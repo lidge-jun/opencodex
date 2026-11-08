@@ -397,7 +397,7 @@ pub fn external_codex_model_provider(content: &str) -> Option<String> {
 pub fn detect_unowned_root_routing_conflict(content: &str) -> Result<(), String> {
     if let Some(ext) = external_codex_model_provider(content) {
         return Err(format!(
-            "attach refused: an external Codex model_provider ({ext}) owns config.toml"
+            "ocx-child-conflict:child_external_provider_conflict: attach refused: an external Codex model_provider ({ext}) owns config.toml"
         ));
     }
     let lf = apply_eol(content, "\n");
@@ -419,7 +419,7 @@ pub fn detect_unowned_root_routing_conflict(content: &str) -> Result<(), String>
                         i > 0 && structural[i - 1] && is_ocx_routing_marker_line(lines[i - 1]);
                     if !marked {
                         return Err(format!(
-                            "attach refused: user-owned root {key} already exists in config.toml"
+                            "ocx-child-conflict:child_external_provider_conflict: attach refused: user-owned root {key} already exists in config.toml"
                         ));
                     }
                 }
@@ -431,7 +431,7 @@ pub fn detect_unowned_root_routing_conflict(content: &str) -> Result<(), String>
             Ok(Some(existing_path)) => {
                 if !is_opencodex_catalog_path(&existing_path) {
                     return Err(
-                        "attach refused: user-owned model_catalog_json already exists in config.toml"
+                        "ocx-child-conflict:child_external_provider_conflict: attach refused: user-owned model_catalog_json already exists in config.toml"
                             .to_owned(),
                     );
                 }

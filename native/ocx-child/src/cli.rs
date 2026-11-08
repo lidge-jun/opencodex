@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::{self, BufRead, Read};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -21,10 +22,11 @@ use crate::journal::{
 };
 use crate::parity::LinkChildParityReport;
 use crate::platform::{
-    DirectoryIdentity, FileLock, LockAcquireError, SecretBytes, constant_time_eq,
-    directory_identity, ensure_private_dir, format_iso8601_utc, now_epoch_ms, random_hex,
-    reject_symlink, resolve_codex_home, resolve_opencodex_home, volatile_zero_bytes,
-    write_private_atomic, write_regular_atomic,
+    DirectoryIdentity, FileLock, LockAcquireError, PurgeExecutableOutcome, SecretBytes,
+    constant_time_eq, directory_identity, ensure_private_dir, format_iso8601_utc, now_epoch_ms,
+    purge_managed_executable, random_hex, reject_symlink, resolve_codex_home,
+    resolve_opencodex_home, resolve_user_home, volatile_zero_bytes, write_private_atomic,
+    write_regular_atomic,
 };
 use crate::relay::{
     RelayCredentials, UpstreamError, fetch_home_authenticated, post_child_parity_report,
@@ -1530,10 +1532,26 @@ fn cmd_sync(args: &[String]) -> u8 {
 }
 
 fn cmd_detach(args: &[String]) -> u8 {
-    let keep_catalog = args.iter().any(|a| a == "--keep-catalog");
-    let json_mode = args.iter().any(|a| a == "--json");
+    detach_with_exe(args, None)
+}
+
+pub fn detach_with_exe(args: &[String], current_exe_override: Option<&Path>) -> u8 {
+    let mut keep_catalog = false;
+    let mut json_mode = false;
+    let mut purge = false;
+    for arg in args {
+        match arg.as_str() {
+            "--keep-catalog" => keep_catalog = true,
+            "--json" => json_mode = true,
+            "--purge" => purge = true,
+            _ => {
+                eprintln!("Usage: ocx-child detach [--keep-catalog] [--purge] [--json]");
+                return 2;
+            }
+        }
+    }
     let local_paths = current_paths();
-    let _lock = match FileLock::acquire_blocking(&local_paths.lock_file) {
+    let lock = match FileLock::acquire_blocking(&local_paths.lock_file) {
         Ok(l) => l,
         Err(_) => {
             eprintln!("detach failed: child lifecycle lock busy");
@@ -1544,7 +1562,20 @@ fn cmd_detach(args: &[String]) -> u8 {
         match CodexHomeGuard::acquire(&local_paths, true, false, ClaimPolicy::Detach) {
             Ok(guard) => guard,
             Err(CodexHomeError::Missing) => {
-                return detach_without_codex_home(&local_paths, json_mode);
+                if let Err(code) = detach_without_codex_home(&local_paths) {
+                    return code;
+                }
+                drop(lock);
+                let purged = match purge_after_detach(purge, current_exe_override) {
+                    Ok(purged) => purged,
+                    Err(code) => return code,
+                };
+                print_detached(
+                    json_mode,
+                    crate::journal::DetachOutcome::NotAttached,
+                    purged,
+                );
+                return 0;
             }
             Err(e) => {
                 eprintln!("detach refused: {}", e.message());
@@ -1637,22 +1668,66 @@ fn cmd_detach(args: &[String]) -> u8 {
         eprintln!("detach cleanup failed releasing Codex home ownership: {e}");
         return 1;
     }
-    print_detached(json_mode, outcome);
+    drop(codex_guard);
+    // The lifecycle lock lives outside the child directory, so the emptied directory can go.
+    // The start gate is removed only after it is released; a relay still waiting on it finds
+    // no state and exits without serving.
+    drop(_startup_gate);
+    let _ = remove_optional_file(&paths.child_dir.join("daemon-start.lock"));
+    let _ = fs::remove_dir(&paths.child_dir);
+    drop(lock);
+    let purged = match purge_after_detach(purge, current_exe_override) {
+        Ok(purged) => purged,
+        Err(code) => return code,
+    };
+    print_detached(json_mode, outcome, purged);
     0
 }
 
-fn print_detached(json_mode: bool, outcome: crate::journal::DetachOutcome) {
+/// Removes the running binary when `--purge` was requested and it sits in the managed plant
+/// directory. Runs only after every recovery record is gone and the lifecycle lock is released.
+fn purge_after_detach(purge: bool, current_exe_override: Option<&Path>) -> Result<bool, u8> {
+    if !purge {
+        return Ok(false);
+    }
+    let exe = match current_exe_override {
+        Some(p) => p.to_path_buf(),
+        None => match std::env::current_exe() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("detach --purge failed resolving current executable: {e}");
+                return Err(1);
+            }
+        },
+    };
+    let user_home = resolve_user_home();
+    let local_appdata = std::env::var_os("LOCALAPPDATA")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
+    match purge_managed_executable(&exe, &user_home, local_appdata.as_deref()) {
+        Ok(PurgeExecutableOutcome::Removed) => Ok(true),
+        Ok(PurgeExecutableOutcome::SkippedUnmanagedPath) => Ok(false),
+        Err(e) => {
+            eprintln!("detach --purge failed: {e}");
+            Err(1)
+        }
+    }
+}
+
+fn print_detached(json_mode: bool, outcome: crate::journal::DetachOutcome, purged: bool) {
     if json_mode {
-        println!("{{\"restored\":true,\"outcome\":\"{outcome:?}\",\"daemonRunning\":false}}");
+        println!(
+            "{{\"restored\":true,\"outcome\":\"{outcome:?}\",\"daemonRunning\":false,\"purged\":{purged}}}"
+        );
     } else {
         println!(
-            "Disconnected ephemeral Remote Link Child ({outcome:?}); zero background daemon running."
+            "Disconnected ephemeral Remote Link Child ({outcome:?}, purged={purged}); zero background daemon running."
         );
     }
 }
 
 /// Detach when `CODEX_HOME` does not exist: succeed only if nothing needs restoring.
-fn detach_without_codex_home(paths: &ChildPaths, json_mode: bool) -> u8 {
+fn detach_without_codex_home(paths: &ChildPaths) -> Result<(), u8> {
     for path in [
         &paths.rollback_file,
         &paths.journal_file,
@@ -1665,17 +1740,16 @@ fn detach_without_codex_home(paths: &ChildPaths, json_mode: bool) -> u8 {
                 eprintln!(
                     "detach refused: Codex home does not exist; child recovery records were kept"
                 );
-                return 1;
+                return Err(1);
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => {
                 eprintln!("detach refused: cannot inspect child recovery material: {e}");
-                return 1;
+                return Err(1);
             }
         }
     }
-    print_detached(json_mode, crate::journal::DetachOutcome::NotAttached);
-    0
+    Ok(())
 }
 
 fn cmd_status(args: &[String]) -> u8 {

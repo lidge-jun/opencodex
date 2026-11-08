@@ -125,4 +125,59 @@ describe("CLI Remote Link enrollment", () => {
       const value = JSON.parse(h.out[0]!); expect(value.role).toBe("child"); expect(value.links[0]).toMatchObject({ id: linkId, tunnelPort: 19200, state: "failed" }); expect(value.child.state).toBe("failed");
     } finally { h.restore(); }
   });
+
+  test("bare host refuses non-TTY add without --plant, succeeds with --plant, and prompts once on TTY", async () => {
+    const bareProbe = { alias: "bare-a", fingerprint, keyType: "ED25519", ocxVersion: null, runtimeKind: "missing", targetTriple: "linux-x64", plantable: true, binarySizeBytes: 943_718 };
+    const bareConfirm = { alias: "bare-a", fingerprint, ocxVersion: null, runtimeKind: "missing", targetTriple: "linux-x64", plantable: true, binarySizeBytes: 943_718 };
+    const hRefuse = harness([bareProbe]);
+    try {
+      expect(await runLinkCommand(["add", "bare-a", "--expect-fingerprint", fingerprint], hRefuse.deps)).toBe(2);
+      expect(hRefuse.calls).toHaveLength(1);
+      expect(hRefuse.err.join("\n")).toContain("--plant");
+    } finally { hRefuse.restore(); }
+
+    const hPlant = harness([bareProbe, bareConfirm, { linkId }]);
+    try {
+      expect(await runLinkCommand(["add", "bare-a", "--plant", "--expect-fingerprint", fingerprint, "--json"], hPlant.deps)).toBe(0);
+      expect(JSON.parse(String(hPlant.calls[1]?.init?.body))).toEqual({ alias: "bare-a", fingerprint, allowMissing: true });
+      expect(JSON.parse(String(hPlant.calls[2]?.init?.body))).toEqual({ alias: "bare-a", fingerprint, plant: true });
+      expect(JSON.parse(hPlant.out[0]!)).toEqual({ linkId, alias: "bare-a", state: "connected", childRole: "client", planted: true });
+    } finally { hPlant.restore(); }
+
+    const hTty = harness([bareProbe, bareConfirm, { linkId }]);
+    try {
+      hTty.deps.stdinImpl = Object.assign(Readable.from(["yes\n"]), { isTTY: true });
+      expect(await runLinkCommand(["add", "bare-a", "--json"], hTty.deps)).toBe(0);
+      expect(JSON.parse(String(hTty.calls[2]?.init?.body))).toEqual({ alias: "bare-a", fingerprint, plant: true });
+    } finally { hTty.restore(); }
+  });
+
+  test("surfaces actionable messages for child_port_busy and child_external_provider_conflict", async () => {
+    for (const [code, snippet] of [
+      ["child_port_busy", "already in use"],
+      ["child_external_provider_conflict", "~/.codex/config.toml"],
+    ] as const) {
+      let step = 0;
+      const h = harness();
+      try {
+        h.deps.fetchImpl = async () => ++step < 3 ? Response.json(step === 1 ? probe : confirm) : Response.json({ error: { code } }, { status: 409 });
+        expect(await runLinkCommand(["add", "child-a", "--expect-fingerprint", fingerprint], h.deps)).not.toBe(0);
+        expect(h.err.join("\n")).toContain(snippet);
+      } finally { h.restore(); }
+    }
+  });
+
+  test("a bare host without a local ocx-child build names where Home looks for one", async () => {
+    const missing = { alias: "bare-b", fingerprint, keyType: "ED25519", ocxVersion: null, runtimeKind: "missing", targetTriple: "linux-arm64", plantable: false, plantUnavailableReason: "artifact_not_found" };
+    const h = harness([missing]);
+    try {
+      expect(await runLinkCommand(["add", "bare-b", "--plant", "--expect-fingerprint", fingerprint], h.deps)).not.toBe(0);
+      const message = h.err.join("\n");
+      expect(message).toContain("OPENCODEX_CHILD_BIN_DIR");
+      expect(message).toContain("ocx-child-linux-arm64");
+      expect(message).toContain("SHA256SUMS");
+      expect(message).toContain("cache/ocx-child/");
+      expect(h.calls).toHaveLength(1);
+    } finally { h.restore(); }
+  });
 });
