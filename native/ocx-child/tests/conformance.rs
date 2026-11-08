@@ -43,6 +43,13 @@ fn detach_preserves_user_edited_web_search_with_managed_marker() {
         None,
     )
     .unwrap();
+    // Unchanged: the journaled injected value is removed and the user's line comes back.
+    let untouched = surgical_detach_config(&injected, &ledger).unwrap().unwrap();
+    assert!(untouched.contains("web_search = \"cached\""), "{untouched}");
+    assert!(
+        !untouched.contains("web_search = \"disabled\""),
+        "{untouched}"
+    );
     let edited = injected.replace("web_search = \"disabled\"", "web_search = \"live\"");
     assert_ne!(edited, injected);
     let restored = surgical_detach_config(&edited, &ledger).unwrap().unwrap();
