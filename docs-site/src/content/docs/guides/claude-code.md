@@ -80,8 +80,8 @@ metadata from the authenticated profile. Both `ultra` and `claude_max_20x` displ
 (the existing `ultra` and `max_20x` tier aliases are retained). Unfamiliar validated tiers retain their original name without
 failing the usage read. Claude account rows prefer your alias, then a masked email, and
 fall back to a numbered label when no safe identity is available. The provider Overview shows the
-same label as a separate current-account field when its account list is verified. Email labels stay
-masked even when `privacy.maskEmails` is false.
+same label as a separate current-account field when its account list is verified. Set
+`privacy.maskEmails` to `false` to show the full email in these rows instead.
 
 You can log in multiple Claude accounts via the Providers dashboard (`ocx login anthropic` /
 add-account). By default every request uses the **active** account only.
