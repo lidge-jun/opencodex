@@ -4,13 +4,13 @@ import { updateCommand, updateCommandStr } from "../../src/update/index";
 import { repoPath } from "../helpers/repo-root";
 
 /**
- * Issue #8361: npm 11 blocks dependency lifecycle scripts by default, so an `ocx update` that
+ * Issue #8361: npm 12 blocks dependency lifecycle scripts by default, so an `ocx update` that
  * ran a bare `npm install -g` removed the old files and installed a package whose bundled `bun`
  * dependency never unpacked. The next `ocx` then failed with "the `bun` dependency is not
  * installed". Every path that builds an npm install argument must approve exactly that one script.
  *
- * The flag is not conditional on the npm major: npm 8 through 11 all accept it on a global
- * install (npm 11.5 warns that it is unknown to the CLI config, then installs successfully).
+ * The flag is not conditional on the npm major: npm 8 through 11 all install with it on a global
+ * install (some npm 11 releases warn that it is unknown to the CLI config, then install).
  * A version gate would add a failure mode that depends on which npm happened to be first on PATH.
  */
 describe("npm update allows bun's postinstall (#8361)", () => {

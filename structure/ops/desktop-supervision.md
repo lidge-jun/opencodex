@@ -128,7 +128,7 @@ formatting is the only allowlisted work between that authorizer and process crea
 exercise refusal when preparation changes the home observation, plus stable-home starts.
 
 The npm install argv that `updateCommand()` (and the Node launcher's own npm self-update) builds
-always carries `--allow-scripts=bun`: npm 11 blocks dependency lifecycle scripts by default, and
+always carries `--allow-scripts=bun`: npm 12 blocks dependency lifecycle scripts by default, and
 bun's postinstall is what unpacks the bundled runtime, so a bare global install would leave the
 next `ocx` unable to start (#8361). npm 8 through 11 accept the flag on global installs, so it is
 not version-gated. The npm package replacement stages beside the live tree and stops the proxy

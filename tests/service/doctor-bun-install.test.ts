@@ -12,7 +12,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { STORE_BUDGET_MS } from "../helpers/test-budget";
 
 /**
- * Issue #8361: npm 11 blocks lifecycle scripts by default, so `npm install -g` leaves the
+ * Issue #8361: npm 12 blocks lifecycle scripts by default, so `npm install -g` leaves the
  * bundled `bun` dependency as its un-downloaded placeholder. The launcher then reports
  * "the `bun` dependency is not installed" and only a reinstall that permits bun's own
  * postinstall repairs it. Doctor must name that state and the exact command.

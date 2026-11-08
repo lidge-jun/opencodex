@@ -21,7 +21,7 @@ fi
 
 echo "Using Node $(node --version)"
 
-# Install opencodex globally. npm 11 blocks dependency lifecycle scripts by default, and
+# Install opencodex globally. npm 12 blocks dependency lifecycle scripts by default, and
 # bun's postinstall is what unpacks the bundled runtime; without this approval the install
 # succeeds but `ocx` cannot start (#8361). npm 8 through 11 accept the flag on global installs.
 # (keep sudo if the original install used sudo)

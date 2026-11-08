@@ -2,7 +2,7 @@
  * `ocx doctor` check for a package install whose bundled Bun dependency never finished
  * installing (#8361).
  *
- * npm 11 blocks dependency lifecycle scripts by default. The `bun` npm package downloads nothing
+ * npm 12 blocks dependency lifecycle scripts by default. The `bun` npm package downloads nothing
  * in its tarball: its postinstall copies the selected `@oven/bun-*` executable into `bin/`. An
  * install that skipped that script succeeds and leaves a ~450-byte placeholder, so the launcher
  * fails later with "the `bun` dependency is not installed". Doctor is where an operator looks
@@ -62,7 +62,8 @@ export function collectBundledBunDiagnostic(deps: BundledBunDiagnosticDeps = {})
   const windows = (deps.platform ?? process.platform) === "win32";
   const lines = [
     `  !!     ${BUNDLED_BUN_MISSING_DETAIL} (its postinstall was skipped or the dependency is incomplete)`,
-    "         Allow bun's own install script; npm 11 blocks lifecycle scripts by default",
+    "         Allow bun's own install script; npm 12 blocks lifecycle scripts by default,",
+    "         and --ignore-scripts or ignore-scripts=true in an npmrc blocks it on any npm",
   ];
   if (!repair) {
     lines.push("         This mise-owned installation has no verified tool name; upgrade it through mise.");

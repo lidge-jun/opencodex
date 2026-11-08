@@ -142,7 +142,7 @@ describe("install scripts", () => {
     const script = await readText("scripts/install.sh");
 
     expect(script).toContain("Node.js 18+ is required");
-    // #8361: npm 11 blocks bun's postinstall by default, so a bare install produces a
+    // #8361: npm 12 blocks bun's postinstall by default, so a bare install produces a
     // package whose bundled runtime never unpacked. Both installers must permit that one script.
     expect(script).toContain("npm install -g --allow-scripts=bun @bitkyc08/opencodex");
     expect(script).toContain("command -v ocx");
