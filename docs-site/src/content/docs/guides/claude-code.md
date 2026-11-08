@@ -79,7 +79,9 @@ The dashboard shows Pro, Max 5x, or Ultra beside Claude account quotas, using su
 metadata from the authenticated profile. Both `ultra` and `claude_max_20x` display as Ultra
 (the existing `ultra` and `max_20x` tier aliases are retained). Unfamiliar validated tiers retain their original name without
 failing the usage read. Claude account rows prefer your alias, then a masked email, and
-fall back to a numbered label when no safe identity is available.
+fall back to a numbered label when no safe identity is available. The provider Overview shows the
+same label as a separate current-account field when its account list is verified. Set
+`privacy.maskEmails` to `false` to show the full email in these rows instead.
 
 You can log in multiple Claude accounts via the Providers dashboard (`ocx login anthropic` /
 add-account). By default every request uses the **active** account only.
@@ -156,6 +158,7 @@ thinking fallback. Adaptive thinking without an explicit effort stays blank. The
 request controls; they do not confirm what effort the upstream applied or change the wire body.
 
 An enabled Anthropic account pool prefers native Messages for eligible direct Anthropic routes
+and canonical Anthropic children of strict failover combos without a default effort
 when neither native rollout flag explicitly disables that path. In Providers → Anthropic →
 Account pooling → **How account selection works**, **Preserve native Claude requests** stores
 `anthropicAccountPool.nativeMessages` (default true). Turning it off selects the legacy bridge

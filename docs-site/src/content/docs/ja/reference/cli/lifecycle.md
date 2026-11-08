@@ -174,9 +174,9 @@ ocx status --json
 
 Remote Link の Home では、最新のカタログが正常にコミットされた後、`ocx sync` は対象となるリンク済み Child にも同期を伝播します。`--local-only` はこの伝播を無効にします。`--json` は Home の結果と各 Child の状態を含む単一の `ocx.sync.fanout/1` 文書を出力し、スキップされた Child の理由も示します。Home 自体の終了コードが 0 以外の場合は、そのコードを変更せずに返します。Home が成功した場合、接続された Child の同期スキップ、失敗、タイムアウト、またはリンクストアの読み取り不能は終了コード 6 となります。クライアント主導リンクや `--local-only` などの意図的なスキップは従来どおりです。スキップされた接続済み Child には対処方法を示す `hint` が付きます。リンクストアを読み取れない場合、テキスト表示ではパスを含まないエラーを出します。コード 7 は更新処理中のために予約されています。JSON モードで Home の同期が例外を送出した場合も、stdout は単一の結果文書を保ち、stderr に無害化された診断を出力します。
 
-伝播は Child の Codex アプリや app-server の再起動を要求しません。必要な場合は GOAT を使うか、その Child で `ocx sync --restart-codex` を実行してください。ただし、Child の固定先同期は、変更された Home 設定を適用した後、自身の OpenCodex クライアントランタイムを再起動することがあります。Home がタイムアウトしてローカルの SSH プロセスを停止しても、すでに開始されたリモート同期は Child 上で続くことがあります。
+伝播は Child の Codex アプリや app-server の再起動を要求しません。必要な場合は GOAT を使うか、フル `ocx` Child では `ocx sync --restart-codex` を実行してください（軽量 `ocx-child` Child では Codex デスクトップと `app-server` を別途再起動してください）。ただし、Child の固定先同期は、変更された Home 設定を適用した後、自身の OpenCodex クライアントランタイムを再起動することがあります。Home がタイムアウトしてローカルの SSH プロセスを停止しても、すでに開始されたリモート同期は Child 上で続くことがあります。
 
-> **Remote Link Child:** `ocx sync` は Home の Codex 設定も適用し、クライアントランタイムがその適用より前に起動していた場合は、再起動フラグなしでもランタイムを再起動します。再起動に失敗した場合は以前のランタイムが動作し続け、コマンドは 0 以外で終了します。`ocx status --json` と `ocx link status --json` の関連フィールドは [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英語）を参照してください。
+> **Remote Link Child:** フル `ocx` Child では `ocx sync` が Home の Codex 設定も適用し、クライアントランタイムがその適用より前に起動していた場合は再起動フラグなしでも再起動します。再起動に失敗しても以前のランタイムは動作し続け、コマンドは 0 以外で終了します。軽量 `ocx-child` ホストでは `ocx-child sync` が未起動時に `ocx-child serve` を起動し、`runtimeStartedAt < lastApplyAt` のときにローテーションして非 `stale` 同期時にベストエフォートで parity を報告します（ローテーション失敗時は旧リレー停止後に 0 以外で終了するため再実行で復旧し、Codex デスクトップや `app-server` の再起動は別途行ってください）。Child の `ocx status --json`（または `ocx-child status --json`）と Home の `ocx link status --json` の関連フィールドは [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英語）を参照してください。
 
 再起動フラグを明示した場合、カタログとキャッシュのバイト列が変わらなくても、`config.toml` の変更が正常にコミットされれば再起動します。設定だけを扱う操作が変更なし、拒否、事前検証、ロールバックとなった場合は再起動しません。再起動フラグがなければ、sync が Codex を自動的に再起動することはありません。
 

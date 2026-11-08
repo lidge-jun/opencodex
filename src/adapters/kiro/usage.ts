@@ -1,4 +1,4 @@
-import { estimateTokens, estimateTokensFromCharacterCounts } from "../../lib/token-estimate";
+import { countCjk, estimateTokens, estimateTokensFromCharacterCounts } from "../../lib/token-estimate";
 import { KIRO_MODEL_CONTEXT_WINDOWS, normalizeKiroModelId } from "../../providers/kiro-models";
 import { kiroObservedContextWindow } from "../../providers/kiro-model-catalog";
 import { modelRecordValue } from "../../reasoning-effort";
@@ -77,18 +77,8 @@ export function estimateKiroTokens(text: string, modelId?: string): number {
   return estimateTokens(text, modelId ? `kiro/${modelId}` : "kiro");
 }
 
-/** Hangul/Han/kana ranges, matching the shared estimator's own CJK classification. */
-export function kiroCjkCount(text: string): number {
-  let cjk = 0;
-  for (let i = 0; i < text.length; i++) {
-    const c = text.charCodeAt(i);
-    if (
-      (c >= 0xac00 && c <= 0xd7a3) || (c >= 0x1100 && c <= 0x11ff) || (c >= 0x3130 && c <= 0x318f)
-      || (c >= 0x4e00 && c <= 0x9fff) || (c >= 0x3400 && c <= 0x4dbf) || (c >= 0x3040 && c <= 0x30ff)
-    ) cjk++;
-  }
-  return cjk;
-}
+/** The wire and shared estimates use the same UTF-16 CJK buckets. */
+export const kiroCjkCount = countCjk;
 
 /**
  * Token estimate for walked payload text, with the wire expansion applied to the Latin portion

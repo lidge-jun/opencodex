@@ -329,6 +329,12 @@ finite `contextUsagePercentage` (and a `tokenUsage` block) there as a fallback, 
 from `metadataEvent` is legitimate rather than impossible. Both feed the same field, and any
 positive value overwrites an earlier one.
 
+When no usable context percentage is available, `src/adapters/kiro/usage.ts` estimates the
+walked payload using the shared CJK classifier, including both UTF-16 units of supplementary Han.
+Kiro's wire expansion applies only to the non-CJK bucket, and the payload adds entry framing.
+`tests/providers/kiro/kiro-wire-estimate.test.ts` covers the wire estimate and streamed context
+usage when supplementary Han is mixed with other scripts.
+
 Spend arrives in `meteringEvent` as **credits, not tokens**. Kiro token usage stays estimated
 unless a `metadataEvent` carries a `tokenUsage` block; no captured response did. That block is the
 only frame that yields a measured count: the parser marks the usage `upstreamReported`,
