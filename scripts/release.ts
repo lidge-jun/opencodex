@@ -29,6 +29,18 @@ async function command(args: string[], label: string, env?: Record<string, strin
   return stdout.trim();
 }
 
+/** Like {@link command}, but the operator sees the child's stdout live; stderr stays captured and unprinted. */
+async function streamCommand(args: string[], label: string): Promise<void> {
+  const [binary, ...rest] = args;
+  const invocation = commandInvocation(binary ?? "", rest);
+  const child = Bun.spawn([invocation.file, ...invocation.args], {
+    stdout: "inherit", stderr: "pipe",
+    ...(invocation.options.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+  });
+  const [exitCode] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+  if (exitCode !== 0) throw new Error(`${label} failed (exit ${exitCode})`);
+}
+
 interface ReleaseRun {
   createdAt: string;
   databaseId: number;
@@ -64,8 +76,9 @@ function parseRuns(raw: string): ReleaseRun[] {
 }
 
 async function watchRun(id: number): Promise<void> {
-  console.log(`Watching release run ${id}.`);
-  await command(["gh", "run", "watch", String(id), "--repo", githubRepo, "--exit-status", "--interval", "10"], "Release run watch");
+  console.log(`Watching release run ${id}: ${runUrlPrefix}${id}`);
+  // Stream gh's progress and final job states (#8330); its stderr may carry credentials and stays private.
+  await streamCommand(["gh", "run", "watch", String(id), "--repo", githubRepo, "--exit-status", "--interval", "10"], "Release run watch");
 }
 
 async function waitForReleaseWorkflowRun(workflowId: number, id: number, startedAt: number): Promise<ReleaseRun> {

@@ -697,6 +697,58 @@ describe("combo stream preflight", () => {
     expect(seen).toEqual([]);
   });
 
+  // #8107: the Codex WebSocket writes its quota/metadata frames into the same body, usually before
+  // `response.created`. They must neither commit the child nor end the preflight.
+  test("Codex metadata control frames neither commit nor terminate the preflight", async () => {
+    expect(comboStreamPayloadCommitsOutput({ type: "codex.rate_limits" })).toBe(false);
+    expect(comboStreamPayloadCommitsOutput({ type: "codex.response.metadata", headers: {} })).toBe(false);
+    expect(comboStreamPayloadCommitsOutput({ type: "codex.future_control" })).toBe(true);
+
+    const rateLimits = { type: "codex.rate_limits", rate_limits: { primary: { used_percent: 10, window_minutes: 10080 } } };
+    const overloaded = {
+      type: "error",
+      status: 503,
+      error: { type: "server_error", code: "server_is_overloaded", message: "Our servers are currently overloaded." },
+    };
+    const failed = await preflightComboStreamResponse(sse(
+      rateLimits,
+      { type: "codex.response.metadata", headers: { "x-codex-turn-state": "t" } },
+      { type: "response.created", response: { id: "r1", status: "in_progress", output: [] } },
+      { type: "response.in_progress", response: { id: "r1", status: "in_progress", output: [] } },
+      overloaded,
+    ), { model: "m1", provider: "a" });
+    expect(failed.kind).toBe("failed");
+    expect(failed.response.status).toBe(503);
+    expect(await failed.response.json()).toMatchObject({ error: { code: "server_is_overloaded" } });
+
+    // Output after the metadata still commits, and the bytes replay unchanged.
+    const committed = sse(
+      rateLimits,
+      { type: "response.created", response: { id: "r1", status: "in_progress", output: [] } },
+      { type: "response.output_text.delta", delta: "visible" },
+      overloaded,
+    );
+    const expected = await committed.clone().text();
+    const accepted = await preflightComboStreamResponse(committed, { model: "m1", provider: "a" });
+    expect(accepted.kind).toBe("accepted");
+    expect(await accepted.response.text()).toBe(expected);
+
+    // A stream that ends after metadata alone was not a terminal; it is accepted, not failed.
+    const metadataOnly = await preflightComboStreamResponse(sse(rateLimits), { model: "m1", provider: "a" });
+    expect(metadataOnly.kind).toBe("accepted");
+
+    // A read error after metadata alone reports that nothing was observed.
+    const reset = await preflightComboStreamResponse(
+      prefixThenReadError(new TextEncoder().encode(`data: ${JSON.stringify(rateLimits)}\n\n`),
+        new Error("preflight-read-reset")).response,
+      { model: "m1", provider: "a" },
+      undefined,
+      { replayReadErrors: true },
+    );
+    expect(reset.kind).toBe("read-error");
+    if (reset.kind === "read-error") expect(reset.stage).toBe("headers-only");
+  });
+
   test("a response.created carrying output is not a prelude", () => {
     expect(comboStreamPayloadCommitsOutput({
       type: "response.created", response: { id: "r1", output: [] },
