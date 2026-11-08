@@ -13,6 +13,8 @@ import type { RouteDecisionTraceV1 } from "../../src/routing/trace";
 import { clearFallbackEventsForTests, recentFallbackEvents } from "../../src/routing/fallback-policy";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { parseSyntheticRowId } from "../../src/server/fast-row";
+import { boundEntryIdForLane, clearProviderCacheAffinityForTests, recordProviderCacheAffinity } from "../../src/providers/cache-affinity";
+import { finalizeProviderCacheAffinity } from "../../src/server/request-log-cache-affinity";
 import {
   handleResponsesWithPolicyFallback,
   rankPolicyFallbackCandidates,
@@ -65,6 +67,42 @@ function seedAttempt(logCtx: RequestLogContext, provider: string, model: string)
 }
 
 describe("policy candidate fallback", () => {
+  test.each([401, 402, 429, "local"] as const)("synthetic failure attribution across candidates (%s)", async outcome => {
+    clearProviderCacheAffinityForTests();
+    const lane = "policy-terminal-source";
+    const providerName = outcome === "local" ? "provider-a" : "provider-b";
+    recordProviderCacheAffinity({ lane, providerName, entryId: "a", model: outcome === "local" ? "model-a" : "model-b", cacheWrite: 4000 });
+    const log: RequestLogContext = { model: "model-a", provider: "provider-a", affinityLane: lane };
+    const trace = policyTrace();
+    trace.candidates[2]!.eligible = false;
+    let calls = 0;
+    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), log, {}, {
+      runCore: async (req, _config, context, options) => {
+        options.onRequestBodyParsed?.(await req.json());
+        context.routeDecision = trace;
+        if (++calls === 1) {
+          context.terminalSource = "synthetic";
+          context.affinityProviderName = "provider-a";
+          context.affinityKeyEntryId = "a";
+          context.cacheAffinityApplicable = true;
+          return Response.json({ error: { message: "local failure" } }, { status: 503 });
+        }
+        if (outcome === "local") return policyCandidateRefusalResponse(new PolicyCandidateUnavailableError())!;
+        seedAttempt(context, "provider-b", "model-b");
+        noteAttemptSend(context.activeAttempt, undefined);
+        context.affinityProviderName = "provider-b";
+        context.affinityKeyEntryId = "a";
+        context.cacheAffinityApplicable = true;
+        return Response.json({ error: { message: "upstream refusal" } }, { status: outcome });
+      },
+    });
+    expect(calls).toBe(2);
+    expect(response.status).toBe(outcome === "local" ? 503 : outcome);
+    expect(log.terminalSource).toBe(outcome === "local" ? "synthetic" : undefined);
+    finalizeProviderCacheAffinity(log, response.status, undefined);
+    expect(boundEntryIdForLane(lane)).toBe(outcome === "local" ? "a" : undefined);
+    clearProviderCacheAffinityForTests();
+  });
   test.each([false, true])("upstream failure body settles when the next policy hop is refused=%s", async denied => {
     const config = fixtureConfig();
     if (denied) config.fallback = { routes: { "policy/daily": { provider: false } } };

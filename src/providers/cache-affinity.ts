@@ -156,14 +156,20 @@ export function recordProviderCacheAffinity(input: RecordProviderCacheAffinityIn
   // sent is what the vendor cached, so it counts as written. An explicitly
   // reported write count, zero included, is believed as-is.
   const cacheWrite = input.cacheWrite ?? input.inputTokens ?? 0;
+  const now = input.now ?? Date.now();
+  const previous = bindings.get(lane);
+  const matchingLongRead = cacheRead > 0 && (input.cacheWrite ?? 0) === 0
+    && previous?.longRetention === true && previous.providerName === providerName
+    && previous.entryId === entryId && previous.model === model
+    && now >= previous.at && now - previous.at <= CACHE_AFFINITY_COLD_LONG_MS;
   const binding: Binding = {
     providerName,
     entryId,
     model,
     cacheRead,
     cacheWrite,
-    longRetention: (input.cacheWriteLong ?? 0) > 0,
-    at: input.now ?? Date.now(),
+    longRetention: (input.cacheWriteLong ?? 0) > 0 || matchingLongRead,
+    at: now,
   };
   if (bindingBytes(lane, binding) > ENTRY_BYTES_MAX) return;
   // Re-insert so eviction drops the least recently recorded lane first.

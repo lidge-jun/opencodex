@@ -363,6 +363,34 @@ describe("provider cache affinity (end-to-end)", () => {
     }
   });
 
+  test.each(["budget", "pacing"])("passthrough retry %s refusal preserves the binding", async kind => {
+    const config = makeConfig();
+    const providerName = "affinity-compact";
+    const provider = config.providers[providerName]!;
+    provider.transientRetryOn5xx = { enabled: true, attempts: 2 };
+    saveConfig(config);
+    const lane = sessionLaneIdFromRequest(new Headers({ "thread-id": "passthrough-refusal" }));
+    recordProviderCacheAffinity({ lane, providerName, entryId: "a", model: "test", cacheWrite: 4000 });
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      if (++sends === 1) return Response.json({ error: { message: "temporary" } }, { status: 503, headers: { "retry-after": "0" } });
+      throw kind === "budget" ? new SendBudgetExhaustedError() : new RequestPacingQueueOverloadError(providerName, "queue_full", 1);
+    }) as typeof globalThis.fetch;
+    const log: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json", "thread-id": "passthrough-refusal" },
+      body: JSON.stringify({ model: `${providerName}/test`, input: "hello", stream: false, store: false }),
+    }), config, log, {});
+    expect(response.status).toBe(429);
+    await response.text();
+    expect(sends).toBe(2);
+    expect(log.affinityKeyEntryId).toBe("a");
+    addFinalRequestLog(nextRequestLogId(), Date.now(), log, response.status);
+    expect(boundEntryIdForLane(lane)).toBe("a");
+    expect(log.terminalSource).toBe("synthetic");
+    expect(log.cacheAffinity).not.toBe("released");
+  });
+
   test.each([401, 402, 429, 400])("a synthetic %s preserves the healthy binding", async (status) => {
     const config = makeConfig();
     const log = await turn(config, "local-refusal");

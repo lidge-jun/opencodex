@@ -91,6 +91,19 @@ describe("provider cache affinity store", () => {
     expect(consult("lane-1", provider(), "m1", NOW + 61 * 60_000)).toBeNull();
   });
 
+  test.each(["same", "provider", "entry", "model", "short-write", "expired"])("read-only retention follows matching identity (%s)", kind => {
+    recordProviderCacheAffinity({ lane: "lane-1", providerName: "kimi", entryId: "a", model: "m1",
+      cacheWrite: 4000, cacheWriteLong: 4000, now: NOW });
+    const name = kind === "provider" ? "other" : "kimi";
+    const entryId = kind === "entry" ? "b" : "a";
+    const model = kind === "model" ? "m2" : "m1";
+    const readAt = NOW + (kind === "expired" ? 61 * 60_000 : 60_000);
+    recordProviderCacheAffinity({ lane: "lane-1", providerName: name, entryId, model,
+      cacheRead: 4000, cacheWrite: kind === "short-write" ? 100 : 0, now: readAt });
+    const hit = consultProviderCacheAffinity({ lane: "lane-1", providerName: name, provider: provider(), model, now: readAt + 6 * 60_000 });
+    expect(hit?.entryId).toBe(kind === "same" ? "a" : undefined);
+  });
+
   test("turn mode keeps only detected continuations, regardless of worth", () => {
     recordProviderCacheAffinity({
       lane: "lane-1", providerName: "kimi", entryId: "a", model: "m1",

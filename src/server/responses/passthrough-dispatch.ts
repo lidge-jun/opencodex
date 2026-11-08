@@ -914,10 +914,9 @@ export async function preparePassthroughExchange(
         return clientCancelledResponse();
       }
       if (lastDistributedResponse) recordDistributedResponseFailure(lastDistributedResponse, config, route.providerName, options.abortSignal);
-      // A budget refusal is a proxy decision, not an upstream fault. Reporting it as
-      // 502 upstream_error would blame the provider for a limit this process applied, and
-      // would record a fake reachability failure against the account's health.
+      // A budget refusal is local; a 502 would falsely record an account reachability failure.
       if (err instanceof SendBudgetExhaustedError) {
+        logCtx.terminalSource = "synthetic";
         releaseUpstreamHostAdmission(nativeHostState.lease);
         nativeHostState.lease = null;
         releaseCodexAuthContextProbeLease(admissionState.authCtx);
@@ -929,12 +928,13 @@ export async function preparePassthroughExchange(
         bindRefreshedAdapter(refusal.adapter);
         return handoffToChat(refusal.adapter);
       }
-      const dispatchRefusal = requestPacingOverloadResponse(refusal) ?? copilotRefusalResponse(refusal);
-      if (dispatchRefusal) {
-        releaseUpstreamHostAdmission(nativeHostState.lease);
-        nativeHostState.lease = null;
+      const pacingRefusal = requestPacingOverloadResponse(refusal);
+      if (pacingRefusal) logCtx.terminalSource = "synthetic";
+      const localDispatchRefusal = pacingRefusal ?? copilotRefusalResponse(refusal);
+      if (localDispatchRefusal) {
+        releaseUpstreamHostAdmission(nativeHostState.lease); nativeHostState.lease = null;
         releaseCodexAuthContextProbeLease(admissionState.authCtx);
-        return dispatchRefusal;
+        return localDispatchRefusal;
       }
       // Pacing may outlive the selected account's admission. No fetch occurred, so do
       // not turn an operator pause into a 502 or charge it to host/account health.
