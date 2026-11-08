@@ -369,6 +369,8 @@ describe("cold keyring selection assertion", () => {
     expect(message).toContain("EICACLS");
     expect(message).toContain("NATIVE_MAIN_CLAIM_UNAVAILABLE");
     expect(() => expectColdKeyringSelection({ selected: true, claimDiagnostics: { phase: "operation" } }, true)).not.toThrow();
+    expect(() => expectColdKeyringSelection({ selected: false, failure: "CodexPoolAuthenticationError" }, false)).not.toThrow();
+    expect(() => expectColdKeyringSelection({ selected: true }, false)).toThrow();
   });
 });
 
