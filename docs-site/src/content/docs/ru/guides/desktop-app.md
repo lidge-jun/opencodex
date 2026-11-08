@@ -32,6 +32,7 @@ brew install --cask opencodex
 
 - **Встроенные обновления (`auto_updates`)**: в приложении есть собственный механизм обновлений, а Cask объявляет `auto_updates true`. Однако адресная команда `brew upgrade --cask opencodex` или обновление с greedy может заменить приложение, уже обновлённое до более новой версии. Перед обновлением через Homebrew проверьте версии установленного приложения и Cask.
 - **CLI и фоновая служба**: Cask устанавливает только `OpenCodex.app` со встроенными CLI и proxy. Для отдельного CLI или службы без интерфейса можно установить `ocx` через npm или архивы выпусков; обе установки используют конфигурацию `~/.opencodex`. Чтобы передать службу отдельному CLI, закройте OpenCodex, явно выберите этот CLI (при необходимости обойдя [передачу пакетного лаунчера в Desktop](/getting-started/installation/)) и выполните `ocx service install`. См. [выбор команды в терминале](/guides/desktop-app/#using-the-ocx-cli-with-the-desktop-app) и [владение runtime](/reference/cli/lifecycle/#runtime-ownership).
+- **Служба после обновления Cask**: при удалении старой версии Cask может удалить задачу launchd `com.opencodex.proxy` и её plist, даже если они принадлежат отдельному CLI, остановив его фоновую службу. После обновления закройте OpenCodex и в графическом сеансе macOS выполните `ocx service status` с помощью явно выбранного выше отдельного CLI. Если служба отсутствует, выполните `ocx service install`; если она установлена, но не загружена, выполните `ocx service repair`. Затем снова проверьте `ocx service status`.
 
 ### Windows
 

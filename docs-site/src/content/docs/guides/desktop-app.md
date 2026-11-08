@@ -31,6 +31,7 @@ brew install --cask opencodex
 
 - **In-app updates (`auto_updates`)**: The desktop app has a built-in updater, and the Cask declares `auto_updates true`. A named `brew upgrade --cask opencodex` or a greedy upgrade can still replace an app updated to a newer version in-app. Check the installed app and Cask versions before upgrading with Homebrew.
 - **CLI and background service**: The Cask installs only `OpenCodex.app`, which bundles its own CLI and proxy runtime. You can install a separate `ocx` via npm or release archives for a standalone CLI or headless service; both share `~/.opencodex`. To give that CLI the service, quit OpenCodex, select the separate CLI explicitly (including bypassing [Desktop’s package-launcher handoff](/getting-started/installation/) if enabled), and run `ocx service install`. See [terminal command selection](/guides/desktop-app/#using-the-ocx-cli-with-the-desktop-app) and [runtime ownership](/reference/cli/lifecycle/#runtime-ownership).
+- **Service after a Cask upgrade**: The Cask's uninstall step can remove the `com.opencodex.proxy` launchd job and plist, even when they belong to the separate CLI, stopping its background service. After upgrading, quit OpenCodex and, in a macOS GUI login session, use that explicitly selected separate CLI to run `ocx service status`. If the service is absent, run `ocx service install`; if it is installed but not loaded, run `ocx service repair`. Check `ocx service status` again.
 
 ### Windows
 
