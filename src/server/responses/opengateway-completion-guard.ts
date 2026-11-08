@@ -27,9 +27,9 @@ function outputCommits(output: unknown): boolean {
   return !Array.isArray(output) || output.some(item => !isPlainObject(item)
     || (item.type !== "reasoning" && (item.type !== "message" || !Array.isArray(item.content) || item.content.some(partCommits))));
 }
-/** A snapshot's aggregate output_text is output too; anything but absent or "" is evidence (#8333). */
+/** A snapshot's aggregate output_text is output too; anything but absent, null or "" is evidence (#8333). */
 function snapshotTextCommits(snapshot: RecordValue): boolean {
-  return snapshot.output_text !== undefined && snapshot.output_text !== "";
+  return snapshot.output_text != null && snapshot.output_text !== "";
 }
 function wellFormedEmpty(snapshot: unknown): snapshot is RecordValue {
   return isPlainObject(snapshot) && typeof snapshot.id === "string" && snapshot.id.trim().length > 0

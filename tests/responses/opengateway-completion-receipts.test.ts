@@ -65,6 +65,14 @@ describe("OpenGateway completion exact-head receipts", () => {
     expect(await f.result.json()).toMatchObject({ output_text: "already produced" });
   });
 
+  test("null or empty output_text is no evidence, so an empty completion still retries (#8333)", async () => {
+    for (const outputText of [null, ""]) {
+      const created = { type: "response.created", response: { id: "resp_1", object: "response", status: "in_progress", output: [], output_text: outputText } };
+      const f = await run(sse([created, { type: "response.completed", response: { ...snapshot(), output_text: outputText } }]));
+      expect(f.retries).toBe(1);
+    }
+  });
+
   test("SSE empty failure head is response.failed after one physical retry", async () => {
     const first = snapshot();
     const second = snapshot({ input_tokens: 4, output_tokens: 3 });
