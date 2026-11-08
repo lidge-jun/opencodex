@@ -11,7 +11,7 @@ import { traePosixInvocation, traeStopPipe } from "../../src/adapters/trae-cn/pr
 import { prepareTraeWindowsJob, TraeWindowsJobFrames, traeWindowsCommandLine, traeWindowsJobExecutable } from "../../src/adapters/trae-cn/windows-job";
 import { commandInvocation } from "../../src/lib/win-exec";
 import { buildCatalogEntries } from "../../src/codex/catalog";
-import { buildResponseJSON } from "../../src/bridge";
+import { bridgeToResponsesSSE, buildResponseJSON } from "../../src/bridge";
 import { resolveTraeCli, traeCnChildEnv } from "../../src/adapters/trae-cn/profile";
 import { fetchProviderModels, fetchProviderModelsWithAuth, observedModelsAuthResolver, refreshingModelsAuthResolver } from "../../src/codex/catalog/provider-models";
 import { captureProviderGather } from "../../src/codex/catalog/gather-capture";
@@ -431,15 +431,39 @@ describe("TRAE CN ACP regression contract", () => {
   });
 
   for (const selected of ["test-model", "unexpected-model"]) {
-    test(`model-selection notification validates ${selected}`, async () => {
+    test(`post-selection model notification validates ${selected}`, async () => {
       const fixture = traeFixture(request => {
-        if (request.method === "session/set_model") fixture.send({ jsonrpc: "2.0", method: "session/update",
+        if (request.method === "session/prompt") fixture.send({ jsonrpc: "2.0", method: "session/update",
           params: { sessionId: "fixture-session", update: { sessionUpdate: "current_model_update", currentModelId: selected } } });
         return false;
       });
       const events: AdapterEvent[] = [];
       await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
       expect(events.at(-1)).toMatchObject(selected === "test-model" ? { type: "done" } : { type: "error", code: "trae_model_changed" });
+    });
+  }
+
+  for (const initialBeforeReply of [true, false]) for (const selectionNotification of [true, false]) {
+    test("initial model notifications are superseded by set_model: " + initialBeforeReply + "/" + selectionNotification, async () => {
+      const modelUpdate = (model: string) => ({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session",
+        update: { sessionUpdate: "current_model_update", currentModelId: model } } });
+      const fixture = traeFixture(request => {
+        if (request.method === "session/new") {
+          if (initialBeforeReply) fixture.send(modelUpdate("default-model"));
+          fixture.send({ jsonrpc: "2.0", id: request.id, result: { sessionId: "fixture-session", models: {
+            availableModels: [{ modelId: "default-model" }, { modelId: "test-model" }], currentModelId: "default-model",
+          } } });
+          if (!initialBeforeReply) fixture.send(modelUpdate("default-model"));
+          return true;
+        }
+        if (request.method === "session/set_model" && selectionNotification) fixture.send(modelUpdate("test-model"));
+        return false;
+      });
+      const events: AdapterEvent[] = [];
+      await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+      expect(events.at(-1)).toMatchObject({ type: "done" });
+      expect(events.some(event => event.type === "error")).toBe(false);
+      expect(fixture.requests.filter(request => request.method === "session/prompt")).toHaveLength(1);
     });
   }
 
@@ -511,13 +535,42 @@ describe("TRAE CN ACP regression contract", () => {
       if (stopReason === "max_tokens") {
         expect(terminal).toMatchObject({ type: "done", stopReason: "max_tokens" });
         expect(buildResponseJSON(events, "test-model")).toMatchObject({ status: "incomplete", incomplete_details: { reason: "max_output_tokens" } });
+      } else if (stopReason === "max_turn_requests") {
+        expect(terminal).toMatchObject({ type: "incomplete", reason: "max_turn_requests", retryable: false });
+        expect(buildResponseJSON(events, "test-model")).toMatchObject({ status: "incomplete", incomplete_details: { reason: "max_turn_requests" } });
       } else {
-        const code = stopReason === "end_turn" ? "trae_empty_response" : stopReason === "max_turn_requests" ? "trae_turn_stopped" : "trae_acp_protocol_error";
+        const code = stopReason === "end_turn" ? "trae_empty_response" : "trae_acp_protocol_error";
         expect(terminal).toMatchObject({ type: "error", code, retryable: false });
         expect(events.some(event => event.type === "done")).toBe(false);
       }
     });
   }
+
+  test("a request-limit terminal retains partial text and usage in JSON and SSE", async () => {
+    const fixture = traeFixture(request => {
+      if (request.method !== "session/prompt") return false;
+      fixture.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: {
+        sessionUpdate: "agent_message_chunk", content: { type: "text", text: "partial answer" },
+      } } });
+      fixture.send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "max_turn_requests", usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 } } });
+      return true;
+    });
+    const events: AdapterEvent[] = [];
+    await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+    const json = buildResponseJSON(events, "test-model");
+    expect(json).toMatchObject({ status: "incomplete", incomplete_details: { reason: "max_turn_requests" }, usage: { input_tokens: 10, output_tokens: 2 } });
+    expect(JSON.stringify(json.output)).toContain("partial answer");
+    const budget = createTranslatorBudget();
+    async function* source() { yield* events; }
+    try {
+      const wire = await new Response(bridgeToResponsesSSE(source(), "test-model", undefined, undefined, undefined, undefined, 2000, { translatorBudget: budget })).text();
+      const frames = wire.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+      expect(frames.find(frame => frame.type === "response.incomplete")?.response)
+        .toMatchObject({ status: "incomplete", incomplete_details: { reason: "max_turn_requests" }, usage: { input_tokens: 10, output_tokens: 2 } });
+      expect(frames.filter(frame => frame.type === "response.output_text.delta").map(frame => frame.delta).join(""))
+        .toBe("partial answer");
+    } finally { budget.dispose(); }
+  });
 
   for (const consumer of ["adapter", "probe"]) {
     test("stderr overflow suppresses a split authorization value in " + consumer, async () => {
@@ -756,7 +809,18 @@ describe("TRAE CN ACP regression contract", () => {
       const expected = pathApi.resolve("relative-user", ".local", "bin", platform === "win32" ? "traecli.exe" : "traecli");
       const result = resolveTraeCli({ platform, env: { PATH: "", HOME: "relative-user", USERPROFILE: "relative-user" }, exists: path => path === expected });
       expect(result).toBe(expected);
+      expect(traeCnChildEnv({ HOME: "relative-user", USERPROFILE: "relative-user" }, platform).TRAE_HOME)
+        .toBe(pathApi.resolve("relative-user", ".trae"));
       if (platform === "win32") expect(traeWindowsJobExecutable(result!, {})).toBe(expected);
+    });
+  }
+
+  for (const binaries of [["traecli.cmd"], ["traecli.bat"], ["traecli.exe", "traecli.cmd"]]) {
+    test("Windows home fallback keeps native/launcher priority: " + binaries.join(","), () => {
+      const root = "C:\\Users\\fixture";
+      const available = binaries.map(name => win32.join(root, ".local", "bin", name));
+      const found = resolveTraeCli({ platform: "win32", env: { USERPROFILE: root, PATH: "" }, exists: path => available.includes(path) });
+      expect(found).toBe(available[0]);
     });
   }
 

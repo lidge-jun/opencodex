@@ -67,6 +67,7 @@ class TraeAcpClient {
   private initialized = false;
   private launchStatus?: number;
   private spawnFailed = false;
+  private selectedModel?: { sessionId: string; modelId: string };
   private readonly reader: Promise<void>;
   private readonly lifecycle: Promise<void>;
   private failure?: Error;
@@ -116,6 +117,17 @@ class TraeAcpClient {
 
   markInitialized(): void { this.initialized = true; }
 
+  /** A successful set_model supersedes setup notifications; guard updates after that acknowledgement. */
+  acknowledgeModelSelection(sessionId: string, modelId: string): void {
+    this.selectedModel = { sessionId, modelId };
+    for (let index = this.updates.length - 1; index >= 0; index--) {
+      const frame = this.updates[index]!;
+      if (frame.kind === "update" && frame.sessionId === sessionId && frame.update.sessionUpdate === "current_model_update") {
+        this.updates.splice(index, 1);
+      }
+    }
+  }
+
   closedError(error: TraeAcpError): TraeAcpError {
     if (!this.initialized && this.launchStatus) {
       return startupFailure("spawn", { code: this.launchStatus === 127 ? "ENOENT" : "EACCES" });
@@ -152,6 +164,13 @@ class TraeAcpClient {
           else waiter.resolve(frame.result);
           continue;
         }
+        const selected = this.selectedModel;
+        if (selected && frame.sessionId === selected.sessionId && frame.update.sessionUpdate === "current_model_update") {
+          if (frame.update.currentModelId !== selected.modelId) {
+            throw new TraeAcpError("TRAE CN changed the selected model unexpectedly.", "trae_model_changed");
+          }
+          continue;
+        }
         if (this.waiters.length) this.waiters.shift()!(frame);
         else if (this.updates.length < 1024) this.updates.push(frame);
         else throw new TraeAcpProtocolError("TRAE CN ACP update queue exceeded its bound");
@@ -173,7 +192,7 @@ class TraeAcpClient {
   }
 
   /** Register before writing so immediate responses and stream errors settle the same request. */
-  async request(method: string, params: Record<string, unknown>, dispatch?: TraePromptDispatch): Promise<unknown> {
+  async request(method: string, params: Record<string, unknown>, dispatch?: TraePromptDispatch, onSuccess?: () => void): Promise<unknown> {
     if (this.closed) throw this.failure ?? new TraeAcpError("TRAE CN ACP is closed", "trae_acp_closed");
     const id = ++this.nextId;
     const result = new Promise<unknown>((resolve, reject) => {
@@ -181,7 +200,9 @@ class TraeAcpClient {
         this.pending.delete(id);
         reject(new TraeAcpError(`TRAE CN ACP timed out during ${method}`, "trae_acp_timeout"));
       }, this.timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve: result => {
+        try { onSuccess?.(); resolve(result); } catch (error) { reject(error); }
+      }, reject, timer });
     });
     try {
       dispatch?.beforeSend();
@@ -333,7 +354,7 @@ export async function openTraeSession(
         signal?.addEventListener("abort", abort, { once: true });
         let completion: Promise<unknown> | undefined;
         try {
-          await client.request("session/set_model", { sessionId, modelId });
+          await client.request("session/set_model", { sessionId, modelId }, undefined, () => client.acknowledgeModelSelection(sessionId, modelId));
           if (signal?.aborted) return;
           let output = false;
           completion = client.request("session/prompt", { sessionId, prompt: [{ type: "text", text }] }, dispatch);
@@ -342,12 +363,6 @@ export async function openTraeSession(
             const frame = await client.nextUpdate();
             if (!frame) break;
             if (frame.kind !== "update" || frame.sessionId !== sessionId) continue;
-            if (frame.update.sessionUpdate === "current_model_update") {
-              if (frame.update.currentModelId !== modelId) {
-                throw new TraeAcpError("TRAE CN changed the selected model unexpectedly.", "trae_model_changed");
-              }
-              continue;
-            }
             for (const event of traePromptEvents(sessionId, frame.update)) {
               if (event.type === "text_delta") output = true;
               emit(event);
@@ -374,6 +389,11 @@ export async function openTraeSession(
           if (stop === "refusal") {
             emit({ type: "incomplete", reason: "content_filter", retryable: false,
               message: "TRAE CN refused the turn.", ...(usage ? { usage } : {}) });
+            return;
+          }
+          if (stop === "max_turn_requests") {
+            emit({ type: "incomplete", reason: "max_turn_requests", retryable: false,
+              message: "TRAE CN reached its request limit for this turn.", ...(usage ? { usage } : {}) });
             return;
           }
           const terminalError = stop !== "stop" && stop !== "max_tokens"

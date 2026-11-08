@@ -1498,7 +1498,7 @@ The `trae-cn` preset uses the signed-in official TRAE CN CLI through
   These completions and refusals retain usage. OpenCodex does not replay a dispatched TRAE prompt on another provider.
   Client cancellation is silent; cancellation initiated by the CLI returns an incomplete turn.
   Requests with an output-token limit fail with `unsupported_max_output_tokens` because this
-  adapter has no verified ACP field for that limit. ACP `max_turn_requests` returns `trae_turn_stopped`.
+  adapter has no verified ACP field for that limit. ACP `max_turn_requests` returns an incomplete turn with that reason.
 - **CLI process:** The CLI uses an empty temporary workspace, no session MCP/skills and a finite tool denylist.
   Shutdown targets the owned POSIX process group or Windows Job Object (Windows 10+, PowerShell 5.1). POSIX descendants
   that detach into another group can survive; this mechanism does not contain untrusted hooks or tools.

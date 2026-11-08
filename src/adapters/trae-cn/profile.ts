@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import { whichFromPath, type PathLookupDeps } from "../coding-agent/profile";
 import { baseScopedEnv } from "../coding-agent/turn";
@@ -14,7 +13,7 @@ export function traeCnDestinationMatches(baseUrl: string | undefined): boolean {
 export function traeCnChildEnv(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): Record<string, string> {
   const pathApi = platform === "win32" ? win32 : posix;
   const home = env[platform === "win32" ? "USERPROFILE" : "HOME"];
-  const traeHome = env.TRAE_HOME ? pathApi.resolve(env.TRAE_HOME) : home ? pathApi.join(home, ".trae") : undefined;
+  const traeHome = env.TRAE_HOME ? pathApi.resolve(env.TRAE_HOME) : home ? pathApi.resolve(home, ".trae") : undefined;
   return { ...baseScopedEnv(), NO_COLOR: "1", ...(traeHome ? { TRAE_HOME: traeHome } : {}) };
 }
 
@@ -25,6 +24,6 @@ export function resolveTraeCli(deps: PathLookupDeps = {}): string | undefined {
   if (onPath) return (platform === "win32" ? win32 : posix).resolve(onPath);
   const home = (deps.env ?? process.env)[platform === "win32" ? "USERPROFILE" : "HOME"];
   if (!home) return undefined;
-  const local = (platform === "win32" ? win32 : posix).resolve(home, ".local", "bin", platform === "win32" ? "traecli.exe" : "traecli");
-  return (deps.exists ?? existsSync)(local) ? local : undefined;
+  const directory = (platform === "win32" ? win32 : posix).resolve(home, ".local", "bin");
+  return whichFromPath("traecli", { ...deps, platform, env: { PATH: directory } });
 }

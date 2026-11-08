@@ -8,7 +8,7 @@ distinct adapter events. Tool input/replay and non-text media are rejected, perm
 denied and terminate the session. Tool notifications fail with `trae_tool_call_unsupported`; only a
 normal `end_turn` completion without text fails with `trae_empty_response`. An outputless `max_tokens`
 completion retains its truncation verdict and maps to an incomplete Responses result. ACP
-`max_turn_requests` reports `trae_turn_stopped` rather than a protocol parsing error.
+`max_turn_requests` emits an incomplete turn with that limit reason and retains partial text and usage.
 Empty completions and unsupported stop reasons retain reported usage in their terminal error. Refusals
 emit a non-retryable `content_filter` incomplete event with usage. The CLI uses
 an empty temporary workspace with disallow rules and no session MCP/skills. `src/codex/catalog/trae-cn-models.ts` publishes discovered
@@ -23,7 +23,8 @@ are refused before CLI startup, including explicit direct routing.
 Observed-auth gathers use only cached evidence; only refreshing gathers and explicit connection
 probes may launch the CLI. Management convergence refreshes CLI-owned evidence before catalog
 admission, so a cold automatic tick can populate it. Lost-generation discovery rereads the current
-cache before attaching its revision. Relative PATH and user-local fallback entries resolve before the child changes its cwd.
+cache before attaching its revision. Relative PATH, user-local fallback entries and the original CLI home resolve before the child changes its cwd.
+Windows home fallback discovery uses the same native-before-launcher order as PATH, including `traecli.cmd`.
 Custom catalog rows and combo members receive the wire modality/verbosity ceiling before optional sidecar publication.
 
 Cancellation is bound before the first initialization RPC. Pending RPCs fail as shutdown starts;
@@ -54,7 +55,9 @@ POSIX launch exits 126/127 before initialization report safe startup codes via t
 Prompt completion closes the bounded update stream once, without a new promise reaction per chunk.
 Client cancellation emits no provider error; an upstream cancellation without client abort emits
 an incomplete event with usage. Explicit output-token limits are refused before startup.
-Model-selection notifications must match the requested model. The finite CLI tool denylist and
+A successful `session/set_model` acknowledgement supersedes prior setup model notifications.
+The reader then validates subsequent model changes against the selected id, before or during prompt dispatch.
+The finite CLI tool denylist and
 disabled ACP client capabilities do not sandbox CLI-side hooks or unlisted vendor tools.
 
 `src/server/management/trae-cn-provider-probe.ts` opens and closes a direct ACP session for the
