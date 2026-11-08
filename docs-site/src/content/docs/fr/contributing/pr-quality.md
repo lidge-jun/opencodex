@@ -79,15 +79,7 @@ Trois contrôles déterministes précèdent la revue humaine. Chaque message d�
   à un commentaire dans un fichier source ne change pas le comportement et n’exige aucun nouveau test
   de régression. La [politique de test locale](/fr/contributing/) reste applicable.
 
-- **CI multiplateforme.** Pour les changements concernés, la suite est fragmentée sous Linux et exécutée
-  intégralement sous macOS pour chaque pull request. La voie Windows principale ne s’exécute actuellement que
-  sur lancement manuel avec `workflow_dispatch` ; elle ne bloque ni les PR ni les promotions. Des tests ciblés
-  du trousseau système et de l’installation npm globale peuvent toutefois inclure Windows.
-
-  Le workflow est créé pour **toutes** les pull requests, quelle que soit leur branche de base, y compris une PR
-  enfant empilée dont la base est la tête d’une autre PR ouverte. Le filtre interne des changements, et non la
-  branche de base, décide quelles tâches coûteuses s’exécutent ; une PR limitée à la documentation reçoit tout
-  de même un contrôle agrégé explicite.
+- **CI.** Consultez la [version anglaise canonique](/contributing/) pour la publication, la CI, les versions et les branches.
 
 - **Label de type.** Le contrôle `label` déduit `bug`, `enhancement`, `documentation` ou `chore` du titre de la
   PR. Si le titre ne possède aucun préfixe reconnu, par exemple `stack 3/5: …`, le contrôle examine les commits,
@@ -102,8 +94,7 @@ un constat est erroné lorsqu’il l’est. CodeRabbit ne bloque pas une fusion.
 
 `enforce-target` et `label` utilisent une automatisation fiable chargée depuis la branche par défaut. Le contrôle
 de PR s’exécute sur les événements `pull_request_target` et `status` de CodeRabbit, tous deux chargés depuis la
-branche par défaut du dépôt. Le comportement disposant de droits d’écriture ne change donc qu’après la promotion
-de la révision du contrôle vers `main`. Le workflow de CI multiplateforme s’exécute sur `pull_request` et prend
+branche par défaut du dépôt. Le comportement disposant de droits d’écriture ne change donc qu’après l’arrivée de la révision du contrôle sur la branche par défaut. Le workflow de CI multiplateforme s’exécute sur `pull_request` et prend
 effet dès qu’il se trouve sur la branche ciblée.
 
 ## Surfaces nécessitant un parrainage

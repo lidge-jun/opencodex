@@ -209,6 +209,9 @@ function QuotaSummaryItem({ row, t, locale }: { row: QuotaSummaryRow; t: TFn; lo
         onClick={onClick}
       >
         <span className="quota-summary-name">{row.label}</span>
+        {headline.labelKey === "quotaSummary.creditsUnavailable" && (
+          <span className="quota-summary-name">{t("quotaSummary.creditsUnavailable")}</span>
+        )}
         {row.showAllWindows ? row.windows.map(window => (
           <span key={window.id} className={`quota-summary-pct quota-summary-pct--${window.severity}`} title={windowLabel(window, t)}>
             {windowLabel(window, t).split(" (")[0]}: {formatQuotaPercent(window.percent)}

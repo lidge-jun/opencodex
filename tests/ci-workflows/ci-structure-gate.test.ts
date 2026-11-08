@@ -35,7 +35,7 @@ test("a change under structure/ selects a job that runs the structure gate", () 
   // The whole defect was that nothing satisfied this. Read the condition off the
   // job rather than naming the job, so renaming it does not quietly pass.
   expect(filters.structure).toContain("structure/**");
-  expect(changes?.outputs?.structure).toBe("${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.structure }}");
+  expect(changes?.outputs?.structure).toBe("${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')) && 'true' || steps.filter.outputs.structure }}");
 
   const selected = Object.entries(workflow.jobs ?? {})
     .filter(([, job]) => job.if?.includes("needs.changes.outputs.structure == 'true'"))
@@ -52,13 +52,8 @@ test("a prose edit still does not start the cross-platform matrix", () => {
   expect(filters.ci).not.toContain("structure/");
 });
 
-test("the push trigger keeps mirroring the ci filter exactly", () => {
-  // The gate is pull-request scope, like `docs-site-build`, because the push
-  // trigger's `paths:` is pinned to equal the `ci` filter and `structure/**`
-  // deliberately is not in that filter. That costs nothing: `dev`, `main` and
-  // `preview` are protected to require a pull request, so no `structure/`
-  // change reaches an integration line without passing through one.
-  expect([...(workflow.on?.push?.paths ?? [])].sort()).toEqual([...(filters.ci ?? [])].sort());
+test("structure changes do not trigger a push run", () => {
+  expect(workflow.on?.push).toBeUndefined();
 });
 
 test("the aggregate gate expects the job instead of ignoring it", () => {
@@ -81,8 +76,8 @@ test("the aggregate gate expects the job instead of ignoring it", () => {
 test("app changes reach the macOS widget job after merge", () => {
   expect(filters.ci).toContain("app/**");
   expect(filters.ci).toContain("desktop/**");
-  // The widget runs on macOS, so pull requests skip it and the push into dev runs it.
-  expect(workflow.on?.push?.paths ?? []).toContain("app/**");
+  // The widget runs on macOS through manual dispatch after the PR.
+  expect(workflow.on?.push).toBeUndefined();
   const widget = workflow.jobs?.widget;
   expect(widget?.if).toBe("github.event_name != 'pull_request'");
   expect(Array.isArray(widget?.needs) ? widget?.needs : []).toContain("changes");
