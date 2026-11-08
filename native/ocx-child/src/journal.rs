@@ -521,6 +521,12 @@ pub fn apply_attach_or_sync_with_fault(
     } else {
         prepare_codex_models_cache(&cache_path, &catalog_models)?
     };
+    // Until the cache write lands, the cache may still hold the previous catalog's entries, so
+    // the backup that tells reconciliation which slugs the Child injected names both catalogs.
+    let interim_backup = match &existing_journal {
+        Some(_) => interim_catalog_backup(&paths.catalog_backup_file, &catalog_models)?,
+        None => None,
+    };
 
     let journal = ChildJournalV1 {
         schema: CHILD_JOURNAL_SCHEMA.to_owned(),
@@ -561,18 +567,63 @@ pub fn apply_attach_or_sync_with_fault(
         return Err("injected fault: AfterJournalWrite".to_owned());
     }
     write_regular_atomic(&catalog_path, catalog_bytes)?;
-    write_private_atomic(&paths.catalog_backup_file, catalog_bytes)?;
+    write_private_atomic(
+        &paths.catalog_backup_file,
+        interim_backup.as_deref().unwrap_or(catalog_bytes),
+    )?;
     if fault == Some(JournalWriteFault::AfterCatalogWrite) {
         return Err("injected fault: AfterCatalogWrite".to_owned());
     }
     if let Some(cache_bytes) = prepared_cache {
         write_regular_atomic(&cache_path, &cache_bytes)?;
     }
+    if interim_backup.is_some() {
+        write_private_atomic(&paths.catalog_backup_file, catalog_bytes)?;
+    }
     if fault == Some(JournalWriteFault::AfterCacheWrite) {
         return Err("injected fault: AfterCacheWrite".to_owned());
     }
     write_regular_atomic(&config_path, next_cfg_text.as_bytes())?;
     Ok(journal)
+}
+
+/// Catalog backup naming the slugs of both the new catalog and the last one the Child injected,
+/// or `None` when there is no previous backup to merge.
+fn interim_catalog_backup(
+    backup_path: &Path,
+    catalog_models: &[serde_json::Value],
+) -> Result<Option<Vec<u8>>, String> {
+    reject_symlink(backup_path)?;
+    let previous = match fs::read(backup_path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("failed reading catalog backup: {e}")),
+    };
+    let previous: serde_json::Value = serde_json::from_slice(&previous).map_err(|e| {
+        format!("client_models_cache_reconcile_failed: invalid catalog backup JSON: {e}")
+    })?;
+    let previous_models = previous
+        .get("models")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("client_models_cache_reconcile_failed: catalog backup missing models array")?;
+    let new_slugs: HashSet<&str> = catalog_models
+        .iter()
+        .filter_map(|m| m.get("slug").and_then(serde_json::Value::as_str))
+        .collect();
+    let mut merged = catalog_models.to_vec();
+    merged.extend(
+        previous_models
+            .iter()
+            .filter(|m| {
+                m.get("slug")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|slug| !new_slugs.contains(slug))
+            })
+            .cloned(),
+    );
+    serde_json::to_vec(&serde_json::json!({ "models": merged }))
+        .map(Some)
+        .map_err(|e| format!("failed serializing catalog backup: {e}"))
 }
 
 /// Performs 100% offline two-tier restoration of `config.toml`, `opencodex-catalog.json`, and `models_cache.json`.

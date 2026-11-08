@@ -253,6 +253,57 @@ fn sync_after_external_cache_edit_keeps_home_entries_over_restored_pre_attach_ve
 }
 
 #[test]
+fn sync_interrupted_before_the_cache_write_still_strips_the_previous_catalog() {
+    for retry_sync in [false, true] {
+        let (_guard, paths, settings) = cache_fixture("interrupted-cache");
+        let sync = |catalog: &[u8], fault: Option<JournalWriteFault>| {
+            apply_attach_or_sync_with_fault(
+                &owned(&paths),
+                "lnk_0123456789abcdef",
+                "link:t",
+                10100,
+                catalog,
+                &settings,
+                fault,
+            )
+        };
+        sync(br#"{"models":[{"slug":"remote-v1"}]}"#, None).unwrap();
+        let mut cache: serde_json::Value =
+            serde_json::from_slice(&fs::read(paths.codex_models_cache_path()).unwrap()).unwrap();
+        cache["models"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"slug":"local-added"}));
+        fs::write(
+            paths.codex_models_cache_path(),
+            serde_json::to_vec(&cache).unwrap(),
+        )
+        .unwrap();
+        // The new catalog and its backup are written, the cache still holds remote-v1.
+        let err = sync(
+            br#"{"models":[{"slug":"remote-v2"}]}"#,
+            Some(JournalWriteFault::AfterCatalogWrite),
+        )
+        .unwrap_err();
+        assert!(err.contains("AfterCatalogWrite"), "{err}");
+        if retry_sync {
+            sync(br#"{"models":[{"slug":"remote-v2"}]}"#, None).unwrap();
+            let slugs: Vec<_> = cache_models(&paths)
+                .iter()
+                .map(|m| m["slug"].as_str().unwrap().to_owned())
+                .collect();
+            assert_eq!(slugs, ["remote-v2", "local-added"]);
+        }
+        offline_detach(&detach_guard(&paths), false).unwrap();
+        assert_eq!(
+            cache_models(&paths),
+            vec![serde_json::json!({"slug":"local-added"})],
+            "retry_sync={retry_sync}"
+        );
+    }
+}
+
+#[test]
 fn sync_and_detach_treat_codex_reserialized_home_entries_as_child_owned() {
     for sync_before_detach in [true, false] {
         let (_guard, paths, settings) = cache_fixture("reserialized-home");
