@@ -42,6 +42,11 @@ Only a human can transition an undecided install to active sending:
 - Interactive prompts run from `src/cli/star-prompt.ts`, `src/service/cli.ts`, and
   `src/cli/init.ts`; agent-driven, non-TTY, or service starts print a once-per-version notice
   and record neither `noticeShownAt` nor `decision`.
+- A decision made before `config.json` exists (`ocx telemetry disable`, the dashboard popup on a
+  fresh install, the Windows installer opt-out) is held as `pendingDecision` in
+  `telemetry-state.json` instead of creating the config, so `ocx init` still runs setup.
+  `withPendingTelemetryDecision` applies it wherever consent is resolved (scheduler, status route,
+  CLI prompt) until a decision is written into the config, which clears it.
 
 ## Identity, aggregation, and scheduling
 

@@ -791,6 +791,24 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
     }
   });
 
+  test("an id minted after an opt-out reports as a returning install, not a new one", async () => {
+    const sent: TelemetryPayloadV1[] = [];
+    const mockFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      sent.push(JSON.parse(String(init?.body)) as TelemetryPayloadV1);
+      return new Response(JSON.stringify({ ok: true }), { status: 202 });
+    }) as unknown as typeof fetch;
+    const config = {
+      telemetry: { decision: "accepted" as const, decidedAt: "2026-11-01T10:00:00.000Z", noticeShownAt: "2026-11-01T10:00:00.000Z" },
+    };
+    expect(await runTelemetryTick({ configDir: home, config, env: {}, now: Date.parse("2026-11-03T12:00:00.000Z"), fetch: mockFetch })).toMatchObject({ sent: true });
+    expect(sent[0]!.newInstall).toBe(true);
+    // A decline or env opt-out deletes the id; the next accepted send mints a fresh one.
+    deleteTelemetryInstallId(home);
+    expect(await runTelemetryTick({ configDir: home, config, env: {}, now: Date.parse("2026-11-04T12:00:00.000Z"), fetch: mockFetch })).toMatchObject({ sent: true });
+    expect(sent[1]!.newInstall).toBe(false);
+    expect(readTelemetryState(home).everReported).toBe(true);
+  });
+
   test("D7: re-reads consent and env before transmission and aborts in-flight ticks on stop or nudge", async () => {
     let fetchCalls = 0;
     const mockFetch = (async () => {

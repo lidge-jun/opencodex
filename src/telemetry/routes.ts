@@ -16,10 +16,13 @@ import {
 } from "./install-id";
 import { buildTelemetryPayloadV1, resolveInstallChannel } from "./payload";
 import {
+  clearPendingTelemetryDecision,
   latestCompletedUtcDay,
   nudgeTelemetryScheduler,
   readTelemetryState,
+  recordPendingTelemetryDecision,
   resolveNextEligibleTelemetryDay,
+  withPendingTelemetryDecision,
 } from "./scheduler";
 
 export interface TelemetryStatusSnapshot extends TelemetryConsentStatus {
@@ -37,7 +40,7 @@ export async function buildTelemetryStatusSnapshot(
   const now = options.now ?? Date.now();
   const env = options.env ?? process.env;
   const configDir = options.configDir ?? getConfigDir();
-  const status = resolveTelemetryStatus(config, env);
+  const status = resolveTelemetryStatus(withPendingTelemetryDecision(config, configDir), env);
   const installChannel = resolveInstallChannel({ env });
   const state = readTelemetryState(configDir);
   const { day: nextEligibleDay } = resolveNextEligibleTelemetryDay(status, state, now);
@@ -48,9 +51,7 @@ export async function buildTelemetryStatusSnapshot(
   const installDayHash = identity
     ? computeInstallDayHash(identity.installId, day)
     : TELEMETRY_PREVIEW_HASH_PLACEHOLDER;
-  const newInstall = identity
-    ? identity.firstReportSent !== true
-    : true;
+  const newInstall = state.everReported !== true && identity?.firstReportSent !== true;
   const preview = buildTelemetryPayloadV1({
     aggregate,
     installDayHash,
@@ -126,13 +127,20 @@ export async function handlePutTelemetryRoute(ctx: ManagementContext): Promise<R
       return { changed, value: next };
     }),
   );
-  if (outcome.status === "unavailable") {
+  if (outcome.status === "unavailable" && outcome.reason === "missing") {
+    // A fresh install's first-run popup can answer before any config.json exists; hold the
+    // decision so creating a config here does not make `ocx init` skip setup.
+    committed = { decision, decidedAt: nowIso, noticeShownAt: nowIso };
+    recordPendingTelemetryDecision(committed);
+  } else if (outcome.status === "unavailable") {
     return jsonResponse(
       { error: `Configuration is ${outcome.reason}`, code: "config_unavailable" },
       503,
       ctx.req,
       ctx.config,
     );
+  } else {
+    clearPendingTelemetryDecision();
   }
   adoptPersistedTelemetry(ctx.config, committed);
   if (decision === "declined") {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -7,7 +7,7 @@ import type { ManagementPrincipal } from "../../src/server/management-auth";
 import type { ManagementRequestIngress } from "../../src/server/management/context";
 import { TELEMETRY_PREVIEW_HASH_PLACEHOLDER, readTelemetryInstallId, resetTelemetryInstallIdMemoForTests, telemetryIdPath } from "../../src/telemetry/install-id";
 import { buildTelemetryStatusSnapshot } from "../../src/telemetry/routes";
-import { latestCompletedUtcDay, runTelemetryTick } from "../../src/telemetry/scheduler";
+import { latestCompletedUtcDay, readTelemetryState, runTelemetryTick } from "../../src/telemetry/scheduler";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -236,5 +236,24 @@ describe("/api/telemetry management routes", () => {
         expect(readFileSync(full, "utf8")).not.toContain(rawInstallId);
       }
     }
+  });
+
+  test("PUT /api/telemetry on a fresh install holds the decision without creating config.json", async () => {
+    // A first-run popup can be answered before any config.json exists (fresh desktop install).
+    unlinkSync(join(home, "config.json"));
+    config = { port: 10100, defaultProvider: "openai", providers: {} } as unknown as OcxConfig;
+    const declined = await call("PUT", "/api/telemetry", {
+      body: { decision: "declined" },
+      principal: "gui-session",
+      ingress: { trustedLoopback: true, guiSessionIssuance: "loopback-bootstrap" },
+    });
+    expect(declined.status).toBe(200);
+    expect(declined.body).toMatchObject({ ok: true, effective: false, decision: "declined" });
+    expect(existsSync(join(home, "config.json"))).toBe(false);
+    expect(readTelemetryState(home).pendingDecision?.decision).toBe("declined");
+    // A later GET from a process that only sees the defaults still reports the held decline.
+    config = { port: 10100, defaultProvider: "openai", providers: {} } as unknown as OcxConfig;
+    const status = await call("GET", "/api/telemetry");
+    expect(status.body).toMatchObject({ effective: false, decision: "declined" });
   });
 });

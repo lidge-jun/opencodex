@@ -1,13 +1,18 @@
 import { lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isatty } from "node:tty";
-import { getConfigDir, getDefaultConfig, initializePersistedConfigIfMissing, mutatePersistedConfig, readConfigDiagnostics } from "../config";
+import { getConfigDir, mutatePersistedConfig, readConfigDiagnostics } from "../config";
 import { atomicWriteFileNoFollow } from "../config/atomic-write";
 import { withConfigDirHardeningSettled } from "../config/paths";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { resolveTelemetryStatus } from "../telemetry/consent";
 import { deleteTelemetryInstallId } from "../telemetry/install-id";
 import { buildTelemetryStatusSnapshot, type TelemetryStatusSnapshot } from "../telemetry/routes";
+import {
+  clearPendingTelemetryDecision,
+  recordPendingTelemetryDecision,
+  withPendingTelemetryDecision,
+} from "../telemetry/scheduler";
 import type { OcxTelemetryConfig, OcxTelemetryDecision } from "../types";
 import { currentVersion } from "../update/index";
 import { isAgentDriven } from "./agent-driven";
@@ -36,7 +41,7 @@ export const TELEMETRY_CLI_DISCLOSURE_LINES = Object.freeze([
   "  • Never sent: prompts, model outputs, request/response bodies, API keys, OAuth tokens, account IDs or emails, custom base URLs, hostnames, file paths, or error text.",
   "  • Public aggregates: project-wide totals are published at opencodex.me/dashboard.",
   "  • See the exact payload: ocx telemetry status --json",
-  "  • Turn off anytime: ocx telemetry disable, OCX_TELEMETRY=0, DO_NOT_TRACK=1, or the Proxy details toggle in the dashboard.",
+  "  • Turn off anytime: ocx telemetry disable, the Proxy details toggle in the dashboard, or OCX_TELEMETRY=0 / DO_NOT_TRACK=1 in the proxy's own environment (a service does not see variables set in your shell).",
 ]);
 
 export function printTelemetryDisclosure(): void {
@@ -88,22 +93,18 @@ async function persistTelemetryDecision(decision: OcxTelemetryDecision): Promise
       fresh.telemetry = next;
       return { changed, value: next };
     });
-  const outcome = await withConfigDirHardeningSettled(dir, () => {
-    const first = mutate();
-    if (first.status !== "unavailable" || first.reason !== "missing") return first;
+  const outcome = await withConfigDirHardeningSettled(dir, () => mutate());
+  if (outcome.status === "unavailable" && outcome.reason === "missing") {
     // A fresh install has no config.json yet; the Windows installer's opt-out arrives exactly
-    // then. Create it the way a first start would, carrying the decision. A concurrent first
-    // start that wins the race leaves a file to patch instead.
-    const created = initializePersistedConfigIfMissing({
-      ...getDefaultConfig(),
-      telemetry: { decision, decidedAt: nowIso, noticeShownAt: nowIso },
-    });
-    return created === "created" ? { status: "committed" as const, value: null } : mutate();
-  });
-  if (outcome.status === "unavailable") {
+    // then. Creating the config would make `ocx init` skip setup, so hold the decision in
+    // telemetry-state.json; it applies until a decision is written into the config.
+    recordPendingTelemetryDecision({ decision, decidedAt: nowIso, noticeShownAt: nowIso }, dir);
+  } else if (outcome.status === "unavailable") {
     throw new Error(
       `Cannot update telemetry configuration: config.json is ${outcome.reason}. Fix or restore config.json before retrying.`,
     );
+  } else {
+    clearPendingTelemetryDecision(dir);
   }
   if (decision === "declined") {
     deleteTelemetryInstallId(dir);
@@ -118,7 +119,7 @@ async function persistTelemetryDecision(decision: OcxTelemetryDecision): Promise
 export async function maybeShowTelemetryPrompt(): Promise<void> {
   try {
     const diagnostics = readConfigDiagnostics({ passive: true });
-    const status = resolveTelemetryStatus(diagnostics.config, process.env);
+    const status = resolveTelemetryStatus(withPendingTelemetryDecision(diagnostics.config), process.env);
     if (status.envOverride !== null || status.decision !== null || status.noticeShownAt !== null) {
       return;
     }
