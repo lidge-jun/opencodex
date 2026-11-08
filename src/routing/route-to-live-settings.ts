@@ -25,3 +25,11 @@ export function refreshRouteNativeSettings(live: OcxConfig): void {
     mirrorRouteNativeSettings(live, latest.config);
   });
 }
+
+/** A copy carrying the durable native switches; another process may have changed them. */
+export function withDurableRouteNativeSettings(config: OcxConfig): OcxConfig {
+  const copy = structuredClone(config);
+  const latest = readConfigDiagnostics();
+  if (latest.source === "file" && !latest.error) mirrorRouteNativeSettings(copy, latest.config);
+  return copy;
+}

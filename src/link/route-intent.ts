@@ -70,9 +70,19 @@ export function emptyRouteIntentState(): RouteIntentState {
   return { version: 1, defaults: {}, devices: {} };
 }
 
+export interface HomeRouteProjectionOptions {
+  /**
+   * The native client a Home write is deciding right now. Its Home default applies to the Home;
+   * every other native client on the Home follows the Home's own persisted switch.
+   */
+  decidedClient?: RouteClientId;
+}
+const NATIVE_ROUTE_CLIENTS: readonly RouteClientId[] = ["codex", "claude", "grok", "claude-desktop"];
+
 /** Pure projection. Persisted policy is supplied explicitly by the management owner. */
 export function projectHomeRouteIntent(
   config: OcxConfig, version: string, deviceId?: string, state: RouteIntentState = emptyRouteIntentState(),
+  options: HomeRouteProjectionOptions = {},
 ): HomeRouteIntentDocument {
   const clients = {} as HomeRouteIntentDocument["clients"];
   const sources = {} as HomeRouteIntentDocument["sources"];
@@ -81,8 +91,14 @@ export function projectHomeRouteIntent(
     // default without changing the builtin defaults inherited by other devices.
     const legacy = client === "claude" ? config.claudeCode?.enabled
       : client === "codex" || client === "grok" || client === "claude-desktop" ? config.clientIntegrations?.[client] : undefined;
-    const home = state.defaults[client] ?? (typeof legacy === "boolean" ? { enabled: legacy } : undefined);
     const device = deviceId === undefined ? undefined : state.devices[deviceId]?.[client];
+    // Captured defaults drive Children. On the Home itself, a persisted native switch is the
+    // Home's own decision: ocx restore, Messages off and native toggles change it without
+    // recording route intent, and an unrelated route write must not undo them.
+    const liveHomeSwitch = deviceId === "home" && NATIVE_ROUTE_CLIENTS.includes(client) && device === undefined
+      && options.decidedClient !== client && typeof legacy === "boolean";
+    const home = liveHomeSwitch ? { enabled: legacy as boolean }
+      : state.defaults[client] ?? (typeof legacy === "boolean" ? { enabled: legacy } : undefined);
     const implicitNativeHome = deviceId === "home" && (client === "grok" || client === "claude-desktop")
       && home === undefined && device === undefined;
     const chosen = { enabled: client === "codex" || client === "claude" || implicitNativeHome, ...home, ...device };

@@ -20,7 +20,7 @@ import { resolveApiSurfaceSettings } from "../protocols/settings";
 import { nativeIntentFields, prepareNativeIntentWrite, publishNativeIntentWrite } from "./route-intent-native-originals";
 
 export interface LocalRouteIntentOptions extends Pick<RouteIntentApplyInput,
-  "overwriteConflict" | "overwriteClient" | "beforeWrite" | "statePath" | "store" | "home" | "env" | "now" | "onlyClients"> {
+  "overwriteConflict" | "overwriteClient" | "beforeWrite" | "statePath" | "store" | "home" | "env" | "now" | "onlyClients" | "retainSkippedOutcomes"> {
   /** Connect/sync already applied the Home's Codex settings through the existing injector. */
   codexApplied?: boolean;
   lifecycleLockDeps?: ClientLifecycleLockDeps;

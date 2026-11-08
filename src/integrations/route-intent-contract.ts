@@ -42,6 +42,8 @@ export interface RouteIntentApplyInput {
   beforeWrite?: () => void;
   /** Reconcile only explicit local opt-outs when no Home document is available. */
   onlyClients?: readonly RouteClientId[];
+  /** Clients skipped by onlyClients keep the previous receipt outcome for the same client intent. */
+  retainSkippedOutcomes?: boolean;
   /** Explicit disconnect recovery only: snapshot an owned conflicting block, then remove it. */
   recoverConflicts?: boolean;
   /** Lifecycle exclusion around async file writers; native adapters manage their own lock order. */

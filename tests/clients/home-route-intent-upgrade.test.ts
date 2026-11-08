@@ -41,7 +41,7 @@ test.each([undefined, false, true])("unrelated Home changes preserve existing na
 test("a later explicit default supersedes migrated Home intent but not a user Home override", () => {
   const config = { port: 18274, hostname: "127.0.0.1", providers: {} } as OcxConfig;
   initializeHomeRouteIntentDefaults(config, "1", "opencode");
-  const homeIntent = () => projectHomeRouteIntent(config, "1", "home", readHomeRouteIntentState(config)).clients.grok.enabled;
+  const homeIntent = (decided?: "grok") => projectHomeRouteIntent(config, "1", "home", readHomeRouteIntentState(config), { decidedClient: decided }).clients.grok.enabled;
   expect(homeIntent()).toBe(true);
   setRouteClientIntent("grok", { enabled: false });
   expect(homeIntent()).toBe(false);
@@ -50,7 +50,9 @@ test("a later explicit default supersedes migrated Home intent but not a user Ho
   expect(homeIntent()).toBe(true);
   config.clientIntegrations = { grok: true };
   clearRouteClientIntent("grok", "home");
-  expect(homeIntent()).toBe(false);
+  // The Home's own switch stays authoritative until the inherit write that decides Grok applies.
+  expect(homeIntent()).toBe(true);
+  expect(homeIntent("grok")).toBe(false);
   expect(projectHomeRouteIntent(config, "1", "lnk_0123456789abcdef", readHomeRouteIntentState(config)).clients.grok.enabled).toBe(false);
 });
 
@@ -61,7 +63,8 @@ test.each(["grok", "claude-desktop"] as const)("clearing a first Home %s overrid
   config.clientIntegrations = { [client]: true };
   clearRouteClientIntent(client, "home");
   const state = readHomeRouteIntentState(config);
-  expect(projectHomeRouteIntent(config, "1", "home", state).clients[client].enabled).toBe(false);
+  expect(projectHomeRouteIntent(config, "1", "home", state).clients[client].enabled).toBe(true);
+  expect(projectHomeRouteIntent(config, "1", "home", state, { decidedClient: client }).clients[client].enabled).toBe(false);
   expect(projectHomeRouteIntent(config, "1", "lnk_0123456789abcdef", state).clients[client].enabled).toBe(false);
 });
 

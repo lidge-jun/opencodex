@@ -138,6 +138,7 @@ export async function materializeRouteIntent(input: RouteIntentApplyInput): Prom
     input = { ...input, document: structuredClone(input.document), config: structuredClone(input.config), models: structuredClone([...input.models]),
       store: input.store ?? createIntegrationStateStore() };
     const effective = effectiveRouteIntent(input.document, path, input.localOff);
+    const previous = input.retainSkippedOutcomes ? readRouteIntentReceipt(path) : null;
     const receipt: RouteIntentReceipt = { version: 1, models: input.models, ...(input.linkId ? { linkId: input.linkId } : {}), document: structuredClone(input.document), ...effective,
       outcomes: ROUTE_CLIENT_IDS.map(client => ({ client, outcome: "stale" })),
       appliedRouteIntentDigest: null, appliedAt: (input.now ?? (() => new Date()))().toISOString() };
@@ -146,7 +147,12 @@ export async function materializeRouteIntent(input: RouteIntentApplyInput): Prom
       ? input.withReceiptWrite(() => writeRouteIntentReceipt(receipt, path)) : writeRouteIntentReceipt(receipt, path);
     saveReceipt();
     for (const client of ROUTE_CLIENT_IDS) {
-      if (input.onlyClients && !input.onlyClients.includes(client)) continue;
+      if (input.onlyClients && !input.onlyClients.includes(client)) {
+        const kept = previous?.linkId === input.linkId
+          ? previous?.outcomes.find(row => row.client === client && row.intentDigest === routeClientIntentDigest(input.document, client)) : undefined;
+        if (kept) receipt.outcomes[ROUTE_CLIENT_IDS.indexOf(client)] = kept;
+        continue;
+      }
       input.beforeWrite?.();
       try {
         receipt.outcomes[ROUTE_CLIENT_IDS.indexOf(client)] = { ...await applyClient({ ...input, overwriteConflict: input.overwriteConflict === true && (input.overwriteClient === undefined || input.overwriteClient === client) }, client, effective.clients[client]),
