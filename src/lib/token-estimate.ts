@@ -104,7 +104,7 @@ const SUPPLEMENTARY_HAN = /\p{Script=Han}/uy;
  * Surrogate pairs (rare CJK extensions beyond the BMP) are counted as their two code units,
  * which slightly over-counts them — again the safe direction.
  */
-function countCjk(text: string): number {
+export function countCjk(text: string): number {
   let cjk = 0;
   for (let i = 0; i < text.length; i++) {
     const c = text.charCodeAt(i);
