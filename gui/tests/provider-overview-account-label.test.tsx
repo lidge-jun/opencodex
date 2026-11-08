@@ -19,6 +19,7 @@ let win: Window;
 let host: HTMLElement;
 let root: Root | null = null;
 let originalFetch: PropertyDescriptor | undefined;
+let domIsSetup = false;
 
 const POOL_A = { name: "anthropic", adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" } as unknown as WorkspaceItem;
 const POOL_B = { ...POOL_A, name: "anthropic2", anthropicOAuthInstance: "anthropic2" } as unknown as WorkspaceItem;
@@ -36,9 +37,13 @@ const originalDescriptors = new Map<string, PropertyDescriptor | undefined>(
   [...globals, "fetch"].map((k) => [k, Object.getOwnPropertyDescriptor(globalThis, k)]),
 );
 
-beforeEach(() => {
+beforeEach(setupDom);
+
+function setupDom(): void {
   previous = Object.fromEntries(globals.map((k) => [k, Object.getOwnPropertyDescriptor(globalThis, k)])) as typeof previous;
   originalFetch = Object.getOwnPropertyDescriptor(globalThis, "fetch");
+  // Armed before the first mutation, so a setup failure still restores what it changed.
+  domIsSetup = true;
   win = new Window({ url: "http://localhost/" });
   Object.defineProperty(win.navigator, "language", { configurable: true, value: "en-US" });
   Object.defineProperty(win, "event", { configurable: true, writable: true, value: undefined });
@@ -55,10 +60,8 @@ beforeEach(() => {
   });
   host = win.document.createElement("div") as unknown as HTMLElement;
   win.document.body.appendChild(host as never);
-  domIsSetup = true;
-});
+}
 
-let domIsSetup = false;
 afterEach(teardownDom);
 
 async function teardownDom(): Promise<void> {
@@ -203,4 +206,19 @@ test("teardown restores the original global property descriptors exactly", async
   const expected = new Map(keys.map((k) => [k, originalDescriptors.get(k)]));
   await teardownDom();
   for (const k of keys) expect(Object.getOwnPropertyDescriptor(globalThis, k)).toEqual(expected.get(k));
+});
+
+/** #8344: a window that already existed comes back as the same object, without an added `event`. */
+test("teardown leaves a pre-existing window object untouched", async () => {
+  await teardownDom();
+  const existing = { marker: "pre-existing" };
+  Object.defineProperty(globalThis, "window", { configurable: true, writable: true, value: existing });
+  try {
+    setupDom();
+    await teardownDom();
+    expect(Reflect.get(globalThis, "window")).toBe(existing);
+    expect(Object.getOwnPropertyNames(existing)).toEqual(["marker"]);
+  } finally {
+    Reflect.deleteProperty(globalThis, "window");
+  }
 });
