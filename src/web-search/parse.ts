@@ -122,6 +122,8 @@ function streamedPartKey(data: Record<string, unknown>, parts: Map<string, Strea
     && (contentIndex === undefined || part.contentIndex === undefined || contentIndex === part.contentIndex);
   const indexedPart = indexedKey ? parts.get(indexedKey) : undefined;
   let match = itemId ? identifiedPart(lookup, itemId, contentIndex, !!indexedKey, outputIndex) : undefined;
+  if (!match && itemId && indexedPart?.itemId === itemId
+    && identifiedPart(lookup, itemId, contentIndex, false, outputIndex) === indexedPart) match = indexedPart;
   if (match && !compatible(match)) match = undefined;
   const outputBucket = outputIndex === undefined ? undefined : lookup.get(JSON.stringify(["output", outputIndex]));
   const outputContentBucket = outputIndex === undefined || contentIndex === undefined ? undefined
@@ -130,16 +132,20 @@ function streamedPartKey(data: Record<string, unknown>, parts: Map<string, Strea
     : lookup.get(JSON.stringify(["output-content", outputIndex, null]));
   const outputCandidates = contentIndex === undefined ? outputBucket?.size ?? 0
     : (outputContentBucket?.size ?? 0) + (outputUnknownContentBucket?.size ?? 0);
-  if (indexedPart && compatible(indexedPart)) {
-    // A full snapshot links the unique item draft to the anonymous position, even if a prior
-    // delta already gave the draft that position. A third candidate keeps the parts separate.
-    if (data.type === "response.output_text.done" && itemId && !indexedPart.itemId
-      && match && match !== indexedPart
-      && outputCandidates === (match.outputIndex === undefined ? 1 : 2)) {
+  // A linking snapshot can identify an anonymous position even when either frame omitted the
+  // content index. Only inspect the buckets when their total proves there are at most two parts.
+  if (data.type === "response.output_text.done" && itemId && match
+    && outputCandidates === (match.outputIndex === undefined ? 1 : 2)) {
+    const buckets = contentIndex === undefined ? [outputBucket] : [outputContentBucket, outputUnknownContentBucket];
+    const anonymous = buckets.flatMap(bucket => bucket ? [...bucket] : [])
+      .find(part => part !== match && !part.itemId && compatible(part));
+    if (anonymous) {
       indexPart(lookup, match, false);
       parts.delete(match.key);
-      return indexedKey!;
+      return anonymous.key;
     }
+  }
+  if (indexedPart && compatible(indexedPart)) {
     if (match && match !== indexedPart) return match.key;
     if ((itemId && indexedPart.itemId === itemId) || outputCandidates === 1) return indexedKey!;
   }

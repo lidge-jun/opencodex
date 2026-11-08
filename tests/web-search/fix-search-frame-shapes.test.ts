@@ -4,6 +4,89 @@ import { MAX_SIDECAR_DECODED_CHARS, parseSidecarSSE } from "../../src/web-search
 const response = (frames: unknown[]) => new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join(""));
 
 describe("identity transition matrix", () => {
+  test("reconciles output-only snapshots when a later snapshot links the item", async () => {
+    const event = (kind: string, identity: object, text: string) => ({
+      type: `response.output_text.${kind}`, ...identity, [kind === "done" ? "text" : "delta"]: text,
+    });
+    for (const first of ["delta", "done"]) for (const anonymous of ["delta", "done"]) for (const anonymousContent of [false, true])
+      for (const linkedContent of [false, true]) for (const linkDelta of [false, true])
+        for (const reverse of [false, true]) for (const terminal of ["empty", "partial", "complete"]) {
+          const drafts = [event(first, { item_id: "a" }, "A"), event(first, { item_id: "b" }, "draft")];
+          if (reverse) drafts.reverse();
+          const link = { item_id: "b", output_index: 1, ...(linkedContent ? { content_index: 0 } : {}) };
+          const result = await parseSidecarSSE(response([
+            ...drafts,
+            event(anonymous, { output_index: 1, ...(anonymousContent ? { content_index: 0 } : {}) }, "B"),
+            ...(linkDelta ? [event("delta", link, "!")] : []),
+            event("done", link, "B"),
+            terminal === "empty" ? { type: "response.completed" } : {
+              type: "response.completed", response: { output: [
+                terminal === "partial" ? null : { type: "message", content: [{ type: "output_text", text: "A" }] },
+                { id: "b", type: "message", content: [{ type: "output_text", text: "B" }] },
+              ] },
+            },
+          ]));
+          expect({ first, anonymous, anonymousContent, linkedContent, linkDelta, reverse, terminal, text: result.text })
+            .toEqual({ first, anonymous, anonymousContent, linkedContent, linkDelta, reverse, terminal, text: terminal === "complete" ? "AB" : "BA" });
+        }
+  });
+
+  test.each([false, true])("keeps a third identity at an output-only position, content index: %s", async content => {
+    const position = { output_index: 1, ...(content ? { content_index: 0 } : {}) };
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", item_id: "a", delta: "A" },
+      { type: "response.output_text.delta", item_id: "b", delta: "draft" },
+      { type: "response.output_text.done", ...position, text: "C" },
+      { type: "response.output_text.delta", item_id: "b", ...position, delta: "!" },
+      { type: "response.output_text.done", item_id: "c", ...position, text: "D" },
+      { type: "response.output_text.done", item_id: "b", ...position, text: "B" },
+      { type: "response.completed" },
+    ]));
+    for (const text of ["A", "B", "C", "D"]) expect(result.text).toContain(text);
+  });
+
+  test("does not iterate an ambiguous output bucket while linking snapshots", async () => {
+    const frames: unknown[] = Array.from({ length: 400 }, (_, i) =>
+      ({ type: "response.output_text.done", item_id: `item_${i}`, output_index: 1, text: "" }));
+    frames.push(...Array.from({ length: 400 }, (_, i) =>
+      ({ type: "response.output_text.done", item_id: `item_${i}`, output_index: 1, content_index: 0, text: "" })));
+    frames.push({ type: "response.completed" });
+    let visited = 0;
+    const original = Set.prototype[Symbol.iterator];
+    const spy = spyOn(Set.prototype, Symbol.iterator).mockImplementation(function (this: Set<unknown>) {
+      visited += this.size;
+      return Reflect.apply(original, this, []);
+    });
+    try {
+      expect((await parseSidecarSSE(response(frames))).text).toBe("");
+      expect(visited).toBeLessThanOrEqual(800);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("retains a snapshot at a different content index when linking an item", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", item_id: "a", content_index: 1, delta: "A" },
+      { type: "response.output_text.delta", item_id: "b", content_index: 1, delta: "draft" },
+      { type: "response.output_text.done", output_index: 1, content_index: 0, text: "C" },
+      { type: "response.output_text.done", item_id: "b", output_index: 1, content_index: 1, text: "B" },
+      { type: "response.completed" },
+    ]));
+    expect(result.text).toBe("CBA");
+  });
+
+  test("does not discard an anonymous snapshot on a linking delta alone", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", item_id: "a", delta: "A" },
+      { type: "response.output_text.delta", item_id: "b", delta: "draft" },
+      { type: "response.output_text.done", output_index: 1, text: "B" },
+      { type: "response.output_text.delta", item_id: "b", output_index: 1, content_index: 0, delta: "!" },
+      { type: "response.completed" },
+    ]));
+    expect(result.text).toBe("draft!BA");
+  });
+
   test("joins an anonymous snapshot after a draft gains its position via delta", async () => {
     const result = await parseSidecarSSE(response([
       { type: "response.output_text.delta", item_id: "a", content_index: 0, delta: "A" },
