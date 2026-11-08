@@ -360,9 +360,9 @@ export async function resolveResponsesCodexAuth(
         headers.delete("chatgpt-account-id");
       }
     }
-    // Codex auth materialization keeps only its credential allowlist. A compact-v1 handoff
-    // must also retain the permitted client fingerprint for its routed summarizer send.
-    if (options.compactionRecoveryKind === "compaction-v1") {
+    // Auth materialization keeps only its credential allowlist. Responses turns and compact
+    // handoffs also need the provider's permitted metadata, without replacing selected identity.
+    if (route.provider.adapter === "openai-responses" || options.compactionRecoveryKind === "compaction-v1") {
       copyResponsesClientMetadata(headers, authInputHeaders, route.provider);
     }
     // dual_header: the assertion is first-party only and travels only beside the caller's own

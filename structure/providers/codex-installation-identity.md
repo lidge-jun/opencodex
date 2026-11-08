@@ -52,6 +52,9 @@ identity. `src/server/ws-bridge.ts` isolates explicit Pool header overrides as w
 Its inbound handshake snapshot also retains caller-supplied `user-agent` and
 `x-codex-app-version`, so reconstructed turns do not lose the original client identity.
 Provider egress still applies its own metadata policy; absent fields are not generated.
+`src/server/responses/core-auth.ts` restores User-Agent and provider-selected metadata after
+credential materialization for Responses turns and compact handoffs. The copier fills only
+missing fields, so a selected Pool installation identity is never replaced with the caller's.
 Native compact in `src/server/responses/compact.ts` projects the body per physical send, so a quota
 failover uses the newly selected account ID. Alternate construction reports identity failures as
 503 instead of treating them as absence of an eligible account, while recording the first

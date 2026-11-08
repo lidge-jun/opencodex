@@ -1,4 +1,5 @@
 {
+  "responses-forward-client-headers-live.test.ts": "responses",
   "responses-direct-chat-tool-choice.test.ts": "responses",
   "responses-native-output-identity.test.ts": "responses",
   "graceful-max-output-tokens.test.ts": "responses",

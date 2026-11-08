@@ -128,6 +128,7 @@ export class WsSendDroppedError extends Error {
   }
 }
 
+/** Capture inbound WS auth and metadata for reconstructed turns; provider egress filters again. */
 export function selectForwardHeaders(
   headers: Headers,
   codexOverride?: { accessToken: string; chatgptAccountId: string; kind?: "pool" | "main-pool" },

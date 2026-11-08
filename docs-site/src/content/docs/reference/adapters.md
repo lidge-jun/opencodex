@@ -220,6 +220,8 @@ If it requires the caller's window identifier, opt in on that provider:
 This preserves only values the client actually sends, including across native compact fallback.
 WebSocket clients retain their original `User-Agent` and app-version metadata through the
 handshake, with the same provider forwarding policy as HTTP clients.
+Responses authentication preparation preserves that permitted metadata before the final
+provider transport applies its header policy, for both HTTP and WebSocket turns.
 Both identifier headers are off by default on custom providers and require separate selection.
 Add `x-codex-installation-id` only when the trusted destination also requires it: an installation
 identifier can correlate requests across sessions. Selecting a window identifier does not enable
