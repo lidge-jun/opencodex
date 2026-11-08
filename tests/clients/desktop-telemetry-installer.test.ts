@@ -228,6 +228,17 @@ describe("Windows installer telemetry choice", () => {
     }
   });
 
+  test("no condition tests a property bare, since a property holding the integer 0 would read as false", () => {
+    const conditions = [
+      ...wxs.matchAll(/<SetProperty [^>]*>([^<]*)<\/SetProperty>/g),
+      ...wxs.matchAll(/<Publish Property="\w+" Value="[^"]*">([^<]*)<\/Publish>/g),
+    ].map(match => xmlUnescape(match[1]!));
+    expect(conditions.length).toBeGreaterThan(0);
+    for (const condition of conditions) {
+      expect(condition, condition).not.toMatch(/(^|\bAND |\bOR |\bNOT |\()\s*OCX_TELEMETRY_\w+\s*($|\)| AND\b| OR\b)/);
+    }
+  });
+
   describe("what each kind of install records in HKLM", () => {
     const optOut = TELEMETRY_INSTALLER_OPT_OUT;
     const send = "send";
@@ -303,6 +314,9 @@ describe("Windows installer telemetry choice", () => {
       expect(simulateInstall(wxs, { ui: "full", previous: { choice: "off", stamp: "s1" } })).toEqual({ choice: optOut, stamp: UI_STAMP, boxPreselected: false });
       expect(simulateInstall(wxs, { ui: "none", previous: { choice: "off", stamp: "s1" } })).toEqual({ choice: "off", stamp: "s1", boxPreselected: undefined });
       expect(simulateInstall(wxs, { ui: "full", previous: { choice: "SEND", stamp: "s1" } }).boxPreselected).toBe(true);
+      // A carried integer 0 is a value: a bare property test would read it as false and fall back to send.
+      expect(simulateInstall(wxs, { ui: "full", previous: { choice: "0", stamp: "s1" } })).toEqual({ choice: optOut, stamp: UI_STAMP, boxPreselected: false });
+      expect(simulateInstall(wxs, { ui: "none", previous: { choice: "0", stamp: "s1" } })).toEqual({ choice: "0", stamp: "s1", boxPreselected: undefined });
     });
   });
 
