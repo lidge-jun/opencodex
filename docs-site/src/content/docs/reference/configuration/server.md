@@ -601,6 +601,10 @@ Set `pollSeconds` to `0` only if you accept that a reset happening while the pro
 noticed on the next request rather than when it happens. The poll exists because the overnight
 case is the one worth knowing about.
 
+After upgrading to this version, key-backed providers start a new reset baseline because older
+baselines do not establish which credential produced them. A reset during the upgrade may not
+produce a notification; subsequent observations use the new credential-bound baseline.
+
 ### The delivered event
 
 ```json
