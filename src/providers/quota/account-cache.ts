@@ -264,13 +264,14 @@ export function canWriteMuseQuota(owner: MuseQuotaOwner, key: string): boolean {
  * Synchronous last-good per-account quota read for routing. Never probes the network.
  * Returns null when nothing is cached (or the cached row has no bars).
  */
-export function getCachedProviderAccountQuota(provider: string, accountId: string): ProviderQuota | null {
+export function getCachedProviderAccountQuota(provider: string, accountId: string, config?: OcxConfig): ProviderQuota | null {
   // A cold routing lookup must see persisted passive rows without publishing a roster or hardening files.
   if (provider === "meta-muse") runPassiveReadSync(hydrateAccountQuotaCache);
   const entry = accountQuotaCache.get(accountCacheKey(provider, accountId));
+  if (provider === "meta-muse" && config && (!entry || !isMuseQuotaEntryCurrent(entry, config))) return null;
   if (provider === "meta-muse" && entry?.museConfigIdentity) {
     const live = readStateStoreLiveConfig(getConfigDir());
-    if (live ? entry.isConfigCurrent?.(live) !== true : entry.museHydrated) return null;
+    if (live ? entry.isConfigCurrent?.(live) !== true : entry.museHydrated && !config) return null;
   }
   if (provider === "kiro") {
     const account = getAccountSet("kiro")?.accounts.find(row => row.id === accountId);
@@ -451,7 +452,7 @@ export function recordPassiveAccountQuota(
  * ever attempted here. A user who has not yet run a streaming turn simply has no
  * measurement, which is not an error state.
  */
-export function readPassiveProviderAccountQuotas(provider: string): ProviderAccountQuota[] {
+export function readPassiveProviderAccountQuotas(provider: string, config?: OcxConfig): ProviderAccountQuota[] {
   if (!hasPassiveAccountQuota(provider)) return [];
   // Idempotent, and otherwise only reached from probe paths a passive provider never
   // enters — without it a restart shows nothing until the next streaming turn, even
@@ -463,9 +464,9 @@ export function readPassiveProviderAccountQuotas(provider: string): ProviderAcco
   for (const account of set.accounts) {
     const entry = accountQuotaCache.get(accountCacheKey(provider, account.id));
     const live = entry?.museConfigIdentity ? readStateStoreLiveConfig(getConfigDir()) : null;
-    if (entry?.quota && entry.isCurrent?.() && (!entry.museConfigIdentity || (live ? entry.isConfigCurrent?.(live) === true : !entry.museHydrated))) {
+    if (entry?.quota && entry.isCurrent?.() && (config ? isMuseQuotaEntryCurrent(entry, config) : !entry.museConfigIdentity || (live ? entry.isConfigCurrent?.(live) === true : !entry.museHydrated))) {
       const row: ProviderAccountQuota = { accountId: account.id, quota: entry.quota };
-      Object.defineProperty(row, "isCurrent", { value: entry.isCurrent });
+      Object.defineProperty(row, "isCurrent", { value: config ? () => isMuseQuotaEntryCurrent(entry, config) : entry.isCurrent });
       rows.push(row);
     }
   }

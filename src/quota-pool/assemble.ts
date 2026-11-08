@@ -256,11 +256,11 @@ function codexAccounts(identity: QuotaPoolIdentity, accounts: Awaited<ReturnType
  * Per-account OAuth providers have no calibrated plan-to-capacity table (the Codex weights describe
  * Codex plans only), so each routable account counts once.
  */
-function oauthAccounts(identity: QuotaPoolIdentity, provider: string, now: number): TrackedAccount[] {
+function oauthAccounts(identity: QuotaPoolIdentity, provider: string, now: number, config: OcxConfig): TrackedAccount[] {
   const set = getAccountSet(provider);
   if (!set) return [];
   return set.accounts.map(row => {
-    const quota = getCachedProviderAccountQuota(provider, row.id);
+    const quota = getCachedProviderAccountQuota(provider, row.id, config);
     const entry = accountQuotaCache.get(accountCacheKey(provider, row.id));
     const windows = quota ? providerQuotaWindows(quota, "measured", now) : [];
     const account: QuotaPoolAccount = {
@@ -329,7 +329,7 @@ async function assemble(config: OcxConfig, identity: QuotaPoolIdentity, deps: Qu
       rows = claudeCliAccounts(identity, name, deps, now);
     } else if (supportsPerAccountQuota(name) || hasPassiveAccountQuota(name)) {
       tracked = true;
-      rows = oauthAccounts(identity, name, now);
+      rows = oauthAccounts(identity, name, now, config);
       poolFromRows = provider.authMode === "oauth";
     }
     const report = reports.get(name);

@@ -39,12 +39,14 @@ import { setQuotaResetSink } from "../../src/quota/reset-observer";
 import { resetQuotaResetStoreForTests } from "../../src/quota/reset-seen-store";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
+import { clearGenericFailoverHealth, preferredInitialAccount } from "../../src/oauth/generic-account-failover";
 import { sweepExpiredProviderAccountQuotaRows } from "../../src/providers/quota/account-cache";
 import { registerUpstreamRewriter } from "../../src/plugins/upstream-hooks";
 import { reconcileLiveStateStores, setLiveStateStoreConfig } from "../../src/lib/state-store-registrations";
 import { hasHeadroomEvidence, rankAccountsByHeadroom } from "../../src/oauth/account-quota-rank";
 import { readPersistedAccountQuotas } from "../../src/providers/account-quota-disk";
+import { ensureQuotaPoolIdentity } from "../../src/quota-pool/identity";
+import { readQuotaPool } from "../../src/quota-pool/assemble";
 
 const previousHome = process.env.OPENCODEX_HOME;
 let testDir = "";
@@ -539,6 +541,43 @@ describe("GET /api/oauth/accounts?quota=1 for a passive provider", () => {
 });
 
 describe("provider-level quota row for a passive provider", () => {
+  test.each(["live", "no-live"] as const)("Muse account ranking and pool reject a detached configuration (%s)", async mode => {
+    writeTwoAccounts();
+    const config = museConfig();
+    config.oauthAccountFailover = { enabled: true };
+    setLiveStateStoreConfig(config);
+    for (const [id, percent] of [[ACCOUNT_ID, 100], ["account-b", 10]] as const) {
+      await setActiveAccount("meta-muse", id);
+      recordWithOwner("meta-muse", id, { fiveHourPercent: percent, updatedAt: Date.now() }, captureConfigGeneration(),
+        bindMuseQuotaConfig(captureMuseQuotaOwner("meta-muse", id), config, "meta-muse"));
+    }
+    await setActiveAccount("meta-muse", ACCOUNT_ID);
+    if (mode === "no-live") setStateStoreLiveConfigReader(() => null);
+    const changed = structuredClone(config);
+    changed.providers["meta-muse"]!.baseUrl = "https://other.example/v1";
+    const ids = [ACCOUNT_ID, "account-b"];
+    try {
+      expect(hasHeadroomEvidence("meta-muse", ids, undefined, undefined, config)).toBe(true);
+      expect(rankAccountsByHeadroom("meta-muse", ids, undefined, undefined, config)).toEqual(["account-b", ACCOUNT_ID]);
+      expect(preferredInitialAccount(config, "meta-muse")).toBe("account-b");
+      expect(hasHeadroomEvidence("meta-muse", ids, undefined, undefined, changed)).toBe(false);
+      expect(rankAccountsByHeadroom("meta-muse", ids, undefined, undefined, changed)).toEqual(ids);
+      expect(preferredInitialAccount(changed, "meta-muse")).toBeNull();
+      ensureQuotaPoolIdentity();
+      const pool = await readQuotaPool(changed);
+      if (!pool.ok) throw new Error(pool.error);
+      const row = pool.pool.providers.find(value => value.provider === "meta-muse")!;
+      expect(row.accounts.map(account => account.windows)).toEqual([[], []]);
+      expect(row.pooled.windows).toEqual([]);
+      const request = new Request("http://localhost/api/oauth/accounts?provider=meta-muse&quota=1");
+      const response = await handleOauthAccountRoutes({ req: request, url: new URL(request.url), config: changed, deps: {},
+        convergeCodexCatalog: async () => ({ status: "failed", reason: "disk" }), syncClaudeAgentDefsBestEffort: async () => {} });
+      const body = await response!.json() as { accounts: Array<{ quota?: unknown }> };
+      expect(body.accounts.map(account => account.quota)).toEqual([undefined, undefined]);
+      expect(hasHeadroomEvidence("meta-muse", ids, undefined, undefined, config)).toBe(true);
+    } finally { setLiveStateStoreConfig(config); }
+  });
+
   test("standalone passive fallback restores only a matching saved Muse configuration", async () => {
     writeTwoAccounts();
     const config = museConfig();

@@ -355,8 +355,8 @@ function rankAntigravityModelAccounts(config: OcxConfig, ids: string[], model: s
     return best ? [best, ...ids.filter(id => id !== best)] : ids;
   }
   if (strategy === "fill-first") return stableGenericRoster(provider).filter(id => ids.includes(id));
-  if (strategy === "reset-first") return rankAccountsByResetFirst(provider, ids, model, now, rows);
-  return rankAccountsByHeadroom(provider, ids, model, rows);
+  if (strategy === "reset-first") return rankAccountsByResetFirst(provider, ids, model, now, rows, config);
+  return rankAccountsByHeadroom(provider, ids, model, rows, config);
 }
 
 /** Reactive model refusal never changes cooldown or account-wide authentication state. */
@@ -515,9 +515,9 @@ function stableGenericRoster(providerName: string): string[] {
  * statement about observed usage, and treating "no observation" as "spent" would evacuate every
  * quota-less provider off its active account on the very first request.
  */
-function isOverAutoSwitchThreshold(providerName: string, accountId: string, threshold: number, requestedModelId?: string | null, account?: ProviderAccount): boolean {
+function isOverAutoSwitchThreshold(providerName: string, accountId: string, threshold: number, requestedModelId?: string | null, account?: ProviderAccount, config?: OcxConfig): boolean {
   if (threshold <= 0) return false;
-  const headroom = accountHeadroomPercent(providerName, accountId, requestedModelId, account);
+  const headroom = accountHeadroomPercent(providerName, accountId, requestedModelId, account, config);
   if (headroom === null) return false;
   return 100 - headroom >= threshold;
 }
@@ -544,14 +544,14 @@ function pickFillFirstGenericAccount(
   const threshold = typeof stored === "number" && Number.isInteger(stored) && stored >= 0 && stored <= 100
     ? stored
     : DEFAULT_GENERIC_AUTO_SWITCH_THRESHOLD;
-  if (activeId && eligible.has(activeId) && !isOverAutoSwitchThreshold(providerName, activeId, threshold, requestedModelId, accountRows?.get(activeId))) {
+  if (activeId && eligible.has(activeId) && !isOverAutoSwitchThreshold(providerName, activeId, threshold, requestedModelId, accountRows?.get(activeId), config)) {
     return null;
   }
   const start = activeId ? stableAll.indexOf(activeId) : -1;
   const ring = start >= 0 ? [...stableAll.slice(start + 1), ...stableAll.slice(0, start)] : stableAll;
   if (preferBelowThreshold) {
     const below = ring.find(id => id !== activeId && eligible.has(id)
-      && !isOverAutoSwitchThreshold(providerName, id, threshold, requestedModelId, accountRows?.get(id)));
+      && !isOverAutoSwitchThreshold(providerName, id, threshold, requestedModelId, accountRows?.get(id), config));
     if (below) return below;
   }
   for (const id of ring) {
@@ -702,12 +702,12 @@ export function rotateGenericOAuthAccountOnRefusal(
   }
   if (strategy === "reset-first") {
     return rankAccountsByResetFirst(providerName, candidates, requestedModelId, now,
-      new Map(set.accounts.map(account => [account.id, account])))[0] ?? null;
+      new Map(set.accounts.map(account => [account.id, account])), config)[0] ?? null;
   }
   // With no quota evidence this returns the ring untouched, so providers without
   // per-account quota keep exactly the traversal they have today.
   return rankAccountsByHeadroom(providerName, candidates, requestedModelId,
-    new Map(set.accounts.map(account => [account.id, account])))[0] ?? null;
+    new Map(set.accounts.map(account => [account.id, account])), config)[0] ?? null;
 }
 
 /** Known dead-account exclusion is a proactive choice with narrow-over-broad precedence. */
@@ -839,22 +839,22 @@ export function preferredInitialAccount(
     const family = classifyModelFamilyForQuota(providerName, requestedModelId);
     const eligibleNow = preferKiroModelSupport(providerName,
       eligibleFailoverAccounts(providerName, now, family), requestedModelId, config);
-    if (eligibleNow.length === 0 || !hasHeadroomEvidence(providerName, eligibleNow, requestedModelId, accountRows)) return null;
-    const best = rankAccountsByResetFirst(providerName, eligibleNow, requestedModelId, now, accountRows)[0] ?? null;
+    if (eligibleNow.length === 0 || !hasHeadroomEvidence(providerName, eligibleNow, requestedModelId, accountRows, config)) return null;
+    const best = rankAccountsByResetFirst(providerName, eligibleNow, requestedModelId, now, accountRows, config)[0] ?? null;
     return best && best !== active ? best : null;
   }
 
   const activeRow = selected.accounts.find(account => account.id === active);
   if (activeRow && activeRow.paused !== true && activeRow.needsReauth !== true
     && !isCooled(providerName, activeRow.id, now, classifyModelFamilyForQuota(providerName, requestedModelId))
-    && !isAccountQuotaExhausted(providerName, activeRow.id, requestedModelId, activeRow)) return null;
+    && !isAccountQuotaExhausted(providerName, activeRow.id, requestedModelId, activeRow, config)) return null;
 
   // Evidence is required BEFORE eligibility narrows the field. Without this, a provider
   // with no quota data at all could still be redirected: cool the active account with a
   // 429 and the eligible list collapses to one candidate, which any ranking returns
   // unchanged — an answer that looks ranked but was never measured. The no-op guarantee
   // for quota-less providers has to be checked on the full roster.
-  if (!hasHeadroomEvidence(providerName, order, requestedModelId, accountRows)) return null;
+  if (!hasHeadroomEvidence(providerName, order, requestedModelId, accountRows, config)) return null;
 
   // Cooldowns are respected here, unlike in the presence count: this picks the account to
   // send to right now, and one inside its 429 window is the single candidate we hold
@@ -870,7 +870,7 @@ export function preferredInitialAccount(
   const candidates = ring.filter(id => eligible.includes(id));
   if (candidates.length === 0) return null;
 
-  const best = rankAccountsByHeadroom(providerName, candidates, requestedModelId, accountRows)[0] ?? null;
+  const best = rankAccountsByHeadroom(providerName, candidates, requestedModelId, accountRows, config)[0] ?? null;
   // Nothing to do when the ranking agrees with the account we would have used anyway.
   //
   // A proposal still needs guarded selection commit after credential resolution: a

@@ -551,7 +551,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // Probing may refresh the active credential and mark needsReauth — project health
     // from the post-probe store so the response is not stale.
     const rows = passiveQuota
-      ? readPassiveProviderAccountQuotas(provider)
+      ? readPassiveProviderAccountQuotas(provider, config)
       : await fetchProviderAccountQuotas(provider, forceRefresh, quotaProvider, config);
     const byId = new Map(rows.map(row => [row.accountId, row]));
     const projected = projectAccounts();
