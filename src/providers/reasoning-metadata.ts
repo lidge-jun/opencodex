@@ -461,6 +461,39 @@ const EFFORT_COMPATIBLE_TYPES = new Set([
   "upstream_error",
 ]);
 
+function extractJsonEnvelope(text: string): unknown | undefined {
+  let s = text.trim();
+  for (let d = 0; d < 3; d += 1) {
+    if (s.startsWith("Provider error 400: ")) {
+      s = s.slice("Provider error 400: ".length).trim();
+    } else if (s.startsWith("Provider error: ")) {
+      s = s.slice("Provider error: ".length).trim();
+    }
+    if (s.startsWith("data:") && !s.includes("\n")) {
+      s = s.slice("data:".length).trim();
+    }
+  }
+  const firstBrace = s.indexOf("{");
+  const lastBrace = s.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    try {
+      return JSON.parse(s.slice(firstBrace, lastBrace + 1));
+    } catch {
+      // ignore
+    }
+  }
+  const firstBracket = s.indexOf("[");
+  const lastBracket = s.lastIndexOf("]");
+  if (firstBracket !== -1 && lastBracket > firstBracket) {
+    try {
+      return JSON.parse(s.slice(firstBracket, lastBracket + 1));
+    } catch {
+      // ignore
+    }
+  }
+  return undefined;
+}
+
 /**
  * Rejects error envelopes that carry a conflicting code (e.g. permission_denied, insufficient_quota,
  * rate_limit_exceeded, model_not_found, malformed non-string code) so they stay terminal or proceed
@@ -477,12 +510,17 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
       unescaped = unescaped.slice("data:".length).trim();
     }
   }
-  if (!unescaped.startsWith("{")) {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(unescaped);
+  } catch {
+    parsed = extractJsonEnvelope(unescaped);
+  }
+  if (!parsed || typeof parsed !== "object") {
     return /\b(?:permission_denied|insufficient_quota|rate_limit_exceeded|model_not_found|context_length_exceeded)\b/i.test(unescaped);
   }
   try {
-    const parsed = JSON.parse(unescaped);
-    const queue = [parsed];
+    const queue: unknown[] = [parsed];
     let examined = 0;
     while (queue.length > 0 && examined < 32) {
       const candidate = queue.shift();
@@ -505,10 +543,20 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
         const type = rec.type.trim().toLowerCase().replaceAll("-", "_");
         if (!EFFORT_COMPATIBLE_TYPES.has(type)) return true;
       }
-      for (const field of ["error", "details", "response", "last_error"] as const) {
+      for (const field of ["message", "error", "details", "response", "last_error", "body"] as const) {
         const val = rec[field];
-        if (val && typeof val === "object") queue.push(val);
+        if (val && typeof val === "object") {
+          queue.push(val);
+        } else if (typeof val === "string") {
+          const inner = extractJsonEnvelope(val);
+          if (inner && typeof inner === "object") {
+            queue.push(inner);
+          }
+        }
       }
+    }
+    if (queue.length > 0) {
+      return true;
     }
   } catch {
     return false;

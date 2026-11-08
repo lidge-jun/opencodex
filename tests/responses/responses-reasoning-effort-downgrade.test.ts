@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses } from "../../src/server/responses/core";
 import { clearComboSelectionState, clearComboTargetCooldowns, isComboTargetInCooldown } from "../../src/combos";
-import { isReasoningEffortLearnedUnsupported, resetReasoningMetadataCachesForTests } from "../../src/providers/reasoning-metadata";
+import {
+  hasConflictingReasoningEffortCode,
+  isReasoningEffortLearnedUnsupported,
+  resetReasoningMetadataCachesForTests,
+} from "../../src/providers/reasoning-metadata";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { chatSuccess } from "../helpers/combo-failover-upstream";
@@ -56,6 +60,18 @@ const CONFLICTING_CODE_REFUSAL = JSON.stringify({
     param: "reasoning_effort",
     message: "Invalid reasoning effort.",
   },
+});
+const SERIALIZED_WRAPPER_CONFLICTING_REFUSAL = JSON.stringify({
+  type: "upstream_error",
+  param: "reasoning_effort",
+  message: 'Provider error 400: {"code":"permission_denied","error":"Invalid reasoning effort."}',
+});
+const UNEXHAUSTED_QUEUE_CANDIDATES_REFUSAL = JSON.stringify({
+  param: "reasoning_effort",
+  details: [
+    ...Array.from({ length: 32 }, (_, i) => ({ id: i, note: "ordinary candidate object" })),
+    { code: "permission_denied", message: "Denied after candidate limit" },
+  ],
 });
 const VENDOR_EFFORT_REFUSAL = JSON.stringify({ code: "invalid-argument", error: "Invalid reasoning effort." });
 const UNRELATED = JSON.stringify({ error: { type: "invalid_request_error", message: "Invalid upload request." } });
@@ -650,6 +666,100 @@ describe("rejected reasoning rungs", () => {
     expect(effortOf(outbound[0])).toBe("max");
     expect(response.status).toBe(400);
     expect(text).toContain("permission_denied");
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("hasConflictingReasoningEffortCode unit checks", () => {
+    expect(hasConflictingReasoningEffortCode(SERIALIZED_WRAPPER_CONFLICTING_REFUSAL)).toBe(true);
+    expect(hasConflictingReasoningEffortCode(UNEXHAUSTED_QUEUE_CANDIDATES_REFUSAL)).toBe(true);
+    expect(hasConflictingReasoningEffortCode(VENDOR_EFFORT_REFUSAL)).toBe(false);
+    expect(hasConflictingReasoningEffortCode(JSON.stringify({
+      param: "reasoning_effort",
+      details: [{ id: 1 }, { id: 2 }],
+    }))).toBe(false);
+  });
+
+  test("stops before effort replay on serialized provider wrapper conflicting code (openai-chat)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(SERIALIZED_WRAPPER_CONFLICTING_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = config();
+    const response = await handleResponses(request(), cfg, logCtx);
+    const text = await response.text();
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(text).toContain("permission_denied");
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("stops before effort replay on serialized provider wrapper conflicting code (openai-responses)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(SERIALIZED_WRAPPER_CONFLICTING_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = passthroughConfig();
+    const response = await handleResponses(request(), cfg, logCtx);
+    const text = await response.text();
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(text).toContain("permission_denied");
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("stops before effort replay when candidate queue leaves unexamined objects (openai-chat)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(UNEXHAUSTED_QUEUE_CANDIDATES_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = config();
+    const response = await handleResponses(request(), cfg, logCtx);
+    const text = await response.text();
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(text).toContain("reasoning_effort");
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("stops before effort replay when candidate queue leaves unexamined objects (openai-responses)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(UNEXHAUSTED_QUEUE_CANDIDATES_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = passthroughConfig();
+    const response = await handleResponses(request(), cfg, logCtx);
+    const text = await response.text();
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(text).toContain("reasoning_effort");
     expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
     expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
   });
