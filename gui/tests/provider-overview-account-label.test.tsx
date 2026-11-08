@@ -211,14 +211,15 @@ test("teardown restores the original global property descriptors exactly", async
 /** #8344: a window that already existed comes back as the same object, without an added `event`. */
 test("teardown leaves a pre-existing window object untouched", async () => {
   await teardownDom();
+  const priorWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const existing = { marker: "pre-existing" };
   Object.defineProperty(globalThis, "window", { configurable: true, writable: true, value: existing });
   try {
     setupDom();
     await teardownDom();
-    expect(Reflect.get(globalThis, "window")).toBe(existing);
+    expect((globalThis as { window?: unknown }).window).toBe(existing);
     expect(Object.getOwnPropertyNames(existing)).toEqual(["marker"]);
   } finally {
-    Reflect.deleteProperty(globalThis, "window");
+    restoreOwnProperty(globalThis, "window", priorWindow);
   }
 });
