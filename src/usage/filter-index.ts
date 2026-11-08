@@ -13,6 +13,22 @@
  * again only when the ledger is replaced -- and every later query, including a brand-new
  * filter, reads a bounded candidate set.
  *
+ * Crash and multi-process contract:
+ * - Rows belong to a generation. Meta names the one published generation; readers only ever
+ *   select rows of that generation, bounded by the published byte offset.
+ * - A rebuild stages a fresh generation and publishes it in one short transaction that
+ *   re-checks the generation it started from. Nothing deletes another writer's staged rows
+ *   while it is still ingesting; only a successful publish prunes other generations. An
+ *   interrupted rebuild therefore leaves the previously published generation intact, so a
+ *   crash can never turn a complete projection into a complete-looking zero.
+ * - An append writes into the published generation and publishes its new offset, digest,
+ *   counts and span in the same transaction. A crash mid-append leaves rows beyond the
+ *   published offset, which readers ignore and the next append replays idempotently.
+ * - Two writers that stage concurrently get distinct generations, so neither can mix the
+ *   other's rows. The loser's publish is fenced out and it retries against the winner.
+ * - Metadata is written by one transaction; there is no window where the cursor, digest,
+ *   counts and span describe different scans.
+ *
  * Bounds and identity:
  * - Ingest reuses `scanUsageLedgerCooperatively`, so the 1 MiB row ceiling, the 1 MiB
  *   chunk, the cooperative yield, the opened-EOF snapshot boundary, and the
@@ -22,15 +38,27 @@
  *   only ever appended to the projection; the ledger is never truncated or rewritten.
  * - An index that disagrees with the ledger (a recorded offset no longer frames a complete
  *   row) is discarded and rebuilt rather than served partially.
+ * - A file at the index path that is not this projection is never modified, and a passive
+ *   management read never creates, writes or registers anything.
  *
  * Rebuild cost: the initial build normalizes every row once. It is cooperative, so the
  * event loop yields between chunks, and it is persisted, so a restart does not repeat it.
  * The projection stores offsets and keys, not row bodies, which keeps it far smaller than
- * the ledger it indexes.
+ * the ledger it indexes. A nonselective filter (no provider/model/key, `client=all`,
+ * `device=all`) still has to normalize every row in its window; the index makes the
+ * selection exact, not sublinear.
  */
 import { Database } from "bun:sqlite";
+import { randomUUID } from "node:crypto";
+import { chmodSync, existsSync } from "node:fs";
 import { getConfigDir } from "../config";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
+import {
+  preparePrivateSqliteDatabase,
+  SQLITE_SIDECAR_SUFFIXES,
+  UnsafeSqlitePathError,
+} from "../lib/private-sqlite-path";
+import { hardenSecretPath } from "../lib/windows-secret-acl";
 import { baseProviderLabel } from "../providers/label";
 import {
   currentUsageLogRevision,
@@ -44,43 +72,58 @@ import {
   UsageLedgerRebuildRequiredError,
   type UsageLedgerScanResult,
 } from "./ledger-scanner";
-import type { UsageSourceFilter } from "./source-filter";
+import { USAGE_CODEX_CLIENT_LABELS, type UsageSourceFilter } from "./source-filter";
 import { usageAttributions } from "./summary";
 import type { UsageTimeWindow } from "./time-range";
 
-export const USAGE_FILTER_INDEX_SCHEMA_VERSION = 1;
+export const USAGE_FILTER_INDEX_SCHEMA_VERSION = 2;
 export const USAGE_FILTER_INDEX_DB_FILENAME = "usage-filter-index.sqlite";
 /** Rows per SQLite transaction during ingest; also the peak pending-row allocation. */
 export const USAGE_FILTER_INDEX_INSERT_BATCH = 500;
-const MAX_REFRESH_ATTEMPTS = 2;
+const META_TABLE = "usage_filter_index_meta";
+const MAX_REFRESH_ATTEMPTS = 3;
+// SQLite's busy handler blocks the thread, so the wait stays short and contention is retried
+// asynchronously instead of parking the event loop behind another writer. A single ingest batch
+// or publish holds the write lock for a few milliseconds.
+const SQLITE_BUSY_TIMEOUT_MS = 250;
+const BATCH_BUSY_RETRIES = 3;
+const BATCH_BUSY_RETRY_MS = 5;
+const BUSY_RETRY_DELAYS_MS = [10, 25, 50] as const;
 
 const SCHEMA_DDL = `
-CREATE TABLE IF NOT EXISTS schema_meta (
+CREATE TABLE IF NOT EXISTS ${META_TABLE} (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS usage_rows (
-  byte_offset    INTEGER PRIMARY KEY,
-  timestamp      INTEGER NOT NULL,
+  generation     TEXT NOT NULL,
+  byte_offset    INTEGER NOT NULL,
+  timestamp      INTEGER,
   api_key_id     TEXT,
   client         TEXT,
   surface        TEXT,
-  admission_kind TEXT
-);
+  admission_kind TEXT,
+  unattributable INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (generation, byte_offset)
+) WITHOUT ROWID;
 
-CREATE INDEX IF NOT EXISTS idx_usage_rows_timestamp ON usage_rows(timestamp);
-CREATE INDEX IF NOT EXISTS idx_usage_rows_api_key ON usage_rows(api_key_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_usage_rows_ts ON usage_rows(generation, timestamp, byte_offset);
+CREATE INDEX IF NOT EXISTS idx_usage_rows_key ON usage_rows(generation, api_key_id, timestamp, byte_offset);
+CREATE INDEX IF NOT EXISTS idx_usage_rows_client ON usage_rows(generation, client, timestamp, byte_offset);
+CREATE INDEX IF NOT EXISTS idx_usage_rows_admission ON usage_rows(generation, admission_kind, api_key_id, byte_offset);
+CREATE INDEX IF NOT EXISTS idx_usage_rows_unattributable ON usage_rows(generation, unattributable);
 
 CREATE TABLE IF NOT EXISTS usage_attributions (
+  generation  TEXT NOT NULL,
   byte_offset INTEGER NOT NULL,
   provider    TEXT NOT NULL,
   model       TEXT NOT NULL,
-  PRIMARY KEY (byte_offset, provider, model)
+  PRIMARY KEY (generation, byte_offset, provider, model)
 ) WITHOUT ROWID;
 
-CREATE INDEX IF NOT EXISTS idx_usage_attr_provider ON usage_attributions(provider, model, byte_offset);
-CREATE INDEX IF NOT EXISTS idx_usage_attr_model ON usage_attributions(model, provider, byte_offset);
+CREATE INDEX IF NOT EXISTS idx_usage_attr_provider ON usage_attributions(generation, provider, model, byte_offset);
+CREATE INDEX IF NOT EXISTS idx_usage_attr_model ON usage_attributions(generation, model, provider, byte_offset);
 `;
 
 const META_KEYS = {
@@ -102,15 +145,31 @@ const META_KEYS = {
   maxTimestamp: "max_timestamp",
 } as const;
 
+/** The file at the index path is not this projection. It is left untouched. */
+export class UsageFilterIndexForeignError extends Error {
+  constructor() {
+    super("usage filter index path holds a file this projection does not own");
+    this.name = "UsageFilterIndexForeignError";
+  }
+}
+
+/** Reading `usage.jsonl` itself failed; this is not an index problem and must not be hidden. */
+export class UsageFilterIndexSourceError extends Error {
+  constructor(readonly sourceError: unknown) {
+    super("usage ledger could not be read for the filtered usage index");
+    this.name = "UsageFilterIndexSourceError";
+  }
+}
+
 /**
- * A retained filtered projection read this generation. A full rebuild replaces every
- * offset, so a projection from an older generation must be discarded even when the file
- * identity and size are unchanged.
+ * A retained filtered projection read this generation. A full rebuild replaces every offset,
+ * so a projection from an older generation must be discarded even when the file identity and
+ * size are unchanged.
  */
 export interface UsageFilterIndexSnapshot {
   revision: UsageLogRevision | null;
   identityKey: string;
-  generation: number;
+  generation: string;
   indexedOffset: number;
   processedThroughDigest: string;
   indexedRows: number;
@@ -119,7 +178,7 @@ export interface UsageFilterIndexSnapshot {
   oversizedRows: number;
   minTimestamp: number | null;
   maxTimestamp: number | null;
-  /** Full-file ingest passes this process has run; the initial build counts as one. */
+  /** Full-file ingest passes this process has run for this home; the initial build counts. */
   ingestPasses: number;
   /** Rows this call ingested; a rebuild reports every row. */
   ingestedRows: number;
@@ -132,7 +191,7 @@ export interface UsageFilterIndexQuery {
   sourceFilter?: UsageSourceFilter;
   configuredApiKeyIds?: readonly string[];
   window?: UsageTimeWindow;
-  /** Exclusive lower bound: rows already folded into a retained projection. */
+  /** Inclusive lower bound: the byte after the last row already folded in. */
   afterOffset?: number;
 }
 
@@ -142,7 +201,13 @@ export interface UsageFilterCandidateRead {
   offsets: number[];
 }
 
-/** Counts a caller can assert on: how much of the ledger a filtered query actually read. */
+/**
+ * Counts a caller can assert on.
+ *
+ * `candidateRows` is the number of ledger rows this query selected and normalized -- not the
+ * number of SQL index entries SQLite examined. For a selective filter it is far below
+ * `totalRows`; for a nonselective one it is every row in scope, which is inherent.
+ */
 export interface UsageFilterQueryStats {
   totalRows: number;
   candidateRows: number;
@@ -150,9 +215,22 @@ export interface UsageFilterQueryStats {
   ingestPasses: number;
 }
 
+export interface UsageFilterIndexTestHooks {
+  /**
+   * Runs after a rebuild has staged its rows and before the publish transaction. Throwing
+   * simulates a crash at that boundary; the hook also lets a test publish from a second
+   * connection to exercise the generation fence.
+   */
+  beforePublish?: (info: {
+    dbPath: string;
+    stagedGeneration: string;
+    publishedGeneration: string;
+  }) => void | Promise<void>;
+}
+
 interface IndexMeta {
   schemaVersion: number;
-  generation: number;
+  generation: string;
   revision: UsageLogRevision | null;
   indexedOffset: number;
   digest: string;
@@ -163,16 +241,39 @@ interface IndexMeta {
   maxTimestamp: number | null;
 }
 
-let ingestFlight: Promise<UsageFilterIndexSnapshot> | null = null;
-let ingestPasses = 0;
-let rebuildRequested = false;
+let ingestFlight: { path: string; promise: Promise<UsageFilterIndexSnapshot> } | null = null;
+const ingestPassesByPath = new Map<string, number>();
+const rebuildRequestedPaths = new Set<string>();
+let testHooks: UsageFilterIndexTestHooks | null = null;
 
 export function usageFilterIndexPath(configDir: string): string {
   return `${configDir.replace(/[\\/]+$/, "")}/${USAGE_FILTER_INDEX_DB_FILENAME}`;
 }
 
+function indexPathForCurrentHome(): string {
+  return usageFilterIndexPath(getConfigDir());
+}
+
+function errorCode(error: unknown): unknown {
+  return error !== null && typeof error === "object" && "code" in error
+    ? (error as { code?: unknown }).code
+    : undefined;
+}
+
+function isBusyError(error: unknown): boolean {
+  const code = errorCode(error);
+  if (code === "SQLITE_BUSY" || code === "SQLITE_LOCKED") return true;
+  const message = error instanceof Error ? error.message : "";
+  return /database is locked|database table is locked/i.test(message);
+}
+
+function isCorruptError(error: unknown): boolean {
+  const code = errorCode(error);
+  return code === "SQLITE_CORRUPT" || code === "SQLITE_NOTADB";
+}
+
 function metaText(db: Database, key: string): string {
-  const row = db.query("SELECT value FROM schema_meta WHERE key = ?").get(key) as
+  const row = db.query(`SELECT value FROM ${META_TABLE} WHERE key = ?`).get(key) as
     | { value: string }
     | undefined;
   return row?.value ?? "";
@@ -187,7 +288,7 @@ function metaNumber(db: Database, key: string): number {
 
 function setMeta(db: Database, key: string, value: string | number): void {
   db.query(
-    "INSERT INTO schema_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    `INSERT INTO ${META_TABLE} (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
   ).run(key, String(value));
 }
 
@@ -208,7 +309,7 @@ function readMeta(db: Database): IndexMeta {
   const maxTimestamp = metaText(db, META_KEYS.maxTimestamp);
   return {
     schemaVersion: metaNumber(db, META_KEYS.schemaVersion),
-    generation: metaNumber(db, META_KEYS.generation),
+    generation: metaText(db, META_KEYS.generation),
     revision,
     indexedOffset: metaNumber(db, META_KEYS.indexedOffset),
     digest: metaText(db, META_KEYS.boundaryDigest),
@@ -220,7 +321,7 @@ function readMeta(db: Database): IndexMeta {
   };
 }
 
-function writeMeta(db: Database, meta: IndexMeta): void {
+function writeMetaStatements(db: Database, meta: IndexMeta): void {
   setMeta(db, META_KEYS.schemaVersion, meta.schemaVersion);
   setMeta(db, META_KEYS.generation, meta.generation);
   setMeta(db, META_KEYS.sourcePath, meta.revision?.path ?? "");
@@ -239,7 +340,7 @@ function writeMeta(db: Database, meta: IndexMeta): void {
   setMeta(db, META_KEYS.maxTimestamp, meta.maxTimestamp === null ? "" : meta.maxTimestamp);
 }
 
-function emptyMeta(generation: number): IndexMeta {
+function emptyMeta(generation: string): IndexMeta {
   return {
     schemaVersion: USAGE_FILTER_INDEX_SCHEMA_VERSION,
     generation,
@@ -254,30 +355,110 @@ function emptyMeta(generation: number): IndexMeta {
   };
 }
 
-function ensureSchema(db: Database): void {
+function tableNames(db: Database): string[] {
+  const rows = db.query(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+  ).all() as Array<{ name: string }>;
+  return rows.map(row => row.name);
+}
+
+/** `fresh` is an empty database, `ours` carries this projection's meta table, anything else is foreign. */
+function classifyDatabase(db: Database): "fresh" | "ours" | "foreign" {
+  let names: string[];
+  try {
+    names = tableNames(db);
+  } catch {
+    return "foreign";
+  }
+  if (names.length === 0) return "fresh";
+  return names.includes(META_TABLE) ? "ours" : "foreign";
+}
+
+function createSchema(db: Database): void {
   db.exec(SCHEMA_DDL);
-  if (metaNumber(db, META_KEYS.schemaVersion) === USAGE_FILTER_INDEX_SCHEMA_VERSION) return;
-  // A schema change invalidates every recorded offset, so drop the projection and rebuild
-  // it from the ledger rather than migrating derived rows.
-  db.exec("DELETE FROM usage_rows");
-  db.exec("DELETE FROM usage_attributions");
-  writeMeta(db, emptyMeta(0));
+  writeMetaStatements(db, emptyMeta(randomUUID()));
 }
 
 /**
- * Open the projection read-write.
- *
- * A read-only handle cannot recover a WAL that has no `-shm` beside it (a crash, or another
- * process that has since exited), so recovery uses the same handle the writer would.
+ * Recreate the projection's own tables. Only called for a database already classified as
+ * ours, so a file this module did not create is never dropped.
  */
-function openIndexDatabase(): Database {
-  const dir = getConfigDir();
-  const path = usageFilterIndexPath(dir);
-  recordOwnedConfigPath(dir, path);
+function recreateSchema(db: Database): void {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec("DROP TABLE IF EXISTS usage_rows");
+    db.exec("DROP TABLE IF EXISTS usage_attributions");
+    db.exec(`DROP TABLE IF EXISTS ${META_TABLE}`);
+    db.exec(SCHEMA_DDL);
+    writeMetaStatements(db, emptyMeta(randomUUID()));
+    db.exec("COMMIT");
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch { /* the close below releases the lock */ }
+    throw error;
+  }
+}
+
+function ensureSchema(db: Database, classification: "fresh" | "ours"): void {
+  if (classification === "fresh") {
+    createSchema(db);
+    return;
+  }
+  const tables = new Set(tableNames(db));
+  const current = metaNumber(db, META_KEYS.schemaVersion) === USAGE_FILTER_INDEX_SCHEMA_VERSION
+    && tables.has("usage_rows")
+    && tables.has("usage_attributions");
+  if (current) return;
+  // A schema change can alter column shape, so the derived tables are recreated rather than
+  // migrated. The ledger is untouched and the next refresh rebuilds from it.
+  recreateSchema(db);
+}
+
+function openIndexForWrite(dir: string, path: string): Database {
+  const existed = existsSync(path);
+  preparePrivateSqliteDatabase(path);
   const db = new Database(path, { create: true });
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA busy_timeout = 5000");
-  return db;
+  try {
+    const classification = classifyDatabase(db);
+    if (classification === "foreign") throw new UsageFilterIndexForeignError();
+    if (!existed) {
+      // Register only names this module is about to create; an existing sidecar may belong to
+      // something else and is never adopted.
+      recordOwnedConfigPath(dir, path);
+      for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+        const sidecar = `${path}${suffix}`;
+        if (!existsSync(sidecar)) recordOwnedConfigPath(dir, sidecar);
+      }
+      if (process.platform !== "win32") {
+        try { chmodSync(path, 0o600); } catch { /* platform may ignore chmod */ }
+      }
+      hardenSecretPath(path, { required: false });
+    }
+    db.exec("PRAGMA journal_mode = WAL");
+    db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
+    ensureSchema(db, classification);
+    return db;
+  } catch (error) {
+    try { db.close(); } catch { /* already closed */ }
+    throw error;
+  }
+}
+
+/** Sidecars inherit the database's mode on creation; re-assert it after the first write. */
+function hardenSidecars(path: string): void {
+  if (process.platform === "win32") return;
+  for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+    try { chmodSync(`${path}${suffix}`, 0o600); } catch { /* not created yet */ }
+  }
+}
+
+function openIndexForRead(path: string): Database {
+  try {
+    return new Database(path, { readonly: true });
+  } catch {
+    // A WAL left without its index (a crash, or a writer that exited abruptly) cannot be
+    // opened read-only; the read-write handle recovers it on open.
+    return new Database(path);
+  }
 }
 
 interface IngestResult {
@@ -289,57 +470,112 @@ interface IngestResult {
 
 async function ingest(
   db: Database,
+  generation: string,
   startAtBytes: number,
   expected: { identityKey: string; digest: string } | null,
 ): Promise<IngestResult> {
   const insertRow = db.prepare(
-    "INSERT OR REPLACE INTO usage_rows (byte_offset, timestamp, api_key_id, client, surface, admission_kind) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT OR REPLACE INTO usage_rows (generation, byte_offset, timestamp, api_key_id, client, surface, admission_kind, unattributable) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
   );
   const insertAttribution = db.prepare(
-    "INSERT OR REPLACE INTO usage_attributions (byte_offset, provider, model) VALUES (?, ?, ?)",
+    "INSERT OR REPLACE INTO usage_attributions (generation, byte_offset, provider, model) VALUES (?, ?, ?, ?)",
   );
-  const commit = db.transaction((batch: Array<{ offset: number; entry: PersistedUsageEntry }>) => {
+  const writeBatch = (batch: Array<{ offset: number; entry: PersistedUsageEntry }>): void => {
     for (const { offset, entry } of batch) {
+      // Normalization preserves hand-edited rows with a missing or non-numeric timestamp and
+      // a missing model. A null timestamp is selected without a window and excluded by one,
+      // exactly as the accumulator treats it.
+      const timestamp = Number.isFinite(entry.timestamp) ? entry.timestamp : null;
+      let attributions: ReturnType<typeof usageAttributions> = [];
+      try {
+        attributions = usageAttributions(entry);
+      } catch {
+        attributions = [];
+      }
+      const attributable = attributions.filter(attribution =>
+        typeof attribution.provider === "string" && typeof attribution.model === "string");
       insertRow.run(
+        generation,
         offset,
-        entry.timestamp,
+        timestamp,
         entry.apiKeyId ?? null,
         entry.client ?? null,
         entry.surface ?? null,
         entry.admissionKind ?? null,
+        attributable.length === 0 ? 1 : 0,
       );
-      // Keys are derived from the same attribution helper the accumulator filters with, so
-      // the index can over-select but never reject a row the exact filter would keep.
-      for (const attribution of usageAttributions(entry)) {
+      for (const attribution of attributable) {
+        // Keys are derived from the same attribution helper the accumulator filters with, so
+        // the index can over-select but never reject a row the exact filter would keep.
         insertAttribution.run(
+          generation,
           offset,
           baseProviderLabel(attribution.provider).toLowerCase(),
           attribution.model.toLowerCase(),
         );
       }
     }
-  });
+  };
+  /**
+   * Commit one batch under `BEGIN IMMEDIATE`.
+   *
+   * A deferred `BEGIN` that later upgrades can fail with SQLITE_BUSY without consulting the
+   * busy handler, which is exactly the shape two concurrent rebuilds produce. Taking the write
+   * lock up front makes the handler apply, and the short synchronous retry rides out a batch
+   * another process is committing.
+   */
+  const commit = (batch: Array<{ offset: number; entry: PersistedUsageEntry }>): void => {
+    for (let attempt = 0; ; attempt += 1) {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        writeBatch(batch);
+        db.exec("COMMIT");
+        return;
+      } catch (error) {
+        try { db.exec("ROLLBACK"); } catch { /* the transaction never started */ }
+        if (!isBusyError(error) || attempt >= BATCH_BUSY_RETRIES) throw error;
+        Bun.sleepSync(BATCH_BUSY_RETRY_MS);
+      }
+    }
+  };
   let pending: Array<{ offset: number; entry: PersistedUsageEntry }> = [];
   let rows = 0;
   let minTimestamp: number | null = null;
   let maxTimestamp: number | null = null;
+  let callbackError: unknown = null;
   try {
-    const scan = await scanUsageLedgerCooperatively({
-      startAtBytes,
-      ...(expected
-        ? { expectedIdentityKey: expected.identityKey, expectedProcessedThroughDigest: expected.digest }
-        : {}),
-      onEntry(entry, offset) {
-        pending.push({ offset, entry });
-        rows += 1;
-        if (minTimestamp === null || entry.timestamp < minTimestamp) minTimestamp = entry.timestamp;
-        if (maxTimestamp === null || entry.timestamp > maxTimestamp) maxTimestamp = entry.timestamp;
-        if (pending.length >= USAGE_FILTER_INDEX_INSERT_BATCH) {
-          commit(pending);
-          pending = [];
-        }
-      },
-    });
+    let scan: UsageLedgerScanResult;
+    try {
+      scan = await scanUsageLedgerCooperatively({
+        startAtBytes,
+        ...(expected
+          ? { expectedIdentityKey: expected.identityKey, expectedProcessedThroughDigest: expected.digest }
+          : {}),
+        onEntry(entry, offset) {
+          try {
+            pending.push({ offset, entry });
+            rows += 1;
+            if (Number.isFinite(entry.timestamp)) {
+              if (minTimestamp === null || entry.timestamp < minTimestamp) minTimestamp = entry.timestamp;
+              if (maxTimestamp === null || entry.timestamp > maxTimestamp) maxTimestamp = entry.timestamp;
+            }
+            if (pending.length >= USAGE_FILTER_INDEX_INSERT_BATCH) {
+              commit(pending);
+              pending = [];
+            }
+          } catch (error) {
+            // An index write failure is not a ledger read failure; keep it classified as one.
+            callbackError = error;
+            throw error;
+          }
+        },
+      });
+    } catch (error) {
+      if (error instanceof UsageLedgerRebuildRequiredError) throw error;
+      if (callbackError !== null) throw callbackError;
+      // A ledger read failure is the authoritative read failing, not the index: surface it.
+      throw new UsageFilterIndexSourceError(error);
+    }
     if (pending.length > 0) commit(pending);
     return { scan, rows, minTimestamp, maxTimestamp };
   } finally {
@@ -348,7 +584,17 @@ async function ingest(
   }
 }
 
-function snapshotFrom(meta: IndexMeta, ingestedRows: number): UsageFilterIndexSnapshot {
+function ingestPassesFor(path: string): number {
+  return ingestPassesByPath.get(path) ?? 0;
+}
+
+function bumpIngestPasses(path: string): number {
+  const next = ingestPassesFor(path) + 1;
+  ingestPassesByPath.set(path, next);
+  return next;
+}
+
+function snapshotFrom(meta: IndexMeta, ingestedRows: number, ingestPasses: number): UsageFilterIndexSnapshot {
   return {
     revision: meta.revision,
     identityKey: usageLogIdentityKey(meta.revision),
@@ -377,37 +623,99 @@ function later(left: number | null, right: number | null): number | null {
   return Math.max(left, right);
 }
 
-async function rebuild(db: Database, prior: IndexMeta): Promise<UsageFilterIndexSnapshot> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < MAX_REFRESH_ATTEMPTS; attempt += 1) {
-    db.exec("DELETE FROM usage_rows");
-    db.exec("DELETE FROM usage_attributions");
-    const reset = emptyMeta(prior.generation + 1);
-    writeMeta(db, reset);
-    try {
-      const result = await ingest(db, 0, null);
-      const next: IndexMeta = {
-        ...reset,
-        revision: result.scan.revision,
-        indexedOffset: result.scan.processedThroughBytes,
-        digest: result.scan.processedThroughDigest,
-        indexedRows: result.rows,
-        invalidRows: result.scan.invalidRows,
-        oversizedRows: result.scan.oversizedRows,
-        minTimestamp: result.minTimestamp,
-        maxTimestamp: result.maxTimestamp,
-      };
-      writeMeta(db, next);
-      ingestPasses += 1;
-      return snapshotFrom(next, result.rows);
-    } catch (error) {
-      lastError = error;
-      if (!(error instanceof UsageLedgerRebuildRequiredError) || attempt + 1 >= MAX_REFRESH_ATTEMPTS) {
-        throw error;
-      }
+function discardGeneration(db: Database, generation: string): void {
+  db.query("DELETE FROM usage_rows WHERE generation = ?").run(generation);
+  db.query("DELETE FROM usage_attributions WHERE generation = ?").run(generation);
+}
+
+/**
+ * Publish one consistent meta snapshot, fenced on the generation the writer started from.
+ *
+ * Returns false when another writer published first. The caller then discards its staging set
+ * and retries, so two writers can never mix rows from different scans under one generation.
+ * Pruning other generations happens here, inside the fence, and never while they may still be
+ * the rows another writer is ingesting.
+ */
+function publish(
+  db: Database,
+  expected: string,
+  next: IndexMeta,
+  pruneTo: string | null,
+): boolean {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    if (metaText(db, META_KEYS.generation) !== expected) {
+      db.exec("ROLLBACK");
+      return false;
     }
+    writeMetaStatements(db, next);
+    if (pruneTo !== null) {
+      db.query("DELETE FROM usage_rows WHERE generation <> ?").run(pruneTo);
+      db.query("DELETE FROM usage_attributions WHERE generation <> ?").run(pruneTo);
+    }
+    db.exec("COMMIT");
+    return true;
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch { /* the close releases the lock */ }
+    throw error;
   }
-  throw lastError ?? new Error("usage filter index rebuild did not settle");
+}
+
+async function rebuild(
+  db: Database,
+  path: string,
+  prior: IndexMeta,
+): Promise<UsageFilterIndexSnapshot | null> {
+  const staging = randomUUID();
+  const result = await ingest(db, staging, 0, null);
+  const next: IndexMeta = {
+    schemaVersion: USAGE_FILTER_INDEX_SCHEMA_VERSION,
+    generation: staging,
+    revision: result.scan.revision,
+    indexedOffset: result.scan.processedThroughBytes,
+    digest: result.scan.processedThroughDigest,
+    indexedRows: result.rows,
+    invalidRows: result.scan.invalidRows,
+    oversizedRows: result.scan.oversizedRows,
+    minTimestamp: result.minTimestamp,
+    maxTimestamp: result.maxTimestamp,
+  };
+  await testHooks?.beforePublish?.({
+    dbPath: path,
+    stagedGeneration: staging,
+    publishedGeneration: prior.generation,
+  });
+  if (!publish(db, prior.generation, next, staging)) {
+    discardGeneration(db, staging);
+    return null;
+  }
+  hardenSidecars(path);
+  return snapshotFrom(next, result.rows, bumpIngestPasses(path));
+}
+
+async function append(
+  db: Database,
+  path: string,
+  meta: IndexMeta,
+): Promise<UsageFilterIndexSnapshot | null> {
+  const result = await ingest(db, meta.generation, meta.indexedOffset, {
+    identityKey: usageLogIdentityKey(meta.revision),
+    digest: meta.digest,
+  });
+  const next: IndexMeta = {
+    ...meta,
+    revision: result.scan.revision,
+    indexedOffset: result.scan.processedThroughBytes,
+    digest: result.scan.processedThroughDigest,
+    indexedRows: meta.indexedRows + result.rows,
+    invalidRows: meta.invalidRows + result.scan.invalidRows,
+    oversizedRows: meta.oversizedRows + result.scan.oversizedRows,
+    minTimestamp: earlier(meta.minTimestamp, result.minTimestamp),
+    maxTimestamp: later(meta.maxTimestamp, result.maxTimestamp),
+  };
+  if (!publish(db, meta.generation, next, null)) return null;
+  hardenSidecars(path);
+  return snapshotFrom(next, result.rows, ingestPassesFor(path));
 }
 
 /**
@@ -415,68 +723,178 @@ async function rebuild(db: Database, prior: IndexMeta): Promise<UsageFilterIndex
  *
  * A same-size file whose revision metadata moved is a rewrite or replacement, not an append,
  * so it rebuilds. An append is verified by the scanner's boundary digest before any of its
- * rows are retained.
+ * rows are retained. Returns null when another writer won the publish race.
  */
-async function refresh(db: Database): Promise<UsageFilterIndexSnapshot> {
-  ensureSchema(db);
+async function refreshOnce(
+  db: Database,
+  path: string,
+): Promise<UsageFilterIndexSnapshot | null> {
   const meta = readMeta(db);
   const revision = currentUsageLogRevision();
   if (meta.schemaVersion !== USAGE_FILTER_INDEX_SCHEMA_VERSION
+    || !meta.generation
     || usageLogIdentityKey(meta.revision) !== usageLogIdentityKey(revision)) {
-    return rebuild(db, meta);
+    return rebuild(db, path, meta);
   }
-  if (revision === null) return snapshotFrom(meta, 0);
-  if (revision.size < meta.indexedOffset) return rebuild(db, meta);
+  if (revision === null) return snapshotFrom(meta, 0, ingestPassesFor(path));
+  if (revision.size < meta.indexedOffset) return rebuild(db, path, meta);
   if (revision.size === meta.indexedOffset) {
     if (meta.revision && usageLogRevisionKey(meta.revision) === usageLogRevisionKey(revision)) {
-      return snapshotFrom(meta, 0);
+      return snapshotFrom(meta, 0, ingestPassesFor(path));
     }
-    return rebuild(db, meta);
+    return rebuild(db, path, meta);
   }
-  try {
-    const result = await ingest(db, meta.indexedOffset, {
-      identityKey: usageLogIdentityKey(meta.revision),
-      digest: meta.digest,
-    });
-    const next: IndexMeta = {
-      ...meta,
-      revision: result.scan.revision,
-      indexedOffset: result.scan.processedThroughBytes,
-      digest: result.scan.processedThroughDigest,
-      indexedRows: meta.indexedRows + result.rows,
-      invalidRows: meta.invalidRows + result.scan.invalidRows,
-      oversizedRows: meta.oversizedRows + result.scan.oversizedRows,
-      minTimestamp: earlier(meta.minTimestamp, result.minTimestamp),
-      maxTimestamp: later(meta.maxTimestamp, result.maxTimestamp),
-    };
-    writeMeta(db, next);
-    return snapshotFrom(next, result.rows);
-  } catch (error) {
-    if (!(error instanceof UsageLedgerRebuildRequiredError)) throw error;
-    return rebuild(db, meta);
-  }
+  return append(db, path, meta);
 }
 
-async function refreshUsageFilterIndex(): Promise<UsageFilterIndexSnapshot> {
-  if (ingestFlight) return ingestFlight;
-  const flight = (async () => {
-    const db = openIndexDatabase();
+async function refreshWithRetry(db: Database, path: string): Promise<UsageFilterIndexSnapshot> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < MAX_REFRESH_ATTEMPTS; attempt += 1) {
     try {
-      if (rebuildRequested) {
-        rebuildRequested = false;
-        return await rebuild(db, readMeta(db));
+      const snapshot = await refreshOnce(db, path);
+      if (snapshot) return snapshot;
+    } catch (error) {
+      if (error instanceof UsageLedgerRebuildRequiredError) {
+        lastError = error;
+        continue;
       }
-      return await refresh(db);
+      // A corrupt file this module owns is derived data: recreate its own tables and retry.
+      if (isCorruptError(error) && attempt === 0) {
+        try {
+          recreateSchema(db);
+          continue;
+        } catch {
+          throw error;
+        }
+      }
+      throw error;
+    }
+  }
+  throw lastError ?? new Error("usage filter index refresh did not settle");
+}
+
+async function refreshUsageFilterIndex(
+  dir: string,
+  path: string,
+): Promise<UsageFilterIndexSnapshot> {
+  if (ingestFlight?.path === path) return ingestFlight.promise;
+  const promise = (async () => {
+    const db = openIndexForWrite(dir, path);
+    try {
+      if (rebuildRequestedPaths.delete(path)) {
+        const rebuilt = await rebuild(db, path, readMeta(db));
+        return rebuilt ?? await refreshWithRetry(db, path);
+      }
+      return await refreshWithRetry(db, path);
     } finally {
       db.close();
     }
   })();
-  ingestFlight = flight;
+  ingestFlight = { path, promise };
   try {
-    return await flight;
+    return await promise;
   } finally {
-    if (ingestFlight === flight) ingestFlight = null;
+    if (ingestFlight?.promise === promise) ingestFlight = null;
   }
+}
+
+function buildCandidateSelect(
+  query: UsageFilterIndexQuery,
+  snapshot: UsageFilterIndexSnapshot,
+): { sql: string; values: Array<string | number> } {
+  const attrClauses: string[] = [];
+  const attrValues: Array<string | number> = [];
+  const rowClauses: string[] = [];
+  const rowValues: Array<string | number> = [];
+  const usesAttributions = query.provider !== null || query.model !== null;
+  if (query.provider !== null) {
+    attrClauses.push("a.provider = ?");
+    attrValues.push(query.provider);
+  }
+  if (query.model !== null) {
+    attrClauses.push("a.model = ?");
+    attrValues.push(query.model);
+  }
+  if (query.apiKeyId !== null) {
+    rowClauses.push("r.api_key_id = ?");
+    rowValues.push(query.apiKeyId);
+  }
+  const device = query.sourceFilter?.device;
+  if (device?.kind === "no-key") rowClauses.push("r.api_key_id IS NULL");
+  else if (device?.kind === "key") {
+    rowClauses.push("r.api_key_id = ?");
+    rowValues.push(device.id);
+  } else if (device?.kind === "unconfigured") {
+    rowClauses.push("r.admission_kind = 'configured' AND r.api_key_id IS NOT NULL AND r.api_key_id <> ''");
+    const ids = query.configuredApiKeyIds ?? [];
+    if (ids.length > 0) {
+      rowClauses.push(`r.api_key_id NOT IN (${ids.map(() => "?").join(", ")})`);
+      rowValues.push(...ids);
+    }
+  }
+  const client = query.sourceFilter?.client;
+  if (client === "codex") {
+    // Mirrors matchesUsageSource: legacy Codex-surface rows, plus the shared roster.
+    rowClauses.push(`((r.client IS NULL AND r.surface IS NULL) OR r.client IN (${USAGE_CODEX_CLIENT_LABELS.map(() => "?").join(", ")}))`);
+    rowValues.push(...USAGE_CODEX_CLIENT_LABELS);
+  } else if (client === "unknown") {
+    // Mirrors matchesUsageSource: explicit unknown, or attributed-but-unclassified.
+    rowClauses.push("(r.client = 'unknown' OR (r.client IS NULL AND r.surface IS NOT NULL))");
+  } else if (client !== undefined && client !== "all") {
+    rowClauses.push("r.client = ?");
+    rowValues.push(client);
+  }
+  if (query.window) {
+    // A row without a usable timestamp is excluded, exactly as the accumulator skips it.
+    rowClauses.push("r.timestamp >= ? AND r.timestamp <= ?");
+    rowValues.push(query.window.since, query.window.until);
+  }
+  if (query.afterOffset !== undefined) {
+    rowClauses.push("r.byte_offset >= ?");
+    rowValues.push(query.afterOffset);
+  }
+  rowClauses.push("r.byte_offset <= ?");
+  rowValues.push(snapshot.indexedOffset);
+  const rowSql = rowClauses.join(" AND ");
+  if (!usesAttributions) {
+    // Force the matching index for a selective row predicate. Without it SQLite's default
+    // estimate prefers the row primary key, which examines every row in the ledger even when
+    // one API key or client matches a handful.
+    const rowIndex = rowAccessIndex(query);
+    return {
+      sql: `SELECT r.byte_offset AS byteOffset FROM usage_rows r${rowIndex ? ` INDEXED BY ${rowIndex}` : ""} WHERE r.generation = ? AND ${rowSql} ORDER BY r.byte_offset`,
+      values: [snapshot.generation, ...rowValues],
+    };
+  }
+  // Drive from the attribution index rather than scanning the row range: SQLite's default
+  // estimate otherwise prefers the row primary key, which examines every row in the ledger.
+  const attrIndex = query.provider === null ? "idx_usage_attr_model" : "idx_usage_attr_provider";
+  // Rows with no usable attribution are selected too: the accumulator is what decides, and a
+  // hand-edited row with a missing model must fail a provider/model filter exactly as the
+  // streaming read does rather than disappear from the result.
+  return {
+    sql: `SELECT DISTINCT a.byte_offset AS byteOffset FROM usage_attributions a INDEXED BY ${attrIndex} WHERE a.generation = ? AND ${attrClauses.join(" AND ")} AND a.byte_offset <= ? AND EXISTS (SELECT 1 FROM usage_rows r WHERE r.generation = a.generation AND r.byte_offset = a.byte_offset AND ${rowSql}) UNION SELECT r.byte_offset AS byteOffset FROM usage_rows r WHERE r.generation = ? AND r.unattributable = 1 AND ${rowSql} ORDER BY byteOffset`,
+    values: [
+      snapshot.generation,
+      ...attrValues,
+      snapshot.indexedOffset,
+      ...rowValues,
+      snapshot.generation,
+      ...rowValues,
+    ],
+  };
+}
+
+/** The index that answers a row-only filter, or null when every row is in scope anyway. */
+function rowAccessIndex(query: UsageFilterIndexQuery): string | null {
+  if (query.apiKeyId !== null) return "idx_usage_rows_key";
+  const device = query.sourceFilter?.device;
+  if (device?.kind === "no-key" || device?.kind === "key") return "idx_usage_rows_key";
+  if (device?.kind === "unconfigured") return "idx_usage_rows_admission";
+  const client = query.sourceFilter?.client;
+  if (client !== undefined && client !== "all") return "idx_usage_rows_client";
+  if (query.window) return "idx_usage_rows_ts";
+  return null;
 }
 
 function selectCandidates(
@@ -484,75 +902,163 @@ function selectCandidates(
   snapshot: UsageFilterIndexSnapshot,
   query: UsageFilterIndexQuery,
 ): number[] {
-  const where: string[] = [];
-  const values: Array<string | number> = [];
-  const add = (clause: string, ...params: Array<string | number>) => {
-    where.push(clause);
-    values.push(...params);
-  };
-  const usesAttributions = query.provider !== null || query.model !== null;
-  if (query.provider !== null) add("a.provider = ?", query.provider);
-  if (query.model !== null) add("a.model = ?", query.model);
-  if (query.apiKeyId !== null) add("r.api_key_id = ?", query.apiKeyId);
-  const device = query.sourceFilter?.device;
-  if (device?.kind === "no-key") add("r.api_key_id IS NULL");
-  else if (device?.kind === "key") add("r.api_key_id = ?", device.id);
-  else if (device?.kind === "unconfigured") {
-    add("r.admission_kind = 'configured' AND r.api_key_id IS NOT NULL AND r.api_key_id <> ''");
-    const ids = query.configuredApiKeyIds ?? [];
-    if (ids.length > 0) add(`r.api_key_id NOT IN (${ids.map(() => "?").join(", ")})`, ...ids);
-  }
-  const client = query.sourceFilter?.client;
-  if (client === "codex") {
-    add("((r.client IS NULL AND r.surface IS NULL) OR r.client IN ('codex_cli', 'codex_desktop', 'codex_ide'))");
-  } else if (client === "unknown") {
-    add("(r.client = 'unknown' OR (r.client IS NULL AND r.surface IS NOT NULL))");
-  } else if (client !== undefined && client !== "all") {
-    add("r.client = ?", client);
-  }
-  if (query.window) add("r.timestamp >= ? AND r.timestamp <= ?", query.window.since, query.window.until);
-  // `afterOffset` is the byte after the last folded row, which is exactly where the next
-  // row starts, so the bound is inclusive.
-  if (query.afterOffset !== undefined) add("r.byte_offset >= ?", query.afterOffset);
-  add("r.byte_offset <= ?", snapshot.indexedOffset);
-  const whereSql = ` WHERE ${where.join(" AND ")}`;
-  const sql = usesAttributions
-    ? `SELECT DISTINCT r.byte_offset AS byteOffset FROM usage_attributions a JOIN usage_rows r ON r.byte_offset = a.byte_offset${whereSql} ORDER BY r.byte_offset`
-    : `SELECT r.byte_offset AS byteOffset FROM usage_rows r${whereSql} ORDER BY r.byte_offset`;
+  const { sql, values } = buildCandidateSelect(query, snapshot);
   const rows = db.query(sql).all(...values) as Array<{ byteOffset: number }>;
   return rows.map(row => row.byteOffset);
 }
 
-/**
- * Refresh the projection, then select the candidate offsets for one filter.
- *
- * The returned snapshot is the boundary the offsets belong to. A concurrent rebuild by another
- * process between the refresh and the select would renumber every offset, so the select
- * re-checks the generation and reports a rebuild-required error instead of mixing them.
- */
-export async function readUsageFilterCandidates(
+/** A published generation with a nonzero row count must actually hold rows. */
+function hasPublishedRows(db: Database, generation: string): boolean {
+  return db.query("SELECT 1 AS present FROM usage_rows WHERE generation = ? LIMIT 1")
+    .get(generation) !== null;
+}
+
+async function readActive(
+  dir: string,
+  path: string,
   query: UsageFilterIndexQuery,
 ): Promise<UsageFilterCandidateRead> {
-  const snapshot = await refreshUsageFilterIndex();
-  const db = openIndexDatabase();
+  const refreshed = await refreshUsageFilterIndex(dir, path);
+  const db = openIndexForRead(path);
   try {
-    if (readMeta(db).generation !== snapshot.generation) {
-      throw new UsageLedgerRebuildRequiredError("content_changed");
+    db.exec("BEGIN");
+    try {
+      const meta = readMeta(db);
+      if (meta.schemaVersion !== USAGE_FILTER_INDEX_SCHEMA_VERSION
+        || meta.generation !== refreshed.generation) {
+        throw new UsageLedgerRebuildRequiredError("content_changed");
+      }
+      const snapshot: UsageFilterIndexSnapshot = {
+        ...snapshotFrom(meta, 0, ingestPassesFor(path)),
+        ingestedRows: refreshed.ingestedRows,
+        ingestPasses: refreshed.ingestPasses,
+      };
+      const offsets = selectCandidates(db, snapshot, query);
+      if (offsets.length === 0 && meta.indexedRows > 0 && !hasPublishedRows(db, meta.generation)) {
+        // The published generation claims rows it no longer has. Never serve that as a
+        // complete zero; drop the projection and rebuild.
+        throw new UsageLedgerRebuildRequiredError("content_changed");
+      }
+      db.exec("COMMIT");
+      return { snapshot, offsets };
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch { /* nothing to roll back */ }
+      throw error;
     }
-    return { snapshot, offsets: selectCandidates(db, snapshot, query) };
   } finally {
     db.close();
   }
 }
 
+/**
+ * Refresh the projection, then select the candidate offsets for one filter.
+ *
+ * Returns null when the projection cannot be used -- a foreign file at its path, an unsafe or
+ * unwritable path, a full disk, or sustained write contention -- so the caller falls back to
+ * the streaming read. A failure to read `usage.jsonl` itself is rethrown: that is the
+ * authoritative source failing, not the acceleration.
+ */
+export async function readUsageFilterCandidates(
+  query: UsageFilterIndexQuery,
+): Promise<UsageFilterCandidateRead | null> {
+  // Capture the home once: every open and ownership registration for this call must target the
+  // directory the flight was keyed on, even if the environment changes mid-flight.
+  const dir = getConfigDir();
+  const path = usageFilterIndexPath(dir);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await readActive(dir, path, query);
+    } catch (error) {
+      if (error instanceof UsageFilterIndexSourceError) throw error;
+      if (error instanceof UsageFilterIndexForeignError || error instanceof UnsafeSqlitePathError) {
+        return null;
+      }
+      if (error instanceof UsageLedgerRebuildRequiredError) {
+        const delay = BUSY_RETRY_DELAYS_MS[attempt];
+        if (delay === undefined) return null;
+        await new Promise<void>(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      if (isBusyError(error)) {
+        const delay = BUSY_RETRY_DELAYS_MS[attempt];
+        if (delay === undefined) return null;
+        await new Promise<void>(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      // Any other index-side failure (permissions, disk full, a corrupt file) degrades to the
+      // streaming read rather than failing a request the authoritative scan can answer.
+      return null;
+    }
+  }
+}
+
+/**
+ * Read the projection without writing anything, for a passive management read.
+ *
+ * Returns null unless the projection is current for the exact ledger revision, in which case
+ * the caller keeps its streaming read. No database, WAL or ownership write happens here.
+ */
+export function readUsageFilterCandidatesPassive(
+  query: UsageFilterIndexQuery,
+): UsageFilterCandidateRead | null {
+  const path = indexPathForCurrentHome();
+  if (!existsSync(path)) return null;
+  let db: Database;
+  try {
+    db = new Database(path, { readonly: true });
+  } catch {
+    return null;
+  }
+  try {
+    db.exec("BEGIN");
+    try {
+      const meta = readMeta(db);
+      const revision = currentUsageLogRevision();
+      if (meta.schemaVersion !== USAGE_FILTER_INDEX_SCHEMA_VERSION || !meta.generation) return null;
+      if (usageLogIdentityKey(meta.revision) !== usageLogIdentityKey(revision)) return null;
+      if (!revision || meta.indexedOffset !== revision.size) return null;
+      if (usageLogRevisionKey(meta.revision) !== usageLogRevisionKey(revision)) return null;
+      const snapshot = snapshotFrom(meta, 0, 0);
+      return { snapshot, offsets: selectCandidates(db, snapshot, query) };
+    } finally {
+      try { db.exec("COMMIT"); } catch { /* read-only transaction */ }
+    }
+  } catch {
+    return null;
+  } finally {
+    db.close();
+  }
+}
+
+/** Test seam: the SQLite plan for one filter's candidate select. */
+export function usageFilterCandidatePlan(query: UsageFilterIndexQuery): string[] {
+  const path = indexPathForCurrentHome();
+  const db = new Database(path, { readonly: true });
+  try {
+    const meta = readMeta(db);
+    const snapshot = snapshotFrom(meta, 0, 0);
+    const { sql, values } = buildCandidateSelect(query, snapshot);
+    const rows = db.query(`EXPLAIN QUERY PLAN ${sql}`).all(...values) as Array<{ detail: string }>;
+    return rows.map(row => row.detail);
+  } finally {
+    db.close();
+  }
+}
+
+/** Test seam: simulate a crash or a competing writer at the publish boundary. */
+export function setUsageFilterIndexTestHooksForTests(hooks: UsageFilterIndexTestHooks | null): void {
+  testHooks = hooks;
+}
+
 /** Discard the projection on the next refresh; used when an offset no longer frames a row. */
 export function requestUsageFilterIndexRebuild(): void {
-  rebuildRequested = true;
+  rebuildRequestedPaths.add(indexPathForCurrentHome());
 }
 
 /** Test-only process-state reset for isolated harnesses. */
 export function resetUsageFilterIndexForTests(): void {
   ingestFlight = null;
-  ingestPasses = 0;
-  rebuildRequested = false;
+  ingestPassesByPath.clear();
+  rebuildRequestedPaths.clear();
+  testHooks = null;
 }

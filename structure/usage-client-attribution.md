@@ -39,11 +39,33 @@ match. `src/usage/ledger-scanner.ts` supplies both halves: `scanUsageLedgerCoope
 row offset during ingest, and `readUsageLedgerRowsAtOffsets` re-reads only the selected rows under the
 same identity, row-ceiling and torn-suffix rules. The first filtered query after the index is missing
 or invalid pays one cooperative full ingest; appends ingest only new bytes, and every later filter
-reuses the projection. A replaced, truncated or same-size rewritten ledger rebuilds it, and a
-recorded offset that no longer frames a complete row drops the projection instead of serving a
-partial answer. `usage.jsonl` stays authoritative and is never truncated or rewritten.
-`tests/usage/usage-filter-index.test.ts` asserts candidate counts against the whole ledger, the
-append cursor, identity handling, and parity with a full-scan oracle.
+reuses the projection. A replaced, truncated or same-size rewritten ledger rebuilds it, a write
+observed during a row read re-verifies the selected bytes before publishing them, and a recorded
+offset that no longer frames a complete row drops the projection instead of serving a partial
+answer. `usage.jsonl` stays authoritative and is never truncated or rewritten.
+
+Rows belong to a generation and meta names the one published generation. A rebuild stages a fresh
+generation and publishes it in one short transaction fenced on the generation it started from;
+nothing deletes another writer's staged rows, only a successful publish prunes other generations.
+Two writers that stage concurrently therefore cannot mix rows, the loser retries, and a crash before
+publish leaves the previously published generation complete. An append writes into the published
+generation and publishes its cursor, digest, counts and span in the same transaction. Readers take
+meta and the candidate select in one read transaction and reject a generation that changed under
+them. A published generation that claims rows it no longer holds is rebuilt rather than served as a
+complete zero, which is why an interrupted rebuild cannot produce empty totals that look final.
+
+The projection is created 0600 through the shared private-SQLite path, its WAL and shared-memory
+sidecars are registered for uninstall only when this module creates them, and a file at that path
+that is not this projection is never modified. A passive management read opens an existing
+projection read-only and only when it is current for the exact ledger revision; otherwise it streams,
+and it never creates, writes or registers anything. Any other index-side failure -- unwritable home,
+full disk, contention, a corrupt or foreign file -- falls back to the authoritative streaming scan
+instead of failing a request the scan can answer; a failure to read `usage.jsonl` itself is
+propagated. A nonselective filter (`client=all`, `device=all`, no provider/model/key) still reads
+every row in its window; `candidateRows` counts the rows selected and normalized, not the SQL index
+entries examined. `tests/usage/usage-filter-index.test.ts` asserts candidate counts against the whole
+ledger, the append cursor, crash and two-writer generation handling, passive and fallback behavior,
+row tolerance, query plans, and parity with a full-scan oracle.
 
 `src/usage/app-breakdown.ts` maps only the closed recorded-client roster to report app categories:
 the three Codex variants share one category, absent client fields are unclassified, and invalid

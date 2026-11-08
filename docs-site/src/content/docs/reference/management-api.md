@@ -494,6 +494,15 @@ rebuildable — delete the file and the next filtered query rebuilds it from `us
 the only authority and is never truncated or rewritten. A replaced, truncated or rewritten ledger
 rebuilds the index rather than extending stale rows.
 
+The index is created private to your user, and a file at that path that is not this index is left
+alone. If the index cannot be used — an unwritable home, a full disk, another process holding it, or
+a damaged file — filtered usage falls back to reading `usage.jsonl` directly, which is slower but
+returns the same totals. A passive management read from a Remote Link Child only uses an index that
+is already current and never creates or modifies one. A query that selects most of the ledger (for
+example `client=all&device=all` with no provider, model or key) still has to read every row in its
+window; the index removes the repeated whole-ledger work for selective filters, not the cost of a
+report whose result is the whole ledger.
+
 The Usage page accepts local date/time inputs. Its selected ending minute includes the entire
 minute through `:59.999`. Choosing a preset or clearing the custom window restores preset behavior.
 This adds exact range selection and existing cost estimates; it does not add hourly chart buckets

@@ -485,21 +485,28 @@ export async function readUsageLedgerRowsAtOffsets(
   options: ReadUsageLedgerRowsOptions,
 ): Promise<UsageLedgerRowRead> {
   throwIfAborted(options.signal);
-  // Nothing selected means there is nothing to verify against the ledger; a missing ledger is
-  // an empty installation, not a failed read.
-  if (options.offsets.length === 0) return { entries: [], unreadableOffsets: [] };
   const path = usageLogPath();
   let fd: number;
   try {
     fd = openSync(path, "r");
   } catch (error) {
-    if (isMissingFileError(error)) throw rebuildRequired("identity_mismatch");
+    if (isMissingFileError(error)) {
+      // An empty selection against a missing ledger is an empty installation. A non-empty
+      // selection against one means the projection outlived its source.
+      if (options.offsets.length === 0
+        && options.expectedIdentityKey === usageLogIdentityKey(null)) {
+        return { entries: [], unreadableOffsets: [] };
+      }
+      throw rebuildRequired("identity_mismatch");
+    }
     throw error;
   }
 
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const window = Buffer.allocUnsafe(USAGE_LEDGER_ROW_READ_WINDOW_BYTES);
-  const row = Buffer.allocUnsafe(USAGE_LEDGER_MAX_LINE_BYTES);
+  // One byte past the ceiling: a row of exactly USAGE_LEDGER_MAX_LINE_BYTES is accepted by the
+  // scanner, so its terminating LF has to fit too.
+  const row = Buffer.allocUnsafe(USAGE_LEDGER_MAX_LINE_BYTES + 1);
   let windowStart = -1;
   let windowLength = 0;
 
@@ -512,8 +519,10 @@ export async function readUsageLedgerRowsAtOffsets(
 
     const lineAt = (offset: number): Buffer | null => {
       if (offset >= windowStart && offset < windowStart + windowLength) {
-        const newline = window.indexOf(0x0a, offset - windowStart);
-        if (newline >= 0) return window.subarray(offset - windowStart, newline);
+        const from = offset - windowStart;
+        // Search only the bytes actually read: the rest of the buffer is uninitialized.
+        const newline = window.subarray(from, windowLength).indexOf(0x0a);
+        if (newline >= 0) return window.subarray(from, from + newline);
         // The cached window ends without a newline; a torn suffix has no complete row.
         if (windowStart + windowLength >= size) return null;
       }
@@ -523,52 +532,60 @@ export async function readUsageLedgerRowsAtOffsets(
       if (read <= 0) return null;
       windowStart = offset;
       windowLength = read;
-      const newline = window.indexOf(0x0a, 0);
+      const newline = window.subarray(0, read).indexOf(0x0a);
       if (newline >= 0) return window.subarray(0, newline);
       // The row spans more than one window: copy the prefix and grow up to the row ceiling.
       window.copy(row, 0, 0, read);
       let length = read;
-      while (length < USAGE_LEDGER_MAX_LINE_BYTES) {
-        const want = Math.min(USAGE_LEDGER_MAX_LINE_BYTES - length, size - offset - length);
+      while (length <= USAGE_LEDGER_MAX_LINE_BYTES) {
+        const want = Math.min(row.byteLength - length, size - offset - length);
         if (want <= 0) return null;
         const more = readSync(fd, row, length, want, offset + length);
         if (more <= 0) return null;
-        const found = row.indexOf(0x0a, length);
-        length += more;
+        const found = row.subarray(length, length + more).indexOf(0x0a);
         if (found >= 0) {
           windowStart = -1;
           windowLength = 0;
-          return row.subarray(0, found);
+          return row.subarray(0, length + found);
         }
+        length += more;
       }
       return null;
     };
 
+    const walk = (visit: (bytes: Buffer, offset: number) => void): number[] => {
+      const unreadableOffsets: number[] = [];
+      for (const offset of options.offsets) {
+        throwIfAborted(options.signal);
+        if (!Number.isSafeInteger(offset) || offset < 0 || offset >= size) {
+          unreadableOffsets.push(offset);
+          continue;
+        }
+        const bytes = lineAt(offset);
+        if (!bytes) {
+          unreadableOffsets.push(offset);
+          continue;
+        }
+        visit(bytes, offset);
+      }
+      return unreadableOffsets;
+    };
+
     const entries: PersistedUsageEntry[] = [];
-    const unreadableOffsets: number[] = [];
-    for (const offset of options.offsets) {
-      throwIfAborted(options.signal);
-      if (!Number.isSafeInteger(offset) || offset < 0 || offset >= size) {
-        unreadableOffsets.push(offset);
-        continue;
-      }
-      const bytes = lineAt(offset);
-      if (!bytes) {
-        unreadableOffsets.push(offset);
-        continue;
-      }
+    const captured = createHash("sha256");
+    const unreadableOffsets = walk((bytes, offset) => {
+      captured.update(bytes);
+      captured.update("\0");
+      captured.update(String(offset));
       let entry: PersistedUsageEntry | undefined;
       try {
         entry = normalizePersistedUsageRow(JSON.parse(decoder.decode(bytes)));
       } catch {
         entry = undefined;
       }
-      if (!entry) {
-        unreadableOffsets.push(offset);
-        continue;
-      }
-      entries.push(entry);
-    }
+      if (entry) entries.push(entry);
+    });
+    const capturedDigest = captured.digest("hex");
 
     throwIfAborted(options.signal);
     const endingRevision = revisionFromStat(path, fd, fstatSync(fd));
@@ -579,6 +596,23 @@ export async function readUsageLedgerRowsAtOffsets(
     const pathRevision = currentUsageLogRevision();
     if (!pathRevision || usageLogIdentityKey(pathRevision) !== options.expectedIdentityKey) {
       throw rebuildRequired("identity_mismatch");
+    }
+    // Any write during the read can be an in-place rewrite, not just an append. Re-read the
+    // same offsets and compare, so a rewrite that lands between two batches cannot publish a
+    // mixture of old and new rows. A pure append leaves every selected row unchanged.
+    const mutated = usageLogRevisionKey(endingRevision) !== usageLogRevisionKey(openedRevision)
+      || usageLogRevisionKey(pathRevision) !== usageLogRevisionKey(openedRevision);
+    if (mutated) {
+      const verified = createHash("sha256");
+      const recheck = walk((bytes, offset) => {
+        verified.update(bytes);
+        verified.update("\0");
+        verified.update(String(offset));
+      });
+      if (recheck.length !== unreadableOffsets.length
+        || verified.digest("hex") !== capturedDigest) {
+        throw rebuildRequired("content_changed");
+      }
     }
     return { entries, unreadableOffsets };
   } finally {

@@ -12,6 +12,7 @@ import {
 } from "../../usage/ledger-scanner";
 import {
   readUsageFilterCandidates,
+  readUsageFilterCandidatesPassive,
   requestUsageFilterIndexRebuild,
   resetUsageFilterIndexForTests,
   type UsageFilterCandidateRead,
@@ -19,6 +20,7 @@ import {
   type UsageFilterIndexSnapshot,
   type UsageFilterQueryStats,
 } from "../../usage/filter-index";
+import { isPassiveRead } from "../../lib/passive-read";
 import {
   createUsageSummaryAccumulator,
   type UsageSummaryAccumulator,
@@ -362,8 +364,11 @@ type NormalizedUsageFilter = {
   configuredApiKeyIds?: readonly string[];
 };
 
-/** A retained filtered projection plus the index generation its candidates came from. */
-type RetainedFilteredAggregate = RetainedUsageAggregate & { indexGeneration: number };
+/**
+ * A retained filtered projection plus the index generation its candidates came from.
+ * `null` means it was built by the streaming fallback and cannot be extended incrementally.
+ */
+type RetainedFilteredAggregate = RetainedUsageAggregate & { indexGeneration: string | null };
 
 /** The derived index and the ledger disagree about where a row starts. */
 class UsageFilterIndexCorruptError extends Error {}
@@ -416,6 +421,44 @@ function filteredStateFrom(
     retainedAt: Date.now(),
     indexGeneration: snapshot.generation,
   };
+}
+
+/** The pre-index streaming read, used when the projection is unavailable or passive. */
+function streamingStateFrom(
+  accumulator: UsageSummaryAccumulator,
+  scan: Awaited<ReturnType<typeof scanUsageLedgerCooperatively>>,
+  overlayVersion: number,
+  timeZone: string,
+): RetainedFilteredAggregate {
+  return {
+    accumulator,
+    usageIncomplete: scan.oversizedRows > 0,
+    usageInvalidRows: scan.invalidRows > 0,
+    revision: scan.revision,
+    identityKey: usageLogIdentityKey(scan.revision),
+    revisionKey: usageLogRevisionKey(scan.revision),
+    processedThroughBytes: scan.processedThroughBytes,
+    processedThroughDigest: scan.processedThroughDigest,
+    overlayVersion,
+    timeZone,
+    retainedAt: Date.now(),
+    indexGeneration: null,
+  };
+}
+
+/**
+ * Candidate selection for one filter.
+ *
+ * A passive management read must not create or write anything, so it only uses a projection
+ * that is already current; otherwise the caller streams. Both paths return null when the
+ * acceleration is unusable, never when the ledger itself failed.
+ */
+async function readCandidates(
+  query: UsageFilterIndexQuery,
+): Promise<UsageFilterCandidateRead | null> {
+  return isPassiveRead()
+    ? readUsageFilterCandidatesPassive(query)
+    : readUsageFilterCandidates(query);
 }
 
 async function accumulateCandidates(
@@ -475,12 +518,14 @@ function publishFilteredAggregate(
   key: string,
   state: RetainedFilteredAggregate,
   update: UsageAggregateResult["update"],
-  read: UsageFilterCandidateRead,
+  read: UsageFilterCandidateRead | null,
 ): UsageAggregateResult {
   retainedFilteredAggregates.set(key, state);
   trimRetainedFilteredAggregates();
   enforceAppOwnedMemoryBudget();
-  return { ...resultFrom(state, update), filterIndex: filterStats(read) };
+  return read
+    ? { ...resultFrom(state, update), filterIndex: filterStats(read) }
+    : resultFrom(state, update);
 }
 
 async function rebuildFilteredAggregate(
@@ -490,7 +535,10 @@ async function rebuildFilteredAggregate(
   overlayVersion: number = userCostOverlayVersion(),
   timeZone: string = currentTimeZone(),
 ): Promise<UsageAggregateResult> {
-  const read = await readUsageFilterCandidates(filterQuery(filter, window));
+  const read = await readCandidates(filterQuery(filter, window));
+  if (!read) {
+    return rebuildFilteredAggregateStreaming(key, filter, window, overlayVersion, timeZone);
+  }
   const accumulator = createUsageSummaryAccumulator({
     filter,
     mode: "row-unique",
@@ -505,6 +553,30 @@ async function rebuildFilteredAggregate(
     filteredStateFrom(accumulator, read.snapshot, overlayVersion, timeZone),
     "rebuild",
     read,
+  );
+}
+
+async function rebuildFilteredAggregateStreaming(
+  key: string,
+  filter: NormalizedUsageFilter,
+  window: UsageTimeWindow | undefined,
+  overlayVersion: number,
+  timeZone: string,
+): Promise<UsageAggregateResult> {
+  const accumulator = createUsageSummaryAccumulator({
+    filter,
+    mode: "row-unique",
+    ...(window ? { window } : {}),
+  });
+  const scan = await scanUsageLedgerCooperatively({ onEntry: entry => accumulator.add(entry) });
+  if (userCostOverlayVersion() !== overlayVersion || currentTimeZone() !== timeZone) {
+    throw new UsageAggregationInputsChangedError();
+  }
+  return publishFilteredAggregate(
+    key,
+    streamingStateFrom(accumulator, scan, overlayVersion, timeZone),
+    "rebuild",
+    null,
   );
 }
 
@@ -547,13 +619,20 @@ async function refreshFilteredAggregate(
     const overlayVersion = userCostOverlayVersion();
     const timeZone = currentTimeZone();
     const state = retainedFilteredAggregates.get(key);
-    if (!state || state.overlayVersion !== overlayVersion || state.timeZone !== timeZone) {
+    if (!state
+      || state.overlayVersion !== overlayVersion
+      || state.timeZone !== timeZone
+      || state.indexGeneration === null) {
       return rebuildFilteredAggregate(key, filter, window, overlayVersion, timeZone);
     }
-    const read = await readUsageFilterCandidates({
+    const read = await readCandidates({
       ...filterQuery(filter, window),
       afterOffset: state.processedThroughBytes,
     });
+    if (!read) {
+      retainedFilteredAggregates.delete(key);
+      return rebuildFilteredAggregate(key, filter, window, overlayVersion, timeZone);
+    }
     if (state.indexGeneration !== read.snapshot.generation
       || state.identityKey !== read.snapshot.identityKey
       || state.processedThroughBytes > read.snapshot.indexedOffset) {
