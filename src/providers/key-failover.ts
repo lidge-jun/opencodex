@@ -26,6 +26,7 @@ import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 // probe machinery onto it.
 import { cachedApiKeyQuota } from "./quota-key-accounts";
 import { isDisplayOnlyQuota } from "./quota-types";
+import { resetAtToMs } from "../codex/quota-types";
 
 // ---- cooldown state (in-memory, same as codex/routing.ts) ----
 
@@ -421,14 +422,16 @@ type ApiKeyPoolEntry = NonNullable<OcxProviderConfig["apiKeyPool"]>[number];
  * what "more room" means. `creditsUsd` is deliberately excluded: it is a currency amount, not
  * a percentage, and ranking one against the other produces an order that means nothing.
  */
-function keyHeadroom(providerName: string, provider: OcxProviderConfig, entry: ApiKeyPoolEntry): number | null {
+function keyHeadroom(providerName: string, provider: OcxProviderConfig, entry: ApiKeyPoolEntry, now: number): number | null {
   const quota = cachedApiKeyQuota(providerName, provider, entry.id, entry.key);
   if (!quota || isDisplayOnlyQuota(quota)) return null;
+  const current = (percent: number | undefined, resetAt: number | undefined) =>
+    typeof resetAt === "number" && Number.isFinite(resetAt) && resetAt > 0 && resetAtToMs(resetAt) <= now ? undefined : percent;
   const percents = [
-    quota.fiveHourPercent,
-    quota.weeklyPercent,
-    quota.monthlyPercent,
-    ...(quota.customWindows ?? []).map((window: { percent?: number }) => window.percent),
+    current(quota.fiveHourPercent, quota.fiveHourResetAt),
+    current(quota.weeklyPercent, quota.weeklyResetAt),
+    current(quota.monthlyPercent, quota.monthlyResetAt),
+    ...(quota.customWindows ?? []).map(window => current(window.percent, window.resetAt)),
   ].filter((value): value is number => typeof value === "number");
   if (percents.length === 0) return null;
   return 100 - Math.max(...percents);
@@ -447,10 +450,11 @@ function rankKeysByHeadroom(
   providerName: string,
   provider: OcxProviderConfig,
   eligible: readonly ApiKeyPoolEntry[],
+  now: number,
 ): ApiKeyPoolEntry[] {
   return eligible
     .map((entry, index) => {
-      const headroom = keyHeadroom(providerName, provider, entry);
+      const headroom = keyHeadroom(providerName, provider, entry, now);
       const bucket = headroom === null ? 1 : headroom <= 0 ? 2 : 0;
       return { entry, bucket, headroom: headroom ?? 0, index };
     })
@@ -513,7 +517,7 @@ export function selectProactiveApiKey(
   } else if (strategy === "quota") {
     // else-if, deliberately. `fill-first` is not a named branch here -- it is the eligible[0]
     // default above, so replacing that default would silently retarget it.
-    chosen = rankKeysByHeadroom(providerName, provider, eligible)[0] ?? chosen;
+    chosen = rankKeysByHeadroom(providerName, provider, eligible, now)[0] ?? chosen;
   }
   if (chosen.key === provider.apiKey) return null;
 

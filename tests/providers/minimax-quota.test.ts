@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearProviderQuotaCache, fetchProviderApiKeyQuotas, fetchProviderQuotaReports } from "../../src/providers/quota";
 import { clearKeyCooldowns, selectProactiveApiKey } from "../../src/providers/key-failover";
+import { setCachedProviderApiKeyQuotaForTests } from "../../src/providers/quota-key-accounts";
 import { saveConfig } from "../../src/config";
 import { ensureQuotaPoolIdentity, resetQuotaPoolIdentityMemoForTests } from "../../src/quota-pool/identity";
 import { readQuotaPool } from "../../src/quota-pool/assemble";
@@ -64,6 +65,42 @@ describe("MiniMax Coding Plan quota", () => {
     const rows = await fetchProviderApiKeyQuotas(cfg, "minimax", true);
     expect(rows.map(row => row.quota?.customWindows?.[0]?.percent)).toEqual([100, 20]);
     expect(selectProactiveApiKey(cfg, "minimax")?.apiKey).toBe("second-key");
+  });
+
+  test("quota strategy stops ranking an elapsed window while retaining an active one", async () => {
+    const cfg = config("minimax", "https://api.minimax.io/v1");
+    Object.assign(cfg.providers.minimax!, {
+      apiKey: "not-active", apiKeyPoolStrategy: "quota",
+      apiKeyPool: [{ id: "first", key: "first-key" }, { id: "second", key: "second-key" }],
+    });
+    const now = Date.now();
+    const resetAt = now + 60_000;
+    globalThis.fetch = (async (_input, init) => {
+      const first = new Headers(init?.headers).get("authorization") === "Bearer first-key";
+      return response([{ model_name: "general", current_interval_remaining_percent: first ? 0 : 50,
+        end_time: resetAt, current_weekly_status: first ? 1 : 0,
+        current_weekly_remaining_percent: 80, weekly_end_time: now + 3_600_000 }]);
+    }) as typeof fetch;
+    await fetchProviderApiKeyQuotas(cfg, "minimax", true);
+    saveConfig(cfg);
+    expect(selectProactiveApiKey(cfg, "minimax", now)?.apiKey).toBe("second-key");
+    cfg.providers.minimax!.apiKey = "not-active";
+    saveConfig(cfg);
+    expect(selectProactiveApiKey(cfg, "minimax", resetAt)?.apiKey).toBe("first-key");
+  });
+
+  test.each(["fiveHour", "weekly", "monthly", "custom"] as const)("elapsed %s quota is unknown for key selection", kind => {
+    const cfg = config("minimax", "https://api.minimax.io/v1");
+    Object.assign(cfg.providers.minimax!, { apiKey: "not-active", apiKeyPoolStrategy: "quota",
+      apiKeyPool: [{ id: "first", key: "first-key" }, { id: "second", key: "second-key" }] });
+    const now = Date.now();
+    const spent = { weeklyPercent: 100, updatedAt: now };
+    const elapsed = kind === "custom" ? { customWindows: [{ label: "fixture", percent: 100, resetAt: now - 1 }], updatedAt: now }
+      : { [`${kind}Percent`]: 100, [`${kind}ResetAt`]: Math.floor((now - 1000) / 1000), updatedAt: now };
+    setCachedProviderApiKeyQuotaForTests("minimax", cfg.providers.minimax!, "first", "first-key", spent);
+    setCachedProviderApiKeyQuotaForTests("minimax", cfg.providers.minimax!, "second", "second-key", elapsed);
+    saveConfig(cfg);
+    expect(selectProactiveApiKey(cfg, "minimax", now)?.apiKey).toBe("second-key");
   });
 
   test("quota pool includes the Coding Plan inference windows", async () => {
