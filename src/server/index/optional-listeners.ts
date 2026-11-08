@@ -152,12 +152,18 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
     },
     async stop() {
       let failure: unknown;
+      // First, before any other await. The local control socket's ownership record is released
+      // synchronously inside this call, and the shutdown that follows can take a long time: a
+      // supervisor stop over SSH, a link drain, the intercept pair. The public listener is already
+      // closed by then, so an independent `ocx start` sees a free port and no runtime record; if
+      // the lease were still held by this live pid it would read as a live owner and that
+      // successor would refuse the port for good.
+      try { await localControl.stop(); } catch (error) { failure = error; }
       if (supervisorStop) {
-        try { await supervisorStop(); } catch (error) { failure = error; }
+        try { await supervisorStop(); } catch (error) { failure ??= error; }
       }
       try { await linkListener.stop(); } catch (error) { failure ??= error; }
       try { await claudeIntercept.stop(); } catch (error) { failure ??= error; }
-      try { await localControl.stop(); } catch (error) { failure ??= error; }
       unregisterSupervisorAdmission?.();
       unregisterSupervisorAdmission = undefined;
       stopJevQuotaActivation?.();

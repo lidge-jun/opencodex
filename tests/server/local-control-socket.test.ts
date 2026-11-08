@@ -535,6 +535,42 @@ describe.skipIf(!unixSupported)("local control socket ownership (#8184)", () => 
     expect(existsSync(localControlLeasePath(publicPort))).toBe(false);
   }, SERVER_BUDGET_MS);
 
+  test("a successor that starts while the optional listeners shut down keeps the socket", async () => {
+    const publicPort = await findAvailablePort(0, "0.0.0.0");
+    saveConfig(hubConfig(await findAvailablePort(0, "127.0.0.1")));
+    const listeners = createOptionalListenerSet();
+    listeners.start({ config: hubConfig(0), publicPort, maxRequestBodySize: 0, dispatch: dispatchFor("first") });
+    const socket = localControlSocketPath(publicPort);
+    expect(existsSync(socket)).toBe(true);
+    // A supervisor stop over SSH is the slow one in production. The record must already be gone
+    // by the time it runs, or the successor sees a live owner on a port nobody will serve.
+    listeners.registerSupervisorStop(() => Bun.sleep(700));
+
+    const stopping = listeners.stop();
+    const barrier = join(testDir, "barrier-handoff");
+    writeFileSync(barrier, "go");
+    let child: ReturnType<typeof spawnChild> | null = null;
+    try {
+      // The public listener is already closed by now and the runtime record is gone, which is
+      // exactly the window an independent `ocx start` occupies.
+      await Bun.sleep(100);
+      child = spawnChild("handoff", publicPort, "successor", barrier);
+      await waitForFile(join(testDir, "handoff.json"), "the successor runtime");
+      const report = JSON.parse(readFileSync(join(testDir, "handoff.json"), "utf8")) as ChildReport;
+      expect(report.socketPath).toBe(socket);
+      expect(await (await overSocket(socket, STATUS)).json()).toEqual({ owner: "successor" });
+
+      await stopping;
+
+      // The predecessor finishing must not take the successor's socket with it.
+      expect(await (await overSocket(socket, STATUS)).json()).toEqual({ owner: "successor" });
+      expect(existsSync(localControlLeasePath(publicPort))).toBe(true);
+    } finally {
+      if (child) { child.kill("SIGKILL"); await child.exited; }
+      await stopping.catch(() => {});
+    }
+  }, SPAWN_BUDGET_MS);
+
   test("a release the claim mutex blocks is reported and retried, not discarded", async () => {
     const publicPort = await findAvailablePort(0, "0.0.0.0");
     saveConfig(hubConfig(await findAvailablePort(0, "127.0.0.1")));
