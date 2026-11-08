@@ -4,14 +4,140 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { classifyUsageClient, normalizeRecordedClient } from "../../src/usage/client";
 import { normalizePersistedUsageRow, readUsageEntries, resetUsageReadCacheForTests, usageLogPath } from "../../src/usage/log";
-import { createUsageSummaryAccumulator } from "../../src/usage/summary";
+import { createUsageSummaryAccumulator, projectUsageSummary, summarizeUsage } from "../../src/usage/summary";
 import { parseUsageSource } from "../../src/usage/source-filter";
 import { createSourceFacetAccumulator } from "../../src/usage/source-facets";
-import { addFinalRequestLog, addRequestLog, clearRequestLogsForTests, getRequestLogEntries, requestLogEntryFromPersistedUsage, type RequestLogEntry } from "../../src/server/request-log";
+import { addFinalRequestLog, addRequestLog, aggregateAttemptUsage, clearRequestLogsForTests, getRequestLogEntries, requestLogEntryFromPersistedUsage, type RequestLogEntry } from "../../src/server/request-log";
 import { log } from "../helpers/request-log-entry";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 describe("usage client attribution", () => {
+  test("report groups accepted usage by bounded app and preserves legacy absence", () => {
+    const now = Date.now();
+    const base = { timestamp: now, provider: "openai", model: "gpt-test", status: 200,
+      durationMs: 10, usageStatus: "reported" as const, usage: { inputTokens: 10, outputTokens: 5 } };
+    const accumulator = createUsageSummaryAccumulator({ filter: { sourceFilter: { client: "all", device: { kind: "all" } } } });
+    accumulator.add({ ...base, requestId: "codex-cli", client: "codex_cli" });
+    accumulator.add({ ...base, requestId: "codex-desktop", client: "codex_desktop" });
+    accumulator.add({ ...base, requestId: "claude", client: "claude_code" });
+    accumulator.add({ ...base, requestId: "legacy", surface: "claude" });
+    accumulator.add({ ...base, requestId: "invalid", client: "not-a-client" as never });
+    const report = accumulator.summarize("30d", now);
+    expect(report.apps.map(row => [row.client, row.requests, row.totalTokens]).sort()).toEqual([
+      ["claude_code", 1, 15], ["codex", 2, 30], ["unclassified", 1, 15], ["unknown", 1, 15],
+    ]);
+    const clone = accumulator.clone();
+    clone.add({ ...base, requestId: "grok", client: "grok" });
+    expect(clone.summarize("30d", now).apps.find(row => row.client === "grok")?.requests).toBe(1);
+    expect(accumulator.summarize("30d", now).apps.some(row => row.client === "grok")).toBe(false);
+  });
+
+  test("app totals follow projected combo attempts and inclusive custom bounds", () => {
+    const now = Date.now();
+    const combo = { timestamp: now, requestId: "combo", provider: "combo", model: "combo", client: "claude_code" as const,
+      status: 200, durationMs: 20, usageStatus: "reported" as const, usage: { inputTokens: 150, outputTokens: 15 },
+      attempts: [{ ordinal: 1, provider: "openai", model: "gpt-5.5", adapter: "openai-responses", status: 200,
+        durationMs: 10, sendCount: 1, recoveryKinds: [], usageStatus: "reported" as const, usage: { inputTokens: 100, outputTokens: 10 }, totalTokens: 110 },
+      { ordinal: 2, provider: "anthropic", model: "claude-sonnet-5", adapter: "anthropic", status: 200,
+        durationMs: 10, sendCount: 1, recoveryKinds: [], usageStatus: "reported" as const, usage: { inputTokens: 50, outputTokens: 5 }, totalTokens: 55 }] };
+    const all = summarizeUsage([combo], "30d", now);
+    const filtered = projectUsageSummary(all, { model: "gpt-5.5" }, [combo]);
+    expect(filtered.apps).toMatchObject([{ client: "claude_code", requests: 1, totalTokens: 110 }]);
+    expect(filtered.apps[0]?.estimatedCostUsd).toBe(filtered.summary.estimatedCostUsd);
+    const bounded = createUsageSummaryAccumulator({ window: { since: now, until: now } });
+    bounded.add(combo);
+    bounded.add({ ...combo, requestId: "outside", timestamp: now + 1 });
+    expect(bounded.summarize("30d", now).apps[0]?.requests).toBe(1);
+  });
+
+  test("filtered combo status reflects retained attempts in summary, app, model and provider", () => {
+    const now = Date.now();
+    const good = { ordinal: 1, provider: "openai", model: "gpt-5.5", adapter: "openai-responses", status: 200,
+      durationMs: 10, sendCount: 1, recoveryKinds: [], usageStatus: "reported" as const, usage: { inputTokens: 100, outputTokens: 10 }, totalTokens: 110 };
+    const missing = { ordinal: 2, provider: "anthropic", model: "claude-test", adapter: "anthropic", status: 200,
+      durationMs: 10, sendCount: 1, recoveryKinds: [], usageStatus: "unreported" as const };
+    const unsent = { ordinal: 3, provider: "openai", model: "gpt-5.5", adapter: "openai-responses", status: 503,
+      durationMs: 1, sendCount: 0, recoveryKinds: [], usageStatus: "unsupported" as const };
+    const combo = { timestamp: now, requestId: "mixed-status", provider: "combo", model: "combo", client: "codex_cli" as const,
+      status: 200, durationMs: 20, usageStatus: "unreported" as const, attempts: [good, missing, unsent] };
+    for (const mode of ["exact", "row-unique"] as const) {
+      for (const [filter, measured] of [[{ model: "gpt-5.5" }, 1], [{ provider: "anthropic" }, 0]] as const) {
+        const accumulator = createUsageSummaryAccumulator({ mode, filter });
+        accumulator.add(combo);
+        const result = accumulator.summarize("30d", now);
+        expect(result.apps[0]?.measuredRequests).toBe(measured);
+        expect(result.summary.measuredRequests).toBe(measured);
+        expect(result.models[0]?.measuredRequests).toBe(measured);
+        expect(result.providers[0]?.measuredRequests).toBe(measured);
+      }
+      const all = createUsageSummaryAccumulator({ mode, filter: { sourceFilter: { client: "all", device: { kind: "all" } } } });
+      all.add(combo);
+      expect(all.summarize("30d", now).apps[0]?.measuredRequests).toBe(0);
+      const allRetained = createUsageSummaryAccumulator({ mode, filter: { sourceFilter: { client: "all", device: { kind: "all" } } } });
+      allRetained.add({ ...combo, requestId: "reported-and-unsent", usageStatus: "reported", attempts: [good, unsent] });
+      const retained = allRetained.summarize("30d", now);
+      expect(retained.apps[0]?.measuredRequests).toBe(1);
+      expect(retained.models[0]?.measuredRequests).toBe(1);
+      expect(retained.providers[0]?.measuredRequests).toBe(1);
+    }
+  });
+
+  test("filtered status follows the request-log rules for mixed and unsent attempts", () => {
+    const now = Date.now();
+    const base = { ordinal: 1, provider: "openai", model: "gpt-5.5", adapter: "openai-responses", status: 200,
+      durationMs: 1, sendCount: 1, recoveryKinds: [] };
+    const reported = { ...base, usageStatus: "reported" as const, usage: { inputTokens: 10, outputTokens: 5 } };
+    const estimated = { ...base, usageStatus: "estimated" as const, usage: { inputTokens: 10, outputTokens: 5, estimated: true } };
+    const unsupported = { ...base, usageStatus: "unsupported" as const };
+    const unreported = { ...base, usageStatus: "unreported" as const };
+    const unsent = { ...unsupported, sendCount: 0 };
+    for (const attempts of [[reported], [estimated], [unsupported], [unreported], [reported, estimated], [reported, unreported], [unsupported, unsent], [unsent]]) {
+      const expected = aggregateAttemptUsage(attempts).status;
+      const removed = { ...unreported, provider: "anthropic", model: "other" };
+      const accumulator = createUsageSummaryAccumulator({ filter: { provider: "openai" } });
+      accumulator.add({ timestamp: now, requestId: "mixed", provider: "combo", model: "combo", client: "codex_cli",
+        status: 200, durationMs: 1, usageStatus: "unreported", attempts: [...attempts, removed] });
+      const result = accumulator.summarize("30d", now);
+      const measured = expected === "reported" || expected === "estimated" ? 1 : 0;
+      expect(result.summary[`${expected}Requests`]).toBe(1);
+      expect(result.apps[0]?.measuredRequests).toBe(measured);
+      expect(result.models[0]?.measuredRequests).toBe(measured);
+      expect(result.providers[0]?.measuredRequests).toBe(measured);
+    }
+  });
+
+  test("app totals respect source, device and range in both modes and count missing prices", () => {
+    const now = Date.now();
+    const base = { provider: "fixture", model: "unpriced", status: 200, durationMs: 1,
+      usageStatus: "unreported" as const, client: "grok" as const, apiKeyId: "A" };
+    for (const mode of ["exact", "row-unique"] as const) {
+      const accumulator = createUsageSummaryAccumulator({ mode, filter: { sourceFilter: { client: "all", device: { kind: "key", id: "A" } } } });
+      const before = accumulator.estimatedBytes;
+      accumulator.add({ ...base, timestamp: now, requestId: "in" });
+      accumulator.add({ ...base, timestamp: now - 10 * 86400_000, requestId: "old" });
+      accumulator.add({ ...base, timestamp: now, requestId: "wrong-key", apiKeyId: "B" });
+      expect(accumulator.estimatedBytes).toBeGreaterThan(before);
+      expect(accumulator.summarize("7d", now).apps).toMatchObject([{ client: "grok", requests: 1, unpricedRequests: 1 }]);
+      expect(accumulator.summarize("7d", now).apps[0]).not.toHaveProperty("estimatedCostUsd");
+      expect(accumulator.summarize("30d", now).apps[0]?.requests).toBe(2);
+    }
+  });
+
+  test("app totals follow local calendar partitions across a daylight-saving transition", () => {
+    const previous = process.env.TZ;
+    process.env.TZ = "America/New_York";
+    try {
+      const start = new Date(2026, 2, 7, 23, 59).getTime();
+      const end = new Date(2026, 2, 9, 0, 0).getTime();
+      const accumulator = createUsageSummaryAccumulator({ window: { since: start, until: end } });
+      const base = { provider: "fixture", model: "model", status: 200, durationMs: 1, usageStatus: "unreported" as const };
+      accumulator.add({ ...base, timestamp: start, requestId: "before", client: "codex_cli" });
+      accumulator.add({ ...base, timestamp: end, requestId: "after", client: "grok" });
+      expect(accumulator.summarize("30d", end).apps.map(row => [row.client, row.requests])).toEqual([["codex", 1], ["grok", 1]]);
+    } finally {
+      if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous;
+    }
+  });
   test("classifies supported clients from bounded request headers", () => {
     expect(classifyUsageClient(new Headers({ originator: "codex_cli_rs" }))).toBe("codex_cli");
     expect(classifyUsageClient(new Headers({ originator: "codex-tui" }))).toBe("codex_cli");

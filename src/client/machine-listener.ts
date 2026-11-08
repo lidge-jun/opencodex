@@ -201,17 +201,11 @@ export function startMachineListener(
         const identity = { service: "opencodex", version: VERSION, role: "client" } as const;
         const facts = { uptime: process.uptime(), pid: process.pid, port: server.port, protocolVersion: 1 };
         let link: LinkReadiness | null = null;
-        if (linkMode && connectionChanged()) {
-          return Response.json({ ...identity, status: "pending", ...facts, link: { state: "unavailable", reason: "client_state_changed" } },
-            { status: 503, headers: { "Retry-After": "1", "Cache-Control": "no-store" } });
-        }
         if (linkMode && deps.linkReadiness) {
           try { link = await deps.linkReadiness(); } catch { link = { ready: false, reason: "link_unverified" }; }
         }
-        if (linkMode && connectionChanged()) {
-          return Response.json({ ...identity, status: "pending", ...facts, link: { state: "unavailable", reason: "client_state_changed" } },
-            { status: 503, headers: { "Retry-After": "1", "Cache-Control": "no-store" } });
-        }
+        // Read durable ownership once, after any probe, so a change during the probe still shows.
+        if (linkMode && connectionChanged()) link = { ready: false, reason: "client_state_changed" };
         if (link && !link.ready) {
           // The /readyz contract: not ready is 503 with Retry-After and status pending or failed.
           return Response.json({ ...identity, status: "pending", ...facts, link: { state: "unavailable", reason: link.reason } },
@@ -263,7 +257,7 @@ export function startMachineListener(
         if (managementPrincipal(req, managementAuth, config) !== "gui-session") {
           return Response.json({ error: "opencodex machine GUI session required" }, { status: 401 });
         }
-        if (linkMode && connectionChanged() && (url.pathname === "/api/machine/status" || url.pathname === "/api/machine/clients" || url.pathname === "/api/link/status")) {
+        if (linkMode && (url.pathname === "/api/machine/status" || url.pathname === "/api/machine/clients" || url.pathname === "/api/link/status") && connectionChanged()) {
           return Response.json({ error: "client_state_changed" }, { status: 503, headers: { "Cache-Control": "no-store" } });
         }
         // A loopback dashboard session proves possession, not user presence: any local

@@ -212,7 +212,7 @@ test("OpenAI context switch restores the selected cap after a disabled-page relo
   const toggle=()=>cluster().querySelector<HTMLButtonElement>("button.switch")!;
   expect(cluster().textContent).toContain("128k");
   await act(async()=>{toggle().click();await settle();});
-  expect(toggle().getAttribute("aria-pressed")).toBe("false");
+  expect(toggle().getAttribute("aria-checked")).toBe("false");
   expect(cluster().textContent).toContain("128k");
   const readsBeforeReload = capReads;
   await act(async () => { root!.unmount(); root = null; });
@@ -224,11 +224,11 @@ test("OpenAI context switch restores the selected cap after a disabled-page relo
   });
   await act(settle);
   expect(capReads).toBeGreaterThan(readsBeforeReload);
-  expect(toggle().getAttribute("aria-pressed")).toBe("false");
+  expect(toggle().getAttribute("aria-checked")).toBe("false");
   expect(cluster().textContent).toContain("128k");
   expect(bodies).toEqual([{ provider: "openai", enabled: false }]);
   await act(async()=>{toggle().click();await settle();});
-  expect(toggle().getAttribute("aria-pressed")).toBe("true");
+  expect(toggle().getAttribute("aria-checked")).toBe("true");
   expect(cluster().textContent).toContain("128k");
   expect(bodies).toEqual([{provider:"openai",enabled:false},{provider:"openai",enabled:true}]);
 });
@@ -259,7 +259,7 @@ test.each([
   expect(capReads).toBeGreaterThan(0);
   const cluster = container.querySelector<HTMLElement>(".models-cap-cluster")!;
   expect(cluster.textContent).toContain(label);
-  expect(cluster.querySelector("button.switch")?.getAttribute("aria-pressed")).toBe(String(enabled));
+  expect(cluster.querySelector("button.switch")?.getAttribute("aria-checked")).toBe(String(enabled));
 });
 
 const catalogRefreshFailures = [

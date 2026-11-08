@@ -162,6 +162,33 @@ disables shared pacing. If Mistral's
 retry time exceeds `retryOn429.maxIntervalMs`, the proxy returns the 429 and retry hint rather
 than replaying early. Context windows and per-model compaction preferences remain independent.
 
+Mistral accepts a different set of `reasoning_effort` values for each model and refuses the
+rest with HTTP 400 (or 422 for `ultra`). The preset ships the accepted rungs as registry
+`modelReasoningEfforts` rows. Client exports such as `ocx export --client opencode` offer only
+these variants. The Codex catalog still adds its synthetic `ultra` rung, plus `max` where a
+model's list omits it, and requests clamp those to the highest listed rung:
+
+| Model | Efforts |
+|---|---|
+| `zai-glm-5-3`, `zai-glm-5-3-flash` | `low`, `high`, `max` |
+| `mistral-large-4`, `mistral-large-4-0` | `low`, `medium`, `high` |
+| `deepseek-v4-1-flash-1017` | `low`, `high`, `xhigh`, `max` |
+
+The GLM and Large 4 rows follow [Mistral's reasoning guide](https://docs.mistral.ai/capabilities/reasoning).
+Mistral documents no values for DeepSeek V4.1 Flash 1017, so its row is the set measured to
+answer HTTP 200 in November 2026 and may change. A `modelReasoningEfforts` entry of your own
+for a model replaces its row.
+
+On native Chat Completions, for a model with reasoning enabled, a caller's `ultra` is sent as `max`, or as the model's highest
+declared rung below `max` (`high` on Large 4). This applies to every `openai-chat` provider
+unless the model's declared ladder lists `ultra` itself. A `reasoningEffortMap` alias for `max`
+applies to the folded value, and `__omit__` drops the effort field. On models with independent
+thinking and effort controls, the effort still selects the thinking switch; legacy thinking-toggle
+wires keep their existing discriminator mapping. Models with reasoning disabled (for
+example `noReasoningModels`) drop `reasoning_effort` entirely. Other caller values are forwarded
+as sent unless an effort pin or a qualifying effort cap rewrites them; rewritten values also go
+through the provider's wire mapping.
+
 When round-robin key selection is enabled, queued requests recheck key cooldowns before sending and acquire pacing capacity for any replacement key. This applies to native Chat, Messages, Responses and compact. Waiting for replacement-key capacity does not consume the upstream response-header timeout. Per-key pacing and round-robin use guarded HTTP/SSE even when upstream WebSockets are enabled; WebSocket-only steering and injection require a route without those key policies. This does not change the saved active key. An established upstream turn keeps its credential; later sends are refused if that key cools. Pre-output key rejection can recover to a healthy key within the existing request limit. Direct Images and compact requests record genuine 401/429 cooldowns without replaying that paid POST.
 
 ### Anthropic API-key credit exhaustion
@@ -1454,6 +1481,7 @@ OpenCodex provides official adapter support for Qoder through the `qoder` (Globa
 - **Model Discovery:** `qoder --list-models` is the authoritative entitlement roster for the current PAT. The cache is bound to an irreversible fingerprint of the token, so switching accounts never reuses another account's roster. If discovery fails, the provider degrades to a stale cache and then the documented static seed. The CLI starts a full agent runtime first, so background catalog discovery allows each run up to 30 seconds, and concurrent callers of the same provider share one run per token. The dashboard connection test waits at most 8 seconds: past that it reports the provider as still discovering rather than failed, and when the run succeeds the catalog is re-synced without a proxy restart. Codex sessions that are already running keep their previous model list until they restart: restart Codex, or run `ocx system codex-restart --yes`, which restarts Codex app-servers (the CLI reference describes what it keeps and what it relaunches).
 - **Token usage:** Qoder CLI reports zero token counts unless its usage switch is on, so each preset turns it on in its scoped CLI child environment: `QODER_EXPOSE_TOKEN_USAGE=true` for Global and `QODERCN_EXPOSE_TOKEN_USAGE=true` for CN, which reads only its own prefix.
 - **Tool Ownership:** The CLI runs single-turn `stream-json` with `--tools ""`, `--strict-mcp-config`, setting sources disabled, and session persistence disabled, so Codex keeps exclusive tool ownership. Client-declared tools are exposed through an isolated request-scoped MCP server.
+- **Tool names:** Qoder Global and Qoder CN accept each selected tool's exact client name or its advertised MCP name. Repeating the same call ID and arguments under either spelling returns the tool call only once. Unknown or unselected names are rejected. If one selected tool's client name equals another selected tool's MCP name, the request fails with `tool_catalog_invalid` before the CLI starts. Select one of those tools or rename it to remove the ambiguity. Tool execution remains with the client.
 - **Output guard:** If the CLI echoes OpenCodex tool-call/result replay envelopes into assistant text, the turn fails with `vendor_scaffold_detected` (502) instead of returning the envelope as a successful answer, and neither reasoning nor tool calls following the envelope are forwarded. Reasoning starts a fresh replay-text block, so earlier prose or code fences cannot hide an envelope in later text. If the CLI's turn already ended with its own error, that error is reported instead, still without the envelope. The proxy does not retry that failure automatically. Ordinary prose and closed fenced examples follow the shared envelope recognizer; an unverified overflowing fenced example is refused. Assistant text preserves Unicode characters split across CLI frames; unpaired surrogates are replaced with U+FFFD.
 - **Image Input:** Global continues forwarding supported images through the shared projection without a per-model vision allowlist. CN retains its vision-sidecar defaults. Its raw-image route admits only one canonical base64 PNG of at most 1 MiB decoded, 8192 pixels per edge, and 16 million total pixels in a single user turn with `DeepSeek-Flash` or `Qwen3.8-Flash`. Use `qoderclicn 1.1.70`: [issue #7516](https://github.com/lidge-jun/opencodex/issues/7516) reports Windows 11 x64 live success for those models on both `--attachment` and inline `--input-format stream-json --output-format stream-json` stdin; OpenCodex uses only stdin. The adapter validates base64 length/padding, decoded PNG signature and basic IHDR fields before CLI discovery; it does not decompress pixels or validate every PNG chunk/CRC. These ceilings are OpenCodex resource policy, not verified vendor maxima: the reported live evidence covers a 96×96 PNG, whose RGBA raster is only 36 KiB. Larger inputs require separate verification. Other CLI versions have not been verified, and the adapter does not probe the installed version. CN refuses raw URL images, other image formats/models, multiple images, tool-result images and image-bearing history/multi-turn replay before starting the CLI with `unsupported_input_modality`; use the vision sidecar for those inputs. Injected CLI tests cover serialization and cancellation without claiming live upstream support. Qoder's supported projection keeps image blocks in conversation order and marks unsupported references as `[image omitted: unsupported reference]`. Global stateless replay can still associate historical images unreliably with their original text; CN does not enable that unverified replay surface.
 - **PAT recovery:** For both Qoder presets, a multi-key API-key pool can switch to another PAT on a supported authentication rejection or account-level quota exhaustion, but only before response content or an event that makes replay unsafe. Recovery requires Qoder-specific classification and respects credential-hop and send budgets; an HTTP 401/429 or quota message alone is not permission to replay. Single-key configurations do not rotate. Sharing the CLI runner does not enable this API-key recovery for CodeBuddy or self-authenticated Claude CLI.

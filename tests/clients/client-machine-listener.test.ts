@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +15,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import type { ClientLinkSupervisorStatus } from "../../src/client/link-tunnel";
+import * as clientState from "../../src/client/state";
 
 let root = "";
 let previousHome: string | undefined;
@@ -391,6 +392,7 @@ describe("client machine listener in link mode", () => {
       state, managementAuthState: authState(), linkReadiness: async () => { notifyProbe(); await pending; return { ready: true }; },
     });
     servers.push(server);
+    const reads = spyOn(clientState, "readClientConnectionState");
     try {
       const responsePromise = fetch(new URL("/readyz", server.url));
       await started;
@@ -399,7 +401,26 @@ describe("client machine listener in link mode", () => {
       const response = await responsePromise;
       expect(response.status).toBe(503);
       expect(await response.json()).toMatchObject({ link: { state: "unavailable", reason: "client_state_changed" } });
-    } finally { resolveProbe(); }
+      expect(reads).toHaveBeenCalledTimes(1);
+    } finally { resolveProbe(); reads.mockRestore(); }
+  });
+
+  test("durable state is read once per readiness and never for unrelated machine routes", async () => {
+    const state = linkConnection();
+    writeFileSync(join(root, "config.json"), JSON.stringify({ port: 0, providers: {}, runtimeRole: "client", client: state }));
+    const server = startMachineListener(0, { state, managementAuthState: authState(), linkReadiness: () => ({ ready: true }) });
+    servers.push(server);
+    const headers = await guiHeaders(server);
+    const reads = spyOn(clientState, "readClientConnectionState");
+    try {
+      expect((await fetch(new URL("/readyz", server.url))).status).toBe(200);
+      expect(reads).toHaveBeenCalledTimes(1);
+      reads.mockClear();
+      expect((await fetch(new URL("/api/machine/not-a-route", server.url), { headers })).status).toBe(404);
+      expect(reads).not.toHaveBeenCalled();
+      expect((await fetch(new URL("/api/machine/status", server.url), { headers })).status).toBe(200);
+      expect(reads).toHaveBeenCalledTimes(1);
+    } finally { reads.mockRestore(); }
   });
 
   function linkListener(options: {

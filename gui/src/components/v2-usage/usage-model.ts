@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import type { SourceFilter } from "./usage-source";
+import type { UsageApp as UsageAppClient } from "../../../../src/usage/app-breakdown";
 import type { Locale, TFn } from "../../i18n/shared";
 import { formatTokens } from "../../format-tokens";
 import type { UsageReadMetadata } from "../../usage-summary-resource";
@@ -99,6 +100,17 @@ export interface UsageProvider {
   shareRatio: number;
 }
 
+export interface UsageApp {
+  client: UsageAppClient;
+  requests: number;
+  measuredRequests: number;
+  totalTokens: number;
+  estimatedCostUsd?: number;
+  pricedRequests: number;
+  unpricedRequests: number;
+  shareRatio: number;
+}
+
 export interface UsageResponse extends UsageReadMetadata {
   sourceFilter?: SourceFilter;
   legacyUnclassifiedRequests?: number;
@@ -112,6 +124,8 @@ export interface UsageResponse extends UsageReadMetadata {
   days: UsageDay[];
   models: UsageModel[];
   providers: UsageProvider[];
+  /** Older proxies do not provide a breakdown by app. */
+  apps?: UsageApp[];
   historyTruncated: boolean;
   truncatedPrefixBytes: number;
   entriesTruncated: boolean;

@@ -42,6 +42,10 @@ curl "$OLLAMA_HOST/api/tags"
 - `options`：`temperature`、`top_p`、`num_predict` 與 `stop`。
 - `format`：僅支援 `"json"`。
 
+每個 `/api/chat` 請求中，所有 assistant 訊息的**工具呼叫總數最多為 1,024 次**，已傳回結果的呼叫也計入總數。
+超過上限時，請求會在傳送給供應商之前回傳 HTTP 400。請縮短對話歷史後重試，並將保留的工具結果與對應的
+assistant 工具呼叫一起保留。
+
 其他內容會以 HTTP 400 拒絕，而不是被忽略，包括 `think`、`keep_alive`、`suffix`、`raw`、
 `template`、`context`、其他 `options`、JSON Schema 形式的 `format` 以及圖片 URL。不提供 Ollama 的模型管理與
 嵌入端點。

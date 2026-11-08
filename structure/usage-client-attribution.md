@@ -20,9 +20,25 @@ Codex clients and legacy Codex-surface rows; it reports the latter as a separate
 count, without assigning a client subtype. A no-key filter means the stored key ID is absent,
 including pre-attribution and environment-admitted rows; it does not prove physical origin.
 `src/usage/summary.ts` applies filters before aggregation and retains range-aware unclassified
-counts. `src/server/management/usage-aggregate-cache.ts` keys retained aggregates by both source
+counts. When provider/model filtering removes combo attempts, it recomputes the retained request
+status using the same status facts as model and provider counts, excluding usage-less attempts
+that never sent or were answered locally. Model and provider attempt counts use the same eligibility
+in unfiltered reports; unchanged attempt sets retain the recorded row status.
+`src/server/management/usage-aggregate-cache.ts` keys retained aggregates by both source
 dimensions, and `src/server/management/logs-usage-routes.ts` validates the complete query before
 special projections. The device inventory requires a dashboard session and refuses child scope.
+
+`src/usage/app-breakdown.ts` maps only the closed recorded-client roster to report app categories:
+the three Codex variants share one category, absent client fields are unclassified, and invalid
+present values are unknown. `src/usage/summary.ts` accumulates per-app request, token and price
+coverage within each date/surface partition after source and model projection. Clone and retained
+memory accounting include these counters; filtered snapshot projection replaces them with the
+filtered totals. `src/remote/hub-usage.ts` accepts the optional bounded app list while stripping
+undeclared fields, and the hub computes it only for the authenticated key. Tests in
+`tests/usage/usage-client-attribution.test.ts`, `tests/usage/usage-aggregate-cache.test.ts` and
+`tests/server/hub-usage.test.ts` cover classification, projection, append and hub scope. The GUI
+validates app categories against the backend roster, and `gui/tests/usage-app-breakdown.test.tsx`
+checks that the source picker exposes the same categories apart from its all-app option.
 
 The unconfigured-key filter compares configured-admission rows to a captured snapshot of all
 currently configured key IDs; it does not prove historical deletion or device identity. Its

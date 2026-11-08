@@ -31,6 +31,7 @@
   "codex-launcher-env.test.ts": "codex-integration",
   "codex-cli-update-artifacts.test.ts": "codex-integration",
   "codex-cli-update-apply.test.ts": "codex-integration",
+  "codex-cli-update-process-fixture.test.ts": "codex-integration",
   "codex-cli-update-paths.test.ts": "codex-integration",
   "codex-cli-update-admission.test.ts": "codex-integration",
   "codex-cli-update-recovery.test.ts": "codex-integration",

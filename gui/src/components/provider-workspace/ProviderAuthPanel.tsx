@@ -487,7 +487,7 @@ export default function ProviderAuthPanel({
               <span className={`pwi-auth-dot ${activeNeedsReauth ? "pwi-auth-dot--warn" : loggedIn ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
               <span className="pwi-auth-status-text">
                 {loggedIn
-                  ? (isAnthropicPool || accounts.length > 0 ? t("pws.loggedInTitle") : (oauth?.email ?? t("pws.loggedInTitle")))
+                  ? t("pws.loggedInTitle")
                   : (oauth?.error || t("pws.notLoggedInTitle"))}
               </span>
               <span className="pwi-auth-actions">
@@ -536,6 +536,14 @@ export default function ProviderAuthPanel({
                 </div>
               </div>
             )}
+            {authHandlers.pendingAffinityResets?.[item.name] && (
+              <div className="pwi-auth-state pwi-auth-state--error" role="alert">
+                <span>{t("prov.affinityResetPending")}</span>
+                {authHandlers.onRetryAffinityReset && <button type="button" className="btn btn-ghost btn-sm"
+                  disabled={Boolean(switchingAccountId || pausingAccountId)}
+                  onClick={() => void authHandlers.onRetryAffinityReset?.(item.name)}>{t("common.retry")}</button>}
+              </div>
+            )}
             {accountLoadState === "loading" && accounts.length === 0 && (
               <div className="pwi-auth-state" role="status">
                 <span className="pwi-spin-inline" aria-hidden="true" />
@@ -555,7 +563,7 @@ export default function ProviderAuthPanel({
             {accounts.length > 0 && (
               <ul className="pwi-auth-list">
                 {accounts.map(account => {
-                  const label = oauthAccountDisplayLabel(accounts, account, t, isAnthropicPool);
+                  const label = oauthAccountDisplayLabel(accounts, account, t);
                   const planLabel = isAnthropicPool ? anthropicSubscriptionLabel(account.plan) : item.name === "google-antigravity" ? account.plan : undefined;
                   const switching = switchingAccountId === account.id;
                   const pausing = pausingAccountId === account.id;
@@ -576,7 +584,7 @@ export default function ProviderAuthPanel({
                       <span className={`pwi-auth-dot ${showReauth ? "pwi-auth-dot--warn" : account.active && !account.paused ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
                       <span className="pwi-auth-row-copy">
                         <span className="pwi-auth-row-heading"><span className="pwi-auth-row-label">{label}</span>{planLabel && <span className="badge badge-green">{planLabel}</span>}</span>
-                        {!isAnthropicPool && <span className="pwi-auth-row-secondary">{[account.email, `${t("prov.accountId")}: ${maskedId}`].filter(Boolean).join(" · ")}</span>}
+                        {!isAnthropicPool && <span className="pwi-auth-row-secondary">{`${t("prov.accountId")}: ${maskedId}`}</span>}
                         {healthSummary && (
                           <span className="pwi-auth-row-secondary faint">{healthSummary}</span>
                         )}
@@ -673,7 +681,7 @@ export default function ProviderAuthPanel({
               <AnthropicResetGrantModal
                 key={`${apiBase}:${item.name}:${grantAccount.id}`}
                 accountId={grantAccount.id}
-                accountLabel={oauthAccountDisplayLabel(accounts, grantAccount, t, isAnthropicPool)}
+                accountLabel={oauthAccountDisplayLabel(accounts, grantAccount, t)}
                 entry={claudeGrants.entries[grantAccount.id]}
                 controller={claudeGrants}
                 onClose={() => setGrantAccount(null)}
