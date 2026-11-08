@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { inflateRawSync } from "node:zlib";
 import {
   childArtifactFilename,
   hostChildTargetTriple,
@@ -279,6 +280,59 @@ describe("remote-plant POSIX & Windows command contracts", () => {
     expect(existsSync(join(binDir, "ocx-child"))).toBe(false);
     expect(existsSync(binDir) ? readdirSync(binDir) : []).toEqual([]);
     expect(existsSync(marker)).toBe(false);
+  });
+
+  // Every record ocx-child keeps while an attach, sync, or detach still needs the binary to finish.
+  const RECOVERY_RECORDS: ReadonlyArray<{ readonly name: string; readonly path: (homes: { readonly ocx: string; readonly codex: string }) => string }> = [
+    { name: "child state", path: h => join(h.ocx, "child", "state.json") },
+    { name: "undo journal", path: h => join(h.ocx, "child", "codex-journal.json") },
+    { name: "attach rollback snapshot", path: h => join(h.ocx, "child", "attach-rollback.json") },
+    { name: "CODEX_HOME ownership record", path: h => join(h.codex, ".ocx-child-owner.json") },
+  ];
+
+  test("POSIX rollback purge keeps an unrunnable planted binary and fails while any recovery record exists", () => {
+    if (process.platform === "win32") return;
+    const argv = remotePurgePlantedChildArgv("posix");
+    let n = 0;
+    const runPurge = (binary: "unrunnable" | "absent", record: (typeof RECOVERY_RECORDS)[number] | null, explicitHomes: boolean) => {
+      const home = join(scratch, "recovery-home-" + n++);
+      const homes = explicitHomes
+        ? { ocx: join(scratch, "custom-ocx-" + n), codex: join(scratch, "custom-codex-" + n) }
+        : { ocx: join(home, ".opencodex"), codex: join(home, ".codex") };
+      const dest = join(home, ".cache", "opencodex", "bin", "ocx-child");
+      mkdirSync(join(home, ".cache", "opencodex", "bin"), { recursive: true, mode: 0o700 });
+      if (binary === "unrunnable") writeFileSync(dest, "not an executable", { mode: 0o600 });
+      if (record) {
+        mkdirSync(join(record.path(homes), ".."), { recursive: true });
+        writeFileSync(record.path(homes), "{}");
+      }
+      const env: Record<string, string> = { HOME: home, PATH: "/usr/bin:/bin" };
+      if (explicitHomes) Object.assign(env, { OPENCODEX_HOME: homes.ocx, CODEX_HOME: homes.codex });
+      const res = Bun.spawnSync(["/bin/sh", ...argv.slice(1)], { env });
+      return { code: res.exitCode, kept: existsSync(dest), stderr: res.stderr.toString("utf8") };
+    };
+    const observed: unknown[] = [], expected: unknown[] = [];
+    for (const explicitHomes of [false, true]) {
+      expect(runPurge("unrunnable", null, explicitHomes)).toEqual({ code: 0, kept: false, stderr: "" });
+      for (const record of RECOVERY_RECORDS) {
+        for (const binary of ["unrunnable", "absent"] as const) {
+          const res = runPurge(binary, record, explicitHomes);
+          observed.push({ record: record.name, binary, explicitHomes, failed: res.code !== 0, kept: res.kept, reported: res.stderr.includes("recovery") });
+          expected.push({ record: record.name, binary, explicitHomes, failed: true, kept: binary === "unrunnable", reported: true });
+        }
+      }
+    }
+    expect(observed).toEqual(expected);
+  });
+
+  test("Windows rollback purge checks every recovery record in both homes before deleting the binary", () => {
+    const outer = Buffer.from(windowsPurgePlantedChildArgv()[5]!, "base64").toString("utf16le");
+    const packed = /\$ocxPacked='([^']+)'/.exec(outer);
+    expect(packed).not.toBeNull();
+    const script = inflateRawSync(Buffer.from(Array.from(packed![1]!, ch => ch.charCodeAt(0) - 256))).toString("utf8");
+    for (const name of ["state.json", "codex-journal.json", "attach-rollback.json", ".ocx-child-owner.json"]) expect(script).toContain(name);
+    expect(script).toContain("$env:CODEX_HOME");
+    expect(script).toContain("\\.codex");
   });
 
   test("POSIX plant verifies the digest with openssl when sha256sum and shasum are absent", () => {
