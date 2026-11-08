@@ -44,8 +44,10 @@ describe("handleStart routing-healer wiring", () => {
   test("the exit cleanup stops the healer before any shared teardown", () => {
     const cleanup = slice("const syncCleanup = () => {", "let shuttingDown = false;");
     const stopAt = cleanup.indexOf("try { routingHealer?.stop(); } catch { /* best-effort */ }");
+    const revertAt = cleanup.indexOf("revertSystemEnvAtShutdown(revertSystemEnv)");
     expect(stopAt).toBeGreaterThan(-1);
-    expect(stopAt).toBeLessThan(cleanup.indexOf("revertSystemEnv()"));
+    expect(revertAt).toBeGreaterThan(-1);
+    expect(stopAt).toBeLessThan(revertAt);
     expect(stopAt).toBeLessThan(cleanup.indexOf("restoreNativeCodex({ withWriteGuard: restoreGuard.run })"));
     expect(stopAt).toBeLessThan(cleanup.indexOf("stripGrokConfig()"));
     expect(stopAt).toBeGreaterThan(cleanup.indexOf("cleaned = true;"));
