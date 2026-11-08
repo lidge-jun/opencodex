@@ -40,10 +40,10 @@ afterEach(() => {
   if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
   removeTreeWithRetry(root);
 });
-function read(headers: HeadersInit = {}, key = link.apiKeyId, suffix = "", method = "GET") {
+function read(headers: HeadersInit = {}, key = link.apiKeyId, suffix = "", method = "GET", readmit?: () => string | undefined) {
   const abort = new AbortController(); aborts.push(abort);
   const url = new URL(LINK_ROUTE_INTENT_PATH + suffix, "http://127.0.0.1");
-  return { abort, response: handleLinkManagementRequest(new Request(url, { headers, method, signal: abort.signal }), url, {} as never, {} as never, undefined, key) };
+  return { abort, response: handleLinkManagementRequest(new Request(url, { headers, method, signal: abort.signal }), url, {} as never, {} as never, undefined, key, readmit) };
 }
 async function digest() { return routeIntentDigest(await (await read().response).json()); }
 const turn = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -108,4 +108,16 @@ test("device mutations notify only their link; default mutations wake all and re
   expect((await mutate({ client: "pi", action: "on" }))?.status).toBe(200);
   expect(homeRouteIntentWatch.size).toBe(0);
   expect((await (await second.response).json()).clients.pi.enabled).toBe(true);
+});
+
+test("a key revoked during the wait is refused even while its link record remains", async () => {
+  const headers = { "x-ocx-route-intent-watch": "1", "x-ocx-route-intent-after": await digest() };
+  let admitted: string | undefined = link.apiKeyId;
+  const waiting = read(headers, link.apiKeyId, "", "GET", () => admitted);
+  await turn();
+  admitted = undefined;
+  homeRouteIntentWatch.notify(link.id);
+  const response = await waiting.response;
+  expect(response.status).toBe(403);
+  expect(await response.text()).not.toContain("aside");
 });

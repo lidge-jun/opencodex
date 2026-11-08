@@ -8,8 +8,12 @@ import { readLinkStore } from "../../link/store";
 function refused(status: number, error: string): Response {
   return Response.json({ error }, { status, headers: { "cache-control": "no-store" } });
 }
-/** Called only after the shared exact GET/no-query/no-upgrade gate. */
-export async function readLinkRouteIntent(req: Request, config: OcxConfig, version: string, admittedKeyId?: string): Promise<Response> {
+/**
+ * Called only after the shared exact GET/no-query/no-upgrade gate. `readmit` repeats the
+ * listener's key admission against current policy and returns the key id it admits now.
+ */
+export async function readLinkRouteIntent(req: Request, config: OcxConfig, version: string, admittedKeyId?: string,
+  readmit?: () => string | undefined): Promise<Response> {
   if (!admittedKeyId) return refused(403, "link_key_required");
   const watch = req.headers.get(ROUTE_INTENT_WATCH_HEADER);
   const after = req.headers.get(ROUTE_INTENT_AFTER_HEADER);
@@ -31,7 +35,8 @@ export async function readLinkRouteIntent(req: Request, config: OcxConfig, versi
       if (wake === "cancelled") return refused(499, "route_intent_watch_cancelled");
       if (wake === "busy") return refused(429, "route_intent_watch_busy");
       wakeReason = wake;
-      // Trust and effective policy can both have changed during the wait.
+      // Trust, the key itself and effective policy can all have changed during the wait.
+      if (readmit && readmit() !== admittedKeyId) return refused(403, "link_key_required");
       if (ownedLink() !== linkId) return refused(403, "link_mismatch");
       document = project();
     }

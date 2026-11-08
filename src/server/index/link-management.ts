@@ -78,6 +78,8 @@ export async function handleLinkManagementRequest(
   deps: ManagementApiDeps,
   sessionControl?: ManagementSessionControl,
   admittedKeyId?: string,
+  /** Repeats link-key admission for a request that waited; see readLinkRouteIntent. */
+  readmit?: () => string | undefined,
 ): Promise<Response> {
   if (url.pathname === LINK_CHILD_PARITY_PATH) return handleChildParityReport(req, url, admittedKeyId);
   if (!linkManagementRouteAllowed(url, req)) return notFound();
@@ -89,7 +91,7 @@ export async function handleLinkManagementRequest(
     } catch { return refused(503, "route_catalog_unavailable"); }
   }
   if (url.pathname === LINK_ROUTE_INTENT_PATH) {
-    return readLinkRouteIntent(req, config, VERSION, admittedKeyId);
+    return readLinkRouteIntent(req, config, VERSION, admittedKeyId, readmit);
   }
   if (url.pathname === LINK_CODEX_SETTINGS_PATH) {
     return Response.json(projectHomeCodexSettings(config, VERSION), { headers: { "cache-control": "no-store" } });
