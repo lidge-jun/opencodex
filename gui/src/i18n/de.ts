@@ -4309,6 +4309,7 @@ export const de: Record<TKey, string> = {
   "link.plant.apply": "Leichtgewicht-Agent bereitstellen & verbinden",
   "link.plant.applying": "Wird bereitgestellt & verbunden…",
   "link.plant.unavailable": "Auf diesem Host ({arch}) wurde kein OpenCodex gefunden und lokal ist keine verifizierte ocx-child-Binärdatei verfügbar.",
+  "link.plant.artifactHelp": "Zum Platzieren braucht dieser Home-Rechner einen verifizierten Build: Legen Sie {file} und eine SHA256SUMS-Datei, die ihn auflistet, in den Ordner aus OPENCODEX_CHILD_BIN_DIR oder nach $OPENCODEX_HOME/cache/ocx-child/<Home-Version>/ und bestätigen Sie den Host dann erneut.",
   "link.plant.unknownArch": "unbekannte Architektur",
   "link.ephemeralReady": "Leichtgewicht-Agent bereit (ocx-child {version})",
   "remoteLink.badge.ephemeral": "Leichtgewicht",

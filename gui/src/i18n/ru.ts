@@ -4332,6 +4332,7 @@ export const ru: Record<TKey, string> = {
   "link.plant.apply": "Установить лёгкий агент и подключить",
   "link.plant.applying": "Установка и подключение…",
   "link.plant.unavailable": "OpenCodex не найден на этом хосте ({arch}), а проверенный бинарный файл ocx-child локально отсутствует.",
+  "link.plant.artifactHelp": "Чтобы установить его, этому Home нужна проверенная сборка: поместите {file} и файл SHA256SUMS с его записью в папку из OPENCODEX_CHILD_BIN_DIR или в $OPENCODEX_HOME/cache/ocx-child/<версия Home>/, затем снова подтвердите хост.",
   "link.plant.unknownArch": "неизвестная архитектура",
   "link.ephemeralReady": "Лёгкий агент готов (ocx-child {version})",
   "remoteLink.badge.ephemeral": "Лёгкий модуль",

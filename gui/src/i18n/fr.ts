@@ -4298,6 +4298,7 @@ export const fr: Record<TKey, string> = {
   "link.plant.apply": "Déployer l’agent léger et connecter",
   "link.plant.applying": "Déploiement et connexion…",
   "link.plant.unavailable": "OpenCodex est introuvable sur cet hôte ({arch}) et aucun binaire ocx-child vérifié n’est disponible localement.",
+  "link.plant.artifactHelp": "Pour le déployer, ce Home a besoin d’une version vérifiée : placez {file} et un fichier SHA256SUMS qui le liste dans le dossier indiqué par OPENCODEX_CHILD_BIN_DIR, ou dans $OPENCODEX_HOME/cache/ocx-child/<version du Home>/, puis confirmez de nouveau l’hôte.",
   "link.plant.unknownArch": "architecture inconnue",
   "link.ephemeralReady": "Agent léger prêt (ocx-child {version})",
   "remoteLink.badge.ephemeral": "Léger",

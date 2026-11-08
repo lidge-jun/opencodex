@@ -143,6 +143,18 @@ function verifyManifestCandidate(
   };
 }
 
+/** What an operator must do when Home cannot plant ocx-child, for the CLI and the API message. */
+export function plantUnavailableGuidance(reason: string | undefined, targetTriple: string | null, version: string = packageVersion("0.0.0")): string {
+  if (reason === "artifact_not_found" && targetTriple && isChildTargetTriple(targetTriple)) {
+    const file = childArtifactFilename(targetTriple);
+    return "No verified ocx-child build for " + targetTriple + " is available on this Home. Put " + file + " and a SHA256SUMS file that lists it in the directory named by OPENCODEX_CHILD_BIN_DIR, or in $OPENCODEX_HOME/cache/ocx-child/" + version + "/, then try again.";
+  }
+  if (reason === "checksum_mismatch") {
+    return "An ocx-child build for " + (targetTriple ?? "this target") + " was found on this Home but failed verification: it needs a matching SHA256SUMS entry, must not be a symlink, and must not be group- or world-writable.";
+  }
+  return "ocx-child has no build for this Child's platform (" + (targetTriple ?? "unknown target") + ").";
+}
+
 export function resolveChildBinarySource(
   targetTriple: ChildTargetTriple | null,
   options: ResolveChildBinaryOptions = {},

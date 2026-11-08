@@ -4330,6 +4330,7 @@ export const zh: Record<TKey, string> = {
   "link.plant.apply": "植入轻量代理并连接",
   "link.plant.applying": "正在植入并连接…",
   "link.plant.unavailable": "远程主机（{arch}）未安装 OpenCodex，且本地没有可植入的已验证 ocx-child 二进制文件。",
+  "link.plant.artifactHelp": "若要植入，此 Home 需要经过验证的构建：将 {file} 和列出它的 SHA256SUMS 文件放到 OPENCODEX_CHILD_BIN_DIR 指定的目录，或 $OPENCODEX_HOME/cache/ocx-child/<Home 版本>/，然后再次确认主机。",
   "link.plant.unknownArch": "未知架构",
   "link.ephemeralReady": "轻量代理已就绪（ocx-child {version}）",
   "remoteLink.badge.ephemeral": "轻量模块",

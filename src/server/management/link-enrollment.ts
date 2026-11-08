@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertSshAlias, buildExecArgv, buildFingerprintArgv, buildProbeArgv, REMOTE_COMMAND_NOT_FOUND, remoteOcxArgv } from "../../link/ssh-argv";
-import { resolveChildBinarySource } from "../../link/child-binary-source";
+import { plantUnavailableGuidance, resolveChildBinarySource } from "../../link/child-binary-source";
 import { parseFingerprintLine } from "../../link/fingerprint";
 import { isDetachedEphemeralChildConfig } from "../../link/ephemeral-child";
 import { classifyChildAttachConflict, classifyPlantFailure, inspectRemoteChildRuntime, remotePlantChildArgv, remotePurgePlantedChildArgv } from "../../link/remote-plant";
@@ -257,7 +257,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       if (body.plant === true && confirmed.runtimeKind === "missing") {
         phase = "remote_plant";
         const source = resolveBinary(confirmed.targetTriple ?? null);
-        if (!source.ok) return fail("remote_plant_unavailable", "No verified ocx-child binary is available for this host architecture.", 409, source.reason);
+        if (!source.ok) return fail("remote_plant_unavailable", plantUnavailableGuidance(source.reason, confirmed.targetTriple ?? null), 409, source.reason);
         let planted: SshRunResult;
         try {
           planted = await runner.run(

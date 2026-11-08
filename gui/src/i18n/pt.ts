@@ -4304,6 +4304,7 @@ export const pt: Record<TKey, string> = {
   "link.plant.apply": "Instalar agente leve e conectar",
   "link.plant.applying": "Instalando e conectando…",
   "link.plant.unavailable": "O OpenCodex não foi encontrado neste host ({arch}) e não há binário ocx-child verificado disponível localmente.",
+  "link.plant.artifactHelp": "Para implantá-lo, este Home precisa de uma versão verificada: coloque {file} e um arquivo SHA256SUMS que o liste na pasta indicada por OPENCODEX_CHILD_BIN_DIR ou em $OPENCODEX_HOME/cache/ocx-child/<versão do Home>/ e confirme o host novamente.",
   "link.plant.unknownArch": "arquitetura desconhecida",
   "link.ephemeralReady": "Agente leve pronto (ocx-child {version})",
   "remoteLink.badge.ephemeral": "Leve",

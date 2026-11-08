@@ -4331,6 +4331,7 @@ export const ja: Record<TKey, string> = {
   "link.plant.apply": "軽量エージェントを配置して接続",
   "link.plant.applying": "配置して接続中…",
   "link.plant.unavailable": "リモートホスト（{arch}）に OpenCodex が見つからず、配置可能な検証済み ocx-child バイナリもローカルにありません。",
+  "link.plant.artifactHelp": "配置するには、この Home に検証済みビルドが必要です。{file} とそれを記載した SHA256SUMS ファイルを OPENCODEX_CHILD_BIN_DIR で指定したフォルダ、または $OPENCODEX_HOME/cache/ocx-child/<Home のバージョン>/ に置き、ホストをもう一度確認してください。",
   "link.plant.unknownArch": "不明なアーキテクチャ",
   "link.ephemeralReady": "軽量エージェント準備完了（ocx-child {version}）",
   "remoteLink.badge.ephemeral": "軽量モジュール",

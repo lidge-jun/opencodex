@@ -4331,6 +4331,7 @@ export const ko: Record<TKey, string> = {
   "link.plant.apply": "경량 에이전트 심고 연결",
   "link.plant.applying": "경량 에이전트 심고 연결 중…",
   "link.plant.unavailable": "원격 컴퓨터({arch})에 OpenCodex가 없으며, 이 컴퓨터에서 심을 수 있는 검증된 경량 에이전트 파일을 찾지 못했습니다.",
+  "link.plant.artifactHelp": "심으려면 이 Home에 검증된 빌드가 있어야 합니다. {file} 파일과 이를 기록한 SHA256SUMS 파일을 OPENCODEX_CHILD_BIN_DIR이 가리키는 폴더나 $OPENCODEX_HOME/cache/ocx-child/<Home 버전>/에 넣은 다음 호스트를 다시 확인하세요.",
   "link.plant.unknownArch": "알 수 없는 아키텍처",
   "link.ephemeralReady": "경량 에이전트 준비됨 (ocx-child {version})",
   "remoteLink.badge.ephemeral": "경량 모듈",

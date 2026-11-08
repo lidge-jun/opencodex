@@ -1,4 +1,5 @@
 import { createInterface } from "node:readline/promises";
+import { plantUnavailableGuidance } from "../link/child-binary-source";
 import { assertSshAlias } from "../link/ssh-argv";
 import { CliUsageError, RuntimeApiError, runtimeBaseUrl, rejectArgs, takeFlag, takeJsonFlag, takeOption, printData } from "./runtime-api";
 import type { LinkCliDeps } from "./link";
@@ -163,7 +164,7 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
     ephemeralFlow = probe.runtimeKind === "ephemeral" || probe.runtimeKind === "missing";
     if (probe.runtimeKind === "missing") {
       if (probe.plantable !== true) {
-        throw new Error(`ocx was not found on ${alias} (${probe.targetTriple ?? "unknown target"}) and no verified ocx-child binary is available locally (${probe.plantUnavailableReason ?? "unavailable"}).`);
+        throw new Error("ocx was not found on " + alias + ". " + plantUnavailableGuidance(probe.plantUnavailableReason, probe.targetTriple ?? null));
       }
       if (!isTTY && !plantFlag) {
         throw new CliUsageError("Remote host has no OpenCodex runtime; pass --plant alongside --expect-fingerprint to plant lightweight ocx-child.", usage);

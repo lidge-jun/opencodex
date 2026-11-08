@@ -4295,6 +4295,7 @@ export const zhTW: Record<TKey, string> = {
   "link.plant.apply": "植入輕量代理並連線",
   "link.plant.applying": "正在植入並連線…",
   "link.plant.unavailable": "遠端主機（{arch}）未安裝 OpenCodex，且本機沒有可植入的已驗證 ocx-child 執行檔。",
+  "link.plant.artifactHelp": "若要植入，此 Home 需要經過驗證的建置：將 {file} 與列出它的 SHA256SUMS 檔案放到 OPENCODEX_CHILD_BIN_DIR 指定的資料夾，或 $OPENCODEX_HOME/cache/ocx-child/<Home 版本>/，然後再次確認主機。",
   "link.plant.unknownArch": "未知架構",
   "link.ephemeralReady": "輕量代理已就緒（ocx-child {version}）",
   "remoteLink.badge.ephemeral": "輕量模組",

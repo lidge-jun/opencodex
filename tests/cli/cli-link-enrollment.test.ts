@@ -166,4 +166,18 @@ describe("CLI Remote Link enrollment", () => {
       } finally { h.restore(); }
     }
   });
+
+  test("a bare host without a local ocx-child build names where Home looks for one", async () => {
+    const missing = { alias: "bare-b", fingerprint, keyType: "ED25519", ocxVersion: null, runtimeKind: "missing", targetTriple: "linux-arm64", plantable: false, plantUnavailableReason: "artifact_not_found" };
+    const h = harness([missing]);
+    try {
+      expect(await runLinkCommand(["add", "bare-b", "--plant", "--expect-fingerprint", fingerprint], h.deps)).not.toBe(0);
+      const message = h.err.join("\n");
+      expect(message).toContain("OPENCODEX_CHILD_BIN_DIR");
+      expect(message).toContain("ocx-child-linux-arm64");
+      expect(message).toContain("SHA256SUMS");
+      expect(message).toContain("cache/ocx-child/");
+      expect(h.calls).toHaveLength(1);
+    } finally { h.restore(); }
+  });
 });

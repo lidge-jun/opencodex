@@ -4343,6 +4343,7 @@ export const en = {
   "link.plant.apply": "Plant lightweight agent & connect",
   "link.plant.applying": "Planting & connecting…",
   "link.plant.unavailable": "OpenCodex was not found on this host ({arch}), and no verified ocx-child binary is available locally to plant.",
+  "link.plant.artifactHelp": "To plant it, this Home needs a verified build: put {file} and a SHA256SUMS file that lists it in the folder named by OPENCODEX_CHILD_BIN_DIR, or in $OPENCODEX_HOME/cache/ocx-child/<Home version>/, then confirm the host again.",
   "link.plant.unknownArch": "unknown architecture",
   "link.ephemeralReady": "Lightweight agent ready (ocx-child {version})",
   "remoteLink.badge.ephemeral": "Lightweight",

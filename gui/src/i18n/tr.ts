@@ -4332,6 +4332,7 @@ export const tr: Record<TKey, string> = {
   "link.plant.apply": "Hafif aracıyı yerleştir ve bağlan",
   "link.plant.applying": "Yerleştiriliyor ve bağlanıyor…",
   "link.plant.unavailable": "Bu ana bilgisayarda ({arch}) OpenCodex bulunamadı ve yerel olarak doğrulanmış ocx-child ikili dosyası mevcut değil.",
+  "link.plant.artifactHelp": "Yerleştirmek için bu Home'un doğrulanmış bir derlemeye ihtiyacı var: {file} dosyasını ve onu listeleyen bir SHA256SUMS dosyasını OPENCODEX_CHILD_BIN_DIR ile belirtilen klasöre veya $OPENCODEX_HOME/cache/ocx-child/<Home sürümü>/ içine koyun, ardından ana bilgisayarı yeniden onaylayın.",
   "link.plant.unknownArch": "bilinmeyen mimari",
   "link.ephemeralReady": "Hafif aracı hazır (ocx-child {version})",
   "remoteLink.badge.ephemeral": "Hafif",

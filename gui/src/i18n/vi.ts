@@ -4301,6 +4301,7 @@ export const vi: Record<TKey, string> = {
   "link.plant.apply": "Cài tác nhân gọn nhẹ & kết nối",
   "link.plant.applying": "Đang cài & kết nối…",
   "link.plant.unavailable": "Không tìm thấy OpenCodex trên máy chủ này ({arch}) và không có tệp ocx-child đã xác minh trên máy cục bộ.",
+  "link.plant.artifactHelp": "Để cài đặt, Home này cần một bản dựng đã xác minh: đặt {file} và tệp SHA256SUMS liệt kê nó vào thư mục do OPENCODEX_CHILD_BIN_DIR chỉ định, hoặc vào $OPENCODEX_HOME/cache/ocx-child/<phiên bản Home>/, rồi xác nhận lại máy chủ.",
   "link.plant.unknownArch": "kiến trúc không xác định",
   "link.ephemeralReady": "Tác nhân gọn nhẹ sẵn sàng (ocx-child {version})",
   "remoteLink.badge.ephemeral": "Gọn nhẹ",

@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import type { Root } from "react-dom/client";
 import { act } from "react";
 import RemoteLink from "../src/pages/RemoteLink";
+import { RemoteLinkSheet } from "../src/pages/RemoteLinkSheet";
 import { boundLinkHint, CHILD_RESTART_NOTICE_MS, CHILD_RESTART_POLL_MS, CHILD_RESTART_SLOW_POLL_MS, LINK_ERROR_CODES, LINK_JOIN_DENIALS, LinkApiError, parseRemoteLinkStatus, readLinkJson, waitForChildRuntime, type RemoteLinkStatusWire } from "../src/remote-link-api";
 import { LanguageProvider } from "../src/i18n/provider";
 import { LOCALES } from "../src/i18n/shared";
@@ -1235,4 +1236,27 @@ test("Ready-to-Plant, cached ephemeral, connected badges, conflict notices, and 
   await act(async () => { forceBtn.click(); });
   await flush();
   expect(calls.at(-1)).toEqual({ method: "DELETE", path: "/api/link/lnk_eph", body: { force: true } });
+});
+
+test("a bare host Home cannot plant names the verified build Home needs and where it looks", async () => {
+  const host = win.document.createElement("div");
+  win.document.body.append(host);
+  root = (await import("react-dom/client")).createRoot(host);
+  const noop = () => {};
+  const sheet = (reason: string | null) => (
+    <LanguageProvider>
+      <RemoteLinkSheet sheetRef={{ current: null }} role="home" standaloneRuntime childSelectable={false} discovery="ready" candidates={[]} alias="barebox" onAliasChange={noop}
+        probe={null} checkedFingerprint={false} onCheckedFingerprintChange={noop}
+        confirmation={{ alias: "barebox", fingerprint: "SHA256:barefp", ocxVersion: null, runtimeKind: "missing", targetTriple: "linux-arm64", plantable: false, binarySizeBytes: null, plantUnavailableReason: reason }}
+        busy={null} sheetOpen actionError={null} failedAction={null} onClose={noop} onRescan={noop} onProbe={noop} onConfirmHost={noop} onApplyLink={noop} onJoinLink={noop} onRetryFailedAction={noop} />
+    </LanguageProvider>
+  );
+  await act(async () => { root?.render(sheet("artifact_not_found")); });
+  const text = host.textContent ?? "";
+  expect(text).toContain("no verified ocx-child binary");
+  expect(text).toContain("OPENCODEX_CHILD_BIN_DIR");
+  expect(text).toContain("ocx-child-linux-arm64");
+  expect(text).toContain("SHA256SUMS");
+  await act(async () => { root?.render(sheet("unsupported_target")); });
+  expect(host.textContent ?? "").not.toContain("OPENCODEX_CHILD_BIN_DIR");
 });

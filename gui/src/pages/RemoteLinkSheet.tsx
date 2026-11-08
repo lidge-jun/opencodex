@@ -48,6 +48,11 @@ export interface RemoteLinkSheetProps {
   onRetryFailedAction: () => void;
 }
 
+/** The file name Home looks for in OPENCODEX_CHILD_BIN_DIR and its cache (child-binary-source.ts). */
+function childArtifactName(targetTriple: string): string {
+  return targetTriple.startsWith("windows-") ? "ocx-child-" + targetTriple + ".exe" : "ocx-child-" + targetTriple;
+}
+
 const CARD = "flex flex-col gap-3 rounded-[10px] bg-surface p-4 ring-1 ring-line";
 
 function ConfirmationCard({ confirmation, isChildFlow, childSelectable, busy, onApplyLink, onJoinLink }: {
@@ -71,7 +76,16 @@ function ConfirmationCard({ confirmation, isChildFlow, childSelectable, busy, on
     );
   }
   if (confirmation.runtimeKind === "missing") {
-    if (!confirmation.plantable) return <Banner tone="warn">{t("link.plant.unavailable", { arch: confirmation.targetTriple ?? t("link.plant.unknownArch") })}</Banner>;
+    if (!confirmation.plantable) {
+      return (
+        <Banner tone="warn">
+          {t("link.plant.unavailable", { arch: confirmation.targetTriple ?? t("link.plant.unknownArch") })}
+          {confirmation.plantUnavailableReason === "artifact_not_found" && confirmation.targetTriple && (
+            <span className="mt-1 block">{t("link.plant.artifactHelp", { file: childArtifactName(confirmation.targetTriple) })}</span>
+          )}
+        </Banner>
+      );
+    }
     return (
       <div className={cn(CARD, "remote-link-plant-card")}>
         <h4 className="m-0 text-[14px] leading-5 font-semibold">{t("link.plant.title")}</h4>
