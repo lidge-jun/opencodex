@@ -24,8 +24,8 @@ const DEFINITE_CONTEXT_OVERFLOW_PHRASES = [
 
 /** Provider wording that says the conversation has reached/passed its model's context capacity. */
 const CONTEXT_WINDOW_POSITION_VERDICTS: readonly RegExp[] = [
-  /\b(?:history|conversation|input|prompt|request|turn|messages?)\b[^;!?\n.]{0,120}\b(?:at(?:\s+or\s+past)?|past|over|beyond|exceed(?:s|ed|ing)?|reached)\b[^;!?\n.]{0,60}\b(?:(?:the|this|selected|its)\s+)?(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\b/i,
-  /\b(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\b[^;!?\n.]{0,60}\b(?:full|exceed(?:s|ed|ing)?|exhausted)\b/i,
+  /\b(?:history|conversation|input|prompt|request|turn|messages?)\b[^;!?\n.]{0,120}\b(?:at\s+or\s+past|at\s+(?:the\s+)?limit|past|over|beyond|exceed(?:s|ed|ing)?|reached)\b[^;!?\n.]{0,60}\b(?:(?:the|this|selected|its)\s+)?(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\b/i,
+  /\b(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\s+(?:(?:is|are|was|were|has\s+been|have\s+been)\s+)?(?:full|exceed(?:s|ed|ing)?|exhausted)\b/i,
 ];
 
 /** Explicit provider wording that an input is too long for a model's context capacity. */
@@ -75,8 +75,7 @@ function isParameterValidationRecord(record: Record<string, unknown>): boolean {
 }
 
 const NEGATED_CONTEXT_VERDICT = /\b(?:not|no|never|neither|nor)\b|n['\u2019]t\b/i;
-const MODAL_PROHIBITION = /\b(?:must|may|shall)\s+(?:not|never)\b|\b(?:mustn)['\u2019]t\b/i;
-const OVERFLOW_COUNT_EVIDENCE = /\b\d+\s*(?:tokens?)?\s*(?:>|exceeds?|past)\s*\d+\b|\b(?:exceeded|exceeds|past|over)\s+(?:the\s+)?(?:limit|maximum|context\s+(?:window|length|limit))\s+by\s+\d+\b/i;
+const MODAL_PROHIBITION = /\b(?:must|should|shall|may)\s+(?:not|never)\b|\b(?:mustn|shouldn)['\u2019]t\b|\bcan\s*not\b|\bcan['\u2019]t\b|\bcannot\b/i;
 
 /** Negation must describe the matched verdict, not a separate statement earlier in its clause. */
 function isNegatedAt(text: string, start: number, end: number): boolean {
@@ -89,12 +88,8 @@ function isNegatedAt(text: string, start: number, end: number): boolean {
     matchSlice.lastIndexOf("\n"),
   );
   const verdictClause = lastBoundary !== -1 ? matchSlice.slice(lastBoundary + 1) : matchSlice;
-  if (MODAL_PROHIBITION.test(verdictClause)) {
-    if (!OVERFLOW_COUNT_EVIDENCE.test(text)) return true;
-  }
   const nonModalVerdict = verdictClause
-    .replace(/\b(?:must|may|shall)\s+(?:not|never)\b/gi, "")
-    .replace(/\b(?:mustn)['\u2019]t\b/gi, "");
+    .replace(new RegExp(MODAL_PROHIBITION.source, "gi"), "");
   if (NEGATED_CONTEXT_VERDICT.test(nonModalVerdict)) return true;
   // Phrase matches can begin at the verb and omit its negating auxiliary (`does not exceed`).
   // Check the clause immediately preceding the match across clause boundaries.
@@ -104,11 +99,10 @@ function isNegatedAt(text: string, start: number, end: number): boolean {
     ? (boundaryMatches[boundaryMatches.length - 1].index ?? -1) + boundaryMatches[boundaryMatches.length - 1][0].length
     : -1;
   const clauseBefore = lastClauseBoundary !== -1 ? before.slice(lastClauseBoundary) : before;
-  // Modal prohibitions ("must not exceed", "may not exceed", "shall not exceed") describe the limit
-  // that was violated rather than asserting the absence of an overflow. Without evidence that this
-  // request actually crossed the limit or over-limit counts, a policy rule stays non-overflow.
+  // Modal prohibitions ("must not exceed", "should not exceed", "can't exceed", "can not exceed", etc.)
+  // describe the limit that was violated rather than asserting the absence of an overflow.
   if (MODAL_PROHIBITION.test(clauseBefore)) {
-    return !OVERFLOW_COUNT_EVIDENCE.test(text);
+    return false;
   }
   return /\b(?:not|never|neither|nor)\b|n['\u2019]t\b/i.test(clauseBefore)
     || /\b(?:in\s+no\s+way|by\s+no\s+means)\b/i.test(clauseBefore);
