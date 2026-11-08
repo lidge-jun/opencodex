@@ -159,6 +159,14 @@ async function* replay(
   }
 }
 
+export const DEFAULT_MAX_REASONING_EVENTS = 65_536;
+
+/**
+ * Required-tool reasoning and zero-output token-limit preflight may hold buffered reasoning,
+ * but never for an unbounded/trickling prelude. Bound the reasoning hold to commit and replay.
+ */
+export const DEFAULT_MAX_REASONING_HOLD_MS = 1_000;
+
 /**
  * Classifies an adapter terminal event that reached an output token limit before producing output.
  *
@@ -167,8 +175,6 @@ async function* replay(
  * can attempt a backup target. Candidate cooling is request-local (`comboFailureCooldownScope` returns
  * "none") because the failure is specific to the requested token limit rather than provider unhealthiness.
  */
-export const DEFAULT_MAX_REASONING_EVENTS = 65_536;
-
 export function classifyZeroOutputTokenLimit(
   event: AdapterEvent,
   options?: { allowCompactionWithContent?: boolean },
@@ -180,9 +186,15 @@ export function classifyZeroOutputTokenLimit(
       && (["max_tokens", "length", "max_output_tokens"].includes(event.stopReason ?? "") || truncationReasonFor(event.stopReason) === "max_output_tokens")
       && event.endTurn !== false && !event.providerState && (options?.allowCompactionWithContent || !event.compactionEncryptedContent);
   if (!zeroOutputLimit) return undefined;
+  // With bufferCompaction, a compaction summary may have been produced in-memory without streaming.
+  // When that run terminates on max_tokens, classify it under the same code so failover can advance,
+  // since zero output was committed/streamed to the client.
+  const message = options?.allowCompactionWithContent
+    ? "Remote compaction reached output token limit before completing"
+    : "Provider reached its output token limit before producing output";
   return {
     type: "error", status: 502, errorType: "upstream_error", code: "zero_output_token_limit",
-    message: "Provider reached its output token limit before producing output",
+    message,
     ...((event.type === "done" || event.type === "incomplete") && event.usage ? { usage: event.usage } : {}),
   };
 }
@@ -213,7 +225,12 @@ export function isContentEvent(event: AdapterEvent): boolean {
 export async function preflightAdapterEvents(
   source: AsyncIterable<AdapterEvent>,
   classifyFirstEvent?: (event: AdapterEvent) => Extract<AdapterEvent, { type: "error" }> | undefined,
-  options?: { maxWaitMs?: number; honorReady?: boolean; bufferCompaction?: boolean },
+  options?: {
+    maxWaitMs?: number;
+    honorReady?: boolean;
+    bufferCompaction?: boolean;
+    maxReasoningHoldMs?: number;
+  },
 ): Promise<AdapterEventPreflight> {
   const iterator = source[Symbol.asyncIterator]();
   const buffered: AdapterEvent[] = [];
@@ -231,16 +248,31 @@ export async function preflightAdapterEvents(
       timeout = setTimeout(() => resolve("timeout"), maxWaitMs);
     });
   }
+  const maxReasoningHoldMs = options?.maxReasoningHoldMs !== undefined
+    ? options.maxReasoningHoldMs
+    : DEFAULT_MAX_REASONING_HOLD_MS;
+  let reasoningTimeout: ReturnType<typeof setTimeout> | undefined;
+  let reasoningPromise: Promise<"reasoning-hold-expired"> | undefined;
   try {
     while (true) {
       const pendingNext = iterator.next();
-      const raced = timeoutPromise ? await Promise.race([pendingNext, timeoutPromise]) : await pendingNext;
+      const raceCandidates: Promise<IteratorResult<AdapterEvent> | "timeout" | "reasoning-hold-expired">[] = [pendingNext];
+      if (timeoutPromise) raceCandidates.push(timeoutPromise);
+      if (reasoningPromise) raceCandidates.push(reasoningPromise);
+      const raced = await Promise.race(raceCandidates);
       if (raced === "timeout") {
         return {
           stream: replay(buffered, iterator, pendingNext),
           empty: false,
           replayUnsafe,
           timedOut: true,
+        };
+      }
+      if (raced === "reasoning-hold-expired") {
+        return {
+          stream: replay(buffered, iterator, pendingNext),
+          empty: false,
+          replayUnsafe,
         };
       }
       const next = raced;
@@ -282,9 +314,14 @@ export async function preflightAdapterEvents(
         || (options?.bufferCompaction === true && next.value.type === "text_delta");
 
       if (isBufferingEvent) {
-        if (!shouldBuffer) {
+        if (!shouldBuffer || maxReasoningHoldMs <= 0) {
           buffered.push(next.value);
           return { stream: replay(buffered, iterator), empty: false, replayUnsafe };
+        }
+        if (!reasoningPromise && maxReasoningHoldMs > 0) {
+          reasoningPromise = new Promise(resolve => {
+            reasoningTimeout = setTimeout(() => resolve("reasoning-hold-expired"), maxReasoningHoldMs);
+          });
         }
         buffered.push(next.value);
         bufferedReasoningCodeUnits += retainedEventCodeUnits(next.value);
@@ -308,6 +345,7 @@ export async function preflightAdapterEvents(
     }
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
+    if (reasoningTimeout !== undefined) clearTimeout(reasoningTimeout);
   }
 }
 

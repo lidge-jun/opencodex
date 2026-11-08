@@ -578,6 +578,38 @@ describe("run-turn adapter event preflight", () => {
     expect(preflight.empty).toBe(false);
     expect(preflight.replayUnsafe).toBe(false);
   });
+
+  test("reasoning trickling past maxReasoningHoldMs commits the target and streams buffered reasoning", async () => {
+    let continuedAfterHold = false;
+    async function* tricklingSource(): AsyncGenerator<AdapterEvent> {
+      yield heartbeat;
+      yield { type: "thinking_delta", thinking: "first thought" };
+      await new Promise(resolve => setTimeout(resolve, 60));
+      continuedAfterHold = true;
+      yield { type: "thinking_delta", thinking: "second thought" };
+      yield text("answer");
+      yield done;
+    }
+
+    const preflight = await preflightAdapterEvents(
+      tricklingSource(),
+      classifyZeroOutputTokenLimit,
+      { maxReasoningHoldMs: 20 },
+    );
+    expect(preflight.error).toBeUndefined();
+    expect(preflight.empty).toBe(false);
+    expect(preflight.replayUnsafe).toBe(false);
+
+    const collected = await collect(preflight.stream);
+    expect(collected).toEqual([
+      heartbeat,
+      { type: "thinking_delta", thinking: "first thought" },
+      { type: "thinking_delta", thinking: "second thought" },
+      text("answer"),
+      done,
+    ]);
+    expect(continuedAfterHold).toBe(true);
+  });
 });
 
 describe("run-turn adapter event queue retained-payload budgets", () => {

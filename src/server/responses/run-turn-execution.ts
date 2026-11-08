@@ -8,7 +8,7 @@ import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import type { ResponsesCompletionPolicy } from "./completion-policy";
 import { linkAbortSignal, runTurnAdapterSseResponses } from "./core-lifetime";
-import { createAdapterEventQueue, preflightAdapterEvents, classifyZeroOutputTokenLimit, isContentEvent, type AdapterEventPreflight } from "../../adapters/run-turn-queue";
+import { createAdapterEventQueue, preflightAdapterEvents, classifyZeroOutputTokenLimit, isContentEvent, DEFAULT_MAX_REASONING_HOLD_MS, type AdapterEventPreflight } from "../../adapters/run-turn-queue";
 import {
   bindRouteReasoningReplayScope,
   adapterNeedsForcedContinuation,
@@ -814,8 +814,10 @@ export async function executeResponsesRunTurn(
         ? Date.now() + (resolveStallTimeoutSec(stallTimeoutSec) || DEFAULT_STALL_TIMEOUT_SEC) * 1_000
         : undefined;
       if (runTurnFailoverArmed()) {
-        // Preflight holds only heartbeats and the first meaningful event. A first-event 429 can be
-        // replayed transparently; after any output reaches the bridge, a later error stays terminal.
+        // Preflight holds heartbeats, pre-output reasoning up to the reasoning hold bound,
+        // and the first meaningful event. A first-event 429 or zero-output token-limit terminal
+        // can be replayed transparently; after any output reaches the bridge or the reasoning
+        // hold expires, a later error stays terminal.
         eventSource = await preflightRunTurnFailover(eventSource, wsFirstParsed, preflightDeadlineAt);
         if (authRecoveryRefusal) {
           cancelResponseCompletion();
@@ -839,6 +841,7 @@ export async function executeResponsesRunTurn(
           eventSource, classifyUndeclaredFirstTool, {
             honorReady: false,
             bufferCompaction: routedCompaction,
+            maxReasoningHoldMs: DEFAULT_MAX_REASONING_HOLD_MS,
           },
         );
         if (preflight.error || preflight.empty) {
@@ -1050,16 +1053,12 @@ export async function executeResponsesRunTurn(
         // Same boundary as the streaming preflight: a replay-unsafe heartbeat means the adapter
         // already ran a local side effect, so an undeclared tool call or error after it keeps the bridge's
         // fail-closed refusal instead of becoming a hop that sends the turn to another target.
-        const terminalIndex = events.findIndex(event => event.type === "done" || event.type === "incomplete");
+        // Fail closed: any replay-unsafe heartbeat anywhere in the buffered turn disables replaying
+        // undeclared tools or zero-output token-limit terminals.
         const firstContentIndex = events.findIndex(isContentEvent);
-        const preBoundaryIndex = firstContentIndex !== -1 ? firstContentIndex : (terminalIndex !== -1 ? terminalIndex : events.length);
         const preOutputEvents = events.slice(0, firstContentIndex !== -1 ? firstContentIndex : events.length);
         const firstTool = preOutputEvents.find(event => event.type === "tool_call_start");
-        const toolCheckIndex = firstTool ? events.indexOf(firstTool) + 1 : preBoundaryIndex;
-        const replayUnsafe = events
-          .slice(0, Math.max(preBoundaryIndex, toolCheckIndex))
-          .some(event => event.type === "heartbeat" && event.replayUnsafe === true)
-          || events.some(event => event.type === "heartbeat" && event.replayUnsafe === true);
+        const replayUnsafe = events.some(event => event.type === "heartbeat" && event.replayUnsafe === true);
         const sawContent = events.some(isContentEvent);
         const terminalEvent = [...events].reverse().find(event => event.type === "done" || event.type === "incomplete");
         const zeroOutputLimit = (!sawContent || routedCompaction) && terminalEvent
