@@ -129,6 +129,15 @@ export function dropHomeNativeOverrides(state: RouteIntentState, clients: readon
   if (Object.keys(map).length === 0) delete state.devices.home;
 }
 
+/** Drops those legacy entries from the file, writing only when one is there. */
+export function dropLegacyHomeNativeOverrides(): void {
+  withConfigMutationLockSync(() => {
+    const map = readRouteIntentState().devices.home;
+    if (!map || !HOME_NATIVE_ROUTE_CLIENTS.some(client => map[client] !== undefined)) return;
+    updateRouteIntentState(state => { dropHomeNativeOverrides(state); return state; });
+  });
+}
+
 /**
  * Bookkeeping for a Home decision about a native client, which itself is written to the Home's
  * native switch. No `devices.home` entry is kept. The caller has already captured the Children's

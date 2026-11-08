@@ -5,6 +5,7 @@ import { projectHomeRouteIntent, ROUTE_CLIENT_IDS, type RouteClientId, type Rout
 import { initializeHomeRouteIntentDefaults, readHomeRouteIntentState } from "./home-route-intent";
 import { routeToDeviceStatus, type RouteToDeviceStatus, type RouteToStatus } from "./route-to-status";
 import { withDurableRouteNativeSettings } from "./route-to-live-settings";
+import { dropLegacyHomeNativeOverrides } from "./route-intent-state";
 import { readLocalRouteIntentOff, readRouteIntentReceipt, setLocalRouteIntentOff } from "../integrations/route-intent";
 import type { LinkChildContext } from "../cli/link-child";
 import type { OcxConfig } from "../types";
@@ -29,8 +30,10 @@ export async function syncHomeRouteTo(config: OcxConfig, version: string, overwr
     commit?.();
     const local = withDurableRouteNativeSettings(config);
     // The Home's own apply is Home-only: it captures the Children's native defaults only once the
-    // Home has a link. A default write's commit above has already captured them.
+    // Home has a link. A default write's commit above has already captured them. Without a link it
+    // saves no defaults, and only drops a legacy devices.home native entry if one is there.
     initializeHomeRouteIntentDefaults(local, version, undefined, { whenLinked: true });
+    dropLegacyHomeNativeOverrides();
     const decidedIntent = deps.onlyIntent?.();
     const document = projectHomeRouteIntent(local, version, "home", readHomeRouteIntentState(local),
       { decidedClient: deps.onlyClient, ...(decidedIntent ? { decidedIntent } : {}) });

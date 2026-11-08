@@ -13,6 +13,8 @@ import { asideHomeDir } from "../../src/clients/config-export";
 import { initializeHomeRouteIntentDefaults } from "../../src/routing/home-route-intent";
 import { readRouteIntentState, routeIntentStatePath, setRouteClientIntent } from "../../src/routing/route-intent-state";
 import { handleNativeIntegrationRoutes } from "../../src/server/management/native-integration-routes";
+import { writeLinkStore } from "../../src/link/store";
+import { linkStorePath } from "../../src/link/paths";
 import type { ManagementContext } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
@@ -34,6 +36,9 @@ beforeEach(() => {
   config.claudeCode = { enabled: true };
   saveConfig(config);
   mkdirSync(home.path("grok")); writeFileSync(home.path("grok", "config.toml"), "# fixture\n");
+  // Route intent bookkeeping belongs to a Home with a Child; an unlinked Home's toggle never reads it.
+  writeLinkStore(linkStorePath(), { version: 1, listenerPort: null, links: [{ id: "lnk_0123456789abcdef", alias: "child",
+    direction: "client-initiated", hostKeyFingerprint: null, tunnelPort: 19200, apiKeyId: "key-test", createdAt: "2026-11-07T00:00:00.000Z" }] });
 });
 afterEach(() => {
   for (const restore of restores.reverse()) restore();
@@ -78,6 +83,15 @@ for (const client of ["codex", "grok", "claude", "claude-desktop"]) {
       expect(readFileSync(home.path("config.json"), "utf8")).toBe(before);
     });
   }
+
+  test(`${client}: an unlinked Home toggles without reading an owned Aside manifest or route intent`, async () => {
+    writeLinkStore(linkStorePath(), { version: 1, listenerPort: null, links: [] });
+    ownAside();
+    writeFileSync(home.path(".aside", "accounts.json"), "{private-fixture-details");
+    const result = await toggle(client);
+    expect(result.status).toBe(200);
+    expect(existsSync(routeIntentStatePath())).toBe(false);
+  });
 }
 
 for (const enabled of [false, true]) {
