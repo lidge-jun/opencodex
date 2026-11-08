@@ -39,7 +39,8 @@ Casual-path consent guards require human interaction before transitioning an und
 - `GET /api/telemetry` (`buildTelemetryStatusSnapshot` in `src/telemetry/routes.ts`) builds `preview`
   for the same completed UTC day the scheduler would send next (oldest eligible unsent day, with
   `previewEligible: true`), or previews the latest completed UTC day with `previewEligible: false`
-  when no day is eligible to be sent.
+  when no day is eligible to be sent. It reads consent from `config.json` on disk, like the scheduler,
+  and reuses a day's aggregate for `TELEMETRY_PREVIEW_CACHE_MS` because the dashboard polls it.
 - `ocx telemetry enable` in `src/cli/telemetry.ts` requires an interactive human terminal (`isatty`
   on both stdin and stdout, not `OCX_SERVICE`, and not `isAgentDriven()`), prints the full
   disclosure block, asks a `[Y/n]` confirmation prompt (default yes), and records `accepted`;
@@ -58,8 +59,17 @@ Casual-path consent guards require human interaction before transitioning an und
   neither `noticeShownAt` nor `decision`.
 - `src/telemetry/disclosure.ts` is the one source for the disclosure text: the CLI prompt prints
   it and the Windows installer dialog is generated from it (`structure/desktop-shell.md`,
-  "Windows installer telemetry choice"). A decline on a fresh install creates `config.json`
-  through `initializePersistedConfigIfMissing`.
+  "Windows installer telemetry choice").
+- A decision made before `config.json` exists (`ocx telemetry disable`, the dashboard popup on a
+  fresh install, the Windows installer opt-out) is held as `pendingDecision` in
+  `telemetry-state.json` instead of creating the config, so `ocx init` still runs setup.
+  `withPendingTelemetryDecision` applies it wherever consent is resolved (scheduler, status route,
+  CLI prompt) until a decision is written into the config, which clears it.
+- The dashboard popup (`gui/src/components/telemetry-consent-card.tsx`) opens only for an undecided
+  install with no env override, after the star onboarding has closed, and never on a Remote Link
+  Child. Only Continue writes (`PUT /api/telemetry`); Escape, the backdrop and the close button
+  record nothing. Focus starts on the heading, so a stray Enter cannot accept. A saved decision
+  whose reply cannot be parsed is re-read with `GET` (`gui/src/telemetry-api.ts`).
 
 ## Identity, aggregation, and scheduling
 
@@ -82,12 +92,17 @@ with a 10-second `signalWithTimeout`. `src/telemetry/scheduler.ts` runs an unref
 timer started lazily from `src/server/background-lifecycle.ts` with startup and periodic jitter.
 Whenever `OCX_TELEMETRY` or `DO_NOT_TRACK` opt-out is observed (at startup in
 `src/server/background-lifecycle.ts` even though the scheduler is not started, and on every tick),
-`ineligibleThroughDay` (today's UTC day) and the `envOptOutActiveSince` marker are persisted in
-`<OPENCODEX_HOME>/telemetry-state.json` (atomic no-follow write) and `telemetry-id.json` is deleted.
-A proxy started under the opt-out reads the env once and runs no ticks, so the marker stands for the
-whole period it ran: while it is set no day is eligible, and `endTelemetryEnvOptOut` closes the
-period (ineligible through the closing day, marker cleared) on that proxy's clean stop or on the
-first tick that runs without the opt-out. Each tick carries an `AbortSignal`
+`ineligibleThroughDay` (today's UTC day) is persisted in `<OPENCODEX_HOME>/telemetry-state.json`
+(atomic no-follow write) together with the `envOptOutActiveSince` marker, or, for a proxy started
+under the opt-out, its pid in `envOptOutOwners`, and `telemetry-id.json` is deleted. Such a proxy
+reads the env once and runs no ticks, so the marker or owner stands for the whole period: while
+either is set no day is eligible. `endTelemetryEnvOptOut` closes the period (ineligible through the
+closing day) on that proxy's clean stop, which always covers its stop day, or on the first tick
+without the opt-out, which ends it only once no recorded owner pid is still alive and otherwise
+extends it to today. A `telemetry-state.json` that exists but cannot be read (symlink, oversized,
+malformed) stops sending (`state-unreadable`) rather than being read as empty. The state code lives
+in `src/telemetry/state.ts`, which `background-lifecycle.ts` imports statically; the scheduler, its
+aggregation and sender stay behind the dynamic import. Each tick carries an `AbortSignal`
 cancelled by shutdown or consent changes (`nudgeTelemetryScheduler`), sends at most one completed
 UTC day strictly after the consent/disclosure UTC day (`day > formatUtcDay(decidedAt ?? noticeShownAt)`)
 and strictly after `ineligibleThroughDay` (`day > ineligibleThroughDay`), re-reads persisted consent
@@ -101,14 +116,23 @@ until then.
 `services/telemetry-collector/src/ingest.ts`, `services/telemetry-collector/src/stats.ts`,
 `services/telemetry-collector/src/prune.ts`, and `services/telemetry-collector/schema.sql`) that imports
 `src/telemetry/contract.ts` directly, deduplicates reports on `(day, install_day_hash)` in a single
-atomic conditional D1 batch, rate-limits `POST /v1/events` to 120 reports/hour per salted hourly IP
-hash (`HTTP 429` with `Retry-After`, pruned after 2 hours) without storing raw IP addresses, and
-serves cached aggregate rollups from `GET /v1/stats`. In `TelemetryStatsV1`, `totals.activeInstalls`
-and breakdown `installs` counters represent install-days (sum of daily reporting installs),
-`totals.avgDailyActiveInstalls` reports `install-days / days in range` (rounded to 1 decimal), and
-every breakdown (`providers`, `models`, `versions`, `platforms`, `channels`, `errors`, and
-`dailyByProvider` per day) folds rows with fewer than 10 install-days in the selected range into
-`"other"` (dropping `"other"` if below 10, while keeping `totals`, `daily`, and `heatmap` unchanged).
+atomic conditional D1 batch, rate-limits `POST /v1/events` to 120 reports/hour per salted hourly hash
+of the client key (`HTTP 429` with `Retry-After`; a bucket is deleted by the hourly prune at most 2 hours
+15 minutes after its hour begins) without storing raw IP addresses, and serves cached aggregate rollups
+from `GET /v1/stats`. The client key comes only from `cf-connecting-ip`: IPv4 per address,
+IPv4-mapped IPv6 as that IPv4 address, and any other IPv6 address collapsed to its /64 prefix;
+`x-forwarded-for` is ignored and a request without `cf-connecting-ip` shares one fixed bucket. In
+`TelemetryStatsV1`, `totals.activeInstalls` and breakdown `installs` counters represent install-days
+(sum of daily reporting installs), and `totals.avgDailyActiveInstalls` reports
+`install-days / days in range` (rounded to 1 decimal). Every breakdown (`providers`, `models`, `versions`,
+`platforms`, `channels`, `errors`, `dailyByProvider`) publishes a value only for `(day, key)` pairs reported by
+at least 10 distinct installs on that day, applied before days are summed into the range, so one install
+cannot pass it alone by reporting on many days or through many provider/model-family rows. The distinct
+counts come from `daily_installs`, `daily_errors.installs`, `daily_provider_installs`, and
+`daily_family_installs`. Single-valued dimensions (version, platform, install channel) fold a day's
+sub-threshold rows into that day's `"other"`, published only if it reaches 10; multi-valued dimensions
+(providers, model families, error causes) drop sub-threshold rows. `totals`, `daily`, and `heatmap` stay
+unfiltered, so suppressed values can still be approximated by subtraction.
 Reports are unauthenticated and self-reported by opencodex installs.
 
 `docs-site/src/content/docs/guides/telemetry.md` documents the payload schema, consent and agent boundaries, opt-out controls, payload preview, and collector retention.

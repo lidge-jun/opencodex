@@ -59,13 +59,18 @@ function parseTelemetryId(text: string): TelemetryInstallIdentity | null {
 /** Read-only: returns the persisted telemetry install identity, or null when absent/invalid. */
 export function readTelemetryInstallId(configDir = getConfigDir()): TelemetryInstallIdentity | null {
   const path = telemetryIdPath(configDir);
-  if (memo?.path === path) return memo.identity;
   try {
     const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024) return null;
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024) {
+      if (memo?.path === path) memo = null;
+      return null;
+    }
   } catch {
+    // Another process (`ocx telemetry disable`, an env opt-out) may have deleted it: forget the memo.
+    if (memo?.path === path) memo = null;
     return null;
   }
+  if (memo?.path === path) return memo.identity;
   let identity: TelemetryInstallIdentity | null;
   try {
     identity = parseTelemetryId(readFileSync(path, "utf8"));
@@ -209,17 +214,6 @@ export function deleteTelemetryInstallId(configDir = getConfigDir()): boolean {
   } catch (error) {
     if (errorCode(error) !== "ENOENT") deleted = false;
   }
-  const statePath = join(configDir, "telemetry-state.json");
-  try {
-    const stat = lstatSync(statePath);
-    if (!stat.isSymbolicLink() && stat.isFile() && stat.size <= 64 * 1024) {
-      const raw = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
-      if (raw && typeof raw === "object" && !Array.isArray(raw) && "firstReportSentForInstallId" in raw) {
-        delete raw.firstReportSentForInstallId;
-        atomicWriteFileNoFollow(statePath, `${JSON.stringify(raw, null, 2)}\n`);
-      }
-    }
-  } catch { /* best-effort */ }
   return deleted;
 }
 

@@ -1,11 +1,12 @@
 import { mutatePersistedConfig } from "../config";
+import { readConfigDiagnostics } from "../config/diagnostics";
 import { adoptPersistedTelemetry } from "../config/live-reconcile";
 import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
 import { jsonResponse } from "../server/auth-cors";
 import { hasHumanDashboardSession } from "../server/management/consent-session";
 import type { ManagementContext } from "../server/management/context";
 import type { OcxConfig, OcxTelemetryConfig, OcxTelemetryDecision } from "../types";
-import { aggregateTelemetryForDay } from "./aggregate";
+import { aggregateTelemetryForDay, type DailyTelemetryAggregate } from "./aggregate";
 import { resolveTelemetryStatus, type TelemetryConsentStatus } from "./consent";
 import type { TelemetryInstallChannel, TelemetryPayloadV1 } from "./contract";
 import {
@@ -16,10 +17,13 @@ import {
 } from "./install-id";
 import { buildTelemetryPayloadV1, resolveInstallChannel } from "./payload";
 import {
+  clearPendingTelemetryDecision,
   latestCompletedUtcDay,
   nudgeTelemetryScheduler,
   readTelemetryState,
+  recordPendingTelemetryDecision,
   resolveNextEligibleTelemetryDay,
+  withPendingTelemetryDecision,
 } from "./scheduler";
 
 export interface TelemetryStatusSnapshot extends TelemetryConsentStatus {
@@ -30,27 +34,44 @@ export interface TelemetryStatusSnapshot extends TelemetryConsentStatus {
   preview: TelemetryPayloadV1;
 }
 
+/** How long the dashboard's preview may reuse a completed day's aggregate (the panel polls). */
+export const TELEMETRY_PREVIEW_CACHE_MS = 10 * 60 * 1000;
+let previewAggregateCache: { configDir: string; day: string; at: number; aggregate: DailyTelemetryAggregate } | null = null;
+
+export function resetTelemetryPreviewCacheForTests(): void {
+  previewAggregateCache = null;
+}
+
+async function previewAggregate(day: string, configDir: string, now: number, cache: boolean): Promise<DailyTelemetryAggregate> {
+  const hit = previewAggregateCache;
+  if (cache && hit && hit.configDir === configDir && hit.day === day && now - hit.at >= 0 && now - hit.at < TELEMETRY_PREVIEW_CACHE_MS) {
+    return hit.aggregate;
+  }
+  // A completed day's aggregate scans usage.jsonl from the start; the dashboard polls this route.
+  const aggregate = await aggregateTelemetryForDay(day);
+  if (cache) previewAggregateCache = { configDir, day, at: now, aggregate };
+  return aggregate;
+}
+
 export async function buildTelemetryStatusSnapshot(
   config: Pick<OcxConfig, "telemetry"> | null | undefined,
-  options: { now?: number; env?: Record<string, string | undefined>; configDir?: string } = {},
+  options: { now?: number; env?: Record<string, string | undefined>; configDir?: string; cachePreview?: boolean } = {},
 ): Promise<TelemetryStatusSnapshot> {
   const now = options.now ?? Date.now();
   const env = options.env ?? process.env;
   const configDir = options.configDir ?? getConfigDir();
-  const status = resolveTelemetryStatus(config, env);
+  const status = resolveTelemetryStatus(withPendingTelemetryDecision(config, configDir), env);
   const installChannel = resolveInstallChannel({ env });
   const state = readTelemetryState(configDir);
   const { day: nextEligibleDay } = resolveNextEligibleTelemetryDay(status, state, now);
   const previewEligible = nextEligibleDay !== null;
   const day = nextEligibleDay ?? latestCompletedUtcDay(now);
-  const aggregate = await aggregateTelemetryForDay(day);
+  const aggregate = await previewAggregate(day, configDir, now, options.cachePreview === true);
   const identity = readTelemetryInstallId(configDir);
   const installDayHash = identity
     ? computeInstallDayHash(identity.installId, day)
     : TELEMETRY_PREVIEW_HASH_PLACEHOLDER;
-  const newInstall = identity
-    ? identity.firstReportSent !== true
-    : true;
+  const newInstall = state.everReported !== true && identity?.firstReportSent !== true;
   const preview = buildTelemetryPayloadV1({
     aggregate,
     installDayHash,
@@ -84,7 +105,8 @@ function consentRefusedResponse(ctx: ManagementContext): Response {
 }
 
 export async function handleGetTelemetryRoute(ctx: ManagementContext): Promise<Response> {
-  const snapshot = await buildTelemetryStatusSnapshot(ctx.config);
+  // Consent is read from disk, like the scheduler: a CLI decision while the proxy runs must show here.
+  const snapshot = await buildTelemetryStatusSnapshot(readConfigDiagnostics({ passive: true }).config, { cachePreview: true });
   return jsonResponse(snapshot, 200, ctx.req, ctx.config);
 }
 
@@ -126,13 +148,20 @@ export async function handlePutTelemetryRoute(ctx: ManagementContext): Promise<R
       return { changed, value: next };
     }),
   );
-  if (outcome.status === "unavailable") {
+  if (outcome.status === "unavailable" && outcome.reason === "missing") {
+    // A fresh install's first-run popup can answer before any config.json exists; hold the
+    // decision so creating a config here does not make `ocx init` skip setup.
+    committed = { decision, decidedAt: nowIso, noticeShownAt: nowIso };
+    recordPendingTelemetryDecision(committed);
+  } else if (outcome.status === "unavailable") {
     return jsonResponse(
       { error: `Configuration is ${outcome.reason}`, code: "config_unavailable" },
       503,
       ctx.req,
       ctx.config,
     );
+  } else {
+    clearPendingTelemetryDecision();
   }
   adoptPersistedTelemetry(ctx.config, committed);
   if (decision === "declined") {

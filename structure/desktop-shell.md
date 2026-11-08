@@ -371,18 +371,33 @@ policy during installation and to include an installation option that disables i
 CLI prompt prints, and `tests/clients/desktop-telemetry-installer.test.ts` fails when the committed
 file is stale. It inserts `OcxTelemetryDlg` between Tauri's `WelcomeDlg` and `InstallDirDlg`
 (`Order="3"` overrides the template's `Order="2"` route) with the disclosure, a policy link and a
-"Send anonymous usage statistics" checkbox, checked by default, and writes the choice to
-`HKCU\Software\OpenCodex\Telemetry\InstallerChoice` (`send` or `optout`; silent installs pass
-`OCX_TELEMETRY_CHOICE=optout`; updates install without the page and write `send`, which is never
-acted on).
+"Send anonymous usage statistics" checkbox.
+
+The choice is machine-wide: `HKLM\Software\OpenCodex\Telemetry` holds `InstallerChoice` (`send`
+or `optout`) and `InstallerChoiceStamp` (`[Date] [Time]` of the decision). HKLM is what lets a
+silent install run as SYSTEM (Intune, SCCM) or approved by another administrator reach the people
+who use the app. `OCX_TELEMETRY_CHOICE` has no default: a value passed on the command line gets a
+new stamp (`OcxTelemetryStampExplicit`, before `AppSearch`); otherwise `AppSearch` reads the
+previous choice and stamp and carries them (`OcxTelemetryKeepChoice`, `OcxTelemetryKeepStamp`),
+which keeps an opt-out through in-app updates, which run without the page, and through the early
+removal of the old product in a major upgrade; a first install defaults to `send`. The box starts
+checked unless the install already carries an opt-out, and pressing Next records the box with a
+new stamp. A page note says leaving the box checked keeps the current choice, because `send` is
+never acted on.
 
 `desktop/src-tauri/src/installer_telemetry.rs` runs in the startup sequence before `resolve::run`,
-so before the app resolves, attaches to or starts any proxy. A pending `optout` runs the bundled
-`ocx telemetry disable --json` (which creates `config.json` on a fresh install) and, after a clean
-exit, rewrites the value to `applied` so a later dashboard choice is never overridden. If the
-decline did not persist, `sidecar::start` adds `OCX_TELEMETRY=0` for that session and the next
-launch tries again. An MSI install puts no `ocx.exe` on PATH; the terminal command comes from this
-app, so the app always runs before any proxy from that install.
+so before the app resolves, attaches to or starts any proxy, with its own 10-second cap. An
+`optout` whose stamp differs from this user's `HKCU\Software\OpenCodex\Telemetry\AppliedInstallerStamp`
+runs the bundled `ocx telemetry disable --json` (on a fresh install it holds the decline as
+`pendingDecision` in `telemetry-state.json` without creating `config.json`, so `ocx init` still
+runs setup) and, after a clean exit, records the stamp for this user. Each opt-out therefore
+applies once per user, and a later dashboard choice is never overridden until an install records a
+new opt-out. If the decline did not persist, `sidecar::start` adds `OCX_TELEMETRY=0` to a sidecar
+this app starts, and the save is retried in the background (`RETRY_DELAYS`, up to about 13
+minutes) and on the next launch; a proxy the app only attaches to follows the decline once a retry
+succeeds. If the stamp could not be recorded, the next launch saves the decline again. An MSI
+install puts no `ocx.exe` on PATH; the terminal command comes from this app, so the app always runs
+before any proxy from that install.
 
 ### Linux packaged-shell acceptance
 

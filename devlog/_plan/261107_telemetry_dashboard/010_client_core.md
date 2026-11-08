@@ -121,7 +121,7 @@ run through `validateTelemetryPayloadV1` before sending or previewing.
 - Each tick (startup jitter, then every 6 h) re-reads config passively from disk and re-evaluates
   `resolveTelemetryStatus`, so CLI and GUI changes take effect without a restart. The management
   routes also call `adoptPersistedTelemetry` and nudge the scheduler.
-- It sends only completed days on or after the UTC day of `decidedAt ?? noticeShownAt` (no pre-consent
+- It sends only completed days strictly after the UTC day of `decidedAt ?? noticeShownAt` (060 D1; no pre-consent
   backfill), at most **one day per tick**, oldest first, at most the last 7 days; 10 s
   `signalWithTimeout`, no in-tick retry. Sent days live in `<OPENCODEX_HOME>/telemetry-state.json`.
 - `tests/preload.ts` sets `OCX_TELEMETRY=0` so no test process ever sends.

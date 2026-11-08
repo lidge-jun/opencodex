@@ -11,7 +11,9 @@ import {
   maybeShowTelemetryPrompt,
   setTelemetryPromptDepsForTests,
 } from "../../src/cli/telemetry";
-import { readConfigDiagnostics } from "../../src/config/diagnostics";
+import { getDefaultConfig, initializePersistedConfigIfMissing } from "../../src/config";
+import { observeInitialConfigState, readConfigDiagnostics } from "../../src/config/diagnostics";
+import { buildTelemetryStatusSnapshot } from "../../src/telemetry/routes";
 import { resolveTelemetryStatus } from "../../src/telemetry/consent";
 import {
   ensureTelemetryInstallId,
@@ -310,17 +312,38 @@ describe("ocx telemetry CLI and interactive prompt", () => {
     }
   });
 
-  test("disable on a fresh install with no config.json creates it with the decline", async () => {
+  test("disable on a fresh install keeps the install fresh for ocx init and the decline survives config creation", async () => {
     const log = spyOn(console, "log").mockImplementation(() => {});
     try {
-      // The Windows installer's opt-out runs before the first proxy start has written any config.
+      // The Windows installer's opt-out (or a privacy-minded user) declines before any config exists.
       unlinkSync(join(home, "config.json"));
       expect(await handleTelemetryCommand(["disable", "--json"])).toBe(0);
-      const saved = JSON.parse(readFileSync(join(home, "config.json"), "utf8")) as { telemetry?: { decision?: string } };
-      expect(saved.telemetry?.decision).toBe("declined");
-      expect(readConfigDiagnostics().config.telemetry?.decision).toBe("declined");
-      expect(resolveTelemetryStatus(readConfigDiagnostics().config, {}).effective).toBe(false);
-      // A second decline leaves the created file in place.
+      // No config.json is created, so `ocx init` still runs provider setup.
+      expect(existsSync(join(home, "config.json"))).toBe(false);
+      expect(observeInitialConfigState()).toBe("missing");
+      expect((await buildTelemetryStatusSnapshot(readConfigDiagnostics().config, { env: {}, configDir: home }))).toMatchObject({
+        effective: false,
+        decision: "declined",
+      });
+
+      // The first config is created later (init, OAuth login, dashboard); the decline still holds.
+      expect(initializePersistedConfigIfMissing(getDefaultConfig())).toBe("created");
+      expect(readConfigDiagnostics().config.telemetry?.decision).toBeUndefined();
+      expect((await buildTelemetryStatusSnapshot(readConfigDiagnostics().config, { env: {}, configDir: home })).effective).toBe(false);
+      let fetchCalls = 0;
+      const tick = await runTelemetryTick({
+        configDir: home,
+        env: {},
+        now: Date.parse("2026-11-12T12:00:00.000Z"),
+        fetch: (async () => {
+          fetchCalls += 1;
+          return new Response("{}", { status: 202 });
+        }) as unknown as typeof fetch,
+      });
+      expect(tick.sent).toBe(false);
+      expect(fetchCalls).toBe(0);
+
+      // A decision written into the config later wins and clears the pending one.
       expect(await handleTelemetryCommand(["disable", "--json"])).toBe(0);
       expect(readConfigDiagnostics().config.telemetry?.decision).toBe("declined");
     } finally {

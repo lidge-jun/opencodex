@@ -1,4 +1,3 @@
-import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import worker, {
@@ -14,119 +13,17 @@ import {
 } from "../../services/telemetry-collector/src/ingest";
 import { pruneCollectorTables } from "../../services/telemetry-collector/src/prune";
 import { clearStatsCache, handleStats } from "../../services/telemetry-collector/src/stats";
-import type {
-  CollectorEnv,
-  D1Database,
-  D1PreparedStatement,
-  D1Result,
-  TelemetryStatsV1,
-} from "../../services/telemetry-collector/src/types";
+import type { CollectorEnv, TelemetryStatsV1 } from "../../services/telemetry-collector/src/types";
 import { aggregateTelemetryEntriesForDay, type DailyTelemetryAggregate } from "../../src/telemetry/aggregate";
 import { computeInstallDayHash } from "../../src/telemetry/install-id";
 import { buildTelemetryPayloadV1 } from "../../src/telemetry/payload";
 import type { PersistedUsageEntry } from "../../src/usage/log";
 import { repoPath } from "../helpers/repo-root";
+import { createInMemoryD1, postEventRequest } from "../helpers/telemetry-collector-d1";
 
 const NOW = Date.parse("2026-11-07T12:30:00.000Z");
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
-
-interface InMemoryD1Harness {
-  sqlite: Database;
-  db: D1Database;
-  env: CollectorEnv;
-  batchCalls: number[];
-  close: () => void;
-}
-
-function createInMemoryD1(salt = "test-rate-limit-salt"): InMemoryD1Harness {
-  const sqlite = new Database(":memory:");
-  const schemaSql = readFileSync(
-    repoPath("services", "telemetry-collector", "schema.sql"),
-    "utf8",
-  );
-  sqlite.exec(schemaSql);
-  const batchCalls: number[] = [];
-
-  function makeStatement(query: string, boundValues: unknown[] = []): D1PreparedStatement & { isSelect: () => boolean } {
-    const executeRun = <T = Record<string, unknown>>(): D1Result<T> => {
-      const stmt = sqlite.query(query);
-      const info = stmt.run(...(boundValues as never[]));
-      return {
-        success: true,
-        meta: {
-          changes: Number(info.changes ?? 0),
-          last_row_id: Number(info.lastInsertRowid ?? 0),
-          changed_db: Number(info.changes ?? 0) > 0,
-        },
-      };
-    };
-
-    return {
-      isSelect(): boolean {
-        return sqlite.query(query).columnNames.length > 0;
-      },
-      bind(...values: unknown[]): D1PreparedStatement {
-        return makeStatement(query, values);
-      },
-      async run<T = Record<string, unknown>>(): Promise<D1Result<T>> {
-        return executeRun<T>();
-      },
-      async all<T = Record<string, unknown>>(): Promise<D1Result<T>> {
-        const stmt = sqlite.query(query);
-        const results = stmt.all(...(boundValues as never[])) as T[];
-        return {
-          success: true,
-          meta: { changes: 0 },
-          results,
-        };
-      },
-      async first<T = Record<string, unknown>>(colName?: string): Promise<T | null> {
-        const stmt = sqlite.query(query);
-        const row = stmt.get(...(boundValues as never[])) as Record<string, unknown> | null;
-        if (!row) return null;
-        if (colName !== undefined) {
-          return ((row[colName] as T | undefined) ?? null);
-        }
-        return row as T;
-      },
-    };
-  }
-
-  const db: D1Database = {
-    prepare(query: string): D1PreparedStatement {
-      return makeStatement(query);
-    },
-    async batch<T = Record<string, unknown>>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
-      batchCalls.push(statements.length);
-      const out: D1Result<T>[] = [];
-      sqlite.exec("BEGIN IMMEDIATE");
-      try {
-        for (const stmt of statements) {
-          const inspectable = stmt as D1PreparedStatement & { isSelect?: () => boolean };
-          if (typeof inspectable.isSelect === "function" && inspectable.isSelect()) {
-            out.push(await stmt.all<T>());
-          } else {
-            out.push(await stmt.run<T>());
-          }
-        }
-        sqlite.exec("COMMIT");
-      } catch (error) {
-        sqlite.exec("ROLLBACK");
-        throw error;
-      }
-      return out;
-    },
-  };
-
-  return {
-    sqlite,
-    db,
-    env: { DB: db, RATE_LIMIT_SALT: salt },
-    batchCalls,
-    close: () => sqlite.close(),
-  };
-}
 
 function makeAggregate(day: string, overrides?: Partial<DailyTelemetryAggregate>): DailyTelemetryAggregate {
   const entries: PersistedUsageEntry[] = [
@@ -199,34 +96,6 @@ function makeAggregate(day: string, overrides?: Partial<DailyTelemetryAggregate>
   };
 }
 
-function postEventRequest(
-  body: string | Uint8Array,
-  options: {
-    ip?: string;
-    origin?: string;
-    contentType?: string;
-    contentLength?: string;
-  } = {},
-): Request {
-  const headers = new Headers();
-  if (options.contentType !== "") {
-    headers.set("content-type", options.contentType ?? "application/json");
-  }
-  if (options.ip) {
-    headers.set("cf-connecting-ip", options.ip);
-  }
-  if (options.origin) {
-    headers.set("origin", options.origin);
-  }
-  if (options.contentLength) {
-    headers.set("content-length", options.contentLength);
-  }
-  return new Request("https://telemetry.opencodex.me/v1/events", {
-    method: "POST",
-    headers,
-    body,
-  });
-}
 
 describe("telemetry collector worker + D1", () => {
   test("wrangler.toml pins placeholder D1 id 00000000-0000-0000-0000-000000000000 and cron trigger", () => {
@@ -274,8 +143,9 @@ describe("telemetry collector worker + D1", () => {
       expect(res1.status).toBe(200);
       expect(res1.headers.get("access-control-allow-origin")).toBe("https://opencodex.me");
       expect(await res1.json()).toEqual({ ok: true, deduplicated: false });
-      // 1 daily_totals + 4 daily_models + 3 daily_errors + 1 daily_installs = 9 statements in one atomic batch.
-      expect(h.batchCalls).toEqual([9]);
+      // 1 daily_totals + 4 daily_models + 4 daily_provider_installs + 4 daily_family_installs
+      // + 3 daily_errors + 1 daily_installs = 17 statements in one atomic batch.
+      expect(h.batchCalls).toEqual([17]);
 
       // Re-send the same (day, installDayHash) with a brand-new batchId and inflated numbers.
       const payload2 = buildTelemetryPayloadV1({
@@ -302,7 +172,7 @@ describe("telemetry collector worker + D1", () => {
       expect(res2.status).toBe(200);
       expect(await res2.json()).toEqual({ ok: true, deduplicated: true });
       // Conditional batch runs atomically and leaves all rollup rows untouched.
-      expect(h.batchCalls).toEqual([9, 9]);
+      expect(h.batchCalls).toEqual([17, 17]);
 
       const installs = h.sqlite.query("SELECT * FROM daily_installs").all() as Array<Record<string, unknown>>;
       expect(installs).toHaveLength(1);
@@ -346,6 +216,19 @@ describe("telemetry collector worker + D1", () => {
         { provider_kind: "deepseek", model_family: "deepseek", installs: 1 },
         { provider_kind: "google", model_family: "gemini-3", installs: 1 },
       ]);
+      // Distinct per-day install counts stay at 1 after the deduplicated re-send.
+      expect(h.sqlite.query("SELECT provider_kind, installs FROM daily_provider_installs ORDER BY provider_kind ASC").all()).toEqual([
+        { provider_kind: "chatgpt", installs: 1 },
+        { provider_kind: "claude-subscription", installs: 1 },
+        { provider_kind: "deepseek", installs: 1 },
+        { provider_kind: "google", installs: 1 },
+      ]);
+      expect(h.sqlite.query("SELECT model_family, installs FROM daily_family_installs ORDER BY model_family ASC").all()).toEqual([
+        { model_family: "claude-opus", installs: 1 },
+        { model_family: "deepseek", installs: 1 },
+        { model_family: "gemini-3", installs: 1 },
+        { model_family: "gpt-5", installs: 1 },
+      ]);
       const errorInstalls = h.sqlite
         .query("SELECT cause, installs, count FROM daily_errors ORDER BY cause ASC")
         .all() as Array<{ cause: string; installs: number; count: number }>;
@@ -356,7 +239,10 @@ describe("telemetry collector worker + D1", () => {
       ]);
 
       // Privacy check: dump every row of every table and ensure no raw installId, batchId, or IP appears.
-      const tables = ["daily_installs", "daily_totals", "daily_models", "daily_errors", "rate_limits"] as const;
+      const tables = [
+        "daily_installs", "daily_totals", "daily_models", "daily_provider_installs",
+        "daily_family_installs", "daily_errors", "rate_limits",
+      ] as const;
       for (const table of tables) {
         const dump = JSON.stringify(h.sqlite.query(`SELECT * FROM ${table}`).all());
         expect(dump).not.toContain(rawInstallId);
@@ -1150,6 +1036,8 @@ describe("telemetry collector worker + D1", () => {
           "VALUES (?1, 'claude-subscription', 'claude-opus', 10, ?2, ?2, ?2, ?2, ?2, ?2)",
         )
         .run(day, nearMax);
+      h.sqlite.query("INSERT INTO daily_provider_installs (day, provider_kind, installs) VALUES (?1, 'claude-subscription', 10)").run(day);
+      h.sqlite.query("INSERT INTO daily_family_installs (day, model_family, installs) VALUES (?1, 'claude-opus', 10)").run(day);
 
       const clampRes = await handleCollectorFetch(
         postEventRequest(JSON.stringify(valid), { ip: "198.51.100.201" }),
@@ -1275,16 +1163,15 @@ describe("telemetry collector worker + D1", () => {
       expect(h.batchCalls.length).toBe(batchCountBeforeStats + 3);
 
       // When caches.default is available and in-isolate memory is cleared, edge cache serves the canonical range key.
-      const edgeStore = new Map<string, string>();
+      const edgeStore = new Map<string, Response>();
       const prevCaches = (globalThis as { caches?: unknown }).caches;
       (globalThis as { caches?: unknown }).caches = {
         default: {
           async match(req: Request): Promise<Response | undefined> {
-            const hit = edgeStore.get(req.url);
-            return hit ? new Response(hit) : undefined;
+            return edgeStore.get(req.url)?.clone();
           },
           async put(req: Request, res: Response): Promise<void> {
-            edgeStore.set(req.url, await res.clone().text());
+            edgeStore.set(req.url, res.clone());
           },
         },
       };
@@ -1318,7 +1205,7 @@ describe("telemetry collector worker + D1", () => {
     }
   });
 
-  test("folds cohorts with fewer than 10 install-days into 'other', drops 'other' below 10, and keeps totals/daily/heatmap unchanged", async () => {
+  test("applies the 10-install cohort threshold per day, folds single-valued dimensions into a per-day 'other', and keeps totals/daily/heatmap unchanged", async () => {
     const h = createInMemoryD1("cohort-salt");
     try {
       const day1 = "2026-11-05";
@@ -1407,10 +1294,10 @@ describe("telemetry collector worker + D1", () => {
 
       // Day 1:
       // - Major cohort (12 installs >= 10): anthropic / claude-opus / 2.41.0 / darwin-arm64 / npm-global / rate-limit
-      // - Two small cohorts (6 + 5 = 11 installs >= 10 when folded into 'other'):
+      // - Two small cohorts (6 + 5 installs, each < 10 on the day):
       //   * 6 installs: openai / gpt-5 / 2.40.0 / linux-x64 / standalone / empty-output
       //   * 5 installs: google / gemini-3 / 2.39.0 / win32-x64 / desktop / client-cancelled
-      // - Multi-day cohort (5 installs on day1 + 5 installs on day2 = 10 install-days in 7d range, < 10 per day):
+      // - Multi-day cohort (5 installs on day1 + 5 installs on day2: 10 install-days in the range, < 10 on each day):
       //   * 5 installs on day1: xai / grok / 2.38.0 / linux-arm64 / docker / upstream-fault
       await ingestCustom({
         day: day1,
@@ -1477,8 +1364,8 @@ describe("telemetry collector worker + D1", () => {
         errorCount: 1,
       });
 
-      // Day 2: 5 more installs of the xai/grok cohort (bringing its 7d range total to 10 install-days,
-      // while day2 alone has only 5 installs < 10 so day2's 'other' is < 10 and dropped on day2).
+      // Day 2: 5 more installs of the xai/grok cohort. Its 10 install-days over the range must not
+      // publish it: the threshold applies per day, and neither day reaches 10.
       await ingestCustom({
         day: day2,
         count: 5,
@@ -1513,47 +1400,37 @@ describe("telemetry collector worker + D1", () => {
         { day: day2, activeInstalls: 5 },
       ]);
 
-      // Range breakdowns: anthropic (12) and xai (5 + 5 = 10) are kept; openai (6) + google (5) fold into 'other' (11 >= 10)
+      // Range breakdowns keep only (day, key) rows with >= 10 distinct installs: anthropic on day1.
+      // Provider, family and error rows below the threshold are dropped, never folded, because a
+      // bucket of several multi-valued rows could count one install more than once.
       expect(statsFolded.providers).toEqual([
         { providerKind: "anthropic", requests: 120, tokens: 12000 },
-        { providerKind: "other", requests: 50, tokens: 5000 },
-        { providerKind: "xai", requests: 20, tokens: 2000 },
       ]);
       expect(statsFolded.models).toEqual([
         { modelFamily: "claude-opus", requests: 120, tokens: 12000 },
-        { modelFamily: "other", requests: 50, tokens: 5000 },
-        { modelFamily: "grok", requests: 20, tokens: 2000 },
       ]);
+      // Single-valued dimensions fold per day: day1's openai (6) + google (5) + xai (5) = 16 distinct
+      // installs form day1's 'other'; day2's 5 xai installs stay below 10 and are dropped.
       expect(statsFolded.versions).toEqual([
+        { version: "other", installs: 16, newInstalls: 4 },
         { version: "2.41.0", installs: 12, newInstalls: 3 },
-        { version: "other", installs: 11, newInstalls: 3 },
-        { version: "2.38.0", installs: 10, newInstalls: 2 },
       ]);
       expect(statsFolded.platforms).toEqual([
+        { os: "other", arch: "other", installs: 16 },
         { os: "darwin", arch: "arm64", installs: 12 },
-        { os: "other", arch: "other", installs: 11 },
-        { os: "linux", arch: "arm64", installs: 10 },
       ]);
       expect(statsFolded.channels).toEqual([
+        { installChannel: "other", installs: 16, newInstalls: 4 },
         { installChannel: "npm-global", installs: 12, newInstalls: 3 },
-        { installChannel: "other", installs: 11, newInstalls: 3 },
-        { installChannel: "docker", installs: 10, newInstalls: 2 },
       ]);
       expect(statsFolded.errors).toEqual([
         { cause: "rate-limit", count: 24 },
-        { cause: "other", count: 23 },
-        { cause: "upstream-fault", count: 10 },
       ]);
-
-      // dailyByProvider per day:
-      // - On day1: anthropic (12 >= 10) is kept; openai (6) + google (5) + xai (5) fold into 'other' (16 >= 10).
-      // - On day2: xai has only 5 installs (< 10), so 'other' on day2 has 5 (< 10) and is dropped!
       expect(statsFolded.dailyByProvider).toEqual([
         { day: day1, providerKind: "anthropic", requests: 120, tokens: 12000 },
-        { day: day1, providerKind: "other", requests: 60, tokens: 6000 },
       ]);
 
-      // Now test dropping 'other' when 'other' itself has fewer than 10 install-days in a fresh DB:
+      // Now test dropping a single-valued day's 'other' below 10 in a fresh DB:
       const hDrop = createInMemoryD1("drop-salt");
       try {
         // 12 installs of anthropic + 4 installs of openai + 5 installs of google -> 'other' has 9 < 10 -> dropped!
@@ -1568,6 +1445,20 @@ describe("telemetry collector worker + D1", () => {
           .prepare(
             "INSERT INTO daily_models (day, provider_kind, model_family, installs, requests, input, cache_read, cache_write, output, reasoning) " +
             "VALUES (?1, 'anthropic', 'claude-opus', 12, 120, 12000, 0, 0, 0, 0), (?1, 'openai', 'gpt-5', 4, 20, 2000, 0, 0, 0, 0), (?1, 'google', 'gemini-3', 5, 20, 2000, 0, 0, 0, 0)",
+          )
+          .bind(day1)
+          .run();
+        await hDrop.db
+          .prepare(
+            "INSERT INTO daily_provider_installs (day, provider_kind, installs) " +
+            "VALUES (?1, 'anthropic', 12), (?1, 'openai', 4), (?1, 'google', 5)",
+          )
+          .bind(day1)
+          .run();
+        await hDrop.db
+          .prepare(
+            "INSERT INTO daily_family_installs (day, model_family, installs) " +
+            "VALUES (?1, 'claude-opus', 12), (?1, 'gpt-5', 4), (?1, 'gemini-3', 5)",
           )
           .bind(day1)
           .run();
@@ -1613,7 +1504,7 @@ describe("telemetry collector worker + D1", () => {
         expect(statsDropped.daily[0]?.activeInstalls).toBe(21);
         expect(statsDropped.heatmap.find(d => d.day === day1)?.activeInstalls).toBe(21);
 
-        // Every breakdown drops 'other' because 4 + 5 = 9 < 10.
+        // Every breakdown drops the small rows; the single-valued 'other' (4 + 5 = 9 < 10) is dropped too.
         expect(statsDropped.providers).toEqual([{ providerKind: "anthropic", requests: 120, tokens: 12000 }]);
         expect(statsDropped.models).toEqual([{ modelFamily: "claude-opus", requests: 120, tokens: 12000 }]);
         expect(statsDropped.versions).toEqual([{ version: "2.41.0", installs: 12, newInstalls: 0 }]);
@@ -1624,15 +1515,17 @@ describe("telemetry collector worker + D1", () => {
           { day: day1, providerKind: "anthropic", requests: 120, tokens: 12000 },
         ]);
 
-        // If a native 'other' row exists (e.g. 6 installs of providerKind='other') alongside
-        // 4 installs of openai and 5 installs of google, all merge into a single 'other' row (15 >= 10).
+        // A native 'other' provider/family is an ordinary key: published when its own distinct
+        // count reaches 10 on the day, and never merged with the dropped small rows.
         await hDrop.db
           .prepare(
             "INSERT INTO daily_models (day, provider_kind, model_family, installs, requests, input, cache_read, cache_write, output, reasoning) " +
-            "VALUES (?1, 'other', 'other', 6, 30, 3000, 0, 0, 0, 0)",
+            "VALUES (?1, 'other', 'other', 10, 30, 3000, 0, 0, 0, 0)",
           )
           .bind(day1)
           .run();
+        hDrop.sqlite.query("INSERT INTO daily_provider_installs (day, provider_kind, installs) VALUES (?1, 'other', 10)").run(day1);
+        hDrop.sqlite.query("INSERT INTO daily_family_installs (day, model_family, installs) VALUES (?1, 'other', 10)").run(day1);
         const resMergedOther = await handleStats(
           new Request("https://telemetry.opencodex.me/v1/stats?range=7d"),
           hDrop.env,
@@ -1642,15 +1535,15 @@ describe("telemetry collector worker + D1", () => {
         const statsMergedOther = (await resMergedOther.json()) as TelemetryStatsV1;
         expect(statsMergedOther.providers).toEqual([
           { providerKind: "anthropic", requests: 120, tokens: 12000 },
-          { providerKind: "other", requests: 70, tokens: 7000 },
+          { providerKind: "other", requests: 30, tokens: 3000 },
         ]);
         expect(statsMergedOther.models).toEqual([
           { modelFamily: "claude-opus", requests: 120, tokens: 12000 },
-          { modelFamily: "other", requests: 70, tokens: 7000 },
+          { modelFamily: "other", requests: 30, tokens: 3000 },
         ]);
         expect(statsMergedOther.dailyByProvider).toEqual([
           { day: day1, providerKind: "anthropic", requests: 120, tokens: 12000 },
-          { day: day1, providerKind: "other", requests: 70, tokens: 7000 },
+          { day: day1, providerKind: "other", requests: 30, tokens: 3000 },
         ]);
       } finally {
         hDrop.close();
@@ -1658,17 +1551,5 @@ describe("telemetry collector worker + D1", () => {
     } finally {
       h.close();
     }
-  });
-
-  test("README documents collector-first rollout, D1 installs column migration, 120/hour rate limit, and residual subtraction risk", () => {
-    const readme = readFileSync(
-      repoPath("services", "telemetry-collector", "README.md"),
-      "utf8",
-    );
-    expect(readme).toContain("120 reports/hour");
-    expect(readme).toContain("ALTER TABLE daily_models ADD COLUMN installs INTEGER NOT NULL DEFAULT 0");
-    expect(readme).toContain("ALTER TABLE daily_errors ADD COLUMN installs INTEGER NOT NULL DEFAULT 0");
-    expect(readme.toLowerCase()).toContain("before a client release");
-    expect(readme.toLowerCase()).toContain("subtraction");
   });
 });

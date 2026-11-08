@@ -764,7 +764,7 @@
   "protocol-settings.test.ts": "config", "config-mutation-lock.test.ts": "config",
   "config-non-object-backup.test.ts": "config", "config-ownership-uninstall.test.ts": "config", "config-ownership-concurrent-record.test.ts": "config", "config-ownership-removal.test.ts": "config",
   "config-rebase-provenance-writers.test.ts": "config", "config-save-boundary.test.ts": "config",
-  "config-spend-ceilings.test.ts": "config", "config-spend-pool-collision.test.ts": "config", "config-user-edits.test.ts": "config", "hub-disable-live-save.test.ts": "config",
+  "config-spend-ceilings.test.ts": "config", "config-spend-pool-collision.test.ts": "config", "config-user-edits.test.ts": "config", "hub-disable-live-save.test.ts": "config", "telemetry-live-save.test.ts": "config",
   "config.test.ts": "server", "configured-native-models.test.ts": "codex-integration",
   "gui-desktop-sidecar-signing.test.ts": "gui", "linux-desktop-packaged-ci.test.ts": "ci-workflows",
   "probe-timeout-env.test.ts": "server", "subagent-roster-migration.test.ts": "routing",
@@ -1623,5 +1623,5 @@
   "messages-sse-control-fields.test.ts": "claude-integration",
   "messages-sse-continuation.test.ts": "claude-integration",
   "sse-payload-rewrite-continuation.test.ts": "responses",
-  "usage-telemetry-client.test.ts": "usage", "usage-telemetry-core-boundary.test.ts": "usage", "usage-telemetry-collector-worker.test.ts": "usage", "usage-telemetry-collector-typecheck.test.ts": "usage", "server-telemetry-routes.test.ts": "server", "cli-telemetry.test.ts": "cli"
+  "usage-telemetry-client.test.ts": "usage", "usage-telemetry-core-boundary.test.ts": "usage", "usage-telemetry-collector-worker.test.ts": "usage", "usage-telemetry-collector-typecheck.test.ts": "usage", "usage-telemetry-collector-privacy.test.ts": "usage", "server-telemetry-routes.test.ts": "server", "cli-telemetry.test.ts": "cli"
 }

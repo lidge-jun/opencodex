@@ -1,7 +1,7 @@
 import { lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isatty } from "node:tty";
-import { getConfigDir, getDefaultConfig, initializePersistedConfigIfMissing, mutatePersistedConfig, readConfigDiagnostics } from "../config";
+import { getConfigDir, mutatePersistedConfig, readConfigDiagnostics } from "../config";
 import { atomicWriteFileNoFollow } from "../config/atomic-write";
 import { withConfigDirHardeningSettled } from "../config/paths";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
@@ -9,6 +9,11 @@ import { resolveTelemetryStatus } from "../telemetry/consent";
 import { TELEMETRY_DISCLOSURE_HEADING, TELEMETRY_DISCLOSURE_POINTS } from "../telemetry/disclosure";
 import { deleteTelemetryInstallId } from "../telemetry/install-id";
 import { buildTelemetryStatusSnapshot, type TelemetryStatusSnapshot } from "../telemetry/routes";
+import {
+  clearPendingTelemetryDecision,
+  recordPendingTelemetryDecision,
+  withPendingTelemetryDecision,
+} from "../telemetry/scheduler";
 import type { OcxTelemetryConfig, OcxTelemetryDecision } from "../types";
 import { currentVersion } from "../update/index";
 import { isAgentDriven } from "./agent-driven";
@@ -85,22 +90,18 @@ async function persistTelemetryDecision(decision: OcxTelemetryDecision): Promise
       fresh.telemetry = next;
       return { changed, value: next };
     });
-  const outcome = await withConfigDirHardeningSettled(dir, () => {
-    const first = mutate();
-    if (first.status !== "unavailable" || first.reason !== "missing") return first;
+  const outcome = await withConfigDirHardeningSettled(dir, () => mutate());
+  if (outcome.status === "unavailable" && outcome.reason === "missing") {
     // A fresh install has no config.json yet; the Windows installer's opt-out arrives exactly
-    // then. Create it the way a first start would, carrying the decision. A concurrent first
-    // start that wins the race leaves a file to patch instead.
-    const created = initializePersistedConfigIfMissing({
-      ...getDefaultConfig(),
-      telemetry: { decision, decidedAt: nowIso, noticeShownAt: nowIso },
-    });
-    return created === "created" ? { status: "committed" as const, value: null } : mutate();
-  });
-  if (outcome.status === "unavailable") {
+    // then. Creating the config would make `ocx init` skip setup, so hold the decision in
+    // telemetry-state.json; it applies until a decision is written into the config.
+    recordPendingTelemetryDecision({ decision, decidedAt: nowIso, noticeShownAt: nowIso }, dir);
+  } else if (outcome.status === "unavailable") {
     throw new Error(
       `Cannot update telemetry configuration: config.json is ${outcome.reason}. Fix or restore config.json before retrying.`,
     );
+  } else {
+    clearPendingTelemetryDecision(dir);
   }
   if (decision === "declined") {
     deleteTelemetryInstallId(dir);
@@ -115,7 +116,7 @@ async function persistTelemetryDecision(decision: OcxTelemetryDecision): Promise
 export async function maybeShowTelemetryPrompt(): Promise<void> {
   try {
     const diagnostics = readConfigDiagnostics({ passive: true });
-    const status = resolveTelemetryStatus(diagnostics.config, process.env);
+    const status = resolveTelemetryStatus(withPendingTelemetryDecision(diagnostics.config), process.env);
     if (status.envOverride !== null || status.decision !== null || status.noticeShownAt !== null) {
       return;
     }
