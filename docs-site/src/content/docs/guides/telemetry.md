@@ -98,10 +98,13 @@ You can disable telemetry at any time through any of these controls:
    account on the computer starts it, before it resolves or starts any proxy (on a fresh install the
    decline is held in `telemetry-state.json` until a `config.json` exists, so `ocx init` still runs
    setup). The choice is recorded for the whole computer, so it also covers a silent install run by
-   an administrator or a deployment tool, and in-app updates keep it. If the save fails, a proxy the
-   app starts runs with `OCX_TELEMETRY=0`, and the app retries in the background and on the next
-   launch. Leaving the box checked does not start sending by itself; the popup below still appears
-   first.
+   an administrator or a deployment tool, and in-app updates keep it (`optout` is matched in any
+   letter case). Each opt-out applies once per account: running a newer installer and continuing
+   without changing the box keeps the earlier decision as it was, so it is not applied again over a
+   choice you made in the dashboard since. If the save fails, a proxy the app starts runs with
+   `OCX_TELEMETRY=0`, and the app retries in the background and on the next launch. Leaving the box
+   checked does not start sending by itself, and never turns telemetry back on for an account that
+   turned it off; the popup below still appears first.
 2. **GUI consent popup** — uncheck **Share anonymous daily usage statistics** and click
    **Continue** when the first-run or post-update dialog appears.
 3. **Proxy details toggle** — open the [Web Dashboard](/guides/web-dashboard/) Overview page, go to
@@ -122,6 +125,12 @@ You can disable telemetry at any time through any of these controls:
    proxy environment.
 6. **`DO_NOT_TRACK=1`** — set `DO_NOT_TRACK=1` (or `true`, `yes`, case-insensitive) in the proxy
    environment.
+
+The two environment variables only reach a proxy that inherits them. A proxy run as a background
+service (systemd, launchd or Task Scheduler, through `ocx service install`) does not see variables
+exported in your interactive shell; set them in the service's own environment, or use one of the
+persistent controls above. `ocx telemetry status` asks the running proxy, so it shows the state that
+proxy actually uses.
 
 Both environment variables override `config.json` immediately without modifying the saved file.
 Whenever `OCX_TELEMETRY` or `DO_NOT_TRACK` opt-out is observed — at proxy startup in
@@ -319,7 +328,11 @@ opencodex never includes any of the following in telemetry payloads:
   suppressed value can still be approximated by subtraction from the published totals. In addition,
   reports to
   `POST /v1/events` are **unauthenticated** and can be forged within the per-key rate limit and
-  payload bounds; the public dashboard therefore labels all figures
+  payload bounds. Forged reports can also lift a real install over the threshold: 9 forged reports
+  for a rare key on the same day as one real install make 10 distinct installs, and the sender can
+  subtract their own share to recover that install's figures for the key. The install stays
+  anonymous, and the rate limit raises the cost without preventing it. The public dashboard
+  therefore labels all figures
   **"self-reported by opencodex installs"**.
 - **Daily aggregate retention** — `daily_installs` rows (which hold only the per-day hash, version,
   release channel, OS, CPU architecture, install channel, `new_install`, and `active_minutes`) are
