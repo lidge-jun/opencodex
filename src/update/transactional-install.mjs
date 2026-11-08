@@ -232,7 +232,7 @@ function inspectAncestorDependency(packageDir, name, store, escaped) {
 }
 
 /** Node may resolve undeclared names from any ancestor node_modules, so none may escape. */
-function inspectAncestorRoots(packageDir, store, escaped, preserved = false, storeAlias = store) {
+function inspectAncestorRoots(packageDir, store, escaped, preserved = false, storeAlias = store, metadataSeen) {
   for (let parent = dirname(packageDir); ; parent = dirname(parent)) {
     if (basename(parent) !== "node_modules") {
       const root = join(parent, "node_modules");
@@ -247,7 +247,7 @@ function inspectAncestorRoots(packageDir, store, escaped, preserved = false, sto
             ? "pnpm preserved-symlink lookup root is outside the selected store" : "pnpm ancestor dependency root is outside the selected store");
           else {
             resolveStoreLinkChain(root, store, storeAlias);
-            inspectPnpmMetadata(root, store, escaped, "ancestor dependency lookup", storeAlias);
+            inspectPnpmMetadata(root, store, escaped, "ancestor dependency lookup", storeAlias, metadataSeen);
           }
         }
         catch { escaped.add("pnpm ancestor dependency root could not be resolved"); }
@@ -286,8 +286,8 @@ function inspectPackageEntries(packageDir, manifest, store, escaped, alternateRo
 }
 
 /** pnpm's metadata and executable directories are not packages, but their links still must stay inside the store. */
-function inspectPnpmMetadata(path, store, escaped, kind, storeAlias = store) {
-  const pending = [path], seen = new Set();
+function inspectPnpmMetadata(path, store, escaped, kind, storeAlias = store, seen = new Set()) {
+  const pending = [path];
   while (pending.length) {
     const current = pending.pop();
     let real;
@@ -441,7 +441,8 @@ function nestedPnpmRoots(packageDir, store, escaped, budget, storeAlias = store)
 
 /** Check reachable global-store package roots and declared dependency links, including cycles. */
 function inspectGlobalPnpmGraph(packageDir, store, escaped, storeAlias = store) {
-  const pending = [packageDir], seen = new Set(), budget = { remaining: 100000 };
+  const pending = [packageDir], seen = new Set(), enumeratedRoots = new Set();
+  const ancestorMetadataSeen = new Set(), metadataSeen = new Map(), budget = { remaining: 100000 };
   inspectGlobalLookupRoots(store, escaped, storeAlias);
   while (pending.length) {
     const spelling = pending.pop();
@@ -455,7 +456,7 @@ function inspectGlobalPnpmGraph(packageDir, store, escaped, storeAlias = store) 
     if (seen.has(path)) continue;
     if (seen.size >= 10000) { escaped.add("pnpm dependency graph exceeds verification limit"); return; }
     seen.add(path);
-    inspectAncestorRoots(path, store, escaped, false, storeAlias);
+    inspectAncestorRoots(path, store, escaped, false, storeAlias, ancestorMetadataSeen);
     const names = new Set();
     const nestedRoots = nestedPnpmRoots(spelling, store, escaped, budget, storeAlias);
     const ownRoot = join(path, "node_modules"), groupRoot = enclosingNodeModules(path);
@@ -466,10 +467,16 @@ function inspectGlobalPnpmGraph(packageDir, store, escaped, storeAlias = store) 
         continue;
       }
       try {
-        if (!inside(realpathSync(root), store)) { escaped.add("pnpm dependency root is outside the selected store"); continue; }
+        const realRoot = realpathSync(root);
+        if (!inside(realRoot, store)) { escaped.add("pnpm dependency root is outside the selected store"); continue; }
+        if (inside(root, store) || (storeAlias && inside(root, storeAlias))) resolveStoreLinkChain(root, store, storeAlias);
+        if (enumeratedRoots.has(realRoot)) continue;
+        enumeratedRoots.add(realRoot);
         for (const name of readdirSync(root)) {
           if ([".bin", ".pnpm", ".modules.yaml"].includes(name)) {
-            inspectPnpmMetadata(join(root, name), store, escaped, name === ".bin" ? "binary" : "metadata", storeAlias);
+            const kind = name === ".bin" ? "binary" : "metadata";
+            if (!metadataSeen.has(kind)) metadataSeen.set(kind, new Set());
+            inspectPnpmMetadata(join(root, name), store, escaped, kind, storeAlias, metadataSeen.get(kind));
             continue;
           }
           if (!name.startsWith("@")) { names.add(name); continue; }

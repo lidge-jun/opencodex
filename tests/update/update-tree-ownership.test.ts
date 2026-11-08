@@ -692,6 +692,19 @@ describe("#4202 install-tree dependency ownership", () => {
     expect(verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"))).toEqual({ ok: true, failures: [] });
   });
 
+  test("verifies a shared global-store group without repeatedly walking every sibling", () => {
+    const store = join(root, "pnpm", "store", "v11"), group = join(store, "links", "large", "node_modules");
+    const pkg = join(group, ...PKG.split("/")); writePackage(pkg, "2.0.0");
+    writeDependency(join(group, "bun"), "bun"); writeDependency(join(group, "zod"), "zod");
+    for (let index = 0; index < 300; index += 1) writeDependency(join(group, `dep${index}`), `dep${index}`);
+    const started = performance.now();
+    expect(verifyPnpmInstallTree(pkg, "2.0.0", store)).toEqual({ ok: true, failures: [] });
+    expect(performance.now() - started).toBeLessThan(10_000);
+    const last = join(group, "dep299", "node_modules"), outside = join(root, "outside", "foreign");
+    mkdirSync(last); writeDependency(outside, "foreign"); symlinkSync(outside, join(last, "foreign"), "dir");
+    expect(verifyPnpmInstallTree(pkg, "2.0.0", store).ok).toBe(false);
+  }, 20_000);
+
   test("refuses a required transitive dependency resolved through an outside ancestor", () => {
     const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
     const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
