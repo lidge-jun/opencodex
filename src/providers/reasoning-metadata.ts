@@ -546,10 +546,18 @@ function isIncompleteStructuredWrapper(text: string): boolean {
   return false;
 }
 
+const EFFORT_PARAM_NAMES = new Set([
+  "reasoning_effort",
+  "reasoning.effort",
+  "reasoning",
+  "reasoning_parameters",
+]);
+
 /**
  * Rejects error envelopes that carry a conflicting code (e.g. permission_denied, insufficient_quota,
- * rate_limit_exceeded, model_not_found, malformed non-string code) so they stay terminal or proceed
- * to combo failover without false reasoning-effort learning or same-target ladder retries (#8173).
+ * rate_limit_exceeded, model_not_found, malformed non-string code) or competing diagnostic parameters
+ * (e.g. reasoning_effort at root with an inner error identifying temperature) so they stay terminal
+ * or proceed to combo failover without false reasoning-effort learning or same-target ladder retries (#8173).
  */
 export function hasConflictingReasoningEffortCode(text: string | undefined): boolean {
   if (!text) return false;
@@ -576,6 +584,8 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
   try {
     const queue: unknown[] = [parsed];
     let examined = 0;
+    let hasEffortParam = false;
+    let hasNonEffortParam = false;
     while (queue.length > 0 && examined < 32) {
       const candidate = queue.shift();
       examined += 1;
@@ -586,21 +596,29 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
           if (item && typeof item === "object") {
             queue.push(item);
           } else if (typeof item === "string") {
+            if (item.length > 16_384) return true;
             const inner = extractJsonEnvelope(item);
             if (inner && typeof inner === "object") {
               queue.push(inner);
             } else if (isIncompleteStructuredWrapper(item)) {
               return true;
             } else {
-              try {
-                const parsedItem = JSON.parse(item);
-                if (parsedItem && typeof parsedItem === "object") {
-                  queue.push(parsedItem);
-                } else {
+              const trimmed = item.trim();
+              if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+                try {
+                  const parsedItem = JSON.parse(item);
+                  if (parsedItem && typeof parsedItem === "object") {
+                    queue.push(parsedItem);
+                  } else {
+                    return true;
+                  }
+                } catch {
                   return true;
                 }
-              } catch {
-                return true;
+              } else {
+                if (/\b(?:permission_denied|insufficient_quota|rate_limit_exceeded|model_not_found|context_length_exceeded)\b/i.test(trimmed)) {
+                  return true;
+                }
               }
             }
           } else {
@@ -610,6 +628,18 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
         continue;
       }
       const rec = candidate as Record<string, unknown>;
+      if (rec.param !== undefined && rec.param !== null) {
+        if (typeof rec.param !== "string") return true;
+        const param = rec.param.trim().toLowerCase();
+        if (param.length > 0) {
+          if (EFFORT_PARAM_NAMES.has(param)) {
+            hasEffortParam = true;
+          } else {
+            hasNonEffortParam = true;
+          }
+        }
+      }
+      if (hasEffortParam && hasNonEffortParam) return true;
       if (rec.code !== undefined && rec.code !== null) {
         if (typeof rec.code !== "string") return true;
         const code = rec.code.trim().toLowerCase().replaceAll("-", "_");
@@ -642,13 +672,6 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
   }
   return false;
 }
-
-const EFFORT_PARAM_NAMES = new Set([
-  "reasoning_effort",
-  "reasoning.effort",
-  "reasoning",
-  "reasoning_parameters",
-]);
 
 function diagnosticTextBlamesReasoningEffort(text: string): boolean {
   if (/unsupported.{0,24}effort/i.test(text)) return true;
@@ -831,8 +854,6 @@ export function isReasoningEffortRejection(text: string | undefined, depth = 0):
 
     if (root.error === undefined || typeof root.error !== "object") {
       if (diagnosticRecordBlamesReasoningEffort(root, depth + 1)) return true;
-    } else if (typeof root.param === "string" && EFFORT_PARAM_NAMES.has(root.param.trim().toLowerCase())) {
-      return true;
     }
 
     return false;

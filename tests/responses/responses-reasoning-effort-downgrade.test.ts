@@ -115,6 +115,16 @@ const SERIALIZED_WRAPPER_ECHOED_PARAM_REFUSAL = JSON.stringify({
 const DETAIL_REASONING_EFFORT_REFUSAL = JSON.stringify({
   detail: "Unsupported reasoning effort",
 });
+const DETAIL_ARRAY_REASONING_EFFORT_REFUSAL = JSON.stringify({
+  detail: ["Unsupported reasoning effort"],
+});
+const CONFLICTING_PARAM_UNRELATED_REFUSAL = JSON.stringify({
+  param: "reasoning_effort",
+  error: {
+    param: "temperature",
+    message: "Invalid temperature.",
+  },
+});
 const ECHOED_REQUEST_CONTENT_REFUSAL = JSON.stringify({
   error: {
     param: "reasoning_effort",
@@ -1227,6 +1237,92 @@ describe("rejected reasoning rungs", () => {
       outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       return outbound.length === 1
         ? new Response(DETAIL_REASONING_EFFORT_REFUSAL, { status: 400, headers: { "content-type": "application/json" } })
+        : success();
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = passthroughConfig();
+    const response = await handleResponses(request(), cfg, logCtx);
+    await response.text();
+
+    expect(outbound).toHaveLength(2);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(effortOf(outbound[1])).toBe("high");
+    expect(response.status).toBe(200);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(true);
+  });
+
+  test("stops before effort replay on conflicting diagnostic parameters (openai-chat)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(CONFLICTING_PARAM_UNRELATED_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = config();
+    const response = await handleResponses(request(), cfg, logCtx);
+    const text = await response.text();
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(text).toContain("Invalid temperature.");
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("stops before effort replay on conflicting diagnostic parameters (openai-responses)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(CONFLICTING_PARAM_UNRELATED_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = passthroughConfig();
+    const response = await handleResponses(request(), cfg, logCtx);
+    const text = await response.text();
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(text).toContain("Invalid temperature.");
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("recovers and replays lower rung on authoritative detail array reasoning effort refusal (openai-chat)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return outbound.length === 1
+        ? new Response(DETAIL_ARRAY_REASONING_EFFORT_REFUSAL, { status: 400, headers: { "content-type": "application/json" } })
+        : success();
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = config();
+    const response = await handleResponses(request(), cfg, logCtx);
+    await response.text();
+
+    expect(outbound).toHaveLength(2);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(effortOf(outbound[1])).toBe("high");
+    expect(response.status).toBe(200);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(true);
+  });
+
+  test("recovers and replays lower rung on authoritative detail array reasoning effort refusal (openai-responses)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return outbound.length === 1
+        ? new Response(DETAIL_ARRAY_REASONING_EFFORT_REFUSAL, { status: 400, headers: { "content-type": "application/json" } })
         : success();
     }) as typeof fetch;
     const logCtx: RequestLogContext = { model: "", provider: "" };
