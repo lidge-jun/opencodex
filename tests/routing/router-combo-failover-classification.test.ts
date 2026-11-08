@@ -466,12 +466,15 @@ describe("definite upstream context overflow", () => {
     expect(comboFailureDecision(502, failedTerminal(prose), { code: "context_length_exceeded" })).toBe("hop");
     expect(comboFailureDecision(400, "context length exceeded", { code: "context_length_exceeded" })).toBe("hop");
     expect(comboFailureDecision(400, `Provider error 400: ${prose}`)).toBe("hop");
+    expect(comboFailureDecision(400, "This is not a timeout: the model's context window is full")).toBe("hop");
+    expect(comboFailureDecision(400, "Request was not accepted because its history is at or past the model's context limit")).toBe("hop");
   });
 
   test("evidence must come from the innermost message, not a stray code token", () => {
     const unrelated = JSON.stringify({ error: { ...unsupportedUser, code: "context_length_exceeded" } });
     expect(comboFailureDecision(400, unrelated)).toBe("stop");
     expect(comboFailureDecision(400, "ordinary invalid request", { code: "context_length_exceeded" })).toBe("stop");
+    expect(comboFailureDecision(400, "Requested tokens should not exceed maximum context length (8192)")).toBe("stop");
     // Reflected prose inside an unrelated body is not the provider's own verdict.
     expect(comboFailureDecision(400, JSON.stringify({ error: { ...unsupportedUser, param: "tools", note: prose } })))
       .toBe("stop");

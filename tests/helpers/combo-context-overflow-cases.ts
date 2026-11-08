@@ -46,7 +46,8 @@ export function registerComboContextOverflowCases<Server>({
     "The request has reached the model context length limit.",
     "Total tokens must not exceed the context window: 9000 > 8192",
     "Total tokens should not exceed the context window: 9000 > 8192",
-    "Requested tokens should not exceed maximum context length (8192)",
+    "This is not a timeout: the model's context window is full",
+    "Request was not accepted because its history is at or past the model's context limit",
     // Devin's opaque context-window refusal: emitted as a structured event with code context_length_exceeded.
     "Devin rejected this turn and its history is at or past the model's context window. Compact the conversation or start a new session.",
   ]) {
@@ -109,6 +110,7 @@ export function registerComboContextOverflowCases<Server>({
     "The input must not exceed the model context window",
     "Prompt tokens can't exceed the context window",
     "Prompt tokens can not exceed the context window",
+    "Requested tokens should not exceed maximum context length (8192)",
     "Your input does not exceed the context window",
     "Your input does not actually exceed the context window",
     "Unsupported parameter: user; supplied value 'The conversation has exceeded this model's context limit.'",
@@ -184,13 +186,14 @@ export function registerComboContextOverflowCases<Server>({
       "No tokens remain and the model's context window is full.",
       "It is not a timeout! The model's context window is full.",
       "It is not a timeout?\nThe model's context window is full.",
+      "This is not a timeout: the model's context window is full.",
+      "Request was not accepted because its history is at or past the model's context limit.",
       "This input is beyond the context window for the selected model.",
       "The request has reached the model context length limit.",
       "The model's context window is full.",
       "This model's context limit has been exceeded.",
       "Total tokens must not exceed the context window: 9000 > 8192",
       "Total tokens should not exceed the context window: 9000 > 8192",
-      "Requested tokens should not exceed maximum context length (8192)",
       "Devin rejected this turn and its history is at or past the model's context window. Compact the conversation or start a new session.",
     ]) {
       expect(isDefiniteContextOverflow(400, message)).toBe(true);
@@ -232,6 +235,7 @@ export function registerComboContextOverflowCases<Server>({
       "The input must not exceed the model context window",
       "Prompt tokens can't exceed the context window",
       "Prompt tokens can not exceed the context window",
+      "Requested tokens should not exceed maximum context length (8192)",
       JSON.stringify({ error: { code: "invalid_value", message: "customer's prompt is too long" } }),
       JSON.stringify({ error: { param: "tools[0].function.name", message: "prompt is too long" } }),
       "Invalid 'tools[0].function.name': 'customer's prompt is too long'.",
