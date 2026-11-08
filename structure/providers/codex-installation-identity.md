@@ -51,7 +51,8 @@ apply the same identity to HTTP headers and a cloned client-metadata map. The se
 identity. `src/server/ws-bridge.ts` isolates explicit Pool header overrides as well.
 Its inbound handshake snapshot also retains caller-supplied `user-agent` and
 `x-codex-app-version`, so reconstructed turns do not lose the original client identity.
-Provider egress still applies its own metadata policy; absent fields are not generated.
+Provider egress applies its own metadata policy without synthesizing absent caller metadata.
+Bun's HTTP transport can still add its default User-Agent when none is supplied.
 `src/server/responses/core-auth.ts` restores User-Agent and provider-selected metadata after
 credential materialization for Responses turns and compact handoffs. The copier fills only
 missing fields, so a selected Pool installation identity is never replaced with the caller's.
