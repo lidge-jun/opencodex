@@ -35,14 +35,18 @@ export function useProvidersFetch({
   const oauthReads = useRef(new Map<string, number>());
   const oauthPublished = useRef(new Map<string, number>());
   const oauthAdmitted = useRef(new Set<string>());
+  const oauthBlocked = useRef(new Set<string>());
   useEffect(() => () => { configRequest.current += 1; }, [apiBase]);
   useLayoutEffect(() => {
     activeTarget.current = target;
-    return () => { activeTarget.current = null; oauthDiscovery.current += 1; oauthAdmitted.current.clear(); };
+    const blocked = oauthBlocked.current;
+    return () => { activeTarget.current = null; oauthDiscovery.current += 1; oauthAdmitted.current.clear(); blocked.clear(); };
   }, [target]);
-  const invalidateOauthStatusReads = useCallback((provider: string) => {
-    if (activeTarget.current !== target) return false;
+  const invalidateOauthStatusReads = useCallback((provider: string, blocked?: boolean) => {
+    if (activeTarget.current !== target || (blocked === undefined && oauthBlocked.current.has(provider))) return false;
     oauthWrites.current.set(provider, (oauthWrites.current.get(provider) ?? 0) + 1);
+    if (blocked === true) oauthBlocked.current.add(provider);
+    if (blocked === false) oauthBlocked.current.delete(provider);
     return true;
   }, [target]);
   const fetchConfig = useCallback(async (): Promise<ProvidersConfigRefreshResult> => {
@@ -84,9 +88,9 @@ export function useProvidersFetch({
         const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${encodeURIComponent(p)}`).catch(() => null);
         const s = sRes ? await readJsonIfOk<OAuthStatus>(sRes) : null;
         if (!s || typeof s.loggedIn !== "boolean") return;
-        if (activeTarget.current !== target || !oauthAdmitted.current.has(p) || !unchanged(p) || read < (oauthPublished.current.get(p) ?? 0)) return;
+        if (activeTarget.current !== target || !oauthAdmitted.current.has(p) || oauthBlocked.current.has(p) || !unchanged(p) || read < (oauthPublished.current.get(p) ?? 0)) return;
         oauthPublished.current.set(p, read);
-        setOauthStatus(current => activeTarget.current === target && oauthAdmitted.current.has(p) && unchanged(p)
+        setOauthStatus(current => activeTarget.current === target && oauthAdmitted.current.has(p) && !oauthBlocked.current.has(p) && unchanged(p)
           && read === oauthPublished.current.get(p) ? { ...current, [p]: s } : current);
       }));
     } catch { /* ignore */ }

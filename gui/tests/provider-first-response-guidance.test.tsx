@@ -359,6 +359,7 @@ describe("ProviderDetails raw ID disambiguation and Providers page integration",
     await act(async () => { logout.click(); });
     await act(async () => { host.querySelector<HTMLButtonElement>("#pws-tab-overview")!.click(); });
     expect(host.textContent).not.toContain("Current accountWork");
+    expect(host.querySelector(".pws-auth-summary")?.textContent).toContain("Not verified");
     await act(async () => { finishLogout(new Response(null, { status: 503 })); await Promise.resolve(); });
     await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
     expect(host.textContent).toContain("Current accountWork");
@@ -762,3 +763,56 @@ describe("ProviderDetails raw ID disambiguation and Providers page integration",
   });
 });
 
+
+test.each(["discovery", "status"] as const)("target switch hides old OAuth identity on the first commit when %s fails", async failure => {
+  let releaseOld!: (response: Response) => void;
+  let late = false;
+  let oldStarted!: () => void;
+  const oldRequested = new Promise<void>(resolve => { oldStarted = resolve; });
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input), "http://localhost");
+    const target = url.pathname.startsWith("/a/") ? "a" : "b";
+    const path = url.pathname.replace(/^\/[ab]/, "");
+    if (path === "/api/config") return Response.json({ port: 0, defaultProvider: "kimi", providers: {
+      kimi: { adapter: "kimi", baseUrl: "https://api.kimi.com", authMode: "oauth" },
+    } });
+    if (path === "/api/providers") return Response.json([{ name: "kimi", adapter: "kimi", authMode: "oauth" }]);
+    if (path === "/api/oauth/providers") return target === "b" && failure === "discovery" ? new Response(null, { status: 503 }) : Response.json({ providers: ["kimi"] });
+    if (path === "/api/oauth/status") {
+      if (target === "b") return new Response(null, { status: 503 });
+      if (late) { oldStarted(); return new Promise<Response>(resolve => { releaseOld = resolve; }); }
+      return Response.json({ loggedIn: true, email: "identity-a@example.test" });
+    }
+    if (path === "/api/oauth/accounts") return new Response(null, { status: 503 });
+    if (path === "/api/selected-models") return Response.json({ selected: {}, available: {}, liveModelCounts: {} });
+    if (path === "/api/provider-presets") return Response.json({ providers: [] });
+    if (path === "/api/models") return Response.json([]);
+    if (path === "/api/provider-quotas") return Response.json({ reports: [] });
+    if (path === "/api/usage") return Response.json({ providers: [], models: [] });
+    if (path === "/api/codex-auth/accounts") return Response.json({ accounts: [] });
+    return Response.json({});
+  }) as typeof fetch;
+  const commits: string[] = [];
+  function Observe({ target }: { target: string }) {
+    useLayoutEffect(() => { commits.push(`${target}:${host.textContent}`); });
+    return null;
+  }
+  const page = (target: string) => <><Providers apiBase={`/${target}`} /><Observe target={target} /></>;
+  await render(page("a"));
+  await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
+  await act(async () => { host.querySelector<HTMLButtonElement>('[role="option"]')!.click(); });
+  expect(host.textContent).toContain("identity-a@example.test");
+  late = true;
+  // Trigger a fresh OAuth read through the existing refresh event by returning to A after B.
+  await render(page("b"));
+  expect(commits.find(value => value.startsWith("b:"))).not.toContain("identity-a@example.test");
+  await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
+  expect(host.textContent).not.toContain("identity-a@example.test");
+  await render(page("a"));
+  await act(async () => { await oldRequested; });
+  const releaseFirstOld = releaseOld;
+  await render(page("b"));
+  await render(page("a"));
+  await act(async () => { releaseFirstOld(Response.json({ loggedIn: true, email: "stale-a@example.test" })); await Promise.resolve(); });
+  expect(host.textContent).not.toContain("stale-a@example.test");
+});

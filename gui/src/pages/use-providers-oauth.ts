@@ -39,7 +39,7 @@ export function useProvidersOAuth({
   setStatus: React.Dispatch<React.SetStateAction<string>>;
   setLoginInfo: React.Dispatch<React.SetStateAction<{ provider: string; url?: string; instructions?: string; deviceCode?: string; browserLaunch?: BrowserLaunch } | null>>;
   setOauthStatus: React.Dispatch<React.SetStateAction<Record<string, OAuthStatus>>>;
-  invalidateOauthStatusReads?: (provider: string) => boolean;
+  invalidateOauthStatusReads?: (provider: string, blocked?: boolean) => boolean;
   beginAccountLogout?: (provider: string) => (() => void) | null;
   notify: (msg: string, ok: boolean) => void;
   fetchConfig: () => Promise<void>;
@@ -264,7 +264,14 @@ export function useProvidersOAuth({
   const logoutOAuth = async (provider: string) => {
     const finishLogout = beginAccountLogout?.(provider);
     if (beginAccountLogout && !finishLogout) return;
-    invalidateOauthStatusReads?.(provider);
+    if (invalidateOauthStatusReads?.(provider, true) === false) { finishLogout?.(); return; }
+    const clearStatus = () => setOauthStatus(current => {
+      if (!(provider in current)) return current;
+      const next = { ...current };
+      delete next[provider];
+      return next;
+    });
+    clearStatus();
     // Invalidate any in-flight login poll so a late completion cannot reseed accounts.
     bumpLoginGeneration(provider);
     setBusy(current => current === provider ? null : current);
@@ -274,16 +281,23 @@ export function useProvidersOAuth({
       const res = await fetch(`${apiBase}/api/oauth/logout?provider=${encodeURIComponent(provider)}`, { method: "POST" });
       if (!res.ok) {
         notify(t("prov.logoutFail", { provider: oauthLabel(provider) }), false);
-        return;
+      } else {
+        success = true;
       }
-      success = true;
     } catch {
       notify(t("prov.logoutFail", { provider: oauthLabel(provider) }), false);
     } finally {
       finishLogout?.();
-      if (!success) void fetchAccountSets([provider]).catch(() => {});
     }
-    if (!success) return;
+    // A read started while the server was processing logout can still describe
+    // the old account. Only a read started after settlement can verify status.
+    if (invalidateOauthStatusReads?.(provider, false) === false) return;
+    clearStatus();
+    if (!success) {
+      void fetchAccountSets([provider]).catch(() => {});
+      void fetchOauth();
+      return;
+    }
     try {
       await Promise.all([
         fetchAccountSets([provider]), fetchOauth(), fetchConfig(), fetchProviderQuotas(true),

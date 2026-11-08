@@ -453,9 +453,9 @@ export default function ProviderOverview({
                 : item.authMode === "oauth"
                   ? (displayEmail
                     ? t("pws.loggedInAs", { email: displayEmail })
-                    : oauth?.loggedIn
+                    : oauth?.loggedIn === true
                       ? t("pws.loggedInTitle")
-                      : t("pws.notLoggedIn"))
+                      : oauth?.loggedIn === false ? t("pws.notLoggedIn") : t("startup.unverified"))
                   : item.hasApiKey
                     ? t("pws.apiKeyConfigured")
                     : authModeLabel(item, t)}
