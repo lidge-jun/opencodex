@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { armClaudeCodeBaseline, getConfigPath, loadConfig, mutatePersistedConfig, saveConfig, saveConfigPreservingClaudeCode, validateConfigCandidate } from "../../src/config";
+import { armClaudeCodeBaseline, getConfigPath, initializePersistedConfigIfMissing, loadConfig, mutatePersistedConfig, saveConfig, saveConfigPreservingClaudeCode, validateConfigCandidate } from "../../src/config";
 import { resolveTelemetryStatus } from "../../src/telemetry/consent";
 import { recordPendingTelemetryDecision, withPendingTelemetryDecision } from "../../src/telemetry/state";
 import type { OcxConfig, OcxTelemetryConfig } from "../../src/types";
@@ -175,6 +175,31 @@ test("a save that creates config.json never turns a pending decline into an acce
     removeTreeWithRetry(getConfigPath());
     const declinedSnapshot = { ...seed(), telemetry: structuredClone(declined) } as OcxConfig;
     saveConfig(declinedSnapshot);
+    expect((JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig).telemetry).toEqual(declined);
+  } finally {
+    if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = oldHome;
+    removeTreeWithRetry(home);
+  }
+});
+
+test("creating config.json from an in-memory config never introduces a telemetry decision", () => {
+  const oldHome = process.env.OPENCODEX_HOME;
+  const home = mkdtempSync(join(tmpdir(), "ocx-telemetry-live-save-"));
+  process.env.OPENCODEX_HOME = home;
+  try {
+    // A running proxy holds an accept in memory while the held decision on disk is a decline.
+    recordPendingTelemetryDecision(declined, home);
+    const live = { ...seed(), telemetry: structuredClone(accepted) } as OcxConfig;
+    expect(initializePersistedConfigIfMissing(live)).toBe("created");
+    expect((JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig).telemetry).toBeUndefined();
+    expect(live.telemetry).toBeUndefined();
+    expect(resolveTelemetryStatus(withPendingTelemetryDecision(loadConfig(), home), {})).toMatchObject({ decision: "declined", effective: false });
+
+    // An in-memory decline is kept.
+    removeTreeWithRetry(getConfigPath());
+    const declinedLive = { ...seed(), telemetry: structuredClone(declined) } as OcxConfig;
+    expect(initializePersistedConfigIfMissing(declinedLive)).toBe("created");
     expect((JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig).telemetry).toEqual(declined);
   } finally {
     if (oldHome === undefined) delete process.env.OPENCODEX_HOME;

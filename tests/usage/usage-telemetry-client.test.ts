@@ -1042,6 +1042,15 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
     }
   });
 
+  test("recording an opted-out owner drops dead pids and keeps the list within the readable limit", () => {
+    const since = "2026-11-01T00:00:00.000Z";
+    const dead = Array.from({ length: 64 }, (_, i) => ({ pid: 2_000_000_000 + i, since }));
+    writeTelemetryState({ ...readTelemetryState(home), envOptOutOwners: dead }, home);
+    recordTelemetryEnvOptOut(home, NOW, process.pid);
+    expect(readTelemetryStateFile(home).unreadable).toBe(false);
+    expect(readTelemetryState(home).envOptOutOwners?.map(owner => owner.pid)).toEqual([process.pid]);
+  });
+
   test("a decision over a state path that cannot be rewritten still completes", () => {
     const statePath = telemetryStatePath(home);
     mkdirSync(statePath);

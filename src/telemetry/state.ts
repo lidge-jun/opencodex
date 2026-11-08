@@ -283,7 +283,11 @@ export function recordTelemetryEnvOptOut(configDir = getConfigDir(), now = Date.
   if (owner === undefined) {
     state.envOptOutActiveSince ??= new Date(now).toISOString();
   } else {
-    const owners = (state.envOptOutOwners ?? []).filter(entry => entry.pid !== owner);
+    // Drop owners that have exited (their days through today are covered above) and stay within the
+    // 64 entries a reader accepts.
+    const owners = (state.envOptOutOwners ?? [])
+      .filter(entry => entry.pid !== owner && isProcessAlive(entry.pid))
+      .slice(-63);
     state.envOptOutOwners = [...owners, { pid: owner, since: new Date(now).toISOString() }];
   }
   writeTelemetryState(state, configDir, now);

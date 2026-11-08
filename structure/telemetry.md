@@ -59,7 +59,9 @@ Only a human can transition an undecided install to active sending:
   never introduces a decision: before the file exists the decision is held in
   `telemetry-state.json`, where another process may have replaced it, and a file that cannot be read
   may hold a decline the snapshot never saw. Only a snapshot decline survives; any other block is
-  dropped, and the held decision or the notice applies.
+  dropped, and the held decision or the notice applies. The same rule covers
+  `initializePersistedConfigIfMissing`, which creates `config.json` from the running config, and the
+  consent route never copies a decision it only held as pending into the running config.
 
 ## Identity, aggregation, and scheduling
 
