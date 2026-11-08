@@ -245,7 +245,7 @@ export async function fetchProviderModelsWithAuth(
     return merged;
   };
   if (prov.adapter === "trae-cn" && prov.liveModels !== false) {
-    return fetchTraeCnProviderModels(captured, ttlMs, contextCap, configured, withConfiguredRetention);
+    return fetchTraeCnProviderModels(captured, ttlMs, contextCap, configured, withConfiguredRetention, resolveAuth.kind === "refreshing");
   }
   // Static catalogs never need an OAuth refresh or an upstream model request. Clear any
   // discovery failure left by an older live configuration even when the account is logged out.

@@ -6,8 +6,8 @@ import { PassThrough, Writable } from "node:stream";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { createTraeCnAdapter } from "../../src/adapters/trae-cn/adapter";
 import * as traeClient from "../../src/adapters/trae-cn/client";
-import { traeCnChildEnv } from "../../src/adapters/trae-cn/profile";
-import { fetchProviderModels, fetchProviderModelsWithAuth, refreshingModelsAuthResolver } from "../../src/codex/catalog/provider-models";
+import { resolveTraeCli, traeCnChildEnv } from "../../src/adapters/trae-cn/profile";
+import { fetchProviderModels, fetchProviderModelsWithAuth, observedModelsAuthResolver, refreshingModelsAuthResolver } from "../../src/codex/catalog/provider-models";
 import { captureProviderGather } from "../../src/codex/catalog/gather-capture";
 import { captureModelCacheGeneration, clearModelCache, getFreshCached, setCached } from "../../src/codex/model-cache";
 import { probeTraeCnProvider } from "../../src/server/management/trae-cn-provider-probe";
@@ -233,7 +233,7 @@ describe("TRAE CN ACP regression contract", () => {
     expect(existsSync(String(fixture.options()!.cwd))).toBe(false);
   });
 
-  for (const phase of ["initialize", "session/new", "session/prompt"]) {
+  for (const phase of ["initialize", "session/new", "session/set_model", "session/prompt"]) {
     test(`abort during ${phase} tears down the child and directories`, async () => {
       const controller = new AbortController();
       const fixture = traeFixture(request => {
@@ -243,14 +243,16 @@ describe("TRAE CN ACP regression contract", () => {
       });
       const budget = fakeSendBudget();
       let sends = 0;
+      const events: AdapterEvent[] = [];
       let deadlineReached = false;
       const watchdog = setTimeout(() => { deadlineReached = true; fixture.child.kill(); }, 1000);
       try {
         await createTraeCnAdapter(config(), { ...fixture.deps, timeoutMs: 60_000 }).runTurn!(traeRequest(), traeMeta({
           abortSignal: controller.signal, sendBudget: budget.budget, onPhysicalSend: () => { sends++; },
-        }), () => undefined);
+        }), event => events.push(event));
       } finally { clearTimeout(watchdog); }
       expect(deadlineReached).toBe(false);
+      expect(events).toEqual([]);
       expect(fixture.child.killed).toBe(true);
       expect(existsSync(String(fixture.options()!.env!.HOME))).toBe(false);
       expect(existsSync(String(fixture.options()!.cwd))).toBe(false);
@@ -272,11 +274,12 @@ describe("TRAE CN ACP regression contract", () => {
     expect(budget.state).toEqual({ used: 0, refunded: 1, closed: 1 });
   });
 
-  for (const kind of ["tools", "required", "toolCall", "toolResult", "image", "audio", "video", "document", "oversized"]) {
+  for (const kind of ["tools", "required", "toolCall", "toolResult", "image", "audio", "video", "document", "oversized", "output limit"]) {
     test(`rejects ${kind} before starting the CLI`, async () => {
       const request = traeRequest();
       if (kind === "tools") request.context.tools = [{ name: "read_file", description: "Read a file", inputSchema: { type: "object" } }];
       if (kind === "required") request.options.toolChoice = "required";
+      if (kind === "output limit") request.options.maxOutputTokens = 32;
       if (kind === "toolCall") request.context.messages = [{ role: "assistant", content: [{ type: "toolCall", id: "call", name: "read_file", arguments: {} }], timestamp: 0 }];
       if (kind === "toolResult") request.context.messages = [{ role: "toolResult", toolCallId: "call", toolName: "read_file", content: "result", timestamp: 0 }];
       if (kind === "image" || kind === "audio") request.context.messages = [{ role: "user", content: [{ type: kind, data: "fixture", mimeType: "image/png" }], timestamp: 0 }] as OcxParsedRequest["context"]["messages"];
@@ -359,6 +362,35 @@ describe("TRAE CN ACP regression contract", () => {
     expect(fixture.child.killed).toBe(true);
   });
 
+  test("an upstream cancellation without client abort emits a terminal event and usage", async () => {
+    const fixture = traeFixture(request => {
+      if (request.method !== "session/prompt") return false;
+      fixture.send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "cancelled", usage: { inputTokens: 3, outputTokens: 0, totalTokens: 3 } } });
+      return true;
+    });
+    const events: AdapterEvent[] = [];
+    await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+    expect(events).toMatchObject([{ type: "incomplete", reason: "upstream_cancelled", retryable: false, usage: { inputTokens: 3, outputTokens: 0 } }]);
+  });
+
+  for (const selected of ["test-model", "unexpected-model"]) {
+    test(`model-selection notification validates ${selected}`, async () => {
+      const fixture = traeFixture(request => {
+        if (request.method === "session/set_model") fixture.send({ jsonrpc: "2.0", method: "session/update",
+          params: { sessionId: "fixture-session", update: { sessionUpdate: "current_model_update", currentModelId: selected } } });
+        return false;
+      });
+      const events: AdapterEvent[] = [];
+      await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+      expect(events.at(-1)).toMatchObject(selected === "test-model" ? { type: "done" } : { type: "error", code: "trae_model_changed" });
+    });
+  }
+
+  test("relative PATH entries resolve before the CLI changes its working directory", () => {
+    expect(resolveTraeCli({ platform: "linux", env: { PATH: "./node_modules/.bin" }, exists: () => true }))
+      .toBe(`${process.cwd()}/node_modules/.bin/traecli`);
+  });
+
   for (const kind of ["tool_call", "session/request_permission"]) {
     test(`server ${kind} is rejected and the session is closed`, async () => {
       const fixture = traeFixture(request => {
@@ -385,6 +417,21 @@ describe("TRAE CN ACP regression contract", () => {
     expect(await turn).toBeInstanceOf(Error);
     expect(fixture.child.stdout!.destroyed).toBe(true);
     expect(existsSync(String(fixture.options()!.cwd))).toBe(false);
+  });
+
+  test("POSIX shutdown kills remaining group members after the leader exits", async () => {
+    const fixture = traeFixture();
+    Object.assign(fixture.child, { pid: 424242 });
+    const signals: NodeJS.Signals[] = [];
+    const session = await traeClient.openTraeSession(config().baseUrl, { ...fixture.deps, platform: "linux",
+      signalPosixProcessGroup: (pid, signal) => {
+        expect(pid).toBe(424242);
+        signals.push(signal);
+        if (signal === "SIGTERM") fixture.child.kill();
+      },
+    });
+    await session.close();
+    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
   });
 
   test("Windows dispatchers use process-tree termination", async () => {
@@ -454,6 +501,19 @@ describe("TRAE CN ACP regression contract", () => {
     await fetchProviderModels("trae-cn", config(), 60_000);
     expect(open).toHaveBeenCalledTimes(1);
   });
+
+  for (const warm of [false, true]) {
+    test(`observed catalogs never launch or refresh CLI authentication (warm=${warm})`, async () => {
+      const open = spyOn(traeClient, "openTraeSession").mockRejectedValue(new Error("observed gather must not launch"));
+      if (warm) setCached("trae-cn", [{ id: "cached-model", provider: "trae-cn" }], Date.now(), captureModelCacheGeneration("trae-cn"));
+      const auth = observedModelsAuthResolver(null, []);
+      const captured = captureProviderGather("trae-cn", config(), auth);
+      const result = await fetchProviderModelsWithAuth(captured, 60_000, undefined, auth);
+      expect(open).not.toHaveBeenCalled();
+      expect(result.outcome.state).toBe(warm ? "authoritative" : "degraded");
+      expect(result.models.map(model => model.id)).toContain(warm ? "cached-model" : "test-model");
+    });
+  }
 
   for (const cacheState of ["fresh", "stale", "cooldown"]) {
     test(`the ${cacheState} cache reapplies lower caps and retained models`, async () => {

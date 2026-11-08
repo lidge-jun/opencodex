@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import { whichFromPath, type PathLookupDeps } from "../coding-agent/profile";
 import { baseScopedEnv } from "../coding-agent/turn";
 
@@ -17,9 +17,9 @@ export function traeCnChildEnv(): Record<string, string> {
 
 /** Find an installed CLI on PATH or at its standard user-local installation path. */
 export function resolveTraeCli(deps: PathLookupDeps = {}): string | undefined {
-  const onPath = whichFromPath("traecli", deps);
-  if (onPath) return onPath;
   const platform = deps.platform ?? process.platform;
+  const onPath = whichFromPath("traecli", deps);
+  if (onPath) return (platform === "win32" ? win32 : posix).resolve(onPath);
   const home = (deps.env ?? process.env)[platform === "win32" ? "USERPROFILE" : "HOME"];
   if (!home) return undefined;
   const local = join(home, ".local", "bin", platform === "win32" ? "traecli.exe" : "traecli");

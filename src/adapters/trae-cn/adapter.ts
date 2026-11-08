@@ -29,6 +29,9 @@ function replayText(parsed: OcxParsedRequest): string {
 
 /** Refuse unsupported input before starting a CLI or reserving a send. */
 function validateInput(parsed: OcxParsedRequest): { message: string; code: string } | undefined {
+  if (parsed.options.maxOutputTokens !== undefined) {
+    return { message: "TRAE CN ACP does not expose an output-token limit.", code: "unsupported_max_output_tokens" };
+  }
   if (requiresToolCall(parsed.options.toolChoice)) {
     return { message: "TRAE CN ACP does not currently expose client tools.", code: "unsupported_tool_choice" };
   }
@@ -96,6 +99,7 @@ export function createTraeCnAdapter(provider: OcxProviderConfig, deps: TraeCnAda
           await session.close();
         }
       } catch (error) {
+        if (incoming.abortSignal?.aborted) return;
         if (error instanceof SendBudgetExhaustedError) throw error;
         emit(errorEvent(error));
       } finally {

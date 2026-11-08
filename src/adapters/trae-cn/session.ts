@@ -20,6 +20,7 @@ export interface TraeAcpDeps {
   killGraceMs?: number;
   reapTimeoutMs?: number;
   killWindowsProcessTree?: (pid: number) => void;
+  signalPosixProcessGroup?: (pid: number, signal: NodeJS.Signals) => void;
   makeTempDir?: typeof mkdtemp;
 }
 
@@ -157,6 +158,10 @@ class TraeAcpClient {
     if (this.closing) return this.closing;
     this.fail(new TraeAcpError("TRAE CN ACP session closed", "trae_acp_closed"));
     this.closing = (async () => {
+      const signalGroup = (pid: number, signal: NodeJS.Signals): void => {
+        if (this.deps.signalPosixProcessGroup) this.deps.signalPosixProcessGroup(pid, signal);
+        else process.kill(-pid, signal);
+      };
       const terminate = (signal: NodeJS.Signals): void => {
         const pid = this.child.pid;
         if (pid && (this.deps.platform ?? process.platform) === "win32") {
@@ -167,7 +172,7 @@ class TraeAcpClient {
             return;
           } catch { /* Fall back to the direct child if tree termination is unavailable. */ }
         } else if (pid) {
-          try { process.kill(-pid, signal); return; } catch { /* The process group may already be gone. */ }
+          try { signalGroup(pid, signal); return; } catch { /* The process group may already be gone. */ }
         }
         try { this.child.kill(signal); } catch { /* Already exited. */ }
       };
@@ -176,6 +181,9 @@ class TraeAcpClient {
       if (!await waitBounded(this.lifecycle, this.deps.killGraceMs ?? 2000)) {
         terminate("SIGKILL");
         await waitBounded(this.lifecycle, reapTimeoutMs);
+      } else if (this.child.pid && (this.deps.platform ?? process.platform) !== "win32") {
+        // The group can outlive its leader, even when the leader closed every pipe.
+        try { signalGroup(this.child.pid, "SIGKILL"); } catch { /* The group has already exited. */ }
       }
       this.child.stdin?.destroy();
       this.child.stdout?.destroy();
@@ -273,6 +281,12 @@ export async function openTraeSession(
             ]);
             if (!frame) break;
             if (frame.kind !== "update" || frame.sessionId !== sessionId) continue;
+            if (frame.update.sessionUpdate === "current_model_update") {
+              if (frame.update.currentModelId !== modelId) {
+                throw new TraeAcpError("TRAE CN changed the selected model unexpectedly.", "trae_model_changed");
+              }
+              continue;
+            }
             for (const event of traePromptEvents(sessionId, frame.update)) {
               if (event.type === "text_delta") output = true;
               emit(event);
@@ -285,8 +299,12 @@ export async function openTraeSession(
           }
           const result = await completion;
           const stop = traeStopReason(result);
-          if (stop === "cancelled") return;
           const usage = traeUsage(result);
+          if (stop === "cancelled") {
+            if (!signal?.aborted) emit({ type: "incomplete", reason: "upstream_cancelled", retryable: false,
+              message: "TRAE CN cancelled the turn.", ...(usage ? { usage } : {}) });
+            return;
+          }
           if (stop === "refusal") {
             emit({ type: "incomplete", reason: "content_filter", retryable: false,
               message: "TRAE CN refused the turn.", ...(usage ? { usage } : {}) });

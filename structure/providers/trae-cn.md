@@ -16,14 +16,21 @@ and no-verbosity limits after config hints. Vision classification and preprocess
 limit before per-model overrides; only sidecar publication can advertise image attachments.
 The CLI inherits `TRAE_HOME` when selected by the operator. Provider `proxy`/`noProxy` overrides
 are refused before CLI startup, including explicit direct routing.
+Observed-auth gathers use only cached evidence; only refreshing gathers and explicit connection
+probes may launch the CLI. Relative PATH entries resolve before the child changes its cwd.
 
 Cancellation is bound before the first initialization RPC. Pending RPCs fail as shutdown starts;
 stdin errors enter the same failure path. Shutdown terminates the POSIX process group or Windows
-process tree and bounds both process and stream waits. A failed workspace allocation removes an
+process tree and bounds both process and stream waits. A final SIGKILL terminates surviving POSIX
+group members even after the leader exits. A failed workspace allocation removes an
 already-created owned HOME. Prompt dispatch alone consumes and reports the reserved send; startup
 failure or unavailable models return unused reservations. Replay over 1,000,000 UTF-16 code units is
 rejected before startup. Unexpected EOF diagnostics retain bounded, redacted stderr after process
 cleanup, including stderr that arrives after stdout closes.
+Client cancellation emits no provider error; an upstream cancellation without client abort emits
+an incomplete event with usage. Explicit output-token limits are refused before startup.
+Model-selection notifications must match the requested model. The finite CLI tool denylist and
+disabled ACP client capabilities do not sandbox CLI-side hooks or unlisted vendor tools.
 
 `src/server/management/trae-cn-provider-probe.ts` opens and closes a direct ACP session for the
 connection test and replaces the unchanged generation's cached roster after success. It requests

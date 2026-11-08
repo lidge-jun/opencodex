@@ -24,6 +24,7 @@ export async function fetchTraeCnProviderModels(
   contextCap: number | undefined,
   configured: CatalogModel[],
   withConfiguredRetention: (models: CatalogModel[]) => CatalogModel[],
+  allowDiscovery: boolean,
 ): Promise<ProviderModelsResult> {
   const { name, provider, metadataModelIdCaseFold, metadataConfigDir } = captured;
   const observed = (models: CatalogModel[], state: ProviderModelsResult["outcome"]["state"]): ProviderModelsResult => ({
@@ -39,6 +40,8 @@ export async function fetchTraeCnProviderModels(
   const fresh = getFreshCached(name, ttlMs, Date.now());
   if (fresh) return observed(fresh, "authoritative");
   const stale = getStaleCached(name);
+  // Observed gathers cannot bind the CLI's live sign-in to their captured auth snapshot.
+  if (!allowDiscovery) return observed(stale ?? configured, "degraded");
   if (isModelsFetchCoolingDown(name)) return observed(stale ?? configured, "degraded");
   const generation = captureModelCacheGeneration(name);
   try {
