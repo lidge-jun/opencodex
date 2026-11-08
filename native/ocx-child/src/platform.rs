@@ -114,6 +114,49 @@ impl Drop for SecretBytes {
     }
 }
 
+/// A secret string that is wiped on drop, so every copy of it (a clone, or a state read that is
+/// dropped) is scrubbed. Serialized as a plain string; `Debug` never prints it.
+#[derive(Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct SecretString(String);
+
+impl SecretString {
+    pub fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for SecretString {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl std::ops::Deref for SecretString {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SecretString(<redacted>)")
+    }
+}
+
+impl Drop for SecretString {
+    fn drop(&mut self) {
+        // SAFETY: Zero bytes are valid UTF-8, so the string stays valid while it is wiped.
+        volatile_zero_bytes(unsafe { self.0.as_bytes_mut() });
+    }
+}
+
 pub fn volatile_zero_bytes(buf: &mut [u8]) {
     for byte in buf.iter_mut() {
         // SAFETY: `byte` is a valid mutable reference to an initialized `u8` inside `buf`.
@@ -1096,7 +1139,7 @@ pub fn spawn_detached_serve(
     opencodex_home: &Path,
     codex_home: &Path,
     listen_port: u16,
-    start_line: &str,
+    start_line: &[u8],
 ) -> Result<std::process::Child, String> {
     let mut cmd = Command::new(exe);
     cmd.arg("serve")
@@ -1135,9 +1178,7 @@ pub fn spawn_detached_serve(
         .spawn()
         .map_err(|e| format!("failed to spawn detached ocx-child serve: {e}"))?;
     let write_result = match child.stdin.as_mut() {
-        Some(stdin) => stdin
-            .write_all(start_line.as_bytes())
-            .and_then(|()| stdin.flush()),
+        Some(stdin) => stdin.write_all(start_line).and_then(|()| stdin.flush()),
         None => Err(std::io::Error::other("missing child stdin")),
     };
     if let Err(e) = write_result {

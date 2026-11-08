@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use crate::http_wire::{read_bounded_body, read_response_head, response_framing};
 use crate::platform::{
-    constant_time_eq, now_epoch_ms, process_is_alive, random_hex, spawn_detached_serve,
+    SecretBytes, constant_time_eq, now_epoch_ms, process_is_alive, random_hex, spawn_detached_serve,
 };
 use crate::relay_auth::compute_child_shutdown_proof;
 use crate::state::{ChildPaths, ChildStateV1, write_child_state};
@@ -274,6 +274,15 @@ impl Drop for PendingDaemon {
     }
 }
 
+/// Concatenate parts into a buffer allocated once at its final size and wiped on drop.
+fn secret_line(parts: &[&[u8]]) -> SecretBytes {
+    let mut line = Vec::with_capacity(parts.iter().map(|p| p.len()).sum());
+    for part in parts {
+        line.extend_from_slice(part);
+    }
+    SecretBytes::new(line)
+}
+
 /// Stop the owned daemon and start a new generation. The new generation is recorded in
 /// state before the spawn (the child's start gate requires it) and the PID after readiness;
 /// the caller commits once its own durable work is done.
@@ -297,17 +306,19 @@ pub fn start_or_rollover_daemon(
     state.daemon_started_at_ms = None;
     state.daemon_generation = Some(generation.clone());
     write_child_state(&paths.state_file, state)?;
-    let start_line = format!(
-        "ocx-child-start/1 {generation} {}
-",
-        state.shutdown_secret
-    );
+    let start_line = secret_line(&[
+        b"ocx-child-start/1 ",
+        generation.as_bytes(),
+        b" ",
+        state.shutdown_secret.as_bytes(),
+        b"\n",
+    ]);
     let spawned = spawn_detached_serve(
         &exe,
         &paths.opencodex_home,
         &paths.codex_home,
         state.listen_port,
-        &start_line,
+        start_line.as_slice(),
     )?;
     let spawned_pid = spawned.id();
     let mut pending = PendingDaemon {

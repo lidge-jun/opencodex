@@ -276,10 +276,6 @@ struct AttachRollbackRecord {
 
 impl Drop for AttachRollbackRecord {
     fn drop(&mut self) {
-        if let Some(state) = &mut self.prior_state {
-            let mut secret = std::mem::take(&mut state.shutdown_secret).into_bytes();
-            volatile_zero_bytes(&mut secret);
-        }
         for bytes in [
             &mut self.journal,
             &mut self.config,
@@ -307,10 +303,6 @@ fn rollback_pending(paths: &ChildPaths) -> Result<bool, String> {
 
 impl Drop for AttachRollbackSnapshot {
     fn drop(&mut self) {
-        if let Some(state) = &mut self.prior_state {
-            let mut secret = std::mem::take(&mut state.shutdown_secret).into_bytes();
-            volatile_zero_bytes(&mut secret);
-        }
         for bytes in [
             &mut self.journal,
             &mut self.config,
@@ -902,7 +894,7 @@ fn attach_locked(guard: &mut CodexHomeGuard, request: AttachRequest) -> Result<(
         catalog_synced_at: now_iso.clone(),
         daemon_pid: existing_pid,
         daemon_started_at_ms: None,
-        shutdown_secret,
+        shutdown_secret: shutdown_secret.into(),
         parity_sequence: 0,
         pending_operation: None,
         daemon_generation: None,

@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::codex_settings::HomeCodexSettingsDocument;
-use crate::platform::{SecretBytes, reject_symlink, write_private_atomic};
+use crate::platform::{
+    SecretBytes, SecretString, reject_symlink, volatile_zero_bytes, write_private_atomic,
+};
 use crate::relay_auth::token_fingerprint_hex;
 
 pub const CHILD_STATE_SCHEMA: &str = "ocx.child.state/1";
@@ -90,7 +92,7 @@ pub struct ChildStateV1 {
     pub catalog_synced_at: String,
     pub daemon_pid: Option<u32>,
     pub daemon_started_at_ms: Option<u64>,
-    pub shutdown_secret: String,
+    pub shutdown_secret: SecretString,
     pub parity_sequence: u64,
     pub pending_operation: Option<String>,
     pub applied_settings: Option<AppliedSettingsRecord>,
@@ -119,11 +121,11 @@ pub fn read_child_state(path: &Path) -> StateReadOutcome {
         return StateReadOutcome::Invalid(e);
     }
     let bytes = match fs::read(path) {
-        Ok(b) => b,
+        Ok(b) => SecretBytes::new(b),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return StateReadOutcome::Absent,
         Err(e) => return StateReadOutcome::Invalid(format!("unreadable state.json: {e}")),
     };
-    match serde_json::from_slice::<ChildStateV1>(&bytes) {
+    match serde_json::from_slice::<ChildStateV1>(bytes.as_slice()) {
         Ok(st) if st.schema != CHILD_STATE_SCHEMA => {
             StateReadOutcome::Invalid(format!("unsupported schema: {}", st.schema))
         }
@@ -145,7 +147,9 @@ pub fn write_child_state(path: &Path, state: &ChildStateV1) -> Result<(), String
     let mut bytes = serde_json::to_vec_pretty(state)
         .map_err(|e| format!("failed to serialize state.json: {e}"))?;
     bytes.push(b'\n');
-    write_private_atomic(path, &bytes)
+    let result = write_private_atomic(path, &bytes);
+    volatile_zero_bytes(&mut bytes);
+    result
 }
 
 pub fn is_valid_link_token_format(raw_token: &str) -> bool {

@@ -339,7 +339,7 @@ fn untrusted_health_pid_never_authorizes_signalling_an_unrelated_process() {
         catalog_synced_at: String::new(),
         daemon_pid: Some(unrelated.id()),
         daemon_started_at_ms: None,
-        shutdown_secret: "a".repeat(48),
+        shutdown_secret: "a".repeat(48).into(),
         parity_sequence: 0,
         pending_operation: None,
         applied_settings: None,
@@ -1081,4 +1081,40 @@ fn full_lifecycle_sse_relay_spoof_rejection_sync_rollover_and_offline_1798_detac
     assert!(!codex_home.join("opencodex-catalog.json").exists());
     assert!(!codex_home.join("models_cache.json").exists());
     let _ = fs::remove_dir_all(&scratch);
+}
+
+#[cfg(unix)]
+#[test]
+fn child_state_debug_redacts_the_shutdown_secret_and_keeps_the_wire_format() {
+    let secret = "0123456789abcdef".repeat(3);
+    let state = ChildStateV1 {
+        schema: CHILD_STATE_SCHEMA.to_owned(),
+        link_id: "lnk_0123456789abcdef".to_owned(),
+        api_key_id: "link:t".to_owned(),
+        token_fingerprint: "fingerprint".to_owned(),
+        tunnel_port: 12345,
+        listen_port: 10100,
+        connected_at: String::new(),
+        catalog_fingerprint: String::new(),
+        catalog_synced_at: String::new(),
+        daemon_pid: None,
+        daemon_started_at_ms: None,
+        shutdown_secret: secret.clone().into(),
+        parity_sequence: 0,
+        pending_operation: None,
+        applied_settings: None,
+        daemon_generation: None,
+    };
+    let debug = format!("{state:?}");
+    assert!(
+        !debug.contains(&secret),
+        "Debug printed the secret: {debug}"
+    );
+    let json: serde_json::Value = serde_json::to_value(&state).unwrap();
+    assert_eq!(
+        json["shutdownSecret"],
+        serde_json::Value::String(secret.clone())
+    );
+    let back: ChildStateV1 = serde_json::from_value(json).unwrap();
+    assert_eq!(back, state);
 }
