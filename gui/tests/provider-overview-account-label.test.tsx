@@ -3,14 +3,14 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import ProviderDetails from "../src/components/provider-workspace/ProviderDetails";
-import type { OAuthAccountRow } from "../src/components/provider-workspace/types";
+import type { AccountLoadState, OAuthAccountRow } from "../src/components/provider-workspace/types";
 import { LanguageProvider } from "../src/i18n/provider";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 
 /**
  * #8286: the Overview of a Claude pool named no account at all, while its Accounts rows show
- * the alias. The Overview now names the active account with the row label (alias, then the
- * server-masked identity, then the ordinal) and still never renders the login email.
+ * the alias. A verified roster supplies a separate current-account field using the row label
+ * (alias, then masked identity, then ordinal), without exposing the login email.
  */
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -85,7 +85,13 @@ afterEach(async () => {
 });
 
 /** Mounts ProviderDetails on its default Overview tab and returns the rendered text. */
-async function overviewText(item: WorkspaceItem, accounts: OAuthAccountRow[], oauthEmail?: string): Promise<string> {
+async function overviewText(
+  item: WorkspaceItem,
+  accounts: OAuthAccountRow[],
+  oauthEmail?: string,
+  accountLoadState: AccountLoadState = "ready",
+  loggedIn: boolean | null = true,
+): Promise<string> {
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     root = createRoot(host);
@@ -104,8 +110,8 @@ async function overviewText(item: WorkspaceItem, accounts: OAuthAccountRow[], oa
           onDeselect={() => {}}
           apiBase=""
           accounts={accounts}
-          accountLoadState="ready"
-          oauth={{ loggedIn: true }}
+          accountLoadState={accountLoadState}
+          oauth={{ loggedIn: loggedIn ?? undefined }}
           oauthEmail={oauthEmail}
         />
       </LanguageProvider>,
@@ -116,38 +122,69 @@ async function overviewText(item: WorkspaceItem, accounts: OAuthAccountRow[], oa
   return host.textContent ?? "";
 }
 
+function currentAccount(): string | undefined {
+  const row = Array.from(host.querySelectorAll(".pws-kv-row"))
+    .find((entry) => entry.querySelector("dt")?.textContent === "Current account");
+  return row?.querySelector("dd")?.textContent ?? undefined;
+}
+
 for (const item of [POOL_A, POOL_B]) {
   const email = "second@" + item.name + ".test";
 
   test(`${item.name} Overview names the active account by its alias`, async () => {
     const text = await overviewText(item, rows(item.name, { alias: "Work", maskedLabel: "s***d@example.test" }), email);
-    expect(text).toContain("OAuth · Work");
-    expect(text).toContain("Logged in as Work");
+    expect(currentAccount()).toBe("Work");
+    expect(text).not.toContain("Logged in as Work");
     expect(text).not.toContain("Spare");
     expect(text).not.toContain(email);
   });
 
   test(`${item.name} Overview falls back to the masked label, then the ordinal, never the email`, async () => {
     const masked = await overviewText(item, rows(item.name, { maskedLabel: "s***d@example.test" }), email);
-    expect(masked).toContain("Logged in as s***d@example.test");
+    expect(currentAccount()).toBe("s***d@example.test");
     expect(masked).not.toContain(email);
     await act(async () => { root!.unmount(); });
     root = null;
 
     const ordinal = await overviewText(item, rows(item.name, {}), email);
-    expect(ordinal).toContain("Logged in as Account 2");
+    expect(currentAccount()).toBe("Account 2");
     expect(ordinal).not.toContain(email);
   });
 
   test(`${item.name} Overview treats a blank alias as missing`, async () => {
     const text = await overviewText(item, rows(item.name, { alias: "   ", maskedLabel: "s***d@example.test" }), email);
-    expect(text).toContain("Logged in as s***d@example.test");
+    expect(currentAccount()).toBe("s***d@example.test");
     expect(text).not.toContain(email);
   });
 
   test(`${item.name} Overview without an active account keeps the generic status`, async () => {
     const text = await overviewText(item, rows(item.name, { active: false }), email);
-    expect(text).toContain("Logged in");
+    expect(currentAccount()).toBeUndefined();
+    expect(text).not.toContain("Logged in as");
+    expect(text).not.toContain(email);
+  });
+
+  for (const state of ["idle", "loading", "error"] as const) {
+    test(`${item.name} Overview hides stale account labels while roster is ${state}`, async () => {
+      const text = await overviewText(item, rows(item.name, { alias: "Stale" }), email, state);
+      expect(currentAccount()).toBeUndefined();
+      expect(text).not.toContain("Stale");
+      expect(text).not.toContain(email);
+    });
+  }
+
+  test(`${item.name} Overview reports logged-out status without naming an account`, async () => {
+    const text = await overviewText(item, [], email, "ready", false);
+    expect(currentAccount()).toBeUndefined();
+    expect(text).toContain("Not logged in");
+    expect(text).not.toContain("Logged in as");
+    expect(text).not.toContain(email);
+  });
+
+  test(`${item.name} Overview reports unknown login status as unverified`, async () => {
+    const text = await overviewText(item, [], email, "ready", null);
+    expect(currentAccount()).toBeUndefined();
+    expect(text).toContain("Not verified");
     expect(text).not.toContain("Logged in as");
     expect(text).not.toContain(email);
   });
@@ -156,5 +193,5 @@ for (const item of [POOL_A, POOL_B]) {
 test("other OAuth providers keep the login identity in the Overview", async () => {
   const text = await overviewText(OTHER, rows("xai", { alias: "Work" }), "s***d@xai.test");
   expect(text).toContain("Logged in as s***d@xai.test");
+  expect(currentAccount()).toBeUndefined();
 });
-
