@@ -181,7 +181,7 @@ export async function putTelemetryDecision(
   apiBase: string,
   decision: TelemetryDecision,
   _previous?: TelemetryStatusSnapshot | null,
-): Promise<TelemetryStatusSnapshot> {
+): Promise<TelemetryStatusSnapshot | null> {
   const bounded = createBoundedFetch(TELEMETRY_TIMEOUT_MS);
   try {
     const res = await fetch(apiBase + "/api/telemetry", {
@@ -190,14 +190,46 @@ export async function putTelemetryDecision(
       body: JSON.stringify({ decision }),
       signal: bounded.signal,
     });
-    if (!res.ok) throw new Error("HTTP " + String(res.status));
+    if (!res.ok) {
+      const failure: unknown = await res.json().catch(() => null);
+      const code =
+        failure && typeof failure === "object" && typeof (failure as { code?: unknown }).code === "string"
+          ? (failure as { code: string }).code
+          : null;
+      throw new TelemetrySaveError(res.status, code);
+    }
     const body: unknown = await res.json().catch(() => null);
     const parsed = parseTelemetryStatus(body);
     // The decision is saved; a reply that cannot be read is re-read from the server, never guessed.
-    const snapshot = parsed ?? (await fetchTelemetryStatus(apiBase));
-    notifyTelemetryStatusChanged(snapshot);
+    // If that re-read fails too, the save still stands: return null and let the next poll refresh.
+    const snapshot = parsed ?? (await fetchTelemetryStatus(apiBase).catch(() => null));
+    if (snapshot) notifyTelemetryStatusChanged(snapshot);
     return snapshot;
   } finally {
     bounded.clear();
   }
 }
+
+/** A refused or failed `PUT /api/telemetry`, with the server's error code when it sent one. */
+export class TelemetrySaveError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+
+  constructor(status: number, code: string | null) {
+    super(code ? `HTTP ${String(status)} ${code}` : `HTTP ${String(status)}`);
+    this.name = "TelemetrySaveError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+/**
+ * The server records consent only from a human dashboard session; a session restored from a
+ * remembered device is refused with `agent_consent_required` and cannot succeed by retrying.
+ */
+export function isTelemetryConsentSessionRefused(error: unknown): boolean {
+  return error instanceof TelemetrySaveError && error.code === "agent_consent_required";
+}
+
+/** The full privacy policy; the same URL as `TELEMETRY_POLICY_URL` in `src/telemetry/disclosure.ts`. */
+export const TELEMETRY_POLICY_URL = "https://opencodex.me/reference/code-signing/#privacy";
