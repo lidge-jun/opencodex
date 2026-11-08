@@ -636,6 +636,19 @@ describe("bounded optional-control error envelopes", () => {
     expect(comboFailureDecision(400, payload)).toBe("stop");
     expect(comboFailureCooldownScope(400, payload)).toBe("target");
   });
+
+  test("rejects conflicting named parameters before exact-effort combo hop", () => {
+    const payload = JSON.stringify({
+      param: "temperature",
+      error: {
+        type: "invalid_request_error",
+        param: "reasoning_effort",
+        message: "Invalid reasoning effort.",
+      },
+    });
+    expect(comboFailureDecision(400, payload)).toBe("stop");
+    expect(comboFailureCooldownScope(400, payload)).toBe("target");
+  });
 });
 
 describe("image rejection classifier bounds", () => {

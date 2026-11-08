@@ -414,6 +414,11 @@ function hasIncompatibleDiagnosticCarrier(val: unknown, depth = 0): boolean {
   }
   if (typeof val === "object") {
     const rec = val as Record<string, unknown>;
+    if (rec.param !== undefined && rec.param !== null) {
+      if (typeof rec.param !== "string") return true;
+      const param = rec.param.trim().toLowerCase();
+      if (param.length > 0 && param !== "reasoning_effort" && param !== "reasoning.effort") return true;
+    }
     if (rec.code !== undefined && rec.code !== null) {
       if (typeof rec.code !== "string") return true;
       if (!EXACT_EFFORT_COMPATIBLE_CODES.has(normalizedFailureCode(rec.code))) return true;
@@ -461,7 +466,11 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
     const root = payload as Record<string, unknown>;
     if (root.code !== undefined && root.code !== null && typeof root.code !== "string") return false;
     if (root.type !== undefined && root.type !== null && typeof root.type !== "string") return false;
-    if (root.param !== undefined && root.param !== null && typeof root.param !== "string") return false;
+    if (root.param !== undefined && root.param !== null) {
+      if (typeof root.param !== "string") return false;
+      const param = root.param.trim().toLowerCase();
+      if (param !== "reasoning_effort" && param !== "reasoning.effort") return false;
+    }
     const rootCode = normalizedFailureCode(root.code as string | undefined);
     const rootType = normalizedFailureCode(root.type as string | undefined);
     if (!EXACT_EFFORT_COMPATIBLE_CODES.has(rootCode)) return false;
@@ -480,7 +489,14 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
     const record = error as Record<string, unknown>;
     if (record.code !== undefined && record.code !== null && typeof record.code !== "string") return false;
     if (record.type !== undefined && record.type !== null && typeof record.type !== "string") return false;
-    if (record.param !== undefined && record.param !== null && typeof record.param !== "string") return false;
+    if (record.param !== undefined && record.param !== null) {
+      if (typeof record.param !== "string") return false;
+      const param = record.param.trim().toLowerCase();
+      if (param !== "reasoning_effort" && param !== "reasoning.effort") return false;
+    }
+    if (root.param !== undefined && root.param !== null && record.param !== undefined && record.param !== null) {
+      if (root.param.trim().toLowerCase() !== record.param.trim().toLowerCase()) return false;
+    }
     const errorCode = normalizedFailureCode(record.code as string | undefined);
     const errorType = normalizedFailureCode(record.type as string | undefined);
     if (!EXACT_EFFORT_COMPATIBLE_CODES.has(errorCode)) return false;
@@ -644,6 +660,7 @@ function isRequestLocalTargetIncompatibility(status: number, message: string, co
     const root = payload as Record<string, unknown>;
     if (root.code !== undefined && root.code !== null && typeof root.code !== "string") return false;
     if (root.type !== undefined && root.type !== null && typeof root.type !== "string") return false;
+    if (root.param !== undefined && root.param !== null && typeof root.param !== "string") return false;
     const rootCode = normalizedFailureCode(root.code as string | undefined);
     if (!genericCodes.has(rootCode)) return false;
     if (root.type !== undefined && root.type !== null && root.type !== "invalid_request_error" && root.type !== "upstream_error") return false;
@@ -651,6 +668,9 @@ function isRequestLocalTargetIncompatibility(status: number, message: string, co
     if (!error || typeof error !== "object" || Array.isArray(error)) return false;
     const e = error as Record<string, unknown>;
     if (e.code !== undefined && e.code !== null && typeof e.code !== "string") return false;
+    if (root.param !== undefined && root.param !== null && typeof e.param === "string") {
+      if (root.param.trim().toLowerCase() !== e.param.trim().toLowerCase()) return false;
+    }
     const errorCode = normalizedFailureCode(typeof e.code === "string" ? e.code : undefined);
     if (!genericCodes.has(errorCode) || typeof e.message !== "string") return false;
     if (e.type !== "invalid_request_error" && e.type !== "upstream_error") return false;
