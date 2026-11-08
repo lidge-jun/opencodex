@@ -12,6 +12,7 @@ export {
   MODEL_DISCOVERY_MAX_MODELS,
   MODEL_DISCOVERY_MAX_RESPONSE_BYTES,
 } from "./model-discovery-limits";
+import { directoryModelDiscoveryForDestination } from "./free-directory";
 import {
   getProviderRegistryEntry,
   providerMatchesRegistryTransport,
@@ -172,7 +173,11 @@ export function resolveProviderModelDiscovery(
   const entry = namedEntry
     ? (providerMatchesRegistryTransport(providerName, provider) ? namedEntry : undefined)
     : registryEntryForProviderDestination(provider);
-  const spec = entry?.modelDiscovery;
+  // A directory row may own a filter for its exact fixed key destination. A named registry row,
+  // including one whose transport no longer matches, does not fall through to that filter.
+  const spec = entry?.modelDiscovery ?? (
+    entry || namedEntry ? undefined : directoryModelDiscoveryForDestination(provider)
+  );
   return {
     ...(spec ? { spec } : {}),
     maxResponseBytes: positiveIntegerAtMost(spec?.maxResponseBytes, MODEL_DISCOVERY_MAX_RESPONSE_BYTES),
