@@ -60,7 +60,13 @@ export const PROVIDER_COMPAT_CARRY_FIELDS = [
   ...RETRY_POLICY_FIELDS,
 ] as const satisfies readonly (keyof OcxProviderConfig)[];
 
-export const PROVIDER_DISPLAY_CARRY_FIELDS = ["hideRawReasoning"] as const satisfies readonly (keyof OcxProviderConfig)[];
+export const PROVIDER_DISPLAY_CARRY_FIELDS = [
+  "hideRawReasoning",
+  // The Anthropic thinking display policy (#8363) is operator configuration the dashboard form
+  // cannot send either, so an unrelated save must not silently return the model to the default.
+  "thinkingDisplay",
+  "modelThinkingDisplay",
+] as const satisfies readonly (keyof OcxProviderConfig)[];
 
 export type ProviderCompatCarryField = typeof PROVIDER_COMPAT_CARRY_FIELDS[number];
 type ProviderDisplayCarryField = typeof PROVIDER_DISPLAY_CARRY_FIELDS[number];
@@ -131,7 +137,8 @@ export function carryProviderCompatFields(
   for (const field of PROVIDER_DISPLAY_CARRY_FIELDS) {
     if (sample.submitted.has(field)) continue;
     const stored = live[field];
-    if (stored !== undefined) target[field] = stored;
+    // Copy maps rather than alias them, like the compatibility settings below.
+    if (stored !== undefined) target[field] = stored !== null && typeof stored === "object" ? structuredClone(stored) : stored;
   }
   if (!providerOverwriteKeepsDestination(candidate, live, sample)) return;
   for (const field of PROVIDER_COMPAT_CARRY_FIELDS) {
