@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, BufRead, Read};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -34,8 +34,8 @@ use crate::relay_auth::{is_valid_key_id, is_valid_link_id};
 use crate::routes::RelayAuthKind;
 use crate::state::{
     AppliedSettingsRecord, CHILD_STATE_SCHEMA, ChildPaths, ChildStateV1, StateReadOutcome,
-    is_valid_link_token_format, read_child_state, read_verified_link_key, write_child_state,
-    write_link_key,
+    is_valid_daemon_generation, is_valid_link_token_format, read_child_state,
+    read_verified_link_key, write_child_state, write_link_key,
 };
 use crate::{DEFAULT_LISTEN_PORT, OCX_PROTOCOL_COMPAT_VERSION};
 
@@ -579,7 +579,9 @@ impl AttachRollbackSnapshot {
                 errors.push("prior relay restart skipped: restored state.json and link-key are inconsistent".to_owned());
             } else {
                 let had_file_errors = !errors.is_empty();
-                match start_or_rollover_daemon(paths, &mut prev, None) {
+                match start_or_rollover_daemon(paths, &mut prev, None)
+                    .and_then(|pending| pending.commit())
+                {
                     Ok(_) => {
                         if let Err(e) = write_child_state(&paths.state_file, &prev) {
                             errors.push(format!("restore daemon state: {e}"));
@@ -903,6 +905,7 @@ fn attach_locked(guard: &mut CodexHomeGuard, request: AttachRequest) -> Result<(
         shutdown_secret,
         parity_sequence: 0,
         pending_operation: None,
+        daemon_generation: None,
         applied_settings: Some(AppliedSettingsRecord {
             link_id: link_id.clone(),
             fetched_at: now_iso.clone(),
@@ -921,8 +924,44 @@ fn attach_locked(guard: &mut CodexHomeGuard, request: AttachRequest) -> Result<(
         });
     }
 
-    if start_daemon {
+    let pending = if start_daemon {
         match start_or_rollover_daemon(&paths, &mut state, Some(now_ms)) {
+            Ok(pending) => Some(pending),
+            Err(e) => {
+                let restored = rollback.restore_and_report(guard);
+                eprintln!("{e}");
+                return Err(AttachFailure {
+                    code: 1,
+                    left_no_changes: restored,
+                });
+            }
+        }
+    } else {
+        None
+    };
+
+    if let Err(e) = guard.set_phase(OwnershipPhase::Attached) {
+        // Stop the uncommitted daemon before restoring files it could otherwise serve.
+        drop(pending);
+        let restored = rollback.restore_and_report(guard);
+        eprintln!("attach failed recording Codex home ownership: {e}");
+        return Err(AttachFailure {
+            code: 1,
+            left_no_changes: restored,
+        });
+    }
+    if let Err(e) = remove_optional_file(&paths.rollback_file) {
+        drop(pending);
+        eprintln!("attach failed to clear rollback snapshot: {e}");
+        return Err(AttachFailure {
+            code: 1,
+            left_no_changes: false,
+        });
+    }
+    // The daemon may serve only now: state and ownership are durable and the rollback record
+    // is gone, so recovery can no longer restore files underneath it.
+    if let Some(pending) = pending {
+        match pending.commit() {
             Ok((_, started_ms)) => {
                 state.parity_sequence += 1;
                 let _ = write_child_state(&paths.state_file, &state);
@@ -936,44 +975,63 @@ fn attach_locked(guard: &mut CodexHomeGuard, request: AttachRequest) -> Result<(
                 let _ = post_child_parity_report(tunnel_port, &creds, &report);
             }
             Err(e) => {
-                let restored = rollback.restore_and_report(guard);
-                eprintln!("{e}");
+                eprintln!(
+                    "attach completed but the client relay did not start: {e}; run                      `ocx-child restart`"
+                );
                 return Err(AttachFailure {
                     code: 1,
-                    left_no_changes: restored,
+                    left_no_changes: false,
                 });
             }
         }
-    }
-
-    if let Err(e) = guard.set_phase(OwnershipPhase::Attached) {
-        let restored = rollback.restore_and_report(guard);
-        eprintln!("attach failed recording Codex home ownership: {e}");
-        return Err(AttachFailure {
-            code: 1,
-            left_no_changes: restored,
-        });
-    }
-    if let Err(e) = remove_optional_file(&paths.rollback_file) {
-        eprintln!("attach failed to clear rollback snapshot: {e}");
-        return Err(AttachFailure {
-            code: 1,
-            left_no_changes: false,
-        });
     }
     println!("Connected to http://127.0.0.1:{tunnel_port} as key {api_key_id}.");
     println!("Local Codex CLI: ready (ephemeral ocx-child Design B attached).");
     Ok(())
 }
 
+struct LifecycleStart {
+    generation: String,
+    secret: SecretBytes,
+}
+
+/// Read the parent's start line: `ocx-child-start/1 <generation> <shutdown secret>\n`.
+fn read_lifecycle_start() -> Result<LifecycleStart, String> {
+    let mut line = Vec::with_capacity(128);
+    let read = io::stdin().lock().take(161).read_until(b'\n', &mut line);
+    let buffer = SecretBytes::new(line);
+    read.map_err(|e| format!("cannot read lifecycle start line: {e}"))?;
+    let text = std::str::from_utf8(buffer.as_slice())
+        .ok()
+        .and_then(|t| t.strip_suffix('\n'))
+        .ok_or("invalid lifecycle start line")?;
+    let mut parts = text.split(' ');
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some("ocx-child-start/1"), Some(generation), Some(secret), None)
+            if is_valid_daemon_generation(generation) && secret.len() == 48 =>
+        {
+            Ok(LifecycleStart {
+                generation: generation.to_owned(),
+                secret: SecretBytes::new(secret.as_bytes().to_vec()),
+            })
+        }
+        _ => Err("invalid lifecycle start line".to_owned()),
+    }
+}
+
 fn cmd_serve(args: &[String]) -> u8 {
     let mut foreground = false;
+    let mut lifecycle_start = false;
     let mut listen_port: Option<u16> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--foreground" => {
                 foreground = true;
+                i += 1;
+            }
+            "--lifecycle-start" => {
+                lifecycle_start = true;
                 i += 1;
             }
             "--listen-port" | "--port" => {
@@ -985,6 +1043,22 @@ fn cmd_serve(args: &[String]) -> u8 {
     }
     let paths = current_paths();
     if foreground {
+        let start = if lifecycle_start {
+            match read_lifecycle_start() {
+                Ok(start) => Some(start),
+                Err(e) => {
+                    eprintln!("serve refused: {e}");
+                    return 1;
+                }
+            }
+        } else {
+            None
+        };
+        // Watch for the commit from now on, so a parent that dies while this process waits
+        // on the start gate still ends it.
+        let committed = start
+            .as_ref()
+            .map(|s| crate::relay::spawn_commit_watcher(s.generation.clone()));
         let state = match read_child_state(&paths.state_file) {
             StateReadOutcome::Valid(st) if st.pending_operation.is_none() => st,
             StateReadOutcome::Absent => {
@@ -1003,23 +1077,21 @@ fn cmd_serve(args: &[String]) -> u8 {
             return 1;
         }
         match rollback_pending(&paths) {
-            Ok(true) => {
-                let mut supplied = Vec::new();
-                let read = io::stdin().take(129).read_to_end(&mut supplied);
-                let authorized = read.is_ok()
-                    && supplied.len() <= 128
-                    && constant_time_eq(&supplied, state.shutdown_secret.as_bytes());
-                volatile_zero_bytes(&mut supplied);
-                if !authorized {
-                    eprintln!("serve refused: incomplete attach requires lifecycle authorization");
-                    return 1;
-                }
+            Ok(true) if start.is_none() => {
+                eprintln!("serve refused: incomplete attach requires lifecycle authorization");
+                return 1;
             }
-            Ok(false) => {}
+            Ok(_) => {}
             Err(e) => {
                 eprintln!("serve refused: {e}");
                 return 1;
             }
+        }
+        if let Some(start) = &start
+            && !constant_time_eq(start.secret.as_slice(), state.shutdown_secret.as_bytes())
+        {
+            eprintln!("serve refused: lifecycle authorization does not match child state");
+            return 1;
         }
         if let Err(e) = read_verified_link_key(&paths.key_file, &state.token_fingerprint) {
             eprintln!("serve refused: {e}");
@@ -1030,7 +1102,13 @@ fn cmd_serve(args: &[String]) -> u8 {
             eprintln!("serve refused: listen port does not match child state");
             return 1;
         }
-        return match serve_foreground(paths, port) {
+        let served = match (&start, committed) {
+            (Some(start), Some(committed)) => {
+                crate::relay::serve_foreground_lifecycle(paths, port, &start.generation, committed)
+            }
+            _ => serve_foreground(paths, port),
+        };
+        return match served {
             Ok(()) => 0,
             Err(e) => {
                 eprintln!("{e}");
@@ -1078,7 +1156,9 @@ fn cmd_restart() -> u8 {
         return 1;
     }
     let floor_ms = state.applied_settings.as_ref().map(|a| a.applied_at_ms);
-    let (pid, started_ms) = match start_or_rollover_daemon(&paths, &mut state, floor_ms) {
+    let (pid, started_ms) = match start_or_rollover_daemon(&paths, &mut state, floor_ms)
+        .and_then(|pending| pending.commit())
+    {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{e}");
@@ -1413,7 +1493,9 @@ fn cmd_sync(args: &[String]) -> u8 {
         _ => true,
     };
     let runtime_started_ms = if needs_rollover {
-        match start_or_rollover_daemon(&paths, &mut state, Some(applied_at_ms)) {
+        match start_or_rollover_daemon(&paths, &mut state, Some(applied_at_ms))
+            .and_then(|pending| pending.commit())
+        {
             Ok((_, s_ms)) => s_ms,
             Err(e) => {
                 eprintln!("The client runtime restart did not complete: {e}");

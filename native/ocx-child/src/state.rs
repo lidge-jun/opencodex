@@ -94,6 +94,17 @@ pub struct ChildStateV1 {
     pub parity_sequence: u64,
     pub pending_operation: Option<String>,
     pub applied_settings: Option<AppliedSettingsRecord>,
+    /// Random nonce of the most recent daemon start. A lifecycle-started daemon serves only
+    /// if this still names its generation and its parent sent the matching commit line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daemon_generation: Option<String>,
+}
+
+pub fn is_valid_daemon_generation(value: &str) -> bool {
+    value.len() == 32
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 #[derive(Debug)]

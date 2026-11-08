@@ -1,5 +1,6 @@
 use std::io::{BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::process::{Child, ChildStdin};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -21,6 +22,8 @@ pub struct LocalHealthz {
     pub pid: u32,
     pub port: u16,
     pub started_at: Option<String>,
+    #[serde(default)]
+    pub generation_committed: Option<bool>,
 }
 
 pub fn pick_ephemeral_link_port() -> Result<u16, String> {
@@ -202,11 +205,83 @@ pub fn stop_owned_daemon(state: &ChildStateV1) -> Result<(), String> {
     ))
 }
 
+/// A daemon that is ready but not yet committed. It answers only `/healthz` until
+/// `commit` writes the commit line for its generation. Dropping it uncommitted kills the
+/// child; if this process dies instead, the child sees EOF on stdin and exits without serving.
+pub struct PendingDaemon {
+    child: Option<Child>,
+    stdin: Option<ChildStdin>,
+    generation: String,
+    pid: u32,
+    started_ms: u64,
+    port: u16,
+}
+
+impl PendingDaemon {
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// Commit the generation. Call only after the state naming this generation and PID is
+    /// durable (and, for attach, after the rollback record is gone).
+    pub fn commit(mut self) -> Result<(u32, u64), String> {
+        crate::test_hooks::barrier("daemon-before-commit");
+        let mut stdin = self.stdin.take().ok_or("spawned child stdin unavailable")?;
+        stdin
+            .write_all(
+                format!(
+                    "commit {}
+",
+                    self.generation
+                )
+                .as_bytes(),
+            )
+            .and_then(|()| stdin.flush())
+            .map_err(|e| format!("failed to commit spawned child: {e}"))?;
+        drop(stdin);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if let Some(child) = self.child.as_mut()
+                && let Some(status) = child
+                    .try_wait()
+                    .map_err(|e| format!("failed to observe spawned child: {e}"))?
+            {
+                return Err(format!("ocx-child serve exited during commit: {status}"));
+            }
+            if let Some(h) = probe_local_healthz(self.port, Duration::from_millis(400))
+                && h.pid == self.pid
+                && h.generation_committed == Some(true)
+            {
+                // Leave the committed child running; dropping a std Child does not kill it.
+                self.child = None;
+                return Ok((self.pid, self.started_ms));
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        Err(format!(
+            "ocx-child serve on 127.0.0.1:{} did not confirm its commit",
+            self.port
+        ))
+    }
+}
+
+impl Drop for PendingDaemon {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// Stop the owned daemon and start a new generation. The new generation is recorded in
+/// state before the spawn (the child's start gate requires it) and the PID after readiness;
+/// the caller commits once its own durable work is done.
 pub fn start_or_rollover_daemon(
     paths: &ChildPaths,
     state: &mut ChildStateV1,
     min_started_at_ms: Option<u64>,
-) -> Result<(u32, u64), String> {
+) -> Result<PendingDaemon, String> {
     stop_owned_daemon(state)?;
     if let Some(floor_ms) = min_started_at_ms {
         let now = now_epoch_ms();
@@ -217,25 +292,40 @@ pub fn start_or_rollover_daemon(
     ensure_port_available_for_attach(state.listen_port, None)?;
     let exe = std::env::current_exe()
         .map_err(|e| format!("failed to resolve current executable: {e}"))?;
-    let pending_attach = match std::fs::symlink_metadata(&paths.rollback_file) {
-        Ok(_) => true,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-        Err(e) => return Err(format!("cannot inspect rollback snapshot: {e}")),
-    };
-    let mut spawned = spawn_detached_serve(
+    let generation = random_hex(16)?;
+    state.daemon_pid = None;
+    state.daemon_started_at_ms = None;
+    state.daemon_generation = Some(generation.clone());
+    write_child_state(&paths.state_file, state)?;
+    let start_line = format!(
+        "ocx-child-start/1 {generation} {}
+",
+        state.shutdown_secret
+    );
+    let spawned = spawn_detached_serve(
         &exe,
         &paths.opencodex_home,
         &paths.codex_home,
         state.listen_port,
-        pending_attach.then_some(state.shutdown_secret.as_str()),
+        &start_line,
     )?;
     let spawned_pid = spawned.id();
+    let mut pending = PendingDaemon {
+        child: Some(spawned),
+        stdin: None,
+        generation,
+        pid: spawned_pid,
+        started_ms: 0,
+        port: state.listen_port,
+    };
+    pending.stdin = pending.child.as_mut().and_then(|c| c.stdin.take());
 
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
-        if let Some(status) = spawned
-            .try_wait()
-            .map_err(|e| format!("failed to observe spawned child: {e}"))?
+        if let Some(child) = pending.child.as_mut()
+            && let Some(status) = child
+                .try_wait()
+                .map_err(|e| format!("failed to observe spawned child: {e}"))?
         {
             return Err(format!("ocx-child serve exited before readiness: {status}"));
         }
@@ -248,28 +338,12 @@ pub fn start_or_rollover_daemon(
             let started_ms = now_epoch_ms().max(min_started_at_ms.unwrap_or(0));
             state.daemon_pid = Some(spawned_pid);
             state.daemon_started_at_ms = Some(started_ms);
-            if let Err(e) = write_child_state(&paths.state_file, state) {
-                let cleanup = spawned.kill().and_then(|()| spawned.wait().map(|_| ()));
-                return Err(format!(
-                    "failed to record spawned child: {e}; cleanup: {cleanup:?}"
-                ));
-            }
-            crate::test_hooks::barrier("daemon-before-commit");
-            return Ok((spawned_pid, started_ms));
+            write_child_state(&paths.state_file, state)
+                .map_err(|e| format!("failed to record spawned child: {e}"))?;
+            pending.started_ms = started_ms;
+            return Ok(pending);
         }
         thread::sleep(Duration::from_millis(50));
-    }
-    if spawned
-        .try_wait()
-        .map_err(|e| format!("failed to observe spawned child: {e}"))?
-        .is_none()
-    {
-        spawned
-            .kill()
-            .map_err(|e| format!("failed to terminate spawned child: {e}"))?;
-        spawned
-            .wait()
-            .map_err(|e| format!("failed to reap spawned child: {e}"))?;
     }
     Err(format!(
         "ocx-child serve failed to answer /healthz on 127.0.0.1:{}",

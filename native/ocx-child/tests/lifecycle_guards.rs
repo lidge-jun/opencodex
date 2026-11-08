@@ -373,3 +373,255 @@ fn offline_detach_rechecks_codex_home_identity_before_each_restore_write() {
     assert!(paths.journal_file.is_file(), "journal was removed");
     assert!(paths.key_file.is_file(), "link key was removed");
 }
+
+fn try_http_exchange(port: u16, raw_req: &str) -> Option<String> {
+    use std::io::Read;
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let mut sock = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)).ok()?;
+    sock.set_read_timeout(Some(Duration::from_secs(3))).ok()?;
+    sock.write_all(raw_req.as_bytes()).ok()?;
+    let mut out = Vec::new();
+    let _ = sock.read_to_end(&mut out);
+    Some(String::from_utf8_lossy(&out).into_owned())
+}
+
+fn models_request(port: u16) -> String {
+    format!("GET /v1/models HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n")
+}
+
+/// Kills a leftover daemon if an assertion fails before the test cleans up.
+struct KillOnDrop(Option<u32>);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        if let Some(pid) = self.0
+            && ocx_child::platform::process_is_alive(pid)
+        {
+            let _ = std::process::Command::new("kill")
+                .args(["-9", &pid.to_string()])
+                .status();
+        }
+    }
+}
+
+fn read_state(ocx: &Path) -> serde_json::Value {
+    serde_json::from_slice(&fs::read(ocx.join("child").join("state.json")).unwrap()).unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn daemon_exits_without_serving_when_its_parent_dies_before_commit() {
+    use ocx_child::platform::process_is_alive;
+
+    let scratch = Scratch::new("parent-crash");
+    let ocx = scratch.0.join("ocx");
+    let codex = scratch.0.join("codex");
+    fs::create_dir_all(&ocx).unwrap();
+    fs::create_dir_all(&codex).unwrap();
+    let home = MockHomeServer::start(&raw_token(), KEY_ID, LINK_ID);
+    let tunnel = home.port.to_string();
+    let port = distinct_port(&[]);
+    let p = port.to_string();
+    let barrier = Barrier::new(&scratch.0, "commit");
+    let mut cmd = child_command(&ocx, &codex, port, &attach_args(&tunnel, LINK_ID, &p));
+    barrier.apply(&mut cmd, "daemon-before-commit");
+    let mut parent = spawn_with_creds(cmd);
+    assert!(
+        barrier.wait_reached("daemon-before-commit", Duration::from_secs(20)),
+        "attach never reached the commit point"
+    );
+    let pid = read_state(&ocx)["daemonPid"]
+        .as_u64()
+        .expect("daemon pid recorded") as u32;
+    let mut leftover = KillOnDrop(Some(pid));
+    assert!(process_is_alive(pid));
+
+    parent.kill().unwrap();
+    let _ = parent.wait();
+    let relayed_before = home.state.observed_data_headers.lock().unwrap().len();
+    let _ = try_http_exchange(port, &models_request(port));
+    assert!(
+        wait_until(Duration::from_secs(5), || !process_is_alive(pid)),
+        "uncommitted daemon kept running after its parent died"
+    );
+    leftover.0 = None;
+    assert_eq!(
+        home.state.observed_data_headers.lock().unwrap().len(),
+        relayed_before,
+        "uncommitted daemon relayed a data request"
+    );
+    assert!(
+        try_http_exchange(port, &models_request(port)).is_none_or(|r| r.is_empty()),
+        "uncommitted daemon still answers after its parent died"
+    );
+    // The recorded attachment stays recoverable.
+    let (code, _, err) = run_bin(&ocx, &codex, port, &["detach"], None);
+    assert_eq!(code, 0, "detach after the parent crash failed: {err}");
+}
+
+/// Starts `serve --foreground --lifecycle-start` the way a lifecycle parent does, with a
+/// start line for `generation`.
+fn spawn_lifecycle_serve(ocx: &Path, codex: &Path, port: u16, generation: &str) -> Child {
+    let secret = read_state(ocx)["shutdownSecret"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let p = port.to_string();
+    let mut cmd = child_command(
+        ocx,
+        codex,
+        port,
+        &[
+            "serve",
+            "--foreground",
+            "--lifecycle-start",
+            "--listen-port",
+            &p,
+        ],
+    );
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = cmd.spawn().unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(format!("ocx-child-start/1 {generation} {secret}\n").as_bytes())
+        .unwrap();
+    child
+}
+
+fn wait_exit(child: &mut Child, timeout: Duration) -> Option<std::process::ExitStatus> {
+    let mut status = None;
+    wait_until(timeout, || {
+        status = child.try_wait().unwrap();
+        status.is_some()
+    });
+    if status.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    status
+}
+
+fn set_state_generation(ocx: &Path, generation: Option<&str>) {
+    let path = ocx.join("child").join("state.json");
+    let mut state = read_state(ocx);
+    match generation {
+        Some(g) => state["daemonGeneration"] = serde_json::Value::String(g.to_owned()),
+        None => {
+            state.as_object_mut().unwrap().remove("daemonGeneration");
+        }
+    }
+    fs::write(path, serde_json::to_vec_pretty(&state).unwrap()).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn lifecycle_start_requires_the_recorded_generation_and_a_commit() {
+    let scratch = Scratch::new("generation");
+    let ocx = scratch.0.join("ocx");
+    let codex = scratch.0.join("codex");
+    fs::create_dir_all(&ocx).unwrap();
+    fs::create_dir_all(&codex).unwrap();
+    let home = MockHomeServer::start(&raw_token(), KEY_ID, LINK_ID);
+    let tunnel = home.port.to_string();
+    let port = distinct_port(&[]);
+    let p = port.to_string();
+    let mut args = attach_args(&tunnel, LINK_ID, &p);
+    args.push("--no-daemon");
+    let out = spawn_with_creds(child_command(&ocx, &codex, port, &args))
+        .wait_with_output()
+        .unwrap();
+    assert!(out.status.success(), "attach failed: {}", text(&out));
+    let relayed = || home.state.observed_data_headers.lock().unwrap().len();
+    let stale = "a".repeat(32);
+    let current = "b".repeat(32);
+
+    // A generation the state never recorded is refused even with a matching commit line.
+    set_state_generation(&ocx, None);
+    let before = relayed();
+    let mut child = spawn_lifecycle_serve(&ocx, &codex, port, &stale);
+    let _ = child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(format!("commit {stale}\n").as_bytes());
+    let _ = try_http_exchange(port, &models_request(port));
+    let status = wait_exit(&mut child, Duration::from_secs(5));
+    assert!(
+        status.is_some_and(|s| !s.success()),
+        "stale generation was not refused: {status:?}"
+    );
+    assert_eq!(relayed(), before, "stale generation relayed a request");
+
+    // A superseded generation is refused once state records a newer one.
+    set_state_generation(&ocx, Some(&current));
+    let mut child = spawn_lifecycle_serve(&ocx, &codex, port, &stale);
+    let _ = child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(format!("commit {stale}\n").as_bytes());
+    let status = wait_exit(&mut child, Duration::from_secs(5));
+    assert!(
+        status.is_some_and(|s| !s.success()),
+        "superseded generation served"
+    );
+
+    // The recorded generation without a commit exits on EOF and never relays.
+    let mut child = spawn_lifecycle_serve(&ocx, &codex, port, &current);
+    assert!(wait_until(Duration::from_secs(5), || {
+        try_http_exchange(
+            port,
+            &format!(
+                "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+            ),
+        )
+        .is_some_and(|r| r.contains("200 OK"))
+    }));
+    let before = relayed();
+    let pending = try_http_exchange(port, &models_request(port)).unwrap_or_default();
+    assert!(
+        !pending.contains("404"),
+        "uncommitted daemon relayed: {pending}"
+    );
+    assert_eq!(relayed(), before, "uncommitted daemon relayed a request");
+    drop(child.stdin.take());
+    let status = wait_exit(&mut child, Duration::from_secs(5));
+    assert!(
+        status.is_some_and(|s| !s.success()),
+        "daemon without a commit did not exit: {status:?}"
+    );
+
+    // Positive control: the recorded generation plus its commit serves.
+    let mut child = spawn_lifecycle_serve(&ocx, &codex, port, &current);
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(format!("commit {current}\n").as_bytes())
+        .unwrap();
+    // Reap the daemon as soon as it exits, as init does for a detached daemon; otherwise
+    // the exited process lingers as a zombie that still looks alive to detach.
+    let reaper = std::thread::spawn(move || child.wait().unwrap());
+    assert!(
+        wait_until(Duration::from_secs(5), || {
+            try_http_exchange(
+                port,
+                &format!(
+                    "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+                ),
+            )
+            .is_some_and(|r| r.contains("\"generationCommitted\":true"))
+        }),
+        "committed daemon never reported its commit"
+    );
+    let before = relayed();
+    let _ = try_http_exchange(port, &models_request(port));
+    assert_eq!(relayed(), before + 1, "committed daemon did not relay");
+    let (code, _, err) = run_bin(&ocx, &codex, port, &["detach"], None);
+    assert_eq!(code, 0, "detach failed: {err}");
+    assert!(reaper.join().unwrap().success());
+}

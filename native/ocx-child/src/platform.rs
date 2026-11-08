@@ -1025,27 +1025,26 @@ impl Drop for FileLock {
     }
 }
 
+/// Spawn `serve --foreground --lifecycle-start` and write `start_line` to its stdin, which
+/// stays open: the caller later writes the commit line or drops it to make the child exit.
 pub fn spawn_detached_serve(
     exe: &Path,
     opencodex_home: &Path,
     codex_home: &Path,
     listen_port: u16,
-    lifecycle_secret: Option<&str>,
+    start_line: &str,
 ) -> Result<std::process::Child, String> {
     let mut cmd = Command::new(exe);
     cmd.arg("serve")
         .arg("--foreground")
+        .arg("--lifecycle-start")
         .arg("--listen-port")
         .arg(listen_port.to_string())
         .env("OPENCODEX_HOME", opencodex_home)
         .env("CODEX_HOME", codex_home)
         .env_remove(crate::test_hooks::BARRIER_DIR_ENV)
         .env_remove(crate::test_hooks::BARRIERS_ENV)
-        .stdin(if lifecycle_secret.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
@@ -1072,17 +1071,17 @@ pub fn spawn_detached_serve(
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to spawn detached ocx-child serve: {e}"))?;
-    if let Some(secret) = lifecycle_secret {
-        let write_result = match child.stdin.take() {
-            Some(mut stdin) => stdin.write_all(secret.as_bytes()),
-            None => Err(std::io::Error::other("missing child stdin")),
-        };
-        if let Err(e) = write_result {
-            let cleanup = child.kill().and_then(|()| child.wait().map(|_| ()));
-            return Err(format!(
-                "failed to authorize spawned child: {e}; cleanup: {cleanup:?}"
-            ));
-        }
+    let write_result = match child.stdin.as_mut() {
+        Some(stdin) => stdin
+            .write_all(start_line.as_bytes())
+            .and_then(|()| stdin.flush()),
+        None => Err(std::io::Error::other("missing child stdin")),
+    };
+    if let Err(e) = write_result {
+        let cleanup = child.kill().and_then(|()| child.wait().map(|_| ()));
+        return Err(format!(
+            "failed to authorize spawned child: {e}; cleanup: {cleanup:?}"
+        ));
     }
     Ok(child)
 }

@@ -1,4 +1,4 @@
-use std::io::{BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -264,6 +264,9 @@ struct SharedServerState {
     stop_flag: AtomicBool,
     stop_cv: (Mutex<bool>, Condvar),
     last_generation: Mutex<Option<String>>,
+    /// False until the lifecycle parent commits this generation; only `/healthz` is
+    /// answered before that.
+    committed: Arc<AtomicBool>,
 }
 
 impl SharedServerState {
@@ -299,7 +302,48 @@ impl SharedServerState {
     }
 }
 
+/// Watch stdin for the parent's commit line. Before the commit, EOF, a read error, or any
+/// other line means the parent died or abandoned this generation: exit without serving.
+pub fn spawn_commit_watcher(generation: String) -> Arc<AtomicBool> {
+    let committed = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&committed);
+    thread::spawn(move || {
+        let expected = format!("commit {generation}\n");
+        let mut line = Vec::with_capacity(expected.len());
+        let read = std::io::stdin()
+            .lock()
+            .take(expected.len() as u64 + 1)
+            .read_until(b'\n', &mut line);
+        if read.is_ok() && line == expected.as_bytes() {
+            flag.store(true, Ordering::SeqCst);
+            return;
+        }
+        std::process::exit(3);
+    });
+    committed
+}
+
+/// Serve a direct foreground relay started by the operator (no lifecycle parent).
 pub fn serve_foreground(paths: ChildPaths, listen_port: u16) -> Result<(), String> {
+    serve_foreground_inner(paths, listen_port, None)
+}
+
+/// Serve a relay started by a lifecycle parent: refuse unless state still records
+/// `generation`, and answer only `/healthz` until `committed` is set.
+pub fn serve_foreground_lifecycle(
+    paths: ChildPaths,
+    listen_port: u16,
+    generation: &str,
+    committed: Arc<AtomicBool>,
+) -> Result<(), String> {
+    serve_foreground_inner(paths, listen_port, Some((generation, committed)))
+}
+
+fn serve_foreground_inner(
+    paths: ChildPaths,
+    listen_port: u16,
+    lifecycle: Option<(&str, Arc<AtomicBool>)>,
+) -> Result<(), String> {
     let startup_gate = FileLock::acquire_blocking(&paths.child_dir.join("daemon-start.lock"))
         .map_err(|_| "serve refused: daemon startup gate unavailable".to_owned())?;
     let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], listen_port)))
@@ -311,6 +355,15 @@ pub fn serve_foreground(paths: ChildPaths, listen_port: u16) -> Result<(), Strin
             state
         }
         _ => return Err("serve refused: child state changed during startup".to_owned()),
+    };
+    if let Some((generation, _)) = &lifecycle
+        && state.daemon_generation.as_deref() != Some(*generation)
+    {
+        return Err("serve refused: this daemon generation is not the recorded one".to_owned());
+    }
+    let committed = match lifecycle {
+        Some((_, committed)) => committed,
+        None => Arc::new(AtomicBool::new(true)),
     };
     if !matches!(validate_existing_journal_paths(&paths), Ok(true))
         || read_verified_link_key(&paths.key_file, &state.token_fingerprint).is_err()
@@ -332,6 +385,7 @@ pub fn serve_foreground(paths: ChildPaths, listen_port: u16) -> Result<(), Strin
         stop_flag: AtomicBool::new(false),
         stop_cv: (Mutex::new(false), Condvar::new()),
         last_generation: Mutex::new(None),
+        committed,
     });
 
     let parity_shared = Arc::clone(&shared);
@@ -388,6 +442,10 @@ fn run_parity_loop(shared: Arc<SharedServerState>) {
             if *guard || shared.stop_flag.load(Ordering::SeqCst) {
                 return;
             }
+        }
+        if !shared.committed.load(Ordering::SeqCst) {
+            wait_ms = 50;
+            continue;
         }
         let StateReadOutcome::Valid(st) = read_child_state(&shared.paths.state_file) else {
             wait_ms = 5_000;
@@ -462,6 +520,16 @@ fn handle_client_connection(stream: TcpStream, shared: &SharedServerState) -> st
         req.header("origin"),
         req.header("upgrade"),
     );
+    let committed = shared.committed.load(Ordering::SeqCst);
+    if !committed && decision != RouteDecision::LocalHealthz {
+        return write_json_response(
+            &mut writer,
+            503,
+            "Service Unavailable",
+            &[("Retry-After", "1"), ("Cache-Control", "no-store")],
+            br#"{"error":"child_starting"}"#,
+        );
+    }
 
     match decision {
         RouteDecision::LocalShutdown => {
@@ -536,6 +604,7 @@ fn handle_client_connection(stream: TcpStream, shared: &SharedServerState) -> st
                 "pid": std::process::id(),
                 "port": shared.listen_port,
                 "startedAt": shared.started_at_iso,
+                "generationCommitted": committed,
             }))
             .unwrap_or_default();
             write_json_response(&mut writer, 200, "OK", &[], &body)

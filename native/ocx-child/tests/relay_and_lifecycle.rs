@@ -343,6 +343,7 @@ fn untrusted_health_pid_never_authorizes_signalling_an_unrelated_process() {
         parity_sequence: 0,
         pending_operation: None,
         applied_settings: None,
+        daemon_generation: None,
     };
 
     let result = stop_owned_daemon(&state);
