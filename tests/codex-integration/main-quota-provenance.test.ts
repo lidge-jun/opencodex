@@ -39,6 +39,8 @@ import {
   type WhamUsageResponse,
 } from "../../src/codex/quota";
 import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
+import { observeNativeMainClaim } from "../helpers/native-main-claim-diagnostics";
+import * as nativeMainLockFile from "../../src/codex/native-main-lock-file";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
@@ -51,6 +53,7 @@ const KEYRING_QUOTA_RESTART_IMPORTS = `${QUOTA_PROVENANCE_IMPORT_PROLOGUE}
         import { resolveCodexAuthContext } from ${JSON.stringify(repoPath("src/codex/auth-context.ts"))};
         import { initializeMainAccountPolicyBinding } from ${JSON.stringify(repoPath("src/codex/account-lifecycle.ts"))};
         import { setNativeMainRefreshResolutionForTests } from ${JSON.stringify(repoPath("src/codex/native-main-refresh-mode.ts"))};
+        import { observeNativeMainClaim } from ${JSON.stringify(repoPath("tests/helpers/native-main-claim-diagnostics.ts"))};
 `;
 
 let testDir: string;
@@ -358,6 +361,8 @@ describe("main policy quota durability and lifecycle", () => {
     { name: "untagged quota", account: "fixture-main-b", tag: "missing", selected: false, refusal: "CodexPoolAuthenticationError" },
     { name: "invalid quota tag", account: "fixture-main-b", tag: "invalid", selected: false, refusal: "CodexPoolAuthenticationError" },
     { name: "unknown RPC identity", account: "", tag: "known", selected: false, refusal: "CodexPoolAuthenticationError" },
+    ...(["open", "hardening", "sqlite"] as const).map(injection => ({ name: `injected claim ${injection}`,
+      account: "", tag: "known", selected: false, refusal: "CodexPoolAuthenticationError", injection })),
     { name: "manually paused", account: "fixture-main-b", tag: "known", selected: false, paused: true, refusal: "CodexPoolAuthenticationError" },
     { name: "startup file replacement", account: "fixture-main-b", tag: "known", selected: true, source: "file" },
     { name: "startup same-account file", account: "fixture-main-a", tag: "known", selected: false, source: "file", refusal: "CodexMainAccountHardLockError" },
@@ -391,6 +396,7 @@ describe("main policy quota durability and lifecycle", () => {
           providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } } };
         let selected = false;
         let failure, failureDetail;
+        const claimObserver = observeNativeMainClaim(${JSON.stringify(scenario.injection)});
         try {
           const result = await resolveCodexAuthContext(new Headers(), config, "pool", {
             nativeMainRefreshDependencies: { codexAuthStatus: async () => { reads++; return { authMethod: "chatgpt", authToken: token, requiresOpenaiAuth: true }; } },
@@ -399,10 +405,15 @@ describe("main policy quota durability and lifecycle", () => {
           });
           selected = result.kind === "main-pool" && result.chatgptAccountId === account;
         } catch (error) {
-          failure = error.name;
-          failureDetail = { message: String(error.message).slice(0, 200), cause: error.cause?.name, code: error.cause?.code ?? error.code };
+          const name = error.name, causeName = error.cause?.name, causeCode = error.cause?.code;
+          failure = ["CodexAuthContextError", "CodexPoolAuthenticationError", "CodexMainAccountHardLockError"].includes(name) ? name : "other";
+          failureDetail = { cause: causeName === "NativeProfileError" ? "NativeProfileError" : "other",
+            code: ["NATIVE_MAIN_CLAIM_UNAVAILABLE", "NATIVE_MAIN_CLAIM_BUSY"].includes(causeCode) ? causeCode : undefined };
         }
+        const claimDiagnostics = claimObserver.snapshot();
+        claimObserver.restore();
         console.log(JSON.stringify({ fixture: "cold-keyring-quota", before, selected, failure, failureDetail, reads, initialized,
+          claimDiagnostics,
           legacy: getAccountQuota("__main__"), policy: getMainPolicyQuota(), stored: getAccountQuota("fixture-stored"),
           paused: config.pausedCodexAccountIds }));
       `;
@@ -422,16 +433,53 @@ describe("main policy quota durability and lifecycle", () => {
         expect(result.legacy).toBeNull();
         expect(result.policy).toBeNull();
       } else {
-        // The refusal must be the policy decision itself; any earlier setup failure (with no read)
-        // fails here with its message and cause instead of passing as a refusal.
-        expect({ failure: result.failure, reads: result.reads, detail: result.failureDetail }).toMatchObject({
+        // The refusal must be the policy decision itself; an earlier setup failure must fail here.
+        const actual = { failure: result.failure, reads: result.reads, detail: result.failureDetail, claimDiagnostics: result.claimDiagnostics };
+        const expected = {
           failure: scenario.refusal, reads: scenario.paused || scenario.source === "file" ? 0 : 1,
-        });
+        };
+        if (scenario.injection) {
+          expect(() => expect(actual).toMatchObject(expected)).toThrow();
+          expect(actual).toMatchObject({ failure: "CodexAuthContextError", reads: 0,
+            detail: { cause: "NativeProfileError", code: "NATIVE_MAIN_CLAIM_UNAVAILABLE" },
+            claimDiagnostics: { failure: { phase: scenario.injection === "sqlite" ? "sqlite-pragma" : scenario.injection,
+              code: "EICACLS", step: "/inheritance:r", stage: "child_result", timedOut: false } } });
+          expect(JSON.stringify(actual)).not.toContain("private-marker");
+        } else {
+          expect(actual).toMatchObject(expected);
+        }
         expect(result.legacy.weeklyPercent).toBe(100);
         if (scenario.account === "fixture-main-a") expect(result.policy.weeklyPercent).toBe(100);
       }
+      if (!scenario.injection && !scenario.paused && scenario.source !== "file") {
+        expect(result.claimDiagnostics.phase).toBe("operation");
+      }
     }, SPAWN_BUDGET_MS);
   }
+
+  test("claim diagnostic wrappers rethrow the original error", async () => {
+    const observer = observeNativeMainClaim("hardening");
+    try {
+      await expect(nativeMainLockFile.hardenStableLockFile(join(testDir, "unused")))
+        .rejects.toBe(observer.injectedError);
+      expect(observer.snapshot().failure).toMatchObject({ phase: "hardening", code: "EICACLS" });
+    } finally { observer.restore(); }
+  });
+
+  test("claim diagnostics read hostile metadata once and never emit its private values", async () => {
+    let reads = 0;
+    const error = Object.assign(new Error("private-marker-message"), { aclFailure: {
+      get step() { reads++; return reads === 1 ? "/grant:r" : "private-marker-step"; },
+      stage: "private-marker-stage", timedOut: "private-marker-timeout",
+    } });
+    const observer = observeNativeMainClaim("hardening", error);
+    try {
+      await expect(nativeMainLockFile.hardenStableLockFile(join(testDir, "unused"))).rejects.toBe(error);
+      expect(reads).toBe(1);
+      expect(observer.snapshot()).toEqual({ phase: "hardening", failure: { phase: "hardening", step: "/grant:r" } });
+      expect(JSON.stringify(observer.snapshot())).not.toContain("private-marker");
+    } finally { observer.restore(); }
+  });
 
   for (const unavailable of [true, false]) {
     test(`persisted ${unavailable ? "unavailable" : "legacy"} null remains identity-bound and cannot authorize spending`, async () => {
