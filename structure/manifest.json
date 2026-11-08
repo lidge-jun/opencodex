@@ -1356,6 +1356,8 @@
         "src/local-credentials/",
         "src/server/index/link-management.ts",
         "src/server/management/link-routes.ts",
+        "src/server/management/link-enrollment.ts",
+        "native/ocx-child/",
         "src/lib/gui-pair-intent.ts",
         "src/lib/windows-owner-acl.ts",
         "src/server/gui-pair-delivery.ts"

@@ -144,10 +144,12 @@ export function windowsNativeArgv(executable: string, args: readonly string[]): 
  * Desktop first, then the GOAT-managed current junction, then legacy and PATH candidates. Each
  * must answer --version within ten seconds; only the selected one runs the real command.
  */
-const OCX_CANDIDATES = String.raw`$u=$env:USERPROFILE;$c=@("$u\.opencodex-desktop\bin\ocx.exe","$u\.local\share\goat\opencodex\current\ocx.exe","$u\.local\bin\ocx.exe")
-if($env:LOCALAPPDATA){$c+="$env:LOCALAPPDATA\Programs\OpenCodex\ocx.exe"}
-if($env:ProgramFiles){$c+="$env:ProgramFiles\OpenCodex\ocx.exe"}
-$c+=@((Get-Command ocx.exe -Type Application -EA 0).Source)
+const OCX_CANDIDATES = String.raw`$u=$env:USERPROFILE;$f=@("$u\.opencodex-desktop\bin\ocx.exe","$u\.local\share\goat\opencodex\current\ocx.exe","$u\.local\bin\ocx.exe")
+if($env:LOCALAPPDATA){$f+="$env:LOCALAPPDATA\Programs\OpenCodex\ocx.exe"}
+if($env:ProgramFiles){$f+="$env:ProgramFiles\OpenCodex\ocx.exe"}
+$f+=@((Get-Command ocx.exe -Type Application -EA 0).Source)
+$k=@("$u\.local\bin\ocx-child.exe","$u\.cache\opencodex\bin\ocx-child.exe");if($env:LOCALAPPDATA){$k+="$env:LOCALAPPDATA\opencodex\bin\ocx-child.exe"};$k+=@((Get-Command ocx-child.exe -Type Application -EA 0).Source)
+$r=if($env:HOME){$env:HOME}elseif($u){$u}else{"."};$h=if($env:OPENCODEX_HOME){$env:OPENCODEX_HOME}else{"$r\.opencodex"};$c=if([IO.File]::Exists("$h\child\state.json")){$k+$f}else{$f+$k}
 `;
 export function windowsOcxArgv(args: readonly string[]): string[] {
   return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args }) + OCX_CANDIDATES + String.raw`

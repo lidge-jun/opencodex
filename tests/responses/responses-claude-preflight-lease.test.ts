@@ -58,15 +58,39 @@ afterEach(() => {
   removeTreeWithRetry(home);
 });
 
-async function send(): Promise<Response> {
+async function send(input: unknown = "hello"): Promise<Response> {
   const config = { port: 0, defaultProvider: "claude-cli", providers: {
     "claude-cli": { adapter: "claude-cli", baseUrl: "https://api.anthropic.com", authMode: "key", selectedModels: ["claude-sonnet-5-5"] },
   } } as OcxConfig;
   return handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: "claude-cli/claude-sonnet-5-5", input: "hello", stream: false }),
+    body: JSON.stringify({ model: "claude-cli/claude-sonnet-5-5", input, stream: false }),
   }), config, { model: "", provider: "" });
 }
+
+test("an instruction image is refused before sidecar lease acquisition, quota admission or dispatch", async () => {
+  let checks = 0;
+  setClaudeUsagePreflightForTests(async () => { checks++; return { state: "available", checkedAt: Date.now() }; });
+  const res = await send([
+    { role: "system", content: [{ type: "input_image", image_url: "https://fixture.invalid/image.png" }] },
+    { role: "user", content: "hello" },
+  ]);
+  expect(res.status).toBe(400);
+  expect(released).toBe(0);
+  expect(checks).toBe(0);
+  expect(turns).toBe(0);
+});
+
+test("an agent message file image is refused before sidecar lease acquisition, quota admission or dispatch", async () => {
+  let checks = 0;
+  setClaudeUsagePreflightForTests(async () => { checks++; return { state: "available", checkedAt: Date.now() }; });
+  const res = await send([{ type: "agent_message", content: [{ type: "input_image", file_id: "file-fixture" }] }]);
+  expect(res.status).toBe(400);
+  expect(await res.text()).toContain("unsupported_input_modality");
+  expect(released).toBe(0);
+  expect(checks).toBe(0);
+  expect(turns).toBe(0);
+});
 
 test("a preflight that throws hands the probe lease back and starts no turn", async () => {
   setClaudeUsagePreflightForTests(async () => { throw new Error("quota cache unreadable"); });

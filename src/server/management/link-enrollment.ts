@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertSshAlias, buildExecArgv, buildFingerprintArgv, buildProbeArgv, REMOTE_COMMAND_NOT_FOUND, remoteOcxArgv } from "../../link/ssh-argv";
 import { parseFingerprintLine } from "../../link/fingerprint";
+import { isDetachedEphemeralChildConfig } from "../../link/ephemeral-child";
 import { requireRemotePlatform } from "../../link/remote-platform";
 import type { SshRunner } from "../../link/ssh-runner";
 import { LINK_CATALOG_MAX_BYTES, LINK_RELAY_VERIFY_MS, isChildHealth, linkCommandBudget, linkRestartBudget, parseChildHttp, remoteChildHttpArgv, REMOTE_CURL_PREFLIGHT } from "../../link/remote-probe";
@@ -129,13 +130,16 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     let remotePlatform: "posix" | "windows";
     const ocx = (args: readonly string[]) => remoteOcxArgv(args, remotePlatform);
     let record: LinkStore["links"][number] | undefined, input: Uint8Array | undefined;
-    let remoteMayBeConnected = false, phase = "remote_port";
+    let ephemeralChild = false, remoteMayBeConnected = false, phase = "remote_port";
     const failed = async (response: Response): Promise<Response> => {
       const compensation = record ? await compensateNewLink(ctx, state, record) : null;
       const outcome = compensation ?? response;
       if (!remoteMayBeConnected) return outcome;
       const payload = await outcome.json() as Record<string, unknown>;
-      return Response.json({ ...payload, residual: true, recovery: "Run ocx disconnect and ocx restart on the Child before retrying." }, { status: outcome.status });
+      const recovery = ephemeralChild
+        ? "Run ocx-child detach (or ocx disconnect) on the Child before retrying."
+        : "Run ocx disconnect and ocx restart on the Child before retrying.";
+      return Response.json({ ...payload, residual: true, recovery }, { status: outcome.status });
     };
     try {
       remotePlatform = confirmed.remotePlatform ?? await requireRemotePlatform(runner, alias, knownHosts);
@@ -153,8 +157,14 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       const childPort = childConfig.port;
       if (remotePlatform === "posix" && (await run(REMOTE_CURL_PREFLIGHT)).code !== 0) return fail("child_curl_missing", "Install curl on the Child before connecting a Remote Link.", 409);
       const before = await run(remoteChildHttpArgv(childPort, "healthz", LINK_RELAY_VERIFY_MS, remotePlatform));
-      const beforeHealth = before.code === 0 ? parseChildHttp(before.stdout) : null;
-      if (!isChildHealth(beforeHealth, "standalone", childPort)) return fail("child_restart_unsupported", "The Child must run a standalone OpenCodex with bound restart support; update or disconnect it before linking.", 409);
+      ephemeralChild = isDetachedEphemeralChildConfig(childConfig);
+      if (ephemeralChild) {
+        if (before.code === 255) return fail("child_preflight_failed", "The Child loopback port could not be inspected.", 502, sshFailureHint(before.stderr));
+        if (before.code === 0) return fail("child_restart_unsupported", "The Child's target port is already in use; disconnect or free the port before linking.", 409);
+      } else {
+        const beforeHealth = before.code === 0 ? parseChildHttp(before.stdout) : null;
+        if (!isChildHealth(beforeHealth, "standalone", childPort)) return fail("child_restart_unsupported", "The Child must run a standalone OpenCodex with bound restart support; update or disconnect it before linking.", 409);
+      }
       state.confirmedHosts?.delete(alias);
       phase = "home_setup";
       const id = newLinkId(), issued = issueKey(ctx, "link:" + alias);

@@ -56,6 +56,32 @@ async function setInput(input: HTMLInputElement, value: string): Promise<void> {
   });
 }
 
+test("Vertex settings can update project and clear location", async () => {
+  const item = { name: "my-vertex", adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key",
+    googleMode: "vertex", project: "old-project", location: "global" } as WorkspaceItem;
+  const patches: ProviderUpdatePatch[] = [];
+  const container = await renderSettings(item, async (_name, patch) => { patches.push(patch); return { ok: true }; });
+  const inputFor = (label: string) => [...container.querySelectorAll("label")]
+    .find(element => element.textContent?.includes(label))?.querySelector("input") as HTMLInputElement;
+  const project = inputFor("Project ID");
+  const location = inputFor("Location");
+  expect(project).toBeDefined();
+  expect(location).toBeDefined();
+  await setInput(project, "new-project");
+  await setInput(location, "");
+  await act(async () => { container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!.click(); });
+  expect(patches[0]).toMatchObject({ project: "new-project", location: "" });
+  await act(async () => { container.unmount(); });
+});
+
+test("canonical Vertex with an old saved URL exposes project and location settings", async () => {
+  const item = { name: "google-vertex", adapter: "google", baseUrl: "https://legacy.example/v1", authMode: "key" } as WorkspaceItem;
+  const container = await renderSettings(item, async () => ({ ok: true }));
+  expect(container.textContent).toContain("Project ID");
+  expect(container.textContent).toContain("Location");
+  await act(async () => { container.unmount(); });
+});
+
 test("settings saves provider pacing and a slower model override", async () => {
   const item: WorkspaceItem = {
     name: "nvidia",
