@@ -9,23 +9,50 @@ import { isNonReplayableUpstreamCode } from "./upstream-retry";
 const SERIALIZED_HARD_CODE =
   /\bcode\s*[:=]\s*["']?(?:cyber_policy|origin_rejected|bio_policy|misalignment_policy_violation|invalid_prompt|upstream_no_response|upstream_closed_before_response|upstream_reset_replay_refused)\b/i;
 
+export interface ExtractedJsonEnvelope {
+  value: unknown;
+  prefix: string;
+  suffix: string;
+}
+
+const HARD_REFUSAL_TOKEN =
+  /\b(?:cyber_policy|origin_rejected|bio_policy|misalignment_policy_violation|invalid_prompt)\b/i;
+
+function isAuthoritativeHardRefusalProse(str: string | undefined): boolean {
+  if (!str) return false;
+  const s = str.trim();
+  if (!s) return false;
+  if (isCyberPolicyMessage(s)) return true;
+  if (/origin_rejected/i.test(s)) return true;
+  if (HARD_REFUSAL_TOKEN.test(s)) return true;
+  if (SERIALIZED_HARD_CODE.test(s)) return true;
+  if (safetyRefusalCodeFromMessage(s)) return true;
+  return false;
+}
+
 /**
- * Extract a balanced or prefixed JSON object/array envelope from error text.
- * Strips common gateway prefixes and extracts content between the outermost JSON delimiters.
+ * Extract a balanced or prefixed JSON object/array envelope from error text,
+ * capturing any authoritative diagnostic prefix and suffix outside the JSON delimiters.
  */
-export function extractJsonEnvelope(text: string): unknown | undefined {
+export function extractJsonEnvelopeWithContext(text: string): ExtractedJsonEnvelope | undefined {
   let s = text.trim();
+  let strippedPrefix = "";
   for (let d = 0; d < 3; d += 1) {
     if (s.startsWith("Provider error 400: ")) {
+      strippedPrefix += s.slice(0, "Provider error 400: ".length);
       s = s.slice("Provider error 400: ".length).trim();
     } else if (s.startsWith("Provider error: ")) {
+      strippedPrefix += s.slice(0, "Provider error: ".length);
       s = s.slice("Provider error: ".length).trim();
     } else if (s.startsWith("Gateway error 400: ")) {
+      strippedPrefix += s.slice(0, "Gateway error 400: ".length);
       s = s.slice("Gateway error 400: ".length).trim();
     } else if (s.startsWith("Gateway error: ")) {
+      strippedPrefix += s.slice(0, "Gateway error: ".length);
       s = s.slice("Gateway error: ".length).trim();
     }
     if (s.startsWith("data:") && !s.includes("\n")) {
+      strippedPrefix += s.slice(0, "data:".length);
       s = s.slice("data:".length).trim();
     }
   }
@@ -33,7 +60,12 @@ export function extractJsonEnvelope(text: string): unknown | undefined {
   const lastBrace = s.lastIndexOf("}");
   if (firstBrace !== -1 && lastBrace > firstBrace) {
     try {
-      return JSON.parse(s.slice(firstBrace, lastBrace + 1));
+      const value = JSON.parse(s.slice(firstBrace, lastBrace + 1));
+      return {
+        value,
+        prefix: (strippedPrefix + " " + s.slice(0, firstBrace)).trim(),
+        suffix: s.slice(lastBrace + 1).trim(),
+      };
     } catch {
       // ignore
     }
@@ -42,12 +74,25 @@ export function extractJsonEnvelope(text: string): unknown | undefined {
   const lastBracket = s.lastIndexOf("]");
   if (firstBracket !== -1 && lastBracket > firstBracket) {
     try {
-      return JSON.parse(s.slice(firstBracket, lastBracket + 1));
+      const value = JSON.parse(s.slice(firstBracket, lastBracket + 1));
+      return {
+        value,
+        prefix: (strippedPrefix + " " + s.slice(0, firstBracket)).trim(),
+        suffix: s.slice(lastBracket + 1).trim(),
+      };
     } catch {
       // ignore
     }
   }
   return undefined;
+}
+
+/**
+ * Extract a balanced or prefixed JSON object/array envelope from error text.
+ * Strips common gateway prefixes and extracts content between the outermost JSON delimiters.
+ */
+export function extractJsonEnvelope(text: string): unknown | undefined {
+  return extractJsonEnvelopeWithContext(text)?.value;
 }
 
 /**
@@ -81,10 +126,24 @@ export function isHardPolicyOrOriginRefusal(text: string | undefined, depth = 0)
   // so echoed user request content (e.g. request.input, prompt, echoed body) does not
   // suppress valid recoveries (#8173).
   let parsed: unknown;
+  let hasOuterRefusal = false;
   try {
     parsed = JSON.parse(unescaped);
   } catch {
-    parsed = extractJsonEnvelope(unescaped);
+    const extracted = extractJsonEnvelopeWithContext(unescaped);
+    if (extracted) {
+      parsed = extracted.value;
+      if (
+        isAuthoritativeHardRefusalProse(extracted.prefix)
+        || isAuthoritativeHardRefusalProse(extracted.suffix)
+      ) {
+        hasOuterRefusal = true;
+      }
+    }
+  }
+
+  if (hasOuterRefusal) {
+    return true;
   }
 
   if (parsed && typeof parsed === "object") {
@@ -100,17 +159,31 @@ export function isHardPolicyOrOriginRefusal(text: string | undefined, depth = 0)
           if (item && typeof item === "object") {
             queue.push(item);
           } else if (typeof item === "string") {
-            if (
-              isCyberPolicyMessage(item)
-              || /origin_rejected/i.test(item)
-              || safetyRefusalCodeFromMessage(item)
-              || isHardPolicyOrOriginRefusal(item, depth + 1)
-            ) {
+            let itemParsed: unknown;
+            let itemHasOuterRefusal = false;
+            try {
+              itemParsed = JSON.parse(item);
+            } catch {
+              const itemExtracted = extractJsonEnvelopeWithContext(item);
+              if (itemExtracted) {
+                itemParsed = itemExtracted.value;
+                if (
+                  isAuthoritativeHardRefusalProse(itemExtracted.prefix)
+                  || isAuthoritativeHardRefusalProse(itemExtracted.suffix)
+                ) {
+                  itemHasOuterRefusal = true;
+                }
+              }
+            }
+
+            if (itemHasOuterRefusal) {
               return true;
             }
-            const inner = extractJsonEnvelope(item);
-            if (inner && typeof inner === "object") {
-              queue.push(inner);
+
+            if (itemParsed && typeof itemParsed === "object") {
+              queue.push(itemParsed);
+            } else if (isAuthoritativeHardRefusalProse(item)) {
+              return true;
             }
           }
         }
@@ -141,21 +214,36 @@ export function isHardPolicyOrOriginRefusal(text: string | undefined, depth = 0)
         }
       }
 
-      // Authoritative diagnostic carriers only (avoid request echo fields like input, prompt, request, body, reason)
+      // Authoritative diagnostic carriers only (avoid request echo fields like input, prompt, request, body, reason).
+      // Parse structured diagnostic strings first so nested request echo is not matched by prose rules (#8173).
       for (const field of ["message", "error", "details", "detail", "last_error", "response", "errors"] as const) {
         const val = rec[field];
         if (typeof val === "string") {
-          if (
-            isCyberPolicyMessage(val)
-            || /origin_rejected/i.test(val)
-            || safetyRefusalCodeFromMessage(val)
-            || isHardPolicyOrOriginRefusal(val, depth + 1)
-          ) {
+          let innerParsed: unknown;
+          let innerHasOuterRefusal = false;
+          try {
+            innerParsed = JSON.parse(val);
+          } catch {
+            const innerExtracted = extractJsonEnvelopeWithContext(val);
+            if (innerExtracted) {
+              innerParsed = innerExtracted.value;
+              if (
+                isAuthoritativeHardRefusalProse(innerExtracted.prefix)
+                || isAuthoritativeHardRefusalProse(innerExtracted.suffix)
+              ) {
+                innerHasOuterRefusal = true;
+              }
+            }
+          }
+
+          if (innerHasOuterRefusal) {
             return true;
           }
-          const inner = extractJsonEnvelope(val);
-          if (inner && typeof inner === "object") {
-            queue.push(inner);
+
+          if (innerParsed && typeof innerParsed === "object") {
+            queue.push(innerParsed);
+          } else if (isAuthoritativeHardRefusalProse(val)) {
+            return true;
           }
         } else if (val && typeof val === "object") {
           queue.push(val);
@@ -165,9 +253,7 @@ export function isHardPolicyOrOriginRefusal(text: string | undefined, depth = 0)
     return false;
   }
 
-  if (isCyberPolicyMessage(text)) return true;
-  if (/origin_rejected/i.test(text)) return true;
-  if (SERIALIZED_HARD_CODE.test(text)) return true;
+  if (isAuthoritativeHardRefusalProse(unescaped)) return true;
 
   return false;
 }

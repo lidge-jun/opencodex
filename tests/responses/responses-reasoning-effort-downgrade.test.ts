@@ -161,6 +161,32 @@ const PREFIXED_ECHOED_BIO_POLICY_REFUSAL =
   'Gateway error 400: {"error":{"param":"reasoning_effort","message":"Invalid reasoning effort."},"request":{"input":"bio_policy violation"}}';
 const PREFIXED_POLICY_REFUSAL =
   'Gateway error 400: {"error":{"code":"cyber_policy","param":"reasoning_effort","message":"Request blocked by upstream cybersecurity policy"},"request":{"input":"ordinary text"}}';
+const HARD_REFUSAL_PREFIX_ENVELOPE =
+  'origin_rejected: {"error":{"param":"reasoning_effort","message":"Invalid reasoning effort."}}';
+const NESTED_WRAPPED_ECHO_ORIGIN_REJECTED = JSON.stringify({
+  error: {
+    type: "upstream_error",
+    message: JSON.stringify({
+      error: { param: "reasoning_effort", message: "Invalid reasoning effort." },
+      request: { input: "origin_rejected" },
+    }),
+  },
+});
+const NESTED_WRAPPED_ECHO_ORDINARY = JSON.stringify({
+  error: {
+    type: "upstream_error",
+    message: JSON.stringify({
+      error: { param: "reasoning_effort", message: "Invalid reasoning effort." },
+      request: { input: "ordinary input prompt" },
+    }),
+  },
+});
+const NESTED_WRAPPED_HARD_REFUSAL_PREFIX = JSON.stringify({
+  error: {
+    type: "upstream_error",
+    message: 'origin_rejected: {"error":{"param":"reasoning_effort","message":"Invalid reasoning effort."}}',
+  },
+});
 const VENDOR_EFFORT_REFUSAL = JSON.stringify({ code: "invalid-argument", error: "Invalid reasoning effort." });
 const UNRELATED = JSON.stringify({ error: { type: "invalid_request_error", message: "Invalid upload request." } });
 
@@ -1023,6 +1049,174 @@ describe("rejected reasoning rungs", () => {
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       return new Response(PREFIXED_POLICY_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = passthroughConfig();
+    const response = await handleResponses(request(), cfg, logCtx);
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("stops before effort replay on outer hard-refusal prefix outside extracted envelope (openai-chat)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(HARD_REFUSAL_PREFIX_ENVELOPE, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = config();
+    const response = await handleResponses(request(), cfg, logCtx);
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("stops before effort replay on outer hard-refusal prefix outside extracted envelope (openai-responses)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(HARD_REFUSAL_PREFIX_ENVELOPE, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = passthroughConfig();
+    const response = await handleResponses(request(), cfg, logCtx);
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("replays downgrade when nested upstream_error message echoes origin_rejected in request input (openai-chat)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (outbound.length === 1) {
+        return new Response(NESTED_WRAPPED_ECHO_ORIGIN_REJECTED, { status: 400, headers: { "content-type": "application/json" } });
+      }
+      return chatSuccess();
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = config();
+    const response = await handleResponses(request(), cfg, logCtx);
+
+    expect(outbound).toHaveLength(2);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(effortOf(outbound[1])).toBe("high");
+    expect(response.status).toBe(200);
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual(["reasoning-effort-downgrade"]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(true);
+  });
+
+  test("replays downgrade when nested upstream_error message echoes origin_rejected in request input (openai-responses)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (outbound.length === 1) {
+        return new Response(NESTED_WRAPPED_ECHO_ORIGIN_REJECTED, { status: 400, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ id: "resp-ok" }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = passthroughConfig();
+    const response = await handleResponses(request(), cfg, logCtx);
+
+    expect(outbound).toHaveLength(2);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(effortOf(outbound[1])).toBe("high");
+    expect(response.status).toBe(200);
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual(["reasoning-effort-downgrade"]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(true);
+  });
+
+  test("replays downgrade when nested upstream_error message has ordinary request input (openai-chat)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (outbound.length === 1) {
+        return new Response(NESTED_WRAPPED_ECHO_ORDINARY, { status: 400, headers: { "content-type": "application/json" } });
+      }
+      return chatSuccess();
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = config();
+    const response = await handleResponses(request(), cfg, logCtx);
+
+    expect(outbound).toHaveLength(2);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(effortOf(outbound[1])).toBe("high");
+    expect(response.status).toBe(200);
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual(["reasoning-effort-downgrade"]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(true);
+  });
+
+  test("replays downgrade when nested upstream_error message has ordinary request input (openai-responses)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (outbound.length === 1) {
+        return new Response(NESTED_WRAPPED_ECHO_ORDINARY, { status: 400, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ id: "resp-ok" }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = passthroughConfig();
+    const response = await handleResponses(request(), cfg, logCtx);
+
+    expect(outbound).toHaveLength(2);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(effortOf(outbound[1])).toBe("high");
+    expect(response.status).toBe(200);
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual(["reasoning-effort-downgrade"]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(true);
+  });
+
+  test("stops before effort replay when nested upstream_error message has hard-refusal prefix (openai-chat)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(NESTED_WRAPPED_HARD_REFUSAL_PREFIX, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = config();
+    const response = await handleResponses(request(), cfg, logCtx);
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("stops before effort replay when nested upstream_error message has hard-refusal prefix (openai-responses)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(NESTED_WRAPPED_HARD_REFUSAL_PREFIX, { status: 400, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
     const logCtx: RequestLogContext = { model: "", provider: "" };
 
