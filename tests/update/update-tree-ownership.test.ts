@@ -407,6 +407,38 @@ describe("#4202 install-tree dependency ownership", () => {
     expect(result.failures).toContain("pnpm dependency link escapes the selected store: foreign");
   });
 
+  test("refuses an escaping dependency link under a nested package directory", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    const nested = join(zod, "lib", "node_modules"); mkdirSync(nested, { recursive: true });
+    const outside = join(root, "outside", "foreign"); writeDependency(outside, "foreign");
+    writeFileSync(join(outside, "index.js"), "module.exports = 1;\n");
+    symlinkSync(outside, join(nested, "foreign"), "dir");
+    expect(realpathSync(createRequire(join(zod, "lib", "entry.js")).resolve("foreign"))).toBe(realpathSync(join(outside, "index.js")));
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm dependency link escapes the selected store: foreign");
+  });
+
+  test("accepts a nested dependency link inside the selected store", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const store = join(root, "pnpm", "store", "v11");
+    const zod = join(store, "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    const nested = join(zod, "lib", "node_modules"); mkdirSync(nested, { recursive: true });
+    const inside = join(store, "links", "nested", "1", "h3", "node_modules", "nested"); writeDependency(inside, "nested");
+    symlinkSync(inside, join(nested, "nested"), "dir");
+    expect(verifyPnpmInstallTree(exposed, "2.0.0", store)).toEqual({ ok: true, failures: [] });
+  });
+
+  test("refuses a dangling nested dependency root", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    mkdirSync(join(zod, "lib")); symlinkSync(join(root, "missing"), join(zod, "lib", "node_modules"), "dir");
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm dependency root could not be resolved");
+  });
+
   test("refuses a hidden dependency link outside the selected store", () => {
     const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
     const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");

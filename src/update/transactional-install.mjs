@@ -134,9 +134,9 @@ function ownedDependencyRoots(packageDir, store) {
  * as a virtual-store path that no lexical ownership test can recognise. existsSync follows
  * the symlink, which is exactly the pnpm graph edge that proves ownership.
  */
-function pnpmOwnedDependencyDir(packageDir, name, store, globalLinks, escaped) {
+function pnpmOwnedDependencyDir(packageDir, name, store, globalLinks, escaped, roots = ownedDependencyRoots(packageDir, store)) {
   let matched;
-  for (const root of ownedDependencyRoots(packageDir, store)) {
+  for (const root of roots) {
     const dir = join(root, ...name.split("/"));
     if (globalLinks) {
       if (name.startsWith("@") && name.includes("/")) {
@@ -209,9 +209,38 @@ function inspectPnpmMetadata(path, store, escaped, kind) {
   }
 }
 
+/** Find nested module roots and validate package links without following them outside the store. */
+function nestedPnpmRoots(packageDir, store, escaped, budget) {
+  const pending = [packageDir], seen = new Set(), roots = [];
+  while (pending.length) {
+    const current = pending.pop();
+    let real;
+    try { real = realpathSync(current); } catch { escaped.add("pnpm package path could not be resolved"); continue; }
+    if (!inside(real, store)) { escaped.add("pnpm package link escapes the selected store"); continue; }
+    if (seen.has(real)) continue;
+    if (budget.remaining-- <= 0) { escaped.add("pnpm package traversal exceeds verification limit"); return roots; }
+    seen.add(real);
+    try {
+      for (const entry of readdirSync(real, { withFileTypes: true })) {
+        const child = join(real, entry.name);
+        if (entry.name === "node_modules") { roots.push(child); continue; }
+        if (entry.isDirectory()) pending.push(child);
+        else if (entry.isSymbolicLink()) {
+          try {
+            const target = realpathSync(child);
+            if (!inside(target, store)) escaped.add("pnpm package link escapes the selected store");
+            else if (statSync(target).isDirectory()) pending.push(target);
+          } catch { escaped.add("pnpm package link could not be resolved"); }
+        }
+      }
+    } catch { escaped.add("pnpm package directory could not be inspected"); }
+  }
+  return roots;
+}
+
 /** Check reachable global-store package roots and declared dependency links, including cycles. */
 function inspectGlobalPnpmGraph(packageDir, store, escaped) {
-  const pending = [packageDir], seen = new Set();
+  const pending = [packageDir], seen = new Set(), budget = { remaining: 100000 };
   while (pending.length) {
     let path;
     try { path = realpathSync(pending.pop()); } catch { escaped.add("pnpm dependency package could not be resolved"); continue; }
@@ -219,7 +248,9 @@ function inspectGlobalPnpmGraph(packageDir, store, escaped) {
     if (seen.size >= 10000) { escaped.add("pnpm dependency graph exceeds verification limit"); return; }
     seen.add(path);
     const names = new Set();
-    for (const root of [join(path, "node_modules"), enclosingNodeModules(path)]) {
+    const nestedRoots = nestedPnpmRoots(path, store, escaped, budget);
+    const ownRoot = join(path, "node_modules"), groupRoot = enclosingNodeModules(path);
+    for (const root of [...new Set([ownRoot, groupRoot, ...nestedRoots])]) {
       if (!root) continue;
       try { lstatSync(root); } catch (error) {
         if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") escaped.add("pnpm dependency root could not be resolved");
@@ -248,7 +279,12 @@ function inspectGlobalPnpmGraph(packageDir, store, escaped) {
     for (const name of names) {
       const dependency = pnpmOwnedDependencyDir(path, name, store, true, escaped);
       if (dependency) pending.push(dependency);
-      else {
+      for (const root of nestedRoots) {
+        if (root === ownRoot || root === groupRoot) continue;
+        const nested = pnpmOwnedDependencyDir(path, name, store, true, escaped, [root]);
+        if (nested) pending.push(nested);
+      }
+      if (!dependency) {
         const required = (Object.hasOwn(manifest.dependencies ?? {}, name) && !Object.hasOwn(manifest.optionalDependencies ?? {}, name))
           || (Object.hasOwn(manifest.peerDependencies ?? {}, name) && manifest.peerDependenciesMeta?.[name]?.optional !== true);
         if (required) {
