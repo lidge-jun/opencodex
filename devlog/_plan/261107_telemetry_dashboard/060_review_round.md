@@ -106,3 +106,5 @@ D20 Dashboard: GitHub release download totals follow pagination (per_page=100, f
   approximated by subtracting published rows from published totals.
 - The rate limit keys IPv6 on the /64, so a client holding a larger prefix (a /48 has 65,536 /64s)
   gets one budget per /64; requests without cf-connecting-ip all share one budget.
+- Installs without an installer (the standalone `ocx.exe`, npm) meet SignPath's install-time conditions
+  only through the first-run notice (CLI prompt or dashboard popup); D21 accepts that reading.
