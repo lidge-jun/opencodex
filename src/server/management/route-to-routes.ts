@@ -113,6 +113,8 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
     code: "route_intent_unsupported", reason: EPHEMERAL_NO_ROUTE_INTENT, device: link.id }, 409);
   if (config.runtimeRole === "client") return reply({ error: "Route-to decisions are owned by the Home", code: "link_child_read_only" }, 403);
   let desiredCommitted = false;
+  // A Home native decision is its switch: what the durable switch read before this write.
+  let nativeBefore: { client: HomeNativeRouteClientId; enabled: boolean } | undefined;
   try {
     if (url.pathname === "/api/route-to" && req.method === "GET") {
       if ([...url.searchParams.keys()].some(key => key !== "device") || url.searchParams.getAll("device").length > 1) return reply({ error: "invalid_request" }, 400);
@@ -154,6 +156,7 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
     // On the Home itself a native client's decision is its native switch, written by the apply below.
     const homeNative = selected === "home" && isHomeNativeRouteClient(write.client) ? write.client : undefined;
     const switchBefore = homeNative ? durableHomeSwitch(ctx.config, homeNative) : undefined;
+    if (homeNative) nativeBefore = { client: homeNative, enabled: switchBefore! };
     const commit = () => withConfigMutationLockSync(() => {
       // A Home native decision on a Home with no link is only its switch: like every Home-only
       // switch writer there, it leaves route-intent.json alone. Until defaults are saved a Home
@@ -219,7 +222,14 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
       : error.message, code: "route_intent_unavailable", desiredCommitted }, 500);
     if (error instanceof Error && error.message === "ambiguous_device") return reply({ error: "ambiguous device alias: use an exact link id", code: "ambiguous_device" }, 409);
     if (error instanceof Error && error.message === "unknown_device") return reply({ error: "unknown device: use home, this, or a link id or alias from ocx link status", code: "unknown_device" }, 404);
-    // Do not project paths, config bytes, or transport credentials from a local exception.
-    return reply({ error: "Route-to state could not be read or applied; inspect the local integration status and retry", code: "route_to_failed" }, 500);
+    // Do not project paths, config bytes, or transport credentials from a local exception. Say
+    // what was saved before the failure: route policy, or the Home's native switch.
+    let switchSaved = false;
+    try { switchSaved = nativeBefore !== undefined && durableHomeSwitch(ctx.config, nativeBefore.client) !== nativeBefore.enabled; }
+    catch { /* An unreadable switch proves nothing was saved. */ }
+    const saved = desiredCommitted || switchSaved;
+    return reply({ error: switchSaved ? `The Home's ${nativeBefore!.client} switch was saved, but applying it failed; inspect the local integration status and retry sync`
+      : desiredCommitted ? "Route policy was saved, but applying it failed; inspect the local integration status and retry sync"
+        : "Route-to state could not be read or applied; inspect the local integration status and retry", code: "route_to_failed", desiredCommitted: saved }, 500);
   }
 }

@@ -8,6 +8,7 @@ import { routeToDeviceStatus } from "../../src/routing/route-to-status";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import type { ManagementContext } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
+import { getDefaultConfig, loadConfig, saveConfig } from "../../src/config";
 
 const id = "lnk_0123456789abcdef";
 let home: TempHome;
@@ -156,5 +157,24 @@ describe("Route-to device API", () => {
     const unsaved = await codex!.json();
     expect(unsaved).toMatchObject({ code: "route_apply_unresolved", desiredCommitted: false });
     expect(unsaved.error).toStartWith("The Home did not apply codex (conflict)");
+  });
+  test("a failure after the write says what it saved", async () => {
+    const failing = (save?: () => void) => ({ ...deps, applyHome: async () => { save?.(); throw new Error("model discovery failed"); } });
+    // A default write saves route policy before the apply, here before its model discovery fails.
+    const policy = await handleRouteToRoutes(ctx("/api/route-to", { client: "pi", action: "off" }), failing());
+    expect(policy?.status).toBe(500);
+    expect(await policy!.json()).toEqual({ code: "route_to_failed", desiredCommitted: true,
+      error: "Route policy was saved, but applying it failed; inspect the local integration status and retry sync" });
+    expect(readRouteIntentState().defaults.pi).toEqual({ enabled: false });
+    // A Home native decision is its switch: the durable switch says whether it was saved.
+    saveConfig({ ...getDefaultConfig(), port: 12345 });
+    const moved = await handleRouteToRoutes(ctx("/api/route-to", { client: "codex", action: "off", device: "home" }),
+      failing(() => saveConfig({ ...loadConfig(), clientIntegrations: { codex: false } })));
+    expect(moved?.status).toBe(500);
+    expect(await moved!.json()).toEqual({ code: "route_to_failed", desiredCommitted: true,
+      error: "The Home's codex switch was saved, but applying it failed; inspect the local integration status and retry sync" });
+    const unmoved = await handleRouteToRoutes(ctx("/api/route-to", { client: "codex", action: "on", device: "home" }), failing());
+    expect(await unmoved!.json()).toEqual({ code: "route_to_failed", desiredCommitted: false,
+      error: "Route-to state could not be read or applied; inspect the local integration status and retry" });
   });
 });
