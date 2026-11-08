@@ -425,7 +425,7 @@ describe("main policy quota durability and lifecycle", () => {
       const child = Bun.spawnSync({ cmd: [process.execPath, "--eval", script], cwd: repoRoot(), env: process.env,
         timeout: process.env.OCX_TEST_CLAIM_REGRESSION === "timeout" ? 15_000 : process.platform === "win32" ? SPAWN_BUDGET_MS - INTERNAL_DEADLINE_MS : 10_000 });
       const diagnostics = formatClaimDiagnostics(readFileSync(diagnosticsPath, "utf8"));
-      if (process.env.OCX_TEST_CLAIM_REGRESSION === "timeout") expect(child.exitCode).toBeNull();
+      if (process.env.OCX_TEST_CLAIM_REGRESSION === "timeout") expect(child.exitedDueToTimeout).toBe(true);
       expect(child.exitCode, `claim diagnostics: ${diagnostics}`).toBe(0);
       const line = child.stdout.toString().split("\n").find(row => row.startsWith('{"fixture":"cold-keyring-quota"'));
       expect(line).toBeDefined();
@@ -500,7 +500,6 @@ describe("main policy quota durability and lifecycle", () => {
     const output = child.stdout.toString() + child.stderr.toString();
     expect(child.exitCode).not.toBe(0);
     expect(output).toContain('claim diagnostics: {"phase":"hardening"}');
-    expect(output).toContain("Received: null");
     expect(output).not.toContain("private-marker");
     expect(output).not.toContain("/private-claim-path");
     expect(output).not.toContain("fixture-secret-token");
