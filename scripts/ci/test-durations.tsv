@@ -2780,6 +2780,7 @@
 88080	tests/update/update-orchestrated-entry.test.ts
 68	tests/update/update-orchestrated-identity.test.ts
 74	tests/update/update-orchestrated-plan.test.ts
+57467	tests/update/update-orchestrated-pnpm-entry.test.ts
 3260	tests/update/update-orchestrated-session.test.ts
 44	tests/update/update-orchestrated-token.test.ts
 119	tests/update/update-pnpm.test.ts
