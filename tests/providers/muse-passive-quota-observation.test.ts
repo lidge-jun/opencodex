@@ -133,6 +133,33 @@ function observePayload(payload: unknown, servingAccountId: string | null, gener
 }
 
 describe("Muse subscription usage observed on the SSE seam", () => {
+  test.each(["detached", "no-live", "late-adoption"] as const)("physical Muse observation cannot overwrite another configuration (%s)", async mode => {
+    writeTwoAccounts();
+    const config = museConfig(), originalFetch = globalThis.fetch;
+    setLiveStateStoreConfig(config);
+    const owner = bindMuseQuotaConfig(captureMuseQuotaOwner("meta-muse", ACCOUNT_ID), config, "meta-muse");
+    recordWithOwner("meta-muse", ACCOUNT_ID, { fiveHourPercent: 40, updatedAt: Date.now() }, captureConfigGeneration(), owner);
+    await Bun.sleep(400);
+    if (mode !== "detached") { clearAccountQuotaCache(); setStateStoreLiveConfigReader(() => null); }
+    const changed = structuredClone(config);
+    changed.providers["meta-muse"]!.baseUrl = "https://other.example/v1";
+    globalThis.fetch = (async () => new Response(usageFrame(80, 20) + 'data: {"type":"response.completed","response":{"id":"fixture","status":"completed","output":[]}}\n\ndata: [DONE]\n\n',
+      { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+    const release = acquireOwnedSpendHome();
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "meta-muse/muse-spark-1.3", stream: true, input: "hello" }),
+      }), changed, { model: "", provider: "" });
+      expect(response.status).toBe(200);
+      if (mode === "late-adoption") setLiveStateStoreConfig(config);
+      await response.text();
+      if (mode === "no-live") setLiveStateStoreConfig(config);
+      reconcileLiveStateStores();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)?.fiveHourPercent).toBe(40);
+    } finally { release(); setLiveStateStoreConfig(config); globalThis.fetch = originalFetch; }
+  });
+
   test("physical observations survive unrelated reconciliation for display, ranking, persistence and reset continuity", async () => {
     writeTwoAccounts();
     const config = museConfig(), events: unknown[] = [], original = globalThis.fetch;
@@ -512,6 +539,21 @@ describe("GET /api/oauth/accounts?quota=1 for a passive provider", () => {
 });
 
 describe("provider-level quota row for a passive provider", () => {
+  test("standalone passive fallback restores only a matching saved Muse configuration", async () => {
+    writeTwoAccounts();
+    const config = museConfig();
+    setLiveStateStoreConfig(config);
+    recordWithOwner("meta-muse", ACCOUNT_ID, { fiveHourPercent: 40, updatedAt: Date.now() }, captureConfigGeneration(),
+      bindMuseQuotaConfig(captureMuseQuotaOwner("meta-muse", ACCOUNT_ID), config, "meta-muse"));
+    try {
+      await Bun.sleep(400);
+      clearAccountQuotaCache(); setStateStoreLiveConfigReader(() => null);
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+      const result = await fetchProviderQuotaReports(config, true);
+      expect(result.reports.find(row => row.provider === "meta-muse")?.quota.fiveHourPercent).toBe(40);
+    } finally { setLiveStateStoreConfig(config); }
+  });
+
   test.each(["unchanged", "destination", "adapter", "auth"] as const)("persisted Muse quota requires matching provider configuration after restart (%s)", async change => {
     writeTwoAccounts(true);
     const config = museConfig(), originalFetch = globalThis.fetch;

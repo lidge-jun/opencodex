@@ -19,7 +19,7 @@ import {
   type KiroUsageSnapshot,
   kiroUsageContextForAccount,
 } from "../kiro-usage";
-import { captureConfigGeneration, readStateStoreLiveConfig } from "../../lib/state-store-sweeper";
+import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { aggregateCodexPoolCapacity, CODEX_CAPACITY_MAX_QUOTA_AGE_MS, type CodexCapacityQuota } from "../codex-capacity";
 import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
 import { providerCodexAccountMode } from "../registry";
@@ -39,6 +39,7 @@ import {
 import {
   accountCacheKey,
   captureProviderAccountQuotaEpoch,
+  canWriteMuseQuota,
   accountQuotaCache,
   hydrateAccountQuotaCache,
   isMuseQuotaEntryCurrent,
@@ -433,12 +434,7 @@ export async function fetchMuseKeyQuota(provider: string, config?: OcxConfig): P
   const probedAccountKey = accountCacheKey(provider, owner.accountId);
   // Load any saved owner before a no-live probe can replace the shared account row.
   runPassiveReadSync(hydrateAccountQuotaCache);
-  const liveOwnerCurrent = () => {
-    const live = readStateStoreLiveConfig(getConfigDir());
-    if (live) return owner.isConfigCurrent?.(live) === true;
-    const previous = accountQuotaCache.get(probedAccountKey);
-    return !previous || !!owner.configIdentity && previous.museConfigIdentity === owner.configIdentity && previous.identity === owner.identity;
-  };
+  const liveOwnerCurrent = () => canWriteMuseQuota(owner, probedAccountKey);
   const probedAccountId = owner.accountId;
   // A paused account is excluded from every automatic upstream use; a key mint is one.
   if (getAccountSet(provider)?.accounts.find(account => account.id === probedAccountId)?.paused === true) return null;

@@ -248,7 +248,16 @@ export function isMuseQuotaEntryCurrent(entry: AccountQuotaCacheEntry, config?: 
   if (!entry.museConfigIdentity || !entry.isCurrent?.()) return false;
   if (config && museQuotaConfigIdentity(config, "meta-muse") !== entry.museConfigIdentity) return false;
   const live = readStateStoreLiveConfig(getConfigDir());
-  return live ? entry.isConfigCurrent?.(live) === true : !entry.museHydrated;
+  return live ? entry.isConfigCurrent?.(live) === true : !entry.museHydrated || config !== undefined;
+}
+
+/** A writer must own the adopted provider or match any still-current retained row. */
+export function canWriteMuseQuota(owner: MuseQuotaOwner, key: string): boolean {
+  const live = readStateStoreLiveConfig(getConfigDir());
+  if (live) return owner.isConfigCurrent?.(live) === true;
+  const previous = accountQuotaCache.get(key);
+  return !previous || previous.isCurrent?.() === false
+    || !!owner.configIdentity && previous.museConfigIdentity === owner.configIdentity && previous.identity === owner.identity;
 }
 
 /**
@@ -421,6 +430,7 @@ export function recordPassiveAccountQuota(
   // them. A probe writer cannot hit this because its own read hydrates first; an
   // observation arrives unprompted, so it must hydrate itself.
   runPassiveReadSync(hydrateAccountQuotaCache);
+  if (!canWriteMuseQuota(owner, key)) return;
   accountQuotaCache.set(key, { ts: Date.now(), quota, identity: owner.identity,
     isCurrent: () => epoch === captureProviderAccountQuotaEpoch(provider) && owner.isAccountCurrent(),
     isConfigCurrent: owner.isConfigCurrent, museConfigIdentity: owner.configIdentity });
