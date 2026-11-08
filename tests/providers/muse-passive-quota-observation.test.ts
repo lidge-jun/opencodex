@@ -542,7 +542,61 @@ describe("GET /api/oauth/accounts?quota=1 for a passive provider", () => {
 });
 
 describe("provider-level quota row for a passive provider", () => {
-  test("reset-first Muse ranking reads each account's ownership once per decision", async () => {
+  test("a rejected persisted Muse row cannot revive after configuration ABA across restarts", async () => {
+    writeTwoAccounts(true);
+    const config = museConfig(), originalFetch = globalThis.fetch;
+    setLiveStateStoreConfig(config);
+    globalThis.fetch = (async () => Response.json({ is_subs_active: true,
+      subs_usage: { window: { used_percent: 40, window_duration_mins: 300 } } })) as typeof fetch;
+    try {
+      expect((await fetchMuseKeyQuota("meta-muse", config))?.quota.fiveHourPercent).toBe(40);
+      await Bun.sleep(400);
+      clearAccountQuotaCache();
+      const changed = structuredClone(config);
+      changed.providers["meta-muse"]!.baseUrl = "https://other.example/v1";
+      setLiveStateStoreConfig(changed); reconcileLiveStateStores();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+      await Bun.sleep(400);
+      clearAccountQuotaCache(); setLiveStateStoreConfig(config); reconcileLiveStateStores();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("observed external Muse credential ABA permanently retires the captured owner", () => {
+    writeTwoAccounts();
+    const owner = captureMuseQuotaOwner("meta-muse", ACCOUNT_ID)!;
+    const path = join(testDir, "auth.json"), original = readFileSync(path, "utf8"), changed = JSON.parse(original);
+    changed["meta-muse"].accounts[0].credential.access = "external-replacement";
+    writeFileSync(path, JSON.stringify(changed), { mode: 0o600 });
+    expect(owner.isAccountCurrent()).toBe(false);
+    writeFileSync(path, original, { mode: 0o600 });
+    expect(owner.isAccountCurrent()).toBe(false);
+    expect(owner.isCurrent()).toBe(false);
+  });
+
+  test("Muse ranking discards evidence changed during the same decision", async () => {
+    writeTwoAccounts();
+    const config = museConfig();
+    setLiveStateStoreConfig(config);
+    for (const [id, percent] of [[ACCOUNT_ID, 70], ["account-b", 10]] as const) {
+      await setActiveAccount("meta-muse", id);
+      recordWithOwner("meta-muse", id, { fiveHourPercent: percent, updatedAt: Date.now() }, captureConfigGeneration(),
+        bindMuseQuotaConfig(captureMuseQuotaOwner("meta-muse", id), config, "meta-muse"));
+    }
+    const path = join(testDir, "auth.json"), original = readFileSync(path, "utf8"), changed = JSON.parse(original);
+    changed["meta-muse"].accounts[0].credential.access = "external-replacement";
+    const realRead = fs.readFileSync;
+    let reads = 0;
+    const spy = spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+      if (String(args[0]) === path && ++reads === 2) writeFileSync(path, JSON.stringify(changed), { mode: 0o600 });
+      return (realRead as (...args: Parameters<typeof fs.readFileSync>) => ReturnType<typeof fs.readFileSync>)(...args);
+    }) as typeof fs.readFileSync);
+    try {
+      expect(rankAccountsByHeadroom("meta-muse", [ACCOUNT_ID, "account-b"], undefined, undefined, config)).toEqual([ACCOUNT_ID, "account-b"]);
+    } finally { spy.mockRestore(); }
+  });
+
+  test("reset-first Muse ranking reads each account twice at most per decision", async () => {
     writeTwoAccounts();
     const config = museConfig();
     setLiveStateStoreConfig(config);
@@ -560,7 +614,7 @@ describe("provider-level quota row for a passive provider", () => {
     }) as typeof fs.readFileSync);
     try {
       expect(rankAccountsByResetFirst("meta-muse", [ACCOUNT_ID, "account-b"], undefined, Date.now(), undefined, config)).toEqual(["account-b", ACCOUNT_ID]);
-      expect(reads).toBeLessThanOrEqual(2);
+      expect(reads).toBeLessThanOrEqual(4);
     } finally { spy.mockRestore(); }
     const path = join(testDir, "auth.json"), store = JSON.parse(readFileSync(path, "utf8"));
     store["meta-muse"].accounts[1].credential.access = "external-replacement";

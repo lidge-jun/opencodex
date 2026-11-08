@@ -131,6 +131,7 @@ export function captureProviderAccountQuotaEpoch(provider: string): number {
  * request and is replaced by a live probe immediately after.
  */
 let diskHydrated = false;
+let rejectedPersistedMuse = false;
 export function hydrateAccountQuotaCache(): void {
   if (diskHydrated) return;
   diskHydrated = true;
@@ -144,7 +145,7 @@ export function hydrateAccountQuotaCache(): void {
       if (!owner || saved.museIdentity !== owner.identity || !/^[a-f0-9]{64}$/.test(saved.museConfigIdentity ?? "")) continue;
       const { museIdentity: _identity, museConfigIdentity, ...publicQuota } = saved;
       const config = readStateStoreLiveConfig(getConfigDir());
-      if (config && museConfigIdentity !== museQuotaConfigIdentity(config, "meta-muse")) continue;
+      if (config && museConfigIdentity !== museQuotaConfigIdentity(config, "meta-muse")) { rejectedPersistedMuse = true; continue; }
       const bound = config ? bindMuseQuotaConfig(owner, config, "meta-muse") : null;
       if (!accountQuotaCache.has(key)) accountQuotaCache.set(key, { ts: quota.updatedAt, quota: publicQuota, identity: owner.identity, museConfigIdentity, museHydrated: true,
         isCurrent: bound?.isAccountCurrent ?? owner.isAccountCurrent, isConfigCurrent: bound?.isConfigCurrent });
@@ -490,7 +491,8 @@ export function sweepExpiredProviderAccountQuotaRows(now = Date.now()): number {
 export function reconcileProviderAccountQuotaRows(context: GenerationContext, config?: OcxConfig): number {
   if (context.generation <= lastReconciledGeneration) return 0;
   hydrateAccountQuotaCache();
-  let removed = 0;
+  let removed = rejectedPersistedMuse ? 1 : 0;
+  rejectedPersistedMuse = false;
   for (const [key, entry] of accountQuotaCache) {
     let current = context.oauthAccountKeys.has(key);
     if (current && key.startsWith("meta-muse\0")) {
@@ -548,6 +550,7 @@ export function clearAccountQuotaCache(provider?: string): void {
     // A cleared cache must not be re-seeded from the file it was just cleared of, and any
     // pending write of the old rows is abandoned.
     diskHydrated = false;
+    rejectedPersistedMuse = false;
     cancelPendingAccountQuotaPersist();
     return;
   }

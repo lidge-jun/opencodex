@@ -58,15 +58,22 @@ export function captureMuseQuotaOwner(provider: string, accountId?: string, sent
   });
   const captured = identityFor(accountId);
   if (!captured) return null;
+  let retired = false;
+  const currentIdentity = () => {
+    if (retired) return null;
+    const current = identityFor(captured.id);
+    if (!current || current.identity !== captured.identity) { retired = true; return null; }
+    return current;
+  };
   return {
     accountId: captured.id,
     identity: captured.identity,
     accountKey: JSON.stringify([provider, captured.id, captured.identity]),
     isCurrent: () => {
-      const current = identityFor(captured.id);
-      return current?.identity === captured.identity && current.selectionId === captured.selectionId
+      const current = currentIdentity();
+      return current !== null && current.selectionId === captured.selectionId
         && current.selectionRevision === captured.selectionRevision;
     },
-    isAccountCurrent: () => identityFor(captured.id)?.identity === captured.identity,
+    isAccountCurrent: () => currentIdentity() !== null,
   };
 }

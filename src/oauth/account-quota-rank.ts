@@ -122,6 +122,13 @@ function cachedDecisionQuota(provider: string, accountId: string, config?: OcxCo
   return quota;
 }
 
+/** Revalidate all passive ownership immediately before returning a ranking. */
+function passiveEvidenceCurrent(provider: string, config: OcxConfig | undefined,
+  evidence: Map<string, ReturnType<typeof getCachedProviderAccountQuota>>): boolean {
+  if (!hasPassiveAccountQuota(provider)) return true;
+  return [...evidence].every(([id, quota]) => getCachedProviderAccountQuota(provider, id, config) === quota);
+}
+
 /**
  * Remaining headroom percent for one account, or null when nothing has measured it.
  *
@@ -203,16 +210,16 @@ export function rankAccountsByResetFirst(
 ): string[] {
   if (ring.length < 2) return [...ring];
   const evidence = new Map<string, ReturnType<typeof getCachedProviderAccountQuota>>();
-  const ranked = rankAccountsByHeadroom(provider, ring, requestedModelId, accounts, config, evidence);
+  const ranked = rankAccountsByHeadroom(provider, ring, requestedModelId, accounts, config, evidence, false);
   const exhausted = (id: string) => provider === "kiro" && accounts?.get(id)
     ? kiroAccountEvidence(accounts.get(id)!).exhausted === true
     : (headroomOf(provider, id, requestedModelId, accounts?.get(id), config, evidence) ?? 1) <= 0;
   const healthy = ranked.filter(id => !exhausted(id));
-  if (healthy.length < 2) return ranked;
+  if (healthy.length < 2) return passiveEvidenceCurrent(provider, config, evidence) ? ranked : [...ring];
   if (
     hasPassiveAccountQuota(provider)
     && !ring.every(id => headroomOf(provider, id, requestedModelId, accounts?.get(id), config, evidence) !== null)
-  ) return ranked;
+  ) return passiveEvidenceCurrent(provider, config, evidence) ? ranked : [...ring];
 
   const withReset = healthy.map((id, index) => ({
     id,
@@ -224,7 +231,7 @@ export function rankAccountsByResetFirst(
   withReset.sort((a, b) => (a.resetAt - b.resetAt) || (b.headroom - a.headroom) || (a.index - b.index));
   const sortedHealthy = withReset.map(r => r.id);
   const spent = ranked.filter(exhausted);
-  return [...sortedHealthy, ...spent];
+  return passiveEvidenceCurrent(provider, config, evidence) ? [...sortedHealthy, ...spent] : [...ring];
 }
 
 /**
@@ -240,6 +247,7 @@ export function rankAccountsByHeadroom(
   accounts?: ReadonlyMap<string, ProviderAccount>,
   config?: OcxConfig,
   evidence = new Map<string, ReturnType<typeof getCachedProviderAccountQuota>>(),
+  validate = true,
 ): string[] {
   if (ring.length < 2) return [...ring];
 
@@ -267,9 +275,10 @@ export function rankAccountsByHeadroom(
 
   if (!sawEvidence) return [...ring];
 
-  return ranked
+  const result = ranked
     .sort((a, b) => (a.bucket - b.bucket) || (b.headroom - a.headroom) || (a.index - b.index))
     .map(entry => entry.id);
+  return !validate || passiveEvidenceCurrent(provider, config, evidence) ? result : [...ring];
 }
 
 /**
