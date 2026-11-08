@@ -907,7 +907,7 @@ fn lock_open_refuses_a_symlink_swapped_in_after_the_symlink_check() {
     let codex = scratch.0.join("codex");
     fs::create_dir_all(&ocx).unwrap();
     fs::create_dir_all(&codex).unwrap();
-    let lock = ocx.join("child").join("lifecycle.lock");
+    let lock = ocx.join("child.lock");
     let target = scratch.0.join("outside-target");
     let barrier = Barrier::new(&scratch.0, "lock-open");
     let mut cmd = child_command(&ocx, &codex, distinct_port(&[]), &["detach"]);
