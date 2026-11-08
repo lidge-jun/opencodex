@@ -217,6 +217,9 @@ test("an unavailable preview keeps the dialog open and retries after an ordinary
   const retry = Array.from(dialog!.querySelectorAll("button")).find(button => (button.textContent ?? "").trim() === "Load catalog and retry") as HTMLButtonElement | undefined;
   expect(retry).toBeDefined();
   expect(dialog!.textContent).toContain("model catalog is not loaded");
+  // No plan exists yet, so confirming must not look available.
+  const refusedConfirm = Array.from(dialog!.querySelectorAll("button")).find(button => (button.textContent ?? "").trim() === "Replace") as HTMLButtonElement;
+  expect(refusedConfirm.disabled).toBe(true);
 
   await act(async () => { retry!.click(); });
   await settle();

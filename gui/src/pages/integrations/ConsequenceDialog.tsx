@@ -186,7 +186,12 @@ export default function ConsequenceDialog({
               {recovering ? t("integrations.preview.recovering") : t("integrations.preview.loadCatalogRetry")}
             </button>
           )}
-          <button type="button" className="btn btn-primary" onClick={() => void applyConsequence()} disabled={pending || planLoading || Boolean(planFailure) || (planRequired && !activePlan && plans === undefined) || noActionableBulkTarget || activePlan?.canApply === false}>
+          {/*
+            A refused preview leaves no plan to confirm. Without `previewRecovery`
+            here the button looked live and did nothing, which reads as a broken
+            dialog rather than the one retry the user can actually take.
+          */}
+          <button type="button" className="btn btn-primary" onClick={() => void applyConsequence()} disabled={pending || planLoading || previewRecovery !== null || Boolean(planFailure) || (planRequired && !activePlan && plans === undefined) || noActionableBulkTarget || activePlan?.canApply === false}>
             {t(copy.confirmKey)}
           </button>
         </div>
