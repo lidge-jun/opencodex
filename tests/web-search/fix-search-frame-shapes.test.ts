@@ -4,6 +4,54 @@ import { MAX_SIDECAR_DECODED_CHARS, parseSidecarSSE } from "../../src/web-search
 const response = (frames: unknown[]) => new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join(""));
 
 describe("sidecar text-done snapshots", () => {
+  test.each([false, true])("keeps distinct item IDs when the first event is indexed: %s", async indexed => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", item_id: "item_a", ...(indexed ? { output_index: 0, content_index: 0 } : {}), text: "First. " },
+      { type: "response.output_text.done", item_id: "item_b", text: "Second." },
+      { type: "response.completed" },
+    ]));
+    expect(result).toEqual({ text: "First. Second.", sources: [] });
+  });
+
+  test.each([false, true])("matches the same item across indexed and unindexed events, indexed first: %s", async indexedFirst => {
+    const indexed = { item_id: "item_a", output_index: 0, content_index: 0 };
+    const unindexed = { item_id: "item_a" };
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", ...(indexedFirst ? indexed : unindexed), delta: "draft" },
+      { type: "response.output_text.done", ...(indexedFirst ? unindexed : indexed), text: "Final" },
+      { type: "response.output_text.done", item_id: "item_a", text: "Final" },
+      { type: "response.completed" },
+    ]));
+    expect(result).toEqual({ text: "Final", sources: [] });
+  });
+
+  test("keeps distinct content parts of the same unindexed item", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", item_id: "item_a", content_index: 0, text: "First. " },
+      { type: "response.output_text.done", item_id: "item_a", content_index: 1, text: "Second." },
+      { type: "response.completed" },
+    ]));
+    expect(result).toEqual({ text: "First. Second.", sources: [] });
+  });
+
+  test("matches item identity among multiple parts and preserves indexed order", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", item_id: "item_b", output_index: 1, content_index: 0, delta: "draft" },
+      { type: "response.output_text.done", item_id: "item_a", output_index: 0, content_index: 0, text: "First. " },
+      { type: "response.output_text.done", item_id: "item_b", text: "Second." },
+      { type: "response.completed" },
+    ]));
+    expect(result).toEqual({ text: "First. Second.", sources: [] });
+  });
+
+  test("keeps streamed identified items when completed output is malformed", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", item_id: "item_a", text: "First. " },
+      { type: "response.output_text.done", item_id: "item_b", text: "Second." },
+      { type: "response.completed", response: { output: [null] } },
+    ]));
+    expect(result).toEqual({ text: "First. Second.", sources: [] });
+  });
   for (const indexed of [false, true]) {
     test(`repeated ${indexed ? "indexed" : "unindexed"} done text is not appended twice`, async () => {
       const indexes = indexed ? { output_index: 0, content_index: 0 } : {};

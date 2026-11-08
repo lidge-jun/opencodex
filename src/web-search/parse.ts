@@ -39,29 +39,53 @@ type CompletedOutput = WebSearchResult & { incomplete: boolean; parts: Map<strin
 interface StreamedPart {
   delta: string;
   done: string | null;
+  itemId?: string;
+  contentIndex?: number;
 }
 
 /** The streamed part for events that carry no valid `output_index`/`content_index`. */
 const UNINDEXED_PART = "unindexed";
 
 /**
- * Key a streamed text event by its content part. An event without valid indexes joins the only
- * indexed part when exactly one exists. The first indexed event identifies any preceding
- * unindexed accumulator; once multiple indexed parts exist, unindexed text stays separate.
+ * Match explicit item identity before applying the legacy single-part fallback. Indexed parts
+ * retain their numeric keys so incomplete completed outputs can fill individual missing parts.
  */
 function streamedPartKey(data: Record<string, unknown>, parts: Map<string, StreamedPart>): string {
   const output = data.output_index;
   const content = data.content_index;
-  if (Number.isInteger(output) && Number.isInteger(content)) {
-    const key = `${output}:${content}`;
-    if (parts.size === 1 && parts.has(UNINDEXED_PART)) {
-      parts.set(key, parts.get(UNINDEXED_PART)!);
-      parts.delete(UNINDEXED_PART);
+  const contentIndex = Number.isInteger(content) ? content as number : undefined;
+  const itemId = typeof data.item_id === "string" && data.item_id ? data.item_id : undefined;
+  const indexedKey = Number.isInteger(output) && contentIndex !== undefined ? `${output}:${contentIndex}` : undefined;
+  const compatible = (part: StreamedPart): boolean =>
+    (!itemId || !part.itemId || itemId === part.itemId)
+    && (contentIndex === undefined || part.contentIndex === undefined || contentIndex === part.contentIndex);
+  const indexedPart = indexedKey ? parts.get(indexedKey) : undefined;
+  if (indexedPart && compatible(indexedPart)) return indexedKey!;
+
+  const entries = [...parts.entries()];
+  const candidates = entries.filter(([key, part]) => compatible(part)
+    && (!indexedKey || !isIndexedPartKey(key)));
+  const identified = itemId ? candidates.filter(([, part]) => part.itemId === itemId) : [];
+  let match = identified.length === 1 ? identified[0] : undefined;
+  if (!match && identified.length === 0 && entries.length === 1 && candidates.length === 1
+    && (!itemId || !candidates[0]![1].itemId)) {
+    match = candidates[0];
+  }
+  if (match) {
+    const [key, part] = match;
+    if (indexedKey && !indexedPart && key !== indexedKey) {
+      parts.delete(key);
+      parts.set(indexedKey, part);
+      return indexedKey;
     }
     return key;
   }
-  const indexed = [...parts.keys()].filter(key => key !== UNINDEXED_PART);
-  return indexed.length === 1 ? indexed[0]! : UNINDEXED_PART;
+  if (indexedKey && !indexedPart) return indexedKey;
+  return itemId ? `item:${JSON.stringify([itemId, contentIndex ?? null])}` : UNINDEXED_PART;
+}
+
+function isIndexedPartKey(key: string): boolean {
+  return key !== UNINDEXED_PART && !key.startsWith("item:");
 }
 
 /** Order `output_index:content_index` keys numerically. */
@@ -78,8 +102,8 @@ function streamedPartText(part: StreamedPart): string {
 
 /** Join indexed parts in index order, followed by any unindexed text. */
 function assembleStreamedText(parts: Map<string, StreamedPart>): string {
-  const keys = [...parts.keys()].filter(key => key !== UNINDEXED_PART).sort(comparePartKeys);
-  if (parts.has(UNINDEXED_PART)) keys.push(UNINDEXED_PART);
+  const keys = [...parts.keys()].filter(isIndexedPartKey).sort(comparePartKeys);
+  keys.push(...[...parts.keys()].filter(key => !isIndexedPartKey(key)));
   return keys.map(key => streamedPartText(parts.get(key)!)).join("");
 }
 
@@ -382,6 +406,8 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
     const key = streamedPartKey(data, acc.parts);
     let part = acc.parts.get(key);
     if (!part) { part = { delta: "", done: null }; acc.parts.set(key, part); }
+    if (typeof data.item_id === "string" && data.item_id) part.itemId = data.item_id;
+    if (Number.isInteger(data.content_index)) part.contentIndex = data.content_index as number;
     return part;
   };
 
@@ -503,7 +529,7 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
   const completedText = acc.final?.text.trim() ? acc.final.text : "";
   let text = completedText || streamedText;
   if (acc.final?.incomplete) {
-    const repaired = acc.parts.has(UNINDEXED_PART) ? streamedText : mergeIncompleteOutput(acc.final.parts, acc.parts);
+    const repaired = [...acc.parts.keys()].some(key => !isIndexedPartKey(key)) ? streamedText : mergeIncompleteOutput(acc.final.parts, acc.parts);
     if (repaired.trim()) text = repaired;
   }
   // Merge sources from the final output[] and the streaming annotation events.
