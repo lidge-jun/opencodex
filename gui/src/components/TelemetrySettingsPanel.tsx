@@ -6,6 +6,7 @@ import {
   fetchTelemetryStatus,
   formatTelemetryPreviewJson,
   hasOtherOpenModalDialog,
+  isTelemetryConsentSessionRefused,
   putTelemetryDecision,
   subscribeModalDialogChanges,
   type TelemetryDecision,
@@ -19,6 +20,10 @@ const PREVIEW_DIALOG_SELECTOR = "dialog.telemetry-preview-overlay";
 
 /**
  * Proxy details row and preview dialog for anonymous daily usage telemetry.
+ *
+ * On a Remote Link Child (`readOnly`) telemetry belongs to the Home proxy, and `/api/telemetry`
+ * is not a link-readable path, so the row shows only the "managed on the Home" hint and fetches
+ * nothing.
  */
 export function TelemetrySettingsPanel({
   apiBase,
@@ -30,7 +35,7 @@ export function TelemetrySettingsPanel({
   const t = useT();
   const [status, setStatus] = useState<TelemetryStatusSnapshot | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
-  const [saveFailed, setSaveFailed] = useState(false);
+  const [saveFailed, setSaveFailed] = useState<"failed" | "session" | null>(null);
   const [saving, setSaving] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [, setModalRevision] = useState(0);
@@ -60,6 +65,7 @@ export function TelemetrySettingsPanel({
   }, [apiBase]);
 
   useEffect(() => {
+    if (readOnly) return;
     const timeout = window.setTimeout(() => {
       void load();
     }, 0);
@@ -80,7 +86,7 @@ export function TelemetrySettingsPanel({
       stop();
       window.removeEventListener(TELEMETRY_STATUS_CHANGED_EVENT, onExternalChange);
     };
-  }, [load]);
+  }, [load, readOnly]);
 
   useEffect(() => {
     if (!previewOpen) return;
@@ -140,19 +146,26 @@ export function TelemetrySettingsPanel({
     savingRef.current = true;
     seqRef.current += 1;
     setSaving(true);
-    setSaveFailed(false);
+    setSaveFailed(null);
+    let refresh = false;
     try {
       const updated = await putTelemetryDecision(apiBase, nextDecision, status);
       seqRef.current += 1;
-      setStatus(updated);
-      setLoadFailed(false);
-    } catch {
-      setSaveFailed(true);
+      if (updated) {
+        setStatus(updated);
+        setLoadFailed(false);
+      } else {
+        // Saved, but the status could not be re-read: refresh instead of showing a stale switch.
+        refresh = true;
+      }
+    } catch (error) {
+      setSaveFailed(isTelemetryConsentSessionRefused(error) ? "session" : "failed");
     } finally {
       savingRef.current = false;
       setSaving(false);
     }
-  }, [apiBase, readOnly, status]);
+    if (refresh) void load();
+  }, [apiBase, load, readOnly, status]);
 
   const envVarDisplay =
     envOverride === "DO_NOT_TRACK"
@@ -168,51 +181,57 @@ export function TelemetrySettingsPanel({
         label={t("proxyV2.telemetryToggleLabel")}
         hint={t(readOnly ? "proxyV2.telemetryReadOnlyHint" : "proxyV2.telemetryToggleHint")}
         details={t("proxyV2.telemetryDetails")}
-        busy={!status && !loadFailed}
+        busy={!readOnly && !status && !loadFailed}
         control={
-          <div className="flex items-center gap-2">
-            {loadFailed && !status && (
+          readOnly ? undefined : (
+            <div className="flex items-center gap-2">
+              {loadFailed && !status && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={saving}
+                  onClick={() => {
+                    void load();
+                  }}
+                >
+                  {t("common.retry")}
+                </button>
+              )}
               <button
+                ref={previewTriggerRef}
                 type="button"
-                className="btn btn-ghost btn-sm"
-                disabled={saving}
+                className="btn btn-ghost btn-sm telemetry-preview-trigger"
+                disabled={!status}
+                aria-haspopup="dialog"
+                aria-expanded={showPreviewDialog}
                 onClick={() => {
-                  void load();
+                  restoreFocusRef.current = previewTriggerRef.current;
+                  setPreviewOpen(true);
                 }}
               >
-                {t("common.retry")}
+                {t("proxyV2.telemetryWhatIsSent")}
               </button>
-            )}
-            <button
-              ref={previewTriggerRef}
-              type="button"
-              className="btn btn-ghost btn-sm telemetry-preview-trigger"
-              disabled={!status}
-              aria-haspopup="dialog"
-              aria-expanded={showPreviewDialog}
-              onClick={() => {
-                restoreFocusRef.current = previewTriggerRef.current;
-                setPreviewOpen(true);
-              }}
-            >
-              {t("proxyV2.telemetryWhatIsSent")}
-            </button>
-            <Switch
-              on={effective}
-              label={t("proxyV2.telemetryToggleLabel")}
-              disabled={switchDisabled}
-              onClick={() => {
-                void handleToggle();
-              }}
-            />
-          </div>
+              <Switch
+                on={effective}
+                label={t("proxyV2.telemetryToggleLabel")}
+                disabled={switchDisabled}
+                onClick={() => {
+                  void handleToggle();
+                }}
+              />
+            </div>
+          )
         }
       >
         {envVarDisplay && (
           <Notice tone="warn">{t("proxyV2.telemetryEnvOverride", { envVar: envVarDisplay })}</Notice>
         )}
         {loadFailed && !status && <Notice tone="err">{t("proxyV2.telemetryLoadFailed")}</Notice>}
-        {saveFailed && <Notice tone="err">{t("proxyV2.telemetrySaveFailed")}</Notice>}
+        {saveFailed && (
+          <Notice tone="err">
+            {t(saveFailed === "session" ? "proxyV2.telemetrySaveNeedsHumanSession" : "proxyV2.telemetrySaveFailed")}
+          </Notice>
+        )}
       </SettingsRow>
 
       {showPreviewDialog && status && (

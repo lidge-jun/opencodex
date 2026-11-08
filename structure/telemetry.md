@@ -54,9 +54,13 @@ Only a human can transition an undecided install to active sending:
   CLI prompt) until a decision is written into the config, which clears it.
 - The dashboard popup (`gui/src/components/telemetry-consent-card.tsx`) opens only for an undecided
   install with no env override, after the star onboarding has closed, and never on a Remote Link
-  Child. Only Continue writes (`PUT /api/telemetry`); Escape, the backdrop and the close button
-  record nothing. Focus starts on the heading, so a stray Enter cannot accept. A saved decision
-  whose reply cannot be parsed is re-read with `GET` (`gui/src/telemetry-api.ts`).
+  Child. Only Continue writes (`PUT /api/telemetry`); Escape and the backdrop record nothing.
+  Focus is moved to the heading after `showModal()` (which would otherwise focus the first
+  focusable element), so a stray Enter cannot accept. A saved decision whose reply cannot be parsed
+  is re-read with `GET`, and if that also fails the save still counts (`gui/src/telemetry-api.ts`).
+  A session restored from a remembered device is refused (`agent_consent_required`), and the popup
+  says how to choose instead. On a Remote Link Child the Proxy details row only says telemetry is
+  managed on the Home: `/api/telemetry` is not a link-readable path.
 - Telemetry consent in `config.json` is owned by the file: `carryPersistedTelemetry`
   (`src/config/telemetry-carry.ts`) makes both whole-config saves (`saveConfig` and
   `saveConfigPreservingClaudeCode`) write the validated on-disk block instead of the caller's

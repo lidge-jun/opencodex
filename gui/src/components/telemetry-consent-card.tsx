@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useT } from "../i18n/shared";
 import {
+  TELEMETRY_POLICY_URL,
   TELEMETRY_STATUS_CHANGED_EVENT,
   fetchTelemetryStatus,
   formatTelemetryPreviewJson,
   hasOtherOpenModalDialog,
+  isTelemetryConsentSessionRefused,
   putTelemetryDecision,
   shouldShowTelemetryConsentPrompt,
   subscribeModalDialogChanges,
@@ -108,9 +110,10 @@ function TelemetryConsentDialog({
   const titleId = useId();
   const bodyId = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const [checked, setChecked] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [saveError, setSaveError] = useState(false);
+  const [saveError, setSaveError] = useState<"failed" | "session" | null>(null);
   const busyRef = useRef(false);
 
   useEffect(() => {
@@ -122,6 +125,9 @@ function TelemetryConsentDialog({
         dialog.setAttribute("open", "");
       }
     }
+    // showModal() focuses the dialog's first focusable element, so move focus to the heading after
+    // it: the dialog can open while someone is typing, and a stray Enter must not accept.
+    headingRef.current?.focus();
     return () => {
       if (dialog?.open) dialog.close?.();
     };
@@ -131,14 +137,14 @@ function TelemetryConsentDialog({
     if (busyRef.current) return;
     busyRef.current = true;
     setSubmitting(true);
-    setSaveError(false);
+    setSaveError(null);
     try {
       await putTelemetryDecision(apiBase, checked ? "accepted" : "declined", status);
       onClose();
-    } catch {
+    } catch (error) {
       busyRef.current = false;
       setSubmitting(false);
-      setSaveError(true);
+      setSaveError(isTelemetryConsentSessionRefused(error) ? "session" : "failed");
     }
   }, [apiBase, checked, onClose, status]);
 
@@ -183,9 +189,7 @@ function TelemetryConsentDialog({
       />
       <div className="modal-card telemetry-consent-card flex flex-col gap-3" onClick={e => e.stopPropagation()}>
         <div className="modal-head">
-          {/* Focus starts on the heading: the dialog can open while someone is typing, and a stray
-              Enter on a focused Continue would accept without the notice being read. */}
-          <h3 id={titleId} className="m-0" tabIndex={-1} autoFocus>
+          <h3 ref={headingRef} id={titleId} className="m-0" tabIndex={-1}>
             {t("proxyV2.telemetryConsentTitle")}
           </h3>
         </div>
@@ -201,6 +205,14 @@ function TelemetryConsentDialog({
             <strong className="text-fg">{t("proxyV2.telemetryNeverTitle")}: </strong>
             <span className="text-fg-muted">{t("proxyV2.telemetryNeverItems")}</span>
           </div>
+          <a
+            className="telemetry-policy-link w-fit font-medium text-highlight hover:underline"
+            href={TELEMETRY_POLICY_URL}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {t("proxyV2.telemetryPolicyLink")}
+          </a>
         </div>
         <label className="flex cursor-pointer items-start gap-3 rounded-control bg-raised p-3 ring-1 ring-line">
           <input
@@ -224,7 +236,11 @@ function TelemetryConsentDialog({
             <pre className="log-detail-json telemetry-preview-json">{formatTelemetryPreviewJson(status)}</pre>
           </div>
         </details>
-        {saveError && <Notice tone="err">{t("proxyV2.telemetrySaveFailed")}</Notice>}
+        {saveError && (
+          <Notice tone="err">
+            {t(saveError === "session" ? "proxyV2.telemetrySaveNeedsHumanSession" : "proxyV2.telemetrySaveFailed")}
+          </Notice>
+        )}
         <div className="modal-actions">
           <button
             type="button"
