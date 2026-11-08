@@ -736,16 +736,22 @@ describe("oauth refresh hardening", () => {
     const credential = getAccountCredential("anthropic", id)!;
     const aborted = new Error("aborted before dispatch");
     const controller = new AbortController();
-    controller.abort(aborted);
+    const realWrite = storeModule.writeOAuthRefreshIntent;
+    const writeSpy = spyOn(storeModule, "writeOAuthRefreshIntent").mockImplementation((...args) => {
+      const intent = realWrite(...args); controller.abort(aborted); return intent;
+    });
     let calls = 0;
 
-    await expect(refreshAnthropicAccountWithLock("anthropic", id, {
-      ...OAUTH_PROVIDERS.anthropic!,
-      refresh: async () => { calls += 1; throw new Error("must not run"); },
-    }, credential, { signal: controller.signal })).rejects.toBe(aborted);
+    try {
+      await expect(refreshAnthropicAccountWithLock("anthropic", id, {
+        ...OAUTH_PROVIDERS.anthropic!,
+        refresh: async () => { calls += 1; throw new Error("must not run"); },
+      }, credential, { signal: controller.signal })).rejects.toBe(aborted);
 
-    expect(calls).toBe(0);
-    expect(readOAuthRefreshIntent("anthropic", id)).toBeUndefined();
+      expect(writeSpy).toHaveBeenCalledTimes(1);
+      expect(calls).toBe(0);
+      expect(readOAuthRefreshIntent("anthropic", id)).toBeUndefined();
+    } finally { writeSpy.mockRestore(); }
   });
 
   test("a failed pre-dispatch cleanup remains safely retryable", async () => {
@@ -754,7 +760,10 @@ describe("oauth refresh hardening", () => {
     const credential = getAccountCredential("anthropic", id)!;
     const controller = new AbortController();
     const aborted = new Error("aborted before dispatch");
-    controller.abort(aborted);
+    const realWrite = storeModule.writeOAuthRefreshIntent;
+    const writeSpy = spyOn(storeModule, "writeOAuthRefreshIntent").mockImplementation((...args) => {
+      const intent = realWrite(...args); controller.abort(aborted); return intent;
+    });
     const realClear = storeModule.clearOAuthRefreshIntentIfMatch;
     let clearCalls = 0;
     const clearSpy = spyOn(storeModule, "clearOAuthRefreshIntentIfMatch").mockImplementation((...args) => {
@@ -768,7 +777,9 @@ describe("oauth refresh hardening", () => {
         ...OAUTH_PROVIDERS.anthropic!,
         refresh: async () => { throw new Error("must not dispatch"); },
       }, credential, { signal: controller.signal })).rejects.toBe(aborted);
+      expect(writeSpy).toHaveBeenCalledTimes(1);
       expect(readOAuthRefreshIntent("anthropic", id)?.cleanupPending).toBe("pre-dispatch");
+      writeSpy.mockRestore();
 
       let retryCalls = 0;
       await expect(refreshAnthropicAccountWithLock("anthropic", id, {
@@ -783,6 +794,7 @@ describe("oauth refresh hardening", () => {
     } finally {
       warnSpy.mockRestore();
       clearSpy.mockRestore();
+      writeSpy.mockRestore();
     }
   });
 
