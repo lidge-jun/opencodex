@@ -6,7 +6,7 @@ import { handleLinkRoutes, type LinkRouteState } from "../../src/server/manageme
 import type { ManagementContext } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
 import type { LinkStore } from "../../src/link/store";
-import { SshRunnerError, type SshRunner, type SshRunResult } from "../../src/link/ssh-runner";
+import { SshRunnerError, SSH_MAX_OUTPUT_BYTES, SSH_OUTPUT_CAP_BYTES, type SshRunner, type SshRunResult } from "../../src/link/ssh-runner";
 import { quoteRemote, remoteOcxArgv, WINDOWS_OS_PROBE } from "../../src/link/ssh-argv";
 import { windowsScriptData } from "../../src/link/remote-windows";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -108,25 +108,32 @@ function harness(remotePlatform: "posix" | "windows" = "posix") {
         // Enrollment itself hits Home's catalog; this is deliberately before the fresh watcher.
         emit("enrollment");
       }
-      if (overrides[step]) return overrides[step]!(call);
-      switch (step) {
-        case "probe": {
-          const path = candidateFile(argv);
-          writeFileSync(path, `${aliasOf(argv)} ssh-ed25519 AAAA\n`);
-          return result("ocx-link-probe\n");
+      const fixture = (): SshRunResult => {
+        switch (step) {
+          case "probe": {
+            const path = candidateFile(argv);
+            writeFileSync(path, `${aliasOf(argv)} ssh-ed25519 AAAA\n`);
+            return result("ocx-link-probe\n");
+          }
+          case "uname": return result("Linux\n");
+          case "windows": return remotePlatform === "windows" ? result("Windows_NT\r\n") : { code: 127, stdout: "", stderr: "sh: cmd: not found" };
+          case "fingerprint": return result(`256 ${fingerprint} child (ED25519)`);
+          case "version": return result("opencodex 2.83.0\n");
+          case "port": return result('{"port":2200}');
+          case "config": return result('{"port":10100}\n');
+          case "curl": case "connect": return result();
+          case "before": return health("standalone");
+          case "restart": return result();
+          case "health": return health("client");
+          case "catalog": emit("catalog"); return http({ models: [{ id: "fixture-model" }] });
         }
-        case "uname": return result("Linux\n");
-        case "windows": return remotePlatform === "windows" ? result("Windows_NT\r\n") : { code: 127, stdout: "", stderr: "sh: cmd: not found" };
-        case "fingerprint": return result(`256 ${fingerprint} child (ED25519)`);
-        case "version": return result("opencodex 2.83.0\n");
-        case "port": return result('{"port":2200}');
-        case "config": return result('{"port":10100}\n');
-        case "curl": case "connect": return result();
-        case "before": return health("standalone");
-        case "restart": return result();
-        case "health": return health("client");
-        case "catalog": emit("catalog"); return http({ models: [{ id: "fixture-model" }] });
-      }
+      };
+      // Mirror the real runner: a stream over the requested (or default) cap is an output_limit
+      // failure, not a silently truncated result.
+      const produced = overrides[step] ? await overrides[step]!(call) : fixture();
+      const cap = options?.maxOutputBytes ?? SSH_OUTPUT_CAP_BYTES;
+      if (Buffer.byteLength(produced.stdout) > cap) throw new SshRunnerError("output_limit", `ssh output exceeded ${cap} bytes`);
+      return produced;
     },
     spawnTunnel() { throw new Error("The route must use its supplied supervisor"); },
   };
@@ -308,6 +315,28 @@ describe("Home enrollment of a standalone Child", () => {
     expect(timeouts.get("restart")).toBe(158_600);
     expect(h.calls.at(-2)?.options?.timeoutMs).toBe(15_000);
     expect(timeouts.get("catalog")).toBe(15_000);
+  });
+
+  test("a Child whose config show exceeds the ordinary SSH output cap still passes preflight", async () => {
+    const h = harness(); h.confirmed();
+    // Reproduces #8356: a Child with a large saved configuration printed far more than the
+    // runner's 64 KiB default, so readOutput threw output_limit before preflight could read port.
+    const padding = "x".repeat(SSH_OUTPUT_CAP_BYTES + 8 * 1024);
+    h.overrides.config = () => result(JSON.stringify({ port: 10100, runtimeRole: "standalone", padding }) + "\n");
+    const response = await h.call("apply", { alias: "child" });
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ linkId: h.store.links[0]!.id });
+    const config = h.calls.find(call => call.step === "config")!;
+    expect(config.options?.maxOutputBytes).toBe(SSH_MAX_OUTPUT_BYTES);
+  });
+
+  test("an output limit in Child preflight names the cap instead of failing generically", async () => {
+    const h = harness(); h.confirmed();
+    h.overrides.config = () => { throw new SshRunnerError("output_limit", `ssh output exceeded ${SSH_MAX_OUTPUT_BYTES} bytes`); };
+    const payload = await denied(await h.call("apply", { alias: "child" }), "child_preflight_output_limit") as { error: { hint: string } };
+    expect(payload.error.hint).toContain("config show --json");
+    expect(payload.error.hint).toContain(String(SSH_MAX_OUTPUT_BYTES));
+    expect(payload.residual).toBeUndefined(); noEnrollmentEffects(h);
   });
 
   test("huge measured latency caps ordinary work at 60s and restart at 190s", async () => {

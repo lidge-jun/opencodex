@@ -14,6 +14,7 @@ import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
 import { fail, exactBody, port, isRecord, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, putKnownHost, issueKey, compensateNewLink, type LinkRouteState } from "./link-route-state";
+import { CHILD_CONFIG_TOO_LARGE_HINT, CHILD_CONFIG_TOO_LARGE_MESSAGE, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES } from "./link-child-preflight";
 
 const PROBE_TTL_MS = 5 * 60_000;
 const MIN_REMOTE_OCX = [2, 66, 0] as const;
@@ -285,7 +286,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       const remotePort = parsePort(chosen.stdout);
       if (!remotePort) return await failed(fail("remote_port_failed", "The remote link port could not be determined.", 502));
       phase = "child_preflight";
-      const configured = await run(ocx(["config", "show", "--json"]));
+      const configured = await run(ocx(["config", "show", "--json"]), budget, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES);
       let childConfig: unknown = null;
       try { if (configured.code === 0) childConfig = JSON.parse(configured.stdout); } catch { /* fail closed */ }
       if (!isRecord(childConfig) || !port(childConfig.port)) return await failed(fail("child_preflight_failed", "The Child effective configuration could not be read.", 502));
@@ -350,6 +351,9 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
         return Response.json({ linkId: id }, { status: 202 });
       } finally { unsubscribe(); }
     } catch (error) {
+      if (phase === "child_preflight" && error instanceof SshRunnerError && error.code === "output_limit") {
+        return await failed(fail("child_preflight_output_limit", CHILD_CONFIG_TOO_LARGE_MESSAGE, 502, CHILD_CONFIG_TOO_LARGE_HINT));
+      }
       return await failed(fail(phase + (error instanceof SshRunnerError && error.code === "timeout" ? "_timeout" : "_failed"), "Remote Link failed during " + phase.replaceAll("_", " ") + ".", 502, sshRunnerErrorHint(error)));
     } finally { input?.fill(0); rmSync(dir, { recursive: true, force: true }); }
   });

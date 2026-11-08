@@ -204,6 +204,7 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
       const code = record(error.body.error) ? error.body.error.code : undefined;
       if (code === "remote_platform_unsupported" && error.body.residual !== true) throw new Error("The remote shell cannot run this Remote Link workflow. Update OpenCodex on Home and check PowerShell on the Child.");
       if (code === "child_port_busy") throw new Error("The target port on the Child is already in use by another process; no Child files were modified.");
+      if (code === "child_preflight_output_limit") throw new Error("The Child's ocx config show --json output exceeded the Remote Link preflight limit; trim the Child's saved configuration and retry.");
       if (code === "child_external_provider_conflict") throw new Error("The Child's ~/.codex/config.toml is already managed by another model provider or custom base URL; no Child files were modified.");
       const phase = typeof code === "string" && Object.hasOwn(PHASES, code) ? PHASES[code] : undefined;
       const message = phase ? "Remote Link failed during " + phase : error.message;
