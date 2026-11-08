@@ -113,15 +113,17 @@ async function loadIntegration(): Promise<InternalLinks> {
 describe("docs link targets", () => {
   test("CI selects hard-coded URL checks for README, skills, and issue-template edits", () => {
     const workflow = Bun.YAML.parse(readFileSync(repoPath(".github/workflows/ci.yml"), "utf8")) as {
-      on?: { push?: { paths?: string[] } };
+      on?: { push?: unknown; pull_request?: unknown; workflow_dispatch?: unknown };
       jobs?: { changes?: { steps?: Array<{ uses?: string; with?: { filters?: string } }> } };
     };
     const filter = workflow.jobs?.changes?.steps?.find(step => step.uses?.startsWith("dorny/paths-filter@"));
     const ciPaths = (Bun.YAML.parse(filter?.with?.filters ?? "") as { ci?: string[] }).ci ?? [];
     for (const path of ["readme/**", "skills/**", ".github/ISSUE_TEMPLATE/**"]) {
       expect(ciPaths).toContain(path);
-      expect(workflow.on?.push?.paths).toContain(path);
     }
+    expect(workflow.on?.pull_request).toBeDefined();
+    expect(workflow.on?.workflow_dispatch).toBeDefined();
+    expect(workflow.on?.push).toBeUndefined();
   });
 
   test("every hard-coded docs URL names a page the site builds", () => {

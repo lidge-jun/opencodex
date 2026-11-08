@@ -1,15 +1,12 @@
 name: Release
 
-# Publish opencodex to npm — jawcode-style: triggered from the Actions tab with an explicit
-# version, dist-tag, and a dry-run-first default. Bump package.json on main BEFORE dispatching
-# (or use `bun run release <version>`, which does the bump+commit+push+dispatch for you); the
-# workflow verifies the version matches before publishing.
+# Select a tested dev source with the workflow revision pinned independently from that source.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to publish — must equal package.json (e.g. 0.1.0)"
-        required: true
+        description: "Optional expected derived version; required original version when resuming"
+        required: false
         type: string
       tag:
         description: "npm dist-tag"
@@ -25,13 +22,13 @@ on:
         type: boolean
         default: true
       resume-after-npm-publish:
-        description: "Operator attestation: a previous run of this workflow acknowledged npm publication for this exact commit; skip npm publish and complete the GitHub side"
+        description: "Attest npm publication was acknowledged for the exact supplied source and version; skip npm publish"
         required: false
         type: boolean
         default: false
       expected-sha:
-        description: "Immutable release commit this dispatch must publish (fail if the branch moved)"
-        required: true
+        description: "Optional exact full source SHA; it must have qualifying dev CI evidence"
+        required: false
         type: string
 
 permissions: {}
@@ -45,39 +42,121 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      workflow_sha: ${{ steps.source.outputs.workflow_sha }}
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Checkout trusted dispatch guard
+      - name: Checkout trusted workflow revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.sha }}
           persist-credentials: false
-          path: trusted-dispatch
+          fetch-depth: 0
 
-      - name: Validate release dispatch
+      - name: Resolve eligible source
+        id: source
         env:
-          EXPECTED_SHA: ${{ inputs.expected-sha }}
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_SHA: ${{ inputs.expected-sha }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+          RESUME: ${{ inputs.resume-after-npm-publish }}
+          DRY_RUN: ${{ inputs.dry-run }}
         run: |
-          node - <<'NODE'
-          const { validateReleaseDispatch } = require(
-            "./trusted-dispatch/.github/scripts/release-dispatch-guard.cjs",
-          );
-
-          const failure = validateReleaseDispatch({
-            eventName: process.env.GITHUB_EVENT_NAME,
-            ref: process.env.GITHUB_REF,
-            expectedSha: process.env.EXPECTED_SHA,
-            actualSha: process.env.GITHUB_SHA,
-          });
-
-          if (failure) {
-            console.error(`::error::${failure}`);
-            process.exit(1);
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch && test "$GITHUB_REF" = refs/heads/dev || {
+            echo '::error::Release workflow must be dispatched from trusted dev.'; exit 1;
           }
+          node - <<'NODE'
+          const { validateReleaseDispatch } = require('./.github/scripts/release-dispatch-guard.cjs');
+          const failure = validateReleaseDispatch({ eventName: process.env.GITHUB_EVENT_NAME,
+            ref: process.env.GITHUB_REF, sourceSha: process.env.REQUESTED_SHA, workflowSha: process.env.GITHUB_SHA });
+          if (failure) throw new Error(failure);
           NODE
+          if [ "$RESUME" = true ]; then
+            if [ -z "$REQUESTED_SHA" ] || [ -z "$REQUESTED_VERSION" ] || [ "$DRY_RUN" != false ]; then
+              echo '::error::Resume requires the original source SHA and version and cannot be a dry run.'; exit 1
+            fi
+          fi
+          if [ -n "$REQUESTED_SHA" ]; then
+            result="$(node .github/scripts/release-evidence.cjs resolve "$REQUESTED_SHA")"
+          else
+            result="$(node .github/scripts/release-evidence.cjs resolve)"
+          fi
+          RESULT="$result" node - <<'NODE'
+          const fs = require('node:fs');
+          const result = JSON.parse(process.env.RESULT);
+          if (!/^[0-9a-f]{40}$/.test(result.sourceSha) || !Number.isSafeInteger(result.ciRunId) || result.ciRunId <= 0 ||
+              (process.env.REQUESTED_SHA && result.sourceSha !== process.env.REQUESTED_SHA)) {
+            throw new Error('Invalid source evidence');
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `source_sha=${result.sourceSha}\nworkflow_sha=${process.env.GITHUB_SHA}\n`);
+          NODE
+
+      - name: Checkout selected source for version resolution
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ steps.source.outputs.source_sha }}
+          path: candidate
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Resolve release version
+        id: version
+        env:
+          CHANNEL: ${{ inputs.tag }}
+          EXPECTED_VERSION: ${{ inputs.version }}
+          RESUME: ${{ inputs.resume-after-npm-publish }}
+        run: |
+          set -euo pipefail
+          bun scripts/release-version-sources.ts check --root candidate
+          if [ "$RESUME" = true ]; then
+            # JavaScript template literals are evaluated by Bun, not the shell.
+            # shellcheck disable=SC2016
+            bun -e '
+              import { parseVersion } from "./scripts/version-line.ts";
+              import { appendFileSync } from "node:fs";
+              const value = process.env.EXPECTED_VERSION ?? "", channel = process.env.CHANNEL;
+              const parsed = parseVersion(value);
+              if (!/^\d+\.\d+\.\d+(?:-preview\.\d{8}(?:\.\d+)?)?$/.test(value) || !parsed ||
+                  !((channel === "latest" && parsed.prerelease === null) ||
+                    (channel === "preview" && parsed.prerelease?.[0] === "preview"))) throw Error("invalid original release version or channel");
+              appendFileSync(process.env.GITHUB_OUTPUT, `version=${value}\n`);
+            '
+            exit 0
+          fi
+          npm view "$(node -p "require('./package.json').name")" versions --json > "$RUNNER_TEMP/release-npm-versions.json"
+          git tag --list 'v[0-9]*' > "$RUNNER_TEMP/release-tags.txt"
+          # JavaScript template literals are evaluated by Bun, not the shell.
+          # shellcheck disable=SC2016
+          bun -e '
+            import { devReleaseVersion, parseVersion } from "./scripts/version-line.ts";
+            import { readFileSync, appendFileSync } from "node:fs";
+            const versions = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/release-npm-versions.json`, "utf8"));
+            if (!Array.isArray(versions) || versions.some(v => typeof v !== "string")) throw new Error("invalid npm versions");
+            const tags = readFileSync(`${process.env.RUNNER_TEMP}/release-tags.txt`, "utf8").trim().split("\n").filter(Boolean).map(v => v.slice(1));
+            const all = [...new Set([...versions, ...tags])];
+            const stableTags = [], previewTags = [];
+            for (const version of all) {
+              const parsed = parseVersion(version);
+              if (!parsed) throw new Error(`invalid published version: ${version}`);
+              (parsed.prerelease === null ? stableTags : previewTags).push(version);
+            }
+            const channel = process.env.CHANNEL;
+            if (channel !== "latest" && channel !== "preview") throw new Error("invalid release channel");
+            const base = JSON.parse(readFileSync("candidate/package.json", "utf8")).version;
+            const stamp = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+            const version = devReleaseVersion({ base, stableTags, previewTags, channel, stamp });
+            if (process.env.EXPECTED_VERSION && process.env.EXPECTED_VERSION !== version) throw new Error("expected version differs from derived version");
+            appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          '
 
   # Every publication precondition the dispatch can already decide, checked before any runner
   # starts packaging: channel and dist-tag, every version source, the tag, the GitHub release,
-  # npm, the global tag ordering and the dev pre-move (scripts/ci/release-preflight.sh).
+  # npm and the global tag ordering (scripts/ci/release-preflight.sh).
   #
   # Run 35783865160 packaged 2.62.0 for nineteen minutes and then failed the ordering gate in
   # `publish` on v2.63.0-preview.20260923. That tag already existed when the run's first job
@@ -96,15 +175,29 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+    env:
+      SOURCE_SHA: ${{ needs.validate-dispatch.outputs.source_sha }}
+      WORKFLOW_SHA: ${{ needs.validate-dispatch.outputs.workflow_sha }}
+      RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
+          ref: ${{ needs.validate-dispatch.outputs.workflow_sha }}
           persist-credentials: false
+          fetch-depth: 0
           fetch-tags: true
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
+
+      - name: Stamp preflight version
+        run: |
+          set -euo pipefail
+          test -n "$SOURCE_SHA" && test -n "$WORKFLOW_SHA" && test -n "$RELEASE_VERSION"
+          test "$(git rev-parse HEAD)" = "$WORKFLOW_SHA"
+          bun scripts/release-version-sources.ts sync "$RELEASE_VERSION"
+          bun scripts/release-version-sources.ts check "$RELEASE_VERSION"
 
       - name: Fetch the dev line
         run: git fetch --no-tags --depth=1 origin +refs/heads/dev:refs/remotes/origin/dev
@@ -112,7 +205,7 @@ jobs:
       - name: Refuse a release that cannot publish
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
           NPM_DIST_TAG: ${{ inputs.tag }}
           DRY_RUN: ${{ inputs.dry-run }}
           RESUME: ${{ inputs.resume-after-npm-publish }}
@@ -120,6 +213,7 @@ jobs:
 
   package-standalone:
     needs: [validate-dispatch, preflight]
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev' }}
     strategy:
       fail-fast: false
       matrix:
@@ -156,14 +250,35 @@ jobs:
       # actions: read lets the SignPath action read this job and download the unsigned artifact.
       actions: read
       contents: read
+    env:
+      SOURCE_SHA: ${{ needs.validate-dispatch.outputs.source_sha }}
+      WORKFLOW_SHA: ${{ needs.validate-dispatch.outputs.workflow_sha }}
+      RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
+          ref: ${{ needs.validate-dispatch.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Checkout trusted release policy
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ needs.validate-dispatch.outputs.workflow_sha }}
+          path: trusted-release-policy
           persist-credentials: false
 
       - name: Setup project Bun
-        uses: ./.github/actions/setup-project-bun
+        uses: ./trusted-release-policy/.github/actions/setup-project-bun
+
+      - name: Stamp and verify release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SOURCE_SHA" && test -n "$WORKFLOW_SHA" && test -n "$RELEASE_VERSION"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          bun trusted-release-policy/scripts/release-version-sources.ts sync "$RELEASE_VERSION" --root .
+          bun trusted-release-policy/scripts/release-version-sources.ts check "$RELEASE_VERSION" --root .
 
       # Windows Authenticode signing through SignPath Foundation (#7207). Decided before the build, so
       # a broken SignPath configuration fails in seconds instead of after the build. The rules
@@ -201,7 +316,10 @@ jobs:
           OPENCODEX_HOME="$RUNNER_TEMP/ocx-home" "$binary" start --port 10177 >"$RUNNER_TEMP/ocx.log" 2>&1 &
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true' EXIT
-          for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:10177/healthz && break || sleep 1; done
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:10177/healthz; then break; fi
+            sleep 1
+          done
           curl -fsS http://127.0.0.1:10177/healthz
           test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:10177/)" = 200
 
@@ -276,12 +394,14 @@ jobs:
       - name: Archive standalone release
         shell: bash
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
           STANDALONE_TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           cd "dist/standalone/$STANDALONE_TARGET"
           if [[ "$RUNNER_OS" == "Windows" ]]; then
+            # Variables in this literal belong to PowerShell.
+            # shellcheck disable=SC2016
             powershell -NoProfile -Command 'Compress-Archive -Path ocx.exe,gui,keyring -DestinationPath ("../../ocx-{0}-{1}.zip" -f $env:RELEASE_VERSION,$env:STANDALONE_TARGET) -Force'
           else
             tar -czf "../../ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" ocx gui keyring
@@ -308,6 +428,7 @@ jobs:
 
   package-desktop:
     needs: [validate-dispatch, preflight]
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev' }}
     strategy:
       fail-fast: false
       matrix:
@@ -341,6 +462,9 @@ jobs:
       actions: read
       contents: read
     env:
+      SOURCE_SHA: ${{ needs.validate-dispatch.outputs.source_sha }}
+      WORKFLOW_SHA: ${{ needs.validate-dispatch.outputs.workflow_sha }}
+      RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
       # Whether this run holds the Developer ID material at all. A run without it still builds
       # locally useful bundles; a run with it must not silently downgrade any part of the app.
       DESKTOP_SIGNING_CONFIGURED: ${{ secrets.APPLE_CERTIFICATE != '' }}
@@ -348,10 +472,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
+          ref: ${{ needs.validate-dispatch.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Checkout trusted release policy
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ needs.validate-dispatch.outputs.workflow_sha }}
+          path: trusted-release-policy
           persist-credentials: false
 
       - name: Setup project Bun
-        uses: ./.github/actions/setup-project-bun
+        uses: ./trusted-release-policy/.github/actions/setup-project-bun
+
+      - name: Stamp and verify release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SOURCE_SHA" && test -n "$WORKFLOW_SHA" && test -n "$RELEASE_VERSION"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          bun trusted-release-policy/scripts/release-version-sources.ts sync "$RELEASE_VERSION" --root .
+          bun trusted-release-policy/scripts/release-version-sources.ts check "$RELEASE_VERSION" --root .
 
       # Windows Authenticode signing through SignPath Foundation (#7207). Decided before the build, so
       # a broken SignPath configuration fails in seconds instead of after the build. The rules
@@ -379,8 +520,8 @@ jobs:
       - name: Verify every version source matches the release
         shell: bash
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
-        run: bun scripts/release-version-sources.ts check "$RELEASE_VERSION"
+          RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
+        run: bun trusted-release-policy/scripts/release-version-sources.ts check "$RELEASE_VERSION" --root .
 
       - name: Install project dependencies
         run: bun install --frozen-lockfile --os=${{ matrix.dependency_os }} --cpu=${{ matrix.dependency_cpu }}
@@ -548,7 +689,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
         run: bun desktop/scripts/windows-installer-config.ts "$RELEASE_VERSION" "$RUNNER_TEMP/opencodex-msi.json"
 
       - name: Preserve the compiled Linux sidecar
@@ -706,7 +847,7 @@ jobs:
       - name: Rename release assets
         shell: bash
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
           DESKTOP_TARGET: ${{ matrix.target }}
         run: |
           args=( \
@@ -785,6 +926,227 @@ jobs:
             security delete-keychain "${OPENCODEX_SIGNING_KEYCHAIN}"
           fi
 
+  # Candidate code and npm lifecycle scripts run only in this read-only job.
+  package-npm:
+    needs: [validate-dispatch, preflight]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+    env:
+      SOURCE_SHA: ${{ needs.validate-dispatch.outputs.source_sha }}
+      WORKFLOW_SHA: ${{ needs.validate-dispatch.outputs.workflow_sha }}
+      RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
+    steps:
+      - name: Checkout selected source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ needs.validate-dispatch.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Checkout trusted release policy
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ needs.validate-dispatch.outputs.workflow_sha }}
+          path: trusted-release-policy
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./trusted-release-policy/.github/actions/setup-project-bun
+
+      - name: Stamp and verify release version
+        run: |
+          set -euo pipefail
+          test -n "$SOURCE_SHA" && test -n "$WORKFLOW_SHA" && test -n "$RELEASE_VERSION"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          bun trusted-release-policy/scripts/release-version-sources.ts sync "$RELEASE_VERSION" --root .
+          bun trusted-release-policy/scripts/release-version-sources.ts check "$RELEASE_VERSION" --root .
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build npm package
+        run: |
+          set -euo pipefail
+          npm run prepublishOnly
+          npm run prepack
+          # All candidate lifecycle scripts have finished. Bind the packed manifest
+          # to the selected commit; npm pack below runs with scripts disabled.
+          node - <<'NODE'
+          const fs = require('node:fs'), { spawnSync } = require('node:child_process');
+          const source = process.env.SOURCE_SHA;
+          if (!/^[0-9a-f]{40}$/.test(source || '')) throw Error('invalid source SHA');
+          const git = spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });
+          if (git.status !== 0 || git.stdout.trim() !== source) throw Error('npm checkout source mismatch');
+          const stat = fs.lstatSync('package.json');
+          if (!stat.isFile() || stat.isSymbolicLink()) throw Error('invalid npm manifest');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          if (pkg.version !== process.env.RELEASE_VERSION) throw Error('npm manifest version mismatch');
+          pkg.gitHead = source;
+          fs.writeFileSync('package.json.release-tmp', JSON.stringify(pkg, null, 2) + '\n', { flag: 'wx' });
+          fs.renameSync('package.json.release-tmp', 'package.json');
+          NODE
+          mkdir -p "$RUNNER_TEMP/npm-pack" dist/npm
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/npm-pack"
+          shopt -s nullglob
+          packages=("$RUNNER_TEMP"/npm-pack/*.tgz)
+          test "${#packages[@]}" -eq 1
+          cp -- "${packages[0]}" dist/npm/package.tgz
+
+      - name: Upload npm package
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-package-unverified
+          path: dist/npm/package.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  # A fresh runner computes the receipt; candidate code cannot execute in this job.
+  verify-npm:
+    needs: [validate-dispatch, package-npm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      sha256: ${{ steps.receipt.outputs.sha256 }}
+    env:
+      SOURCE_SHA: ${{ needs.validate-dispatch.outputs.source_sha }}
+      WORKFLOW_SHA: ${{ needs.validate-dispatch.outputs.workflow_sha }}
+      RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
+    steps:
+      - name: Checkout trusted workflow revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ needs.validate-dispatch.outputs.workflow_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Resolve trusted Bun version
+        id: bun-version
+        run: |
+          # JavaScript template literals are evaluated by Node, not the shell.
+          # shellcheck disable=SC2016
+          node -e 'const v = require("./package.json").dependencies.bun; if (!/^\d+\.\d+\.\d+$/.test(v)) throw Error("invalid Bun pin"); require("node:fs").appendFileSync(process.env.GITHUB_OUTPUT, `version=${v}\n`);'
+
+      - name: Setup trusted Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ steps.bun-version.outputs.version }}
+
+      - name: Download npm package by immutable artifact ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.package-npm.outputs.artifact_id }}
+          path: npm-artifact
+
+      - name: Recheck source CI and service evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node .github/scripts/release-evidence.cjs check "$SOURCE_SHA"
+          baseline_tag="$(git tag --merged "$SOURCE_SHA" --list 'v[0-9]*' | bun -e '
+            import { parseVersion, compareVersions } from "./scripts/version-line.ts";
+            const tags = (await Bun.stdin.text()).trim().split("\n").filter(Boolean);
+            const versions = tags.map(tag => ({ tag, version: tag.slice(1) }));
+            if (versions.some(item => !parseVersion(item.version))) throw new Error("invalid release tag");
+            const eligible = versions.filter(item => compareVersions(item.version, process.env.RELEASE_VERSION) < 0);
+            eligible.sort((a, b) => compareVersions(a.version, b.version));
+            console.log(eligible.at(-1)?.tag ?? "");
+          ')"
+          baseline=--initial
+          if [ -n "$baseline_tag" ]; then
+            draft="$(gh release view "$baseline_tag" --json isDraft --jq .isDraft)"
+            test "$draft" = false || { echo '::error::Service baseline is not a published release.'; exit 1; }
+            baseline="$(git rev-parse "refs/tags/${baseline_tag}^{commit}")"
+          fi
+          range="$(node .github/scripts/release-evidence.cjs service-range "$SOURCE_SHA" "$baseline")"
+          required="$(RANGE="$range" node -e 'const x = JSON.parse(process.env.RANGE); if (typeof x.required !== "boolean") throw Error("invalid service range"); process.stdout.write(String(x.required));')"
+          if [ "$required" = true ]; then
+            node .github/scripts/release-evidence.cjs service "$SOURCE_SHA" || {
+              echo "::error::Dispatch service-lifecycle.yml from dev for source ${SOURCE_SHA} and wait for all platforms."; exit 1;
+            }
+          fi
+
+      - name: Require reconciled publication history
+        if: ${{ inputs.resume-after-npm-publish != true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NPM_DIST_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || [ -z "$RELEASE_VERSION" ]; then
+            echo '::error::Invalid release identity for history reconciliation.'; exit 1
+          fi
+          case "$NPM_DIST_TAG" in
+            latest) channel=stable ;;
+            preview) channel=preview ;;
+            *) echo '::error::Invalid release channel.'; exit 1 ;;
+          esac
+          node .github/scripts/release-history.cjs check "$SOURCE_SHA" "$RELEASE_VERSION" "$channel"
+
+      - name: Verify resume registry identity
+        id: resume-identity
+        if: ${{ inputs.resume-after-npm-publish == true }}
+        run: |
+          set -euo pipefail
+          pkg_name="$(node -p "require('./package.json').name")"
+          registry_version="$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" version --json --registry=https://registry.npmjs.org --fetch-retries=0 --fetch-timeout=8000)" || {
+            echo '::error::Cannot read the exact npm version; resume refused.'; exit 1;
+          }
+          REGISTRY_VERSION="$registry_version" node - <<'NODE'
+          const value = JSON.parse(process.env.REGISTRY_VERSION);
+          if (typeof value !== 'string' || value !== process.env.RELEASE_VERSION) throw Error('npm version does not match original release');
+          NODE
+          registry_head="$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" gitHead --json --registry=https://registry.npmjs.org --fetch-retries=0 --fetch-timeout=8000)" || {
+            echo '::error::Cannot read npm gitHead; resume refused.'; exit 1;
+          }
+          bun scripts/verify-release-resume.ts "$SOURCE_SHA" "$registry_head"
+          echo "resume_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Create verified npm receipt
+        id: receipt
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const { spawnSync } = require('node:child_process');
+          const archive = 'npm-artifact/package.tgz';
+          const sha = /^[0-9a-f]{40}$/;
+          if (!sha.test(process.env.SOURCE_SHA) || !sha.test(process.env.WORKFLOW_SHA) ||
+              !/^\d+$/.test(process.env.GITHUB_RUN_ID) || !/^\d+$/.test(process.env.GITHUB_RUN_ATTEMPT) ||
+              !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(process.env.RELEASE_VERSION)) throw new Error('invalid receipt identity');
+          const stat = fs.lstatSync(archive);
+          if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0 || stat.size > 500 * 1024 * 1024) throw new Error('invalid npm tarball');
+          const entries = spawnSync('tar', ['-tzf', archive], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+          if (entries.status !== 0 || entries.stdout.split('\n').filter(p => p === 'package/package.json').length !== 1) throw new Error('invalid npm manifest entry');
+          const manifest = spawnSync('tar', ['-xOzf', archive, 'package/package.json'], { encoding: 'utf8', maxBuffer: 1024 * 1024 });
+          if (manifest.status !== 0) throw new Error('cannot read npm manifest');
+          const pkg = JSON.parse(manifest.stdout), trusted = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          if (pkg.name !== trusted.name || pkg.version !== process.env.RELEASE_VERSION || pkg.gitHead !== process.env.SOURCE_SHA) throw new Error('npm package identity or gitHead mismatch');
+          const digest = crypto.createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
+          const receipt = { sourceSha: process.env.SOURCE_SHA, workflowSha: process.env.WORKFLOW_SHA,
+            version: process.env.RELEASE_VERSION, runId: process.env.GITHUB_RUN_ID,
+            attempt: process.env.GITHUB_RUN_ATTEMPT, packageName: pkg.name, gitHead: pkg.gitHead, sha256: digest };
+          fs.writeFileSync('npm-artifact/receipt.json', JSON.stringify(receipt) + '\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha256=${digest}\n`);
+          NODE
+
+      - name: Upload verified npm package and receipt
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-package-verified
+          path: npm-artifact/
+          if-no-files-found: error
+          retention-days: 7
+
   # Pre-publication verification. Everything that will be published is checked
   # here — expected platform set, every checksum, the updater signatures, and the
   # manifest parse-back — and publication consumes this result rather than
@@ -797,11 +1159,15 @@ jobs:
     permissions:
       contents: read
     env:
+      SOURCE_SHA: ${{ needs.validate-dispatch.outputs.source_sha }}
+      WORKFLOW_SHA: ${{ needs.validate-dispatch.outputs.workflow_sha }}
+      RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
       UPDATER_SIGNING_CONFIGURED: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
     steps:
-      - name: Checkout
+      - name: Checkout trusted workflow revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
+          ref: ${{ needs.validate-dispatch.outputs.workflow_sha }}
           persist-credentials: false
 
       - name: Setup project Bun
@@ -823,22 +1189,48 @@ jobs:
 
       - name: Verify release assets
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
         run: |
           set -euo pipefail
           args=(
             --version "$RELEASE_VERSION"
             --dir dist/release
             --repo "$GITHUB_REPOSITORY"
-            --sha "$GITHUB_SHA"
+            --sha "$SOURCE_SHA"
             --receipt-out verification/receipt.json
           )
-          # Signatures are verified whenever they exist; the manifest is only
-          # generated when this run holds the updater key, exactly as before.
+          # HEAD release policy requires updater signatures whenever the key is configured.
           if [ "$UPDATER_SIGNING_CONFIGURED" = "true" ]; then
             args+=(--manifest-out dist/release/latest.json --require-signatures)
           fi
           bun desktop/scripts/verify-release-assets.ts "${args[@]}"
+
+      - name: Bind verified asset digests
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('node:fs'), crypto = require('node:crypto'), path = require('node:path');
+          (async () => {
+            const receipt = JSON.parse(fs.readFileSync('verification/receipt.json', 'utf8'));
+            if (receipt.version !== process.env.RELEASE_VERSION || receipt.sha !== process.env.SOURCE_SHA || receipt.repo !== process.env.GITHUB_REPOSITORY) throw Error('asset verifier identity mismatch');
+            const names = fs.readdirSync('dist/release').sort();
+            if (!names.length) throw Error('empty verified release');
+            const assets = {};
+            for (const name of names) {
+              if (name === '.' || name === '..' || name.includes('/') || name.includes('\\')) throw Error('invalid asset name');
+              const file = path.join('dist/release', name), stat = fs.lstatSync(file);
+              if (!stat.isFile() || stat.isSymbolicLink()) throw Error('asset is not a regular file');
+              const hash = crypto.createHash('sha256');
+              for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+              assets[name] = hash.digest('hex');
+            }
+            receipt.workflowSha = process.env.WORKFLOW_SHA;
+            receipt.runId = process.env.GITHUB_RUN_ID;
+            receipt.attempt = process.env.GITHUB_RUN_ATTEMPT;
+            receipt.assets = assets;
+            fs.writeFileSync('verification/receipt.json', JSON.stringify(receipt) + '\n');
+          })().catch(error => { console.error(error.message); process.exitCode = 1; });
+          NODE
 
       - name: Upload verified release bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -858,15 +1250,20 @@ jobs:
 
   attach-release:
     runs-on: ubuntu-latest
-    needs: [publish, verify-release]
+    needs: [validate-dispatch, publish, verify-release]
     if: ${{ inputs.dry-run != true }}
     timeout-minutes: 10
     permissions:
       contents: write
+    env:
+      SOURCE_SHA: ${{ needs.validate-dispatch.outputs.source_sha }}
+      WORKFLOW_SHA: ${{ needs.validate-dispatch.outputs.workflow_sha }}
+      RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
+          ref: ${{ needs.validate-dispatch.outputs.workflow_sha }}
           persist-credentials: false
 
       - name: Setup project Bun
@@ -888,30 +1285,90 @@ jobs:
       # run's version and commit, or nothing uploads.
       - name: Require the verification receipt for this commit
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
         run: |
           set -euo pipefail
-          receipt_version="$(bun -e 'console.log(JSON.parse(await Bun.file("verification/receipt.json").text()).version)')"
-          receipt_sha="$(bun -e 'console.log(JSON.parse(await Bun.file("verification/receipt.json").text()).sha)')"
-          test "$receipt_version" = "$RELEASE_VERSION" || {
-            echo "::error::verification receipt names version $receipt_version, not $RELEASE_VERSION"
-            exit 1
-          }
-          test "$receipt_sha" = "$GITHUB_SHA" || {
-            echo "::error::verification receipt names commit $receipt_sha, not $GITHUB_SHA"
-            exit 1
-          }
+          node - <<'NODE'
+          const fs = require('node:fs'), crypto = require('node:crypto'), path = require('node:path');
+          (async () => {
+            const receipt = JSON.parse(fs.readFileSync('verification/receipt.json', 'utf8'));
+            if (receipt.version !== process.env.RELEASE_VERSION || receipt.sha !== process.env.SOURCE_SHA ||
+                receipt.repo !== process.env.GITHUB_REPOSITORY || receipt.workflowSha !== process.env.WORKFLOW_SHA ||
+                receipt.runId !== process.env.GITHUB_RUN_ID || !/^[1-9]\d*$/.test(receipt.attempt || '') ||
+                !/^[1-9]\d*$/.test(process.env.GITHUB_RUN_ATTEMPT || '') ||
+                BigInt(receipt.attempt) > BigInt(process.env.GITHUB_RUN_ATTEMPT) ||
+                !receipt.assets || typeof receipt.assets !== 'object' || Array.isArray(receipt.assets)) throw Error('release receipt identity mismatch');
+            const names = fs.readdirSync('dist/release').sort(), recorded = Object.keys(receipt.assets).sort();
+            if (!names.length || JSON.stringify(names) !== JSON.stringify(recorded)) throw Error('release asset set mismatch');
+            for (const name of names) {
+              if (name === '.' || name === '..' || /[\x00-\x1f\x7f/\\]/.test(name) || !/^[0-9a-f]{64}$/.test(receipt.assets[name])) throw Error('invalid asset receipt');
+              const file = path.join('dist/release', name), stat = fs.lstatSync(file);
+              if (!stat.isFile() || stat.isSymbolicLink()) throw Error('asset is not a regular file');
+              const hash = crypto.createHash('sha256');
+              for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+              if (hash.digest('hex') !== receipt.assets[name]) throw Error(`asset sha256 mismatch: ${name}`);
+            }
+          })().catch(error => { console.error(error.message); process.exitCode = 1; });
+          NODE
+
+      - name: Check resume assets
+        if: ${{ inputs.resume-after-npm-publish == true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NPM_DIST_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          case "$NPM_DIST_TAG" in latest) channel=stable ;; preview) channel=preview ;; *) exit 1 ;; esac
+          decision="$(node .github/scripts/release-resume.cjs check-assets "$RELEASE_VERSION" "$SOURCE_SHA" "$channel" verification/receipt.json)"
+          DECISION="$decision" CHANNEL="$channel" node - <<'NODE'
+          const result = JSON.parse(process.env.DECISION);
+          if (result.version !== process.env.RELEASE_VERSION || result.sourceSha !== process.env.SOURCE_SHA ||
+              result.channel !== process.env.CHANNEL || result.publishNpm !== false || result.assetsChecked !== true ||
+              !Array.isArray(result.reuseAssets) || !Array.isArray(result.missingAssets)) throw Error('invalid resume asset decision');
+          NODE
 
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}
           # Workflow inputs reach shell code through env, never by interpolation into
           # run: source. tests/ci-workflows.test.ts enforces this repo-wide.
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
         run: |
           set -euo pipefail
           release_tag="v${RELEASE_VERSION}"
-          gh release upload "$release_tag" dist/release/* --clobber
+          # The preceding receipt check binds this local set to verified bytes.
+          # Existing assets are reused only when GitHub reports their exact digest.
+          checker="$RUNNER_TEMP/check-release-assets.cjs"
+          cat > "$checker" <<'NODE'
+          const fs = require('node:fs');
+          const release = JSON.parse(process.env.RELEASE_INFO);
+          const receipt = JSON.parse(fs.readFileSync('verification/receipt.json', 'utf8'));
+          if (typeof release.isDraft !== 'boolean' || !Array.isArray(release.assets) ||
+              !receipt.assets || typeof receipt.assets !== 'object' || Array.isArray(receipt.assets)) throw Error('invalid release or receipt');
+          const expected = receipt.assets, names = Object.keys(expected), seen = new Set();
+          if (!names.length) throw Error('empty asset receipt');
+          for (const name of names) {
+            if (!name || name === '.' || name === '..' || /[\x00-\x1f\x7f/\\]/.test(name) || !/^[0-9a-f]{64}$/.test(expected[name])) throw Error('invalid asset receipt');
+          }
+          for (const asset of release.assets) {
+            if (!asset || typeof asset.name !== 'string' || seen.has(asset.name) || !Object.hasOwn(expected, asset.name) ||
+                asset.state !== 'uploaded' || asset.digest !== `sha256:${expected[asset.name]}`) throw Error('existing asset is unexpected, unavailable or has a different digest');
+            seen.add(asset.name);
+          }
+          const missing = names.filter(name => !seen.has(name));
+          if ((!release.isDraft || process.env.CHECK_FINAL === 'true') && missing.length) throw Error('release is missing verified assets');
+          if (missing.length) process.stdout.write(missing.join('\0') + '\0');
+          NODE
+          release_info="$(gh release view "$release_tag" --json isDraft,assets)"
+          RELEASE_INFO="$release_info" CHECK_FINAL=false node "$checker" > "$RUNNER_TEMP/missing-release-assets"
+          missing=()
+          while IFS= read -r -d '' name; do missing+=("dist/release/$name"); done < "$RUNNER_TEMP/missing-release-assets"
+          if [ "${#missing[@]}" -gt 0 ]; then
+            gh release upload "$release_tag" "${missing[@]}"
+          fi
+          # Re-read the entire remote set before publishing the draft.
+          release_info="$(gh release view "$release_tag" --json isDraft,assets)"
+          RELEASE_INFO="$release_info" CHECK_FINAL=true node "$checker" > /dev/null
 
           # A published release is immutable: GitHub rejects every later asset upload
           # with HTTP 422, which is why v2.55.0 through v2.60.0 shipped with zero
@@ -940,12 +1397,16 @@ jobs:
   # release is invisible to it and reads as not public, which is the question the row answers.
   release-outcomes:
     name: release outcomes
-    needs: [publish, attach-release]
-    if: ${{ always() && inputs.dry-run != true }}
+    needs: [validate-dispatch, publish, attach-release]
+    if: ${{ always() && needs.validate-dispatch.result == 'success' && inputs.dry-run != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
+    env:
+      SOURCE_SHA: ${{ needs.validate-dispatch.outputs.source_sha }}
+      WORKFLOW_SHA: ${{ needs.validate-dispatch.outputs.workflow_sha }}
+      RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -955,7 +1416,7 @@ jobs:
       - name: Report release outcomes
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
           NPM_DIST_TAG: ${{ inputs.tag }}
           NPM_VERSION_STATE: ${{ needs.publish.outputs.npm_version }}
           NPM_DIST_TAG_STATE: ${{ needs.publish.outputs.npm_dist_tag }}
@@ -964,7 +1425,8 @@ jobs:
         run: bash scripts/ci/release-outcome-report.sh
 
   publish:
-    needs: [validate-dispatch, verify-release]
+    needs: [validate-dispatch, verify-release, verify-npm]
+    if: ${{ inputs.dry-run != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
@@ -975,318 +1437,265 @@ jobs:
       actions: read
       pull-requests: read
       id-token: write
+    env:
+      SOURCE_SHA: ${{ needs.validate-dispatch.outputs.source_sha }}
+      WORKFLOW_SHA: ${{ needs.validate-dispatch.outputs.workflow_sha }}
+      RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
+      NPM_TARBALL: npm-artifact/package.tgz
+      EXPECTED_DIGEST: ${{ needs.verify-npm.outputs.sha256 }}
     steps:
-      - name: Checkout
+      - name: Checkout trusted workflow revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
+          ref: ${{ needs.validate-dispatch.outputs.workflow_sha }}
           fetch-depth: 0
 
-      - name: Verify dispatched SHA
-        env:
-          EXPECTED_SHA: ${{ inputs.expected-sha }}
+      - name: Resolve trusted Bun version
+        id: bun-version
         run: |
-          if [ -z "$EXPECTED_SHA" ]; then
-            echo "::error::expected-sha is required; refusing to publish without an audited commit"
-            exit 1
-          elif [ "$GITHUB_SHA" != "$EXPECTED_SHA" ]; then
-            echo "::error::branch moved after the release audit (expected ${EXPECTED_SHA}, got ${GITHUB_SHA}) — refusing to publish an unaudited commit"
-            exit 1
-          fi
+          # JavaScript template literals are evaluated by Node, not the shell.
+          # shellcheck disable=SC2016
+          node -e 'const v = require("./package.json").dependencies.bun; if (!/^\d+\.\d+\.\d+$/.test(v)) throw Error("invalid Bun pin"); require("node:fs").appendFileSync(process.env.GITHUB_OUTPUT, `version=${v}\n`);'
 
-      # opencodex is bun-native (the prepublishOnly audit, GUI build, and typecheck run under bun).
-      - name: Setup project Bun
-        uses: ./.github/actions/setup-project-bun
+      - name: Setup trusted Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ steps.bun-version.outputs.version }}
 
-      # node + npm perform the actual publish. registry-url points npm at the public registry.
       - name: Setup Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
-          registry-url: "https://registry.npmjs.org"
+          registry-url: https://registry.npmjs.org
 
-      # Trusted Publishing (OIDC) needs npm >= 11.5.1. Node 24 runners already
-      # provide a compatible npm; avoid replacing the bundled npm because global
-      # npm self-updates can lose publish-time dependencies such as sigstore.
-      - name: Verify npm version
+      - name: Download verified npm package by immutable artifact ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.verify-npm.outputs.artifact_id }}
+          path: npm-artifact
+
+      # Fetch the independently verified release receipt before publication, so
+      # an unavailable handoff cannot strand a newly published npm version.
+      - name: Download verified release receipt for publication
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-verification-receipt
+          path: verification
+
+      - name: Verify immutable npm receipt
         run: |
-          npm_version="$(npm --version)"
-          echo "npm=${npm_version}"
-          # shellcheck disable=SC2016 # the node script deliberately avoids shell expansion
-          node -e '
-            const [major, minor] = process.argv[1].split(".").map(Number);
-            if (major < 11 || (major === 11 && minor < 5)) {
-              console.error(`npm ${process.argv[1]} is too old for trusted publishing; need >= 11.5.1`);
-              process.exit(1);
-            }
-          ' "$npm_version"
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const { spawnSync } = require('node:child_process');
+          const archive = process.env.NPM_TARBALL;
+          const stat = fs.lstatSync(archive);
+          if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0 || stat.size > 500 * 1024 * 1024) throw new Error('invalid npm tarball');
+          const receipt = JSON.parse(fs.readFileSync('npm-artifact/receipt.json', 'utf8'));
+          const sha256 = crypto.createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
+          const expectedName = JSON.parse(fs.readFileSync('package.json', 'utf8')).name;
+          if (!/^[0-9a-f]{64}$/.test(process.env.EXPECTED_DIGEST) || sha256 !== process.env.EXPECTED_DIGEST ||
+              receipt.sha256 !== sha256 || receipt.sourceSha !== process.env.SOURCE_SHA || receipt.workflowSha !== process.env.WORKFLOW_SHA ||
+              receipt.version !== process.env.RELEASE_VERSION || receipt.runId !== process.env.GITHUB_RUN_ID ||
+              !/^[1-9]\d*$/.test(receipt.attempt || '') || !/^[1-9]\d*$/.test(process.env.GITHUB_RUN_ATTEMPT || '') ||
+              BigInt(receipt.attempt) > BigInt(process.env.GITHUB_RUN_ATTEMPT) || receipt.packageName !== expectedName ||
+              receipt.gitHead !== process.env.SOURCE_SHA) throw new Error('npm receipt identity or digest mismatch');
+          const entries = spawnSync('tar', ['-tzf', archive], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+          if (entries.status !== 0 || entries.stdout.split('\n').filter(p => p === 'package/package.json').length !== 1) throw new Error('invalid npm manifest entry');
+          const manifest = spawnSync('tar', ['-xOzf', archive, 'package/package.json'], { encoding: 'utf8', maxBuffer: 1024 * 1024 });
+          if (manifest.status !== 0) throw new Error('cannot read npm manifest');
+          const pkg = JSON.parse(manifest.stdout);
+          if (pkg.name !== expectedName || pkg.version !== process.env.RELEASE_VERSION || pkg.gitHead !== process.env.SOURCE_SHA || pkg.gitHead !== receipt.gitHead) throw new Error('npm package identity or gitHead mismatch');
+          NODE
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Dependency audit (high severity)
-        run: bun run audit:high
-
-      - name: Verify every version source matches the requested version
+      # Prepare and validate the receipt before the irreversible npm publication.
+      - name: Prepare publication receipt
+        if: ${{ inputs.resume-after-npm-publish != true }}
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
-        run: |
-          # package.json plus the desktop sources (tauri.conf.json, Cargo.toml and the
-          # opencodex-desktop Cargo.lock entry). package-desktop already refused to build on a
-          # mismatch; this re-proves it on the commit that is about to publish.
-          bun scripts/release-version-sources.ts check "$RELEASE_VERSION" || {
-            echo "::error::a version source != requested (${RELEASE_VERSION}) — run scripts/release.ts, which moves all of them, on main first";
-            exit 1;
-          }
-
-      # The exact-SHA CI gate includes the hosted Linux, Windows, and macOS
-      # keyring smoke matrix. Do not duplicate its Linux bootstrap here.
-      - name: Require successful Cross-platform CI for this commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.version }}
           NPM_DIST_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
+          mkdir -p publication
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const receipt = JSON.parse(fs.readFileSync('verification/receipt.json', 'utf8'));
+          const sha = /^[0-9a-f]{40}$/, digest = /^[0-9a-f]{64}$/;
+          const runId = Number(process.env.GITHUB_RUN_ID), attempt = Number(process.env.GITHUB_RUN_ATTEMPT);
+          const version = process.env.RELEASE_VERSION, tag = process.env.NPM_DIST_TAG;
+          if (!sha.test(process.env.SOURCE_SHA || '') || !sha.test(process.env.WORKFLOW_SHA || '') ||
+              !/^[1-9]\d*$/.test(process.env.GITHUB_RUN_ID || '') || !/^[1-9]\d*$/.test(process.env.GITHUB_RUN_ATTEMPT || '') ||
+              !digest.test(process.env.EXPECTED_DIGEST || '') || !Number.isSafeInteger(runId) || runId <= 0 ||
+              !Number.isSafeInteger(attempt) || attempt <= 0 || !/^\d+\.\d+\.\d+(?:-preview\.\d{8}\.\d+)?$/.test(version || '') ||
+              !((tag === 'latest' && !version.includes('-')) || (tag === 'preview' && version.includes('-preview.')))) throw Error('invalid publication identity');
+          if (receipt.sha !== process.env.SOURCE_SHA || receipt.workflowSha !== process.env.WORKFLOW_SHA ||
+              receipt.version !== version || receipt.repo !== process.env.GITHUB_REPOSITORY ||
+              receipt.runId !== process.env.GITHUB_RUN_ID || !/^[1-9]\d*$/.test(receipt.attempt || '') ||
+              BigInt(receipt.attempt) > BigInt(process.env.GITHUB_RUN_ATTEMPT) ||
+              !receipt.assets || typeof receipt.assets !== 'object' || Array.isArray(receipt.assets) || !Object.keys(receipt.assets).length) throw Error('release asset receipt mismatch');
+          for (const [name, value] of Object.entries(receipt.assets)) {
+            if (!name || /[\x00-\x1f/\\]/.test(name) || !digest.test(value)) throw Error('invalid release asset receipt');
+          }
+          const publication = { sourceSha: process.env.SOURCE_SHA, workflowSha: process.env.WORKFLOW_SHA,
+            version, channel: tag === 'latest' ? 'stable' : 'preview', sha256: process.env.EXPECTED_DIGEST,
+            gitHead: process.env.SOURCE_SHA, runId, attempt, published: true, assets: receipt.assets };
+          fs.writeFileSync('publication/pending.json', JSON.stringify(publication) + '\n', { flag: 'wx' });
+          NODE
 
-          case "$GITHUB_REF" in
-            refs/heads/main)
-              expected_tag="latest"
-              if [[ "$RELEASE_VERSION" == *-* ]]; then
-                echo "::error::main releases must use a stable semver version; got ${RELEASE_VERSION}"
-                exit 1
-              fi
-              ;;
-            refs/heads/preview)
-              expected_tag="preview"
-              if [[ "$RELEASE_VERSION" != *-preview.* ]]; then
-                echo "::error::preview releases must use a preview prerelease version; got ${RELEASE_VERSION}"
-                exit 1
-              fi
-              ;;
-            *)
-              echo "::error::Release must run from main or preview; got ${GITHUB_REF}"
-              exit 1
-              ;;
-          esac
-
-          if [ "$NPM_DIST_TAG" != "$expected_tag" ]; then
-            echo "::error::${GITHUB_REF#refs/heads/} releases must publish with npm dist-tag '${expected_tag}', got '${NPM_DIST_TAG}'"
-            exit 1
-          fi
-
-          ci_url="$(
-            gh run list \
-              --workflow ci.yml \
-              --branch "${GITHUB_REF#refs/heads/}" \
-              --commit "$GITHUB_SHA" \
-              --event push \
-              --limit 10 \
-              --json conclusion,url \
-              --jq '[.[] | select(.conclusion == "success")][0].url // ""'
-          )"
-
-          if [ -z "$ci_url" ]; then
-            # Deliberately narrower than "any successful ci.yml run for this SHA".
-            # The release branch's own push run is the one whose trigger set,
-            # runner selection, and job graph match what is being published —
-            # a green PR run for the same SHA ran against a merge ref with a
-            # different trigger context. Accepting it here would let a publish
-            # proceed while the promotion run was still pending, or had failed.
-            echo "::error::No successful Cross-platform CI run found for ${GITHUB_SHA} on ${GITHUB_REF#refs/heads/} (push event). A pull-request run does not qualify. Wait for the promotion run to pass before releasing."
-            gh run list --workflow ci.yml --commit "$GITHUB_SHA" --limit 10 || true
-            exit 1
-          fi
-
-          echo "Cross-platform CI passed for ${GITHUB_SHA}: ${ci_url}"
-
-          # Service baseline (lineage-relative): merged tags only, so the
-          # changed-files gate compares against the last release actually
-          # reachable from this commit. The release-notes baseline below uses the
-          # full tag set instead, so a stable on another lineage can anchor the
-          # changelog range.
-          # - Preview: newest prior release of either channel (stable or preview). A
-          #   preview→preview-only baseline skips a shipped stable and restates it.
-          # - Stable: newest prior stable only (matching preview carry adjusts the
-          #   generate-notes range separately below).
-          previous_tag="$(
-            git tag --merged HEAD --list 'v[0-9]*' |
-              bun scripts/release-notes.ts previous-release-tag "$RELEASE_VERSION"
-          )"
-          if [ -n "$previous_tag" ]; then
-            changed_files="$(git diff --name-only "${previous_tag}..HEAD")"
-          else
-            changed_files="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA")"
-          fi
-
-          # Keep in sync with the service-lifecycle.yml trigger paths. src/cli.ts is
-          # the pre-restructure compat stub that durable launchers still execute; the
-          # service implementation itself is the src/service/ directory, and the desktop
-          # shell packages and launches it.
-          if printf '%s\n' "$changed_files" | grep -Eq '^(src/service\.ts|src/service/.*|desktop/.*|src/cli\.ts|src/cli/index\.ts|src/lib/bun-runtime\.ts|package\.json|bun\.lock|\.github/workflows/service-lifecycle\.yml|\.github/workflows/release\.yml)$'; then
-            service_url="$(
-              gh run list \
-                --workflow service-lifecycle.yml \
-                --commit "$GITHUB_SHA" \
-                --limit 10 \
-                --json conclusion,headSha,url,workflowName \
-                --jq '[.[] | select(.conclusion == "success")][0].url // ""'
-            )"
-            if [ -z "$service_url" ]; then
-              echo "::error::Service-related files changed since ${previous_tag:-initial commit}, but no successful Service lifecycle run was found for ${GITHUB_SHA}."
-              gh run list --workflow service-lifecycle.yml --commit "$GITHUB_SHA" --limit 10 || true
-              exit 1
-            fi
-            echo "Service lifecycle passed for ${GITHUB_SHA}: ${service_url}"
-          fi
-
-      - name: Require dev to be ready for this release
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          git fetch --force --tags origin +refs/heads/dev:refs/remotes/origin/dev
-          dev_version="$(git show origin/dev:package.json | bun -e 'console.log(JSON.parse(await Bun.stdin.text()).version)')"
-          bun scripts/version-line.ts assert-ahead "$dev_version" "$RELEASE_VERSION"
-
-      # Tokenless publish via Trusted Publishing (OIDC) — NO NPM_TOKEN secret. npm auto-detects the
-      # OIDC environment (`id-token: write` above) and generates provenance automatically, so neither a
-      # token nor `--provenance` is needed. `npm publish` runs prepublishOnly first (typecheck + build
-      # the GUI into gui/dist), so even a dry-run fully verifies the build.
-      # PREREQUISITE: configure the Trusted Publisher for this repo + workflow on npmjs.com — possible
-      # only AFTER the package's first version exists (do the first publish locally, see the runbook).
-      - name: Preflight release metadata
-        id: metadata
+      - name: Recheck source CI and service evidence
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.version }}
-          DRY_RUN: ${{ inputs.dry-run }}
-          RESUME: ${{ inputs.resume-after-npm-publish }}
         run: |
           set -euo pipefail
-
-          pkg_name="$(node -p "require('./package.json').name")"
-          release_tag="v${RELEASE_VERSION}"
-          dry_run="$DRY_RUN"
-
-          git fetch --force --tags origin
-
-          existing_tag_sha="$(git rev-parse -q --verify "refs/tags/${release_tag}^{commit}" || true)"
-          if [ -n "$existing_tag_sha" ] && [ "$existing_tag_sha" != "$GITHUB_SHA" ]; then
-            echo "::error::${release_tag} already points at ${existing_tag_sha}, not ${GITHUB_SHA}"
-            exit 1
+          node .github/scripts/release-evidence.cjs check "$SOURCE_SHA"
+          baseline_tag="$(git tag --merged "$SOURCE_SHA" --list 'v[0-9]*' | bun -e '
+            import { parseVersion, compareVersions } from "./scripts/version-line.ts";
+            const tags = (await Bun.stdin.text()).trim().split("\n").filter(Boolean);
+            const versions = tags.map(tag => ({ tag, version: tag.slice(1) }));
+            if (versions.some(item => !parseVersion(item.version))) throw new Error("invalid release tag");
+            const eligible = versions.filter(item => compareVersions(item.version, process.env.RELEASE_VERSION) < 0);
+            eligible.sort((a, b) => compareVersions(a.version, b.version));
+            console.log(eligible.at(-1)?.tag ?? "");
+          ')"
+          baseline=--initial
+          if [ -n "$baseline_tag" ]; then
+            draft="$(gh release view "$baseline_tag" --json isDraft --jq .isDraft)"
+            test "$draft" = false || { echo '::error::Service baseline is not a published release.'; exit 1; }
+            baseline="$(git rev-parse "refs/tags/${baseline_tag}^{commit}")"
           fi
-
-          if [ -n "$existing_tag_sha" ]; then
-            if [ "$RESUME" = "true" ]; then
-              echo "::notice::${release_tag} already exists at this commit; resuming"
-            elif [ "$dry_run" = "true" ]; then
-              echo "::notice::${release_tag} already exists at this commit; dry-run only"
-            else
-              echo "::error::${release_tag} already exists. Refusing to publish a version with pre-existing Git metadata."
-              exit 1
-            fi
-          fi
-
-          if gh release view "$release_tag" >/dev/null 2>&1; then
-            if [ "$RESUME" = "true" ]; then
-              echo "::notice::GitHub Release ${release_tag} already exists; resuming to complete the attachment"
-            elif [ "$dry_run" = "true" ]; then
-              echo "::notice::GitHub Release ${release_tag} already exists; dry-run only"
-            else
-              echo "::error::GitHub Release ${release_tag} already exists. Choose the next unused patch version."
-              exit 1
-            fi
-          fi
-
-          if [ "$RESUME" = "true" ] && [ "$dry_run" = "true" ]; then
-            echo "::error::resume-after-npm-publish is a real-publication recovery path and cannot combine with dry-run"
-            exit 1
-          fi
-          if npm view "${pkg_name}@${RELEASE_VERSION}" version >/dev/null 2>&1; then
-            if [ "$RESUME" = "true" ]; then
-              resume_git_head="$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" gitHead --json --registry=https://registry.npmjs.org --fetch-retries=0 --fetch-timeout=8000)" || {
-                echo "::error::Cannot verify the existing npm package source; resume refused"
-                exit 1
-              }
-              bun scripts/verify-release-resume.ts "$GITHUB_SHA" "$resume_git_head"
-              echo "resume_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
-              echo "::notice::${pkg_name}@${RELEASE_VERSION} is acknowledged on npm; resuming after the recorded partial publication"
-            elif [ "$dry_run" = "true" ]; then
-              echo "::notice::${pkg_name}@${RELEASE_VERSION} already exists on npm; dry-run only"
-            else
-              echo "::error::${pkg_name}@${RELEASE_VERSION} already exists on npm. If a previous run acknowledged this publication and failed afterwards, re-dispatch with resume-after-npm-publish: true; otherwise choose the next unused patch version."
-              exit 1
-            fi
-          elif [ "$RESUME" = "true" ]; then
-            echo "::error::resume-after-npm-publish is set, but ${pkg_name}@${RELEASE_VERSION} is not on npm — there is no acknowledged publication to resume from"
-            exit 1
+          range="$(node .github/scripts/release-evidence.cjs service-range "$SOURCE_SHA" "$baseline")"
+          required="$(RANGE="$range" node -e 'const x = JSON.parse(process.env.RANGE); if (typeof x.required !== "boolean") throw Error("invalid service range"); process.stdout.write(String(x.required));')"
+          if [ "$required" = true ]; then
+            node .github/scripts/release-evidence.cjs service "$SOURCE_SHA" || {
+              echo "::error::Dispatch service-lifecycle.yml from dev for source ${SOURCE_SHA} and wait for all platforms."; exit 1;
+            }
           fi
 
       - name: Refuse a release the current tag set already outranks
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
-          DRY_RUN: ${{ inputs.dry-run }}
           RESUME: ${{ inputs.resume-after-npm-publish }}
         run: |
           set -euo pipefail
+          git fetch --force --tags origin
           allow=""
           existing_tag_sha="$(git rev-parse -q --verify "refs/tags/v${RELEASE_VERSION}^{commit}" || true)"
-          # Dry-run re-dispatches and the resume path both legitimately find the tag
-          # already at this commit; a moved tag is still refused above.
-          if { [ "$DRY_RUN" = "true" ] || [ "$RESUME" = "true" ]; } && [ -n "$existing_tag_sha" ] && [ "$existing_tag_sha" = "$GITHUB_SHA" ]; then
-            allow="--allow-existing-tag-at-head"
+          if [ -n "$existing_tag_sha" ] && [ "$existing_tag_sha" != "$SOURCE_SHA" ]; then
+            echo '::error::Existing release tag points at a different source.'; exit 1
           fi
-          git tag --list 'v*' | bun scripts/version-line.ts assert-releasable "$RELEASE_VERSION" $allow
+          if [ "$RESUME" = true ] && [ -n "$existing_tag_sha" ]; then allow="--allow-existing-tag-at-head"; fi
+          git tag --list 'v*' | bun scripts/version-line.ts assert-releasable "$RELEASE_VERSION" ${allow:+"$allow"}
 
       - name: Build and validate release changelog
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.version }}
           NPM_DIST_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           notes_file="$GITHUB_WORKSPACE/.release-notes.md"
-          bun scripts/build-release-changelog.ts \
-            --version "$RELEASE_VERSION" \
-            --dist-tag "$NPM_DIST_TAG" \
-            --repository "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --out "$notes_file"
-          test -s "$notes_file" || {
-            echo "::error::release changelog builder produced an empty notes file"
-            exit 1
-          }
+          bun scripts/build-release-changelog.ts --version "$RELEASE_VERSION" --dist-tag "$NPM_DIST_TAG" \
+            --repository "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --out "$notes_file"
+          test -s "$notes_file"
 
-      - name: Publish (or dry-run)
-        id: publication
+      - name: Require publication hold to be enabled
         env:
           DRY_RUN: ${{ inputs.dry-run }}
+          PUBLISH_ENABLED: ${{ vars.OCX_DEV_RELEASE_PUBLISH_ENABLED }}
+        run: |
+          if [ "$DRY_RUN" != "true" ] && [ "$PUBLISH_ENABLED" != "true" ]; then
+            echo '::error::Publication is disabled; OCX_DEV_RELEASE_PUBLISH_ENABLED must equal true.'
+            exit 1
+          fi
+
+      - name: Require reconciled publication history
+        if: ${{ inputs.resume-after-npm-publish != true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
           NPM_DIST_TAG: ${{ inputs.tag }}
-          RESUME: ${{ inputs.resume-after-npm-publish }}
-          RELEASE_VERSION: ${{ inputs.version }}
-          VERIFIED_RESUME_SHA: ${{ steps.metadata.outputs.resume_sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || [ -z "$RELEASE_VERSION" ]; then
+            echo '::error::Invalid release identity for history reconciliation.'; exit 1
+          fi
+          case "$NPM_DIST_TAG" in
+            latest) channel=stable ;;
+            preview) channel=preview ;;
+            *) echo '::error::Invalid release channel.'; exit 1 ;;
+          esac
+          node .github/scripts/release-history.cjs check "$SOURCE_SHA" "$RELEASE_VERSION" "$channel"
+
+      - name: Verify resume registry identity
+        id: resume-identity
+        if: ${{ inputs.resume-after-npm-publish == true }}
         run: |
           set -euo pipefail
           pkg_name="$(node -p "require('./package.json').name")"
-          if [ "$RESUME" = "true" ]; then
-            if [ -z "$VERIFIED_RESUME_SHA" ] || [ "$VERIFIED_RESUME_SHA" != "$GITHUB_SHA" ]; then
-              echo "::error::Resume has no matching registry source verification; publication remains unacknowledged"
-              exit 1
+          registry_version="$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" version --json --registry=https://registry.npmjs.org --fetch-retries=0 --fetch-timeout=8000)" || {
+            echo '::error::Cannot read the exact npm version; resume refused.'; exit 1;
+          }
+          REGISTRY_VERSION="$registry_version" node - <<'NODE'
+          const value = JSON.parse(process.env.REGISTRY_VERSION);
+          if (typeof value !== 'string' || value !== process.env.RELEASE_VERSION) throw Error('npm version does not match original release');
+          NODE
+          registry_head="$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" gitHead --json --registry=https://registry.npmjs.org --fetch-retries=0 --fetch-timeout=8000)" || {
+            echo '::error::Cannot read npm gitHead; resume refused.'; exit 1;
+          }
+          bun scripts/verify-release-resume.ts "$SOURCE_SHA" "$registry_head"
+          echo "resume_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Check resume publication
+        id: resume-check
+        if: ${{ inputs.resume-after-npm-publish == true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NPM_DIST_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          case "$NPM_DIST_TAG" in latest) channel=stable ;; preview) channel=preview ;; *) exit 1 ;; esac
+          decision="$(node .github/scripts/release-resume.cjs check "$RELEASE_VERSION" "$SOURCE_SHA" "$channel")"
+          DECISION="$decision" CHANNEL="$channel" node - <<'NODE'
+          const fs = require('node:fs'), result = JSON.parse(process.env.DECISION);
+          if (result.version !== process.env.RELEASE_VERSION || result.sourceSha !== process.env.SOURCE_SHA ||
+              result.channel !== process.env.CHANNEL || result.publishNpm !== false || result.assetsChecked !== false) throw Error('invalid resume publication decision');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `resume_checked_sha=${result.sourceSha}\n`);
+          NODE
+
+      - name: Publish verified npm tarball
+        id: publication
+        env:
+          NPM_DIST_TAG: ${{ inputs.tag }}
+          RESUME: ${{ inputs.resume-after-npm-publish }}
+          VERIFIED_RESUME_SHA: ${{ steps.resume-identity.outputs.resume_sha }}
+          VERIFIED_RESUME_DECISION: ${{ steps.resume-check.outputs.resume_checked_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$RESUME" = true ]; then
+            if [ -z "$VERIFIED_RESUME_SHA" ] || [ "$VERIFIED_RESUME_SHA" != "$SOURCE_SHA" ] ||
+               [ -z "$VERIFIED_RESUME_DECISION" ] || [ "$VERIFIED_RESUME_DECISION" != "$SOURCE_SHA" ]; then
+              echo '::error::Resume has no matching registry verification; refusing publication acknowledgement.'; exit 1
             fi
-            # npm publication was acknowledged by the earlier run and confirmed by the
-            # preflight above; completing the GitHub side must never republish.
-            echo "::notice::RESUME — npm publish skipped; publication already acknowledged"
-            echo "published=true" >> "$GITHUB_OUTPUT"
-            echo "Publication resumed for ${pkg_name}@${RELEASE_VERSION} at ${GITHUB_SHA} (npm publish skipped; acknowledged by the earlier run)." >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$DRY_RUN" = "true" ]; then
-            echo "::notice::DRY RUN — building + packing, not publishing"
-            npm run prepublishOnly
-            npm pack --dry-run
+            echo "::notice::Resume verified; npm publish skipped."
           else
-            npm publish --tag "$NPM_DIST_TAG" --access public
-            echo "published=true" >> "$GITHUB_OUTPUT"
-            echo "Publication acknowledged for ${pkg_name}@${RELEASE_VERSION} at ${GITHUB_SHA}. If any later step in this run fails, re-dispatch with the same version and expected-sha plus resume-after-npm-publish: true — never republish this version." >> "$GITHUB_STEP_SUMMARY"
+            npm publish "$NPM_TARBALL" --ignore-scripts --tag "$NPM_DIST_TAG" --access public
           fi
+          echo "published=true" >> "$GITHUB_OUTPUT"
+          echo "Publication acknowledged for ${RELEASE_VERSION} at ${SOURCE_SHA}; do not republish this version." >> "$GITHUB_STEP_SUMMARY"
+
+      # A same-run artifact is evidence to be authenticated, not provenance by itself.
+      - name: Record acknowledged publication
+        if: ${{ steps.publication.outputs.published == 'true' && inputs.resume-after-npm-publish != true }}
+        run: |
+          set -euo pipefail
+          test -s publication/pending.json && test ! -e publication/receipt.json
+          mv publication/pending.json publication/receipt.json
+
+      - name: Upload publication receipt
+        if: ${{ steps.publication.outputs.published == 'true' && inputs.resume-after-npm-publish != true }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-publication-receipt
+          path: publication/receipt.json
+          if-no-files-found: error
+          retention-days: 7
 
       # Publication is acknowledged before registry reads, which can lag or fail.
       # Recover only observation failures in this run; never retry npm publish.
@@ -1294,7 +1703,7 @@ jobs:
         id: registry-smoke
         if: ${{ inputs.dry-run != true && steps.publication.outputs.published == 'true' }}
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
           NPM_DIST_TAG: ${{ inputs.tag }}
           PUBLISHED: ${{ steps.publication.outputs.published }}
         run: |
@@ -1338,17 +1747,41 @@ jobs:
             echo "::notice::Registry lookup not confirmed (attempt $attempt/6)"
             if [ "$attempt" -lt 6 ]; then sleep 5; fi
           done
+          # Keep each outcome explicit for the recovery report.
+          # shellcheck disable=SC2129
           echo "verification=pending" >> "$GITHUB_OUTPUT"
           echo "npm_version=unconfirmed" >> "$GITHUB_OUTPUT"
           echo "npm_dist_tag=unconfirmed" >> "$GITHUB_OUTPUT"
           echo "::warning::npm publish succeeded, but registry verification remains pending; continuing GitHub release creation without republishing"
           echo "Publication acknowledged for ${pkg_name}@${RELEASE_VERSION}; registry verification pending after bounded reads. Inspect the registry before announcing availability. Do not republish this version." >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Verify published npm source
+        if: ${{ steps.publication.outputs.published == 'true' }}
+        run: |
+          set -euo pipefail
+          pkg_name="$(node -p "require('./package.json').name")"
+          for attempt in $(seq 1 6); do
+            if head="$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" gitHead --json --registry=https://registry.npmjs.org --fetch-retries=0 --fetch-timeout=8000 2>/dev/null)"; then
+              if [ -n "$head" ] && [ "$head" != null ]; then
+                REGISTRY_HEAD="$head" node - <<'NODE'
+          const head = JSON.parse(process.env.REGISTRY_HEAD);
+          if (!/^[0-9a-f]{40}$/.test(process.env.SOURCE_SHA || '') || head !== process.env.SOURCE_SHA) {
+            throw Error('published npm gitHead does not match selected source');
+          }
+          NODE
+                exit 0
+              fi
+            fi
+            if [ "$attempt" -lt 6 ]; then sleep 5; fi
+          done
+          echo '::error::Published npm gitHead could not be verified; do not republish and reconcile manually.'
+          exit 1
+
       - name: Create GitHub release
         if: ${{ inputs.dry-run != true && steps.publication.outputs.published == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
           RESUME: ${{ inputs.resume-after-npm-publish }}
         run: |
           set -euo pipefail
@@ -1363,8 +1796,8 @@ jobs:
           git fetch --force --tags origin
 
           existing_tag_sha="$(git rev-parse -q --verify "refs/tags/${release_tag}^{commit}" || true)"
-          if [ -n "$existing_tag_sha" ] && [ "$existing_tag_sha" != "$GITHUB_SHA" ]; then
-            echo "::error::${release_tag} already points at ${existing_tag_sha}, not ${GITHUB_SHA}"
+          if [ -n "$existing_tag_sha" ] && [ "$existing_tag_sha" != "$SOURCE_SHA" ]; then
+            echo "::error::${release_tag} already points at ${existing_tag_sha}, not ${SOURCE_SHA}"
             exit 1
           fi
 
@@ -1374,7 +1807,7 @@ jobs:
           fi
 
           if [ -z "$existing_tag_sha" ]; then
-            git tag "$release_tag" "$GITHUB_SHA"
+            git tag "$release_tag" "$SOURCE_SHA"
             git push origin "refs/tags/${release_tag}"
           fi
 
@@ -1393,6 +1826,6 @@ jobs:
             # Draft first. Publication freezes a release under GitHub's immutable
             # releases, so attach-release attaches the verified bundle to the draft
             # and publishes it afterwards.
-            gh release create "$release_tag" --draft --target "$GITHUB_SHA" --title "$release_tag" \
+            gh release create "$release_tag" --draft --target "$SOURCE_SHA" --title "$release_tag" \
               --notes-file "$notes_file" ${prerelease_flag:+$prerelease_flag}
           fi

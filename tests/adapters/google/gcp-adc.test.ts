@@ -1,12 +1,27 @@
-import { afterEach, beforeAll, beforeEach, afterAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, afterAll, describe, expect, spyOn, test } from "bun:test";
 import { Buffer } from "node:buffer";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getVertexAccessToken, __resetVertexTokenCache } from "../../../src/lib/gcp-adc";
+import { getVertexAccessToken, getVertexAccessTokenWithAuthority, __resetVertexTokenCache } from "../../../src/lib/gcp-adc";
 import { createGoogleAdapter } from "../../../src/adapters/google";
-import { providerManagementConfigError } from "../../../src/server/auth-cors";
-import type { OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
+import { providerManagementConfigError, safeConfigDTO } from "../../../src/server/auth-cors";
+import { providerApiKeySelectionIsCurrent } from "../../../src/providers/api-key-selection";
+import { routedProviderConfig } from "../../../src/providers/routed-config";
+import { loadConfig, saveConfig } from "../../../src/config";
+import { handleChatCompletions } from "../../../src/server/chat-completions";
+import { handleResponses } from "../../../src/server/responses";
+import { handleManagementAPI } from "../../../src/server/management-api";
+import { resolveWireProtocolOverride } from "../../../src/server/adapter-resolve";
+import { openAIChatTransport } from "../../../src/adapters/openai-chat/wire";
+import * as proxyEnv from "../../../src/lib/proxy-env";
+import * as destinationPolicy from "../../../src/lib/destination-policy";
+import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
+import { ManagementRequest } from "../../helpers/management-auth";
+import { catalogConvergenceFactory } from "../../helpers/catalog-convergence";
+import { setProviderKeychainEntryFactoryForTests } from "../../../src/providers/key-store";
+import { registerUpstreamRewriter } from "../../../src/plugins/upstream-hooks";
+import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import { STATE_STORE_REGISTRATIONS } from "../../../src/lib/state-store-registrations";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
@@ -81,6 +96,575 @@ function setEnv(k: string, v: string): void {
 }
 
 describe("gcp-adc resolver", () => {
+  test("ADC rotation during schema repair preserves the repaired replay", async () => {
+    const replacementPath = join(tmp, "repair-replacement.json");
+    writeFileSync(replacementPath, JSON.stringify({ type: "authorized_user", client_id: "fixture", client_secret: "fixture", refresh_token: "fixture" }));
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key", googleMode: "vertex", project: "demo-project", location: "global" } as OcxProviderConfig;
+    const config = { port: 0, defaultProvider: "google-vertex", providers: { "google-vertex": provider } } as OcxConfig;
+    const releaseOwner = acquireOwnedSpendHome();
+    saveConfig(config);
+    const priorFetch = globalThis.fetch;
+    const bodies: string[] = [];
+    const authorizations: Array<string | null> = [];
+    let tokens = 0;
+    globalThis.fetch = (async (input, init) => {
+      if (String(input) === OAUTH_TOKEN_URL) return Response.json({ access_token: `fixture-${++tokens}`, expires_in: 3600 });
+      bodies.push(String(init?.body));
+      authorizations.push(new Headers(init?.headers).get("authorization"));
+      if (bodies.length === 1) setEnv("GOOGLE_APPLICATION_CREDENTIALS", replacementPath);
+      return Response.json({ error: { code: 400, status: "INVALID_ARGUMENT", message: "tools.0.custom.input_schema: JSON schema is invalid" } }, { status: 400 });
+    }) as typeof fetch;
+    Object.assign(provider, { fetch: globalThis.fetch });
+    const configuredFetch = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init) => globalThis.fetch(input, init));
+    try {
+      const request = new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        model: "google-vertex/gemini-3-pro", messages: [{ role: "user", content: "hello" }],
+        tools: [{ type: "function", function: { name: "fixture", parameters: { type: "object", properties: { ids: { type: "array", items: { type: "string" } } } } } }], stream: false,
+      }) });
+      await handleChatCompletions(request, config, { model: "", provider: "" });
+      expect(tokens).toBe(2);
+      expect(bodies).toHaveLength(2);
+      expect(authorizations).toEqual(["Bearer fixture-1", "Bearer fixture-2"]);
+      expect(bodies[1]).not.toBe(bodies[0]);
+    } finally {
+      configuredFetch.mockRestore();
+      globalThis.fetch = priorFetch;
+      releaseOwner();
+    }
+  });
+
+  test("unresolved explicit Vertex key references do not fall back to host credentials", () => {
+    setEnv("GOOGLE_CLOUD_API_KEY", "fixture-host-key");
+    setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => null, setPassword: () => {}, deletePassword: () => true }));
+    try {
+      for (const apiKey of ["keychain:missing-fixture", "${MISSING_VERTEX_TEST_KEY}"]) {
+        const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key", googleMode: "vertex", apiKey } as OcxProviderConfig;
+        expect(() => routedProviderConfig("google-vertex", provider)).toThrow();
+      }
+    } finally {
+      setProviderKeychainEntryFactoryForTests(null);
+    }
+  });
+
+  test("Vertex forward auth cannot silently use proxy host credentials", async () => {
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "forward", googleMode: "vertex", project: "demo-project", location: "global" } as OcxProviderConfig;
+    await expect(createGoogleAdapter(provider).buildRequest(parsed())).rejects.toThrow();
+    expect(oauthCalls).toBe(0);
+  });
+  test("dashboard exposes only a non-secret Vertex credential kind", () => {
+    const vertex = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", googleMode: "vertex" } as const;
+    const config = { port: 0, defaultProvider: "ambient", providers: {
+      ambient: { ...vertex }, marker: { ...vertex, apiKey: "gcp-sa:fixture-marker" },
+      placeholder: { ...vertex, apiKey: "N/A" }, key: { ...vertex, apiKey: "fixture-key" },
+      "google-vertex": { adapter: "openai-chat", baseUrl: "https://legacy.example/v1", apiKey: "gcp-sa:fixture-marker" },
+    } } as OcxConfig;
+    const dto = safeConfigDTO(config) as { providers: Record<string, Record<string, unknown>> };
+    expect(dto.providers.ambient?.vertexCredentialKind).toBe("ambient");
+    expect(dto.providers.marker?.vertexCredentialKind).toBe("marker");
+    expect(dto.providers.placeholder?.vertexCredentialKind).toBe("ambient");
+    expect(dto.providers.key?.vertexCredentialKind).toBe("api-key");
+    expect(dto.providers["google-vertex"]?.vertexCredentialKind).toBe("marker");
+    expect(JSON.stringify(dto)).not.toContain("fixture-marker");
+    expect(JSON.stringify(dto)).not.toContain("fixture-key");
+  });
+  test("ambient Vertex API key never becomes a non-Google wire credential", () => {
+    setEnv("GOOGLE_CLOUD_API_KEY", "fixture-ambient-key");
+    const provider = { adapter: "google", baseUrl: "https://external.example/v1", authMode: "key", googleMode: "vertex",
+      modelAdapters: { "example-model": "openai-chat" } } as OcxProviderConfig;
+    const routed = routedProviderConfig("custom-vertex", provider);
+    const wire = resolveWireProtocolOverride("custom-vertex", "example-model", routed, "chat");
+    expect(wire.adapter).toBe("openai-chat");
+    expect(wire.apiKey).toBeUndefined();
+    expect(() => openAIChatTransport(wire)).toThrow("requires a non-empty credential");
+  });
+
+  test("a Vertex credential marker is never sent as a non-Google wire credential", () => {
+    const provider = { adapter: "google", baseUrl: "https://external.example/v1", authMode: "key", googleMode: "vertex", apiKey: "gcp-sa:fixture-account",
+      modelAdapters: { "example-model": "openai-chat" } } as OcxProviderConfig;
+    const wire = resolveWireProtocolOverride("custom-vertex", "example-model", routedProviderConfig("custom-vertex", provider), "chat");
+    expect(wire.adapter).toBe("openai-chat");
+    expect(wire.apiKey).toBeUndefined();
+    expect(() => openAIChatTransport(wire)).toThrow("requires a non-empty credential");
+  });
+
+  for (const inbound of ["chat", "responses"] as const) {
+    test(`ambient Vertex key does not reach an overridden ${inbound} transport`, async () => {
+      setEnv("GOOGLE_CLOUD_API_KEY", "fixture-ambient-key");
+      const provider = { adapter: "google", baseUrl: "https://external.example/v1", authMode: "key", googleMode: "vertex",
+        modelAdapters: { "example-model": "openai-chat" } } as OcxProviderConfig;
+      const config = { port: 0, defaultProvider: "custom-vertex", providers: { "custom-vertex": provider } } as OcxConfig;
+      const releaseOwner = acquireOwnedSpendHome();
+      saveConfig(config);
+      const priorFetch = globalThis.fetch;
+      const sent: string[] = [];
+      globalThis.fetch = (async (input, init) => {
+        sent.push(new Headers(init?.headers).get("authorization") ?? "");
+        return Response.json({});
+      }) as typeof fetch;
+      Object.assign(provider, { fetch: globalThis.fetch });
+      const configuredFetch = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init) => globalThis.fetch(input, init));
+      try {
+        const body = inbound === "chat"
+          ? { model: "custom-vertex/example-model", messages: [{ role: "user", content: "hello" }], stream: false }
+          : { model: "custom-vertex/example-model", input: "hello", stream: false };
+        const request = new Request(`http://localhost/v1/${inbound === "chat" ? "chat/completions" : "responses"}`,
+          { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+        const response = inbound === "chat" ? await handleChatCompletions(request, config, { model: "", provider: "" })
+          : await handleResponses(request, config, { model: "", provider: "" });
+        expect(response.status).toBeGreaterThanOrEqual(400);
+        expect(sent).toEqual([]);
+      } finally {
+        configuredFetch.mockRestore();
+        globalThis.fetch = priorFetch;
+        releaseOwner();
+      }
+    });
+  }
+
+  test("an ADC source switch during token exchange never returns the previous bearer", async () => {
+    const firstPath = join(tmp, "adc-first.json");
+    const secondPath = join(tmp, "adc-second.json");
+    const credential = { type: "authorized_user", client_id: "fixture-client", client_secret: "fixture-secret", refresh_token: "fixture-refresh" };
+    writeFileSync(firstPath, JSON.stringify(credential));
+    writeFileSync(secondPath, JSON.stringify({ ...credential, refresh_token: "other-fixture-refresh" }));
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", firstPath);
+    let release!: (response: Response) => void;
+    let started!: () => void;
+    const requested = new Promise<void>(resolve => { started = resolve; });
+    const fakeFetch = (async () => { started(); return new Promise<Response>(resolve => { release = resolve; }); }) as typeof fetch;
+    const pending = getVertexAccessToken({ fetch: fakeFetch });
+    await requested;
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", secondPath);
+    release(Response.json({ access_token: "old-fixture-token", expires_in: 3600 }));
+    await expect(pending).rejects.toThrow();
+  });
+
+  for (const cancelled of ["first", "second"] as const) {
+    test(`cancelling the ${cancelled} ADC waiter leaves the other refresh alive`, async () => {
+      const file = join(tmp, `adc-cancel-${cancelled}.json`);
+      writeFileSync(file, JSON.stringify({ type: "authorized_user", client_id: "fixture-client", client_secret: "fixture-secret", refresh_token: "fixture-refresh" }));
+      setEnv("GOOGLE_APPLICATION_CREDENTIALS", file);
+      const firstController = new AbortController();
+      const secondController = new AbortController();
+      let release!: (response: Response) => void;
+      let started!: () => void;
+      const requested = new Promise<void>(resolve => { started = resolve; });
+      const fakeFetch = (async (_input, init) => {
+        started();
+        return new Promise<Response>((resolve, reject) => {
+          release = resolve;
+          init?.signal?.addEventListener("abort", () => reject(new Error("fixture exchange aborted")), { once: true });
+        });
+      }) as typeof fetch;
+      const first = getVertexAccessToken({ fetch: fakeFetch, signal: firstController.signal });
+      void first.catch(() => {});
+      await requested;
+      const second = getVertexAccessToken({ fetch: fakeFetch, signal: secondController.signal });
+      void second.catch(() => {});
+      (cancelled === "first" ? firstController : secondController).abort();
+      release(Response.json({ access_token: "fixture-shared-token", expires_in: 3600 }));
+      await expect(cancelled === "first" ? first : second).rejects.toThrow();
+      expect(await (cancelled === "first" ? second : first)).toBe("fixture-shared-token");
+    });
+  }
+
+  test("a shared ADC retry uses a remaining authorized provider", async () => {
+    const file = join(tmp, "adc-shared-authority.json");
+    writeFileSync(file, JSON.stringify({ type: "authorized_user", client_id: "fixture-client", client_secret: "fixture-secret", refresh_token: "fixture-refresh" }));
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", file);
+    let firstValid = true;
+    let release!: (response: Response) => void;
+    let started!: () => void;
+    const requested = new Promise<void>(resolve => { started = resolve; });
+    let calls = 0;
+    const fakeFetch = (async () => {
+      if (++calls === 1) { started(); return new Promise<Response>(resolve => { release = resolve; }); }
+      return Response.json({ access_token: "fixture-shared-token", expires_in: 3600 });
+    }) as typeof fetch;
+    const first = getVertexAccessTokenWithAuthority({ fetch: fakeFetch, beforeSend: () => { if (!firstValid) throw new Error("first provider changed"); } });
+    void first.catch(() => {});
+    await requested;
+    const second = getVertexAccessTokenWithAuthority({ fetch: fakeFetch, beforeSend: () => {} });
+    firstValid = false;
+    release(new Response(null, { status: 503 }));
+    expect((await second).token).toBe("fixture-shared-token");
+    await expect(first).rejects.toThrow("first provider changed");
+    expect(calls).toBe(2);
+  });
+
+  test("ADC rotation during JWT signing prevents the old assertion from being sent", async () => {
+    const replacement = join(tmp, "adc-after-signing.json");
+    writeFileSync(replacement, JSON.stringify({ type: "authorized_user", client_id: "fixture-client", client_secret: "fixture-secret", refresh_token: "fixture-refresh" }));
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
+    const originalSign = globalThis.crypto.subtle.sign.bind(globalThis.crypto.subtle);
+    const signing = spyOn(globalThis.crypto.subtle, "sign").mockImplementation(async (...args) => {
+      const signature = await originalSign(...args);
+      setEnv("GOOGLE_APPLICATION_CREDENTIALS", replacement);
+      return signature;
+    });
+    let sent = 0;
+    const fakeFetch = (async () => { sent++; return Response.json({ access_token: "fixture-old-token", expires_in: 3600 }); }) as typeof fetch;
+    try {
+      await expect(getVertexAccessToken({ fetch: fakeFetch })).rejects.toThrow();
+      expect(sent).toBe(0);
+    } finally {
+      signing.mockRestore();
+    }
+  });
+
+  test("an observed ADC A to B to A switch rejects the first A exchange", async () => {
+    const firstPath = join(tmp, "adc-aba-a.json");
+    const secondPath = join(tmp, "adc-aba-b.json");
+    const credential = { type: "authorized_user", client_id: "fixture-client", client_secret: "fixture-secret", refresh_token: "token-one" };
+    writeFileSync(firstPath, JSON.stringify(credential));
+    writeFileSync(secondPath, JSON.stringify({ ...credential, refresh_token: "token-two" }));
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", firstPath);
+    let release!: (response: Response) => void;
+    let started!: () => void;
+    const requested = new Promise<void>(resolve => { started = resolve; });
+    let calls = 0;
+    const fakeFetch = (async () => {
+      if (++calls === 1) { started(); return new Promise<Response>(resolve => { release = resolve; }); }
+      return Response.json({ access_token: "fixture-b", expires_in: 3600 });
+    }) as typeof fetch;
+    const old = getVertexAccessToken({ fetch: fakeFetch });
+    await requested;
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", secondPath);
+    expect(await getVertexAccessToken({ fetch: fakeFetch })).toBe("fixture-b");
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", firstPath);
+    // Observing A again establishes a new generation before the old A exchange returns.
+    const newer = getVertexAccessToken({ fetch: fakeFetch });
+    release(Response.json({ access_token: "fixture-old-a", expires_in: 3600 }));
+    await expect(old).rejects.toThrow();
+    expect(await newer).not.toBe("fixture-old-a");
+  });
+
+  test("same-size ADC file replacement with preserved mtime invalidates the token", async () => {
+    const file = join(tmp, "same-size-adc.json");
+    const credential = { type: "authorized_user", client_id: "fixture-client", client_secret: "fixture-secret", refresh_token: "token-one" };
+    writeFileSync(file, JSON.stringify(credential));
+    const initial = statSync(file);
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", file);
+    let calls = 0;
+    const fakeFetch = (async () => Response.json({ access_token: `fixture-${++calls}`, expires_in: 3600 })) as typeof fetch;
+    expect(await getVertexAccessToken({ fetch: fakeFetch })).toBe("fixture-1");
+    writeFileSync(file, JSON.stringify({ ...credential, refresh_token: "token-two" }));
+    utimesSync(file, initial.atime, initial.mtime);
+    expect(await getVertexAccessToken({ fetch: fakeFetch })).toBe("fixture-2");
+  });
+
+  test("replacing credentials behind the same marker invalidates the token", async () => {
+    let credential = JSON.stringify({ type: "authorized_user", client_id: "fixture-client", client_secret: "fixture-secret", refresh_token: "token-one" });
+    setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => credential, setPassword: () => {}, deletePassword: () => true }));
+    let calls = 0;
+    const fakeFetch = (async () => Response.json({ access_token: `fixture-${++calls}`, expires_in: 3600 })) as typeof fetch;
+    try {
+      expect(await getVertexAccessToken({ markerAccount: "fixture-marker", fetch: fakeFetch })).toBe("fixture-1");
+      credential = credential.replace("token-one", "token-two");
+      expect(await getVertexAccessToken({ markerAccount: "fixture-marker", fetch: fakeFetch })).toBe("fixture-2");
+    } finally {
+      setProviderKeychainEntryFactoryForTests(null);
+    }
+  });
+  test("keyless Vertex ADC remains valid through the physical-send selection check", () => {
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key", googleMode: "vertex", project: "demo-project", location: "global" } as OcxProviderConfig;
+    const config = { port: 0, defaultProvider: "google-vertex", providers: { "google-vertex": provider } } as OcxConfig;
+    const routed = routedProviderConfig("google-vertex", provider);
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", routed)).toBe(true);
+    config.providers["google-vertex"] = { ...provider, project: "other-project" };
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", routed)).toBe(false);
+  });
+
+  test("Vertex selection detects adapter and model-wire changes before dispatch", () => {
+    const provider = { adapter: "google", baseUrl: "https://external.example/v1", googleMode: "vertex", project: "demo-project", location: "global" } as OcxProviderConfig;
+    const config = { port: 0, defaultProvider: "custom-vertex", providers: { "custom-vertex": provider } } as OcxConfig;
+    const routed = routedProviderConfig("custom-vertex", provider);
+    expect(providerApiKeySelectionIsCurrent(config, "custom-vertex", routed)).toBe(true);
+    config.providers["custom-vertex"] = { ...provider, adapter: "openai-chat" };
+    expect(providerApiKeySelectionIsCurrent(config, "custom-vertex", routed)).toBe(false);
+    config.providers["custom-vertex"] = { ...provider, modelAdapters: { "example-model": "openai-chat" } };
+    expect(providerApiKeySelectionIsCurrent(config, "custom-vertex", routed)).toBe(false);
+  });
+
+  test("an observed ambient key A to B to A invalidates the original selection", () => {
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key", googleMode: "vertex" } as OcxProviderConfig;
+    const config = { port: 0, defaultProvider: "google-vertex", providers: { "google-vertex": provider } } as OcxConfig;
+    setEnv("GOOGLE_CLOUD_API_KEY", "fixture-key-a");
+    const first = routedProviderConfig("google-vertex", provider);
+    setEnv("GOOGLE_CLOUD_API_KEY", "fixture-key-b");
+    routedProviderConfig("google-vertex", provider);
+    setEnv("GOOGLE_CLOUD_API_KEY", "fixture-key-a");
+    routedProviderConfig("google-vertex", provider);
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", first)).toBe(false);
+  });
+
+  test("Vertex send-time selection detects environment key, project and location changes", () => {
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key", googleMode: "vertex" } as OcxProviderConfig;
+    const config = { port: 0, defaultProvider: "google-vertex", providers: { "google-vertex": provider } } as OcxConfig;
+    setEnv("GOOGLE_CLOUD_PROJECT", "project-one");
+    setEnv("GOOGLE_CLOUD_LOCATION", "global");
+    const adc = routedProviderConfig("google-vertex", provider);
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", adc)).toBe(true);
+    setEnv("GOOGLE_CLOUD_PROJECT", "project-two");
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", adc)).toBe(false);
+    const changedProject = routedProviderConfig("google-vertex", provider);
+    setEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", changedProject)).toBe(false);
+    setEnv("GOOGLE_CLOUD_API_KEY", "fixture-env-key");
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", adc)).toBe(false);
+    const key = routedProviderConfig("google-vertex", provider);
+    expect(key.apiKey).toBeUndefined();
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", key)).toBe(true);
+    setEnv("GOOGLE_CLOUD_API_KEY", "replacement-env-key");
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", key)).toBe(false);
+    const placeholder = { ...provider, apiKey: "N/A" };
+    config.providers["google-vertex"] = placeholder;
+    const fallback = routedProviderConfig("google-vertex", placeholder);
+    expect(fallback.apiKey).toBe("N/A");
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", fallback)).toBe(true);
+    setEnv("GOOGLE_CLOUD_API_KEY", "third-env-key");
+    expect(providerApiKeySelectionIsCurrent(config, "google-vertex", fallback)).toBe(false);
+  });
+
+  test("management saves and reloads a renamed keyless Vertex provider", async () => {
+    const config = { port: 0, defaultProvider: "fixture", providers: {
+      fixture: { adapter: "openai-chat", baseUrl: "https://fixture.example/v1" },
+    } } as OcxConfig;
+    saveConfig(config);
+    const destination = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
+    try {
+      const request = new ManagementRequest("http://127.0.0.1/api/providers", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "my-vertex", provider: { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key", googleMode: "vertex", project: "demo-project", location: "global", defaultModel: "gemini-3-pro", liveModels: false } }) });
+      const response = await handleManagementAPI(request, new URL(request.url), config, { createManagementConvergeCodex: catalogConvergenceFactory() });
+      expect(response?.status).toBe(200);
+      expect(loadConfig().providers["my-vertex"]).toMatchObject({ googleMode: "vertex", project: "demo-project", location: "global" });
+      expect(loadConfig().providers["my-vertex"]?.apiKey).toBeUndefined();
+      const read = new ManagementRequest("http://127.0.0.1/api/config");
+      const readResponse = await handleManagementAPI(read, new URL(read.url), config, { createManagementConvergeCodex: catalogConvergenceFactory() });
+      const dto = await readResponse!.json() as { providers: Record<string, Record<string, unknown>> };
+      expect(dto.providers["my-vertex"]).toMatchObject({ googleMode: "vertex", project: "demo-project", location: "global", hasApiKey: false });
+      expect(dto.providers["my-vertex"]).not.toHaveProperty("apiKey");
+      const probe = new ManagementRequest("http://127.0.0.1/api/providers/test?name=my-vertex", { method: "POST" });
+      const probeResponse = await handleManagementAPI(probe, new URL(probe.url), config, { createManagementConvergeCodex: catalogConvergenceFactory() });
+      expect(await probeResponse!.json()).toMatchObject({ applicable: false, reason: "static_catalog" });
+      const patch = new ManagementRequest("http://127.0.0.1/api/providers?name=my-vertex", { method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ project: "new-project", location: "" }) });
+      const patchResponse = await handleManagementAPI(patch, new URL(patch.url), config, { createManagementConvergeCodex: catalogConvergenceFactory() });
+      expect(patchResponse?.status).toBe(200);
+      expect(loadConfig().providers["my-vertex"]?.project).toBe("new-project");
+      expect(loadConfig().providers["my-vertex"]?.location).toBeUndefined();
+      const invalid = new ManagementRequest("http://127.0.0.1/api/providers?name=my-vertex", { method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ location: "invalid.example" }) });
+      const invalidResponse = await handleManagementAPI(invalid, new URL(invalid.url), config, { createManagementConvergeCodex: catalogConvergenceFactory() });
+      expect(invalidResponse?.status).toBe(400);
+      expect(loadConfig().providers["my-vertex"]?.location).toBeUndefined();
+    } finally {
+      destination.mockRestore();
+    }
+  });
+
+  test("a keyless Vertex provider sends a proxy chat request with ADC", async () => {
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key", googleMode: "vertex", project: "demo-project", location: "global" } as OcxProviderConfig;
+    const config = { port: 0, defaultProvider: "google-vertex", providers: { "google-vertex": provider } } as OcxConfig;
+    const releaseOwner = acquireOwnedSpendHome();
+    saveConfig(config);
+    const priorFetch = globalThis.fetch;
+    const sent: Array<{ url: string; authorization: string | null; apiKey: string | null }> = [];
+    let tokenRequests = 0;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url === OAUTH_TOKEN_URL) { tokenRequests++; return Response.json({ access_token: "vertex-tok", expires_in: 3600 }); }
+      const headers = new Headers(init?.headers);
+      sent.push({ url, authorization: headers.get("authorization"), apiKey: headers.get("x-goog-api-key") });
+      return new Response(`data: ${JSON.stringify({ candidates: [{ content: { role: "model", parts: [{ text: "hello" }] }, finishReason: "STOP" }] })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    Object.assign(provider, { fetch: globalThis.fetch });
+    const configuredFetch = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init) => globalThis.fetch(input, init));
+    try {
+      const request = new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "google-vertex/gemini-3-pro", messages: [{ role: "user", content: "hello" }], stream: false }) });
+      const logContext = { model: "", provider: "" };
+      const response = await handleChatCompletions(request, config, logContext);
+      if (response.status !== 200) throw new Error(`Proxy returned ${response.status}: ${await response.text()}`);
+      expect(response.status).toBe(200);
+      expect(sent).toHaveLength(1);
+      expect(tokenRequests).toBe(1);
+      expect(sent[0]).toMatchObject({ authorization: "Bearer vertex-tok", apiKey: null });
+      expect(sent[0]!.url).toContain("/v1/projects/demo-project/locations/global/");
+    } finally {
+      configuredFetch.mockRestore();
+      globalThis.fetch = priorFetch;
+      releaseOwner();
+    }
+  });
+
+  test("physical Vertex dispatch refuses a bearer whose ADC source changed after build", async () => {
+    const replacementPath = join(tmp, "adc-after-build.json");
+    writeFileSync(replacementPath, JSON.stringify({ type: "authorized_user", client_id: "fixture-client", client_secret: "fixture-secret", refresh_token: "fixture-refresh" }));
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key", googleMode: "vertex", project: "demo-project", location: "global" } as OcxProviderConfig;
+    const config = { port: 0, defaultProvider: "google-vertex", providers: { "google-vertex": provider } } as OcxConfig;
+    const releaseOwner = acquireOwnedSpendHome();
+    saveConfig(config);
+    const priorFetch = globalThis.fetch;
+    const sent: string[] = [];
+    let tokens = 0;
+    globalThis.fetch = (async (input, init) => {
+      if (String(input) === OAUTH_TOKEN_URL) return Response.json({ access_token: `fixture-token-${++tokens}`, expires_in: 3600 });
+      sent.push(new Headers(init?.headers).get("authorization") ?? "");
+      return new Response(`data: ${JSON.stringify({ candidates: [{ content: { role: "model", parts: [{ text: "hello" }] }, finishReason: "STOP" }] })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    Object.assign(provider, { fetch: globalThis.fetch });
+    const configuredFetch = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init) => globalThis.fetch(input, init));
+    let rotated = false;
+    const unregister = registerUpstreamRewriter("fixture-adc-rotation", target => {
+      if (target.url.includes("aiplatform.googleapis.com")) { rotated = true; setEnv("GOOGLE_APPLICATION_CREDENTIALS", replacementPath); }
+    });
+    try {
+      const request = new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "google-vertex/gemini-3-pro", messages: [{ role: "user", content: "hello" }], stream: false }) });
+      await handleChatCompletions(request, config, { model: "", provider: "" });
+      expect(tokens).toBeGreaterThanOrEqual(1);
+      expect(rotated).toBe(true);
+      expect(sent).not.toContain("Bearer fixture-token-1");
+    } finally {
+      unregister();
+      configuredFetch.mockRestore();
+      globalThis.fetch = priorFetch;
+      releaseOwner();
+    }
+  });
+
+  test("a changed model wire never rebuilds using the old Vertex policy", async () => {
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
+    const name = "custom-vertex";
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key", googleMode: "vertex", project: "demo-project", location: "global" } as OcxProviderConfig;
+    const config = { port: 0, defaultProvider: name, providers: { [name]: provider } } as OcxConfig;
+    const releaseOwner = acquireOwnedSpendHome();
+    saveConfig(config);
+    const priorFetch = globalThis.fetch;
+    const sent: string[] = [];
+    let changed = false;
+    globalThis.fetch = (async (input, init) => {
+      if (String(input) === OAUTH_TOKEN_URL) return Response.json({ access_token: "fixture-token", expires_in: 3600 });
+      sent.push(new Headers(init?.headers).get("authorization") ?? "");
+      return Response.json({});
+    }) as typeof fetch;
+    Object.assign(provider, { fetch: globalThis.fetch });
+    const configuredFetch = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init) => globalThis.fetch(input, init));
+    const unregister = registerUpstreamRewriter("fixture-model-wire-change", target => {
+      if (!changed && target.url.includes("aiplatform.googleapis.com")) {
+        changed = true;
+        config.providers[name]!.modelAdapters = { "gemini-3-pro": "openai-chat" };
+      }
+    });
+    try {
+      const request = new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: `${name}/gemini-3-pro`, messages: [{ role: "user", content: "hello" }], stream: false }) });
+      await handleChatCompletions(request, config, { model: "", provider: "" });
+      expect(changed).toBe(true);
+      expect(sent).not.toContain("Bearer fixture-token");
+    } finally {
+      unregister();
+      configuredFetch.mockRestore();
+      globalThis.fetch = priorFetch;
+      releaseOwner();
+    }
+  });
+
+  test("client cancellation detaches a token exchange started by a Vertex rebuild", async () => {
+    const replacement = join(tmp, "adc-rebuild-cancel.json");
+    writeFileSync(replacement, JSON.stringify({ type: "authorized_user", client_id: "fixture-client", client_secret: "fixture-secret", refresh_token: "fixture-refresh" }));
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key", googleMode: "vertex", project: "demo-project", location: "global" } as OcxProviderConfig;
+    const config = { port: 0, defaultProvider: "google-vertex", providers: { "google-vertex": provider } } as OcxConfig;
+    const releaseOwner = acquireOwnedSpendHome();
+    saveConfig(config);
+    const priorFetch = globalThis.fetch;
+    let tokenCalls = 0;
+    let tokenSignal: AbortSignal | null | undefined;
+    let releaseToken!: (response: Response) => void;
+    let signalStarted!: () => void;
+    const started = new Promise<void>(resolve => { signalStarted = resolve; });
+    globalThis.fetch = (async (input, init) => {
+      if (String(input) === OAUTH_TOKEN_URL) {
+        if (++tokenCalls === 1) return Response.json({ access_token: "fixture-first", expires_in: 3600 });
+        tokenSignal = init?.signal;
+        signalStarted();
+        return new Promise<Response>(resolve => { releaseToken = resolve; });
+      }
+      return Response.json({});
+    }) as typeof fetch;
+    Object.assign(provider, { fetch: globalThis.fetch });
+    const configuredFetch = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init) => globalThis.fetch(input, init));
+    let rotated = false;
+    const unregister = registerUpstreamRewriter("fixture-rebuild-cancel", target => {
+      if (!rotated && target.url.includes("aiplatform.googleapis.com")) { rotated = true; setEnv("GOOGLE_APPLICATION_CREDENTIALS", replacement); }
+    });
+    const client = new AbortController();
+    let pending: Promise<Response> | undefined;
+    try {
+      const request = new Request("http://localhost/v1/chat/completions", { method: "POST", signal: client.signal, headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "google-vertex/gemini-3-pro", messages: [{ role: "user", content: "hello" }], stream: false }) });
+      pending = handleChatCompletions(request, config, { model: "", provider: "" });
+      await started;
+      client.abort();
+      await Promise.resolve();
+      expect(tokenSignal?.aborted).toBe(true);
+    } finally {
+      releaseToken?.(Response.json({ access_token: "fixture-second", expires_in: 3600 }));
+      await pending?.catch(() => undefined);
+      unregister();
+      configuredFetch.mockRestore();
+      globalThis.fetch = priorFetch;
+      releaseOwner();
+    }
+  });
+
+  for (const changed of ["ambient-key", "destination", "header", "provider-disabled"] as const) {
+    test(`physical Vertex dispatch refuses a changed ${changed}`, async () => {
+      setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
+      if (changed === "ambient-key") setEnv("GOOGLE_CLOUD_API_KEY", "fixture-ambient-one");
+      const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key", googleMode: "vertex", project: "demo-project", location: "global" } as OcxProviderConfig;
+      const config = { port: 0, defaultProvider: "google-vertex", providers: { "google-vertex": provider } } as OcxConfig;
+      const releaseOwner = acquireOwnedSpendHome();
+      saveConfig(config);
+      const priorFetch = globalThis.fetch;
+      const sent: Array<{ url: string; key: string | null }> = [];
+      let modified = false;
+      globalThis.fetch = (async (input, init) => {
+        if (String(input) === OAUTH_TOKEN_URL) return Response.json({ access_token: "fixture-token", expires_in: 3600 });
+        sent.push({ url: String(input), key: new Headers(init?.headers).get("x-goog-api-key") });
+        return Response.json({});
+      }) as typeof fetch;
+      Object.assign(provider, { fetch: globalThis.fetch });
+      const configuredFetch = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init) => globalThis.fetch(input, init));
+      const unregister = registerUpstreamRewriter("fixture-vertex-authority", target => {
+        if (!target.url.includes("aiplatform.googleapis.com")) return;
+        modified = true;
+        if (changed === "ambient-key") setEnv("GOOGLE_CLOUD_API_KEY", "fixture-ambient-two");
+        if (changed === "destination") target.url = "https://external.example/collect";
+        if (changed === "header") target.headers.set("authorization", "Bearer replacement");
+        if (changed === "provider-disabled") config.providers["google-vertex"]!.disabled = true;
+      });
+      try {
+        const request = new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "google-vertex/gemini-3-pro", messages: [{ role: "user", content: "hello" }], stream: false }) });
+        await handleChatCompletions(request, config, { model: "", provider: "" });
+        expect(modified).toBe(true);
+        if (changed === "ambient-key") expect(sent.every(entry => entry.key !== "fixture-ambient-one")).toBe(true);
+        else expect(sent).toEqual([]);
+      } finally {
+        unregister();
+        configuredFetch.mockRestore();
+        globalThis.fetch = priorFetch;
+        releaseOwner();
+      }
+    });
+  }
   test("service_account flow signs an RS256 JWT and returns the access token", async () => {
     setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
     const tok = await getVertexAccessToken();

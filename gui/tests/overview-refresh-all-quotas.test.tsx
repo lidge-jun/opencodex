@@ -34,6 +34,7 @@ async function flush(): Promise<void> {
 const SECTIONS: WorkspaceSections = {
   ready: [{ name: "anthropic", adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" }],
   needsSetup: [],
+  unverified: [],
   disabled: [],
 };
 
