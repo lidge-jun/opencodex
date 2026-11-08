@@ -1,11 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { emailMaskingEnabled, maskAccountId, maskEmail, maskedAccountLabel, projectEmail } from "../../src/lib/privacy";
+import { accountDisplayLabel, emailMaskingEnabled, maskAccountId, maskEmail, maskedAccountLabel, projectEmail } from "../../src/lib/privacy";
 
 test("account display labels omit malformed identities and mask valid addresses", () => {
   expect(maskedAccountLabel("person@example.test")).toBe("p***n@example.test");
   expect(maskedAccountLabel("a@domain")).toBe("*@domain");
   for (const value of [undefined, "", "not-an-email", "a@@example.test", "a@-bad.test", "a@bad..test", "a@example.test\nextra", "x".repeat(255) + "@example.test"]) {
     expect(maskedAccountLabel(value)).toBeUndefined();
+  }
+});
+
+test("dashboard account labels follow the masking decision (#8286)", () => {
+  expect(accountDisplayLabel("person@example.test", true)).toBe("p***n@example.test");
+  expect(accountDisplayLabel("not-an-email", true)).toBeUndefined();
+  expect(accountDisplayLabel("  person@example.test  ", false)).toBe("person@example.test");
+  expect(accountDisplayLabel("workspace-login", false)).toBe("workspace-login");
+  for (const value of [undefined, "", "   ", "x".repeat(255), "a@example.test\nextra", "a\u202E@example.test", "a\u200B@example.test"]) {
+    expect(accountDisplayLabel(value, false)).toBeUndefined();
   }
 });
 
