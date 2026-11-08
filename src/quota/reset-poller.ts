@@ -71,16 +71,17 @@ async function tick(): Promise<void> {
     // callee at all. Only while this tick still owns the timer.
     restartIfCadenceChanged(configured);
     tickCount += 1;
-    const [{ loadConfig }, { fetchProviderQuotaReports }] = await Promise.all([
+    const [{ loadConfig }, { fetchProviderQuotaReports }, { getLiveStateStoreConfig }] = await Promise.all([
       import("../config"),
       import("../providers/quota"),
+      import("../lib/state-store-registrations"),
     ]);
     // A stop or restart landed while this probe was in flight: the result belongs to a
     // generation that no longer owns the timer, so it must not publish.
     if (entryGeneration !== generation) return;
     // Forced: an unforced call would be served from the 5-minute cache and produce no new
     // observation at all.
-    await fetchProviderQuotaReports(loadConfig(), true);
+    await fetchProviderQuotaReports(getLiveStateStoreConfig() ?? loadConfig(), true);
   } catch {
     // A failed probe is not an error worth surfacing: the next tick tries again.
   } finally {

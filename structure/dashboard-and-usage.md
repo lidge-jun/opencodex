@@ -550,7 +550,10 @@ enabling it takes effect without a restart.
   a local command; each sink is best-effort and isolated from the other.
 - `src/quota/reset-poller.ts` is an opt-in idle refresh (default 15 minutes, floor 10). Without it,
   quota reports are fetched only when the dashboard or CLI asks, and an overnight reset goes
-  unobserved. `src/quota/reset-activation.ts` installs the sink independently of the poller, so
+  unobserved. Each tick uses the server's adopted live configuration for the current home when
+  available; a detached disk snapshot cannot authorize a provider the live server disabled. The
+  state-store owner supplies that home-scoped live configuration without adding a static poller
+  dependency. `src/quota/reset-activation.ts` installs the sink independently of the poller, so
   `pollSeconds: 0` observes live traffic only.
 
 ## Usage history and model identity

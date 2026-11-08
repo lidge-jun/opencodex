@@ -24,6 +24,8 @@ import {
 } from "../../src/quota/reset-poller";
 import { resetQuotaResetNotifyCacheForTests } from "../../src/quota/reset-notify-config";
 import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
+import { setLiveStateStoreConfig } from "../../src/lib/state-store-registrations";
+import type { OcxConfig } from "../../src/types";
 
 const ACCOUNT = "acct_reset_observation";
 const HOUR = 60 * 60_000;
@@ -265,6 +267,40 @@ describe("idle poller", () => {
     // The docstring claims the floor sits above the 10-minute per-account TTL; 60s did not.
     const { MIN_INTERVAL_MS } = await import("../../src/quota/reset-poller");
     expect(MIN_INTERVAL_MS).toBe(600_000);
+  });
+
+  test("the poller does not probe a provider disabled in the live configuration", async () => {
+    const { runQuotaResetPollerTickForTests } = await import("../../src/quota/reset-poller");
+    const { resetQuotaResetActivationForTests } = await import("../../src/quota/reset-activation");
+    const home = mkdtempSync(join(tmpdir(), "ocx-poller-live-"));
+    const oldHome = process.env.OPENCODEX_HOME, oldFetch = globalThis.fetch;
+    const disk = { port: 10100, defaultProvider: "mistral", providers: { mistral: {
+      adapter: "openai-chat", authMode: "key", baseUrl: "https://api.mistral.ai/v1", apiKey: "fixture-key",
+    } }, quotaResetNotify: { enabled: true, command: ["true"], pollSeconds: 900 } } as OcxConfig;
+    writeFileSync(join(home, "config.json"), JSON.stringify(disk));
+    process.env.OPENCODEX_HOME = home;
+    const live = structuredClone(disk); live.providers.mistral!.disabled = true;
+    setLiveStateStoreConfig(live);
+    let calls = 0;
+    globalThis.fetch = (async input => {
+      calls++;
+      return Response.json(String(input).endsWith("/subscription") ? { plan_name: "TEAM" } : {
+        api_budget: { initial_budget: 100, currency: "EUR", usage_percentage: 90 },
+      });
+    }) as typeof fetch;
+    resetQuotaResetNotifyCacheForTests();
+    try {
+      startQuotaResetPoller(900_000);
+      await runQuotaResetPollerTickForTests();
+      expect(calls).toBe(0);
+      live.providers.mistral!.disabled = false;
+      await runQuotaResetPollerTickForTests();
+      expect(calls).toBe(2);
+    } finally {
+      stopQuotaResetPoller(); resetQuotaResetActivationForTests(); resetQuotaResetNotifyCacheForTests();
+      globalThis.fetch = oldFetch;
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldHome;
+    }
   });
 
   test("the configured pollSeconds reaches the poller interval", async () => {
