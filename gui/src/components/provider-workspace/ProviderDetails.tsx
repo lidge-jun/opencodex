@@ -27,10 +27,6 @@ import type { AccountLoadState, ProviderModelUsageRow, ProviderUsageTotals, OAut
 
 type Tab = "overview" | "models" | "usage" | "accounts" | "settings";
 
-/**
- * Detail view for one provider. Owns the tab state and derives what the tabs share: the auth
- * surface, the active account or key, and the active OAuth account's display label for the Overview.
- */
 export default function ProviderDetails({
   item,
   preset,
@@ -140,13 +136,10 @@ export default function ProviderDetails({
   const free = useMemo(() => isFreeProvider(item), [item]);
   const local = useMemo(() => isLocalProvider(item), [item]);
   const authSurface = useMemo(() => providerAuthSurface(item), [item]);
+  const activeOAuthAccount = accounts?.find(account => account.active);
   const currentQuotaReading = authSurface === "oauth-accounts"
     ? accounts?.find(account => account.active)
     : authSurface === "api-keys" ? keys?.find(entry => entry.active) : undefined;
-  const activeOAuthAccount = authSurface === "oauth-accounts" ? accounts?.find(account => account.active) : undefined;
-  const activeAccountLabel = activeOAuthAccount && accounts
-    ? oauthAccountDisplayLabel(accounts, activeOAuthAccount, t)
-    : undefined;
   // Global counter from Providers — only honor it for the reveal target.
   const scopedAccountsFocusToken = accountsFocusProvider === item.name ? accountsFocusToken : 0;
   const usesCodexPool = isAccountProvider(item.name, item);
@@ -380,7 +373,8 @@ export default function ProviderDetails({
             currentQuotaReading={currentQuotaReading}
             onRefreshQuota={onRefreshQuota}
             oauthEmail={oauthEmail}
-            activeAccountLabel={activeAccountLabel}
+            currentAccountLabel={authSurface === "oauth-accounts" && accountLoadState === "ready" && activeOAuthAccount
+              ? oauthAccountDisplayLabel(accounts ?? [], activeOAuthAccount, t) : undefined}
             oauth={oauth}
             onEditSettings={() => switchTab("settings")}
             onViewUsage={() => switchTab("usage")}

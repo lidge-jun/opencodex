@@ -19,6 +19,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { probeSpawn, probeSpawnSync } from \"../src/update/mutation-guard.mjs\";",
     "import { createSupervisionLatch, inspectDesktopSupervision } from \"../src/service/desktop-supervision.mjs\";",
     "import { planDesktopCliHandoff, runDesktopCliHandoff } from \"../src/lib/desktop-cli-handoff.mjs\";",
+    "import { forwardLauncherSignals } from \"../src/lib/launcher-signal-forwarding.mjs\";",
     "import { desktopCliRecordPath } from \"../src/lib/desktop-cli-record.mjs\";",
     "import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from \"../src/update/stop-contract.mjs\";",
     "import { probeProxyLiveness } from \"../src/update/proxy-liveness-probe.mjs\";",

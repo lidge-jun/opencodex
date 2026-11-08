@@ -99,8 +99,8 @@ varsayılan olarak kapalıdır; kapalı anahtar değişiklik yapmaz.
 | Anahtar | Açıkken |
 | --- | --- |
 | `nativeChatCombos` | Combo içindeki uygun Chat adayı, istemci gövdesinin kendine ait kopyasından yerel gönderilir; diğer adaylar köprüde kalır. |
-| `managedMessagesNative` | Doğrudan, anahtarla doğrulanan Anthropic sağlayıcısına giden Messages isteği köprü yerine Messages olarak gönderilir. Sabitlenmiş çaba, engelli beceri çıkarma, web arama yardımcısı, görsel ön işleme veya sentetik satır gibi yalnızca köprüde çalışan davranışlar köprüde kalır. |
-| `managedMessagesNativeOAuth` | `api.anthropic.com` üzerindeki havuzsuz `anthropic` OAuth sağlayıcısı için yerel Messages. Yalnızca `managedMessagesNative` ile birlikte etkilidir; Anthropic OAuth hesap havuzu köprüde kalır. |
+| `managedMessagesNative` | Uygun doğrudan Anthropic rotaları ve varsayılan çabası olmayan strict failover combo içindeki birinci taraf Anthropic adayları Messages olarak gönderilir. Çaba yeniden yazımı ve yalnızca köprüde çalışan davranışlar köprüde kalır. |
+| `managedMessagesNativeOAuth` | `api.anthropic.com` üzerindeki yapılandırılmış Anthropic OAuth hesapları, hesap havuzları ve uygun failover adayları için yerel Messages. Yalnızca `managedMessagesNative` ile birlikte etkilidir. |
 | `directEncoders` | Responses dışı üst sunucuda Chat/Messages yanıtı, iç Responses akışı yerine doğrudan bağdaştırıcı olaylarından kodlanır. İstek tarafı değişmez. |
 | `antigravityDirect` | **Varsayılan olarak açık**; kapatmak için `false` yapın. Tek Google Antigravity sağlayıcısına giden Chat/Messages, iç Responses gövdesini iki yönde de atlar: konuşma doğrudan Google bağdaştırıcısının derlediği biçime çözülür, yanıt `directEncoders` gibi kodlanır. Yol `chat -> ir -> other` veya `messages -> ir -> other` olur. Model, çaba, sınırlar ve araç seçimi normal ilkelerden geçtiği için hesap dönüşümü, çaba kuralları ve kullanım değişmez. Combo'lar, ilkeler, barındırılan web araması aracı, yalnızca metin modeline gelen görseller, gölge çağrı yakalamasının değiştirebileceği modeller ve proxy'nin yeniden yazdığı metinler (beceri kataloğu, üretilmiş görsel bağlantısı) köprüde kalır; neden günlükte belirtilir. |
 | `shadowPlan` | Her Chat/Messages isteğinin sonunda önizlemenin öngöreceği plan gerçek yolla karşılaştırılır. Uyuşmazsa yol kaydına `planMismatch: true` eklenir. İkinci istek gönderilmez. |
@@ -136,7 +136,7 @@ Aşağıdakiler iç Responses köprüsünü kullanmaya devam eder veya kapsam d�
   gövdeye çözülür. Tek Google Antigravity rotası istisnadır; ancak
   `antigravityDirect: false` ise o da köprü kullanır.
 - Yönlendirme ilkesi adayları, çaba satırından ulaşılan combo'lar,
-  `nativeChatCombos` kapalıyken combo adayları ve Messages combo'ları.
+  `nativeChatCombos` kapalıyken Chat combo adayları. Messages combo'larında varsayılan çabası olmayan strict failover içindeki uygun birinci taraf Anthropic adayları yerel yolu kullanır; diğerleri köprüde kalır. Her aday çağıranın model/sağlayıcı kapsamını uygular.
 - `directEncoders`, yalnızca somut Responses dışı rotalarda akışlı teslimi kapsar.
   Combo/ilke alt istekleri, yönlendirilmiş sıkıştırma, tur çalıştıran bağdaştırıcılar
   (Cursor, Devin, kod ajanı CLI'ları, CodeBuddy) ve yardımcı servis turları köprüde kalır.
@@ -154,8 +154,8 @@ Aşağıdakiler iç Responses köprüsünü kullanmaya devam eder veya kapsam d�
   Başlıklar tek başına istek yetkisi veya resmi destek sağlamaz. TypeScript Agent
   SDK'nın `sdk-ts` user-agent giriş noktası da aynı zorunlu kimlik başlıklarıyla
   tanınır; birinci taraf Anthropic isteklerinde izin listeli yerel betalarını korur.
-- OAuth üzerinden yerel Chat planlanmıyor. Anthropic OAuth ile yerel Messages
-  yalnızca havuzsuz hesabı kapsar; hesap havuzu köprüde kalır.
+- OAuth üzerinden yerel Chat planlanmıyor. Anthropic OAuth ile yerel Messages,
+  aynı uygunluk ve kimlik bilgisi kurallarıyla hesap havuzlarını da kapsar.
 - Yönetilen yerel Messages, çağıranın `anthropic-beta` değerlerinden yalnızca kısa
   izin listesindekileri ve yalnızca `api.anthropic.com` hedefine iletir. İzin
   listesi dışı üst düzey alanları özellik etkisi kaydetmeden düşürür ve

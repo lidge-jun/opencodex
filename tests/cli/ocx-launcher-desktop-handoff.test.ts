@@ -200,6 +200,19 @@ describe("async handoff transport", () => {
     const run = (() => { queueMicrotask(() => { parent.emit("SIGTERM"); child.emit("exit", null, null); }); return child; }) as unknown as typeof spawn;
     expect(await runDesktopCliHandoff({ kind: "handoff", target: "/fixture/ocx" }, { argv: [], env: {}, proof, context }, { spawn: run, parent: parent as unknown as NodeJS.Process })).toEqual({ kind: "exit", code: 1, signal: null });
   });
+  test("a signal that lands before spawn returns is forwarded to the child once it exists", async () => {
+    // The child can exec and print its readiness line before spawn() returns in the launcher; a
+    // forwarder registered only afterwards let that signal kill the launcher and orphan the child.
+    const parent = new EventEmitter(), killed: string[] = [];
+    const child = new EventEmitter() as EventEmitter & { kill: (signal: string) => boolean };
+    child.kill = signal => { killed.push(signal); return true; };
+    const run = (() => { parent.emit("SIGTERM"); return child; }) as unknown as typeof spawn;
+    const pending = runDesktopCliHandoff({ kind: "handoff", target: "/fixture/ocx" }, { argv: [], env: {}, proof, context }, { spawn: run, parent: parent as unknown as NodeJS.Process, platform: "linux" });
+    expect(killed).toEqual(["SIGTERM"]);
+    child.emit("exit", 29, null);
+    expect(await pending).toEqual({ kind: "exit", code: 29, signal: null });
+    expect(parent.eventNames()).toHaveLength(0);
+  });
   test("synchronous spawn errors refuse package fallback", async () => {
     for (const code of ["ENOENT", "EACCES"]) {
       const fail = (() => { throw coded(code); }) as unknown as typeof spawn;
