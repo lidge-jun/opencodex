@@ -231,6 +231,14 @@ describe("native Messages candidates in a combo", () => {
     expect(seen[1]!.body.system).toEqual(source.system);
     expect(seen[1]!.body.tools).toEqual(source.tools);
   });
+  for (const streamed of [true, false]) {
+    test(`mixed-case SSE content type permits pre-output failover (${streamed ? "stream" : "fold"})`, async () => {
+      answer = () => new Response(prelude + refusal, { headers: { "content-type": "Text/Event-Stream" } });
+      const { text } = await send({ stream: streamed });
+      expect(text).toContain("fallback reply");
+      expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["api.anthropic.com", "backup.fixture.invalid"]);
+    });
+  }
   test("pre-output streamed refusal falls back without leaking rejected child's prelude", async () => {
     answer = () => stream(prelude + refusal);
     const { response, text, rows } = await send();

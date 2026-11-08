@@ -63,7 +63,7 @@ export function observeNativeMessagesReplayBoundary(body: ReadableStream<Uint8Ar
 export async function preflightNativeMessagesResponse(
   response: Response, logCtx: RequestLogContext, budget: TranslatorBudget, replay?: { committed: boolean },
 ): Promise<{ kind: "accepted" | "failed"; response: Response }> {
-  if (!response.ok || !response.body || !response.headers.get("content-type")?.includes("text/event-stream")) {
+  if (!response.ok || !response.body || !response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")) {
     return { kind: "accepted", response };
   }
   let committed = false;
