@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
-import { EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD } from "../../src/server/responses/codex-tool-catalog";
+import {
+  EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD,
+  eagerCodexMcpToolCount,
+  warnEagerCodexToolCatalog,
+} from "../../src/server/responses/codex-tool-catalog";
 import type { OcxConfig } from "../../src/types";
 import { createTempHome } from "../helpers/temp-home";
 import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
@@ -281,5 +285,35 @@ describe("an eagerly expanded Codex MCP catalog is forwarded with a one-time dia
     } finally {
       socket.close();
     }
+  });
+});
+
+describe("the eager catalog count stays a bounded, side-effect-free diagnostic", () => {
+  const headers = new Headers({ originator: "codex_cli_rs" });
+
+  test.each([
+    ["a tool call and its output", [
+      { type: "function_call", call_id: "call_1", name: "mcp__fixture__tool_0", arguments: "{}" },
+      { type: "function_call_output", call_id: "call_1", output: "ok" },
+    ]],
+    ["reasoning", [{ type: "reasoning", summary: [] }]],
+    ["a compaction", [{ type: "compaction", encrypted_content: "opaque" }]],
+  ])("history whose last model output is %s keeps the earlier catalog out of the count", (_label, tail) => {
+    const input = [...liteFirstTurn(mcpTools()), ...tail];
+    expect(eagerCodexMcpToolCount({ input }, headers)).toBe(0);
+    expect(eagerCodexMcpToolCount({ input: liteFirstTurn(mcpTools()) }, headers)).toBe(EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD);
+  });
+
+  test("a deeply nested namespace body neither throws nor counts", () => {
+    let tools: unknown[] = mcpTools();
+    for (let depth = 0; depth < 25_000; depth += 1) tools = [{ type: "namespace", name: `mcp__nest_${depth % 7}`, tools }];
+    const body = { model: "fixture/model", input: "hello", tools };
+    expect(() => warnEagerCodexToolCatalog(body, headers)).not.toThrow();
+    expect(eagerCodexMcpToolCount(body, headers)).toBe(0);
+  });
+
+  test("a namespace nested inside a namespace is not a Codex declaration", () => {
+    const body = { input: "hello", tools: [{ type: "namespace", name: "mcp__outer", tools: mcpTools() }] };
+    expect(eagerCodexMcpToolCount(body, headers)).toBe(0);
   });
 });

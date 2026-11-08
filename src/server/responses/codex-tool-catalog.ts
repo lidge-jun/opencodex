@@ -22,8 +22,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function collectEagerMcpTools(specs: unknown[], names: Set<string>, namespace?: string): void {
   for (const spec of specs) {
     if (!isRecord(spec) || spec.defer_loading === true) continue;
+    // Codex namespaces are one level deep. A namespace nested inside another is not a Codex
+    // declaration, and recursing into caller-shaped depth could exhaust the stack.
     if (spec.type === "namespace" && typeof spec.name === "string" && Array.isArray(spec.tools)) {
-      collectEagerMcpTools(spec.tools, names, spec.name);
+      if (namespace === undefined) collectEagerMcpTools(spec.tools, names, spec.name);
       continue;
     }
     const tool = isRecord(spec.function) ? spec.function : spec;
@@ -91,7 +93,10 @@ export function eagerCodexMcpToolCount(body: unknown, headers: Headers, surface:
  * request without a session identity shares one anonymous slot.
  */
 export function warnEagerCodexToolCatalog(body: unknown, headers: Headers, surface: "responses" | "compact" = "responses"): void {
-  const count = eagerCodexMcpToolCount(body, headers, surface);
+  // A diagnostic must never change the request it observes: any failure while counting a
+  // malformed body skips the warning and lets the request continue exactly as before.
+  let count: number;
+  try { count = eagerCodexMcpToolCount(body, headers, surface); } catch { return; }
   if (count < EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD) return;
   const session = sessionLaneIdFromRequest(headers) ?? "";
   if (warnedSessions.has(session)) return;
