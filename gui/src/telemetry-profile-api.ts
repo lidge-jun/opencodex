@@ -151,10 +151,10 @@ export async function connectProfile(
   });
 }
 
-export async function disconnectProfile(apiBase: string): Promise<"deleted" | "deletion_pending" | "not_connected"> {
+export async function disconnectProfile(apiBase: string): Promise<"deleted" | "deletion_pending" | "not_connected" | "local_removed"> {
   const body = await request(apiBase, "/api/telemetry/profile", { method: "DELETE" });
   const status = isRecord(body) ? body.status : null;
-  return status === "deleted" || status === "deletion_pending" || status === "not_connected" ? status : "deleted";
+  return status === "deleted" || status === "deletion_pending" || status === "not_connected" || status === "local_removed" ? status : "deleted";
 }
 
 /** The public leaderboard, opened on this handle's personal-rank view. */

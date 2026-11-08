@@ -58,8 +58,9 @@ describe("telemetry collector: opt-in profiles", () => {
     expect(res.status).toBe(201);
     expect(res.headers.get("x-robots-tag")).toBe("noindex");
     expect(res.headers.get("cache-control")).toBe("no-store");
-    const body = (await res.json()) as { secret: string; profile: unknown };
+    const body = (await res.json()) as { secret: string; profile: unknown; createdDay: string };
     expect(body.secret).toMatch(/^ocxp_[A-Za-z0-9_-]{43}$/);
+    expect(body.createdDay).toBe("2026-11-04");
     expect(body.profile).toEqual({ handle: "jun", displayName: "Jun", avatar: "teal" });
     const dump = dumpProfileTables();
     expect(dump).not.toContain(body.secret);

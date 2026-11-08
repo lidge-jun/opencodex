@@ -123,7 +123,12 @@ export function TelemetryProfileCard({ apiBase }: { apiBase: string }) {
         </a>
       </div>
 
-      {s.unreadable && !profile && <p className="m-0 text-[14px] text-fg-muted">{t("telemetryProfile.unreadable")}</p>}
+      {s.unreadable && !profile && (
+        <>
+          <p className="m-0 text-[14px] text-fg-muted">{t("telemetryProfile.unreadable")}</p>
+          <div><Button variant="outline" disabled={busy} onClick={() => { void disconnect(); }}>{t("telemetryProfile.disconnect")}</Button></div>
+        </>
+      )}
 
       {!profile && !s.unreadable && (
         <>

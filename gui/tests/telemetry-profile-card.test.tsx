@@ -204,6 +204,16 @@ test("a connected profile stays visible to disconnect while anonymous telemetry 
   expect(buttonByText("Disconnect")).toBeTruthy();
 });
 
+test("an unreadable profile file offers Disconnect, which clears it", async () => {
+  status = { ...status, connected: false, unreadable: true, profile: null };
+  deleteReply = { ok: true, status: "local_removed", deleted: false };
+  await mount();
+  expect(card()?.textContent).toContain("Disconnect removes it");
+  await click(buttonByText("Disconnect"));
+  await settle(50);
+  expect(calls.filter(c => c.method === "DELETE")).toHaveLength(1);
+});
+
 test("leaderboard links are built only for valid handles", () => {
   expect(profileLeaderboardUrl("a-1-b2")).toBe("https://opencodex.me/dashboard/?profile=a-1-b2#leaderboard");
   expect(profileLeaderboardUrl("x\"><script>")).toBeNull();

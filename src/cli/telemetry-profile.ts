@@ -186,6 +186,8 @@ export async function handleTelemetryProfileCommand(argv: string[], wantsJson: b
         ? "Public profile deleted on the server and disconnected."
         : outcome.status === "not_connected"
           ? "No public profile is connected."
+          : outcome.status === "local_removed"
+            ? "The unreadable local profile file was removed. Its secret could not be read, so the server profile was not deleted; it stops receiving data and is pruned after 400 days without submissions."
           : "deletion_pending: the telemetry service could not be reached. Nothing more is sent; the proxy retries the deletion on every tick and on its next start.";
       printData({ ok: true, ...outcome }, wantsJson, [line]);
       return;

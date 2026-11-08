@@ -180,7 +180,12 @@ with `gui/src/telemetry-profile-api.ts`, and `docs-site/src/components/Telemetry
 - **Sync.** `src/telemetry/profile/sync.ts` sends at most one day per tick, chosen by
   `resolveNextEligibleTelemetryDay` with the profile's own sent days and the connect day folded into
   `ineligibleThroughDay`, so every anonymous eligibility rule applies plus no day on or before the connect day.
-  Sending requires anonymous telemetry to be effective. `src/server/background-lifecycle.ts` starts the loop only
+  The floor is the later of the client's connect day and the collector's `createdDay`; a day the collector refuses
+  with a 4xx other than 401/429 is set aside (`refused` in `sentDays`) so the oldest-first order never stalls.
+  Every write after a network call goes through `updateTelemetryProfileState`, which re-reads the file and skips the
+  write if the secret changed, the file is gone or a disconnect is pending. A disconnect of an unreadable file
+  removes it locally (`local_removed`). Sending requires anonymous telemetry to be effective.
+  `src/server/background-lifecycle.ts` starts the loop only
   when the profile file exists, independently of the env opt-out gate, so a pending deletion is retried while
   telemetry is off; `GET /api/telemetry/profile` starts it after a CLI connect. A `401` marks the profile revoked.
 - **Collector.** Profile endpoints, limits, ranking (`RANK()` among non-hidden profiles with a positive total; `rank:

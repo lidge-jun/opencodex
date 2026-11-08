@@ -86,7 +86,7 @@ export async function handleDeleteProfileRoute(ctx: ManagementContext): Promise<
     const outcome = await disconnectTelemetryProfile();
     if (outcome.status === "deletion_pending") nudgeProfileScheduler();
     return jsonResponse(
-      { ok: true, status: outcome.status, deleted: outcome.status !== "deletion_pending" },
+      { ok: true, status: outcome.status, deleted: outcome.status === "deleted" || outcome.status === "not_connected" },
       200,
       ctx.req,
       ctx.config,

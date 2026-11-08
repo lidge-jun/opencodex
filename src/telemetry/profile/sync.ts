@@ -181,6 +181,12 @@ export async function runProfileTick(options: ProfileTickOptions = {}): Promise<
       updateTelemetryProfileState(latest.secret, current => ({ ...current, retryAfterUntil }), { configDir, now });
       return { sent: false, day, reason: "retry-after-backoff" };
     }
+    if (typeof result.status === "number" && result.status >= 400 && result.status < 500) {
+      // A permanent refusal for this day (validation, too old, before the creation day): set the
+      // day aside so the oldest-first order never stalls on it.
+      updateTelemetryProfileState(latest.secret, current => ({ ...current, sentDays: { ...current.sentDays, [day]: `refused ${nowIso}` } }), { configDir, now });
+      return { sent: false, day, reason: "refused" };
+    }
     return { sent: false, day, reason: "send-failed" };
   }
   updateTelemetryProfileState(latest.secret, current => ({

@@ -115,7 +115,13 @@ export async function connectTelemetryProfile(
   const now = options.now ?? Date.now();
   const env = options.env ?? process.env;
   const existing = readTelemetryProfileFile(configDir);
-  if (existing.unreadable) throw new ProfileActionError("profile_unreadable", "The local profile file cannot be read; remove it with 'ocx telemetry profile disconnect' first.", 409);
+  if (existing.unreadable) {
+    throw new ProfileActionError(
+      "profile_unreadable",
+      "The local profile file cannot be read. Remove it first with 'ocx telemetry profile disconnect' (or Disconnect on the dashboard Home).",
+      409,
+    );
+  }
   if (existing.state?.pendingDelete) throw new ProfileActionError("deletion_pending", "The previous profile is still being deleted; try again once deletion is confirmed.", 409);
   if (existing.state) throw new ProfileActionError("already_connected", "A public profile is already connected; disconnect it first.", 409);
   const gate = readProfileTelemetryGate({ configDir, env });
@@ -149,7 +155,8 @@ export async function connectTelemetryProfile(
     avatar: validated.value.avatar,
     secret: created.body.secret,
     connectedAt: new Date(now).toISOString(),
-    connectedDay: formatUtcDay(now),
+    // The collector refuses days on or before its own creation day; never start below it.
+    connectedDay: created.body.createdDay && created.body.createdDay > formatUtcDay(now) ? created.body.createdDay : formatUtcDay(now),
     sentDays: {},
     lastSentDay: null,
     lastSentAt: null,
@@ -162,7 +169,11 @@ export async function connectTelemetryProfile(
   return toPublicProfileState(state);
 }
 
-export type DisconnectOutcome = { status: "deleted" } | { status: "not_connected" } | { status: "deletion_pending"; error: string };
+export type DisconnectOutcome =
+  | { status: "deleted" }
+  | { status: "not_connected" }
+  | { status: "local_removed" }
+  | { status: "deletion_pending"; error: string };
 
 /**
  * Disconnect: mark the deletion as pending, ask the collector to delete the profile and every row,
@@ -175,11 +186,14 @@ export async function disconnectTelemetryProfile(options: ProfileServiceOptions 
   const now = options.now ?? Date.now();
   const file = readTelemetryProfileFile(configDir);
   if (file.unreadable) {
-    throw new ProfileActionError(
-      "profile_unreadable",
-      "The local profile file cannot be read, so its secret is unknown; the server profile cannot be deleted from here. Nothing is sent while the file is unreadable.",
-      409,
-    );
+    // Its secret cannot be read, so the server profile cannot be deleted from here; removing the
+    // local file is still the person's way out. A profile that stops submitting is pruned by the
+    // collector after 400 days and drops out of every ranked period at once.
+    if (!deleteTelemetryProfileFile(configDir)) {
+      throw new ProfileActionError("profile_unreadable", "The local profile file cannot be read or removed (it may be a symlink or a directory).", 409);
+    }
+    rankCache = null;
+    return { status: "local_removed" };
   }
   const state = file.state;
   if (!state) return { status: "not_connected" };

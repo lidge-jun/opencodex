@@ -70,6 +70,7 @@ export async function handleCreateProfile(request: Request, env: CollectorEnv, n
     ok: true,
     schemaVersion: PROFILE_SCHEMA_VERSION,
     profile: { handle: validated.value.handle, displayName: validated.value.displayName, avatar: validated.value.avatar },
+    createdDay,
     secret,
   }, 201);
 }

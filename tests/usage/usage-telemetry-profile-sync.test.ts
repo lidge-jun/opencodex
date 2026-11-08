@@ -220,6 +220,33 @@ describe("opt-in public profile: client sync", () => {
     expect(existsSync(telemetryProfilePath(home))).toBe(false);
   });
 
+  test("the collector's creation day is the floor, and a refused day never blocks newer ones", async () => {
+    // The client clock is behind: it is still 2026-11-05 here, the collector already says 2026-11-06.
+    respond = call => call.method === "POST" && call.url.endsWith("/v1/profiles")
+      ? Response.json({ ok: true, profile: { handle: "jun", displayName: "Jun", avatar: "blue" }, createdDay: "2026-11-06", secret: SECRET }, { status: 201 })
+      : Response.json({ ok: true });
+    await connect();
+    expect(readTelemetryProfileFile(home).state?.connectedDay).toBe("2026-11-06");
+
+    // A day the collector refuses for good (400) is set aside, so the next day still goes out.
+    const aggregateDay = async (day: string) => aggregate(day, [["openai", "gpt-6", 1, 1]]);
+    respond = call => call.url.endsWith("/v1/profiles/me/days") && (call.body as { day: string }).day === "2026-11-07"
+      ? Response.json({ ok: false, error: "nope" }, { status: 400 })
+      : Response.json({ ok: true, deduplicated: false });
+    expect(await runProfileTick({ configDir: home, env, now: CONNECT_AT + 4 * DAY_MS, aggregateDay })).toMatchObject({ day: "2026-11-07", reason: "refused" });
+    expect(await runProfileTick({ configDir: home, env, now: CONNECT_AT + 4 * DAY_MS + 1000, aggregateDay })).toMatchObject({ sent: true, day: "2026-11-08" });
+  });
+
+  test("an unreadable profile file can always be cleared with disconnect", async () => {
+    writeFileSync(telemetryProfilePath(home), "{ not json");
+    await expect(connect()).rejects.toMatchObject({ code: "profile_unreadable" });
+    await expect(connect()).rejects.toThrow("ocx telemetry profile disconnect");
+    expect(await disconnectTelemetryProfile({ configDir: home, now: CONNECT_AT })).toMatchObject({ status: "local_removed" });
+    expect(existsSync(telemetryProfilePath(home))).toBe(false);
+    expect(calls).toHaveLength(0);
+    await connect();
+  });
+
   test("profile modules never reach the anonymous install identity", () => {
     const dir = repoPath("src", "telemetry", "profile");
     for (const name of readdirSync(dir)) {

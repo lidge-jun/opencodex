@@ -1,4 +1,5 @@
 import { signalWithTimeout } from "../../lib/abort";
+import { parseCalendarUtcDayMs } from "../contract";
 import {
   PROFILE_SECRET_RE,
   parseProfileRankV1,
@@ -94,20 +95,24 @@ async function call<T>(
 export interface CreatedProfile {
   profile: PublicProfileV1;
   secret: string;
+  /** The collector's own creation day; only later days are accepted, so it is the client's floor too. */
+  createdDay: string | null;
 }
 
 export async function createProfile(
   body: ProfileCreateV1,
   options: ProfileClientOptions = {},
 ): Promise<ProfileCallResult<CreatedProfile>> {
-  const result = await call<{ profile?: PublicProfileV1; secret?: unknown }>("POST", "/v1/profiles", options, { body });
+  const result = await call<{ profile?: PublicProfileV1; secret?: unknown; createdDay?: unknown }>("POST", "/v1/profiles", options, { body });
   if (!result.ok) return result;
   const secret = result.body?.secret;
   const profile = result.body?.profile;
   if (typeof secret !== "string" || !PROFILE_SECRET_RE.test(secret) || !profile || typeof profile.handle !== "string") {
     return { ok: false, status: result.status, error: "collector returned an invalid profile" };
   }
-  return { ok: true, status: result.status, body: { profile, secret } };
+  const rawDay = result.body?.createdDay;
+  const createdDay = typeof rawDay === "string" && parseCalendarUtcDayMs(rawDay) !== null ? rawDay : null;
+  return { ok: true, status: result.status, body: { profile, secret, createdDay } };
 }
 
 export async function submitProfileDay(

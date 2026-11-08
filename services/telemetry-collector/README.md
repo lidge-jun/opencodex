@@ -18,8 +18,8 @@ anonymous ones: no install hash, version or platform is stored, and rate-limit k
 `src/telemetry/profile/contract.ts` (collector-first rollout applies to it too).
 
 - `POST /v1/profiles` — `{schemaVersion, handle, displayName, avatar}` (2 KiB), 5 per client key per hour; returns
-  the profile and a one-time secret (`ocxp_` + 32 random bytes, base64url). Only `sha256(secret)` is stored. A taken
-  handle is `409`.
+  the profile, its `createdDay` (the client never sends that day or earlier) and a one-time secret (`ocxp_` + 32
+  random bytes, base64url). Only `sha256(secret)` is stored. A taken handle is `409`.
 - `POST /v1/profiles/me/days` (bearer) — one completed UTC day within the last 7, strictly after the creation day,
   with consistent totals and closed model families (8 KiB), 48 per profile per hour. The first submission for a day
   wins (`{deduplicated}`).
