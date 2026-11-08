@@ -9,7 +9,7 @@ import {
   renameSync,
   unlinkSync,
   writeFileSync,
-  type Stats,
+  type BigIntStats,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Server } from "bun";
@@ -77,7 +77,8 @@ function preparePrivateDir(dir: string): void {
   if (!isPrivateSocketDir(dir)) throw new Error("socket directory could not be made private");
 }
 
-interface FileIdentity { dev: number; ino: number }
+/** Inode identity as the kernel reports it. Bigint keeps every bit of a Windows file ID. */
+interface FileIdentity { dev: bigint; ino: bigint }
 
 /**
  * The per-port ownership record. `host` and `processStart` come from the shared owner evidence
@@ -102,8 +103,12 @@ const PUBLISH_ATTEMPTS = 4;
 /** `withLockClaim` is a try-lock; a contender retries a bounded number of times and then refuses. */
 const LEASE_LOCK_ATTEMPTS = 8;
 const LEASE_LOCK_RETRY_MS = 2;
+/** A release is on the shutdown path, so it retries longer than the acquire does. */
+const RELEASE_ATTEMPTS = 12;
+const RELEASE_RETRY_MS = 5;
 /** Filesystems without hard links reject `link` with one of these; the socket cannot be published. */
 const HARD_LINK_UNSUPPORTED = new Set(["EPERM", "EOPNOTSUPP", "ENOTSUP", "ENOSYS", "EXDEV", "EMLINK"]);
+const HARD_LINK_WARNING = "[local-control] the socket directory's filesystem does not support hard links; ocx link status will use the TCP listener";
 
 function isCode(error: unknown, code: string): boolean {
   return !!error && typeof error === "object" && (error as { code?: unknown }).code === code;
@@ -144,7 +149,7 @@ function registerRunDirectory(root: string, dir: string): void {
 
 function identityOf(path: string): FileIdentity | null {
   try {
-    const stat = lstatSync(path);
+    const stat = lstatSync(path, { bigint: true });
     return { dev: stat.dev, ino: stat.ino };
   } catch {
     return null;
@@ -227,14 +232,14 @@ function publishPublicLink(target: string, privateTarget: string): void {
     } catch (error) {
       if (!isCode(error, "EEXIST")) throw error;
     }
-    let existing: Stats;
+    let existing: BigIntStats;
     try {
-      existing = lstatSync(target);
+      existing = lstatSync(target, { bigint: true });
     } catch (error) {
       if (isCode(error, "ENOENT")) continue;
       throw error;
     }
-    if (!existing.isSocket() || existing.uid !== process.getuid!()) throw new Error("socket path is occupied");
+    if (!existing.isSocket() || existing.uid !== BigInt(process.getuid!())) throw new Error("socket path is occupied");
     unlinkSync(target);
   }
   throw new Error("socket path is occupied");
@@ -271,27 +276,71 @@ function acquireLease(leasePath: string, token: string, publish: () => void): Le
   return { kind: "contended" };
 }
 
-/**
- * Give the port back. The lease is held for the whole teardown, so no successor can publish into
- * these paths while they are being removed; the identity checks keep a successor's socket safe if
- * a previous teardown is still in flight.
- */
-function releaseOwnedSocket(state: {
+/** The record and the paths one runtime published, kept until the release actually succeeds. */
+interface OwnedSocket {
   leasePath: string;
   token: string;
   publicPath: string | null;
   privatePath: string | null;
   identity: FileIdentity | null;
-}): void {
+}
+
+type ReleaseOutcome =
+  | { kind: "released" }
+  | { kind: "contended" }
+  | { kind: "failed"; error: unknown };
+
+/**
+ * A stop that could not give the port back. The record stays on the listener, so a later stop()
+ * or start() retries it; this error is how the caller learns the socket may still be live.
+ */
+export class LocalControlReleaseError extends Error {
+  readonly code = "LOCAL_CONTROL_RELEASE_FAILED";
+  constructor(readonly outcome: "contended" | "failed", cause?: unknown) {
+    super(outcome === "contended"
+      ? "another runtime held the control socket ownership record; the lease and socket were left in place"
+      : "the control socket ownership record could not be released", { cause });
+    this.name = "LocalControlReleaseError";
+  }
+}
+
+function releaseFailure(outcome: Exclude<ReleaseOutcome, { kind: "released" }>): string {
+  return outcome.kind === "contended"
+    ? "another runtime held the control socket ownership record"
+    : `the control socket ownership record could not be released: ${messageOf(outcome.error)}`;
+}
+
+/**
+ * Remove the published link and the lease, inside the claim mutex. The outcome is explicit: a
+ * lost mutex is contention the caller must retry, never a release that silently did nothing.
+ */
+function releaseOwnedSocket(state: OwnedSocket): ReleaseOutcome {
   try {
-    withLockClaim(state.leasePath, state.token, ownerDefaults, () => {
+    const outcome = withLockClaim(state.leasePath, state.token, ownerDefaults, () => {
       if (state.publicPath && state.identity && sameIdentity(state.publicPath, state.identity)) unlinkSync(state.publicPath);
       if (state.privatePath && state.identity && sameIdentity(state.privatePath, state.identity)) unlinkSync(state.privatePath);
       removeOwnedLease(state.leasePath, state.token);
     });
-  } catch {
-    // A foreign, unreadable or vanished record is left for the next runtime to judge.
+    return outcome.ok ? { kind: "released" } : { kind: "contended" };
+  } catch (error) {
+    return { kind: "failed", error };
   }
+}
+
+/**
+ * Retry a contended release a bounded number of times. The wait is synchronous on purpose:
+ * stop() has to give the record up before it suspends on its own socket teardown, or a successor
+ * starting in the same turn reads a live lease and abandons a port nobody will serve. A
+ * same-process peer holds this mutex only inside a synchronous critical section, so a blocking
+ * wait always reaches it; a peer process makes progress on its own.
+ */
+function releaseBlocking(state: OwnedSocket): ReleaseOutcome {
+  let outcome = releaseOwnedSocket(state);
+  for (let attempt = 1; attempt < RELEASE_ATTEMPTS && outcome.kind === "contended"; attempt += 1) {
+    Bun.sleepSync(RELEASE_RETRY_MS);
+    outcome = releaseOwnedSocket(state);
+  }
+  return outcome;
 }
 
 const notFound = () => Response.json(
@@ -306,22 +355,20 @@ export function createLocalControlListener<T>(): LocalControlListener<T> {
   let identity: FileIdentity | null = null;
   let leasePath: string | null = null;
   let leaseToken: string | null = null;
+  /** A release that could not run yet. Retained so the next stop() or start() finishes it. */
+  let pendingRelease: OwnedSocket | null = null;
 
-  const release = (state: {
-    lease: string | null;
-    token: string | null;
-    publicPath: string | null;
-    privatePath: string | null;
-    identity: FileIdentity | null;
-  }): void => {
-    if (!state.lease || !state.token) return;
-    releaseOwnedSocket({
-      leasePath: state.lease,
-      token: state.token,
-      publicPath: state.publicPath,
-      privatePath: state.privatePath,
-      identity: state.identity,
-    });
+  const liveState = (): OwnedSocket | null => leasePath && leaseToken
+    ? { leasePath, token: leaseToken, publicPath, privatePath, identity }
+    : null;
+
+  const clearLive = (): void => {
+    server = null;
+    publicPath = null;
+    privatePath = null;
+    identity = null;
+    leasePath = null;
+    leaseToken = null;
   };
 
   return {
@@ -329,6 +376,16 @@ export function createLocalControlListener<T>(): LocalControlListener<T> {
     socketPath: () => publicPath,
     start(ctx) {
       if (server || !localControlSocketWanted(ctx.config)) return;
+      // A previous stop could not give the port back; finish that before asking for it again,
+      // because the record it left names this pid and would read as a live owner.
+      if (pendingRelease) {
+        const previous = releaseBlocking(pendingRelease);
+        if (previous.kind !== "released") {
+          console.warn(`[local-control] ${releaseFailure(previous)}; leaving the previous record in place`);
+          return;
+        }
+        pendingRelease = null;
+      }
       const target = localControlSocketPath(ctx.publicPort, ctx.configDir);
       const leaseFile = localControlLeasePath(ctx.publicPort, ctx.configDir);
       const token = randomToken();
@@ -378,14 +435,14 @@ export function createLocalControlListener<T>(): LocalControlListener<T> {
         decision = acquireLease(leaseFile, token, publish);
       } catch (error) {
         if (bound) void (bound as Server<T>).stop(true).catch(() => {});
-        console.warn(hardLinkUnsupported(error)
-          ? "[local-control] the socket directory's filesystem does not support hard links; ocx link status will use the TCP listener"
-          : `[local-control] socket unavailable: ${messageOf(error)}`);
+        console.warn(hardLinkUnsupported(error) ? HARD_LINK_WARNING : `[local-control] socket unavailable: ${messageOf(error)}`);
         return;
       }
       if (decision.kind === "failed") {
         if (bound) void (bound as Server<T>).stop(true).catch(() => {});
-        console.warn(`[local-control] socket unavailable: ${messageOf(decision.error)}`);
+        // Publishing is where a hard-link-less filesystem actually fails, and that error is
+        // returned rather than thrown, so this branch is the one that has to classify it.
+        console.warn(hardLinkUnsupported(decision.error) ? HARD_LINK_WARNING : `[local-control] socket unavailable: ${messageOf(decision.error)}`);
         return;
       }
       if (decision.kind === "held") {
@@ -409,35 +466,50 @@ export function createLocalControlListener<T>(): LocalControlListener<T> {
     },
     abort() {
       const running = server;
-      const state = { lease: leasePath, token: leaseToken, publicPath, privatePath: null, identity };
-      server = null;
-      publicPath = null;
-      privatePath = null;
-      identity = null;
-      leasePath = null;
-      leaseToken = null;
+      // Bun's own stop unlinks the private name, so this rollback leaves that one to it.
+      const live = liveState();
+      const state = pendingRelease ?? (live ? { ...live, privatePath: null } : null);
+      clearLive();
       // startServer is synchronous, so this rollback cannot await. Bun begins closing the listen
       // socket on the call itself and unlinks its own private name; the published link and the
       // lease must go now, because a stranded live lease keeps the next runtime off a dead socket.
       if (running) {
         try { void running.stop(true).catch(() => {}); } catch { /* the startup error is the one to report */ }
       }
-      release(state);
+      if (!state) return;
+      const outcome = releaseBlocking(state);
+      if (outcome.kind === "released") { pendingRelease = null; return; }
+      // abort() runs inside startServer's catch, so it must not replace the startup error. The
+      // record is retained and reported here, and the next stop() or start() retries it.
+      pendingRelease = state;
+      console.warn(`[local-control] ${releaseFailure(outcome)}; the record is retained for the next start or stop`);
     },
     async stop() {
       const running = server;
-      const state = { lease: leasePath, token: leaseToken, publicPath, privatePath, identity };
-      server = null;
-      publicPath = null;
-      privatePath = null;
-      identity = null;
-      leasePath = null;
-      leaseToken = null;
+      const state = pendingRelease ?? liveState();
+      clearLive();
+      // Give the record up BEFORE awaiting the socket teardown. A successor that starts while
+      // this stop is suspended must not read a live lease and abandon a port nobody will serve.
+      let releaseError: LocalControlReleaseError | null = null;
+      if (state) {
+        const outcome = releaseBlocking(state);
+        if (outcome.kind === "released") {
+          pendingRelease = null;
+        } else {
+          pendingRelease = state;
+          releaseError = new LocalControlReleaseError(outcome.kind, outcome.kind === "failed" ? outcome.error : undefined);
+        }
+      }
+      let failure: unknown;
       try {
         if (running) await running.stop(true);
-      } finally {
-        release(state);
+      } catch (error) {
+        failure = error;
       }
+      // A record that could not be released is the failure worth reporting: the socket may live,
+      // and the caller's shutdown has to say so rather than look complete.
+      if (releaseError) throw releaseError;
+      if (failure) throw failure;
     },
   };
 }

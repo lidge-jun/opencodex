@@ -36,12 +36,20 @@ export function localControlSocketPath(port: number, configDir?: string): string
 }
 
 /**
+ * How much of the instance token the socket name keeps. The name only has to differ from the
+ * instance it replaces, and the lease already serializes instances, so 32 bits is plenty;
+ * keeping it short keeps the private path no longer than the public one (`.c65535.abcdef12` is
+ * 16 bytes, `control-65535.sock` is 18), so a home that fits the public path fits this one too.
+ */
+const PRIVATE_SOCKET_TOKEN_CHARS = 8;
+
+/**
  * The address Bun itself binds for one runtime. It is instance-specific, so a shutdown can only
  * ever unlink its own listener and a restart in the same process cannot collide with the instance
  * it is replacing; the public path above is a hard link to this socket.
  */
 export function localControlPrivateSocketPath(port: number, token: string, configDir?: string): string {
-  return join(localControlSocketDir(configDir), `.c${port}.${token}`);
+  return join(localControlSocketDir(configDir), `.c${port}.${token.slice(0, PRIVATE_SOCKET_TOKEN_CHARS)}`);
 }
 
 /**

@@ -12,20 +12,24 @@
  * that a live incumbent keeps its socket and that a killed one is replaced.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
   unlinkSync, writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { startServer, waitForFailedStartRollback } from "../../src/server";
 import { runLinkCommand } from "../../src/cli/link";
 import { ownEvidence, ownerDefaults } from "../../src/codex/prompt-lock-owner";
+import { ownerState } from "../../src/codex/prompt-lock-owner";
 import { removeOwnedConfigState } from "../../src/lib/config-ownership";
 import {
   LOCAL_CONTROL_SOCKET_PATH_MAX,
   localControlLeasePath,
+  localControlPrivateSocketPath,
   localControlSocketDir,
   localControlSocketPath,
   localControlSocketPathFits,
@@ -33,6 +37,7 @@ import {
 } from "../../src/lib/local-control-socket";
 import {
   createLocalControlListener,
+  LocalControlReleaseError,
   localControlRouteAllowed,
   localControlSocketWanted,
 } from "../../src/server/index/local-control-listener";
@@ -51,10 +56,11 @@ const STATUS = "/api/link/status?compatibility=1&diagnostics=1";
 const unixSupported = process.platform !== "win32";
 /**
  * sun_path is 103 bytes, and os.tmpdir() on macOS is /var/folders/..., which pushes
- * <home>/run/control-65535.sock past it. The socket cases therefore pin a short root; the
- * long-path case below exercises the default shape on purpose instead of skipping it.
+ * <home>/run/control-65535.sock past it. The socket cases therefore pin a short root on macOS
+ * and use the platform temp directory elsewhere, which on Windows is where C:\tmp does not
+ * exist. The long-path case below exercises the default shape on purpose instead of skipping it.
  */
-const SOCKET_ROOT = "/tmp";
+const SOCKET_ROOT = process.platform === "darwin" ? "/tmp" : tmpdir();
 let testDir = "";
 
 function hubConfig(managementPort: number, hostname = "0.0.0.0"): OcxConfig {
@@ -100,6 +106,18 @@ async function runQuietly(args: string[], deps: Parameters<typeof runLinkCommand
 
 function overSocket(socket: string, path: string, init: RequestInit = {}): Promise<Response> {
   return fetch("http://localhost" + path, { ...init, unix: socket } as RequestInit);
+}
+
+/**
+ * A lease record this host wrote for a pid that is gone. The production helper decides that, not
+ * the fixture: a reused pid reads as live, and the test must say so instead of asserting against
+ * a state the code never produces.
+ */
+function writeCrashedLease(path: string): void {
+  const deadPid = spawnSync("/bin/sh", ["-c", "exit 0"]).pid!;
+  const record = { ...ownEvidence(ownerDefaults), pid: deadPid, token: "0123456789abcdef" };
+  expect(ownerState(record, ownerDefaults)).toBe("dead");
+  writeFileSync(path, JSON.stringify(record), { mode: 0o600 });
 }
 
 /**
@@ -159,6 +177,47 @@ function spawnChild(tag: string, publicPort: number, owner: string, barrier: str
 }
 
 interface Child { tag: string; owner: string; process: ReturnType<typeof Bun.spawn> }
+
+/**
+ * A real second process sitting inside the per-port claim mutex. A same-process holder would
+ * prove nothing here: the release retries synchronously, so only a separate process can keep the
+ * mutex occupied while that budget runs out.
+ */
+const CLAIM_HOLDER_SCRIPT = [
+  "(async () => {",
+  "  const fs = await import('node:fs');",
+  "  const { withLockClaim } = await import(process.env.OCX_CHILD_CLAIM_MODULE);",
+  "  const { ownerDefaults } = await import(process.env.OCX_CHILD_OWNER_MODULE);",
+  "  withLockClaim(process.env.OCX_CHILD_LEASE, 'deadbeefdeadbeef', ownerDefaults, () => {",
+  "    fs.writeFileSync(process.env.OCX_CHILD_HELD, 'held');",
+  "    while (!fs.existsSync(process.env.OCX_CHILD_RELEASE)) Bun.sleepSync(2);",
+  "  });",
+  "  process.exit(0);",
+  "})().catch(error => { process.stderr.write(String((error && error.stack) || error)); process.exit(1); });",
+].join("\n");
+
+function holdClaim(leasePath: string) {
+  const tag = "claim-" + randomBytes(4).toString("hex");
+  const held = join(testDir, tag + ".held");
+  const release = join(testDir, tag + ".release");
+  const child = Bun.spawn([process.execPath, "-e", CLAIM_HOLDER_SCRIPT], {
+    env: {
+      ...process.env,
+      OCX_CHILD_CLAIM_MODULE: repoPath("src/codex/prompt-lock-claim.ts"),
+      OCX_CHILD_OWNER_MODULE: repoPath("src/codex/prompt-lock-owner.ts"),
+      OCX_CHILD_LEASE: leasePath,
+      OCX_CHILD_HELD: held,
+      OCX_CHILD_RELEASE: release,
+    },
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  return {
+    held,
+    stop: async () => { writeFileSync(release, "go"); await child.exited; },
+  };
+}
 
 async function stopChildren(children: Child[]): Promise<void> {
   for (const child of children) child.process.kill("SIGKILL");
@@ -436,7 +495,7 @@ describe.skipIf(!unixSupported)("local control socket ownership (#8184)", () => 
     const first = createLocalControlListener();
     first.start({ config: hubConfig(0), publicPort, dispatch: dispatchFor("first") });
     const firstToken = (JSON.parse(readFileSync(localControlLeasePath(publicPort), "utf8")) as { token: string }).token;
-    expect(privateNames()).toEqual([".c" + publicPort + "." + firstToken]);
+    expect(privateNames()).toEqual([basename(localControlPrivateSocketPath(publicPort, firstToken))]);
     first.abort();
 
     const second = createLocalControlListener();
@@ -445,12 +504,116 @@ describe.skipIf(!unixSupported)("local control socket ownership (#8184)", () => 
       const secondToken = (JSON.parse(readFileSync(localControlLeasePath(publicPort), "utf8")) as { token: string }).token;
       // A same-pid restart must not reuse the name or the record it is replacing.
       expect(secondToken).not.toBe(firstToken);
-      expect(privateNames()).toEqual([".c" + publicPort + "." + secondToken]);
+      expect(privateNames()).toEqual([basename(localControlPrivateSocketPath(publicPort, secondToken))]);
       expect(await (await overSocket(localControlSocketPath(publicPort), STATUS)).json()).toEqual({ owner: "second" });
     } finally {
       await second.stop();
     }
   }, SERVER_BUDGET_MS);
+
+  test("a successor that starts during a stop takes the socket over", async () => {
+    const publicPort = await findAvailablePort(0, "0.0.0.0");
+    saveConfig(hubConfig(await findAvailablePort(0, "127.0.0.1")));
+    const first = createLocalControlListener();
+    first.start({ config: hubConfig(0), publicPort, dispatch: dispatchFor("first") });
+    const socket = localControlSocketPath(publicPort);
+    expect(first.socketPath()).toBe(socket);
+
+    // The departing runtime has to give the record up before it suspends on its own teardown.
+    // Otherwise the successor reads a live lease, refuses, and the port is served by nobody.
+    const stopping = first.stop();
+    const second = createLocalControlListener();
+    second.start({ config: hubConfig(0), publicPort, dispatch: dispatchFor("second") });
+    try {
+      expect(second.socketPath()).toBe(socket);
+      expect(await (await overSocket(socket, STATUS)).json()).toEqual({ owner: "second" });
+    } finally {
+      await stopping;
+      await second.stop();
+    }
+    expect(existsSync(socket)).toBe(false);
+    expect(existsSync(localControlLeasePath(publicPort))).toBe(false);
+  }, SERVER_BUDGET_MS);
+
+  test("a release the claim mutex blocks is reported and retried, not discarded", async () => {
+    const publicPort = await findAvailablePort(0, "0.0.0.0");
+    saveConfig(hubConfig(await findAvailablePort(0, "127.0.0.1")));
+    const listener = createLocalControlListener();
+    listener.start({ config: hubConfig(0), publicPort, dispatch: dispatchFor("owner") });
+    const socket = localControlSocketPath(publicPort);
+    const lease = localControlLeasePath(publicPort);
+    const peer = holdClaim(lease);
+    try {
+      await waitForFile(peer.held, "the peer claim");
+      // The peer holds the mutex, so the release cannot run. stop() must say so and keep the
+      // record: clearing the fields first is what used to strand a live lease with no retry.
+      await expect(listener.stop()).rejects.toBeInstanceOf(LocalControlReleaseError);
+      expect(existsSync(lease)).toBe(true);
+      expect(existsSync(socket)).toBe(true);
+    } finally {
+      await peer.stop();
+    }
+    // The retained record makes the next stop finish the job.
+    await listener.stop();
+    expect(existsSync(lease)).toBe(false);
+    expect(existsSync(socket)).toBe(false);
+  }, SPAWN_BUDGET_MS);
+
+  test("an exhausted release keeps the port owned and refuses a second start until it recovers", async () => {
+    const publicPort = await findAvailablePort(0, "0.0.0.0");
+    saveConfig(hubConfig(await findAvailablePort(0, "127.0.0.1")));
+    const listener = createLocalControlListener();
+    listener.start({ config: hubConfig(0), publicPort, dispatch: dispatchFor("owner") });
+    const socket = localControlSocketPath(publicPort);
+    const lease = localControlLeasePath(publicPort);
+    const peer = holdClaim(lease);
+    try {
+      await waitForFile(peer.held, "the peer claim");
+      await expect(listener.stop()).rejects.toBeInstanceOf(LocalControlReleaseError);
+      // The record still names this live pid, so a second listener in this process refuses
+      // rather than publishing over it. That refusal is the observable half of retained state.
+      const second = createLocalControlListener();
+      second.start({ config: hubConfig(0), publicPort, dispatch: dispatchFor("second") });
+      expect(second.socketPath()).toBeNull();
+      await second.stop();
+      expect(existsSync(lease)).toBe(true);
+    } finally {
+      await peer.stop();
+    }
+    // With the peer gone the owner's retry releases the record and the port is usable again.
+    await listener.stop();
+    expect(existsSync(lease)).toBe(false);
+    const third = createLocalControlListener();
+    third.start({ config: hubConfig(0), publicPort, dispatch: dispatchFor("third") });
+    try {
+      expect(third.socketPath()).toBe(socket);
+      expect(await (await overSocket(socket, STATUS)).json()).toEqual({ owner: "third" });
+    } finally {
+      await third.stop();
+    }
+  }, SPAWN_BUDGET_MS);
+
+  test("an abort that cannot take the claim keeps the record for the next stop", async () => {
+    const publicPort = await findAvailablePort(0, "0.0.0.0");
+    saveConfig(hubConfig(await findAvailablePort(0, "127.0.0.1")));
+    const listener = createLocalControlListener();
+    listener.start({ config: hubConfig(0), publicPort, dispatch: dispatchFor("owner") });
+    const socket = localControlSocketPath(publicPort);
+    const lease = localControlLeasePath(publicPort);
+    const peer = holdClaim(lease);
+    try {
+      await waitForFile(peer.held, "the peer claim");
+      // abort() runs inside startServer's catch: it must not throw over the startup error, and
+      // it must not pretend the record is gone either.
+      expect(() => listener.abort()).not.toThrow();
+      expect(existsSync(lease)).toBe(true);
+    } finally {
+      await peer.stop();
+    }
+    await listener.stop();
+    expect(existsSync(lease)).toBe(false);
+    expect(existsSync(socket)).toBe(false);
+  }, SPAWN_BUDGET_MS);
 
   test("a startup that fails after the socket started releases its lease", async () => {
     const publicPort = await findAvailablePort(0, "0.0.0.0");
@@ -491,9 +654,8 @@ describe.skipIf(!unixSupported)("local control socket ownership (#8184)", () => 
     const dead = Bun.serve({ unix: deadPrivate, fetch: () => new Response("dead") });
     linkSync(deadPrivate, socket);
     await dead.stop(true);
-    const deadPid = spawnSync("/bin/sh", ["-c", "exit 0"]).pid!;
     // The record this host would have written, for a pid that is gone.
-    writeFileSync(lease, JSON.stringify({ ...ownEvidence(ownerDefaults), pid: deadPid, token: "0123456789abcdef" }), { mode: 0o600 });
+    writeCrashedLease(lease);
 
     const server = startServer(publicPort);
     try {
@@ -533,8 +695,7 @@ describe.skipIf(!unixSupported)("local control socket ownership (#8184)", () => 
     const dead = Bun.serve({ unix: deadPrivate, fetch: () => new Response("dead") });
     linkSync(deadPrivate, localControlSocketPath(publicPort));
     await dead.stop(true);
-    const deadPid = spawnSync("/bin/sh", ["-c", "exit 0"]).pid!;
-    writeFileSync(localControlLeasePath(publicPort), JSON.stringify({ ...ownEvidence(ownerDefaults), pid: deadPid, token: "0123456789abcdef" }), { mode: 0o600 });
+    writeCrashedLease(localControlLeasePath(publicPort));
 
     const race = await raceListeners(publicPort, ["a", "b", "c", "d"], "barrier-stale");
     try {
