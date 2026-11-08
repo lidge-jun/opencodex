@@ -374,7 +374,13 @@ test("a local-only opt-out never invents an applied Home receipt for an unsuppor
 
 test("disconnect resumes after token removal without rerunning completed generic cleanup", () => {
   const result = scenario(`
-    setPersistedConfigMutationBeforeCommitForTests(()=>{throw new Error('fixture after token removal');});
+    // Fail the first config commit after the token is gone; earlier commits (the standalone
+    // native restore) proceed, so the fault lands exactly where the test name says.
+    const afterTokenRemoval=()=>{
+      if(readServiceApiTokenState().kind==='present'){setPersistedConfigMutationBeforeCommitForTests(afterTokenRemoval);return;}
+      throw new Error('fixture after token removal');
+    };
+    setPersistedConfigMutationBeforeCommitForTests(afterTokenRemoval);
     let failed=false;try{await disconnectClient({},deps);}catch{failed=true;}
     const token=readServiceApiTokenState().kind;
     const receiptPath=join(process.env.OPENCODEX_HOME,'desktop-remote','disconnect.json');
