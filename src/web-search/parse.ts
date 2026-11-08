@@ -131,9 +131,11 @@ function streamedPartKey(data: Record<string, unknown>, parts: Map<string, Strea
   const outputCandidates = contentIndex === undefined ? outputBucket?.size ?? 0
     : (outputContentBucket?.size ?? 0) + (outputUnknownContentBucket?.size ?? 0);
   if (indexedPart && compatible(indexedPart)) {
-    // A later full snapshot can link a previously ambiguous position to a unique item draft.
-    if (data.type === "response.output_text.done" && itemId && !indexedPart.itemId && outputCandidates === 1
-      && match && match !== indexedPart && match.outputIndex === undefined) {
+    // A full snapshot links the unique item draft to the anonymous position, even if a prior
+    // delta already gave the draft that position. A third candidate keeps the parts separate.
+    if (data.type === "response.output_text.done" && itemId && !indexedPart.itemId
+      && match && match !== indexedPart
+      && outputCandidates === (match.outputIndex === undefined ? 1 : 2)) {
       indexPart(lookup, match, false);
       parts.delete(match.key);
       return indexedKey!;

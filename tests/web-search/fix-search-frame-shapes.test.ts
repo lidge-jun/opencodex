@@ -4,6 +4,59 @@ import { MAX_SIDECAR_DECODED_CHARS, parseSidecarSSE } from "../../src/web-search
 const response = (frames: unknown[]) => new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join(""));
 
 describe("identity transition matrix", () => {
+  test("joins an anonymous snapshot after a draft gains its position via delta", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", item_id: "a", content_index: 0, delta: "A" },
+      { type: "response.output_text.delta", item_id: "b", content_index: 0, delta: "draft" },
+      { type: "response.output_text.done", output_index: 1, content_index: 0, text: "B" },
+      { type: "response.output_text.delta", item_id: "b", output_index: 1, content_index: 0, delta: "!" },
+      { type: "response.output_text.done", item_id: "b", output_index: 1, content_index: 0, text: "B" },
+      { type: "response.completed" },
+    ]));
+    expect(result.text).toBe("BA");
+  });
+
+  test("reconciles uniquely linked identities across event types, ordering and final output", async () => {
+    const event = (kind: string, identity: object, text: string) => ({
+      type: `response.output_text.${kind}`, ...identity, [kind === "done" ? "text" : "delta"]: text,
+    });
+    for (const first of ["delta", "done"]) for (const anonymous of ["delta", "done"])
+      for (const promotion of ["delta", "done"]) for (const reverse of [false, true]) for (const itemOnly of [false, true])
+        for (const terminal of ["empty", "partial", "complete"]) {
+          const content = itemOnly ? {} : { content_index: 0 };
+          const drafts = [event(first, { item_id: "a", ...content }, "A"),
+            event(first, { item_id: "b", ...content }, "draft")];
+          if (reverse) drafts.reverse();
+          const result = await parseSidecarSSE(response([
+            ...drafts,
+            event(anonymous, { output_index: 1, content_index: 0 }, "B"),
+            event(promotion, { item_id: "b", output_index: 1, content_index: 0 }, "draft"),
+            event("done", { item_id: "b", output_index: 1, content_index: 0 }, "B"),
+            terminal === "empty" ? { type: "response.completed" } : {
+              type: "response.completed", response: { output: [
+                terminal === "partial" ? null : { type: "message", content: [{ type: "output_text", text: "A" }] },
+                { id: "b", type: "message", content: [{ type: "output_text", text: "B" }] },
+              ] },
+            },
+          ]));
+          expect(result.text).toBe(terminal === "complete" ? "AB" : "BA");
+        }
+  });
+
+  test.each([false, true])("a third part at the position prevents merging, partial final: %s", async partial => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", item_id: "a", content_index: 0, delta: "A" },
+      { type: "response.output_text.delta", item_id: "b", content_index: 0, delta: "draft" },
+      { type: "response.output_text.done", output_index: 1, content_index: 0, text: "C" },
+      { type: "response.output_text.delta", item_id: "b", output_index: 1, content_index: 0, delta: "!" },
+      { type: "response.output_text.done", item_id: "c", output_index: 1, content_index: 0, text: "D" },
+      { type: "response.output_text.done", item_id: "b", output_index: 1, content_index: 0, text: "B" },
+      partial ? { type: "response.completed", response: { output: [null,
+        { id: "b", type: "message", content: [{ type: "output_text", text: "B" }] },
+      ] } } : { type: "response.completed" },
+    ]));
+    expect(result.text).toBe("BCDA");
+  });
   test("promotes a unique item-only draft when an indexed snapshot arrives", async () => {
     const result = await parseSidecarSSE(response([
       { type: "response.output_text.done", item_id: "a", output_index: 0, content_index: 0, text: "A" },
