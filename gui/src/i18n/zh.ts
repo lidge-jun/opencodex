@@ -4259,6 +4259,7 @@ export const zh: Record<TKey, string> = {
   "quotaSummary.warn": "已用 70% 以上",
   "quotaSummary.critical": "已用 90% 以上",
   "quotaSummary.credits": "额度",
+  "quotaSummary.creditsUnavailable": "不可用额度",
   "quotaSummary.refreshFailed": "最近一次刷新失败，显示上次数据",
   "quotaSummary.scrollPrev": "向左滚动提供商",
   "quotaSummary.scrollNext": "向右滚动提供商",

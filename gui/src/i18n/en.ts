@@ -4272,6 +4272,7 @@ export const en = {
   "quotaSummary.warn": "70%+ used",
   "quotaSummary.critical": "90%+ used",
   "quotaSummary.credits": "Credits",
+  "quotaSummary.creditsUnavailable": "Unavailable credits",
   "quotaSummary.refreshFailed": "Last refresh failed; showing the previous reading",
   "quotaSummary.scrollPrev": "Scroll providers left",
   "quotaSummary.scrollNext": "Scroll providers right",

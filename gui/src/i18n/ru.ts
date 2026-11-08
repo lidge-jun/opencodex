@@ -4261,6 +4261,7 @@ export const ru: Record<TKey, string> = {
   "quotaSummary.warn": "Использовано более 70%",
   "quotaSummary.critical": "Использовано более 90%",
   "quotaSummary.credits": "Кредиты",
+  "quotaSummary.creditsUnavailable": "Недоступные кредиты",
   "quotaSummary.refreshFailed": "Последнее обновление не удалось; показаны предыдущие данные",
   "quotaSummary.scrollPrev": "Прокрутить провайдеров влево",
   "quotaSummary.scrollNext": "Прокрутить провайдеров вправо",

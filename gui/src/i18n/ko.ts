@@ -4260,6 +4260,7 @@ export const ko: Record<TKey, string> = {
   "quotaSummary.warn": "70% 이상 사용",
   "quotaSummary.critical": "90% 이상 사용",
   "quotaSummary.credits": "크레딧",
+  "quotaSummary.creditsUnavailable": "사용할 수 없는 크레딧",
   "quotaSummary.refreshFailed": "최근 갱신에 실패해 이전 값을 표시합니다",
   "quotaSummary.scrollPrev": "프로바이더 목록 왼쪽으로",
   "quotaSummary.scrollNext": "프로바이더 목록 오른쪽으로",

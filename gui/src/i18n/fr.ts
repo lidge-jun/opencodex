@@ -4227,6 +4227,7 @@ export const fr: Record<TKey, string> = {
   "quotaSummary.warn": "Plus de 70 % utilisés",
   "quotaSummary.critical": "Plus de 90 % utilisés",
   "quotaSummary.credits": "Crédits",
+  "quotaSummary.creditsUnavailable": "Crédits indisponibles",
   "quotaSummary.refreshFailed": "Échec de la dernière actualisation ; affichage de la lecture précédente",
   "quotaSummary.scrollPrev": "Faire défiler les fournisseurs vers la gauche",
   "quotaSummary.scrollNext": "Faire défiler les fournisseurs vers la droite",
