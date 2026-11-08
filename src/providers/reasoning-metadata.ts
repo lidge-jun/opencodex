@@ -495,12 +495,53 @@ function extractJsonEnvelope(text: string): unknown | undefined {
 }
 
 function isIncompleteStructuredWrapper(text: string): boolean {
-  const s = text.trim();
-  if (/^(?:Provider error (?:400:\s*)?|data:\s*)\{/i.test(s)) {
-    return extractJsonEnvelope(s) === undefined;
+  let s = text.trim();
+  for (let d = 0; d < 3; d += 1) {
+    if (s.startsWith("Provider error 400: ")) {
+      s = s.slice("Provider error 400: ".length).trim();
+    } else if (s.startsWith("Provider error: ")) {
+      s = s.slice("Provider error: ".length).trim();
+    }
+    if (s.startsWith("data:") && !s.includes("\n")) {
+      s = s.slice("data:".length).trim();
+    }
   }
-  if (s.startsWith("{") && !s.endsWith("}")) {
+  if (s.startsWith("{") || s.startsWith("[")) {
+    try {
+      JSON.parse(s);
+      return false;
+    } catch {
+      return true;
+    }
+  }
+  if (/^(?:Provider error (?:400:\s*)?|data:\s*)[{\[]/i.test(text.trim())) {
     return true;
+  }
+  const firstBrace = s.indexOf("{");
+  if (firstBrace !== -1) {
+    let openBraces = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = 0; i < s.length; i += 1) {
+      const ch = s[i];
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escape = true;
+        continue;
+      }
+      if (ch === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (!inString) {
+        if (ch === "{") openBraces += 1;
+        else if (ch === "}") openBraces -= 1;
+      }
+    }
+    if (openBraces !== 0) return true;
   }
   return false;
 }
@@ -512,6 +553,7 @@ function isIncompleteStructuredWrapper(text: string): boolean {
  */
 export function hasConflictingReasoningEffortCode(text: string | undefined): boolean {
   if (!text) return false;
+  if (isIncompleteStructuredWrapper(text)) return true;
   let unescaped = text.trim();
   for (let d = 0; d < 3; d += 1) {
     if (unescaped.startsWith("Provider error 400: ")) {

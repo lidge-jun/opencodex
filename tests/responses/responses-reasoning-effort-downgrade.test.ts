@@ -77,6 +77,7 @@ const INCOMPLETE_STRUCTURED_WRAPPER_REFUSAL = JSON.stringify({
   param: "reasoning_effort",
   message: 'Provider error 400: {"code":"permission_denied"',
 });
+const INCOMPLETE_OUTER_OBJECT_REFUSAL = ' {"param":"reasoning_effort","error":{"code":"unknown_terminal_code"}';
 const ECHOED_REQUEST_CONTENT_REFUSAL = JSON.stringify({
   error: {
     param: "reasoning_effort",
@@ -864,5 +865,47 @@ describe("rejected reasoning rungs", () => {
     expect(response.status).toBe(200);
     expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual(["reasoning-effort-downgrade"]);
     expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(true);
+  });
+
+  test("stops before effort replay on incomplete outer object ending with inner brace (openai-chat)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(INCOMPLETE_OUTER_OBJECT_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = config();
+    const response = await handleResponses(request(), cfg, logCtx);
+    const text = await response.text();
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(text).toContain("unknown_terminal_code");
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("stops before effort replay on incomplete outer object ending with inner brace (openai-responses)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(INCOMPLETE_OUTER_OBJECT_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = passthroughConfig();
+    const response = await handleResponses(request(), cfg, logCtx);
+    const text = await response.text();
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(text).toContain("unknown_terminal_code");
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
   });
 });

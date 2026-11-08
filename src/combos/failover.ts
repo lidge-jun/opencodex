@@ -391,6 +391,41 @@ function normalizedFailureCode(code?: string | null): string {
 const EXACT_EFFORT_COMPATIBLE_CODES = new Set(["", "invalid_request_error", "invalid_argument"]);
 const EXACT_EFFORT_COMPATIBLE_TYPES = new Set(["", "invalid_request_error", "upstream_error"]);
 
+function hasIncompatibleDiagnosticCarrier(val: unknown): boolean {
+  if (val === undefined || val === null) return false;
+  if (Array.isArray(val)) {
+    for (const item of val.slice(0, 32)) {
+      if (hasIncompatibleDiagnosticCarrier(item)) return true;
+    }
+    return false;
+  }
+  if (typeof val === "object") {
+    const rec = val as Record<string, unknown>;
+    if (rec.code !== undefined && rec.code !== null) {
+      if (typeof rec.code !== "string") return true;
+      if (!EXACT_EFFORT_COMPATIBLE_CODES.has(normalizedFailureCode(rec.code))) return true;
+    }
+    if (rec.type !== undefined && rec.type !== null) {
+      if (typeof rec.type !== "string") return true;
+      if (!EXACT_EFFORT_COMPATIBLE_TYPES.has(normalizedFailureCode(rec.type))) return true;
+    }
+    if (rec.response !== undefined && rec.response !== null) {
+      if (hasIncompatibleDiagnosticCarrier(rec.response)) return true;
+    }
+    if (rec.last_error !== undefined && rec.last_error !== null) {
+      if (hasIncompatibleDiagnosticCarrier(rec.last_error)) return true;
+    }
+    if (rec.details !== undefined && rec.details !== null) {
+      if (hasIncompatibleDiagnosticCarrier(rec.details)) return true;
+    }
+    if (rec.errors !== undefined && rec.errors !== null) {
+      if (hasIncompatibleDiagnosticCarrier(rec.errors)) return true;
+    }
+    return false;
+  }
+  return false;
+}
+
 function isExactInvalidReasoningEffortRefusal(status: number, message: string, code?: string | null): boolean {
   if (status !== 400 || message.length > 16_384) return false;
   if (code !== undefined && code !== null && typeof code !== "string") return false;
@@ -402,7 +437,7 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
     if (text.startsWith("Provider error 400: ")) text = text.slice("Provider error 400: ".length).trim();
     if (text.startsWith("data:") && !text.includes("\n")) text = text.slice("data:".length).trim();
     let payload: unknown;
-    try { payload = JSON.parse(text); } catch { return false; }
+    try { payload = JSON.parse(text); } catch { return false; };
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
     const root = payload as Record<string, unknown>;
     if (root.code !== undefined && root.code !== null && typeof root.code !== "string") return false;
@@ -414,13 +449,8 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
     if (!EXACT_EFFORT_COMPATIBLE_TYPES.has(rootType)) return false;
     if (root.response !== undefined && root.response !== null) return false;
     if (root.last_error !== undefined && root.last_error !== null) return false;
-    if (root.details !== undefined && root.details !== null && typeof root.details === "object") {
-      const detailsRec = root.details as Record<string, unknown>;
-      if (detailsRec.code !== undefined && detailsRec.code !== null) {
-        if (typeof detailsRec.code !== "string") return false;
-        if (!EXACT_EFFORT_COMPATIBLE_CODES.has(normalizedFailureCode(detailsRec.code))) return false;
-      }
-    }
+    if (hasIncompatibleDiagnosticCarrier(root.details)) return false;
+    if (hasIncompatibleDiagnosticCarrier(root.errors)) return false;
     if (rootCode === "invalid_argument"
       && root.error === "Invalid reasoning effort."
       && (root.type === undefined || root.type === "invalid_request_error")
@@ -435,6 +465,10 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
     const errorType = normalizedFailureCode(record.type as string | undefined);
     if (!EXACT_EFFORT_COMPATIBLE_CODES.has(errorCode)) return false;
     if (!EXACT_EFFORT_COMPATIBLE_TYPES.has(errorType)) return false;
+    if (record.response !== undefined && record.response !== null) return false;
+    if (record.last_error !== undefined && record.last_error !== null) return false;
+    if (hasIncompatibleDiagnosticCarrier(record.details)) return false;
+    if (hasIncompatibleDiagnosticCarrier(record.errors)) return false;
     if (record.type === "upstream_error" && typeof record.message === "string"
       && record.message.startsWith("Provider error 400: ")
       && EXACT_EFFORT_COMPATIBLE_CODES.has(errorCode)) {
