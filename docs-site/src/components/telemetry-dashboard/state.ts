@@ -452,7 +452,8 @@ export function parseDownloadsPayload(input: {
         releaseTotal = safeAddInt(releaseTotal, count);
       }
       total = safeAddInt(total, releaseTotal);
-      if (githubLatestTag === null && typeof rel.tag_name === "string" && rel.tag_name.trim()) {
+      // Previews count toward the totals, but "latest release" is the newest stable one.
+      if (githubLatestTag === null && rel.prerelease !== true && typeof rel.tag_name === "string" && rel.tag_name.trim()) {
         githubLatestTag = rel.tag_name.trim();
         githubLatestDownloads = releaseTotal;
       }

@@ -697,6 +697,16 @@ describe("telemetry dashboard formatting and bucketing helpers", () => {
       githubReleaseCount: 2,
     });
 
+    // A preview published after a stable release counts toward totals but is not "the latest release".
+    expect(
+      parseDownloadsPayload({
+        githubReleases: [
+          { tag_name: "v3.0.0-preview.20261108", draft: false, prerelease: true, assets: [{ download_count: 7 }] },
+          { tag_name: "v2.99.0", draft: false, prerelease: false, assets: [{ download_count: 5 }] },
+        ],
+      }),
+    ).toMatchObject({ githubLatestTag: "v2.99.0", githubLatestDownloads: 5, githubTotalDownloads: 12, githubReleaseCount: 2 });
+
     expect(parseDownloadsPayload({})).toEqual({
       npmWeekly: null,
       npmMonthly: null,
