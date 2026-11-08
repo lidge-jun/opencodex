@@ -232,6 +232,13 @@ describe("GitHub Actions hardening", () => {
     const gate = ci.jobs?.ci as { if?: unknown; needs?: string[] } | undefined;
     expect(gate?.if).toBe("always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.lane != 'windows-native-claim')");
     expect(ci.jobs?.["windows-native-claim"]?.if).toBe("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev' && github.event.inputs.lane == 'windows-native-claim'");
+    const diagnosticSteps = (ci.jobs?.["windows-native-claim"] as { steps?: Array<{ name?: string; env?: Record<string, string>; run?: string }> })?.steps ?? [];
+    const diagnosticStep = diagnosticSteps.find(step => step.name === "Run native-main claim diagnostics");
+    expect(diagnosticStep?.env?.OCX_TEST_WINDOWS_NATIVE_CLAIM_DIAGNOSTIC).toBe("1");
+    expect(diagnosticStep?.run).toBe("bun test tests/codex-integration/main-quota-provenance.test.ts --timeout 60000");
+    expect(windowsTest?.env?.OCX_TEST_WINDOWS_NATIVE_CLAIM_DIAGNOSTIC).toBeUndefined();
+    expect(diagnosticSteps.filter(step => step.env?.OCX_TEST_WINDOWS_NATIVE_CLAIM_DIAGNOSTIC !== undefined)).toEqual([diagnosticStep]);
+    expect((ci.jobs?.["windows-native-claim"] as { env?: Record<string, string> }).env?.OCX_TEST_WINDOWS_NATIVE_CLAIM_DIAGNOSTIC).toBeUndefined();
     const ungated = new Set(["ci", "windows-native-claim"]);
     expect([...(gate?.needs ?? [])].sort())
       .toEqual(Object.keys(ci.jobs ?? {}).filter(name => !ungated.has(name)).sort());

@@ -5,6 +5,37 @@ import * as lockFile from "../../src/codex/native-main-lock-file";
 
 type Injection = "open" | "hardening" | "sqlite";
 
+export function skipInvalidQuotaTag(platform: string, githubActions: string | undefined, diagnostic: string | undefined): boolean {
+  return platform === "win32" && githubActions === "true" && diagnostic !== "1";
+}
+
+/** Accept only the observer's bounded fields, never arbitrary child output. */
+export function formatClaimDiagnostics(stdout: string): string {
+  const prefix = '{"fixture":"claim-diagnostics",';
+  const line = stdout.split("\n").find(row => row.startsWith(prefix));
+  if (!line) return "claim diagnostics unavailable";
+  try {
+    const { diagnostics } = JSON.parse(line);
+    const phases = ["not-started", "open", "hardening", "sqlite-open", "sqlite-pragma", "sqlite-journal-mode",
+      "identity-after-hardening", "identity-after-sqlite-setup", "identity-after-transaction", "identity-unknown",
+      "transaction", "transaction-read", "operation"];
+    const codes = ["EACCES", "EPERM", "ENOENT", "EBUSY", "ETIMEDOUT", "EICACLS", "EACLIDENTITY",
+      "SQLITE_BUSY", "SQLITE_LOCKED", "SQLITE_CANTOPEN", "SQLITE_NOTADB"];
+    const steps = ["/grant:r", "/inheritance:r", "/remove:g", "/findsid"];
+    const stages = ["deadline_before_spawn", "spawn_failed", "runner_rejected", "runner_watchdog", "child_result"];
+    const failure = diagnostics?.failure;
+    const safeFailure = failure && typeof failure === "object" ? {
+      ...(phases.includes(failure.phase) ? { phase: failure.phase } : {}),
+      ...(codes.includes(failure.code) ? { code: failure.code } : {}),
+      ...(steps.includes(failure.step) ? { step: failure.step } : {}),
+      ...(stages.includes(failure.stage) ? { stage: failure.stage } : {}),
+      ...(typeof failure.timedOut === "boolean" ? { timedOut: failure.timedOut } : {}),
+    } : undefined;
+    return JSON.stringify({ ...(phases.includes(diagnostics?.phase) ? { phase: diagnostics.phase } : {}),
+      ...(safeFailure ? { failure: safeFailure } : {}) });
+  } catch { return "claim diagnostics unavailable"; }
+}
+
 /** Observe the real claim setup without publishing paths, messages, or subprocess output. */
 export function observeNativeMainClaim(inject?: Injection, testError?: Error) {
   let phase = "not-started";
