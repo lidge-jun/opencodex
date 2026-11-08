@@ -93,13 +93,15 @@ function sparseComboConfig<T extends {
   imageInput?: "auto" | "disabled";
   reasoningEffortMode?: "strict" | "adaptive";
   defaultEffortMode?: "fallback" | "force";
-}>(combo: T): Omit<T, "cooldownMs" | "waitForCooldownMs" | "cooldownWaitPolicy" | "imageInput" | "reasoningEffortMode" | "defaultEffortMode"> & {
+  jevEffortMode?: "decide" | "client";
+}>(combo: T): Omit<T, "cooldownMs" | "waitForCooldownMs" | "cooldownWaitPolicy" | "imageInput" | "reasoningEffortMode" | "defaultEffortMode" | "jevEffortMode"> & {
   cooldownMs?: number;
   waitForCooldownMs?: number;
   cooldownWaitPolicy?: OcxComboCooldownWaitPolicy;
   imageInput?: "disabled";
   reasoningEffortMode?: "adaptive";
   defaultEffortMode?: "force";
+  jevEffortMode?: "client";
 } {
   const {
     cooldownMs,
@@ -108,6 +110,7 @@ function sparseComboConfig<T extends {
     imageInput,
     reasoningEffortMode,
     defaultEffortMode,
+    jevEffortMode,
     ...rest
   } = combo;
   return {
@@ -122,6 +125,7 @@ function sparseComboConfig<T extends {
     ...(imageInput === "disabled" ? { imageInput: "disabled" as const } : {}),
     ...(reasoningEffortMode === "adaptive" ? { reasoningEffortMode: "adaptive" as const } : {}),
     ...(defaultEffortMode === "force" ? { defaultEffortMode: "force" as const } : {}),
+    ...(jevEffortMode === "client" ? { jevEffortMode: "client" as const } : {}),
   };
 }
 

@@ -3,6 +3,7 @@ import type { CodexAccount } from "./accounts";
 import type { AnthropicAccountPoolConfig, OcxAccountPoolRotationStrategy } from "./anthropic-account-pool";
 import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import type { OcxFallbackConfig } from "./fallback";
+import type { OcxComboJevEffortMode } from "./combo-jev-effort-mode";
 export type { AnthropicAccountPoolConfig, AnthropicModelRoute, OcxAccountPoolRotationStrategy, OcxAccountPoolQuotaWindow } from "./anthropic-account-pool";
 export type { OcxFallbackConfig, OcxFallbackDeviceConfig, OcxFallbackKind, OcxFallbackSwitches } from "./fallback";
 
@@ -1463,17 +1464,6 @@ export type OcxComboDefaultEffortMode = "fallback" | "force";
  */
 export type OcxComboReasoningEffortMode = "strict" | "adaptive";
 
-/**
- * Who owns the wire effort on a JEV combo.
- *
- * `decide` (default) lets the decision set the effort and override the caller, which is what
- * a capability-routing combo wants. `client` takes only the decision's target choice and
- * leaves effort to the caller and the target ladder, for providers that must hold one tier
- * to keep their prompt cache warm — one whose effort swaps the upstream model id per tier
- * pays a cache miss on every re-tier.
- */
-export type OcxComboJevEffortMode = "decide" | "client";
-
 /** Policy for how target cooldowns interact with `lastResort` targets (#5691). */
 export type OcxComboCooldownWaitPolicy = "before-last-resort";
 
@@ -1549,10 +1539,7 @@ export interface OcxComboConfig {
    * explicitly empty target ladder suppresses the whole combo's effort control.
    */
   reasoningEffortMode?: OcxComboReasoningEffortMode;
-  /**
-   * Who owns the wire effort on a `jev` combo. Omitted / `"decide"` lets the decision
-   * override effort; `"client"` keeps only its target choice and leaves effort to the caller.
-   */
+  /** Wire-effort owner on a `jev` combo; omitted means `"decide"` ({@link OcxComboJevEffortMode}). */
   jevEffortMode?: OcxComboJevEffortMode;
   /**
    * Disable image input even when every target supports it.

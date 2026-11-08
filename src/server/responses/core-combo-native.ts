@@ -90,12 +90,17 @@ export interface ComboProtocolLanes {
   pickable(target: ComboTarget): boolean;
   /** The ingress refusal when every enabled candidate was skipped; otherwise undefined. */
   refusal(): Response | undefined;
-  /** The native plan for the candidate about to dispatch, or undefined to keep the bridge. */
+  /**
+   * The native plan for the candidate about to dispatch, or undefined to keep the bridge.
+   * `decisionOwnsEffort` is the caller's pre-decision reading of `jevEffortMode`: re-reading a
+   * combo the management API can replace mid-decision would split this lane from its log label.
+   */
   nativeChild(
     target: ComboTarget,
     targetRoute: RouteResult,
     targetSendBudget: TransientSendBudget | undefined,
-    initialDecision?: Pick<JevDecision, "effort">,
+    initialDecision: Pick<JevDecision, "effort"> | undefined,
+    decisionOwnsEffort: boolean,
   ): NativeComboChildPlan | undefined;
 }
 
@@ -207,7 +212,7 @@ export function createComboProtocolLanes(input: {
         400, unrepresentableMessage(features), "invalid_request_error", "unsupported_feature",
       ), "chat");
     },
-    nativeChild: (target, targetRoute, targetSendBudget, initialDecision) => {
+    nativeChild: (target, targetRoute, targetSendBudget, initialDecision, decisionOwnsEffort) => {
       // Without the request's execution budget a native child could not share its sends, so it
       // keeps the bridge rather than opening a tracker of its own.
       if (!isRequestExecutionBudget(targetSendBudget)) return undefined;
@@ -220,9 +225,7 @@ export function createComboProtocolLanes(input: {
       });
       // `client` keeps the decision's target but not its tier, so the ordinary combo effort
       // policy applies instead of the decision's effort.
-      const decisionOwnsEffort = initialDecision !== undefined
-        && getCombo(config, comboId)?.jevEffortMode !== "client";
-      if (decisionOwnsEffort) {
+      if (initialDecision && decisionOwnsEffort) {
         // A validated JEV choice owns only this first dispatch, including explicit no-effort.
         // Do not run ordinary force defaults for null: they require a non-null default.
         delete body.service_tier;

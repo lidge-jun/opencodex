@@ -27,6 +27,7 @@ export type { UpstreamHttpVersion, ReasoningSummaryDelivery, CodexAccountMode } 
 export type { AnthropicInstanceId } from "./providers/anthropic-instance-id";
 export { ANTHROPIC_INSTANCE_IDS, ANTHROPIC_PRIMARY_INSTANCE, ANTHROPIC_POOL2_INSTANCE, isAnthropicInstanceId } from "./providers/anthropic-instance-id";
 export type { AnthropicAccountPoolConfig, AnthropicModelRoute } from "./types/anthropic-account-pool";
+export type { OcxComboJevEffortMode } from "./types/combo-jev-effort-mode";
 export {
   UPSTREAM_HTTP_VERSION_VALUES,
   REASONING_SUMMARY_DELIVERY_VALUES,
@@ -97,7 +98,6 @@ export type {
   OcxComboDefaultEffort,
   OcxComboDefaultEffortMode,
   OcxComboReasoningEffortMode,
-  OcxComboJevEffortMode,
   OcxComboTarget,
   OcxComboConfig,
   OcxRoutingUnknownEvidenceMode,
