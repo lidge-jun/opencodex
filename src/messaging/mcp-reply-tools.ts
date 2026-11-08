@@ -42,8 +42,13 @@ function finalReplies(rows: Entry[]) {
 }
 
 /** Read one bounded history page; matching proves shared turn membership, never exclusive reply ownership. */
-export async function queueMcpReadReply(options: QueueMcpOptions, raw: ReplyInput, signal?: AbortSignal, onObservedFailure?: () => void) {
-  const unavailable = (code: string) => ({ available: false as const, error: { code } });
+export async function queueMcpReadReply(options: QueueMcpOptions, raw: ReplyInput, signal?: AbortSignal,
+  hooks?: { onObservedFailure: () => void; outcomeIsTimely: () => boolean }) {
+  let outcomeBeforeDeadline = false;
+  const unavailable = (code: string) => {
+    if (outcomeBeforeDeadline) hooks?.onObservedFailure();
+    return { available: false as const, error: { code } };
+  };
   if (!options.allowReplyRead) return unavailable("reply_read_disabled");
   const parsed = z.object(replyInput).strict().safeParse(raw);
   if (!parsed.success) return unavailable("reply_invalid_input");
@@ -52,11 +57,13 @@ export async function queueMcpReadReply(options: QueueMcpOptions, raw: ReplyInpu
   try { position = decodeReplyCursor(input); } catch { return unavailable("reply_invalid_cursor"); }
   const budget = new MessageBudget(20_000, signal);
   const read = async (method: "thread/items/list" | "thread/items/read" | "thread/turns/list", params: Record<string, unknown>) => {
+    outcomeBeforeDeadline = false;
     budget.throwIfEnded();
-    const result = await queueMcpRpc(options, method, { threadId: input.threadId, ...params }, budget.signal);
+    // The helper may close after the deadline even when its response arrived in time.
+    const result = await queueMcpRpc(options, method, { threadId: input.threadId, ...params }, budget.signal,
+      () => { if (hooks?.outcomeIsTimely() ?? !signal?.aborted) outcomeBeforeDeadline = true; });
     if (result.status !== "response") {
-      if (!["queue_mcp_cancelled", "queue_mcp_timeout"].includes(result.error.code)
-        && !(result.error.code === "queue_mcp_preflight_failed" && signal?.aborted)) onObservedFailure?.();
+      if (hooks?.outcomeIsTimely() ?? !signal?.aborted) outcomeBeforeDeadline = true;
       throw new Error("read unavailable");
     }
     return result.result;

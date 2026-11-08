@@ -21,6 +21,15 @@ const fs = require("node:fs");
 const rl = require("node:readline").createInterface({input:process.stdin});
 const mode = ${JSON.stringify(mode)};
 const emit = value => process.stdout.write(JSON.stringify(value)+"\\n");
+const emitBeforeDeadlineAndDelayClose = value => {
+  process.on("SIGTERM", () => {});
+  setInterval(() => {}, 1000);
+  const deadline = Number(fs.readFileSync(${JSON.stringify(join(root, "deadline"))}, "utf8"));
+  setTimeout(() => {
+    emit(value);
+    fs.writeFileSync(${JSON.stringify(join(root, "outcome-sent"))}, "sent");
+  }, Math.max(0, deadline - Date.now() - 450));
+};
 rl.on("line", line => {
   const f = JSON.parse(line);
   fs.appendFileSync(${JSON.stringify(capture)}, JSON.stringify({frame:f,argv:process.argv.slice(2),sender:process.env.CODEX_THREAD_ID,home:process.env.CODEX_HOME,pid:process.pid})+"\\n");
@@ -36,9 +45,7 @@ rl.on("line", line => {
   if(mode === "mixed-error-result") return emit({id:2,error:{code:-32602,message:"private"},result:{}});
   if(mode === "reject") return emit({id:2,error:{code:-32602,message:"PRIVATE_NATIVE_ERROR"}});
   if(mode === "reply-reject-delayed-close") {
-    process.on("SIGTERM", () => {});
-    setInterval(() => {}, 1000);
-    return emit({id:2,error:{code:-32601,message:"PRIVATE_READ_FAILURE"}});
+    return emitBeforeDeadlineAndDelayClose({id:2,error:{code:-32601,message:"PRIVATE_READ_FAILURE"}});
   }
   if(mode.startsWith("reply-") && ["thread/items/list","thread/items/read","thread/turns/list"].includes(f.method)) {
     const turnId = ${JSON.stringify(REPLY_MCP_TURN)};
@@ -48,6 +55,7 @@ rl.on("line", line => {
     const commentary = {turnId,item:{type:"agentMessage",id:"commentary",phase:"commentary",text:"PRIVATE_COMMENTARY"}};
     const tool = {turnId,item:{type:"commandExecution",id:"tool-1",aggregatedOutput:"PRIVATE_TOOL"}};
     if(f.method === "thread/items/read") {
+      if(mode === "reply-wait-malformed-delayed") return emitBeforeDeadlineAndDelayClose({id:2,result:{data:[null]}});
       if(mode === "reply-stale") user.item.clientId="another-client";
       return emit({id:2,result:{data:[user]}});
     }

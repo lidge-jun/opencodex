@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { queueMcpWaitReply } from "../../src/messaging/mcp-reply-wait";
 import { QUEUE_MCP_TARGET, REPLY_MCP_CLIENT, queueMcpFixture } from "../helpers/messaging-mcp-queue";
 
@@ -91,11 +93,38 @@ describe.skipIf(process.platform === "win32")("bounded stored reply waiting", ()
   test("a read rejection observed before the deadline survives delayed helper shutdown", async () => {
     const f = queueMcpFixture("reply-reject-delayed-close");
     try {
-      const result = await queueMcpWaitReply({ ...f.options, allowReplyRead: true }, { ...input, waitMs: 500 });
+      const waitMs = 6_000;
+      writeFileSync(join(f.root, "deadline"), String(Date.now() + waitMs));
+      const result = await queueMcpWaitReply({ ...f.options, allowReplyRead: true }, { ...input, waitMs });
       expect(methods(f)).toHaveLength(1);
       expect(result).toEqual({ available: false, error: { code: "reply_read_unavailable" } });
     } finally { await f.close(); }
-  }, 10_000);
+  }, 15_000);
+
+  test("a malformed later snapshot stays unavailable when helper shutdown crosses the deadline", async () => {
+    const f = queueMcpFixture("reply-wait-malformed-delayed");
+    try {
+      const waitMs = 8_000;
+      writeFileSync(join(f.root, "deadline"), String(Date.now() + waitMs));
+      const result = await queueMcpWaitReply({ ...f.options, allowReplyRead: true }, { ...input, waitMs });
+      expect(f.calls().some(call => call.frame.method === "thread/items/read")).toBe(true);
+      expect(result).toEqual({ available: false, error: { code: "reply_read_unavailable" } });
+    } finally { await f.close(); }
+  }, 15_000);
+
+  test("parent cancellation wins after a read rejection during helper shutdown", async () => {
+    const f = queueMcpFixture("reply-reject-delayed-close"), abort = new AbortController();
+    try {
+      const waitMs = 6_000, marker = join(f.root, "outcome-sent");
+      writeFileSync(join(f.root, "deadline"), String(Date.now() + waitMs));
+      const pending = queueMcpWaitReply({ ...f.options, allowReplyRead: true }, { ...input, waitMs }, abort.signal);
+      const until = performance.now() + waitMs;
+      while (!existsSync(marker) && performance.now() < until) await Bun.sleep(10);
+      expect(existsSync(marker)).toBe(true);
+      abort.abort();
+      expect(await pending).toEqual({ available: false, error: { code: "reply_wait_cancelled" } });
+    } finally { abort.abort(); await f.close(); }
+  }, 15_000);
 
   test("a later hanging snapshot inherits the original deadline and preserves the aged observation",async()=>{
     const f=queueMcpFixture("reply-wait-hang-second");
