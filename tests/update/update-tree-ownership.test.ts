@@ -8,9 +8,10 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
 import {
   bootRestoreProbe,
   verifyInstallTree,
@@ -505,6 +506,75 @@ describe("#4202 install-tree dependency ownership", () => {
     const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
     expect(result.ok).toBe(false);
     expect(result.failures).toContain("pnpm required dependency is missing from the selected store: foreign");
+  });
+
+  test("refuses an undeclared dependency link reachable through an outside ancestor", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    const outside = join(root, "outside", "foreign"); writeDependency(outside, "foreign");
+    writeFileSync(join(outside, "index.js"), "module.exports = 1;\n");
+    mkdirSync(join(root, "node_modules")); symlinkSync(outside, join(root, "node_modules", "foreign"), "dir");
+    expect(realpathSync(createRequire(join(zod, "entry.js")).resolve("foreign"))).toBe(realpathSync(join(outside, "index.js")));
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm ancestor dependency root is outside the selected store");
+  });
+
+  test("refuses a package main entry outside the selected store", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    const outside = join(root, "outside-entry.js"); writeFileSync(outside, "module.exports = 1;\n");
+    const zodLink = join(realpathSync(exposed), "..", "..", "zod");
+    writeFileSync(join(zod, "package.json"), JSON.stringify({ name: "zod", main: relative(zodLink, outside) }));
+    const node = Bun.which("node"); if (!node) throw new Error("Node is required for this resolution fixture");
+    const probe = spawnSync(node, ["-e", "process.stdout.write(require('node:module').createRequire(process.argv[1]).resolve('zod'))", join(realpathSync(exposed), "entry.js")], { encoding: "utf8" });
+    expect({ status: probe.status, stderr: probe.stderr }).toMatchObject({ status: 0 });
+    expect(realpathSync(probe.stdout)).toBe(realpathSync(outside));
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm package entry point is outside the selected store");
+  });
+
+  test("accepts in-store package main, exports and binary paths", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const store = join(root, "pnpm", "store", "v11");
+    const zod = join(store, "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    writeFileSync(join(zod, "index.js"), "module.exports = 1;\n");
+    writeFileSync(join(zod, "package.json"), JSON.stringify({ name: "zod", main: "./index.js", exports: { ".": "./index.js" }, bin: { zod: "./index.js" } }));
+    expect(verifyPnpmInstallTree(exposed, "2.0.0", store)).toEqual({ ok: true, failures: [] });
+  });
+
+  test("refuses an outside NODE_PATH that can supply an undeclared dependency", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    const fallback = join(root, "fallback"), foreign = join(fallback, "foreign"); writeDependency(foreign, "foreign");
+    writeFileSync(join(foreign, "index.js"), "module.exports = 1;\n");
+    const node = Bun.which("node"); if (!node) throw new Error("Node is required for this resolution fixture");
+    const probe = spawnSync(node, ["-e", "process.stdout.write(require('node:module').createRequire(process.argv[1]).resolve('foreign'))", join(zod, "entry.js")],
+      { encoding: "utf8", env: { ...process.env, NODE_PATH: fallback } });
+    expect({ status: probe.status, stderr: probe.stderr }).toMatchObject({ status: 0 });
+    expect(realpathSync(probe.stdout)).toBe(realpathSync(join(foreign, "index.js")));
+    const original = process.env.NODE_PATH;
+    try {
+      process.env.NODE_PATH = fallback;
+      const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+      expect(result.ok).toBe(false);
+      expect(result.failures).toContain("pnpm global dependency lookup root is outside the selected store");
+    } finally {
+      if (original === undefined) delete process.env.NODE_PATH; else process.env.NODE_PATH = original;
+    }
+  });
+
+  test("accepts an in-store NODE_PATH whose links stay inside the store", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const store = realpathSync(join(root, "pnpm", "store", "v11")), lookup = join(root, "pnpm", "store", "v11", "lookup");
+    mkdirSync(lookup); const original = process.env.NODE_PATH;
+    try {
+      process.env.NODE_PATH = lookup;
+      expect(verifyPnpmInstallTree(exposed, "2.0.0", store)).toEqual({ ok: true, failures: [] });
+    } finally {
+      if (original === undefined) delete process.env.NODE_PATH; else process.env.NODE_PATH = original;
+    }
   });
 
   test("refuses a manifestless dependency with an escaping nested link", () => {

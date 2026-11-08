@@ -24,8 +24,9 @@ import { guardedRenameSync, ownedArtifactRm } from "./mutation-guard.mjs";
  */
 import { probeSpawnSync } from "./mutation-guard.mjs";
 import { randomBytes } from "node:crypto";
+import { globalPaths } from "node:module";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { isInPnpmGlobalStoreLinks } from "./pnpm-store-layout.mjs";
 
 /**
@@ -192,6 +193,52 @@ function inspectAncestorDependency(packageDir, name, store, escaped) {
   }
 }
 
+/** Node may resolve undeclared names from any ancestor node_modules, so none may escape. */
+function inspectAncestorRoots(packageDir, store, escaped) {
+  for (let parent = dirname(packageDir); ; parent = dirname(parent)) {
+    if (basename(parent) !== "node_modules") {
+      const root = join(parent, "node_modules");
+      let exists = true;
+      try { lstatSync(root); } catch (error) {
+        exists = false;
+        if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") escaped.add("pnpm ancestor dependency root could not be resolved");
+      }
+      if (exists) {
+        try { if (!inside(root, store) || !inside(realpathSync(root), store)) escaped.add("pnpm ancestor dependency root is outside the selected store"); }
+        catch { escaped.add("pnpm ancestor dependency root could not be resolved"); }
+      }
+    }
+    if (parent === dirname(parent)) return;
+  }
+}
+
+/** Resolve existing ancestors too, so a missing entry cannot hide an escaping symlink. */
+function canonicalProspectivePath(path) {
+  const missing = [];
+  for (let current = path; ; current = dirname(current)) {
+    try { return resolve(realpathSync(current), ...missing.reverse()); }
+    catch (error) {
+      if ((error?.code !== "ENOENT" && error?.code !== "ENOTDIR") || current === dirname(current)) throw error;
+      missing.push(basename(current));
+    }
+  }
+}
+
+function inspectPackageEntries(packageDir, manifest, store, escaped) {
+  const values = [manifest.main, manifest.module, manifest.bin, manifest.exports];
+  const pending = [...values];
+  while (pending.length) {
+    const entry = pending.pop();
+    if (entry && typeof entry === "object") { pending.push(...Object.values(entry)); continue; }
+    if (typeof entry !== "string" || !entry) continue;
+    try {
+      if (!inside(canonicalProspectivePath(resolve(packageDir, entry)), store)) {
+        escaped.add("pnpm package entry point is outside the selected store");
+      }
+    } catch { escaped.add("pnpm package entry point could not be resolved"); }
+  }
+}
+
 /** pnpm's metadata and executable directories are not packages, but their links still must stay inside the store. */
 function inspectPnpmMetadata(path, store, escaped, kind) {
   const pending = [path], seen = new Set();
@@ -206,6 +253,24 @@ function inspectPnpmMetadata(path, store, escaped, kind) {
     seen.add(real);
     try { if (statSync(real).isDirectory()) for (const name of readdirSync(real)) pending.push(join(real, name)); }
     catch { escaped.add("pnpm " + kind + " link could not be resolved: " + basename(current)); }
+  }
+}
+
+/** Node's global search paths can supply undeclared modules outside the package ancestry. */
+function inspectGlobalLookupRoots(store, escaped) {
+  const roots = new Set([...globalPaths, ...String(process.env.NODE_PATH ?? "").split(delimiter).filter(Boolean)]);
+  for (const raw of roots) {
+    const root = resolve(raw);
+    try { lstatSync(root); } catch (error) {
+      if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") escaped.add("pnpm global dependency lookup root could not be resolved");
+      continue;
+    }
+    try {
+      if (!inside(realpathSync(root), store)) {
+        escaped.add("pnpm global dependency lookup root is outside the selected store"); continue;
+      }
+    } catch { escaped.add("pnpm global dependency lookup root could not be resolved"); continue; }
+    inspectPnpmMetadata(root, store, escaped, "global dependency lookup");
   }
 }
 
@@ -241,12 +306,20 @@ function nestedPnpmRoots(packageDir, store, escaped, budget) {
 /** Check reachable global-store package roots and declared dependency links, including cycles. */
 function inspectGlobalPnpmGraph(packageDir, store, escaped) {
   const pending = [packageDir], seen = new Set(), budget = { remaining: 100000 };
+  inspectGlobalLookupRoots(store, escaped);
   while (pending.length) {
+    const spelling = pending.pop();
     let path;
-    try { path = realpathSync(pending.pop()); } catch { escaped.add("pnpm dependency package could not be resolved"); continue; }
+    try { path = realpathSync(spelling); } catch { escaped.add("pnpm dependency package could not be resolved"); continue; }
+    let manifest;
+    try { manifest = JSON.parse(readFileSync(join(spelling, "package.json"), "utf8")); }
+    catch { escaped.add("pnpm dependency manifest could not be read"); continue; }
+    inspectPackageEntries(spelling, manifest, store, escaped);
+    if (path !== spelling) inspectPackageEntries(path, manifest, store, escaped);
     if (seen.has(path)) continue;
     if (seen.size >= 10000) { escaped.add("pnpm dependency graph exceeds verification limit"); return; }
     seen.add(path);
+    inspectAncestorRoots(path, store, escaped);
     const names = new Set();
     const nestedRoots = nestedPnpmRoots(path, store, escaped, budget);
     const ownRoot = join(path, "node_modules"), groupRoot = enclosingNodeModules(path);
@@ -272,9 +345,6 @@ function inspectGlobalPnpmGraph(packageDir, store, escaped) {
         }
       } catch { escaped.add("pnpm dependency root could not be resolved"); }
     }
-    let manifest;
-    try { manifest = JSON.parse(readFileSync(join(path, "package.json"), "utf8")); }
-    catch { escaped.add("pnpm dependency manifest could not be read"); continue; }
     for (const name of [...Object.keys(manifest.dependencies ?? {}), ...Object.keys(manifest.optionalDependencies ?? {}), ...Object.keys(manifest.peerDependencies ?? {})]) names.add(name);
     for (const name of names) {
       const dependency = pnpmOwnedDependencyDir(path, name, store, true, escaped);

@@ -356,8 +356,9 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { guardedRenameSync, ownedArtifactRm } from \"./mutation-guard.mjs\";",
     "import { probeSpawnSync } from \"./mutation-guard.mjs\";",
     "import { randomBytes } from \"node:crypto\";",
+    "import { globalPaths } from \"node:module\";",
     "import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, writeFileSync } from \"node:fs\";",
-    "import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from \"node:path\";",
+    "import { basename, delimiter, dirname, isAbsolute, join, parse, relative, resolve, sep } from \"node:path\";",
     "import { isInPnpmGlobalStoreLinks } from \"./pnpm-store-layout.mjs\";"
   ],
   "src/update/tray-update-plan.mjs": [],
