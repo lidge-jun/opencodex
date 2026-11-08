@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import {
   bootRestoreProbe,
   verifyInstallTree,
@@ -425,6 +426,54 @@ describe("#4202 install-tree dependency ownership", () => {
     mkdirSync(join(zod, "node_modules", "@bitkyc08"), { recursive: true });
     symlinkSync(target, join(zod, "node_modules", ...PKG.split("/")), "dir");
     expect(verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"))).toEqual({ ok: true, failures: [] });
+  });
+
+  test("refuses a required transitive dependency resolved through an outside ancestor", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    writeFileSync(join(zod, "package.json"), JSON.stringify({ name: "zod", dependencies: { foreign: "1" } }));
+    const outside = join(root, "node_modules", "foreign"); writeDependency(outside, "foreign");
+    writeFileSync(join(outside, "index.js"), "module.exports = 1;\n");
+    expect(realpathSync(createRequire(join(zod, "entry.js")).resolve("foreign"))).toBe(realpathSync(join(outside, "index.js")));
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm required dependency is missing from the selected store: foreign");
+  });
+
+  test("refuses a manifestless dependency with an escaping nested link", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    writeFileSync(join(zod, "package.json"), JSON.stringify({ name: "zod", dependencies: { phantom: "1" } }));
+    const phantom = join(root, "pnpm", "store", "v11", "links", "phantom", "1", "h3", "node_modules", "phantom");
+    mkdirSync(join(phantom, "node_modules"), { recursive: true });
+    writeFileSync(join(phantom, "index.js"), "module.exports = 1;\n");
+    const outside = join(root, "outside", "foreign"); writeDependency(outside, "foreign");
+    symlinkSync(outside, join(phantom, "node_modules", "foreign"), "dir");
+    mkdirSync(join(zod, "node_modules")); symlinkSync(phantom, join(zod, "node_modules", "phantom"), "dir");
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm dependency manifest could not be read: phantom");
+  });
+
+  test("refuses an optional dependency when Node can resolve it from an outside ancestor", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    writeFileSync(join(zod, "package.json"), JSON.stringify({ name: "zod", optionalDependencies: { foreign: "1" } }));
+    const outside = join(root, "node_modules", "foreign"); writeDependency(outside, "foreign");
+    writeFileSync(join(outside, "index.js"), "module.exports = 1;\n");
+    expect(realpathSync(createRequire(join(zod, "entry.js")).resolve("foreign"))).toBe(realpathSync(join(outside, "index.js")));
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm dependency can resolve outside the selected store: foreign");
+  });
+
+  test("requires non-optional peers while allowing absent optional peers", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    writeFileSync(join(zod, "package.json"), JSON.stringify({ name: "zod", peerDependencies: { required: "1", optional: "1" }, peerDependenciesMeta: { optional: { optional: true } } }));
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.failures).toContain("pnpm required dependency is missing from the selected store: required");
+    expect(result.failures).not.toContain("pnpm required dependency is missing from the selected store: optional");
   });
 
   test("global-store dependency links cannot escape the canonical configured store", () => {

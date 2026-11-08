@@ -160,9 +160,36 @@ function pnpmOwnedDependencyDir(packageDir, name, store, globalLinks, escaped) {
         if (!inside(realpathSync(dir), store)) { escaped.add("pnpm dependency link escapes the selected store: " + name); continue; }
       } catch { escaped.add("pnpm dependency link could not be resolved: " + name); continue; }
     }
+    if (globalLinks) {
+      try {
+        if (statSync(dir).isDirectory() && !existsSync(join(dir, "package.json"))) {
+          escaped.add("pnpm dependency manifest could not be read: " + name); continue;
+        }
+      } catch { escaped.add("pnpm dependency link could not be resolved: " + name); continue; }
+    }
     if (!matched && existsSync(join(dir, "package.json"))) matched = dir;
   }
   return matched;
+}
+
+/** A missing owned entry may still resolve through Node's ancestor lookup. */
+function inspectAncestorDependency(packageDir, name, store, escaped) {
+  for (let parent = dirname(packageDir); ; parent = dirname(parent)) {
+    const candidate = join(parent, "node_modules", ...name.split("/"));
+    for (const path of [candidate, candidate + ".js", candidate + ".json", candidate + ".node"]) {
+      try { lstatSync(path); } catch (error) {
+        if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") escaped.add("pnpm dependency fallback could not be inspected: " + name);
+        continue;
+      }
+      try {
+        const resolved = realpathSync(path);
+        escaped.add(inside(resolved, store) ? "pnpm dependency resolves outside its package group: " + name
+          : "pnpm dependency can resolve outside the selected store: " + name);
+      } catch { escaped.add("pnpm dependency fallback could not be resolved: " + name); }
+      return;
+    }
+    if (parent === dirname(parent)) return;
+  }
 }
 
 /** Check reachable global-store package roots and declared dependency links, including cycles. */
@@ -201,6 +228,14 @@ function inspectGlobalPnpmGraph(packageDir, store, escaped) {
     for (const name of names) {
       const dependency = pnpmOwnedDependencyDir(path, name, store, true, escaped);
       if (dependency) pending.push(dependency);
+      else {
+        const required = (Object.hasOwn(manifest.dependencies ?? {}, name) && !Object.hasOwn(manifest.optionalDependencies ?? {}, name))
+          || (Object.hasOwn(manifest.peerDependencies ?? {}, name) && manifest.peerDependenciesMeta?.[name]?.optional !== true);
+        if (required) {
+          escaped.add("pnpm required dependency is missing from the selected store: " + name);
+        }
+        inspectAncestorDependency(path, name, store, escaped);
+      }
     }
   }
 }
