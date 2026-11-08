@@ -161,6 +161,8 @@ import { persistConfigUnlocked, readRawConfigJson } from "./config/persist-unloc
 import { withConfigMutationLockSync, bumpGenerationForCooperatingConfigWrite } from "./config/mutation-lock";
 import { getDefaultConfig } from "./config/proxy-env";
 import { configSchema } from "./config/schema/config-schema";
+import { adoptPersistedTelemetry } from "./config/live-reconcile";
+import { carryPersistedTelemetry } from "./config/telemetry-carry";
 import { sanitizeOpenCodeOverridesForLoad } from "./config/opencode-wire-upgrade";
 import { projectRemovedOpenCodeFreeSnapshot } from "./config/removed-opencode-free-backup";
 import {
@@ -384,12 +386,16 @@ export function saveConfig(config: OcxConfig): void {
   // Keep the real-home assertion ahead of even lock-directory preparation.
   assertNotRealHomeUnderTest(getConfigDir());
   withConfigMutationLockSync(() => {
+    const onDisk = readRawConfigJson();
     const withProvenance = projectCustomModelCatalogMigration(
-      readRawConfigJson(),
+      onDisk,
       projectConfigRebaseProvenance(config),
     );
+    // Telemetry consent is owned by the file, as in the live save (see carryPersistedTelemetry).
+    const telemetry = carryPersistedTelemetry(withProvenance, onDisk);
     if (persistConfigUnlocked(withProvenance)) bumpGenerationForCooperatingConfigWrite();
     adoptCustomModelCatalogMigration(config, withProvenance);
+    if (telemetry.carried) adoptPersistedTelemetry(config, telemetry.value);
     if (withProvenance.configRebaseProvenance === undefined) delete config.configRebaseProvenance;
     else config.configRebaseProvenance = structuredClone(withProvenance.configRebaseProvenance);
     clearPendingConfigDeletions(config);

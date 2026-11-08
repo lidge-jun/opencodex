@@ -52,6 +52,11 @@ Only a human can transition an undecided install to active sending:
   `telemetry-state.json` instead of creating the config, so `ocx init` still runs setup.
   `withPendingTelemetryDecision` applies it wherever consent is resolved (scheduler, status route,
   CLI prompt) until a decision is written into the config, which clears it.
+- Telemetry consent in `config.json` is owned by the file: `carryPersistedTelemetry`
+  (`src/config/telemetry-carry.ts`) makes both whole-config saves (`saveConfig` and
+  `saveConfigPreservingClaudeCode`) write the validated on-disk block instead of the caller's
+  snapshot, so a decision written by another process is never dropped or rolled back, and a
+  malformed hand edit is dropped as a load would drop it.
 
 ## Identity, aggregation, and scheduling
 
