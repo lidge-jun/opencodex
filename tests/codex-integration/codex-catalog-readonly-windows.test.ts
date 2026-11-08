@@ -38,6 +38,7 @@ import { atomicWriteFile, type AtomicWriteIO } from "../../src/config";
 import {
   CodexCatalogReadOnlyError,
   catalogReadOnlyRepairFor,
+  defaultCatalogReadOnlyRepair,
   publishWithReadOnlyRepair,
   type CatalogReadOnlyRepair,
 } from "../../src/lib/codex-catalog-read-only";
@@ -228,5 +229,26 @@ test("a retry that fails for another reason keeps that error instead of claiming
   } catch (error) { failure = error; }
   expect(failure).toBe(diskFull);
   expect(renames).toBe(2);
+});
+
+
+test("the named error keeps an errno code so disk-failure classification still applies", () => {
+  let failure: unknown;
+  try {
+    publishWithReadOnlyRepair(() => { throw denial("EACCES"); }, "C:/u/.codex/opencodex-catalog.json",
+      { platform: "win32", isReadOnly: () => true, makeWritable: () => {} });
+  } catch (error) { failure = error; }
+  expect(failure).toBeInstanceOf(CodexCatalogReadOnlyError);
+  expect((failure as NodeJS.ErrnoException).code).toBe("EACCES");
+});
+
+test("the production attribute helpers read and clear the owner-write bit", () => {
+  const file = join(root, "opencodex-catalog.json");
+  writeFileSync(file, "{}\n");
+  chmodSync(file, 0o444);
+  const repair = defaultCatalogReadOnlyRepair("win32");
+  expect(repair.isReadOnly(file)).toBe(true);
+  repair.makeWritable(file);
+  expect(repair.isReadOnly(file)).toBe(false);
 });
 

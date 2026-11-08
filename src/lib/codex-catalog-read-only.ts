@@ -22,9 +22,13 @@ import { basename } from "node:path";
 
 /** A retried catalog publication that still fails after the attribute was cleared. */
 export class CodexCatalogReadOnlyError extends Error {
+  /** The cause's errno code, so disk-failure classification (management convergence) still applies. */
+  readonly code: string;
   constructor(readonly path: string, options?: ErrorOptions) {
     super(`Codex catalog is read-only: ${path}`, options);
     this.name = "CodexCatalogReadOnlyError";
+    const cause = (options?.cause as NodeJS.ErrnoException | undefined)?.code;
+    this.code = typeof cause === "string" ? cause : "EPERM";
   }
 }
 
