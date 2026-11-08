@@ -106,3 +106,35 @@ test("a whole-config save from a stale snapshot keeps a newer decline on disk", 
     removeTreeWithRetry(home);
   }
 });
+
+test("a save over an unreadable config.json never turns an unread decline back into an accept", () => {
+  const oldHome = process.env.OPENCODEX_HOME;
+  const home = mkdtempSync(join(tmpdir(), "ocx-telemetry-live-save-"));
+  process.env.OPENCODEX_HOME = home;
+  try {
+    saveConfig(seed(accepted));
+    const stale = loadConfig();
+    // Another process declines, then a hand edit breaks the file: the decline can no longer be read.
+    expect(mutatePersistedConfig(config => {
+      config.telemetry = structuredClone(declined);
+      return { changed: true, value: null };
+    }).status).toBe("committed");
+    writeFileSync(getConfigPath(), "{ broken", "utf8");
+    stale.logLevel = "debug";
+    saveConfig(stale);
+    // The stale accept is not written over a decision that could not be read; the install waits for the notice.
+    expect((JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig).telemetry).toBeUndefined();
+    expect(stale.telemetry).toBeUndefined();
+
+    // A snapshot that holds a decline keeps it.
+    const declinedSnapshot = loadConfig();
+    declinedSnapshot.telemetry = structuredClone(declined);
+    writeFileSync(getConfigPath(), "{ broken", "utf8");
+    saveConfig(declinedSnapshot);
+    expect((JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig).telemetry).toEqual(declined);
+  } finally {
+    if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = oldHome;
+    removeTreeWithRetry(home);
+  }
+});

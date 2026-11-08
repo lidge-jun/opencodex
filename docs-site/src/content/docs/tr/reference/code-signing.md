@@ -33,7 +33,7 @@ imzalanmasını yasaklar.
 
 OpenCodex, yalnızca programı kuran veya çalıştıran kişi bildirimi (kontrol paneli
 açılır penceresi veya etkileşimli CLI istemi) gördükten ve reddetmedikten sonra
-`telemetry.opencodex.me` adresine günde bir anonim kullanım özeti (sürüm, platform,
+`telemetry.opencodex.me` adresine günde bir anonim kullanım özeti (her gün değişen bir kurulum karması, sürüm, platform,
 sayımlar; istemler, çıktılar, anahtarlar, hesaplar, ana bilgisayar adları veya dosya
 yolları asla dahil edilmez) gönderir; bu bildirimde, Windows yükleyicisinde
 (varsayılan olarak işaretli "Send anonymous usage statistics" onay kutusu) ve
