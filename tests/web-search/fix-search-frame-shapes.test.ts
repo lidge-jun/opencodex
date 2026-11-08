@@ -1,9 +1,41 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { MAX_SIDECAR_DECODED_CHARS, parseSidecarSSE } from "../../src/web-search/parse";
 
 const response = (frames: unknown[]) => new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join(""));
 
 describe("sidecar text-done snapshots", () => {
+  test("keeps distinct content indexes without item or output identity", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", content_index: 0, text: "First. " },
+      { type: "response.output_text.done", content_index: 1, text: "Second." },
+      { type: "response.output_text.done", content_index: 0, text: "First. " },
+      { type: "response.completed" },
+    ]));
+    expect(result).toEqual({ text: "First. Second.", sources: [] });
+  });
+
+  test.each([false, true])("indexed part lookup does bounded work with item identity: %s", async identified => {
+    const frames: unknown[] = Array.from({ length: 1000 }, (_, output_index) =>
+      ({ type: "response.output_text.delta", output_index, content_index: output_index,
+        ...(identified ? { item_id: "item_a" } : {}), delta: "" }));
+    frames.push({ type: "response.completed" });
+    let scanned = 0;
+    const methods = ["entries", "keys", "values", Symbol.iterator] as const;
+    const spies = methods.map(method => {
+      const original = Map.prototype[method];
+      return spyOn(Map.prototype, method).mockImplementation(function (this: Map<unknown, unknown>) {
+        scanned += this.size;
+        return Reflect.apply(original, this, []);
+      });
+    });
+    try {
+      expect(await parseSidecarSSE(response(frames))).toEqual({ text: "", sources: [] });
+      expect(scanned).toBeLessThanOrEqual(10000);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
   test.each([false, true])("keeps distinct item IDs when the first event is indexed: %s", async indexed => {
     const result = await parseSidecarSSE(response([
       { type: "response.output_text.done", item_id: "item_a", ...(indexed ? { output_index: 0, content_index: 0 } : {}), text: "First. " },
@@ -29,6 +61,18 @@ describe("sidecar text-done snapshots", () => {
     const result = await parseSidecarSSE(response([
       { type: "response.output_text.done", item_id: "item_a", content_index: 0, text: "First. " },
       { type: "response.output_text.done", item_id: "item_a", content_index: 1, text: "Second." },
+      { type: "response.completed" },
+    ]));
+    expect(result).toEqual({ text: "First. Second.", sources: [] });
+  });
+
+  test("tracks identity as an unindexed part gains an item and content index", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", delta: "draft" },
+      { type: "response.output_text.done", item_id: "item_a", text: "old" },
+      { type: "response.output_text.done", item_id: "item_a", content_index: 0, text: "First. " },
+      { type: "response.output_text.done", item_id: "item_a", content_index: 1, text: "Second." },
+      { type: "response.output_text.done", item_id: "item_a", content_index: 0, text: "First. " },
       { type: "response.completed" },
     ]));
     expect(result).toEqual({ text: "First. Second.", sources: [] });

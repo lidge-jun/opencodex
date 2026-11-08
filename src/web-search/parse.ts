@@ -37,6 +37,7 @@ interface OutputItem {
 type CompletedOutput = WebSearchResult & { incomplete: boolean; parts: Map<string, string> };
 /** Streamed text for one `output_text` content part. */
 interface StreamedPart {
+  key: string;
   delta: string;
   done: string | null;
   itemId?: string;
@@ -46,11 +47,43 @@ interface StreamedPart {
 /** The streamed part for events that carry no valid `output_index`/`content_index`. */
 const UNINDEXED_PART = "unindexed";
 
+// Identity buckets allow a unique compatible match without scanning prior parts on every frame.
+type PartLookup = Map<string, Set<StreamedPart>>;
+
+function partBucket(itemId: string, contentIndex: number | undefined, exact: boolean, unindexed: boolean): string {
+  return JSON.stringify([itemId, contentIndex ?? null, exact, unindexed]);
+}
+
+function indexPart(lookup: PartLookup, part: StreamedPart, add: boolean): void {
+  if (!part.itemId) return;
+  for (const exact of [false, true]) {
+    for (const unindexed of isIndexedPartKey(part.key) ? [false] : [false, true]) {
+      const key = partBucket(part.itemId, exact ? part.contentIndex : undefined, exact, unindexed);
+      let bucket = lookup.get(key);
+      if (add) {
+        if (!bucket) { bucket = new Set(); lookup.set(key, bucket); }
+        bucket.add(part);
+      } else if (bucket) {
+        bucket.delete(part);
+        if (!bucket.size) lookup.delete(key);
+      }
+    }
+  }
+}
+
+function identifiedPart(lookup: PartLookup, itemId: string, contentIndex: number | undefined, unindexed: boolean): StreamedPart | undefined {
+  const buckets = contentIndex === undefined
+    ? [lookup.get(partBucket(itemId, undefined, false, unindexed))]
+    : [lookup.get(partBucket(itemId, contentIndex, true, unindexed)), lookup.get(partBucket(itemId, undefined, true, unindexed))];
+  if (buckets.reduce((count, bucket) => count + (bucket?.size ?? 0), 0) !== 1) return undefined;
+  return buckets.find(bucket => bucket?.size)?.values().next().value;
+}
+
 /**
  * Match explicit item identity before applying the legacy single-part fallback. Indexed parts
  * retain their numeric keys so incomplete completed outputs can fill individual missing parts.
  */
-function streamedPartKey(data: Record<string, unknown>, parts: Map<string, StreamedPart>): string {
+function streamedPartKey(data: Record<string, unknown>, parts: Map<string, StreamedPart>, lookup: PartLookup): string {
   const output = data.output_index;
   const content = data.content_index;
   const contentIndex = Number.isInteger(content) ? content as number : undefined;
@@ -62,30 +95,30 @@ function streamedPartKey(data: Record<string, unknown>, parts: Map<string, Strea
   const indexedPart = indexedKey ? parts.get(indexedKey) : undefined;
   if (indexedPart && compatible(indexedPart)) return indexedKey!;
 
-  const entries = [...parts.entries()];
-  const candidates = entries.filter(([key, part]) => compatible(part)
-    && (!indexedKey || !isIndexedPartKey(key)));
-  const identified = itemId ? candidates.filter(([, part]) => part.itemId === itemId) : [];
-  let match = identified.length === 1 ? identified[0] : undefined;
-  if (!match && identified.length === 0 && entries.length === 1 && candidates.length === 1
-    && (!itemId || !candidates[0]![1].itemId)) {
-    match = candidates[0];
+  let match = itemId ? identifiedPart(lookup, itemId, contentIndex, !!indexedKey) : undefined;
+  if (!match && parts.size === 1) {
+    const only = parts.values().next().value;
+    if (only && compatible(only) && (!indexedKey || !isIndexedPartKey(only.key))
+      && (!itemId || !only.itemId)) match = only;
   }
   if (match) {
-    const [key, part] = match;
-    if (indexedKey && !indexedPart && key !== indexedKey) {
-      parts.delete(key);
-      parts.set(indexedKey, part);
+    if (indexedKey && !indexedPart && match.key !== indexedKey) {
+      indexPart(lookup, match, false);
+      parts.delete(match.key);
+      match.key = indexedKey;
+      parts.set(indexedKey, match);
+      indexPart(lookup, match, true);
       return indexedKey;
     }
-    return key;
+    return match.key;
   }
   if (indexedKey && !indexedPart) return indexedKey;
-  return itemId ? `item:${JSON.stringify([itemId, contentIndex ?? null])}` : UNINDEXED_PART;
+  return itemId ? `item:${JSON.stringify([itemId, contentIndex ?? null])}`
+    : contentIndex !== undefined ? `content:${contentIndex}` : UNINDEXED_PART;
 }
 
 function isIndexedPartKey(key: string): boolean {
-  return key !== UNINDEXED_PART && !key.startsWith("item:");
+  return key !== UNINDEXED_PART && !key.startsWith("item:") && !key.startsWith("content:");
 }
 
 /** Order `output_index:content_index` keys numerically. */
@@ -382,6 +415,7 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
   let buffer = "";
   let responseBytes = 0;
   const seen = new Set<string>();
+  const partLookup: PartLookup = new Map();
   // Holder object — fields are mutated inside the closure, so they can't live as narrowed locals.
   const acc: {
     parts: Map<string, StreamedPart>;
@@ -403,11 +437,13 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
 
   /** The accumulator for the content part that `data` belongs to. */
   const streamedPart = (data: Record<string, unknown>): StreamedPart => {
-    const key = streamedPartKey(data, acc.parts);
+    const key = streamedPartKey(data, acc.parts, partLookup);
     let part = acc.parts.get(key);
-    if (!part) { part = { delta: "", done: null }; acc.parts.set(key, part); }
+    if (!part) { part = { key, delta: "", done: null }; acc.parts.set(key, part); }
+    indexPart(partLookup, part, false);
     if (typeof data.item_id === "string" && data.item_id) part.itemId = data.item_id;
     if (Number.isInteger(data.content_index)) part.contentIndex = data.content_index as number;
+    indexPart(partLookup, part, true);
     return part;
   };
 
