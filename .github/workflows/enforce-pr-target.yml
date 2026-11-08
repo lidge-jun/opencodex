@@ -191,19 +191,17 @@ jobs:
           # PR's head, so `base.sha` let an unpromoted commit choose which code
           # runs with this job's contents/pull-requests write token.
           #
-          # The branch is chosen, not fixed. `status` has no pull_request
-          # payload and runs the privileged workflow from the repository
-          # default branch, so it sources from that same promoted boundary. A
-          # `main`-targeting PR must take its scripts from `main`, or the gate
-          # runs a `main` workflow definition against `dev` scripts. Every
-          # other base, including a stacked child's, resolves to `dev`.
-          ref: ${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || 'dev') }}
+          # `status` has no pull_request payload and runs the privileged
+          # workflow from the repository default branch, so it sources from
+          # that same boundary. Every pull_request event, including a stacked
+          # child's, resolves to `dev`, the single integration branch.
+          ref: ${{ github.event_name == 'status' && github.event.repository.default_branch || 'dev' }}
           persist-credentials: false
           sparse-checkout: |
             .github/scripts
             MAINTAINERS.md
 
-      - name: Enforce PR target, ancestry, and description
+      - name: Enforce PR target and description
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           RESOLVED_PULL_NUMBER: ${{ needs.resolve-pr.outputs.pull-number }}
@@ -683,9 +681,7 @@ jobs:
               gateState.pendingReattestation = null;
             }
 
-            let behindMain = 0;
             let behindBase = 0;
-            let aheadMain = 0;
             let ancestryLookupFailed = false;
             const baseAllowed = ALLOWED_BASES.includes(pr.base.ref);
 
@@ -725,15 +721,10 @@ jobs:
             if (baseAllowed) {
               const headSha = pr.head.sha;
               try {
-                const { data: mainCompare } =
-                  await github.rest.repos.compareCommitsWithBasehead({
-                    owner,
-                    repo,
-                    basehead: `main...${headSha}`
-                  });
-                behindMain = mainCompare.behind_by;
-                aheadMain = mainCompare.ahead_by;
-
+                // `dev` is the only integration branch now. This single
+                // compare feeds the review-readiness latest-dev claim; there
+                // is no deleted `main` tip to compare against, so no
+                // wrong-ancestry verdict is derived here.
                 const { data: baseCompare } =
                   await github.rest.repos.compareCommitsWithBasehead({
                     owner,
@@ -805,12 +796,6 @@ jobs:
               allowedBases: ALLOWED_BASES,
               title: pr.title,
               body: pr.body,
-              behindMain,
-              behindBase,
-              aheadMain,
-              authorPermission,
-              permissionLookupFailed,
-              ancestryLookupFailed,
               stackedBase,
               // A maintainer issue comment ("not touching gui") waives the
               // GUI-screenshot gate; the comments are already fetched above.
@@ -1263,11 +1248,6 @@ jobs:
                   `Retarget this PR to ${inlineCode(DEFAULT_BASE)} — all contributions go to ${inlineCode(DEFAULT_BASE)}.`
                 );
               }
-              if (failures.some(failure => failure.code === "wrong_ancestry")) {
-                actions.push(
-                  `Rebase onto the current ${inlineCode(DEFAULT_BASE)} branch instead of opening from ${inlineCode("main")}.`
-                );
-              }
               if (failures.some(failure => failure.code === "bad_description")) {
                 actions.push(
                   "Add a real **Summary** and **Test plan** to the PR description."
@@ -1395,9 +1375,6 @@ jobs:
                   .map(failure => {
                     if (failure.code === "wrong_base") {
                       return `wrong target branch (${pr.base.ref}); retarget to ${inlineCode(DEFAULT_BASE)}.`;
-                    }
-                    if (failure.code === "wrong_ancestry") {
-                      return "wrong branch ancestry; rebase onto the latest dev.";
                     }
                     if (failure.code === "bad_description") {
                       return `PR description needs work (${failure.reason}).`;

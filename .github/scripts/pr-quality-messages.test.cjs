@@ -143,19 +143,17 @@ describe("buildFailureSections", () => {
     assert.match(sections, /@contributor Please retarget this PR to `dev`/);
   });
 
-  it("builds ancestry, description, and screenshot sections", () => {
+  it("builds description and screenshot sections", () => {
     const sections = buildFailureSections(
       [
-        { code: "wrong_ancestry" },
         { code: "bad_description", reason: "empty" },
         { code: "missing_ui_screenshot" }
       ],
       { pr: PR, allowedBases: ALLOWED_BASES, defaultBase: DEFAULT_BASE },
     ).join("\n");
-    assert.match(sections, /Wrong branch ancestry/);
     assert.match(sections, /Pull request description/);
     assert.match(sections, /UI screenshot required/);
-    assert.match(sections, /Rebase onto the current `main`/);
+    assert.doesNotMatch(sections, /Wrong branch ancestry/);
   });
 });
 
@@ -165,14 +163,13 @@ describe("failureSummary", () => {
       failureSummary(
         [
           { code: "wrong_base" },
-          { code: "wrong_ancestry" },
           { code: "bad_description", reason: "empty" },
           { code: "missing_ui_screenshot" },
           { code: "mystery" }
         ],
         { pr: PR },
       ),
-      "wrong base (main); wrong ancestry; bad description (empty); missing UI screenshot; mystery",
+      "wrong base (main); bad description (empty); missing UI screenshot; mystery",
     );
   });
 });

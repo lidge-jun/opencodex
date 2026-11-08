@@ -28,7 +28,7 @@ describe("Linux packaged desktop E2E in CI", () => {
     const filters = String(filter?.with?.filters ?? "");
     expect(filters).toContain("desktop:");
     // The package E2E filter: only packaging inputs select it on a pull request. Ordinary
-    // src/** and gui/** edits are left to promotion pushes and workflow_dispatch.
+    // src/** and gui/** edits are covered by manual workflow_dispatch evidence.
     const desktopFilter = filters.split(/\n(?=\s{0,2}\S[^\n]*:\s*$)/m)
       .find(block => /^\s*desktop:\s*$/m.test(block.split("\n")[0] ?? "")) ?? "";
     const desktopPaths = [...desktopFilter.matchAll(/- '([^']+)'/g)].map(match => match[1]);

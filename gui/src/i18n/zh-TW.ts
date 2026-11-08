@@ -3088,6 +3088,7 @@ export const zhTW: Record<TKey, string> = {
   "auth.adminTokenHelp": "這是 OpenCodex 管理 API 的管理員金鑰，不是服務商 API 金鑰。代理首次啟動時會寫入 ~/.opencodex/admin-api-token（或 $OPENCODEX_HOME/admin-api-token），設定 OPENCODEX_ADMIN_AUTH_TOKEN 可覆寫該值。",
   "auth.rememberDevice": "記住此裝置",
   "auth.rememberDeviceHint": "保留可撤銷的 HttpOnly 工作階段30天，不儲存管理員權杖。需要直接存取與 API 同源的 HTTPS 儀表板（或本機回環）。",
+  "auth.rememberUnsupported": "OpenCodex 無法在此位址記住此裝置。記住裝置需要直接存取 HTTPS 儀表板（或本機回環）；在反向代理後方，請不勾選此項登入。",
   "connection.forgetDevice": "忘記此裝置",
   "connection.forgetDeviceFailed": "無法忘記此裝置。工作階段已保留。",
   "auth.adminTokenDocsLink": "如何尋找",
