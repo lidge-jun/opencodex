@@ -252,6 +252,7 @@ original wire bytes. `src/server/relay.ts` re-exports the canonical extractor an
 Empty byte results across the relay and `src/server/sse-frame-buffer.ts` reuse one immutable
 zero-length view; non-empty frame ownership,
 frame limits, cancellation and wire ownership remain bounded. The byte framer and inspection share
+an unfinished-byte count for the native combo replay observer, without exposing or copying its buffer. They share
 one CR/LF/CRLF delimiter scanner; WebSocket projection uses the canonical data extractor. A terminal
 CR dispatches without awaiting EOF. A later LF extends that delimiter: byte delivery returns a
 framing-only continuation, excluded from event-count limits and the next event's byte cap;

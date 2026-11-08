@@ -13,6 +13,9 @@ These links preserve the preset's referral parameters. Sponsor information is sh
 the configured provider name, adapter and endpoint match the preset; it never changes routing,
 account selection or defaults.
 
+While a provider login is in progress, its Accounts panel offers **Cancel** once sign-in
+instructions appear.
+
 ## OpenAI account modes
 
 | Provider id | Use | Credential/account rule |
@@ -1404,6 +1407,10 @@ WorkBuddy's Chat endpoint. The Overview and Accounts tabs show remaining credits
 balances, and the next expiring non-daily credits when available. Refresh reads the signed-in
 account's billing summary; an unavailable read is not a zero balance. These credits are
 informational and do not disable free models when paid credits run out.
+When the reported total is positive, the header quota summary shows the unavailable percentage,
+including frozen credits, rounded to the nearest whole percent. It gives no exhaustion warning:
+free models may still work. An individual
+credit expiry is not shown as a reset of the entire balance.
 
 This uses an unofficial subscription protocol based on
 [Magpie's WorkBuddy plugin](https://github.com/magpie-community/plugins/tree/e7f65641df820dfd715c0d2241f99f2092e4efb1/packages/workbuddy).
@@ -1526,6 +1533,12 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
   OpenCodex runs as, so every request routed through this row — from any client of the proxy —
   spends that one Claude account. There is no per-client account, no pooling and no multiplexing;
   giving several people their own Claude usage needs one proxy user per sign-in.
+- **Subscription usage:** the Providers workspace shows the plan's 5-hour, weekly and model-scoped
+  windows from the last usage check OpenCodex recorded before a turn, for the account Claude Code is
+  signed in to now. Opening the page never probes or launches the CLI, and **Refresh all quotas**
+  re-reads the local sign-in and that recorded observation rather than Anthropic's endpoint. After a
+  sign-out or account switch the previous account's row disappears on **Refresh all quotas**, and
+  within a minute otherwise; a newly signed-in account shows nothing until its first Claude turn.
 - **Input media:** the row publishes its models as text-only for v1. The CLI accepts an image frame
   on its stream-json input, but no headless turn has been shown to hand those bytes to the model, so
   an image sent straight to this provider is refused (`unsupported_input_modality`) instead of

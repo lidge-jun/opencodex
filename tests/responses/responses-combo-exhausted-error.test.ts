@@ -93,15 +93,15 @@ function upstream(fallbackStatus: number, fallbackMessage: string, primaryStatus
   return hosts;
 }
 
-// Exercise the real reject-policy eligibility path and native dispatch seam with a budget
-// for one selected target: its eligibility copy and dispatch copy, never an unused target.
+// Exercise the real reject-policy eligibility path and native dispatch seam with a budget for
+// one retained copy: eligibility reads the source in place, so only the dispatched child copies.
 async function nativeCombo(cfg = config, status = 200) {
   const nativeConfig: OcxConfig = {
     ...cfg,
     protocols: { unrepresentable: "reject", rollout: { nativeChatCombos: true } },
   };
   const chatBody = { model: "combo/fan", stream: false, n: 2, messages: [{ role: "user", content: "hello" }] };
-  const budget = createTranslatorBudget({ maxTurnBytes: 2 * jsonUtf8Bytes(chatBody) });
+  const budget = createTranslatorBudget({ maxTurnBytes: jsonUtf8Bytes(chatBody) });
   const envelope = createProtocolEnvelope({ inbound: "chat", body: chatBody, translatorBudget: budget });
   const copies: Record<string, unknown>[] = [];
   const dispatched: string[] = [];
@@ -215,7 +215,7 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
       const { response, dispatched, copies, overflows } = await nativeCombo();
       expect(response.status).toBe(200);
       expect(dispatched).toEqual(["primary"]);
-      expect(copies.map(copy => copy.model)).toEqual(["primary/model-primary", "primary/model-primary"]);
+      expect(copies.map(copy => copy.model)).toEqual(["primary/model-primary"]);
       expect(overflows).toBe(0);
     });
   }
@@ -231,14 +231,14 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     expect(overflows).toBe(0);
   });
 
-  test("a throwing snapshot eligibility check preserves the fallback's 401", async () => {
+  test("a cooled primary still eligible for the request answers with its cooldown over the fallback's 401", async () => {
     coolComboTarget("fan", { provider: "primary", model: "model-primary" }, { retryAfter: "120", status: 429 });
     const { response, dispatched, overflows } = await nativeCombo(config, 401);
     expect(dispatched).toEqual(["fallback"]);
-    expect(response.status).toBe(401);
-    expect(response.headers.get("retry-after")).toBeNull();
-    // Only lazy eligibility for the cooled primary attempts a third charged body copy.
-    expect(overflows).toBe(1);
+    expect(response.status).toBe(503);
+    expect(Number(response.headers.get("retry-after"))).toBeGreaterThan(0);
+    // Eligibility for the cooled primary reads the source in place: no copy, so no budget overflow.
+    expect(overflows).toBe(0);
   });
 
   test("quota cooldown snapshots retain usable targets and expiry for 429 and 402", () => {

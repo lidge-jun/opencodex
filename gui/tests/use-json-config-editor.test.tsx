@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useEffect } from "react";
 import type { Root } from "react-dom/client";
 import { useJsonConfigEditor, type Config } from "../src/hooks/useJsonConfigEditor";
 
@@ -23,6 +23,7 @@ const config: Config = {
       allowPrivateNetwork: true,
       hasApiKey: true,
       hasHeaders: true,
+      vertexCredentialKind: "marker",
       initialModelSelection: { version: 1, registrationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", status: "pending" },
       note: "derived registry note",
     },
@@ -50,7 +51,7 @@ let addedProviderNames: string[];
 let notifications: Array<{ message: string; ok?: boolean }>;
 
 function Harness() {
-  editor = useJsonConfigEditor({
+  const currentEditor = useJsonConfigEditor({
     apiBase: "/editor",
     config,
     notify: (message, ok) => { notifications.push({ message, ok }); },
@@ -59,6 +60,7 @@ function Harness() {
     onSaved: added => { savedCallbacks += 1; addedProviderNames = added; },
     t: key => key,
   });
+  useEffect(() => { editor = currentEditor; }, [currentEditor]);
   return null;
 }
 
