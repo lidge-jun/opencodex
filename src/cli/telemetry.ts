@@ -162,7 +162,9 @@ function formatStatusLines(snapshot: TelemetryStatusSnapshot): string[] {
     ...(snapshot.envOverride ? [`Environment override: ${snapshot.envOverride}`] : []),
     `Install channel: ${snapshot.installChannel}`,
     `Last sent day: ${snapshot.lastSentDay ?? "never"}`,
-    ...(snapshot.stateUnreadable ? ["Sending paused: telemetry-state.json cannot be read, so nothing is sent."] : []),
+    ...(snapshot.stateUnreadable
+      ? ["Sending paused: telemetry-state.json cannot be read. Choosing again (ocx telemetry enable or disable) rebuilds it."]
+      : []),
     `Preview eligible: ${snapshot.previewEligible ? "yes" : "no"}`,
     snapshot.previewEligible
       ? `Preview (${snapshot.preview.day}, next eligible send):`

@@ -3,6 +3,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { armClaudeCodeBaseline, getConfigPath, loadConfig, mutatePersistedConfig, saveConfig, saveConfigPreservingClaudeCode, validateConfigCandidate } from "../../src/config";
+import { resolveTelemetryStatus } from "../../src/telemetry/consent";
+import { recordPendingTelemetryDecision, withPendingTelemetryDecision } from "../../src/telemetry/state";
 import type { OcxConfig, OcxTelemetryConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -22,12 +24,26 @@ const seed = (telemetry?: OcxTelemetryConfig): OcxConfig => ({
 const declined: OcxTelemetryConfig = { decision: "declined", decidedAt: "2026-11-08T10:00:00.000Z", noticeShownAt: "2026-11-08T10:00:00.000Z" };
 const accepted: OcxTelemetryConfig = { decision: "accepted", decidedAt: "2026-11-01T10:00:00.000Z", noticeShownAt: "2026-11-01T10:00:00.000Z" };
 
+/**
+ * A whole-config save never introduces a telemetry decision, so a config holding one is created the
+ * way a person's decision reaches it: the file first, then the decision through mutatePersistedConfig.
+ */
+function createConfig(config: OcxConfig): void {
+  const { telemetry, ...rest } = config;
+  saveConfig(rest as OcxConfig);
+  if (!telemetry) return;
+  expect(mutatePersistedConfig(persisted => {
+    persisted.telemetry = structuredClone(telemetry);
+    return { changed: true, value: null };
+  }).status).toBe("committed");
+}
+
 function liveSaveAfterDiskDecision(initial: OcxConfig, onDisk: OcxTelemetryConfig): { live: OcxConfig; saved: OcxConfig } {
   const oldHome = process.env.OPENCODEX_HOME;
   const home = mkdtempSync(join(tmpdir(), "ocx-telemetry-live-save-"));
   process.env.OPENCODEX_HOME = home;
   try {
-    saveConfig(initial);
+    createConfig(initial);
     const live = loadConfig();
     armClaudeCodeBaseline(live);
     // A CLI process records a decision while the proxy keeps its older in-memory config.
@@ -89,7 +105,7 @@ test("a whole-config save from a stale snapshot keeps a newer decline on disk", 
   const home = mkdtempSync(join(tmpdir(), "ocx-telemetry-live-save-"));
   process.env.OPENCODEX_HOME = home;
   try {
-    saveConfig(seed(accepted));
+    createConfig(seed(accepted));
     const stale = loadConfig();
     // Another process (`ocx telemetry disable`) declines between this load and save.
     expect(mutatePersistedConfig(config => {
@@ -112,7 +128,7 @@ test("a save over an unreadable config.json never turns an unread decline back i
   const home = mkdtempSync(join(tmpdir(), "ocx-telemetry-live-save-"));
   process.env.OPENCODEX_HOME = home;
   try {
-    saveConfig(seed(accepted));
+    createConfig(seed(accepted));
     const stale = loadConfig();
     // Another process declines, then a hand edit breaks the file: the decline can no longer be read.
     expect(mutatePersistedConfig(config => {
@@ -130,6 +146,34 @@ test("a save over an unreadable config.json never turns an unread decline back i
     const declinedSnapshot = loadConfig();
     declinedSnapshot.telemetry = structuredClone(declined);
     writeFileSync(getConfigPath(), "{ broken", "utf8");
+    saveConfig(declinedSnapshot);
+    expect((JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig).telemetry).toEqual(declined);
+  } finally {
+    if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = oldHome;
+    removeTreeWithRetry(home);
+  }
+});
+
+test("a save that creates config.json never turns a pending decline into an accept", () => {
+  const oldHome = process.env.OPENCODEX_HOME;
+  const home = mkdtempSync(join(tmpdir(), "ocx-telemetry-live-save-"));
+  process.env.OPENCODEX_HOME = home;
+  try {
+    // A proxy runs without config.json and adopted a dashboard accept (held as the pending decision) ...
+    const live = { ...seed(), telemetry: structuredClone(accepted) } as OcxConfig;
+    recordPendingTelemetryDecision(accepted, home);
+    // ... then "ocx telemetry disable" replaces the pending decision with a decline.
+    recordPendingTelemetryDecision(declined, home);
+    // A settings save from that proxy creates config.json.
+    saveConfig(live);
+    expect((JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig).telemetry).toBeUndefined();
+    expect(live.telemetry).toBeUndefined();
+    expect(resolveTelemetryStatus(withPendingTelemetryDecision(loadConfig(), home), {})).toMatchObject({ decision: "declined", effective: false });
+
+    // A snapshot that holds a decline still creates the file with it.
+    removeTreeWithRetry(getConfigPath());
+    const declinedSnapshot = { ...seed(), telemetry: structuredClone(declined) } as OcxConfig;
     saveConfig(declinedSnapshot);
     expect((JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig).telemetry).toEqual(declined);
   } finally {

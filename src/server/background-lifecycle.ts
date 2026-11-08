@@ -35,7 +35,7 @@ import {
 import { ensureQuotaPoolIdentity } from "../quota-pool/identity";
 import { isTelemetryEnvOptOut } from "../telemetry/consent";
 // The state module alone: the scheduler and its aggregation stay behind the dynamic import below.
-import { endTelemetryEnvOptOut, recordTelemetryEnvOptOut } from "../telemetry/state";
+import { TELEMETRY_ENV_OPT_OUT_REFRESH_MS, endTelemetryEnvOptOut, recordTelemetryEnvOptOut } from "../telemetry/state";
 
 type PolicyApply = (policy: StorageCleanupPolicy) => void;
 
@@ -67,11 +67,6 @@ let telemetryLoopGeneration = 0;
 let stopTelemetryLoop: (() => void) | null = null;
 // This process started under an env opt-out; its clean stop closes the opt-out period (D2).
 let telemetryEnvOptOutObserved = false;
-/**
- * How often a proxy running under an env opt-out records itself again, so a telemetry-state.json
- * rebuilt after corruption (which forgets every owner) learns that this proxy is still opted out.
- */
-const TELEMETRY_ENV_OPT_OUT_REFRESH_MS = 6 * 60 * 60 * 1000;
 let telemetryEnvOptOutRefreshMsOverride: number | null = null;
 let telemetryEnvOptOutRefresh: ReturnType<typeof setInterval> | null = null;
 

@@ -554,3 +554,34 @@ test("a saved decision whose reply and re-read both fail still counts as saved",
   expect(host.querySelector(".telemetry-consent-card")).toBeNull();
   expect(host.querySelector(".notice-err")).toBeNull();
 });
+
+test("a Continue whose request drops reads the status back and closes if the choice was saved", async () => {
+  setup();
+  await mountCard();
+  // The server saved the decline, but the connection dropped before the reply.
+  putReply = () => {
+    statusResponse = { ...statusResponse, effective: false, reason: "declined", decision: "declined", decidedAt: "2026-11-07T00:00:00.000Z", noticeShownAt: "2026-11-07T00:00:00.000Z" };
+    throw new TypeError("network connection was lost");
+  };
+  await act(async () => {
+    click(host.querySelector(".telemetry-consent-checkbox")!);
+  });
+  await act(async () => {
+    click(host.querySelector(".telemetry-consent-card .btn-primary")!);
+    await new Promise(r => setTimeout(r, 30));
+  });
+  expect(host.querySelector(".telemetry-consent-card")).toBeNull();
+
+  // When nothing was saved, the popup stays and says so.
+  statusResponse = makeStatus();
+  putReply = () => {
+    throw new TypeError("network connection was lost");
+  };
+  await mountCard();
+  await act(async () => {
+    click(host.querySelector(".telemetry-consent-card .btn-primary")!);
+    await new Promise(r => setTimeout(r, 30));
+  });
+  expect(host.querySelector(".telemetry-consent-card")).toBeTruthy();
+  expect(host.querySelector(".telemetry-consent-card .notice-err")?.textContent).toContain("Could not save telemetry preference");
+});

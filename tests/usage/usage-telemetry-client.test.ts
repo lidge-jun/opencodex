@@ -58,6 +58,7 @@ import {
   setTelemetrySenderOverridesForTests,
 } from "../../src/telemetry/sender";
 import { acquireServerBackgroundLifecycle, setTelemetryEnvOptOutRefreshMsForTests } from "../../src/server/background-lifecycle";
+import { clearPendingTelemetryDecision } from "../../src/telemetry/state";
 import type { OcxConfig } from "../../src/types";
 import type { PersistedUsageEntry } from "../../src/usage/log";
 import { REQUEST_OUTCOME_CLASSES } from "../../src/usage/request-outcome";
@@ -939,6 +940,33 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
     });
     expect(result).toMatchObject({ sent: false, reason: "state-unreadable" });
     expect(fetchCalls).toBe(0);
+  });
+
+  test("a person's decision rebuilds an unreadable state file, keeping every day through the next owner refresh unsent", async () => {
+    const statePath = telemetryStatePath(home);
+    writeFileSync(statePath, "{ broken", "utf8");
+    // Recorded late in the day: an opted-out proxy forgotten by the rebuild records itself again
+    // within 6 hours, so the rebuild covers the next UTC day too.
+    clearPendingTelemetryDecision(home, Date.parse("2026-11-07T21:00:00.000Z"));
+    expect(readTelemetryStateFile(home).unreadable).toBe(false);
+    expect(readTelemetryState(home).ineligibleThroughDay).toBe("2026-11-08");
+    // Sending resumes for later days instead of staying paused forever.
+    const sentDays: string[] = [];
+    const config = {
+      telemetry: { decision: "accepted" as const, decidedAt: "2026-10-30T10:00:00.000Z", noticeShownAt: "2026-10-30T10:00:00.000Z" },
+    };
+    const result = await runTelemetryTick({
+      configDir: home,
+      config,
+      env: {},
+      now: Date.parse("2026-11-10T12:00:00.000Z"),
+      fetch: (async (_url: string | URL | Request, init?: RequestInit) => {
+        sentDays.push((JSON.parse(String(init?.body)) as TelemetryPayloadV1).day);
+        return new Response("{}", { status: 202 });
+      }) as unknown as typeof fetch,
+    });
+    expect(result).toMatchObject({ sent: true, day: "2026-11-09" });
+    expect(sentDays).toEqual(["2026-11-09"]);
   });
 
   test("D2: an opted-out proxy records itself again, so a state file rebuilt after corruption keeps it", async () => {
