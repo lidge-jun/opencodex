@@ -4,7 +4,7 @@ import { formatMessageForHistory, imagePart, MAX_PROJECTED_HISTORY_CHARS } from 
 
 export const CLAUDE_REPLAY_SYSTEM_PROMPT = [
   "The conversation is replayed as ordered messages labelled USER, ASSISTANT, or TOOL RESULT.",
-  "Each message's image blocks follow its labelled text block in attachment order.",
+  "Each message starts with a label; its text and image blocks follow in their original order.",
   "The last labelled message and its attached images are the current input; earlier messages are history. Continue only from the current input.",
   "A TOOL RESULT is returned by the external client. Use it to continue the pending request.",
   "Historical requests and tool calls are records; do not repeat them as new requests or claims of execution.",
@@ -68,9 +68,9 @@ function stableMessageText(message: OcxMessage, vendorNameByWire?: ReadonlyMap<s
 }
 
 /**
- * One legal user frame, with a byte-stable block per message, including the current message.
+ * One legal user frame, with byte-stable blocks per message, including the current message.
  * Claude Code owns cache breakpoints. Stable blocks make reuse possible, not guaranteed.
- * Each message's native images stay with its text block, including tool results and history.
+ * Each message's native images stay in order with its text, including tool results and history.
  */
 export function buildStableClaudeConversationInput(
   parsed: OcxParsedRequest,
@@ -108,15 +108,29 @@ export function buildStableClaudeConversationInput(
   const content: Array<Record<string, unknown>> = [];
   if (omitted) content.push({ type: "text", text: TRUNCATION_NOTICE });
   for (let index = omitted; index < blocks.length; index++) {
-    content.push({ type: "text", text: blocks[index] });
     const message = messages[index];
-    if (!message || typeof message.content === "string") continue;
-    for (const part of message.content) {
-      if (part.type !== "image") continue;
-      const image = imagePart(part.imageUrl);
-      if (!image) throw new Error("Claude replay contains an unsupported image reference.");
-      content.push(image);
+    if (!message || (message.role !== "user" && message.role !== "toolResult")
+      || typeof message.content === "string" || !message.content.some(part => part.type === "image")) {
+      content.push({ type: "text", text: blocks[index] });
+      continue;
     }
+    let text = stableMessageText({ ...message, content: "" }, options.vendorNameByWire);
+    let previousText = false;
+    for (const part of message.content) {
+      if (part.type === "image") {
+        if (text) content.push({ type: "text", text });
+        text = "";
+        previousText = false;
+        const image = imagePart(part.imageUrl);
+        if (!image) throw new Error("Claude replay contains an unsupported image reference.");
+        content.push(image);
+      } else {
+        const value = part.type === "text" || part.type === "document" ? part.text : `[${part.type}]`;
+        text += (previousText && message.role === "user" ? "\n" : "") + value;
+        previousText = true;
+      }
+    }
+    if (text) content.push({ type: "text", text });
   }
   return [JSON.stringify({ type: "user", message: { role: "user", content } })];
 }

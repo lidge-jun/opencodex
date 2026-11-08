@@ -180,7 +180,7 @@ export async function executeResponsesRunTurn(
   // Publish the known subscription pause before headers or a CLI turn, preserving its reset
   // across both Responses and translated Chat instead of presenting a retryable generic 502.
   if (transportState.runTurnAdapter.name === "claude-cli") {
-    if (options.chatInstructionImage || responsesHasInstructionImage(parsed._rawBody)
+    if (options.chatInstructionImage || options.responsesInstructionImage || responsesHasInstructionImage(parsed._rawBody)
       || parsed.context.messages.some(message => message.role === "developer"
         && Array.isArray(message.content) && message.content.some(part => part.type === "image"))) {
       cancelResponseCompletion();

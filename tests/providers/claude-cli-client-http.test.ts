@@ -183,6 +183,46 @@ test("instruction images are refused at both HTTP routes before CLI launch", asy
     expect(comboResponse.status).toBe(400);
     expect(await comboResponse.text()).toContain("does not support images in developer instructions");
     expect(launches).toBe(0);
+    // Text-only Claude rows rewrite the raw body during vision preprocessing.
+    const textOnlyConfig = { ...comboConfig, visionSidecar: { enabled: false }, providers: {
+      "claude-cli": { ...config.providers["claude-cli"], noVisionModels: ["claude-sonnet-5-5"] },
+    } } as OcxConfig;
+    for (const target of [model, "pair"]) {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", body: JSON.stringify({ model: target, input: [
+          { role: "developer", content: [responseImage] }, { role: "user", content: "hello" },
+        ] }),
+      }), textOnlyConfig, { model: "", provider: "" });
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain("unsupported_input_modality");
+    }
+    expect(launches).toBe(0);
+    let descriptions = 0;
+    const vision = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => {
+      descriptions++;
+      return Response.json({ choices: [{ message: { content: "fixture description" } }] });
+    } });
+    try {
+      const visionConfig = { ...textOnlyConfig, port: vision.port, hostname: "127.0.0.1",
+        providers: { ...textOnlyConfig.providers, helper: { adapter: "openai-chat", baseUrl: "https://fixture.invalid",
+          apiKey: "fixture-key", modelInputModalities: { vision: ["text", "image"] } } },
+        visionSidecar: { enabled: true, backend: "routed", model: "helper/vision" },
+      } as OcxConfig;
+      for (const target of [model, "pair"]) {
+        const response = await handleResponses(new Request("http://localhost/v1/responses", {
+          method: "POST", body: JSON.stringify({ model: target, input: [
+            { role: "developer", content: [{ type: "input_image", image_url: "data:image/png;base64,QUFB" }] },
+            { role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,QkJC" }] },
+          ] }),
+        }), visionConfig, { model: "", provider: "" });
+        expect(response.status).toBe(400);
+        expect(await response.text()).toContain("unsupported_input_modality");
+      }
+      expect(descriptions).toBeGreaterThan(0);
+      expect(launches).toBe(0);
+    } finally {
+      await vision.stop(true);
+    }
     const otherConfig = { port: 0, defaultProvider: "other", providers: {
       other: { adapter: "codebuddy", baseUrl: "https://fixture.invalid", authMode: "key", apiKey: "fixture-key", selectedModels: ["fixture-model"] },
     } } as OcxConfig;
@@ -260,10 +300,10 @@ test("image requests retain Responses history and Chat tool results through CLI 
     expect(longReplay[0].text).toStartWith("USER:\nEARLY_RECORD_0:");
     expect(longReplay.at(-1).text).toBe("USER:\nCurrent request after the long history");
     const first = await post("responses", { model, stream: false, store: true, input: [
-      { role: "user", content: [{ type: "input_text", text: "First pair" }, image("QUFB"), image("QkJC")] },
+      { role: "user", content: [{ type: "input_text", text: "First" }, image("QUFB"), { type: "input_text", text: "Second" }, image("QkJC")] },
     ] });
     const initial = replay(first);
-    expect(initial).toEqual([{ type: "text", text: "USER:\nFirst pair\n[image]\n[image]" }, native("QUFB"), native("QkJC")]);
+    expect(initial).toEqual([{ type: "text", text: "USER:\nFirst" }, native("QUFB"), { type: "text", text: "Second" }, native("QkJC")]);
     const second = await post("responses", { model, stream: false, previous_response_id: first.id, input: [
       { role: "user", content: [{ type: "input_text", text: "Next" }, image("Q0ND")] },
     ] });
@@ -274,11 +314,10 @@ test("image requests retain Responses history and Chat tool results through CLI 
     const call = { type: "function_call", name: "screenshot", call_id: "shot_1", arguments: "{}" };
     const tool = await post("responses", { model, stream: false, tools, input: [
       { role: "user", content: "Inspect" }, call,
-      { type: "function_call_output", call_id: "shot_1", output: [image("RERERQ==")] },
+      { type: "function_call_output", call_id: "shot_1", output: [{ type: "input_text", text: "Before" }, image("RERERQ=="), { type: "input_text", text: "After" }] },
     ] });
     const toolReplay = replay(tool);
-    expect(toolReplay.at(-2).text).toContain("TOOL RESULT (call_id: shot_1)");
-    expect(toolReplay.at(-1)).toEqual(native("RERERQ=="));
+    expect(toolReplay.slice(-3)).toEqual([{ type: "text", text: "TOOL RESULT (call_id: shot_1):\nBefore" }, native("RERERQ=="), { type: "text", text: "After" }]);
     const chat = await post("chat/completions", { model, stream: false,
       tools: [{ type: "function", function: { name: "screenshot", description: "Return a screenshot", parameters: { type: "object", properties: {} } } }],
       messages: [

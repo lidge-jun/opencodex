@@ -94,7 +94,7 @@ describe("Claude stable replay", () => {
     const first = request([{ role: "user", content: [{ type: "text", text: "First image" }, image("QUFB"), image("QkJC")], timestamp: 0 }]);
     const before = blocks(buildStableClaudeConversationInput(first));
     expect(before).toEqual([
-      { type: "text", text: "USER:\nFirst image\n[image]\n[image]" },
+      { type: "text", text: "USER:\nFirst image" },
       { type: "image", source: { type: "base64", media_type: "image/png", data: "QUFB" } },
       { type: "image", source: { type: "base64", media_type: "image/png", data: "QkJC" } },
     ] as any);
@@ -103,6 +103,25 @@ describe("Claude stable replay", () => {
     const projected = blocks(buildStableClaudeConversationInput(after));
     assertPrefix(before, projected);
     expect(projected.at(-1)).toMatchObject({ type: "image", source: { data: "Q0ND" } });
+  });
+
+  test("interleaved text and images retain adjacency for users and tool results", () => {
+    const parts = [{ type: "text" as const, text: "First" }, { type: "image" as const, imageUrl: "https://example.test/a" },
+      { type: "text" as const, text: "Second" }, { type: "image" as const, imageUrl: "https://example.test/b" },
+      { type: "text" as const, text: "Third" }];
+    const native = (url: string) => ({ type: "image", source: { type: "url", url } });
+    for (const message of [
+      { role: "user", content: parts, timestamp: 0 },
+      { role: "toolResult", toolCallId: "c", toolName: "view", isError: true, content: parts, timestamp: 0 },
+    ] as OcxMessage[]) {
+      const before = blocks(buildStableClaudeConversationInput(request([message])));
+      expect(JSON.stringify(before)).toBe(JSON.stringify([
+        { type: "text", text: message.role === "user" ? "USER:\nFirst" : "TOOL RESULT (call_id: c) (error):\nFirst" },
+        native("https://example.test/a"), { type: "text", text: "Second" },
+        native("https://example.test/b"), { type: "text", text: "Third" },
+      ]));
+      assertPrefix(before, blocks(buildStableClaudeConversationInput(request([message, assistant("seen"), user("next")]))));
+    }
   });
 
   test("tool screenshot bytes stay with their call result when replayed", () => {
@@ -140,7 +159,7 @@ describe("Claude stable replay", () => {
     const projected = blocks(buildStableClaudeConversationInput(request([old, current]), { maxHistoryChars: 600 }));
     expect(projected).toEqual([
       { type: "text", text: "[Earlier conversation history omitted at a whole-message checkpoint.]" },
-      { type: "text", text: "USER:\n[image]" },
+      { type: "text", text: "USER:\n" },
       { type: "image", source: { type: "base64", media_type: "image/png", data: "Q0ND".repeat(400) } },
     ] as any);
   });

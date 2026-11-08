@@ -286,6 +286,8 @@ export interface HandleResponsesOptions {
   chatRawReasoningVisible?: boolean;
   /** Value-free fact retained before Chat instruction content is projected to text. */
   chatInstructionImage?: boolean;
+  /** Original Responses instruction image, retained across preprocessing and combo replay. */
+  responsesInstructionImage?: boolean;
   /** Set only by the Chat or Messages ingress on an eligible Antigravity route; see {@link DirectRequestOption}. */
   directRequest?: DirectRequestOption;
 }

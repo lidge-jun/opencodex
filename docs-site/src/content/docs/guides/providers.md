@@ -1496,7 +1496,7 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
   giving several people their own Claude usage needs one proxy user per sign-in.
 - **Input media:** the row advertises text and image input. The stable replay sends native image
   blocks directly through the official CLI, following the labelled message they belong to. This
-  includes multiple attachments, retained historical images and images returned by client tools.
+  includes multiple attachments, retained historical images and images returned by client tools. Text and images retain their order within each message.
   Unsupported image references fail explicitly. Images in system or developer instructions are refused rather
   than lost while folding those instructions into the system prompt. Omitted history also omits its images. A vision
   sidecar is not needed. An untouched v2.94.0 text-only roster is migrated; edited lists and explicit
