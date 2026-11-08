@@ -4,6 +4,65 @@ import { MAX_SIDECAR_DECODED_CHARS, parseSidecarSSE } from "../../src/web-search
 const response = (frames: unknown[]) => new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join(""));
 
 describe("sidecar text-done snapshots", () => {
+  test.each([false, true])("orders output-only parts among fully indexed parts, reverse arrival: %s", async reverse => {
+    const frames = [
+      { type: "response.output_text.done", output_index: 0, text: "A" },
+      { type: "response.output_text.done", output_index: 1, content_index: 0, text: "B" },
+    ];
+    if (reverse) frames.reverse();
+    expect(await parseSidecarSSE(response([...frames, { type: "response.completed" }])))
+      .toEqual({ text: "AB", sources: [] });
+  });
+
+  test("reconciles a unique output-only part with a partial completed output", async () => {
+    expect(await parseSidecarSSE(response([
+      { type: "response.output_text.done", output_index: 0, text: "draft" },
+      { type: "response.output_text.done", output_index: 1, content_index: 0, text: "B" },
+      { type: "response.completed", response: { output: [
+        { type: "message", content: [{ type: "output_text", text: "A" }] }, null,
+      ] } },
+    ]))).toEqual({ text: "AB", sources: [] });
+  });
+
+  test("does not infer a content index from a multi-part completed item", async () => {
+    expect(await parseSidecarSSE(response([
+      { type: "response.output_text.done", output_index: 0, text: "A" },
+      { type: "response.output_text.done", output_index: 1, content_index: 0, text: "B" },
+      { type: "response.completed", response: { output: [
+        { type: "message", content: [{ type: "output_text", text: "X" }, { type: "output_text", text: "Y" }] }, null,
+      ] } },
+    ]))).toEqual({ text: "XYAB", sources: [] });
+  });
+
+  test("fills a missing completed output from an output-only stream without full indexes", async () => {
+    expect(await parseSidecarSSE(response([
+      { type: "response.output_text.done", output_index: 0, text: "A" },
+      { type: "response.completed", response: { output: [
+        null, { type: "message", content: [{ type: "output_text", text: "B" }] },
+      ] } },
+    ]))).toEqual({ text: "AB", sources: [] });
+  });
+
+  test("does not reconcile an output-only part with a conflicting completed item ID", async () => {
+    expect(await parseSidecarSSE(response([
+      { type: "response.output_text.done", item_id: "a", output_index: 0, text: "A" },
+      { type: "response.output_text.done", output_index: 1, content_index: 0, text: "B" },
+      { type: "response.completed", response: { output: [
+        { id: "other", type: "message", content: [{ type: "output_text", text: "X" }] }, null,
+      ] } },
+    ]))).toEqual({ text: "XAB", sources: [] });
+  });
+
+  test("fills a malformed single completed text block from its output-only stream", async () => {
+    expect(await parseSidecarSSE(response([
+      { type: "response.output_text.done", output_index: 0, text: "A" },
+      { type: "response.output_text.done", output_index: 1, content_index: 0, text: "B" },
+      { type: "response.completed", response: { output: [
+        { type: "message", content: [{ type: "output_text", text: 7 }] }, null,
+      ] } },
+    ]))).toEqual({ text: "AB", sources: [] });
+  });
+
   test("keeps distinct output-only indexes and repeated snapshots", async () => {
     const result = await parseSidecarSSE(response([
       { type: "response.output_text.done", output_index: 0, text: "First. " },

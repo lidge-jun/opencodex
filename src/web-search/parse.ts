@@ -38,7 +38,7 @@ interface OutputItem {
 type CompletedOutput = WebSearchResult & {
   incomplete: boolean;
   parts: Map<string, string>;
-  identities: Map<string, { itemId: string; contentIndex: number; singleContent: boolean }>;
+  slots: Map<string, { itemId?: string; outputIndex: number; contentIndex: number; singleContent: boolean }>;
 };
 /** Streamed text for one `output_text` content part. */
 interface StreamedPart {
@@ -155,10 +155,13 @@ function isIndexedPartKey(key: string): boolean {
   return key !== UNINDEXED_PART && !key.startsWith("item:") && !key.startsWith("content:") && !key.startsWith("output:");
 }
 
-/** Order `output_index:content_index` keys numerically. */
+/** Order known output indexes numerically; an unknown content index follows known siblings. */
 function comparePartKeys(left: string, right: string): number {
-  const [leftOutput = 0, leftContent = 0] = left.split(":").map(Number);
-  const [rightOutput = 0, rightContent = 0] = right.split(":").map(Number);
+  const position = (key: string): [number, number] => key.startsWith("output:")
+    ? [Number(key.slice("output:".length)), Infinity]
+    : key.split(":").map(Number) as [number, number];
+  const [leftOutput, leftContent] = position(left);
+  const [rightOutput, rightContent] = position(right);
   return leftOutput - rightOutput || leftContent - rightContent;
 }
 
@@ -169,7 +172,8 @@ function streamedPartText(part: StreamedPart): string {
 
 /** Keep earlier content-only siblings before a part promoted to an indexed identity. */
 function orderedPartKeys(completed: Iterable<string>, streamed: Map<string, StreamedPart>): string[] {
-  const indexed = [...new Set([...completed, ...streamed.keys()].filter(isIndexedPartKey))].sort(comparePartKeys);
+  const ordered = (key: string): boolean => isIndexedPartKey(key) || key.startsWith("output:");
+  const indexed = [...new Set([...completed, ...streamed.keys()].filter(ordered))].sort(comparePartKeys);
   const contentOnly = [...streamed.values()].filter(part => part.key.startsWith("content:"))
     .sort((a, b) => a.order - b.order);
   const keys: string[] = [];
@@ -182,13 +186,13 @@ function orderedPartKeys(completed: Iterable<string>, streamed: Map<string, Stre
     keys.push(key);
   }
   const emitted = new Set(contentOnly.slice(0, next));
-  const remaining = [...streamed.values()].filter(part => !isIndexedPartKey(part.key) && !emitted.has(part));
+  const remaining = [...streamed.values()].filter(part => !ordered(part.key) && !emitted.has(part));
   remaining.sort((a, b) => a.order - b.order);
   keys.push(...remaining.map(part => part.key));
   return keys;
 }
 
-/** Join indexed parts in index order, preserving arrival order for unindexed parts. */
+/** Join parts with known output indexes in order, then other parts in arrival order. */
 function assembleStreamedText(parts: Map<string, StreamedPart>): string {
   return orderedPartKeys([], parts).map(key => streamedPartText(parts.get(key)!)).join("");
 }
@@ -207,13 +211,19 @@ function mergeIncompleteOutput(completed: Map<string, string>, streamed: Map<str
   }).join("");
 }
 
-/** Match completed items to uniquely identified unindexed parts before filling missing output. */
+/** Match completed slots to unique compatible streamed parts before filling missing output. */
 function reconcileCompletedParts(final: CompletedOutput, streamed: Map<string, StreamedPart>, lookup: PartLookup): Map<string, StreamedPart> {
   const reconciled = new Map(streamed);
   const matched = new Set<StreamedPart>();
-  for (const [key, identity] of final.identities) {
+  for (const [key, identity] of final.slots) {
     if (reconciled.has(key)) continue;
-    const part = identifiedPart(lookup, identity.itemId, identity.contentIndex, true);
+    let part = identity.itemId ? identifiedPart(lookup, identity.itemId, identity.contentIndex, true) : undefined;
+    if (!part && identity.singleContent) {
+      const bucket = lookup.get(JSON.stringify(["output", identity.outputIndex]));
+      const candidate = bucket?.size === 1 ? bucket.values().next().value : undefined;
+      if (candidate?.key.startsWith("output:") && (!identity.itemId || !candidate.itemId || identity.itemId === candidate.itemId)) part = candidate;
+    }
+    if (part?.outputIndex !== undefined && part.outputIndex !== identity.outputIndex) continue;
     if (!part || matched.has(part) || (part.contentIndex === undefined && !identity.singleContent)) continue;
     matched.add(part);
     reconciled.delete(part.key);
@@ -440,7 +450,7 @@ function fromOutputArray(output: OutputItem[], seen: Set<string>): CompletedOutp
   let text = "";
   let incomplete = false;
   const parts = new Map<string, string>();
-  const identities: CompletedOutput["identities"] = new Map();
+  const slots: CompletedOutput["slots"] = new Map();
   const sources: WebSearchSource[] = [];
   for (const [outputIndex, item] of output.entries()) {
     if (!item || typeof item !== "object") { incomplete = true; continue; }
@@ -450,9 +460,8 @@ function fromOutputArray(output: OutputItem[], seen: Set<string>): CompletedOutp
       if (!block || typeof block !== "object") { incomplete = true; continue; }
       if (block.type === "output_text") {
         const key = `${outputIndex}:${contentIndex}`;
-        if (typeof item.id === "string" && item.id) {
-          identities.set(key, { itemId: item.id, contentIndex, singleContent: item.content.length === 1 });
-        }
+        slots.set(key, { itemId: typeof item.id === "string" && item.id ? item.id : undefined,
+          outputIndex, contentIndex, singleContent: item.content.length === 1 });
         if (typeof block.text !== "string") { incomplete = true; continue; }
         text += block.text;
         parts.set(key, block.text);
@@ -460,7 +469,7 @@ function fromOutputArray(output: OutputItem[], seen: Set<string>): CompletedOutp
       }
     }
   }
-  return { text, sources, incomplete, parts, identities };
+  return { text, sources, incomplete, parts, slots };
 }
 
 export function cancelReaderWithoutWaiting(
@@ -641,7 +650,8 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
   let text = completedText || streamedText;
   if (acc.final?.incomplete) {
     const reconciled = reconcileCompletedParts(acc.final, acc.parts, partLookup);
-    const repaired = [...reconciled.keys()].some(isIndexedPartKey) ? mergeIncompleteOutput(acc.final.parts, reconciled) : streamedText;
+    const repaired = [...reconciled.keys()].some(key => isIndexedPartKey(key) || key.startsWith("output:"))
+      ? mergeIncompleteOutput(acc.final.parts, reconciled) : streamedText;
     if (repaired.trim()) text = repaired;
   }
   // Merge sources from the final output[] and the streaming annotation events.
