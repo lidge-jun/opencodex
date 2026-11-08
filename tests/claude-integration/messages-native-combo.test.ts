@@ -507,6 +507,14 @@ describe("native Messages candidates in a combo", () => {
       } finally { spy.mockRestore(); }
     });
   }
+  for (const [following, streamed] of [[textStart, true], [textStart, false], [textStart.slice(0, 30), true], [textStart.slice(0, 30), false]] as const) {
+    test(`a ${following === textStart ? "complete" : "partial"} frame read with a refusal never replays (${streamed ? "stream" : "fold"})`, async () => {
+      answer = () => stream(prelude + refusal + following);
+      const { text } = await send({ stream: streamed });
+      expect(text).not.toContain("fallback reply");
+      expect(seen).toHaveLength(1);
+    });
+  }
   test("a streamed error after content is a failed child, not a completion", async () => {
     answer = () => stream(prelude + textStart + textDelta + refusal);
     const { text, rows } = await send();

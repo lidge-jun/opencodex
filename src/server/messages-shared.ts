@@ -147,6 +147,7 @@ export function tapAnthropicSseForLog(
   let usageAcc: Rec = {};
   // message_stop or an upstream error event: the turn's own terminal already went through.
   let terminalSeen = false;
+  let errorSeen = false;
   // stop_reason of the latest message event the client received as a complete SSE event. Any
   // later message event (resumed content) clears it; pings and comments do not.
   let lastDeliveredStop: string | null = null;
@@ -166,6 +167,7 @@ export function tapAnthropicSseForLog(
     if (!dataLine) return;
     let data: unknown;
     try { data = JSON.parse(dataLine); } catch { data = null; }
+    if (errorSeen && !(isRec(data) && named(event, data, "ping"))) logCtx.streamErrorFollowed = true;
     if (!isRec(data)) {
       // A malformed event after a stop reason means the turn kept going and was cut.
       if (delivered) lastDeliveredStop = null;
@@ -180,6 +182,7 @@ export function tapAnthropicSseForLog(
     if (named(event, data, "message_stop") || named(event, data, "error")) {
       terminalSeen = true;
       if (data.type === "error") {
+        errorSeen = true;
         const error = isRec(data.error) ? data.error : {};
         logCtx.streamErrorStatus = httpStatusFromTerminalError({ type: typeof error.type === "string" ? error.type : undefined,
           code: typeof error.code === "string" ? error.code : undefined, message: typeof error.message === "string" ? error.message : undefined });
@@ -216,6 +219,8 @@ export function tapAnthropicSseForLog(
       const end = text.length - (heldLf ? 1 : 0);
       appendPart(text.slice(start, end));
     }
+    // The relay may reframe this read: a combo child judges a retryable error by what followed it here.
+    if (errorSeen && !isHarmlessSseTail([...frameParts, ...pendingParts].join(""))) logCtx.streamErrorFollowed = true;
   };
   // The last block can sit in the buffer without its blank line: an upstream that stopped after
   // it, or a held trailing CR. Count it before deciding how the turn ended (the Responses relay

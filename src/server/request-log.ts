@@ -254,6 +254,8 @@ export interface RequestLogContext extends UpstreamErrorDiagnostics {
   terminalHttpStatus?: number;
   /** Status of an upstream `error` event that ended a 200 Messages stream; the row stays 200, a combo child reads it. */
   streamErrorStatus?: number;
+  /** Bytes other than a ping followed that upstream `error` event, so a retry would repeat output. */
+  streamErrorFollowed?: true;
   /** Recognized structured terminal code whose exact identity must survive status mapping. */
   terminalErrorCode?: typeof CYBER_POLICY_ERROR_CODE;
   /**

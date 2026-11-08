@@ -83,7 +83,8 @@ export async function preflightNativeMessagesResponse(
       chunks.push(next.value);
       if (committed || terminal || failure) break;
     }
-    if (failure && !committed) {
+    // The tap read the original upstream chunk; output after the error there commits too.
+    if (failure && !committed && !logCtx.streamErrorFollowed) {
       logCtx.usage = anthropicUsageToOcx(usage);
       const message = redactSecretString(typeof failure.message === "string" ? failure.message : "Provider stream failed before output");
       logCtx.upstreamError = `Provider stream failed (${failureStatus})`;
