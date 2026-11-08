@@ -4,6 +4,49 @@ import { MAX_SIDECAR_DECODED_CHARS, parseSidecarSSE } from "../../src/web-search
 const response = (frames: unknown[]) => new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join(""));
 
 describe("sidecar text-done snapshots", () => {
+  test("keeps distinct output-only indexes and repeated snapshots", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", output_index: 0, text: "First. " },
+      { type: "response.output_text.done", output_index: 1, text: "Second." },
+      { type: "response.output_text.done", output_index: 0, text: "First. " },
+      { type: "response.completed" },
+    ]));
+    expect(result).toEqual({ text: "First. Second.", sources: [] });
+  });
+
+  test.each([false, true])("reconciles output-only and full identities with other parts present: %s", async fullFirst => {
+    const partial = { output_index: 1 };
+    const full = { output_index: 1, content_index: 0 };
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", output_index: 0, content_index: 0, text: "First. " },
+      { type: "response.output_text.delta", ...(fullFirst ? full : partial), delta: "draft" },
+      { type: "response.output_text.done", ...(fullFirst ? partial : full), text: "Second." },
+      { type: "response.completed" },
+    ]));
+    expect(result).toEqual({ text: "First. Second.", sources: [] });
+  });
+
+  test("keeps output identities separate even when item IDs conflict with them", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", item_id: "a", output_index: 0, text: "First. " },
+      { type: "response.output_text.done", item_id: "a", output_index: 1, text: "Second." },
+      { type: "response.completed" },
+    ]));
+    expect(result).toEqual({ text: "First. Second.", sources: [] });
+  });
+
+  test("reconciles a malformed completed part at its original position", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.done", item_id: "a", text: "First. " },
+      { type: "response.output_text.done", item_id: "b", text: "Second." },
+      { type: "response.completed", response: { output: [
+        { id: "a", type: "message", content: [{ type: "output_text", text: 7 }] },
+        { id: "b", type: "message", content: [{ type: "output_text", text: "Second." }] },
+      ] } },
+    ]));
+    expect(result).toEqual({ text: "First. Second.", sources: [] });
+  });
+
   test("keeps distinct content indexes without item or output identity", async () => {
     const result = await parseSidecarSSE(response([
       { type: "response.output_text.done", content_index: 0, text: "First. " },

@@ -47,6 +47,7 @@ interface StreamedPart {
   delta: string;
   done: string | null;
   itemId?: string;
+  outputIndex?: number;
   contentIndex?: number;
   promotedFromContent?: boolean;
 }
@@ -62,6 +63,17 @@ function partBucket(itemId: string, contentIndex: number | undefined, exact: boo
 }
 
 function indexPart(lookup: PartLookup, part: StreamedPart, add: boolean): void {
+  if (part.outputIndex !== undefined) {
+    const key = JSON.stringify(["output", part.outputIndex]);
+    let bucket = lookup.get(key);
+    if (add) {
+      if (!bucket) { bucket = new Set(); lookup.set(key, bucket); }
+      bucket.add(part);
+    } else if (bucket) {
+      bucket.delete(part);
+      if (!bucket.size) lookup.delete(key);
+    }
+  }
   if (!part.itemId) return;
   for (const exact of [false, true]) {
     for (const unindexed of isIndexedPartKey(part.key) ? [false] : [false, true]) {
@@ -93,16 +105,26 @@ function identifiedPart(lookup: PartLookup, itemId: string, contentIndex: number
 function streamedPartKey(data: Record<string, unknown>, parts: Map<string, StreamedPart>, lookup: PartLookup): string {
   const output = data.output_index;
   const content = data.content_index;
+  const outputIndex = Number.isInteger(output) ? output as number : undefined;
   const contentIndex = Number.isInteger(content) ? content as number : undefined;
   const itemId = typeof data.item_id === "string" && data.item_id ? data.item_id : undefined;
-  const indexedKey = Number.isInteger(output) && contentIndex !== undefined ? `${output}:${contentIndex}` : undefined;
+  const indexedKey = outputIndex !== undefined && contentIndex !== undefined ? `${outputIndex}:${contentIndex}` : undefined;
+  const outputOnly = outputIndex === undefined ? undefined : parts.get(`output:${outputIndex}`);
   const compatible = (part: StreamedPart): boolean =>
     (!itemId || !part.itemId || itemId === part.itemId)
+    && (outputIndex === undefined || part.outputIndex === undefined || outputIndex === part.outputIndex)
     && (contentIndex === undefined || part.contentIndex === undefined || contentIndex === part.contentIndex);
   const indexedPart = indexedKey ? parts.get(indexedKey) : undefined;
   if (indexedPart && compatible(indexedPart)) return indexedKey!;
 
   let match = itemId ? identifiedPart(lookup, itemId, contentIndex, !!indexedKey) : undefined;
+  if (match && !compatible(match)) match = undefined;
+  if (!match && outputOnly && compatible(outputOnly)) match = outputOnly;
+  if (!match && outputIndex !== undefined && contentIndex === undefined) {
+    const bucket = lookup.get(JSON.stringify(["output", outputIndex]));
+    const only = bucket?.size === 1 ? bucket.values().next().value : undefined;
+    if (only && compatible(only)) match = only;
+  }
   // A content-only part can acquire its item or output identity after other parts arrived.
   const contentOnly = contentIndex === undefined ? undefined : parts.get(`content:${contentIndex}`);
   if (!match && contentOnly && compatible(contentOnly)) match = contentOnly;
@@ -124,12 +146,13 @@ function streamedPartKey(data: Record<string, unknown>, parts: Map<string, Strea
     return match.key;
   }
   if (indexedKey && !indexedPart) return indexedKey;
-  return itemId ? `item:${JSON.stringify([itemId, contentIndex ?? null])}`
+  return outputIndex !== undefined && !outputOnly ? `output:${outputIndex}`
+    : itemId ? `item:${JSON.stringify([itemId, contentIndex ?? null])}`
     : contentIndex !== undefined ? `content:${contentIndex}` : UNINDEXED_PART;
 }
 
 function isIndexedPartKey(key: string): boolean {
-  return key !== UNINDEXED_PART && !key.startsWith("item:") && !key.startsWith("content:");
+  return key !== UNINDEXED_PART && !key.startsWith("item:") && !key.startsWith("content:") && !key.startsWith("output:");
 }
 
 /** Order `output_index:content_index` keys numerically. */
@@ -426,13 +449,13 @@ function fromOutputArray(output: OutputItem[], seen: Set<string>): CompletedOutp
     for (const [contentIndex, block] of item.content.entries()) {
       if (!block || typeof block !== "object") { incomplete = true; continue; }
       if (block.type === "output_text") {
-        if (typeof block.text !== "string") { incomplete = true; continue; }
-        text += block.text;
         const key = `${outputIndex}:${contentIndex}`;
-        parts.set(key, block.text);
         if (typeof item.id === "string" && item.id) {
           identities.set(key, { itemId: item.id, contentIndex, singleContent: item.content.length === 1 });
         }
+        if (typeof block.text !== "string") { incomplete = true; continue; }
+        text += block.text;
+        parts.set(key, block.text);
         for (const ann of Array.isArray(block.annotations) ? block.annotations : []) collectAnnotation(ann, sources, seen);
       }
     }
@@ -493,6 +516,7 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
     if (!part) { part = { key, order: nextPartOrder++, delta: "", done: null }; acc.parts.set(key, part); }
     indexPart(partLookup, part, false);
     if (typeof data.item_id === "string" && data.item_id) part.itemId = data.item_id;
+    if (Number.isInteger(data.output_index)) part.outputIndex = data.output_index as number;
     if (Number.isInteger(data.content_index)) part.contentIndex = data.content_index as number;
     indexPart(partLookup, part, true);
     return part;
