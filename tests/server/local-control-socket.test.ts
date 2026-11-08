@@ -8,14 +8,24 @@
  * boundary is the filesystem, which no TCP relay or forged header can reach.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { startServer, waitForFailedStartRollback } from "../../src/server";
 import { runLinkCommand } from "../../src/cli/link";
-import { localControlSocketDir, localControlSocketPath, usableLocalControlSocket } from "../../src/lib/local-control-socket";
-import { localControlRouteAllowed, localControlSocketWanted } from "../../src/server/index/local-control-listener";
+import {
+  localControlLeasePath,
+  localControlSocketDir,
+  localControlSocketPath,
+  usableLocalControlSocket,
+} from "../../src/lib/local-control-socket";
+import {
+  createLocalControlListener,
+  localControlRouteAllowed,
+  localControlSocketWanted,
+} from "../../src/server/index/local-control-listener";
 import { AuxiliaryListenerBindError, findAvailablePort, isAddrInUse } from "../../src/server/ports";
 import type { OcxConfig } from "../../src/types";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
@@ -168,6 +178,7 @@ describe.skipIf(!unixSupported)("hub with a non-loopback public listener (#8184)
       await server.stop(true);
     }
     expect(existsSync(socket)).toBe(false);
+    expect(existsSync(localControlLeasePath(publicPort))).toBe(false);
   }, SERVER_BUDGET_MS);
 
   test("a path that is not a stale socket is left alone and no socket is served", async () => {
@@ -183,6 +194,8 @@ describe.skipIf(!unixSupported)("hub with a non-loopback public listener (#8184)
       await server.stop(true);
     }
     expect(lstatSync(localControlSocketPath(publicPort)).isFile()).toBe(true);
+    // The refused start must not leave its ownership record behind for the next runtime.
+    expect(existsSync(localControlLeasePath(publicPort))).toBe(false);
   }, SERVER_BUDGET_MS);
 
   test("a loopback public listener serves no socket", async () => {
@@ -212,6 +225,81 @@ describe.skipIf(!unixSupported)("hub with a non-loopback public listener (#8184)
     } finally {
       await server.stop(true);
     }
+  }, SERVER_BUDGET_MS);
+});
+
+describe.skipIf(!unixSupported)("local control socket ownership (#8184)", () => {
+  const dispatchFor = (owner: string) => async () => Response.json({ owner });
+
+  test("a live incumbent keeps its socket when a second runtime starts on the same port", async () => {
+    const publicPort = await findAvailablePort(0, "0.0.0.0");
+    const first = createLocalControlListener();
+    const second = createLocalControlListener();
+    first.start({ config: hubConfig(0), publicPort, dispatch: dispatchFor("first") });
+    try {
+      const socket = localControlSocketPath(publicPort);
+      expect(first.socketPath()).toBe(socket);
+      expect(await (await overSocket(socket, STATUS)).json()).toEqual({ owner: "first" });
+
+      second.start({ config: hubConfig(0), publicPort, dispatch: dispatchFor("second") });
+
+      // The incumbent is live, so the second runtime must not take the address or the lease.
+      expect(second.socketPath()).toBeNull();
+      expect(first.socketPath()).toBe(socket);
+      expect(await (await overSocket(socket, STATUS)).json()).toEqual({ owner: "first" });
+    } finally {
+      await second.stop();
+      await first.stop();
+    }
+    expect(existsSync(localControlSocketPath(publicPort))).toBe(false);
+    expect(existsSync(localControlLeasePath(publicPort))).toBe(false);
+  }, SERVER_BUDGET_MS);
+
+  test("an old runtime's shutdown leaves a successor's socket in place", async () => {
+    const { server, publicPort } = await startHub();
+    const socket = localControlSocketPath(publicPort);
+    let successor: ReturnType<typeof Bun.serve> | null = null;
+    try {
+      // A successor bound the public address while the old runtime still held its own listener.
+      unlinkSync(socket);
+      successor = Bun.serve({ unix: socket, fetch: () => new Response("successor") });
+
+      await server.stop(true);
+
+      expect(lstatSync(socket).isSocket()).toBe(true);
+      const response = await fetch("http://localhost/", { unix: socket } as RequestInit);
+      expect(await response.text()).toBe("successor");
+    } finally {
+      if (successor) await successor.stop(true);
+      if (existsSync(socket)) unlinkSync(socket);
+    }
+  }, SERVER_BUDGET_MS);
+
+  test("a crashed predecessor's lease and dead socket are replaced", async () => {
+    const publicPort = await findAvailablePort(0, "0.0.0.0");
+    const socket = localControlSocketPath(publicPort);
+    const lease = localControlLeasePath(publicPort);
+    mkdirSync(localControlSocketDir(), { recursive: true, mode: 0o700 });
+    // A dead socket: bind a private address, publish it, then stop the binder. Bun unlinks only
+    // the private name, so the public hard link survives as the crash residue a real crash leaves.
+    const deadPrivate = join(localControlSocketDir(), `.c${publicPort}.dead`);
+    const dead = Bun.serve({ unix: deadPrivate, fetch: () => new Response("dead") });
+    linkSync(deadPrivate, socket);
+    await dead.stop(true);
+    const deadPid = spawnSync("/bin/sh", ["-c", "exit 0"]).pid!;
+    writeFileSync(lease, JSON.stringify({ pid: deadPid, start: "ps:gone", token: `.c${publicPort}.dead` }), { mode: 0o600 });
+    saveConfig(hubConfig(await findAvailablePort(0, "127.0.0.1")));
+
+    const server = startServer(publicPort);
+    try {
+      expect(usableLocalControlSocket(publicPort)).toBe(socket);
+      const response = await overSocket(socket, STATUS, { headers: { "x-opencodex-api-key": ADMIN } });
+      expect(response.status).toBe(200);
+    } finally {
+      await server.stop(true);
+    }
+    expect(existsSync(socket)).toBe(false);
+    expect(existsSync(lease)).toBe(false);
   }, SERVER_BUDGET_MS);
 });
 

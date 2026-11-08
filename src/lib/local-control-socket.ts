@@ -26,6 +26,23 @@ export function localControlSocketPath(port: number, configDir?: string): string
   return join(localControlSocketDir(configDir), `control-${port}.sock`);
 }
 
+/**
+ * The address Bun itself binds for one runtime. It is process-specific, so a shutdown can only
+ * ever unlink its own listener, and the public path above is a hard link to this socket. The name
+ * is never longer than the public one (`.c65535.zzzzzz` vs `control-65535.sock`).
+ */
+export function localControlPrivateSocketPath(port: number, configDir?: string): string {
+  return join(localControlSocketDir(configDir), `.c${port}.${process.pid.toString(36)}`);
+}
+
+/**
+ * The ownership record for one port's public socket. A runtime holds it for as long as it serves
+ * the socket, so a second runtime can tell a live incumbent from a crashed predecessor.
+ */
+export function localControlLeasePath(port: number, configDir?: string): string {
+  return join(localControlSocketDir(configDir), `.c${port}.lease`);
+}
+
 /** A real directory, owned by this user, that no other user can enter or list. */
 export function isPrivateSocketDir(dir: string): boolean {
   try {
