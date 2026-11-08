@@ -23,7 +23,7 @@ function scenario(body: string, options: { noSync?: boolean; olderHome?: boolean
       import { INTEGRATION_CLIENTS } from './src/integrations/registry';
       import { materializeLocalRouteIntent } from './src/client/route-intent-apply';
       import { applyConnectedRouteIntent } from './src/integrations/route-intent-connected';
-      import { routeIntentStatePath, readRouteIntentReceipt, setLocalRouteIntentOff } from './src/integrations/route-intent-state';
+      import { routeIntentStatePath, readRouteIntentReceipt, setLocalRouteIntentOff, readLocalRouteIntentOff } from './src/integrations/route-intent-state';
       import { homeRouteIntentPath, readHomeRouteIntentRecord } from './src/client/link-home';
       import { ROUTE_CLIENT_IDS } from './src/link/route-intent';
       const home = process.env.HOME;
@@ -70,6 +70,18 @@ test("disconnect restores the previously absent standalone Codex flag", () => {
   expect(result.error).toBeUndefined();
   expect(result.state).toBe("disconnected");
   expect(result.hasCodex).toBe(false);
+});
+
+// The local opt-out list is the person's own choice on this machine, not a Home write.
+test("disconnect keeps the Child's local route opt-outs", () => {
+  const result = scenario(`
+    setLocalRouteIntentOff('pi',true);
+    let error; try { await disconnectClient({},deps); } catch(e) { error=e.message; }
+    console.log(JSON.stringify({error,state:readClientConnectionState().kind,off:readLocalRouteIntentOff()}));
+  `);
+  expect(result.error).toBeUndefined();
+  expect(result.state).toBe("disconnected");
+  expect(result.off).toEqual(["pi"]);
 });
 
 test("review: isolated local-off fallback reads its own opt-out and previous document", () => {

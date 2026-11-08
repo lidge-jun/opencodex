@@ -96,6 +96,8 @@ Aside 계정은 로컬 `u/N` 번호가 아닌 **userId**로 선택합니다. `al
 
 기존에 소유권 기록이 있는 연동은 Home 기본값으로 이전합니다. 명시적인 `connect --clients` 선택은 초기 기기 override로 유지하며, Home의 해당 기기 `on|off|inherit`가 그 선택을 대체합니다. Child 보고는 Home 정책을 변경하지 않습니다.
 
+연결된 Child는 Home의 실효 의도를 자신의 Codex, Claude Code, Claude Desktop, Grok 켜기/끄기 스위치에 기록합니다. Claude Code를 끄면 Messages API 설정도 고정될 수 있습니다. Child는 처음 바꾸기 전에 각 스위치의 독립형 값을, 설정되지 않았던 상태까지 포함해 기록합니다. `ocx disconnect`와 실패한 등록은 그 값을 되돌립니다. 연결 중 사용자가 직접 바꾼 스위치는 그 값을 유지합니다. 다만 Home이 마지막으로 적용한 값과 정확히 같은 값으로 직접 설정한 스위치는 Home의 기록과 구별할 수 없어 복원됩니다. 로컬 제외(`--local`)는 해당 Child 사용자의 선택이므로 disconnect 후에도 유지됩니다.
+
 disconnect는 소유한 키만 복구하므로 이후 편집한 모델·훅·신뢰 프로젝트·Computer Use 설정이 남습니다. 중단된 작업은 `ocx disconnect`로 재개하며 최초 사용한 `--keep-catalog`를 유지하세요. 소유 키 충돌이나 소유권 근거가 남은 이전 저널은 `ocx disconnect --recover-config --yes`로 현재 상태를 비공개 백업한 뒤 키 단위로 복구합니다. 소유권을 확인할 수 없거나 프로필이 편집되어 검증할 수 없으면 계속 거부합니다. 백업 경로를 보존하고, disconnect 후 `ocx service restart`로 독립형 런타임을 시작한 다음 다시 연결하세요.
 
 ## 보안
