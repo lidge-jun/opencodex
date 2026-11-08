@@ -130,9 +130,9 @@ The scoped docs job builds the site. CI does not run coverage or perform remote 
 Those stay outside the default gate until a concrete regression justifies the extra runtime.
 
 The manual Release workflow selects a source with qualifying full `dev` dispatch evidence and
-uses a separately identified trusted workflow revision. Publication remains held, and its current
-history reconciliation fails closed for existing npm publications. Resume is refused pending a
-verified durable receipt. History reconciliation, security review, actual dry-run evidence and
-cutover settings remain open; a CI run alone does not authorize publication.
+uses a separately identified trusted workflow revision. Publication remains held. History
+reconciliation and the attested resume follow the [release workflow](docs-and-release.md#release-workflow).
+Review of the legacy history mapping, security review, actual dry-run evidence and cutover settings
+remain open; a CI run alone does not authorize publication.
 
 The shared Responses path follows the [bounded multipart recovery contract](../subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
