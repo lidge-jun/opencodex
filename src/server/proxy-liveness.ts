@@ -589,7 +589,7 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
     // Missing/blank means an actual loopback bind, not a later config's bind scope.
     const bindHostname = opts.hostname?.trim() || "127.0.0.1";
     const hostname = normalizeBindHostname(opts.hostname);
-    if (!observer || (!isLoopbackHostname(hostname) && !isWildcardHostname(hostname))) {
+    if (!observer || (!recoveryLoopbackFamily(hostname) && !isWildcardHostname(hostname))) {
       // Recovery only (an observer is present): a transport miss on a specific non-loopback bind
       // address is "unknown", and a bind proof is the one thing that turns it into "dead".
       let verdict: EndpointLiveness | undefined;
@@ -702,6 +702,19 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
   return null;
 }
 
+// Recovery classification is intentionally local: it must not broaden admission or bind policy.
+function recoveryLoopbackFamily(hostname: string): 4 | 6 | null {
+  if (isLoopbackHostname(hostname)) return hostname.includes(":") ? 6 : 4;
+  const address = hostname.replace(/^\[(.*)\]$/, "$1");
+  const family = isIP(address);
+  if (family === 4) return address.startsWith("127.") ? 4 : null;
+  if (family !== 6) return null;
+  // URL serializes validated IPv6 literals canonically, including dotted IPv4-mapped forms.
+  const canonical = new URL(`http://[${address.split("%")[0]}]/`).hostname.slice(1, -1);
+  if (canonical === "::1") return 6;
+  return /^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(canonical) ? 4 : null;
+}
+
 /**
  * Loopback addresses to ask about a port whose holder must be identified before a
  * decision that is destructive when it answers "nobody".
@@ -722,9 +735,9 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
 export function loopbackProbeHosts(hostname: string | undefined): string[] {
   const normalized = normalizeBindHostname(hostname);
   const primary = probeHostname(normalized);
-  if (isLoopbackHostname(normalized) || isWildcardHostname(normalized)) {
-    return primary === "[::1]" ? ["[::1]", "127.0.0.1"] : ["127.0.0.1", "[::1]"];
-  }
+  if (isWildcardHostname(normalized)) return ["127.0.0.1", "[::1]"];
+  const family = recoveryLoopbackFamily(normalized);
+  if (family) return [primary, family === 6 ? "127.0.0.1" : "[::1]"];
   return [primary];
 }
 

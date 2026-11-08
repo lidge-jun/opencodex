@@ -20,6 +20,79 @@ function ioFor(bindProofFn: LivenessIo["bindProofFn"], hostname = "100.88.46.13"
   };
 }
 
+for (const [hostname, primary, other] of [
+  ["127.0.0.2", "127.0.0.2", "[::1]"],
+  ["127.255.255.254", "127.255.255.254", "[::1]"],
+  ["::0:1", "[::1]", "127.0.0.1"],
+  ["[0:0:0:0:0:0:0:1]", "[::1]", "127.0.0.1"],
+  ["::ffff:127.0.0.1", "[::ffff:7f00:1]", "[::1]"],
+  ["[0:0:0:0:0:ffff:7fff:fffe]", "[::ffff:7fff:fffe]", "[::1]"],
+] as const) {
+  for (const source of ["config", "runtime"] as const) {
+    test(`loopback ${hostname} ${source} probes both families without bind proof`, async () => {
+      const calls: string[] = [];
+      let proofs = 0;
+      const extra: Partial<LivenessIo> = source === "runtime"
+        ? { readRuntimeFn: () => ({ port: 10100, hostname }) } : {};
+      const io = ioFor(async () => { proofs++; return true; }, hostname, {
+        ...extra, fetchFn: (async (url: string) => {
+          calls.push(new URL(url).hostname);
+          throw Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
+        }) as typeof fetch,
+      });
+      expect(await observeProxyLiveness(io)).toEqual({ kind: "unknown", live: null });
+      expect(calls).toEqual(source === "runtime" ? [primary, other, primary, other] : [primary, other]);
+      expect(proofs).toBe(0);
+      for (const uncertain of [primary, other]) {
+        const result = await observeProxyLiveness({ ...io, fetchFn: (async (url: string) => {
+          throw Object.assign(new Error("probe failed"), {
+            code: new URL(url).hostname === uncertain ? "ETIMEDOUT" : "ECONNREFUSED",
+          });
+        }) as typeof fetch });
+        expect(result).toEqual({ kind: "unknown", live: null });
+      }
+      expect(proofs).toBe(0);
+    });
+  }
+  test(`loopback ${hostname} retains runtime owner evidence on its concrete address`, async () => {
+    const observation = await observeProxyLiveness(ioFor(async () => true, hostname, {
+      readRuntimeFn: () => ({ pid: process.pid, port: 10100, hostname }),
+      fetchFn: (async (url: string) => new URL(url).hostname === primary
+        ? Response.json({ service: "opencodex", pid: process.pid })
+        : Promise.reject(Object.assign(new Error("refused"), { code: "ECONNREFUSED" }))) as typeof fetch,
+    }));
+    expect(observation.kind).toBe("live");
+    expect(observation.live).toMatchObject({ pid: process.pid, port: 10100, hostname, source: "runtime" });
+    expect(new URL(`http://${observation.live?.probeHostname}:10100`).hostname).toBe(primary);
+  });
+  test(`loopback ${hostname} finds an owner on the other family`, async () => {
+    const observation = await observeProxyLiveness(ioFor(async () => true, hostname, {
+      fetchFn: (async (url: string) => new URL(url).hostname === other
+        ? Response.json({ service: "opencodex", pid: process.pid })
+        : Promise.reject(Object.assign(new Error("refused"), { code: "ECONNREFUSED" }))) as typeof fetch,
+    }));
+    expect(observation.kind).toBe("live");
+    expect(observation.live).toMatchObject({ pid: process.pid, hostname, probeHostname: other, source: "config" });
+  });
+  test(`loopback ${hostname} requires both negative probes and checks the runtime PID`, async () => {
+    const io = ioFor(async () => { throw new Error("loopback bind proof called"); }, hostname, {
+      fetchFn: (async () => { throw Object.assign(new Error("refused"), { code: "ECONNREFUSED" }); }) as typeof fetch,
+    });
+    expect(await observeProxyLiveness(io)).toEqual({ kind: "absent", live: null });
+    expect(await observeProxyLiveness({ ...io,
+      readRuntimeFn: () => ({ pid: process.pid, port: 10100, hostname }),
+      readCommandLineFn: () => "ocx start",
+    })).toEqual({ kind: "unknown", live: null });
+  });
+}
+
+test("mapped non-loopback IPv4 remains eligible for the bind proof", async () => {
+  let socketHost = "";
+  const observation = await observeProxyLiveness(ioFor(async host => { socketHost = host; return true; }, "[::ffff:192.0.2.1]"));
+  expect(observation.kind).toBe("absent");
+  expect(socketHost).toBe("::ffff:192.0.2.1");
+});
+
 test("a timed-out probe of a non-loopback bind is absent when the address can be bound", async () => {
   let asked: [string, number] | undefined;
   const observation = await observeProxyLiveness(ioFor(async (host, port) => { asked = [host, port]; return true; }));
