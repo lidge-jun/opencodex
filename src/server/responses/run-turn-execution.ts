@@ -1055,9 +1055,6 @@ export async function executeResponsesRunTurn(
         // fail-closed refusal instead of becoming a hop that sends the turn to another target.
         // Fail closed: any replay-unsafe heartbeat anywhere in the buffered turn disables replaying
         // undeclared tools or zero-output token-limit terminals.
-        const firstContentIndex = events.findIndex(isContentEvent);
-        const preOutputEvents = events.slice(0, firstContentIndex !== -1 ? firstContentIndex : events.length);
-        const firstTool = preOutputEvents.find(event => event.type === "tool_call_start");
         const replayUnsafe = events.some(event => event.type === "heartbeat" && event.replayUnsafe === true);
         const sawContent = events.some(isContentEvent);
         const terminalEvent = [...events].reverse().find(event => event.type === "done" || event.type === "incomplete");
@@ -1065,7 +1062,7 @@ export async function executeResponsesRunTurn(
           ? classifyZeroOutputTokenLimit(terminalEvent, { allowCompactionWithContent: routedCompaction })
           : undefined;
         const classifiedError = !replayUnsafe
-          ? (zeroOutputLimit ?? (firstTool ? classifyUndeclaredFirstTool(firstTool) : undefined) ?? (firstMeaningful ? classifyUndeclaredFirstTool(firstMeaningful) : undefined))
+          ? (zeroOutputLimit ?? (firstMeaningful ? classifyUndeclaredFirstTool(firstMeaningful) : undefined))
           : undefined;
         if (!firstMeaningful || firstMeaningful.type === "error" || classifiedError) {
           if (classifiedError?.usage) transportState.bindKeyUsageFromBridge(classifiedError.usage);

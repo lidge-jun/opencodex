@@ -309,7 +309,6 @@ export async function preflightAdapterEvents(
       const shouldBuffer = classifyFirstEvent !== undefined || options?.bufferCompaction === true;
       const emptyDelta = next.value.type === "text_delta" && next.value.text.length === 0;
       const isBufferingEvent = isReasoningEvent(next.value)
-        || next.value.type === "assistant_boundary"
         || emptyDelta
         || (options?.bufferCompaction === true && next.value.type === "text_delta");
 
@@ -330,7 +329,12 @@ export async function preflightAdapterEvents(
         }
         continue;
       }
-      const classifiedError = replayUnsafe ? undefined : classifyFirstEvent?.(next.value);
+      const hasPriorMeaningful = buffered.some(e => e.type !== "heartbeat");
+      const classifiedError = replayUnsafe
+        ? undefined
+        : hasPriorMeaningful
+          ? (next.value.type === "done" || next.value.type === "incomplete" ? classifyFirstEvent?.(next.value) : undefined)
+          : classifyFirstEvent?.(next.value);
       if (classifiedError) {
         buffered.push(classifiedError);
         await iterator.return?.();
