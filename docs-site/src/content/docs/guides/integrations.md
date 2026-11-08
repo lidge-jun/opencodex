@@ -29,7 +29,7 @@ file, and removes it again. Each client below has its own switch:
 | WorkBuddy AI | `~/.workbuddy-ai/models.json` | JSON | auto reload / new sessions | loopback placeholder |
 | Cline CLI | `~/.cline/data/settings/providers.json` and sibling `models.json` | JSON pair | after stopping and restarting Cline | loopback placeholder |
 | Kilo | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` | JSONC | new sessions | `OPENCODEX_KILO_API_KEY` |
-| Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`) |
+| Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`), plus a seeded `auth.json` credential the desktop app gates on |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | JSON | immediately via file watching | none — keyless loopback |
 | T3 Code | `$T3CODE_HOME/userdata/settings.json` (default `~/.t3/userdata/settings.json`) | JSON | immediately — T3 Code watches the file | non-secret loopback marker |
 
@@ -1101,6 +1101,15 @@ whichever one it was written into.
 **The credential form.** The provider is written with `apiKey: false`, the documented
 form for an endpoint that needs no key. A raw string is refused by Command Code, and
 no service-token file is read, referenced, or exported by this integration.
+
+**The desktop app.** Command Code Desktop never reads that keyless form: before it
+shows a workspace it checks `~/.commandcode/auth.json` (or `COMMAND_CODE_API_KEY`)
+and, finding neither, stops on a sign-in screen that then asks for a subscription.
+Enabling therefore also seeds a placeholder `apiKey` into `auth.json` when the store
+has none — the file is shared with real Command Code logins, so an existing
+`apiKey` is never overwritten, other entries are kept, and Disable leaves the file
+in place. A sign-out inside the app is not undone by a later catalog sync; only a
+fresh enable seeds again.
 
 **Home resolution.** There is no `COMMANDCODE_HOME` override here. The published
 client resolves `HOME ?? USERPROFILE` and then appends `/.commandcode/providers.json`;

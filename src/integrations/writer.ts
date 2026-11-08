@@ -14,6 +14,8 @@ import { createClineIO, ClineTransactionError } from "./cline-io";
 import { serializeClineDocument, preserveClineSelection } from "./cline-document";
 import { dirname } from "node:path";
 import type { ExportModel, ManagedContribution } from "../clients/config-export";
+import { commandCodeAuthPath } from "../clients/config-export";
+import { LOOPBACK_API_KEY_PLACEHOLDER } from "../clients/config-export/constants";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { detachedConfigSnapshot } from "../config/admitted-identity";
 import { copyPlainData } from "../lib/plain-data";
@@ -523,8 +525,65 @@ function applyOrRefreshIntegration(
   });
 }
 
+/**
+ * Give the Command Code DESKTOP app the credential it insists on.
+ *
+ * `providers.json` alone is enough for the published CLI, which accepts
+ * `apiKey: false` for a loopback endpoint. The desktop shell never gets that far:
+ * before any workspace exists it calls `checkCommandAuthStatus()` from its bundled
+ * harness, which answers `authenticated: true` only when `COMMAND_CODE_API_KEY` is
+ * in the environment or `~/.commandcode/auth.json` carries an `apiKey`. A keyless
+ * provider block is invisible to that gate, so a fresh machine sits on a sign-in
+ * screen that then demands a subscription the BYOK user does not have — the models
+ * opencodex just wrote are never reachable.
+ *
+ * Seeded, not owned: the file belongs to Command Code and is where a real login
+ * (and every other provider's token) is stored, so
+ *   - a store that already has an `apiKey` is left byte-for-byte alone, and one
+ *     that does not parse is skipped rather than rewritten;
+ *   - the seed only ADDS `apiKey` to an existing object, keeping its other keys;
+ *   - nothing is removed on disable. After a real `cmd login` the file holds a
+ *     real credential, and deleting it on toggle-off would sign the user out.
+ *
+ * Apply/overwrite only, never refresh: a deliberate sign-out empties `apiKey`
+ * while the block stays owned, and the next catalog sync must not silently undo it.
+ * Best effort by design — the provider block is already committed, so a seed that
+ * cannot be written is not worth turning a successful enable into a failure.
+ */
+function seedCommandCodeAuth(input: IntegrationWriteInput, outcome: WriteOutcome): WriteOutcome {
+  if (!outcome.ok || !outcome.changed) return outcome;
+  const io = input.io ?? defaultIntegrationIO(input.store ?? createIntegrationStateStore());
+  const authPath = commandCodeAuthPath(input.env, input.home);
+  const current = io.readText(authPath);
+  let document: Record<string, unknown> = {};
+  if (current.kind === "text") {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(current.text);
+    } catch {
+      return outcome;
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return outcome;
+    const existing = (parsed as { apiKey?: unknown }).apiKey;
+    if (typeof existing === "string" && existing.trim() !== "") return outcome;
+    document = { ...(parsed as Record<string, unknown>) };
+  } else if (current.kind !== "missing") {
+    return outcome;
+  }
+  // The placeholder the other loopback integrations use: never a real secret, and
+  // the proxy admits it on the loopback listener.
+  document.apiKey = LOOPBACK_API_KEY_PLACEHOLDER;
+  try {
+    io.mkdirp(dirname(authPath));
+    io.writeText(authPath, `${JSON.stringify(document, null, 2)}\n`);
+  } catch {
+    return outcome;
+  }
+  return outcome;
+}
+
 export function applyIntegration(input: IntegrationWriteInput): WriteOutcome {
-  return applyOrRefreshIntegration(input, true);
+  return seedCommandCodeAuth(input, applyOrRefreshIntegration(input, true));
 }
 
 /**
@@ -541,7 +600,7 @@ export function applyIntegration(input: IntegrationWriteInput): WriteOutcome {
  * this on a clean file is not a way to skip any other check.
  */
 export function overwriteIntegration(input: IntegrationWriteInput): WriteOutcome {
-  return applyOrRefreshIntegration(input, true, "overwrite");
+  return seedCommandCodeAuth(input, applyOrRefreshIntegration(input, true, "overwrite"));
 }
 
 /** Refresh an owned stale block, but never create or reconnect an absent one. */
