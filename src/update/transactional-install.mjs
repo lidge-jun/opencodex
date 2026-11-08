@@ -370,8 +370,8 @@ function inspectGlobalPnpmGraph(packageDir, store, escaped) {
         if (nested) pending.push(nested);
       }
       if (!dependency) {
-        const required = (Object.hasOwn(manifest.dependencies ?? {}, name) && !Object.hasOwn(manifest.optionalDependencies ?? {}, name))
-          || (Object.hasOwn(manifest.peerDependencies ?? {}, name) && manifest.peerDependenciesMeta?.[name]?.optional !== true);
+        // pnpm can leave even non-optional peers absent when peer auto-install and strict checking are disabled.
+        const required = Object.hasOwn(manifest.dependencies ?? {}, name) && !Object.hasOwn(manifest.optionalDependencies ?? {}, name);
         if (required) {
           escaped.add("pnpm required dependency is missing from the selected store: " + name);
         }

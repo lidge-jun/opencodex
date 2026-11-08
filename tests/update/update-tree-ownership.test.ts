@@ -732,13 +732,32 @@ describe("#4202 install-tree dependency ownership", () => {
     expect(result.failures).toContain("pnpm dependency can resolve outside the selected store: foreign");
   });
 
-  test("requires non-optional peers while allowing absent optional peers", () => {
+  test("accepts absent peers, including non-optional peers pnpm may leave uninstalled", () => {
     const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
     const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    // Models auto-install-peers=false and strict-peer-dependencies=false; no pnpm runs.
     writeFileSync(join(zod, "package.json"), JSON.stringify({ name: "zod", peerDependencies: { required: "1", optional: "1" }, peerDependenciesMeta: { optional: { optional: true } } }));
+    expect(verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"))).toEqual({ ok: true, failures: [] });
+  });
+
+  test("refuses an existing peer link that escapes the selected store", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    writeFileSync(join(zod, "package.json"), JSON.stringify({ name: "zod", peerDependencies: { peer: "1" } }));
+    const outside = join(root, "outside", "peer"); writeDependency(outside, "peer");
+    mkdirSync(join(zod, "node_modules")); symlinkSync(outside, join(zod, "node_modules", "peer"), "dir");
     const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
-    expect(result.failures).toContain("pnpm required dependency is missing from the selected store: required");
-    expect(result.failures).not.toContain("pnpm required dependency is missing from the selected store: optional");
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm dependency link escapes the selected store: peer");
+  });
+
+  test("still requires a direct dependency also declared as a peer", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    writeFileSync(join(zod, "package.json"), JSON.stringify({ name: "zod", dependencies: { missing: "1" }, peerDependencies: { missing: "1" } }));
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm required dependency is missing from the selected store: missing");
   });
 
   test("global-store dependency links cannot escape the canonical configured store", () => {
