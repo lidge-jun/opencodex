@@ -1421,12 +1421,12 @@ describe("Issue #6469 — offline fixtures", () => {
     const schemaRequest = parsed({ options: { textFormat: { type: "json_schema", name: "probe", schema: uncertifiable, strict: true } } });
     const stdout = [
       systemInit,
-      enc.encode(textDelta('{"answer":"42"}')),
+      enc.encode(textDelta('{"answer":42}')),
       enc.encode('{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":4,"output_tokens":2}}\n'),
     ];
     const events = await run(adapterWith(stdout), schemaRequest);
     const text = events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("");
-    expect(text).toBe('{"answer":"42"}');
+    expect(text).toBe('{"answer":42}');
     expect(events.some(e => e.type === "error")).toBe(false);
   });
 
@@ -1511,6 +1511,11 @@ describe("Issue #6469 — offline fixtures", () => {
     expect(events.filter(e => e.type === "tool_call_delta").map(e => (e as { arguments: string }).arguments))
       .toEqual(['{"path":"a"}', '{"path":"b"}']);
     expect(events.filter(e => e.type === "tool_call_end")).toHaveLength(2);
+    expect(events.filter(e => e.type === "tool_call_start" || e.type === "tool_call_delta"
+      || e.type === "tool_call_end" || e.type === "error").map(e => e.type)).toEqual([
+      "tool_call_start", "tool_call_delta", "tool_call_end",
+      "tool_call_start", "tool_call_delta", "tool_call_end", "error",
+    ]);
     const err = events.find(e => e.type === "error");
     expect(err).toBeDefined();
     expect(err).toMatchObject({ code: "protocol_error" });
