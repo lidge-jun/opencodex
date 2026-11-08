@@ -387,6 +387,14 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
+function withoutTurnToken(userId: string): string {
+  try {
+    const parsed: unknown = JSON.parse(userId);
+    if (isRec(parsed) && "tk" in parsed) { const { tk: _tk, ...rest } = parsed; return JSON.stringify(rest); }
+  } catch { /* not JSON */ }
+  return userId;
+}
+
 /** Provenance of the generated prompt_cache_key (never serialized into the wire body). */
 export type ClaudeCacheKeySource = "metadata" | "system" | null;
 
@@ -598,8 +606,10 @@ function applyAnthropicSettings(
     // their session id; without it consecutive /v1/messages turns reported
     // cached_tokens: 0 on the ChatGPT backend — devlog 090). Claude Code's
     // metadata.user_id embeds the session uuid, so hashing it yields a stable
-    // per-session key with a bounded length/charset.
-    body.prompt_cache_key = userIdHash.slice(0, 32);
+    // per-session key with a bounded length/charset. Remote Claude Code adds a per-turn
+    // attribution token (`tk`) to that blob; it is dropped, as Claude Code itself drops it,
+    // so every turn of one session keeps one key.
+    body.prompt_cache_key = createHash("sha256").update(withoutTurnToken(raw.metadata.user_id)).digest("hex").slice(0, 32);
     cacheKeySource = "metadata";
   } else if (typeof cacheSystem === "string" || cacheSystem.length > 0) {
     // Claude Desktop sends no metadata.user_id (H1, devlog 130): without any key the
