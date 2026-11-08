@@ -483,6 +483,11 @@ main:has(.lp) .sl-container { max-width: none; }
 .lp-btn-primary,
 .lp-btn-ghost,
 .lp-github-cta { translate: var(--mgx, 0) var(--mgy, 0); }
+@media (prefers-reduced-motion: reduce) {
+  .lp-btn-primary, .lp-btn-ghost, .lp-github-cta { translate: none; }
+  .lp-field-photo { transform: scale(1.04); }
+  .lp-field-clouds { transform: none; }
+}
 
 /* provider chips: glass tags on the sky */
 .lp-chips { gap: 0.375rem; margin-top: 2rem; }

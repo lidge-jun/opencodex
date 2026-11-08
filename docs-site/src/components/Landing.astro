@@ -559,21 +559,36 @@ const docsMap = [
 	type Tick = () => boolean;
 	const ticks = new Set<Tick>();
 	let loopId = 0;
+	const resetMotion: (() => void)[] = [];
 	const frame = () => {
 		loopId = 0;
 		for (const tick of ticks) if (!tick()) ticks.delete(tick);
 		if (ticks.size) loopId = requestAnimationFrame(frame);
 	};
 	const wake = (tick: Tick) => {
+		if (motionPreference.matches) return;
 		ticks.add(tick);
 		loopId ||= requestAnimationFrame(frame);
 	};
+	motionPreference.addEventListener('change', () => {
+		if (!motionPreference.matches) return;
+		cancelAnimationFrame(loopId);
+		loopId = 0;
+		ticks.clear();
+		root.classList.remove('cl-motion');
+		resetMotion.forEach((reset) => reset());
+	});
 
 	// Hero depth: pointer parallax (fine pointers) + scroll drift.
 	const hero = document.querySelector<HTMLElement>('.lp-hero-field');
-	if (hero && !reduceMotion) {
+	if (hero) {
 		const target = { x: 0, y: 0, s: 0 };
 		const cur = { x: 0, y: 0, s: 0 };
+		resetMotion.push(() => {
+			Object.assign(target, { x: 0, y: 0, s: 0 });
+			Object.assign(cur, { x: 0, y: 0, s: 0 });
+			['--px', '--py', '--sy'].forEach((name) => hero.style.removeProperty(name));
+		});
 		const tick: Tick = () => {
 			cur.x = lerp(cur.x, target.x, 0.06);
 			cur.y = lerp(cur.y, target.y, 0.06);
@@ -585,6 +600,7 @@ const docsMap = [
 		};
 		if (finePointer) {
 			hero.addEventListener('pointermove', (e) => {
+				if (motionPreference.matches) return;
 				const r = hero.getBoundingClientRect();
 				target.x = ((e.clientX - r.left) / r.width) * 2 - 1;
 				target.y = ((e.clientY - r.top) / r.height) * 2 - 1;
@@ -597,6 +613,7 @@ const docsMap = [
 			});
 		}
 		const onScroll = () => {
+			if (motionPreference.matches) return;
 			const r = hero.getBoundingClientRect();
 			target.s = Math.min(1, Math.max(0, -r.top / Math.max(1, r.height)));
 			wake(tick);
@@ -607,9 +624,11 @@ const docsMap = [
 
 	// Cards: the hover glow drifts along the bottom edge under the cursor
 	// (CSS eases `left`, so raw pointer positions are enough).
-	if (finePointer && !reduceMotion) {
+	if (finePointer) {
 		document.querySelectorAll<HTMLElement>('.lp-cell').forEach((card) => {
+			resetMotion.push(() => card.style.removeProperty('--mx'));
 			card.addEventListener('pointermove', (e) => {
+				if (motionPreference.matches) return;
 				const r = card.getBoundingClientRect();
 				card.style.setProperty('--mx', `${(((e.clientX - r.left) / r.width) * 100).toFixed(1)}%`);
 			});
@@ -620,6 +639,12 @@ const docsMap = [
 		document.querySelectorAll<HTMLElement>('.lp-btn-primary, .lp-btn-ghost, .lp-github-cta').forEach((btn) => {
 			const target = { x: 0, y: 0 };
 			const cur = { x: 0, y: 0 };
+			resetMotion.push(() => {
+				Object.assign(target, { x: 0, y: 0 });
+				Object.assign(cur, { x: 0, y: 0 });
+				btn.style.removeProperty('--mgx');
+				btn.style.removeProperty('--mgy');
+			});
 			const tick: Tick = () => {
 				cur.x = lerp(cur.x, target.x, 0.18);
 				cur.y = lerp(cur.y, target.y, 0.18);
@@ -628,6 +653,7 @@ const docsMap = [
 				return Math.abs(cur.x - target.x) + Math.abs(cur.y - target.y) > 0.05;
 			};
 			btn.addEventListener('pointermove', (e) => {
+				if (motionPreference.matches) return;
 				const r = btn.getBoundingClientRect();
 				target.x = (e.clientX - (r.left + r.width / 2)) * 0.18;
 				target.y = (e.clientY - (r.top + r.height / 2)) * 0.3;
@@ -711,19 +737,27 @@ const docsMap = [
 			: n < 1_000_000 ? `${Math.floor(n / 1000)}k`
 			: `${trim(Math.floor(n / 100_000) / 10)}m`;
 		const final = stars.textContent;
-		new IntersectionObserver((entries, obs) => {
+		let starFrame = 0;
+		const starObserver = new IntersectionObserver((entries, obs) => {
 			if (!entries.some((e) => e.isIntersecting)) return;
 			obs.disconnect();
+			if (motionPreference.matches) return;
 			const start = performance.now();
 			const DURATION = 1600;
 			const step = (now: number) => {
 				const t = Math.min(1, (now - start) / DURATION);
 				const eased = t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
 				stars.textContent = t === 1 ? final : format(Math.round(total * eased));
-				if (t < 1) requestAnimationFrame(step);
+				if (t < 1) starFrame = requestAnimationFrame(step);
 			};
-			requestAnimationFrame(step);
-		}, { threshold: 0.6 }).observe(stars);
+			starFrame = requestAnimationFrame(step);
+		}, { threshold: 0.6 });
+		starObserver.observe(stars);
+		resetMotion.push(() => {
+			starObserver.disconnect();
+			cancelAnimationFrame(starFrame);
+			stars.textContent = final;
+		});
 	}
 </script>
 
@@ -734,9 +768,9 @@ const docsMap = [
 	const canvas = document.querySelector<HTMLCanvasElement>('.lp-scrub-canvas');
 	const section = document.querySelector<HTMLElement>('.lp-scene-scrub');
 	const poster = document.querySelector<HTMLImageElement>('.lp-scrub-poster');
-	const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+	const preference = matchMedia('(prefers-reduced-motion: reduce)');
 	const wide = matchMedia('(min-width: 48rem)').matches;
-	if (canvas && section && poster && !reduce && wide) {
+	if (canvas && section && poster && !preference.matches && wide) {
 		const ctx = canvas.getContext('2d');
 		const count = Number(canvas.dataset.count || '0');
 		const base = canvas.dataset.base || '/';
@@ -745,6 +779,14 @@ const docsMap = [
 		let started = false;
 		let current = -1;
 		let raf = 0;
+		let stopped = false;
+		preference.addEventListener('change', () => {
+			if (!preference.matches) return;
+			stopped = true;
+			cancelAnimationFrame(raf);
+			canvas.style.display = 'none';
+			poster.style.display = '';
+		});
 		const load = (i: number) =>
 			new Promise<void>((resolve) => {
 				if (frames[i]) return resolve();
@@ -761,6 +803,7 @@ const docsMap = [
 			return -1;
 		};
 		const draw = (i: number) => {
+			if (stopped) return;
 			const j = nearestLoaded(Math.max(0, Math.min(count - 1, i)));
 			if (j < 0 || j === current || !ctx) return;
 			current = j;
@@ -776,6 +819,7 @@ const docsMap = [
 		};
 		const update = () => {
 			raf = 0;
+			if (stopped) return;
 			const rect = section.getBoundingClientRect();
 			const travel = section.offsetHeight - innerHeight;
 			if (travel <= 0) return;
@@ -783,24 +827,26 @@ const docsMap = [
 			draw(Math.round(progress * (count - 1)));
 		};
 		const start = async () => {
-			if (started) return;
+			if (started || stopped) return;
 			started = true;
 			await load(0);
+			if (stopped) return;
 			draw(0);
 			// checkpoints first, then fill in idle time
 			const checkpoints = [count - 1, Math.floor(count / 2), Math.floor(count / 4), Math.floor((3 * count) / 4)];
 			await Promise.all(checkpoints.map(load));
+			if (stopped) return;
 			update();
 			const fill = (i: number) => {
-				if (i >= count) return;
+				if (stopped || i >= count) return;
 				load(i).then(() => {
 					const next = () => fill(i + 1);
 					'requestIdleCallback' in window ? requestIdleCallback(next) : setTimeout(next, 16);
 				});
 			};
 			fill(0);
-			addEventListener('scroll', () => { raf ||= requestAnimationFrame(update); }, { passive: true });
-			addEventListener('resize', () => { raf ||= requestAnimationFrame(update); }, { passive: true });
+			addEventListener('scroll', () => { if (!stopped) raf ||= requestAnimationFrame(update); }, { passive: true });
+			addEventListener('resize', () => { if (!stopped) raf ||= requestAnimationFrame(update); }, { passive: true });
 		};
 		new IntersectionObserver((entries, obs) => {
 			if (entries.some((e) => e.isIntersecting)) { obs.disconnect(); start(); }

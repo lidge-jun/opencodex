@@ -1239,7 +1239,8 @@ const contributing: NavLink = {
 	const remember = () => {
 		try { sessionStorage.setItem('ocx-gh-count', '1'); return true; } catch { return false; }
 	};
-	if (ghCount && ghTotal > 0 && !seen && !matchMedia('(prefers-reduced-motion: reduce)').matches && remember()) {
+	const starMotionPreference = matchMedia('(prefers-reduced-motion: reduce)');
+	if (ghCount && ghTotal > 0 && !seen && !starMotionPreference.matches && remember()) {
 		const final = ghCount.textContent ?? '';
 		const trim = (n: number) => String(n).replace(/\.0$/, '');
 		const format = (n: number) =>
@@ -1249,6 +1250,14 @@ const contributing: NavLink = {
 			: `${trim(Math.floor(n / 100_000) / 10)}m`;
 		const DURATION = 1400;
 		const start = performance.now();
+		let frame = 0;
+		starMotionPreference.addEventListener('change', () => {
+			if (!starMotionPreference.matches) return;
+			cancelAnimationFrame(frame);
+			ghCount.textContent = final;
+			ghCount.style.filter = '';
+			ghCount.style.transform = '';
+		}, { once: true });
 		const step = (now: number) => {
 			const t = Math.min(1, (now - start) / DURATION);
 			const eased = 1 - Math.pow(1 - t, 4);
@@ -1256,8 +1265,8 @@ const contributing: NavLink = {
 			ghCount.textContent = t === 1 ? final : format(Math.round(ghTotal * eased));
 			ghCount.style.filter = t === 1 ? '' : `blur(${Math.min(2.5, speed * 2.5).toFixed(2)}px)`;
 			ghCount.style.transform = t === 1 ? '' : `scaleX(${(1 + speed * 0.06).toFixed(3)})`;
-			if (t < 1) requestAnimationFrame(step);
+			if (t < 1) frame = requestAnimationFrame(step);
 		};
-		requestAnimationFrame(step);
+		frame = requestAnimationFrame(step);
 	}
 </script>
