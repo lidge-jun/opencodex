@@ -512,12 +512,15 @@ export default function IntegrationsOverview({
   };
 
   const recoverBulkPlans = async () => {
+    // Close and any newer bulk preview move the generation; a stale recovery must not revive it.
+    const generation = bulkPreviewGenerationRef.current;
     try {
       await loadIntegrationStates(apiBase);
     } catch {
       // Fall through: the next preview answers again, and its refusal is the
       // message the user can act on.
     }
+    if (generation !== bulkPreviewGenerationRef.current) return;
     refresh();
     await requestDisableAll(true);
   };
@@ -722,12 +725,15 @@ export default function IntegrationsOverview({
   const recoverPlannedCard = async () => {
     const planned = plannedCard;
     if (!planned) return;
+    // Close and any newer preview move the generation; a stale recovery must not revive it.
+    const generation = cardPreviewGenerationRef.current;
     try {
       await loadIntegrationStates(apiBase);
     } catch {
       // The preview will answer (or refuse) again; a second error banner here
       // would only obscure the one the user can act on.
     }
+    if (generation !== cardPreviewGenerationRef.current) return;
     refresh();
     await requestFilePlan(planned.row, planned.operation, true);
   };

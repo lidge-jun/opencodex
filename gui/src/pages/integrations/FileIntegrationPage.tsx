@@ -271,6 +271,8 @@ function FileIntegrationControls({
   const recoverPlannedMutation = async () => {
     const pendingOperation = plannedMutation;
     if (!pendingOperation) return;
+    // Close and any newer preview move the generation; a stale recovery must not revive it.
+    const generation = previewGenerationRef.current;
     const defaults = pendingOperation.droidReasoningDefaults;
     /*
      * This read IS the recovery: the server retains its export roster from an
@@ -284,6 +286,7 @@ function FileIntegrationControls({
       // A failed read is not a plan; fall through and let the preview say so
       // again rather than reporting a second, unrelated error.
     }
+    if (generation !== previewGenerationRef.current) return;
     refresh();
     await requestMutation(pendingOperation.operation, defaults, true);
   };

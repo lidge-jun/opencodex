@@ -269,3 +269,47 @@ test("a per-profile Aside overwrite offers the same catalog retry and keeps its 
     enabled: true, overwriteConflict: true, operation: "overwrite", planFingerprint: plan("aside", "overwrite", { profileId: 4 }).fingerprint,
   });
 });
+
+test("a recovery read still pending when the dialog closes does not reopen it, and the retry waits for the read", async () => {
+  clients = [fileStatus({ state: "conflict", reason: "unowned-key" })];
+  let previews = 0;
+  preview = body => {
+    previews += 1;
+    return previews === 1
+      ? json({ error: "no model roster is cached yet", code: "integration_preview_unavailable" }, 409)
+      : json(plan(String(body.clientId), String(body.operation)));
+  };
+  let release: (() => void) | null = null;
+  let gate: Promise<void> | null = null;
+  const originalFetch = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (gate && (init?.method ?? "GET").toUpperCase() === "GET" && url.endsWith("/api/client-integrations")) await gate;
+      return originalFetch(input, init);
+    }) as typeof fetch,
+  });
+  Object.defineProperty(testWindow, "fetch", { configurable: true, value: globalThis.fetch });
+
+  const { default: IntegrationsOverview } = await import("../src/pages/integrations/IntegrationsOverview");
+  await mount(async () => ({ name: "overview", element: <IntegrationsOverview apiBase={apiBase} active /> }));
+  await act(async () => { buttonByText("Replace")!.click(); });
+  await settle();
+  expect(container.querySelector("dialog[open]")).not.toBeNull();
+
+  gate = new Promise<void>(resolve => { release = resolve; });
+  await act(async () => { buttonByText("Load catalog and retry")!.click(); });
+  await settle();
+  // The retry may not ask again before the roster-retaining read has answered.
+  expect(previews).toBe(1);
+  await act(async () => { buttonByText("Close")!.click(); });
+  await settle();
+  expect(container.querySelector("dialog[open]")).toBeNull();
+  await act(async () => { release!(); gate = null; });
+  await settle(80);
+  // A dismissed action stays dismissed: no second preview, no reopened dialog.
+  expect(previews).toBe(1);
+  expect(container.querySelector("dialog[open]")).toBeNull();
+});
+

@@ -139,12 +139,15 @@ export default function AsideProfilesPage({ apiBase, active = true }: { apiBase:
   const recoverPlanned = async () => {
     const pendingPlan = planned;
     if (!pendingPlan) return;
+    // Close and any newer preview move the generation; a stale recovery must not revive it.
+    const generation = previewGenerationRef.current;
     try {
       await loadIntegrationState(apiBase, "aside", undefined, pendingPlan.profile.profileId);
     } catch {
       // Fall through: the preview answers again, and a second banner here
       // would only hide the refusal the user can act on.
     }
+    if (generation !== previewGenerationRef.current) return;
     resource.refresh();
     await requestProfileMutation(pendingPlan.profile, pendingPlan.enabled, true);
   };
