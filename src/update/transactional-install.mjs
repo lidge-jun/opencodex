@@ -423,7 +423,11 @@ function nestedPnpmRoots(packageDir, store, escaped, budget, storeAlias = store)
     try {
       for (const entry of readdirSync(real, { withFileTypes: true })) {
         const child = join(current, entry.name);
-        if (entry.name === "node_modules") { roots.push(child); continue; }
+        if (entry.name === "node_modules") {
+          try { roots.push(resolveStoreLinkChain(child, store, storeAlias)); }
+          catch { escaped.add("pnpm dependency root could not be resolved"); }
+          continue;
+        }
         if (entry.isDirectory()) pending.push(child);
         else if (entry.isSymbolicLink()) {
           try {
@@ -474,11 +478,9 @@ function inspectGlobalPnpmGraph(packageDir, store, escaped, storeAlias = store) 
         const realRoot = realpathSync(root);
         if (!inside(realRoot, store)) { escaped.add("pnpm dependency root is outside the selected store"); continue; }
         if (inside(root, store) || (storeAlias && inside(root, storeAlias))) resolveStoreLinkChain(root, store, storeAlias);
-        // Different spellings of the same physical root can resolve package entry points
-        // differently under preserved symlinks, so cache only the spelling we inspected.
-        const rootSpelling = resolve(root);
-        if (enumeratedRoots.has(rootSpelling)) continue;
-        enumeratedRoots.add(rootSpelling);
+        // Link hops for each spelling were checked above; expand the physical group once.
+        if (enumeratedRoots.has(realRoot)) continue;
+        enumeratedRoots.add(realRoot);
         for (const name of readdirSync(root)) {
           if ([".bin", ".pnpm", ".modules.yaml"].includes(name)) {
             const kind = name === ".bin" ? "binary" : "metadata";

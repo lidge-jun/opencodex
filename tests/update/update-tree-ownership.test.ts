@@ -720,6 +720,19 @@ describe("#4202 install-tree dependency ownership", () => {
     expect(result.failures).toContain("pnpm package entry point is outside the selected store");
   });
 
+  test("accepts repeated in-store aliases of the same dependency group", () => {
+    const store = join(root, "pnpm", "store", "v11"), group = join(store, "links", "app", "node_modules");
+    const pkg = join(group, ...PKG.split("/")); writePackage(pkg, "2.0.0");
+    writeDependency(join(group, "bun"), "bun"); writeDependency(join(group, "zod"), "zod");
+    for (let index = 0; index < 30; index += 1) {
+      const dep = join(group, `dep${index}`); writeDependency(dep, `dep${index}`);
+      symlinkSync(group, join(dep, "node_modules"), "dir");
+    }
+    expect(realpathSync(createRequire(join(group, "dep0", "entry.js")).resolve("dep1/package.json")))
+      .toBe(realpathSync(join(group, "dep1", "package.json")));
+    expect(verifyPnpmInstallTree(pkg, "2.0.0", store)).toEqual({ ok: true, failures: [] });
+  });
+
   test("refuses a required transitive dependency resolved through an outside ancestor", () => {
     const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
     const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
