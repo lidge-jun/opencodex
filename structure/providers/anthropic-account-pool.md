@@ -328,7 +328,9 @@ metadata-only probes. Caller deadlines do not signal the child; timed-out flight
 output and occupy the slot until termination and captured output closure. Failures cool down for
 60 seconds; a timely item-not-found result is authoritative absence and has no cooldown. An
 unavailable initial credential observation refuses transiently before refresh dispatch, intent
-cleanup or account-health mutation. Adoption obtains a fresh matching source and generation
+cleanup or account-health mutation. The initial observation does not join an older Keychain
+flight; after a Keychain wait, a changed preferred-profile file invalidates the observation.
+Adoption obtains a fresh matching source and generation
 inside the serialized mutation after its pre-persist hook, then synchronously rechecks ownership.
 This snapshot does not exclude external Keychain changes after observation, and the process-local
 slot does not bound surviving children across parent restarts.

@@ -36,6 +36,27 @@ afterEach(() => {
 });
 
 describe("Claude Code credentials file fallback (Linux/Windows)", () => {
+  test.each(["missing", "invalid"])("a preferred file becoming valid during a Keychain read cannot be shadowed (%s)", async initial => {
+    const dir = join(tmp, `profile-changes-during-read-${initial}`);
+    mkdirSync(dir, { recursive: true });
+    if (initial === "invalid") writeFileSync(join(dir, ".credentials.json"), "{}");
+    process.env.CLAUDE_CONFIG_DIR = dir;
+    let release!: (value: { status: "present"; value: string }) => void;
+    const blocked = new Promise<{ status: "present"; value: string }>(resolve => { release = resolve; });
+    const read = spyOn(claudeKeychain, "read").mockReturnValue(blocked);
+    try {
+      const observation = observeClaudeCodeToken();
+      expect(read).toHaveBeenCalledTimes(1);
+      writeFileSync(join(dir, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+        accessToken: "synthetic-new", refreshToken: "synthetic-new-refresh", expiresAt: 1234,
+      } }));
+      release({ status: "present", value: JSON.stringify({ claudeAiOauth: {
+        accessToken: "synthetic-old", refreshToken: "synthetic-old-refresh", expiresAt: 1234,
+      } }) });
+      expect(await observation).toEqual({ kind: "unavailable" });
+    } finally { read.mockRestore(); }
+  });
+
   test("an explicit profile with a usable credential takes precedence over Keychain", async () => {
     const dir = join(tmp, "claude-priority");
     mkdirSync(dir, { recursive: true });

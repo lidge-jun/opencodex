@@ -84,6 +84,105 @@ function deferred() {
 }
 const noRefresh = { ...OAUTH_PROVIDERS.anthropic!, refresh: async () => { throw new Error("refresh must not run"); } };
 
+test("a preferred profile becoming valid during initial Keychain observation preserves the intent", async () => {
+  const { id, credential } = await seed();
+  const intent = writeOAuthRefreshIntent("anthropic", id, credentialGeneration(credential));
+  const dir = join(tmp, "profile-created-during-initial-read");
+  mkdirSync(dir);
+  process.env.CLAUDE_CONFIG_DIR = dir;
+  const started = deferred(), release = deferred();
+  const read = spyOn(claudeKeychain, "read").mockImplementation(async () => {
+    started.resolve(); await release.promise;
+    return { status: "present", value: JSON.stringify({ claudeAiOauth: {
+      accessToken: credential.access, refreshToken: credential.refresh, expiresAt: credential.expires,
+    } }) };
+  });
+  try {
+    const result = refreshAnthropicAccountWithLock("anthropic", id, noRefresh, credential).catch(error => error);
+    await started.promise;
+    writeFileSync(join(dir, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+      accessToken: "synthetic-newer", refreshToken: "synthetic-newer-refresh", expiresAt: Date.now() + 3_600_000,
+    } }));
+    release.resolve();
+    expect(await result).toBeInstanceOf(OAuthTokenRefreshStaleError);
+    expect(getAccountCredential("anthropic", id)).toEqual(credential);
+    expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+    expect(readOAuthRefreshIntent("anthropic", id)).toEqual(intent);
+  } finally { release.resolve(); read.mockRestore(); }
+});
+
+test.each(["missing", "invalid"])("a preferred profile becoming valid during final Keychain observation blocks adoption (%s)", async initial => {
+  const { id, credential } = await seed();
+  const intent = writeOAuthRefreshIntent("anthropic", id, credentialGeneration(credential));
+  const dir = join(tmp, "profile-created-before-adoption");
+  mkdirSync(dir);
+  process.env.CLAUDE_CONFIG_DIR = dir;
+  const started = deferred(), release = deferred();
+  let calls = 0;
+  const payload = JSON.stringify({ claudeAiOauth: { accessToken: "synthetic-candidate",
+    refreshToken: credential.refresh, expiresAt: Date.now() + 3_600_000 } });
+  const read = spyOn(claudeKeychain, "read").mockImplementation(async () => {
+    if (++calls === 2) { started.resolve(); await release.promise; }
+    return { status: "present", value: payload };
+  });
+  try {
+    const operation = refreshAnthropicAccountWithLock("anthropic", id, noRefresh, credential, {
+      afterPrePersistRead: () => {
+        if (initial === "invalid") writeFileSync(join(dir, ".credentials.json"), "{}");
+      },
+    });
+    await started.promise;
+    writeFileSync(join(dir, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+      accessToken: "synthetic-newer", refreshToken: "synthetic-newer-refresh", expiresAt: Date.now() + 3_600_000,
+    } }));
+    release.resolve();
+    await expect(operation).rejects.toBeInstanceOf(OAuthTokenRefreshStaleError);
+    expect(getAccountCredential("anthropic", id)).toEqual(credential);
+    expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+    expect(readOAuthRefreshIntent("anthropic", id)).toEqual(intent);
+  } finally { release.resolve(); read.mockRestore(); }
+});
+
+test("initial refresh cannot join a Keychain read started before the refresh", async () => {
+  const { id, credential } = await seed();
+  const intent = writeOAuthRefreshIntent("anthropic", id, "a".repeat(64));
+  process.env.CLAUDE_CONFIG_DIR = join(tmp, "profile-without-file");
+  const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), pid: 1 });
+  let source = JSON.stringify({ claudeAiOauth: { accessToken: credential.access,
+    refreshToken: credential.refresh, expiresAt: credential.expires } });
+  let captured = "";
+  const service = createClaudeKeychainService({ platform: "darwin", spawn: () => {
+    captured = source;
+    return child as unknown as KeychainChild;
+  } });
+  const earlier = service.read();
+  child.emit("spawn");
+  child.stdout.write(captured);
+  source = JSON.stringify({ claudeAiOauth: { accessToken: "synthetic-rotated",
+    refreshToken: "synthetic-rotated-refresh", expiresAt: Date.now() + 3_600_000 } });
+  const entered = deferred();
+  const read = spyOn(claudeKeychain, "read").mockImplementation(options => {
+    const result = service.read(options); entered.resolve(); return result;
+  });
+  let refreshCalls = 0;
+  try {
+    const operation = refreshAnthropicAccountWithLock("anthropic", id, { ...noRefresh, refresh: async () => {
+      refreshCalls++;
+      return { access: "synthetic-replayed", refresh: "synthetic-replayed-refresh", expires: Date.now() + 3_600_000 };
+    } }, credential);
+    const outcome = operation.catch(error => error);
+    await entered.promise;
+    child.emit("exit", 0, null); child.stdout.emit("end"); child.stdout.emit("close");
+    await earlier;
+    expect(await outcome).toBeInstanceOf(OAuthTokenRefreshStaleError);
+    expect(read).toHaveBeenCalledWith({ fresh: true });
+    expect(refreshCalls).toBe(0);
+    expect(getAccountCredential("anthropic", id)).toEqual(credential);
+    expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+    expect(readOAuthRefreshIntent("anthropic", id)).toEqual(intent);
+  } finally { read.mockRestore(); }
+});
+
 for (const withIntent of [false, true]) {
   test(`unavailable initial Keychain observation preserves account and ${withIntent ? "pending intent" : "refresh token"}`, async () => {
     const { id, credential } = await seed();

@@ -115,6 +115,7 @@ export async function observeClaudeCodeToken(options: { fresh?: boolean } = {}):
   if (preferredFile?.kind === "present" || preferredFile?.kind === "unavailable") return preferredFile;
   const keychain = await claudeKeychain.read(options);
   if ((process.env.CLAUDE_CONFIG_DIR?.trim() ?? "") !== profile || claudeConfigDir() !== profilePath) return { kind: "unavailable" };
+  if (profile && fromFile()?.kind !== preferredFile?.kind) return { kind: "unavailable" };
   if (preferredFile) return keychain.status === "unavailable" ? { kind: "unavailable" } : preferredFile;
   if (keychain.status === "unavailable") return { kind: "unavailable" };
   if (keychain.status === "present" && keychain.value.trim()) {

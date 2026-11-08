@@ -32,7 +32,7 @@ export async function newerClaudeCredentialForInstance(
 ): Promise<ClaudeCredentialObservation> {
   if (instance === "anthropic2") return { kind: "absent" };
   if (stored.source !== "local-cli") return { kind: "absent" };
-  const observation = await observeClaudeCodeToken();
+  const observation = await observeClaudeCodeToken({ fresh: true });
   if (observation.kind === "unavailable") return observation;
   const disk = observation.kind === "present" ? observation.credential : null;
   if (!disk || !Number.isFinite(disk.expires) || disk.expires <= now + REFRESH_SKEW_MS
