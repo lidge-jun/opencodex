@@ -281,9 +281,9 @@ the recorded service ownership.
 
 > Decision record: [ADR-0010](decisions/ADR-0010-codex-home.md)
 
-`atomicWriteFile` uses a temp file named `{path}.ocx.{pid}.{seq}.tmp` (process ID + incrementing
-sequence number) to avoid collisions when concurrent writers (e.g. `ocx stop` and the proxy's own
-shutdown handler) both restore Codex config simultaneously. The temp is renamed atomically into place.
+`atomicWriteFile` uses a temp file named `{path}.ocx.{pid}.{seq}.tmp` (process ID + incrementing sequence number) so
+concurrent writers (e.g. `ocx stop` and the proxy's shutdown handler) do not collide; the temp is renamed atomically into place.
+For the OpenCodex-owned `opencodex-catalog.json` on Windows only, an `EPERM`/`EACCES` rename onto a read-only destination clears the attribute with `chmod`, retries once, and otherwise raises `Codex catalog is read-only: <path>`; every other destination keeps the plain rename.
 Storage cleanup run metadata uses the field-scoped persisted-config mutation path, so a background
 Worker cannot restore unrelated API keys or provider settings from a snapshot read before the lock.
 If that metadata write is unavailable after cleanup has already completed, the job retains the

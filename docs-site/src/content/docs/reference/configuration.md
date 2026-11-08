@@ -132,6 +132,9 @@ opencodex writes managed `config.toml` and `opencodex-catalog.json` files throug
 followed by rename (`atomicWriteFile`).
 This prevents partial files when concurrent writers, such as `ocx stop` and the proxy shutdown handler,
 restore Codex at the same time.
+On Windows, if `opencodex-catalog.json` carries the read-only attribute and blocks the rename, opencodex
+clears the attribute and retries once; a write that still fails reports `Codex catalog is read-only: <path>`
+instead of a bare `EPERM`.
 If a managed TOML file contains an integer outside JavaScript's safe range, the rewrite is refused
 instead of rounding the value, and the file is left unchanged.
 :::
