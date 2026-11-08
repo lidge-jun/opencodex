@@ -88,8 +88,9 @@ describe("docs-site leaderboard", () => {
   test("renders names as text, follows ?profile=, and never fetches an invalid handle", async () => {
     const win = new Window({ url: "https://opencodex.me/dashboard/" });
     const doc = win.document;
+    const hadDocument = Object.prototype.hasOwnProperty.call(globalThis, "document");
     const previousDocument = Reflect.get(globalThis, "document");
-    Object.defineProperty(globalThis, "document", { configurable: true, value: doc });
+    Object.defineProperty(globalThis, "document", { configurable: true, writable: true, value: doc });
     try {
       const astro = readFileSync(repoPath("docs-site/src/components/TelemetryLeaderboard.astro"), "utf8");
       const markup = astro.slice(astro.indexOf("<section"), astro.indexOf("</section>") + "</section>".length)
@@ -132,7 +133,8 @@ describe("docs-site leaderboard", () => {
       expect(fetched.length).toBe(before);
       expect(doc.querySelector("[data-tl-find-error]")!.textContent).toBe(TELEMETRY_LEADERBOARD_STRINGS.en.findInvalid);
     } finally {
-      Object.defineProperty(globalThis, "document", { configurable: true, value: previousDocument });
+      if (hadDocument) Object.defineProperty(globalThis, "document", { configurable: true, writable: true, value: previousDocument });
+      else Reflect.deleteProperty(globalThis, "document");
       await win.happyDOM.close();
     }
   });
