@@ -165,6 +165,46 @@ function pnpmOwnedDependencyDir(packageDir, name, store, globalLinks, escaped) {
   return matched;
 }
 
+/** Check reachable global-store package roots and declared dependency links, including cycles. */
+function inspectGlobalPnpmGraph(packageDir, store, escaped) {
+  const pending = [packageDir], seen = new Set();
+  while (pending.length) {
+    let path;
+    try { path = realpathSync(pending.pop()); } catch { escaped.add("pnpm dependency package could not be resolved"); continue; }
+    if (seen.has(path)) continue;
+    if (seen.size >= 10000) { escaped.add("pnpm dependency graph exceeds verification limit"); return; }
+    seen.add(path);
+    const names = new Set();
+    for (const root of [join(path, "node_modules"), enclosingNodeModules(path)]) {
+      if (!root) continue;
+      try { lstatSync(root); } catch (error) {
+        if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") escaped.add("pnpm dependency root could not be resolved");
+        continue;
+      }
+      try {
+        if (!inside(realpathSync(root), store)) { escaped.add("pnpm dependency root is outside the selected store"); continue; }
+        for (const name of readdirSync(root)) {
+          if (name.startsWith(".")) continue;
+          if (!name.startsWith("@")) { names.add(name); continue; }
+          const scope = join(root, name);
+          try {
+            if (!inside(realpathSync(scope), store)) { escaped.add("pnpm dependency scope is outside the selected store: " + name); continue; }
+            if (statSync(scope).isDirectory()) for (const child of readdirSync(scope)) names.add(name + "/" + child);
+          } catch { escaped.add("pnpm dependency scope could not be resolved: " + name); }
+        }
+      } catch { escaped.add("pnpm dependency root could not be resolved"); }
+    }
+    let manifest;
+    try { manifest = JSON.parse(readFileSync(join(path, "package.json"), "utf8")); }
+    catch { escaped.add("pnpm dependency manifest could not be read"); continue; }
+    for (const name of [...Object.keys(manifest.dependencies ?? {}), ...Object.keys(manifest.optionalDependencies ?? {}), ...Object.keys(manifest.peerDependencies ?? {})]) names.add(name);
+    for (const name of names) {
+      const dependency = pnpmOwnedDependencyDir(path, name, store, true, escaped);
+      if (dependency) pending.push(dependency);
+    }
+  }
+}
+
 /** Verification manifest for a staged (or live) package tree. */
 function verifyTreeWithDependencyLookup(packageDir, expectedVersion, dependencyDir, inspectAllLinks = false) {
   const failures = [];
@@ -236,6 +276,7 @@ export function verifyPnpmInstallTree(packageDir, expectedVersion, store) {
   const escaped = new Set();
   const result = verifyTreeWithDependencyLookup(packageDir, expectedVersion,
     (path, name) => pnpmOwnedDependencyDir(path, name, store, globalLinks, escaped), globalLinks);
+  if (globalLinks) inspectGlobalPnpmGraph(real, store, escaped);
   if (escaped.size) return { ok: false, failures: [...escaped].concat(result.failures) };
   return result;
 }

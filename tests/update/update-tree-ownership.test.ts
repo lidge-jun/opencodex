@@ -383,6 +383,50 @@ describe("#4202 install-tree dependency ownership", () => {
     expect(result.failures).toContain("pnpm dependency link could not be resolved: @scope/other");
   });
 
+  test("refuses a transitive dependency link that escapes the selected store", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    writeFileSync(join(zod, "package.json"), JSON.stringify({ name: "zod", dependencies: { foreign: "1" } }));
+    mkdirSync(join(zod, "node_modules"));
+    const outside = join(root, "outside", "foreign"); writeDependency(outside, "foreign");
+    symlinkSync(outside, join(zod, "node_modules", "foreign"), "dir");
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm dependency link escapes the selected store: foreign");
+  });
+
+  test("refuses an undeclared but reachable transitive dependency link outside the store", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    mkdirSync(join(zod, "node_modules"));
+    const outside = join(root, "outside", "foreign"); writeDependency(outside, "foreign");
+    symlinkSync(outside, join(zod, "node_modules", "foreign"), "dir");
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm dependency link escapes the selected store: foreign");
+  });
+
+  test.each(["dangling", "outside"])("refuses an existing %s package dependency root", kind => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const target = realpathSync(exposed), ownRoot = join(target, "node_modules");
+    rmSync(ownRoot, { recursive: true });
+    const outside = join(root, "outside-root");
+    if (kind === "outside") mkdirSync(outside);
+    symlinkSync(outside, ownRoot, "dir");
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.ok).toBe(false);
+    expect(result.failures.some(message => message.includes("pnpm dependency root"))).toBe(true);
+  });
+
+  test("global-store dependency graph handles cycles and absent optional dependencies", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const target = realpathSync(exposed), zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    writeFileSync(join(zod, "package.json"), JSON.stringify({ name: "zod", dependencies: { [PKG]: "1" }, optionalDependencies: { absent: "1" } }));
+    mkdirSync(join(zod, "node_modules", "@bitkyc08"), { recursive: true });
+    symlinkSync(target, join(zod, "node_modules", ...PKG.split("/")), "dir");
+    expect(verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"))).toEqual({ ok: true, failures: [] });
+  });
+
   test("global-store dependency links cannot escape the canonical configured store", () => {
     const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
     const group = join(root, "pnpm", "store", "v11", "links", ...PKG.split("/"), "2.0.0", "h1", "node_modules");
