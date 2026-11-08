@@ -87,3 +87,16 @@ hidden excluded from leaderboard and by-handle; delete removes every row; rate l
 prune rules; leaderboard rows contain only the allowed keys. Extend the collector typecheck test's file list if it
 enumerates files.
 
+
+## Stale check (wp3 P, 2026-11-09)
+
+- `readBoundedBody` in `ingest.ts` is private and its error text names 16 KiB; profiles get their own small bounded
+  reader (2 KiB create, 8 KiB day) instead of editing the stack-owned ingest module.
+- Caching: an isolate cache keyed by canonical query (5 min) plus `cache-control: public, max-age=300` on public reads;
+  the Workers edge-cache API is left out (the stack lane is changing its error handling in `stats.ts`).
+  Bearer responses are `no-store`.
+- Handle uniqueness uses `INSERT OR IGNORE` + `meta.changes` (no reliance on constraint exceptions, which differ
+  between `bun:sqlite` and D1).
+- Write endpoints get no CORS preflight (OPTIONS → 405), so a browser page cannot send the bearer header cross-origin.
+- `tests/usage/usage-telemetry-collector-worker.test.ts` dumps a fixed list of anonymous tables; the new profile test
+  dumps the profile tables the same way and checks they never contain an IP, a raw secret or an anonymous identifier.
