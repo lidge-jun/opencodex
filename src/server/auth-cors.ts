@@ -1360,6 +1360,16 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       hasApiKey: !!provider.apiKey,
       hasHeaders: !!provider.headers && Object.keys(provider.headers).length > 0,
     };
+    const registry = getProviderRegistryEntry(name);
+    const vertex = (provider.adapter === "google" && effectiveGoogleMode(name, provider) === "vertex")
+      || (registry?.adapter === "google" && (provider.googleMode ?? registry.googleMode) === "vertex"
+        && providerMatchesRegistryTransport(name, provider));
+    if (vertex) {
+      const key = provider.apiKey;
+      dto.vertexCredentialKind = key?.startsWith("gcp-sa:") ? "marker"
+        : !key?.trim() || key === "N/A" || key.startsWith("<") ? "ambient"
+          : key.startsWith("keychain:") || /^\$\{?\w+\}?$/.test(key) ? "reference" : "api-key";
+    }
     if (name === "xai") {
       dto.xaiResponsesOptInState = xaiResponsesOptInState(provider);
     }

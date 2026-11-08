@@ -119,6 +119,15 @@ interface ProviderAdapter {
 `/v1beta/models/{model}:streamGenerateContent`，其他模式使用各自的 Google 原生 endpoint。
 **认证：** 根据 `googleMode` 选择 API key、Vertex ADC 或 Google Antigravity OAuth。
 
+在仪表盘的 Google Vertex AI 预设中，项目 ID 和位置为可选输入。API key 留空且未设置
+`GOOGLE_CLOUD_API_KEY` 时，代理使用 **代理主机**上的 ADC。ADC 还需要项目和位置，可在
+表单中填写，或由代理主机上的 `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` 和
+`GOOGLE_CLOUD_LOCATION` 提供。添加 provider 不代表凭据或权限已验证。API key 未指定
+项目时使用 Vertex express 模式。
+仪表盘预设使用以配置的默认模型为起点的静态目录；连接测试不会验证 Vertex 凭据或权限。
+已有 Vertex 配置省略 `liveModels` 时会保留通过通用发现端点进行实时发现的原有行为。
+设置 `liveModels: false` 使用静态目录，也可在设置页面切换这两种模式。
+
 - 系统提示词 → `systemInstruction`；消息 → `contents[]`（assistant → `model`）；工具 →
   `functionDeclarations`；data URL 图像 → `inline_data`。
 - Gemini 省略 tool-call id 时会合成 id。Vertex 与 Antigravity 会保留并重放不透明
