@@ -356,6 +356,28 @@ test("an already cancelled refresh does not read Keychain or create an intent", 
   } finally { read.mockRestore(); }
 });
 
+for (const source of ["file", "keychain"] as const) {
+  test(`malformed ${source} during initial refresh preserves the credential, intent and health`, async () => {
+    const { id, credential } = await seed();
+    const intent = writeOAuthRefreshIntent("anthropic", id, credentialGeneration(credential));
+    const raw = '{"claudeAiOauth":{"accessToken":"synthetic-incomplete"}}';
+    if (source === "file") writeFileSync(join(process.env.CLAUDE_CONFIG_DIR!, ".credentials.json"), raw);
+    else process.env.CLAUDE_CONFIG_DIR = join(tmp, "malformed-keychain");
+    const read = spyOn(claudeKeychain, "read").mockResolvedValue(source === "keychain"
+      ? { status: "present", value: raw } : { status: "absent" });
+    let calls = 0;
+    try {
+      await expect(refreshAnthropicAccountWithLock("anthropic", id, { ...noRefresh, refresh: async () => {
+        calls++; throw new Error("unexpected refresh");
+      } }, credential)).rejects.toBeInstanceOf(OAuthTokenRefreshStaleError);
+      expect(calls).toBe(0);
+      expect(getAccountCredential("anthropic", id)).toEqual(credential);
+      expect(readOAuthRefreshIntent("anthropic", id)).toEqual(intent);
+      expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+    } finally { read.mockRestore(); }
+  });
+}
+
 for (const pendingState of ["pending", "cleanup-pending"] as const) {
   test(`cancellation during an absent observation preserves ${pendingState} intent and account health`, async () => {
     const { id, credential } = await seed();

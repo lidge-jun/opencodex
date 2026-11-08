@@ -21,6 +21,21 @@ import { observeGuardedManagerStopped } from "../service/guarded-manager-target"
 import type { StartExitTeardown } from "./dispatch";
 import type { StopOutcome } from "./stop-report";
 
+/** A failed environment revert must make shutdown fail visibly; safe no-op states remain successful. */
+export function revertSystemEnvAtShutdown(
+  revert: () => { reverted: boolean; reason?: string },
+  report: (message: string) => void = message => console.error(message),
+): boolean {
+  try {
+    const result = revert();
+    if (result.reverted || result.reason === "no tracking file" || result.reason === "not macOS") return true;
+    report(`System environment cleanup failed: ${result.reason ?? "unknown failure"}`);
+  } catch {
+    report("System environment cleanup failed: unexpected error");
+  }
+  return false;
+}
+
 /** Honor accepted API deferral, otherwise re-read connection ownership on ordinary exit. */
 export function preserveConnectedClientRoutingOnExit(teardown: StartExitTeardown): StartExitTeardown {
   if (isSharedTeardownDeferredOnExit()) {

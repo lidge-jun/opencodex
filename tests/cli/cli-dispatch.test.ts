@@ -22,6 +22,7 @@ import { runGuiCommand } from "../../src/cli/gui";
 import { isCodexAccountLoginName } from "../../src/cli/account-auth";
 import { listOAuthProviders } from "../../src/oauth";
 import { isKeyLoginProvider } from "../../src/oauth/key-providers";
+import { revertSystemEnvAtShutdown } from "../../src/cli/stop-restore";
 import { loginUsageMessage } from "../../src/oauth/login-cli";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -620,7 +621,7 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     expect(start).not.toContain("re-points this home's Codex config");
     expect(start).toContain("...siblingRuntimeField(),");
     expect(start).toContain("if (!siblingStart) await maybeShowUpdatePrompt();");
-    expect(start).toContain("if (!siblingStart) reportShellHookFailure(reconcileShellHook(systemEnv.injected));");
+    expect(start).toContain("if (!siblingStart && systemEnvFollowup) systemEnvFollowup(() => reportShellHookFailure(reconcileShellHook(systemEnv.injected)));");
     expect(start).toContain("if (!siblingStart && !currentExternalCodexModelProvider() && !shouldInjectApiAuthHeader(config)");
     expect(start).toContain("startupLeftCodexNativeLine(localClientSkipReason(config), server.port ?? port)");
   });
@@ -632,6 +633,17 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     expect(cleanup).toContain("if (teardown.restoreNativeCodex) {");
     expect(cleanup).toContain("if (teardown.stripGrokConfig && serviceEnvironmentOwnedHere()) {");
     expect(cleanup).not.toContain("preserveRouting");
+  });
+
+  test("shutdown reports a busy environment coordinator as failure", () => {
+    const errors: string[] = [];
+    expect(revertSystemEnvAtShutdown(() => ({ reverted: false, reason: "coordination unavailable" }), message => errors.push(message))).toBe(false);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("coordination unavailable");
+    expect(revertSystemEnvAtShutdown(() => ({ reverted: false, reason: "no tracking file" }), message => errors.push(message))).toBe(true);
+    expect(errors).toHaveLength(1);
+    expect(revertSystemEnvAtShutdown(() => { throw new Error("synthetic private detail"); }, message => errors.push(message))).toBe(false);
+    expect(errors[1]).toBe("System environment cleanup failed: unexpected error");
   });
 
   test("ocx stop of a sibling claims no receipt and restores nothing", () => {
@@ -646,7 +658,7 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     expect(stop).toContain('if (nativeRestoreHandledByProxy && !stoppingSibling && !connectedClientSkip) record.sharedTeardown = "performed-by-proxy";');
     expect(stop).not.toContain("fetchFn:");
     // The system env was never the sibling's to set, so its stop does not roll it back either.
-    expect(stop).toContain("if (!stoppingSibling) { try { revertSystemEnv(); } catch { /* best-effort */ } }");
+    expect(stop).toContain("if (!stoppingSibling && !revertSystemEnvAtShutdown(revertSystemEnv)) stopFailed = true;");
     expect(stop).not.toMatch(/\n {2}try \{ revertSystemEnv\(\); \}/);
     // A sibling never runs under a service manager, so an installed one is the live owner's. Asking
     // it failed the ownership check from the sibling's home: exit 1, and after a hard kill the

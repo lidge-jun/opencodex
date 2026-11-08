@@ -335,6 +335,104 @@ test("failed initial injection rolls back before a later owner can take over", a
   } finally { log.mockRestore(); }
 });
 
+test("a database commit failure compensates its environment writes and surfaces the error", async () => {
+  const failure = new Error("synthetic transaction commit failed");
+  const original = fakeConfigGeneration;
+  let injectionCallbackReturned = false;
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  configLockSpy.mockImplementation((fn => {
+    const value = fn();
+    if (!injectionCallbackReturned && fakeTracking !== undefined && fakeConfigGeneration > original) {
+      injectionCallbackReturned = true;
+      fakeConfigGeneration = original;
+      throw failure;
+    }
+    return value;
+  }) as never);
+  try {
+    await expect(injectSystemEnv(4567, baseConfig)).rejects.toBe(failure);
+    expect(injectionCallbackReturned).toBe(true);
+    expect(fakeLaunchd.size).toBe(0);
+    expect(fakeTracking).toBeUndefined();
+    expect(shellEnvContents).toBe("");
+  } finally { log.mockRestore(); }
+});
+
+test("commit failure never compensates over a replacement environment owner", async () => {
+  const failure = new Error("synthetic transaction commit failed");
+  const original = fakeConfigGeneration;
+  const foreign = "http://127.0.0.1:4568";
+  let failed = false;
+  configLockSpy.mockImplementation((fn => {
+    const value = fn();
+    if (!failed && fakeTracking !== undefined && fakeConfigGeneration > original) {
+      failed = true;
+      fakeConfigGeneration = original + 1;
+      fakeTracking = JSON.stringify({ pid: 42, port: 4568, injectedAt: "synthetic-foreign" });
+      fakeLaunchd.set("ANTHROPIC_BASE_URL", foreign);
+      throw failure;
+    }
+    return value;
+  }) as never);
+  await expect(injectSystemEnv(4567, baseConfig)).rejects.toThrow("ownership could not be recovered");
+  expect(failed).toBe(true);
+  expect(fakeLaunchd.get("ANTHROPIC_BASE_URL")).toBe(foreign);
+  expect(JSON.parse(fakeTracking!)).toMatchObject({ pid: 42, port: 4568 });
+});
+
+test("a completed injection cannot run a follow-up after another owner replaces it", async () => {
+  const { captureSystemEnvFollowup } = await import("../../src/server/system-env");
+  const result = await injectSystemEnv(4567, baseConfig);
+  expect(result).toEqual({ injected: true });
+  const followup = captureSystemEnvFollowup(baseConfig, result);
+  let writes = 0;
+  expect(followup?.(() => { writes++; })).toBe(true);
+  fakeTracking = JSON.stringify({ pid: 42, port: 4568, injectedAt: "synthetic-foreign" });
+  fakeLaunchd.set("ANTHROPIC_BASE_URL", "http://127.0.0.1:4568");
+  expect(followup?.(() => { writes++; })).toBe(false);
+  expect(writes).toBe(1);
+});
+
+test("a disabled-state follow-up cannot run after the saved config changes", async () => {
+  const { captureSystemEnvFollowup } = await import("../../src/server/system-env");
+  const disabled = { ...baseConfig, claudeCode: { systemEnv: false } };
+  configSnapshotSpy.mockReturnValue({ diagnostics: { source: "file", error: null, config: disabled }, raw: "synthetic" });
+  const result = await injectSystemEnv(4567, disabled);
+  const followup = captureSystemEnvFollowup(disabled, result);
+  let writes = 0;
+  expect(followup?.(() => { writes++; })).toBe(true);
+  configSnapshotSpy.mockReturnValue({ diagnostics: { source: "file", error: null, config: baseConfig }, raw: "synthetic-new" });
+  fakeConfigGeneration++;
+  expect(followup?.(() => { writes++; })).toBe(false);
+  expect(writes).toBe(1);
+});
+
+test("a disabled-state follow-up cannot write after another environment owner appears", async () => {
+  const { captureSystemEnvFollowup } = await import("../../src/server/system-env");
+  const disabled = { ...baseConfig, claudeCode: { systemEnv: false } };
+  configSnapshotSpy.mockReturnValue({ diagnostics: { source: "file", error: null, config: disabled }, raw: "synthetic" });
+  const followup = captureSystemEnvFollowup(disabled, await injectSystemEnv(4567, disabled));
+  fakeTracking = JSON.stringify({ pid: 42, port: 4568, injectedAt: "synthetic-foreign" });
+  fakeLaunchd.set("ANTHROPIC_BASE_URL", "http://127.0.0.1:4568");
+  let writes = 0;
+  expect(followup?.(() => { writes++; })).toBe(false);
+  expect(writes).toBe(0);
+});
+
+test("a follow-up refuses and reports a busy coordinator", async () => {
+  const { captureSystemEnvFollowup } = await import("../../src/server/system-env");
+  const result = await injectSystemEnv(4567, baseConfig);
+  const followup = captureSystemEnvFollowup(baseConfig, result);
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  let writes = 0;
+  try {
+    configLockSpy.mockImplementation(() => { throw new Error("synthetic busy"); });
+    expect(followup?.(() => { writes++; })).toBe(false);
+    expect(writes).toBe(0);
+    expect(log).toHaveBeenCalledWith("System environment follow-up unavailable.");
+  } finally { log.mockRestore(); }
+});
+
 test("disabling during gateway fetch prevents late cache and tracking writes", async () => {
   let started!: () => void, release!: () => void;
   const entered = new Promise<void>(resolve => { started = resolve; });

@@ -108,7 +108,7 @@ describe("Claude Code credentials file fallback (Linux/Windows)", () => {
     }
   });
 
-  test.each(["", "{broken", "{}"])("an unusable explicit profile is not fallback evidence when Keychain is unavailable (%s)", async raw => {
+  test.each(["", "{}"])("an empty explicit profile is not fallback evidence when Keychain is unavailable (%s)", async raw => {
     const dir = join(tmp, `claude-unusable-${raw.length}`);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, ".credentials.json"), raw);
@@ -126,6 +126,34 @@ describe("Claude Code credentials file fallback (Linux/Windows)", () => {
     try { expect(await observeClaudeCodeToken()).toEqual({ kind: "absent" }); }
     finally { read.mockRestore(); }
   });
+
+  test("a valid explicit profile without OAuth remains authoritative absence", async () => {
+    const dir = join(tmp, "claude-empty-object");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, ".credentials.json"), "{}");
+    process.env.CLAUDE_CONFIG_DIR = dir;
+    const read = spyOn(claudeKeychain, "read").mockResolvedValue({ status: "absent" });
+    try { expect(await observeClaudeCodeToken()).toEqual({ kind: "absent" }); }
+    finally { read.mockRestore(); }
+  });
+
+  for (const source of ["file", "keychain"] as const) {
+    test.each(["{broken", '{"claudeAiOauth":{"accessToken":"synthetic-incomplete"}}'])(
+      `malformed ${source} credentials remain unavailable (%s)`, async raw => {
+        const dir = join(tmp, `malformed-${source}-${raw.length}`);
+        mkdirSync(dir, { recursive: true });
+        process.env.CLAUDE_CONFIG_DIR = dir;
+        if (source === "file") writeFileSync(join(dir, ".credentials.json"), raw);
+        const read = spyOn(claudeKeychain, "read").mockResolvedValue(source === "keychain"
+          ? { status: "present", value: raw } : { status: "absent" });
+        try {
+          expect(await observeClaudeCodeToken()).toEqual({ kind: "unavailable" });
+          expect(read).toHaveBeenCalledTimes(source === "file" ? 0 : 1);
+        }
+        finally { read.mockRestore(); }
+      },
+    );
+  }
 
   test("an unreadable explicit credentials file is unavailable rather than absent", async () => {
     const dir = join(tmp, "claude-unreadable");

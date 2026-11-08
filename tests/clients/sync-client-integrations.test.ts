@@ -959,6 +959,7 @@ test("already-running ensure leaves Raycast untouched when saved host and listen
       writeFileSync(configPath, "wrong saved destination");
     },
     injectSystemEnv: async () => ({ injected: true }),
+    captureSystemEnvFollowup: () => (action: () => void) => { action(); return true; },
     reportShellHookFailure: () => {},
     reconcileShellHook: () => ({ state: "installed" }),
     reconcileEnsureDesiredIntegrations: async () => {},

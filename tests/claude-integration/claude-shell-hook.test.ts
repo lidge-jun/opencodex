@@ -187,8 +187,10 @@ describe("Claude Code shell-hook reconciliation", () => {
 
   test("superseded startup work cannot remove the hook or sync agents from stale settings", async () => {
     const source = await Bun.file(repoPath("src/cli/index.ts")).text();
-    expect(source).toContain('if (!siblingStart && systemEnv.reason !== "superseded" && systemEnv.reason !== "unavailable") reportShellHookFailure(reconcileShellHook(systemEnv.injected))');
-    expect(source).toContain('if (siblingOfLivePort() === null && systemEnv.reason !== "superseded" && systemEnv.reason !== "unavailable") reportShellHookFailure(reconcileShellHook(systemEnv.injected))');
-    expect(source).toContain('if (!systemEnv.injected && systemEnv.reason !== "superseded" && systemEnv.reason !== "unavailable") await syncClaudeAgentDefsAtProxyStartup(config, live.port)');
+    expect(source).toContain('if (!siblingStart && systemEnvFollowup) systemEnvFollowup(() => reportShellHookFailure(reconcileShellHook(systemEnv.injected)))');
+    expect(source).toContain('if (siblingOfLivePort() === null && systemEnvFollowup) systemEnvFollowup(() => reportShellHookFailure(reconcileShellHook(systemEnv.injected)))');
+    expect(source).toContain('syncClaudeAgentDefsAtProxyStartup(config, port, { runIfCurrent: systemEnvFollowup })');
+    expect(source).toContain('syncClaudeAgentDefsAtProxyStartup(config, live.port, { runIfCurrent: systemEnvFollowup })');
+    expect(source).toContain('syncClaudeAgentDefsAtProxyStartup(config, port, { runIfCurrent: rosterGuard })');
   });
 });

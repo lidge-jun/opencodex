@@ -11,6 +11,8 @@ export interface ClaudeAgentStartupSyncDeps {
   warn?: (message: string) => void;
   /** Seam for the hub roster lookup; the default reads only the on-disk cache. */
   readHubRoster?: (config: OcxConfig) => readonly string[] | undefined;
+  /** Commit a result only while the system-environment observation is still current. */
+  runIfCurrent?: (action: () => void) => boolean;
 }
 
 /**
@@ -97,6 +99,11 @@ export async function syncClaudeAgentDefsAtProxyStartup(
 ): Promise<string[] | null> {
   if (siblingOfLivePort() !== null) return null;
   const inject = deps.injectAgentDefs ?? injectClaudeAgentDefs;
+  const commit = (action: () => string[] | null): string[] | null => {
+    if (!deps.runIfCurrent) return action();
+    let result: string[] | null = null;
+    return deps.runIfCurrent(() => { result = action(); }) ? result : null;
+  };
   const warn = deps.warn ?? (message => console.warn(message));
 
   try {
@@ -104,7 +111,7 @@ export async function syncClaudeAgentDefsAtProxyStartup(
     // shouldSyncCodexOnStart / shouldSyncGrokOnStart — the hub serves other machines).
     if (config.runtimeRole === "hub") return null;
     if (config.claudeCode?.enabled === false || config.claudeCode?.injectAgents === false) {
-      return inject(config, {});
+      return commit(() => inject(config, {}));
     }
 
     let windows: Record<string, number> = {};
@@ -114,7 +121,7 @@ export async function syncClaudeAgentDefsAtProxyStartup(
       // Startup remains best-effort. The next management mutation or `ocx claude` launch can
       // restore context markers after a transient catalog/Management API failure.
     }
-    return inject(config, windows, undefined, (deps.readHubRoster ?? cachedHubRoster)(config));
+    return commit(() => inject(config, windows, undefined, (deps.readHubRoster ?? cachedHubRoster)(config)));
   } catch (error) {
     warn(`⚠ Claude agent definitions could not be synced at proxy startup: ${error instanceof Error ? error.message : String(error)}`);
     return null;

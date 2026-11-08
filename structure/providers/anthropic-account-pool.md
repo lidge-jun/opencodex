@@ -336,6 +336,8 @@ Adoption obtains a fresh matching source and generation
 inside the serialized mutation after its pre-persist hook, then synchronously rechecks ownership.
 This snapshot does not exclude external Keychain changes after observation, and the process-local
 slot does not bound surviving children across parent restarts.
+Empty credential files and JSON objects without an OAuth field remain absent; malformed JSON or
+an incomplete OAuth payload is unavailable and stops refresh before intent or health changes.
 An unsent token request proven by structured `getaddrinfo` `ENOTFOUND` for the token host,
 with no outbound proxy configured in either the startup or current environment and a single
 HTTP/1.1 attempt without keep-alive reuse or redirect following, releases its intent as

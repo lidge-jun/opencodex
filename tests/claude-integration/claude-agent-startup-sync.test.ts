@@ -133,6 +133,22 @@ describe("Claude agent roster proxy-start synchronization (#2200)", () => {
     ]);
   });
 
+  test("a roster observation superseded while awaiting context windows cannot write", async () => {
+    let started!: () => void, release!: () => void, current = true, writes = 0;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const pending = syncClaudeAgentDefsAtProxyStartup(config(), 10100, {
+      fetchContextWindows: async () => { started(); await blocked; return {}; },
+      injectAgentDefs: () => { writes++; return []; },
+      runIfCurrent: action => { if (!current) return false; action(); return true; },
+    });
+    try {
+      await entered; current = false; release();
+      expect(await pending).toBeNull();
+      expect(writes).toBe(0);
+    } finally { release(); }
+  });
+
   test("disabled integration prunes owned definitions without touching discovery", async () => {
     let fetched = false;
     let injected: Record<string, number> | undefined;

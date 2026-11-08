@@ -119,7 +119,15 @@ export async function observeClaudeCodeToken(options: { fresh?: boolean } = {}):
       return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : { kind: "unavailable" };
     }
     const credential = parseClaudeOauthPayload(raw);
-    return credential ? { kind: "present", credential, sourceKey: `file:${profilePath}` } : { kind: "absent" };
+    if (credential) return { kind: "present", credential, sourceKey: `file:${profilePath}` };
+    // Empty and valid objects with no OAuth field are authoritative absence; a broken or
+    // incomplete OAuth payload is not evidence that no newer credential exists.
+    if (!raw) return { kind: "absent" };
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && !("claudeAiOauth" in parsed)) return { kind: "absent" };
+    } catch { /* malformed content is unavailable */ }
+    return { kind: "unavailable" };
   };
   const preferredFile = profile ? fromFile() : null;
   if (preferredFile?.kind === "present" || preferredFile?.kind === "unavailable") return preferredFile;
@@ -130,7 +138,7 @@ export async function observeClaudeCodeToken(options: { fresh?: boolean } = {}):
   if (keychain.status === "unavailable") return { kind: "unavailable" };
   if (keychain.status === "present" && keychain.value.trim()) {
     const credential = parseClaudeOauthPayload(keychain.value.trim());
-    return credential ? { kind: "present", credential, sourceKey: `keychain:${profilePath}` } : { kind: "absent" };
+    return credential ? { kind: "present", credential, sourceKey: `keychain:${profilePath}` } : { kind: "unavailable" };
   }
   const fallback = fromFile();
   if (fallback?.kind === "present") return fallback;
@@ -146,7 +154,8 @@ export function parseClaudeOauthPayload(raw: string): OAuthCredentials | null {
   try {
     const data = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: string; refreshToken?: string; expiresAt?: number } };
     const o = data.claudeAiOauth;
-    if (!o?.accessToken || !o?.refreshToken) return null;
+    if (typeof o?.accessToken !== "string" || !o.accessToken.trim()
+      || typeof o.refreshToken !== "string" || !o.refreshToken.trim()) return null;
     // Number.isFinite guard: a string/NaN expiresAt must not flow into downstream time
     // comparisons as a "valid forever" value. Unknown → 0 (refresh-validation path).
     const expires = typeof o.expiresAt === "number" && Number.isFinite(o.expiresAt) ? o.expiresAt : 0;

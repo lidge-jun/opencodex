@@ -132,7 +132,7 @@ import { startupDataPlaneToken } from "../lib/service-secrets";
 import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, proxyStillLiveAfterStop, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatePaths, serviceStatusSummary, stopServiceIfInstalledDetailed, uninstallServiceIfInstalled, uninstallServiceDetailed } from "../service";
 import { acquireOwnershipMutationLease } from "../service/ownership-mutation-lease.mjs";
 import { formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
-import { injectSystemEnv, reconcileShellHook, revertSystemEnv, uninstallShellHook } from "../server/system-env";
+import { captureSystemEnvFollowup, injectSystemEnv, reconcileShellHook, revertSystemEnv, uninstallShellHook } from "../server/system-env";
 import { startTokenGuardian } from "../oauth/token-guardian";
 import { startHistoryMigrationGuardian } from "../codex/history-migration-guardian";
 import { maybeShowStarPrompt } from "./star-prompt";
@@ -164,7 +164,7 @@ import { uninstallPrivilegeRefusal } from "../lib/config-ownership";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
-import { assertConnectedClientStopSupported, clearRestoredStopReceipts, connectedClientStopSkipLine, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary } from "./stop-restore";
+import { assertConnectedClientStopSupported, clearRestoredStopReceipts, connectedClientStopSkipLine, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, revertSystemEnvAtShutdown, settleUnrestoredStopBoundary } from "./stop-restore";
 import { stopRestoreWriteGuard } from "./stop-restore-guard";
 import { startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
 import { recoverStartJournalAfterOwnerRecheck, recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
@@ -658,7 +658,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     const teardown = preserveConnectedClientRoutingOnExit(decideStartExitTeardown({ sibling: siblingStart, recycling: isRecyclingForExit(), ocxService: process.env.OCX_SERVICE }));
     const restoreGuard = stopRestoreWriteGuard();
     if (teardown.revertSystemEnv) {
-      try { revertSystemEnv(); } catch { /* best-effort */ }
+      if (!revertSystemEnvAtShutdown(revertSystemEnv)) cleanupSucceeded = false;
     }
     removePid(process.pid);
     removeRuntimePort(process.pid);
@@ -728,11 +728,11 @@ async function handleStart(options: { block?: boolean } = {}) {
 
   // System-wide env injection AFTER signal handlers are registered (crash safety:
   // syncCleanup reverts even if injection itself or subsequent startup steps fail).
-  const systemEnv = await injectSystemEnv(port, config).catch(() => { console.error("System environment reconciliation unavailable."); return { injected: false, reason: "unavailable" }; });
+  const systemEnv = await injectSystemEnv(port, config).catch(() => { console.error("System environment reconciliation unavailable."); return { injected: false, reason: "unavailable" }; }); const systemEnvFollowup = (() => { try { return captureSystemEnvFollowup(config, systemEnv); } catch { console.error("System environment follow-up unavailable."); return undefined; } })();
   // The hook is useful only for an installed Claude Code CLI. Reconcile instead of
   // appending unconditionally so stale OpenCodex-owned hooks are removed as well. A sibling
   // skips it: reconciling to "not injected" would uninstall the live owner's ~/.zshrc hook.
-  if (!siblingStart && systemEnv.reason !== "superseded" && systemEnv.reason !== "unavailable") reportShellHookFailure(reconcileShellHook(systemEnv.injected));
+  if (!siblingStart && systemEnvFollowup) systemEnvFollowup(() => reportShellHookFailure(reconcileShellHook(systemEnv.injected)));
   await maybeShowStarPrompt(); // once-only Yes/No GitHub-star prompt on first interactive start
   // Codex sync owns the ready/failed verdict, but its successful transition is
   // deferred until the best-effort Claude roster and Desktop registry settle. This
@@ -746,9 +746,9 @@ async function handleStart(options: { block?: boolean } = {}) {
       () => {
         if (catalogHealerModule && !siblingStart && !cleaned) catalogHealer = catalogHealerModule.startCodexCatalogSelfHeal({ port });
       }),
-    () => systemEnv.injected
+    () => systemEnv.injected || !systemEnvFollowup
       ? Promise.resolve(null)
-      : syncClaudeAgentDefsAtProxyStartup(config, port),
+      : syncClaudeAgentDefsAtProxyStartup(config, port, { runIfCurrent: systemEnvFollowup }),
     async () => {
       // Shared with the Claude Code CLI picker, which awaits this same build (desktop-3p-startup.ts).
       const { initDesktop3pRegistry } = await import("../claude/desktop-3p-startup");
@@ -858,9 +858,9 @@ async function handleEnsure(options: { existingIsSuccess?: boolean; forceStart?:
       // secondary-listener settings may differ. Explicit sync or server startup
       // owns catalog refresh; ensure must not overwrite a working destination.
       // Ensure env file exists for already-running proxy (may have been deleted or pre-dates this feature).
-      const systemEnv = await injectSystemEnv(live.port, config).catch(() => { console.error("System environment reconciliation unavailable."); return { injected: false, reason: "unavailable" }; });
-      if (siblingOfLivePort() === null && systemEnv.reason !== "superseded" && systemEnv.reason !== "unavailable") reportShellHookFailure(reconcileShellHook(systemEnv.injected));
-      if (!systemEnv.injected && systemEnv.reason !== "superseded" && systemEnv.reason !== "unavailable") await syncClaudeAgentDefsAtProxyStartup(config, live.port);
+      const systemEnv = await injectSystemEnv(live.port, config).catch(() => { console.error("System environment reconciliation unavailable."); return { injected: false, reason: "unavailable" }; }); const systemEnvFollowup = (() => { try { return captureSystemEnvFollowup(config, systemEnv); } catch { console.error("System environment follow-up unavailable."); return undefined; } })();
+      if (siblingOfLivePort() === null && systemEnvFollowup) systemEnvFollowup(() => reportShellHookFailure(reconcileShellHook(systemEnv.injected)));
+      if (!systemEnv.injected && systemEnvFollowup) await syncClaudeAgentDefsAtProxyStartup(config, live.port, { runIfCurrent: systemEnvFollowup });
       // Refresh the Grok Build fence too (same contract as start). Keep the observed
       // bind scope for admission and its responding address for the destination.
       // The reconciler re-reads immediately before each client-file mutation;
@@ -913,7 +913,7 @@ async function handleEnsure(options: { existingIsSuccess?: boolean; forceStart?:
   // The child opens /healthz before its best-effort roster reconcile. Await the same idempotent
   // operation in the parent so `ocx ensure` cannot report success while stale ocx-*.md files are
   // still observable. Always use the live port, including fallback-port starts.
-  await syncClaudeAgentDefsAtProxyStartup(config, port);
+  const rosterGuard = (() => { try { return captureSystemEnvFollowup(config, { injected: false, reason: "startup-roster" }); } catch { console.error("System environment follow-up unavailable."); return undefined; } })(); if (rosterGuard) await syncClaudeAgentDefsAtProxyStartup(config, port, { runIfCurrent: rosterGuard });
   console.log(`✅ Proxy running on port ${port}`);
   return true;
 }
@@ -1356,7 +1356,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   }
   // Environment ownership is independent from service ownership. Roll back current-home
   // variables (the helper refuses foreign markers on its own) unless a sibling never set them.
-  if (!stoppingSibling) { try { revertSystemEnv(); } catch { /* best-effort */ } }
+  if (!stoppingSibling && !revertSystemEnvAtShutdown(revertSystemEnv)) stopFailed = true;
   // A stopped Windows scheduler is not a proven-down proxy. `killWindowsSchedulerWrappers`
   // is explicitly best-effort and the `:loop` wrapper respawns its child after ~5s, so an
   // immediate probe can see a dead interval and an update can start replacing files right

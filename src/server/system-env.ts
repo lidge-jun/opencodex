@@ -76,9 +76,50 @@ const BIND_HOST_PATTERN = /^[A-Za-z0-9.\-_]{1,253}$|^\[[0-9A-Fa-f:.]{2,45}\]$/;
 type SystemEnvResult = { injected: boolean; reason?: string };
 type RevertResult = { reverted: boolean; reason?: string };
 type CleanupResult = { cleaned: boolean; reason?: string };
+type SystemEnvFollowup = (action: () => void) => boolean;
+const completedSystemEnv = new WeakMap<SystemEnvResult, SystemEnvFollowup>();
 let systemEnvGeneration = 0;
 function savedConfigMatches(config: string, snapshot: ReturnType<typeof configDiagnostics.readConfigFileSnapshot>["diagnostics"]): boolean {
   return snapshot.source === "default" || (snapshot.source === "file" && !snapshot.error && JSON.stringify(snapshot.config) === config);
+}
+
+/** Carry the result's ownership through asynchronous startup follow-ups without serializing it. */
+export function captureSystemEnvFollowup(config: OcxConfig, result: SystemEnvResult): SystemEnvFollowup | undefined {
+  const bounded = (followup: SystemEnvFollowup): SystemEnvFollowup => action => {
+    let actionFailed = false;
+    try {
+      return followup(() => { try { action(); } catch (error) { actionFailed = true; throw error; } });
+    } catch (error) {
+      if (actionFailed) throw error;
+      console.error("System environment follow-up unavailable.");
+      return false;
+    }
+  };
+  if (result.injected) {
+    const followup = completedSystemEnv.get(result);
+    return followup && bounded(followup);
+  }
+  if (result.reason === "superseded" || result.reason === "unavailable" || result.reason === "sibling instance") return undefined;
+  const desired = JSON.stringify(config);
+  const sourcePath = getConfigDir();
+  const epoch = systemEnvGeneration;
+  const receipt = configMutation.withConfigMutationLockSync(() => {
+    const snapshot = configDiagnostics.readConfigFileSnapshot().diagnostics;
+    if (!savedConfigMatches(desired, snapshot)) return undefined;
+    const tracking = readTracking();
+    return { generation: configMutation.readConfigGenerationInCurrentMutationTransaction().value, source: snapshot.source,
+      tracking: JSON.stringify(tracking), baseUrl: launchctlGetenv("ANTHROPIC_BASE_URL") };
+  });
+  if (!receipt) return undefined;
+  return bounded(action => configMutation.withConfigMutationLockSync(() => {
+    const snapshot = configDiagnostics.readConfigFileSnapshot().diagnostics;
+    if (epoch !== systemEnvGeneration || getConfigDir() !== sourcePath || JSON.stringify(config) !== desired || snapshot.source !== receipt.source
+      || !savedConfigMatches(desired, snapshot)
+      || JSON.stringify(readTracking()) !== receipt.tracking || launchctlGetenv("ANTHROPIC_BASE_URL") !== receipt.baseUrl
+      || configMutation.readConfigGenerationInCurrentMutationTransaction().value !== receipt.generation) return false;
+    action();
+    return true;
+  }));
 }
 
 export function getSystemEnvTrackingPath(): string {
@@ -163,7 +204,7 @@ function trackedHealthzOrigin(tracking: Pick<SystemEnvTracking, "port" | "bindHo
   return `http://${tracking.bindHost ?? "127.0.0.1"}:${tracking.port}`;
 }
 
-function rollbackInjectedKeys(port: number, injectedKeys: string[], tracked?: TrackedDestination): void {
+function rollbackInjectedKeys(port: number, injectedKeys: string[], tracked?: TrackedDestination): boolean {
   const rollbackFailed: string[] = [];
   for (const name of [...injectedKeys].reverse()) {
     try {
@@ -175,10 +216,11 @@ function rollbackInjectedKeys(port: number, injectedKeys: string[], tracked?: Tr
 
   if (rollbackFailed.length > 0) {
     writeTracking(port, rollbackFailed, tracked);
-    return;
+    return false;
   }
 
   try { unlinkSync(getSystemEnvTrackingPath()); } catch { /* already gone */ }
+  return true;
 }
 
 /**
@@ -216,6 +258,7 @@ export async function injectSystemEnv(
   if (config.claudeCode?.systemEnv !== true) return { injected: false, reason: "systemEnv disabled" };
 
   const desired = JSON.stringify(config);
+  const sourcePath = getConfigDir();
   let initialSource: "default" | "file" | undefined;
   const desiredStillCurrent = (snapshot: ReturnType<typeof configDiagnostics.readConfigFileSnapshot>["diagnostics"]) => {
     if (JSON.stringify(config) !== desired) return false;
@@ -234,7 +277,7 @@ export async function injectSystemEnv(
   let ownedTracking: string | undefined;
   let ownedBaseUrl: string | undefined;
   const commitIfCurrent = (commit: () => void): boolean => configMutation.withConfigMutationLockSync(() => {
-    if (!isCurrent() || configMutation.readConfigGenerationInCurrentMutationTransaction().value !== configGeneration
+    if (!isCurrent() || getConfigDir() !== sourcePath || configMutation.readConfigGenerationInCurrentMutationTransaction().value !== configGeneration
       || !desiredStillCurrent(configDiagnostics.readConfigFileSnapshot().diagnostics)) return false;
     if (ownedTracking !== undefined && (JSON.stringify(readTracking()) !== ownedTracking
       || launchctlGetenv("ANTHROPIC_BASE_URL") !== ownedBaseUrl)) return false;
@@ -309,6 +352,8 @@ export async function injectSystemEnv(
   };
 
   let wrote = false;
+  let initialCommitFinished = false;
+  const beforeInjectionGeneration = configGeneration;
   try {
     const applied = commitIfCurrent(() => {
       // Tracking and launchd may have changed in another process during model resolution.
@@ -422,12 +467,14 @@ export async function injectSystemEnv(
         ownedTracking = JSON.stringify(tracking);
         ownedBaseUrl = destination.origin;
       } catch (error) {
-        rollbackInjectedKeys(port, injectedKeys, tracked);
+        const restored = rollbackInjectedKeys(port, injectedKeys, tracked);
         removeShellEnvFile();
         wrote = false;
+        if (!restored) throw new Error("System environment rollback incomplete; inspect the tracked environment before retrying.", { cause: error });
         throw error;
       }
     });
+    initialCommitFinished = true;
     if (!applied || !wrote) return superseded();
 
     // Gateway-model cache pre-write (devlog 030): plain `claude` sessions read the
@@ -451,15 +498,35 @@ export async function injectSystemEnv(
     } catch { /* best-effort */ }
 
     if (!isCurrent()) return superseded();
-    if (!commitIfCurrent(() => { writeTracking(port, injectedKeys, tracked); })) return superseded();
+    if (!commitIfCurrent(() => {})) return superseded();
   } catch (error) {
+    if (wrote && !initialCommitFinished) {
+      let compensated = false;
+      try {
+        compensated = configMutation.withConfigMutationLockSync(() => {
+          if (getConfigDir() !== sourcePath || configMutation.readConfigGenerationInCurrentMutationTransaction().value !== beforeInjectionGeneration
+            || ownedTracking === undefined || JSON.stringify(readTracking()) !== ownedTracking
+            || launchctlGetenv("ANTHROPIC_BASE_URL") !== ownedBaseUrl) return false;
+          if (!rollbackInjectedKeys(port, injectedKeys, tracked)) return false;
+          removeShellEnvFile();
+          return true;
+        });
+      } catch { /* retain the tracked state for recovery */ }
+      if (!compensated) throw new Error("System environment commit failed; ownership could not be recovered. Inspect the tracked environment before retrying.", { cause: error });
+      console.error("Failed to commit system environment; rolled back launchctl changes.");
+      throw error;
+    }
     if (!isCurrent()) return superseded();
-    if (wrote && !commitIfCurrent(() => { rollbackInjectedKeys(port, injectedKeys, tracked); removeShellEnvFile(); })) return superseded();
+    let restored = false;
+    if (wrote && !commitIfCurrent(() => { restored = rollbackInjectedKeys(port, injectedKeys, tracked); removeShellEnvFile(); })) return superseded();
+    if (wrote && !restored) throw new Error("System environment rollback incomplete; inspect the tracked environment before retrying.", { cause: error });
     console.error("Failed to inject system environment; rolled back launchctl changes:", error);
     throw error;
   }
 
-  return { injected: true };
+  const result: SystemEnvResult = { injected: true };
+  completedSystemEnv.set(result, commitIfCurrent);
+  return result;
 }
 
 export async function applySystemEnvToggle(config: OcxConfig, port: number): Promise<SystemEnvResult | RevertResult> {
