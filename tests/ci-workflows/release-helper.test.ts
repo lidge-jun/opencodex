@@ -11,7 +11,7 @@ setDefaultTimeout(30_000);
 const source = "a".repeat(40);
 const other = "b".repeat(40);
 type Call = { name: string; args: string[]; tokenMatches?: boolean; tokenPresent?: boolean; repository?: string };
-type Scenario = { token?: string | null; repository?: string | null; authExit?: number; authToken?: string; resolverStderr?: string; dispatchStderr?: string; dispatchExit?: number; dispatchOutput?: string; runMode?: string; watchExit?: number };
+type Scenario = { token?: string | null; repository?: string | null; authExit?: number; authToken?: string; resolverStderr?: string; dispatchStderr?: string; dispatchExit?: number; dispatchOutput?: string; runMode?: string; watchExit?: number; watchStdout?: string };
 
 async function invoke(args: string[], evidence = JSON.stringify({ sourceSha: source, ciRunId: 42 }), evidenceExit = 0, scenario: Scenario = {}) {
   const dir = mkdtempSync(join(tmpdir(), "ocx-release-helper-"));
@@ -39,7 +39,7 @@ if (name === "gh" && args[0] === "run" && args[1] === "list") {
     url: mode === "wrong-repo" ? "https://github.com/other/repository/actions/runs/123" : "https://github.com/lidge-jun/opencodex/actions/runs/123" };
   process.stdout.write(JSON.stringify(mode === "malformed" ? {} : mode === "duplicate" ? [run, run] : mode === "other-run" ? [{ ...run, databaseId: 124, url: "https://github.com/lidge-jun/opencodex/actions/runs/124", createdAt: "2020-01-01T00:00:00Z" }, run] : [run])); process.exit(0);
 }
-if (name === "gh" && args[0] === "run" && args[1] === "watch") { process.stderr.write(process.env.RELEASE_TEST_DISPATCH_STDERR); process.exit(Number(process.env.RELEASE_TEST_WATCH_EXIT)); }
+if (name === "gh" && args[0] === "run" && args[1] === "watch") { process.stdout.write(process.env.RELEASE_TEST_WATCH_STDOUT); process.stderr.write(process.env.RELEASE_TEST_DISPATCH_STDERR); process.exit(Number(process.env.RELEASE_TEST_WATCH_EXIT)); }
 `);
       const launcher = join(dir, name);
       writeFileSync(launcher, `#!${process.execPath}\nimport "./${name}.js";\n`);
@@ -56,7 +56,8 @@ if (name === "gh" && args[0] === "run" && args[1] === "watch") { process.stderr.
         RELEASE_TEST_EXPECTED_TOKEN: scenario.token === null ? (scenario.authToken ?? "fixture-auth-token").trim() : (scenario.token ?? "fixture-existing-token"),
         RELEASE_TEST_RESOLVER_STDERR: scenario.resolverStderr ?? "", RELEASE_TEST_DISPATCH_STDERR: scenario.dispatchStderr ?? "", RELEASE_TEST_DISPATCH_EXIT: String(scenario.dispatchExit ?? 0),
         RELEASE_TEST_DISPATCH_OUTPUT: scenario.dispatchOutput ?? "https://github.com/lidge-jun/opencodex/actions/runs/123\n",
-        RELEASE_TEST_RUN_MODE: scenario.runMode ?? "valid", RELEASE_TEST_WATCH_EXIT: String(scenario.watchExit ?? 0), HOME: dir, USERPROFILE: dir },
+        RELEASE_TEST_RUN_MODE: scenario.runMode ?? "valid", RELEASE_TEST_WATCH_EXIT: String(scenario.watchExit ?? 0),
+        RELEASE_TEST_WATCH_STDOUT: scenario.watchStdout ?? "", HOME: dir, USERPROFILE: dir },
     });
     const [status, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     const calls = readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line) as Call);
@@ -189,6 +190,20 @@ describe("dev release helper", () => {
     const result = await invoke(["latest"], undefined, 0, { watchExit: 1, dispatchStderr: "fixture-secret-watch" });
     expect(result.status).not.toBe(0);
     expect(result.output).not.toContain("fixture-secret-watch");
+  });
+
+  test("streams watch progress and final job states to the operator (#8330)", async () => {
+    const watchStdout = "fixture-progress: build in_progress\nfixture-final: X publish failed\n";
+    for (const args of [["latest"], ["watch"]]) {
+      const result = await invoke(args, undefined, 0, { watchStdout });
+      expect(result.status, result.output).toBe(0);
+      expect(result.output).toContain("https://github.com/lidge-jun/opencodex/actions/runs/123");
+      expect(result.output).toContain(watchStdout);
+    }
+    const failed = await invoke(["latest"], undefined, 0, { watchExit: 1, watchStdout, dispatchStderr: "fixture-secret-watch" });
+    expect(failed.status).not.toBe(0);
+    expect(failed.output).toContain("fixture-final: X publish failed");
+    expect(failed.output).not.toContain("fixture-secret-watch");
   });
 
   test("watch command locates the latest dev release without dispatching", async () => {

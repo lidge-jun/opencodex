@@ -11,6 +11,10 @@ manual dispatch from `dev`, not on PRs. A full `lane=all` dispatch provides evid
 source SHA; a PR green or a narrower dispatch is not full-platform evidence. After a batch of
 merges, maintainers run one full dispatch on `dev` rather than one per PR.
 
+The manual `windows-native-claim` lane runs the instrumented native-main quota
+provenance test on one hosted Windows runner, without starting the full matrix.
+It is diagnostic evidence only: it cannot mark a commit green for release.
+
 Two paths sit outside the `ci` filter on purpose and get narrow jobs instead of the full matrix.
 A change under `.github/actions/` runs `setup-action` on Linux for PRs and on Linux, Windows and macOS for full dispatch: it runs the
 composite Bun setup and requires the installed runtime to equal the version `package.json`
@@ -126,9 +130,9 @@ The scoped docs job builds the site. CI does not run coverage or perform remote 
 Those stay outside the default gate until a concrete regression justifies the extra runtime.
 
 The manual Release workflow selects a source with qualifying full `dev` dispatch evidence and
-uses a separately identified trusted workflow revision. Publication remains held, and its current
-history reconciliation fails closed for existing npm publications. Resume is refused pending a
-verified durable receipt. History reconciliation, security review, actual dry-run evidence and
-cutover settings remain open; a CI run alone does not authorize publication.
+uses a separately identified trusted workflow revision. Publication remains held. History
+reconciliation and the attested resume follow the [release workflow](docs-and-release.md#release-workflow).
+Review of the legacy history mapping, security review, actual dry-run evidence and cutover settings
+remain open; a CI run alone does not authorize publication.
 
 The shared Responses path follows the [bounded multipart recovery contract](../subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
