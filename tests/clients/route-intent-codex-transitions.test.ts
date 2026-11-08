@@ -8,7 +8,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 // Fresh modules bind every Codex path to this disposable home, including journal restoration.
-function scenario(body: string) {
+function scenario(body: string, initialCodex?: boolean | "absent") {
   const home = mkdtempSync(join(tmpdir(), "ocx-route-codex-transition-"));
   mkdirSync(join(home, ".codex"));
   try {
@@ -29,7 +29,11 @@ function scenario(body: string) {
       const original = 'model = "user-model"\\n';
       writeFileSync(configPath, original);
       mkdirSync(join(home, '.pi', 'agent'), {recursive:true});
-      const local = getDefaultConfig(); local.port = 18274; saveConfig(local);
+      const local = getDefaultConfig(); local.port = 18274;
+      if (${initialCodex === "absent"}) { if (local.clientIntegrations) delete local.clientIntegrations.codex; }
+      else if (${typeof initialCodex === "boolean"}) local.clientIntegrations = {...local.clientIntegrations, codex:${JSON.stringify(initialCodex === true)}};
+      saveConfig(local);
+      const rawNativeBefore = JSON.parse(readFileSync(join(process.env.OPENCODEX_HOME,'config.json'),'utf8'));
       let codexEnabled = true, modelId = 'fixture/first';
       const document = () => ({version:1, home:{name:'fixture-home',version:'1'},
         clients:Object.fromEntries(ROUTE_CLIENT_IDS.map(id=>[id,{enabled:id==='pi'||id==='codex'&&codexEnabled}])),
@@ -62,6 +66,56 @@ function scenario(body: string) {
     return JSON.parse(child.stdout.trim().split("\n").at(-1)!);
   } finally { removeTreeWithRetry(home); }
 }
+
+for (const initial of ["absent", false, true] as const) {
+  test(`disconnect restores native Codex intent after repeated Home sync (initial: ${String(initial)})`, () => {
+    const result = scenario(`
+      codexEnabled=false; await syncConnectedClient({},deps);
+      codexEnabled=true; await syncConnectedClient({},deps);
+      let error; try { await disconnectClient({},deps); } catch(e) { error=e.message; }
+      const raw=JSON.parse(readFileSync(join(process.env.OPENCODEX_HOME,'config.json'),'utf8'));
+      console.log(JSON.stringify({error,state:readClientConnectionState().kind,
+        hasCodex:Object.hasOwn(raw.clientIntegrations??{},'codex'),value:raw.clientIntegrations?.codex}));
+    `, initial);
+    expect(result.error).toBeUndefined();
+    expect(result.state).toBe("disconnected");
+    expect(result.hasCodex).toBe(initial !== "absent");
+    if (initial !== "absent") expect(result.value).toBe(initial);
+  }, SPAWN_BUDGET_MS);
+}
+
+// A value the route-intent writer did not publish is the person's own edit: disconnect keeps it.
+test("disconnect retains the user's edit to native Codex intent after Home sync", () => {
+  const result = scenario(`
+    codexEnabled=false; await syncConnectedClient({},deps);
+    const edited=loadConfig(); edited.clientIntegrations={...edited.clientIntegrations,codex:true}; saveConfig(edited);
+    let error; try { await disconnectClient({},deps); } catch(e) { error=e.message; }
+    const raw=JSON.parse(readFileSync(join(process.env.OPENCODEX_HOME,'config.json'),'utf8'));
+    console.log(JSON.stringify({error,state:readClientConnectionState().kind,value:raw.clientIntegrations?.codex}));
+  `, "absent");
+  expect(result.error).toBeUndefined();
+  expect(result.state).toBe("disconnected");
+  expect(result.value).toBe(true);
+}, SPAWN_BUDGET_MS);
+
+test("disconnect restores native Claude, Desktop, Grok and Messages field presence", () => {
+  const result = scenario(`
+    await syncConnectedClient({},deps);
+    let error; try { await disconnectClient({},deps); } catch(e) { error=e.message; }
+    const after=JSON.parse(readFileSync(join(process.env.OPENCODEX_HOME,'config.json'),'utf8'));
+    const fields = raw => ({
+      grok: Object.hasOwn(raw.clientIntegrations??{},'grok') ? raw.clientIntegrations.grok : 'absent',
+      desktop: Object.hasOwn(raw.clientIntegrations??{},'claude-desktop') ? raw.clientIntegrations['claude-desktop'] : 'absent',
+      claude: Object.hasOwn(raw.claudeCode??{},'enabled') ? raw.claudeCode.enabled : 'absent',
+      sentinel: Object.hasOwn(raw.claudeCode??{},'authModeMigratedAt') ? raw.claudeCode.authModeMigratedAt : 'absent',
+      messages: Object.hasOwn(raw.apiSurfaces??{},'messages') ? raw.apiSurfaces.messages : 'absent',
+    });
+    console.log(JSON.stringify({error,state:readClientConnectionState().kind,before:fields(rawNativeBefore),after:fields(after)}));
+  `);
+  expect(result.error).toBeUndefined();
+  expect(result.state).toBe("disconnected");
+  expect(result.after).toEqual(result.before);
+}, SPAWN_BUDGET_MS);
 
 for (const damage of ["malformed", "invalid_owner", "missing"] as const) {
   test(`unknown Codex cleanup evidence retains credentials after failed off: ${damage}`, () => {
@@ -140,11 +194,11 @@ for (const foreign of [false, true]) {
       codexEnabled=false;
       let off;
       try{off=await syncConnectedClient({},deps);}finally{releaseConfigWriteLock(lock.handle);}
-      const retained=existsSync(journalPath),before=readFileSync(configPath,'utf8');
+      const retained=existsSync(journalPath),before=readFileSync(configPath,'utf8'),disabled=loadConfig().clientIntegrations?.codex;
       if(${foreign}){const journal=JSON.parse(readFileSync(journalPath,'utf8'));journal.owner={kind:'client',apiKeyId:'foreign-key'};writeFileSync(journalPath,JSON.stringify(journal));}
       let disconnected,error;try{disconnected=await disconnectClient({},deps);}catch(e){error=e.message;}
       console.log(JSON.stringify({injected,before,retained,offOutcome:off.routeIntent.outcomes.find(row=>row.client==='codex'),
-        selected:off.connection.selectedClients,disabled:loadConfig().clientIntegrations.codex,error,disconnected,
+        selected:off.connection.selectedClients,disabled,codexAfter:loadConfig().clientIntegrations?.codex??'absent',error,disconnected,
         after:readFileSync(configPath,'utf8'),original,journal:existsSync(journalPath),
         token:existsSync(join(process.env.OPENCODEX_HOME,'service-api-token')),state:readClientConnectionState().kind}));
     `);
@@ -156,6 +210,7 @@ for (const foreign of [false, true]) {
     expect(result.before).toBe(result.injected);
     if (foreign) {
       expect(result.error).toContain("journal ownership conflicts");
+      expect(result.codexAfter).toBe(false);
       expect(result.after).toBe(result.injected);
       expect(result.journal).toBe(true);
       expect(result.token).toBe(true);
@@ -163,6 +218,8 @@ for (const foreign of [false, true]) {
     } else {
       expect(result.error).toBeUndefined();
       expect(result.disconnected.restored).toBe(true);
+      // The standalone flag was absent before the Home's off displaced it.
+      expect(result.codexAfter).toBe("absent");
       expect(result.after).toBe(result.original);
       expect(result.journal).toBe(false);
       expect(result.token).toBe(false);

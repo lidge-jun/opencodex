@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExportModel } from "../clients/config-export";
 import { loadConfig, mutatePersistedConfig, withConfigMutationLockSync } from "../config";
+import { readConfigForAdmittedMutation } from "../config/persisted-mutation";
 import { commitClaudeCodeBlock } from "../claude/claude-code-block";
 import { localInferenceDestination } from "../lib/local-destinations";
 import { persistCommittedDesktopGateway } from "../claude/desktop-gateway-state";
@@ -14,6 +15,7 @@ import { assertNoClientDisconnectPending, readClientConnectionState, sameClientC
 import { withClientLifecycle, withClientLifecycleSync, type ClientLifecycleLockDeps } from "./lifecycle-lock";
 import { assertRouteIntentPort } from "./sync-runtime";
 import { resolveApiSurfaceSettings } from "../protocols/settings";
+import { nativeIntentFields, prepareNativeIntentWrite, publishNativeIntentWrite } from "./route-intent-native-originals";
 
 export interface LocalRouteIntentOptions extends Pick<RouteIntentApplyInput,
   "overwriteConflict" | "overwriteClient" | "beforeWrite" | "statePath" | "store" | "home" | "env" | "now" | "onlyClients"> {
@@ -22,22 +24,42 @@ export interface LocalRouteIntentOptions extends Pick<RouteIntentApplyInput,
   lifecycleLockDeps?: ClientLifecycleLockDeps;
 }
 
-/** Caller holds the lifecycle fence; the config coordinator rechecks guard before each commit. */
-export function persistNativeRouteIntent(client: "codex" | "claude" | "claude-desktop" | "grok", enabled: boolean, guard: () => void, snapshot: OcxConfig): OcxConfig {
-  const result = mutatePersistedConfig(config => {
-    guard();
+/**
+ * Caller holds the lifecycle fence; the config coordinator rechecks guard before each commit.
+ * `recordStandalone` is true only for a Child's link write: it records the standalone value
+ * write-ahead so disconnect or a failed enrollment can restore it. Home writes are the
+ * operator's own decisions and are not recorded.
+ */
+export function persistNativeRouteIntent(client: "codex" | "claude" | "claude-desktop" | "grok", enabled: boolean, guard: () => void, snapshot: OcxConfig,
+  recordStandalone: boolean): OcxConfig {
+  const now = new Date();
+  const apply = (config: OcxConfig): boolean => {
     const previous = client === "claude" ? config.claudeCode?.enabled !== false : config.clientIntegrations?.[client] !== false;
-    if (previous === enabled) return { changed: false, value: config };
+    if (previous === enabled) return false;
     if (client === "claude") {
       // The legacy flag also supplied the shared Messages API default. A local opt-out
       // must preserve that preexisting exposure for other devices and Desktop clients.
       if (!enabled && resolveApiSurfaceSettings(config).messages.source === "claude-code-legacy") {
         config.apiSurfaces = { ...config.apiSurfaces, messages: { enabled: resolveApiSurfaceSettings(config).messages.enabled } };
       }
-      commitClaudeCodeBlock(config, { ...config.claudeCode, enabled });
+      commitClaudeCodeBlock(config, { ...config.claudeCode, enabled }, now);
     }
     else config.clientIntegrations = { ...config.clientIntegrations, [client]: enabled };
-    return { changed: true, value: config };
+    return true;
+  };
+  const result = withConfigMutationLockSync(() => {
+    let recorded = false;
+    if (recordStandalone) {
+      guard();
+      const base = readConfigForAdmittedMutation(), planned = structuredClone(base);
+      if (apply(planned)) recorded = prepareNativeIntentWrite(nativeIntentFields(base), nativeIntentFields(planned));
+    }
+    const outcome = mutatePersistedConfig(config => {
+      guard();
+      return { changed: apply(config), value: config };
+    });
+    if (outcome.status !== "unavailable" && recorded) publishNativeIntentWrite(nativeIntentFields(outcome.value));
+    return outcome;
   });
   if (result.status === "unavailable") throw new Error(`Local native route intent could not be persisted (${result.reason})`);
   if (client === "claude") {
@@ -65,7 +87,8 @@ async function applyNative(
       const current = loadConfig();
       if (desktopMode.resolveClaudeDesktopMode(current, desktopMode.observeClaudeDesktopMode(current)) === "first-party") return null;
     }
-    return persistNativeRouteIntent(client, intent.enabled, guard, input.config);
+    // Only a connected Child's write displaces a standalone value; the Home owns its own flags.
+    return persistNativeRouteIntent(client, intent.enabled, guard, input.config, readClientConnectionState().kind === "connected");
   }), options.lifecycleLockDeps);
   if (committedConfig === null) return { client, outcome: "conflict", message: "Claude Desktop first-party mode needs its existing mode-switch transaction" };
   if (client === "codex") {

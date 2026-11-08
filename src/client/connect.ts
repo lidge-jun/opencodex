@@ -107,6 +107,7 @@ import type { RouteIntentReceipt } from "../integrations/route-intent-contract";
 import { clearHomeRouteIntentRecord } from "./link-home";
 import { clearInitialRouteIntent, recordInitialRouteIntent } from "../integrations/route-intent-initial";
 import { cleanupConnectedRouteIntent } from "../integrations/route-intent-disconnect";
+import { restoreNativeIntentOriginals } from "./route-intent-native-originals";
 
 class RotationRecoveryRequiredError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -617,7 +618,7 @@ async function connectClientUnlocked(
   let priorCatalog: CatalogSnapshot | null = null;
   let writtenCatalogFingerprint: string | null = null;
   let injectionCommitted = false;
-  let restoreCodexIntent: (() => void) | undefined;
+  let restoreNativeIntent = false;
   let committed = false;
   let initialSelectionWritten = false;
   // Before any catalog, journal, client-state or credential write: `CODEX_HOME` is shared with the
@@ -765,16 +766,15 @@ async function connectClientUnlocked(
     };
     if (!options.noSync && routeIntent && selectedClients.includes("codex") && existsSync(getCodexHome())) {
       const { persistNativeRouteIntent } = await import("./route-intent-apply");
+      // Armed before publication: the write-ahead originals record can exist even when the
+      // config write or its bookkeeping throws, and rollback must still put the field back.
+      restoreNativeIntent = true;
       withClientLifecycleSync(() => withConfigMutationLockSync(() => {
         beforeCodexWrite();
         // Home intent owns a selected installed client, including a standalone OFF. Keep
-        // compensation field-scoped: a failed enrollment must not enable standalone Codex
-        // or replace disjoint config changes made while injection was awaiting its locks.
-        const wasDisabled = loadConfig().clientIntegrations?.codex === false;
-        if (wasDisabled) restoreCodexIntent = () => {
-          persistNativeRouteIntent("codex", false, () => assertConnectingState(persisted.fingerprint), loadConfig());
-        };
-        persistNativeRouteIntent("codex", true, beforeCodexWrite, injectConfig);
+        // compensation field-scoped: a failed enrollment restores the recorded standalone
+        // value, keeps a later edit by the person, and keeps disjoint config changes.
+        persistNativeRouteIntent("codex", true, beforeCodexWrite, injectConfig, true);
       }), deps.lifecycleLockDeps);
     }
     const preflight = !selectedClients.includes("codex") || (routeIntent && !existsSync(getCodexHome()))
@@ -869,8 +869,9 @@ async function connectClientUnlocked(
           try { clearInitialRouteIntent(linkMetadata.linkId); }
           catch { rollbackFailures.push("initial route selection rollback unavailable"); }
         }
-        if (restoreCodexIntent) {
-          try { restoreCodexIntent(); }
+        if (restoreNativeIntent && !committed && pendingConnectFingerprint) {
+          const fingerprint = pendingConnectFingerprint;
+          try { restoreNativeIntentOriginals(() => assertConnectingState(fingerprint)); }
           catch { rollbackFailures.push("Codex intent rollback ownership unavailable"); }
         }
         if (priorCatalog && writtenCatalogFingerprint && !restoreCatalogSnapshot(priorCatalog, writtenCatalogFingerprint)) {
@@ -1057,7 +1058,7 @@ async function syncConnectedClientUnlocked(
     // that durable gate, retaining local opt-outs and the owner/runtime/token commit fences.
     if (routeIntent) {
       const { persistNativeRouteIntent } = await import("./route-intent-apply");
-      withClientLifecycleSync(() => persistNativeRouteIntent("codex", true, beforeCodexWrite, config), deps.lifecycleLockDeps);
+      withClientLifecycleSync(() => persistNativeRouteIntent("codex", true, beforeCodexWrite, config, true), deps.lifecycleLockDeps);
     }
     const result = await injectCodexConfig(config.port, { ...config, syncResumeHistory: false }, {
       routingTarget: routingTarget(next.serverUrl, isLinkConnection(next) ? config.port : undefined, config), catalogPath: DEFAULT_CATALOG_PATH,
@@ -1316,6 +1317,10 @@ export async function disconnectClient(
       clearHomeRouteIntentRecord();
       if (readRouteIntentReceiptStrict()?.linkId === connection.link?.linkId) clearRouteIntentReceipt();
     }
+    // Standalone native switches come back before the token that displaced them is removed.
+    // The record is machine-scoped, so any transport drains one a crashed enrollment left.
+    // The locks and the receipt checked above already fence this; a retry is idempotent.
+    if (!disconnectAtLeast(receipt, "removing_token")) restoreNativeIntentOriginals(() => {});
     if (!disconnectAtLeast(receipt, "removing_token")) advance("removing_token");
     const tokenRemoval = removeServiceApiTokenFileIfOwned(receipt.tokenFingerprint);
     if (tokenRemoval === "changed") throw new Error("client_token_changed");

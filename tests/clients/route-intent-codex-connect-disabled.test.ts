@@ -147,6 +147,20 @@ for (const initiallyEnabled of [false, true]) {
   }, SPAWN_BUDGET_MS);
 }
 
+test("failed enrollment preserves a later user edit to the temporary Codex intent", () => {
+  const result = scenario(`
+    deps.now=()=>{
+      observedEnabled=loadConfig().clientIntegrations.codex;
+      const edited=loadConfig(); edited.clientIntegrations={...edited.clientIntegrations,grok:true};
+      delete edited.clientIntegrations.codex; saveConfig(edited);
+      throw new Error('fixture enrollment commit failed');
+    };
+  `);
+  expect(result.error).toContain("fixture enrollment commit failed");
+  expect(result.observedEnabled).toBe(true);
+  expect(result.enabled).toBeUndefined();
+}, SPAWN_BUDGET_MS);
+
 test("fresh Link connect with local Codex off preserves the disabled flag without injection", () => {
   const result = scenario("setLocalRouteIntentOff('codex',true);");
   expect(result.error).toBeUndefined();

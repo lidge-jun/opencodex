@@ -58,6 +58,20 @@ function scenario(body: string, options: { noSync?: boolean; olderHome?: boolean
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
 
+test("disconnect restores the previously absent standalone Codex flag", () => {
+  const result = scenario(`
+    const during=loadConfig().clientIntegrations?.codex;
+    let error; try { await disconnectClient({},deps); } catch(e) { error=e.message; }
+    const after=loadConfig();
+    console.log(JSON.stringify({during,error,state:readClientConnectionState().kind,
+      hasCodex:Object.hasOwn(after.clientIntegrations??{},'codex')}));
+  `);
+  expect(result.during).toBe(false);
+  expect(result.error).toBeUndefined();
+  expect(result.state).toBe("disconnected");
+  expect(result.hasCodex).toBe(false);
+});
+
 test("review: isolated local-off fallback reads its own opt-out and previous document", () => {
   const result = scenario(`
     const statePath=join(home,'isolated-state'), store=createIntegrationStateStore(join(home,'isolated-store'));

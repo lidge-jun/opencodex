@@ -71,7 +71,7 @@ test.each(["grok", "claude-desktop"] as const)("a no-op enable does not invent a
   saveConfig(config);
   const snapshot = loadConfig();
   expect(snapshot.clientIntegrations?.[client]).toBeUndefined();
-  persistNativeRouteIntent(client, true, () => {}, snapshot);
+  persistNativeRouteIntent(client, true, () => {}, snapshot, false);
   expect(snapshot.clientIntegrations?.[client]).toBeUndefined();
   expect(loadConfig().clientIntegrations?.[client]).toBeUndefined();
 });
