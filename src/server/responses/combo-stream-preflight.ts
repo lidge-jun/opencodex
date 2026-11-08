@@ -7,6 +7,7 @@ import type { RequestFailureStage } from "../../lib/request-failure-model";
 import type { RequestLogContext } from "../request-log";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
 import { createSseInspector } from "../relay";
+import { sseDataPayload } from "../sse-payload-rewrite";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import { REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
 import { requiredToolReasoningPrelude } from "./combo-required-tool-stream";
@@ -45,6 +46,33 @@ const RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS = new Set([
   "missing_terminal_event",
   "upstream_stall_timeout",
 ]);
+
+// SSE uses the last event field, with an empty value resetting it to the default.
+// A mismatched or unreadable frame is not a proven lifecycle prelude.
+function ambiguousSseFrame(frame: string): boolean {
+  let event: string | undefined;
+  let hasNonComment = false;
+  for (const line of frame.split(/\r\n|\r|\n/)) {
+    if (!line || line.startsWith(":")) continue;
+    hasNonComment = true;
+    const colon = line.indexOf(":");
+    const field = colon < 0 ? line : line.slice(0, colon);
+    if (field === "event") {
+      const value = colon < 0 ? "" : line.slice(colon + 1);
+      event = value.startsWith(" ") ? value.slice(1) : value;
+    }
+  }
+  const data = sseDataPayload(frame);
+  if (data === null || data === "") return hasNonComment;
+  if (!event) return false;
+  try {
+    const payload: unknown = JSON.parse(data);
+    return !payload || typeof payload !== "object" || Array.isArray(payload)
+      || (payload as { type?: unknown }).type !== event;
+  } catch {
+    return true;
+  }
+}
 
 function bareErrorStatus(payload: unknown): number | undefined {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
@@ -321,6 +349,10 @@ export async function preflightComboStreamResponse(
   let holdDeadline: Promise<"hold-expired"> | undefined;
   const inspector = createSseInspector({
     logCtx,
+    onFrame: frame => {
+      if (terminalStatus === undefined && !outputCommitted && !retryableTerminalPayload
+        && ambiguousSseFrame(frame)) outputCommitted = true;
+    },
     // A payload the inspector could not parse still reached this proxy, and it may be output.
     // Committing on it is what keeps an unreadable frame from reading as an empty prelude.
     onOpaquePayload: () => { outputCommitted = true; },
@@ -371,10 +403,16 @@ export async function preflightComboStreamResponse(
         next = observed;
       } catch (error) {
         if (!options?.replayReadErrors) throw error;
+        // A rejected read can leave an output, terminal or opaque frame buffered
+        // in the inspector. Flush it before deciding whether recovery is safe.
+        inspector.finish();
         // The native relay still owns post-header transport failures. Preserve
         // the bounded prefix and the errored reader; cancelling it here would
         // erase the failure before either client relay or inspection sees it.
         const replay = replayBufferedResponse(response, reader, buffered);
+        if (outputCommitted || terminalStatus !== undefined || retryableTerminalPayload) {
+          return { kind: "accepted", response: replay };
+        }
         const stage = observedResponsesStage({ outputCommitted, terminalStatus, responseCreated });
         return { kind: "read-error", response: replay, error, stage };
       }

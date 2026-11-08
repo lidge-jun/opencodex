@@ -807,6 +807,87 @@ describe("combo stream preflight", () => {
     } finally { await reader.cancel(); }
   });
 
+  test.each([
+    ['event: error\ndata: {"type":"response.created"}\n\n'],
+    ['event: response.output_text.delta\ndata: {"type":"response.created"}\n\n'],
+    ['event: response.created\nevent: error\ndata: {"type":"response.created"}\n\n'],
+    ['event: error\ndata: {"type":"response.failed","response":{"status":"failed"}}\n\n'],
+    ['event: error\ndata:\n\n'],
+  ])("conflicting or opaque SSE frames preserve original bytes (%s)", async frame => {
+    const bytes = new TextEncoder().encode(frame);
+    let offset = 0;
+    const source = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (offset === bytes.length) return controller.close();
+        controller.enqueue(bytes.slice(offset, ++offset));
+      },
+    });
+    let calls = 0;
+    const wrapped = deferProtocolSafeResetRecovery(
+      new Response(source, { headers: { "content-type": "text/event-stream" } }),
+      { model: "m1", provider: "a" }, async () => { calls++; return sse({ type: "response.completed" }); },
+    );
+    expect(await wrapped.text()).toBe(frame);
+    expect(calls).toBe(0);
+  });
+
+  test.each([
+    'data: {"type":"response.created"}\n\n',
+    'event: error\nevent: response.created\ndata: {"type":"response.created"}\n\n',
+    'event:\ndata: {"type":"response.created"}\n\n',
+  ])("ordinary prelude event semantics still allow EOF recovery (%s)", async frame => {
+    let calls = 0;
+    const wrapped = deferProtocolSafeResetRecovery(
+      new Response(frame, { headers: { "content-type": "text/event-stream" } }),
+      { model: "m1", provider: "a" }, async () => { calls++; return sse({ type: "response.completed", response: { id: "replacement" } }); },
+    );
+    expect(await wrapped.text()).toContain('"replacement"');
+    expect(calls).toBe(1);
+  });
+
+  test("a retryable bare error remains authoritative over a later conflicting frame in the same chunk", async () => {
+    const body = 'data: {"type":"error","error":{"message":"first"}}\n\n'
+      + 'event: error\ndata: {"type":"response.created"}\n\n';
+    const result = await preflightComboStreamResponse(
+      new Response(body, { headers: { "content-type": "text/event-stream" } }),
+      { model: "m1", provider: "a" },
+    );
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(502);
+  });
+
+  test.each([
+    'data: {"type":"response.output_text.delta","delta":"original"}',
+    'data: {"type":"error","error":{"message":"original"}}',
+    'data: {"type":"response.completed","response":{"status":"completed"}}',
+    'data: {"type":"response.output',
+    'data:',
+    'event: error',
+  ])("read rejection retains unfinished unsafe frame and the same error (%s)", async frame => {
+    const readError = new Error("original reset");
+    const prefix = new TextEncoder().encode(frame);
+    let calls = 0;
+    const wrapped = deferProtocolSafeResetRecovery(
+      prefixThenReadError(prefix, readError).response, { model: "m1", provider: "a" },
+      async () => { calls++; return sse({ type: "response.completed", response: { id: "replacement" } }); },
+    );
+    const reader = wrapped.body!.getReader();
+    expect((await reader.read()).value).toEqual(prefix);
+    await expect(reader.read()).rejects.toBe(readError);
+    expect(calls).toBe(0);
+  });
+
+  test("read rejection after an unfinished empty control still allows recovery", async () => {
+    const prefix = new TextEncoder().encode('data: {"type":"response.created","response":{"output":[]}}');
+    let calls = 0;
+    const wrapped = deferProtocolSafeResetRecovery(
+      prefixThenReadError(prefix, new Error("reset")).response, { model: "m1", provider: "a" },
+      async () => { calls++; return sse({ type: "response.completed", response: { id: "replacement" } }); },
+    );
+    expect(await wrapped.text()).toContain('"replacement"');
+    expect(calls).toBe(1);
+  });
+
   test("a response.created carrying output is not a prelude", () => {
     expect(comboStreamPayloadCommitsOutput({
       type: "response.created", response: { id: "r1", output: [] },
