@@ -115,10 +115,13 @@ Both environment variables override `config.json` immediately without modifying 
 Whenever `OCX_TELEMETRY` or `DO_NOT_TRACK` opt-out is observed — at proxy startup in
 `src/server/background-lifecycle.ts` (even though the scheduler timer is not started) and on every
 scheduler tick — opencodex also persists `ineligibleThroughDay` set to today's UTC day (`YYYY-MM-DD`)
-in `<OPENCODEX_HOME>/telemetry-state.json` via an atomic no-follow write and deletes
-`<OPENCODEX_HOME>/telemetry-id.json`. If you later remove the environment variable, any UTC day on or
-before `ineligibleThroughDay` (`day <= ineligibleThroughDay`) is never sent and a fresh install ID is
-minted on the next eligible send. While either variable is set, the dashboard toggle is disabled and
+and an `envOptOutActiveSince` marker in `<OPENCODEX_HOME>/telemetry-state.json` via an atomic no-follow
+write and deletes `<OPENCODEX_HOME>/telemetry-id.json`. A proxy started with the variable reads it
+once, so the marker covers every day that proxy keeps running. The opt-out period ends when that
+proxy stops cleanly, or, if it crashed, at the first scheduler tick without the variable; either way
+`ineligibleThroughDay` moves to that day. If you later remove the environment variable, no day the
+opt-out covered is ever sent, including the day it ended, and a fresh install ID is minted on the next
+eligible send. While either variable is set, the dashboard toggle is disabled and
 names the active variable.
 
 ## How to see the exact payload
@@ -244,7 +247,7 @@ opencodex never includes any of the following in telemetry payloads:
   or file paths.
 - Raw or free-form upstream error messages or stack traces.
 - Usage from the UTC calendar day on which consent or disclosure was recorded (`formatUtcDay(decidedAt ?? noticeShownAt)`) or any earlier UTC day — only completed UTC calendar days strictly after the consent/disclosure day (`day > formatUtcDay(decidedAt ?? noticeShownAt)`) are ever sent.
-- Usage from any UTC calendar day on or before `ineligibleThroughDay` (`day <= ineligibleThroughDay`), recorded whenever `OCX_TELEMETRY=0` or `DO_NOT_TRACK=1` opt-out is observed.
+- Usage from any UTC calendar day covered by an `OCX_TELEMETRY=0` or `DO_NOT_TRACK=1` opt-out, including every day a proxy started with it kept running and the day the opt-out ended (`day <= ineligibleThroughDay`, and nothing at all while `envOptOutActiveSince` is set).
 
 ## Storage, retention, and collector source
 
