@@ -410,7 +410,8 @@ not start or replace it as a package. Add isolated POSIX and Windows IPC tests
 for forged or stale app identity, unauthorized callers, changed grant/policy,
 lost replies, process exit, concurrent native-page/remote actions and Stop/Quit
 intent. The IPC boundary is separate from the bundled update-page guard
-(`desktop/src-tauri/src/lib.rs:274`) and requires independent security review.
+(`desktop/src-tauri/src/lib.rs:272` at the inventory baseline) and requires
+independent security review.
 
 ## Required activation scenarios
 

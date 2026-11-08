@@ -9,7 +9,8 @@ The proposed dashboard footer would expose desktop update state through the
 existing download orb and open the planned update panel. For browser/package
 installations, the existing dashboard update flow remains available. The native
 update page retains sole native update-command authority
-(`desktop/src-tauri/src/lib.rs:274`, `desktop/src-tauri/src/window.rs:115`).
+(`desktop/src-tauri/src/lib.rs:272` at the inventory baseline,
+`desktop/src-tauri/src/window.rs:115`).
 The footer's displayed version must fit ordinary stable versions; long versions
 remain fully readable without overlapping action buttons, at normal and narrow
 widths and in supported zoom modes.
