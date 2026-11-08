@@ -9,10 +9,10 @@
  * `mock.module` in update subprocess tests, so the verifier must not import its spelling from there.
  */
 
-/** Detect a versioned links layout, including a custom store directory. */
-export const PNPM_GLOBAL_STORE_LINKS_PATTERN = /(?:^|\/)v\d+\/links(?:\/|$)/i;
+/** Default store layout is sufficient for the legacy install-detection signature. */
+export const PNPM_GLOBAL_STORE_LINKS_PATTERN = /(?:^|\/)store\/v\d+\/links(?:\/|$)/i;
 
 /** True when a native path (either separator) has the versioned links layout. */
 export function isInPnpmGlobalStoreLinks(path) {
-  return PNPM_GLOBAL_STORE_LINKS_PATTERN.test(String(path).replaceAll("\\", "/"));
+  return /(?:^|\/)v\d+\/links(?:\/|$)/i.test(String(path).replaceAll("\\", "/"));
 }

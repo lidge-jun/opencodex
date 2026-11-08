@@ -168,7 +168,9 @@ export function runOwnedPnpm(
   capture: boolean,
   stdio: "inherit" | "pipe" | "ignore" = capture ? "pipe" : "inherit",
   probeSpawn: typeof probeSpawnSync = probeSpawnSync,
-  authorizeMutation: (kind: "package") => boolean = () => ["root", "bin", "list", "config", "view", "--version"].includes(args[0] ?? ""),
+  authorizeMutation: (kind: "package") => boolean = () => ["root", "bin", "list", "config", "view", "--version"].includes(args[0] ?? "")
+    || (args[0] === "store" && args.at(-1) === "path" && args.slice(1, -1).every(arg =>
+      arg === `--global-dir=${owner.globalDir}` || arg === `--config.global-bin-dir=${owner.globalBinDir}`)),
   session?: Pick<ReturnType<typeof createOrchestratedChildSession>, "retainInstallerFence" | "noteUntrackedInstaller" | "confirmInstallerExit">,
   markerPath = join(getConfigDir(), "update-orchestrated.json"),
 ): { status: number | null; stdout?: string | null; stderr?: string | null; processTreeExited?: boolean } {

@@ -255,6 +255,9 @@ function detectInstallCandidate(packagePath, exists) {
     /(?:^|\/)node_modules\/\.pnpm(?:\/|$)/i.test(normalized)
     || PNPM_GLOBAL_STORE_LINKS_PATTERN.test(normalized)
   ) return "pnpm";
+  const customStore = normalized.match(/^(.*\/v\d+)\/links\//i)?.[1];
+  if (customStore && exists(`${customStore}/files`)
+    && ["index", "index.db", "index.fallback"].some(name => exists(`${customStore}/${name}`))) return "pnpm";
 
   // `--preserve-symlinks` can leave a v10/v11 group path visible. Corroborate it with the
   // group's virtual store or the v11 global store before selecting pnpm.

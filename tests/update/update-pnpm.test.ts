@@ -49,6 +49,13 @@ describe("pnpm installation detection", () => {
     expect(detectInstallFromPath("C:\\work\\node_modules\\.pnpm\\@bitkyc08+opencodex@2.49.0\\node_modules\\@bitkyc08\\opencodex\\bin")).toBe("pnpm");
   });
 
+  test("an npm install under an unrelated versioned links directory stays npm", () => {
+    expect(detectInstallFromPath("/opt/releases/v2/links/node_modules/@bitkyc08/opencodex/bin")).toBe("npm");
+    const custom = "/opt/custom-cache/v11/links/pkg/2/h/node_modules/@bitkyc08/opencodex/bin";
+    expect(detectInstallFromPath(custom, { exists: path => ["/opt/custom-cache/v11/files", "/opt/custom-cache/v11/index"].includes(path) })).toBe("pnpm");
+    expect(detectInstallFromPath(custom, { exists: path => ["/opt/custom-cache/v11/files", "/opt/custom-cache/v11/index.db"].includes(path) })).toBe("pnpm");
+  });
+
   test("follows a preserved npm-looking symlink to the pnpm package target", () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-pnpm-detect-link-"));
     try {
