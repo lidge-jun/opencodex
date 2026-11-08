@@ -26,6 +26,7 @@ brew install --cask opencodex
 - **인앱 업데이트 (`auto_updates`)**: 데스크톱 앱에는 자체 업데이트 기능이 있으며 Cask는 `auto_updates true`를 선언합니다. 특정 Cask를 지정한 `brew upgrade --cask opencodex` 또는 greedy 업그레이드는 인앱 업데이트로 더 최신 버전이 된 앱을 교체할 수 있습니다. Homebrew로 업그레이드하기 전에 설치된 앱과 Cask의 버전을 확인하세요.
 - **CLI와 백그라운드 서비스**: Cask는 CLI와 프록시 런타임을 포함한 `OpenCodex.app`만 설치합니다. 독립 CLI나 헤드리스 서비스를 위해 npm 또는 릴리스 아카이브로 `ocx`를 별도 설치할 수 있으며, 두 설치는 `~/.opencodex` 설정을 공유합니다. 해당 CLI에 서비스를 넘기려면 OpenCodex를 종료하고 별도 CLI를 명시적으로 선택한 다음([Desktop 패키지 런처 핸드오프](/getting-started/installation/)가 활성화되어 있으면 우회) `ocx service install`을 실행하세요. [터미널 명령 선택](/guides/desktop-app/#using-the-ocx-cli-with-the-desktop-app)과 [런타임 소유권](/reference/cli/lifecycle/#runtime-ownership)을 참조하세요.
 - **Cask 업그레이드 후 서비스**: Cask의 제거 단계는 별도 CLI의 `com.opencodex.proxy` launchd 작업과 plist도 제거하여 백그라운드 서비스를 중단할 수 있습니다. 업그레이드 후 OpenCodex를 종료하고 macOS GUI 로그인 세션에서 위처럼 명시적으로 선택한 별도 CLI로 `ocx service status`를 실행하세요. 서비스가 없으면 `ocx service install`, 설치되어 있지만 로드되지 않았다면 `ocx service repair`를 실행한 뒤 `ocx service status`로 다시 확인하세요.
+- **`--zap`을 사용한 데이터 삭제**: `brew uninstall --zap --cask opencodex`는 `~/.opencodex`와 `~/.opencodex-desktop`을 삭제합니다. 이 디렉터리에 있는 CLI와 Desktop의 공유 설정과 상태 데이터도 삭제됩니다. `--zap`을 사용하기 전에 보관할 데이터를 백업하세요.
 
 ### Windows
 
