@@ -7,7 +7,7 @@
  * backup at boot — so a non-self-contained candidate called healthy costs the known-good copy.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -226,6 +226,10 @@ describe("#4202 install-tree dependency ownership", () => {
     writeDependency(join(instance, "bun"), "bun");
     writeDependency(join(instance, "zod"), "zod");
     expect(verifyPnpmInstallTree(packageDir, "2.0.0", store)).toEqual({ ok: true, failures: [] });
+    const exposed = join(root, "releases", "v2", "links", "global", "node_modules", ...PKG.split("/"));
+    mkdirSync(join(exposed, ".."), { recursive: true });
+    symlinkSync(packageDir, exposed, "dir");
+    expect(verifyPnpmInstallTree(exposed, "2.0.0", store)).toEqual({ ok: true, failures: [] });
   });
 
   test("a sibling entry in the same virtual store cannot vouch for an unrelated group", () => {
@@ -334,6 +338,49 @@ describe("#4202 install-tree dependency ownership", () => {
     const result = verifyPnpmInstallTree(exposed, "2.0.0", store);
     expect(result.ok).toBe(false);
     expect(result.failures).toContain("pnpm global links are outside the selected store");
+  });
+
+  test("refuses a package reached through an unmarked foreign custom links path", () => {
+    const store = join(root, "selected", "v11"), foreign = join(root, "foreign", "v11", "links", "pkg", "node_modules", ...PKG.split("/"));
+    const exposed = join(root, "global", "node_modules", ...PKG.split("/")), target = join(root, "plain", "node_modules", ...PKG.split("/"));
+    mkdirSync(store, { recursive: true });
+    writePackage(target, "2.0.0");
+    writeDependency(join(target, "node_modules", "bun"), "bun");
+    writeDependency(join(target, "node_modules", "zod"), "zod");
+    mkdirSync(join(foreign, ".."), { recursive: true }); mkdirSync(join(exposed, ".."), { recursive: true });
+    symlinkSync(target, foreign, "dir"); symlinkSync(foreign, exposed, "dir");
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", store);
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm global links are outside the selected store");
+  });
+
+  test("refuses a non-sentinel dependency link outside the selected store", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const target = realpathSync(exposed), group = join(target, "..", "..");
+    writeFileSync(join(target, "package.json"), JSON.stringify({ name: PKG, version: "2.0.0", dependencies: { bun: "1", zod: "1", other: "1" } }));
+    const outside = join(root, "outside", "other"); writeDependency(outside, "other");
+    symlinkSync(outside, join(group, "other"), "dir");
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm dependency link escapes the selected store: other");
+  });
+
+  test("refuses a dangling package-local dependency link despite a valid group link", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    symlinkSync(join(root, "missing-zod"), join(realpathSync(exposed), "node_modules", "zod"), "dir");
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm dependency link could not be resolved: zod");
+  });
+
+  test("refuses a dangling scoped dependency directory link", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const target = realpathSync(exposed);
+    writeFileSync(join(target, "package.json"), JSON.stringify({ name: PKG, version: "2.0.0", dependencies: { bun: "1", zod: "1", "@scope/other": "1" } }));
+    symlinkSync(join(root, "missing-scope"), join(target, "node_modules", "@scope"), "dir");
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm dependency link could not be resolved: @scope/other");
   });
 
   test("global-store dependency links cannot escape the canonical configured store", () => {

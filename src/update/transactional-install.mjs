@@ -90,7 +90,12 @@ function packagePathUsesGlobalLinks(packageDir, store) {
     for (let i = 0; i < parts.length; i += 1) {
       prefix = join(prefix, parts[i]);
       if (lstatSync(prefix).isSymbolicLink()) {
-        path = resolve(dirname(prefix), readlinkSync(prefix), ...parts.slice(i + 1));
+        const target = resolve(dirname(prefix), readlinkSync(prefix));
+        const remaining = parts.slice(i + 1);
+        found ||= (!/(?:^|[\\/])node_modules[\\/]\.pnpm(?:[\\/]|$)/i.test(target)
+          && /(?:^|[\\/])v\d+[\\/]links(?:[\\/]|$)/i.test(target))
+          || (/(?:^|[\\/])v\d+$/i.test(target) && remaining[0]?.toLowerCase() === "links");
+        path = resolve(target, ...remaining);
         changed = true;
         break;
       }
@@ -130,23 +135,38 @@ function ownedDependencyRoots(packageDir, store) {
  * the symlink, which is exactly the pnpm graph edge that proves ownership.
  */
 function pnpmOwnedDependencyDir(packageDir, name, store, globalLinks, escaped) {
+  let matched;
   for (const root of ownedDependencyRoots(packageDir, store)) {
     const dir = join(root, ...name.split("/"));
-    if (existsSync(join(dir, "package.json"))) {
-      if (globalLinks) {
-        try {
-          if (!inside(realpathSync(root), store)) { escaped.add("pnpm dependency root is outside the selected store: " + name); continue; }
-          if (!inside(realpathSync(dir), store)) { escaped.add("pnpm dependency link escapes the selected store: " + name); continue; }
-        } catch { escaped.add("pnpm dependency link could not be resolved: " + name); continue; }
+    if (globalLinks) {
+      if (name.startsWith("@") && name.includes("/")) {
+        const scope = join(root, name.split("/")[0]);
+        let scopeStat;
+        try { scopeStat = lstatSync(scope); } catch (error) {
+          if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") escaped.add("pnpm dependency link could not be resolved: " + name);
+          continue;
+        }
+        if (scopeStat.isSymbolicLink()) {
+          try { if (!inside(realpathSync(scope), store)) { escaped.add("pnpm dependency link escapes the selected store: " + name); continue; } }
+          catch { escaped.add("pnpm dependency link could not be resolved: " + name); continue; }
+        }
       }
-      return dir;
+      try { lstatSync(dir); } catch (error) {
+        if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") escaped.add("pnpm dependency link could not be resolved: " + name);
+        continue;
+      }
+      try {
+        if (!inside(realpathSync(root), store)) { escaped.add("pnpm dependency root is outside the selected store: " + name); continue; }
+        if (!inside(realpathSync(dir), store)) { escaped.add("pnpm dependency link escapes the selected store: " + name); continue; }
+      } catch { escaped.add("pnpm dependency link could not be resolved: " + name); continue; }
     }
+    if (!matched && existsSync(join(dir, "package.json"))) matched = dir;
   }
-  return undefined;
+  return matched;
 }
 
 /** Verification manifest for a staged (or live) package tree. */
-function verifyTreeWithDependencyLookup(packageDir, expectedVersion, dependencyDir) {
+function verifyTreeWithDependencyLookup(packageDir, expectedVersion, dependencyDir, inspectAllLinks = false) {
   const failures = [];
   let pkg;
   try {
@@ -177,6 +197,7 @@ function verifyTreeWithDependencyLookup(packageDir, expectedVersion, dependencyD
   // Sentinel direct deps: each must have an intact package.json. The bundled Bun dep is
   // the load-bearing one — without it the launcher cannot start the proxy at all.
   const deps = Object.keys(pkg.dependencies ?? {});
+  if (inspectAllLinks) for (const name of new Set([...deps, ...Object.keys(pkg.optionalDependencies ?? {})])) dependencyDir(packageDir, name);
   const sentinels = deps.filter(name => name === "bun" || name === "zod").length > 0
     ? deps.filter(name => name === "bun" || name === "zod")
     : deps.slice(0, 2);
@@ -214,7 +235,7 @@ export function verifyPnpmInstallTree(packageDir, expectedVersion, store) {
   }
   const escaped = new Set();
   const result = verifyTreeWithDependencyLookup(packageDir, expectedVersion,
-    (path, name) => pnpmOwnedDependencyDir(path, name, store, globalLinks, escaped));
+    (path, name) => pnpmOwnedDependencyDir(path, name, store, globalLinks, escaped), globalLinks);
   if (escaped.size) return { ok: false, failures: [...escaped].concat(result.failures) };
   return result;
 }
