@@ -225,10 +225,16 @@ async function applyNative(
   const appliedFingerprint = committedConfig.claudeCode?.desktopProfile?.appliedFingerprint;
   const refreshOnly = implicitHomeIntent(input.document, client, intent, options);
   const changedProfile = ["unsafe", "broken", "gateway_drifted"].includes(inspected.kind);
+  if (changedProfile && refreshOnly) {
+    // Only an OpenCodex-owned profile can have changed under a refresh. An unreadable library or one
+    // selecting another app's profile was never ours, so the refresh has nothing to do there.
+    const owned = inspected.ownedProfileActive === true || (inspected.ownedProfileActive === null && !!appliedFingerprint);
+    if (!owned) return { client, target, outcome: "current", message: IMPLICIT_DESKTOP_MESSAGE };
+    // A refresh never takes over a changed profile, even with overwrite: that is a decided write.
+    return { client, target, outcome: "conflict",
+      message: "Claude Desktop ownership or profile changed; replace it with ocx route to claude-desktop on --device home --overwrite-conflict" };
+  }
   if (changedProfile && !options.overwriteConflict) return { client, target, outcome: "conflict", message: "Claude Desktop ownership or profile changed" };
-  // A refresh never takes over a changed profile, even with overwrite: that is a decided write.
-  if (changedProfile && refreshOnly) return { client, target, outcome: "conflict",
-    message: "Claude Desktop ownership or profile changed; replace it with ocx route to claude-desktop on --device home --overwrite-conflict" };
   // Only an absent or untouched profile satisfies a refresh-only switch.
   if (refreshOnly && (inspected.kind !== "gateway_ours" || !appliedFingerprint)) return { client, target, outcome: "current", message: IMPLICIT_DESKTOP_MESSAGE };
   if (!intent.enabled) {

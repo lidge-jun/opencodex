@@ -14,7 +14,7 @@ function scenario(body: string) {
   try {
     const child = spawnSync(process.execPath, ["--eval", `
       import { expect } from 'bun:test';
-      import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+      import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
       import { join } from 'node:path';
       import { getDefaultConfig, saveConfig, loadConfig } from './src/config';
       import { materializeLocalRouteIntent } from './src/client/route-intent-apply';
@@ -90,6 +90,28 @@ test("implicit Home Desktop intent reports a changed owned profile as a conflict
     expect(receipt.outcomes.find(row=>row.client==='claude-desktop').outcome).toBe('conflict');
   }
   expect(readFileSync(profile,'utf8')).toBe(before);
+`), SPAWN_BUDGET_MS);
+
+test("a full Home sync leaves a Desktop library OpenCodex never owned as current", () => scenario(`
+  // Unset Home switch, read as on: a refresh-only row over libraries with no OpenCodex ownership.
+  const uuid = '0f8b7c1e-4d3a-4b2c-9e1f-2a3b4c5d6e7f';
+  for (const metadata of [JSON.stringify({ appliedId: uuid, entries: [{ id: uuid, name: 'Work' }] }), '{not json',
+    JSON.stringify({ appliedId: '../escape', entries: [] })]) {
+    writeFileSync(join(library,'_meta.json'), metadata);
+    const receipt = await materializeLocalRouteIntent(loadConfig(), homeDocument(), modelsA, { lifecycleLockDeps:lockDeps });
+    const row = receipt.outcomes.find(entry=>entry.client==='claude-desktop');
+    expect(row.outcome).toBe('current');
+    expect(row.message ?? '').not.toContain('--overwrite-conflict');
+    expect(readFileSync(join(library,'_meta.json'),'utf8')).toBe(metadata);
+    expect(existsSync(join(library, uuid+'.json'))).toBe(false);
+  }
+`), SPAWN_BUDGET_MS);
+
+test("an owned Desktop profile whose file is gone stays a refresh-only conflict", () => scenario(`
+  setRouteClientIntent('claude-desktop',{enabled:true});
+  expect((await reconcile('claude-desktop', modelsA, homeDocument('claude-desktop'), 'claude-desktop')).outcome).toBe('current');
+  rmSync(join(library, meta().appliedId+'.json'));
+  expect((await reconcile('claude-desktop', modelsB)).outcome).toBe('conflict');
 `), SPAWN_BUDGET_MS);
 
 test("implicit Home Grok intent matches the startup gate on a gated hub", () => scenario(`
