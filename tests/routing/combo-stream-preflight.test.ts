@@ -817,4 +817,34 @@ describe("combo stream preflight", () => {
     })).toBe(true);
   });
 
+  for (const type of ["response.created", "response.in_progress", "response.queued", "response.heartbeat"]) {
+    for (const [description, snapshot] of [
+      ["output", { output: [{ type: "message", role: "assistant" }] }],
+      ["malformed output", { output: { type: "message" } }],
+      ["error", { output: [], error: { code: "server_error", message: "original failure" } }],
+    ] as const) {
+      test(`${type} snapshot with ${description} preserves the original at EOF`, async () => {
+        const original = sse({ type, response: snapshot });
+        const expected = await original.clone().text();
+        let calls = 0;
+        const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async () => {
+          calls++;
+          return sse({ type: "response.completed", response: { id: "replacement" } });
+        });
+        expect(await wrapped.text()).toBe(expected);
+        expect(calls).toBe(0);
+      });
+    }
+    test(`${type} with an empty snapshot still permits EOF recovery`, async () => {
+      let calls = 0;
+      const original = sse({ type, response: { output: [], error: null } });
+      const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async () => {
+        calls++;
+        return sse({ type: "response.completed", response: { id: "replacement" } });
+      });
+      expect(await wrapped.text()).toContain('"replacement"');
+      expect(calls).toBe(1);
+    });
+  }
+
 });

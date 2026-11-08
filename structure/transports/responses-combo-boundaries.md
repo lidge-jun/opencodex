@@ -135,8 +135,8 @@ Native post-header reset recovery shares that boundary, because it is asking the
 about the same bytes. With `replayReadErrors`, the preflight reports the stage it observed —
 `headers-only` before any parsed event, `protocol-prelude` after `response.created`,
 `semantic-output` once anything else arrives, including a payload it could not parse — and the
-resend gate decides. A `response.created` whose snapshot already carries output items is not a
-prelude. A clean EOF before output or a terminal is offered only to the native reset recovery
+resend gate decides. A lifecycle snapshot with output items, malformed output, or a non-null error
+commits the original stream. A clean EOF before output or a terminal is offered only to the native reset recovery
 owner as a distinct pre-output EOF; ordinary combo preflight keeps its existing EOF behavior.
 The deferred native hold emits bounded SSE comment heartbeats without counting them as output,
 and downstream cancellation aborts the hold or an in-flight replacement.

@@ -151,14 +151,14 @@ export function comboStreamPayloadCommitsOutput(payload: unknown): boolean {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return true;
   const type = (payload as { type?: unknown }).type;
   if (typeof type !== "string") return true;
-  if (type === "response.created") {
-    // A created event is a control frame only while its snapshot is empty. An origin that
-    // resumes a turn can put completed items in it, and treating that as a prelude would let
-    // a replacement re-emit output the caller already received.
+  if (PRE_OUTPUT_CONTROL_EVENTS.has(type)) {
+    // Lifecycle snapshots may already carry output or an error. Neither can be discarded
+    // for a replacement, even if the event name otherwise describes only a prelude.
     const response = (payload as { response?: unknown }).response;
     if (response && typeof response === "object" && !Array.isArray(response)) {
-      const output = (response as { output?: unknown }).output;
-      if (Array.isArray(output) && output.length > 0) return true;
+      const snapshot = response as { output?: unknown; error?: unknown };
+      if (snapshot.output !== undefined && (!Array.isArray(snapshot.output) || snapshot.output.length > 0)) return true;
+      if (snapshot.error != null) return true;
     }
   }
   return !PRE_OUTPUT_CONTROL_EVENTS.has(type) && !TERMINAL_EVENTS.has(type);
