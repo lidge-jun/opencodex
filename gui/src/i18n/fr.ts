@@ -358,6 +358,7 @@ export const fr: Record<TKey, string> = {
   "auth.adminTokenHelp": "Il s’agit du jeton d’administration de l’API de gestion OpenCodex, pas d’une clé API de fournisseur. Au premier démarrage, le proxy l’écrit dans ~/.opencodex/admin-api-token (ou $OPENCODEX_HOME/admin-api-token), et OPENCODEX_ADMIN_AUTH_TOKEN a la priorité.",
   "auth.rememberDevice": "Mémoriser cet appareil",
   "auth.rememberDeviceHint": "Conserve une session HttpOnly révocable pendant 30 jours, pas le jeton administrateur. Nécessite un tableau de bord HTTPS direct de même origine que l'API (ou une boucle locale).",
+  "auth.rememberUnsupported": "OpenCodex ne peut pas mémoriser cet appareil à cette adresse. La mémorisation exige un tableau de bord HTTPS direct (ou une boucle locale) ; derrière un proxy inverse, connectez-vous sans cette option.",
   "connection.forgetDevice": "Oublier cet appareil",
   "connection.forgetDeviceFailed": "Impossible d’oublier cet appareil. La session a été conservée.",
   "auth.adminTokenDocsLink": "Où le trouver",
