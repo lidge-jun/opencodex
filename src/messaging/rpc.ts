@@ -1,10 +1,11 @@
 import { isAbsolute } from "node:path";
 import { realpathSync, statSync } from "node:fs";
 import { MessageBudget } from "./budget";
+import { isResumeProfile, verifyResumeProfile } from "./resume-permissions";
 import { localSocket, type LocalSocket } from "./socket";
 import { isRecord, isThreadId, LocalMessagingError, type LocalMetadataClient, type LocalThread } from "./types";
 
-type Method = "initialize" | "thread/loaded/list" | "thread/read" | "thread/queue/add" | "thread/resume";
+type Method = "initialize" | "thread/loaded/list" | "thread/read" | "thread/queue/add" | "thread/resume" | "configRequirements/read" | "permissionProfile/list";
 interface QueueResult {
   status: "not_sent" | "queued" | "unknown";
   error?: { code: string; message: string };
@@ -103,15 +104,24 @@ export class LocalMessageRpc implements LocalMetadataClient {
   }
 
   /** Acknowledgement is not execution/completion; uncertain writes are never retried. */
-  async resumeThread(threadId: string) {
+  async resumeThread(threadId: string, permissionProfile: string) {
     let written = false;
     try {
-      if (!this.allowResume || !isThreadId(threadId)) throw new LocalMessagingError("resume_disabled", "Explicit resume access and an exact thread UUID are required.");
-      const raw = await this.request("thread/resume", { threadId, excludeTurns: true }, () => { written = true; });
+      if (!this.allowResume || !isThreadId(threadId) || !isResumeProfile(permissionProfile)) throw new LocalMessagingError("resume_disabled", "An explicit resume grant, thread UUID and permission profile are required.");
+      const state = await this.request("thread/read", { threadId, includeTurns: false });
+      const target = this.projectThread(state, threadId);
+      if (target.status === "systemError") throw new LocalMessagingError("resume_target_unhealthy", "The target is unhealthy.");
+      if (target.status !== "notLoaded") return { status: "already_loaded" as const, observedStatus: target.status };
+      await verifyResumeProfile((method, params) => this.request(method, params), permissionProfile, (state as {thread: Record<string, unknown>}).thread.cwd);
+      // Pin an explicit native selection: a removed profile must not become a persisted default fallback.
+      const raw = await this.request("thread/resume", { threadId, excludeTurns: true, permissions: permissionProfile }, () => { written = true; });
       const thread = isRecord(raw) ? raw.thread : null;
       if (!isRecord(thread) || thread.id !== threadId || !isRecord(thread.status)
         || !["idle", "active"].includes(String(thread.status.type))) throw this.invalidMetadata();
-      return { status: "resumed" as const, observedStatus: thread.status.type as "idle" | "active" };
+      if (!isRecord(raw) || !isRecord(raw.activePermissionProfile) || raw.activePermissionProfile.id !== permissionProfile) {
+        throw new LocalMessagingError("resume_profile_mismatch", "The server did not acknowledge the requested permission profile.");
+      }
+      return { status: "resumed" as const, observedStatus: thread.status.type as "idle" | "active", permissionProfileId: permissionProfile };
     } catch (error) {
       return { status: written ? "unknown" as const : "not_resumed" as const,
         error: error instanceof LocalMessagingError ? { code: error.code } : { code: "resume_unavailable" } };
@@ -133,6 +143,11 @@ export class LocalMessageRpc implements LocalMetadataClient {
   async readThread(id: string): Promise<LocalThread> {
     if (!isThreadId(id)) throw new LocalMessagingError("invalid_selector", "A valid Codex thread ID is required.");
     const raw = await this.request("thread/read", { threadId: id, includeTurns: false });
+    return this.projectThread(raw, id);
+  }
+
+  /** Metadata projection shared by normal reads and the resume-only preflight. */
+  private projectThread(raw: unknown, id: string): LocalThread {
     const thread = isRecord(raw) ? raw.thread : null;
     if (!isRecord(thread) || thread.id !== id || (thread.name !== undefined && thread.name !== null
       && (typeof thread.name !== "string" || thread.name.length > 4096)) || !isRecord(thread.status)

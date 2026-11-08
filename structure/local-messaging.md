@@ -253,41 +253,54 @@ contracts, not native app processing, goal behavior or cross-client registration
 
 ## Explicit existing-server resume
 
-`src/messaging/mcp-resume-tools.ts` exposes codex_resume_thread only when the MCP
-host receives both --allow-resume and --resume-socket. Default queue and read
-options grant no execution access. Initialization/import allocates no connection.
-The selected existing Unix socket uses the local transport's ownership, ancestor,
-address and frame bounds. No listener, daemon, CLI helper or session is created.
+`src/messaging/mcp-resume-tools.ts` exposes codex_resume_thread only when the host
+receives --allow-resume, --resume-socket and --resume-permissions together. The
+permission profile is a host-configured execution grant, not a tool argument or
+an assertion that stored permissions are preserved. Default tools grant no resume
+access; initialization/import allocates no connection or server.
 
-`src/messaging/rpc.ts` grants resume only through connectForResume, after initialize
-reports a home whose real path equals the configured Codex home. Older servers
-without a verifiable home refuse. Default connect/attach instances cannot resume;
-remote peers gain no lifecycle capability. The preflight normalizes the validated UUID to lowercase before thread/read
-and uses includeTurns false. Idle/active targets return already_loaded without a
-resume RPC; systemError refuses. A notLoaded target is resumed once with only
-threadId and excludeTurns true: no model, cwd, sandbox, permission or approval
-policy override is supplied. No message is queued and no turn/start or steer is
-issued. Existing queued work may execute under the saved native configuration.
+`src/messaging/rpc.ts` grants resume through connectForResume only after the existing
+trusted Unix endpoint reports the configured canonical home. Default connect/attach
+and remote-peer instances cannot resume. The exact UUID is normalized before a
+metadata-only thread/read; idle/active targets return already_loaded without
+changing their permissions, and unhealthy targets refuse. The private cwd is used
+only for the permission catalog, never returned to MCP.
 
-resumed means a validated same-thread acknowledgement, never delivery, execution
-or completion; executionVerified is always false. Live state is scoped to this
-selected server, not other processes. A concurrent external resume can rejoin the
-same native thread; there is no global execution lease. The MCP host refuses
-same-thread overlapping resume calls and shares its four-operation bound. A
-20-second inherited budget includes connection, home verification, preflight and
-resume, with existing ten-second RPC limits. After a resume write, rejection,
-timeout, malformed/uncorrelated acknowledgement, approval request or disconnect
-is unknown, with no replay. Before that write, failures are not_resumed. Private
-server errors, history and paths are not returned.
+`src/messaging/resume-permissions.ts` verifies the new grant before a resume write.
+configRequirements/read must explicitly report no managed requirements (null):
+native managed policy can substitute a profile, so this slice refuses every
+managed context. permissionProfile/list reads one page of at most 50 profiles in
+the target cwd, validates IDs/allowed flags and duplicate/cursor bounds, and requires
+the host-selected ID with allowed true. Missing, disallowed, malformed, unsupported
+or unobserved profiles refuse rather than scanning indefinitely or inheriting a
+saved/default selection. The profile string is a bounded opaque native identifier.
 
-The bridge does not answer approval requests. Unexpected server requests close
-this connection; native approval handling belongs to the server's existing owner.
-Cancellation/disconnect closes only the MCP-owned connection, not the shared
-server or target turn. A resumed target can continue or await native approval
-without this connection. Callers inspect stored replies separately.
+A notLoaded target then receives one thread/resume with threadId, excludeTurns true
+and permissions set to the verified host-selected ID. A removed explicit profile
+must be rejected by native selection rather than using the stale persisted-profile
+fallback. No approval policy, model, cwd, sandbox, instruction override, message,
+turn/start or steer is sent. This is a new permission selection and may differ from
+the saved profile. It relies on genuine native explicit-profile semantics, tested
+on Codex 0.166.0; compatibility servers without the preflight APIs refuse.
 
-`tests/codex-integration/messaging-mcp-resume.test.ts` covers default refusal,
-same-home verification, state preflight, exact bounded parameters, unknown writes,
-unsupported approval handling and cancellation. `tests/cli/cli-message-mcp-resume.test.ts`
-covers paired flags, actual MCP registration/invocation, inert activation,
-same-thread admission, four-operation limits and disconnect cleanup.
+resumed requires matching thread, idle/active state and matching activePermissionProfile
+in the acknowledgement. It is not execution/completion; executionVerified is always
+false. A mismatching post-write profile is unknown, never a success or a rollback
+guarantee. Live state belongs only to the selected server. Catalog observations do
+not lock configuration against its trusted owner or administrators changing it;
+there is no cross-process execution lease or immutable profile-definition snapshot.
+
+The host refuses same-thread overlapping resumes and shares its four-operation
+bound. A 20-second inherited deadline covers connection, preflight and resume,
+with existing ten-second RPC and 1 MiB frame limits. After a resume write, errors,
+timeout, malformed acknowledgements, approval requests or disconnect are unknown;
+there is no automatic replay or retry without the explicit profile. Before the
+write failures are not_resumed. No native history, diagnostics or private paths
+are returned. The bridge never answers approval requests. Cancellation closes
+only its own connection, not the shared server or target turn.
+
+`tests/codex-integration/messaging-mcp-resume.test.ts` covers the grant, home identity,
+state and uppercase UUID handling, profile/policy refusals, exact pinned parameters,
+mismatching acknowledgements, no fallback/replay and cancellation.
+`tests/cli/cli-message-mcp-resume.test.ts` covers all three required flags, inert and
+actual MCP invocation, host-only permission selection, admission and disconnect.

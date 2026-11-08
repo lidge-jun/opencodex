@@ -182,7 +182,7 @@ Drives no management route.
 
 ### `ocx message mcp`
 
-Usage: `ocx message mcp --codex <absolute-cli-path> --codex-home <absolute-existing-home> [--allow-reply-read] [--allow-resume --resume-socket <absolute-existing-unix-socket>]`
+Usage: `ocx message mcp --codex <absolute-cli-path> --codex-home <absolute-existing-home> [--allow-reply-read] [--allow-resume --resume-socket <absolute-existing-unix-socket> --resume-permissions <profile-id>]`
 
 Serve MCP tools for stored Codex metadata, queued text, opt-in stored-turn reply reads and explicit existing-server resume.
 
@@ -195,11 +195,12 @@ Drives no management route.
 | `--codex` | string | Explicit local Codex CLI executable. |
 | `--codex-home` | string | Explicit existing Codex home; no creation or login. |
 | `--allow-reply-read` | boolean | Explicitly expose stored final-turn text through codex_read_reply; disabled by default. |
-| `--allow-resume` | boolean | Expose explicit existing-thread resume; requires --resume-socket and may run queued work. |
-| `--resume-socket` | string | Existing trusted local Unix App Server socket; requires --allow-resume and matching Codex home. |
+| `--allow-resume` | boolean | Expose explicit existing-thread resume; requires --resume-socket and --resume-permissions; may run queued work. |
+| `--resume-socket` | string | Existing trusted local Unix App Server socket; requires --allow-resume, --resume-permissions and matching Codex home. |
+| `--resume-permissions` | string | Explicit native permission profile for resumed work; a new host-configured grant, not automatic preservation of saved permissions. |
 
 - macOS/Linux only. Default queue/read tools need no proxy/control socket; resume uses the explicitly configured existing Unix socket. Starts bounded stdio helpers only when a tool is called; existing sessions/send behavior stays unchanged.
-- Stored threads are not verified live sessions. queued is not processing; unknown is never replayed. --allow-reply-read exposes bounded same-turn final text, not exclusive reply ownership or goal completion. No daemon start, steer, automatic replies or registration. Resume is separate opt-in through a same-home existing Unix server; acknowledgement never proves execution.
+- Stored threads are not verified live sessions. queued is not processing; unknown is never replayed. --allow-reply-read exposes bounded same-turn final text, not exclusive reply ownership or goal completion. No daemon start, steer, automatic replies or registration. Resume is separate opt-in through a same-home existing Unix server; an explicit available profile is required and managed requirements refuse; acknowledgement never proves execution.
 
 ### `ocx advisor`
 

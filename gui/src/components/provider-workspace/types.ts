@@ -59,6 +59,7 @@ export type OAuthAccountRow = AccountQuotaReading & {
   id: string;
   alias?: string;
   email?: string;
+  maskedLabel?: string;
   active: boolean;
   expiresAt?: number;
   needsReauth?: boolean;

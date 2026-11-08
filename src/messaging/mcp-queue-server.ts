@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { queueMcpSend, queueMcpThreads, queueMessageInput, queueThreadInput } from "./mcp-queue-tools";
+import { isResumeProfile } from "./resume-permissions";
 import { queueMcpResume, resumeThreadInput } from "./mcp-resume-tools";
 import { queueMcpReadReply } from "./mcp-reply-tools";
 import { replyInput } from "./mcp-reply-cursor";
@@ -30,8 +31,8 @@ export async function serveQueueMcp(options: QueueMcpOptions): Promise<void> {
   server.registerTool("codex_queue_message", { description: "Queue one explicitly user-authorized message to an exact Codex thread UUID. May trigger recipient model usage. Storage is not processing; never retry unknown outcomes.",
     inputSchema: queueMessageInput, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } },
   async (input, extra) => run(signal => queueMcpSend(options, input, signal), extra.signal));
-  if (options.allowResume && options.resumeSocket) server.registerTool("codex_resume_thread", {
-    description: "Explicitly resume an exact existing Codex thread on the configured local Unix App Server. May execute already queued work and consume model usage under existing permissions. Already-loaded targets are left alone. No server start, permission overrides, approval answers or message submission. resumed is only an acknowledgement, never execution/completion; unknown must not be retried automatically.",
+  if (options.allowResume && options.resumeSocket && isResumeProfile(options.resumePermissions)) server.registerTool("codex_resume_thread", {
+    description: "Explicitly resume an exact existing Codex thread on the configured local Unix App Server. May execute already queued work and consume model usage under the host-configured explicit permission profile; this is a new grant, not preservation of saved permissions. Already-loaded targets are left alone. No server start, tool-selected permissions, approval answers or message submission. Managed requirements and unavailable profiles are refused. resumed is only an acknowledgement, never execution/completion; unknown must not be retried automatically.",
     inputSchema: resumeThreadInput, annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   }, async (input, extra) => run(async signal => {
     const key = input.threadId.toLowerCase();

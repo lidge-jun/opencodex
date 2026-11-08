@@ -396,36 +396,48 @@ idle notifications remain outside this contribution.
 
 ## Explicit existing-server resume
 
-To let an MCP client explicitly resume an existing unloaded Codex conversation,
-add both flags to the MCP host's arguments:
+To expose `codex_resume_thread`, configure all three resume arguments on the MCP
+host. For example, the built-in read-only profile:
 
 ```sh
-ocx message mcp --codex /absolute/path/to/codex --codex-home /absolute/path/to/.codex --allow-reply-read --allow-resume --resume-socket /absolute/path/to/existing.sock
+ocx message mcp --codex /absolute/path/to/codex --codex-home /absolute/path/to/.codex --allow-reply-read --allow-resume --resume-socket /absolute/path/to/existing.sock --resume-permissions :read-only
 ```
 
-This adds `codex_resume_thread`, with one exact `threadId` UUID. Grant it only when
-you intend to execute already queued work and accept possible model usage. Queueing,
-reading and resuming remain separate calls; queueing never implicitly resumes.
-No server is installed or started. The socket must be an existing trusted local
-Unix App Server, and its initialization must report the same canonical Codex home.
-Missing/unverifiable/mismatched homes refuse. Network/SSH endpoints and Windows
-are not supported by this tool.
+**This explicitly authorizes a new execution permission profile.** It does not
+promise automatic preservation of saved permissions. Choose only a profile you
+intend to authorize; it may differ from the conversation's previous permissions.
+The profile comes from host configuration, not model/tool arguments or queued
+messages. Resuming may execute queued work and consume model usage. Queueing,
+reading and resuming remain separate calls.
 
-The tool checks the selected server's live state. Loaded idle/active conversations
-return `already_loaded`; unhealthy conversations refuse. Only `notLoaded` targets
-receive one `thread/resume` with `excludeTurns: true`. It creates no conversation,
-sends no message and supplies no model, permission or approval overrides. State
-on other servers/processes is not verified; do not use this as a global execution
-lock. Overlapping resume calls for one UUID on this MCP host are refused.
+The socket must be an existing trusted local Unix App Server that reports the
+same canonical Codex home. No server is installed or started. Exact UUIDs are
+normalized before metadata lookup. Loaded idle/active targets return already_loaded
+without changing their permissions; unhealthy targets refuse.
 
-`resumed` is an acknowledgement, not proof that a message was processed or a task
-completed. `executionVerified` is always false. Failure before writing resume is
-`not_resumed`; uncertain results after writing, including errors or disconnects,
-are `unknown`. Never automatically repeat unknown operations or resend messages.
-Use the existing receipt and stored-reply tools to inspect results separately.
+Before resuming an unloaded target, the server must report no managed requirements.
+Managed policy can substitute its default profile, so this implementation refuses
+managed contexts. It checks one bounded catalog page (at most 50 profiles) for the
+configured ID in the target's working directory and requires it to be allowed.
+Unverified, missing, disallowed or unobserved profiles refuse. Unsupported APIs
+also refuse. Native explicit-profile semantics were tested on Codex 0.166.0.
 
-The bridge never answers native approval requests. They require the server's
-existing owner/native client. Unsupported requests close this connection and can
-make the result unknown. Disconnect/cancellation closes the bridge connection,
-not the shared server or recipient turn; work may continue or await approval.
-Each call shares a 20-second budget and the MCP host's four-operation limit.
+The resume request pins that exact `permissions` ID. A removed profile must cause a
+native error rather than fall back to the stored/default selection. No message,
+new conversation, turn/start, steer, model or approval override is sent. Acknowledged
+thread/state/profile must match. Catalog checks do not freeze definitions against
+later changes by trusted configuration owners or administrators, and this tool is
+not a global execution lock across separate App Servers.
+
+`resumed` acknowledges matching metadata, not message processing or task completion;
+`executionVerified` is always false. Failure before writing resume is not_resumed.
+After writing, rejection, timeout, a mismatching profile or disconnect is unknown;
+never automatically replay it or retry without the configured profile. A mismatch
+cannot roll back work that may already have begun on the shared server.
+
+The bridge never answers native approval requests. They belong to the existing
+native owner. Unsupported requests close this connection and can make the result
+unknown. Disconnect closes only the bridge connection, not the shared server or
+target turn. Each call shares a 20-second budget and the host's four-operation limit;
+overlapping resumes for one UUID are refused. Network/SSH and Windows are outside
+this tool's scope.

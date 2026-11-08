@@ -63,10 +63,11 @@ export function DashboardOverviewHead({
                 "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-highlight",
               )}>
               <span className={cn("size-2 shrink-0 rounded-full",
-                startupHealth === "error" ? "bg-danger" : startupHealth === "at-risk" ? "bg-warning" : "bg-success")} aria-hidden="true" />
+                startupHealth === "error" ? "bg-danger" : startupHealth === "at-risk" ? "bg-warning" : startupHealth === "unverified" ? "bg-fg-subtle" : "bg-success")} aria-hidden="true" />
               <span className="min-w-0 flex-1 truncate">
                 {t(startupHealth === "error"
                   ? "startup.error"
+                  : startupHealth === "unverified" ? "startup.unverified"
                   : startupHealth === "at-risk"
                     ? "startup.summary.atRisk"
                     : startupHealth === "protected"

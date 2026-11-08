@@ -287,9 +287,13 @@ ve boşta bildirimleri bu katkının kapsamı dışındadır.
 
 ## Açık oturum devam ettirme
 
-`--allow-resume --resume-socket /absolute/path/to/existing.sock` birlikte verilirse
-`codex_resume_thread` aracı açılır. Aynı Codex home'u bildiren mevcut, güvenilir yerel
-Unix sunucusu gerekir. Kuyruklama otomatik devam ettirmez; bu çağrı model kullanımı
-başlatabilir. `resumed` tamamlanma kanıtı değildir; `unknown` otomatik yinelenmez.
-Sunucu başlatılmaz, izinler değiştirilmez ve onay istekleri yanıtlanmaz. Ayrıntılar
-için [İngilizce başvuruya](../../../../reference/cli/messaging/#explicit-existing-server-resume) bakın.
+`--allow-resume --resume-socket /absolute/path/to/existing.sock --resume-permissions :read-only`
+birlikte verilirse `codex_resume_thread` açılır. Bu, kayıtlı izinleri otomatik
+koruma sözü değil, kullanıcı tarafından seçilen yeni bir izin profilidir. Model
+araç argümanları profili değiştiremez. Yönetilen gereksinimler ve doğrulanamayan,
+eksik veya izin verilmeyen profiller devam ettirmeden önce reddedilir. İstek aynı
+profil kimliğini açıkça gönderir; varsayılan izinlere sessiz geçiş yapılmaz.
+Aynı Codex home'u bildiren mevcut, güvenilir yerel Unix sunucusu gerekir. Sunucu
+başlatılmaz, onay istekleri yanıtlanmaz; resumed tamamlanma kanıtı değildir ve
+unknown otomatik yinelenmez. Ayrıntılar için
+[İngilizce başvuruya](../../../../reference/cli/messaging/#explicit-existing-server-resume) bakın.

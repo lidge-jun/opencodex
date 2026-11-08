@@ -54,20 +54,24 @@ function exhausted(quota: Record<string, unknown>, plan: string | undefined): bo
   return windows.some(value => typeof value === 'number' && Number.isFinite(value) && value >= 100);
 }
 
-export function parseAccounts(value: unknown): TrayAccount[] {
+export function parseAccounts(value: unknown, kind?: TraySwitchKind | null, ordinal?: (index: number) => string): TrayAccount[] {
   const body = object(value);
   const rows = body.accounts ?? body.keys;
   if (!Array.isArray(rows)) throw new Error('Invalid account roster');
-  return rows.map(raw => {
+  return rows.map((raw, index) => {
     const row = object(raw);
     if (typeof row.id !== 'string') throw new Error('Invalid account identifier');
-    const email = typeof row.email === 'string' ? maskEmail(row.email) : undefined;
-    const label = [row.alias, row.label, email, row.logLabel, row.id].find(item => typeof item === 'string' && item.length) as string;
+    const email = kind === 'oauth' ? undefined : typeof row.email === 'string' ? maskEmail(row.email) : undefined;
+    const label = kind === 'oauth'
+      ? [row.alias, row.maskedLabel].find(item => typeof item === 'string' && item.trim()) as string | undefined
+      : [row.alias, row.label, email, row.logLabel, row.id].find(item => typeof item === 'string' && item.trim()) as string;
+    const displayLabel = label?.trim() || (kind === 'oauth' ? ordinal?.(index + 1) : undefined);
+    if (!displayLabel) throw new Error('Missing account label');
     const quota = row.quotaUnavailable === true || row.quotaMode === 'unsupported' || !row.quota ? null : object(row.quota) as unknown as AccountQuota;
     const plan = typeof row.plan === 'string' ? row.plan : undefined;
     const activeId = body.activeAccountId ?? body.activeId ?? body.activeCodexAccountId;
     const active = typeof activeId === 'string' ? activeId === row.id : row.active === true;
-    return { id: row.id, label, email, plan, unavailable: row.quotaUnavailable === true, active, ...switchState(row, active), exhausted: quota !== null && exhausted(object(row.quota), plan), status: typeof object(row.health).status === 'string' ? object(row.health).status as string : undefined, quotaFailure: typeof row.quotaFailure === 'string' ? row.quotaFailure : undefined, quota: normalizeQuotaForPlan(quota, plan) };
+    return { id: row.id, label: displayLabel, email, plan, unavailable: row.quotaUnavailable === true, active, ...switchState(row, active), exhausted: quota !== null && exhausted(object(row.quota), plan), status: typeof object(row.health).status === 'string' ? object(row.health).status as string : undefined, quotaFailure: typeof row.quotaFailure === 'string' ? row.quotaFailure : undefined, quota: normalizeQuotaForPlan(quota, plan) };
   });
 }
 
