@@ -1042,11 +1042,10 @@ pub fn spawn_detached_serve(
         .arg(listen_port.to_string())
         .env("OPENCODEX_HOME", opencodex_home)
         .env("CODEX_HOME", codex_home)
-        .env_remove(crate::test_hooks::BARRIER_DIR_ENV)
-        .env_remove(crate::test_hooks::BARRIERS_ENV)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    crate::test_hooks::strip_barrier_env(&mut cmd);
 
     #[cfg(unix)]
     {
