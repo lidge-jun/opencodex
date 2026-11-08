@@ -1,6 +1,7 @@
 import { observeAccountAutoPauseRevisions, snapshotAutoPauseFingerprints } from "./account-auto-pause-revisions";
 import type { OcxConfig, OcxProviderConfig, ProviderCostOverlay } from "../types";
 import { configReasoningPinsConfigError } from "./provider-validation";
+import { carryPersistedTelemetry } from "./telemetry-carry";
 import { adoptCustomModelCatalogMigration, projectCustomModelCatalogMigration } from "../codex/custom-model-catalog-migration";
 import { refreshPreservedProviderOwner } from "../usage/user-cost-overlays";
 import { refreshConfigDerivedRegistries } from "./derived-registries";
@@ -636,15 +637,9 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
     );
     if (provenanceProjection.configRebaseProvenance === undefined) delete projectedConfig.configRebaseProvenance;
     else projectedConfig.configRebaseProvenance = provenanceProjection.configRebaseProvenance;
-    // Telemetry consent is owned by the file: the CLI and the consent route write it there while a
-    // proxy may hold an older snapshot. A settings save must carry the decision on disk, never drop
-    // or roll it back.
-    if (onDisk !== undefined) {
-      const diskTelemetry = (onDisk as Partial<OcxConfig>).telemetry;
-      if (diskTelemetry === undefined) delete projectedConfig.telemetry;
-      else projectedConfig.telemetry = structuredClone(diskTelemetry);
-      adoptPersistedTelemetry(config, diskTelemetry);
-    }
+    // Telemetry consent is owned by the file (see carryPersistedTelemetry).
+    const telemetry = carryPersistedTelemetry(projectedConfig, onDisk as Record<string, unknown> | undefined);
+    if (telemetry.carried) adoptPersistedTelemetry(config, telemetry.value);
     const persistedBinding = (bindingBaseline || diskDeletedKeys.has("hostname")) && onDisk
       ? readPersistedServerBinding(onDisk, bindingBaseline ?? { port: config.port, hostname: config.hostname })
       : bindingBaseline;

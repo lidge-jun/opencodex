@@ -36,12 +36,14 @@ import {
   telemetryIdPath,
 } from "../../src/telemetry/install-id";
 import { buildTelemetryPayloadV1, normalizeTelemetryVersion, resolveInstallChannel } from "../../src/telemetry/payload";
+import { buildTelemetryStatusSnapshot } from "../../src/telemetry/routes";
 import {
   computeTelemetryIntervalDelayMs,
   computeTelemetryStartupDelayMs,
   nudgeTelemetryScheduler,
   endTelemetryEnvOptOut,
   readTelemetryState,
+  recordPendingTelemetryDecision,
   recordTelemetryEnvOptOut,
   runTelemetryTick,
   startTelemetryScheduler,
@@ -864,6 +866,14 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
     writeFileSync(telemetryStatePath(home), "{ not json", "utf8");
     expect(await runTelemetryTick({ configDir: home, config, env: {}, now: NOW, fetch: mockFetch })).toEqual({ sent: false, reason: "state-unreadable" });
     expect(fetchCalls).toBe(0);
+    // The status shows nothing eligible while every tick refuses to send.
+    expect((await buildTelemetryStatusSnapshot(config, { configDir: home, env: {}, now: NOW })).previewEligible).toBe(false);
+    // A writer that replaces the unreadable file keeps every day through today unsent.
+    recordTelemetryEnvOptOut(home, NOW);
+    expect(readTelemetryState(home).ineligibleThroughDay).toBe("2026-11-07");
+    writeFileSync(telemetryStatePath(home), "{ not json", "utf8");
+    recordPendingTelemetryDecision({ decision: "declined", decidedAt: "2026-11-07T10:00:00.000Z", noticeShownAt: "2026-11-07T10:00:00.000Z" }, home, NOW);
+    expect(readTelemetryState(home).ineligibleThroughDay).toBe("2026-11-07");
   });
 
   test("a telemetry-id.json deleted by another process is not served from memory", () => {

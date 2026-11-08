@@ -40,10 +40,16 @@ administrator or a deployment tool (Intune, SCCM). For a silent install, pass
 msiexec /i OpenCodex-<version>-windows-x64.msi /qn OCX_TELEMETRY_CHOICE=optout
 ```
 
+The installer needs administrator rights and records the choice for the whole computer.
+`optout` is matched in any letter case; any other value counts as `send`.
+
 Leaving the box checked does not start sending by itself: the dashboard still shows its one-time
-notice first. In-app updates install without this page and keep an earlier opt-out. Running a
-newer installer by hand shows the page again, unchecked if you opted out before. If you have since
-turned telemetry on in the dashboard and want to keep it, check the box before you continue.
+notice first, and a checked box never turns telemetry back on for an account that turned it off.
+In-app updates, reduced-UI installs (`/qr`) and maintenance runs of the installed version skip this
+page and keep the recorded choice. Running a newer installer by hand shows the page again, unchecked
+if you opted out before. Continuing without changing the box keeps that earlier decision as it was,
+so it is not applied again over a choice you made in the dashboard since; changing the box records a
+new decision.
 
 ### Linux
 

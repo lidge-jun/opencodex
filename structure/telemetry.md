@@ -57,6 +57,11 @@ Only a human can transition an undecided install to active sending:
   Child. Only Continue writes (`PUT /api/telemetry`); Escape, the backdrop and the close button
   record nothing. Focus starts on the heading, so a stray Enter cannot accept. A saved decision
   whose reply cannot be parsed is re-read with `GET` (`gui/src/telemetry-api.ts`).
+- Telemetry consent in `config.json` is owned by the file: `carryPersistedTelemetry`
+  (`src/config/telemetry-carry.ts`) makes both whole-config saves (`saveConfig` and
+  `saveConfigPreservingClaudeCode`) write the validated on-disk block instead of the caller's
+  snapshot, so a decision written by another process is never dropped or rolled back, and a
+  malformed hand edit is dropped as a load would drop it.
 
 ## Identity, aggregation, and scheduling
 

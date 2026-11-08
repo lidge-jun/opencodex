@@ -152,6 +152,16 @@ export function readTelemetryState(configDir = getConfigDir()): TelemetryState {
   return readTelemetryStateFile(configDir).state;
 }
 
+/**
+ * Read the state for a rewrite. A file that exists but cannot be read may have held opt-out days
+ * or sent days, so the rewrite starts from "nothing through today may be sent".
+ */
+function readTelemetryStateForWrite(configDir: string, now: number): TelemetryState {
+  const { state, unreadable } = readTelemetryStateFile(configDir);
+  if (unreadable) extendIneligibleThroughToday(state, now);
+  return state;
+}
+
 export function writeTelemetryState(state: TelemetryState, configDir = getConfigDir(), now = Date.now()): void {
   mkdirSync(configDir, { recursive: true, mode: 0o700 });
   const path = telemetryStatePath(configDir);
@@ -182,7 +192,7 @@ export function recordPendingTelemetryDecision(
   configDir = getConfigDir(),
   now = Date.now(),
 ): void {
-  const state = readTelemetryState(configDir);
+  const state = readTelemetryStateForWrite(configDir, now);
   state.pendingDecision = structuredClone(decision);
   writeTelemetryState(state, configDir, now);
 }
@@ -232,7 +242,7 @@ function extendIneligibleThroughToday(state: TelemetryState, now: number): void 
  * passes its pid as `owner`; a one-off observation (a CLI command, a tick) passes none.
  */
 export function recordTelemetryEnvOptOut(configDir = getConfigDir(), now = Date.now(), owner?: number): void {
-  const state = readTelemetryState(configDir);
+  const state = readTelemetryStateForWrite(configDir, now);
   extendIneligibleThroughToday(state, now);
   if (owner === undefined) {
     state.envOptOutActiveSince ??= new Date(now).toISOString();
@@ -251,7 +261,7 @@ export function recordTelemetryEnvOptOut(configDir = getConfigDir(), now = Date.
  * `ineligibleThroughDay` to today. Returns true while an opted-out proxy is still running.
  */
 export function endTelemetryEnvOptOut(configDir = getConfigDir(), now = Date.now(), owner?: number): boolean {
-  const state = readTelemetryState(configDir);
+  const state = readTelemetryStateForWrite(configDir, now);
   const recorded = state.envOptOutOwners ?? [];
   const others = owner === undefined ? recorded : recorded.filter(entry => entry.pid !== owner);
   const running = others.filter(entry => isProcessAlive(entry.pid));
