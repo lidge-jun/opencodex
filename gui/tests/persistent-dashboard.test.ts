@@ -116,10 +116,6 @@ test("a hung Remember response body is aborted and cannot install a session", as
   expect(attempts).toBe(1); expect(verdict).toBe("unavailable"); expect(signal?.aborted).toBe(true); expect(hasApiSession("shared")).toBe(false);
 });
 
-function sessionHtml(): string {
-  return sessionHtmlFixture();
-}
-
 for (const [label, body, expected] of [
   ["the server's direct-origin refusal", { error: "Remember requires a direct HTTPS dashboard (or loopback) and matching Origin", code: "remember_requires_direct_origin" }, "remember-unsupported"],
   ["an uncoded 403", { error: "Admin token required" }, "unavailable"],
@@ -137,7 +133,7 @@ for (const [label, body, expected] of [
   });
 }
 
-function sessionHtmlFixture(): string {
+function sessionHtml(): string {
   return `<meta name="opencodex-session-token" content="ocx_session_remembered">
     <meta name="opencodex-session-csrf" content="csrf-fixture">
     <meta name="opencodex-session-origin" content="${window.location.origin}">
