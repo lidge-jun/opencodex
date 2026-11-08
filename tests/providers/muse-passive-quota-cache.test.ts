@@ -8,6 +8,7 @@ import {
   getCachedProviderAccountQuota,
   hasPassiveAccountQuota,
   readPassiveProviderAccountQuotas,
+  reconcileProviderAccountQuotaRows,
   recordPassiveAccountQuota as recordWithOwner,
   resetProviderQuotaReconcileStateForTests,
   setCachedProviderAccountQuotaForTests,
@@ -113,12 +114,17 @@ describe("passive Muse quota cache", () => {
     expect(getCachedProviderAccountQuota("meta-muse", id!)).toBeNull();
   });
 
-  test("discards a write whose config generation has been superseded", () => {
+  test("discards a write whose config generation has been superseded", async () => {
+    const [id] = await seedAccounts(FIRST);
+    const owner = bindMuseQuotaConfig(captureMuseQuotaOwner("meta-muse", id!), config, "meta-muse");
+    expect(owner?.isCurrent()).toBe(true);
     // Generation 0 predates any reconciliation; a stale writer must not commit.
-    const { reconcileStateGeneration } = require("../../src/lib/state-store-sweeper");
-    reconcileStateGeneration({ generation: 0, oauthAccountKeys: new Set<string>(), providerNames: new Set<string>() });
-    recordPassiveAccountQuota("meta-muse", FIRST.accountId, quotaAt(42), -1);
-    expect(getCachedProviderAccountQuota("meta-muse", FIRST.accountId)).toBeNull();
+    reconcileProviderAccountQuotaRows({ generation: 1, oauthAccountKeys: new Set(), providerNames: new Set(),
+      comboIds: new Set(), comboTargets: new Set(), codexAccountIds: new Set(), configRoots: new Set() });
+    recordPassiveAccountQuota("meta-muse", id!, quotaAt(42), 0, owner);
+    expect(getCachedProviderAccountQuota("meta-muse", id!)).toBeNull();
+    recordPassiveAccountQuota("meta-muse", id!, quotaAt(42), 1, owner);
+    expect(getCachedProviderAccountQuota("meta-muse", id!)?.fiveHourPercent).toBe(42);
   });
 
   test("omits accounts with no observation rather than reporting a failed probe", async () => {
