@@ -252,6 +252,10 @@ export interface RequestLogContext extends UpstreamErrorDiagnostics {
   upstreamCondition?: UpstreamCondition; // classified at capture where the evidence is not kept on the context
   /** HTTP status derived from a terminal `response.failed` SSE payload (429/401/503/etc.). */
   terminalHttpStatus?: number;
+  /** Status of an upstream `error` event that ended a 200 Messages stream; the row stays 200, a combo child reads it. */
+  streamErrorStatus?: number;
+  /** Bytes other than a ping followed that upstream `error` event, so a retry would repeat output. */
+  streamErrorFollowed?: true;
   /** Recognized structured terminal code whose exact identity must survive status mapping. */
   terminalErrorCode?: typeof CYBER_POLICY_ERROR_CODE;
   /**

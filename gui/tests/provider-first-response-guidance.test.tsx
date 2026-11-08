@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, type ReactNode } from "react";
+import { act, useLayoutEffect, type ReactNode } from "react";
 import type { Root } from "react-dom/client";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import ProviderModelsNotice from "../src/components/ProviderModelsNotice";
@@ -127,6 +127,22 @@ function runProbeButton(): HTMLButtonElement {
 }
 
 describe("first-response progression states on ProviderOverview", () => {
+  test("keyless Vertex reports host credentials as unverified rather than missing", async () => {
+    const item = { ...baseItem, name: "google-vertex", adapter: "google", baseUrl: "https://aiplatform.googleapis.com",
+      authMode: "key", googleMode: "vertex", hasApiKey: false } as WorkspaceItem;
+    await render(<ProviderOverview item={item} apiBase="" />);
+    expect(host.querySelector(".pws-kv dd")?.textContent).toContain("Credentials unverified");
+    expect(stepText("provider")).toContain("proxy credentials unverified");
+    expect(stepText("provider")).not.toContain("credentials required");
+    await render(<ProviderOverview item={{ ...item, hasApiKey: true, vertexCredentialKind: "marker" }} apiBase="" />);
+    expect(host.querySelector(".pws-kv dd")?.textContent).toContain("Credentials unverified");
+    await render(<ProviderOverview item={{ ...item, hasApiKey: true }} apiBase="" />);
+    expect(host.querySelector(".pws-kv dd")?.textContent).toContain("Ready");
+    await render(<ProviderOverview item={{ ...item, googleMode: "ai-studio" }} apiBase="" />);
+    expect(host.querySelector(".pws-kv dd")?.textContent).toContain("Needs setup");
+    await render(<ProviderOverview item={{ ...item, disabled: true }} apiBase="" />);
+    expect(host.querySelector(".pws-kv dd")?.textContent).toContain("Disabled");
+  });
   test("distinguishes provider saved, models ready, client routing guidance, and untested probe without claiming Connected", async () => {
     const rows: ModelRow[] = [{ provider: "my-provider", id: "model-a", namespaced: "my-provider/model-a", disabled: false }];
     let openedConnect = 0;
@@ -330,6 +346,101 @@ describe("first-response progression states on ProviderOverview", () => {
 });
 
 describe("ProviderDetails raw ID disambiguation and Providers page integration", () => {
+  test("logout hides the current account until the roster is reconciled", async () => {
+    let finishLogout!: (response: Response) => void;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === "/api/oauth/logout") return new Promise<Response>(resolve => { finishLogout = resolve; });
+      if (path === "/api/config") return Response.json({ port: 0, defaultProvider: "anthropic", providers: {
+        anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" },
+      } });
+      if (path === "/api/providers") return Response.json([{ name: "anthropic", adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" }]);
+      if (path === "/api/oauth/providers") return Response.json({ providers: ["anthropic"] });
+      if (path === "/api/oauth/status") return Response.json({ loggedIn: true });
+      if (path === "/api/oauth/accounts") return Response.json({ activeAccountId: "a", accounts: [{ id: "a", active: true, alias: "Work" }] });
+      if (path === "/api/selected-models") return Response.json({ selected: {}, available: {}, liveModelCounts: {} });
+      if (path === "/api/provider-presets") return Response.json({ providers: [] });
+      if (path === "/api/models") return Response.json([]);
+      if (path === "/api/provider-quotas") return Response.json({ reports: [] });
+      if (path === "/api/usage") return Response.json({ providers: [], models: [] });
+      if (path === "/api/codex-auth/accounts") return Response.json({ accounts: [] });
+      return Response.json({});
+    }) as typeof fetch;
+    await render(<Providers apiBase="" />);
+    await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('[role="option"]')!.click(); });
+    expect(host.textContent).toContain("Current accountWork");
+    await act(async () => { host.querySelector<HTMLButtonElement>("#pws-tab-accounts")!.click(); });
+    const logout = [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Logout")!;
+    await act(async () => { logout.click(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>("#pws-tab-overview")!.click(); });
+    expect(host.textContent).not.toContain("Current accountWork");
+    expect(host.querySelector(".pws-auth-summary")?.textContent).toContain("Not verified");
+    await act(async () => { finishLogout(new Response(null, { status: 503 })); await Promise.resolve(); });
+    await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
+    expect(host.textContent).toContain("Current accountWork");
+  });
+  test("changing API targets does not unmount an unsaved Settings draft", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path.startsWith("/new/")) return new Promise<Response>(() => {});
+      if (path === "/old/api/config") return Response.json({ port: 0, defaultProvider: "my-provider", providers: {
+        "my-provider": { adapter: "openai-chat", baseUrl: "https://example.test/v1", hasApiKey: true },
+      } });
+      if (path === "/old/api/providers") return Response.json([{ name: "my-provider", adapter: "openai-chat", baseUrl: "https://example.test/v1", hasApiKey: true }]);
+      if (path === "/old/api/oauth/providers" || path === "/old/api/provider-presets") return Response.json({ providers: [] });
+      if (path === "/old/api/selected-models") return Response.json({ selected: {}, available: {}, liveModelCounts: {} });
+      if (path === "/old/api/models") return Response.json([]);
+      if (path === "/old/api/provider-quotas") return Response.json({ reports: [] });
+      if (path === "/old/api/usage") return Response.json({ providers: [], models: [] });
+      if (path === "/old/api/codex-auth/accounts") return Response.json({ accounts: [] });
+      return Response.json({});
+    }) as typeof fetch;
+    await render(<Providers apiBase="/old" />);
+    await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('[role="option"]')!.click(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>("#pws-tab-settings")!.click(); });
+    const input = [...host.querySelectorAll<HTMLInputElement>("input")].find(element => element.value === "https://example.test/v1")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(input, "https://draft.example.test/v1");
+      input.dispatchEvent(new win.Event("input", { bubbles: true }));
+    });
+    expect(host.textContent).toContain("unsaved changes");
+    await render(<Providers apiBase="/new" />);
+    expect([...host.querySelectorAll<HTMLInputElement>("input")].some(element => element.value === "https://draft.example.test/v1")).toBe(true);
+    expect(host.textContent).toContain("unsaved changes");
+  });
+  test("switching API targets never paints the previous server's account", async () => {
+    let firstNewPaint = "";
+    function Inspect({ apiBase }: { apiBase: string }) {
+      useLayoutEffect(() => { if (apiBase === "/new") firstNewPaint = host.textContent ?? ""; }, [apiBase]);
+      return <Providers apiBase={apiBase} />;
+    }
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path.startsWith("/new/")) return new Promise<Response>(() => {});
+      if (path === "/old/api/config") return Response.json({ port: 0, defaultProvider: "anthropic", providers: {
+        anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" },
+      } });
+      if (path === "/old/api/providers") return Response.json([{ name: "anthropic", adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" }]);
+      if (path === "/old/api/oauth/providers") return Response.json({ providers: ["anthropic"] });
+      if (path === "/old/api/oauth/status") return Response.json({ loggedIn: true });
+      if (path === "/old/api/oauth/accounts") return Response.json({ activeAccountId: "a", accounts: [{ id: "a", active: true, alias: "Old Server Account" }] });
+      if (path === "/old/api/selected-models") return Response.json({ selected: {}, available: {}, liveModelCounts: {} });
+      if (path === "/old/api/models") return Response.json([]);
+      if (path === "/old/api/provider-quotas") return Response.json({ reports: [] });
+      if (path === "/old/api/usage") return Response.json({ providers: [], models: [] });
+      if (path === "/old/api/codex-auth/accounts") return Response.json({ accounts: [] });
+      return Response.json({});
+    }) as typeof fetch;
+    await render(<Inspect apiBase="/old" />);
+    await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('[role="option"]')!.click(); });
+    expect(host.textContent).toContain("Old Server Account");
+    await render(<Inspect apiBase="/new" />);
+    expect(firstNewPaint).not.toContain("Old Server Account");
+    expect(host.textContent).not.toContain("Old Server Account");
+  });
   test("ProviderDetails header shows both display name and raw config ID when they differ", async () => {
     await render(
       <ProviderDetails
@@ -668,3 +779,56 @@ describe("ProviderDetails raw ID disambiguation and Providers page integration",
   });
 });
 
+
+test.each(["discovery", "status"] as const)("target switch hides old OAuth identity on the first commit when %s fails", async failure => {
+  let releaseOld!: (response: Response) => void;
+  let late = false;
+  let oldStarted!: () => void;
+  const oldRequested = new Promise<void>(resolve => { oldStarted = resolve; });
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input), "http://localhost");
+    const target = url.pathname.startsWith("/a/") ? "a" : "b";
+    const path = url.pathname.replace(/^\/[ab]/, "");
+    if (path === "/api/config") return Response.json({ port: 0, defaultProvider: "kimi", providers: {
+      kimi: { adapter: "kimi", baseUrl: "https://api.kimi.com", authMode: "oauth" },
+    } });
+    if (path === "/api/providers") return Response.json([{ name: "kimi", adapter: "kimi", authMode: "oauth" }]);
+    if (path === "/api/oauth/providers") return target === "b" && failure === "discovery" ? new Response(null, { status: 503 }) : Response.json({ providers: ["kimi"] });
+    if (path === "/api/oauth/status") {
+      if (target === "b") return new Response(null, { status: 503 });
+      if (late) { oldStarted(); return new Promise<Response>(resolve => { releaseOld = resolve; }); }
+      return Response.json({ loggedIn: true, email: "identity-a@example.test" });
+    }
+    if (path === "/api/oauth/accounts") return new Response(null, { status: 503 });
+    if (path === "/api/selected-models") return Response.json({ selected: {}, available: {}, liveModelCounts: {} });
+    if (path === "/api/provider-presets") return Response.json({ providers: [] });
+    if (path === "/api/models") return Response.json([]);
+    if (path === "/api/provider-quotas") return Response.json({ reports: [] });
+    if (path === "/api/usage") return Response.json({ providers: [], models: [] });
+    if (path === "/api/codex-auth/accounts") return Response.json({ accounts: [] });
+    return Response.json({});
+  }) as typeof fetch;
+  const commits: string[] = [];
+  function Observe({ target }: { target: string }) {
+    useLayoutEffect(() => { commits.push(`${target}:${host.textContent}`); });
+    return null;
+  }
+  const page = (target: string) => <><Providers apiBase={`/${target}`} /><Observe target={target} /></>;
+  await render(page("a"));
+  await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
+  await act(async () => { host.querySelector<HTMLButtonElement>('[role="option"]')!.click(); });
+  expect(host.textContent).toContain("identity-a@example.test");
+  late = true;
+  // Trigger a fresh OAuth read through the existing refresh event by returning to A after B.
+  await render(page("b"));
+  expect(commits.find(value => value.startsWith("b:"))).not.toContain("identity-a@example.test");
+  await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
+  expect(host.textContent).not.toContain("identity-a@example.test");
+  await render(page("a"));
+  await act(async () => { await oldRequested; });
+  const releaseFirstOld = releaseOld;
+  await render(page("b"));
+  await render(page("a"));
+  await act(async () => { releaseFirstOld(Response.json({ loggedIn: true, email: "stale-a@example.test" })); await Promise.resolve(); });
+  expect(host.textContent).not.toContain("stale-a@example.test");
+});

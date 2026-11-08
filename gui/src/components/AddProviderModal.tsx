@@ -174,6 +174,7 @@ export default function AddProviderModal({
         apiKey: "",
         apiKeyTransport: undefined,
         defaultModel: p.defaultModel ?? "",
+        ...(p.id === "google-vertex" ? { googleMode: "vertex" as const, project: "", location: "" } : {}),
         allowPrivateNetwork: false,
       },
     });
