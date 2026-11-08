@@ -1,9 +1,9 @@
 import { ENCRYPTED_FUNCTION_OUTPUT_REJECTION, upstreamErrorMessageFromPayload } from "../../lib/errors";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
+import { isHardPolicyOrOriginRefusal } from "../../lib/hard-refusal";
 import { isPlainObject } from "../../lib/plain-data";
 import {
   hasConflictingReasoningEffortCode,
-  isHardPolicyOrOriginRefusal,
   isReasoningEffortRejection,
   planReasoningEffortDowngrade,
 } from "../../providers/reasoning-metadata";
@@ -85,7 +85,7 @@ export async function refusedReasoningEffortDowngrade(
 ): Promise<ReturnType<typeof planReasoningEffortDowngrade>> {
   if (guard.attempted && !comboAttempt) return undefined;
   const rejectionText = await reasoningEffortRejectionText(response, false, signal);
-  return rejectionText === undefined || isHardPolicyOrOriginRefusal(rejectionText) || hasConflictingReasoningEffortCode(rejectionText)
+  return rejectionText === undefined
     ? undefined
     : planReasoningEffortDowngrade({ ...plan, rejectionText });
 }

@@ -19,9 +19,6 @@ const SERIALIZED_HARD_CODE =
  */
 export function isHardPolicyOrOriginRefusal(text: string | undefined, depth = 0): boolean {
   if (!text || depth > 4) return false;
-  if (isCyberPolicyMessage(text)) return true;
-  if (/origin_rejected/i.test(text)) return true;
-  if (SERIALIZED_HARD_CODE.test(text)) return true;
 
   let unescaped = text.trim();
   for (let d = 0; d < 3; d += 1) {
@@ -33,70 +30,82 @@ export function isHardPolicyOrOriginRefusal(text: string | undefined, depth = 0)
     }
   }
 
+  // Restrict structured policy/origin checks to authoritative diagnostic carriers
+  // so echoed user request content (e.g. request.input, prompt, echoed body) does not
+  // suppress valid recoveries (#8173).
   try {
     const parsed = JSON.parse(unescaped) as Record<string, unknown>;
-    const queue: unknown[] = [
-      parsed,
-      parsed.error,
-      (parsed.response as Record<string, unknown> | undefined)?.error,
-      (parsed.response as Record<string, unknown> | undefined)?.last_error,
-      parsed.last_error,
-    ];
-    let examined = 0;
-    while (queue.length > 0 && examined < 32) {
-      const candidate = queue.shift();
-      examined += 1;
-      if (!candidate || typeof candidate !== "object") continue;
-      if (Array.isArray(candidate)) {
-        for (const item of candidate) {
-          if (item && typeof item === "object") queue.push(item);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const queue: unknown[] = [
+        parsed,
+        parsed.error,
+        (parsed.response as Record<string, unknown> | undefined)?.error,
+        (parsed.response as Record<string, unknown> | undefined)?.last_error,
+        parsed.last_error,
+        parsed.details,
+      ];
+      let examined = 0;
+      while (queue.length > 0 && examined < 32) {
+        const candidate = queue.shift();
+        examined += 1;
+        if (!candidate || typeof candidate !== "object") continue;
+        if (Array.isArray(candidate)) {
+          for (const item of candidate) {
+            if (item && typeof item === "object") queue.push(item);
+          }
+          continue;
         }
-        continue;
-      }
-      const rec = candidate as Record<string, unknown>;
+        const rec = candidate as Record<string, unknown>;
 
-      const code = typeof rec.code === "string" ? rec.code.trim().toLowerCase().replaceAll("-", "_") : undefined;
-      if (code) {
-        if (
-          isCyberPolicyCode(code)
-          || code === "origin_rejected"
-          || isTerminalRefusalCode(code)
-          || isNonReplayableUpstreamCode(code)
-        ) {
-          return true;
-        }
-      }
-
-      const type = typeof rec.type === "string" ? rec.type.trim().toLowerCase().replaceAll("-", "_") : undefined;
-      if (type) {
-        if (
-          isCyberPolicyCode(type)
-          || type === "origin_rejected"
-          || isTerminalRefusalCode(type)
-        ) {
-          return true;
-        }
-      }
-
-      for (const field of ["message", "error", "details", "body", "reason", "last_error", "response"] as const) {
-        const val = rec[field];
-        if (typeof val === "string") {
+        const code = typeof rec.code === "string" ? rec.code.trim().toLowerCase().replaceAll("-", "_") : undefined;
+        if (code) {
           if (
-            isCyberPolicyMessage(val)
-            || /origin_rejected/i.test(val)
-            || safetyRefusalCodeFromMessage(val)
-            || isHardPolicyOrOriginRefusal(val, depth + 1)
+            isCyberPolicyCode(code)
+            || code === "origin_rejected"
+            || isTerminalRefusalCode(code)
+            || isNonReplayableUpstreamCode(code)
           ) {
             return true;
           }
-        } else if (val && typeof val === "object") {
-          queue.push(val);
+        }
+
+        const type = typeof rec.type === "string" ? rec.type.trim().toLowerCase().replaceAll("-", "_") : undefined;
+        if (type) {
+          if (
+            isCyberPolicyCode(type)
+            || type === "origin_rejected"
+            || isTerminalRefusalCode(type)
+          ) {
+            return true;
+          }
+        }
+
+        // Authoritative diagnostic carriers only (avoid request echo fields like input, prompt, request, body, reason)
+        for (const field of ["message", "error", "details", "last_error", "response"] as const) {
+          const val = rec[field];
+          if (typeof val === "string") {
+            if (
+              isCyberPolicyMessage(val)
+              || /origin_rejected/i.test(val)
+              || safetyRefusalCodeFromMessage(val)
+              || isHardPolicyOrOriginRefusal(val, depth + 1)
+            ) {
+              return true;
+            }
+          } else if (val && typeof val === "object") {
+            queue.push(val);
+          }
         }
       }
+      return false;
     }
   } catch {
-    /* non-JSON payload handled by text matches above */
+    /* non-JSON payload handled by text matches below */
   }
+
+  if (isCyberPolicyMessage(text)) return true;
+  if (/origin_rejected/i.test(text)) return true;
+  if (SERIALIZED_HARD_CODE.test(text)) return true;
 
   return false;
 }

@@ -412,6 +412,15 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
     const rootType = normalizedFailureCode(root.type as string | undefined);
     if (!EXACT_EFFORT_COMPATIBLE_CODES.has(rootCode)) return false;
     if (!EXACT_EFFORT_COMPATIBLE_TYPES.has(rootType)) return false;
+    if (root.response !== undefined && root.response !== null) return false;
+    if (root.last_error !== undefined && root.last_error !== null) return false;
+    if (root.details !== undefined && root.details !== null && typeof root.details === "object") {
+      const detailsRec = root.details as Record<string, unknown>;
+      if (detailsRec.code !== undefined && detailsRec.code !== null) {
+        if (typeof detailsRec.code !== "string") return false;
+        if (!EXACT_EFFORT_COMPATIBLE_CODES.has(normalizedFailureCode(detailsRec.code))) return false;
+      }
+    }
     if (rootCode === "invalid_argument"
       && root.error === "Invalid reasoning effort."
       && (root.type === undefined || root.type === "invalid_request_error")

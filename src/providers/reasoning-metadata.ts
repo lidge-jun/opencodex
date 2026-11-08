@@ -494,6 +494,17 @@ function extractJsonEnvelope(text: string): unknown | undefined {
   return undefined;
 }
 
+function isIncompleteStructuredWrapper(text: string): boolean {
+  const s = text.trim();
+  if (/^(?:Provider error (?:400:\s*)?|data:\s*)\{/i.test(s)) {
+    return extractJsonEnvelope(s) === undefined;
+  }
+  if (s.startsWith("{") && !s.endsWith("}")) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Rejects error envelopes that carry a conflicting code (e.g. permission_denied, insufficient_quota,
  * rate_limit_exceeded, model_not_found, malformed non-string code) so they stay terminal or proceed
@@ -517,6 +528,7 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
     parsed = extractJsonEnvelope(unescaped);
   }
   if (!parsed || typeof parsed !== "object") {
+    if (isIncompleteStructuredWrapper(unescaped)) return true;
     return /\b(?:permission_denied|insufficient_quota|rate_limit_exceeded|model_not_found|context_length_exceeded)\b/i.test(unescaped);
   }
   try {
@@ -543,7 +555,7 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
         const type = rec.type.trim().toLowerCase().replaceAll("-", "_");
         if (!EFFORT_COMPATIBLE_TYPES.has(type)) return true;
       }
-      for (const field of ["message", "error", "details", "response", "last_error", "body"] as const) {
+      for (const field of ["message", "error", "details", "response", "last_error"] as const) {
         const val = rec[field];
         if (val && typeof val === "object") {
           queue.push(val);
@@ -551,6 +563,8 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
           const inner = extractJsonEnvelope(val);
           if (inner && typeof inner === "object") {
             queue.push(inner);
+          } else if (isIncompleteStructuredWrapper(val)) {
+            return true;
           }
         }
       }

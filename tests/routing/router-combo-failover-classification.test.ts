@@ -577,6 +577,15 @@ describe("bounded optional-control error envelopes", () => {
     expect(comboFailureDecision(400, permBody)).toBe("hop");
     expect(comboFailureCooldownScope(400, permBody)).toBe("target");
   });
+
+  test("rejects competing error carriers before granting a target-local combo hop for reasoning effort", () => {
+    const payload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      response: { code: "permission_denied" },
+    });
+    expect(comboFailureCooldownScope(400, payload)).toBe("target");
+  });
 });
 
 describe("image rejection classifier bounds", () => {

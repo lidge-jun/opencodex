@@ -73,6 +73,20 @@ const UNEXHAUSTED_QUEUE_CANDIDATES_REFUSAL = JSON.stringify({
     { code: "permission_denied", message: "Denied after candidate limit" },
   ],
 });
+const INCOMPLETE_STRUCTURED_WRAPPER_REFUSAL = JSON.stringify({
+  param: "reasoning_effort",
+  message: 'Provider error 400: {"code":"permission_denied"',
+});
+const ECHOED_REQUEST_CONTENT_REFUSAL = JSON.stringify({
+  error: {
+    param: "reasoning_effort",
+    message: "Invalid reasoning effort.",
+  },
+  request: {
+    input: "origin_rejected",
+    reason: "testing cybersecurity policy",
+  },
+});
 const VENDOR_EFFORT_REFUSAL = JSON.stringify({ code: "invalid-argument", error: "Invalid reasoning effort." });
 const UNRELATED = JSON.stringify({ error: { type: "invalid_request_error", message: "Invalid upload request." } });
 
@@ -762,5 +776,93 @@ describe("rejected reasoning rungs", () => {
     expect(text).toContain("reasoning_effort");
     expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
     expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("stops before effort replay on incomplete structured wrapper (openai-chat)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(INCOMPLETE_STRUCTURED_WRAPPER_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = config();
+    const response = await handleResponses(request(), cfg, logCtx);
+    const text = await response.text();
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(text).toContain("permission_denied");
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("stops before effort replay on incomplete structured wrapper (openai-responses)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(INCOMPLETE_STRUCTURED_WRAPPER_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = passthroughConfig();
+    const response = await handleResponses(request(), cfg, logCtx);
+    const text = await response.text();
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(text).toContain("permission_denied");
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("replays downgrade when request content echoes origin_rejected or cyber wording (openai-chat)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (outbound.length === 1) {
+        return new Response(ECHOED_REQUEST_CONTENT_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+      }
+      return chatSuccess();
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = config();
+    const response = await handleResponses(request(), cfg, logCtx);
+
+    expect(outbound).toHaveLength(2);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(effortOf(outbound[1])).toBe("high");
+    expect(response.status).toBe(200);
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual(["reasoning-effort-downgrade"]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(true);
+  });
+
+  test("replays downgrade when request content echoes origin_rejected or cyber wording (openai-responses)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (outbound.length === 1) {
+        return new Response(ECHOED_REQUEST_CONTENT_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ id: "resp-ok" }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = passthroughConfig();
+    const response = await handleResponses(request(), cfg, logCtx);
+
+    expect(outbound).toHaveLength(2);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(effortOf(outbound[1])).toBe("high");
+    expect(response.status).toBe(200);
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual(["reasoning-effort-downgrade"]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(true);
   });
 });
