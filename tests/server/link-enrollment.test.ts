@@ -30,7 +30,7 @@ const result = (stdout = "", code = 0): SshRunResult => ({ code, stdout, stderr:
 const http = (body: unknown, status = 200) => result(`${JSON.stringify(body)}\n${status}`);
 const health = (role: string, restartCapability: string | null = "v1") => http({ service: "opencodex", pid: 4321, port: 10100, role, ...(restartCapability === null ? {} : { restartCapability }) });
 type RunOptions = Parameters<SshRunner["run"]>[1];
-type Step = "probe" | "uname" | "windows" | "fingerprint" | "version" | "port" | "config" | "curl" | "before" | "connect" | "restart" | "health" | "catalog";
+type Step = "probe" | "uname" | "windows" | "fingerprint" | "version" | "port" | "config" | "validate" | "curl" | "before" | "connect" | "restart" | "health" | "catalog";
 interface Call { step: Step; argv: readonly string[]; options: RunOptions; }
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -90,6 +90,7 @@ function harness(remotePlatform: "posix" | "windows" = "posix") {
         : command === remoteOcx(["--version"]) ? "version"
         : command === remoteOcx(["link", "port"]) ? "port"
         : command === remoteOcx(["config", "show", "--json"]) ? "config"
+        : command === remoteOcx(["config", "validate", "--json"]) ? "validate"
         : command.includes("ocx-curl-preflight") ? "curl"
         : (nativeArgs?.[0] === "connect" || command.includes("'connect' '--link' '--key-stdin'")) ? "connect"
         : command === remoteOcx(["restart"]) ? "restart"
@@ -121,6 +122,7 @@ function harness(remotePlatform: "posix" | "windows" = "posix") {
           case "version": return result("opencodex 2.83.0\n");
           case "port": return result('{"port":2200}');
           case "config": return result('{"port":10100}\n');
+          case "validate": return { code: 1, stdout: "", stderr: "Unknown command: config validate\n" };
           case "curl": case "connect": return result();
           case "before": return health("standalone");
           case "restart": return result();
@@ -331,15 +333,32 @@ describe("Home enrollment of a standalone Child", () => {
   });
 
   test("a Child preflight failure carries the Child's own reason (#8357)", async () => {
+    // The line a real `ocx config show --json` prints for an invalid saved configuration: generic,
+    // and long enough that the 160-code-point cap cuts it before naming any defect.
+    const showWarning = "Warning: Config at /var/lib/opencodex-child/Library/Application Support/opencodex/config.json is invalid or unreadable; defaults are being shown for invalid settings. Run: ocx config validate. Inspect: ocx config show --source.\n";
     const h = harness(); h.confirmed();
-    h.overrides.config = () => ({ code: 1, stdout: "", stderr: "opencodex: invalid config\nError: defaultProvider must exist in providers\n" });
+    h.overrides.config = () => ({ code: 1, stdout: "", stderr: showWarning });
+    h.overrides.validate = () => ({ code: 1, stdout: '{\n  "ok": false,\n  "error": "schema_invalid: defaultProvider: defaultProvider must exist in providers"\n}\n', stderr: "" });
     const payload = await denied(await h.call("apply", { alias: "child" }), "child_preflight_failed") as { error: { hint: string } };
-    expect(payload.error.hint).toBe("Error: defaultProvider must exist in providers");
+    expect(payload.error.hint).toBe("Child config is invalid: schema_invalid: defaultProvider: defaultProvider must exist in providers");
+    expect(h.calls.find(call => call.step === "validate")?.options?.maxOutputBytes).toBe(16 * 1024);
     noEnrollmentEffects(h);
+    // A Child without `config validate` (ocx-child, an older ocx) keeps the config show reason.
+    const legacy = harness(); legacy.confirmed();
+    legacy.overrides.config = () => ({ code: 1, stdout: "", stderr: "opencodex: invalid config\nError: defaultProvider must exist in providers\n" });
+    const third = await denied(await legacy.call("apply", { alias: "child" }), "child_preflight_failed") as { error: { hint: string } };
+    expect(third.error.hint).toBe("Error: defaultProvider must exist in providers");
+    // A validate that times out must not mask it either.
+    const hung = harness(); hung.confirmed();
+    hung.overrides.config = () => ({ code: 1, stdout: "", stderr: "Error: defaultProvider must exist in providers\n" });
+    hung.overrides.validate = () => { throw new SshRunnerError("timeout", "ssh command timed out"); };
+    const fourth = await denied(await hung.call("apply", { alias: "child" }), "child_preflight_failed") as { error: { hint: string } };
+    expect(fourth.error.hint).toBe("Error: defaultProvider must exist in providers");
     const unreadable = harness(); unreadable.confirmed();
     unreadable.overrides.config = () => result("not json\n");
     const second = await denied(await unreadable.call("apply", { alias: "child" }), "child_preflight_failed") as { error: { hint: string } };
     expect(second.error.hint).toContain("config show --json");
+    expect(unreadable.calls.some(call => call.step === "validate")).toBe(false);
   });
 
   test("an output limit in Child preflight names the cap instead of failing generically", async () => {

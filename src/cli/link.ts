@@ -247,7 +247,7 @@ async function linkRequest<T>(path: string, init: RequestInit, deps: LinkCliDeps
   } catch (error) {
     if (error instanceof RuntimeApiError) {
       // Never echo an API error body: issue responses contain a one-time data key. Only the error
-      // code survives, because callers branch on it and a code is never secret.
+      // code, the server's already-bounded hint and the residual flag survive (errorCodeBody).
       throw new RuntimeApiError(`Link management request failed (${error.status})`, error.status, errorCodeBody(error.body));
     }
     throw error;
