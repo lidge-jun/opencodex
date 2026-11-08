@@ -10,6 +10,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     'import { acquireSyncGuard } from "../src/update/sync-update-mutex.mjs";',
     'import { isOrchestratedUpdateArgv, parseOrchestratedUpdateArgs, parseOrchestratedChildArgs } from "../src/update/orchestrated-arguments.mjs";',
     'import { createLegacyUpdateSession, createOrchestratedChildSession, decodeOrchestratedExpect } from "../src/update/orchestrated-session.mjs";',
+    'import { matchesOrchestratedPnpmOwner } from "../src/update/orchestrated-pnpm.mjs";',
     'import { createUpdatePlanToken } from "../src/update/orchestrated-token.mjs";',
     // The orchestration driver starts an independently admitted update child.
     'import { applyNodeOrchestratedUpdate } from "../src/update/orchestrated-node-driver.mjs";',
