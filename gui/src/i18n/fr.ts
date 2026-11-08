@@ -4130,6 +4130,7 @@ export const fr: Record<TKey, string> = {
   "remoteLink.error.probe_failed": "Impossible de se connecter à l’hôte SSH. Vérifiez qu’il accepte votre clé SSH et que l’assistant ProxyCommand éventuellement requis est installé.",
   "remoteLink.error.remote_connect_failed": "L’ordinateur distant n’a pas pu se connecter à ce Home. Vérifiez son service OpenCodex, puis réessayez.",
   "remoteLink.error.remote_disconnect_failed": "La demande de lien distant n’a pas pu aboutir.",
+  "remoteLink.error.purge_unsupported": "Cet ordinateur distant exécute une installation complète d’OpenCodex : aucun binaire d’agent léger déployé n’est à supprimer. Déconnectez-le sans supprimer le binaire.",
   "remoteLink.error.remote_ocx_missing": "ocx est introuvable sur l’ordinateur distant. Installez-y OpenCodex, ou vérifiez que ocx figure dans le PATH des sessions SSH non interactives.",
   "remoteLink.error.remote_ocx_outdated": "OpenCodex est trop ancien sur l’ordinateur distant pour Remote Link. Exécutez-y ocx update (2.66.0 ou ultérieur), puis réessayez.",
   "remoteLink.error.remote_ocx_unrecognized": "L’ordinateur distant n’a pas indiqué de version d’OpenCodex. Remote Link nécessite OpenCodex 2.66.0 ou ultérieur sous macOS ou Linux.",

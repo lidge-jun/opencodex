@@ -60,7 +60,12 @@ async function mount(props: Partial<React.ComponentProps<typeof RemoteLink>> = {
 test("current translated link errors remain implemented across route and enrollment owners", async () => {
   const source = (await Promise.all(["link-routes", "link-enrollment", "link-route-state"].map(name =>
     Bun.file(`../src/server/management/${name}.ts`).text()))).join("\n");
-  const fromRoutes = [...source.matchAll(/(?:fail\(|remoteFailure\([^,\n]+,\s*)"([a-z_]+)"/g)].map(match => match[1]).filter((value, index, all) => all.indexOf(value) === index).sort();
+  // DELETE --purge forwards the code purgeDisconnectRemote chose, so its literals count as route codes.
+  const purgeSource = await Bun.file("../src/link/remote-plant.ts").text();
+  const fromRoutes = [
+    ...[...source.matchAll(/(?:fail\(|remoteFailure\([^,\n]+,\s*)"([a-z_]+)"/g)].map(match => match[1]),
+    ...[...purgeSource.matchAll(/\bcode: "([a-z_]+)"/g)].map(match => match[1]),
+  ].filter((value, index, all) => all.indexOf(value) === index).sort();
   // New phase errors use generic text. These two old-server translations remain compatible
   // although enrollment now reports child_relay_timeout and phase-specific failures instead.
   const legacyOnly = new Set(["admission_timeout", "link_apply_failed"]);
@@ -1236,6 +1241,22 @@ test("Ready-to-Plant, cached ephemeral, connected badges, conflict notices, and 
   await act(async () => { forceBtn.click(); });
   await flush();
   expect(calls.at(-1)).toEqual({ method: "DELETE", path: "/api/link/lnk_eph", body: { force: true } });
+});
+
+test("a refused --purge on a full install explains why instead of a generic failure", async () => {
+  globalThis.fetch = (async (_input, init) => {
+    if (init?.method === "DELETE") return response({ error: { code: "purge_unsupported", message: "full install" } }, 409);
+    return response({ ...baseStatus, links: [{ id: "lnk_stale", alias: "devbox-stale", direction: "hub-initiated", state: "connected", since: "2026-11-07T00:00:00Z", reason: null, tunnelPort: 24502, childKind: "ephemeral" }] });
+  }) as typeof fetch;
+  const host = await mount();
+  await act(async () => { ([...host.querySelectorAll(".remote-link-row button")][0] as HTMLButtonElement).click(); });
+  await flush();
+  const dialog = host.querySelector(".remote-link-confirm-dialog") as HTMLDialogElement;
+  await act(async () => { (dialog.querySelector('input[type="checkbox"]') as HTMLInputElement).click(); });
+  await act(async () => { ([...dialog.querySelectorAll("button")].find(b => b.textContent?.includes("Delete & disconnect")) as HTMLButtonElement).click(); });
+  await flush();
+  expect(dialog.textContent).toContain("full OpenCodex install");
+  expect(dialog.textContent).toContain("without deleting");
 });
 
 test("a bare host Home cannot plant names the verified build Home needs and where it looks", async () => {

@@ -4164,6 +4164,7 @@ export const ru: Record<TKey, string> = {
   "remoteLink.error.probe_failed": "Не удалось подключиться к SSH-хосту. Убедитесь, что он принимает ваш ключ SSH и что нужная вспомогательная программа ProxyCommand установлена.",
   "remoteLink.error.remote_connect_failed": "Удалённый компьютер не смог подключиться к этому Home. Проверьте службу OpenCodex на нём и повторите попытку.",
   "remoteLink.error.remote_disconnect_failed": "Не удалось завершить запрос удалённой связи.",
+  "remoteLink.error.purge_unsupported": "На этом удалённом компьютере работает полная установка OpenCodex, поэтому удалять установленный файл лёгкого агента нечего. Отключитесь, не удаляя файл.",
   "remoteLink.error.remote_ocx_missing": "На удалённом компьютере не найден ocx. Установите там OpenCodex или убедитесь, что ocx есть в PATH неинтерактивных SSH-сеансов.",
   "remoteLink.error.remote_ocx_outdated": "OpenCodex на удалённом компьютере слишком старый для удалённой связи. Выполните там ocx update (версия 2.66.0 или новее) и повторите попытку.",
   "remoteLink.error.remote_ocx_unrecognized": "Удалённый компьютер не сообщил версию OpenCodex. Для удалённой связи нужен OpenCodex 2.66.0 или новее на macOS или Linux.",

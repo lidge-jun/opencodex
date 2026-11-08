@@ -75,6 +75,7 @@ const ERROR_TKEY: Record<LinkErrorCode, TKey> = {
   link_unavailable: "remoteLink.error.link_unavailable",
   listener_unavailable: "remoteLink.error.listener_unavailable",
   probe_failed: "remoteLink.error.probe_failed",
+  purge_unsupported: "remoteLink.error.purge_unsupported",
   remote_connect_failed: "remoteLink.error.remote_connect_failed",
   remote_disconnect_failed: "remoteLink.error.remote_disconnect_failed",
   remote_ocx_missing: "remoteLink.error.remote_ocx_missing",

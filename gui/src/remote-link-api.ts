@@ -30,6 +30,7 @@ export const LINK_ERROR_CODES = [
   "link_unavailable",
   "listener_unavailable",
   "probe_failed",
+  "purge_unsupported",
   "remote_connect_failed",
   "remote_disconnect_failed",
   "remote_ocx_missing",

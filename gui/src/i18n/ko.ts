@@ -4163,6 +4163,7 @@ export const ko: Record<TKey, string> = {
   "remoteLink.error.probe_failed": "SSH 호스트에 접속하지 못했습니다. SSH 키로 로그인할 수 있는지, ProxyCommand 도우미가 설치되어 있는지 확인하세요.",
   "remoteLink.error.remote_connect_failed": "원격 컴퓨터를 이 홈에 연결하지 못했습니다. 그 컴퓨터의 OpenCodex 서비스를 확인한 뒤 다시 시도하세요.",
   "remoteLink.error.remote_disconnect_failed": "원격 연결 요청을 완료하지 못했습니다.",
+  "remoteLink.error.purge_unsupported": "이 원격 컴퓨터는 OpenCodex 전체 설치로 실행 중이라 삭제할 경량 에이전트 파일이 없습니다. 파일 삭제 없이 연결을 해제하세요.",
   "remoteLink.error.remote_ocx_missing": "원격 컴퓨터에서 ocx를 찾지 못했습니다. 그 컴퓨터에 OpenCodex를 설치하거나, 비대화형 SSH 세션의 PATH에 ocx가 있는지 확인하세요.",
   "remoteLink.error.remote_ocx_outdated": "원격 컴퓨터의 OpenCodex가 원격 연결을 쓰기에는 오래되었습니다. 그 컴퓨터에서 ocx update를 실행해 2.66.0 이상으로 올린 뒤 다시 시도하세요.",
   "remoteLink.error.remote_ocx_unrecognized": "원격 컴퓨터가 OpenCodex 버전을 알려 주지 않았습니다. 원격 연결에는 macOS 또는 Linux의 OpenCodex 2.66.0 이상이 필요합니다.",

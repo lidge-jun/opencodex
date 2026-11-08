@@ -4092,6 +4092,7 @@ export const vi: Record<TKey, string> = {
   "remoteLink.error.probe_failed": "Không kết nối được tới máy chủ SSH. Hãy kiểm tra máy đó chấp nhận khóa SSH của bạn và trình trợ giúp ProxyCommand cần thiết đã được cài đặt.",
   "remoteLink.error.remote_connect_failed": "Máy từ xa không kết nối được tới Home này. Hãy kiểm tra dịch vụ OpenCodex trên máy đó rồi thử lại.",
   "remoteLink.error.remote_disconnect_failed": "Không thể hoàn tất yêu cầu liên kết từ xa.",
+  "remoteLink.error.purge_unsupported": "Máy tính từ xa này chạy bản cài đặt OpenCodex đầy đủ nên không có tệp tác nhân gọn nhẹ nào để xóa. Hãy ngắt kết nối mà không xóa tệp.",
   "remoteLink.error.remote_ocx_missing": "Không tìm thấy ocx trên máy từ xa. Hãy cài OpenCodex trên máy đó hoặc kiểm tra ocx có trong PATH của phiên SSH không tương tác.",
   "remoteLink.error.remote_ocx_outdated": "OpenCodex trên máy từ xa quá cũ để dùng liên kết từ xa. Hãy chạy ocx update trên máy đó (2.66.0 trở lên) rồi thử lại.",
   "remoteLink.error.remote_ocx_unrecognized": "Máy từ xa không báo phiên bản OpenCodex. Liên kết từ xa cần OpenCodex 2.66.0 trở lên trên macOS hoặc Linux.",

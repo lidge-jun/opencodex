@@ -4162,6 +4162,7 @@ export const zh: Record<TKey, string> = {
   "remoteLink.error.probe_failed": "无法连接到 SSH 主机。请确认该主机接受你的 SSH 密钥，并已安装所需的 ProxyCommand 辅助程序。",
   "remoteLink.error.remote_connect_failed": "远程电脑无法连接到此 Home。请检查该电脑上的 OpenCodex 服务后重试。",
   "remoteLink.error.remote_disconnect_failed": "无法完成远程连接请求。",
+  "remoteLink.error.purge_unsupported": "此远程计算机运行的是完整的 OpenCodex 安装，没有可删除的已植入轻量代理文件。请在不删除文件的情况下断开连接。",
   "remoteLink.error.remote_ocx_missing": "在远程电脑上找不到 ocx。请在该电脑上安装 OpenCodex，或确认 ocx 位于非交互式 SSH 会话的 PATH 中。",
   "remoteLink.error.remote_ocx_outdated": "远程电脑上的 OpenCodex 版本过旧，不支持远程连接。请在该电脑上运行 ocx update 升级到 2.66.0 或更高版本后重试。",
   "remoteLink.error.remote_ocx_unrecognized": "远程电脑没有报告 OpenCodex 版本。远程连接需要 macOS 或 Linux 上的 OpenCodex 2.66.0 或更高版本。",

@@ -4163,6 +4163,7 @@ export const ja: Record<TKey, string> = {
   "remoteLink.error.probe_failed": "SSH ホストに接続できませんでした。SSH キーで認証できるか、必要な ProxyCommand ヘルパーがインストールされているかを確認してください。",
   "remoteLink.error.remote_connect_failed": "リモートのコンピューターがこの Home に接続できませんでした。そのコンピューターの OpenCodex サービスを確認してから再試行してください。",
   "remoteLink.error.remote_disconnect_failed": "リモートリンクのリクエストを完了できませんでした。",
+  "remoteLink.error.purge_unsupported": "このリモートコンピュータは OpenCodex のフルインストールで動作しているため、削除する配置済み軽量エージェントファイルはありません。ファイルを削除せずに接続を解除してください。",
   "remoteLink.error.remote_ocx_missing": "リモートのコンピューターで ocx が見つかりませんでした。そこに OpenCodex をインストールするか、非対話 SSH セッションの PATH に ocx があることを確認してください。",
   "remoteLink.error.remote_ocx_outdated": "リモートのコンピューターの OpenCodex が古く、リモートリンクに対応していません。そのコンピューターで ocx update を実行して 2.66.0 以降にしてから再試行してください。",
   "remoteLink.error.remote_ocx_unrecognized": "リモートのコンピューターが OpenCodex のバージョンを返しませんでした。リモートリンクには macOS または Linux 上の OpenCodex 2.66.0 以降が必要です。",

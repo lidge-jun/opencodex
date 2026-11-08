@@ -4175,6 +4175,7 @@ export const en = {
   "remoteLink.error.probe_failed": "Could not connect to the SSH host. Check that it accepts your SSH key and that any ProxyCommand helper is installed.",
   "remoteLink.error.remote_connect_failed": "The remote computer could not connect to this Home. Check its OpenCodex service and retry.",
   "remoteLink.error.remote_disconnect_failed": "Remote link request could not be completed.",
+  "remoteLink.error.purge_unsupported": "This remote computer runs a full OpenCodex install, so there is no planted lightweight agent binary to delete. Disconnect without deleting the binary.",
   "remoteLink.error.remote_ocx_missing": "ocx was not found on the remote computer. Install OpenCodex there, or make sure ocx is on the PATH of non-interactive SSH sessions.",
   "remoteLink.error.remote_ocx_outdated": "OpenCodex on the remote computer is too old for Remote Link. Run ocx update there (2.66.0 or later), then retry.",
   "remoteLink.error.remote_ocx_unrecognized": "The remote computer did not report an OpenCodex version. Remote Link needs OpenCodex 2.66.0 or later on macOS or Linux.",

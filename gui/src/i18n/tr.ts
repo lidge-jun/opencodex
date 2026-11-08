@@ -4164,6 +4164,7 @@ export const tr: Record<TKey, string> = {
   "remoteLink.error.probe_failed": "SSH ana bilgisayarına bağlanılamadı. SSH anahtarınızı kabul ettiğini ve gerekiyorsa ProxyCommand yardımcısının kurulu olduğunu kontrol edin.",
   "remoteLink.error.remote_connect_failed": "Uzak bilgisayar bu Home'a bağlanamadı. Oradaki OpenCodex hizmetini kontrol edip tekrar deneyin.",
   "remoteLink.error.remote_disconnect_failed": "Uzak bağlantı isteği tamamlanamadı.",
+  "remoteLink.error.purge_unsupported": "Bu uzak bilgisayar tam bir OpenCodex kurulumu çalıştırıyor; silinecek yerleştirilmiş hafif aracı dosyası yok. Dosyayı silmeden bağlantıyı kesin.",
   "remoteLink.error.remote_ocx_missing": "Uzak bilgisayarda ocx bulunamadı. Orada OpenCodex'i kurun veya ocx'in etkileşimsiz SSH oturumlarının PATH'inde olduğundan emin olun.",
   "remoteLink.error.remote_ocx_outdated": "Uzak bilgisayardaki OpenCodex, uzak bağlantı için çok eski. Orada ocx update komutunu çalıştırıp 2.66.0 veya sonrasına güncelleyin, ardından yeniden deneyin.",
   "remoteLink.error.remote_ocx_unrecognized": "Uzak bilgisayar bir OpenCodex sürümü bildirmedi. Uzak bağlantı için macOS veya Linux üzerinde OpenCodex 2.66.0 veya sonrası gerekir.",
