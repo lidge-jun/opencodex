@@ -33,23 +33,23 @@ test("standalone grants can follow values without reinterpreting literal profile
 
 const result=(r:any)=>JSON.parse(r.content[0].text);
 describe.skipIf(process.platform === "win32")("resume MCP CLI",()=>{
-  test("explicit grant is inert on initialization, registers a separate tool and resumes on the selected server",async()=>{
-    const q=queueMcpFixture();const f=localMessagingFixture(c=>c.method === "thread/read" ? {thread:{...localFixtureThread(),status:{type:"notLoaded"}}} : c.method === "thread/resume" ? {thread:localFixtureThread(),activePermissionProfile:{id:":read-only"}} : undefined,{allowResume:true});
+  test("explicit grant is inert on initialization, registers a separate tool and refuses unsafe resume on the selected server",async()=>{
+    const q=queueMcpFixture();const f=localMessagingFixture(c=>c.method === "thread/read" ? {thread:{...localFixtureThread(),status:{type:"notLoaded"}}} : undefined,{allowResume:true});
     const client=new Client({name:"fixture",version:"1"});
     const transport=new StdioClientTransport({command:process.execPath,args:[repoPath("src/cli/index.ts"),"message","mcp","--codex",q.options.codex,"--codex-home",f.codexHome,"--allow-resume","--resume-socket",join(f.codexHome,"app-server-control/app-server-control.sock"),"--resume-permissions",":read-only"],stderr:"pipe"});
     try {
       await client.connect(transport);
       expect((await client.listTools()).tools.map(t=>t.name).sort()).toEqual(["codex_queue_message","codex_resume_thread","codex_threads"]);
       expect(f.calls).toEqual([]);expect(q.calls()).toEqual([]);
-      expect(result(await client.callTool({name:"codex_resume_thread",arguments:{threadId:LOCAL_TARGET}}))).toMatchObject({status:"resumed",executionVerified:false});
-      expect(q.calls()).toEqual([]);expect(f.calls.filter(c=>c.method === "thread/resume")).toHaveLength(1);
+      expect(result(await client.callTool({name:"codex_resume_thread",arguments:{threadId:LOCAL_TARGET}}))).toMatchObject({status:"not_resumed",executionVerified:false,error:{code:"resume_atomicity_unsupported"}});
+      expect(q.calls()).toEqual([]);expect(f.calls.filter(c=>c.method === "thread/resume")).toHaveLength(0);
       await client.callTool({name:"codex_resume_thread",arguments:{threadId:LOCAL_TARGET,permissions:":danger-full-access"}});
-      expect(f.calls.filter(c=>c.method === "thread/resume").every(c=>c.params.permissions === ":read-only")).toBe(true);
+      expect(f.calls.some(c=>c.method === "thread/resume")).toBe(false);
     }finally{await client.close();await f.close();await q.close();}
   },15_000);
 
   test("same-thread overlap is refused; four distinct calls share admission and disconnect cleanup",async()=>{
-    const q=queueMcpFixture();const f=localMessagingFixture(c=>c.method === "thread/read" ? {thread:{...localFixtureThread(String(c.params.threadId)),status:{type:"notLoaded"}}} : c.method === "thread/resume" ? NO_REPLY : undefined,{allowResume:true});
+    const q=queueMcpFixture();const f=localMessagingFixture(c=>c.method === "thread/read" ? {thread:{...localFixtureThread(String(c.params.threadId)),status:{type:"notLoaded"}}} : c.method === "configRequirements/read" ? NO_REPLY : undefined,{allowResume:true});
     const client=new Client({name:"fixture",version:"1"});
     const transport=new StdioClientTransport({command:process.execPath,args:[repoPath("src/cli/index.ts"),"message","mcp","--codex",q.options.codex,"--codex-home",f.codexHome,"--allow-reply-read","--allow-resume","--resume-socket",join(f.codexHome,"app-server-control/app-server-control.sock"),"--resume-permissions",":read-only"],stderr:"pipe"});
     const pending:Promise<unknown>[]=[];
@@ -57,11 +57,11 @@ describe.skipIf(process.platform === "win32")("resume MCP CLI",()=>{
       await client.connect(transport);
       expect((await client.listTools()).tools.map(t=>t.name).sort()).toEqual(expect.arrayContaining(["codex_queue_message","codex_read_reply","codex_resume_thread","codex_threads"]));
       pending.push(client.callTool({name:"codex_resume_thread",arguments:{threadId:LOCAL_TARGET}}).catch(e=>e));
-      const until=performance.now()+5000;while(!f.calls.some(c=>c.method === "thread/resume")&&performance.now()<until)await Bun.sleep(10);
+      const until=performance.now()+5000;while(!f.calls.some(c=>c.method === "configRequirements/read")&&performance.now()<until)await Bun.sleep(10);
       expect(result(await client.callTool({name:"codex_resume_thread",arguments:{threadId:LOCAL_TARGET}}))).toMatchObject({status:"not_resumed",error:{code:"resume_busy"}});
       for(let i=3;i<=5;i++) pending.push(client.callTool({name:"codex_resume_thread",arguments:{threadId:`00000000-0000-4000-8000-00000000000${i}`}}).catch(e=>e));
-      const end=performance.now()+5000;while(f.calls.filter(c=>c.method === "thread/resume").length<4&&performance.now()<end)await Bun.sleep(10);
-      expect(f.calls.filter(c=>c.method === "thread/resume")).toHaveLength(4);
+      const end=performance.now()+5000;while(f.calls.filter(c=>c.method === "configRequirements/read").length<4&&performance.now()<end)await Bun.sleep(10);
+      expect(f.calls.filter(c=>c.method === "configRequirements/read")).toHaveLength(4);
       expect((await client.callTool({name:"codex_threads",arguments:{}})).isError).toBe(true);
       await client.close();await Promise.allSettled(pending);await Bun.sleep(50);
       expect(f.activeConnections).toBe(0);expect(q.calls()).toEqual([]);

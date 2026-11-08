@@ -97,6 +97,7 @@ import { clientWireOf } from "./inference/client-wire";
 import { directEncodersApply } from "./inference/client-encoder-delivery";
 import type { ClientEncoderOption } from "./responses/core-options";
 import { handleResponses } from "./responses";
+import { resolveComboId } from "../combos";
 import { previewXaiOauthWireModel } from "./responses/core-normalize";
 import { upstreamWireForAdapter } from "../protocols/contract";
 import { createProtocolEnvelope, type ProtocolEnvelope } from "../protocols/envelope";
@@ -650,6 +651,7 @@ async function handleClaudeMessagesWithBudget(
   }
   // Model resolution reads this view; every other claudeCode setting keeps reading `config`.
   const cc = claudeCodeForIngress(config.claudeCode, ingress.claudeIntercept === true);
+  let nativeComboSource = false;
 
   let anthropicBody: unknown;
   let internalBody: Rec;
@@ -742,7 +744,12 @@ async function handleClaudeMessagesWithBudget(
     // proxy-owned `speed` + beta (anthropic-speed wire) and its usage.speed observation would be
     // silently skipped. Translation reaches the adapter, which owns both.
     const messagesBody = anthropicBody;
-    if (isRec(messagesBody) && resolveProtocolSettings(config).unrepresentable === "reject") {
+    // An effort override rewrites the body below, so only an unrewritten body is a replay source;
+    // the envelope then keeps it by reference and charges no ingress copy.
+    nativeComboSource = !effortOverride && isRec(messagesBody) && typeof messagesBody.model === "string"
+      && resolveComboId(config, resolveInboundModel(messagesBody.model, cc)) !== null
+      && Object.keys(config.providers).some(name => resolveProtocolSettings(config, name).rollout.managedMessagesNative);
+    if (isRec(messagesBody) && (resolveProtocolSettings(config).unrepresentable === "reject" || nativeComboSource)) {
       envelope = createProtocolEnvelope({ inbound: "messages", body: messagesBody, translatorBudget });
     }
     const sourceEnvelope = envelope;
@@ -1127,7 +1134,8 @@ async function handleClaudeMessagesWithBudget(
     });
   }
   // Combo and policy children are judged per candidate (PF-07); an unknown model has no route.
-  if (envelope && settledRoute && !settledRoute.combo && settledRoute.routeKind !== "policy") {
+  if (envelope && resolveProtocolSettings(config).unrepresentable === "reject"
+    && settledRoute && !settledRoute.combo && settledRoute.routeKind !== "policy") {
     const verdict = checkRepresentable({
       inbound: "messages",
       requestPath: requestPathForLane(
@@ -1147,7 +1155,8 @@ async function handleClaudeMessagesWithBudget(
   }
   // PF-10: opaque thinking state reaches only first-party Anthropic; under `reject` a native
   // route to anyone else refuses the request instead of sending it without that state.
-  if (envelope && nativeMessagesRoute && !credentialDomainFor(nativeMessagesRoute.provider)?.firstPartyAnthropic
+  if (envelope && resolveProtocolSettings(config).unrepresentable === "reject"
+    && nativeMessagesRoute && !credentialDomainFor(nativeMessagesRoute.provider)?.firstPartyAnthropic
     && messagesBodyHasOpaqueState(anthropicBody as Rec)) {
     markProtocolBlocked(logCtx, { inbound: "messages", reasonCodes: ["feature-unrepresentable", "opaque-state-stripped"], features: messagesFeatures });
     logCtx.errorCode = "unsupported_feature";
@@ -1262,6 +1271,22 @@ async function handleClaudeMessagesWithBudget(
     // over, and TTL-less breakpoints take the destination default.
     cacheRetention: config.cacheRetention ?? callerCacheRetention(anthropicBody),
   }, logCtx, {
+    ...(nativeComboSource && envelope && settledRoute?.combo ? {
+      protocolSource: (await import("./messages-native")).createNativeMessagesComboSource({
+        req, config, logCtx, envelope, requestedModel, translatorBudget, selector: nativeSelector,
+        echoModel: clientFacingModelText(clientModelLabel),
+        modelScope: resolveAdmissionModelScope(config, logIds?.admission),
+        callerAnthropicBeta: req.headers.get("anthropic-beta"),
+        clientIdentity: captureAnthropicClientIdentity(req.headers),
+        sessionKey: anthropicSessionKeyFromParts({
+          sessionIdHeader: req.headers.get("session_id")?.trim() || req.headers.get("x-claude-code-session-id"),
+          threadIdHeader: req.headers.get("thread_id"),
+          clientThreadId: logCtx.conversationId,
+          promptCacheKey: typeof internalBody.prompt_cache_key === "string" ? internalBody.prompt_cache_key : null,
+          promptCacheKeyIsSharedCohort: cacheKeySource === "system",
+        }),
+      }),
+    } : {}),
     // Routing keeps Claude-only sidecar overrides; admission policy must follow the live owner.
     codexAuthPolicy: config,
     ...(logIds?.admission ? { admission: logIds.admission } : {}),
@@ -1309,6 +1334,8 @@ async function handleClaudeMessagesWithBudget(
       ? { directRequest: messagesDirectRequestOption(directPlan, anthropicBody, cc, translatorBudget) }
       : {}),
   });
+  // Native combo children report through gated callbacks, not the Responses log inspector.
+  if (clientWireOf(upstream) === "messages" && upstream.ok && settledRoute?.combo) return upstream;
   const response = logIds ? responseWithDeferredRequestLog(upstream, logIds.requestId, logIds.start, logCtx) : upstream;
   // Already in the Messages wire (direct encoder): no conversion.
   if (clientWireOf(upstream) === "messages") return response;

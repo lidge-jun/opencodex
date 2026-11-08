@@ -90,14 +90,9 @@ tells you exactly what to change:
   lockfile changed without its manifest each need an explicit approval label.
   A comment-only change to a source file is not a behavior change and owes no
   test.
-- **Cross-platform CI.** The suite runs sharded on Linux and in full on macOS for
-  every pull request. Windows runs at the shipping boundary — on promotion to
-  `main` or `preview` — so a slow or flaky Windows runner cannot decide when your
-  pull request turns green.
-  This runs for **every** pull request, whatever its base branch — including a
-  stacked child whose base is another open PR's head. The `paths:` filter, not
-  the base branch, decides whether the jobs run at all: a PR touching only docs
-  or `devlog/` queues nothing.
+- **Cross-platform CI.** Pull requests run scoped Linux checks. Full Linux, macOS and Windows
+  coverage is a manual `lane=all` dispatch on `dev` after a batch of merges; a green PR is not
+  full-platform release evidence. Docs changes receive a scoped build gate.
 
 - **Type label.** The `label` check derives `bug` / `enhancement` /
   `documentation` / `chore` from your PR title. A title without a recognisable
@@ -114,7 +109,7 @@ right; say why when it is wrong. It does not block a merge.
 `enforce-target` and `label` use trusted default-branch automation. The PR gate
 runs on `pull_request_target` and on CodeRabbit `status` events, both loaded
 from the repository default branch; the write-capable behavior therefore
-changes only after the gate revision is promoted to `main`. The cross-platform
+changes only after the gate revision reaches the repository default branch. The cross-platform
 CI workflow runs on `pull_request` and takes effect as soon as it is on the
 branch being targeted.
 

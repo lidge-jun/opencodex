@@ -396,48 +396,37 @@ idle notifications remain outside this contribution.
 
 ## Explicit existing-server resume
 
-To expose `codex_resume_thread`, configure all three resume arguments on the MCP
-host. For example, the built-in read-only profile:
+**Execution is currently blocked pending native atomic conditional resume support.**
+This pending tool cannot safely resume an unloaded conversation with the checked
+Codex 0.166.0 API. It performs bounded preflight and returns a refusal; it does not
+run queued work. Existing queue and stored-reply tools remain available separately.
+
+To expose the preflight tool, configure all three arguments:
 
 ```sh
 ocx message mcp --codex /absolute/path/to/codex --codex-home /absolute/path/to/.codex --allow-reply-read --allow-resume --resume-socket /absolute/path/to/existing.sock --resume-permissions :read-only
 ```
 
-**This explicitly authorizes a new execution permission profile.** It does not
-promise automatic preservation of saved permissions. Choose only a profile you
-intend to authorize; it may differ from the conversation's previous permissions.
-The profile comes from host configuration, not model/tool arguments or queued
-messages. Resuming may execute queued work and consume model usage. Queueing,
-reading and resuming remain separate calls.
+The socket must be an existing trusted local Unix App Server reporting the same
+canonical Codex home. No server is installed or started. An exact thread UUID is
+normalized before metadata-only lookup. Observed loaded idle/active targets return
+`already_loaded`; unhealthy targets refuse. For an unloaded target, managed policy,
+unsupported APIs, invalid metadata or a missing/disallowed/unobserved profile refuse.
+The profile is configured by the host, never by tool arguments or queued messages.
+The check reads one bounded catalog page of at most 50 profiles in the target cwd.
 
-The socket must be an existing trusted local Unix App Server that reports the
-same canonical Codex home. No server is installed or started. Exact UUIDs are
-normalized before metadata lookup. Loaded idle/active targets return already_loaded
-without changing their permissions; unhealthy targets refuse.
+Even when these checks pass, the result is `not_resumed` with
+`resume_atomicity_unsupported`. No `thread/resume` is sent. Another client could load
+and unsubscribe from the conversation between the metadata read and resume; the
+checked native server can replace that idle cache entry using supplied permissions.
+A client-side lock or second read cannot eliminate this window. Execution requires
+a native unloaded-only condition enforced atomically before changing a live thread;
+there is no supported conditional-resume API in the checked version. Do not bypass
+this refusal, infer safety from a version string or treat an acknowledgement as a
+way to undo work already started.
 
-Before resuming an unloaded target, the server must report no managed requirements.
-Managed policy can substitute its default profile, so this implementation refuses
-managed contexts. It checks one bounded catalog page (at most 50 profiles) for the
-configured ID in the target's working directory and requires it to be allowed.
-Unverified, missing, disallowed or unobserved profiles refuse. Unsupported APIs
-also refuse. Native explicit-profile semantics were tested on Codex 0.166.0.
-
-The resume request pins that exact `permissions` ID. A removed profile must cause a
-native error rather than fall back to the stored/default selection. No message,
-new conversation, turn/start, steer, model or approval override is sent. Acknowledged
-thread/state/profile must match. Catalog checks do not freeze definitions against
-later changes by trusted configuration owners or administrators, and this tool is
-not a global execution lock across separate App Servers.
-
-`resumed` acknowledges matching metadata, not message processing or task completion;
-`executionVerified` is always false. Failure before writing resume is not_resumed.
-After writing, rejection, timeout, a mismatching profile or disconnect is unknown;
-never automatically replay it or retry without the configured profile. A mismatch
-cannot roll back work that may already have begun on the shared server.
-
-The bridge never answers native approval requests. They belong to the existing
-native owner. Unsupported requests close this connection and can make the result
-unknown. Disconnect closes only the bridge connection, not the shared server or
-target turn. Each call shares a 20-second budget and the host's four-operation limit;
-overlapping resumes for one UUID are refused. Network/SSH and Windows are outside
-this tool's scope.
+`executionVerified` is always false. The tool starts no conversation or turn,
+changes no permission and answers no approval requests. Each call shares a
+20-second budget and the host's four-operation limit; overlapping calls for one
+UUID refuse. Disconnect closes only the bridge connection. Network/SSH endpoints
+and Windows remain outside this tool's scope.

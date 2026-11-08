@@ -32,8 +32,8 @@ export async function serveQueueMcp(options: QueueMcpOptions): Promise<void> {
     inputSchema: queueMessageInput, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } },
   async (input, extra) => run(signal => queueMcpSend(options, input, signal), extra.signal));
   if (options.allowResume && options.resumeSocket && isResumeProfile(options.resumePermissions)) server.registerTool("codex_resume_thread", {
-    description: "Explicitly resume an exact existing Codex thread on the configured local Unix App Server. May execute already queued work and consume model usage under the host-configured explicit permission profile; this is a new grant, not preservation of saved permissions. Already-loaded targets are left alone. No server start, tool-selected permissions, approval answers or message submission. Managed requirements and unavailable profiles are refused. resumed is only an acknowledgement, never execution/completion; unknown must not be retried automatically.",
-    inputSchema: resumeThreadInput, annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    description: "Inspect an exact existing Codex thread on the configured local Unix App Server. Execution is blocked: the checked native API cannot atomically enforce an unloaded-only resume. Loaded targets return already_loaded; unloaded targets return not_resumed, including resume_atomicity_unsupported after permission verification. No thread/resume, server start, permission change, approval answer or message submission is sent. This pending capability must not be treated as execution access.",
+    inputSchema: resumeThreadInput, annotations: { readOnlyHint: true, openWorldHint: false },
   }, async (input, extra) => run(async signal => {
     const key = input.threadId.toLowerCase();
     if (resuming.has(key)) return { status: "not_resumed", executionVerified: false, error: { code: "resume_busy" } };

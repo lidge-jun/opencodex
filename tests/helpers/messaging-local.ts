@@ -53,7 +53,7 @@ export function localMessagingFixture(handler?: (call: LocalCall) => unknown | P
           const call: LocalCall = { id: raw.id, method: raw.method, params: raw.params ?? {} };
           calls.push(call);
           if (call.method === "initialized" && raw.id === undefined) { ws.data.initialized = true; return; }
-          const allowed = ["initialize", "thread/loaded/list", "thread/read", "thread/queue/add", ...(options.allowResume ? ["thread/resume", "configRequirements/read", "permissionProfile/list"] : [])];
+          const allowed = ["initialize", "thread/loaded/list", "thread/read", "thread/queue/add", ...(options.allowResume ? ["configRequirements/read", "permissionProfile/list"] : [])];
           if (!allowed.includes(call.method) || (call.method !== "initialize" && !ws.data.initialized)) {
             failures.push(call.method);
             ws.send(JSON.stringify({ id: raw.id, error: { code: -32601, message: "Unexpected fixture RPC" } }));

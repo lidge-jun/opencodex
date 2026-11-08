@@ -5,7 +5,7 @@ import { isResumeProfile, verifyResumeProfile } from "./resume-permissions";
 import { localSocket, type LocalSocket } from "./socket";
 import { isRecord, isThreadId, LocalMessagingError, type LocalMetadataClient, type LocalThread } from "./types";
 
-type Method = "initialize" | "thread/loaded/list" | "thread/read" | "thread/queue/add" | "thread/resume" | "configRequirements/read" | "permissionProfile/list";
+type Method = "initialize" | "thread/loaded/list" | "thread/read" | "thread/queue/add" | "configRequirements/read" | "permissionProfile/list";
 interface QueueResult {
   status: "not_sent" | "queued" | "unknown";
   error?: { code: string; message: string };
@@ -88,7 +88,7 @@ export class LocalMessageRpc implements LocalMetadataClient {
     } catch (error) { rpc.close(); throw error; }
   }
 
-  /** Grant only existing-thread resume on an explicitly selected trusted local server. */
+  /** Grant only resume preflight on an explicitly selected trusted local server. */
   static async connectForResume(url: string, budget: MessageBudget, codexHome: string): Promise<LocalMessageRpc> {
     const rpc = await LocalMessageRpc.connect(url, budget);
     try {
@@ -103,9 +103,8 @@ export class LocalMessageRpc implements LocalMetadataClient {
     }
   }
 
-  /** Acknowledgement is not execution/completion; uncertain writes are never retried. */
+  /** Inspect the target but refuse execution until native conditional resume is available. */
   async resumeThread(threadId: string, permissionProfile: string) {
-    let written = false;
     try {
       if (!this.allowResume || !isThreadId(threadId) || !isResumeProfile(permissionProfile)) throw new LocalMessagingError("resume_disabled", "An explicit resume grant, thread UUID and permission profile are required.");
       const state = await this.request("thread/read", { threadId, includeTurns: false });
@@ -113,17 +112,11 @@ export class LocalMessageRpc implements LocalMetadataClient {
       if (target.status === "systemError") throw new LocalMessagingError("resume_target_unhealthy", "The target is unhealthy.");
       if (target.status !== "notLoaded") return { status: "already_loaded" as const, observedStatus: target.status };
       await verifyResumeProfile((method, params) => this.request(method, params), permissionProfile, (state as {thread: Record<string, unknown>}).thread.cwd);
-      // Pin an explicit native selection: a removed profile must not become a persisted default fallback.
-      const raw = await this.request("thread/resume", { threadId, excludeTurns: true, permissions: permissionProfile }, () => { written = true; });
-      const thread = isRecord(raw) ? raw.thread : null;
-      if (!isRecord(thread) || thread.id !== threadId || !isRecord(thread.status)
-        || !["idle", "active"].includes(String(thread.status.type))) throw this.invalidMetadata();
-      if (!isRecord(raw) || !isRecord(raw.activePermissionProfile) || raw.activePermissionProfile.id !== permissionProfile) {
-        throw new LocalMessagingError("resume_profile_mismatch", "The server did not acknowledge the requested permission profile.");
-      }
-      return { status: "resumed" as const, observedStatus: thread.status.type as "idle" | "active", permissionProfileId: permissionProfile };
+      // Codex 0.166.0 can replace an unsubscribed idle thread loaded after preflight.
+      // No atomic not-loaded condition exists in its resume API; never send an unconditional resume.
+      throw new LocalMessagingError("resume_atomicity_unsupported", "The server cannot enforce an unloaded-only resume; no resume was submitted.");
     } catch (error) {
-      return { status: written ? "unknown" as const : "not_resumed" as const,
+      return { status: "not_resumed" as const,
         error: error instanceof LocalMessagingError ? { code: error.code } : { code: "resume_unavailable" } };
     }
   }
@@ -234,7 +227,7 @@ export class LocalMessageRpc implements LocalMetadataClient {
       const pending = this.pending.get(raw.id);
       if (!pending) {
         // During a one-shot submission an uncorrelated response cannot acknowledge our write.
-        if ([...this.pending.values()].some(request => ["thread/queue/add", "thread/resume"].includes(request.method))) throw new Error();
+        if ([...this.pending.values()].some(request => request.method === "thread/queue/add")) throw new Error();
         return;
       }
       let rejection: LocalMessagingError | undefined;
@@ -248,8 +241,7 @@ export class LocalMessageRpc implements LocalMetadataClient {
           rejection = unsupported
             ? new QueueRejection("unsupported_queue", "Your Codex daemon does not support local queueing (experimental thread/queue/add).")
             : new QueueRejection("queue_rejected", "Codex rejected the local queue submission.");
-        } else if (pending.method === "thread/resume") rejection = new LocalMessagingError("resume_rejected", "Codex rejected the explicit resume request.");
-        else rejection = new LocalMessagingError("rpc_rejected", "Codex rejected the local metadata request.");
+        } else rejection = new LocalMessagingError("rpc_rejected", "Codex rejected the local metadata request.");
       }
       this.pending.delete(raw.id);
       clearTimeout(pending.timer);
