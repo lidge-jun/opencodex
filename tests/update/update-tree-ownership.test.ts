@@ -217,6 +217,17 @@ describe("#4202 install-tree dependency ownership", () => {
     expect(verifyPnpmInstallTree(packageDir, "2.0.0")).toEqual({ ok: true, failures: [] });
   });
 
+  test("an isolated pnpm install below an unrelated versioned links directory remains valid", () => {
+    const instance = join(root, "releases", "v2", "links", "global", "node_modules", ".pnpm", "pkg", "node_modules");
+    const packageDir = join(instance, ...PKG.split("/"));
+    const store = join(root, "configured-store", "v11");
+    mkdirSync(store, { recursive: true });
+    writePackage(packageDir, "2.0.0");
+    writeDependency(join(instance, "bun"), "bun");
+    writeDependency(join(instance, "zod"), "zod");
+    expect(verifyPnpmInstallTree(packageDir, "2.0.0", store)).toEqual({ ok: true, failures: [] });
+  });
+
   test("a sibling entry in the same virtual store cannot vouch for an unrelated group", () => {
     // The instance directory is per package@version, so a dependency parked in a DIFFERENT
     // instance's link farm is not reachable from this one and must not satisfy it.
@@ -281,6 +292,34 @@ describe("#4202 install-tree dependency ownership", () => {
     if (!result.ok) expect(result.reason).toContain("outside the selected store");
   });
 
+  test("refuses a registered lookalike hidden in an intermediate package symlink", () => {
+    const store = join(root, "actual-store", "v11"), globalRoot = join(root, "global", "v11");
+    const exposed = join(globalRoot, "node_modules", ...PKG.split("/"));
+    const intermediate = join(root, "lookalike", "store", "v2", "links", "pkg", "node_modules", ...PKG.split("/"));
+    const target = join(root, "plain", "node_modules", ...PKG.split("/"));
+    mkdirSync(store, { recursive: true });
+    writePackage(target, "2.0.0");
+    writeDependency(join(target, "node_modules", "bun"), "bun");
+    writeDependency(join(target, "node_modules", "zod"), "zod");
+    mkdirSync(join(intermediate, ".."), { recursive: true });
+    mkdirSync(join(exposed, ".."), { recursive: true });
+    symlinkSync(target, intermediate, "dir");
+    symlinkSync(intermediate, exposed, "dir");
+    const result = resolvePnpmGlobalOwner({ packageName: PKG, packagePath: exposed,
+      commandPaths: [join(root, "pnpm-executable")],
+      runPnpm: (_command, args) => {
+        if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: exposed } } }]) };
+        if (args[0] === "root") return { status: 0, stdout: globalRoot };
+        if (args[0] === "store") return { status: 0, stdout: store };
+        if (args[2] === "global-dir") return { status: 0, stdout: join(root, "global") };
+        if (args[2] === "global-bin-dir") return { status: 0, stdout: join(root, "bin") };
+        return { status: 1 };
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("outside the selected store");
+  });
+
   test("global-store dependency links cannot escape the canonical configured store", () => {
     const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
     const group = join(root, "pnpm", "store", "v11", "links", ...PKG.split("/"), "2.0.0", "h1", "node_modules");
@@ -292,6 +331,20 @@ describe("#4202 install-tree dependency ownership", () => {
     expect(result.ok).toBe(false);
     expect(result.failures).toContain("sentinel dependency missing: zod");
     expect(result.failures).toContain("pnpm dependency link escapes the selected store: zod");
+  });
+
+  test("a global-store package cannot borrow dependencies from its exposed lexical group", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: false });
+    const exposedGroup = join(root, "pnpm", "global", "v11", "g1", "node_modules");
+    const links = join(root, "pnpm", "store", "v11", "links");
+    writeFileSync(join(exposedGroup, ".modules.yaml"), "nodeLinker: hoisted\n");
+    for (const name of ["bun", "zod"]) {
+      symlinkSync(join(links, name, "1.0.0", "h2", "node_modules", name), join(exposedGroup, name), "dir");
+    }
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("sentinel dependency missing: zod");
+    expect(result.failures).toContain("pnpm dependency root is outside the selected store: zod");
   });
 
   test("accepts links in a custom store and refuses them with no resolved store", () => {

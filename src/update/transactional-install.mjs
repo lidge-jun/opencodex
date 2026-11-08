@@ -24,8 +24,8 @@ import { guardedRenameSync, ownedArtifactRm } from "./mutation-guard.mjs";
  */
 import { probeSpawnSync } from "./mutation-guard.mjs";
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { isInPnpmGlobalStoreLinks } from "./pnpm-store-layout.mjs";
 
 /**
@@ -78,6 +78,28 @@ function inside(path, root) {
   return rel === "" || (rel !== ".." && !rel.startsWith(".." + sep) && !isAbsolute(rel));
 }
 
+/** Retain intermediate spellings: realpath alone hides a links directory behind another symlink. */
+function packagePathUsesGlobalLinks(packageDir) {
+  let path = resolve(packageDir);
+  let found = false;
+  for (let hop = 0; hop < 64; hop += 1) {
+    found ||= isInPnpmGlobalStoreLinks(path, existsSync);
+    const root = parse(path).root;
+    const parts = path.slice(root.length).split(sep).filter(Boolean);
+    let prefix = root, changed = false;
+    for (let i = 0; i < parts.length; i += 1) {
+      prefix = join(prefix, parts[i]);
+      if (lstatSync(prefix).isSymbolicLink()) {
+        path = resolve(dirname(prefix), readlinkSync(prefix), ...parts.slice(i + 1));
+        changed = true;
+        break;
+      }
+    }
+    if (!changed) return found;
+  }
+  throw new Error("pnpm package symlink chain is too long");
+}
+
 /**
  * Dependency roots this package INSTANCE owns. pnpm exposes dependencies in several shapes —
  * symlinks inside the package's own node_modules, a package root that is itself a symlink into
@@ -112,7 +134,10 @@ function pnpmOwnedDependencyDir(packageDir, name, store, globalLinks, escaped) {
     const dir = join(root, ...name.split("/"));
     if (existsSync(join(dir, "package.json"))) {
       if (globalLinks) {
-        try { if (!inside(realpathSync(dir), store)) { escaped.add(name); continue; } } catch { escaped.add(name); continue; }
+        try {
+          if (!inside(realpathSync(root), store)) { escaped.add("pnpm dependency root is outside the selected store: " + name); continue; }
+          if (!inside(realpathSync(dir), store)) { escaped.add("pnpm dependency link escapes the selected store: " + name); continue; }
+        } catch { escaped.add("pnpm dependency link could not be resolved: " + name); continue; }
       }
       return dir;
     }
@@ -179,15 +204,18 @@ export function verifyPnpmInstallTree(packageDir, expectedVersion, store) {
   let real;
   try { real = realpathSync(packageDir); } catch { return { ok: false, failures: ["pnpm package path could not be resolved"] }; }
   try { if (store) store = realpathSync(store); } catch { return { ok: false, failures: ["pnpm configured store could not be resolved"] }; }
-  const globalLinks = isInPnpmGlobalStoreLinks(real) || isInPnpmGlobalStoreLinks(packageDir)
-    || (store && (inside(real, join(store, "links")) || inside(packageDir, join(store, "links"))));
+  let globalLinks;
+  try {
+    globalLinks = packagePathUsesGlobalLinks(packageDir)
+      || (store && (inside(real, join(store, "links")) || inside(packageDir, join(store, "links"))));
+  } catch { return { ok: false, failures: ["pnpm package symlink chain could not be resolved"] }; }
   if (globalLinks && (!store || !inside(real, join(store, "links")))) {
     return { ok: false, failures: ["pnpm global links are outside the selected store"] };
   }
   const escaped = new Set();
   const result = verifyTreeWithDependencyLookup(packageDir, expectedVersion,
     (path, name) => pnpmOwnedDependencyDir(path, name, store, globalLinks, escaped));
-  if (escaped.size) return { ok: false, failures: [...escaped].map(name => "pnpm dependency link escapes the selected store: " + name).concat(result.failures) };
+  if (escaped.size) return { ok: false, failures: [...escaped].concat(result.failures) };
   return result;
 }
 

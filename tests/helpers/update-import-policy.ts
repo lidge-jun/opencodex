@@ -138,7 +138,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
   "src/update/install-detection.mjs": [
     "import { existsSync, readFileSync, realpathSync, statSync } from \"node:fs\";",
     // Dependency-free pnpm store-layout spelling shared with the tree verifier (#8183).
-    "import { PNPM_GLOBAL_STORE_LINKS_PATTERN } from \"./pnpm-store-layout.mjs\";"
+    "import { isInPnpmGlobalStoreLinks } from \"./pnpm-store-layout.mjs\";"
   ],
   "src/update/job-pinned-start.ts": [
     "import { guardedSpawn } from \"./mutation-guard.mjs\";",
@@ -355,8 +355,8 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { guardedRenameSync, ownedArtifactRm } from \"./mutation-guard.mjs\";",
     "import { probeSpawnSync } from \"./mutation-guard.mjs\";",
     "import { randomBytes } from \"node:crypto\";",
-    "import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from \"node:fs\";",
-    "import { basename, dirname, isAbsolute, join, relative, sep } from \"node:path\";",
+    "import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, writeFileSync } from \"node:fs\";",
+    "import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from \"node:path\";",
     "import { isInPnpmGlobalStoreLinks } from \"./pnpm-store-layout.mjs\";"
   ],
   "src/update/tray-update-plan.mjs": [],

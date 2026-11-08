@@ -12,7 +12,11 @@
 /** Default store layout is sufficient for the legacy install-detection signature. */
 export const PNPM_GLOBAL_STORE_LINKS_PATTERN = /(?:^|\/)store\/v\d+\/links(?:\/|$)/i;
 
-/** True when a native path (either separator) has the versioned links layout. */
-export function isInPnpmGlobalStoreLinks(path) {
-  return /(?:^|\/)v\d+\/links(?:\/|$)/i.test(String(path).replaceAll("\\", "/"));
+/** Default spelling or custom layout corroborated by the pnpm store's contents. */
+export function isInPnpmGlobalStoreLinks(path, exists = () => false) {
+  const normalized = String(path).replaceAll("\\", "/");
+  if (PNPM_GLOBAL_STORE_LINKS_PATTERN.test(normalized)) return true;
+  const customStore = normalized.match(/^(.*\/v\d+)\/links\//i)?.[1];
+  return !!customStore && exists(`${customStore}/files`)
+    && ["index", "index.db", "index.fallback"].some(name => exists(`${customStore}/${name}`));
 }

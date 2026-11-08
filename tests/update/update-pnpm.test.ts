@@ -51,6 +51,7 @@ describe("pnpm installation detection", () => {
 
   test("an npm install under an unrelated versioned links directory stays npm", () => {
     expect(detectInstallFromPath("/opt/releases/v2/links/node_modules/@bitkyc08/opencodex/bin")).toBe("npm");
+    expect(detectInstallFromPath("/opt/releases/v2/links/.bun/install/global/node_modules/@bitkyc08/opencodex/bin")).toBe("bun");
     const custom = "/opt/custom-cache/v11/links/pkg/2/h/node_modules/@bitkyc08/opencodex/bin";
     expect(detectInstallFromPath(custom, { exists: path => ["/opt/custom-cache/v11/files", "/opt/custom-cache/v11/index"].includes(path) })).toBe("pnpm");
     expect(detectInstallFromPath(custom, { exists: path => ["/opt/custom-cache/v11/files", "/opt/custom-cache/v11/index.db"].includes(path) })).toBe("pnpm");

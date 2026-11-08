@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { PNPM_GLOBAL_STORE_LINKS_PATTERN } from "./pnpm-store-layout.mjs";
+import { isInPnpmGlobalStoreLinks } from "./pnpm-store-layout.mjs";
 
 const OPENCODEX_MISE_BACKEND = "npm:@bitkyc08/opencodex";
 const OPENCODEX_MISE_BACKEND_DIR = "npm-bitkyc08-opencodex";
@@ -253,11 +253,8 @@ function detectInstallCandidate(packagePath, exists) {
   // npm prefix such as `/opt/global/v11` from its directory name alone.
   if (
     /(?:^|\/)node_modules\/\.pnpm(?:\/|$)/i.test(normalized)
-    || PNPM_GLOBAL_STORE_LINKS_PATTERN.test(normalized)
+    || isInPnpmGlobalStoreLinks(normalized, exists)
   ) return "pnpm";
-  const customStore = normalized.match(/^(.*\/v\d+)\/links\//i)?.[1];
-  if (customStore && exists(`${customStore}/files`)
-    && ["index", "index.db", "index.fallback"].some(name => exists(`${customStore}/${name}`))) return "pnpm";
 
   // `--preserve-symlinks` can leave a v10/v11 group path visible. Corroborate it with the
   // group's virtual store or the v11 global store before selecting pnpm.
