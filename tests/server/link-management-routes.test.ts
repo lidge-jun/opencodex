@@ -344,8 +344,8 @@ describe("link management routes", () => {
   });
 
   test("uses the serve-options trusted-loopback derivation for every ingress", () => {
-    const ingresses: ServerIngress[] = ["public", "unauthenticated-loopback", "hub-management", "claude-intercept", "hub-link"];
-    expect(ingresses.map(ingress => trustedLoopbackForIngress(ingress, "0.0.0.0"))).toEqual([false, true, false, false, false]);
+    const ingresses: ServerIngress[] = ["public", "unauthenticated-loopback", "hub-management", "claude-intercept", "hub-link", "local-control"];
+    expect(ingresses.map(ingress => trustedLoopbackForIngress(ingress, "0.0.0.0"))).toEqual([false, true, false, false, false, true]);
     expect(trustedLoopbackForIngress("public", "127.0.0.1")).toBe(true);
     expect(trustedLoopbackForIngress("public", "::1")).toBe(true);
     // A loopback hostname never makes the hub-link, hub-management or intercept ingress trusted.
