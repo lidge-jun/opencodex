@@ -471,7 +471,7 @@ Free code signing provided by [SignPath.io](https://about.signpath.io/), certifi
 
 - Committers and reviewers: [lidge-jun](https://github.com/lidge-jun)
 - Approvers: [lidge-jun](https://github.com/lidge-jun)
-- Privacy: OpenCodex sends one anonymous daily usage summary (a per-day install hash that changes daily, version, platform, counts; never prompts, outputs, keys, accounts, hosts or paths) to `telemetry.opencodex.me` only after the person installing or operating it has seen the notice (dashboard popup or interactive CLI prompt) and has not declined; it can be turned off in that notice, in the Windows installer (a "Send anonymous usage statistics" checkbox, checked by default) and anytime with `ocx telemetry disable`, `OCX_TELEMETRY=0`, `DO_NOT_TRACK=1` or Proxy details; project-wide aggregates are public; otherwise data goes only where the user configures.
+- Privacy: OpenCodex sends one anonymous daily usage summary (a per-day install hash that changes daily, version, release channel, platform, install channel, provider kind, coarse model family, active minutes and request, token and error counts; never prompts, outputs, keys, accounts, hosts or paths) to `telemetry.opencodex.me` only after the person installing or operating it has seen the notice (dashboard popup or interactive CLI prompt) and has not declined; it can be turned off in that notice, in the Windows installer (a "Send anonymous usage statistics" checkbox, checked by default) and anytime with `ocx telemetry disable`, `OCX_TELEMETRY=0`, `DO_NOT_TRACK=1` or Proxy details; project-wide aggregates are public; otherwise data goes only where the user configures.
 
 ## 免责声明
 
