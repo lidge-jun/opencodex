@@ -32,6 +32,28 @@ test("a timed-out probe of a non-loopback bind stays unknown when the address ca
   expect(observation.kind).toBe("unknown");
 });
 
+for (const source of ["config", "runtime"] as const) {
+  test(`an inconclusive ${source} hostname stays unknown without a bind proof`, async () => {
+    let proofCalls = 0;
+    const hostname = "multi-address.fixture.invalid";
+    const extra: Partial<LivenessIo> = source === "runtime"
+      ? { readRuntimeFn: () => ({ port: 10100, hostname }) }
+      : {};
+    const observation = await observeProxyLiveness(ioFor(async () => { proofCalls++; return true; }, hostname, extra));
+    expect(observation.kind).toBe("unknown");
+    expect(proofCalls).toBe(0);
+  });
+}
+
+test("a hostname listener that identifies itself remains live", async () => {
+  let proofCalls = 0;
+  const observation = await observeProxyLiveness(ioFor(async () => { proofCalls++; return true; }, "multi-address.fixture.invalid", {
+    fetchFn: (async () => Response.json({ service: "opencodex" })) as typeof fetch,
+  }));
+  expect(observation.kind).toBe("live");
+  expect(proofCalls).toBe(0);
+});
+
 for (const commandLine of ["ocx start", undefined, ""]) {
   test(`an orphan runtime PID with ${JSON.stringify(commandLine)} identity blocks bind-proof recovery`, async () => {
     const io = ioFor(async () => true, undefined, {

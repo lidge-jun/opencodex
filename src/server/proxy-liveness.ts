@@ -13,7 +13,7 @@ import { loadConfig } from "../config";
 import { isLoopbackHostname, isWildcardHostname } from "../codex/loopback-target";
 import { normalizeBindHostname } from "./bind-host";
 import { isOcxCommandLine, readAlivePid, readProcessCommandLine, readRuntimePort, verifyPidIdentity } from "../config/process-state";
-import { createServer } from "node:net";
+import { createServer, isIP } from "node:net";
 import { loopbackFamilyAvailability } from "../lib/loopback-family";
 import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
@@ -580,6 +580,8 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
     const remainingMs = deadlineAt === undefined ? BIND_PROOF_TIMEOUT_MS : Math.min(BIND_PROOF_TIMEOUT_MS, deadlineAt - nowFn());
     if (remainingMs <= 0) return false;
     const socketHost = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+    // A hostname can resolve to different addresses for the probe and the bind.
+    if (isIP(socketHost) === 0) return false;
     const bound = await (io.bindProofFn ?? canBindAddress)(socketHost, port, remainingMs);
     return bound && !budgetExhausted();
   };
