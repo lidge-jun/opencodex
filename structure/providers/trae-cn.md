@@ -70,3 +70,5 @@ Disk-only edits do not invalidate the running process's cache generation.
 It never probes the vendor
 website or accepts a cached roster as login evidence. The cache remains provider-scoped, so account
 switches require this explicit refresh. Each prompt still checks its model against a new session roster.
+
+User setup: [TRAE CN guide](../../docs-site/src/content/docs/guides/trae-cn.md).
