@@ -543,7 +543,7 @@ enabling it takes effect without a restart.
   never throws into the quota write that triggered it. `src/codex/quota.ts` and
   `src/providers/quota.ts` reach it only through a lazy import, because both are statically
   reachable from `src/server/responses/core.ts` and a static edge would load the subsystem into
-  every install. Antigravity reports use the probed account and login incarnation for reset baselines. Queued provider observations recheck report ownership and both global and provider-scoped invalidation before updating a baseline; clearing another provider alone does not suppress them.
+  every install. Antigravity reports use the probed account and login incarnation for reset baselines. Queued provider observations recheck report ownership, config generation and both global and provider-scoped invalidation before updating a baseline; reconciliation conservatively drops an already queued observation, while clearing another provider alone does not suppress it.
 - `src/quota/reset-seen-store.ts` keeps a durable already-notified ledger. The observer claims a
   reset there before dispatch, so a reset is attempted at most once, across restarts and racing
   observers; a failed delivery is not retried. `src/quota/reset-sinks.ts` delivers to a webhook or

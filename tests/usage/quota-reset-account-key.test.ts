@@ -3,6 +3,7 @@ import type { OcxConfig } from "../../src/types/config";
 import { providerObservationAccountKeyForTests } from "../../src/providers/quota";
 import { clearProviderQuotaCache, clearProviderQuotaCacheFor, fetchProviderQuotaReports, flushProviderQuotaObservationsForTests, setProviderQuotaBeforePublishForTests } from "../../src/providers/quota";
 import { setProviderQuotaBeforeObservationForTests } from "../../src/providers/quota/report-cache";
+import { reconcileLiveStateStores, setLiveStateStoreConfig } from "../../src/lib/state-store-registrations";
 import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/key-store";
 import { setQuotaResetSink } from "../../src/quota/reset-observer";
 import { flushQuotaResetStoreForTests, resetQuotaResetStoreForTests } from "../../src/quota/reset-seen-store";
@@ -10,10 +11,12 @@ import type { QuotaResetEvent } from "../../src/quota/reset-detector";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-test.each(["disabled", "removed", "key", "provider-clear", "global-clear", "other-clear"] as const)("a deferred key quota reset respects %s", async change => {
+test.each(["disabled", "removed", "key", "provider-clear", "global-clear", "other-clear", "detached-disable"] as const)("a deferred key quota reset respects %s", async change => {
   const originalFetch = globalThis.fetch;
   const provider = { adapter: "openai-chat", authMode: "key", baseUrl: "https://api.mistral.ai/v1", apiKey: "fixture-reset-key" } as const;
   const cfg = { defaultProvider: "mistral", providers: { mistral: { ...provider } } } as OcxConfig;
+  const live = structuredClone(cfg);
+  if (change === "detached-disable") setLiveStateStoreConfig(live);
   const events: QuotaResetEvent[] = [];
   let percent = 95, resetAt = Date.now() - 30_000;
   globalThis.fetch = (async input => Response.json(String(input).endsWith("/subscription") ? { plan_name: "TEAM" } : {
@@ -32,6 +35,7 @@ test.each(["disabled", "removed", "key", "provider-clear", "global-clear", "othe
       if (change === "provider-clear") clearProviderQuotaCacheFor("mistral");
       if (change === "global-clear") clearProviderQuotaCache();
       if (change === "other-clear") clearProviderQuotaCacheFor("other-provider");
+      if (change === "detached-disable") { live.providers.mistral!.disabled = true; reconcileLiveStateStores(); }
     });
     expect((await fetchProviderQuotaReports(cfg, true)).reports).toHaveLength(1);
     await flushProviderQuotaObservationsForTests();
