@@ -104,6 +104,8 @@ modality 和 reasoning metadata；目标显式声明的限制仍然优先，因�
 
 每个请求都会先从 Anthropic 开始。Anthropic 的可重试失败会把该请求切换到 OpenAI；OpenAI 的可重试失败则可以切换到 Google。终止性错误会立即停止，而不会尝试剩余目标。
 
+提供方的 HTTP 400 响应仍可能是针对特定目标的。OpenRouter 的不透明提供方包装（带有数字 `code: 400`、无 `type` 且 `metadata.raw: "ERROR"` 的 `Provider returned error`）会被视为目标特定的，允许 combo 尝试下一个目标而无需冷却失败的目标。带类型的未编码 400、已知的格式错误的 `response_format` 模式错误以及此不透明 400 路径上的结构化 `invalid_request_error` 代码仍为终止性错误。本指南后面描述的已识别目标不兼容情况仍会继续推进。
+
 ### 轮询：平滑的加权批次
 
 `round-robin` 使用平滑加权轮询。更大的目标权重会让该目标在长期内获得更大的份额，但不会把它的全部份额一次性作为一个很长的连续块发送。`stickyLimit` 控制在下一次加权选择之前，有多少个成功请求会继续停留在当前选中的目标上。
@@ -305,7 +307,7 @@ combo id 不存在。响应是 HTTP 404，类型为 `invalid_request_error`。�
 
 ## 可选参数兼容性
 
-一般 400 错误仍会终止请求，但明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值、返回模型特定图像输入拒绝（`param: input`），或拒绝该路由无法读取的输入媒体（`unsupported_input_modality`）的结构化错误，可让 combo 在输出开始前尝试下一个符合条件的目标，而不记录冷却时间。安全策略拒绝、取消以及已经开始的输出仍不可重放。
+一般 400 错误仍会终止请求，但 OpenRouter 的不透明提供方包装（带有数字 `code: 400` 的 `Provider returned error`），或明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值、返回模型特定图像输入拒绝（`param: input`），以及拒绝该路由无法读取的输入媒体（`unsupported_input_modality`）的结构化错误，可让 combo 在输出开始前尝试下一个符合条件的目标，而不记录冷却时间。安全策略拒绝、取消以及已经开始的输出仍不可重放。
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
 

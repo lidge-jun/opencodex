@@ -140,6 +140,8 @@ chaque requête commence par Anthropic. Un échec d’Anthropic autorisant une n
 échec similaire d’OpenAI peut la faire basculer vers Google. Une erreur terminale interrompt immédiatement le traitement au lieu de
 essayer les cibles restantes.
 
+Une réponse HTTP 400 d'un fournisseur peut toujours être spécifique à une cible. L'enveloppe opaque de fournisseur d'OpenRouter (`Provider returned error` avec un `code: 400` numérique, aucun `type`, et `metadata.raw: "ERROR"`) est traitée comme locale à la cible et permet au combo d'essayer la cible suivante sans placer la cible défaillante en période de refroidissement. Les 400 typés sans code, les erreurs connues de schéma `response_format` malformé et les codes `invalid_request_error` structurés sur ce chemin 400 opaque restent terminaux. Les incompatibilités de cibles reconnues décrites plus loin dans ce guide continuent d'avancer.
+
 ### Round-robin : lots pondérés lisses
 
 `round-robin` utilise un round-robin pondéré en douceur. Un poids cible plus grand donne à cet objectif un plus grand
@@ -378,7 +380,7 @@ gérer un refus de politique ou corriger l’origine de la demande rejetée. Les
 
 ## Compatibilité des paramètres facultatifs
 
-Exception aux erreurs 400 terminales : un rejet structuré de `user`, une valeur non prise en charge pour `reasoning.effort`/`reasoning_effort`, un rejet d’entrée d’image propre à un modèle (`param: input`), ou le refus d’un média d’entrée que la route ne peut pas lire (`unsupported_input_modality`) peut faire passer le combo à la cible admissible suivante avant le début de la sortie, sans délai de refroidissement. Le refus de sécurité, l’annulation et une sortie déjà commencée restent non rejouables.
+Exception aux erreurs 400 terminales : l'enveloppe opaque d'OpenRouter (`Provider returned error` avec `code: 400`), ou un rejet structuré de `user`, une valeur non prise en charge pour `reasoning.effort`/`reasoning_effort`, un rejet d’entrée d’image propre à un modèle (`param: input`), ou le refus d’un média d’entrée que la route ne peut pas lire (`unsupported_input_modality`) peut faire passer le combo à la cible admissible suivante avant le début de la sortie, sans délai de refroidissement. Le refus de sécurité, l’annulation et une sortie déjà commencée restent non rejouables.
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
 

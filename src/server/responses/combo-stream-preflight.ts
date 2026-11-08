@@ -132,12 +132,24 @@ function bareErrorIsRetryable(payload: unknown): boolean {
   const error = nested && typeof nested === "object" && !Array.isArray(nested)
     ? nested as Record<string, unknown>
     : event;
-  const rawCode = error.code ?? event.code;
-  const code = typeof rawCode === "string"
-    ? rawCode
-    : typeof rawCode === "number" && Number.isFinite(rawCode)
-      ? String(rawCode)
+  const rootRawCode = event.code;
+  const nestedRawCode = nested && typeof nested === "object" && !Array.isArray(nested)
+    ? (nested as Record<string, unknown>).code
+    : undefined;
+  const rootCode = typeof rootRawCode === "string"
+    ? rootRawCode
+    : typeof rootRawCode === "number" && Number.isFinite(rootRawCode)
+      ? String(rootRawCode)
       : null;
+  const nestedCode = typeof nestedRawCode === "string"
+    ? nestedRawCode
+    : typeof nestedRawCode === "number" && Number.isFinite(nestedRawCode)
+      ? String(nestedRawCode)
+      : null;
+  if (rootCode !== null && nestedCode !== null && rootCode !== nestedCode) {
+    return false;
+  }
+  const code = nestedCode ?? rootCode;
   const upstreamType = typeof error.type === "string"
     ? error.type
     : typeof event.type === "string" ? event.type : null;

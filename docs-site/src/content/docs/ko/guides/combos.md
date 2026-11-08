@@ -84,6 +84,8 @@ alias는 클라이언트가 요청하는 공개 이름만 바꿉니다. 콤보�
 
 각 요청은 Anthropic에서 시작합니다. Anthropic에서 재시도 가능한 실패가 나면 그 요청은 OpenAI로 넘어갑니다. OpenAI에서도 재시도 가능한 실패가 나면 Google로 넘어갈 수 있습니다. 종결 오류가 나면 남은 대상은 더 시도하지 않고 즉시 멈춥니다.
 
+제공자의 HTTP 400 응답도 대상별 오류일 수 있습니다. OpenRouter의 불투명 제공자 래퍼(숫자 `code: 400`, `type` 없음, `metadata.raw: "ERROR"`를 포함하는 `Provider returned error`)는 대상 로컬로 처리되어 실패한 대상을 쿨다운하지 않고 콤보가 다음 대상을 시도할 수 있도록 합니다. 타입이 지정된 비코드 400, 알려진 잘못된 형식의 `response_format` 스키마 오류 및 이 불투명 400 경로의 구조화된 `invalid_request_error` 코드는 계속 종결 오류로 유지됩니다. 이 가이드의 뒷부분에 설명된 인식된 대상 비호환성은 계속 진행됩니다.
+
 ### 라운드 로빈: 부드러운 가중 배치
 
 `round-robin`은 smooth weighted round-robin을 사용합니다. 대상 가중치가 클수록 시간에 따라 더 큰 비중을 가져가지만, 그 몫이 한꺼번에 긴 덩어리로 몰리지는 않습니다. `stickyLimit`은 선택된 대상에 몇 번의 성공 요청을 붙여 둘지 정합니다.
@@ -291,7 +293,7 @@ opencodex 인스턴스에 기록했는지 확인하세요.
 
 ## 선택적 매개변수 호환성
 
-일반적인 400 오류는 종료되지만, `user`를 명시적으로 거부하거나 `reasoning.effort`/`reasoning_effort`의 지원되지 않는 값, 모델별 이미지 입력 거부(`param: input`) 또는 경로가 읽을 수 없는 입력 미디어 거부(`unsupported_input_modality`)를 나타내는 구조화된 오류는 출력 시작 전에 다음 적격 대상으로 넘어갈 수 있습니다. 이 경우 쿨다운을 기록하지 않습니다. 보안 정책 거부, 취소 및 이미 시작된 출력은 재실행하지 않습니다.
+일반적인 400 오류는 종료되지만, OpenRouter의 불투명 제공자 래퍼(숫자 `code: 400`을 포함하는 `Provider returned error`) 또는 `user`를 명시적으로 거부하거나 `reasoning.effort`/`reasoning_effort`의 지원되지 않는 값, 모델별 이미지 입력 거부(`param: input`), 경로가 읽을 수 없는 입력 미디어 거부(`unsupported_input_modality`)를 나타내는 구조화된 오류는 출력 시작 전에 다음 적격 대상으로 넘어갈 수 있습니다. 이 경우 쿨다운을 기록하지 않습니다. 보안 정책 거부, 취소 및 이미 시작된 출력은 재실행하지 않습니다.
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
 

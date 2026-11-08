@@ -162,6 +162,8 @@ her istek Anthropic ile başlar. Yeniden denenebilir bir Anthropic hatası bu
 isteği OpenAI'ye taşır; yeniden denenebilir bir OpenAI hatası onu Google'a
 taşıyabilir. Bir terminal hatası kalan hedefleri denemek yerine hemen durur.
 
+Bir sağlayıcının HTTP 400 yanıtı yine de hedefe özgü olabilir. OpenRouter'ın opak sağlayıcı sarmalayıcısı (sayısal `code: 400`, `type` yok ve `metadata.raw: "ERROR"` içeren `Provider returned error`), hedefe yerel olarak değerlendirilir ve combo'nun başarısız hedefi beklemeye almadan sonraki hedefi denemesine izin verir. Türü belirtilmiş kodsuz 400'ler, bilinen bozuk `response_format` şema hataları ve bu opak 400 yolundaki yapılandırılmış `invalid_request_error` kodları sonlandırıcı kalır. Bu kılavuzun ilerleyen bölümlerinde açıklanan tanınan hedef uyumsuzlukları ilerlemeye devam eder.
+
 ### Round-robin: pürüzsüz ağırlıklı gruplar
 
 `round-robin` pürüzsüz ağırlıklı round-robin kullanır. Daha büyük bir hedef
@@ -417,7 +419,7 @@ reddedilen istek kaynağını düzeltin. Kombolar bu durumlar için atlama yapma
 
 ## İsteğe bağlı parametre uyumluluğu
 
-Sonlandırıcı 400 hatalarının dar bir istisnası vardır: `user` alanını açıkça reddeden, `reasoning.effort`/`reasoning_effort` için desteklenmeyen değer bildiren, modele özgü görüntü girdisini reddeden (`param: input`) veya rotanın okuyamadığı girdi medyasını reddeden (`unsupported_input_modality`) yapılandırılmış hata, çıktı başlamadan önce sonraki uygun hedefe geçebilir. Bu uyumsuzluk için bekleme süresi kaydedilmez. Güvenlik politikası reddi, iptal ve başlamış çıktı yeniden yürütülmez.
+Sonlandırıcı 400 hatalarının dar bir istisnası vardır: OpenRouter'ın opak sağlayıcı sarmalayıcısı (`code: 400` içeren `Provider returned error`), veya `user` alanını açıkça reddeden, `reasoning.effort`/`reasoning_effort` için desteklenmeyen değer bildiren, modele özgü görüntü girdisini reddeden (`param: input`) ya da rotanın okuyamadığı girdi medyasını reddeden (`unsupported_input_modality`) yapılandırılmış hata, çıktı başlamadan önce sonraki uygun hedefe geçebilir. Bu uyumsuzluk için bekleme süresi kaydedilmez. Güvenlik politikası reddi, iptal ve başlamış çıktı yeniden yürütülmez.
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
 

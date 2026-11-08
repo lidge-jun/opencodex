@@ -428,6 +428,21 @@ describe("combo stream preflight", () => {
     expect(result.kind).toBe("accepted");
   });
 
+  test("treats a zero-output opaque OpenRouter numeric 400 carrying root code invalid_request_error as terminal", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      code: "invalid_request_error",
+      status: 400,
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+      },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("accepted");
+  });
+
   test("treats a wrapped invalid_request_error with upstream_error as terminal", async () => {
     const result = await preflightComboStreamResponse(sse({
       type: "error",
