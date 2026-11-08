@@ -206,7 +206,7 @@ describe("Claude Keychain reader never kills a blocked security child (#8161)", 
     const h = harness();
     const read = h.reader.readAsync();
     h.children[0]!.stdout.emit("data", Buffer.from("{\"claudeAiOauth\":{}}\n"));
-    h.children[0]!.emit("exit", 0, null);
+    h.children[0]!.emit("close", 0, null);
     expect(await read).toBe("{\"claudeAiOauth\":{}}");
     expect(h.deadlines[0]!.cancelled).toBe(true);
     expect(h.reader.syncReadBlocked()).toBe(false);
@@ -215,7 +215,7 @@ describe("Claude Keychain reader never kills a blocked security child (#8161)", 
   test("a nonzero exit (item not found) resolves null without backoff", async () => {
     const h = harness();
     const read = h.reader.readAsync();
-    h.children[0]!.emit("exit", 44, null);
+    h.children[0]!.emit("close", 44, null);
     expect(await read).toBeNull();
     expect(h.reader.syncReadBlocked()).toBe(false);
     void h.reader.readAsync();
@@ -241,7 +241,7 @@ describe("Claude Keychain reader never kills a blocked security child (#8161)", 
     expect(second).toBe(first);
     expect(h.children).toHaveLength(1);
     h.children[0]!.stdout.emit("data", "secret");
-    h.children[0]!.emit("exit", 0, null);
+    h.children[0]!.emit("close", 0, null);
     expect(await Promise.all([first, second])).toEqual(["secret", "secret"]);
   });
 
@@ -265,7 +265,7 @@ describe("Claude Keychain reader never kills a blocked security child (#8161)", 
     h.fireDeadline();
     await read;
     // The prompt is dismissed and the blocked child exits on its own.
-    h.children[0]!.emit("exit", 1, null);
+    h.children[0]!.emit("close", 1, null);
     h.advance(59_999);
     expect(await h.reader.readAsync()).toBeNull();
     expect(h.reader.syncReadBlocked()).toBe(true);
@@ -276,12 +276,35 @@ describe("Claude Keychain reader never kills a blocked security child (#8161)", 
     expect(h.children).toHaveLength(2);
   });
 
+  test("stdout is decoded once, so a multi-byte character split across chunks survives", async () => {
+    const h = harness();
+    const read = h.reader.readAsync();
+    const bytes = Buffer.from("{\"label\":\"caf\u00e9\"}");
+    const split = bytes.indexOf(0xc3) + 1;
+    h.children[0]!.stdout.emit("data", bytes.subarray(0, split));
+    h.children[0]!.stdout.emit("data", bytes.subarray(split));
+    h.children[0]!.emit("close", 0, null);
+    expect(await read).toBe("{\"label\":\"caf\u00e9\"}");
+  });
+
+  test("an exit event alone does not settle the read before stdout closes", async () => {
+    const h = harness();
+    let settled = false;
+    const read = h.reader.readAsync().then(value => { settled = true; return value; });
+    h.children[0]!.emit("exit", 0, null);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    h.children[0]!.stdout.emit("data", "tail");
+    h.children[0]!.emit("close", 0, null);
+    expect(await read).toBe("tail");
+  });
+
   test("a late exit after the deadline does not resurrect the timed-out read", async () => {
     const h = harness();
     const read = h.reader.readAsync();
     h.fireDeadline();
     h.children[0]!.stdout.emit("data", "late");
-    h.children[0]!.emit("exit", 0, null);
+    h.children[0]!.emit("close", 0, null);
     expect(await read).toBeNull();
   });
 

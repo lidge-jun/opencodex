@@ -342,7 +342,8 @@ On macOS the local Claude Code credential is read from the Keychain with `securi
 `src/oauth/claude-keychain-read.ts` never signals that child: killing `security` while an unlock
 prompt is pending can crash `securityd` and re-lock the keychain (#8161). The async reader resolves
 null after five seconds and leaves the child to exit on its own, keeps one child per process,
-and backs off for sixty seconds after a timeout. The synchronous reader does not spawn while a
+and backs off for sixty seconds after a timeout; a child that never exits keeps that slot, so the
+process stays on the credentials file rather than raising a second prompt. The synchronous reader does not spawn while a
 child is running or the backoff is active; its own timeout, which does kill, starts the backoff.
 Every null falls back to the credentials file. `tests/oauth/local-token-detect.test.ts` covers this.
 

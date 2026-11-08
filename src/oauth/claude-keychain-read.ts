@@ -21,7 +21,7 @@ interface UnrefHandle { unref?(): unknown }
 /** The subset of a spawned child the reader relies on. */
 export interface KeychainChild extends UnrefHandle {
   stdout: (UnrefHandle & { on(event: "data", listener: (chunk: Buffer | string) => void): unknown }) | null;
-  once(event: "exit", listener: (code: number | null, signal: string | null) => void): unknown;
+  once(event: "close", listener: (code: number | null, signal: string | null) => void): unknown;
   once(event: "error", listener: (error: Error) => void): unknown;
 }
 
@@ -70,7 +70,7 @@ export function createClaudeKeychainReader(deps: ClaudeKeychainReaderDeps): Clau
     childRunning = true;
     const read = new Promise<string | null>(resolve => {
       let settled = false;
-      let stdout = "";
+      const chunks: Buffer[] = [];
       let stdoutBytes = 0;
       const settle = (value: string | null): void => {
         if (settled) return;
@@ -88,17 +88,20 @@ export function createClaudeKeychainReader(deps: ClaudeKeychainReaderDeps): Clau
         settle(null);
       });
       child.stdout?.on("data", chunk => {
-        stdoutBytes += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
-        if (stdoutBytes <= MAX_STDOUT_BYTES) stdout += chunk.toString();
+        const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+        stdoutBytes += bytes.length;
+        if (stdoutBytes <= MAX_STDOUT_BYTES) chunks.push(bytes);
       });
       child.once("error", () => {
         childRunning = false;
         settle(null);
       });
-      child.once("exit", code => {
+      // `close`, not `exit`: `exit` can fire before stdout is drained, which would truncate
+      // the credential. Decode once so a multi-byte character split across chunks survives.
+      child.once("close", code => {
         childRunning = false;
         if (code !== 0 || stdoutBytes > MAX_STDOUT_BYTES) return settle(null);
-        settle(stdout.trim() || null);
+        settle(Buffer.concat(chunks).toString("utf8").trim() || null);
       });
     });
     pending = read;
