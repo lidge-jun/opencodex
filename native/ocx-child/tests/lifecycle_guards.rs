@@ -459,6 +459,81 @@ fn daemon_exits_without_serving_when_its_parent_dies_before_commit() {
     assert_eq!(code, 0, "detach after the parent crash failed: {err}");
 }
 
+#[cfg(unix)]
+#[test]
+fn attach_rollback_commits_the_restarted_prior_relay_only_after_removing_its_record() {
+    let scratch = Scratch::new("rollback-restart");
+    let ocx = scratch.0.join("ocx");
+    let codex = scratch.0.join("codex");
+    fs::create_dir_all(&ocx).unwrap();
+    fs::create_dir_all(&codex).unwrap();
+    let home = MockHomeServer::start(&raw_token(), KEY_ID, LINK_ID);
+    let tunnel = home.port.to_string();
+    let port = distinct_port(&[]);
+    let p = port.to_string();
+    let out = spawn_with_creds(child_command(
+        &ocx,
+        &codex,
+        port,
+        &attach_args(&tunnel, LINK_ID, &p),
+    ))
+    .wait_with_output()
+    .unwrap();
+    assert!(out.status.success(), "first attach failed: {}", text(&out));
+    let prior_pid = read_state(&ocx)["daemonPid"].as_u64().unwrap() as u32;
+    let _prior_leftover = KillOnDrop(Some(prior_pid));
+
+    // Re-attach on another port. The prior relay is serving when the rollback snapshot is
+    // taken and is stopped before the new daemon starts; the occupied new port then fails the
+    // start, so rollback has to restart the prior relay.
+    let new_port = distinct_port(&[port]);
+    let np = new_port.to_string();
+    let barrier = Barrier::new(&scratch.0, "rollback-restart");
+    let mut cmd = child_command(&ocx, &codex, new_port, &attach_args(&tunnel, LINK_ID, &np));
+    barrier.apply(&mut cmd, "attach-before-daemon-start,daemon-before-commit");
+    let parent = spawn_with_creds(cmd);
+    assert!(
+        barrier.wait_reached("attach-before-daemon-start", Duration::from_secs(20)),
+        "re-attach never reached the daemon start"
+    );
+    let blocker =
+        std::net::TcpListener::bind(std::net::SocketAddr::from(([127, 0, 0, 1], new_port)))
+            .expect("occupy the new listen port");
+    barrier.release("attach-before-daemon-start");
+    let reached_commit = barrier.wait_reached("daemon-before-commit", Duration::from_secs(20));
+    let record_at_commit = ocx.join("child").join("attach-rollback.json").exists();
+    let restarted_pid = read_state(&ocx)["daemonPid"].as_u64().map(|pid| pid as u32);
+    let _restarted_leftover = KillOnDrop(restarted_pid);
+    barrier.release("daemon-before-commit");
+    let out = parent.wait_with_output().unwrap();
+    drop(blocker);
+    assert!(
+        reached_commit,
+        "rollback never restarted the prior relay: {}",
+        text(&out)
+    );
+    assert!(
+        !record_at_commit,
+        "the restarted prior relay was committed while the rollback record still existed"
+    );
+    assert!(!out.status.success(), "re-attach unexpectedly succeeded");
+    assert!(
+        !ocx.join("child").join("attach-rollback.json").exists(),
+        "rollback record left behind: {}",
+        text(&out)
+    );
+    let healthz =
+        format!("GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    let health = try_http_exchange(port, &healthz).unwrap_or_default();
+    assert!(
+        health.contains("200 OK") && health.contains("\"generationCommitted\":true"),
+        "prior relay not serving after rollback: {health} / {}",
+        text(&out)
+    );
+    let (code, _, err) = run_bin(&ocx, &codex, port, &["detach"], None);
+    assert_eq!(code, 0, "detach after rollback failed: {err}");
+}
+
 /// Starts `serve --foreground --lifecycle-start` the way a lifecycle parent does, with a
 /// start line for `generation`.
 fn spawn_lifecycle_serve(ocx: &Path, codex: &Path, port: u16, generation: &str) -> Child {

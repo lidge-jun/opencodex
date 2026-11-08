@@ -561,6 +561,7 @@ impl AttachRollbackSnapshot {
                 &mut errors,
             )?;
         }
+        let mut restarted = None;
         if let Some(mut prev) = self.prior_state.clone()
             && self.prior_was_serving
             && errors.is_empty()
@@ -578,26 +579,25 @@ impl AttachRollbackSnapshot {
             if !state_key_consistent {
                 errors.push("prior relay restart skipped: restored state.json and link-key are inconsistent".to_owned());
             } else {
-                let had_file_errors = !errors.is_empty();
-                match start_or_rollover_daemon(paths, &mut prev, None)
-                    .and_then(|pending| pending.commit())
-                {
-                    Ok(_) => {
-                        if let Err(e) = write_child_state(&paths.state_file, &prev) {
-                            errors.push(format!("restore daemon state: {e}"));
-                        } else if had_file_errors {
-                            errors.push("prior relay restart attempted and succeeded".to_owned());
-                        }
-                    }
+                // The state naming the new generation and PID is durable once this returns.
+                match start_or_rollover_daemon(paths, &mut prev, None) {
+                    Ok(pending) => restarted = Some(pending),
                     Err(e) => errors.push(format!("restart prior daemon: {e}")),
                 }
             }
         }
         if errors.is_empty() {
-            // The rollback record goes only after restoration verified both homes.
+            // The rollback record goes only after restoration verified both homes, and before a
+            // restarted prior relay is committed, so that relay never serves while recovery
+            // could still restore files underneath it. Dropping an uncommitted relay stops it.
             guard
                 .restore_step(|| remove_optional_file(&paths.rollback_file))
                 .map_err(RestoreStepError::into_message)?;
+            if let Some(pending) = restarted {
+                pending.commit().map_err(|e| {
+                    format!("attach rolled back, but the prior relay did not restart: {e}")
+                })?;
+            }
             Ok(())
         } else {
             Err(format!("attach rollback incomplete: {}", errors.join("; ")))
@@ -925,6 +925,7 @@ fn attach_locked(guard: &mut CodexHomeGuard, request: AttachRequest) -> Result<(
     }
 
     let pending = if start_daemon {
+        crate::test_hooks::barrier("attach-before-daemon-start");
         match start_or_rollover_daemon(&paths, &mut state, Some(now_ms)) {
             Ok(pending) => Some(pending),
             Err(e) => {
