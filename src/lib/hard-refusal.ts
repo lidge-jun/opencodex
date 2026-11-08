@@ -6,18 +6,25 @@ import {
 } from "./errors";
 import { isNonReplayableUpstreamCode } from "./upstream-retry";
 
+const SERIALIZED_HARD_CODE =
+  /\bcode\s*[:=]\s*["']?(?:cyber_policy|origin_rejected|bio_policy|misalignment_policy_violation|invalid_prompt|upstream_no_response|upstream_closed_before_response|upstream_reset_replay_refused)\b/i;
+
 /**
  * Detect a hard policy or origin refusal across known upstream envelope shapes and diagnostic text.
  * When an error is a hard refusal (e.g. cyber_policy, origin_rejected, bio_policy), recovery must
  * stop immediately without retrying or walking any parameter ladders (#8173).
+ *
+ * Traverses bounded nested wrappers (e.g. Provider error 400, data:, nested error JSON) so wrapped
+ * policy refusals are recognized rather than treated as prose.
  */
-export function isHardPolicyOrOriginRefusal(text: string | undefined): boolean {
-  if (!text) return false;
+export function isHardPolicyOrOriginRefusal(text: string | undefined, depth = 0): boolean {
+  if (!text || depth > 4) return false;
   if (isCyberPolicyMessage(text)) return true;
   if (/origin_rejected/i.test(text)) return true;
+  if (SERIALIZED_HARD_CODE.test(text)) return true;
 
   let unescaped = text.trim();
-  for (let depth = 0; depth < 3; depth += 1) {
+  for (let d = 0; d < 3; d += 1) {
     if (unescaped.startsWith("Provider error 400: ")) {
       unescaped = unescaped.slice("Provider error 400: ".length).trim();
     }
@@ -63,23 +70,17 @@ export function isHardPolicyOrOriginRefusal(text: string | undefined): boolean {
         }
       }
 
-      if (typeof rec.message === "string") {
-        if (
-          isCyberPolicyMessage(rec.message)
-          || /origin_rejected/i.test(rec.message)
-          || safetyRefusalCodeFromMessage(rec.message)
-        ) {
-          return true;
-        }
-      }
-
-      if (typeof rec.error === "string") {
-        if (
-          isCyberPolicyMessage(rec.error)
-          || /origin_rejected/i.test(rec.error)
-          || safetyRefusalCodeFromMessage(rec.error)
-        ) {
-          return true;
+      for (const field of ["message", "error", "details", "body", "reason"] as const) {
+        const val = rec[field];
+        if (typeof val === "string") {
+          if (
+            isCyberPolicyMessage(val)
+            || /origin_rejected/i.test(val)
+            || safetyRefusalCodeFromMessage(val)
+            || isHardPolicyOrOriginRefusal(val, depth + 1)
+          ) {
+            return true;
+          }
         }
       }
     }

@@ -551,6 +551,22 @@ describe("bounded optional-control error envelopes", () => {
       expect(comboFailureCooldownScope(400, rootWithCode)).toBe("target");
     }
   });
+  test("rejects conflicting root and nested codes before granting a combo hop for reasoning effort", () => {
+    for (const conflictingCode of ["permission_denied", "context_length_exceeded", "origin_rejected", "unknown_terminal_code"]) {
+      const payloadWithCode = JSON.stringify({
+        error: { type: "invalid_request_error", code: conflictingCode, message: "Invalid reasoning effort." },
+      });
+      expect(comboFailureDecision(400, payloadWithCode)).toBe("stop");
+      expect(comboFailureCooldownScope(400, payloadWithCode)).toBe("target");
+
+      const rootWithCode = JSON.stringify({
+        code: conflictingCode,
+        error: { type: "invalid_request_error", message: "Invalid reasoning effort." },
+      });
+      expect(comboFailureDecision(400, rootWithCode)).toBe("stop");
+      expect(comboFailureCooldownScope(400, rootWithCode)).toBe("target");
+    }
+  });
 });
 
 describe("image rejection classifier bounds", () => {

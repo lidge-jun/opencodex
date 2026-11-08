@@ -388,11 +388,14 @@ function normalizedFailureCode(code?: string | null): string {
  * evidence for a combo: the same model may accept a lower rung, or a later target may accept the
  * request. Keep the match exact so unrelated invalid arguments stay terminal.
  */
+const EXACT_EFFORT_COMPATIBLE_CODES = new Set(["", "invalid_request_error", "invalid_argument"]);
+const EXACT_EFFORT_COMPATIBLE_TYPES = new Set(["", "invalid_request_error", "upstream_error"]);
+
 function isExactInvalidReasoningEffortRefusal(status: number, message: string, code?: string | null): boolean {
   if (status !== 400 || message.length > 16_384) return false;
   if (code !== undefined && code !== null && typeof code !== "string") return false;
   const outerCode = normalizedFailureCode(code);
-  if (!["", "invalid_request_error", "invalid_argument"].includes(outerCode)) return false;
+  if (!EXACT_EFFORT_COMPATIBLE_CODES.has(outerCode)) return false;
   if (isHardPolicyOrOriginRefusal(message)) return false;
   let text = message.trim();
   for (let depth = 0; depth < 3; depth += 1) {
@@ -405,7 +408,11 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
     if (root.code !== undefined && root.code !== null && typeof root.code !== "string") return false;
     if (root.type !== undefined && root.type !== null && typeof root.type !== "string") return false;
     if (root.param !== undefined && root.param !== null && typeof root.param !== "string") return false;
-    if (normalizedFailureCode(root.code as string | undefined) === "invalid_argument"
+    const rootCode = normalizedFailureCode(root.code as string | undefined);
+    const rootType = normalizedFailureCode(root.type as string | undefined);
+    if (!EXACT_EFFORT_COMPATIBLE_CODES.has(rootCode)) return false;
+    if (!EXACT_EFFORT_COMPATIBLE_TYPES.has(rootType)) return false;
+    if (rootCode === "invalid_argument"
       && root.error === "Invalid reasoning effort."
       && (root.type === undefined || root.type === "invalid_request_error")
       && (root.param === undefined || root.param === "reasoning_effort" || root.param === "reasoning.effort")) return true;
@@ -416,15 +423,18 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
     if (record.type !== undefined && record.type !== null && typeof record.type !== "string") return false;
     if (record.param !== undefined && record.param !== null && typeof record.param !== "string") return false;
     const errorCode = normalizedFailureCode(record.code as string | undefined);
+    const errorType = normalizedFailureCode(record.type as string | undefined);
+    if (!EXACT_EFFORT_COMPATIBLE_CODES.has(errorCode)) return false;
+    if (!EXACT_EFFORT_COMPATIBLE_TYPES.has(errorType)) return false;
     if (record.type === "upstream_error" && typeof record.message === "string"
       && record.message.startsWith("Provider error 400: ")
-      && ["", "invalid_request_error", "invalid_argument"].includes(errorCode)) {
+      && EXACT_EFFORT_COMPATIBLE_CODES.has(errorCode)) {
       text = record.message;
       continue;
     }
     return record.type === "invalid_request_error"
       && record.message === "Invalid reasoning effort."
-      && ["", "invalid_request_error", "invalid_argument"].includes(errorCode)
+      && EXACT_EFFORT_COMPATIBLE_CODES.has(errorCode)
       && (record.param === undefined || record.param === "reasoning_effort" || record.param === "reasoning.effort");
   }
   return false;
@@ -567,7 +577,13 @@ function isRequestLocalTargetIncompatibility(status: number, message: string, co
     let payload: unknown;
     try { payload = JSON.parse(text); } catch { return false; }
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
-    const error = (payload as Record<string, unknown>).error;
+    const root = payload as Record<string, unknown>;
+    if (root.code !== undefined && root.code !== null && typeof root.code !== "string") return false;
+    if (root.type !== undefined && root.type !== null && typeof root.type !== "string") return false;
+    const rootCode = normalizedFailureCode(root.code as string | undefined);
+    if (!genericCodes.has(rootCode)) return false;
+    if (root.type !== undefined && root.type !== null && root.type !== "invalid_request_error" && root.type !== "upstream_error") return false;
+    const error = root.error;
     if (!error || typeof error !== "object" || Array.isArray(error)) return false;
     const e = error as Record<string, unknown>;
     if (e.code !== undefined && e.code !== null && typeof e.code !== "string") return false;
@@ -942,9 +958,9 @@ export function comboFailureDecision(
   if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(error.code ?? "")) {
     return "stop";
   }
-  // Quota prose inside a request-validation status (400/422) is not authoritative without a
-  // structured code: the body can quote prompt or parameter text back (#7625).
-  if (error.code === "insufficient_quota" && (status === 400 || status === 422)) return "stop";
+  // Quota or permission prose inside a request-validation status (400/422) is not authoritative without a
+  // structured code: the body can quote prompt or parameter text back (#7625, #8173).
+  if (["insufficient_quota", "permission_denied"].includes(error.code ?? "") && (status === 400 || status === 422)) return "stop";
   // 402 (payment required) and 425 (too early) are provider-state signals, not verdicts about
   // the request: another combo target can still serve it.
   if ([401, 402, 403, 404, 408, 425, 429].includes(status) || status >= 500) return "hop";
