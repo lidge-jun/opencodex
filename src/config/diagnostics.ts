@@ -783,24 +783,24 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
   return { ok: false, error: schemaDiagnosticsError(result.error) };
 }
 
-export function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
-  return configDiagnosticsFromText(raw);
+export function configDiagnosticsFromRaw(raw: string, options: { warn?: (message: string) => void } = {}): ConfigDiagnostics {
+  return configDiagnosticsFromText(raw, undefined, options.warn);
 }
 
-function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Uint8Array }): ConfigDiagnostics {
+function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Uint8Array }, warn?: (message: string) => void): ConfigDiagnostics {
   try {
     const parsed = JSON.parse(raw.replace(/^\uFEFF/, ""));
     projectRemovedOpenCodeFreeSnapshot(parsed, file);
     sanitizeOpenCodeOverridesForLoad(parsed);
-    sanitizeReasoningPinsForLoad(parsed);
+    sanitizeReasoningPinsForLoad(parsed, warn);
     // Same degradation as loadConfig: a hand-edited invalid retryOn429 must not trip the
     // schema and send the caller a default-config fallback (the config command could then
     // persist that fallback over the user's providers/keys).
-    sanitizeModelDisplayNamesForLoad(parsed);
-    sanitizeAutoReviewForLoad(parsed);
-    sanitizeRetryOn429ForLoad(parsed);
-    sanitizeModelCostsForLoad(parsed);
-    sanitizeCapabilityDeclarationsForLoad(parsed);
+    sanitizeModelDisplayNamesForLoad(parsed, warn);
+    sanitizeAutoReviewForLoad(parsed, warn);
+    sanitizeRetryOn429ForLoad(parsed, warn);
+    sanitizeModelCostsForLoad(parsed, warn);
+    sanitizeCapabilityDeclarationsForLoad(parsed, warn);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
       return validFileConfigDiagnostics(normalizeApiKeyIds(result.data as OcxConfig), parsed);

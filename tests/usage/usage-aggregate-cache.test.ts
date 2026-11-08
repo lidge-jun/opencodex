@@ -22,6 +22,7 @@ import {
 import type { OcxConfig } from "../../src/types/config";
 import { resetUsageReadCacheForTests, type PersistedUsageEntry } from "../../src/usage/log";
 import * as usageLedgerScannerModule from "../../src/usage/ledger-scanner";
+import { getUsageSourceFacets, SourceFacetsBusyError } from "../../src/server/management/usage-source-facets";
 import { refreshUserCostOverlays } from "../../src/usage/user-cost-overlays";
 import { buildRouteDecisionTrace } from "../../src/routing/trace";
 import { createAnthropicAdapter } from "../../src/adapters/anthropic";
@@ -80,6 +81,97 @@ afterEach(() => {
 });
 
 describe("retained usage aggregate cache", () => {
+  test("app breakdowns survive filtered cache appends and match fresh scans", async () => {
+    const path = join(testDir, "usage.jsonl");
+    const row = (id: string, client: "codex_cli" | "claude_code", apiKeyId: string) => ({ ...entry(id), client, apiKeyId });
+    writeFileSync(path, `${JSON.stringify(row("first", "codex_cli", "A"))}\n`);
+    const all = { sourceFilter: { client: "all" as const, device: { kind: "all" as const } } };
+    const keyed = { sourceFilter: { client: "all" as const, device: { kind: "key" as const, id: "A" } } };
+    await Promise.all([getFilteredUsageAggregate(all), getFilteredUsageAggregate(keyed)]);
+    appendFileSync(path, [row("second", "claude_code", "A"), row("other-key", "codex_cli", "B")].map(value => JSON.stringify(value)).join("\n") + "\n");
+    const [appendedAll, appendedKey] = await Promise.all([getFilteredUsageAggregate(all), getFilteredUsageAggregate(keyed)]);
+    expect(appendedAll.update).toBe("append");
+    expect(appendedKey.update).toBe("append");
+    const summarize = (result: UsageAggregateResult) => result.accumulator.summarize("all", NOW).apps;
+    const actual = [summarize(appendedAll), summarize(appendedKey)];
+    resetUsageAggregateCacheForTests();
+    const rebuilt = await Promise.all([getFilteredUsageAggregate(all), getFilteredUsageAggregate(keyed)]);
+    expect(actual).toEqual(rebuilt.map(summarize));
+    expect(actual[1]).toMatchObject([{ client: "codex", requests: 1 }, { client: "claude_code", requests: 1 }]);
+  });
+  test("unconfigured reports retain invalid-row diagnostics across incremental scans", async () => {
+    const path = join(testDir, "usage.jsonl");
+    writeFileSync(path, line("valid"));
+    const filter = { sourceFilter: { client: "all" as const, device: { kind: "unconfigured" as const } }, configuredApiKeyIds: [] };
+    expect((await getFilteredUsageAggregate(filter)).usageInvalidRows).toBe(false);
+    appendFileSync(path, "{invalid}\n");
+    const next = await getFilteredUsageAggregate(filter);
+    expect(next.update).toBe("append");
+    expect(next.usageInvalidRows).toBe(true);
+    appendFileSync(path, line("another"));
+    expect((await getFilteredUsageAggregate(filter)).usageInvalidRows).toBe(true);
+  });
+
+  test("facet scans share identical work and reject excess distinct concurrent scans", async () => {
+    const original = usageLedgerScannerModule.scanUsageLedgerCooperatively;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let scans = 0;
+    const spy = spyOn(usageLedgerScannerModule, "scanUsageLedgerCooperatively").mockImplementation(async options => {
+      scans += 1;
+      await gate;
+      return original(options);
+    });
+    const source = (client: "all" | "codex" | "claude_code" | "grok" | "aside") => ({ client, device: { kind: "all" as const } });
+    try {
+      const flights = [getUsageSourceFacets(source("all"), []), getUsageSourceFacets(source("all"), []),
+        getUsageSourceFacets(source("codex"), []), getUsageSourceFacets(source("claude_code"), []),
+        getUsageSourceFacets(source("grok"), [])];
+      await expect(getUsageSourceFacets(source("aside"), [])).rejects.toBeInstanceOf(SourceFacetsBusyError);
+      expect(scans).toBe(4);
+      release();
+      await Promise.all(flights);
+    } finally {
+      release();
+      spy.mockRestore();
+    }
+  });
+
+  test("unconfigured-key aggregates change identity when configured keys change", async () => {
+    const row = { ...entry("former"), apiKeyId: "former", admissionKind: "configured" };
+    writeFileSync(join(testDir, "usage.jsonl"), `${JSON.stringify(row)}\n`);
+    const sourceFilter = { client: "all" as const, device: { kind: "unconfigured" as const } };
+    const absent = await getFilteredUsageAggregate({ sourceFilter, configuredApiKeyIds: [] });
+    expect(requests(absent)).toBe(1);
+    const reused = await getFilteredUsageAggregate({ sourceFilter, configuredApiKeyIds: ["former"] });
+    expect(requests(reused)).toBe(0);
+    appendFileSync(join(testDir, "usage.jsonl"), `${JSON.stringify({ ...row, requestId: "second" })}\n`);
+    expect(requests(await getFilteredUsageAggregate({ sourceFilter, configuredApiKeyIds: [] }))).toBe(2);
+    expect(requests(await getFilteredUsageAggregate({ sourceFilter, configuredApiKeyIds: ["former"] }))).toBe(0);
+  });
+
+  test("client and device filters retain separate caches across incremental appends", async () => {
+    const path = join(testDir, "usage.jsonl");
+    const row = (id: string, client: "codex_cli" | "claude_code", apiKeyId?: string) => ({
+      ...entry(id), client, ...(apiKeyId ? { apiKeyId } : {}),
+    });
+    writeFileSync(path, [row("codex-local", "codex_cli"), row("codex-key", "codex_cli", "Key-A"),
+      row("claude", "claude_code")].map(value => JSON.stringify(value)).join("\n") + "\n");
+    const local = { sourceFilter: { client: "codex" as const, device: { kind: "no-key" as const } } };
+    const keyed = { sourceFilter: { client: "codex" as const, device: { kind: "key" as const, id: "Key-A" } } };
+    const claude = { sourceFilter: { client: "claude_code" as const, device: { kind: "all" as const } } };
+    const [localFirst, keyFirst, claudeFirst] = await Promise.all([
+      getFilteredUsageAggregate(local), getFilteredUsageAggregate(keyed), getFilteredUsageAggregate(claude),
+    ]);
+    expect([requests(localFirst), requests(keyFirst), requests(claudeFirst)]).toEqual([1, 1, 1]);
+    appendFileSync(path, `${JSON.stringify(row("codex-new", "codex_cli"))}\n`);
+    const [localNext, keyNext, claudeNext] = await Promise.all([
+      getFilteredUsageAggregate(local), getFilteredUsageAggregate(keyed), getFilteredUsageAggregate(claude),
+    ]);
+    expect([requests(localNext), requests(keyNext), requests(claudeNext)]).toEqual([2, 1, 1]);
+    expect(localNext.update).toBe("append");
+  });
+
   test("JEV projections share a cold scan and read only a verified append suffix", async () => {
     const path = join(testDir, "usage.jsonl");
     const jevEntry = (requestId: string, model: string): PersistedUsageEntry => ({

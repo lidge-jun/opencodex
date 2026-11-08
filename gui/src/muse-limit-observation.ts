@@ -16,11 +16,10 @@ export function museLimitReport(value: unknown, accountLabel: string, now = Date
   const row = value as Record<string, unknown>;
   if (row.provider !== PROVIDER || row.accountLogLabel !== accountLabel || row.status !== 429
     || row.errorCode !== "rate_limit_exceeded" || typeof row.timestamp !== "number"
-    || !Number.isFinite(row.timestamp) || row.timestamp > now || typeof row.upstreamError !== "string") return null;
-  const match = /^Subscription quota exhausted\. Your usage window resets at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\.$/.exec(row.upstreamError);
-  if (!match) return null;
-  const resetAt = Date.parse(match[1]!);
-  if (!Number.isFinite(resetAt) || resetAt <= now || resetAt <= row.timestamp
+    || !Number.isFinite(row.timestamp) || row.timestamp > now) return null;
+  // The server derives this from the provider's quota sentence; the row carries no message text.
+  const resetAt = row.rateLimitResetAt;
+  if (typeof resetAt !== "number" || !Number.isFinite(resetAt) || resetAt <= now || resetAt <= row.timestamp
     || resetAt - row.timestamp > MAX_RESET_DELAY_MS) return null;
   return {
     label: "Muse Code", source: "meta-muse:rate-limit-observation", observed: true, updatedAt: row.timestamp,

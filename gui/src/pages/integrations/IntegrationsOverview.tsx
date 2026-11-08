@@ -5,6 +5,7 @@ import { navigateHash } from "../../hash-routing";
 import { useT } from "../../i18n/shared";
 import { Notice, Switch } from "../../ui";
 import ClientMark from "../../components/ClientMark";
+import { useHelpToggle } from "../../components/v2-connect/help-toggle";
 import { markFor } from "../../components/integration-marks";
 import IntegrationStateBadge from "./IntegrationStateBadge";
 import ConsequenceDialog, { type ConsequenceCopy } from "./ConsequenceDialog";
@@ -167,8 +168,13 @@ function OverviewCard({
     : null;
   const toggleOn = row.toggleOn ?? row.applied;
   const removableKiloIssue = row.status !== null && canDisableKiloWithCandidateIssue(row.status);
+  // One of three readings a glance needs: connected, not yet, needs attention.
+  const tone = !row.installed && row.state !== "unknown" ? "idle"
+    : row.state === "current" ? "on"
+    : row.state === "stale" || row.state === "conflict" || row.state === "unsafe" ? "attention"
+      : row.state === "absent" ? "off" : "idle";
   return (
-    <li className="integration-card" data-client={row.id}>
+    <li className="integration-card" data-client={row.id} data-tone={tone}>
       <div className="integration-card-head">
         {/*
           Before the title, not inside it: the title IS the card's one control
@@ -234,6 +240,17 @@ function OverviewCard({
   );
 }
 
+/*
+ * Apps that are not on this machine have nothing to switch on, so they fold away under
+ * one disclosure instead of filling the page with "Not installed" cards. An unread
+ * source (`unknown`) stays in the main grid: it may well be installed.
+ */
+function elsewhere(row: OverviewRow): boolean {
+  return row.state !== "unknown"
+    && (row.state === "not-installed" || !row.installed)
+    && !(row.toggleOn ?? row.applied);
+}
+
 export default function IntegrationsOverview({
   apiBase,
   active = true,
@@ -242,6 +259,7 @@ export default function IntegrationsOverview({
   active?: boolean;
 }) {
   const t = useT();
+  const help = useHelpToggle(t("integrations.catalog.title"));
   const [bulkPending, setBulkPending] = useState(false);
   const [bulkResult, setBulkResult] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [restoring, setRestoring] = useState<IntegrationJournalRow | null>(null);
@@ -692,6 +710,22 @@ export default function IntegrationsOverview({
    *
    * Errors propagate so the dialog can show them while the user still has cancel.
    */
+  const presentRows = rows.filter(row => !elsewhere(row));
+  const elsewhereRows = rows.filter(elsewhere);
+  const renderCard = (row: OverviewRow) => (
+    <OverviewCard
+      key={row.id}
+      row={row}
+      pending={cardPending !== null}
+      result={cardResults[row.id] ?? null}
+      onOpen={() => navigateHash(row.hash)}
+      onToggle={row.toggle ? () => requestToggle(row, !(row.toggleOn ?? row.applied)) : null}
+      onOverwrite={row.status !== null && row.status.state === "conflict" && row.status.reason !== "candidate-conflict" && row.installed
+        ? () => void requestFilePlan(row, "overwrite")
+        : null}
+    />
+  );
+
   return (
     <section className="integrations-overview">
       <div className="integration-summary">
@@ -699,11 +733,11 @@ export default function IntegrationsOverview({
           <span className="integration-summary-label">{t("integrations.summary.detected")}</span>
           <strong>{counts.detected}</strong>
         </div>
-        <div className="integration-summary-cell">
+        <div className="integration-summary-cell" data-tone={counts.applied > 0 ? "ok" : undefined}>
           <span className="integration-summary-label">{t("integrations.summary.applied")}</span>
           <strong>{counts.applied}</strong>
         </div>
-        <div className="integration-summary-cell">
+        <div className="integration-summary-cell" data-tone={counts.stale > 0 ? "warn" : undefined}>
           <span className="integration-summary-label">{t("integrations.summary.stale")}</span>
           <strong>{counts.stale}</strong>
         </div>
@@ -720,16 +754,8 @@ export default function IntegrationsOverview({
         )}
         <div className="integration-summary-cell">
           <span className="integration-summary-label">{t("integrations.summary.lastChange")}</span>
-          <strong>{lastChange ? new Date(lastChange).toLocaleString() : t("integrations.status.unknown")}</strong>
+          <strong className="integration-summary-when">{lastChange ? new Date(lastChange).toLocaleString() : t("integrations.status.unknown")}</strong>
         </div>
-        <button
-          type="button"
-          className="btn btn-ghost"
-          onClick={() => void requestDisableAll()}
-          disabled={bulkPending || Boolean(bulkPlans) || appliedClients.length === 0}
-        >
-          {t("integrations.summary.disableAll")}
-        </button>
       </div>
 
       {/*
@@ -745,10 +771,21 @@ export default function IntegrationsOverview({
         as the things it is not part of. This h3 owns the catalog; rollback
         below is its sibling.
       */}
-      <h3>{t("integrations.catalog.title")}</h3>
+      <div className="connect-catalog-head">
+        <h3>{t("integrations.catalog.title")}</h3>
+        {help.button}
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm connect-disable-all"
+          onClick={() => void requestDisableAll()}
+          disabled={bulkPending || Boolean(bulkPlans) || appliedClients.length === 0}
+        >
+          {t("integrations.summary.disableAll")}
+        </button>
+      </div>
+      {help.panel(<p>{t("integrations.onboarding")}</p>, "connect-help-panel")}
       <ApiKeysRow row={keysRow} />
 
-      <p className="page-sub">{t("integrations.onboarding")}</p>
       {statesResource.state.kind === "failed-cold" && (
         <Notice tone="err">{t("integrations.error.load")}</Notice>
       )}
@@ -773,21 +810,18 @@ export default function IntegrationsOverview({
           <p className="page-sub">{t("common.loading")}</p>
         )
       ) : (
-        <ul className="integration-cards">
-          {rows.map(row => (
-            <OverviewCard
-              key={row.id}
-              row={row}
-              pending={cardPending !== null}
-              result={cardResults[row.id] ?? null}
-              onOpen={() => navigateHash(row.hash)}
-              onToggle={row.toggle ? () => requestToggle(row, !(row.toggleOn ?? row.applied)) : null}
-              onOverwrite={row.status !== null && row.status.state === "conflict" && row.status.reason !== "candidate-conflict" && row.installed
-                ? () => void requestFilePlan(row, "overwrite")
-                : null}
-            />
-          ))}
-        </ul>
+        <>
+          {presentRows.length > 0 && <ul className="integration-cards">{presentRows.map(renderCard)}</ul>}
+          {elsewhereRows.length > 0 && (
+            <details className="connect-elsewhere">
+              <summary>
+                <span className="connect-elsewhere-title">{t("connectV2.elsewhereTitle", { count: String(elsewhereRows.length) })}</span>
+                <span className="connect-elsewhere-hint">{t("connectV2.elsewhereHint")}</span>
+              </summary>
+              <ul className="integration-cards integration-cards--elsewhere">{elsewhereRows.map(renderCard)}</ul>
+            </details>
+          )}
+        </>
       )}
       {clientsSettled && installedFileClients.length === 0 && (
         <div className="integration-empty">

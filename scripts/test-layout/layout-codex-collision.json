@@ -1,7 +1,17 @@
 {
+  "codex-shim-legacy-record.test.ts": "codex-integration",
+  "codex-installation-live-content.test.ts": "codex-integration",
+  "codex-installation-invalid-account.test.ts": "codex-integration",
+  "codex-installation-live-http.test.ts": "codex-integration",
+  "codex-installation-live-ws.test.ts": "codex-integration",
+  "codex-installation-compact-empty.test.ts": "responses",
+  "codex-installation-turn-limit.test.ts": "responses",
+  "codex-installation-sidecars.test.ts": "codex-integration",
+  "claude-installation-helper.test.ts": "claude-integration",
   "codex-role-configured-credentials.test.ts": "server",
   "codex-role-capability-consent.test.ts": "routing",
   "codex-role-capability-redirects.test.ts": "routing",
+  "codex-role-capability-pages.test.ts": "routing",
   "codex-role-measured-ties.test.ts": "routing",
   "messaging-remote-port-reservation.test.ts": "codex-integration",
   "messaging-remote-forward-failure.test.ts": "codex-integration",
@@ -21,6 +31,7 @@
   "codex-launcher-env.test.ts": "codex-integration",
   "codex-cli-update-artifacts.test.ts": "codex-integration",
   "codex-cli-update-apply.test.ts": "codex-integration",
+  "codex-cli-update-process-fixture.test.ts": "codex-integration",
   "codex-cli-update-paths.test.ts": "codex-integration",
   "codex-cli-update-admission.test.ts": "codex-integration",
   "codex-cli-update-recovery.test.ts": "codex-integration",
@@ -34,5 +45,6 @@
   "codex-stored-main-duplicate.test.ts": "codex-integration",
   "codex-account-slot-identity.test.ts": "codex-integration",
   "codex-pool-caller-fallback-policy.test.ts": "codex-integration",
-  "codex-windows-current-sid.test.ts": "codex-integration"
+  "codex-windows-current-sid.test.ts": "codex-integration",
+  "codex-profile-preservation.test.ts": "codex-integration"
 }

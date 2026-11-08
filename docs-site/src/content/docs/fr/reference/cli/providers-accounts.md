@@ -129,7 +129,7 @@ Répertoriez et changez de compte de fournisseur et de pools de clés API via le
 la surface est :
 
 ```text
-Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
+Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|reset-affinity|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
@@ -143,6 +143,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
 strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Stratégie du pool ; least-loaded est réservé à Kiro.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
@@ -160,7 +161,7 @@ A selection-order change applies from the next unbound request and never moves a
 
 Les sous-commandes nécessitent que le proxy soit en cours d'exécution et résolvent automatiquement son port d'exécution enregistré, sauf `import-orca` : l'aperçu est purement local, et `import-orca --apply` exige que le proxy soit arrêté.
 Les opérations réussies se terminent 0. Utilisation invalide, un fournisseur ou un identifiant inconnu, un
-proxy, ou un échec API se termine 1. Les champs d'informations d'identification sont affichés exactement comme la gestion API
+proxy inaccessible ou un échec API renvoient normalement le code 1. Pour `reset-affinity`, HTTP 404 renvoie 4 et HTTP 409 renvoie 5 ; les autres échecs API et les résultats non confirmés renvoient 1. Les champs d'informations d'identification sont affichés exactement comme la gestion API
 les renvoie (y compris son masquage) ; Les clés API brutes et les jetons OAuth ne sont jamais restitués. Affichage
 les commodités sont synthétisées côté client, comme dans le tableau de bord : `main` désigne la connexion
 Codex App du groupe de comptes `openai`, les comptes OAuth sans adresse e-mail apparaissent sous la forme `Account N`,
@@ -229,9 +230,8 @@ cet état et quitte toujours 0. `--json` renvoie :
 `auto` efface la sélection manuelle pour que le pool place à nouveau le travail selon sa propre stratégie — sauf si un compte Codex porte littéralement l'id `auto`, qui l'emporte par correspondance exacte d'id ; `ocx account clear <provider>` rétablit toujours la sélection automatique. Un compte Codex peut être désigné par l'alias défini avec `ocx account alias` au lieu de son id ; cela vaut aussi pour `priority`, `pause`, `resume`, `clear-cooldown`, `remove` et `alias`. Pour les comptes Codex, `auto`, `main` et `__main__` sont réservés sans distinction de casse et ne peuvent pas être attribués comme alias. Les noms affichés des comptes OAuth et des clés API conservent leurs règles existantes.
 
 Sélectionne un compte Codex, un compte OAuth ou une clé API existant. Pour `openai`, `main` sélectionne la
-connexion Codex App. Une sélection en mode Codex Pool efface l'affinité locale du processus et s'applique à la requête suivante,
-dont un provenant d'une tâche visible existante ; le redémarrage du proxy ou l'expulsion par affinité peuvent également laisser une tâche
-non lié, tandis que les demandes en cours conservent leur compte capturé. Cela contrôle uniquement le routage du pool ;
+connexion Codex App. Une sélection en mode Codex Pool efface l'affinité et s'applique à la requête suivante,
+y compris si elle provient d'une tâche visible existante. Les liaisons des requêtes avec un identifiant de session (y compris les tours habituels de Codex CLI et App et les sous-agents), ou des requêtes sans session ancrées sur leur parent immédiat, peuvent survivre à un redémarrage normal du proxy jusqu’à 24 heures d’inactivité, si l’enregistrement final de l’affinité à l’arrêt réussit. Les chaînes sans session plus profondes et les liaisons à la connexion principale de Codex App restent en mémoire uniquement et sont réattribuées après le redémarrage ; une expulsion, la suppression du compte, une reconnexion, un plantage ou une réinitialisation de l’affinité peuvent laisser une tâche non liée, tandis que les demandes en cours conservent leur compte capturé. Cela contrôle uniquement le routage du pool ;
 Le mode direct continue d’utiliser les informations d’identification principales de l’appelant. Commutation proactive basée sur l'utilisation,
 401/403 réauthentification, 429/retry-after temps de recharge, exclusion et pré-sortie 429/402 échec
 la récupération peut sélectionner ultérieurement un autre compte Pool éligible. Ces chemins de récupération restent actifs lorsque
@@ -442,18 +442,19 @@ déplacé car son AAD chiffré et l'identité du trousseau de clés du système 
 
 ### `ocx models [subcommand]` · `ocx model <subcommand>`
 
-`ocx model` est un alias de `ocx models`. Sans sous-commande, répertoriez les modèles implantés statiquement dans
-fournisseurs configurés. `--provider` filtre un fournisseur configuré et `--json` renvoie le modèle
+`ocx model` est un alias de `ocx models`. Sans sous-commande, liste les ID enregistrés et connus du routeur, notamment les modèles du registre, les modèles personnalisés et le cache de découverte de ce processus CLI. Le cache d’un nouveau processus peut être vide : ce n’est pas le catalogue du proxy actif. Certains anciens fournisseurs à clé conservent les modèles du registre après un changement de destination. `--provider` filtre un fournisseur configuré et `--json` renvoie le modèle
 métadonnées. `live` lit le catalogue en cours d'exécution ; `add`, `edit`, `remove` et `list-custom` gèrent le manuel
 entrées de catalogue ; `enable`, `disable` et `provider` contrôlent la visibilité ; `selected` contrôle un
 liste d'autorisation des fournisseurs ; `context` contrôle les plafonds de contexte du fournisseur ; et `shadow` gère l'arrière-plan
 interception d'appel fantôme.
 
+Le champ `reasoningEfforts` apparaît uniquement avec `--json`. La valeur `null` signifie que la liste est inconnue ou n’a pas été consultée, notamment si sa vérification nécessiterait d’ouvrir le trousseau du système. Le tableau vide `[]` indique une liste explicitement vide ou un effort de raisonnement désactivé pour le modèle, par exemple par `noReasoningModels`. Utilisez `ocx models live` pour consulter le catalogue du proxy actif.
+
 `add` et `remove` enregistrent localement par défaut ; `--live` modifie le proxy actif. Sans proxy, un enregistrement local `--json` renvoie `sync.status: "not-attempted"`, `needsSync: true` et le code 0. Une synchronisation tentée mais échouée conserve la sauvegarde et renvoie un code non nul. `list-custom` reste local. `display-name` prend l’ID amont brut ; `order` prend les IDs publics du sélecteur. Voir les contraintes de permutation complète, de préfixe featured et de réinitialisation native dans le [guide anglais](/reference/cli/providers-accounts/#display-names-and-picker-identities).
 
 | Sous-commande | Drapeaux pris en charge | Actions |
 | --- | --- | --- |
-| `list` (par défaut) | `--provider <name>`, `--json` | Répertoriez les modèles prédéfinis dans les fournisseurs configurés. |
+| `list` (par défaut) | `--provider <name>`, `--json` | Liste les modèles locaux enregistrés et connus du routeur. |
 | `live` | `--provider <name>`, `--json` | Lisez le catalogue en cours d'exécution, y compris les modèles découverts lors de l'exécution. Les lignes sont marquées `native`/`routed`, `custom` et `enabled`/`disabled`. |
 | `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | Enregistre un modèle personnalisé localement, ou sur le proxy actif avec `--live`. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Modifiez un modèle personnalisé. `-` libère un champ ; `0` efface la fenêtre contextuelle. |

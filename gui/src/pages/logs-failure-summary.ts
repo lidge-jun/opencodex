@@ -1,5 +1,7 @@
 import type { TFn } from "../i18n/shared";
 import type { RequestFailureCause, RequestFailureStage, ResendPermission, RequestSpendTotals } from "../../../src/usage/telemetry-contract";
+import type { UpstreamCondition } from "../../../src/lib/upstream-condition";
+import { boundedFailureDetail, type FailureDetailCode } from "../../../src/lib/failure-detail";
 
 interface LogFailureAttribution {
   failureCause?: RequestFailureCause;
@@ -101,3 +103,69 @@ export function failureSummary(
   }
   return result;
 }
+
+/** i18n key for each upstream condition the server classified; total over the closed enum. */
+const UPSTREAM_CONDITION_KEYS = {
+  auth_failed: "logs.detail.condition.authFailed",
+  access_denied: "logs.detail.condition.accessDenied",
+  context_overflow: "logs.detail.condition.contextOverflow",
+  location_unsupported: "logs.detail.condition.locationUnsupported",
+  account_verification_required: "logs.detail.condition.accountVerificationRequired",
+  billing_exhausted: "logs.detail.condition.billingExhausted",
+  model_unavailable: "logs.detail.condition.modelUnavailable",
+  rate_limited: "logs.detail.condition.rateLimited",
+  upstream_unavailable: "logs.detail.condition.upstreamUnavailable",
+  upstream_failed: "logs.detail.condition.upstreamFailed",
+  request_rejected: "logs.detail.condition.requestRejected",
+} as const satisfies Record<UpstreamCondition, string>;
+
+/** Localized label for a row's classified upstream condition; unknown values (newer servers) get none. */
+export function upstreamConditionLabel(condition: unknown, t: TFn): string | undefined {
+  return typeof condition === "string" && Object.hasOwn(UPSTREAM_CONDITION_KEYS, condition)
+    ? t(UPSTREAM_CONDITION_KEYS[condition as UpstreamCondition])
+    : undefined;
+}
+
+/** i18n key for each closed failure-detail code; total over the code set. */
+const FAILURE_DETAIL_KEYS = {
+  provider_error: "logs.failureDetail.providerError",
+  header_timeout: "logs.failureDetail.headerTimeout",
+  connect_timeout: "logs.failureDetail.connectTimeout",
+  connect_failed: "logs.failureDetail.connectFailed",
+  client_closed: "logs.failureDetail.clientClosed",
+  body_stall: "logs.failureDetail.bodyStall",
+  body_overflow: "logs.failureDetail.bodyOverflow",
+  stream_error_stop: "logs.failureDetail.streamErrorStop",
+  stream_ended_early: "logs.failureDetail.streamEndedEarly",
+  stream_failed: "logs.failureDetail.streamFailed",
+  output_limit: "logs.failureDetail.outputLimit",
+  stall_timeout: "logs.failureDetail.stallTimeout",
+  adapter_eof: "logs.failureDetail.adapterEof",
+  generation_timeout: "logs.failureDetail.generationTimeout",
+  turn_inactivity: "logs.failureDetail.turnInactivity",
+} as const satisfies Record<FailureDetailCode, string>;
+
+const VALUE_REQUIRED: ReadonlySet<FailureDetailCode> = new Set([
+  "connect_timeout", "body_stall", "body_overflow", "generation_timeout", "turn_inactivity",
+]);
+
+/**
+ * Localized text for a row's failure detail. Only a closed code with valid parameters renders; free
+ * text (a legacy or edited row) and malformed details render nothing.
+ */
+export function failureDetailLabel(value: unknown, t: TFn): string | undefined {
+  const detail = boundedFailureDetail(value);
+  if (!detail) return undefined;
+  if (detail.code === "provider_error") {
+    const label = detail.type ? t("logs.failureDetail.providerErrorTyped", { type: detail.type }) : t(FAILURE_DETAIL_KEYS.provider_error);
+    return detail.validation ? `${label}: ${detail.validation.map(issue => `${issue.field} [${issue.type}]`).join("; ")}` : label;
+  }
+  if (detail.code === "header_timeout" && detail.value !== undefined) {
+    return t("logs.failureDetail.headerTimeoutAfter", { value: detail.value });
+  }
+  if (VALUE_REQUIRED.has(detail.code)) {
+    return detail.value === undefined ? undefined : t(FAILURE_DETAIL_KEYS[detail.code], { value: detail.value });
+  }
+  return t(FAILURE_DETAIL_KEYS[detail.code]);
+}
+

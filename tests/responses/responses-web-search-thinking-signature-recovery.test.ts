@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
-import { markResponseNonReplayable, SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
+import { markResponseNonReplayable, SendBudgetExhaustedError, providerErrorDestinationLabel } from "../../src/lib/upstream-retry";
 import { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY, type SpendJournal } from "../../src/lib/spend-reservation-ledger";
 import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
 import { resetWorkflowBudgetsForTest } from "../../src/lib/workflow-budget";
@@ -437,7 +437,7 @@ describe("hosted web search Anthropic thinking-signature recovery", () => {
   test("a local retry-budget exception preserves terminal 429 identity", async () => {
     const { bodies } = transport(index => {
       if (index === 1) return streamRejection();
-      if (index === 2) throw new SendBudgetExhaustedError("synthetic-search-recovery");
+      if (index === 2) throw new SendBudgetExhaustedError(providerErrorDestinationLabel("synthetic-search-recovery"));
       return success();
     });
     const result = await send();
@@ -483,7 +483,7 @@ describe("hosted web search Anthropic thinking-signature recovery", () => {
   test("an HTTP replacement budget exception retains HTTP 429 and its stable code", async () => {
     const { bodies } = transport(index => {
       if (index === 1) return rejection();
-      throw new SendBudgetExhaustedError("synthetic-http-search-recovery");
+      throw new SendBudgetExhaustedError(providerErrorDestinationLabel("synthetic-http-search-recovery"));
     });
     const result = await send();
     expect(bodies).toHaveLength(2);

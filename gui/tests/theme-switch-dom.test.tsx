@@ -45,42 +45,40 @@ afterEach(() => {
 });
 
 for (const [locale, dict] of [["en", en], ["ko", ko]] as const) {
-  test(`theme choices have ordered ${locale} accessible names and decorative icons`, () => {
+  test(`the theme button names the current and next mode in ${locale}, with a decorative icon`, () => {
     const { host } = mount("system", () => {}, locale);
-    const group = host.querySelector('[role="group"]');
-    expect(group?.classList.contains("theme-switch")).toBe(true);
-    expect(group?.getAttribute("aria-label")).toBe(dict["theme.label"]);
-    const buttons = Array.from(group!.querySelectorAll("button"));
-    expect(buttons).toHaveLength(3);
-    expect(buttons.map(button => button.getAttribute("aria-label"))).toEqual(modes.map(mode => dict[`theme.${mode}`]));
-    buttons.forEach((button, index) => {
-      expect(button.type).toBe("button");
-      expect(button.classList.contains("theme-switch__btn")).toBe(true);
-      expect(button.title).toBe(dict[`theme.${modes[index]!}`]);
-      expect(button.textContent?.trim()).toBe("");
-      expect(button.querySelectorAll("svg")).toHaveLength(1);
-      expect(button.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
-    });
+    // Design system v2: one button in the sidebar foot's orb row; a click steps to the next mode.
+    const buttons = Array.from(host.querySelectorAll("button"));
+    expect(buttons).toHaveLength(1);
+    const button = buttons[0]!;
+    expect(button.type).toBe("button");
+    const label = dict["shellV2.themeCycle"]
+      .replace("{mode}", dict["theme.system"])
+      .replace("{next}", dict["theme.light"]);
+    expect(button.getAttribute("aria-label")).toBe(label);
+    expect(button.title).toBe(label);
+    expect(button.textContent?.trim()).toBe("");
+    expect(button.querySelectorAll("svg")).toHaveLength(1);
+    expect(button.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
   });
 }
 
-test("exactly the controlled theme is pressed, including after re-render", () => {
+test("the button shows whichever mode is controlled, including after re-render", () => {
   const { host, render } = mount("light", () => {});
   for (const mode of modes) {
     render(mode);
-    const buttons = Array.from(host.querySelectorAll("button"));
-    expect(buttons.map(button => button.getAttribute("aria-pressed"))).toEqual(modes.map(choice => String(choice === mode)));
-    expect(host.querySelectorAll('[aria-pressed="true"]')).toHaveLength(1);
+    const button = host.querySelector("button")!;
+    expect(button.getAttribute("data-mode")).toBe(mode);
+    expect(button.getAttribute("aria-label")).toContain(en[`theme.${mode}`]);
   }
 });
 
-test("dark, system and light clicks report their own mode", () => {
+test("a click steps light, dark, system and back to light", () => {
   const calls: ThemeMode[] = [];
-  const { host } = mount("light", mode => calls.push(mode));
-  const [light, dark, system] = Array.from(host.querySelectorAll("button"));
-  for (const button of [dark, system, light]) act(() => { button!.click(); });
+  const { host, render } = mount("light", mode => calls.push(mode));
+  for (const mode of modes) {
+    render(mode);
+    act(() => { host.querySelector("button")!.click(); });
+  }
   expect(calls).toEqual(["dark", "system", "light"]);
-  // Selection stays controlled by the prop until the parent re-renders.
-  expect(light!.getAttribute("aria-pressed")).toBe("true");
-  expect(host.querySelectorAll('[aria-pressed="true"]')).toHaveLength(1);
 });

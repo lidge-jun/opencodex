@@ -19,9 +19,11 @@ function scopedFamily(row: Record<string, unknown>): "fable" | "opus" | "sonnet"
 }
 
 /**
- * A limits entry supersedes its legacy duplicate even when inactive or unusable.
- * Missing is_active preserves the older limits contract; an unknown flag is not active.
- * Unknown kinds/families leave usable shared windows intact but cannot clear family refusals.
+ * Recognized rows supersede legacy duplicates even when skipped or malformed; duplicates
+ * and malformed shared measurements make family enumeration incomplete. Shared finite
+ * measurements apply regardless of the binding flag, though an unknown flag also makes
+ * enumeration incomplete. A null legacy five_hour requires an explicitly active session.
+ * Scoped rows retain active-only behavior; unknown kinds/families cannot clear refusals.
  */
 export function anthropicUsageBuckets(body: Record<string, unknown>): {
   buckets: AnthropicUsageBucket[]; familyEnumeration: boolean;
@@ -37,6 +39,14 @@ export function anthropicUsageBuckets(body: Record<string, unknown>): {
     if (!row || !window) { familyEnumeration = false; continue; }
     if (represented.has(window)) { familyEnumeration = false; continue; }
     represented.add(window);
+    if (window === "5h" || window === "weekly") {
+      const flag = row.is_active;
+      if (flag !== undefined && typeof flag !== "boolean") familyEnumeration = false;
+      if (toFiniteNumber(row.percent) === undefined) { familyEnumeration = false; continue; }
+      if (window === "5h" && body.five_hour === null && flag !== true) continue;
+      selected.set(window, { window, row, percentField: "percent" });
+      continue;
+    }
     if (row.is_active === false) continue;
     if (row.is_active !== undefined && row.is_active !== true) { familyEnumeration = false; continue; }
     if (toFiniteNumber(row.percent) === undefined) familyEnumeration = false;

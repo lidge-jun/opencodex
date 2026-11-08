@@ -77,6 +77,7 @@ Drives no management route.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the full capability table as JSON. |
+| `--contracts` | boolean | List supported versioned contracts. |
 | `--mutating-only` | boolean | Restrict output to capabilities that mutate state. |
 | `--route` | string | Show which capabilities drive a management route. |
 
@@ -84,11 +85,11 @@ Drives no management route.
 
 ### `ocx sync`
 
-Usage: `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--restart-codex] [--restart-app-server-only]`
+Usage: `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only]`
 
 Synchronize client catalogs, including Aside profiles through the running server's mutation owner.
 
-State-changing: yes. JSON mode: `none`.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -96,6 +97,8 @@ State-changing: yes. JSON mode: `none`.
 
 | Flag | Value | Meaning |
 |---|---|---|
+| `--local-only` | boolean | Do not fan out the Home sync to linked Children. |
+| `--json` | boolean | Emit the sync fan-out result as JSON. |
 | `--restart-codex` | boolean | Restart the Codex app-servers and fully quit and relaunch the Codex desktop app after a catalog, cache, or changed configuration write, on macOS, Linux and Windows. |
 | `--restart-app-server-only` | boolean | Restart only the Codex app-servers and leave the desktop app running; wins over --restart-codex when both are given. |
 | `--restart-desktop-app` | boolean | Deprecated alias of --restart-codex. |
@@ -103,6 +106,9 @@ State-changing: yes. JSON mode: `none`.
 | `--expect-hub-key` | string | Sync only when this machine is a hub client connected with this API key id; otherwise exit 5 with nothing changed. |
 
 - The Aside refresh uses the live server; other catalog synchronization also performs local work.
+- An update in flight or an unavailable update/sync mutex refuses without changes: update-in-flight, exit 7. Another sync reports sync-in-progress, exit 1.
+- A current Home catalog fans out to linked Children. Fan-out never requests a Codex app or app-server restart on a Child; use GOAT or ocx sync --restart-codex there. Applying changed Home settings may restart the Child's own OpenCodex client runtime.
+- After a successful Home sync, a connected Child skipped during fan-out, a failed or timed-out Child, or an unreadable link store yields partial exit 6. Skipped connected Children include an actionable hint; update an outdated ocx through its owning installer, with the Desktop tray as an option for Desktop installs. Intentional skips, including client-initiated links and --local-only, keep their existing exit behavior.
 - --expect-link/--expect-hub-key are checked under the lock that selects the sync path. A mismatch writes nothing, never falls back to local providers, exits 5, and ends stderr with {"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}; reasons are disconnected, invalid_state, disconnect_pending, pending_operation, hub_client, link_client, other_link and other_key. Usage errors exit 2.
 
 ### `ocx stop`

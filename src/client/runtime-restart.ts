@@ -30,9 +30,12 @@ export type ClientRestartSupervisor = "service" | "desktop";
 
 export type ClientRestartAdmission =
   | { kind: "accepted"; alreadyRestarting: boolean }
+  | { kind: "stopping" }
   | { kind: "supervised"; supervisor: ClientRestartSupervisor };
 
 export interface ClientRestartIo {
+  /** A signal shutdown has claimed this runtime; it cannot admit a replacement. */
+  stopping?: () => boolean;
   /** Which supervisor owns this process, or null when it starts its own replacement. */
   supervisor(): Promise<ClientRestartSupervisor | null>;
   /** Stop the tunnel supervisor and the listener, giving in-flight requests up to `drainMs`. */
@@ -41,7 +44,7 @@ export interface ClientRestartIo {
   spawnReplacement(deadlineAt: number): Promise<void>;
   /** Serve again on this process: listener, fresh tunnel supervisor, records. */
   resume(): Promise<void>;
-  exitProcess(code: number): void;
+  exitProcess(code: number): void | Promise<void>;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   warn?: (message: string) => void;
@@ -49,7 +52,9 @@ export interface ClientRestartIo {
 
 export interface ClientRestartController {
   request(): Promise<ClientRestartAdmission>;
-  /** Settles when the restart in flight (if any) has finished or rolled back. Tests only. */
+  /** Only an accepted flight owns routing; a supervisor check does not. */
+  hasHandoff(): boolean;
+  /** Join the accepted flight before signal teardown; may reject on a failed exit callback. */
   settled(): Promise<void>;
 }
 
@@ -81,16 +86,19 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
         await io.resume();
       } catch (resumeError) {
         warn(`[client] restart: this runtime could not serve again (${failureCode(resumeError)}); run 'ocx start'`);
-        io.exitProcess(1);
+        await io.exitProcess(1);
       }
       return;
     }
-    io.exitProcess(0);
+    await io.exitProcess(0);
   };
 
   return {
+    hasHandoff: () => flight !== null,
     async request() {
+      if (io.stopping?.()) return { kind: "stopping" };
       const supervisor = await io.supervisor();
+      if (io.stopping?.()) return { kind: "stopping" };
       if (supervisor) return { kind: "supervised", supervisor };
       if (flight) return { kind: "accepted", alreadyRestarting: true };
       flight = run(now()).finally(() => { flight = null; });

@@ -63,11 +63,7 @@ describe("CI review lanes", () => {
       }
     }
 
-    // The push trigger is pinned to the release lines. main and preview MUST
-    // stay because release.yml requires a successful push-event run for the
-    // exact release SHA and states that a pull-request run does not qualify.
-    // dev is deliberately absent (CI policy): cross-platform legs run on dev
-    // only by manual workflow_dispatch.
+    // Cross-platform evidence is requested manually on dev, never by push.
     const ci = Bun.YAML.parse(await readText(".github/workflows/ci.yml")) as {
       on?: {
         push?: { branches?: string[]; paths?: string[] };
@@ -75,8 +71,7 @@ describe("CI review lanes", () => {
       };
       jobs?: Record<string, Record<string, unknown> | undefined>;
     };
-    expect([...(ci.on?.push?.branches ?? [])].sort())
-      .toEqual(["main", "preview"]);
+    expect(ci.on?.push).toBeUndefined();
 
     // The PR trigger must carry NO base-branch filter, and the two triggers
     // differ on purpose. GitHub matches `branches:` against the BASE ref, so
@@ -95,10 +90,8 @@ describe("CI review lanes", () => {
     expect(ci.on?.pull_request?.branches).toBeUndefined();
     expect(ci.on?.pull_request?.paths).toBeUndefined();
 
-    // The push trigger and pull-request `changes` job share one expensive-CI
-    // allowlist. PRs always create the workflow and aggregate check; this list
-    // decides whether the costly jobs run. Pin the entire list on both paths,
-    // including every script and workflow used by repository automation.
+    // PRs always create the workflow and aggregate check; this list decides
+    // whether the costly Ubuntu jobs run.
     const ciPaths = [
       ".dockerignore",
       ".gitattributes",
@@ -125,8 +118,6 @@ describe("CI review lanes", () => {
       "tests/**",
       "tsconfig.json",
     ];
-    expect([...(ci.on?.push?.paths ?? [])].sort()).toEqual(ciPaths);
-
     const filterStep = (ci.jobs?.changes as {
       steps?: { with?: Record<string, string> }[];
     })?.steps?.find(step => step.with?.filters);
@@ -152,7 +143,7 @@ describe("CI review lanes", () => {
     expect(changesJob?.outputs?.ci).toBe("${{ steps.scope.outputs.ci }}");
     expect(scopeStep?.id).toBe("scope");
     expect(scopeStep?.shell).toBe("bash");
-    expect(scopeStep?.env?.CI_SCOPE).toBe("${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.ci }}");
+    expect(scopeStep?.env?.CI_SCOPE).toBe("${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')) && 'true' || steps.filter.outputs.ci }}");
     expect(scopeStep?.run).not.toContain("${{");
     expect(scopeStep?.run).toContain('case "$CI_SCOPE" in');
     expect(scopeStep?.run).toContain("true|false)");
@@ -171,7 +162,7 @@ describe("CI review lanes", () => {
       expect(`${jobName}:${job?.needs}`).toBe(`${jobName}:changes`);
       expect(`${jobName}:${job?.if}`).toBe(`${jobName}:${scopedCondition}`);
     }
-    // The pull-request fast lane swaps the four full shards for `test changed`; every
+    // The pull-request fast lane swaps the five full shards for `test changed`; every
     // other event keeps the shards, and `fast` is only ever true on a pull request.
     const shards = ci.jobs?.test as { needs?: string; if?: string } | undefined;
     expect(shards?.needs).toBe("changes");
@@ -363,7 +354,7 @@ describe("Windows and nightly CI contracts", () => {
         env?: Record<string, string>; with?: Record<string, unknown>;
       }> }>;
     };
-    expect(ci.on.schedule).toEqual([{ cron: "17 18 * * *" }]);
+    expect(ci.on.schedule).toBeUndefined();
     const changes = ci.jobs.changes!;
     expect(changes.outputs?.windows).toBe("${{ steps.windows.outputs.windows }}");
     expect(changes.outputs?.checkout_ref).toBe("${{ steps.nightly.outputs.checkout_ref }}");

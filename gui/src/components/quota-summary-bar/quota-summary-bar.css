@@ -1,3 +1,6 @@
+/* Imported by its component, so it sits in the `legacy` cascade layer itself:
+   unlayered CSS would outrank design/bridge.css and every Tailwind utility. */
+@layer legacy {
 .quota-summary-bar {
   position: sticky;
   top: 0;
@@ -17,6 +20,7 @@
   inside. What does not fit scrolls sideways (scrollbar hidden) and the « / » buttons page it.
 */
 .quota-summary-scroller {
+  position: relative;
   display: flex;
   flex: 1;
   min-width: 0;
@@ -44,6 +48,24 @@
 .quota-summary-list::-webkit-scrollbar {
   display: none;
 }
+
+/* Overlays signal clipped chips without masking the fixed popovers in the list. */
+.quota-summary-scroller--overflow::before,
+.quota-summary-scroller--overflow::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  z-index: 1;
+  pointer-events: none;
+}
+.quota-summary-scroller--overflow::before { left: 24px; background: linear-gradient(to right, var(--bg), transparent); }
+.quota-summary-scroller--overflow::after { right: 24px; background: linear-gradient(to left, var(--bg), transparent); }
+.quota-summary-scroller--overflow:has(.quota-summary-scroll--prev[aria-disabled="true"])::before,
+.quota-summary-scroller--overflow:has(.quota-summary-scroll--next[aria-disabled="true"])::after,
+.quota-summary-scroller--overflow:has(.quota-summary-list:focus-within)::before,
+.quota-summary-scroller--overflow:has(.quota-summary-list:focus-within)::after { display: none; }
 
 .quota-summary-item {
   flex: 0 0 auto;
@@ -325,4 +347,5 @@
     height: 100%;
     min-height: 0;
   }
+}
 }

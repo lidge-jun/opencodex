@@ -43,7 +43,7 @@ async function approved(f: ReturnType<typeof fixture>, deps = depsFor(f)) {
 }
 function cli(f: ReturnType<typeof fixture>, args: string[]) {
   const result = spawnSync(Bun.which("node")!, [repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", ...args, "--json"], {
-    cwd: repoRoot(), encoding: "utf8", env: f.env, timeout: 60_000,
+    cwd: f.root, encoding: "utf8", env: f.env, timeout: 60_000,
   });
   expect(result.error).toBeUndefined(); expect(result.status).toBe(0);
   return JSON.parse(result.stdout);
@@ -88,7 +88,14 @@ async function reserveLoopbackPort(): Promise<number> {
 }
 
 function startFixtureManagementServer(f: ReturnType<typeof fixture>, port: number, gate: string) {
-  const { node, env } = managementTestEnv(f);
+  const { node, configDir, env } = managementTestEnv(f);
+  // The operator pairing CLI must observe the same configured literal origin
+  // as the fixture listener; a start-only --port override is not authority.
+  mkdirSync(configDir, { recursive: true, mode: 0o700 });
+  const configPath = join(configDir, "config.json");
+  if (!existsSync(configPath)) {
+    writeFileSync(configPath, JSON.stringify({ port, hostname: "127.0.0.1" }), { mode: 0o600 });
+  }
   env.OCX_FIXTURE_NPM_GATE = gate;
   const child = spawn(node, [repoPath("bin", "ocx.mjs"), "start", "--port", String(port)], {
     cwd: f.root, env, detached: true, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
@@ -147,6 +154,28 @@ async function stopFixtureManagementServer(server: ReturnType<typeof startFixtur
 async function issueFixtureGuiSession(base: string) {
   const origin = new URL(base).origin;
   const response = await fetch(`${base}/opencodex-session`, { headers: { origin } });
+  return readFixtureGuiSession(response, origin);
+}
+
+async function pairFixtureGuiSession(f: ReturnType<typeof fixture>, base: string) {
+  const origin = new URL(base).origin;
+  const { node, env } = managementTestEnv(f);
+  const result = spawnSync(node, [repoPath("bin", "ocx.mjs"), "gui", "pair", "--origin", origin, "--json"], {
+    cwd: f.root, encoding: "utf8", env, timeout: 60_000,
+  });
+  if (result.error || result.status !== 0) throw new Error("fixture operator pairing CLI failed");
+  const issued = JSON.parse(result.stdout) as { kind?: string; grant?: string; browserOrigin?: string; serverOrigin?: string };
+  if (issued.kind !== "created" || typeof issued.grant !== "string"
+    || !/^ocx_pair_[A-Za-z0-9_-]{43}$/.test(issued.grant)
+    || issued.browserOrigin !== origin || issued.serverOrigin !== origin) {
+    throw new Error("fixture pairing grant invalid");
+  }
+  const response = await fetch(`${base}/opencodex-session`, { method: "POST",
+    headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ grant: issued.grant }) });
+  return readFixtureGuiSession(response, origin);
+}
+
+async function readFixtureGuiSession(response: Response, origin: string) {
   if (!response.ok) throw new Error(`fixture GUI session refused (${response.status})`);
   const html = await response.text();
   const read = (name: string) => new RegExp(`<meta name="${name}" content="([^"]+)"`).exec(html)?.[1] ?? null;
@@ -344,6 +373,14 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
     try {
       await waitForManagementServer(base, server.child, server.closed, server.output);
       session = await issueFixtureGuiSession(base);
+      for (const [scan, refusal] of [["active", "blocked_active_session"], ["unavailable", "blocked_process_state_unknown"]] as const) {
+        writeFileSync(join(f.root, "process-scan-state.json"), JSON.stringify({ scans: [scan] }));
+        const response = await fetch(`${base}/api/codex/cli-update/plan`, { headers: fixtureSessionHeaders(session) });
+        expect(response.ok).toBe(true);
+        expect(await response.json()).toMatchObject({ applicable: false, refusal });
+        expect(readFileSync(f.trace, "utf8")).toBe("");
+      }
+      writeFileSync(join(f.root, "process-scan-state.json"), JSON.stringify({ scans: ["empty", "empty", "empty"] }));
       const planResponse = await fetch(`${base}/api/codex/cli-update/plan`, { headers: fixtureSessionHeaders(session) });
       if (!planResponse.ok) throw new Error(`isolated production plan refused (${planResponse.status})`);
       const plan = await planResponse.json() as { schemaVersion?: number; applicable: boolean; refusal?: string | null;
@@ -380,6 +417,9 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
 
       const requestId = "lost-response-management-e2e-01";
       const applyBody = { requestId, planId: plan.planId, confirmed: true };
+      expect((await postFixtureApply(base, session, applyBody)).status).toBe(403);
+      expect(existsSync(join(f.home, "ocx", "codex-cli-update-jobs", "jobs.json"))).toBe(false);
+      session = await pairFixtureGuiSession(f, base);
       lostSocket = await sendLostApplyResponse(base, session, applyBody);
       jobId = await waitForDurableAdmission(join(f.home, "ocx"), requestId);
       lostSocket.destroy(); lostSocket = undefined;

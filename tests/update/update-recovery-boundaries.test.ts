@@ -12,6 +12,7 @@ import { prepareWorkerUpdateHome } from "../../src/update/job-update-home";
 import { createSupervisionLatch } from "../../src/service/desktop-supervision.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../../src/update/tray-update-plan.mjs";
 import { transactionalNpmUpdate, transactionalNpmUpdateAsync, launcherUsableAfterNpmUpdate } from "../../src/update/transactional-install.mjs";
+import { createLegacyUpdateSession } from "../../src/update/orchestrated-session.mjs";
 
 const node = readFileSync(repoPath("bin/ocx.mjs"), "utf8");
 const bun = readFileSync(repoPath("src/update/index.ts"), "utf8");
@@ -54,7 +55,7 @@ for (const platform of ["win32", "linux"] as const) {
           expect(command.args).toContain("--update-package-only");
           expect(command.args).toContain("--update-worker-home");
         }
-        const body = section(node, "async function runPackageManagerSelfUpdate(manager) {", "function bunBinDir(")
+        const body = section(node, "async function runPackageManagerSelfUpdate(manager, child) {", "function bunBinDir(")
           .replaceAll("import.meta.url", JSON.stringify(new URL("../../bin/ocx.mjs", import.meta.url).href));
         const stage = (args: string[]) => {
           tree(join(args[args.indexOf("--prefix") + 1]!, "node_modules", "@bitkyc08", "opencodex"), "2.0.0");
@@ -64,8 +65,9 @@ for (const platform of ["win32", "linux"] as const) {
           return { status: 0, processTreeExited: true };
         };
         await execute(body + 'return runPackageManagerSelfUpdate("npm");', {
-          process: { argv: packageOnly ? [process.execPath, ...command.args] : [process.execPath, launcher, "update"], env: {}, execPath: process.execPath, platform,
+          process: { argv: packageOnly ? [process.execPath, ...command.args] : [process.execPath, launcher, "update"], env: {}, execPath: process.execPath, platform, once: () => {},
             exit: (code: number) => { exits.push(code); throw code; } },
+          createLegacyUpdateSession,
           console: { log: (line: string) => logs.push(line), warn: (line: string) => logs.push(line), error: (line: string) => logs.push(line) },
           PKG: "@bitkyc08/opencodex", here: join(live, "bin"), dirname, join, resolve, fileURLToPath,
           currentPackageVersion: () => "1.0.0", updateTag: () => "latest",
@@ -92,6 +94,7 @@ for (const platform of ["win32", "linux"] as const) {
           acquireOwnershipMutationLease: () => ({ token: "fixture", release() {} }),
           transactionalNpmUpdateAsync, transactionalNpmUpdateSync: transactionalNpmUpdate,
           runNpmInstall: async (invocation: { args: string[] }) => { await Promise.resolve(); return stage(invocation.args); },
+          runPosixInstallerSync: ({ args }: { args: string[] }) => ({ ...stage(args), groupExited: true, groupKilled: false }),
           launcherUsableAfterNpmUpdate, npmUpdateFailureGuidance, repairCodexShimIfNeeded() {}, launcherStartHint: () => "fixture start",
         }).catch((error: unknown) => { if (typeof error !== "number") throw error; });
         expect(installed).toBe(true);

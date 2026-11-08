@@ -128,6 +128,32 @@ describe("management CLI on a Remote Link Child", () => {
     expect(error.message).toContain("upgrade the Home");
   });
 
+  for (const provider of ["anthropic", "anthropic2"]) {
+    test.each([{ wantsJson: false }, { wantsJson: true }, { wantsJson: false, baseUrl: LINK_HOME_BASE }, { wantsJson: true, baseUrl: LINK_HOME_BASE }])(`affinity reset ${provider} preserves the Child refusal (%#)`, async ({ wantsJson, baseUrl }) => {
+      writeChild();
+      const before = await Bun.file(join(root, "config.json")).text();
+      const { cmdAccount } = await import("../../src/cli/account");
+      const seen: Request[] = [], lines: string[] = [], errors: string[] = [];
+      const log = console.log, error = console.error;
+      console.log = (...args) => { lines.push(args.map(String).join(" ")); };
+      console.error = (...args) => { errors.push(args.map(String).join(" ")); };
+      try {
+        const code = await cmdAccount(["reset-affinity", provider, ...(wantsJson ? ["--json"] : [])], {
+          baseUrl, fetchImpl: homeServing({}, seen),
+          loadConfigImpl: () => { throw new Error("no provider roster is needed to refuse"); },
+        });
+        expect(code).toBe(1);
+        const message = wantsJson ? JSON.parse(lines.join("")).message : errors.join("\n");
+        expect(message).toContain("ocx account reset-affinity runs on the Home");
+        expect(message).toContain(LINK_ID);
+        expect(message).toContain("No request was sent");
+        if (wantsJson) expect(JSON.parse(lines.join(""))).toMatchObject({ ok: false, code: "link_child_management_unavailable", retryable: false });
+        expect(seen).toHaveLength(0);
+        expect(await Bun.file(join(root, "config.json")).text()).toBe(before);
+      } finally { console.log = log; console.error = error; }
+    });
+  }
+
   test("local reads are labelled as local and inactive", () => {
     writeChild();
     expect(linkChildLocalNotice("The providers")).toContain("inactive while it is linked");

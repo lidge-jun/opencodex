@@ -43,8 +43,17 @@ describe("provider workspace auth surface", () => {
 });
 
 describe("safe OAuth account labels", () => {
+  test("Anthropic identity uses alias first, then the safe label and never raw email", () => {
+    const alias = { id: "opaque-a", alias: "Work", maskedLabel: "f***t@example.com", email: "first@example.com" };
+    const identity = { id: "opaque-b", maskedLabel: "s***d@example.com", email: "second@example.com" };
+    const legacy = { id: "opaque-c", email: "third@example.com" };
+    const rows = [alias, identity, legacy];
+    expect(oauthAccountDisplayLabel(rows, alias, t)).toBe("Work");
+    expect(oauthAccountDisplayLabel(rows, identity, t)).toBe("s***d@example.com");
+    expect(oauthAccountDisplayLabel(rows, legacy, t)).toBe("Account 3");
+  });
   const accounts = [
-    { id: "opaque-first", email: "f***@example.com" },
+    { id: "opaque-first", maskedLabel: "f***@example.com" },
     { id: "opaque-second" },
   ];
 

@@ -68,7 +68,7 @@ export function hardenExistingSecret(path: string): void {
   }
 }
 /** Load only: discard invalid optional pins without rewriting the file or losing providers. */
-export function sanitizeReasoningPinsForLoad(parsed: unknown): void {
+export function sanitizeReasoningPinsForLoad(parsed: unknown, warn: (message: string) => void = console.warn): void {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
   const root = parsed as Record<string, unknown>;
   let degraded = false;
@@ -107,7 +107,7 @@ export function sanitizeReasoningPinsForLoad(parsed: unknown): void {
     }
   }
   // Never include a provider/model name or value: malformed pins can contain secrets.
-  if (degraded) console.warn("config.json contains invalid optional reasoning pins — ignoring invalid fields or entries");
+  if (degraded) warn("config.json contains invalid optional reasoning pins — ignoring invalid fields or entries");
 }
 
 /**
@@ -203,7 +203,7 @@ export function warnDegradedMemoryModels(rawParsed: unknown, validated: OcxConfi
  * `anthropicInstance` of its own is left untouched: the conflicting key lives in the global
  * block, which is valid on its own, and the inherited value is still a well-formed instance.
  */
-export function sanitizeAnthropicSidecarInstanceForLoad(parsed: unknown): void {
+export function sanitizeAnthropicSidecarInstanceForLoad(parsed: unknown, warn: (message: string) => void = console.warn): void {
   const asRecord = (value: unknown): Record<string, unknown> | undefined =>
     value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
   const root = asRecord(parsed);
@@ -220,7 +220,7 @@ export function sanitizeAnthropicSidecarInstanceForLoad(parsed: unknown): void {
       if (!error) continue;
       delete sidecar.anthropicInstance;
       // The message names a static path and reason only; the hand-edited value is never echoed.
-      console.warn(`⚠️  config.json ${error} — ignoring that anthropicInstance; the helper inherits the request's Anthropic pool`);
+      warn(`⚠️  config.json ${error} — ignoring that anthropicInstance; the helper inherits the request's Anthropic pool`);
     }
   }
 }
@@ -231,7 +231,7 @@ export function sanitizeAnthropicSidecarInstanceForLoad(parsed: unknown): void {
  * provider/key behind a default config. Invalid fields are dropped with a warning; the management
  * write boundary still rejects invalid policies explicitly.
  */
-export function sanitizeRetryOn429ForLoad(parsed: unknown): void {
+export function sanitizeRetryOn429ForLoad(parsed: unknown, warn: (message: string) => void = console.warn): void {
   if (!parsed || typeof parsed !== "object") return;
   const root = parsed as Record<string, unknown>;
   const providers = root.providers;
@@ -247,7 +247,7 @@ export function sanitizeRetryOn429ForLoad(parsed: unknown): void {
     if (!policy || typeof policy !== "object" || Array.isArray(policy)) {
       delete p.retryOn429;
       // Never serialize the value: an accidental `retryOn429: "sk-..."` would leak the secret.
-      console.warn(`⚠️  config.json providers.${safeProviderName}.retryOn429 (${typeof policy}) is invalid — ignoring the policy`);
+      warn(`⚠️  config.json providers.${safeProviderName}.retryOn429 (${typeof policy}) is invalid — ignoring the policy`);
       continue;
     }
     const policyRecord = policy as Record<string, unknown>;
@@ -255,7 +255,7 @@ export function sanitizeRetryOn429ForLoad(parsed: unknown): void {
     // drop the whole policy so a hand-edit that tried to disable retries stays disabled.
     if ("enabled" in policyRecord && typeof policyRecord.enabled !== "boolean") {
       delete p.retryOn429;
-      console.warn(`⚠️  config.json providers.${safeProviderName}.retryOn429.enabled (${typeof policyRecord.enabled}) is invalid — ignoring the whole policy`);
+      warn(`⚠️  config.json providers.${safeProviderName}.retryOn429.enabled (${typeof policyRecord.enabled}) is invalid — ignoring the whole policy`);
       continue;
     }
     // Field checks derive from the shared policy schema so the bounds cannot drift
@@ -268,7 +268,7 @@ export function sanitizeRetryOn429ForLoad(parsed: unknown): void {
       if (value === undefined) continue;
       if (fieldSchema.safeParse(value).success) cleaned[key] = value;
       // Log only the received type, never the value (provider config can hold secrets).
-      else console.warn(`⚠️  config.json providers.${safeProviderName}.retryOn429.${key} (${typeof value}) is invalid — ignoring the field`);
+      else warn(`⚠️  config.json providers.${safeProviderName}.retryOn429.${key} (${typeof value}) is invalid — ignoring the field`);
     }
     const knownKeys = new Set(Object.keys(policyShape));
     for (const key of Object.keys(policyRecord)) {
@@ -277,7 +277,7 @@ export function sanitizeRetryOn429ForLoad(parsed: unknown): void {
         // property name (`retryOn429: { "sk-...": true }`). Ordinary typos (e.g. `attempt`)
         // stay readable, secret-shaped names become [REDACTED]. JSON-escape afterwards so a
         // control-character property name (newline/ANSI) can never forge a log line.
-        console.warn(`⚠️  config.json providers.${safeProviderName}.retryOn429.${JSON.stringify(redactSecretString(key))} is not a recognized field — ignoring it`);
+        warn(`⚠️  config.json providers.${safeProviderName}.retryOn429.${JSON.stringify(redactSecretString(key))} is not a recognized field — ignoring it`);
       }
     }
     if (hadPolicyEntries && Object.keys(cleaned).length === 0) {
@@ -285,7 +285,7 @@ export function sanitizeRetryOn429ForLoad(parsed: unknown): void {
       // opt IN to retries with defaults, which is the opposite of what a malformed
       // disable-oriented edit (`retryOn429: { enabled: "false" }`, `attempts: 0`) asked for.
       delete p.retryOn429;
-      console.warn(`⚠️  config.json providers.${safeProviderName}.retryOn429 has no valid fields left — removing the policy (an empty policy would enable retries with defaults)`);
+      warn(`⚠️  config.json providers.${safeProviderName}.retryOn429 has no valid fields left — removing the policy (an empty policy would enable retries with defaults)`);
     } else {
       // Preserve an intentionally empty `retryOn429: {}` (presence = opt-in with defaults).
       p.retryOn429 = cleaned;
@@ -355,7 +355,7 @@ function strictPolicyConfigError(
   return `${field}.${String(first.path[first.path.length - 1])} is invalid (${first.message})`;
 }
 
-export function sanitizeCapabilityDeclarationsForLoad(parsed: unknown): void {
+export function sanitizeCapabilityDeclarationsForLoad(parsed: unknown, warn: (message: string) => void = console.warn): void {
   if (!parsed || typeof parsed !== "object") return;
   const providers = (parsed as Record<string, unknown>).providers;
   if (!providers || typeof providers !== "object" || Array.isArray(providers)) return;
@@ -363,12 +363,12 @@ export function sanitizeCapabilityDeclarationsForLoad(parsed: unknown): void {
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;
     const provider = value as Record<string, unknown>;
     if (providerInputModalitiesConfigError(provider.inputModalities) !== null) {
-      console.warn(`config.json provider ${JSON.stringify(redactSecretString(name))} has malformed inputModalities; restricting input modalities to text`);
+      warn(`config.json provider ${JSON.stringify(redactSecretString(name))} has malformed inputModalities; restricting input modalities to text`);
       provider.inputModalities = ["text"];
     }
     if (provider.modelCapabilities === undefined) continue;
     if (modelCapabilitiesConfigError(provider.modelCapabilities) !== null) {
-      console.warn(`config.json provider ${JSON.stringify(redactSecretString(name))} has malformed modelCapabilities; retaining valid axes and restricting malformed input modalities to text`);
+      warn(`config.json provider ${JSON.stringify(redactSecretString(name))} has malformed modelCapabilities; retaining valid axes and restricting malformed input modalities to text`);
       const repaired = sanitizeModelCapabilitiesForLoad(provider.modelCapabilities);
       if (repaired) provider.modelCapabilities = repaired;
       else delete provider.modelCapabilities;
@@ -385,7 +385,7 @@ export function sanitizeCapabilityDeclarationsForLoad(parsed: unknown): void {
  * with a warning; strict rejection stays at the management/write boundary
  * (providerManagementConfigError).
  */
-export function sanitizeModelCostsForLoad(parsed: unknown): void {
+export function sanitizeModelCostsForLoad(parsed: unknown, warn: (message: string) => void = console.warn): void {
   if (!parsed || typeof parsed !== "object") return;
   const root = parsed as Record<string, unknown>;
   const providers = root.providers;
@@ -400,7 +400,7 @@ export function sanitizeModelCostsForLoad(parsed: unknown): void {
     if (costs === undefined) continue;
     if (!costs || typeof costs !== "object" || Array.isArray(costs)) {
       delete p.modelCosts;
-      console.warn(`⚠️  config.json providers.${safeProviderName}.modelCosts (${typeof costs}) is invalid — ignoring the overlay`);
+      warn(`⚠️  config.json providers.${safeProviderName}.modelCosts (${typeof costs}) is invalid — ignoring the overlay`);
       continue;
     }
     const costsRecord = costs as Record<string, unknown>;
@@ -415,11 +415,11 @@ export function sanitizeModelCostsForLoad(parsed: unknown): void {
       }
       delete costsRecord[modelId];
       // Redact the model id: a hand-edit can place a secret in a key name.
-      console.warn(`⚠️  config.json providers.${safeProviderName}.modelCosts.${JSON.stringify(redactSecretString(modelId))} is invalid — ignoring the row`);
+      warn(`⚠️  config.json providers.${safeProviderName}.modelCosts.${JSON.stringify(redactSecretString(modelId))} is invalid — ignoring the row`);
     }
     if (hadEntries && kept === 0) {
       delete p.modelCosts;
-      console.warn(`⚠️  config.json providers.${safeProviderName}.modelCosts has no valid rows left — removing the overlay`);
+      warn(`⚠️  config.json providers.${safeProviderName}.modelCosts has no valid rows left — removing the overlay`);
     }
   }
 }
@@ -429,12 +429,12 @@ export function sanitizeModelCostsForLoad(parsed: unknown): void {
  * hand edit must not fail the whole config parse; the management boundary stays
  * strict and rejects the same shapes before they can be written.
  */
-export function sanitizeAutoReviewForLoad(parsed: unknown): void {
+export function sanitizeAutoReviewForLoad(parsed: unknown, warn: (message: string) => void = console.warn): void {
   if (!parsed || typeof parsed !== "object") return;
   const root = parsed as Record<string, unknown>;
   if (root.autoReviewOverride !== undefined
     && autoReviewOverrideConfigError(root.autoReviewOverride) !== null) {
-    console.warn("⚠️  config.json autoReviewOverride is invalid — ignoring the override");
+    warn("⚠️  config.json autoReviewOverride is invalid — ignoring the override");
     delete root.autoReviewOverride;
   }
   const providers = root.providers;
@@ -450,7 +450,7 @@ export function sanitizeAutoReviewForLoad(parsed: unknown): void {
     }
     if (provider.autoReviewModel !== undefined
       && autoReviewModelTargetConfigError(provider.autoReviewModel, "autoReviewModel", true) !== null) {
-      console.warn(`⚠️  config.json providers.${safeProviderName}.autoReviewModel is invalid — ignoring the selector`);
+      warn(`⚠️  config.json providers.${safeProviderName}.autoReviewModel is invalid — ignoring the selector`);
       delete provider.autoReviewModel;
     }
     if (provider.autoReviewModelOverrides !== undefined) {
@@ -460,7 +460,7 @@ export function sanitizeAutoReviewForLoad(parsed: unknown): void {
         true,
       );
       if (overridesError) {
-        console.warn(`⚠️  config.json providers.${safeProviderName}.autoReviewModelOverrides is invalid — ignoring the map`);
+        warn(`⚠️  config.json providers.${safeProviderName}.autoReviewModelOverrides is invalid — ignoring the map`);
         delete provider.autoReviewModelOverrides;
       }
     }
@@ -1006,7 +1006,7 @@ export function warnInheritedFastWireConflicts(configPath: string, config: OcxCo
 }
 
 /** Hand-edited alias mistakes disable only the bad alias; providers and routing survive. */
-export function sanitizeAliasesForLoad(raw: unknown): void {
+export function sanitizeAliasesForLoad(raw: unknown, warn: (message: string) => void = console.warn): void {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
   const root = raw as Record<string, unknown>;
   if (!root.providers || typeof root.providers !== "object" || Array.isArray(root.providers)) return;
@@ -1021,7 +1021,7 @@ export function sanitizeAliasesForLoad(raw: unknown): void {
     if (typeof alias !== "string" || !isValidProviderName(alias)
       || providerNames.has(alias.toLowerCase()) || claimedProviders.has(alias.toLowerCase())
       || comboAliases.has(alias.toLowerCase()) || accountNamespaces.has(alias.toLowerCase())) {
-      if (alias !== undefined) console.warn("Ignoring invalid or colliding provider alias in config.json");
+      if (alias !== undefined) warn("Ignoring invalid or colliding provider alias in config.json");
       delete provider.alias;
     } else claimedProviders.add(alias.toLowerCase());
     if (!provider.modelAliases || typeof provider.modelAliases !== "object" || Array.isArray(provider.modelAliases)) {
@@ -1035,7 +1035,7 @@ export function sanitizeAliasesForLoad(raw: unknown): void {
       const lower = typeof value === "string" ? value.toLowerCase() : "";
       if (typeof value !== "string" || !MODEL_ALIAS_PATTERN.test(value) || claimed.has(lower)
         || nativeIds.has(lower) || comboAliases.has(lower) || /^(?:gpt-|o1-|o3-|o4-|codex-)/i.test(value)) {
-        console.warn(`Ignoring invalid or colliding model alias for ${id} in config.json`);
+        warn(`Ignoring invalid or colliding model alias for ${id} in config.json`);
         delete aliases[id];
       } else claimed.add(lower);
     }
@@ -1043,7 +1043,7 @@ export function sanitizeAliasesForLoad(raw: unknown): void {
 }
 
 /** Hand-edited display-name mistakes disable only the bad label. */
-export function sanitizeModelDisplayNamesForLoad(raw: unknown): void {
+export function sanitizeModelDisplayNamesForLoad(raw: unknown, warn: (message: string) => void = console.warn): void {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
   const root = raw as Record<string, unknown>;
   if (!root.providers || typeof root.providers !== "object" || Array.isArray(root.providers)) return;
@@ -1055,7 +1055,7 @@ export function sanitizeModelDisplayNamesForLoad(raw: unknown): void {
     const providerLabel = JSON.stringify(redactSecretString(providerName));
     if (!value || typeof value !== "object" || Array.isArray(value)
       || Object.entries(value).length > MODEL_DISCOVERY_MAX_MODELS) {
-      console.warn(`Ignoring invalid modelDisplayNames map for provider ${providerLabel} in config.json`);
+      warn(`Ignoring invalid modelDisplayNames map for provider ${providerLabel} in config.json`);
       delete provider.modelDisplayNames;
       continue;
     }
@@ -1064,7 +1064,7 @@ export function sanitizeModelDisplayNamesForLoad(raw: unknown): void {
       const displayName = typeof rawDisplayName === "string" ? rawDisplayName.trim() : rawDisplayName;
       if (modelDisplayNamesConfigError({ [modelId]: displayName })) {
         const safeModelId = JSON.stringify(redactSecretString(modelId));
-        console.warn(`Ignoring invalid modelDisplayNames entry ${safeModelId} for provider ${providerLabel} in config.json`);
+        warn(`Ignoring invalid modelDisplayNames entry ${safeModelId} for provider ${providerLabel} in config.json`);
         delete labels[modelId];
       } else {
         labels[modelId] = displayName;
