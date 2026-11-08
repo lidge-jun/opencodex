@@ -427,19 +427,21 @@ source-selection path. The release workflow remains subject to the unresolved cu
 
 Every run that is not a resume, dry runs included, runs `.github/scripts/release-history.cjs` from
 the trusted workflow revision in `verify-npm`, and `publish` repeats it immediately before
-`npm publish`. It requires complete Git history, reads npm, `dev`, tags and releases with
-authenticated GitHub requests, and refuses if a second read differs. Existing npm history does not
-block a release. The gate reconciles it against the channel floors, the newest stable and the
-newest preview npm publications, and refuses when any of these fails:
+`npm publish`. It requires complete Git history, reads npm history from the npm registry, reads
+`dev`, tags and releases with authenticated GitHub requests, and refuses if a second read differs.
+Existing npm history does not block a release. The gate reconciles it against the channel floors,
+the newest stable and the newest preview npm publications, and refuses when any of these fails:
 
 - Every npm publication from the older floor onward has a `gitHead`, a `v<version>` tag at that
   commit and a published GitHub release whose prerelease flag matches its channel. Every published
   GitHub release in that window has an npm version. An npm-only or partial publication stops for
   manual reconciliation.
 - The candidate version exceeds every published npm version.
-- The candidate is reachable from `dev` and contains each floor's source. The two fixed legacy
-  `2.99.0` mappings pass only when their trees differ from the legacy baseline in the four version
-  sources alone.
+- The candidate is reachable from `dev` and contains each floor's source. For the two fixed legacy
+  `2.99.0` floors, containment is replaced, not added to. Their registry `gitHead` and `v<version>`
+  tag must equal the fixed legacy SHA, the legacy baseline `0627a2c2` (2.100.0) must be an ancestor
+  of both the candidate and `dev`, and the legacy-to-baseline diff must be exactly the four version
+  sources with only the version string changed (`verifyLegacyTreeEvidence`).
 - The candidate reuses the newest floor's source only for a stable release after that preview.
 
 Publications older than the floor window take part in the identity, version and ordering checks
@@ -459,10 +461,10 @@ The run skips version derivation and history reconciliation, and refuses unless:
 - `.github/scripts/release-resume.cjs` finds that version is the newest npm publication, with no
   higher npm version or `v` tag and no dist-tag naming an unknown version, and two reads of the
   registry, tags and release agree;
-- an existing `v<version>` tag points at the source and an existing GitHub release matches the
-  channel;
+- if a `v<version>` tag or GitHub release already exists, the tag points at the source and the
+  release matches the channel; the run creates a missing tag and a missing release as a draft;
 - assets already on the release carry the digests in this run's verification receipt. A published
-  release missing a verified asset is refused; missing assets on a draft are uploaded.
+  release missing a verified asset is refused; otherwise missing assets are uploaded.
 
 A resume never runs `npm publish`, and only the resume path reuses an existing tag or GitHub
 release. If the version or source cannot be verified, the maintainer reconciles the partial
