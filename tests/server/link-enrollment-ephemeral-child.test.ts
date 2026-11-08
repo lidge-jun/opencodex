@@ -298,6 +298,31 @@ describe("Home Remote Link enrollment, SSH plant, and --purge removal with ephem
     expect(body2.recovery).toContain("detach --purge");
   });
 
+  test("reports hash_tool_unavailable when the Child cannot verify the planted binary's SHA-256", async () => {
+    const h = buildHarness();
+    h.state.confirmedHosts!.set("barebox", {
+      alias: "barebox",
+      fingerprint,
+      keyType: "ED25519",
+      knownHostLine: "barebox ssh-ed25519 AAAA",
+      probedAt: 1_800_000_000_000,
+      remotePlatform: "posix",
+      ocxVersion: null,
+      runtimeKind: "missing",
+      targetTriple: "linux-x64",
+      plantable: true,
+      binarySizeBytes: fakeBinary.byteLength,
+    });
+    h.overrides.plant = () => ok("", 3, "ocx-plant-error:hash_tool_unavailable\nNo sha256sum, shasum, or openssl on this host to verify the binary.\n");
+    const res = await h.request("POST", "/api/link/apply", { alias: "barebox", plant: true });
+    expect(res.status).toBe(502);
+    const body = await res.json() as { error: { code: string; hint?: string } };
+    expect(body.error.code).toBe("remote_plant_failed");
+    expect(body.error.hint).toBe("hash_tool_unavailable");
+    expect(h.events).not.toContain("connect");
+    expect(h.store.links).toHaveLength(0);
+  });
+
   test("maps child_port_busy and child_external_provider_conflict to 409 without residual", async () => {
     const h = buildHarness();
     h.overrides.before = () => http200({ service: "other" });

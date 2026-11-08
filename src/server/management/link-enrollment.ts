@@ -5,7 +5,7 @@ import { assertSshAlias, buildExecArgv, buildFingerprintArgv, buildProbeArgv, RE
 import { resolveChildBinarySource } from "../../link/child-binary-source";
 import { parseFingerprintLine } from "../../link/fingerprint";
 import { isDetachedEphemeralChildConfig } from "../../link/ephemeral-child";
-import { classifyChildAttachConflict, inspectRemoteChildRuntime, remotePlantChildArgv, remotePurgePlantedChildArgv } from "../../link/remote-plant";
+import { classifyChildAttachConflict, classifyPlantFailure, inspectRemoteChildRuntime, remotePlantChildArgv, remotePurgePlantedChildArgv } from "../../link/remote-plant";
 import { requireRemotePlatform } from "../../link/remote-platform";
 import { LINK_CATALOG_MAX_BYTES, LINK_RELAY_VERIFY_MS, isChildHealth, linkCommandBudget, linkRestartBudget, parseChildHttp, remoteChildHttpArgv, REMOTE_CURL_PREFLIGHT } from "../../link/remote-probe";
 import { newLinkId, type LinkStore } from "../../link/store";
@@ -270,7 +270,11 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
           }
           return fail("remote_plant_failed", "Could not plant ocx-child on the remote host.", 502, sshRunnerErrorHint(plantErr));
         }
-        if (planted.code !== 0) return fail("remote_plant_failed", "Could not plant ocx-child on the remote host.", 502, sshFailureHint(planted.stderr));
+        if (planted.code !== 0) {
+          const reason = classifyPlantFailure(planted.stderr);
+          if (reason) return fail("remote_plant_failed", "The Child has no sha256sum, shasum, or openssl to verify the ocx-child binary, so it was not installed.", 502, reason);
+          return fail("remote_plant_failed", "Could not plant ocx-child on the remote host.", 502, sshFailureHint(planted.stderr));
+        }
         plantedFreshBinary = true;
         ephemeralChild = true;
       }

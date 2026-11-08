@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -218,5 +218,52 @@ describe("remote-plant POSIX & Windows command contracts", () => {
     });
     expect(symPlant.exitCode).not.toBe(0);
   });
-});
 
+  // A bin directory exposing only the named tools, so the plant script sees exactly these.
+  function restrictedBin(dir: string, tools: readonly string[]): string {
+    mkdirSync(dir, { recursive: true });
+    for (const tool of tools) {
+      const found = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"].map(d => join(d, tool)).find(p => existsSync(p));
+      if (!found) throw new Error("missing host tool " + tool);
+      symlinkSync(found, join(dir, tool));
+    }
+    return dir;
+  }
+  const PLANT_BASE_TOOLS = ["uname", "mkdir", "chmod", "cat", "wc", "awk", "rm", "mv"] as const;
+
+  test("POSIX plant refuses to install or execute a binary when no SHA-256 tool can verify it", () => {
+    if (process.platform === "win32") return;
+    const fakeHome = join(scratch, "nohash-home");
+    mkdirSync(fakeHome, { recursive: true, mode: 0o700 });
+    const marker = join(scratch, "nohash-executed");
+    const payload = Buffer.from("#!/bin/sh\necho ran > '" + marker + "'\necho \"opencodex 2.98.0\"\n", "utf8");
+    const sha = createHash("sha256").update(payload).digest("hex");
+    const argv = remotePlantChildArgv("posix", payload.byteLength, sha);
+    const env = { HOME: fakeHome, PATH: restrictedBin(join(scratch, "nohash-bin"), PLANT_BASE_TOOLS) };
+    const res = Bun.spawnSync(["/bin/sh", ...argv.slice(1)], { env, stdin: payload });
+    expect(res.exitCode).not.toBe(0);
+    expect(res.stderr.toString("utf8")).toContain("ocx-plant-error:hash_tool_unavailable");
+    const binDir = join(fakeHome, ".cache", "opencodex", "bin");
+    expect(existsSync(join(binDir, "ocx-child"))).toBe(false);
+    expect(existsSync(binDir) ? readdirSync(binDir) : []).toEqual([]);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  test("POSIX plant verifies the digest with openssl when sha256sum and shasum are absent", () => {
+    if (process.platform === "win32" || !["/usr/bin/openssl", "/bin/openssl"].some(p => existsSync(p))) return;
+    const payload = Buffer.from("#!/bin/sh\necho \"opencodex 2.98.0\"\n", "utf8");
+    const sha = createHash("sha256").update(payload).digest("hex");
+    const bin = restrictedBin(join(scratch, "openssl-bin"), [...PLANT_BASE_TOOLS, "openssl"]);
+    const goodHome = join(scratch, "openssl-home");
+    mkdirSync(goodHome, { recursive: true, mode: 0o700 });
+    const good = Bun.spawnSync(["/bin/sh", ...remotePlantChildArgv("posix", payload.byteLength, sha).slice(1)], { env: { HOME: goodHome, PATH: bin }, stdin: payload });
+    expect(good.exitCode).toBe(0);
+    expect(existsSync(join(goodHome, ".cache", "opencodex", "bin", "ocx-child"))).toBe(true);
+    const badHome = join(scratch, "openssl-bad-home");
+    mkdirSync(badHome, { recursive: true, mode: 0o700 });
+    const wrongSha = createHash("sha256").update("other").digest("hex");
+    const bad = Bun.spawnSync(["/bin/sh", ...remotePlantChildArgv("posix", payload.byteLength, wrongSha).slice(1)], { env: { HOME: badHome, PATH: bin }, stdin: payload });
+    expect(bad.exitCode).not.toBe(0);
+    expect(existsSync(join(badHome, ".cache", "opencodex", "bin", "ocx-child"))).toBe(false);
+  });
+});

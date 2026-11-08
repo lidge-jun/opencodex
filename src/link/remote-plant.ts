@@ -120,6 +120,9 @@ export async function inspectRemoteChildRuntime(
   return parseRemoteRuntimeInspection(platform, res.stdout);
 }
 
+/** Printed on stderr by the POSIX plant script when no tool can verify the binary's SHA-256. */
+export const PLANT_HASH_TOOL_UNAVAILABLE_MARKER = "ocx-plant-error:hash_tool_unavailable";
+
 export const POSIX_PLANT_SCRIPT = [
   "case \"$(uname -s 2>/dev/null)\" in Windows*|MSYS*|MINGW*|CYGWIN*) exit 125;; esac",
   "umask 077",
@@ -139,13 +142,19 @@ export const POSIX_PLANT_SCRIPT = [
   "  printf 'Planted binary size mismatch: expected %s got %s\\n' \"$expected_bytes\" \"$actual_bytes\" >&2",
   "  exit 1",
   "fi",
+  // The digest must be checked before the binary is ever executed; with no tool to check it the
+  // plant fails closed and the temporary file is removed by the EXIT trap.
   "if command -v sha256sum >/dev/null 2>&1; then",
   "  actual_sha=$(sha256sum \"$tmp\" | awk '{print tolower($1)}')",
-  "  if [ \"$actual_sha\" != \"$expected_sha\" ]; then printf 'Planted binary SHA-256 mismatch\\n' >&2; exit 1; fi",
   "elif command -v shasum >/dev/null 2>&1; then",
   "  actual_sha=$(shasum -a 256 \"$tmp\" | awk '{print tolower($1)}')",
-  "  if [ \"$actual_sha\" != \"$expected_sha\" ]; then printf 'Planted binary SHA-256 mismatch\\n' >&2; exit 1; fi",
+  "elif command -v openssl >/dev/null 2>&1; then",
+  "  actual_sha=$(openssl dgst -sha256 \"$tmp\" | awk '{print tolower($NF)}')",
+  "else",
+  `  printf '${PLANT_HASH_TOOL_UNAVAILABLE_MARKER}\\nNo sha256sum, shasum, or openssl on this host to verify the ocx-child binary.\\n' >&2`,
+  "  exit 3",
   "fi",
+  "if [ \"$actual_sha\" != \"$expected_sha\" ]; then printf 'Planted binary SHA-256 mismatch\\n' >&2; exit 1; fi",
   "chmod 0700 \"$tmp\" || exit 1",
   "mv -f \"$tmp\" \"$dest\" || exit 1",
   "trap - EXIT HUP INT TERM",
@@ -200,6 +209,11 @@ export function remotePurgePlantedChildArgv(platform: "posix" | "windows" = "pos
   return platform === "windows"
     ? windowsPurgePlantedChildArgv()
     : ["sh", "-c", POSIX_PURGE_PLANTED_SCRIPT, "ocx-purge-plant"];
+}
+
+/** The distinct reason a plant failed on the Child, when the plant script reported one. */
+export function classifyPlantFailure(stderr: string): "hash_tool_unavailable" | null {
+  return stderr.includes(PLANT_HASH_TOOL_UNAVAILABLE_MARKER) ? "hash_tool_unavailable" : null;
 }
 
 export function classifyChildAttachConflict(stderr: string): ChildAttachConflictCode | null {
