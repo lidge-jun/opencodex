@@ -25,6 +25,7 @@ import {
   CODEBUDDY_REASONING_EFFORTS,
 } from "../codebuddy-models";
 import { QODER_CN_MODELS, QODER_GLOBAL_MODELS, QODER_REASONING_EFFORTS } from "../qoder-models";
+import { TRAE_CN_MODELS } from "../trae-cn-models";
 import type { ProviderRegistryEntry } from "./types";
 import {
   ZAI_GLM_53_MODELS,
@@ -129,6 +130,24 @@ import {
 } from "./model-seeds";
 
 export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
+  {
+    // The official TRAE CN CLI owns authentication and transport through its documented ACP
+    // server. No desktop credential or private IDE endpoint enters OpenCodex.
+    id: "trae-cn",
+    label: "TRAE CN (ACP)",
+    adapter: "trae-cn",
+    baseUrl: "https://www.trae.cn",
+    authKind: "key",
+    keyOptional: true,
+    preserveCustomDestination: true,
+    dashboardUrl: "https://docs.trae.cn/cli_agent-client-protocol",
+    defaultModel: "Doubao-Seed-1.8",
+    models: [...TRAE_CN_MODELS],
+    liveModels: true,
+    noVisionModels: [...TRAE_CN_MODELS],
+    reasoningEfforts: [],
+    note: "Uses the signed-in official traecli through `traecli acp serve`; OpenCodex stores no TRAE token. Requires TRAE CN CLI and a signed-in account. The initial adapter supports text and reasoning streams; client tools and images are rejected explicitly.",
+  },
   {
     // Verified 2026-09-21: docs.typesafe.ai/introduction/quickstart and /api document the fixed
     // endpoint, Bearer auth, jev-latest, and TYPESAFE_API_KEY; typesafe.ai/legal/mca permits API integration.

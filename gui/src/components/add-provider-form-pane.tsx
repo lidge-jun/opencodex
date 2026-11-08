@@ -150,7 +150,9 @@ export function AddProviderFormPane({
         <div role="note" data-subscription-cli-warning="" className="text-label leading-relaxed" style={{ color: "var(--amber)", background: "var(--amber-soft)", border: "1px solid var(--amber)", borderRadius: "var(--radius-sm)", padding: "10px 12px" }}>
           <strong>{t("modal.subscriptionCliTitle")}</strong>
           <div style={{ marginTop: 4 }}>
-            <Trans k="modal.subscriptionCliWarning" cmd="claude -p" vars={{ apiProvider: SUBSCRIPTION_CLI_API_KEY_ALTERNATIVE }} />
+            {form.adapter === "trae-cn" && preset.note
+              ? preset.note
+              : <Trans k="modal.subscriptionCliWarning" cmd="claude -p" vars={{ apiProvider: SUBSCRIPTION_CLI_API_KEY_ALTERNATIVE }} />}
           </div>
         </div>
       ) : preset.keyOptional ? (

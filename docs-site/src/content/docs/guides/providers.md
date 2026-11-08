@@ -779,7 +779,7 @@ On upgrade, startup adds Pro to a saved model list only when it exactly matches 
 
 ## 3. API-key catalog
 
-opencodex ships 106 built-in presets: 85 key-based, 17 OAuth, three local, and one default
+opencodex ships 107 built-in presets: 86 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -1454,6 +1454,42 @@ OpenCodex provides official adapter support for Tencent Cloud's CodeBuddy Code C
 - **Tool Choice Enforcement:** When a request specifies `tool_choice: "required"` or selects a specific named tool, the bridge expects a tool call from the model. If the CLI completes the turn with plain text instead of capturing a tool call, OpenCodex fails closed with a 502 `tool_call_required` error rather than returning an invalid text completion.
 - **Governance Status:** Whether routing this vendor automation surface behind a proxy for a third-party agent satisfies CodeBuddy's acceptable-use terms is an open question flagged for maintainer security review (see the governance note in the provider registry entry). Treat this provider as pending that review, and keep the tool bridge's ownership boundary in mind: the nested CLI advertises tools but never executes them, and approval, sandboxing, and execution remain with the external Codex client.
 - **Entitlements and Billing:** The provider uses the same vendor-documented CodeBuddy account/CLI authentication surface. Availability and billing of free, promotional, trial, or subscription credits remain determined by the user's CodeBuddy account entitlement.
+
+### TRAE CN (official ACP)
+
+The `trae-cn` preset uses the signed-in official TRAE CN CLI through
+`traecli acp serve`. OpenCodex does not read desktop tokens, private IDE endpoints, or Ferry.
+
+```json
+{
+  "providers": {
+    "trae-cn": {
+      "adapter": "trae-cn",
+      "baseUrl": "https://www.trae.cn"
+    }
+  }
+}
+```
+
+- **Prerequisites:** Install and sign in to [TRAE CN](https://www.trae.cn/) and its official CLI.
+  The CLI owns authentication and token refresh; the provider needs no API key.
+- **Model discovery:** `session/new` returns the models available to the signed-in account.
+  Successful discovery is cached by the normal provider catalog mechanism, with the last good
+  catalog and a small text-only seed as degraded fallbacks.
+- **Transport:** Each turn creates a fresh ACP session, selects the requested model with
+  `session/set_model`, and maps `agent_message_chunk` and `agent_thought_chunk` to OpenCodex text
+  and reasoning events. Conversation history is replayed as labelled text.
+- **Capability boundary:** This initial provider supports text conversations only. It rejects
+  client tools, tool replay, and image/audio input. Permission requests from the CLI receive an
+  error. Internal tool notifications are not converted into client tool calls, and a turn that
+  ends without text is an error rather than an empty successful answer.
+- **Process isolation:** The CLI uses an empty temporary workspace, no session MCP servers or
+  selected skills, and disallow rules for file and command tools. OpenCodex terminates the child
+  after the turn, on cancellation, or on protocol failure. Any tool notification or permission
+  request ends the turn with an error instead of being executed by OpenCodex.
+- **Destination:** `https://www.trae.cn` identifies this provider; OpenCodex does not call it
+  directly. A custom destination is refused. This row is separate from TRAE International and
+  from a custom OpenAI-compatible provider named `trae`.
 
 ### Official Qoder CLI (Global & CN)
 

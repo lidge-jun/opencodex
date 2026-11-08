@@ -8,6 +8,7 @@ import { withClinePassDeepSeekV4ToolReplayCompatibility } from "./cline-pass-dee
 import { withUniqueToolCallIds } from "./unique-tool-call-ids";
 import { createCodeBuddyAdapter } from "./codebuddy/adapter";
 import { createQoderAdapter } from "./qoder/adapter";
+import { createTraeCnAdapter } from "./trae-cn/adapter";
 import { createCommandCodeAdapter } from "./command-code";
 import { createCursorAdapter } from "./cursor";
 import { createDevinAdapter } from "./devin";
@@ -40,6 +41,7 @@ export interface AdapterFactoryContext {
 
 export type AdapterWire =
   | "codebuddy"
+  | "trae-cn"
   | "command-code"
   | "openai-chat"
   | "ollama-native"
@@ -159,6 +161,11 @@ export const ADAPTER_REGISTRY = {
     // and the CLI owns the credential: the adapter stores and injects none.
     contractParent: "codebuddy",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createClaudeCliAdapter(provider),
+  },
+  "trae-cn": {
+    wire: "trae-cn",
+    mutation: "codex-owned",
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createTraeCnAdapter(provider),
   },
   "dsh-account": {
     contractParent: "anthropic",

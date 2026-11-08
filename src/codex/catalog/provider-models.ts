@@ -122,6 +122,7 @@ import type { CapturedProviderGather, CatalogGatherProviderAuthOutcome, CatalogG
 import { workBuddyCatalogIdentity } from "../../providers/workbuddy";
 import { QUIET_AUTHORITATIVE_CATALOG_PROVIDERS, applyConfigHintsToCachedModels, applyProviderConfigHints, boundedOwnedBy, catalogHintsFromModelsApiItem, catalogHintsFromProviderConfig, withVisionSidecarInput } from "./model-hints";
 import { mergeConfiguredModelsIntoLiveCatalog, shouldExposeProviderModel, warnDroppedConfiguredIdsOnce } from "./model-visibility";
+import { fetchTraeCnProviderModels } from "./trae-cn-models";
 import { captureModelsRequest, captureProviderGather, materializeCapturedHeaders } from "./gather-capture";
 
 
@@ -243,6 +244,9 @@ export async function fetchProviderModelsWithAuth(
     }
     return merged;
   };
+  if (prov.adapter === "trae-cn") {
+    return fetchTraeCnProviderModels(captured, ttlMs, contextCap, configured, withConfiguredRetention);
+  }
   // Static catalogs never need an OAuth refresh or an upstream model request. Clear any
   // discovery failure left by an older live configuration even when the account is logged out.
   if (prov.liveModels === false) {
