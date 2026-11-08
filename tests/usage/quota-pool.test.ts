@@ -23,6 +23,7 @@ import {
 import { parseUpstreamQuotaHeaders } from "../../src/codex/quota";
 import { getAccountSet, saveCredential } from "../../src/oauth/store";
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
+import { claudeSignedInIdentity, recordClaudeSignedInIdentity } from "../../src/providers/claude-cli-usage-state";
 import { setProviderQuotaReportCache } from "../../src/providers/quota/report-cache";
 import { nullPaths, QuotaPoolSchema } from "../helpers/quota-pool-schema";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -76,6 +77,7 @@ beforeEach(async () => {
       customWindows: [{ label: "Opus", percent: 100, resetAt: NOW + 72 * HOUR, scope: "model" }],
     },
   }));
+  recordClaudeSignedInIdentity("c".repeat(64));
   setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [{
     provider: "openrouter", label: "OpenRouter", source: "fixture", updatedAt: NOW - 120_000,
     quota: { creditsUsd: { used: 7.5, limit: 10, remaining: 2.5, percent: 75 }, updatedAt: NOW - 120_000 },
@@ -86,6 +88,7 @@ afterEach(() => {
   setQuotaPoolIdentityHooksForTests();
   setProviderQuotaReportCache(null);
   clearAccountQuotaCache("xai");
+  recordClaudeSignedInIdentity(null);
   resetQuotaPoolIdentityMemoForTests();
   if (priorHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = priorHome;
@@ -204,6 +207,46 @@ describe("ocx.quota-pool/1 producer", () => {
     expect(xai.pooled.windows.map(window => [window.id, window.usedPercent, window.source, window.observedAt]))
       .toEqual([["weekly", 3, "measured", "2026-10-21T11:58:00.000Z"]]);
   });
+
+  test.each([["signed out", null], ["another account", "d".repeat(64)]] as const)(
+    "the Claude CLI row is absent when the recorded sign-in is %s",
+    async (_, signedIn) => {
+      ensureQuotaPoolIdentity();
+      recordClaudeSignedInIdentity(signedIn);
+      const result = await read();
+      if (!result.ok) throw new Error(result.error);
+      const claude = result.pool.providers.find(provider => provider.provider === "claude-cli")!;
+      expect(claude.accounts).toEqual([]);
+      expect(claude.pooled.windows).toEqual([]);
+    },
+  );
+
+  test.each([["signed out", null], ["another account", "d".repeat(64)]] as const)(
+    "a sign-in change during the suspended Codex snapshot never pools the old Claude report (%s)",
+    async (_, next) => {
+      ensureQuotaPoolIdentity();
+      const oldIdentity = "c".repeat(64);
+      const stale = { provider: "claude-cli", label: "Claude", source: "fixture", updatedAt: NOW, quota: { weeklyPercent: 61, updatedAt: NOW } };
+      const { accountReportCurrent } = await import("../../src/providers/quota/report-cache");
+      accountReportCurrent.set(stale, () => claudeSignedInIdentity() === oldIdentity);
+      setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [stale] } });
+      let release!: (value: { accounts: []; mainIdentityGeneration: number }) => void;
+      let started!: () => void;
+      const waiting = new Promise<void>(resolve => { started = resolve; });
+      const cfg = config();
+      cfg.providers.openai = { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } as never;
+      const resultPromise = readQuotaPool(cfg, { now: () => NOW, claudeUsageStatePath: admissionPath,
+        codexSnapshot: () => { started(); return new Promise(resolve => { release = resolve; }); } });
+      await waiting;
+      recordClaudeSignedInIdentity(next);
+      release({ accounts: [], mainIdentityGeneration: 0 });
+      const result = await resultPromise;
+      if (!result.ok) throw new Error(result.error);
+      const claude = result.pool.providers.find(provider => provider.provider === "claude-cli")!;
+      expect(claude.accounts).toEqual([]);
+      expect(claude.pooled.windows).toEqual([]);
+    },
+  );
 
   test("accountRef is opaque, stable across restarts and distinct per provider and account", async () => {
     ensureQuotaPoolIdentity();

@@ -1515,8 +1515,9 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
 - **Prerequisites:** `npm install -g @anthropic-ai/claude-code`, then sign in once with `claude`
   (or `claude setup-token`). The CLI uses the machine's own Claude Code sign-in (the macOS Keychain
   entry, or `~/.claude/.credentials.json` elsewhere).
-- **No credential stored:** this row holds no API key, and OpenCodex never reads, copies or forwards
-  a Claude token. The CLI owns the login and bills the account itself. A CLI that is not signed in
+- **No credential stored:** this row holds no API key. Quota preflight reads the CLI sign-in token
+  in memory and sends it only to Anthropic's usage endpoint. OpenCodex does not store that token or
+  inject it into CLI inference requests. The CLI owns the login and bills the account itself. A CLI that is not signed in
   fails the turn with a sign-in error naming the command, instead of a generic `401`.
   Classification follows the same fact: the preset is a keyless key row (`keyOptional`), so it needs
   no API key and no key field is offered for it. An API key saved on this row by other means is never
@@ -1533,11 +1534,21 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
   OpenCodex runs as, so every request routed through this row — from any client of the proxy —
   spends that one Claude account. There is no per-client account, no pooling and no multiplexing;
   giving several people their own Claude usage needs one proxy user per sign-in.
-- **Input media:** the row publishes its models as text-only for v1. The CLI accepts an image frame
-  on its stream-json input, but no headless turn has been shown to hand those bytes to the model, so
-  an image sent straight to this provider is refused (`unsupported_input_modality`) instead of
-  being silently dropped and answered blind. With the
-  vision sidecar on the request path, images are captioned into text before they reach the row.
+- **Subscription usage:** the Providers workspace shows the plan's 5-hour, weekly and model-scoped
+  windows from the last usage check OpenCodex recorded before a turn, for the account Claude Code is
+  signed in to now. Opening the page never probes or launches the CLI, and **Refresh all quotas**
+  re-reads the local sign-in and that recorded observation rather than Anthropic's endpoint. After a
+  sign-out or account switch the previous account's row disappears on **Refresh all quotas**, and
+  within a minute otherwise; a newly signed-in account shows nothing until its first Claude turn.
+- **Input media:** the row advertises text and image input. The stable replay sends native image
+  blocks directly through the official CLI, following the labelled message they belong to. This
+  includes multiple attachments, retained historical images and images returned by client tools. Text and images retain their order within each message.
+  Unsupported image references fail explicitly, including Responses image `file_id` references in messages
+  and tool results; supply a supported image URL instead. Images in system or developer instructions are refused
+  before vision preprocessing or helper calls. Omitted history also omits its images. A vision
+  sidecar is not needed. An untouched v2.94.0 text-only roster is migrated; edited lists and explicit
+  per-model capability overrides remain authoritative. Live verification used Claude Code 2.1.312
+  and Fable 5.1; other model/CLI combinations still depend on their upstream image support.
 - **Isolation:** every turn runs in a scoped child environment with no inherited `ANTHROPIC_*`
   variable (a `claude` already pointed at this proxy therefore cannot loop back into it), telemetry,
   feedback and the auto-updater disabled, and `--tools ""`, `--strict-mcp-config` plus

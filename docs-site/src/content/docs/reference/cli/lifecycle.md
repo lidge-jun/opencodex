@@ -606,8 +606,8 @@ for an update in flight.
 If the Home sync throws in JSON mode, stdout still contains one result document and stderr gives a
 sanitized failure message.
 
-Fan-out never requests a Codex app or app-server restart on a Child. Use GOAT or run
-`ocx sync --restart-codex` on that Child if a Codex restart is needed. The Child's pinned sync may
+Fan-out never requests a Codex app or app-server restart on a Child. Use GOAT, run
+`ocx sync --restart-codex` on a full `ocx` Child, or restart the Codex desktop app and long-lived `app-server` processes separately on a lightweight `ocx-child` Child if a Codex restart is needed. The Child's pinned sync may
 still restart its own OpenCodex client runtime after applying changed Home settings. If the Home
 times out and stops its local SSH process, a remote sync already running may continue on the Child.
 
@@ -1363,6 +1363,8 @@ starts and then once a minute; the Home keeps reports in memory only, so after a
 fields read `null` until the next report. A Child whose runtime started before `lastApplyAt` is
 running an older runtime than its last apply.
 
+Lightweight `ocx-child` Child hosts run `ocx-child sync [--expect-link <id>] [--json]`, `ocx-child status [--json]` (while `ocx link status --json` remains on the Home), and `ocx-child disconnect` / `ocx-child detach`: on an attached `ocx-child` host (which runs without a system service manager), a successful `ocx-child sync` starts `ocx-child serve` if no relay is running even when settings are unchanged, rolls it over when `runtimeStartedAt < lastApplyAt`, and posts a best-effort parity report on non-stale syncs. `ocx-child sync` accepts `--restart-codex` / `--restart-app-server-only` for flag compatibility without restarting Codex processes (restart the Codex desktop app and long-lived `app-server` processes separately if needed), and `ocx-child disconnect` / `ocx-child detach` restores `~/.codex` files offline and stops `ocx-child serve` with zero background daemon left running. Only one `ocx-child` install may manage a given `CODEX_HOME` at a time: lifecycle commands lock `CODEX_HOME/.ocx-child.lock` (kept permanently) and record the owning `OPENCODEX_HOME` in `CODEX_HOME/.ocx-child-owner.json` until `ocx-child detach` completes, so an `ocx-child attach` or `sync` from a different `OPENCODEX_HOME` sharing that `CODEX_HOME` exits nonzero without changing any file and names the owning home to detach first.
+
 ## Remote Link Child attestations
 
 A peer that sends work through a Remote Link Child can check two more facts in the Child's
@@ -1387,10 +1389,11 @@ empty after a Home restart. `GET /api/link/status` includes the field only when 
 
 After `ocx sync` applies the Home's settings on a Child, it restarts the Child's client runtime when
 that runtime started before `lastApplyAt`, using the same restart as `ocx restart`. A runtime that
-already started after the apply is left alone, nothing is started when no client runtime is
-running, and a failed restart exits nonzero while the previous runtime keeps serving; run
-`ocx sync` or `ocx restart` again to retry. Two applies on one Child never interleave: a second
-`ocx sync` while one is applying fails fast and changes nothing.
+already started after the apply is left alone, on a full `ocx` Child nothing is started when no client runtime is
+running (unlike an attached `ocx-child`, which starts `ocx-child serve` when absent), and on a full `ocx` Child a failed restart exits nonzero while the previous runtime keeps serving (whereas on `ocx-child`, rollover stops the prior `ocx-child serve` before binding the replacement, so a failed rollover exits nonzero with no relay running until `ocx-child sync` or `ocx-child restart` retries). Two applies on one Child never interleave. On a full `ocx` Child, a second `ocx sync` while one is
+applying fails fast and changes nothing. On `ocx-child`, a second `ocx-child sync --expect-link <id>`
+(the form the Home's sync fan-out runs) exits `5` with reason `pending_operation` and changes
+nothing, while a plain `ocx-child sync` waits for the first apply to finish and then runs.
 
 ## Forced link revoke and remote recovery
 
