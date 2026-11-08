@@ -128,8 +128,9 @@ downstream Responses SSE through `src/server/responses/combo-stream-preflight.ts
 reader and buffers only until one of these boundaries:
 
 SSE selection uses the [exact internal media-type match](inventory.md#internal-response-media-types).
-Explicit non-SSE types pass through unread, including parameters or longer subtypes containing the
-event-stream token. A caller can still opt into inspecting a response without a content type.
+Explicit non-SSE types pass through unread by default, including parameters or longer subtypes containing the
+event-stream token. A caller can opt into inspecting direct non-streaming JSON responses via `inspectJsonResponse: true`
+(e.g., to fail over on a zero-output token limit before committing the response) or a response without a content type.
 
 Native post-header reset recovery shares that boundary, because it is asking the same question about
 the same bytes. With `replayReadErrors`, a read error that arrives while the preflight is still
@@ -147,8 +148,8 @@ is not a prelude: it commits.
   target is committed and cross-target replay is forbidden;
 - a `response.failed` terminal arrives first, in which case the terminal is converted back through
   the ordinary bounded combo-failure classifier and may advance to the next declared target;
-- a zero-output `response.incomplete` with no reason, `adapter_eof`, `missing_terminal_event`, or
-  `upstream_stall_timeout` follows the same failure path; explicit semantic or unknown reasons stay terminal;
+- a zero-output `response.incomplete` with no reason, `adapter_eof`, `missing_terminal_event`,
+  `upstream_stall_timeout`, or an empty-output `max_output_tokens` limit follows the same failure path; other explicit semantic or unknown reasons stay terminal;
 - a top-level `error` arrives before output, in which case unknown, rate-limit, and server failures
   may advance while errors explicitly classified as non-retryable 4xx remain committed;
 - another completed/incomplete terminal or the aggregate preflight byte or retained-chunk cap is reached,

@@ -378,7 +378,10 @@ async function preflightComboJsonResponse(
         }
         return { kind: "accepted", response: replayBufferedResponse(response, reader, buffered) };
       }
-      if (bufferedBytes + next.value.byteLength > COMBO_STREAM_PREFLIGHT_MAX_BYTES) {
+      if (
+        bufferedBytes + next.value.byteLength > COMBO_STREAM_PREFLIGHT_MAX_BYTES
+        || buffered.length >= COMBO_STREAM_PREFLIGHT_MAX_CHUNKS
+      ) {
         return {
           kind: "accepted",
           response: replayBufferedResponse(response, reader, [...buffered, next.value]),

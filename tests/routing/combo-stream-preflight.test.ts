@@ -941,6 +941,29 @@ describe("combo stream preflight", () => {
     expect(result.kind).toBe("failed");
     expect(result.response.status).toBe(502);
   });
+
+  test("inspectJsonResponse enforces chunk cap before reaching byte limit", async () => {
+    let chunksSent = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (chunksSent < preflightChunkLimit + 10) {
+          chunksSent += 1;
+          controller.enqueue(new Uint8Array([32]));
+        } else {
+          controller.close();
+        }
+      },
+    });
+    const source = new Response(stream, {
+      headers: { "content-type": "application/json" },
+    });
+
+    const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" }, undefined, {
+      inspectJsonResponse: true,
+    });
+    expect(result.kind).toBe("accepted");
+    expect(result.response.status).toBe(200);
+  });
 });
 
 
