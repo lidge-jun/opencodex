@@ -408,8 +408,8 @@ sources in temporary build checkouts using `scripts/release-version-sources.ts`.
 `package.json`, `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/Cargo.toml`, and the
 `opencodex-desktop` entry in `desktop/src-tauri/Cargo.lock`. The new path remains pre-cutover:
 a non-dry run fails unless the repository variable `OCX_DEV_RELEASE_PUBLISH_ENABLED` equals `true`.
-Real dry-run evidence and that setting remain maintainer cutover steps; this text does not attest
-them. Docs publishing is separate.
+Independent review of the legacy history mapping, real dry-run evidence and that setting remain
+maintainer cutover steps; this text does not attest them. Docs publishing is separate.
 
 Dispatch inputs are `tag` (`latest` or `preview`), `dry-run` (default `true`), an optional
 `expected-sha` that must be a full `dev` SHA with qualifying CI evidence, an optional `version`
@@ -425,11 +425,13 @@ version published since the older floor must have a GitHub tag at its npm `gitHe
 published GitHub release of the matching channel, and every non-draft GitHub release since then
 must have its npm version; an npm-only or partial publication stops the run for manual
 reconciliation. The candidate version must exceed every published npm version, the candidate must
-be reachable from GitHub `dev`, and its lineage must contain each floor's source. The two fixed
-legacy floors (`2.99.0` and `2.99.0-preview.20261108`) are accepted only at their recorded SHAs
-and only when they differ from the `2.100.0` baseline by the four version files alone. The
-candidate may reuse the newest floor's source only to promote a preview to stable. The evidence is
-read twice and the run fails if npm, tags, releases or `dev` changed in between.
+be reachable from GitHub `dev`, and its lineage must contain each ordinary floor's source. The two
+fixed legacy floors (`2.99.0` and `2.99.0-preview.20261108`) are exempt from that ancestry check:
+their npm `gitHead` and `v` tag must both equal the recorded legacy SHA, that SHA must differ from
+the `2.100.0` baseline only in the four version files, and the baseline must be an ancestor of both
+the candidate and `dev`. The candidate may reuse the newest floor's source only to promote a
+preview to stable. The evidence is read twice and the run fails if npm, tags, releases or `dev`
+changed in between.
 
 Resume recovers a run that stopped after npm acknowledged the publication. It requires
 `resume-after-npm-publish: true`, `dry-run: false`, and both `expected-sha` and `version` naming
@@ -437,8 +439,11 @@ the original source and version; the version must match the channel's format. It
 reconciliation and npm publish. Instead, `scripts/verify-release-resume.ts` and
 `.github/scripts/release-resume.cjs` require that exact npm version to exist with `gitHead` equal
 to the supplied source, that no newer npm version or `v*` tag exists, and that an existing tag for
-the version points at that source. Existing release assets must match the digests in the receipt
-from this run's `verify-release` job, and a published release missing a verified asset is refused.
+the version points at that source; an existing GitHub release must carry the channel's prerelease
+flag. The resume rebuilds every asset, and existing release assets must match the digests in the
+receipt from this run's `verify-release` job, so an asset whose rebuild is not byte-identical (for
+example a re-signed Windows binary) refuses the resume. A published release missing a verified
+asset is refused.
 Registry metadata is a consistency check, not cryptographic provenance: the operator attests the
 original source and version, and a source or version that cannot be verified refuses the resume.
 

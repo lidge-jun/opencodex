@@ -138,9 +138,12 @@ describe("release pipeline contract", () => {
       expect(doc, gate).toContain(gate);
     }
     // The pre-#8328 text said resume was refused and any npm history failed the run.
-    expect(doc).not.toContain("refuses resume");
-    expect(doc).not.toContain("Resume is also refused");
-    expect(doc).not.toContain("fails closed on existing npm publications");
+    const ci = readFileSync(repoPath("structure", "ops", "cross-platform-ci.md"), "utf8");
+    for (const [name, text] of [["docs-and-release.md", doc], ["cross-platform-ci.md", ci]] as const) {
+      for (const stale of ["refuses resume", "Resume is also refused", "Resume is refused", "fails closed on existing npm", "fails closed for existing npm"]) {
+        expect(text, `${name}: ${stale}`).not.toContain(stale);
+      }
+    }
   });
 
   test("attachment checks the entire receipt digest set and never clobbers assets", () => {
