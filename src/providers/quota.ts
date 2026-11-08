@@ -205,8 +205,7 @@ function notifyProviderQuotaSnapshot(
         observer.observeQuotaSnapshot({
           scope: observation.scope,
           accountKey: observation.accountKey,
-          windows: providerWindowObservations(observation.quota),
-          ...(observation.report.source === "mistral:budget" ? { retainUnknownWindows: mistralUnknownBudgetWindows(observation.quota) } : {}),
+          windows: providerWindowObservations(observation.quota), ...(observation.report.source === "mistral:budget" ? { retainUnknownWindows: mistralUnknownBudgetWindows(observation.quota) } : {}),
         });
       }
     })

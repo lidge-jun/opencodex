@@ -5,7 +5,8 @@ import { clearProviderQuotaCache, clearProviderQuotaCacheFor, fetchProviderQuota
 import { setProviderQuotaBeforeObservationForTests } from "../../src/providers/quota/report-cache";
 import { reconcileLiveStateStores, setLiveStateStoreConfig } from "../../src/lib/state-store-registrations";
 import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/key-store";
-import { setQuotaResetSink } from "../../src/quota/reset-observer";
+import { observeQuotaSnapshot, setQuotaResetSink } from "../../src/quota/reset-observer";
+import { apiKeyPoolEntryId } from "../../src/providers/api-keys";
 import { flushQuotaResetStoreForTests, resetQuotaResetStoreForTests } from "../../src/quota/reset-seen-store";
 import type { QuotaResetEvent } from "../../src/quota/reset-detector";
 import { mkdtempSync, readFileSync } from "node:fs";
@@ -103,6 +104,42 @@ test.each(["changed-clock", "missing-clock", "new-key"] as const)("Mistral unkno
     expect(events).toEqual([]);
   } finally {
     setQuotaResetSink(null); clearProviderQuotaCache(); resetQuotaResetStoreForTests(); globalThis.fetch = originalFetch;
+    if (originalHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = originalHome;
+    removeTreeWithRetry(home);
+  }
+});
+
+test.each(["same-key", "colliding-key", "keychain-replacement"] as const)("legacy key reset baseline is not transferred without proof (%s)", async change => {
+  const originalFetch = globalThis.fetch;
+  const originalHome = process.env.OPENCODEX_HOME;
+  const home = mkdtempSync(join(tmpdir(), "ocx-legacy-reset-identity-"));
+  process.env.OPENCODEX_HOME = home;
+  const first = "fixture-collision-76466", second = "fixture-collision-176773";
+  expect(apiKeyPoolEntryId(first)).toBe(apiKeyPoolEntryId(second));
+  const configuredKey = change === "keychain-replacement" ? "keychain:mistral" : change === "same-key" ? first : second;
+  const cfg = { defaultProvider: "mistral", providers: { mistral: {
+    adapter: "openai-chat", authMode: "key", baseUrl: "https://api.mistral.ai/v1", apiKey: configuredKey,
+  } } } as OcxConfig;
+  const events: QuotaResetEvent[] = [];
+  const oldReset = Date.now() - 60_000;
+  clearProviderQuotaCache(); resetQuotaResetStoreForTests(); setQuotaResetSink(event => events.push(event));
+  try {
+    const legacyKey = change === "keychain-replacement" ? configuredKey : first;
+    observeQuotaSnapshot({ scope: "mistral", accountKey: `mistral\0key:${apiKeyPoolEntryId(legacyKey)}`,
+      windows: [{ window: "custom:API budget", percent: 95, resetAt: oldReset }] });
+    flushQuotaResetStoreForTests(); resetQuotaResetStoreForTests();
+    if (change === "keychain-replacement") setProviderKeychainEntryFactoryForTests(() => ({
+      getPassword: () => second, setPassword: () => {}, deletePassword: () => true,
+    }));
+    globalThis.fetch = (async input => Response.json(String(input).endsWith("/subscription") ? { plan_name: "TEAM" } : {
+      api_budget: { initial_budget: 100, currency: "EUR", usage_percentage: 2, reset_at: Date.now() + 3_600_000 },
+    })) as typeof fetch;
+    await fetchProviderQuotaReports(cfg, true);
+    await flushProviderQuotaObservationsForTests();
+    expect(events).toEqual([]);
+  } finally {
+    setProviderKeychainEntryFactoryForTests(null); setQuotaResetSink(null); clearProviderQuotaCache();
+    resetQuotaResetStoreForTests(); globalThis.fetch = originalFetch;
     if (originalHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = originalHome;
     removeTreeWithRetry(home);
   }
