@@ -184,6 +184,7 @@ export interface HandleNativeMessagesOptions {
   req: Request;
   config: OcxConfig;
   logCtx: RequestLogContext;
+  admission?: import("./auth-cors").DataPlaneAdmission;
   logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease };
   /** The settled, eligible route (see `isNativeMessagesRouteEligible`). */
   route: RouteResult;
@@ -538,7 +539,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
   } else {
     // Same pre-dispatch key preference every direct send path applies (see chat-native.ts).
     try {
-      const affinityLane = affinityLaneFromRequest(req.headers, logCtx);
+      const affinityLane = affinityLaneFromRequest(req, logCtx, config, options.admission);
       if (affinityLane) logCtx.affinityLane = affinityLane;
       const lastMessage = Array.isArray(body.messages) ? body.messages.at(-1) : undefined;
       const continuation = Array.isArray(lastMessage?.content)

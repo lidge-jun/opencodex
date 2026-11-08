@@ -358,7 +358,7 @@ export async function runNativeChatAttempt(
   // Transport variant: the bare picker answers with the persisted row, which for a built-in
   // provider carries no adapter id or base URL until routedProviderConfig backfills it.
   try {
-    const affinityLane = affinityLaneFromRequest(req.headers, logCtx);
+    const affinityLane = affinityLaneFromRequest(req, logCtx, config, execution.admission ?? logIds?.admission);
     if (affinityLane) logCtx.affinityLane = affinityLane;
     const chatMessages = Array.isArray(execution.chatBody.messages) ? execution.chatBody.messages : [];
     const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider, undefined, Date.now(), { lane: affinityLane, model: route.modelId, log: logCtx, continuation: (chatMessages.at(-1) as { role?: unknown } | undefined)?.role === "tool" });
