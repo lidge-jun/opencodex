@@ -767,7 +767,7 @@ test("desktop recovery guidance is scoped to routing owned by OpenCodex", () => 
     supervisor: { supervisorPid: 3131, runtimePid: 4242, app: "/fixture/opencodex-desktop" } };
   const local = deriveStartupHealth({ ...base, platform: "darwin", desktop });
   expect(local.recommendedCommand).toBeNull();
-  expect(local.recommendedAction).toContain("Turn on Start at Login");
+  expect(local.recommendedAction).toContain("Check Start at Login");
   const stopped = deriveStartupHealth({ ...base, platform: "darwin",
     desktop: { owned: true, loginEnabled: true, running: false, viable: false } });
   expect(stopped.recommendedAction).toBe("Reopen OpenCodex and check Start at Login.");

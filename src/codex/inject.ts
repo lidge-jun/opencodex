@@ -25,6 +25,7 @@ import {
   captureCodexPreImages,
   codexInjectLockOutcome,
   codexWriteCoordinationEligibility,
+  type CodexProfilePublish,
   CodexPartialWriteError,
   CodexWriteConflictError,
   DEFAULT_INJECT_LOCK_TIMEOUT_MS,
@@ -82,6 +83,7 @@ import {
   deriveCodexInjectionPlan,
   type CodexInjectionPlanContext,
   type CodexInjectionPlanOk,
+  readCodexProfileSource,
 } from "./inject/plan";
 
 export { effectiveLoopbackListenerPort, isLoopbackHostname, shouldInjectApiAuthHeader } from "./loopback-target";
@@ -378,9 +380,7 @@ async function injectCodexConfigImpl(
         && rootTomlString(nativeInput, REALTIME_WS_BASE_URL_KEY) === journaledRealtimeWsBaseUrl);
     return !hasInjectedCodexRouting(nativeInput) && !looksInjectedByValue;
   };
-  const readCurrentProfile = (): string | null => existsSync(CODEX_PROFILE_PATH)
-    ? readFileSync(CODEX_PROFILE_PATH, "utf-8")
-    : null;
+  const readCurrentProfile = readCodexProfileSource;
   const unverifiedJournalMessage = "Codex configuration was not written: the journal has no verified baseline for the current config/profile. Current files and the journal were preserved.";
   // When the reconcile will rewrite config.toml under the lock, the baseline it
   // must be journaled against does not exist yet — this check runs inside the
@@ -440,13 +440,15 @@ async function injectCodexConfigImpl(
         message: "Codex config injection refused: config.toml changed while the write lock was being acquired. Retry to inject on the latest bytes.",
       });
     }
+    // The profile carries unmanaged root keys from the bytes the plan read; a profile edit since then would be overwritten.
+    if (readCurrentProfile() !== admittedPlan.profileSource) throw new CodexInjectRefusal({ success: false, retryable: true, message: "Codex config injection refused: opencodex.config.toml changed while the write lock was being acquired. Retry to inject on the latest bytes." });
     if (missingConfig) publishCodexArtifact(CODEX_CONFIG_PATH, heldConfigWriteLock, (_path, hooks) => { hooks.validateBeforeRename?.(CODEX_CONFIG_PATH); createEmptyCodexConfigInBoundary(); hooks.afterRename?.(CODEX_CONFIG_PATH); });
     let nativeInput = rawContent;
     let plan = admittedPlan;
     if (v1Reconcile) {
       const reconciled = v1Reconcile.run(heldConfigWriteLock);
       if (!reconciled.ok) {
-        throw new CodexInjectRefusal({ success: false, message: reconciled.message });
+        throw new CodexInjectRefusal({ success: false, message: reconciled.message, retryable: reconciled.retryable });
       }
       nativeInput = reconciled.content;
       if (reconciled.content !== rawContent) {
@@ -490,6 +492,7 @@ async function injectCodexConfigImpl(
     publishCodexArtifact(CODEX_CONFIG_PATH, heldConfigWriteLock, (path, hooks) => atomicWriteFile(path, plan.content, undefined, hooks));
     historyArtifactStageForTests?.("after-config");
     assertCodexHomeOwner(getCodexHome());
+    profilePublish.published = plan.profileContent;
     publishCodexArtifact(CODEX_PROFILE_PATH, heldConfigWriteLock, (path, hooks) => atomicWriteFile(path, plan.profileContent, undefined, hooks));
     publishCodexArtifact(JOURNAL_PATH, heldConfigWriteLock, (_path, hooks) => markJournalInjectedState(plan.content, plan.profileContent, {
       // A root override is ours whenever we wrote one and no user-owned value won. That is
@@ -529,6 +532,7 @@ async function injectCodexConfigImpl(
    * legacy-uncoordinated home, which publishes no transition to resolve.
    */
   let transitionReceipt: { nativeGeneration: number; currentTxId: string } | undefined;
+  const profilePublish: CodexProfilePublish = {}; // rollback reverts only profile bytes this operation published
 
   /*
    * The file-level write lock every config.toml writer shares (see
@@ -548,6 +552,10 @@ async function injectCodexConfigImpl(
    */
   let effectivePlan: CodexInjectionPlanOk = admittedPlan;
 
+  if (v1Reconcile && !await v1Reconcile.admit()) {
+    return { success: false, retryable: true, message: "Codex config injection refused: the CLI selection is busy. Retry after the CLI update finishes." };
+  }
+  try {
   const configLock = await acquireConfigWriteLock(CODEX_CONFIG_PATH, {
     timeoutMs: Math.min(options.lockTimeoutMs ?? CONFIG_WRITE_LOCK_WAIT_MS, CONFIG_WRITE_LOCK_WAIT_MS),
   });
@@ -590,7 +598,7 @@ async function injectCodexConfigImpl(
         effectivePlan = resolved.plan;
       } catch (error) {
         if (error instanceof ConfigWriteDestinationChanged || codexHomeOwnerBlocksCompensation(getCodexHome(), error)) throw error;
-        const restored = restoreCodexPreImages(preImages, heldConfigWriteLock);
+        const restored = restoreCodexPreImages(preImages, heldConfigWriteLock, profilePublish);
         if (!restored.complete) throw new CodexPartialWriteError(restored.unrestored);
         throw error;
       }
@@ -610,7 +618,7 @@ async function injectCodexConfigImpl(
         ...(eligibility.kind === "adopt" ? { adoption: { direction: "apply" as const } } : {}),
         onPostCallbackFailure: () => {
           if (!coordinatedPreImages) throw new Error("Codex injection preimages were not captured.");
-          const restored = restoreCodexPreImages(coordinatedPreImages, heldConfigWriteLock);
+          const restored = restoreCodexPreImages(coordinatedPreImages, heldConfigWriteLock, profilePublish);
           if (!restored.complete) throw new CodexPartialWriteError(restored.unrestored);
         },
         admitted: { authoritySnapshotId: witness.comparisonId },
@@ -687,7 +695,7 @@ async function injectCodexConfigImpl(
           if (error instanceof ConfigWriteDestinationChanged || codexHomeOwnerBlocksCompensation(getCodexHome(), error)) throw error;
           // Compensate, then ALWAYS throw. Returning a partial result would let the
           // lock commit a row describing an apply that did not finish.
-          const restored = restoreCodexPreImages(preImages, heldConfigWriteLock);
+          const restored = restoreCodexPreImages(preImages, heldConfigWriteLock, profilePublish);
           if (!restored.complete) {
             throw new CodexPartialWriteError(restored.unrestored);
           }
@@ -724,6 +732,9 @@ async function injectCodexConfigImpl(
   } finally {
     releaseConfigWriteLock(configLock.handle);
     heldConfigWriteLock = undefined;
+  }
+  } finally {
+    v1Reconcile?.release();
   }
   // Both write paths have committed, including the coordinator's post-callback checks.
   // Compare against the admitted original, not post-v1-reconcile input: the native

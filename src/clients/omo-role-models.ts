@@ -76,7 +76,7 @@ function load(path: string): Loaded {
   }
   if (hasJsoncComments(text)) return { kind: "comments" };
   try {
-    const doc = parseJsonc(text.replace(/^\ufeff/, ""));
+    const doc = parseJsonc(text);
     return isObject(doc) ? { kind: "document", text, doc } : { kind: "invalid" };
   } catch {
     return { kind: "invalid" };

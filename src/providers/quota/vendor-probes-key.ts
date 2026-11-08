@@ -1125,18 +1125,17 @@ export function isCanonicalCommandCodeBaseUrl(baseUrl: string): boolean {
   return normalized === COMMAND_CODE_BASE_URL || normalized === `${COMMAND_CODE_BASE_URL}/provider/v1`;
 }
 
-/** Prefer the nested `data` shell when the outer object is only an envelope. */
-function unwrapKimiQuotaPayload(value: unknown): Record<string, unknown> | null {
-  const body = asRecord(value);
-  if (!body) return null;
-  const nested = asRecord(body.data);
-  if (!nested) return body;
-  // A null/non-usable outer field is a placeholder, not data — an envelope like
-  // { usage: null, data: { usage: {...} } } must still unwrap to the nested payload.
+/**
+ * Pick the envelope carrying the legacy windows (weekly, 5h, total credits). The monthly
+ * `usages` container is located separately, so its presence never hides a nested window.
+ */
+function kimiLegacyWindowBody(root: Record<string, unknown>): Record<string, unknown> {
+  const nested = asRecord(root.data);
+  if (!nested) return root;
+  // A null outer field is a placeholder, not data — { usage: null, data: { usage: {...} } } unwraps.
   const usable = (field: unknown): boolean => field !== undefined && field !== null;
-  const outerHasUsage = usable(body.usage) || usable(body.limits) || usable(body.totalQuota);
-  const nestedHasUsage = usable(nested.usage) || usable(nested.limits) || usable(nested.totalQuota);
-  return !outerHasUsage && nestedHasUsage ? nested : body;
+  const hasLegacy = (body: Record<string, unknown>): boolean => usable(body.usage) || usable(body.limits) || usable(body.totalQuota);
+  return !hasLegacy(root) && hasLegacy(nested) ? nested : root;
 }
 
 function kimiLimitLabel(item: Record<string, unknown>, detail: Record<string, unknown>): string {
@@ -1146,21 +1145,43 @@ function kimiLimitLabel(item: Record<string, unknown>, detail: Record<string, un
     .toLowerCase();
 }
 
+/** Highest percentage a window with a positive remainder may report; 100 means exhausted. */
+const KIMI_BELOW_EXHAUSTED_PERCENT = 99.999;
+
+/**
+ * Counter-derived percentage, or undefined when the counters cannot be trusted. Any
+ * exhaustion signal (used at or past the limit, or remaining at or below zero) wins first,
+ * even beside an impossible companion counter: dropping it would let an over-quota account
+ * look available. Otherwise a negative used or a remaining above the limit is impossible.
+ * A positive remainder never rounds up to exhaustion.
+ */
+function kimiCounterPercent(row: Record<string, unknown>): number | undefined {
+  const limit = toFiniteNumber(row.limit);
+  if (limit === undefined || limit <= 0) return undefined;
+  const used = toFiniteNumber(row.used);
+  const remaining = toFiniteNumber(row.remaining);
+  if ((used !== undefined && used >= limit) || (remaining !== undefined && remaining <= 0)) return 100;
+  if ((used !== undefined && used < 0) || (remaining !== undefined && remaining > limit)) return undefined;
+  if (used !== undefined) return (used / limit) * 100;
+  if (remaining === undefined) return undefined;
+  return Math.min(((limit - remaining) / limit) * 100, KIMI_BELOW_EXHAUSTED_PERCENT);
+}
+
+/** Parse consumed usage, preferring valid counters, then a valid [0, 1] ratio, then direct percentages. */
 function parseKimiQuotaRow(value: unknown, resetFallback?: Record<string, unknown>): { percent: number; resetAt?: number } | null {
   const row = asRecord(value);
   if (!row) return null;
   const resetAt = quotaResetAt(row) ?? (resetFallback ? quotaResetAt(resetFallback) : undefined);
-  const limit = toFiniteNumber(row.limit);
-  if (limit !== undefined && limit > 0) {
-    let used = toFiniteNumber(row.used);
-    if (used === undefined) {
-      const remaining = toFiniteNumber(row.remaining);
-      if (remaining !== undefined) used = limit - remaining;
-    }
-    if (used !== undefined) {
-      const percent = normalizePercent((used / limit) * 100);
-      if (percent !== undefined) return { percent, ...(resetAt !== undefined ? { resetAt } : {}) };
-    }
+  const counterPercent = kimiCounterPercent(row);
+  if (counterPercent !== undefined) {
+    const percent = normalizePercent(counterPercent);
+    if (percent !== undefined) return { percent, ...(resetAt !== undefined ? { resetAt } : {}) };
+  }
+  // Newer Kimi responses expose utilization as a fraction in [0, 1].
+  const ratio = toFiniteNumber(row.used_ratio ?? row.usedRatio);
+  if (ratio !== undefined && ratio >= 0 && ratio <= 1) {
+    const percent = normalizePercent(ratio * 100);
+    if (percent !== undefined) return { percent, ...(resetAt !== undefined ? { resetAt } : {}) };
   }
   // Some payloads expose utilisation directly when limit/used arithmetic is absent.
   const direct = normalizePercent(row.utilization ?? row.percent ?? row.usedPercent ?? row.used_percent);
@@ -1181,11 +1202,22 @@ function isKimiWeeklyLimit(item: Record<string, unknown>, detail: Record<string,
   return /weekly|7\s*(?:d|day)/.test(kimiLimitLabel(item, detail));
 }
 
+/** Keep legacy windows separate and use the first parseable monthly row across supported envelopes. */
 function parseKimiQuotaPayload(value: unknown): ProviderQuota | null {
-  const body = unwrapKimiQuotaPayload(value);
-  if (!body) return null;
+  const root = asRecord(value);
+  if (!root) return null;
+  const body = kimiLegacyWindowBody(root);
   let weekly = parseKimiQuotaRow(body.usage);
   const total = parseKimiQuotaRow(body.totalQuota);
+  const nested = asRecord(root.data);
+  let monthly: { percent: number; resetAt?: number } | null = null;
+  for (const container of [root, nested, asRecord(root.quota), asRecord(nested?.quota)]) {
+    const usages = asRecord(container?.usages);
+    if (!usages) continue;
+    monthly = parseKimiQuotaRow(usages.limit_month_total ?? usages.monthTotal)
+      ?? parseKimiQuotaRow(usages.limit_month_code ?? usages.monthCode);
+    if (monthly) break;
+  }
   let fiveHour: { percent: number; resetAt?: number } | null = null;
   if (Array.isArray(body.limits)) {
     for (const rawItem of body.limits) {
@@ -1210,6 +1242,10 @@ function parseKimiQuotaPayload(value: unknown): ProviderQuota | null {
     ...(weekly ? {
       weeklyPercent: weekly.percent,
       ...(weekly.resetAt !== undefined ? { weeklyResetAt: weekly.resetAt } : {}),
+    } : {}),
+    ...(monthly ? {
+      monthlyPercent: monthly.percent,
+      ...(monthly.resetAt !== undefined ? { monthlyResetAt: monthly.resetAt } : {}),
     } : {}),
     ...(total ? { customWindows: [{ label: "Total subscription credits", percent: total.percent, ...(total.resetAt !== undefined ? { resetAt: total.resetAt } : {}) }] } : {}),
     updatedAt: Date.now(),

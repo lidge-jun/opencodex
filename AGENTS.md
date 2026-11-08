@@ -113,10 +113,10 @@ different pointer, so every branch move and promotion dragged a diff.
   Reference *clones* are gitignored: they are third-party source carrying their
   own licenses and have no business in this repository's history.
 
-Nothing in the build, typecheck, or test path reads from `devlog/`, so a
-contributor who ignores it entirely still passes every gate. `privacy:scan` does
-read it — that is deliberate, and it is what makes a public devlog safe rather
-than merely visible.
+Build and typecheck do not read `devlog/`. The test-layout membership oracle reads
+`devlog/_fin/260905_test_modularization_and_windows/001_test_inventory.md`; sparse
+checkouts running that test must materialize this tracked input. `privacy:scan`
+also reads `devlog/` to keep public development notes safe to publish.
 
 Two mechanical guards in `tests/ci-workflows/repo-hygiene.test.ts` back this up: no `160000`
 gitlink may be tracked anywhere, and neither the vendored reference clones nor
@@ -352,7 +352,9 @@ than nudged.
   those folders. When the PR resolves an issue, add
   `Closes #<number>` to link it. GitHub auto-closes the linked issue only
   when the PR merges into the default branch (`main`); PRs here target
-  `dev`, so close the issue manually once the change is on `dev`.
+  `dev`, so close the issue manually once the change is on `dev` while `main`
+  remains the default branch. After the maintainer switches the default to `dev`,
+  GitHub can close it automatically when the linked pull request merges.
 - **Landing another author's work:** reimplementing, superseding, carrying, or
   rebasing someone else's pull request requires a `Co-authored-by` trailer
   naming that author, in the description or in a branch commit so it survives
@@ -374,7 +376,8 @@ than nudged.
   (`MAINTAINERS.md`, "Batched merges"). Because `test changed` follows the module graph,
   add `ci:full` for changes it cannot see (subprocesses, files read as data, generated output).
 - Full cross-platform (macOS/Windows) CI runs **only** via manual
-  `workflow_dispatch` and on push to `main`/`preview` (release lines).
+  `workflow_dispatch` on `dev`. A successful complete `lane=all` run establishes
+  evidence for its exact dev commit; a PR run or narrower manual lane does not.
 - A manual `lane=all` dispatch is a **batch check on `dev`**, never a per-PR gate.
   One run is about 32 jobs (11 Windows, at least 6 macOS, 15 Linux) and six runner-hours, and the
   account has only five macOS slots (a macOS job can queue), so per-PR dispatches starve
@@ -383,10 +386,9 @@ than nudged.
   - Merge a pull request, including a Windows- or macOS-sensitive one, on its green PR
     CI. After a batch of merges, run one `gh workflow run ci.yml --ref dev` as described
     under "Batched merges". If it is red, stop merging and fix `dev` from that batch.
-  - Do not dispatch `lane=all` for a PR branch unless a maintainer explicitly asks for it
-    on that PR. Even then, run it once, on the exact head about to merge. Never re-dispatch
-    because the head moved (an `origin/dev` merge or a review fix), and never rerun to
-    green. Cancel your own superseded dispatches with `gh run cancel`.
+  - Do not dispatch `lane=all` for a PR branch. Run it once for a batch on `dev`;
+    never re-dispatch merely because the head moved or rerun to green. Cancel your
+    own superseded dispatches with `gh run cancel`.
   - Every description edit or label change starts three event-gate workflows. Batch those
     edits, and keep the number of agents working pull requests in parallel small.
 - **Never** add a `dev` push trigger, or `pull_request` runs for macOS/Windows
@@ -394,10 +396,12 @@ than nudged.
 
 ## Branch policy
 
-- `dev` — the single integration branch and the target for every pull request.
-- `main` — release branch. It only moves by maintainer-controlled promotion
-  from `dev` (releases, docs deploys). Do not open feature PRs against `main`.
-- `preview` — prerelease train (`x.y.z-preview.*` versions).
+- `dev` — the single development and integration branch and the target for every
+  ordinary pull request. Preview and stable releases are built from eligible
+  commits on this line, with versions stamped in build checkouts.
+- `main` and `preview` — protected historical branches retained for migration and
+  recovery. They are not integration or release promotion targets. Switching the
+  repository default branch to `dev` is a separate maintainer-controlled setting.
 
 Bun-native TypeScript on `dev` is the only runtime line. If native code
 returns, the expectation is an incremental module (for example Rust via N-API)

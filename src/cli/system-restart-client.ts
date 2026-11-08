@@ -164,6 +164,11 @@ export async function requestBoundSystemRestart(
   if (!sameRestartTarget(target, observed)) return rejected("restart_target_changed");
   if (skew.relation === "cli-newer") {
     if (!updateHome) return rejected("update_restart_home_unverified");
+    try {
+      if (JSON.stringify((deps.readUpdateHome ?? readUpdateRestartHome)()) !== JSON.stringify(updateHome)) {
+        return rejected("update_restart_home_changed");
+      }
+    } catch { return rejected("update_restart_home_changed"); }
     const current = readRuntime(target.pid);
     if (!current || current.pid !== runtime.pid || current.port !== runtime.port
       || current.hostname !== runtime.hostname || current.attestationSecret !== runtime.attestationSecret) {

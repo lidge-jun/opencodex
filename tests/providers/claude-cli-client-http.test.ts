@@ -12,6 +12,39 @@ import { buildDshClientConfig } from "../../src/clients/config-export/dsh";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import type { OcxConfig } from "../../src/types";
 
+test("Chat preserves the local Claude image refusal across direct and combo dispatch", async () => {
+  const definition = getAdapterDefinition("claude-cli")!;
+  const originalCreate = definition.create;
+  const releaseSpend = acquireOwnedSpendHome();
+  let launches = 0;
+  definition.create = provider => createClaudeCliAdapter(provider, {
+    usageAdmission: async () => ({ state: "unknown" }),
+    which: () => process.execPath,
+    spawn: () => { launches++; throw new Error("unexpected CLI launch"); },
+  });
+  const config = { port: 0, defaultProvider: "claude-cli", providers: {
+    "claude-cli": { adapter: "claude-cli", baseUrl: "https://api.anthropic.com", authMode: "key", selectedModels: ["claude-sonnet-5-5"] },
+  }, combos: { pair: { strategy: "failover", targets: [{ provider: "claude-cli", model: "claude-sonnet-5-5" }] } } } as OcxConfig;
+  try {
+    for (const model of ["claude-cli/claude-sonnet-5-5", "pair"]) {
+      const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", body: JSON.stringify({ model, messages: [
+          { role: "developer", content: [{ type: "image_url", image_url: { url: "https://fixture.invalid/private-image" } }] },
+          { role: "user", content: "hello" },
+        ] }),
+      }), config, { model: "", provider: "" });
+      const body = await response.text();
+      expect(response.status).toBe(400);
+      expect(body).toContain("Claude Code CLI does not support images in developer instructions.");
+      expect(body).not.toContain("private-image");
+    }
+    expect(launches).toBe(0);
+  } finally {
+    definition.create = originalCreate;
+    releaseSpend();
+  }
+});
+
 test("Codex/DSH Responses and Pi Chat retain host-owned tools, inclusive usage and abort cleanup", async () => {
   const home = mkdtempSync(join(tmpdir(), "ocx-claude-http-"));
   const fixture = join(home, "fixture.txt");

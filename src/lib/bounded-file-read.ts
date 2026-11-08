@@ -1,14 +1,8 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "node:fs";
+import { sameFileIdentity } from "./file-identity";
 
 const MAX_BOUNDED_READ_BYTES = 64 * 1024 * 1024;
 const READ_CHUNK_BYTES = 64 * 1024;
-
-function sameIdentity(
-  left: { dev: bigint; ino: bigint },
-  right: { dev: bigint; ino: bigint },
-): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
-}
 
 export function readBoundedRegularFileSync(path: string, limit: number): Buffer {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_BOUNDED_READ_BYTES) {
@@ -25,7 +19,7 @@ export function readBoundedRegularFileSync(path: string, limit: number): Buffer 
   try {
     const opened = fstatSync(fd, { bigint: true });
     if (!opened.isFile() || opened.size > BigInt(limit)) throw new Error("file is not bounded regular data");
-    if (entryBefore && (!sameIdentity(entryBefore, opened) || opened.ino === 0n)) {
+    if (entryBefore && (!sameFileIdentity(entryBefore, opened) || opened.ino === 0n)) {
       throw new Error("file entry changed while opening");
     }
 
@@ -47,7 +41,7 @@ export function readBoundedRegularFileSync(path: string, limit: number): Buffer 
 
     if (entryBefore) {
       const entryAfter = lstatSync(path, { bigint: true });
-      if (entryAfter.isSymbolicLink() || !entryAfter.isFile() || !sameIdentity(opened, entryAfter)) {
+      if (entryAfter.isSymbolicLink() || !entryAfter.isFile() || !sameFileIdentity(opened, entryAfter)) {
         throw new Error("file entry changed while reading");
       }
     }

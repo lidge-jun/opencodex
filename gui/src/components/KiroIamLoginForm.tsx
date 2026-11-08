@@ -1,5 +1,6 @@
 import { useId, useState } from "react";
 import { useT } from "../i18n/shared";
+import { Select } from "../ui";
 import { validKiroIamOptions, type KiroIamOptions, type KiroIamProfile } from "../kiro-device-login-helpers";
 
 export function KiroIamLoginForm({ disabled, onStart, onBack }: {
@@ -46,10 +47,10 @@ export function KiroIamProfilePicker({ profiles, disabled, onSelect }: {
   }}>
     <p>{t("kiroLogin.selectProfile")}</p>
     <label className="field-label" htmlFor={id}>{t("kiroLogin.profile")}</label>
-    <select className="input" id={id} value={arn} required disabled={disabled} onChange={event => setArn(event.target.value)}>
-      <option value="">{t("kiroLogin.selectProfile")}</option>
-      {profiles.map(profile => <option key={profile.arn} value={profile.arn}>{profile.name} ({profile.region})</option>)}
-    </select>
+    <Select fullWidth id={id} value={arn} required disabled={disabled} onChange={setArn} options={[
+      { value: "", label: t("kiroLogin.selectProfile") },
+      ...profiles.map(profile => ({ value: profile.arn, label: `${profile.name} (${profile.region})` })),
+    ]} />
     {arn && <code className="kiro-device-destination">{arn}</code>}
     <div className="kiro-device-actions"><button type="submit" className="btn btn-primary" disabled={disabled || !arn}>{t("kiroLogin.saveAccount")}</button></div>
   </form>;

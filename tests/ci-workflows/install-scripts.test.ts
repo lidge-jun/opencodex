@@ -218,26 +218,32 @@ exit 0
     const launcher = await readText("bin/ocx.mjs");
 
     expect(launcher).toContain('process.argv[2] === "update"');
-    expect(launcher).toContain('["install", "-g", `${PKG}@${tag}`]');
-    expect(launcher).toContain('["add", "-g", "--allow-build=bun", `${PKG}@${tag}`]');
+    expect(launcher).toContain('const selector = child?.version ?? tag;');
+    expect(launcher).toContain('["install", "-g", `${PKG}@${selector}`]');
+    expect(launcher).toContain('["add", "-g", "--allow-build=bun", `${PKG}@${selector}`]');
+    expect(launcher).toContain('const tag = updateTag(current);');
     expect(launcher).toContain('return String(currentVersion).includes("-preview.") ? "preview" : "latest"');
     expect(launcher).toContain("!isBunGlobalInstall()");
     expect(launcher).toContain("repairCodexShimIfNeeded(postUpdateLauncher, homePolicy.authorizeMutation)");
     expect(launcher).toContain("runNpmSelfUpdate()");
     expect(launcher).toContain("runPnpmSelfUpdate()");
+    const bunStart = launcher.indexOf('const child = probeSpawn(bun,');
+    for (const entry of ['if (installMethod === "npm") await runNpmSelfUpdate();',
+      'if (installMethod === "pnpm") await runPnpmSelfUpdate();',
+      'await runPackageManagerSelfUpdate(installMethod, childArgs);']) {
+      expect(launcher.indexOf(entry)).toBeGreaterThan(-1);
+      expect(launcher.indexOf(entry)).toBeLessThan(bunStart);
+    }
   });
 
   test("release helper watches the workflow run it just dispatched", async () => {
     const script = await readText("scripts/release.ts");
 
     expect(script).toContain("waitForReleaseWorkflowRun");
-    // The invariant is that the dispatched run is located by workflow, branch
-    // and commit — not that the call is a shell string. Every external command
-    // now goes through the shared launcher as an argv array, because Bun.$
-    // resolved PATH itself and walked past the Windows `.cmd` test shims.
+    // Pin the workflow and dev branch without filtering by a mutable pre-dispatch SHA.
     expect(script).toContain('"gh", "run", "list", "--workflow", "release.yml", "--branch"');
-    expect(script).toContain('"--commit"');
-    expect(script).toContain("createdAt,databaseId,headSha,status,url");
+    expect(script).not.toContain('"--commit"');
+    expect(script).toContain("createdAt,databaseId,headSha,status,url,headBranch,event,workflowDatabaseId");
     expect(script).toContain("await watchRun(releaseRun.databaseId)");
   });
 

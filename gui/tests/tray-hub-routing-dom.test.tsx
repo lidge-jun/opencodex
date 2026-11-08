@@ -99,6 +99,8 @@ for (const base of ['https://hub.example.test', '/api/machine/hub-relay']) {
     expect(requests.length).toBeGreaterThan(0);
     for (const request of requests) expect(request.url.startsWith(`${base}/api/`)).toBe(true);
     expect(new Set(requests.map(request => request.url.slice(base.length)))).toEqual(new Set(expectedReads));
+    // The header's connection state is read off those same reads; it adds no request of its own.
+    expect(container.querySelector('.tray-status')?.getAttribute('data-state')).toBe('up');
 
     const use = container.querySelector('button.tray-use') as unknown as HTMLButtonElement | null;
     expect(use).not.toBeNull();
@@ -117,6 +119,7 @@ test('a failed target discovery is reported, polls nothing, and Retry resolves a
   }, 'https://hub.example.test');
   await settle(5);
   expect(requests).toEqual([]);
+  expect(container.querySelector('.tray-status')?.getAttribute('data-state')).toBe('down');
   const alert = container.querySelector('[role="alert"] button') as unknown as HTMLButtonElement | null;
   expect(alert).not.toBeNull();
   await act(async () => { alert!.click(); });

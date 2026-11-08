@@ -22,6 +22,25 @@ function scan(text: string, mode: "scanner" | "inventory" = "scanner", target = 
   }
   finally {snapshot.dispose();rmSync(dir,{recursive:true,force:true});}
 }
+const refusalDeclaration = "const entered = await session.enterMutation();";
+const refusalBranch = "if (!entered.ok) { releaseUpdateLease(); process.exit(10); }";
+for (const [name, body, accepted] of [
+  ["exact refusal", `${refusalDeclaration} ${refusalBranch}`, true],
+  ["exit elsewhere", `${refusalDeclaration} if (!entered.ok) { releaseUpdateLease(); } process.exit(10);`, false],
+  ["exit zero", `${refusalDeclaration} ${refusalBranch.replace("exit(10)", "exit(0)")}`, false],
+  ["exit eleven", `${refusalDeclaration} ${refusalBranch.replace("exit(10)", "exit(11)")}`, false],
+  ["missing release", `${refusalDeclaration} if (!entered.ok) { process.exit(10); }`, false],
+  ["extra statement", `${refusalDeclaration} if (!entered.ok) { releaseUpdateLease(); extra(); process.exit(10); }`, false],
+  ["intervening statement", `${refusalDeclaration} extra(); ${refusalBranch}`, false],
+  ["not awaited", `const entered = session.enterMutation(); ${refusalBranch}`, false],
+  ["different call", `const entered = await session.finish(); ${refusalBranch}`, false],
+  ["inverted condition", `${refusalDeclaration} if (entered.ok) { releaseUpdateLease(); process.exit(10); }`, false],
+  ["else branch", `${refusalDeclaration} ${refusalBranch.replace(/ \}$/, " } else { extra(); }")}`, false],
+] as const) lint("launcher mutation-entry refusal: " + name, () => {
+  const text = `async function runPackageManagerSelfUpdate() { const homePolicy = {}; ${body} }`;
+  const failures = scan(text, "scanner", "bin/ocx.mjs");
+  expect(failures.some(failure => failure.startsWith("unguarded successful update exit:"))).toBe(!accepted);
+});
 // Reviewer round-10 named-object variants: every raw call fails regardless of
 // where its options came from. Runtime tests separately prove wrapped refusal.
 for (const options of ["startOptions", "{ ...startOptions }", "{ stdio: startOptions.stdio }"])

@@ -79,6 +79,8 @@ the estimate excludes it too; history that never reaches the provider therefore 
 context-limit refusal. Models that preserve reasoning, and other adapters,
 send that thinking and still count it.
 
+Character-based token estimates apply the existing denser CJK weight to supplementary Han characters such as 𠀀 as well as BMP Chinese and Korean text. A supplementary Han surrogate pair contributes two UTF-16 units to that bucket. These remain heuristics: model ratios, context-window caps and provider-reported usage are unchanged.
+
 ## The parser
 
 `responses/parser.ts` validates the incoming request with `responses/schema.ts` (Zod), then builds an
@@ -121,6 +123,13 @@ never see an unknown variant. The default **stall deadline** is 300 seconds for 
 and disabled for a local one (`stallTimeoutSec`; `0` disables it everywhere);
 reaching it aborts the upstream and emits `response.incomplete` with reason
 `upstream_stall_timeout`, preventing a hung connection from blocking Codex indefinitely.
+
+The adapter's response-body inactivity guard has a separate failure path. When an initial or
+recovery, terminal-guard continuation, or empty-completion retry response body stalls during translated Responses streaming, the terminal event is
+`response.failed` with code `upstream_stall_timeout` and a bounded-duration message. The request
+log classifies that terminal as 504 and can record the duration as `body_stall`. HTTP headers
+already sent for the stream cannot change. A buffered initial or continuation body stall returns
+HTTP 504 with the same bounded-duration message, which can also produce the `body_stall` detail.
 
 Tool calls are disambiguated into three Responses item types using the namespace map, the freeform
 set, and the tool-search set captured by the parser — so MCP namespaces, `apply_patch`-style freeform

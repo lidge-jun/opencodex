@@ -1,3 +1,4 @@
+import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { mapSpendLedgerStorageError } from "./spend-storage-error";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
@@ -49,7 +50,7 @@ import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
 import { awaitThoughtSignatureDurability } from "../../responses/thought-signature-replay";
 import { undeclaredToolCallMessage } from "../responses-undeclared-tool-guard";
-import { emptyToolCatalogRefusal, guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
+import { currentTurnToolBridgeMaps, emptyToolCatalogRefusal, guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
 // LOCAL PATCH (runturn-websearch)
 import { planWebSearch } from "../../web-search";
 import { runTurnWebSearchInitialParsed, runTurnWebSearchLoop } from "../../web-search/run-turn-loop";
@@ -132,6 +133,7 @@ export async function executeResponsesRunTurn(
     | "noteAdapterRecoveryWithheld"
     | "reserveCredentialHop"
     | "pendingHopPermit"
+    | "dispatchSidecarSend"
   >,
   completionPolicy: Pick<ResponsesCompletionPolicy, "emptyCompletionGuardEnabled">,
 ): Promise<Response> {
@@ -209,7 +211,7 @@ export async function executeResponsesRunTurn(
       } }), {
         status: 429,
         headers: { "Content-Type": "application/json",
-          ...(usage.resetAt ? { "Retry-After": String(Math.max(1, Math.ceil((usage.resetAt - Date.now()) / 1000))) } : {}),
+          ...(usage.resetAt ? { "Retry-After": formatClientRetryAfter(Math.max(1, Math.ceil((usage.resetAt - Date.now()) / 1000)))! } : {}),
         },
       });
       markResponseNonReplayable(refusal);
@@ -768,8 +770,7 @@ export async function executeResponsesRunTurn(
 
     const clientToolCatalog = requestState.clientToolCatalogRestriction && route.provider.authMode !== "forward"
       ? requestState.clientToolCatalogRestriction : undefined;
-    const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, bareCustomToolNames, toolSearchToolNames } = clientToolCatalog
-      ? { ...toolBridgeMaps, ...clientToolCatalog } : toolBridgeMaps;
+    const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, bareCustomToolNames, toolSearchToolNames } = currentTurnToolBridgeMaps(toolBridgeMaps, clientToolCatalog);
     const enforceDeclaredToolNames = inboundWire !== "chat" && inboundWire !== "anthropic";
     const classifyUndeclaredFirstTool = (
       event: AdapterEvent,
@@ -785,7 +786,7 @@ export async function executeResponsesRunTurn(
         type: "error",
         status: 502,
         errorType: "upstream_error",
-        message: undeclaredToolCallMessage(effectiveName),
+        message: undeclaredToolCallMessage(),
       };
     };
     const grokDevinPreflight = !options.comboAttempt && logCtx.surface === "grok" && inboundWire === "responses"
@@ -871,6 +872,7 @@ export async function executeResponsesRunTurn(
       // iterations; terminal output keeps flowing through the same queue/bridge.
       if (wsPlan) {
         eventSource = runTurnWebSearchLoop(eventSource, {
+          dispatchSidecarSend: sendBudgetState.dispatchSidecarSend,
           parsed,
           plan: wsPlan,
           translatorBudget,
@@ -909,7 +911,7 @@ export async function executeResponsesRunTurn(
           queue.close();
         }, 2_000,
         {
-          translatorBudget,
+          translatorBudget, proxyErrorContext: logCtx,
           replayCacheScope: parsed._reasoningReplayScope,
           ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
           stallTimeoutSec,
@@ -1022,6 +1024,7 @@ export async function executeResponsesRunTurn(
           {
             parsed,
             plan: wsPlan,
+            dispatchSidecarSend: sendBudgetState.dispatchSidecarSend,
             translatorBudget,
             emptyCompletionRetry: emptyCompletionGuardEnabled,
             forwardProvider: wsPlan.forwardSidecar?.provider,

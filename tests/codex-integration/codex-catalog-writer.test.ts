@@ -409,6 +409,8 @@ test("retained catalog sync initializes an empty home before publishing its back
   expect(readdirSync(openCodexHome)).toEqual([]);
   const result = await syncCatalogModels({ port: 10100, defaultProvider: "openai", providers: {}, subagentModels: [] }, { allowWhenDesiredDisabled: true });
   expect(result.refreshOutcome).toBe("committed");
+  const unchanged = await syncCatalogModels({ port: 10100, defaultProvider: "openai", providers: {}, subagentModels: [] }, { allowWhenDesiredDisabled: true });
+  expect(unchanged).toMatchObject({ refreshOutcome: "committed", catalogWritten: false });
   const backup = catalogBackupPathFor(path);
   expect(readFileSync(backup, "utf8")).toBe(pristine);
   expect(manifestPaths(openCodexHome)).toContain(backup.split(/[\\/]/).pop()!);

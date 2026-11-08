@@ -49,8 +49,6 @@ import { ProviderOutboundPolicyError, providerOutboundGet, providerOutboundPost,
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { fetchDevinUsableModels } from "../../adapters/devin/live-models";
 import { resolveDevinApiBaseUrl } from "../../oauth/devin/api-base";
-import { fetchQoderModels } from "../../adapters/qoder/live-models";
-import { resolveQoderProfile } from "../../adapters/qoder/profiles";
 import { parseAntigravityAvailableModels } from "../../providers/antigravity-models";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import {
@@ -383,6 +381,14 @@ function applyProviderPatchFields(
     const dm = rawBody.defaultModel.trim();
     if (dm) next.defaultModel = dm;
     else delete next.defaultModel;
+    touched = true;
+  }
+  for (const field of ["project", "location"] as const) {
+    if (!Object.hasOwn(rawBody, field)) continue;
+    const value = rawBody[field];
+    if (typeof value !== "string") return { error: `${field} must be a string` };
+    if (value.trim()) next[field] = value.trim();
+    else delete next[field];
     touched = true;
   }
   if (Object.hasOwn(rawBody, "authMode")) {
@@ -1702,26 +1708,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       });
     }
     if (prov.adapter === "qoder") {
-      const started = Date.now();
-      const profile = resolveQoderProfile(prov.baseUrl);
-      if (!profile) {
-        return jsonResponse({ ok: false, latencyMs: 0, error: "qoder discovery refused a non-canonical destination" });
-      }
-      const live = await fetchQoderModels(profile, apiKey ?? "");
-      const latencyMs = Date.now() - started;
-      if (!live.ok) {
-        return jsonResponse({
-          ok: false,
-          latencyMs,
-          error: `qoder discovery ${live.error}${live.detail ? `: ${live.detail}` : ""}`,
-        });
-      }
-      return jsonResponse({
-        ok: true,
-        latencyMs,
-        models: live.models.length,
-        message: `Connected. ${live.models.length} models.`,
-      });
+      // A late success re-syncs the catalog through the same convergence every mutation uses.
+      return (await import("./qoder-provider-probe")).probeQoderProvider(name, prov, apiKey, convergeCodexCatalog);
     }
     const project = prov.project ?? snapshot?.projectId;
     if (antigravity && !project) {

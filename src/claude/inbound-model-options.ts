@@ -1,3 +1,4 @@
+import { markProxyError } from "../lib/client-error-body";
 import type { OcxConfig, OcxClaudeCodeConfig } from "../types";
 import { isAnthropicOutputSchema, satisfiesOpenAiStrictSchema } from "../adapters/anthropic-output-schema";
 import { resolveAlias } from "./alias";
@@ -60,7 +61,7 @@ export function resolveInboundModel(model: string, cc?: OcxClaudeCodeConfig): st
     // A missing date-shaped ID is ambiguous even after a successful but partial
     // discovery. Never infer that a genuine native model is invalid or reroute it.
     if (validDateAlias(base)) throw new DesktopModelMappingUnavailableError();
-    throw new AnthropicRequestError("Unknown Claude Desktop alias; reapply the Desktop profile from the connected hub");
+    throw markProxyError(new AnthropicRequestError("Unknown Claude Desktop alias; reapply the Desktop profile from the connected hub"));
   }
   const stripped = model.replace(/-\d{8}$/, "");
   const dateless = map[stripped];

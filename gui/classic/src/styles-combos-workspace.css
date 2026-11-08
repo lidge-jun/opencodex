@@ -1,0 +1,809 @@
+/* ============================================================================
+   combos-workspace — isolated stylesheet (mirrors providers-workspace layout DNA)
+   Namespace: combos-workspace-  |  widgets: cwi-
+   Shared pwi-* chrome reuses current workspace styles; scoped compatibility follows below.
+   Uses only design tokens from styles.css. No gradients.
+   ============================================================================ */
+
+.combos-workspace-root {
+  display: grid;
+  grid-template-columns: minmax(340px, 28vw) 1fr;
+  min-height: 100%;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  align-items: stretch;
+}
+
+.combos-workspace-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+.combos-workspace-shell-banner {
+  flex-shrink: 0;
+  padding: 10px 16px 0;
+}
+
+/* Revalidation shell: keeps the workspace body stable while aria-busy and an
+   sr-only status span announce in-flight refreshes to assistive tech. */
+.combos-workspace-shell-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.combos-workspace-rail {
+  position: sticky;
+  top: 0;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  background: var(--rail);
+}
+
+.combos-workspace-rail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+
+.combos-workspace-rail-title {
+  font-size: var(--text-title);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.combos-workspace-rail-count {
+  font-family: var(--mono);
+  font-size: var(--text-caption);
+  color: var(--faint);
+}
+
+.combos-workspace-rail-list {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.combos-workspace-rail-group + .combos-workspace-rail-group {
+  margin-top: 10px;
+}
+
+.combos-workspace-rail-group-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 16px 6px;
+  color: var(--muted);
+  font-size: var(--text-caption);
+  font-weight: 600;
+}
+
+.combos-workspace-rail-row {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) 3.5rem 14px;
+  align-items: center;
+  column-gap: 8px;
+  padding: 11px 12px 11px 14px;
+  min-height: 40px;
+  border: none;
+  border-bottom: 1px solid var(--border-soft);
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-control);
+  color: var(--text);
+  text-align: left;
+  width: 100%;
+  transition: background 0.12s;
+}
+
+.combos-workspace-rail-row:hover {
+  background: var(--hover);
+}
+
+.combos-workspace-rail-row.combos-workspace-rail-row--selected {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.combos-workspace-rail-row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.combos-workspace-rail-icon {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.combos-workspace-rail-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: var(--text-label);
+}
+
+.combos-workspace-rail-meta {
+  font-family: var(--mono);
+  font-size: var(--text-caption);
+  color: var(--faint);
+  text-align: right;
+}
+
+.combos-workspace-rail-chevron {
+  width: 14px;
+  height: 14px;
+  color: var(--faint);
+}
+
+.combos-workspace-main {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.combos-workspace-overview,
+.combos-workspace-detail {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 24px 32px;
+}
+
+.combos-workspace-overview-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.combos-workspace-overview-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.combos-workspace-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.combos-workspace-detail-title {
+  font-size: var(--text-title);
+  font-weight: 600;
+  font-family: var(--mono);
+  margin: 0;
+  min-width: 0;
+}
+
+.combos-workspace-detail-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/*
+  Pill group for the detail panel's Config/About switch. Mirrors `.models-segmented`;
+  `.segmented` has no standalone declaration in this codebase, so every use pairs it
+  with a concrete class. It replaced an underline row that would have stacked under the
+  Models page tab strip.
+*/
+.combos-workspace-segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  padding: 2px;
+  gap: 2px;
+  margin-bottom: 16px;
+}
+
+.combos-workspace-segmented .btn {
+  border-radius: var(--radius-pill);
+  min-width: 0;
+  min-height: 0;
+  padding: 4px 12px;
+  border: none;
+  font-size: var(--text-label);
+  line-height: inherit;
+}
+
+/*
+ `:not([hidden])`, not a bare `display: flex`.
+
+ Both panels stay in the tree so each tab's `aria-controls` resolves, and the inactive
+ one carries `hidden`. But author CSS beats the UA's `[hidden] { display: none }`, so a
+ plain `display: flex` here left BOTH panels on screen at once — Config and About
+ stacked, one of them marked hidden and rendering anyway.
+*/
+.combos-workspace-tab-content:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 720px;
+}
+
+.jev-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.jev-stats-toolbar,
+.jev-stats-facts,
+.jev-stats-gates {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.jev-stats-toolbar {
+  justify-content: space-between;
+}
+
+.jev-stats-ranges {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+}
+
+.jev-stats-ranges .btn {
+  min-width: 0;
+  min-height: 0;
+  padding: 4px 10px;
+  border: none;
+  border-radius: var(--radius-pill);
+}
+
+.jev-stats-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.jev-stats-cards .stat {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.jev-stats-facts {
+  color: var(--muted);
+  font-size: var(--text-caption);
+}
+
+.jev-stats-facts span:not(:last-child)::after {
+  content: "·";
+  margin-left: 8px;
+  color: var(--faint);
+}
+
+.jev-stats-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+}
+
+.jev-stats-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  font-size: var(--text-caption);
+}
+
+.jev-stats-table th,
+.jev-stats-table td {
+  padding: 9px 10px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.jev-stats-table th {
+  color: var(--muted);
+  font-weight: 600;
+  background: var(--surface);
+}
+
+.jev-stats-table tr:last-child td {
+  border-bottom: none;
+}
+
+.jev-stats-table .num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.jev-stats-cell-note {
+  display: block;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.jev-stats-empty {
+  padding: 28px 20px;
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+}
+
+.jev-stats-empty h3,
+.jev-stats-empty p,
+.jev-stats-footnote {
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .jev-stats-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cwi-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+
+.cwi-search-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.cwi-search-wrap .cwi-search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  color: var(--faint);
+  pointer-events: none;
+}
+
+.cwi-search-input {
+  width: 100%;
+  padding-left: 32px !important;
+}
+
+.cwi-count-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.cwi-count-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+
+.cwi-count-pill strong {
+  font-family: var(--mono);
+  font-size: var(--text-subtitle);
+}
+
+.cwi-count-pill span {
+  font-size: var(--text-label);
+  color: var(--muted);
+}
+
+/* Keep helper copy on the shared prose measure (line-length bar). */
+.cwi-field > p.muted {
+  max-width: var(--prose-measure);
+  overflow-wrap: anywhere;
+}
+
+.cwi-capabilities {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+
+.cwi-capability-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cwi-capability-label {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.cwi-capability-hint {
+  margin: 3px 0 0;
+  font-size: 12px;
+}
+
+/* Requests still continue without the images, so this is a warning (amber), not a failure. */
+.cwi-capability-hint--warn {
+  color: var(--amber);
+}
+
+
+.cwi-target-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cwi-target-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.cwi-jev-target-meta {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-left: 72px;
+  font-size: var(--text-label);
+}
+
+.cwi-jev-efforts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.cwi-jev-efforts legend {
+  float: left;
+  margin: 2px 2px 0 0;
+  color: var(--muted);
+}
+
+/* Decision method: a fieldset for grouping semantics, laid out like any other .cwi-field. */
+.cwi-jev-decision {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.cwi-jev-decision > legend {
+  padding: 0;
+  margin-bottom: 6px;
+}
+
+.cwi-jev-decision .segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cwi-jev-decision > p:empty {
+  display: none;
+}
+
+.cwi-jev-effort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.cwi-jev-effort:has(input:disabled) {
+  cursor: not-allowed;
+}
+
+.cwi-jev-quick-action {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  padding: 0 12px 12px;
+  font-size: var(--text-label);
+}
+
+.cwi-target-row {
+  display: grid;
+  grid-template-columns: 28px auto minmax(0, 1fr) minmax(0, 1.2fr) 4.5rem auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.cwi-target-row--failover {
+  grid-template-columns: 28px auto minmax(0, 1fr) minmax(0, 1.2fr) auto auto;
+}
+
+.cwi-target-row--dragging {
+  opacity: 0.55;
+}
+
+.cwi-target-row--drop {
+  box-shadow: inset 0 0 0 1px var(--accent);
+  border-radius: var(--radius);
+}
+
+.cwi-target-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--faint);
+  cursor: grab;
+  touch-action: none;
+}
+
+.cwi-target-grip:hover {
+  color: var(--muted);
+  background: var(--hover);
+}
+
+.cwi-target-grip:active {
+  cursor: grabbing;
+}
+
+.cwi-target-reorder {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0;
+  flex-shrink: 0;
+}
+
+.cwi-target-reorder .btn {
+  min-width: 0;
+  padding: 2px 4px;
+  line-height: 1;
+}
+
+.cwi-target-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.cwi-quota-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  color: var(--muted);
+  font-size: var(--text-caption);
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.cwi-quota-badge--available {
+  border-color: color-mix(in srgb, var(--green) 36%, var(--border));
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.cwi-quota-badge--exhausted {
+  border-color: color-mix(in srgb, var(--red) 36%, var(--border));
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.cwi-quota-banner {
+  max-width: 720px;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--red) 36%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--red-soft);
+  color: var(--red);
+  font-size: var(--text-control);
+  font-weight: 550;
+  line-height: 1.4;
+}
+
+.cwi-strategy-seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  border-radius: var(--radius-pill);
+  background: var(--surface-soft, var(--raised));
+  padding: 3px;
+  gap: 2px;
+}
+
+.cwi-strategy-seg .btn {
+  border-radius: var(--radius-pill);
+  min-width: 88px;
+  padding: 5px 12px;
+  border: none;
+}
+
+.cwi-strategy-seg .btn-ghost {
+  background: transparent;
+  color: var(--muted);
+}
+
+.cwi-copy-chip {
+  font-family: var(--mono);
+  font-size: var(--text-label);
+  cursor: pointer;
+}
+
+.cwi-form-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cwi-field label {
+  display: block;
+  font-size: var(--text-label);
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.cwi-field .input,
+.cwi-field select.input {
+  width: 100%;
+}
+
+.cwi-attention-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.cwi-attention-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 0;
+  border: none;
+  border-bottom: 1px solid var(--border-soft);
+  background: none;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.cwi-attention-row:hover {
+  color: var(--accent);
+}
+
+.cwi-modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.cwi-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+@media (max-width: 939px) {
+  .combos-workspace-root {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(220px, 38vh) 1fr;
+  }
+
+  .combos-workspace-rail {
+    position: relative;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .cwi-capability-row {
+    align-items: flex-start;
+  }
+
+  .cwi-target-row,
+  .cwi-target-row--failover {
+    grid-template-columns: 28px auto 1fr auto;
+  }
+
+  .cwi-target-row > .input:nth-child(3),
+  .cwi-target-row > .input:nth-child(4) {
+    grid-column: 3 / -1;
+  }
+
+  .cwi-target-row > .cwi-quota-badge {
+    grid-column: 3;
+    justify-self: start;
+  }
+
+  .cwi-jev-target-meta {
+    padding-left: 0;
+  }
+
+}
+
+/* Narrow compatibility for pwi-* classes consumed by ComboWorkspace only. */
+.pwi-dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: var(--muted); }
+.pwi-back-overview { flex: 0 0 auto; gap: 4px; margin-right: 2px; white-space: nowrap; }
+.pwi-section { background: none; border: none; border-radius: 0; min-width: 0; padding: 0; }
+.pwi-section-title { margin: 0 0 4px; font-size: var(--text-label); font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.pwi-empty-right-icon { color: var(--faint); }
+.pwi-empty-right-sub { font-size: var(--text-control); color: var(--muted); margin: 0; max-width: 44ch; line-height: 1.5; }
+.pwi-json-unsaved-card,
+.pwi-remove-confirm-card { max-width: 420px; width: min(420px, 92vw); padding: 20px 22px 16px; }
+.pwi-json-unsaved-title,
+.pwi-remove-confirm-title { margin: 0 0 8px; font-size: var(--text-subtitle); font-weight: 650; color: var(--text); }
+.pwi-json-unsaved-desc,
+.pwi-remove-confirm-desc { margin: 0 0 18px; font-size: var(--text-control); line-height: 1.45; }
+.pwi-json-unsaved-actions,
+.pwi-remove-confirm-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.pwi-remove-confirm-danger { background: var(--red) !important; color: #fff !important; border-color: transparent !important; }
+.pwi-remove-confirm-danger:hover:not(:disabled) { filter: brightness(1.08); }

@@ -401,8 +401,8 @@ const NON_DESKTOP: SupervisionEvidence[] = [{ kind: "none" },
   { kind: "unknown", reason: "probe-timeout", desktopSeen: false }, { kind: "unsupported" }];
 const RESTART_TARGET: ProxyRestartLive = { pid: 4242, port: 19999, source: "runtime" };
 const UPDATE_CANDIDATE: UpdateRestartCandidate = {
-  home: { config: { path: "/test/ocx", dev: 1, ino: 2 }, codex: { path: "/test/codex", dev: 1, ino: 3 }, revision: 0 },
-  target: { ...RESTART_TARGET, pid: 4242, version: "2.76.0" },
+  home: { config: { path: "/test/ocx", dev: 1, ino: 2, fileId: "1:2" }, codex: { path: "/test/codex", dev: 1, ino: 3, fileId: "1:3" }, revision: 0, serviceRecord: { schema: 1, digest: "a".repeat(64) }, diagnosedHostname: null },
+  target: { ...RESTART_TARGET, pid: 4242, hostname: "127.0.0.1", version: "2.76.0" },
   runtime: { pid: 4242, port: 19999, attestationSecret: "a".repeat(43) }, cliVersion: "2.77.0",
 };
 function desktopRestartFixture() {

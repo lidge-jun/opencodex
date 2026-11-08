@@ -154,8 +154,10 @@ function rows(): HTMLElement[] {
 function expectOrder(models: string[]) {
   expect(rows()).toHaveLength(models.length);
   models.forEach((model, index) => {
-    // The model span can also contain the unavailable-model warning.
-    expect(rows()[index]?.querySelector("span")?.textContent?.trim().startsWith(`${index + 1}. ${model}`)).toBe(true);
+    // Position and name are separate cells (numbered square, then the id); the model cell can
+    // also carry the unavailable-model warning under the name.
+    expect(rows()[index]?.querySelector(".swi-fallback-pos")?.textContent?.trim()).toBe(String(index + 1));
+    expect(rows()[index]?.querySelector(".swi-fallback-name")?.textContent?.trim()).toBe(model);
     expect(rowButton(index, "sub.removeAria", model)).toBeTruthy();
   });
 }

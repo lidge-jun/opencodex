@@ -19,7 +19,7 @@ import type {
 import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
 import type { OcxTool } from "../types";
 import { contentPartsToText, parseDataUrl } from "./image";
-import { GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount, getVertexAccessToken } from "../lib/gcp-adc";
+import { bindVertexRequestAuthority, GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount, getVertexAccessTokenWithAuthority } from "../lib/gcp-adc";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
 import { isVertexTruncatedTurn, vertexTruncationErrorEvent } from "./google-truncation";
@@ -37,6 +37,7 @@ import {
 } from "./google-antigravity-replay";
 import { canonicalAntigravityUsageModel, resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
 import { selectVertexEndpoint, vertexInferenceUrl, vertexReplayModelKey } from "./google-vertex-endpoint";
+import { captureVertexAmbientKey, vertexAmbientKeyIsCurrent } from "../providers/vertex-environment-authority";
 import { resolveVertexApiKeyProject, VERTEX_PROJECT_AUTO } from "./google-vertex-key-project";
 import { forgetThoughtSignatureForReplay, lookupReplayThoughtSignature } from "../responses/thought-signature-replay";
 import {
@@ -1130,21 +1131,21 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         if (!project) throw new Error("Antigravity requires a discovered Cloud Code Assist project id (re-run `ocx login google-antigravity`).");
         const sessionId = antigravitySessionId(parsed);
         const mappedEffort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
+        // CCA Gemini exposes provider-authored summaries only when explicitly requested.
+        const includeThoughts = provider.showThinkingSummary === true
+          && parsed.options.hideThinkingSummary !== true
+          && /^gemini-/.test(routedModelId)
+          && !isImageCapableModel(parsed.modelId);
         const { wireModelId, thinkingLevel } = resolveAntigravityEffortWireModel(
           parsed.modelId,
           mappedEffort,
           provider.baseUrl,
+          { includeThoughts },
         );
         antigravityModel = wireModelId;
         antigravitySession = sessionId;
-        // CCA Gemini exposes provider-authored thought summaries with includeThoughts.
-        // Other CCA model families do not share this request contract.
-        const includeThoughts = provider.showThinkingSummary === true
-          && parsed.options.hideThinkingSummary !== true
-          && /^gemini-/.test(wireModelId)
-          && !isImageCapableModel(parsed.modelId);
         // Effort → thinkingConfig for CCA (CLIProxyAPI proven: request.generationConfig.thinkingConfig).
-        // Suffix/compat IDs return thinkingLevel=undefined — the suffix IS the effort, no contradiction.
+        // Argon summaries repeat the suffix tier; other suffix IDs keep their existing shape.
         if (thinkingLevel || includeThoughts) {
           const gc = (body.generationConfig ?? {}) as Record<string, unknown>;
           gc.thinkingConfig = {
@@ -1222,10 +1223,17 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
 
       if (provider.googleMode === "vertex") {
+        if (provider.authMode === "forward") throw new Error("Vertex does not support forward authentication");
         const compiled = compileGoogleWireBody(body, toolSchemaProfile, toolSchemaPolicy);
         reportToolSchemaLoss(compiled.toolSchemaLossReport);
         restoreGoogleToolName = compiled.restoreToolName;
         const apiKey = resolveVertexApiKey(provider.apiKey);
+        const ambientAuthority = apiKey && (!provider.apiKey || provider.apiKey.startsWith("<") || provider.apiKey === "N/A")
+          ? captureVertexAmbientKey(apiKey) : undefined;
+        const beforeCredentialSend = () => {
+          incoming?.beforePhysicalSend?.();
+          if (ambientAuthority && !vertexAmbientKeyIsCurrent(ambientAuthority)) throw new Error("Vertex credential authority changed before auxiliary send");
+        };
         let vertexEndpoint = selectVertexEndpoint(provider, Boolean(apiKey));
         if (apiKey && vertexEndpoint.kind === "project" && vertexEndpoint.project === VERTEX_PROJECT_AUTO) {
           // Unresolved keys use express for this request so Google's status drives key failover.
@@ -1233,6 +1241,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             signal: incoming?.abortSignal,
             provider,
             providerName: incoming?.providerName,
+            beforeSend: beforeCredentialSend,
           });
           vertexEndpoint = project ? { ...vertexEndpoint, project } : { kind: "express" };
         }
@@ -1254,13 +1263,20 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           );
         }
         // Endpoint, location and model path were validated above, before any credential is attached.
+        let adcAuthority: Awaited<ReturnType<typeof getVertexAccessTokenWithAuthority>> | undefined;
         if (apiKey) headers["x-goog-api-key"] = apiKey;
         else {
           // Resolve each marker per request; never share a process-global active account.
           const markerAccount = gcpCredentialMarkerAccount(provider.apiKey);
-          headers["Authorization"] = `Bearer ${await getVertexAccessToken({ markerAccount })}`;
+          adcAuthority = await getVertexAccessTokenWithAuthority({ markerAccount, signal: incoming?.abortSignal, beforeSend: beforeCredentialSend });
+          headers["Authorization"] = `Bearer ${adcAuthority.token}`;
         }
-        return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
+        const request = { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
+        if (adcAuthority) bindVertexRequestAuthority(request, url, headers["Authorization"]!, { source: adcAuthority.source, generation: adcAuthority.generation, markerAccount: adcAuthority.markerAccount });
+        else if (apiKey && ambientAuthority) {
+          bindVertexRequestAuthority(request, url, apiKey, { ambientKey: ambientAuthority });
+        }
+        return request;
       }
 
       // Go and Zen use separate guarded Gemini endpoints; AI Studio retains /v1beta.

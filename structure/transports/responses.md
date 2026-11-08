@@ -1,4 +1,6 @@
 # Responses Transport
+
+Canonical HTTP and WebSocket sends share the [account installation identity contract](../providers/codex-installation-identity.md). The adapter serializes the isolated metadata before WS preparation; Direct and native main retain caller values.
 WorkBuddy AI carries account-bound identity through initial dispatch and renewal under the [WorkBuddy contract](../providers/workbuddy.md).
 Native result continuations and function-result injection follow [the mode-specific result and control contract](streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 
@@ -17,6 +19,7 @@ provider, lets the selected adapter speak the upstream protocol, then bridges ad
 Responses-compatible streaming output. Every Responses serializer projects unreferenced hosted-search history when the final body declares no hosted search tool; with search declared, the canonical Codex ordinary serializer retains structural hosted history by default, and only selected-provider `projectResponsesLiteHostedSearchHistory === true` plus exact canonical `/responses` and explicit Lite intent enables model-independent projection under the [hosted-search history boundary](../providers-and-adapters.md#hosted-search-continuation-binding), shared by HTTP/SSE and WS. The routed provider name follows every adapter build, including retries and continuations; only `github-copilot` injects a configured `modelContextTiers` value as upstream `contextTier`, while unconfigured passthrough retains the caller field. For an opted-in key-auth provider, a hosted-search continuation stays bound to the API-key selection that served the first leg; the contract is the [hosted-search continuation binding](../providers-and-adapters.md#hosted-search-continuation-binding). The native passthrough undeclared-tool guard fails closed on the Responses inbound wire in SSE and buffered JSON before continuation state is stored. Chat and Anthropic inbounds defer to the caller's own registry except an explicit empty catalog; the [declared-tool contract](responses-wire-shapes.md#declared-tool-membership-by-inbound-wire) also covers managed native, translated, directly encoded, and final media output while preserving internal hosted operations. GitHub Copilot Auto admission rechecks the negotiated provider/model against the key scope captured at request admission (a key edited or removed mid-request cannot widen it) before route mutation or dispatch, on initial and renewal negotiation; denial returns the standard `model_not_allowed_for_key` 403 naming the caller's inbound selector without disclosing the destination. The web-search and image sidecars answer a denial during their credential rotation with that 403 instead of the original 429, and a combo child's denial keeps the same envelope. Local model-scope refusals are non-replayable. A denial during Copilot dispatch renewal propagates as an admission exception to the request boundary, never as a provider fetch response; account recovery and combo/policy fallback cannot continue after that denial. A committed continuation, including OAuth account rotation after a 429, emits the same refusal type in-stream without dispatching another inference; ordinary negotiation failures still preserve the original provider refusal.
 
 The `openai-responses` adapter preserves caller `User-Agent` unless provider headers own it, in either auth mode.
+Final route capability normalization removes rejected reasoning effort and toggle fields from the native passthrough body when those fields were parsed into options, before custom gateway-object serialization.
 `forwardClientHeaders` additionally opts into `originator`, `x-client-request-id`, `x-codex-app-version`, or `user-agent`.
 Provider headers win case-insensitively; arbitrary names are rejected on load/write and ignored at runtime.
 Canonical forward auth retains its separate fixed credential/metadata allowlist; absent caller identity is not invented. Upstream WebSocket reasoning-inclusion headers follow the [native prelude and connection-signal contract](responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
@@ -125,6 +128,7 @@ Function-call wrappers around freeform bodies are restored by
 `exec` and `apply_patch`, one tool-specific alternate field or one complete outer Markdown fence
 is recoverable because the wrapper is otherwise unusable; two alternate fields are ambiguous and
 therefore remain untouched. Foreign freeform grammars never receive that compatibility rewrite.
+An unwrapped executable body may carry one extra `{"input":string}` object, removed once, never recursively.
 
 #### Schema-bound flat shell repair
 
@@ -143,25 +147,24 @@ A prefix that can still become a complete outer fence stays held so completion n
 bytes already published in a delta; a body that is not shaped like a wrapper object remains
 progressive, and JSON escapes emit only complete decoded units.
 
-Which wrapper applies is decided by scanning the prefix as JSON rather than matching it against
-a literal opening. `JSON.parse` decides the completed input, and it cares about neither property
+Which wrapper applies is decided by scanning the prefix as JSON rather than matching it against a
+literal opening. `JSON.parse` decides the completed input, and it cares about neither property
 order nor how a name is spelled, so a canonical key arriving after other properties or written
 with an escape is the same wrapper and has to preview as one (#5151). The buffering policy that
-follows is: an own `input` with a string value streams progressively, because completion gives
-it precedence over everything else in the object whatever its position; an `input` with a
-non-string value, a text that is not an object, and an object `JSON.parse` can no longer accept
-all publish their own bytes, because that is what completion returns for them; every other
-object HOLDS until it closes, because a key that has not arrived yet can still change the
-answer. Fallback fields decide at that close rather than from a parse: they only unwrap as the
-single string field, so the scan keeps a last-wins table of the members it already walked and
-consults it once — one string fallback field releases its value as `input`, anything else
-streams the raw text byte-exact through whatever trailing whitespace follows. Classification is
-bounded to `MAX_FREEFORM_WRAPPER_SCAN_CHARS`, which keeps the work per delta from growing with
-the arguments. Past the bound nothing is previewed at all: the authoritative parse still
-unwraps the wrapper at completion, so the bound costs preview and never agreement. Because the
-close resolves from the member table instead of `JSON.parse`, fragmented trailing whitespace
-and deltas that happen to end on a brace can never reparse a growing provider-controlled
-buffer.
+follows is: an own string `input` streams progressively (completion prefers it to any other
+member) unless its executable body could still be a nested wrapper (a nested non-string `input` holds only while a later string duplicate can follow). A non-string `input`, a text
+that is not an object, and an object `JSON.parse` can no longer accept all publish their own
+bytes, because that is what completion returns for them; every other object HOLDS until it closes,
+because a key that has not arrived yet can still change the answer. Fallback fields decide at that
+close rather than from a parse: they only unwrap as the single string field, so the scan keeps a
+last-wins table of the members it already walked and consults it once — one string fallback field
+releases its value as `input`, anything else streams the raw text byte-exact through whatever
+trailing whitespace follows. Classification is bounded to `MAX_FREEFORM_WRAPPER_SCAN_CHARS`, which
+keeps the work per delta from growing with the arguments. Past the bound nothing is previewed at
+all: the authoritative parse still unwraps the wrapper at completion, so the bound costs preview
+and never agreement. Because the close resolves from the member table instead of `JSON.parse`,
+fragmented trailing whitespace and deltas that happen to end on a brace can never reparse a
+growing provider-controlled buffer.
 
 What that policy costs is worth stating plainly, because it is a real narrowing. A body that IS
 a parseable JSON object but not a wrapper — `{"code":1}` or `{"code":"a","script":"b"}` — now
@@ -172,7 +175,7 @@ restoration has held exactly these bodies since #5047 and this is the two paths 
 new restriction invented for one of them. Bodies that are not objects, which is what an `exec`
 program or an `apply_patch` envelope actually looks like, are unaffected and still stream.
 
-Routed restoration keeps its hold for an unrecognized JSON object and its separate code-mode patch-envelope hold. Duplicate `input` keys and wrappers that become invalid only after a valid prefix was emitted remain bounded exceptions for ordinary freeform tools. Routed `apply_patch` narrows that boundary: after an exact canonical `*** Begin Patch` line resolves, `src/responses/apply-patch-envelope.ts` exposes only bytes that delimiter normalization cannot rewrite.
+Routed restoration keeps its hold for an unrecognized JSON object and its separate code-mode patch-envelope hold. Duplicate `input` keys and wrappers that become invalid only after a valid prefix was emitted remain bounded exceptions for ordinary freeform tools. Routed `apply_patch` narrows that boundary: after an exact canonical `*** Begin Patch` line resolves, `src/responses/apply-patch-envelope.ts` exposes only bytes that delimiter normalization cannot rewrite, identifying a rewritable terminal decoration from a bounded suffix rather than rescanning the accumulated patch. Both raw arguments and decoded JSON wrappers supply at most 64 trailing characters to that suffix check.
 A possible decorated terminal marker and the line break behind it remain held until authoritative. If a late-invalid or duplicate-key wrapper makes the completed repaired input disagree with an emitted canonical patch prefix, the routed rewrite fails closed before input-done, item-done, or completed output rather than publishing a rewound executable call.
 
 Codex-private tool fields are removed at the same boundary from one table
@@ -285,7 +288,7 @@ alone never opt a gateway in. Response-tier evidence is governed by `src/provide
 
 ### Response-tier observation authority
 
-`src/providers/fastwire.ts` copies a defined authority flag into `AttemptTierOutcome`. With false, an eligible serialized priority request remains `fastOutcome: applied` and `confirmation: assumed`: the parameter was sent, while actual scheduling is unconfirmed. Neither a `default` nor a `priority` echo can confirm or deny Fast; sanitized `responseServiceTier` remains for inspection, while local capability and wire failures still downgrade. Logs and persisted attempts retain the flag, and `src/usage/cost.ts` uses requested-tier estimation without promoting an untrusted echo or a confirmed label to response-confirmed pricing. Official API and undeclared destinations retain legacy response judgments.
+`src/providers/fastwire.ts` copies a defined authority flag into `AttemptTierOutcome`. With false, an eligible serialized priority request remains `fastOutcome: applied` and `confirmation: assumed`: the parameter was sent, while actual scheduling is unconfirmed. Neither a `default` nor a `priority` echo can confirm or deny Fast; a closed-member `responseServiceTier` ([service tier and model identity](../data-planes/error-detail.md#service-tier-and-model-identity)) remains for inspection, while local capability and wire failures still downgrade. Logs and persisted attempts retain the flag, and `src/usage/cost.ts` uses requested-tier estimation without promoting an untrusted echo or a confirmed label to response-confirmed pricing. Official API and undeclared destinations retain legacy response judgments.
 
 Anthropic Fast eligibility and downgrade recovery use the [Responses failover contract](responses-failover.md#anthropic-fast-downgrade-recovery). The [instance runtime contract](../providers/anthropic-account-pool.md#instance-scoped-runtime) governs Anthropic pool selection, physical-send ownership and continuation recovery.
 
@@ -326,7 +329,7 @@ again held its entry for the life of the process.
 > Decision record: [ADR-0038](../decisions/ADR-0038-responses-http-sse.md)
 Custom `openai-responses` gateways declare native v2 triggers with `supportsNativeCompactionTrigger` and native v1 endpoints with `supportsNativeCompactEndpoint`; neither flag implies blob replay or OpenAI identity. `src/adapters/openai-responses/transport.ts` shares normal URL/auth/header construction with custom native v1 key/local/forward routes; generic OAuth retains routed compaction so the existing credential selection, refresh and dispatch fence own authentication. Native v2 remains an independent declaration. Custom native v1 honors `preserveResponsesReasoningContent: true` in both sanitizer passes only for custom destinations; absent/false and OpenAI-operated compact destinations blank raw reasoning content. Proxy-owned `ocxr1:` envelopes are always stripped, and plaintext preservation grants neither native generation nor ciphertext replay. Both custom v1 sanitizer passes omit non-array reasoning content channels and reuse `requiresPlaintextReasoningReplay` from `src/adapters/openai-responses/passthrough.ts`: custom providers with plaintext preservation and strict tool-result adjacency strip opaque reasoning ciphertext and backfill missing `reasoning_text` from `summary_text` or the existing minimal placeholder, while preserving available plaintext. Each physical send applies `dropResponsesReasoningItems: true` and strips private input message metadata unless `preserveResponsesMessageMetadata: true`, using the ordinary adapter policy; OpenAI-operated compact metadata, reasoning items and null channels retain their established policy. Custom v1 scrubs compaction ciphertext, reasoning ciphertext and foreign reasoning ids after each serving bind, using ordinary turns' parent-thread-first replay scope; provenance commits require a successful HTTP response and a validated replacement history with replayable compact ciphertext or nonblank message text, absent/completed status and absent/null error (`nativeCompactResponseSchema` in `src/responses/schema.ts`). Invalid or empty bodies preserve the prior identity; validation never rewrites the relayed body or request-log metadata. Daybreak endpoint restrictions remain canonical-only. A native 404 handoff preserves User-Agent and allowlisted provider-opted-in metadata through `src/server/responses/core-auth.ts` without widening credential forwarding. Every custom native v1 send carries only the gateway transport's headers, and Codex pool recovery (401 refresh replay, quota and transient alternates) and pool outcome recording skip gateway sends, so recovery cannot put a stored ChatGPT credential on a gateway wire (`tests/responses/native-compaction-gateway-credentials.test.ts`). Readable reasoning retention also bypasses native v2-capable gateways; the capability predicate controls local retention as well as dispatch. V1 fallback remains portable even for v2-capable gateways; cross-provider overrides still force portable summaries. `tests/responses/native-compaction-gateway.test.ts`, `tests/responses/native-compaction-gateway-policy.test.ts` `tests/responses/native-compaction-provenance.test.ts` and `tests/responses/native-compaction-oauth.test.ts` pin these boundaries. Key-auth compact revalidates the serving key after pacing, rebuilding custom gateway paths, transport headers, replay sanitization and [citation projection](responses-citations.md) against that physical selection; `tests/responses/compact-key-selection.test.ts` covers initial gateway dispatch and queued reselection.
 Canonical native v1's 404 fallback also bypasses local readable retention: its native v2 turn receives the original reasoning and creates no archive (`tests/responses/reasoning-retention-routing.test.ts`).
-A replayed compaction item carries an `encrypted_content` blob only its minting backend can decode, and the client replays it on every later turn. The proxy's own `ocx1:`/`ocx2:` envelopes are transparent base64, so they always lower to plain user messages. A
+A replayed compaction item carries an `encrypted_content` blob only its minting backend can decode, and the client replays it on every later turn. The proxy's own `ocx1:`/`ocx2:` envelopes are transparent base64, so they always lower to plain user messages, including on canonical and official native v1 `/responses/compact` sends, where native blobs stay byte-identical (`tests/responses/responses-native-compact-ocx-envelope.test.ts`). A
 native blob is relayed only when there is no known serving-identity mismatch and the destination is known to decode native blobs — the canonical ChatGPT forward surface, the official OpenAI API, or a provider with the explicit
 `decodesNativeCompactionBlobs` capability. The destination gate alone is insufficient because more than one backend, including OpenAI and xAI, mints native blobs: a destination can decode its own blob without being able to decode the previous backend's.
 The same serving-identity mismatch signal therefore strips reasoning `encrypted_content` unless the narrowly scoped [native reasoning retention](native-reasoning-retention.md#runtime-boundary) policy permits it; native compaction blobs still degrade through the existing opaque-note path independently of that policy. Claude-native reasoning batches rejected blob tags into one scrub pass: only the
@@ -421,6 +424,7 @@ Final-route normalization in `src/server/responses/core-normalize.ts` decodes cl
 | `request-spend.ts` | This request's entries in the durable spend ledger: one per physical send, settled from the terminal usage. |
 | `passthrough-execution.ts` | Native host-lease transfer and the enclosing dispatch/delivery `finally`. |
 | `passthrough-dispatch.ts` | Native request preparation, upstream sends and pre-commit recovery. |
+| `passthrough-build-error.ts` | Shared adapter-build refusal mapping, including installation-identity unavailability as a sanitized 503. |
 | `passthrough-delivery.ts`, `terminal-error-redaction.ts`, `non-replayable-error.ts` | Native HTTP/SSE/JSON delivery and terminal accounting. Marked real errors use bounded reads to retain only allowlisted error type and code, keep status and non-replayability plus `x-should-retry: false` when present, and withhold upstream body text and all other upstream headers; the client receives a fixed generic message and synthetic refusals stay distinct. SSE diagnostics and xAI tool-envelope filtering precede client delivery/continuation storage. |
 | `policy-refusal.ts` | Rewrites an allowlisted non-combo HTTP 403 model refusal (`isUpstreamPolicyRefusal` in `src/lib/errors.ts`) from an xAI destination only (`isXaiResponsesDestination`: api.x.ai or the Grok CLI proxy, on either wire) to an HTTP 200 Responses `incomplete` / `content_filter` payload, JSON or SSE, for both `adapter-dispatch.ts` and `passthrough-delivery.ts`. A streamed rewrite takes the turn admission lease and releases it when the body finishes, so the refusal stays inside active-turn accounting. Combo attempts keep the original 403 so failover classifies it as a hop. |
 | `sidecar-execution.ts`, `sidecar-send-budget.ts` | Image/video versus web-search execution, Chat raw-reasoning preference forwarded to both loop bridges under [reasoning display parity](../providers/chat-compat.md#reasoning-display-parity-hidethinkingsummary), per-build adapter prompt estimates for usage logging, shared rotation, and adapter-aware prepaid inference/producer ownership under the [spend contract](responses-spend.md#prepaid-initial-sends). |
@@ -428,7 +432,7 @@ Final-route normalization in `src/server/responses/core-normalize.ts` decodes cl
 | `adapter-dispatch.ts` | Translated initial dispatch, bounded recovery (including [Anthropic thinking-signature recovery](anthropic-thinking-recovery.md)) and the shared continuation retry counter. Initial and rebuilt adapter budget refusals retain the HTTP 413 [byte-accounting contract](byte-accounting.md#request-copy-accounting); ordinary build errors remain 400. |
 | `adapter-continuation.ts`, `adapter-delivery.ts` | Continuation event sources and final streaming/buffered bridging; Anthropic routed summaries pass through `src/responses/compaction-summary.ts` before either bridge. A streamed turn with a `clientEncoder` option is handed to `src/server/inference/client-encoder-delivery.ts` instead of the bridge. |
 
-Reusable helpers live in `core-auth.ts`, `core-codex-account.ts`, `core-combo.ts`, `core-combo-failure.ts`, `core-combo-native.ts`, `combo-requested-effort.ts`, `core-errors.ts`, `core-lifetime.ts`, `core-normalize.ts`, `core-opaque-recovery.ts` and `core-replay.ts`. `core-options.ts` owns the public option types
+Direct Chat delivery preserves the live `localUpstream` getter when adding collector/provenance options, so replacement routes retain their own stall policy. Local preflight/auth responses and tool-guard messages carry process-local ownership through the pipeline and lifetime wrappers for the [Chat client error contract](../data-planes/error-detail.md#client-error-bodies-chat); Responses wire bytes retain their existing formatting. Reusable helpers live in `core-auth.ts`, `core-codex-account.ts`, `core-combo.ts`, `core-combo-failure.ts`, `core-combo-native.ts`, `combo-requested-effort.ts`, `core-errors.ts`, `core-lifetime.ts`, `core-normalize.ts`, `core-opaque-recovery.ts` and `core-replay.ts`. `core-options.ts` owns the public option types
 and small composition contracts, including [finite model-refusal evidence](../providers-and-adapters.md#combo-model-refusal-evidence). Existing public helper names are re-exported by `core.ts`. After an admitted Anthropic OAuth pool rotation, `adapter-dispatch.ts` rebinds reasoning replay to the committed credential snapshot; `adapter-continuation.ts` rebinds both its continuation clone and the outer request that persists the response. The replacement send strips the previous account's private state, while persisted ownership and the next turn follow the serving account. Codex alternate-account sends in `core-codex-account.ts` record `oauth-account-402` for HTTP 402 quota recovery, `oauth-account-429` for HTTP 429 rate-limit recovery, and `transient-5xx` for transient recovery, preserving the first response's wire status when sealing its attempt; gated-model moves keep their existing unattributed kind.
 Adapter construction remains with the existing registry; `fetch-helpers.ts` remains a leaf. For Kiro OAuth with load settings, `request-transport.ts` acquires a lease on the admitted account and transfers it before a reactive replacement send; cancellation permanently fences the request holder so recovery cannot install a late lease after abort cleanup. `core.ts` and `core-lifetime.ts` release the lease on returned-body completion, error, or cancellation, outside the inner admission `finally`.
 
@@ -565,8 +569,8 @@ in the Chat shape, blocked trace) with no send. `n > 1` is never emulated with s
 inferences. Policy routes resolve one candidate in `routeModel` and never reach this loop, so they
 are not migrated. `tests/responses/chat-native-combo.test.ts` pins the source body, failover
 within the shared budget, no resend after output, the switch-off path and both reject outcomes.
-Managed native Messages ([Protocol Paths](../data-planes/protocol-paths.md#managed-native-messages))
-reuses `beginInferenceAttempt` and `createFinalRequestLog` with its own 401/429 key-rotation loop.
+Managed native Messages uses the same seam and shared executor for [eligible canonical failover children](../data-planes/protocol-paths.md#managed-native-messages), with the combo's existing attempt, budget/permit and gated final-row callbacks.
+Messages successes are marked `messages`, bypass Responses inspection/translation and use their own [bounded preflight](responses-combo-boundaries.md); standalone ingress keeps its own attempt/final row.
 
 ## Adapter-to-Responses bridge
 
@@ -574,7 +578,7 @@ Opt-in translated Responses text-only token-limit completion follows [the text c
 `src/bridge.ts` is a re-export facade; the implementation lives in `src/bridge/`.
 `src/bridge/sse.ts` (`bridgeToResponsesSSE`) turns adapter events into the Responses SSE stream; its once-only first-output observer includes nonempty `tool_call_delta` arguments (including custom-tool input), but not tool-start scaffolding or empty arguments,
 and `src/bridge/response-json.ts` (`buildResponseJSON`) builds the non-streaming Responses body
-from the same events. `buildResponseJSON` records a buffered delivery on the attempt unless the
+from the same events. Both bridge forms and the shared undeclared-tool guard use a fixed refusal sentence without the upstream tool name. Synthetic watchdog/EOF origin follows the [Chat error contract](../data-planes/error-detail.md#client-error-bodies-chat). `buildResponseJSON` records a buffered delivery on the attempt unless the
 caller passes `recordBufferedDelivery: false`, which the direct client encoders do because they
 count their own frames. `src/protocols/encoders/adapter-events.ts` ports the bridge's item state
 machine for those encoders, so a change to item boundaries, tool naming or terminal handling in

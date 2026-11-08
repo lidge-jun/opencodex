@@ -1,21 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { createBoundedFetch } from '../bounded-fetch';
 import { useI18n } from '../i18n/shared';
-import { formatTokens } from '../format-tokens';
-import { formatProviderDisplayName } from '../provider-icons';
-import { ProviderIcon } from '../components/provider-workspace/ProviderRail';
-import { quotaSeverity } from '../quota-summary';
 import { UsageCompanionChart } from './usage-companion-chart';
 import { companionTimelineQuery, companionTimelineProjection, type CompanionSettings, type CompanionSettingsResponse, type UsageTimeline } from './usage-companion-utils';
-import { accountSwitchRequest, fetchTrayJson, parseTrayUsage, filterUsage, measuredTotals, finite, parseAccounts, providerSources, quotaWindows, relativeReset, type TrayProvider, type TraySwitchKind, type TrayTotals, type TrayUsage } from './tray-data';
+import { accountSwitchRequest, fetchTrayJson, parseTrayUsage, filterUsage, parseAccounts, providerSources, type TrayProvider, type TraySwitchKind, type TrayUsage } from './tray-data';
 import { resolveTrayApiBase } from './tray-targets';
+import { TrayAlert, TrayCard, TrayFooter, TrayHeader, type TrayConnection } from './tray/TrayParts';
+import { TrayModelsCard, TrayTotalsCard } from './tray/TrayUsage';
+import { TrayProviderCard } from './tray/TrayAccounts';
 
 declare global { interface Window { __OPENCODEX_TRAY_VISIBLE__?: boolean } }
 
 /** A switch that has not answered by then is reported as failed rather than left spinning. */
 const SWITCH_TIMEOUT_MS = 20_000;
-
-const incomplete = (data: TrayUsage | null | undefined) => data?.usageIncomplete || data?.historyTruncated || data?.entriesTruncated;
 
 export interface TrayProps {
   /** Where tray requests go; the default runs App's discovery and hub-session bootstrap. */
@@ -122,7 +119,7 @@ export default function Tray({ resolveApiBase = resolveTrayApiBase }: TrayProps 
                     payload.activeCodexAccountId = selection.activeCodexAccountId ?? '__main__';
                   } catch { /* Missing selection is unknown, never inferred from quota. */ }
                 }
-                return { name: source.name, switchKind: source.switchKind, accounts: parseAccounts(payload) };
+                return { name: source.name, switchKind: source.switchKind, accounts: parseAccounts(payload, source.switchKind, index => t('pws.accountOrdinal', { count: index })) };
               }
               catch { return { name: source.name, switchKind: source.switchKind, accounts: [], unavailable: true }; }
             }));
@@ -187,73 +184,26 @@ export default function Tray({ resolveApiBase = resolveTrayApiBase }: TrayProps 
       window.removeEventListener('blur', blur); window.removeEventListener('focus', focus);
       window.removeEventListener('opencodex:tray-visibility', nativeVisibility);
     };
-  }, [revision, apiBase]);
+  }, [revision, apiBase, t]);
 
-  const number = (value: unknown) => finite(value) ? formatTokens(value, locale) : '—';
-  const totals = (raw: TrayTotals | undefined) => {
-    const data = raw ? measuredTotals(raw) : undefined;
-    const cached = data?.cacheReadInputTokens ?? data?.cachedInputTokens;
-    const percent = finite(cached) && finite(data?.inputTokens) && data.inputTokens > 0 ? `${Math.round(cached / data.inputTokens * 100)}%` : '—';
-    return <dl>
-      <div><dt>{t('usage.card.totalTokens')}</dt><dd>{number(data?.totalTokens)}</dd></div>
-      <div><dt>{t('tray.input')}</dt><dd>{number(data?.inputTokens)} <small title={t('usage.card.cachedTokens')}>{t('tray.cached', { percent })}</small></dd></div>
-      <div><dt>{t('tray.output')}</dt><dd>{number(data?.outputTokens)}</dd></div>
-      {settings?.showCost && <div><dt title={t('logs.metric.estimatedCostTitle')}>{t('tray.cost')}</dt><dd title={finite(data?.requests) && finite(data?.pricedRequests) && data.pricedRequests < data.requests ? t('usage.cost.unpricedNote', { count: data.requests - data.pricedRequests }) : t('logs.metric.estimatedCostTitle')}>{finite(data?.estimatedCostUsd) ? new Intl.NumberFormat(locale, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(data.estimatedCostUsd) + (finite(data.pricedRequests) && finite(data.requests) && data.pricedRequests < data.requests ? '*' : '') : '—'}</dd></div>}
-      <div><dt>{t('usage.card.requests')}</dt><dd>{number(data?.requests)}</dd></div>
-      {finite(data?.requests) && data.requests > 0 && finite(data.measuredRequests) && data.measuredRequests < data.requests && <div className="tray-coverage" title={t('usage.coverage.note')}><dt>{t('usage.card.coverage')}</dt><dd>{Math.round(data.measuredRequests / data.requests * 100)}%</dd></div>}
-    </dl>;
-  };
   const hiddenProviders = new Set(settings?.hiddenProviders ?? []);
+  // Read off the popover's own requests: the runtime answered, could not be reached, or has not yet.
+  const connection: TrayConnection = targetError || (quotaError && settingsError) ? 'down' : updatedAt !== null ? 'up' : 'loading';
+  const updated = t('tray.updated', { time: updatedAt === null ? '—' : new Date(updatedAt).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' }) });
   return <main className="tray-page">
-    <header><strong>OpenCodex</strong><a href="/?desktop=open#/usage" aria-label={t('sub.settings')} title={t('sub.settings')}>⚙</a></header>
-    {targetError && <p role="alert" className="tray-error">{t('startup.tray.unavailable')} <button onClick={retry}>{t('common.retry')}</button></p>}
-    {settingsError && <p role="alert" className="tray-error">{t('usage.companion.settingsUnavailable')} <button onClick={retry}>{t('common.retry')}</button></p>}
-    {!settings && !settingsError && !targetError && <p role="status">{t('common.loading')}</p>}
-    {settings && <section className="tray-totals">
-      {settings.showToday && <div><h2>{t('tray.today')}{incomplete(usage[0]) && <span title={t('usage.incomplete')} aria-label={t('usage.incomplete')}> *</span>}</h2>{totals(usage[0]?.summary)}</div>}
-      <div><h2>{t('usage.range.30d')}{incomplete(usage[1]) && <span title={t('usage.incomplete')} aria-label={t('usage.incomplete')}> *</span>}</h2>{totals(usage[1]?.summary)}</div>
-    </section>}
-    {usageError && <p role="alert" className="tray-error">{t('usage.loadError')} <button onClick={retry}>{t('common.retry')}</button></p>}
-    {settings?.showChart && <section className="tray-chart"><UsageCompanionChart timeline={timeline} chartStyle={settings.chartStyle} hours={settings.chartHours} loading={!timeline && !chartError} error={chartError ? t('usage.companion.timelineUnavailable') : null} onRetry={retry} locale={locale} t={t} /></section>}
-    {settings?.showModels && !!usage[0]?.models.length && <section className="tray-models" aria-label={t('usage.section.models')}>
-      {usage[0].models.map(row => <div key={`${row.provider}/${row.model}`}><span title={`${row.provider}/${row.model}`}>{row.model}</span><span className="tray-model-metrics"><span title={t('usage.card.requests')}>{t('pws.dashboard.requests', { count: number(row.requests) })}</span><span title={t('usage.card.totalTokens')}>{number(measuredTotals(row).totalTokens)}</span></span></div>)}
-    </section>}
+    <TrayHeader connection={connection} refreshing={refreshing} onRefresh={retry} t={t} />
+    {targetError && <TrayAlert onRetry={retry} t={t}>{t('startup.tray.unavailable')}</TrayAlert>}
+    {settingsError && <TrayAlert onRetry={retry} t={t}>{t('usage.companion.settingsUnavailable')}</TrayAlert>}
+    {!settings && !settingsError && !targetError && <p role="status" className="tray-loading">{t('common.loading')}</p>}
     {(settings?.showAccounts ?? true) && <section className="tray-providers" aria-label={t('usage.section.providers')}>
-      {quotaError && <p role="alert" className="tray-error">{t('startup.tray.unavailable')} <button onClick={retry}>{t('common.retry')}</button></p>}
-      {switchError && <p role="alert" className="tray-error">{switchError}</p>}
-      {providers.filter(provider => !hiddenProviders.has(provider.name)).map(provider => <div className="tray-provider" key={provider.name}>
-        <h2><ProviderIcon name={provider.name} cls="provider-icon tray-provider-icon" />{formatProviderDisplayName(provider.name, t)}</h2>
-        {!provider.accounts.length && <div className="tray-missing">{t(provider.unavailable ? 'startup.tray.unavailable' : 'pws.dashboard.noQuota')}</div>}
-        {provider.accounts.map(account => {
-          const kind = provider.switchKind;
-          const pending = switching === `${provider.name}:${account.id}`;
-          return <div className="tray-account" key={account.id}>
-          <div className="tray-account-name">
-            <span className="tray-account-label" title={account.label}>{account.label}{account.exhausted && <span className="tray-exhausted" title={t('quota.limitReached')} aria-label={t('quota.limitReached')}> ⚠</span>}</span>
-            <span className="tray-account-meta">
-              {pending && <span role="status">{t('pws.accountSwitching')}</span>}
-              {!pending && kind && account.switchState === 'available' && <button type="button" className="tray-use" disabled={switching !== null} onClick={() => void switchAccount(provider.name, kind, account.id)} title={t('prov.accountSwitchTitle')} aria-label={`${t('prov.accountSwitchTitle')}: ${account.label}`}>{t('prov.accountSwitchTitle')}</button>}
-              {account.plan}
-              {account.active && <span className="tray-active" title={t('prov.activeBadge')} aria-label={t('prov.activeBadge')}> ✓</span>}
-            </span>
-          </div>
-          {account.email && account.email !== account.label && <div className="tray-account-email">{account.email}</div>}
-          {!quotaWindows(account.quota).length && <div className="tray-missing">{t(account.unavailable ? 'startup.tray.unavailable' : 'pws.dashboard.noQuota')}</div>}
-          {quotaWindows(account.quota).map(window => {
-            const label = 'key' in window ? t(window.key!) : window.label;
-            const reset = relativeReset(window.reset, locale);
-            const percent = finite(window.percent) ? Math.min(100, window.percent) : null;
-            return <div className="tray-quota" key={window.id}>
-              <span title={label}>{label}</span><span>{percent === null ? '—' : `${Math.round(percent)}%`}</span>
-              <span className={`tray-bar tray-bar--${quotaSeverity(percent ?? undefined)}`} role={percent === null ? 'img' : 'meter'} aria-label={percent === null ? `${label}: ${t('pws.dashboard.noQuota')}` : label} aria-valuemin={percent === null ? undefined : 0} aria-valuemax={percent === null ? undefined : 100} aria-valuenow={percent ?? undefined} aria-valuetext={percent === null ? undefined : `${Math.round(percent)}%`}><i style={{ width: percent === null ? '0%' : `${percent}%` }} /></span>
-             <time title={reset.exact}>{reset.text}</time>
-           </div>;
-         })}
-        </div>;
-        })}
-      </div>)}
+      {quotaError && <TrayAlert onRetry={retry} t={t}>{t('startup.tray.unavailable')}</TrayAlert>}
+      {switchError && <TrayAlert t={t}>{switchError}</TrayAlert>}
+      {providers.filter(provider => !hiddenProviders.has(provider.name)).map(provider => <TrayProviderCard key={provider.name} provider={provider} switching={switching} onSwitch={(name, kind, id) => void switchAccount(name, kind, id)} locale={locale} t={t} />)}
     </section>}
-    <div className="tray-refresh"><button type="button" onClick={retry} disabled={refreshing}>{t('startup.refresh')}</button><span role="status">{t('tray.updated', { time: updatedAt === null ? '—' : new Date(updatedAt).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' }) })}</span></div>
-    <footer><a href="/?desktop=open#/usage">{t('nav.dashboard')} <span aria-hidden="true">↗</span></a></footer>
+    {settings && <TrayTotalsCard usage={usage} settings={settings} locale={locale} t={t} />}
+    {usageError && <TrayAlert onRetry={retry} t={t}>{t('usage.loadError')}</TrayAlert>}
+    {settings?.showChart && <TrayCard className="tray-chart"><UsageCompanionChart timeline={timeline} chartStyle={settings.chartStyle} hours={settings.chartHours} loading={!timeline && !chartError} error={chartError ? t('usage.companion.timelineUnavailable') : null} onRetry={retry} locale={locale} t={t} /></TrayCard>}
+    {settings?.showModels && !!usage[0]?.models.length && <TrayModelsCard usage={usage[0]} locale={locale} t={t} />}
+    <TrayFooter updated={updated} t={t} />
   </main>;
 }

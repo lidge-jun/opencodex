@@ -37,7 +37,55 @@ function sanitizeZenToolParameters(value: unknown): unknown {
   return out;
 }
 
-function ensureZenRootObjectSchema(schema: unknown): Record<string, unknown> {
+/** Inspect composition edges only: property schemas and literal values are not branches. */
+function hasUnreadClaudeComposition(branch: Record<string, unknown>, budget: { nestedRemaining: number }): boolean {
+  const pending = [branch];
+  const seen = new Set<object>(pending);
+  while (pending.length > 0) {
+    const node = pending.pop()!;
+    for (const key of ["oneOf", "anyOf", "allOf"]) {
+      const variants = node[key];
+      if (!Array.isArray(variants)) continue;
+      for (const variant of variants) {
+        if (budget.nestedRemaining-- <= 0) return true;
+        if (!variant || typeof variant !== "object" || Array.isArray(variant)) continue;
+        if (Object.hasOwn(variant, "properties")) {
+          const properties = (variant as Record<string, unknown>).properties;
+          if (!properties || typeof properties !== "object" || Array.isArray(properties) || Object.keys(properties).length > 0) return true;
+          const prototype = Object.getPrototypeOf(properties);
+          if (prototype !== null && prototype !== Object.prototype) return true;
+        }
+        if (Object.hasOwn(variant, "$ref") || seen.has(variant)) return true;
+        seen.add(variant);
+        pending.push(variant as Record<string, unknown>);
+      }
+    }
+  }
+  return false;
+}
+
+/** Read only root-branch ref chains; never expand property schemas or literal data. */
+function claudeRootBranchLayers(branch: Record<string, unknown>, root: Record<string, unknown>, budget: { remaining: number; nestedRemaining: number }): Record<string, unknown>[] | undefined {
+  if (typeof branch.$ref === "string" && ["oneOf", "anyOf", "allOf"].some(key => Array.isArray(branch[key]))) return undefined;
+  if (hasUnreadClaudeComposition(branch, budget)) return undefined;
+  const layers = [branch];
+  const seen = new Set<object>([branch]);
+  let current = branch;
+  // One budget across all branches bounds repeated references as well as long chains.
+  while (typeof current.$ref === "string") {
+    if (budget.remaining-- <= 0) return undefined;
+    const target = lookupLocalJsonPointer(root, current.$ref);
+    if (!target || typeof target !== "object" || Array.isArray(target) || seen.has(target)) return undefined;
+    seen.add(target);
+    current = target as Record<string, unknown>;
+    if (["oneOf", "anyOf", "allOf"].some(key => Array.isArray(current[key]))) return undefined;
+    layers.push(current);
+  }
+  // Referenced fields first, then referring siblings; later branches still win.
+  return layers.reverse();
+}
+
+function ensureZenRootObjectSchema(schema: unknown, sanitizeNested = true): Record<string, unknown> {
   const obj = schema && typeof schema === "object" && !Array.isArray(schema)
     ? schema as Record<string, unknown>
     : {};
@@ -46,14 +94,15 @@ function ensureZenRootObjectSchema(schema: unknown): Record<string, unknown> {
   const rootType = obj.type;
   const rootObjectType = rootType === "object" || (Array.isArray(rootType) && rootType.includes("object"));
   if (!hasComposition) {
-    const base = sanitizeZenToolParameters(obj) as Record<string, unknown>;
+    const base = (sanitizeNested ? sanitizeZenToolParameters(obj) : { ...obj }) as Record<string, unknown>;
     return rootObjectType && base.type === "object" ? base : { ...base, type: "object" };
   }
 
-  const props: Record<string, unknown> = {};
+  const props: Record<string, unknown> = sanitizeNested ? {} : Object.create(null);
   const required = new Set<string>();
+  const refBudget = { remaining: 64, nestedRemaining: 256 };
   if (obj.properties && typeof obj.properties === "object") {
-    Object.assign(props, sanitizeZenSchemaMap(obj.properties) as Record<string, unknown>);
+    Object.assign(props, sanitizeNested ? sanitizeZenSchemaMap(obj.properties) : obj.properties);
   }
   if (Array.isArray(obj.required)) {
     for (const entry of obj.required) if (typeof entry === "string") required.add(entry);
@@ -64,17 +113,22 @@ function ensureZenRootObjectSchema(schema: unknown): Record<string, unknown> {
     const mergeRequired = key === "allOf";
     for (const variant of variants) {
       if (!variant || typeof variant !== "object" || Array.isArray(variant)) continue;
-      const rec = variant as Record<string, unknown>;
-      if (rec.properties && typeof rec.properties === "object") {
-        Object.assign(props, sanitizeZenSchemaMap(rec.properties) as Record<string, unknown>);
-      }
-      if (mergeRequired && Array.isArray(rec.required)) {
-        for (const entry of rec.required) if (typeof entry === "string") required.add(entry);
+      const branch = variant as Record<string, unknown>;
+      const layers = sanitizeNested ? [branch] : claudeRootBranchLayers(branch, obj, refBudget);
+      // Keep the unsupported schema visible to the provider rather than losing arguments.
+      if (!layers) return { ...obj, type: "object" };
+      for (const rec of layers) {
+        if (rec.properties && typeof rec.properties === "object") {
+          Object.assign(props, sanitizeNested ? sanitizeZenSchemaMap(rec.properties) : rec.properties);
+        }
+        if (mergeRequired && Array.isArray(rec.required)) {
+          for (const entry of rec.required) if (typeof entry === "string") required.add(entry);
+        }
       }
     }
   }
 
-  const merged = sanitizeZenToolParameters(obj) as Record<string, unknown>;
+  const merged = (sanitizeNested ? sanitizeZenToolParameters(obj) : { ...obj }) as Record<string, unknown>;
   delete merged.oneOf;
   delete merged.anyOf;
   delete merged.allOf;
@@ -92,6 +146,21 @@ function shouldSanitizeZenToolParameters(provider: OcxProviderConfig): boolean {
 
 /** Azure Model Router (and Gemini-in-the-pool) 400s Codex MCP schemas whose root is a union. */
 const AZURE_CHAT_FORBIDDEN_ROOT_KEYS = ["oneOf", "anyOf", "allOf", "enum", "const", "not"] as const;
+
+/**
+ * Anthropic validates every tool `input_schema` as a plain object and answers 400
+ * "input_schema does not support oneOf, allOf, or anyOf at the top level". Gateways that
+ * front Claude behind a Chat Completions wire (new-api / EasyRouter style relays) forward the
+ * schema as-is, so a Codex MCP tool with a union root fails the whole turn. The provider-wide
+ * adapter cannot be split per model, so decide on the upstream model id: Claude ids get the
+ * inline root flattening plus bounded local branch-ref handling; other models are untouched.
+ */
+function isClaudeModelId(modelId: string | undefined): boolean {
+  if (typeof modelId !== "string") return false;
+  const id = modelId.trim().toLowerCase();
+  const tail = id.slice(id.lastIndexOf("/") + 1);
+  return tail.startsWith("claude-");
+}
 
 function isAzureOpenAiChatTarget(provider: OcxProviderConfig): boolean {
   try {
@@ -576,14 +645,15 @@ export function toolsToChatFormatForProvider(
   const base = toolsToChatFormat(parsed, provider, registry);
   const azureChat = isAzureOpenAiChatTarget(provider);
   const zenChat = shouldSanitizeZenToolParameters(provider);
-  if (!base || (!zenChat && !azureChat)) return base;
+  const claudeChat = isClaudeModelId(parsed._wireModelOverride ?? parsed.modelId);
+  if (!base || (!zenChat && !azureChat && !claudeChat)) return base;
   return base.map(tool => {
     if (!tool || typeof tool !== "object") return tool;
     const functionDef = (tool as { function?: Record<string, unknown> }).function;
     if (!functionDef || typeof functionDef !== "object") return tool;
     const parameters = azureChat
       ? sanitizeAzureChatToolParameters(functionDef.parameters ?? {})
-      : ensureZenRootObjectSchema(functionDef.parameters ?? {});
+      : ensureZenRootObjectSchema(functionDef.parameters ?? {}, zenChat);
     const nextFunction: Record<string, unknown> = { ...functionDef, parameters };
     // strict: true plus a flattened schema is rejected by Gemini-in-the-pool routers.
     if (azureChat) delete nextFunction.strict;

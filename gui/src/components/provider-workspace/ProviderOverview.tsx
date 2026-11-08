@@ -1,3 +1,4 @@
+import { anthropicInstanceRowShapeMatches, isAnthropicInstanceId } from "../../../../src/providers/anthropic-instance-id";
 /**
  * ProviderOverview — 2-column layout: left (CONNECTION + Auth summary) / right
  * (STATS + Notes). Phase 030 of workspace design parity.
@@ -6,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { readJsonOrThrow } from "../../fetch-json";
 import { useT, useI18n } from "../../i18n/shared";
 import { IconAlert, IconCheck } from "../../icons";
-import { binProviderStatus, type WorkspaceItem } from "../../provider-workspace/catalog";
+import { binProviderStatus, usesUnverifiedVertexCredentials, type WorkspaceItem } from "../../provider-workspace/catalog";
 import { formatRequestCount, formatTokenCount } from "../../provider-workspace/usage";
 import { modelVisible } from "../../model-visibility";
 import { discoveryFailureLabel, type ModelRow } from "../../pages/models-shared";
@@ -36,7 +37,7 @@ type ConnectionTestState = {
 };
 
 export default function ProviderOverview({
-  item, preset, usageTotals, quotaReport, currentQuotaReading, onRefreshQuota, oauthEmail, oauth,
+  item, preset, usageTotals, quotaReport, currentQuotaReading, onRefreshQuota, oauthEmail, currentAccountLabel, oauth,
   apiBase, connectionIdentity, probeController, availableModels = [], selectedModels, modelRows, modelRowsReady = false,
   modelsLoading = false, modelsLoadFailed = false, onRetryModels, onOpenAccounts, onOpenModelsTab, onOpenModels, onOpenConnect,
   onEditSettings, onViewUsage, onUpdateProvider,
@@ -50,6 +51,7 @@ export default function ProviderOverview({
   currentQuotaReading?: AccountQuotaReading;
   onRefreshQuota?: () => Promise<boolean>;
   oauthEmail?: string;
+  currentAccountLabel?: string;
   /** Login state for OAuth summaries that carry no email (e.g. Cursor/Kimi). */
   oauth?: { loggedIn?: boolean; needsReauth?: boolean };
   apiBase?: string;
@@ -78,17 +80,20 @@ export default function ProviderOverview({
   const t = useT();
   const { locale } = useI18n();
   const status = binProviderStatus(item);
+  const vertexUnverified = usesUnverifiedVertexCredentials(item);
   const needsAttention = Boolean(item.activeNeedsReauth) || oauth?.needsReauth === true;
   const needsOAuthLogin = item.authMode === "oauth" && oauth?.loggedIn === false;
   const effectiveStatus = item.disabled === true
     ? "disabled"
+    : vertexUnverified && !needsAttention ? "unverified"
     : needsAttention || needsOAuthLogin || status === "needs-setup"
       ? "needs-setup"
       : "ready";
   const statusText = effectiveStatus === "ready"
     ? t("pws.status.ready")
+    : effectiveStatus === "unverified" ? t("pws.vertexUnverified")
     : effectiveStatus === "needs-setup"
-      ? (needsAttention ? t("pws.status.needsAttention") : t("pws.status.needsSetup"))
+      ? (needsAttention ? t("pws.status.needsAttention") : vertexUnverified ? t("pws.vertexUnverified") : t("pws.status.needsSetup"))
       : t("prov.disabledBadge");
   const requests = usageTotals?.requests;
   const tokens = usageTotals?.totalTokens;
@@ -167,7 +172,7 @@ export default function ProviderOverview({
       ? "needs-attention"
       : needsOAuthLogin
         ? "needs-login"
-        : effectiveStatus === "needs-setup"
+        : effectiveStatus === "needs-setup" || effectiveStatus === "unverified"
           ? "needs-setup"
           : "saved";
   const providerStepText = providerStepState === "disabled"
@@ -177,7 +182,7 @@ export default function ProviderOverview({
       : providerStepState === "needs-login"
         ? t("pws.firstResponse.providerNeedsLogin")
         : providerStepState === "needs-setup"
-          ? t("pws.firstResponse.providerNeedsSetup")
+          ? t(vertexUnverified ? "pws.vertexSavedUnverified" : "pws.firstResponse.providerNeedsSetup")
           : t("pws.firstResponse.providerSaved");
 
   const providerRows = (modelRows ?? []).filter(row => row.provider === item.name);
@@ -244,6 +249,8 @@ export default function ProviderOverview({
           : reverifyPending
             ? t("pws.firstResponse.probeReverify", { model: reverifyModel })
             : t("pws.firstResponse.probeUntested");
+  const displayEmail = isAnthropicInstanceId(item.name) && anthropicInstanceRowShapeMatches(item.name, item) ? undefined : oauthEmail;
+  const currentClaudeAccount = isAnthropicInstanceId(item.name) && anthropicInstanceRowShapeMatches(item.name, item) ? currentAccountLabel : undefined;
   const openModelsAction = onOpenModelsTab ?? onOpenModels;
   const fixCredentialsAction = onOpenAccounts ?? onEditSettings;
 
@@ -270,8 +277,11 @@ export default function ProviderOverview({
           </div>
           <div className="pws-kv-row">
             <dt>{t("pws.cell.auth")}</dt>
-            <dd>{oauthEmail ? `${authModeLabel(item, t)} · ${oauthEmail}` : authModeLabel(item, t)}</dd>
+            <dd>{displayEmail ? `${authModeLabel(item, t)} · ${displayEmail}` : authModeLabel(item, t)}</dd>
           </div>
+          {currentClaudeAccount && <div className="pws-kv-row">
+            <dt>{t("pws.accountCurrent")}</dt><dd>{currentClaudeAccount}</dd>
+          </div>}
           <div className="pws-kv-row">
             <dt>{t("modal.defaultModel")}</dt>
             <dd>{item.defaultModel ?? <span className="muted">—</span>}</dd>
@@ -444,11 +454,11 @@ export default function ProviderOverview({
               {item.authMode === "forward"
                 ? t("pws.passthrough")
                 : item.authMode === "oauth"
-                  ? (oauthEmail
-                    ? t("pws.loggedInAs", { email: oauthEmail })
-                    : oauth?.loggedIn
+                  ? (displayEmail
+                    ? t("pws.loggedInAs", { email: displayEmail })
+                    : oauth?.loggedIn === true
                       ? t("pws.loggedInTitle")
-                      : t("pws.notLoggedIn"))
+                      : oauth?.loggedIn === false ? t("pws.notLoggedIn") : t("startup.unverified"))
                   : item.hasApiKey
                     ? t("pws.apiKeyConfigured")
                     : authModeLabel(item, t)}
