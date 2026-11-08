@@ -39,6 +39,8 @@ export interface LinkListenerDeps {
   warn?: (message: string) => void;
   /** Freezes the native defaults Children inherit before this listener can serve route intent. */
   captureRouteDefaults?: () => void;
+  /** Delay before retry `attempt` (0-based) of a failed capture; tests shorten it. */
+  captureRetryDelayMs?: (attempt: number) => number;
 }
 
 export type LinkListenerStatus = {
@@ -103,6 +105,32 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   const releaseFallbackLinkResolver = registerFallbackLinkResolver(keyId =>
     readStoreForAdmission().links.find(link => link.apiKeyId === keyId)?.id);
 
+  // Children read route intent through this listener, and that read is pure: it never captures.
+  // So a failed capture (a busy config lock, a damaged route-intent.json) is owed and retried with
+  // backoff until it succeeds or the listener stops, and again on every ensureStarted. Meanwhile
+  // Children project the builtin defaults, and every Home-only switch writer still captures first.
+  let routeDefaultsOwed = false;
+  let captureAttempt = 0;
+  let captureRetry: ReturnType<typeof setTimeout> | undefined;
+  const retryDelay = deps.captureRetryDelayMs ?? (attempt => Math.min(1_000 * 2 ** attempt, 300_000));
+  const captureRouteDefaults = (): void => {
+    if (captureRetry) { clearTimeout(captureRetry); captureRetry = undefined; }
+    try {
+      (deps.captureRouteDefaults ?? (() => { captureHomeRouteDefaults(undefined, { whenLinked: true }); }))();
+      routeDefaultsOwed = false;
+      captureAttempt = 0;
+    } catch (error) {
+      if (!routeDefaultsOwed) warn(`⚠ Child route defaults were not captured; retrying: ${error instanceof Error ? error.message : String(error)}`);
+      routeDefaultsOwed = true;
+      if (stopped) return;
+      captureRetry = setTimeout(() => {
+        captureRetry = undefined;
+        if (!stopped && routeDefaultsOwed) captureRouteDefaults();
+      }, retryDelay(captureAttempt++));
+      (captureRetry as { unref?: () => void }).unref?.();
+    }
+  };
+
   const bindIfNeeded = (): void => {
     if (stopped || listener || !startContext) return;
     let store: LinkStore;
@@ -116,11 +144,9 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       setStatus("off", null, null);
       return;
     }
-    // Children read route intent through this listener. Capture their defaults from the Home's
-    // switches as they stand at startup, before any Home-only command can move one. A failure
-    // leaves the listener up: the route-intent read captures again before it projects.
-    try { (deps.captureRouteDefaults ?? (() => { captureHomeRouteDefaults(undefined, { whenLinked: true }); }))(); }
-    catch (error) { warn(`⚠ Child route defaults were not captured: ${error instanceof Error ? error.message : String(error)}`); }
+    // Capture the Children's defaults from the Home's switches as they stand at startup, before any
+    // Home-only command can move one. A failure leaves the listener up and is retried (see above).
+    captureRouteDefaults();
     const requestedPort = store.listenerPort ?? 0;
     const sessions = createLinkRelaySessions({ peers, connectionGeneration: linkId => startContext?.connectionGeneration?.(linkId), fingerprints: (keyId, linkId) => {
       if (!readStoreForAdmission().links.some(link => link.id === linkId && link.apiKeyId === keyId)) return [];
@@ -184,6 +210,8 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     const flight = (async () => {
       if (closeFlight) await closeFlight;
       if (stopped) return;
+      // An unbound listener captures in bindIfNeeded; a bound one retries an owed capture here.
+      if (routeDefaultsOwed && listener) captureRouteDefaults();
       bindIfNeeded();
     })();
     ensureFlight = flight.finally(() => {
@@ -239,6 +267,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     close,
     async stop() {
       stopped = true;
+      if (captureRetry) { clearTimeout(captureRetry); captureRetry = undefined; }
       releaseFallbackLinkResolver();
       // Process shutdown is deliberately forceful, unlike last-link removal. Every
       // authenticated socket is closed, and the client transport cannot reconnect it.
