@@ -401,6 +401,17 @@ function hasIncompatibleDiagnosticCarrier(val: unknown, depth = 0): boolean {
     }
     return false;
   }
+  if (typeof val === "string") {
+    try {
+      const parsed = JSON.parse(val);
+      if (parsed && typeof parsed === "object") {
+        return hasIncompatibleDiagnosticCarrier(parsed, depth + 1);
+      }
+      return true;
+    } catch {
+      return true;
+    }
+  }
   if (typeof val === "object") {
     const rec = val as Record<string, unknown>;
     if (rec.code !== undefined && rec.code !== null) {

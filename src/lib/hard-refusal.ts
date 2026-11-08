@@ -51,8 +51,28 @@ export function isHardPolicyOrOriginRefusal(text: string | undefined, depth = 0)
         examined += 1;
         if (!candidate || typeof candidate !== "object") continue;
         if (Array.isArray(candidate)) {
+          if (candidate.length > 32) return true;
           for (const item of candidate) {
-            if (item && typeof item === "object") queue.push(item);
+            if (item && typeof item === "object") {
+              queue.push(item);
+            } else if (typeof item === "string") {
+              if (
+                isCyberPolicyMessage(item)
+                || /origin_rejected/i.test(item)
+                || safetyRefusalCodeFromMessage(item)
+                || isHardPolicyOrOriginRefusal(item, depth + 1)
+              ) {
+                return true;
+              }
+              try {
+                const parsedItem = JSON.parse(item);
+                if (parsedItem && typeof parsedItem === "object") {
+                  queue.push(parsedItem);
+                }
+              } catch {
+                /* non-JSON string */
+              }
+            }
           }
           continue;
         }

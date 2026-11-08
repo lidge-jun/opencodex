@@ -583,7 +583,29 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
       if (Array.isArray(candidate)) {
         if (candidate.length > 32) return true;
         for (const item of candidate) {
-          if (item && typeof item === "object") queue.push(item);
+          if (item && typeof item === "object") {
+            queue.push(item);
+          } else if (typeof item === "string") {
+            const inner = extractJsonEnvelope(item);
+            if (inner && typeof inner === "object") {
+              queue.push(inner);
+            } else if (isIncompleteStructuredWrapper(item)) {
+              return true;
+            } else {
+              try {
+                const parsedItem = JSON.parse(item);
+                if (parsedItem && typeof parsedItem === "object") {
+                  queue.push(parsedItem);
+                } else {
+                  return true;
+                }
+              } catch {
+                return true;
+              }
+            }
+          } else {
+            return true;
+          }
         }
         continue;
       }
@@ -621,21 +643,15 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
   return false;
 }
 
-/**
- * Evidence test for a rejection body: does it blame reasoning effort?
- *
- * The parameter name on its own is not evidence. A 400 that refuses `max_tokens` may still
- * echo the whole request body back, `reasoning_effort` included, and treating that as a
- * refusal spends this request's one downgrade replay on a rung the upstream never objected to
- * — and persists a false refusal that clamps every later turn for thirty days.
- */
-export function isReasoningEffortRejection(text: string | undefined): boolean {
-  if (!text) return false;
-  if (isHardPolicyOrOriginRefusal(text)) return false;
-  if (hasConflictingReasoningEffortCode(text)) return false;
+const EFFORT_PARAM_NAMES = new Set([
+  "reasoning_effort",
+  "reasoning.effort",
+  "reasoning",
+  "reasoning_parameters",
+]);
+
+function diagnosticTextBlamesReasoningEffort(text: string): boolean {
   if (/unsupported.{0,24}effort/i.test(text)) return true;
-  // An upstream that names the offending parameter has already said which one it means.
-  if (/["']?param["']?\s*[:=]\s*["']?(?:reasoning[._ ]effort|reasoning)/i.test(text)) return true;
   const scanned = text.replace(GENERIC_ERROR_TYPE, " ");
   const term = /reasoning\.effort|reasoning_effort|reasoning effort|thinking budget|reasoning_parameters/gi;
   for (let match = term.exec(scanned); match; match = term.exec(scanned)) {
@@ -644,6 +660,135 @@ export function isReasoningEffortRejection(text: string | undefined): boolean {
     if (REJECTION_LANGUAGE.test(scanned.slice(from, to))) return true;
   }
   return false;
+}
+
+function diagnosticRecordBlamesReasoningEffort(rec: Record<string, unknown>): boolean {
+  if (typeof rec.param === "string") {
+    const param = rec.param.trim().toLowerCase();
+    if (EFFORT_PARAM_NAMES.has(param)) return true;
+    return false;
+  }
+  if (typeof rec.message === "string" && diagnosticTextBlamesReasoningEffort(rec.message)) {
+    return true;
+  }
+  if (typeof rec.error === "string" && diagnosticTextBlamesReasoningEffort(rec.error)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Evidence test for a rejection body: does it blame reasoning effort?
+ *
+ * Restricts inspections to authoritative diagnostic carriers (error, errors, details, last_error, response)
+ * so echoed request context (e.g. request.param: "reasoning_effort") does not falsely classify unrelated 400s
+ * (such as temperature or max_tokens errors) as effort refusals (#8173).
+ */
+export function isReasoningEffortRejection(text: string | undefined): boolean {
+  if (!text) return false;
+  if (isHardPolicyOrOriginRefusal(text)) return false;
+  if (hasConflictingReasoningEffortCode(text)) return false;
+
+  let unescaped = text.trim();
+  for (let d = 0; d < 3; d += 1) {
+    if (unescaped.startsWith("Provider error 400: ")) {
+      unescaped = unescaped.slice("Provider error 400: ".length).trim();
+    }
+    if (unescaped.startsWith("data:") && !unescaped.includes("\n")) {
+      unescaped = unescaped.slice("data:".length).trim();
+    }
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(unescaped);
+  } catch {
+    parsed = extractJsonEnvelope(unescaped);
+  }
+
+  if (parsed && typeof parsed === "object") {
+    if (Array.isArray(parsed)) {
+      for (const item of parsed) {
+        if (item && typeof item === "object") {
+          if (diagnosticRecordBlamesReasoningEffort(item as Record<string, unknown>)) return true;
+        } else if (typeof item === "string") {
+          try {
+            const inner = JSON.parse(item);
+            if (inner && typeof inner === "object" && diagnosticRecordBlamesReasoningEffort(inner as Record<string, unknown>)) return true;
+          } catch {
+            if (diagnosticTextBlamesReasoningEffort(item)) return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    const root = parsed as Record<string, unknown>;
+
+    if (root.error !== undefined && root.error !== null) {
+      if (typeof root.error === "object" && !Array.isArray(root.error)) {
+        if (diagnosticRecordBlamesReasoningEffort(root.error as Record<string, unknown>)) return true;
+      } else if (typeof root.error === "string") {
+        if (diagnosticTextBlamesReasoningEffort(root.error)) return true;
+      }
+    }
+
+    if (Array.isArray(root.errors)) {
+      for (const item of root.errors) {
+        if (item && typeof item === "object") {
+          if (diagnosticRecordBlamesReasoningEffort(item as Record<string, unknown>)) return true;
+        } else if (typeof item === "string") {
+          try {
+            const inner = JSON.parse(item);
+            if (inner && typeof inner === "object" && diagnosticRecordBlamesReasoningEffort(inner as Record<string, unknown>)) return true;
+          } catch {
+            if (diagnosticTextBlamesReasoningEffort(item)) return true;
+          }
+        }
+      }
+    }
+
+    if (Array.isArray(root.details)) {
+      for (const item of root.details) {
+        if (item && typeof item === "object") {
+          if (diagnosticRecordBlamesReasoningEffort(item as Record<string, unknown>)) return true;
+        } else if (typeof item === "string") {
+          try {
+            const inner = JSON.parse(item);
+            if (inner && typeof inner === "object" && diagnosticRecordBlamesReasoningEffort(inner as Record<string, unknown>)) return true;
+          } catch {
+            if (diagnosticTextBlamesReasoningEffort(item)) return true;
+          }
+        }
+      }
+    } else if (root.details && typeof root.details === "object") {
+      if (diagnosticRecordBlamesReasoningEffort(root.details as Record<string, unknown>)) return true;
+    }
+
+    if (root.last_error && typeof root.last_error === "object") {
+      if (diagnosticRecordBlamesReasoningEffort(root.last_error as Record<string, unknown>)) return true;
+    }
+
+    if (root.response && typeof root.response === "object") {
+      const resp = root.response as Record<string, unknown>;
+      if (resp.error && typeof resp.error === "object") {
+        if (diagnosticRecordBlamesReasoningEffort(resp.error as Record<string, unknown>)) return true;
+      }
+      if (resp.last_error && typeof resp.last_error === "object") {
+        if (diagnosticRecordBlamesReasoningEffort(resp.last_error as Record<string, unknown>)) return true;
+      }
+    }
+
+    if (root.error === undefined || typeof root.error !== "object") {
+      if (diagnosticRecordBlamesReasoningEffort(root)) return true;
+    } else if (typeof root.param === "string" && EFFORT_PARAM_NAMES.has(root.param.trim().toLowerCase())) {
+      return true;
+    }
+
+    return false;
+  }
+
+  return diagnosticTextBlamesReasoningEffort(unescaped);
 }
 
 /**

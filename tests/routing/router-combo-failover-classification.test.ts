@@ -616,6 +616,26 @@ describe("bounded optional-control error envelopes", () => {
     expect(comboFailureDecision(400, payload)).toBe("stop");
     expect(comboFailureCooldownScope(400, payload)).toBe("target");
   });
+
+  test("rejects serialized diagnostic entries in details before granting combo hop", () => {
+    const payload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      details: ['{"code":"unknown_terminal_code"}'],
+    });
+    expect(comboFailureDecision(400, payload)).toBe("stop");
+    expect(comboFailureCooldownScope(400, payload)).toBe("target");
+  });
+
+  test("fails closed on unclassifiable string entries in details array", () => {
+    const payload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      details: ["unrecognized_plain_text_error"],
+    });
+    expect(comboFailureDecision(400, payload)).toBe("stop");
+    expect(comboFailureCooldownScope(400, payload)).toBe("target");
+  });
 });
 
 describe("image rejection classifier bounds", () => {
