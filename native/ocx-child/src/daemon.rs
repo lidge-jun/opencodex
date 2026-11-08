@@ -254,6 +254,7 @@ pub fn start_or_rollover_daemon(
                     "failed to record spawned child: {e}; cleanup: {cleanup:?}"
                 ));
             }
+            crate::test_hooks::barrier("daemon-before-commit");
             return Ok((spawned_pid, started_ms));
         }
         thread::sleep(Duration::from_millis(50));

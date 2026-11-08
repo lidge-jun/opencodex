@@ -11,6 +11,7 @@ pub mod relay;
 pub mod relay_auth;
 pub mod routes;
 pub mod state;
+pub mod test_hooks;
 pub mod toml_surgeon;
 
 /// OpenCodex wire/CLI protocol version reported by `ocx-child --version` and peer headers.

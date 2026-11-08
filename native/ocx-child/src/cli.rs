@@ -500,6 +500,17 @@ impl AttachRollbackSnapshot {
         private: bool,
         errors: &mut Vec<String>,
     ) {
+        crate::test_hooks::barrier("restore-before-write");
+        Self::restore_path_inner(path, bytes, private, errors);
+        crate::test_hooks::barrier("restore-after-write");
+    }
+
+    fn restore_path_inner(
+        path: &std::path::Path,
+        bytes: Option<&[u8]>,
+        private: bool,
+        errors: &mut Vec<String>,
+    ) {
         match bytes {
             Some(b) => {
                 let res = if private {
@@ -679,6 +690,7 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
         }
     };
 
+    crate::test_hooks::barrier("attach-protected");
     if !matches!(rollback_pending(&paths), Ok(false)) {
         eprintln!("attach refused: incomplete attach requires detach recovery");
         return 1;

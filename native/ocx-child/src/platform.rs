@@ -1025,6 +1025,8 @@ pub fn spawn_detached_serve(
         .arg(listen_port.to_string())
         .env("OPENCODEX_HOME", opencodex_home)
         .env("CODEX_HOME", codex_home)
+        .env_remove(crate::test_hooks::BARRIER_DIR_ENV)
+        .env_remove(crate::test_hooks::BARRIERS_ENV)
         .stdin(if lifecycle_secret.is_some() {
             Stdio::piped()
         } else {
