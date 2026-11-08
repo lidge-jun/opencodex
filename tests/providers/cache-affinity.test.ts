@@ -451,6 +451,34 @@ describe("cache affinity against committed-key movement (persisted config)", () 
     expect(loadConfig().providers["affinity-pool"]!.apiKey).toBe("key-b");
   });
 
+  test("a disabled in-flight affinity selection cannot rotate the committed key", () => {
+    const config = persistedConfig({ apiKey: "key-a", apiKeySelectionRevision: "before" });
+    bindA();
+    const selected = pick(config)!;
+    expect(selected._apiKeyAttempt?.cacheAffinity).toBe(true);
+    config.providers["affinity-pool"]!.apiKeyPool![0]!.disabled = true;
+    saveConfig(config);
+    expect(rotateProviderTransportOn429(config, "affinity-pool", selected, {
+      attemptedKey: "key-a", attemptedSelection: selected._apiKeyAttempt,
+    })).toBeNull();
+    expect(loadConfig().providers["affinity-pool"]!.apiKey).toBe("key-a");
+    expect(loadConfig().providers["affinity-pool"]!.apiKeySelectionRevision).toBe("before");
+  });
+
+  test.each([false, true])("turning affinity off fences an in-flight pick (distributed=%s)", distributed => {
+    const config = persistedConfig({ apiKey: "key-a", apiKeySelectionRevision: "before",
+      ...(distributed ? { requestPacing: { enabled: true, keySelection: "round-robin" as const } } : {}) });
+    bindA();
+    const selected = pick(config)!;
+    config.providers["affinity-pool"]!.cacheAffinity = "off";
+    saveConfig(config);
+    expect(providerApiKeySelectionIsCurrent(config, "affinity-pool", selected)).toBe(false);
+    expect(rotateProviderTransportOn429(config, "affinity-pool", selected, {
+      attemptedKey: "key-a", attemptedSelection: selected._apiKeyAttempt,
+    })).toBeNull();
+    expect(loadConfig().providers["affinity-pool"]!.apiKey).toBe("key-a");
+  });
+
   test("an affinity pick survives another conversation's rotation (revision bump)", () => {
     const config = persistedConfig();
     bindA();

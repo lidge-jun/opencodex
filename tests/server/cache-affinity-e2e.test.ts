@@ -25,6 +25,7 @@ import {
 import { handleManagementAPI } from "../../src/server/management-api";
 import { ManagementRequest } from "../helpers/management-auth";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
+import { resolveDataPlaneAdmissionSecret, type DataPlaneAdmission } from "../../src/server/auth-cors";
 
 const REAL_FETCH = globalThis.fetch;
 let testDir = "";
@@ -96,6 +97,8 @@ async function turn(
   config: OcxConfig,
   threadId: string,
   model = "affinity-e2e/test",
+  admission?: DataPlaneAdmission,
+  finalize = true,
 ): Promise<RequestLogContext> {
   saveConfig(config);
   const logCtx: RequestLogContext = { model: "", provider: "" };
@@ -107,12 +110,12 @@ async function turn(
     }),
     config,
     logCtx,
-    {},
+    { admission },
   );
   expect(response.status).toBe(200);
   await response.text();
   // The ingress layer owns finalization in production; this harness stands in for it.
-  addFinalRequestLog(nextRequestLogId(), Date.now(), logCtx, response.status);
+  if (finalize) addFinalRequestLog(nextRequestLogId(), Date.now(), logCtx, response.status);
   return logCtx;
 }
 
@@ -204,6 +207,173 @@ describe("provider cache affinity (end-to-end)", () => {
     // A different conversation is placed by ordinary selection: the moved key.
     await turn(config, "conv-2");
     expect(seenAuth.at(-1)).toBe("Bearer key-b");
+  });
+
+  test("different authenticated principals cannot share a client-supplied lane", async () => {
+    const config = makeConfig();
+    config.apiKeys = [
+      { id: "client-a", name: "A", createdAt: "2026-01-01", key: "synthetic-client-a" },
+      { id: "client-b", name: "B", createdAt: "2026-01-01", key: "synthetic-client-b" },
+    ];
+    const a = resolveDataPlaneAdmissionSecret("synthetic-client-a", config)!;
+    const b = resolveDataPlaneAdmissionSecret("synthetic-client-b", config)!;
+    await turn(config, "shared-thread", undefined, a);
+    config.providers["affinity-e2e"]!.apiKey = "key-b";
+    await turn(config, "shared-thread", undefined, b);
+    expect(seenAuth).toEqual(["Bearer key-a", "Bearer key-b"]);
+  });
+
+  test.each(["responses", "compact", "chat", "messages", "combo", "chat-combo", "messages-combo"])(
+    "%s scopes cache affinity to the admitted caller", async (wire) => {
+      const config = makeConfig();
+      config.apiKeys = [
+        { id: "client-a", name: "A", createdAt: "2026-01-01", key: "synthetic-client-a" },
+        { id: "client-b", name: "B", createdAt: "2026-01-01", key: "synthetic-client-b" },
+      ];
+      config.protocols = { rollout: { nativeChatCombos: true, managedMessagesNative: true } };
+      const provider = wire.includes("messages") ? "affinity-msg" : wire.includes("chat") ? "affinity-chat"
+        : wire === "compact" ? "affinity-compact" : "affinity-e2e";
+      const model = wire === "messages-combo" ? "claude-sonnet-4-6" : wire.includes("messages") ? "claude-test" : "test";
+      if (wire === "messages-combo") {
+        config.providers[provider]!.baseUrl = "https://api.anthropic.com";
+        config.providers[provider]!.models = [model];
+      }
+      config.combos = { affinity: { strategy: "failover", reasoningEffortMode: "strict", targets: [{ provider, model }] } };
+      const a = resolveDataPlaneAdmissionSecret("synthetic-client-a", config, "bearer")!;
+      const aDedicated = resolveDataPlaneAdmissionSecret("synthetic-client-a", config, "dedicated")!;
+      const b = resolveDataPlaneAdmissionSecret("synthetic-client-b", config)!;
+      const send = async (admission: DataPlaneAdmission) => {
+        saveConfig(config);
+        const log: RequestLogContext = { model: "", provider: "" };
+        const ids = { requestId: nextRequestLogId(), start: Date.now(), admission };
+        const req = new Request("http://localhost/v1/test", {
+          method: "POST", headers: { "content-type": "application/json", "thread-id": "shared-thread" },
+          body: JSON.stringify({ model: wire.includes("combo") ? "combo/affinity" : `${provider}/${model}`,
+            input: "hello", max_tokens: 16, messages: [{ role: "user", content: "hello" }], stream: false }),
+        });
+        const response = wire === "compact" ? await handleResponsesCompact(req, config, log, undefined, admission)
+          : wire.includes("chat") ? await handleChatCompletions(req, config, log, ids)
+          : wire.includes("messages") ? await handleClaudeMessages(req, config, log, ids)
+          : await handleResponses(req, config, log, { admission });
+        expect(response.status).toBe(200);
+        await response.text();
+        if (wire.includes("chat") || wire.includes("messages")) expect(protocolTraceForRequest(log, log.attempts)?.mode).toBe("native");
+        if (!wire.includes("chat") && !wire.includes("messages")) addFinalRequestLog(ids.requestId, ids.start, log, response.status);
+        return log;
+      };
+      const first = await send(a);
+      expect(first.cacheAffinity).toBe("bound");
+      config.providers[provider]!.apiKey = "key-b";
+      const same = await send(aDedicated);
+      expect(same.cacheAffinity).toBe("kept");
+      const other = await send(b);
+      expect(other.cacheAffinity).toBe("bound");
+      expect(seenAuth).toEqual(["Bearer key-a", "Bearer key-a", "Bearer key-b"]);
+      expect(first.affinityLane).not.toBe(other.affinityLane);
+      expect(first.affinityLane).not.toContain("synthetic-client-a");
+    },
+  );
+
+  test("loopback credentials and an authenticated admission without a principal cannot borrow a lane", async () => {
+    const config = makeConfig();
+    config.apiKeys = [{ id: "client-a", name: "A", createdAt: "2026-01-01", key: "synthetic-client-a" }];
+    const { affinityLaneFromRequest } = await import("../../src/server/request-log-conversation");
+    const headers = { "thread-id": "shared-thread", "x-opencodex-api-key": "synthetic-client-a" };
+    const req = new Request("http://localhost/", { headers });
+    const slot = {};
+    const loopback = { kind: "loopback", source: "loopback" } as const;
+    const admitted = resolveDataPlaneAdmissionSecret("synthetic-client-a", config)!;
+    const namedLane = affinityLaneFromRequest(req, slot, config, admitted);
+    expect(affinityLaneFromRequest(req, slot, config, loopback)).toBe(namedLane);
+    expect(affinityLaneFromRequest(new Request("http://localhost/", { headers: { "thread-id": "shared-thread" } }), slot, config, loopback)).not.toBe(namedLane);
+    expect(affinityLaneFromRequest(req, slot, config, { kind: "configured", keyId: "client-a", source: "bearer" })).toBeUndefined();
+    config.apiKeys[0]!.key = "synthetic-client-rotated";
+    const rotated = resolveDataPlaneAdmissionSecret("synthetic-client-rotated", config)!;
+    expect(affinityLaneFromRequest(req, slot, config, rotated)).not.toBe(namedLane);
+  });
+
+  test("HTTP ingress scopes voluntary loopback credentials", async () => {
+    const config = makeConfig();
+    config.apiKeys = [
+      { id: "client-a", name: "A", createdAt: "2026-01-01", key: "synthetic-client-a" },
+      { id: "client-b", name: "B", createdAt: "2026-01-01", key: "synthetic-client-b" },
+    ];
+    saveConfig(config);
+    const server = startServer(0);
+    trackedServers.add(server);
+    const send = async (key: string) => {
+      const response = await REAL_FETCH(`http://127.0.0.1:${server.port}/v1/responses`, {
+        method: "POST", headers: { "content-type": "application/json", "thread-id": "shared-http", "x-opencodex-api-key": key },
+        body: JSON.stringify({ model: "affinity-e2e/test", input: "hello", stream: false }),
+      });
+      expect(response.status).toBe(200);
+      await response.text();
+    };
+    await send("synthetic-client-a");
+    await send("synthetic-client-a");
+    const { affinityLaneFromRequest } = await import("../../src/server/request-log-conversation");
+    const req = new Request("http://localhost/", { headers: { "thread-id": "shared-http" } });
+    const admission = resolveDataPlaneAdmissionSecret("synthetic-client-b", config)!;
+    const lane = affinityLaneFromRequest(req, {}, config, admission)!;
+    recordProviderCacheAffinity({ lane, providerName: "affinity-e2e", entryId: "b", model: "test", cacheWrite: 4000 });
+    await send("synthetic-client-b");
+    expect(seenAuth).toEqual(["Bearer key-a", "Bearer key-a", "Bearer key-b"]);
+  });
+
+  test.each(["chat", "messages"])("%s translated combo retains the loopback caller scope", async (wire) => {
+    const config = makeConfig();
+    const mockFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      await mockFetch(input, init);
+      const chunks = [
+        { id: "fixture", object: "chat.completion.chunk", model: "test", choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: null }] },
+        { id: "fixture", object: "chat.completion.chunk", model: "test", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 5000, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 4000 } } },
+      ];
+      return new Response(chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    config.apiKeys = [
+      { id: "client-a", name: "A", createdAt: "2026-01-01", key: "synthetic-client-a" },
+      { id: "client-b", name: "B", createdAt: "2026-01-01", key: "synthetic-client-b" },
+    ];
+    config.combos = { affinity: { strategy: "failover", targets: [{ provider: "affinity-e2e", model: "test" }] } };
+    const send = async (key: string) => {
+      saveConfig(config);
+      const log: RequestLogContext = { model: "", provider: "" };
+      const req = new Request("http://localhost/v1/test", {
+        method: "POST", headers: { "content-type": "application/json", "thread-id": "shared-loopback", "x-opencodex-api-key": key },
+        body: JSON.stringify({ model: "combo/affinity", max_tokens: 16, stream: false, messages: [{ role: "user", content: "hello" }] }),
+      });
+      const ids = { requestId: nextRequestLogId(), start: Date.now(), admission: { kind: "loopback", source: "loopback" } as const };
+      const response = wire === "chat" ? await handleChatCompletions(req, config, log, ids) : await handleClaudeMessages(req, config, log, ids);
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(protocolTraceForRequest(log, log.attempts)?.mode).toBe("legacy-bridge");
+    };
+    await send("synthetic-client-a");
+    config.providers["affinity-e2e"]!.apiKey = "key-b";
+    await send("synthetic-client-a");
+    await send("synthetic-client-b");
+    expect(seenAuth).toEqual(["Bearer key-a", "Bearer key-a", "Bearer key-b"]);
+  });
+
+  test("a replacement credential under the same entry id cannot inherit cache evidence", async () => {
+    const config = makeConfig();
+    await turn(config, "replacement-thread");
+    config.providers["affinity-e2e"]!.apiKeyPool![0]!.key = "replacement-key";
+    config.providers["affinity-e2e"]!.apiKey = "key-b";
+    await turn(config, "replacement-thread");
+    expect(seenAuth).toEqual(["Bearer key-a", "Bearer key-b"]);
+  });
+
+  test("an old in-flight success cannot bind a replaced credential", async () => {
+    const config = makeConfig();
+    const oldAttempt = await turn(config, "in-flight-thread", undefined, undefined, false);
+    config.providers["affinity-e2e"]!.apiKeyPool![0]!.key = "replacement-key";
+    config.providers["affinity-e2e"]!.apiKey = "key-b";
+    saveConfig(config);
+    addFinalRequestLog(nextRequestLogId(), Date.now(), oldAttempt, 200);
+    await turn(config, "in-flight-thread");
+    expect(seenAuth).toEqual(["Bearer key-a", "Bearer key-b"]);
   });
 
   test.each(["env", "keychain"])(

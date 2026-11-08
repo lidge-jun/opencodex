@@ -2,7 +2,9 @@
  * Best-effort chat/session correlation for Logs / usage.jsonl (#330).
  * Opaque ids only — never persist raw emails or Claude Desktop system-hash fallbacks.
  */
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
+import type { OcxConfig } from "../types";
+import { resolveContextPrincipal, type DataPlaneAdmission } from "./auth-cors";
 
 /** Reject absurdly long client strings before hashing (DoS / JSONL bloat). */
 export const LOG_CONVERSATION_ID_INPUT_MAX = 4096;
@@ -138,14 +140,30 @@ export function sessionLaneIdFromRequest(headers: Headers): string | undefined {
  * never affect lanes or routing (#330). This expression used to be inlined at four
  * entry paths and drifted: three of the four missed the `x-opencode-session` fallback
  * until PR #7738 aligned them.
+ *
+ * Scope authenticated lanes to the admitted principal with a process-local HMAC. A translated
+ * request carries the principal captured before its caller credential was stripped. Loopback
+ * without a recognized credential retains the existing local lane; an authenticated admission
+ * without a principal cannot bind. The distinct prefix prevents local lanes from colliding.
  */
+const AFFINITY_SCOPE_KEY = randomBytes(32);
+
 export function affinityLaneFromRequest(
-  headers: Headers,
+  req: Request,
   slot: LogConversationSlot,
+  config: OcxConfig,
+  admission?: DataPlaneAdmission,
+  capturedPrincipal?: Readonly<{ clientPrincipalId: string | undefined }>,
 ): string | undefined {
-  return sessionLaneIdFromRequest(headers)
-    ?? normalizeLogConversationId(headers.get("x-opencode-session"))
+  const lane = sessionLaneIdFromRequest(req.headers)
+    ?? normalizeLogConversationId(req.headers.get("x-opencode-session"))
     ?? (slot.conversationIdIsHermesFallback ? undefined : normalizeLogConversationId(slot.conversationId));
+  if (!lane) return undefined;
+  const principal = capturedPrincipal ? capturedPrincipal.clientPrincipalId : resolveContextPrincipal(req, config, admission);
+  if (principal) return `principal:${createHmac("sha256", AFFINITY_SCOPE_KEY).update(JSON.stringify([principal, lane])).digest("hex")}`;
+  // An authenticated admission with no identity must not join any other caller's lane.
+  if (admission && admission.kind !== "loopback") return undefined;
+  return lane;
 }
 
 function firstSanitizedConversationId(

@@ -10,6 +10,7 @@ import { OPENCODE_GO_SESSION_HEADER } from "./opencode-go-transport";
 import { resolveProviderTransport, XAI_GROK_COMPATIBILITY, type OcxProviderTransport } from "./xai-transport";
 import { captureProviderApiKeySelection } from "./api-key-selection-capture";
 import { vertexEnvironmentKeyIsCurrent } from "./vertex-environment-authority";
+import { cacheAffinityApplies } from "./cache-affinity";
 
 export { captureProviderApiKeySelection } from "./api-key-selection-capture";
 
@@ -27,8 +28,8 @@ function matchesSelection(provider: OcxProviderConfig, expected: ProviderApiKeyS
     // is the operator's override. (Ordinary captured selections keep the
     // revision fence below: a permit for the previously committed key must
     // not dispatch after a manual replacement.)
-    return !!expected.entryId && !!expected.reference
-      && (provider.apiKeyPool ?? []).some(entry => entry.id === expected.entryId && entry.key === expected.reference);
+    return cacheAffinityApplies(provider) && !!expected.entryId && !!expected.reference
+      && (provider.apiKeyPool ?? []).some(entry => !entry.disabled && entry.id === expected.entryId && entry.key === expected.reference);
   }
   const current = captureProviderApiKeySelection(provider);
   if (current.revision !== expected.revision) return false;
@@ -38,6 +39,7 @@ function matchesSelection(provider: OcxProviderConfig, expected: ProviderApiKeyS
 function currentKeyProvider(config: OcxConfig, name: string, selection?: ProviderApiKeySelection, allowCooling = false): OcxProviderConfig | null {
   const configured = config.providers[name];
   if (!configured || configured.disabled) return null;
+  if (selection?.cacheAffinity && !cacheAffinityApplies(configured)) return null;
   let row = configured;
   if (selection?.distributed) {
     const entry = configured.apiKeyPool?.find(key => key.id === selection.entryId && key.key === selection.reference);
@@ -52,11 +54,11 @@ function currentKeyProvider(config: OcxConfig, name: string, selection?: Provide
     // deliberately NOT fenced on the selection revision — that revision bumps
     // on every committed change, automatic rotation included, so it cannot
     // supersede a pick whose whole purpose is to outlast committed movement.
-    // Anything else falls back to the committed row rather than refusing.
+    // An invalidated captured pick cannot authorize a different credential.
     const entry = configured.apiKeyPool?.find(key => key.id === selection.entryId && key.key === selection.reference);
     if (entry && !entry.disabled && (allowCooling || !isKeyInCooldown(name, entry.id))) {
       row = { ...configured, apiKey: entry.key, _apiKeyAttempt: selection };
-    }
+    } else return null;
   }
   if (row.apiKeyPool?.some(entry => entry.disabled && entry.key === row.apiKey)
     || row.apiKeyPool?.length && row.apiKeyPool.every(entry => entry.disabled)) return null;
