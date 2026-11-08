@@ -164,3 +164,20 @@ backup set (checked in B against `ocx config export` and the desktop backup meta
   `src/telemetry/install-id.ts`.
 - Each new test file is registered in `scripts/test-layout/layout*.json` and `tests/fixtures/test-layout-expected*.json`.
 
+
+## Stale check (wp2 P, 2026-11-09)
+
+- Route path equalities must sit in `src/server/management/telemetry-routes.ts` (the route registry reconciles by an
+  equality scan of the owning module), with the handlers in `src/telemetry/profile/routes.ts` behind a lazy import.
+- `tests/usage/usage-telemetry-core-boundary.test.ts` already forbids any load-time path from the core files and
+  `management-api.ts` into `src/telemetry/`, which covers `src/telemetry/profile/`. The new install-id isolation
+  check goes into the profile sync test.
+- `background-lifecycle.ts` statically imports `src/telemetry/state.ts` and `consent.ts`; its profile file check
+  imports only a tiny `src/telemetry/profile/paths.ts` (no I/O at module load).
+- `withPendingTelemetryDecision`, `readTelemetryStateFile`, `formatUtcDay` and `utcMidnightMs` are exported from
+  `state.ts` (re-exported by `scheduler.ts`); the profile code imports `state.ts` and `consent.ts` directly, and
+  `resolveNextEligibleTelemetryDay`/`latestCompletedUtcDay` from `scheduler.ts`, which statically imports
+  `install-id.ts`. A-phase decision: do not move stack-owned code (the stack lane may still edit `scheduler.ts`);
+  instead the profile test scans every file under `src/telemetry/profile/` and fails if one imports `install-id`,
+  `payload` or `sender`, or names `installDayHash`, `batchId`, `installId` or `telemetry-id`, and asserts the
+  submitted body's exact key set.

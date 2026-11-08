@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import type { OcxConfig, StorageCleanupPolicy } from "../types";
 import { registerCodexLowQuotaProtection, type LowQuotaRegistration } from "../codex/low-quota-protection";
 import { resolveLowQuotaDesktopSink } from "../codex/low-quota-desktop-notifier";
@@ -36,6 +37,7 @@ import { ensureQuotaPoolIdentity } from "../quota-pool/identity";
 import { isTelemetryEnvOptOut } from "../telemetry/consent";
 // The state module alone: the scheduler and its aggregation stay behind the dynamic import below.
 import { TELEMETRY_ENV_OPT_OUT_REFRESH_MS, endTelemetryEnvOptOut, recordTelemetryEnvOptOut } from "../telemetry/state";
+import { telemetryProfilePath } from "../telemetry/profile/paths";
 
 type PolicyApply = (policy: StorageCleanupPolicy) => void;
 
@@ -65,6 +67,7 @@ let processLoops: ProcessLoops | null = null;
 let cleanupInProgress = false;
 let telemetryLoopGeneration = 0;
 let stopTelemetryLoop: (() => void) | null = null;
+let stopProfileLoop: (() => void) | null = null;
 // This process started under an env opt-out; its clean stop closes the opt-out period (D2).
 let telemetryEnvOptOutObserved = false;
 let telemetryEnvOptOutRefreshMsOverride: number | null = null;
@@ -161,11 +164,26 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
       }, telemetryEnvOptOutRefreshMsOverride ?? TELEMETRY_ENV_OPT_OUT_REFRESH_MS);
       telemetryEnvOptOutRefresh.unref?.();
     }
+    // The opt-in public profile loop runs only when a profile file exists, and independently of
+    // the anonymous env gate above: a disconnect that could not reach the collector is retried
+    // here even while anonymous telemetry is off. Sending stays gated on anonymous telemetry.
+    if (existsSync(telemetryProfilePath())) {
+      void import("../telemetry/profile/sync")
+        .then(sync => {
+          if (generation !== telemetryLoopGeneration) return;
+          stopProfileLoop = sync.startProfileScheduler();
+        })
+        .catch(() => {
+          // Optional background loop.
+        });
+    }
     return { memoryWatchdog, stateStoreSweeper };
   } catch (error) {
     telemetryLoopGeneration += 1;
     stopTelemetryLoop?.();
     stopTelemetryLoop = null;
+    stopProfileLoop?.();
+    stopProfileLoop = null;
     clearTelemetryEnvOptOutRefresh();
     memoryWatchdog?.stop();
     stateStoreSweeper?.stop();
@@ -183,6 +201,9 @@ function stopProcessLoops(): void {
   const stopTelemetry = stopTelemetryLoop;
   stopTelemetryLoop = null;
   stopTelemetry?.();
+  const stopProfile = stopProfileLoop;
+  stopProfileLoop = null;
+  stopProfile?.();
   clearTelemetryEnvOptOutRefresh();
   if (telemetryEnvOptOutObserved) {
     telemetryEnvOptOutObserved = false;
