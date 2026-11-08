@@ -870,7 +870,7 @@ export async function prepareResponsesTransport(
         const beforePhysicalSend = (): void => {
           incoming.abortSignal?.throwIfAborted();
           if (sent) {
-            if (binding?.kind === "api-key" && binding.provider._apiKeyAttempt?.distributed
+            if (binding?.kind === "api-key" && (binding.provider._apiKeyAttempt?.distributed || binding.provider._apiKeyAttempt?.cacheAffinity)
               && !selectionIsCurrent(binding)) throw new Error("API key became unavailable during the turn");
             return;
           }

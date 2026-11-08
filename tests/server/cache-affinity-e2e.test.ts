@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { ADAPTER_REGISTRY } from "../../src/adapters/registry";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -509,6 +510,38 @@ describe("provider cache affinity (end-to-end)", () => {
     await response.text();
     expect(response.status).toBe(429);
     expect(sends).toBe(1);
+  });
+
+  test("a stale affinity selection cannot send again inside a turn", async () => {
+    const config = makeConfig();
+    await turn(config, "stale-inner-send");
+    const provider = config.providers["affinity-e2e"]!;
+    let sends = 0;
+    globalThis.fetch = (async () => { sends++; return new Response("ok"); }) as typeof fetch;
+    const create = ADAPTER_REGISTRY["openai-chat"].create;
+    const override = spyOn(ADAPTER_REGISTRY["openai-chat"], "create").mockImplementation((...args) => ({
+      ...create(...args),
+      async runTurn(_parsed, incoming, emit) {
+        expect(args[0]._apiKeyAttempt?.cacheAffinity).toBe(true);
+        await (await incoming.providerFetch!("https://upstream.invalid/v1/messages", { method: "POST" })).text();
+        const context = { generation: 1, providerNames: new Set(Object.keys(config.providers)), comboIds: new Set<string>(),
+          comboTargets: new Set<string>(), codexAccountIds: new Set<string>(), oauthAccountKeys: new Set<string>(), configRoots: new Set<string>() };
+        provider.apiKeyPool![0]!.key = "replacement-key";
+        reconcileProviderCacheAffinity(context, config.providers);
+        provider.apiKeyPool![0]!.key = "key-a";
+        reconcileProviderCacheAffinity({ ...context, generation: 2 }, config.providers);
+        await expect(incoming.providerFetch!("https://upstream.invalid/v1/messages", { method: "POST" })).rejects.toThrow("unavailable during the turn");
+        emit({ type: "text_delta", text: "ok" }); emit({ type: "done" });
+      },
+    }));
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json", "thread-id": "stale-inner-send" },
+        body: JSON.stringify({ model: "affinity-e2e/test", input: "hello", stream: false, store: false }),
+      }), config, { model: "", provider: "" });
+      await response.text();
+      expect(sends).toBe(1);
+    } finally { override.mockRestore(); }
   });
 
   test("changed resolved environment credential does not inherit evidence", async () => {
