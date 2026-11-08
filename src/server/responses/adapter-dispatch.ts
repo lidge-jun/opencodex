@@ -664,16 +664,14 @@ export async function prepareAdapterExchange(
         } catch (err) {
           const authRefusal = options.abortSignal?.aborted ? undefined : codexAdapterBuildRefusal(err, admissionState.authCtx, route.codexAccountNamespace, () => { cleanupUpstreamAbort(); upstream.abort(); });
           if (authRefusal) return { failed: authRefusal };
-          // A rotated/rebuilt adapter build failure is a request-shaping error, not an
-          // upstream connect failure: tear the abort link down and map it as 400. A
-          // translator-budget refusal keeps its established 413 here as well — adapters
-          // can throw it while sizing generated content (e.g. Ollama late-tool
-          // attribution), not only parseRequest/buildToolBridgeMaps.
-          cleanupUpstreamAbort();
-          upstream.abort();
-          if (options.abortSignal?.aborted) return { failed: clientCancelledResponse() };
-          if (err instanceof OllamaLateAttributionBudgetError) return { failed: lateAttributionLimitResponse() };
+          if (err instanceof OllamaLateAttributionBudgetError) {
+            cleanupUpstreamAbort();
+            upstream.abort();
+            return { failed: lateAttributionLimitResponse() };
+          }
           if (isTranslatorBudgetExceededError(err)) {
+            cleanupUpstreamAbort();
+            upstream.abort();
             return { failed: formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
               code: "translation_buffer_limit",
             }) };
@@ -681,9 +679,14 @@ export async function prepareAdapterExchange(
           // A rotated credential that cannot be shaped keeps the refusal it was meant to
           // replace. The image-tier and reasoning-effort rebuilds are different: the request itself
           // failed to shape, and their established build-error contracts stay authoritative.
-          if (preserveFailureResponse && recovery !== "image-413" && recovery !== "reasoning-effort-downgrade") {
+          if (preserveFailureResponse && recovery !== "image-413" && recovery !== "reasoning-effort-downgrade" && !options.abortSignal?.aborted) {
             return { failed: preserveFailureResponse };
           }
+          // A rotated/rebuilt adapter build failure is a request-shaping error, not an
+          // upstream connect failure: tear the abort link down and map it as 400.
+          cleanupUpstreamAbort();
+          upstream.abort();
+          if (options.abortSignal?.aborted) return { failed: clientCancelledResponse() };
           const msg = err instanceof Error ? err.message : String(err);
           return { failed: formatErrorResponse(400, "invalid_request_error", redactSecretString(msg)) };
         }
