@@ -146,7 +146,14 @@ function retryableZeroOutputTerminal(payload: unknown): boolean {
     };
   };
   if (bareErrorIsRetryable(event)) return true;
+  const target = (event.response && typeof event.response === "object" && !Array.isArray(event.response))
+    ? event.response as Record<string, unknown>
+    : event as Record<string, unknown>;
+  const emptyOutput = (!Array.isArray(event.output) || event.output.length === 0)
+    && (!Array.isArray(target.output) || target.output.length === 0);
+
   if (event.type === "response.failed" || event.status === "failed") {
+    if (!emptyOutput) return false;
     const error = (event.response as { error?: { code?: unknown; retryable?: unknown } } | undefined)?.error
       ?? event.error;
     const code = error?.code;
@@ -155,14 +162,13 @@ function retryableZeroOutputTerminal(payload: unknown): boolean {
   }
   const isIncomplete = event.type === "response.incomplete" || event.status === "incomplete";
   if (!isIncomplete) return false;
-  const target = (event.type === "response.incomplete" && event.response && typeof event.response === "object" && !Array.isArray(event.response))
-    ? event.response
-    : event;
-  const reason = target.incomplete_details?.reason;
-  // A terminal-only upstream can carry output without preceding delta/item events.
-  const emptyOutput = !Array.isArray(target.output) || target.output.length === 0;
-  if (reason === undefined) return emptyOutput;
-  if (reason === "max_output_tokens") return emptyOutput;
+  if (!emptyOutput) return false;
+  const incompleteDetails = (target.incomplete_details && typeof target.incomplete_details === "object" && !Array.isArray(target.incomplete_details))
+    ? (target.incomplete_details as { reason?: unknown }).reason
+    : undefined;
+  const reason = incompleteDetails;
+  if (reason === undefined) return true;
+  if (reason === "max_output_tokens") return true;
   return typeof reason === "string" && RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason);
 }
 
@@ -352,15 +358,23 @@ async function preflightComboJsonResponse(
         } catch {
           return { kind: "accepted", response: replayBufferedResponse(response, reader, buffered) };
         }
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && retryableTerminal(parsed)) {
-          const failed = failedTerminalResponse(response, parsed as Record<string, unknown>, logCtx);
-          return {
-            kind: "failed",
-            response: failed,
-            ...(failed.status === 400
-              ? { codexModelRefusal: terminalModelRefusal(failed.status, parsed as Record<string, unknown>) }
-              : {}),
-          };
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          const payloadRecord = parsed as Record<string, unknown>;
+          const target = (payloadRecord.response && typeof payloadRecord.response === "object" && !Array.isArray(payloadRecord.response))
+            ? payloadRecord.response as Record<string, unknown>
+            : payloadRecord;
+          const hasOutput = (Array.isArray(payloadRecord.output) && payloadRecord.output.length > 0)
+            || (Array.isArray(target.output) && target.output.length > 0);
+          if (!hasOutput && retryableTerminal(parsed)) {
+            const failed = failedTerminalResponse(response, payloadRecord, logCtx);
+            return {
+              kind: "failed",
+              response: failed,
+              ...(failed.status === 400
+                ? { codexModelRefusal: terminalModelRefusal(failed.status, payloadRecord) }
+                : {}),
+            };
+          }
         }
         return { kind: "accepted", response: replayBufferedResponse(response, reader, buffered) };
       }

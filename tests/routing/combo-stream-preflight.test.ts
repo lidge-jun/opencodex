@@ -889,5 +889,58 @@ describe("combo stream preflight", () => {
     const body = await result.response.json();
     expect(body.status).toBe("completed");
   });
+
+  test("inspectJsonResponse accepts failed or incomplete JSON when output is non-empty", async () => {
+    for (const jsonPayload of [
+      {
+        id: "r1",
+        status: "failed",
+        output: [{ type: "message", content: "partial progress" }],
+        error: { code: "server_error", message: "internal error" },
+      },
+      {
+        id: "r2",
+        status: "incomplete",
+        incomplete_details: { reason: "max_output_tokens" },
+        output: [{ type: "message", content: "cut off" }],
+      },
+      {
+        id: "r3",
+        response: {
+          status: "failed",
+          output: [{ type: "message", content: "nested partial" }],
+          error: { code: "server_error", message: "internal error" },
+        },
+      },
+    ]) {
+      const source = new Response(JSON.stringify(jsonPayload), {
+        headers: { "content-type": "application/json" },
+      });
+      const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" }, undefined, {
+        inspectJsonResponse: true,
+      });
+      expect(result.kind).toBe("accepted");
+      expect(result.response.status).toBe(200);
+    }
+  });
+
+  test("inspectJsonResponse converts zero-output failed JSON into a retryable failure", async () => {
+    const jsonPayload = {
+      id: "r1",
+      status: "failed",
+      output: [],
+      error: { code: "server_error", message: "service unavailable" },
+    };
+    const source = new Response(JSON.stringify(jsonPayload), {
+      headers: { "content-type": "application/json" },
+    });
+
+    const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" }, undefined, {
+      inspectJsonResponse: true,
+    });
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(502);
+  });
 });
+
 
