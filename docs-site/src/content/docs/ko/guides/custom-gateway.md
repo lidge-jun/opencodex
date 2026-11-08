@@ -61,7 +61,7 @@ ocx models live --provider my-gateway --json
 필요하면 `ocx sync`로 클라이언트 카탈로그에 반영한 뒤 Codex 모델 선택기에 해당 모델이 나타나는지 확인하세요.
 실행 중인 클라이언트는 이전 목록을 메모리에 유지할 수 있습니다. 진행 중인 작업을 보존하고 목록이 계속 오래된 상태라면
 Codex를 완전히 종료한 뒤 다시 여세요. 또는 명시적으로 승인한 뒤
-[`ocx system codex-restart --yes`](/reference/cli/agents/#ocx-system-codex-restart)를 사용할 수 있습니다.
+[`ocx system codex-restart --yes`](/reference/cli/agents/)를 사용할 수 있습니다.
 이 명령은 세션을 중단하고 저장하지 않은 초안, 선택 또는 대기 중인 승인 요청을 잃게 할 수 있습니다.
 위의 설정 파일 직접 수정 외에는 클라이언트나 프록시 재시작이 기본 복구 단계가 아닙니다.
 

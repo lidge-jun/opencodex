@@ -64,7 +64,7 @@ is a separate setting. See the [CLI reference](/reference/cli/providers-accounts
 When needed, run `ocx sync` to update the client catalog, then confirm the model appears in the
 Codex model picker. A running client can retain an older in-memory list. Preserve active work and,
 if the picker remains stale, fully quit and reopen Codex. Alternatively, after explicit approval,
-use [`ocx system codex-restart --yes`](/reference/cli/agents/#ocx-system-codex-restart): it can
+use [`ocx system codex-restart --yes`](/reference/cli/agents/): it can
 interrupt the session and discard unsaved drafts, selections, or pending approval prompts.
 Outside the direct config-file edit above, restarting a client or proxy is not the default recovery step.
 
