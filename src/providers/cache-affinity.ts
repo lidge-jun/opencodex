@@ -26,6 +26,7 @@
  */
 import type { CacheAffinityMode, OcxProviderConfig } from "../types";
 import type { GenerationContext } from "../lib/state-store-sweeper";
+import { clearCacheAffinityIdentitiesForTests, currentCacheAffinityIdentity, reconcileCacheAffinityIdentities } from "./cache-affinity-identity";
 
 /** Tokens read from or written to an upstream cache that make a binding worth keeping across turns. */
 export const CACHE_AFFINITY_WORTH_TOKENS = 1024;
@@ -55,6 +56,7 @@ export interface CacheAffinityHit {
 interface Binding {
   providerName: string;
   entryId: string;
+  identity: string;
   model: string;
   cacheRead: number;
   cacheWrite: number;
@@ -68,7 +70,7 @@ let bindingsBytes = 0;
 
 function bindingBytes(lane: string, binding: Binding): number {
   return Buffer.byteLength(lane) + Buffer.byteLength(binding.providerName)
-    + Buffer.byteLength(binding.entryId) + Buffer.byteLength(binding.model);
+    + Buffer.byteLength(binding.entryId) + Buffer.byteLength(binding.model) + Buffer.byteLength(binding.identity);
 }
 
 function deleteBinding(lane: string): void {
@@ -114,6 +116,10 @@ export function consultProviderCacheAffinity(input: ConsultProviderCacheAffinity
     return null;
   }
   if (binding.providerName !== providerName || binding.model !== model) return null;
+  if (binding.identity !== currentCacheAffinityIdentity(providerName, provider, binding.entryId)) {
+    deleteBinding(lane);
+    return null;
+  }
   const mode = cacheAffinityMode(provider);
   const age = now - binding.at;
   const warmMs = binding.longRetention ? CACHE_AFFINITY_COLD_LONG_MS : CACHE_AFFINITY_COLD_MS;
@@ -133,6 +139,7 @@ export interface RecordProviderCacheAffinityInput {
   lane: string | undefined;
   providerName: string;
   entryId: string | undefined;
+  identity: string | undefined;
   model: string;
   cacheRead?: number;
   cacheWrite?: number;
@@ -148,8 +155,8 @@ export interface RecordProviderCacheAffinityInput {
  * Cloud): the prompt the vendor cached is the prompt that was sent.
  */
 export function recordProviderCacheAffinity(input: RecordProviderCacheAffinityInput): void {
-  const { lane, providerName, entryId, model } = input;
-  if (!lane || !entryId) return;
+  const { lane, providerName, entryId, model, identity } = input;
+  if (!lane || !entryId || !identity) return;
   const cacheRead = input.cacheRead ?? 0;
   // No write counter reported — reads-only reporters (OpenAI Chat reports
   // reads, never writes) and fully silent vendors alike: the prompt that was
@@ -160,11 +167,12 @@ export function recordProviderCacheAffinity(input: RecordProviderCacheAffinityIn
   const previous = bindings.get(lane);
   const matchingLongRead = cacheRead > 0 && (input.cacheWrite ?? 0) === 0
     && previous?.longRetention === true && previous.providerName === providerName
-    && previous.entryId === entryId && previous.model === model
+    && previous.entryId === entryId && previous.identity === identity && previous.model === model
     && now >= previous.at && now - previous.at <= CACHE_AFFINITY_COLD_LONG_MS;
   const binding: Binding = {
     providerName,
     entryId,
+    identity,
     model,
     cacheRead,
     cacheWrite,
@@ -187,12 +195,14 @@ export function releaseProviderCacheAffinity(
   lane: string | undefined,
   providerName?: string,
   entryId?: string,
+  identity?: string,
 ): boolean {
   if (!lane) return false;
   const binding = bindings.get(lane);
   if (!binding) return false;
   if ((providerName !== undefined && binding.providerName !== providerName)
-    || (entryId !== undefined && binding.entryId !== entryId)) return false;
+    || (entryId !== undefined && binding.entryId !== entryId)
+    || (identity !== undefined && binding.identity !== identity)) return false;
   deleteBinding(lane);
   return true;
 }
@@ -220,15 +230,17 @@ export function sweepExpiredProviderCacheAffinity(now: number): number {
  * re-validates against the live pool on every request regardless; this keeps
  * unconsulted lanes from lingering.
  */
-export function reconcileProviderCacheAffinity(context: GenerationContext): number {
+export function reconcileProviderCacheAffinity(context: GenerationContext, providers?: Readonly<Record<string, OcxProviderConfig>>): number {
   if (context.generation <= lastReconciledGeneration) return 0;
   lastReconciledGeneration = context.generation;
+  if (providers) reconcileCacheAffinityIdentities(providers);
   let removed = 0;
   for (const [lane, binding] of bindings) {
     const entryIds = context.providerKeyEntryIds?.get(binding.providerName);
     if (!context.providerNames.has(binding.providerName)
       || context.disabledProviderNames?.has(binding.providerName)
-      || (entryIds !== undefined && !entryIds.has(binding.entryId))) {
+      || (entryIds !== undefined && !entryIds.has(binding.entryId))
+      || (providers !== undefined && binding.identity !== currentCacheAffinityIdentity(binding.providerName, providers[binding.providerName], binding.entryId))) {
       deleteBinding(lane);
       removed += 1;
     }
@@ -240,4 +252,5 @@ export function clearProviderCacheAffinityForTests(): void {
   bindings.clear();
   bindingsBytes = 0;
   lastReconciledGeneration = 0;
+  clearCacheAffinityIdentitiesForTests();
 }

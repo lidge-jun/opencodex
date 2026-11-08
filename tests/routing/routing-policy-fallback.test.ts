@@ -15,6 +15,10 @@ import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { parseSyntheticRowId } from "../../src/server/fast-row";
 import { boundEntryIdForLane, clearProviderCacheAffinityForTests, recordProviderCacheAffinity } from "../../src/providers/cache-affinity";
 import { finalizeProviderCacheAffinity } from "../../src/server/request-log-cache-affinity";
+import { currentCacheAffinityIdentity } from "../../src/providers/cache-affinity-identity";
+import { routedProviderConfig } from "../../src/providers/routed-config";
+import { stampApiKeyAccountLabel } from "../../src/providers/label";
+import { saveConfig } from "../../src/config";
 import {
   handleResponsesWithPolicyFallback,
   rankPolicyFallbackCandidates,
@@ -71,12 +75,15 @@ describe("policy candidate fallback", () => {
     clearProviderCacheAffinityForTests();
     const lane = "policy-terminal-source";
     const providerName = outcome === "local" ? "provider-a" : "provider-b";
-    recordProviderCacheAffinity({ lane, providerName, entryId: "a", model: outcome === "local" ? "model-a" : "model-b", cacheWrite: 4000 });
+    const config = fixtureConfig();
+    config.providers[providerName]!.apiKeyPool = [{ id: "a", key: "fixture-key" }, { id: "b", key: "other-key" }];
+    saveConfig(config);
+    recordProviderCacheAffinity({ lane, providerName, entryId: "a", identity: currentCacheAffinityIdentity(providerName, config.providers[providerName], "a"), model: outcome === "local" ? "model-a" : "model-b", cacheWrite: 4000 });
     const log: RequestLogContext = { model: "model-a", provider: "provider-a", affinityLane: lane };
     const trace = policyTrace();
     trace.candidates[2]!.eligible = false;
     let calls = 0;
-    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), log, {}, {
+    const response = await handleResponsesWithPolicyFallback(request(), config, log, {}, {
       runCore: async (req, _config, context, options) => {
         options.onRequestBodyParsed?.(await req.json());
         context.routeDecision = trace;
@@ -93,6 +100,7 @@ describe("policy candidate fallback", () => {
         context.affinityProviderName = "provider-b";
         context.affinityKeyEntryId = "a";
         context.cacheAffinityApplicable = true;
+        stampApiKeyAccountLabel(context, "provider-b", routedProviderConfig("provider-b", config.providers["provider-b"]!));
         return Response.json({ error: { message: "upstream refusal" } }, { status: outcome });
       },
     });

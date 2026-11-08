@@ -1,5 +1,6 @@
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE, KEY_ACCOUNT_LOG_LABEL_RE, apiKeyAccountLogLabel, oauthAccountLogLabel } from "../codex/account-label";
 import type { OcxProviderConfig } from "../types";
+import { captureCacheAffinityIdentity } from "./cache-affinity-identity";
 
 export function canonicalUsageProviderLabel(provider: string): string {
   return provider === "chatgpt" || provider === "openai-multi" ? "openai" : provider;
@@ -16,8 +17,9 @@ export function usesApiKeyAccount(provider: Pick<OcxProviderConfig, "authMode" |
 export function stampApiKeyAccountLabel(
   logCtx: { accountLogLabel?: string; affinityKeyEntryId?: string; affinityProviderName?: string },
   providerName: string,
-  provider: Pick<OcxProviderConfig, "authMode" | "_apiKeyAttempt">,
+  provider: OcxProviderConfig,
 ): void {
+  captureCacheAffinityIdentity(logCtx, providerName, provider);
   if (usesApiKeyAccount(provider)) {
     logCtx.accountLogLabel = apiKeyAccountLogLabel(providerName, provider._apiKeyAttempt);
     logCtx.affinityKeyEntryId = provider._apiKeyAttempt?.entryId;

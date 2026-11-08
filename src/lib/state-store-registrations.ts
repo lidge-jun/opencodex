@@ -170,7 +170,7 @@ export const STATE_STORE_REGISTRATIONS = [
   {
     name: "provider-cache-affinity",
     sweepExpired: sweepExpiredProviderCacheAffinity,
-    reconcileGeneration: reconcileProviderCacheAffinity,
+    reconcileGeneration: context => reconcileProviderCacheAffinity(context, liveServerConfig?.providers),
   },
   { name: "guardian-backoff", reconcileGeneration: reconcileGuardianBackoff },
   { name: "codex-reauth", reconcileGeneration: reconcileCodexReauthState },

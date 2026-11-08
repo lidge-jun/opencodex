@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, beforeEach } from "bun:test";
 import {
   clearProviderCacheAffinityForTests,
   consultProviderCacheAffinity,
-  recordProviderCacheAffinity,
+  recordProviderCacheAffinity as recordAffinity,
   releaseProviderCacheAffinity,
   sweepExpiredProviderCacheAffinity,
   reconcileProviderCacheAffinity,
@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { setKeyCooldown } from "../../src/providers/api-key-cooldowns";
 import { routedProviderConfig } from "../../src/providers/routed-config";
+import { currentCacheAffinityIdentity } from "../../src/providers/cache-affinity-identity";
 
 const NOW = 1_700_000_000_000;
 function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
@@ -33,6 +34,10 @@ function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig
     ],
     ...overrides,
   } as OcxProviderConfig;
+}
+
+function recordProviderCacheAffinity(input: Omit<Parameters<typeof recordAffinity>[0], "identity">) {
+  recordAffinity({ ...input, identity: currentCacheAffinityIdentity(input.providerName, provider(), input.entryId ?? "") });
 }
 
 function consult(lane: string, p: OcxProviderConfig, model = "m1", now = NOW) {
