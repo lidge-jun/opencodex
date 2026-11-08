@@ -1,7 +1,7 @@
 import { lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isatty } from "node:tty";
-import { getConfigDir, mutatePersistedConfig, readConfigDiagnostics } from "../config";
+import { getConfigDir, getDefaultConfig, initializePersistedConfigIfMissing, mutatePersistedConfig, readConfigDiagnostics } from "../config";
 import { atomicWriteFileNoFollow } from "../config/atomic-write";
 import { withConfigDirHardeningSettled } from "../config/paths";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
@@ -76,7 +76,7 @@ function isInteractiveTty(): boolean {
 async function persistTelemetryDecision(decision: OcxTelemetryDecision): Promise<void> {
   const nowIso = new Date().toISOString();
   const dir = getConfigDir();
-  const outcome = await withConfigDirHardeningSettled(dir, () =>
+  const mutate = () =>
     mutatePersistedConfig(fresh => {
       const prev = fresh.telemetry;
       const next: OcxTelemetryConfig = {
@@ -87,8 +87,19 @@ async function persistTelemetryDecision(decision: OcxTelemetryDecision): Promise
       const changed = JSON.stringify(prev) !== JSON.stringify(next);
       fresh.telemetry = next;
       return { changed, value: next };
-    }),
-  );
+    });
+  const outcome = await withConfigDirHardeningSettled(dir, () => {
+    const first = mutate();
+    if (first.status !== "unavailable" || first.reason !== "missing") return first;
+    // A fresh install has no config.json yet; the Windows installer's opt-out arrives exactly
+    // then. Create it the way a first start would, carrying the decision. A concurrent first
+    // start that wins the race leaves a file to patch instead.
+    const created = initializePersistedConfigIfMissing({
+      ...getDefaultConfig(),
+      telemetry: { decision, decidedAt: nowIso, noticeShownAt: nowIso },
+    });
+    return created === "created" ? { status: "committed" as const, value: null } : mutate();
+  });
   if (outcome.status === "unavailable") {
     throw new Error(
       `Cannot update telemetry configuration: config.json is ${outcome.reason}. Fix or restore config.json before retrying.`,
