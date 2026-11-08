@@ -35,6 +35,18 @@ test("decimal package totals preserve the reported remaining balance", () => {
   expect(parseWorkBuddyCredits({ Packages: [{ CycleTotalCapacity: 1e-300, CycleUsedCapacity: 0, CycleRemainCapacity: 5e-301 }] })?.remaining).toBe(5e-301);
 });
 
+test("exact balance metadata stays bounded, validates its numeric projection, and survives JSON", () => {
+  const balance = parseWorkBuddyCredits({ Packages: [amounts("0.5", "0", "0.4975"), amounts("0.5", "0", "0.49750000000000005")] })!;
+  expect(balance.exact).toEqual({ total: "1", remaining: "0.99500000000000005" });
+  expect(normalizeWorkBuddyCredits(JSON.parse(JSON.stringify(balance)))?.exact).toEqual(balance.exact);
+  for (const exact of [null, {}, { total: "1", remaining: "2" }, { total: "1e0", remaining: "0.995" },
+    { total: "1", remaining: `0.${"0".repeat(384)}1` }]) {
+    expect(normalizeWorkBuddyCredits({ ...balance, exact })?.exact).toBeNull();
+  }
+  expect(parseWorkBuddyCredits({ Packages: [amounts("1", "0", `0.${"0".repeat(384)}1`)] })).toBeUndefined();
+  expect(normalizeWorkBuddyCredits({ total: 1, used: 0, remaining: 0.995, frozen: 0, groups: [] })?.exact).toBeUndefined();
+});
+
 test("enterprise decimal balance retains half-percent rounding in the dashboard", async () => {
   globalThis.fetch = (async input => Response.json({ code: 0, data: String(input).endsWith("summary")
     ? { Packages: [] } : { limitNum: "1", credit: "0.285" } })) as typeof fetch;

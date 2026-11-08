@@ -1,7 +1,7 @@
 import type { OAuthCredentials } from "../../oauth/types";
 import { workBuddyApi, WorkBuddyApiError } from "../../oauth/workbuddy";
 import { workBuddyHeaders } from "../workbuddy";
-import { parseWorkBuddyCredits, remainingWorkBuddyCredits, workBuddyCapacity, workBuddyRecord, type WorkBuddyCreditBalance } from "../workbuddy-credit-balance";
+import { enterpriseWorkBuddyCredits, parseWorkBuddyCredits, workBuddyCapacity, workBuddyRecord, type WorkBuddyCreditBalance } from "../workbuddy-credit-balance";
 import { REQUEST_TIMEOUT_MS } from "../quota-wire";
 import { TERMINAL_QUOTA_FAILURE, type ProviderQuotaProbeResult } from "./report-cache";
 
@@ -65,9 +65,7 @@ export async function fetchWorkBuddyQuota(provider: string, credential: OAuthCre
     let credits = parseWorkBuddyCredits(summary);
     if (credential.workbuddy.enterpriseId && (!credits || credits.total === 0)) {
       const team = await workBuddyApi("/billing/meter/get-enterprise-user-usage", headers, signal, true);
-      const total = workBuddyCapacity(team.limitNum), used = workBuddyCapacity(team.credit);
-      if (total === undefined || used === undefined) return null;
-      credits = { total, used, remaining: remainingWorkBuddyCredits(total, used), frozen: 0, groups: [] };
+      credits = enterpriseWorkBuddyCredits(team.limitNum, team.credit);
     }
     if (!credits) return null;
     if (credits.remaining > 0) {

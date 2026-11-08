@@ -9,6 +9,7 @@ import type { AccountQuota } from "./codex-quota-utils";
 import type { TKey } from "./i18n/en";
 import { quotaWindows, resetTimestamp } from "./pages/tray-data";
 import { accountQuotaFromReport, type ProviderQuotaReportView } from "./provider-workspace/report";
+import { workBuddyUnavailablePercent } from "../../src/providers/workbuddy-credit-balance";
 
 export const QUOTA_SUMMARY_WARN_PERCENT = 70;
 export const QUOTA_SUMMARY_CRITICAL_PERCENT = 90;
@@ -51,23 +52,6 @@ export function formatQuotaPercent(percent: number | undefined): string {
   return finite(percent) ? `${Math.floor(percent)}%` : "-";
 }
 
-/** Interpret the reported decimal numbers exactly when rounding an informational balance. */
-function decimalRatio(value: number): [bigint, bigint] {
-  const [coefficient, exponent = "0"] = value.toString().split("e");
-  const [whole, fraction = ""] = coefficient!.split(".");
-  const digits = BigInt(`${whole}${fraction}`);
-  const scale = fraction.length - Number(exponent);
-  return scale >= 0 ? [digits, 10n ** BigInt(scale)] : [digits * 10n ** BigInt(-scale), 1n];
-}
-
-function roundedUnavailablePercent(total: number, remaining: number): number {
-  const [totalNumerator, totalDenominator] = decimalRatio(total);
-  const [remainingNumerator, remainingDenominator] = decimalRatio(Math.min(remaining, total));
-  const denominator = totalNumerator * remainingDenominator;
-  const numerator = (denominator - remainingNumerator * totalDenominator) * 100n;
-  return Number((2n * numerator + denominator) / (2n * denominator));
-}
-
 /** Long windows first: weekly is the default headline, then monthly, then 5h, then custom. */
 const HEADLINE_ORDER: TKey[] = ["quota.weeklyLimit", "quota.monthlyLimit", "quota.fiveHourLimit"];
 
@@ -99,14 +83,13 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
     });
   }
   const workbuddy = quota.workbuddyCredits;
-  // The provider can sum up to 512 packages; tolerate only their accumulated roundoff.
-  if (workbuddy && workbuddy.total > 0 && workbuddy.remaining / workbuddy.total <= 1 + Number.EPSILON * 1024) {
+  const workbuddyPercent = workbuddy ? workBuddyUnavailablePercent(workbuddy) : undefined;
+  if (workbuddyPercent !== undefined) {
     // Remaining is authoritative and includes frozen credits; the meter is informational.
-    const percent = roundedUnavailablePercent(workbuddy.total, workbuddy.remaining);
     windows.push({
       id: "quotaSummary.creditsUnavailable",
       labelKey: "quotaSummary.creditsUnavailable",
-      percent,
+      percent: workbuddyPercent,
       severity: "normal",
     });
   }

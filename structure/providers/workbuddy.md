@@ -38,8 +38,10 @@ account metadata; fresh/stale cache and failure cooldowns are bound to the crede
 Unavailable discovery degrades to the same-account cache, then the minimal `default-model` seed.
 
 `src/providers/quota/workbuddy.ts` reads the authenticated resource summary through the bounded,
-fixed-origin API helper. It sums `Packages` once using the decimal representation of each validated
-number before returning numeric totals, and treats `CreditGroups` as a breakdown;
+fixed-origin API helper. It sums `Packages` once using bounded decimal arithmetic and retains the
+existing numeric totals alongside optional exact total/remaining strings for the informational
+headline. Quoted provider decimals retain their input precision; JSON numbers have already been
+parsed as JavaScript numbers. `CreditGroups` is a breakdown;
 explicit remaining/frozen amounts take precedence over arithmetic estimates. Team accounts use
 the enterprise meter when the personal summary has no capacity; estimated remaining credits use
 decimal subtraction on validated amounts. Optional paid/free package
@@ -52,8 +54,9 @@ probe/cache path supplies refresh, paused-account exclusion, stale-reading and 4
 semantics. Unknown or malformed summaries never become zero. Explicit zero balances remain visible.
 `workbuddyCredits` is a display-only field in the quota DTO, separate from USD balances and
 quota windows, so credit exhaustion does not disable free models or influence account ranking.
-`src/providers/workbuddy-credit-balance.ts` validates the numeric-only public projection for the
-GUI. The shared provider quota panel shows the remaining credits, usage, group balances and
+`src/providers/workbuddy-credit-balance.ts` validates numeric fields and bounded exact decimal
+metadata for the GUI. Invalid or inconsistent exact metadata suppresses the headline percentage;
+older payloads without it keep the numeric fallback. The shared provider quota panel shows the remaining credits, usage, group balances and
 optional expiry; the existing refresh and stale-state controls apply to it.
 
 ## Verification
