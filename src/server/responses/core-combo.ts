@@ -7,6 +7,7 @@ import { effectiveAzureOutputBudget } from "../../adapters/azure";
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
 import { isMetaAiResponsesDestination } from "../../responses/muse-tool-name-alias";
 import { chatCanPreserveMandatoryToolChoice, hasMandatoryToolChoice } from "./combo-required-tool-contract";
+import { isPolicyCandidateRefusal, isMandatoryToolChoiceRefusal } from "./policy-request-scope";
 import { isCodexAccountCooldownResponse } from "../../codex/account-cooldown-response";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { parseSyntheticRowId } from "../fast-row";
@@ -412,7 +413,7 @@ export async function executeComboResponses(
   // internal request carries the caller's captured scope on options.admissionScope even though
   // its own admission is the host's broad key; recomputing from options.admission would lose it.
   const admissionScope = options.admissionScope ?? resolveAdmissionModelScope(config, options.admission);
-  // PF-07: present only for a Chat combo with `nativeChatCombos` on; otherwise every child
+  // Present only when an opted-in ingress supplied a native source; otherwise every child
   // takes the bridge below exactly as before.
   const protocolLanes = createComboProtocolLanes({
     source: options.protocolSource,
@@ -518,6 +519,7 @@ export async function executeComboResponses(
     }
     carryProxyErrorContext(childLog, logCtx);
     Object.assign(logCtx, childLog, {
+      client: logCtx.client,
       requestedModel: responseModel,
       model: responseModel,
       provider: "combo",
@@ -561,6 +563,8 @@ export async function executeComboResponses(
       const policy = captureRouteStaticPolicy(route.providerName, modelId, route.provider,
         route.staticPolicy.effectiveAlias, inboundWire);
       const provider = resolveWireProtocolOverride(route.providerName, modelId, route.provider, inboundWire, policy);
+      // Copilot's Auto account may settle on a different wire; the child checks that result.
+      if (route.providerName === "github-copilot" && provider.authMode !== "forward") return true;
       return provider.adapter === "openai-chat" ? chatCanPreserveMandatoryToolChoice(body, provider, modelId)
         : provider.adapter !== "openai-responses" || !isMetaAiResponsesDestination(buildResponsesTransport(provider, { headers: req.headers }).url);
     } catch {
@@ -908,6 +912,7 @@ export async function executeComboResponses(
   // Local input admission refusals (#1524), while every failed target so far was one: such a
   // target sent nothing, so an exhausted ladder must not be reported as a provider rejection.
   let localAdmissionRefusals: string[] | undefined = [];
+  let toolChoiceRefusalsOnly: boolean | undefined;
   // The first quota/rate-limit refusal of the ladder. A fallback that then refuses its own
   // credential or plan (401/403, or a 400 the ladder hopped past) says nothing about why the
   // request failed: the primary target ran out. Returning that fallback refusal told clients
@@ -918,7 +923,7 @@ export async function executeComboResponses(
   // Snapshotted before dispatch: a 401/403 inside this ladder cools its own provider, and that
   // fresh cooldown is not a reason the request found no target.
   const quotaCooldownSnapshot = snapshotComboQuotaCooldowns(config, comboId);
-  const exhaustedFailure = (): Response => {
+  const exhaustedFailure = (targetsExhausted = false): Response => {
     if (contextFailure) {
       adoptFailedChildLog(contextFailure.childLog);
       return contextFailure.response;
@@ -926,6 +931,7 @@ export async function executeComboResponses(
     const returnsQuota = lastFailure && [400, 401, 403].includes(lastFailure.status) && quotaFailure;
     const failedChildLog = returnsQuota ? quotaFailedChildLog : lastFailedChildLog;
     if (failedChildLog) adoptFailedChildLog(failedChildLog);
+    if (targetsExhausted && toolChoiceRefusalsOnly === true) return comboUnavailableResponse("No available targets for combo; attempted targets cannot preserve mandatory tool_choice");
     if (!lastFailure || ![400, 401, 403].includes(lastFailure.status)) return lastFailure!;
     if (quotaFailure) return quotaFailure;
     // The quota-refused target was cooled before this request picked, so the ladder never saw
@@ -1252,7 +1258,7 @@ export async function executeComboResponses(
 
     // A native Chat child reports a pre-stream failure by status before any byte, so its body
     // is never peeked; a non-OK one takes the ordinary failure path below.
-    if (response.ok && !runTurnAdapterSseResponses.has(response) && clientWireOf(response) !== "chat") {
+    if (response.ok && !runTurnAdapterSseResponses.has(response) && clientWireOf(response) === undefined) {
       const nativePassthrough = isNativePassthroughSseResponse(response);
       const eagerRelay = isEagerRelaySseResponse(response);
       let preflight;
@@ -1302,6 +1308,7 @@ export async function executeComboResponses(
       settleComboReprobeSuccess(pick);
       carryProxyErrorContext(childLog, logCtx);
       Object.assign(logCtx, childLog, {
+        client: logCtx.client,
         requestedModel: responseModel,
         model: responseModel,
         provider: "combo",
@@ -1328,7 +1335,7 @@ export async function executeComboResponses(
     let failure: ConsumedComboFailure;
     try {
       failure = consumedChildFailure
-        ?? await consumeComboFailure(response, options.abortSignal);
+        ?? await consumeComboFailure(response, options.abortSignal, Date.now(), childLog);
       if (hasProxyErrorMessage(childLog, failure.upstreamMessage ?? "", { type: failure.upstreamType, code: failure.upstreamCode })) markProxyError(failure.response);
       if (preflightModelRefusal !== undefined) failure = { ...failure, codexModelRefusal: preflightModelRefusal };
     } catch (error) {
@@ -1374,6 +1381,7 @@ export async function executeComboResponses(
     }
     attemptRetained = true;
     lastFailure = failure.response;
+    toolChoiceRefusalsOnly = (toolChoiceRefusalsOnly ?? true) && isMandatoryToolChoiceRefusal(failure.response);
     // A real target failure ends the session pin; the next turn is decided afresh (#7525).
     jevPin?.forget();
     if (!quotaFailure && (lastFailure.status === 429 || lastFailure.status === 402)) {
@@ -1399,6 +1407,7 @@ export async function executeComboResponses(
     // send that already ran the turn, so no later target may receive it, whatever its status says.
     const failureDecision = failure.nonReplayable || spentReplacement
       ? "stop"
+      : isPolicyCandidateRefusal(failure.response) ? "hop"
       : comboFailureDecision(failure.response.status, failure.classificationText, {
         code: failure.upstreamCode,
         codexModelRefusal: failure.codexModelRefusal,
@@ -1471,7 +1480,7 @@ export async function executeComboResponses(
     );
     const failureNow = Date.now();
     const attemptedTargets = pick.attempted;
-    const failureCooldownScope = comboFailureCooldownScope(failure.response.status, failure.classificationText, {
+    const failureCooldownScope = isPolicyCandidateRefusal(failure.response) ? "none" : comboFailureCooldownScope(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
     });
     const failedTargetKey = targetKey(pick.target);
@@ -1582,7 +1591,7 @@ export async function executeComboResponses(
       if (!initialSend?.producerOwned) initialSend?.permit.release();
     }
   }
-  const failure = exhaustedFailure();
+    const failure = exhaustedFailure(true);
   if (
     failure === lastFailure && lastFailure?.status === 413
     && lastFailureClassifiesOverflow

@@ -68,6 +68,10 @@ same context. `src/server/index/websocket-handler.ts` and `src/server/index/live
 apply Pool projection at every immediate or queued upstream frame send, including JSON carried
 in binary frames. Unchanged frames retain their original bytes and encoding; derivation failure
 closes the relay with a sanitized reason without forwarding the failed frame or the queue tail.
+New inbound Responses inference turns retain the handshake's parent/thread headers and pass through
+the same workflow admission as HTTP before dispatch or native control ownership. Their workflow
+lease follows the active turn through terminal output and cancellation; an admission refusal is
+framed as the same local 429, including its workflow-refusal header.
 The optional availability probe in `src/server/claude-messages.ts` treats an installation-identity
 failure as helper unavailability, allowing an independent native Messages route to continue.
 `src/codex/affinity-debug.ts` reports only process-local keyed equality tags, never raw identities.

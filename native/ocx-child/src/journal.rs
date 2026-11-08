@@ -6,8 +6,12 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 
+use crate::codex_home::{CodexHomeGuard, RestoreStepError};
 use crate::codex_settings::HomeCodexSettings;
-use crate::platform::{reject_symlink, sha256_hex, write_private_atomic, write_regular_atomic};
+use crate::platform::{
+    DirectoryIdentity, directory_identity, ensure_private_dir, reject_symlink, sha256_hex,
+    write_private_atomic, write_regular_atomic,
+};
 use crate::state::ChildPaths;
 use crate::toml_surgeon::{
     ChildInjectedLedger, apply_design_b_config, detect_unowned_root_routing_conflict,
@@ -24,6 +28,10 @@ pub struct ChildJournalV1 {
     pub api_key_id: String,
     pub opencodex_home: String,
     pub codex_home: String,
+    #[serde(default)]
+    pub opencodex_home_identity: Option<DirectoryIdentity>,
+    #[serde(default)]
+    pub codex_home_identity: Option<DirectoryIdentity>,
     pub catalog_path: String,
     pub pre_attach_config_existed: bool,
     pub pre_attach_config_bytes_b64: Option<String>,
@@ -43,6 +51,8 @@ pub struct ChildJournalV1 {
     pub latest_models_cache_sha256: Option<String>,
     #[serde(default)]
     pub previous_models_cache_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub retained_external_cache_entries: bool,
     pub ledger: ChildInjectedLedger,
 }
 
@@ -87,6 +97,42 @@ pub fn write_journal(path: &Path, journal: &ChildJournalV1) -> Result<(), String
         .map_err(|e| format!("failed serializing journal: {e}"))?;
     bytes.push(b'\n');
     write_private_atomic(path, &bytes)
+}
+
+fn validate_journal_paths(paths: &ChildPaths, journal: &ChildJournalV1) -> Result<(), String> {
+    let current_ocx = fs::canonicalize(&paths.opencodex_home)
+        .map_err(|e| format!("cannot resolve current OpenCodex home: {e}"))?;
+    let current_codex = fs::canonicalize(&paths.codex_home)
+        .map_err(|e| format!("cannot resolve current Codex home: {e}"))?;
+    let catalog = Path::new(&journal.catalog_path);
+    let expected_ocx_identity = journal
+        .opencodex_home_identity
+        .as_ref()
+        .ok_or("child journal lacks OpenCodex directory identity")?;
+    let expected_codex_identity = journal
+        .codex_home_identity
+        .as_ref()
+        .ok_or("child journal lacks Codex directory identity")?;
+    if current_ocx != Path::new(&journal.opencodex_home)
+        || current_codex != Path::new(&journal.codex_home)
+        || catalog != current_codex.join("opencodex-catalog.json")
+        || &directory_identity(&current_ocx)? != expected_ocx_identity
+        || &directory_identity(&current_codex)? != expected_codex_identity
+    {
+        return Err("child journal belongs to a different home or catalog path".to_owned());
+    }
+    Ok(())
+}
+
+/// Verify an existing journal before any lifecycle operation changes state or stops a daemon.
+pub fn validate_existing_journal_paths(paths: &ChildPaths) -> Result<bool, String> {
+    match read_journal(&paths.journal_file)? {
+        Some(journal) => {
+            validate_journal_paths(paths, &journal)?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
 }
 
 /// Fail-closed check ensuring full `ocx` does not own `$OPENCODEX_HOME` or `$CODEX_HOME`.
@@ -168,12 +214,20 @@ pub fn prepare_codex_models_cache(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(format!("failed reading models_cache.json: {e}")),
     };
+    render_codex_models_cache(existing_bytes.as_deref(), catalog_models, false)
+}
+
+fn render_codex_models_cache(
+    existing_bytes: Option<&[u8]>,
+    catalog_models: &[serde_json::Value],
+    retain_unmarked: bool,
+) -> Result<(Option<Vec<u8>>, String), String> {
     let catalog_slugs: HashSet<&str> = catalog_models
         .iter()
         .filter_map(|m| m.get("slug").and_then(serde_json::Value::as_str))
         .collect();
     let mut observed_native = Vec::new();
-    if let Some(raw) = &existing_bytes
+    if let Some(raw) = existing_bytes
         && let Ok(val) = serde_json::from_slice::<serde_json::Value>(raw)
         && let Some(arr) = val.get("models").and_then(serde_json::Value::as_array)
     {
@@ -186,7 +240,12 @@ pub fn prepare_codex_models_cache(
                 .get("slug")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("");
-            if is_obs && !slug.is_empty() && !catalog_slugs.contains(slug) {
+            if retain_unmarked && slug.is_empty() {
+                return Err(
+                    "client_models_cache_conflict: local model is missing a slug".to_owned(),
+                );
+            }
+            if (is_obs || retain_unmarked) && !slug.is_empty() && !catalog_slugs.contains(slug) {
                 observed_native.push(entry.clone());
             }
         }
@@ -203,7 +262,7 @@ pub fn prepare_codex_models_cache(
         .map_err(|e| format!("failed serializing models_cache.json: {e}"))?;
     rendered.push(b'\n');
     let digest = sha256_hex(&rendered);
-    let to_write = (existing_bytes.as_deref() != Some(rendered.as_slice())).then_some(rendered);
+    let to_write = (existing_bytes != Some(rendered.as_slice())).then_some(rendered);
     Ok((to_write, digest))
 }
 
@@ -219,7 +278,7 @@ pub fn refresh_codex_models_cache(
 }
 
 pub fn apply_attach_or_sync(
-    paths: &ChildPaths,
+    guard: &CodexHomeGuard,
     link_id: &str,
     api_key_id: &str,
     listen_port: u16,
@@ -227,7 +286,7 @@ pub fn apply_attach_or_sync(
     settings: &HomeCodexSettings,
 ) -> Result<ChildJournalV1, String> {
     apply_attach_or_sync_with_fault(
-        paths,
+        guard,
         link_id,
         api_key_id,
         listen_port,
@@ -238,7 +297,7 @@ pub fn apply_attach_or_sync(
 }
 
 pub fn apply_attach_or_sync_with_fault(
-    paths: &ChildPaths,
+    guard: &CodexHomeGuard,
     link_id: &str,
     api_key_id: &str,
     listen_port: u16,
@@ -246,6 +305,10 @@ pub fn apply_attach_or_sync_with_fault(
     settings: &HomeCodexSettings,
     fault: Option<JournalWriteFault>,
 ) -> Result<ChildJournalV1, String> {
+    if !guard.is_owner() {
+        return Err("attach refused: this OpenCodex home does not own the Codex home".to_owned());
+    }
+    let paths = guard.paths();
     assert_no_full_ocx_conflict(paths)?;
     let catalog_models = validate_catalog_json(catalog_bytes)?;
     let config_path = paths.codex_config_path();
@@ -256,6 +319,9 @@ pub fn apply_attach_or_sync_with_fault(
     reject_symlink(&cache_path)?;
 
     let existing_journal = read_journal(&paths.journal_file)?;
+    if let Some(journal) = &existing_journal {
+        validate_journal_paths(paths, journal)?;
+    }
     let current_cfg_bytes = match fs::read(&config_path) {
         Ok(b) => Some(b),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -272,7 +338,18 @@ pub fn apply_attach_or_sync_with_fault(
         detect_unowned_root_routing_conflict(&current_cfg_text)?;
     }
 
-    let catalog_path_str = catalog_path.to_string_lossy().into_owned();
+    ensure_private_dir(&paths.child_dir)?;
+    fs::create_dir_all(&paths.codex_home)
+        .map_err(|e| format!("failed to create Codex home: {e}"))?;
+    let canonical_ocx = fs::canonicalize(&paths.opencodex_home)
+        .map_err(|e| format!("cannot resolve OpenCodex home: {e}"))?;
+    let canonical_codex = fs::canonicalize(&paths.codex_home)
+        .map_err(|e| format!("cannot resolve Codex home: {e}"))?;
+    let catalog_path_str = canonical_codex
+        .join("opencodex-catalog.json")
+        .to_str()
+        .ok_or("canonical catalog path is not UTF-8")?
+        .to_owned();
     let (next_cfg_text, next_ledger) = apply_design_b_config(
         &current_cfg_text,
         listen_port,
@@ -358,50 +435,122 @@ pub fn apply_attach_or_sync_with_fault(
         }
     };
 
-    let (pre_cache_existed, pre_cache_b64, prev_cache_sha) = if let Some(prev) = &existing_journal {
-        let carried_prev_cache = match fs::read(&cache_path) {
-            Ok(existing_cache) => {
-                let existing_cache_sha = sha256_hex(&existing_cache);
-                let matches_owned = Some(existing_cache_sha.as_str())
-                    == prev.latest_models_cache_sha256.as_deref()
-                    || Some(existing_cache_sha.as_str())
-                        == prev.previous_models_cache_sha256.as_deref();
-                if matches_owned {
-                    Some(existing_cache_sha)
-                } else {
-                    prev.previous_models_cache_sha256
-                        .clone()
-                        .or_else(|| prev.latest_models_cache_sha256.clone())
+    let (mut pre_cache_existed, mut pre_cache_b64, prev_cache_sha) =
+        if let Some(prev) = &existing_journal {
+            let carried_prev_cache = match fs::read(&cache_path) {
+                Ok(existing_cache) => {
+                    let existing_cache_sha = sha256_hex(&existing_cache);
+                    let matches_owned = Some(existing_cache_sha.as_str())
+                        == prev.latest_models_cache_sha256.as_deref()
+                        || Some(existing_cache_sha.as_str())
+                            == prev.previous_models_cache_sha256.as_deref();
+                    if matches_owned {
+                        Some(existing_cache_sha)
+                    } else {
+                        prev.previous_models_cache_sha256
+                            .clone()
+                            .or_else(|| prev.latest_models_cache_sha256.clone())
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => prev
+                    .previous_models_cache_sha256
+                    .clone()
+                    .or_else(|| prev.latest_models_cache_sha256.clone()),
+                Err(e) => return Err(format!("failed reading {}: {e}", cache_path.display())),
+            };
+            (
+                prev.pre_attach_models_cache_existed,
+                prev.pre_attach_models_cache_bytes_b64.clone(),
+                carried_prev_cache,
+            )
+        } else {
+            match fs::read(&cache_path) {
+                Ok(b) => (true, Some(BASE64.encode(&b)), None),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (false, None, None),
+                Err(e) => return Err(format!("failed reading {}: {e}", cache_path.display())),
+            }
+        };
+
+    let mut retained_external_cache_entries = existing_journal
+        .as_ref()
+        .is_some_and(|j| j.retained_external_cache_entries);
+    let (prepared_cache, latest_cache_sha) = if let Some(prev) = &existing_journal {
+        let current = match fs::read(&cache_path) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(format!("failed reading models_cache.json: {e}")),
+        };
+        let externally_modified = current.as_ref().is_some_and(|bytes| {
+            let hash = sha256_hex(bytes);
+            Some(hash.as_str()) != prev.latest_models_cache_sha256.as_deref()
+                && Some(hash.as_str()) != prev.previous_models_cache_sha256.as_deref()
+        });
+        if current.is_some() && (externally_modified || retained_external_cache_entries) {
+            let original = match (
+                &prev.pre_attach_models_cache_bytes_b64,
+                prev.pre_attach_models_cache_existed,
+            ) {
+                (Some(encoded), true) => Some(
+                    BASE64
+                        .decode(encoded)
+                        .map_err(|e| format!("bad models_cache snapshot: {e}"))?,
+                ),
+                (None, false) => None,
+                _ => return Err("missing pre-attach models_cache snapshot".to_owned()),
+            };
+            let current = current
+                .as_deref()
+                .ok_or("models_cache disappeared during sync")?;
+            let reconciled = reconcile_modified_models_cache(
+                current,
+                original.as_deref(),
+                &paths.catalog_backup_file,
+            )?;
+            let local: serde_json::Value = serde_json::from_slice(&reconciled)
+                .map_err(|e| format!("invalid reconciled models_cache.json: {e}"))?;
+            let local_models = local
+                .get("models")
+                .and_then(serde_json::Value::as_array)
+                .ok_or("reconciled models_cache.json missing models array")?;
+            for entry in local_models {
+                if let Some(slug) = entry.get("slug").and_then(serde_json::Value::as_str)
+                    && catalog_models.iter().any(|model| {
+                        model.get("slug").and_then(serde_json::Value::as_str) == Some(slug)
+                            && model != entry
+                    })
+                {
+                    return Err(format!(
+                        "client_models_cache_conflict: local model {slug} conflicts with Home catalog"
+                    ));
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => prev
-                .previous_models_cache_sha256
-                .clone()
-                .or_else(|| prev.latest_models_cache_sha256.clone()),
-            Err(e) => return Err(format!("failed reading {}: {e}", cache_path.display())),
-        };
-        (
-            prev.pre_attach_models_cache_existed,
-            prev.pre_attach_models_cache_bytes_b64.clone(),
-            carried_prev_cache,
-        )
-    } else {
-        match fs::read(&cache_path) {
-            Ok(b) => (true, Some(BASE64.encode(&b)), None),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (false, None, None),
-            Err(e) => return Err(format!("failed reading {}: {e}", cache_path.display())),
+            let (rendered, hash) =
+                render_codex_models_cache(Some(&reconciled), &catalog_models, true)?;
+            pre_cache_existed = true;
+            pre_cache_b64 = Some(BASE64.encode(&reconciled));
+            retained_external_cache_entries = true;
+            (rendered.or(Some(reconciled)), hash)
+        } else {
+            prepare_codex_models_cache(&cache_path, &catalog_models)?
         }
+    } else {
+        prepare_codex_models_cache(&cache_path, &catalog_models)?
     };
-
-    let (prepared_cache, latest_cache_sha) =
-        prepare_codex_models_cache(&cache_path, &catalog_models)?;
 
     let journal = ChildJournalV1 {
         schema: CHILD_JOURNAL_SCHEMA.to_owned(),
         link_id: link_id.to_owned(),
         api_key_id: api_key_id.to_owned(),
-        opencodex_home: paths.opencodex_home.to_string_lossy().into_owned(),
-        codex_home: paths.codex_home.to_string_lossy().into_owned(),
+        opencodex_home: canonical_ocx
+            .to_str()
+            .ok_or("canonical OpenCodex home is not UTF-8")?
+            .to_owned(),
+        codex_home: canonical_codex
+            .to_str()
+            .ok_or("canonical Codex home is not UTF-8")?
+            .to_owned(),
+        opencodex_home_identity: Some(directory_identity(&canonical_ocx)?),
+        codex_home_identity: Some(directory_identity(&canonical_codex)?),
         catalog_path: catalog_path_str,
         pre_attach_config_existed: pre_cfg_existed,
         pre_attach_config_bytes_b64: pre_cfg_b64,
@@ -418,6 +567,7 @@ pub fn apply_attach_or_sync_with_fault(
         pre_attach_models_cache_bytes_b64: pre_cache_b64,
         latest_models_cache_sha256: Some(latest_cache_sha),
         previous_models_cache_sha256: prev_cache_sha,
+        retained_external_cache_entries,
         ledger: next_ledger,
     };
     // Persist recovery journal BEFORE mutating any file in $CODEX_HOME (write-ahead durability).
@@ -442,18 +592,72 @@ pub fn apply_attach_or_sync_with_fault(
 
 /// Performs 100% offline two-tier restoration of `config.toml`, `opencodex-catalog.json`, and `models_cache.json`.
 pub fn offline_detach(
-    paths: &ChildPaths,
+    guard: &CodexHomeGuard,
     keep_catalog: bool,
 ) -> Result<DetachOutcome, DetachError> {
-    let Some(journal) = read_journal(&paths.journal_file).map_err(DetachError::Io)? else {
+    offline_detach_inner(guard, keep_catalog, false)
+}
+
+/// Restore client files while retaining recovery records until lifecycle cleanup succeeds.
+pub fn offline_detach_deferred(
+    guard: &CodexHomeGuard,
+    keep_catalog: bool,
+) -> Result<DetachOutcome, DetachError> {
+    offline_detach_inner(guard, keep_catalog, true)
+}
+
+pub fn remove_optional_file(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => {
+            #[cfg(unix)]
+            {
+                let parent = path.parent().ok_or("removed file has no parent")?;
+                crate::platform::sync_parent_directory(parent)?;
+            }
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("file");
+            Err(format!("failed removing {name}: {e}"))
+        }
+    }
+}
+
+fn offline_detach_inner(
+    guard: &CodexHomeGuard,
+    keep_catalog: bool,
+    defer_cleanup: bool,
+) -> Result<DetachOutcome, DetachError> {
+    let paths = guard.paths();
+    let Some(mut journal) = read_journal(&paths.journal_file).map_err(DetachError::Io)? else {
         return Ok(DetachOutcome::NotAttached);
     };
+    validate_journal_paths(paths, &journal).map_err(DetachError::Conflict)?;
     let config_path = paths.codex_config_path();
     let catalog_path = Path::new(&journal.catalog_path);
     let cache_path = paths.codex_models_cache_path();
     reject_symlink(&config_path).map_err(DetachError::Io)?;
     reject_symlink(catalog_path).map_err(DetachError::Io)?;
     reject_symlink(&cache_path).map_err(DetachError::Io)?;
+
+    let prior_catalog =
+        if !keep_catalog && journal.pre_attach_catalog_existed {
+            let encoded = journal
+                .pre_attach_catalog_bytes_b64
+                .as_ref()
+                .ok_or_else(|| {
+                    DetachError::Conflict("missing pre-attach catalog snapshot".to_owned())
+                })?;
+            Some(BASE64.decode(encoded).map_err(|e| {
+                DetachError::Conflict(format!("bad pre-attach catalog snapshot: {e}"))
+            })?)
+        } else {
+            None
+        };
 
     if !keep_catalog && catalog_path.exists() {
         let cat_bytes = fs::read(catalog_path)
@@ -462,11 +666,9 @@ pub fn offline_detach(
         let matches_known_injected = cur_cat_sha == journal.latest_catalog_sha256
             || Some(cur_cat_sha.as_str()) == journal.previous_catalog_sha256.as_deref();
         if !matches_known_injected {
-            let matches_prior = journal
-                .pre_attach_catalog_bytes_b64
+            let matches_prior = prior_catalog
                 .as_ref()
-                .and_then(|b64| BASE64.decode(b64).ok())
-                .is_some_and(|prior| prior == cat_bytes);
+                .is_some_and(|prior| *prior == cat_bytes);
             if !matches_prior {
                 return Err(DetachError::Conflict(
                     "client_catalog_ownership_changed: opencodex-catalog.json was modified externally".to_owned(),
@@ -556,9 +758,13 @@ pub fn offline_detach(
                                 DetachError::Conflict(format!("bad snapshot base64: {e}"))
                             })
                         })?;
-                    write_regular_atomic(&config_path, &orig).map_err(DetachError::Io)?;
+                    guard
+                        .restore_step(|| write_regular_atomic(&config_path, &orig))
+                        .map_err(step_err)?;
                 } else {
-                    let _ = fs::remove_file(&config_path);
+                    guard
+                        .restore_step(|| remove_optional_file(&config_path))
+                        .map_err(step_err)?;
                 }
                 DetachOutcome::ExactRestore
             } else {
@@ -568,11 +774,14 @@ pub fn offline_detach(
                     surgical_detach_config(text, &journal.ledger).map_err(DetachError::Conflict)?;
                 match stripped {
                     Some(updated) => {
-                        write_regular_atomic(&config_path, updated.as_bytes())
-                            .map_err(DetachError::Io)?;
+                        guard
+                            .restore_step(|| write_regular_atomic(&config_path, updated.as_bytes()))
+                            .map_err(step_err)?;
                     }
                     None => {
-                        let _ = fs::remove_file(&config_path);
+                        guard
+                            .restore_step(|| remove_optional_file(&config_path))
+                            .map_err(step_err)?;
                     }
                 }
                 DetachOutcome::SurgicalRestore
@@ -582,35 +791,69 @@ pub fn offline_detach(
 
     if !keep_catalog {
         if journal.pre_attach_catalog_existed {
-            if let Some(b64) = &journal.pre_attach_catalog_bytes_b64
-                && let Ok(prior_bytes) = BASE64.decode(b64)
-            {
-                write_regular_atomic(catalog_path, &prior_bytes).map_err(DetachError::Io)?;
+            if let Some(prior_bytes) = &prior_catalog {
+                guard
+                    .restore_step(|| write_regular_atomic(catalog_path, prior_bytes))
+                    .map_err(step_err)?;
             }
         } else {
-            let _ = fs::remove_file(catalog_path);
+            guard
+                .restore_step(|| remove_optional_file(catalog_path))
+                .map_err(step_err)?;
         }
     }
 
     match cache_plan {
         CacheDetachPlan::Noop => {}
-        CacheDetachPlan::Remove => match fs::remove_file(&cache_path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => {
-                return Err(DetachError::Io(format!(
-                    "failed removing models_cache.json: {e}"
-                )));
-            }
-        },
+        CacheDetachPlan::Remove => {
+            guard
+                .restore_step(|| remove_optional_file(&cache_path))
+                .map_err(step_err)?;
+        }
         CacheDetachPlan::Write(reconciled) => {
-            write_regular_atomic(&cache_path, &reconciled).map_err(DetachError::Io)?;
+            guard
+                .restore_step(|| write_regular_atomic(&cache_path, &reconciled))
+                .map_err(step_err)?;
         }
     }
 
-    let _ = fs::remove_file(&paths.catalog_backup_file);
-    let _ = fs::remove_file(&paths.journal_file);
+    // A retry after cleanup starts must recognize the restored cache without
+    // relying on the catalog backup, which cleanup may already have removed.
+    match fs::read(&cache_path) {
+        Ok(restored) => {
+            journal.pre_attach_models_cache_existed = true;
+            journal.pre_attach_models_cache_bytes_b64 = Some(BASE64.encode(&restored));
+            journal.latest_models_cache_sha256 = Some(sha256_hex(&restored));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            journal.pre_attach_models_cache_existed = false;
+            journal.pre_attach_models_cache_bytes_b64 = None;
+            journal.latest_models_cache_sha256 = None;
+        }
+        Err(e) => {
+            return Err(DetachError::Io(format!(
+                "failed reading restored cache: {e}"
+            )));
+        }
+    }
+    journal.previous_models_cache_sha256 = None;
+    guard
+        .restore_step(|| write_journal(&paths.journal_file, &journal))
+        .map_err(step_err)?;
+
+    if !defer_cleanup {
+        guard
+            .restore_step(|| remove_optional_file(&paths.catalog_backup_file))
+            .map_err(step_err)?;
+        guard
+            .restore_step(|| remove_optional_file(&paths.journal_file))
+            .map_err(step_err)?;
+    }
     Ok(outcome)
+}
+
+fn step_err(e: RestoreStepError) -> DetachError {
+    DetachError::Io(e.into_message())
 }
 
 /// Preserves newly observed native models (`opencodex_account_observed_native`) and prior cache

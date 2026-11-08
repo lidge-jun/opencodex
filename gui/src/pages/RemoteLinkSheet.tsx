@@ -5,9 +5,12 @@ import {
   type LinkConfirmHostView,
   type LinkProbeView,
 } from "../remote-link-api";
-import { IconLink, IconX } from "../icons";
+import { IconLink, IconRefresh, IconX } from "../icons";
 import { type TKey, useT } from "../i18n/shared";
-import { Notice } from "../ui";
+import { Button } from "@/components/ui-v2/button";
+import { cn } from "@/lib/utils";
+import { Banner, IconButton } from "../components/v2-startup/primitives";
+import { SheetSteps } from "../components/v2-startup/remote-link-parts";
 
 export interface LinkActionErrorView {
   readonly key: TKey;
@@ -16,12 +19,7 @@ export interface LinkActionErrorView {
 
 export function LinkErrorNotice({ error }: { error: LinkActionErrorView }): ReactElement {
   const t = useT();
-  return (
-    <Notice tone="err">
-      <span className="remote-link-error">{t(error.key)}</span>
-      {error.hint && <span className="remote-link-hint">{t("remoteLink.reason.generic")} <code>{error.hint}</code></span>}
-    </Notice>
-  );
+  return <Banner tone="err"><span className="remote-link-error">{t(error.key)}</span>{error.hint && <span className="remote-link-hint mt-1 block text-[12px] text-fg-muted [overflow-wrap:anywhere]">{t("remoteLink.reason.generic")} <code className="font-mono">{error.hint}</code></span>}</Banner>;
 }
 
 export interface RemoteLinkSheetProps {
@@ -50,130 +48,139 @@ export interface RemoteLinkSheetProps {
   onRetryFailedAction: () => void;
 }
 
+const CARD = "flex flex-col gap-3 rounded-[10px] bg-surface p-4 ring-1 ring-line";
+
+function ConfirmationCard({ confirmation, isChildFlow, childSelectable, busy, onApplyLink, onJoinLink }: {
+  confirmation: LinkConfirmHostView;
+  isChildFlow: boolean;
+  childSelectable: boolean;
+  busy: RemoteLinkSheetProps["busy"];
+  onApplyLink: () => void;
+  onJoinLink: () => void;
+}): ReactElement {
+  const t = useT();
+  if (isChildFlow) {
+    return (
+      <div className={CARD}>
+        <p className="m-0 text-[13px] text-fg-muted">{t("link.ocxVersion", { version: confirmation.ocxVersion ?? "" })}</p>
+        <Banner tone="warn">{t("remoteLink.findHome.notice")}</Banner>
+        <Button variant="primary" className="self-start" onClick={onJoinLink} disabled={busy !== null || !childSelectable}>
+          {busy === "join" ? t("remoteLink.joining") : t("remoteLink.findHome.connect")}
+        </Button>
+      </div>
+    );
+  }
+  if (confirmation.runtimeKind === "missing") {
+    if (!confirmation.plantable) return <Banner tone="warn">{t("link.plant.unavailable", { arch: confirmation.targetTriple ?? t("link.plant.unknownArch") })}</Banner>;
+    return (
+      <div className={cn(CARD, "remote-link-plant-card")}>
+        <h4 className="m-0 text-[14px] leading-5 font-semibold">{t("link.plant.title")}</h4>
+        <div className="flex flex-wrap items-center gap-2 font-mono text-[12px] text-fg">
+          <code>{confirmation.targetTriple ?? t("link.plant.unknownArch")}</code>
+          <code>{formatBinaryMegabytes(confirmation.binarySizeBytes)}</code>
+          <code>{"~/.cache/opencodex/bin/ocx-child"}</code>
+        </div>
+        <p className="m-0 text-[13px] leading-5 text-fg-muted">{t("link.plant.body")}</p>
+        <Button variant="primary" className="self-start" onClick={onApplyLink} disabled={busy !== null}>
+          {busy === "apply" ? t("link.plant.applying") : t("link.plant.apply")}
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className={CARD}>
+      <p className="m-0 text-[13px] text-fg-muted">
+        {confirmation.runtimeKind === "ephemeral"
+          ? t("link.ephemeralReady", { version: confirmation.ocxVersion ?? "" })
+          : t("link.ocxVersion", { version: confirmation.ocxVersion ?? "" })}
+      </p>
+      <Button variant="primary" className="self-start" onClick={onApplyLink} disabled={busy !== null}>
+        {busy === "apply" ? t("link.applying") : t("link.apply")}
+      </Button>
+    </div>
+  );
+}
+
 export function RemoteLinkSheet({
-  sheetRef,
-  role,
-  standaloneRuntime,
-  childSelectable,
-  discovery,
-  candidates,
-  alias,
-  onAliasChange,
-  probe,
-  checkedFingerprint,
-  onCheckedFingerprintChange,
-  confirmation,
-  busy,
-  sheetOpen,
-  actionError,
-  failedAction,
-  onClose,
-  onRescan,
-  onProbe,
-  onConfirmHost,
-  onApplyLink,
-  onJoinLink,
-  onRetryFailedAction,
+  sheetRef, role, standaloneRuntime, childSelectable, discovery, candidates, alias, onAliasChange, probe, checkedFingerprint,
+  onCheckedFingerprintChange, confirmation, busy, sheetOpen, actionError, failedAction, onClose, onRescan, onProbe, onConfirmHost,
+  onApplyLink, onJoinLink, onRetryFailedAction,
 }: RemoteLinkSheetProps): ReactElement {
   const t = useT();
   const isChildFlow = role === "child" && standaloneRuntime;
 
   return (
-    <dialog ref={sheetRef} className="remote-link-sheet" aria-labelledby="remote-link-sheet-title" onCancel={event => { event.preventDefault(); onClose(); }}>
-      <div className="remote-link-sheet-head">
-        <h3 id="remote-link-sheet-title">{isChildFlow ? t("remoteLink.findHome.title") : t("link.sheetTitle")}</h3>
-        <button type="button" className="btn btn-ghost btn-icon" onClick={onClose} aria-label={t("link.close")}><IconX /></button>
-      </div>
-      <div className="remote-link-sheet-body">
-        {role === "home" && <div className="remote-link-info"><p>{t("link.setup.relationship")}</p><p>{t("link.setup.requirements")}</p></div>}
-        <div>
-          <h4>{isChildFlow ? t("remoteLink.findHome.body") : t("link.candidates")}</h4>
-          {discovery === "loading" && <p className="remote-link-info" role="status">{t("link.loading")}</p>}
-          {discovery === "failed" && <><p className="remote-link-info">{t("link.discoveryFailed")}</p>{sheetOpen && actionError && <LinkErrorNotice error={actionError} />}</>}
-          {discovery === "ready" && (candidates.length > 0 ? (
-            <div className="remote-link-candidates">
-              {candidates.map(candidate => (
-                <button type="button" className="remote-link-candidate" key={`${candidate.source}:${candidate.alias}`} onClick={() => onAliasChange(candidate.alias)}>
-                  <span>{candidate.alias}</span><small>{candidate.source}</small>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="remote-link-info">
-              <p>{t("link.noCandidates")}</p>
-              <p>{t(role === "home" ? "link.setup.emptyHome" : "link.setup.emptyLocal")}</p>
-              <pre><code>{"Host devbox\n  HostName devbox.example.com\n  User you\n  IdentityFile ~/.ssh/id_ed25519"}</code></pre>
-            </div>
-          ))}
-          <a href="https://opencodex.me/guides/remote-link/" target="_blank" rel="noopener noreferrer">{t("link.setup.guide")}</a>
-          <button type="button" className="btn btn-ghost" onClick={onRescan} disabled={busy !== null}>{t(discovery === "failed" ? "link.retry" : "link.rescan")}</button>
-        </div>
-        <div className="remote-link-form">
-          <label className="field-label" htmlFor="remote-link-alias">{t("link.alias")}</label>
-          <input id="remote-link-alias" aria-describedby="remote-link-alias-help" className="input" spellCheck={false} value={alias} onChange={event => onAliasChange(event.target.value)} placeholder={t("link.aliasPlaceholder")} autoComplete="off" />
-          <p id="remote-link-alias-help" className="remote-link-info">{t("link.aliasRequired")}</p>
-          <button type="button" className="btn btn-ghost" onClick={onProbe} disabled={!alias.trim() || busy !== null}><IconLink />{busy === "probe" ? t("link.probing") : t("link.probe")}</button>
-        </div>
-        {probe && (
-          <div className="remote-link-panel">
-            <div>
-              <span className="remote-link-info">{t("link.hostFingerprint")}</span>
-              <p className="remote-link-fingerprint"><code>{probe.fingerprint}</code></p>
-              <span className="remote-link-info">{probe.keyType}</span>
-            </div>
-            <label><input type="checkbox" checked={checkedFingerprint} onChange={event => onCheckedFingerprintChange(event.target.checked)} /> {t("link.confirmFingerprint")}</label>
-            <button type="button" className="btn btn-primary" onClick={onConfirmHost} disabled={!checkedFingerprint || busy !== null}>{busy === "confirm" ? t("link.confirming") : t("link.confirm")}</button>
+    <dialog ref={sheetRef} aria-labelledby="remote-link-sheet-title" onCancel={event => { event.preventDefault(); onClose(); }}
+      className="remote-link-sheet m-auto max-h-[min(800px,calc(100dvh-24px))] w-[min(620px,calc(100vw-24px))] flex-col overflow-hidden rounded-[14px] border-0 bg-surface p-1 text-fg shadow-lg ring-1 ring-line backdrop:bg-black/40 open:flex">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[10px] bg-bg ring-1 ring-line">
+        <header className="flex flex-col gap-3 border-b border-line px-5 pt-4 pb-3.5">
+          <div className="flex items-start justify-between gap-3">
+            <h3 id="remote-link-sheet-title" className="m-0 text-[16px] leading-6 font-semibold tracking-[-0.015em]">{isChildFlow ? t("remoteLink.findHome.title") : t("link.sheetTitle")}</h3>
+            <IconButton label={t("link.close")} onClick={onClose}><IconX /></IconButton>
           </div>
-        )}
-        {confirmation && (
-          isChildFlow ? (
-            <div className="remote-link-panel">
-              <p className="remote-link-info">{t("link.ocxVersion", { version: confirmation.ocxVersion ?? "" })}</p>
-              <Notice tone="warn">{t("remoteLink.findHome.notice")}</Notice>
-              <button type="button" className="btn btn-primary" onClick={onJoinLink} disabled={busy !== null || !childSelectable}>
-                {busy === "join" ? t("remoteLink.joining") : t("remoteLink.findHome.connect")}
-              </button>
-            </div>
-          ) : confirmation.runtimeKind === "missing" ? (
-            confirmation.plantable ? (
-              <div className="remote-link-plant-card">
-                <h4>{t("link.plant.title")}</h4>
-                <div className="remote-link-plant-meta">
-                  <code>{confirmation.targetTriple ?? t("link.plant.unknownArch")}</code>
-                  <code>{formatBinaryMegabytes(confirmation.binarySizeBytes)}</code>
-                  <code>{"~/.cache/opencodex/bin/ocx-child"}</code>
-                </div>
-                <p>{t("link.plant.body")}</p>
-                <button type="button" className="btn btn-primary" onClick={onApplyLink} disabled={busy !== null}>
-                  {busy === "apply" ? t("link.plant.applying") : t("link.plant.apply")}
-                </button>
+          <SheetSteps step={confirmation ? 2 : probe ? 1 : 0} />
+        </header>
+        <div className="flex min-h-0 flex-col gap-5 overflow-y-auto px-5 py-4">
+          {role === "home" && <div className="flex flex-col gap-1 text-[13px] leading-5 text-fg-muted"><p className="m-0">{t("link.setup.relationship")}</p><p className="m-0">{t("link.setup.requirements")}</p></div>}
+          <div className="flex flex-col gap-2">
+            <h4 className="m-0 text-[13px] leading-5 font-semibold">{isChildFlow ? t("remoteLink.findHome.body") : t("link.candidates")}</h4>
+            {discovery === "loading" && <p className="m-0 text-[13px] text-fg-muted" role="status">{t("link.loading")}</p>}
+            {discovery === "failed" && <><p className="m-0 text-[13px] text-fg-muted">{t("link.discoveryFailed")}</p>{sheetOpen && actionError && <LinkErrorNotice error={actionError} />}</>}
+            {discovery === "ready" && (candidates.length > 0 ? (
+              <div className="flex flex-col gap-1.5">
+                {candidates.map(candidate => (
+                  <button type="button" key={`${candidate.source}:${candidate.alias}`} onClick={() => onAliasChange(candidate.alias)} aria-pressed={alias === candidate.alias}
+                    className={cn(
+                      "remote-link-candidate ui-v2 flex min-h-[var(--ocx-control-h)] cursor-pointer items-center justify-between gap-3 rounded-[10px] bg-surface px-3 py-2 text-left ring-1 ring-line transition-colors hover:bg-raised",
+                      "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-highlight",
+                      alias === candidate.alias && "bg-raised ring-2 ring-fg",
+                    )}>
+                    <span className="truncate font-mono text-[13px] text-fg">{candidate.alias}</span>
+                    <small className="shrink-0 text-[12px] text-fg-subtle">{candidate.source}</small>
+                  </button>
+                ))}
               </div>
             ) : (
-              <Notice tone="warn">{t("link.plant.unavailable", { arch: confirmation.targetTriple ?? t("link.plant.unknownArch") })}</Notice>
-            )
-          ) : (
-            <div className="remote-link-panel">
-              <p className="remote-link-info">
-                {confirmation.runtimeKind === "ephemeral"
-                  ? t("link.ephemeralReady", { version: confirmation.ocxVersion ?? "" })
-                  : t("link.ocxVersion", { version: confirmation.ocxVersion ?? "" })}
-              </p>
-              <button type="button" className="btn btn-primary" onClick={onApplyLink} disabled={busy !== null}>
-                {busy === "apply" ? t("link.applying") : t("link.apply")}
-              </button>
+              <div className="flex flex-col gap-2 text-[13px] leading-5 text-fg-muted">
+                <p className="m-0">{t("link.noCandidates")}</p>
+                <p className="m-0">{t(role === "home" ? "link.setup.emptyHome" : "link.setup.emptyLocal")}</p>
+                <pre className="m-0 rounded-[8px] bg-surface px-3 py-2.5 font-mono text-[12px] leading-5 whitespace-pre-wrap text-fg ring-1 ring-line [overflow-wrap:anywhere]"><code>{"Host devbox\n  HostName devbox.example.com\n  User you\n  IdentityFile ~/.ssh/id_ed25519"}</code></pre>
+              </div>
+            ))}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <a href="https://opencodex.me/guides/remote-link/" target="_blank" rel="noopener noreferrer" className="text-[13px] font-medium text-highlight hover:underline">{t("link.setup.guide")}</a>
+              <Button variant="ghost" size="sm" onClick={onRescan} disabled={busy !== null}><IconRefresh />{t(discovery === "failed" ? "link.retry" : "link.rescan")}</Button>
             </div>
-          )
-        )}
-        {sheetOpen && discovery !== "failed" && actionError && <LinkErrorNotice error={actionError} />}
-        {failedAction && actionError?.key !== "remoteLink.error.join_restart_failed" && (
-          <div>
-            {failedAction.phase === "probe" && <><p className="remote-link-info">{t("link.probeHelp")}</p><pre><code>{"ssh -o BatchMode=yes <alias> true"}</code></pre></>}
-            <button type="button" className="btn btn-ghost" onClick={onRetryFailedAction} disabled={busy !== null}>{t("link.retry")}</button>
           </div>
-        )}
-        <div className="remote-link-sheet-actions"><button type="button" className="btn btn-ghost" onClick={onClose}>{t("link.cancel")}</button></div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[13px] leading-5 font-semibold" htmlFor="remote-link-alias">{t("link.alias")}</label>
+            <div className="flex flex-wrap items-center gap-2">
+              <input id="remote-link-alias" aria-describedby="remote-link-alias-help" className="input min-w-0 flex-1 font-mono" spellCheck={false} value={alias} onChange={event => onAliasChange(event.target.value)} placeholder={t("link.aliasPlaceholder")} autoComplete="off" />
+              <Button variant="outline" onClick={onProbe} disabled={!alias.trim() || busy !== null}><IconLink />{busy === "probe" ? t("link.probing") : t("link.probe")}</Button>
+            </div>
+            <p id="remote-link-alias-help" className="m-0 text-[12px] leading-[18px] text-fg-subtle">{t("link.aliasRequired")}</p>
+          </div>
+          {probe && (
+            <div className={CARD}>
+              <div className="flex flex-col gap-1.5">
+                <span className="text-[13px] font-semibold">{t("link.hostFingerprint")} <span className="font-normal text-fg-subtle">{probe.keyType}</span></span>
+                <p className="remote-link-fingerprint m-0 rounded-[8px] bg-bg px-3 py-2 font-mono text-[12.5px] ring-1 ring-line [overflow-wrap:anywhere]"><code>{probe.fingerprint}</code></p>
+              </div>
+              <label className="flex items-center gap-2 text-[13px]"><input type="checkbox" checked={checkedFingerprint} onChange={event => onCheckedFingerprintChange(event.target.checked)} /> {t("link.confirmFingerprint")}</label>
+              <Button variant="primary" className="self-start" onClick={onConfirmHost} disabled={!checkedFingerprint || busy !== null}>{busy === "confirm" ? t("link.confirming") : t("link.confirm")}</Button>
+            </div>
+          )}
+          {confirmation && <ConfirmationCard confirmation={confirmation} isChildFlow={isChildFlow} childSelectable={childSelectable} busy={busy} onApplyLink={onApplyLink} onJoinLink={onJoinLink} />}
+          {sheetOpen && discovery !== "failed" && actionError && <LinkErrorNotice error={actionError} />}
+          {failedAction && actionError?.key !== "remoteLink.error.join_restart_failed" && (
+            <div className="flex flex-col gap-2">
+              {failedAction.phase === "probe" && <><p className="m-0 text-[13px] leading-5 text-fg-muted">{t("link.probeHelp")}</p><pre className="m-0 rounded-[8px] bg-surface px-3 py-2 font-mono text-[12px] whitespace-pre-wrap ring-1 ring-line"><code>{"ssh -o BatchMode=yes <alias> true"}</code></pre></>}
+              <Button variant="outline" size="sm" className="self-start" onClick={onRetryFailedAction} disabled={busy !== null}>{t("link.retry")}</Button>
+            </div>
+          )}
+        </div>
       </div>
+      <footer className="flex shrink-0 justify-end gap-2 px-2 py-2"><Button variant="ghost" onClick={onClose}>{t("link.cancel")}</Button></footer>
     </dialog>
   );
 }
-

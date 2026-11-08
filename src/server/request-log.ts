@@ -1,9 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
+import { normalizeRecordedClient, type UsageClient } from "../usage/client";
 import { stampApiKeyAccountLabel, usesApiKeyAccount } from "../providers/label";
 import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
 export { sealRequestAttemptIdentity };
+export { noteAttemptRecoveryWithheld } from "./request-log-attempt-recovery";
 import { captureUpstreamTerminalDiagnostics, upstreamDiagnosticLogFields, type UpstreamErrorDiagnostics, type UpstreamErrorPayload } from "./request-log-terminal-status";
 export { noteUpstreamRequestId } from "./request-log-terminal-status";
 import { readBoundedResponseBody } from "../lib/bounded-body";
@@ -57,7 +59,6 @@ import {
   usageStatusForFinalLog,
   usageTotalTokens,
   type AttemptRecoveryKind,
-  type AttemptRecoveryWithheld,
   type CacheTelemetryProvenance,
   type PersistedRequestSpend,
   type PersistedUsageAttempt,
@@ -119,6 +120,7 @@ export function cacheDiagnosticsObserving(): boolean {
 export interface RequestLogContext extends UpstreamErrorDiagnostics {
   model: string;
   provider: string;
+  client?: UsageClient;
   /** Optional process-lifetime aggregate sink, injected by the server composition owner. */
   requestMetricsRecorder?: RequestMetricsRecorder;
   /** Bounded terminal enum observed while inspecting a buffered response body. */
@@ -250,6 +252,10 @@ export interface RequestLogContext extends UpstreamErrorDiagnostics {
   upstreamCondition?: UpstreamCondition; // classified at capture where the evidence is not kept on the context
   /** HTTP status derived from a terminal `response.failed` SSE payload (429/401/503/etc.). */
   terminalHttpStatus?: number;
+  /** Status of an upstream `error` event that ended a 200 Messages stream; the row stays 200, a combo child reads it. */
+  streamErrorStatus?: number;
+  /** Bytes other than a ping followed that upstream `error` event, so a retry would repeat output. */
+  streamErrorFollowed?: true;
   /** Recognized structured terminal code whose exact identity must survive status mapping. */
   terminalErrorCode?: typeof CYBER_POLICY_ERROR_CODE;
   /**
@@ -302,6 +308,7 @@ export function rebindCacheDiagnosticBody(
 
 export interface RequestLogEntry extends UpstreamErrorDiagnostics {
   requestId: string;
+  client?: UsageClient;
   /** The logical request this row belongs to (#4546); absent on rows written without a budget. */
   logicalRequestId?: string;
   timestamp: number;
@@ -490,6 +497,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     timestamp: entry.timestamp,
     model: entry.model,
     provider: entry.provider,
+    ...(Object.hasOwn(entry, "client") ? { client: normalizeRecordedClient(entry.client) ?? "unknown" } : {}),
     ...(entry.firstOutputMs !== undefined ? { firstOutputMs: entry.firstOutputMs } : {}),
     ...(entry.genStartMs !== undefined ? { genStartMs: entry.genStartMs } : {}),
     ...(entry.lastOutputMs !== undefined ? { lastOutputMs: entry.lastOutputMs } : {}),
@@ -626,7 +634,13 @@ export function rehydrateRequestLogsAfterLedgerReplacement(
 export function addRequestLog(entry: RequestLogEntry) {
   // Rows keep proxy-owned error facts only; upstream error text and tokens stop here (both the
   // retained ring row and the usage.jsonl projection below read the projected entry).
+  const attemptNormalizationDropped = entry.attemptNormalizationDropped === true, client = normalizeRecordedClient(entry.client) ?? "unknown";
+  const clientDescriptor = Object.getOwnPropertyDescriptor(entry, "client");
+  if (!Object.isFrozen(entry) || !clientDescriptor?.enumerable || !("value" in clientDescriptor) || clientDescriptor.value !== client || Object.values(Object.getOwnPropertyDescriptors(entry)).some(descriptor => !("value" in descriptor))) {
+    entry = { ...entry, ...errorDetailFor(entry), client, ...(attemptNormalizationDropped ? { attemptNormalizationDropped: true } : {}) };
+  }
   entry = projectErrorDetail(entry);
+  if (attemptNormalizationDropped && entry.attemptNormalizationDropped !== true) entry = { ...entry, attemptNormalizationDropped: true };
   // Sanitize ONCE, at the ingress, and use that one value for both destinations.
   //
   // `addFinalRequestLog` is not the only way in: `addRequestLog` is exported and callable
@@ -679,6 +693,7 @@ export function addRequestLog(entry: RequestLogEntry) {
       timestamp: entry.timestamp,
       provider: entry.provider,
       model: entry.model,
+      client: entry.client ?? "unknown",
       ...(isKnownUsageSurface(entry.surface) ? { surface: entry.surface } : {}),
       // This function REBUILDS the persisted row field by field rather than
       // spreading it, so a field missing here reaches /api/logs and never
@@ -1558,6 +1573,7 @@ function writeFinalRequestLog(
     timestamp: start,
     model: isCombo ? logCtx.requestedModel! : logCtx.model,
     provider: isCombo ? "combo" : logCtx.provider,
+    client: normalizeRecordedClient(logCtx.client) ?? "unknown",
     ...(logCtx.surface ? { surface: logCtx.surface } : {}),
     ...(logCtx.apiKeyId ? { apiKeyId: logCtx.apiKeyId } : {}),
     ...(logCtx.admissionKind ? { admissionKind: logCtx.admissionKind } : {}),
@@ -1777,13 +1793,15 @@ export function noteProviderAttemptSend(
   provider: OcxProviderConfig,
   inputTokenEstimate: number | undefined,
   recovery?: AttemptRecoveryKind,
+  resolved?: { model: string; adapter: string },
 ): void {
   const attempt = logCtx.activeAttempt;
   const previous = attempt?.accountLogLabel;
   stampApiKeyAccountLabel(logCtx, providerName, provider);
   const next = logCtx.accountLogLabel;
   if (attempt && usesApiKeyAccount(provider)) keyUsageOwners.add(attempt);
-  if (attempt && attempt.sendCount > 0 && attemptAccountChanged(previous, next, attempt.provider, logCtx.provider)) {
+  if (attempt && attempt.sendCount > 0 && (attemptAccountChanged(previous, next, attempt.provider, logCtx.provider)
+    || resolved && (attempt.model !== resolved.model || attempt.adapter !== resolved.adapter))) {
     // An input estimate is not evidence that a failed send used that many tokens.
     delete attempt.inputTokenEstimate;
     // An account-scoped recovery kind names the status the sealed account answered.
@@ -1815,6 +1833,7 @@ export function noteProviderAttemptSend(
     logCtx.activeAttemptStartedAt = Date.now();
   }
   if (attempt) {
+    if (resolved) { attempt.model = resolved.model; attempt.adapter = resolved.adapter; }
     sealRequestAttemptIdentity(attempt, logCtx.provider, attempt.adapter, next);
     recordAttemptCredentialSource(attempt, providerName, provider, attempt.adapter);
   }
@@ -1871,22 +1890,6 @@ export function noteAttemptSend(
   if (recovery && !attempt.recoveryKinds.includes(recovery)) {
     attempt.recoveryKinds.push(recovery);
   }
-}
-
-/**
- * Record that a recovery this attempt was eligible for did not happen.
- *
- * Deliberately NOT `noteAttemptSend`: nothing was sent, so `sendCount` must not move. The two
- * together are what make a one-send log readable — no kind and no withheld reason means nothing
- * was eligible, a withheld reason means something was and the budget refused it (#5044).
- */
-export function noteAttemptRecoveryWithheld(
-  attempt: PersistedUsageAttempt | undefined,
-  reason: AttemptRecoveryWithheld,
-): void {
-  if (!attempt) return;
-  if (!attempt.recoveryWithheld) attempt.recoveryWithheld = [];
-  if (!attempt.recoveryWithheld.includes(reason)) attempt.recoveryWithheld.push(reason);
 }
 
 export function finishRequestAttempt(

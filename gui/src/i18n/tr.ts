@@ -1,4 +1,13 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 // Turkish — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -122,6 +131,15 @@ export const tr: Record<TKey, string> = {
   "workflowBudget.saveFailed": "İş akışı sınırları kaydedilemedi.",
   "workflowBudget.saved": "İş akışı sınırları kaydedildi.",
   ...desktopCompatibilityCopy("tr"),
+  ...shellV2Copy("tr"),
+  ...modelsV2Copy("tr"),
+  ...accountsV2Copy("tr"),
+  ...subagentsV2Copy("tr"),
+  ...usageV2Copy("tr"),
+  ...logsV2Copy("tr"),
+  ...connectV2Copy("tr"),
+  ...startupV2Copy("tr"),
+  ...proxyV2Copy("tr"),
   "claude.tierDefaults.unset": "Belirtilmedi (mevcut Claude ayarını koru)",
   "claude.tierDefaults.recovery": "Uygulama durdu ve otomatik geri yükleme başarısız oldu. Yeniden denemeden önce aşağıdaki yedeği kontrol edin.",
   "claude.tierDefaults.title": "CLI varsayılan modelleri",
@@ -330,6 +348,9 @@ export const tr: Record<TKey, string> = {
   "common.remove": "Kaldır",
   "common.loading": "Yükleniyor…",
   "common.retry": "Tekrar Dene",
+  "prov.affinityResetPending": "Hesap değişikliği kaydedildi, ancak konuşma yönlendirmesi güncellenemedi. Tamamlamak için yeniden deneyin.",
+  "prov.affinityResetComplete": "Konuşma yönlendirmesi güncellendi.",
+  "prov.affinityResetRetryUnavailable": "Bu hesap için şu anda yeniden denenemiyor. Hesap listesini yenileyin ve gerekirse hesabı devam ettirin veya yeniden oturum açın.",
   "common.undo": "Geri al",
   "auth.adminTokenTitle": "OpenCodex yönetici jetonu (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "Hesap",
@@ -486,6 +507,11 @@ export const tr: Record<TKey, string> = {
   "startup.viable": "Hazır",
   "startup.unhealthy": "Yüklü ama sağlıksız",
   "startup.desktopLoginUnverified": "Çalışıyor · oturum açılışında başlatma doğrulanmadı",
+  "startup.loginUnverifiedTitle": "Oturum açılışında başlatma doğrulanmadı",
+  "startup.unverified": "Doğrulanmadı",
+  "startup.loginUnverifiedAction": "OpenCodex menüsünde oturum açılışında başlatmayı kontrol edin. Sistem tepsisi olmayan Linux’ta ~/.config/autostart/OpenCodex.desktop dosyasını kontrol edin.",
+  "startup.loginDisabled": "Çalışıyor · oturum açılışında başlatma kapalı",
+  "startup.desktopRunning": "Bu proxy’yi OpenCodex Desktop çalıştırıyor.",
   "startup.conflict": "Servis çakışması",
   "startup.installedDisabled": "Yüklü ama devre dışı",
   "startup.shimActivationPending": "Yüklü · etkinleştirme doğrulanmadı",
@@ -837,6 +863,8 @@ export const tr: Record<TKey, string> = {
   "subagentSurface.learnMore": "Neden başarısız oluyor",
   "prov.logoutOk": "{provider} çıkışı yapıldı.",
   "prov.logoutFail": "{provider} çıkışı yapılamadı.",
+  "prov.logoutBusy": "Hesap değişikliği sürüyor. Tamamlanmasını bekleyip tekrar çıkış yapmayı deneyin.",
+  "prov.accountRemoveUnverified": "{email} hesabının kaldırılıp kaldırılmadığı doğrulanamadı. Yeniden denemeden önce hesap listesini yenileyin.",
   "prov.removed": "\"{name}\" kaldırıldı.",
   "prov.removedDefault": "\"{name}\" kaldırıldı. Varsayılan sağlayıcı artık \"{defaultProvider}\".",
   "prov.removedShadowTarget": "\"{name}\" kaldırıldı. Gölge Çağrı Yakalama hâlâ \"{model}\" hedefini kullanıyor; başka bir hedef seçene kadar yardımcı çağrılar başarısız olur.",
@@ -2128,6 +2156,13 @@ export const tr: Record<TKey, string> = {
   "modal.localHint": "Yerel mod, Cursor'ın statik kamuya açık kataloğunu kaydeder. Canlı taşıma, dosya ve kabuk (shell) araçları denetlenene kadar kapalı kalır.",
   "modal.getApiKey": "{label} API anahtarınızı alın",
   "modal.apiKey": "API anahtarı",
+  "modal.vertexProject": "Proje kimliği (isteğe bağlı)",
+  "modal.vertexStaticHint": "Yapılandırılan model listesi kullanılır; bağlantı testi Vertex kimlik bilgilerini doğrulamaz.",
+  "modal.vertexLocation": "Konum (isteğe bağlı)",
+  "pws.vertexUnverified": "Kimlik bilgileri doğrulanmadı",
+  "pws.vertexSavedUnverified": "Kaydedildi — proxy kimlik bilgileri doğrulanmadı",
+  "pws.vertexHostAuth": "Sunucu kimlik bilgileri veya API anahtarı",
+  "modal.vertexAdcHint": "GOOGLE_CLOUD_API_KEY ayarlı değilse proxy sunucusundaki Application Default Credentials bilgilerini kullanmak için API anahtarını boş bırakın. Proje ve konum da proxy ortamından alınabilir.",
   "modal.apiKeyTransport": "API anahtar başlığı",
   "modal.apiKeyTransportNative": "x-api-key (Anthropic yerel)",
   "modal.apiKeyTransportBearer": "Authorization: Bearer",
@@ -2140,7 +2175,7 @@ export const tr: Record<TKey, string> = {
   "modal.useOauthLogin": "← OAuth girişini kullan",
 "nav.codexAuth": "Codex Kimlik Doğrulama",
   "nav.codexSet": "Codex",
-  "nav.connect": "Bağlantı",
+  "nav.connect": "Rota",
   "nav.usageLogs": "Kullanım ve Günlükler",
   "nav.sectionNavigation": "Bölüm sayfaları",
   "codexSet.tab.multiauth": "Çoklu kimlik doğrulama",
@@ -3474,7 +3509,7 @@ export const tr: Record<TKey, string> = {
   "cws.attention.catalogOmitted": "Model kataloğunda eksik — üye yetenekleri eksik veya uyumsuz (eksik bağlam penceresi / meta veri veya boş modalite kesişimi). Takma ada göre yönlendirme hâlâ çalışır",
   "cws.attention.allTargetsExhausted": "Etkin hedeflerin tüm kotaları tükendi",
   "cws.emptyTitle": "İlk kombonuzu oluşturun",
-  "cws.empty.createDesc": "Sanal bir model adlandırın ve iki veya daha fazla arka ucu bağlayın.",
+  "cws.empty.createDesc": "En az bir hedef ekleyin; yük devretme için iki veya daha fazla hedef kullanın.",
   "cws.backToAll": "Tüm kombolara dön",
   "cws.allCombos": "Tüm kombolar",
   "cws.copyModel": "ID kopyala",
@@ -3845,6 +3880,7 @@ export const tr: Record<TKey, string> = {
   "models.aliasStale": "eski",
   "connection.discovering": "Yerel ve paylaşılan hedefler aranıyor…",
   "connection.machineUnavailable": "Yerel makine bağlantısı kullanılamıyor. Paylaşılan istekler yerele yönlendirilmedi.",
+  "connection.clientStateChanged": "Bu Child'ın kayıtlı Remote Link bağlantısı eksik veya artık başka bir sahibi ya da bağlantıyı gösteriyor, bu yüzden çalışan Child ile eşleşmiyor. Yeniden bağlamadan önce bu Child'ı durdurun veya yeniden başlatın ve bağlantısını kontrol edin.",
   "connection.linkManaged": "Remote Link ({linkId}) üzerinden Home {home} tarafından yönetiliyor. Bu pano Home'un ayarlarını ve kotasını salt okunur gösterir; değişiklikleri Home üzerinde yapın.",
   "connection.linkManagedUnnamed": "Remote Link ({linkId}) üzerinden Home tarafından yönetiliyor. Bu pano Home'un ayarlarını ve kotasını salt okunur gösterir; değişiklikleri Home üzerinde yapın.",
   "connection.disconnect": "Merkez bağlantısını kes",
@@ -4227,6 +4263,7 @@ export const tr: Record<TKey, string> = {
   "quotaSummary.warn": "%70+ kullanıldı",
   "quotaSummary.critical": "%90+ kullanıldı",
   "quotaSummary.credits": "Krediler",
+  "quotaSummary.creditsUnavailable": "Kullanılamayan krediler",
   "quotaSummary.refreshFailed": "Son yenileme başarısız; önceki değer gösteriliyor",
   "quotaSummary.scrollPrev": "Sağlayıcıları sola kaydır",
   "quotaSummary.scrollNext": "Sağlayıcıları sağa kaydır",

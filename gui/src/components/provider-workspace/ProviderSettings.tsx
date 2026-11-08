@@ -16,11 +16,12 @@ import { createBoundedFetch } from "../../bounded-fetch";
 import { startVisibilityPoll } from "../../visibility-poll";
 import { useT } from "../../i18n/shared";
 import { IconLock } from "../../icons";
+import { Select } from "../../ui";
 import { isCatalogProviderId } from "../../provider-icons";
 import { openAiAccountProviderState } from "../../provider-payload";
 import { canConfigureResponsesReasoningReplay } from "../../responses-reasoning-replay";
 import { ResponsesReasoningReplayControl } from "../responses-reasoning-replay-control";
-import { providerSupportsLiveModelDiscovery } from "../../provider-workspace/catalog";
+import { isVertexProvider, providerSupportsLiveModelDiscovery } from "../../provider-workspace/catalog";
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import { authModeLabel } from "./ProviderRail";
 import { ProviderProtocolPanel } from "./ProviderProtocolPanel";
@@ -84,6 +85,8 @@ export default function ProviderSettings({
   const savedCursorHttpVersion = effectiveCursorHttpVersion(item.upstreamHttpVersion);
   const [adapter, setAdapter] = useState(item.adapter);
   const [baseUrl, setBaseUrl] = useState(item.baseUrl);
+  const [project, setProject] = useState(item.project ?? "");
+  const [location, setLocation] = useState(item.location ?? "");
   const [defaultModel, setDefaultModel] = useState(item.defaultModel ?? "");
   const [authMode, setAuthMode] = useState(initialAuth);
   const [apiKeyTransport, setApiKeyTransport] = useState(item.apiKeyTransport ?? "x-api-key");
@@ -117,6 +120,8 @@ export default function ProviderSettings({
   useEffect(() => {
     setAdapter(item.adapter);
     setBaseUrl(item.baseUrl);
+    setProject(item.project ?? "");
+    setLocation(item.location ?? "");
     setDefaultModel(item.defaultModel ?? "");
     setAuthMode(String(item.authMode ?? (item.keyOptional ? "local" : "key")));
     setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
@@ -134,7 +139,7 @@ export default function ProviderSettings({
     setMsg(null);
     setModeMsg(null);
     queueMicrotask(() => setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl)));
-  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, item.preserveResponsesReasoningContent, savedLiveModels, savedCursorHttpVersion, item.requestPacing, baseUrlChoices]);
+  }, [item.adapter, item.baseUrl, item.project, item.location, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, item.preserveResponsesReasoningContent, savedLiveModels, savedCursorHttpVersion, item.requestPacing, baseUrlChoices]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Account mode syncs on its own: a mode PATCH refresh must not reset an in-progress
@@ -208,8 +213,10 @@ export default function ProviderSettings({
   const supportsReasoningReplay = !isCatalogProviderId(item.name)
     && canConfigureResponsesReasoningReplay({ adapter, baseUrl, authMode });
   const reasoningReplayDirty = supportsReasoningReplay && preserveReasoningReplay !== (item.preserveResponsesReasoningContent === true);
+  const vertexSettings = isVertexProvider(item) && (item.name === "google-vertex" || adapter.trim() === "google");
   const dirty = reasoningReplayDirty || adapter.trim() !== item.adapter
     || baseUrl.trim() !== item.baseUrl
+    || (vertexSettings && (project.trim() !== (item.project ?? "") || location.trim() !== (item.location ?? "")))
     || defaultModel.trim() !== (item.defaultModel ?? "")
     || authMode !== String(item.authMode ?? (item.keyOptional ? "local" : "key"))
     || (adapter.trim() === "anthropic" && authMode === "key" && apiKeyTransport !== (item.apiKeyTransport ?? "x-api-key"))
@@ -280,6 +287,8 @@ export default function ProviderSettings({
             ...(pacingDirty ? { requestPacing: pacingDraft } : {}),
           };
       if (!pacingOnly) {
+        if (vertexSettings && project.trim() !== (item.project ?? "")) patch.project = project.trim();
+        if (vertexSettings && location.trim() !== (item.location ?? "")) patch.location = location.trim();
         // Keep omitted legacy values omitted unless the user actually changes this toggle.
         // Otherwise an unrelated settings save manufactures `liveModels: true` provenance.
         if (liveModelDiscoverySupported && liveModels !== (item.liveModels !== false)) patch.liveModels = liveModels;
@@ -334,19 +343,14 @@ export default function ProviderSettings({
    * handler: a floating `.then` in a JSX handler has no rejection path and is what
    * `no-floating-then-in-jsx-handler` exists to catch.
    */
-  const requestAccountMode = async (next: "pool" | "direct", select: HTMLSelectElement) => {
-    if (await confirmAction({ message: t("pws.accountModeConfirm") })) {
-      await applyAccountMode(next);
-      return;
-    }
-    // Keep the visible choice aligned with the applied mode. React re-renders this
-    // controlled <select> only when `accountMode` changes, and a refusal leaves it
-    // unchanged, so the declined option would otherwise stay shown.
-    select.value = accountMode;
+  const requestAccountMode = async (next: "pool" | "direct") => {
+    // A refusal leaves `accountMode` unchanged, and the Select only ever shows that state,
+    // so the declined option never appears chosen.
+    if (await confirmAction({ message: t("pws.accountModeConfirm") })) await applyAccountMode(next);
   };
 
   const discard = () => {
-    setAdapter(item.adapter); setBaseUrl(item.baseUrl);
+    setAdapter(item.adapter); setBaseUrl(item.baseUrl); setProject(item.project ?? ""); setLocation(item.location ?? "");
     setDefaultModel(item.defaultModel ?? ""); setAuthMode(initialAuth);
     setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
     setNote(item.note ?? ""); setAllowPrivateNetwork(item.allowPrivateNetwork ?? false); setLiveModels(savedLiveModels);
@@ -399,9 +403,8 @@ export default function ProviderSettings({
       <label className="pwi-settings-field">
         <span className="pwi-settings-label">{t("modal.adapter")}</span>
         {isPreset ? <input className="input" value={adapter} readOnly disabled /> : (
-          <select className="input" value={adapter} onChange={e => setAdapter(e.target.value)}>
-            {adapterOptions.map(a => <option key={a} value={a}>{a}</option>)}
-          </select>
+          <Select fullWidth label={t("modal.adapter")} value={adapter} onChange={setAdapter}
+            options={adapterOptions.map(a => ({ value: a, label: a }))} />
         )}
       </label>
       <ProviderProtocolPanel
@@ -415,19 +418,16 @@ export default function ProviderSettings({
         <>
           <label className="pwi-settings-field">
             <span className="pwi-settings-label">{t("modal.endpoint")}</span>
-            <select
-              className="input"
+            <Select
+              fullWidth
+              label={t("modal.endpoint")}
               value={endpointChoice}
-              onChange={e => {
-                const id = e.target.value;
+              onChange={id => {
                 setEndpointChoice(id);
                 setBaseUrl(baseUrlForChoice(baseUrlChoices, id, baseUrl));
               }}
-            >
-              {baseUrlChoices!.map(c => (
-                <option key={c.id} value={c.id}>{endpointLabel(c.id, c.label)}</option>
-              ))}
-            </select>
+              options={baseUrlChoices!.map(c => ({ value: c.id, label: endpointLabel(c.id, c.label) }))}
+            />
           </label>
           {endpointChoice === "custom" && (
             <label className="pwi-settings-field">
@@ -442,27 +442,37 @@ export default function ProviderSettings({
           <input className="input" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} readOnly={plainBaseUrlLocked} disabled={plainBaseUrlLocked} />
         </label>
       )}
+      {vertexSettings && <>
+        <label className="pwi-settings-field">
+          <span className="pwi-settings-label">{t("modal.vertexProject")}</span>
+          <input className="input" value={project} onChange={e => setProject(e.target.value)} />
+        </label>
+        <label className="pwi-settings-field">
+          <span className="pwi-settings-label">{t("modal.vertexLocation")}</span>
+          <input className="input" value={location} onChange={e => setLocation(e.target.value)} placeholder="us-central1" />
+        </label>
+      </>}
       {adapter.trim() === "cursor" && (
         <label className="pwi-settings-field">
           <span className="pwi-settings-label">{t("pws.cursorTransport")}</span>
-          <select
-            className="input"
+          <Select
+            fullWidth
+            label={t("pws.cursorTransport")}
             value={cursorHttpVersion}
-            onChange={e => setCursorHttpVersion(e.target.value as CursorHttpVersion)}
-          >
-            <option value="http2">{t("pws.cursorTransportHttp2")}</option>
-            <option value="http1.1">{t("pws.cursorTransportHttp1")}</option>
-          </select>
+            onChange={value => setCursorHttpVersion(value as CursorHttpVersion)}
+            options={[
+              { value: "http2", label: t("pws.cursorTransportHttp2") },
+              { value: "http1.1", label: t("pws.cursorTransportHttp1") },
+            ]}
+          />
           <span className="pwi-settings-hint">{t("pws.cursorTransportDesc")}</span>
         </label>
       )}
       <label className="pwi-settings-field">
         <span className="pwi-settings-label">{t("pws.cell.defaultModel")}</span>
         {modelOptions.length > 0 ? (
-          <select className="input" value={defaultModel} onChange={e => setDefaultModel(e.target.value)}>
-            <option value="">{t("pws.defaultModelNone")}</option>
-            {modelOptions.map(m => <option key={m} value={m}>{m}</option>)}
-          </select>
+          <Select fullWidth label={t("pws.cell.defaultModel")} value={defaultModel} onChange={setDefaultModel}
+            options={[{ value: "", label: t("pws.defaultModelNone") }, ...modelOptions.map(m => ({ value: m, label: m }))]} />
         ) : (
           <input className="input" value={defaultModel} onChange={e => setDefaultModel(e.target.value)} placeholder={t("pws.optionalPlaceholder")} />
         )}
@@ -470,31 +480,32 @@ export default function ProviderSettings({
       <label className="pwi-settings-field">
         <span className="pwi-settings-label">{t("pws.authMode")}</span>
         {isPreset ? <input className="input" value={authModeLabel(item, t)} readOnly disabled /> : (
-          <select className="input" value={authMode} onChange={e => setAuthMode(e.target.value)}>
-            <option value="key">{t("modal.badge.apiKey")}</option>
-            <option value="forward">{t("pws.auth.chatgptPassthrough")}</option>
-            <option value="oauth">{t("modal.badge.oauth")}</option>
-            <option value="local">{t("modal.badge.local")}</option>
-          </select>
+          <Select fullWidth label={t("pws.authMode")} value={authMode} onChange={setAuthMode} options={[
+            { value: "key", label: t("modal.badge.apiKey") },
+            { value: "forward", label: t("pws.auth.chatgptPassthrough") },
+            { value: "oauth", label: t("modal.badge.oauth") },
+            { value: "local", label: t("modal.badge.local") },
+          ]} />
         )}
       </label>
       {isCanonicalOpenAi && (
         <label className="pwi-settings-field">
           <span className="pwi-settings-label">{t("codexAuth.accountModeTitle")}</span>
-          <select
-            className="input"
+          <Select
+            fullWidth
+            label={t("codexAuth.accountModeTitle")}
             value={accountMode}
             disabled={modeSaving || saving}
-            onChange={e => {
-              const next = e.target.value as "pool" | "direct";
+            onChange={value => {
+              const next = value as "pool" | "direct";
               if (next === accountMode) return;
-              // currentTarget is read here: it is null once the handler resumes after an await.
-              void requestAccountMode(next, e.currentTarget);
+              void requestAccountMode(next);
             }}
-          >
-            <option value="pool">{t("codexAuth.accountModePool")}</option>
-            <option value="direct">{t("codexAuth.accountModeDirect")}</option>
-          </select>
+            options={[
+              { value: "pool", label: t("codexAuth.accountModePool") },
+              { value: "direct", label: t("codexAuth.accountModeDirect") },
+            ]}
+          />
           <span className="pwi-settings-hint">
             {accountMode === "direct" ? t("codexAuth.accountModeDirectDesc") : t("codexAuth.accountModePoolDesc")}
           </span>
@@ -512,10 +523,11 @@ export default function ProviderSettings({
       {supportsApiKeyTransport && (
         <label className="pwi-settings-field">
           <span className="pwi-settings-label">{t("modal.apiKeyTransport")}</span>
-          <select className="input" value={apiKeyTransport} onChange={e => setApiKeyTransport(e.target.value as "x-api-key" | "bearer")}>
-            <option value="x-api-key">{t("modal.apiKeyTransportNative")}</option>
-            <option value="bearer">{t("modal.apiKeyTransportBearer")}</option>
-          </select>
+          <Select fullWidth label={t("modal.apiKeyTransport")} value={apiKeyTransport}
+            onChange={value => setApiKeyTransport(value as "x-api-key" | "bearer")} options={[
+              { value: "x-api-key", label: t("modal.apiKeyTransportNative") },
+              { value: "bearer", label: t("modal.apiKeyTransportBearer") },
+            ]} />
         </label>
       )}
       <label className="pwi-settings-field">

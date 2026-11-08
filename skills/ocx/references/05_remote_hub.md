@@ -370,6 +370,16 @@ It ends a browser session; it does not disconnect a client or revoke a key.
 
 ### When `disconnect` refuses, that is the safety property
 
+When the operator has explicitly authorized recovery of a disconnected installation with a
+leftover token, `ocx disconnect --orphaned-token --yes` preserves the service-token files in a
+private backup. It refuses pending or connected client state, a Hub, admission-token use,
+installed or unverified service definitions, and live or unverified client runtimes. Inspect the
+bind, API keys, token environment and `ocx service status`; manage a Hub credential through the
+Hub service. It does not prove the tokens belonged to a link or restore lost connection settings.
+Report the printed backup location; to restore, stop OpenCodex and move the saved files back only
+if their original names are absent. Never read or print their contents. Do not add `--yes` without
+the operator's explicit authorization.
+
 Do not work around these. Each one means unwinding would damage state that
 `disconnect` cannot prove is safe to touch.
 

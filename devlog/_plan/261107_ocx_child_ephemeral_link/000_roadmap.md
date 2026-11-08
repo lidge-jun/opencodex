@@ -7,11 +7,11 @@ Remote Link today requires every Child machine (`src/server/management/link-enro
 ## Contents
 
 1. [Loop Specification & HOTL Bounds](#1-loop-specification--hotl-bounds)
-2. [Threat Model & Security Controls (`SEC-THREAT-01`)](#2-threat-model--security-controls-sec-threat-01)
+2. [Scope](#2-scope)
 3. [Architect Consultation & Design Dispositions](#3-architect-consultation--design-dispositions)
 4. [Dependency-Ordered Work-Phase Map (`PHASE-SPLIT-01`)](#4-dependency-ordered-work-phase-map-phase-split-01)
 5. [Cross-Boundary Field & Type Chains (`PLAN-FIELD-CHAIN-01`)](#5-cross-boundary-field--type-chains-plan-field-chain-01)
-6. [Early-Warning & Boundary Guard Disclosure (`PLAN-BYPASS-NAMED-01`)](#6-early-warning--boundary-guard-disclosure-plan-bypass-named-01)
+6. [Verification scope](#6-verification-scope)
 7. [Grounded Verifiers (`PLAN-VERIFIER-REAL-01`)](#7-grounded-verifiers-plan-verifier-real-01)
 8. [Non-Goals, Alternatives Rejected, & Consequences](#8-non-goals-alternatives-rejected--consequences)
 
@@ -30,29 +30,9 @@ Remote Link today requires every Child machine (`src/server/management/link-enro
 | Escalation condition | Any requirement to edit outside `writeScope` (`native/ocx-child`, `src/link`, `src/server/management`, `src/cli`, `structure`, `docs-site`, `scripts`, `tests`, `package.json`, `devlog`), weaken a check, or merge the PR. Subagent recovery follows `DISPATCH-RETIRE-01` (inherit `google-antigravity/gemini-4-argon` per user directive) |
 | HOTL resource bounds | Token/cost/wall-clock bounds: `none stated; host limits apply`. Tool/credential scope: local git/bun/cargo, `gh` PR creation/inspection on `feat/ocx-child-ephemeral-link`, GOAT PR link/watch/unwatch |
 
-## 2. Threat Model & Security Controls (`SEC-THREAT-01`)
+## 2. Scope
 
-1. **Assets**:
-   - Per-Child Home link API key (`ocx_data_<40hex>`) and its SHA-256 fingerprint.
-   - Child local caller credentials sent by Codex CLI/App or Claude Code (`Authorization`, `api-key`, `x-api-key`, `x-goog-api-key`, `x-opencodex-api-key`, `chatgpt-account-id`, `cookie`).
-   - User's native `~/.codex/config.toml`, `opencodex-catalog.json`, and `models_cache.json`.
-   - Home loopback `hub-link` listener and SSH reverse tunnel (`127.0.0.1:<tunnelPort>`).
-2. **Entrypoints & Trust Boundaries**:
-   - Local Child callers -> `127.0.0.1:<listenPort>` (`ocx-child serve` HTTP/1.1 ingress).
-   - `ocx-child` -> `127.0.0.1:<tunnelPort>` (reverse SSH tunnel into Home `hub-link` listener; untrusted until `link-relay-auth` v2 listener proof verifies on the same TCP socket).
-   - Home SSH orchestrator -> Child shell (`remoteOcxArgv` / `remotePinnedSyncArgv` over pinned `known_hosts` with `StrictHostKeyChecking=yes` and `BatchMode=yes`).
-   - Child filesystem (`$OPENCODEX_HOME/child/*` and `$CODEX_HOME/*` across concurrent processes and Codex Desktop App `#1798` comment-stripping rewrites).
-3. **Attacker Capabilities**:
-   - Unprivileged local process or browser page probing non-loopback interfaces or sending cross-origin / WebSocket `Upgrade` / `Content-Length` + `Transfer-Encoding` smuggling payloads.
-   - Spoofed local tunnel listener on `<tunnelPort>` attempting to harvest the Child's `ocx_data_*` key without knowing its SHA-256 fingerprint.
-   - Concurrent `ocx sync` / `detach` invocations or post-attach user/app edits to `config.toml`.
-4. **Controls**:
-   - **Loopback-only bind**: `ocx-child serve` binds strictly to `127.0.0.1:<listenPort>` (refusing `0.0.0.0` or `::`).
-   - **Default-deny route allowlist & framing**: Exact `linkRouteAllowed` + `linkManagementRouteAllowed` match; reject any `Upgrade` (`426` for `/v1/responses` WebSocket upgrade with Origin check, `404`/`400` elsewhere), reject `CL+TE`, duplicate/non-digit `CL`, non-`chunked` `TE`, CR/LF in headers, headers > 64 KiB (`431`), and request/non-SSE response bodies > 256 MiB (`413`/`502`).
-   - **Caller credential stripping**: Strip all `CALLER_CREDENTIAL_HEADERS`, hop-by-hop headers, and `Connection`-nominated headers before forwarding.
-   - **Same-socket HMAC-SHA256 v2 mutual authentication**: Derive 32-byte raw key `SHA-256(token)`, send credential-free `GET /.well-known/opencodex/link-relay-auth?version=2&...` on a fresh `TcpStream`, verify `204` + 0-byte body + constant-time `x-opencodex-link-proof` (and optional `x-opencodex-link-connection-proof`), then send the single data request with `x-opencodex-link-session: <nonce>` and link key on that **exact `TcpStream`** (never pooling or silently reconnecting).
-   - **Secret & journal hygiene**: Read `{apiKeyId, key}` from `stdin` (4 KiB cap) and volatile-zero buffer immediately; create `$OPENCODEX_HOME/child` (`0700`) and `link-key` / `codex-journal.json` / `state.json` (`0600` at open on Unix via `OpenOptionsExt::mode(0o600)`, atomic temp-write + `fsync` + `rename`); never log keys, headers, URLs, or bodies.
-   - **SSH argv & Windows Job containment**: Reuse `quoteRemote` single-quoting on POSIX and deflated base64 JSON data + `OCX_JOB_SOURCE` kill-on-close Job (`<= 8000` UTF-16LE base64 chars) on Windows.
+Security working analysis is kept outside the tracked repository.
 
 ## 3. Architect Consultation & Design Dispositions
 
@@ -72,7 +52,7 @@ Remote Link today requires every Child machine (`src/server/management/link-enro
 ### 3.1 Reflection Record
 
 - **Handle `01a1b18b-a2f3-7b53-971a-9b2c9cccecf7` reflection verdict**: `ALIGNED`.
-- **Decision-ID mapping verified**: `ARCH-01` -> `000` §3 + `020` §1.1–§1.2; `ARCH-02` -> `000` §2–§3 + `020` §1.2.3–§1.2.4; `ARCH-03` -> `000` §3, §5 + `020` §1.2.5; `ARCH-04` -> `000` §3, §5 + `020` §1.2.6; `ARCH-05` -> `000` §3, §8 + `030` §1.1–§1.3; `ARCH-06` -> `000` §5 + `010` §1.2–§1.3 + `020` §1.3; `ARCH-07` -> `000` §3, §7 + `010` §1.1 + `030` §1.5 + `040` §1.1–§1.2.
+- **Decision-ID mapping verified**: `ARCH-01` -> `000` §3 + `020` §1.1–§1.2; `ARCH-02` -> `000` §3 + `020` §1.2.3–§1.2.4; `ARCH-03` -> `000` §3, §5 + `020` §1.2.5; `ARCH-04` -> `000` §3, §5 + `020` §1.2.6; `ARCH-05` -> `000` §3, §8 + `030` §1.1–§1.3; `ARCH-06` -> `000` §5 + `010` §1.2–§1.3 + `020` §1.3; `ARCH-07` -> `000` §3, §7 + `010` §1.1 + `030` §1.5 + `040` §1.1–§1.2.
 - **Minor notes folded into `020_wp2_rust_ocx_child.md`**:
   - `Gap-1` (Accepted): `ChildJournalV1` snapshots `preAttachModelsCacheExisted` / `preAttachModelsCacheBytesB64` / `latestModelsCacheSha256` so offline `detach` restores pre-attach `models_cache.json` (or unlinks an unchanged cache `ocx-child` created) and never leaves stale Home slugs in Codex's model picker.
   - `Gap-2` (Accepted): `native/ocx-child/Cargo.toml` includes `Win32_Security_Authorization` on `windows-sys` and `write_private_atomic` on Windows hardens `$OPENCODEX_HOME/child` and its `0600`-equivalent secret/journal files with an owner-only protected DACL.
@@ -102,13 +82,9 @@ Single-PR delivery decision (`DEV-STACK-01`): Delivered as a single focused PR t
 | `ConformanceSuite` (`schema: "ocx.child.conformance/1"`) | Checked-in JSON fixture `tests/fixtures/link/ocx-child-conformance.json` verified against TS oracle functions | Static UTF-8 JSON file in git | `JSON.parse` in `tests/clients/link-ocx-child-conformance.test.ts` AND `serde_json::from_str` in `native/ocx-child/tests/conformance.rs` | Both `bun test` and `cargo test` conformance runners asserting identical outputs across route admission, framing/stripping, HMAC v2, OCX-6 digest, child-parity validation, and TOML/catalog round-trips |
 | `ClientSyncMismatchReason` stderr JSON (`{"phase":"child_link_mismatch","reason":"..."}`) | Existing closed union in `src/client/sync-expectation.ts:17` (no new enum members added); emitted by `native/ocx-child/src/cli.rs` on `--expect-link` mismatch/busy lock | `serde_json::to_string` as final stderr line with exit code `5` | `JSON.parse(last ?? "")` in `src/cli/sync-fanout.ts:62` checking `mismatchReasons` set | Home `ocx sync [--json]` fan-out classifier (`classifySyncResult` -> `skipped("child-link-mismatch:<reason>")`) |
 
-## 6. Early-Warning & Boundary Guard Disclosure (`PLAN-BYPASS-NAMED-01`)
+## 6. Verification scope
 
-| Mechanism | Tier | Executing Surface | Known Bypass Path | Residual Risk | Wording Downgrade & Final Layer |
-|---|---|---|---|---|---|
-| Fail-closed full-`ocx` / external-provider check on `ocx-child attach` | E2 (runtime check) | `native/ocx-child/src/journal.rs` under `lifecycle.lock` + `.opencodex-write.lock` | A privileged local user manually deleting `runtime-port.json` or editing `~/.codex/config.toml` out-of-band without holding `.opencodex-write.lock` | Local user already owns `~/.codex`; out-of-band manual edits caught later by `DetachConflictError` | Called "preflight guard" (not unbypassable sandbox); `final layer: OS user account boundary + Tier-2 value-matched detach` |
-| Detached `ocx-child` port-free check during Home `POST /api/link/apply` | E2 (runtime check) | `src/server/management/link-enrollment.ts` (`remoteChildHttpArgv` before `connect`) | Narrow TOCTOU between SSH port probe and `ocx-child restart` binding `127.0.0.1:<childPort>` | `ocx-child serve` `TcpListener::bind` fails closed if another process grabs the port in between, and Home `child_relay` authenticated `/v1/catalog` callback refuses enrollment unless Home receives its own issued key | Called "preflight check"; `final layer: TcpListener::bind + Home onAuthenticatedCatalog(issued.id)` |
-| Shared TS/Rust golden conformance suite | E4 (CI/test gate) | `bun test tests/clients/ocx-child-conformance.test.ts` and `cargo test --locked --manifest-path native/ocx-child/Cargo.toml` | Fast Ubuntu PR lane runs `test changed` (Bun) unless Rust tests also run; mitigated by running `cargo test` in E2E/verification and `ci-workflows` version/conformance checks | Behavioral bugs outside the covered vector classes require real-binary E2E tests (`ocx-child-e2e.test.ts`) | Called "conformance regression suite"; `final layer: none (human + CI review)` |
+The work packages record implementation and conformance-test status.
 
 ## 7. Grounded Verifiers (`PLAN-VERIFIER-REAL-01`)
 

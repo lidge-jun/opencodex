@@ -76,6 +76,7 @@ function usagePayload(models: Array<{ provider: string; model: string; requests:
   return {
     range: "all",
     surface: "all",
+    sourceFilter: { client: "all", device: { kind: "all" } }, legacyUnclassifiedRequests: 0,
     since: null,
     generatedAt: Date.now(),
     summary: {
@@ -93,8 +94,14 @@ function usagePayload(models: Array<{ provider: string; model: string; requests:
 }
 
 test("Usage heatmap exposes one roving entry and day/week keyboard movement", async () => {
-  globalThis.fetch = (async () => Response.json(usagePayload())) as typeof fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => Response.json({ ...usagePayload(), range: new URL(String(input)).searchParams.get("range") })) as typeof fetch;
   const container = await mount(<Usage apiBase="http://usage-chart-test" />);
+  // Short presets open on bars; available history opens on the calendar heatmap.
+  await waitFor(() => container.querySelectorAll(".daybar").length === 30);
+  expect(container.querySelector(".heatmap-grid")).toBeNull();
+  const available = Array.from(container.querySelectorAll<HTMLButtonElement>(".usage-segmented-btn"))
+    .find(button => button.textContent === "Available history")!;
+  await act(async () => { available.click(); });
   await waitFor(() => container.querySelector(".heatmap-grid") !== null);
 
   expect(container.querySelector(".heatmap-grid")?.getAttribute("role")).toBe("group");
@@ -125,9 +132,9 @@ test("Usage heatmap exposes one roving entry and day/week keyboard movement", as
 });
 
 test("seven-day bars expose the same detail on focus and touch", async () => {
-  globalThis.fetch = (async () => Response.json(usagePayload())) as typeof fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => Response.json({ ...usagePayload(), range: new URL(String(input)).searchParams.get("range") })) as typeof fetch;
   const container = await mount(<Usage apiBase="http://usage-bars-test" />);
-  await waitFor(() => container.querySelector(".heatmap-grid") !== null);
+  await waitFor(() => container.querySelector(".daybars") !== null);
   const sevenDay = Array.from(container.querySelectorAll<HTMLButtonElement>(".usage-segmented-btn"))
     .find(button => button.textContent === "7d")!;
   await act(async () => { sevenDay.click(); });
@@ -161,9 +168,9 @@ test("Usage tooltip portals stay inside viewport gutters at the lower-right edge
     requests: 1,
     totalTokens: index + 1,
   }));
-  globalThis.fetch = (async () => Response.json(usagePayload(models))) as typeof fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => Response.json({ ...usagePayload(models), range: new URL(String(input)).searchParams.get("range") })) as typeof fetch;
   const container = await mount(<Usage apiBase="http://usage-tip-bounds-test" />);
-  await waitFor(() => container.querySelector(".heatmap-grid") !== null);
+  await waitFor(() => container.querySelector(".daybars") !== null);
   const sevenDay = Array.from(container.querySelectorAll<HTMLButtonElement>(".usage-segmented-btn"))
     .find(button => button.textContent === "7d")!;
   await act(async () => { sevenDay.click(); });
@@ -184,4 +191,17 @@ test("Usage tooltip portals stay inside viewport gutters at the lower-right edge
   expect(parseFloat(tooltip.style.left) + parseFloat(tooltip.style.maxWidth)).toBeLessThanOrEqual(312);
   expect(parseFloat(tooltip.style.bottom)).toBeGreaterThanOrEqual(8);
   expect(parseFloat(tooltip.style.maxHeight) + parseFloat(tooltip.style.bottom)).toBeLessThanOrEqual(232);
+});
+
+test("the chart view switch moves between bars and the calendar in any window", async () => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => Response.json({ ...usagePayload(), range: new URL(String(input)).searchParams.get("range") })) as typeof fetch;
+  const container = await mount(<Usage apiBase="http://usage-view-switch-test" />);
+  await waitFor(() => container.querySelectorAll(".daybar").length === 30);
+  const views = () => container.querySelectorAll<HTMLButtonElement>('[role="radiogroup"][aria-label="Chart view"] [role="radio"]');
+  expect(Array.from(views(), view => view.getAttribute("aria-checked"))).toEqual(["true", "false"]);
+  await act(async () => { views()[1]!.click(); });
+  await waitFor(() => container.querySelector(".heatmap-grid") !== null);
+  expect(container.querySelector(".daybars")).toBeNull();
+  await act(async () => { views()[0]!.click(); });
+  await waitFor(() => container.querySelectorAll(".daybar").length === 30);
 });

@@ -1,6 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod cli;
+pub mod codex_home;
 pub mod codex_settings;
 pub mod daemon;
 pub mod http_wire;
@@ -11,6 +12,7 @@ pub mod relay;
 pub mod relay_auth;
 pub mod routes;
 pub mod state;
+pub mod test_hooks;
 pub mod toml_surgeon;
 
 /// OpenCodex wire/CLI protocol version reported by `ocx-child --version` and peer headers.

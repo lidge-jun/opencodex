@@ -1,7 +1,9 @@
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
-use crate::platform::{constant_time_eq, hex_decode_lower, hex_encode, random_hex, sha256_hex};
+use crate::platform::{
+    constant_time_eq, hex_decode_lower, hex_encode, random_hex, sha256_hex, volatile_zero_bytes,
+};
 
 pub const LINK_RELAY_AUTH_PATH: &str = "/.well-known/opencodex/link-relay-auth";
 pub const LINK_RELAY_SESSION_HEADER: &str = "x-opencodex-link-session";
@@ -12,6 +14,30 @@ pub const LINK_RELAY_CONNECTION_PROOF_HEADER: &str = "x-opencodex-link-connectio
 pub const LINK_RELAY_AUTH_VERSION: &str = "2";
 
 type HmacSha256 = Hmac<Sha256>;
+
+pub fn compute_child_shutdown_proof(secret: &str, role: &str, binding: &str) -> Option<String> {
+    if secret.len() != 48
+        || !secret
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        || (role != "caller" && role != "listener")
+        || binding.len() != 128
+        || !binding
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return None;
+    }
+    let mut key = hex_decode_lower(secret)?;
+    let mac = HmacSha256::new_from_slice(&key);
+    volatile_zero_bytes(&mut key);
+    let mut mac = mac.ok()?;
+    mac.update(b"opencodex-child-shutdown-v1\0");
+    mac.update(role.as_bytes());
+    mac.update(b"\0");
+    mac.update(binding.as_bytes());
+    Some(hex_encode(&mac.finalize().into_bytes()))
+}
 
 pub fn token_fingerprint_hex(raw_token: &str) -> String {
     sha256_hex(raw_token.as_bytes())

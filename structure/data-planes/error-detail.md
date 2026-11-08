@@ -33,8 +33,9 @@ through the disk reader. A row keeps:
 - `rateLimitResetAt`, finite epoch milliseconds after the request and at most eight days later, derived
   server-side from the exact Meta Muse quota sentence on a Muse 429; the dashboard quota observation in
   `gui/src/muse-limit-observation.ts` reads only this number. Legacy rows that stored the sentence recover
-  the number on hydration.
-- `failureDetail`, a closed `{ code, value?, type? }` from `src/lib/failure-detail.ts`: `code` is a member of
+  the number on hydration. Direct log rows also classify non-enumerable or inherited quota
+  evidence before discarding its text; `tests/usage/request-log-normalization.test.ts` covers both.
+- `failureDetail`, a closed `{ code, value?, type?, validation? }` from `src/lib/failure-detail.ts`: `code` is a member of
   `FAILURE_DETAIL_CODES`, `value` a safe integer (milliseconds or bytes) kept only for codes that take one,
   and `type` a closed Anthropic error class kept only on `provider_error`. `recordLocalFailureDetail` in
   `src/server/request-log-failure-detail.ts` takes the detail beside the English text it leaves on the
@@ -45,6 +46,18 @@ through the disk reader. A row keeps:
   read and hydration; free text (a row from an earlier build or an edited one) is dropped. The dashboard
   renders the code through `failureDetailLabel` in `gui/src/pages/logs-failure-summary.ts` and the
   `logs.failureDetail.*` catalog keys in every locale.
+
+For schema-validation 4xx responses, native Chat and the translated adapter dispatch capture
+`failureDetail.validation` before client formatting. `src/lib/upstream-validation-detail.ts` projects
+only closed field identities and validation types from structured `detail[].loc/type`, inspecting at
+most 64 issues and retaining at most eight distinct pairs. Known nested locations retain closed paths such as `messages.role` or `messages.content`; other nested
+locations become a closed root plus `.*`. Arbitrary keys, indexes, messages, inputs, contexts and unknown
+types are dropped. The optional error type must be an allowlisted upstream type; absent/unknown types
+are omitted. Existing 64 KiB upstream error-body retention limits remain authoritative: over-limit or
+partial bodies produce status-only diagnostics.
+`boundedFailureDetail` revalidates those pairs on live projection, usage append/read, hydration and
+GUI rendering. The dashboard appends the machine field/type pairs to its localized provider-error
+label. No upstream-authored free text is retained, and client-facing messages retain their existing policy.
 
 `upstreamError`, `upstreamErrorCode`, `upstreamErrorType` and `upstreamRequestId` stay on the request
 context, where status heuristics and classifiers read them, and never reach a row, `usage.jsonl` or the
@@ -428,6 +441,7 @@ inspection or serialization.
 
 `src/server/messages-native-tool-guard.ts`, `src/server/messages-shared.ts` and
 `src/server/sse-payload-rewrite.ts` carry complete-frame construction identity.
+Native combo replay evidence is collected before framing transforms; if a transform fails before preflight, complete output or opaque frames and an unfinished raw frame prevent replay. A complete empty message prelude and ping remain replayable. The accounting tap remains the owner of stream outcomes and error presentation; after an error it conservatively marks a long unfinished frame as followed, bounding repeated tail inspection.
 Native and passthrough Messages SSE apply error-response normalization after echo, guard,
 accounting tap and the existing configured-only overflow rewrite. The final enqueue stage in
 `src/server/messages-sse-error-filter.ts` introduces no stream queue, timer or possible-prefix hold.

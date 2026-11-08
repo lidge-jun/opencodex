@@ -1,7 +1,7 @@
 # Per-file Bun test durations in milliseconds, read from hosted CI job logs.
 # Consumed by scripts/ci/run-bun-test-batches.sh to balance shards; a file without a row weighs the median.
 # Regenerate with scripts/ci/test-durations.ts (usage in its header); do not edit by hand.
-# Source: runs 41491122166 (workflow_dispatch on dev 1800b4d7f: windows 7/11, 8/11, 10/11 failed and 9/11 cancelled; files measured to completion count) and 41462914814 (dev 09b558580), windows 1/11-11/11; prior rows retained for unmeasured files
+# Source: runs 41491122166 (workflow_dispatch on dev 1800b4d7f: windows 7/11, 8/11, 10/11 failed and 9/11 cancelled; files measured to completion count) and 41462914814 (dev 09b558580), windows 1/11-11/11; prior rows retained for unmeasured files; provisional overflow primary groups: 42161735382 jobs 127708835065 baseline pass, 127708835193 builtin 4 timed out, 127708835075 collectors pass, 127708835100 stream pass, 127708835179 verdicts pass; 42168265793 jobs 127730254061 native 1 timed out, 127730254018 verdicts pass; 42145900556 job 127657289210 translated 3 timed out
 4873	tests/adapters/abort-race.test.ts
 2703	tests/adapters/adapter-buffered-tool-conformance.test.ts
 897	tests/adapters/adapter-error-inline.test.ts
@@ -427,6 +427,13 @@
 2818	tests/claude-integration/messages-native-opaque-state.test.ts
 15045	tests/claude-integration/messages-native-scope.test.ts
 52752	tests/claude-integration/messages-native.test.ts
+224	tests/claude-integration/messages-overflow-baseline-contract.test.ts
+391302	tests/claude-integration/messages-overflow-builtin.test.ts
+9197	tests/claude-integration/messages-overflow-collectors.test.ts
+290644	tests/claude-integration/messages-overflow-native.test.ts
+8748	tests/claude-integration/messages-overflow-stream.test.ts
+346067	tests/claude-integration/messages-overflow-translated.test.ts
+255760	tests/claude-integration/messages-overflow-verdicts.test.ts
 71096	tests/claude-integration/messages-request-id-endpoint.test.ts
 174	tests/claude-integration/messages-request-id-headers.test.ts
 45635	tests/claude-integration/messages-revoked-token.test.ts

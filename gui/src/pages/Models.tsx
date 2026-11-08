@@ -3,8 +3,8 @@ import ModelCatalogSettingsPanels from "../components/ModelCatalogSettingsPanels
 import ModelDisplayNameDialog from "../components/ModelDisplayNameDialog";
 import ModelPriceDialog from "../components/ModelPriceDialog";
 import ModelSettingsDialog from "../components/ModelSettingsDialog";
-import { fetchCodexAppServerState } from "../codex-app-server-state";
-import type { AppServerStateOutcome } from "../codex-app-server-state";
+import { fetchCodexAppServerState, type AppServerStateOutcome } from "../codex-app-server-state";
+import { ModelsReloadFocusBoundary } from "./models-reload-focus-boundary";
 import { useCodexRestart } from "../use-codex-restart";
 import { confirmAction } from "../action-dialogs";
 import { editModelAlias, editProviderAlias } from "./models-alias-editing";
@@ -95,6 +95,10 @@ import { CustomModelsSummary, InfoHint, ModelsSettingsPanel, SettingsRow } from 
 import { modelsSettingsSummary } from "./models-settings-summary";
 import { useAutoReviewSettings } from "./use-auto-review-settings";
 import { useShadowCallSettings } from "./use-shadow-call-settings";
+import { Button } from "@/components/ui-v2/button";
+import { ModelsAbout } from "../components/v2-models/models-about";
+import { ModelsProviderRail } from "../components/v2-models/models-provider-rail";
+import { ProviderMark } from "../components/v2-models/provider-mark";
 
 type CachedModelsPage = {
   models: ModelRow[];
@@ -106,12 +110,12 @@ type CachedModelsPage = {
   contextCapValue: number;
 };
 
-/** One subtitle per tab: only one panel is visible, so only one description applies. */
-const SUBTITLE_TKEY: Record<ModelsTab, TKey> = {
-  catalog: "models.subtitle",
-  combos: "models.subtitle.combos",
-  routing: "models.subtitle.routing",
-  compatibility: "models.subtitle.compatibility",
+/** One plain lead line per tab; a longer description (if any) opens from the "?" beside it. */
+const SUBTITLE_TKEY: Record<ModelsTab, [lede: TKey, about?: TKey]> = {
+  catalog: ["modelsV2.ledeCatalog", "models.subtitle"],
+  combos: ["modelsV2.ledeCombos", "models.subtitle.combos"],
+  routing: ["models.subtitle.routing"],
+  compatibility: ["models.subtitle.compatibility"],
 };
 
 interface ModelDiscoveryView {
@@ -133,6 +137,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   // catalog route here would register a phantom endpoint with the CLI parity
   // sweep, which reads GUI sources for api paths.)
   const [appServerState, setAppServerState] = useState<AppServerStateOutcome["state"]>(null);
+  const reloadHeadRef = useRef<HTMLButtonElement>(null), reloadBannerRef = useRef<HTMLButtonElement>(null);
   // A restart request outlives a navigation away from this page, so its completion
   // callback must not set state after unmount.
   const appServerMounted = useRef(true);
@@ -173,7 +178,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   // onSettled, not a per-button callback: the sidebar control knows nothing about
   // this page, and a restart succeeding there must still clear the banner here.
   const { restarting: codexRestarting, restart: handleCodexRestart } = useCodexRestart(apiBase, {
-    onSettled: () => { void reloadAppServerState(); },
+    onSettled: () => { void reloadAppServerState(); }, restoreFocusFallback: previous => previous?.hasAttribute("data-models-reload-action") ? reloadBannerRef.current ?? reloadHeadRef.current : null,
     // Reported through the shell, not this page's toast: a restart takes up to 30s and
     // outlives a navigation away, and an outcome that says app-servers are still running
     // must not be discarded because the user moved on while waiting for it.
@@ -187,9 +192,6 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     void reloadAppServerState();
     return cancelAppServerRead;
   }, [apiBase, cancelAppServerRead, reloadAppServerState, restartEpoch]);
-
-
-
   /*
    * Tab state. The hash is the source of truth, so refresh, bookmark, and
    * Back/Forward keep the choice — same contract as `#logs` / `#logs/debug`.
@@ -1444,6 +1446,68 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
          enable,
        );
      };
+    const presetControl = (() => {
+      // #2465: Preset / All / Custom. Only providers with a shipped preset get the
+      // control — a provider with nothing to curate would show a dead switch.
+      const preset = presets[provider];
+      if (!preset) return null;
+      const busyHere = busy || presetBusy !== null;
+      const stale = preset.mode === "custom"
+        && preset.appliedVersion !== undefined
+        && preset.appliedVersion < preset.availableVersion;
+      return (
+        <>
+          <div className="segmented models-segmented" role="radiogroup" aria-label={t("models.presetLabel")}>
+            {(["preset", "all"] as const).map(mode => (
+              <button
+                key={mode}
+                type="button"
+                role="radio"
+                aria-checked={preset.mode === mode}
+                className={`btn btn-sm${preset.mode === mode ? " btn-primary" : " btn-ghost"}`}
+                style={{
+                  background: preset.mode === mode ? undefined : "transparent",
+                  color: preset.mode === mode ? undefined : "var(--muted)",
+                }}
+                disabled={busy || busyHere || selectionPending}
+               onClick={(e) => {
+                 e.stopPropagation();
+                 // Switching from a custom selection destroys it, so consent first.
+                 void applyPreset(provider, mode, mode === "preset" && preset.mode === "custom" ? preset : undefined);
+               }}
+              >
+                {t(`models.presetMode_${mode}` as TKey)}
+              </button>
+            ))}
+            {/* Custom is a STATE, not a destination: it activates on edit. Shown as a
+                disabled segment so the current mode is never ambiguous. */}
+            {preset.mode === "custom" && (
+              <button
+                type="button"
+                role="radio"
+                aria-checked
+                className="btn btn-sm btn-primary"
+                disabled
+              >{t("models.presetMode_custom")}</button>
+            )}
+          </div>
+          {preset.mode === "preset" && (
+            <span className="muted mono text-label">
+              {t("models.presetSummary", {
+                count: String(preset.presetCount),
+                total: String(preset.totalCount),
+                version: String(preset.availableVersion),
+              })}
+            </span>
+          )}
+          {stale && (
+            <span className="badge badge-amber" role="status">
+              {t("models.presetUpdateAvailable", { version: String(preset.availableVersion) })}
+            </span>
+          )}
+        </>
+      );
+    })();
     return (
       <div key={provider} className="card models-provider-card">
        <div className={`row group-head models-provider-head${isCollapsed ? "" : " open"}`}>
@@ -1455,8 +1519,9 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
             style={{ flex: "1 1 auto", border: 0, background: "transparent", padding: 0, color: "inherit", cursor: "pointer", textAlign: "left" }}
           >
           <IconChevron style={{ width: 14, height: 14, color: "var(--muted)", transform: isCollapsed ? "none" : "rotate(90deg)", transition: "transform .12s" }} />
+          <ProviderMark name={provider} />
           <span className="text-body font-semibold" style={{ whiteSpace: "nowrap" }}>{providerDisplaySlug(provider)}</span>
-          {aliases.providers[provider] && <span className="models-chip mono text-caption">{aliases.providers[provider]}</span>}
+          {aliases.providers[provider] && <span className="models-chip models-chip--identifier mono text-caption">{aliases.providers[provider]}</span>}
           {nativeProviderGroup && <span className="models-chip muted mono text-caption">{t("models.nativeGroupLabel")}</span>}
          {discoveryFailure && (
            <span
@@ -1467,10 +1532,19 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
              {t("models.discoveryFailedBadge")}
            </span>
          )}
-          <span className="muted mono text-label">{t("models.active", { active: activeCount, total: scoped.length })}</span>
+          <span className="muted mono text-label models-provider-count">{t("models.active", { active: activeCount, total: scoped.length })}</span>
           {recentForProvider.length > 0 && <span className="models-chip mono text-caption">{t("models.newCount", { count: recentForProvider.length })}</span>}
+          {isCollapsed && capOn && <span className="models-chip muted mono text-caption">{t("models.contextCappedValue", { value: fmtK(capDisplayValue) })}</span>}
           </button>
            <div className="row models-provider-actions">
+             {presetControl}
+             <div className="models-bulk" role="group" aria-label={t("modelsV2.bulkLabel")}>
+               <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={(busy && !visibility.pending) || allOn || selectionPending} onClick={() => bulkToggle(true)}>{t("models.allOn")}</button>
+               <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={(busy && !visibility.pending) || allOff || selectionPending} onClick={() => bulkToggle(false)}>{t("models.allOff")}</button>
+             </div>
+           </div>
+           {/* The rare per-provider settings: a quiet second line, shown while the card is open. */}
+           {!isCollapsed && <div className="row models-provider-actions models-provider-tools" role="group" aria-label={t("modelsV2.providerTools")}>
              <button type="button" className="btn btn-ghost btn-sm models-alias-edit" aria-label={t("models.editProviderAlias")} title={t("models.editProviderAlias")} onClick={() => void saveProviderAlias(provider)}><IconPencil style={{ width: 14, height: 14 }} /></button>
             <Switch
               on={aliases.defaults.providers[provider] ?? aliases.defaults.global}
@@ -1501,70 +1575,6 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
                 aria-haspopup="dialog"
               ><span aria-hidden="true">+</span> {t("models.customAdd")}</button>
              }
-             {(() => {
-               // #2465: Preset / All / Custom. Only providers with a shipped preset get the
-               // control — a provider with nothing to curate would show a dead switch.
-               const preset = presets[provider];
-               if (!preset) return null;
-               const busyHere = busy || presetBusy !== null;
-               const stale = preset.mode === "custom"
-                 && preset.appliedVersion !== undefined
-                 && preset.appliedVersion < preset.availableVersion;
-               return (
-                 <>
-                   <div className="segmented models-segmented" role="radiogroup" aria-label={t("models.presetLabel")}>
-                     {(["preset", "all"] as const).map(mode => (
-                       <button
-                         key={mode}
-                         type="button"
-                         role="radio"
-                         aria-checked={preset.mode === mode}
-                         className={`btn btn-sm${preset.mode === mode ? " btn-primary" : " btn-ghost"}`}
-                         style={{
-                           background: preset.mode === mode ? undefined : "transparent",
-                           color: preset.mode === mode ? undefined : "var(--muted)",
-                         }}
-                         disabled={busy || busyHere || selectionPending}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          // Switching from a custom selection destroys it, so consent first.
-                          void applyPreset(provider, mode, mode === "preset" && preset.mode === "custom" ? preset : undefined);
-                        }}
-                       >
-                         {t(`models.presetMode_${mode}` as TKey)}
-                       </button>
-                     ))}
-                     {/* Custom is a STATE, not a destination: it activates on edit. Shown as a
-                         disabled segment so the current mode is never ambiguous. */}
-                     {preset.mode === "custom" && (
-                       <button
-                         type="button"
-                         role="radio"
-                         aria-checked
-                         className="btn btn-sm btn-primary"
-                         disabled
-                       >{t("models.presetMode_custom")}</button>
-                     )}
-                   </div>
-                   {preset.mode === "preset" && (
-                     <span className="muted mono text-label">
-                       {t("models.presetSummary", {
-                         count: String(preset.presetCount),
-                         total: String(preset.totalCount),
-                         version: String(preset.availableVersion),
-                       })}
-                     </span>
-                   )}
-                   {stale && (
-                     <span className="badge badge-amber" role="status">
-                       {t("models.presetUpdateAvailable", { version: String(preset.availableVersion) })}
-                     </span>
-                   )}
-                 </>
-               );
-             })()}
-             <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={(busy && !visibility.pending) || allOn || selectionPending} onClick={() => bulkToggle(true)}>{t("models.allOn")}</button>
-            <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={(busy && !visibility.pending) || allOff || selectionPending} onClick={() => bulkToggle(false)}>{t("models.allOff")}</button>
             <div className="models-cap-cluster">
               {/* The label names the FUNCTION. It used to be `models.capValue` -
                   "기본 128k" - which is a value masquerading as a name: even a
@@ -1636,28 +1646,11 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
                 aria-haspopup="dialog"
               >{t("models.contextSettings")}</button>
             </div>
-          </div>
+          </div>}
         </div>
         {!isCollapsed && (
           <div className="models-provider-body">
             {nativeProviderGroup && <p className="muted text-label models-provider-hint">{t("models.nativeHint")}</p>}
-            {!nativeProviderGroup && modelDiscovery && (
-              <div className="row models-provider-hint">
-                <span className="muted text-label">{t("models.newPolicyProvider")}</span>
-                <div className="segmented models-segmented" role="radiogroup" aria-label={t("models.newPolicyProvider")}>
-                  {(["off", "on"] as const).map(mode => (
-                    <button key={mode} type="button" role="radio"
-                      aria-checked={(modelDiscovery.providers[provider] ?? "inherit") === mode}
-                      className={`btn btn-sm${(modelDiscovery.providers[provider] ?? "inherit") === mode ? " btn-primary" : " btn-ghost"}`}
-                      onClick={() => void saveModelDiscovery(mode, provider)}>
-                      {t(`models.newPolicy_${mode}` as TKey)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {!nativeProviderGroup && <ProviderFastRow summary={providers.find(p => p.name === provider)} apiBase={apiBase}
-              onSaved={(saved, message) => { publishFeedback(saved, message); if (saved) void load(true); }} />}
             {rows.length === 0 && (
               <EmptyProviderHint liveModels={liveModels} discovery={discovery} showFailureBadge={false} />
             )}
@@ -1665,29 +1658,47 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
                 explains the dependency; #4075 is the reporter having to discover on their own
                 that turning discovery off is what makes a manually added model usable. */}
             {rows.length > 0 && discoveryFailure && <DiscoveryDependencyHint />}
-            {pricingKnown && (
-              <div className="row models-provider-hint">
+            {/* One filter bar over the list: find, narrow to free rows, and how new rows arrive. */}
+            {(rows.length > PAGE / 2 || pricingKnown || (!nativeProviderGroup && modelDiscovery)) && <div className="row models-provider-filters">
+              {rows.length > PAGE / 2 && (
+                <input
+                  className="input"
+                  placeholder={t("models.search")}
+                  value={search[provider] ?? ""}
+                  onChange={e => setSearch(prev => ({ ...prev, [provider]: e.target.value }))}
+                  aria-label={t("models.search")}
+                />
+              )}
+              {pricingKnown && (
                 <Switch
                   on={freeOnlyOn}
                   onClick={() => setFreeOnly(prev => ({ ...prev, [provider]: !freeOnlyOn }))}
                   label={t("models.freeOnly")}
                   showLabel
                 />
-              </div>
-            )}
+              )}
+              {!nativeProviderGroup && modelDiscovery && (
+                <div className="row models-provider-hint">
+                  <span className="muted text-label">{t("models.newPolicyProvider")}</span>
+                  <div className="segmented models-segmented" role="radiogroup" aria-label={t("models.newPolicyProvider")}>
+                    {(["off", "on"] as const).map(mode => (
+                      <button key={mode} type="button" role="radio"
+                        aria-checked={(modelDiscovery.providers[provider] ?? "inherit") === mode}
+                        className={`btn btn-sm${(modelDiscovery.providers[provider] ?? "inherit") === mode ? " btn-primary" : " btn-ghost"}`}
+                        onClick={() => void saveModelDiscovery(mode, provider)}>
+                        {t(`models.newPolicy_${mode}` as TKey)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>}
+            {!nativeProviderGroup && <ProviderFastRow summary={providers.find(p => p.name === provider)} apiBase={apiBase}
+              onSaved={(saved, message) => { publishFeedback(saved, message); if (saved) void load(true); }} />}
             {/* Reads `scoped`, not `filtered`: with a search term that matches nothing, the
                 honest message is the search one, not "this provider has no free models". */}
             {freeOnlyActive && scoped.length === 0 && rows.length > 0 && (
               <p className="muted text-label" role="status">{t("models.noFreeMatch")}</p>
-            )}
-            {rows.length > PAGE / 2 && (
-              <input
-                className="input"
-                placeholder={t("models.search")}
-                value={search[provider] ?? ""}
-                onChange={e => setSearch(prev => ({ ...prev, [provider]: e.target.value }))}
-                aria-label={t("models.search")}
-              />
             )}
              {visible.map(m => {
                // The row reflects the same final-visibility answer as the count and the picker.
@@ -1705,6 +1716,14 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
                  >
                    <div className="row models-model-row">
                      <Switch on={!off} onClick={() => void applyVisibility("models", provider, [{ id: m.id, native: m.native === true }], off)} disabled={(busy && !visibility.pending) || m.initialSelectionPending} label={m.native ? m.id : m.namespaced} />
+                    <span className="models-model-main">
+                    {aliases.models[provider]?.[m.id] && <strong className="mono text-control">{aliases.models[provider][m.id].alias}</strong>}
+                    <span className="models-model-identity">
+                      <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : m.namespaced}</code>
+                      {!m.native && m.displayName?.trim() && m.displayName.trim() !== m.namespaced && (
+                        <span className="models-model-friendly text-caption">{m.displayName.trim()}</span>
+                      )}
+                    </span>
                     {m.initialSelectionPending && <span className="models-chip muted" role="status">{t("models.initialSelectionPending")}</span>}
                     {/* #1711: listed and selectable, but every usable target is out of credit.
                         Not a visibility change and not the operator's disable flag — the row is
@@ -1714,14 +1733,14 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
                         {t("models.inactiveNoCredit")}
                       </span>
                     )}
-                     {aliases.models[provider]?.[m.id] && <strong className="mono text-control">{aliases.models[provider][m.id].alias}</strong>}
-                     <span className="models-model-identity">
-                       <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : m.namespaced}</code>
-                       {!m.native && m.displayName?.trim() && m.displayName.trim() !== m.namespaced && (
-                         <span className="models-model-friendly text-caption">{m.displayName.trim()}</span>
-                       )}
-                     </span>
-                     {aliases.models[provider]?.[m.id]?.source === "builtin" && <span className="models-chip muted text-caption">{t("models.aliasAuto")}</span>}
+                    {aliases.models[provider]?.[m.id]?.source === "builtin" && <span className="models-chip muted text-caption">{t("models.aliasAuto")}</span>}
+                    {m.custom && <span className="models-chip muted mono text-caption">{t("models.customBadge")}</span>}
+                    {!m.native && m.provider !== "combo" && m.manualPricing === true && <span className="models-chip muted text-caption">{t("pricing.override.badge")}</span>}
+                    {!m.custom && recentIds.has(m.id) && <span className="badge badge-amber">{t("models.newBadge")}</span>}
+                    {m.contextCapped && <span className="models-chip muted mono text-caption">{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
+                    </span>
+                    {/* Per-model edits, right-aligned like a table's action column. */}
+                    <span className="models-model-actions" role="group" aria-label={t("modelsV2.modelActions")}>
                      <button type="button" className="btn btn-ghost btn-sm" aria-label={t("models.editModelAlias")} title={t("models.editModelAlias")} onClick={() => void saveModelAlias(provider, m.id)}><IconPencil style={{ width: 13, height: 13 }} /></button>
                      {!m.native && !m.custom && (
                        <button
@@ -1740,31 +1759,22 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
                          {t("models.displayNameAction")}
                        </button>
                      )}
-                     {m.custom && (
-                       <span className="models-chip muted mono text-caption">
-                         {t("models.customBadge")}
-                       </span>
-                     )}
                      {!m.native && m.provider !== "combo" && (
-                       <>
-                         {m.manualPricing === true && <span className="models-chip muted text-caption">{t("pricing.override.badge")}</span>}
-                         <button
-                           type="button"
-                           className="btn btn-ghost btn-sm text-caption models-display-name-trigger"
-                           aria-haspopup="dialog"
-                           aria-label={t("pricing.override.actionLabel", { model: m.namespaced })}
-                           onClick={event => {
-                             priceTriggerRef.current = event.currentTarget;
-                             setPriceModel(m);
-                           }}
-                         >
-                           {t("pricing.override.action")}
-                         </button>
-                       </>
+                       <button
+                         type="button"
+                         className="btn btn-ghost btn-sm text-caption models-display-name-trigger"
+                         aria-haspopup="dialog"
+                         aria-label={t("pricing.override.actionLabel", { model: m.namespaced })}
+                         onClick={event => {
+                           priceTriggerRef.current = event.currentTarget;
+                           setPriceModel(m);
+                         }}
+                       >
+                         {t("pricing.override.action")}
+                       </button>
                      )}
                      {!m.native && !m.custom && m.provider !== "combo" && <button type="button" className="btn btn-ghost btn-sm text-caption models-display-name-trigger" aria-haspopup="dialog" aria-label={t("models.settingsTitle", { model: m.namespaced })} onClick={() => setSettingsModel(m)}>{t("models.customEdit")}</button>}
-                     {!m.custom && recentIds.has(m.id) && <span className="badge badge-amber">{t("models.newBadge")}</span>}
-                     {m.contextCapped && <span className="models-chip muted mono text-caption">{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
+                    </span>
                    </div>
                    {hoveredModel?.namespaced === m.namespaced && (() => {
                      const r = hoveredModel.rect;
@@ -2537,46 +2547,11 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
         {controlsBlock}
       </ModelsSettingsPanel>
       <div className="models-workspace-root" aria-busy={visibility.pending || catalogState.refreshing || undefined}>
-        <aside className="models-workspace-rail" aria-label={t("nav.models")}>
-          <div className="models-workspace-rail-header">
-            <span className="models-workspace-rail-title">{t("models.workspace.providers")}</span>
-            <span className="models-workspace-rail-count">{groups.length}</span>
-          </div>
-          <div className="models-workspace-rail-list">
-            <button
-              type="button"
-              className={`models-workspace-rail-row${selectedProvider === null ? " models-workspace-rail-row--selected" : ""}`}
-              onClick={() => setSelectedProvider(null)}
-              aria-current={selectedProvider === null ? "true" : undefined}
-            >
-              <span className="models-workspace-rail-name">{t("models.workspace.allProviders")}</span>
-              <span className="models-workspace-rail-meta">{t("models.active", { active: effectiveVisibleCount, total: models.length })}</span>
-            </button>
-            {groups.map(group => {
-              const { provider, rows } = group;
-              // Same final-visibility rule as the provider card, so the rail never disagrees with it.
-              const activeCount = rows.filter(m => modelVisible(
-                selectedModelMap,
-                provider,
-                m.id,
-                m.native === true,
-                disabled.has(m.namespaced),
-              )).length;
-              return (
-                <button
-                  key={provider}
-                  type="button"
-                  className={`models-workspace-rail-row${selectedProvider === provider ? " models-workspace-rail-row--selected" : ""}`}
-                  onClick={() => setSelectedProvider(provider)}
-                  aria-current={selectedProvider === provider ? "true" : undefined}
-                >
-                  <span className="models-workspace-rail-name">{formatProviderDisplayName(provider, t)}</span>
-                  <span className="models-workspace-rail-meta">{t("models.active", { active: activeCount, total: rows.length })}</span>
-                </button>
-              );
-            })}
-          </div>
-        </aside>
+        <ModelsProviderRail selected={selectedProvider} onSelect={setSelectedProvider}
+          all={{ active: effectiveVisibleCount, total: models.length }}
+          // Same final-visibility rule as the provider card, so the rail never disagrees with it.
+          items={groups.map(({ provider, rows }) => ({ provider, total: rows.length,
+            active: rows.filter(m => modelVisible(selectedModelMap, provider, m.id, m.native === true, disabled.has(m.namespaced))).length }))} />
         <section className="models-workspace-main" aria-label={t("models.workspace.mainAria")}>
           {collapseControls}
           <div className="models-provider-list">
@@ -2594,28 +2569,33 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
 
   return (
     <>
-      <div className="page-head">
-        <h2>{t("nav.models")}</h2>
-        <div className="page-head-actions">
-          <button type="button" className="sidebar-orb"
-            onClick={() => { void handleCodexRestart(); }} disabled={codexRestarting}
-            aria-label={codexRestarting ? t("dash.codexRestarting") : t("dash.codexRestart")}
-            title={codexRestarting ? t("dash.codexRestarting") : t("dash.codexRestart")}>
-            <IconRefresh />
-          </button>
-        </div>
-      </div>
-      <CodexStaleBanner
-        state={appServerState}
-        controller={{ restarting: codexRestarting, restart: handleCodexRestart }}
-      />
-      <ModelsTabStrip tab={tab} onSelect={selectTab} meta={tabMeta} />
       {/*
-        One subtitle for the active tab. The catalog adds its delivery process folded to one
-        line, rendered here rather than in the panel because hidden panels stay mounted.
+        Title, one plain line for the active tab, and the one page action. The long
+        description and the catalog's delivery process open from "?", rendered here rather
+        than in the panel because hidden panels stay mounted.
       */}
-      <p className="page-sub">{t(SUBTITLE_TKEY[tab])}</p>
-      {tab === "catalog" && <ModelCatalogDelivery connected={connected} catalogSyncedAt={catalogSyncedAt} />}
+      <ModelsReloadFocusBoundary stale={appServerState === "stale"} headRef={reloadHeadRef} bannerRef={reloadBannerRef}>
+        <div className="page-head">
+          <div className="ui-v2 flex min-w-0 flex-col gap-1">
+            <h2 className="m-0 text-title font-semibold tracking-[-0.025em] text-fg">{t("nav.models")}</h2>
+            <p className="m-0 text-[14px] leading-5 text-fg-muted">{t(SUBTITLE_TKEY[tab][0])}</p>
+          </div>
+          <div className="page-head-actions">
+            {SUBTITLE_TKEY[tab][1] && <ModelsAbout key={tab} text={t(SUBTITLE_TKEY[tab][1])}>
+              {tab === "catalog" && <ModelCatalogDelivery connected={connected} catalogSyncedAt={catalogSyncedAt} />}
+            </ModelsAbout>}
+            {appServerState !== "stale" && <Button data-models-reload-action ref={reloadHeadRef} variant="outline" size="sm" onClick={() => { void handleCodexRestart(); }} disabled={codexRestarting}>
+              <span className={codexRestarting ? "inline-flex animate-spin" : "inline-flex"}><IconRefresh aria-hidden="true" /></span>
+              {codexRestarting ? t("dash.codexRestarting") : t("dash.codexRestart")}
+            </Button>}
+          </div>
+        </div>
+        <CodexStaleBanner
+          state={appServerState} actionRef={reloadBannerRef}
+          controller={{ restarting: codexRestarting, restart: handleCodexRestart }}
+        />
+      </ModelsReloadFocusBoundary>
+      <ModelsTabStrip tab={tab} onSelect={selectTab} meta={tabMeta} />
 
       {/*
         Panels mount lazily and then stay mounted, hidden — a half-typed combo draft

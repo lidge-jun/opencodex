@@ -556,6 +556,9 @@ function assertConnectingState(expectedTokenFingerprint?: string): void {
   const token = readServiceApiTokenState();
   if (expectedTokenFingerprint === undefined ? token.kind !== "absent"
     : token.kind !== "present" || token.fingerprint !== expectedTokenFingerprint) {
+    if (expectedTokenFingerprint === undefined && token.kind === "present") {
+      throw new Error("client_token_changed: if this is not a Hub and no admission secret or installed service uses the token, inspect it and use ocx disconnect --orphaned-token --yes before retrying");
+    }
     throw new Error("client_token_changed");
   }
 }
@@ -1121,7 +1124,7 @@ export async function disconnectClient(
         writeDesktopDisconnectReceipt(held, previous, receipt);
       }
     } else if (state.kind !== "disconnected" || !receipt || !disconnectAtLeast(receipt, "clearing_connection")) {
-      throw new Error("disconnect refused: no recoverable connected state");
+      throw new Error("disconnect refused: no recoverable connected state; if this is not a Hub and no admission secret or installed service uses the token, inspect it and use ocx disconnect --orphaned-token --yes");
     }
     if (!receipt || receipt.keepCatalog !== keepCatalog) throw new Error("client_disconnect_options_changed");
     return { receipt, connection };

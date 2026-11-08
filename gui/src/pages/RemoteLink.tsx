@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useEffectEvent, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
 import {
   LinkApiError, parseRemoteLinkConfirmation, parseRemoteLinkStatus, readRuntimeHealth, requestLinkJson, waitForChildRuntime, type ChildRestartWaitDeps, type LinkCandidateView, type LinkConfirmHostView,
   type LinkErrorCode, type LinkJoinDenied, type LinkProbeView, type LinkRowWire, type LinkWireState, type RemoteLinkStatusWire,
 } from "../remote-link-api";
 import { IconPlus, IconRefresh, IconTrash } from "../icons";
 import { type TKey, useT } from "../i18n/shared";
-import { Notice } from "../ui";
 import { isStandaloneRuntime, standaloneApiTargets } from "../api-targets";
 import { ConnectPairingForm } from "../connect-pairing";
 import FallbackPanel from "../components/FallbackPanel";
+import { Button } from "@/components/ui-v2/button";
+import { Banner, PageHeader, StateBadge } from "../components/v2-startup/primitives";
+import { LinkIntro, LinkStatus, LinkSwitchRow, Monogram, RoleCard } from "../components/v2-startup/remote-link-parts";
 import { RemoteLinkDisconnectDialog } from "./RemoteLinkDialogs";
 import { LinkErrorNotice, RemoteLinkSheet, type LinkActionErrorView } from "./RemoteLinkSheet";
 import "../styles-remote-link.css";
@@ -124,6 +126,11 @@ function parseProbe(value: unknown): LinkProbeView {
 function errorKey(error: unknown): TKey {
   if (error instanceof LinkApiError && error.code in ERROR_TKEY) return ERROR_TKEY[error.code as LinkErrorCode];
   return "remoteLink.error.generic";
+}
+
+/** Whether a Child applied the Home's current Codex settings; null when either digest is unknown. */
+function paritySynced(homeDigest: string | null, childDigest: string | null): boolean | null {
+  return homeDigest !== null && childDigest !== null ? homeDigest === childDigest : null;
 }
 
 function linkActionError(error: unknown): LinkActionErrorView { return { key: errorKey(error), hint: error instanceof LinkApiError ? error.hint : null }; }
@@ -431,19 +438,130 @@ export default function RemoteLink({ apiBase, sessionReady, pairingRecoveryAvail
   const roleLabel: TKey = status?.role === "home" || choseHome ? "remoteLink.role.home" : status?.role === "child" ? "remoteLink.role.child" : "remoteLink.role.standalone";
   const primaryActionDisabled = role === "child" && !childSelectable;
 
-  if (!sessionReady) return <div className="remote-link-page"><div className="page-head"><h2>{t("link.title")}</h2></div><Notice tone="warn">{t("link.sessionRequired")}</Notice>{pairingRecoveryAction && <div className="panel">{pairingRecoveryAction}</div>}</div>;
+  const refreshButton = <Button variant="ghost" size="sm" onClick={() => void refreshStatus()} disabled={busy !== null}><IconRefresh />{t("link.refresh")}</Button>;
+  if (!sessionReady) return (
+    <div className="remote-link-page flex min-w-0 flex-col gap-5 font-sans text-fg">
+      <PageHeader title={t("link.title")} subtitle={t("link.subtitle")} />
+      <Banner tone="warn" action={pairingRecoveryAction}>{t("link.sessionRequired")}</Banner>
+    </div>
+  );
+
+  const childHome = role === "child" && standaloneRuntime;
+  const showLinks = uiState === "connected" || uiState === "reconnecting" || uiState === "failed" || uiState === "restart-waiting" || status?.role === "child" || statusRows.length > 0 || uiState === "adding-child" || uiState === "confirming-host" || uiState === "applying" || uiState === "joining";
+  const showStatusMessage = !sheetOpen && (uiState === "reconnecting" || (uiState === "failed" && ((failedAction !== null && actionError?.key !== "remoteLink.error.join_restart_failed") || statusRows.some(row => row.state === "failed"))));
+  const onRoleKey = (event: KeyboardEvent<HTMLButtonElement>, index: number, enabled: boolean) => {
+    if (enabled && ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) { event.preventDefault(); moveRole(index, event.key); }
+  };
 
   return (
-    <div className="remote-link-page">
-      <div className="page-head"><div><h2>{t("link.title")}</h2><p className="page-sub">{t("link.subtitle")}</p></div><button type="button" className="btn btn-ghost btn-sm" onClick={() => void refreshStatus()} disabled={busy !== null}><IconRefresh />{t("link.refresh")}</button></div>
-      {workspaceAvailable && <section className="panel remote-link-workspace-card"><div><strong>{t("remoteLink.workspaceMoved.title")}</strong><p>{t("remoteLink.workspaceMoved.body")}</p></div><button type="button" className="btn btn-ghost btn-sm" onClick={onOpenWorkspace ?? (() => { window.location.hash = "remote-workspace"; })}>{t("remoteLink.workspaceMoved.open")}</button></section>}
-      {statusError && <><Notice tone="err"><span className="remote-link-error">{t(statusError)}</span></Notice>{pairingRecoveryAction && <section className="panel">{pairingRecoveryAction}</section>}</>}
-      {statusRows.length === 0 && uiState === "off" && <section className="panel remote-link-off-preview"><div className="remote-link-switch-row"><div><strong>{t("link.switch")}</strong><p className="remote-link-info">{t("link.switchOffHint")}</p></div><button type="button" role="switch" className="remote-link-switch" aria-checked="false" aria-label={t("link.switch")} onClick={() => setUiState("role-select")} /></div><div className="remote-link-preview-content" aria-hidden="true"><div className="remote-link-preview-row"><div className="remote-link-preview-lines"><span /><span /><span /></div><span className="remote-link-status">{t("remoteLink.status.idle")}</span></div><div className="remote-link-preview-row"><div className="remote-link-preview-lines"><span /><span /></div><span className="remote-link-status">{t("remoteLink.role.child")}</span></div></div></section>}
-      {uiState === "role-select" && <section className="panel remote-link-panel"><div><h3>{t("link.role.title")}</h3><p className="remote-link-info">{t("link.role.hint")}</p></div><div className="remote-link-role-grid" role="radiogroup" aria-label={t("link.role.title")}><button ref={element => { roleRefs.current[0] = element; }} type="button" role="radio" tabIndex={role === "home" ? 0 : -1} aria-checked={role === "home"} className="remote-link-role-card" onClick={() => setRole("home")} onKeyDown={event => { if (["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) { event.preventDefault(); moveRole(0, event.key); } }}><strong>{t("link.role.home")}</strong><span>{t("link.role.homeHint")}</span></button><button ref={element => { roleRefs.current[1] = element; }} type="button" role="radio" tabIndex={childSelectable && role === "child" ? 0 : -1} aria-checked={role === "child"} aria-disabled={!childSelectable} className="remote-link-role-card" onClick={() => { if (childSelectable) { setRole("child"); void openSheet(); } }} onKeyDown={event => { if (childSelectable && ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) { event.preventDefault(); moveRole(1, event.key); } }}><strong>{t("link.role.child")}</strong><span>{t("link.role.childHint")}</span></button></div>{!standaloneRuntime && <Notice tone="warn">{t("remoteLink.childDisabled")}</Notice>}{standaloneRuntime && status !== null && !status.joinAvailable && <Notice tone="warn">{t(joinDeniedKey)}</Notice>}<button type="button" className="btn btn-primary" disabled={primaryActionDisabled || status?.role === "child"} onClick={() => void openSheet()}>{role === "child" ? t("remoteLink.findHome.action") : t("link.continue")}</button></section>}
+    <div className="remote-link-page flex min-w-0 flex-col gap-5 font-sans text-fg">
+      <PageHeader title={t("link.title")} subtitle={t("link.subtitle")} actions={refreshButton} />
+      {workspaceAvailable && (
+        <Banner tone="info" className="remote-link-workspace-card" action={<Button variant="outline" size="sm" onClick={onOpenWorkspace ?? (() => { window.location.hash = "remote-workspace"; })}>{t("remoteLink.workspaceMoved.open")}</Button>}>
+          <strong className="font-semibold">{t("remoteLink.workspaceMoved.title")}</strong>{" "}<span className="text-fg-muted">{t("remoteLink.workspaceMoved.body")}</span>
+        </Banner>
+      )}
+      {statusError && <Banner tone="err" action={pairingRecoveryAction}><span className="remote-link-error">{t(statusError)}</span></Banner>}
+
+      {statusRows.length === 0 && uiState === "off" && <LinkIntro onTurnOn={() => setUiState("role-select")} />}
+
+      {uiState === "role-select" && (
+        <section className="remote-link-panel flex min-w-0 flex-col rounded-[12px] bg-surface p-1 ring-1 ring-line" aria-label={t("link.role.title")}>
+          <LinkSwitchRow on onToggle={() => setUiState("off")} hint={t("link.role.title")} />
+          <div className="flex min-w-0 flex-col gap-4 rounded-[8px] bg-bg p-4 ring-1 ring-line">
+            <p className="m-0 max-w-[72ch] text-[13px] leading-5 text-fg-muted">{t("link.role.hint")}</p>
+            <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label={t("link.role.title")}>
+              <RoleCard role="home" buttonRef={element => { roleRefs.current[0] = element; }} tabIndex={role === "home" ? 0 : -1} checked={role === "home"}
+                onSelect={() => setRole("home")} onKeyDown={event => onRoleKey(event, 0, true)} />
+              <RoleCard role="child" buttonRef={element => { roleRefs.current[1] = element; }} tabIndex={childSelectable && role === "child" ? 0 : -1} checked={role === "child"} disabled={!childSelectable}
+                onSelect={() => { if (childSelectable) { setRole("child"); void openSheet(); } }} onKeyDown={event => onRoleKey(event, 1, childSelectable)} />
+            </div>
+            {!standaloneRuntime && <Banner tone="warn">{t("remoteLink.childDisabled")}</Banner>}
+            {standaloneRuntime && status !== null && !status.joinAvailable && <Banner tone="warn">{t(joinDeniedKey)}</Banner>}
+          </div>
+          <div className="flex justify-end px-3 py-2.5">
+            <Button variant="primary" data-action="continue" disabled={primaryActionDisabled || status?.role === "child"} onClick={() => void openSheet()}>
+              {role === "child" ? t("remoteLink.findHome.action") : t("link.continue")}
+            </Button>
+          </div>
+        </section>
+      )}
       {uiState === "role-select" && canPairLocally && status?.joinAvailable === false && status.joinDenied === "pairing_required" && (
         <ConnectPairingForm local target={localPairingTarget} onConnected={() => { void refreshStatus(); }} />
       )}
-      {(uiState === "connected" || uiState === "reconnecting" || uiState === "failed" || uiState === "restart-waiting" || status?.role === "child" || statusRows.length > 0 || uiState === "adding-child" || uiState === "confirming-host" || uiState === "applying" || uiState === "joining") && <section className="panel remote-link-panel"><div className="remote-link-toolbar"><div><h3>{role === "child" && standaloneRuntime ? t("remoteLink.findHome.title") : t("link.children")}</h3><p className="remote-link-info">{uiState === "restart-waiting" ? t("remoteLink.restart.waiting") : t(roleLabel)}</p></div><button ref={addButtonRef} type="button" className="btn btn-primary btn-sm" onClick={() => void openSheet()} disabled={busy !== null || uiState === "applying" || uiState === "joining" || uiState === "restart-waiting" || status?.role === "child"}><IconPlus />{role === "child" && standaloneRuntime ? t("remoteLink.findHome.action") : t("link.addChild")}</button></div>{uiState === "restart-waiting" ? <div className="remote-link-restart" aria-live="polite"><strong>{t("remoteLink.restart.title")}</strong><p>{t("remoteLink.restart.body")}</p>{restartSlow && <Notice tone="warn">{t("remoteLink.restart.slow")}</Notice>}</div> : status?.role === "child" ? <div className="remote-link-children" aria-live="polite"><div className="remote-link-row"><div className="remote-link-row-main"><strong>{status.child?.alias ?? t("remoteLink.role.child")}</strong>{status.child && <div className="remote-link-row-meta"><span className="remote-link-status" data-state={status.child.state}>{t(STATUS_LABEL[status.child.state])}</span></div>}</div></div></div> : statusRows.length > 0 ? <div className="remote-link-children" aria-live="polite">{statusRows.map(row => { const homeDigest = status?.homeCodexSettingsDigest ?? null; const childDigest = row.appliedCodexSettingsDigest ?? null; const paritySynced = homeDigest !== null && childDigest !== null ? homeDigest === childDigest : null; return (<div className="remote-link-row" key={row.id}><div className="remote-link-row-main"><div className="remote-link-row-head"><strong>{row.alias}</strong><div className="remote-link-badges">{row.childKind && <span className={row.childKind === "ephemeral" ? "badge badge-green" : "badge badge-muted"}>{t(row.childKind === "ephemeral" ? "remoteLink.badge.ephemeral" : "remoteLink.badge.full")}</span>}{paritySynced !== null && <span className={paritySynced ? "badge badge-green" : "badge badge-amber"}>{t(paritySynced ? "remoteLink.parity.synced" : "remoteLink.parity.outdated")}</span>}</div></div><div className="remote-link-row-meta"><span className="remote-link-status" data-state={row.state}>{t(STATUS_LABEL[row.state])}</span><span>{row.direction === "hub-initiated" ? t("remoteLink.direction.hub") : t("remoteLink.direction.client")}</span>{row.reason && <span className="remote-link-error">{row.reason in REASON_TKEY ? t(REASON_TKEY[row.reason]) : <>{t("remoteLink.reason.generic")} <code>{row.reason}</code></>}</span>}</div></div><button type="button" className="btn btn-ghost btn-sm" onClick={event => { disconnectTriggerRef.current = event.currentTarget; setPurgeOnDisconnect(false); setConfirming({ row, force: false }); }} disabled={busy !== null}><IconTrash />{t("link.disconnect")}</button></div>); })}</div> : <p className="remote-link-info">{t(role === "child" && standaloneRuntime ? "remoteLink.findHome.empty" : "link.noChildren")}</p>}{(!sheetOpen && (uiState === "reconnecting" || (uiState === "failed" && ((failedAction !== null && actionError?.key !== "remoteLink.error.join_restart_failed") || statusRows.some(row => row.state === "failed"))))) && <div className="remote-link-status-message" aria-live="polite"><span className="remote-link-status" data-state={uiState === "failed" ? "failed" : "reconnecting"}>{t(STATUS_LABEL[uiState === "failed" ? "failed" : "reconnecting"])}</span><button type="button" className="btn btn-ghost btn-sm" onClick={retryFailedAction} disabled={busy !== null}>{t("link.retry")}</button></div>}{uiState === "joining" && <p className="remote-link-info" aria-live="polite">{t("remoteLink.joining")}</p>}{!sheetOpen && actionError && <LinkErrorNotice error={actionError} />}</section>}
+
+      {showLinks && (
+        <section className="remote-link-panel flex min-w-0 flex-col rounded-[12px] bg-surface p-1 ring-1 ring-line" aria-labelledby="remote-link-list-title">
+          <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <h3 id="remote-link-list-title" className="m-0 text-[15px] leading-6 font-semibold tracking-[-0.01em]">{childHome ? t("remoteLink.findHome.title") : t("link.children")}</h3>
+              <span className="text-[13px] leading-5 text-fg-muted">{uiState === "restart-waiting" ? t("remoteLink.restart.waiting") : t(roleLabel)}</span>
+            </div>
+            <Button ref={addButtonRef} variant="primary" size="sm" onClick={() => void openSheet()} disabled={busy !== null || uiState === "applying" || uiState === "joining" || uiState === "restart-waiting" || status?.role === "child"}>
+              <IconPlus />{childHome ? t("remoteLink.findHome.action") : t("link.addChild")}
+            </Button>
+          </div>
+          <div className="flex min-w-0 flex-col rounded-[8px] bg-bg ring-1 ring-line">
+            {uiState === "restart-waiting" ? (
+              <div className="remote-link-restart flex flex-col gap-1.5 px-4 py-4" aria-live="polite">
+                <strong className="text-[14px] font-semibold">{t("remoteLink.restart.title")}</strong>
+                <p className="m-0 text-[13px] leading-5 text-fg-muted">{t("remoteLink.restart.body")}</p>
+                {restartSlow && <Banner tone="warn" className="mt-1">{t("remoteLink.restart.slow")}</Banner>}
+              </div>
+            ) : status?.role === "child" ? (
+              <ul className="remote-link-children m-0 list-none p-0" aria-live="polite">
+                <li className="remote-link-row flex min-w-0 items-center gap-3 px-4 py-3">
+                  <Monogram name={status.child?.alias ?? t("remoteLink.role.child")} />
+                  <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="truncate text-[14px] font-semibold">{status.child?.alias ?? t("remoteLink.role.child")}</span>
+                    {status.child && <LinkStatus state={status.child.state}>{t(STATUS_LABEL[status.child.state])}</LinkStatus>}
+                  </div>
+                </li>
+              </ul>
+            ) : statusRows.length > 0 ? (
+              <ul className="remote-link-children m-0 flex list-none flex-col divide-y divide-line p-0" aria-live="polite">
+                {statusRows.map(row => {
+                  const synced = paritySynced(status?.homeCodexSettingsDigest ?? null, row.appliedCodexSettingsDigest ?? null);
+                  return (
+                    <li className="remote-link-row flex min-w-0 items-center gap-3 px-4 py-3" key={row.id}>
+                      <Monogram name={row.alias} />
+                      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
+                          <span className="truncate text-[14px] font-semibold">{row.alias}</span>
+                          {row.childKind && <StateBadge tone={row.childKind === "ephemeral" ? "ok" : "neutral"}>{t(row.childKind === "ephemeral" ? "remoteLink.badge.ephemeral" : "remoteLink.badge.full")}</StateBadge>}
+                          {synced !== null && <StateBadge tone={synced ? "ok" : "warn"}>{t(synced ? "remoteLink.parity.synced" : "remoteLink.parity.outdated")}</StateBadge>}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px] leading-5 text-fg-muted">
+                          <LinkStatus state={row.state}>{t(STATUS_LABEL[row.state])}</LinkStatus>
+                          <span>{row.direction === "hub-initiated" ? t("remoteLink.direction.hub") : t("remoteLink.direction.client")}</span>
+                          {row.reason && <span className="remote-link-error text-danger">{row.reason in REASON_TKEY ? t(REASON_TKEY[row.reason]) : <>{t("remoteLink.reason.generic")} <code className="font-mono">{row.reason}</code></>}</span>}
+                        </div>
+                      </div>
+                      <Button variant="ghost" size="sm" className="hover:bg-danger-soft hover:text-danger" onClick={event => { disconnectTriggerRef.current = event.currentTarget; setPurgeOnDisconnect(false); setConfirming({ row, force: false }); }} disabled={busy !== null}>
+                        <IconTrash />{t("link.disconnect")}
+                      </Button>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="m-0 px-4 py-6 text-center text-[13px] text-fg-muted">{t(childHome ? "remoteLink.findHome.empty" : "link.noChildren")}</p>
+            )}
+          </div>
+          {(showStatusMessage || uiState === "joining" || (!sheetOpen && actionError)) && (
+            <div className="flex flex-col gap-2 px-3 py-2.5">
+              {showStatusMessage && (
+                <div className="remote-link-status-message flex items-center justify-between gap-3" aria-live="polite">
+                  <LinkStatus state={uiState === "failed" ? "failed" : "reconnecting"}>{t(STATUS_LABEL[uiState === "failed" ? "failed" : "reconnecting"])}</LinkStatus>
+                  <Button variant="outline" size="sm" onClick={retryFailedAction} disabled={busy !== null}>{t("link.retry")}</Button>
+                </div>
+              )}
+              {uiState === "joining" && <p className="m-0 text-[13px] text-fg-muted" aria-live="polite">{t("remoteLink.joining")}</p>}
+              {!sheetOpen && actionError && <LinkErrorNotice error={actionError} />}
+            </div>
+          )}
+        </section>
+      )}
       {(status?.role === "child" || statusRows.length > 0) && <FallbackPanel apiBase={apiBase} section="devices" readOnly={status?.role === "child"} />}
 
       <RemoteLinkSheet

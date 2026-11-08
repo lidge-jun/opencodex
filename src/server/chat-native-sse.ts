@@ -1,3 +1,5 @@
+import { normalizeNativeChatContent } from "../adapters/openai-chat/native-content";
+import type { OcxProviderConfig } from "../types";
 import { ownedChatErrorPayload, canonicalSseErrorBlock } from "../lib/client-error-body";
 import { legacyFailureVerdict, type FailureVerdictSink } from "../chat/failure-verdict";
 import { chatCompletionsErrorBody, type ChatCompletionsCollectorSource } from "../chat/outbound";
@@ -177,6 +179,7 @@ export function jsonCompletionSse(value: Rec, requestedModel: string, budget?: T
 }
 
 interface NativeChatSseOptions {
+  provider?: Pick<OcxProviderConfig, "adapter" | "authMode" | "baseUrl">;
   requestedModel: string;
   failureVerdictSink?: FailureVerdictSink;
   collectorSource?: ChatCompletionsCollectorSource;
@@ -370,7 +373,10 @@ export function nativeChatSse(
       fail(controller, "upstream returned an invalid SSE event", "upstream_sse_invalid");
       return;
     }
-    const error = structuredError(parsed);
+    const usage = usageFromChat(parsed.usage);
+    if (usage) options.onUsage(usage);
+    const chunk = normalizeNativeChatContent(parsed, options.provider);
+    const error = structuredError(chunk);
     if (error) {
       const status = error.status ?? 502;
       const classified = classifyError(status, error.type ?? "upstream_error", error.message);
@@ -390,14 +396,12 @@ export function nativeChatSse(
       controller.close();
       return;
     }
-    const usage = usageFromChat(parsed.usage);
-    options.onChunk?.(parsed);
-    if (usage) options.onUsage(usage);
-    if (options.clientDeclaredEmptyToolCatalog && !inspectToolCalls(parsed)) {
+    options.onChunk?.(chunk);
+    if (options.clientDeclaredEmptyToolCatalog && !inspectToolCalls(chunk)) {
       fail(controller, UNDECLARED_CHAT_TOOL_MESSAGE, UNDECLARED_TOOL_CALL_ERROR_CODE);
       return;
     }
-    const choices = Array.isArray(parsed.choices) ? parsed.choices : [];
+    const choices = Array.isArray(chunk.choices) ? chunk.choices : [];
     const finished = choices.some(choice => isRec(choice) && typeof choice.finish_reason === "string" && choice.finish_reason.length > 0);
     if (hasPendingToolName() && choices.some((choice, position) => isRec(choice)
       && typeof choice.finish_reason === "string" && choice.finish_reason.length > 0
@@ -436,16 +440,16 @@ export function nativeChatSse(
       firstOutput = true;
       options.onFirstOutput?.();
     }
-    if (eventName === "error" || parsed.type === "error") {
+    if (eventName === "error" || chunk.type === "error") {
       // These frames keep the ordinary relay's control flow; only client bytes change.
-      const flat = structuredError({ error: parsed })!;
+      const flat = structuredError({ error: chunk })!;
       const status = flat.status ?? 502;
       const payload = ownedChatErrorPayload({ status, type: flat.type, code: flat.code,
         evidence: { ...flat, status, code: flat.code ?? undefined } }).error;
-      options.collectorSource?.retain(JSON.stringify(payload), parsed);
+      options.collectorSource?.retain(JSON.stringify(payload), chunk);
       relay(controller, (eventName === "error" ? "event: error\n" : "") + canonicalSseErrorBlock(payload));
     } else {
-      const normalized = normalizedChunk(parsed, options.requestedModel);
+      const normalized = normalizedChunk(chunk, options.requestedModel);
       const choiceError = choices.some(choice => isRec(choice) && choice.error !== undefined && choice.error !== null);
       relay(controller, choiceError ? canonicalSseErrorBlock(normalizeChatChoiceErrors(normalized))
         : replaceSseDataPayload(block, JSON.stringify(normalized)) + delimiter);

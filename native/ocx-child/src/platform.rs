@@ -1,11 +1,99 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+#[cfg(unix)]
+use std::io::Read;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{Ordering, compiler_fence};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DirectoryIdentity {
+    pub volume: u64,
+    pub file_id: [u8; 16],
+}
+
+pub fn directory_identity(path: &Path) -> Result<DirectoryIdentity, String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let directory = File::open(path).map_err(|e| format!("cannot open directory: {e}"))?;
+        let metadata = directory
+            .metadata()
+            .map_err(|e| format!("cannot inspect directory: {e}"))?;
+        if !metadata.is_dir() {
+            return Err("expected a directory".to_owned());
+        }
+        let mut file_id = [0u8; 16];
+        file_id[..8].copy_from_slice(&metadata.ino().to_le_bytes());
+        Ok(DirectoryIdentity {
+            volume: metadata.dev(),
+            file_id,
+        })
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        use std::os::windows::io::AsRawHandle;
+        #[repr(C)]
+        struct FileIdInfo {
+            volume: u64,
+            file_id: [u8; 16],
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetFileInformationByHandleEx(
+                file: *mut std::ffi::c_void,
+                class: u32,
+                info: *mut std::ffi::c_void,
+                size: u32,
+            ) -> i32;
+        }
+        let directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(0x02000000 | 0x00200000)
+            .open(path)
+            .map_err(|e| format!("cannot open directory: {e}"))?;
+        let metadata = directory
+            .metadata()
+            .map_err(|e| format!("cannot inspect directory: {e}"))?;
+        if !metadata.is_dir() || metadata.file_attributes() & 0x400 != 0 {
+            return Err("expected a directory".to_owned());
+        }
+        let mut info = FileIdInfo {
+            volume: 0,
+            file_id: [0; 16],
+        };
+        // SAFETY: The open directory handle and output buffer remain valid for the call.
+        if unsafe {
+            GetFileInformationByHandleEx(
+                directory.as_raw_handle(),
+                18,
+                (&mut info as *mut FileIdInfo).cast(),
+                std::mem::size_of::<FileIdInfo>() as u32,
+            )
+        } == 0
+        {
+            return Err(format!(
+                "cannot inspect directory identity: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(DirectoryIdentity {
+            volume: info.volume,
+            file_id: info.file_id,
+        })
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        Err("directory identity is unavailable on this platform".to_owned())
+    }
+}
 
 /// Zeroes sensitive heap bytes on drop using volatile writes so the compiler cannot elide scrubbing.
 pub struct SecretBytes(Vec<u8>);
@@ -159,7 +247,6 @@ unsafe extern "system" {
         inherit_handle: i32,
         process_id: u32,
     ) -> *mut std::ffi::c_void;
-    fn TerminateProcess(process: *mut std::ffi::c_void, exit_code: u32) -> i32;
     fn WaitForSingleObject(handle: *mut std::ffi::c_void, milliseconds: u32) -> u32;
     fn CloseHandle(object: *mut std::ffi::c_void) -> i32;
 }
@@ -234,7 +321,9 @@ pub fn reject_symlink(path: &Path) -> Result<(), String> {
 #[cfg(windows)]
 mod windows_private_acl {
     use std::ffi::c_void;
+    use std::fs::File;
     use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::FromRawHandle;
     use std::path::Path;
     use std::ptr;
 
@@ -261,6 +350,24 @@ mod windows_private_acl {
         kind: u8,
         flags: u8,
         size: u16,
+    }
+
+    #[repr(C)]
+    struct SecurityDescriptor {
+        revision: u8,
+        reserved: u8,
+        control: u16,
+        owner: Ptr,
+        group: Ptr,
+        sacl: Ptr,
+        dacl: Ptr,
+    }
+
+    #[repr(C)]
+    struct SecurityAttributes {
+        length: u32,
+        descriptor: Ptr,
+        inherit_handle: i32,
     }
 
     #[link(name = "advapi32")]
@@ -317,6 +424,14 @@ mod windows_private_acl {
         fn IsValidAcl(acl: *mut Acl) -> i32;
         fn GetAce(acl: *mut Acl, index: u32, ace: *mut Ptr) -> i32;
         fn GetLengthSid(sid: Ptr) -> u32;
+        fn InitializeSecurityDescriptor(descriptor: Ptr, revision: u32) -> i32;
+        fn SetSecurityDescriptorDacl(
+            descriptor: Ptr,
+            present: i32,
+            dacl: *mut Acl,
+            defaulted: i32,
+        ) -> i32;
+        fn SetSecurityDescriptorControl(descriptor: Ptr, mask: u16, control: u16) -> i32;
     }
 
     #[link(name = "kernel32")]
@@ -324,6 +439,15 @@ mod windows_private_acl {
         fn GetCurrentProcess() -> Ptr;
         fn CloseHandle(handle: Ptr) -> i32;
         fn LocalFree(memory: Ptr) -> Ptr;
+        fn CreateFileW(
+            name: *const u16,
+            access: u32,
+            share: u32,
+            attributes: *mut SecurityAttributes,
+            disposition: u32,
+            flags: u32,
+            template: Ptr,
+        ) -> Ptr;
     }
 
     struct Local(Ptr);
@@ -397,15 +521,21 @@ mod windows_private_acl {
         Ok(sid)
     }
 
-    pub fn harden_and_verify(path: &Path, directory: bool) -> Result<(), String> {
+    fn private_acl(
+        directory: bool,
+    ) -> Result<(Vec<usize>, [u32; 17], [u32; 17], Vec<u32>), String> {
         let user = current_user_sid()?;
         let mut system = well_known_sid(22)?;
         let mut admins = well_known_sid(26)?;
-        let sids: [Ptr; 3] = [
-            user[0] as Ptr,
-            system.as_mut_ptr().cast(),
-            admins.as_mut_ptr().cast(),
-        ];
+        let sids: Vec<Ptr> = if directory {
+            vec![
+                user[0] as Ptr,
+                system.as_mut_ptr().cast(),
+                admins.as_mut_ptr().cast(),
+            ]
+        } else {
+            vec![user[0] as Ptr]
+        };
         // SAFETY: All 3 SIDs were validated by `IsValidSid` / `CreateWellKnownSid`.
         let acl_bytes = std::mem::size_of::<Acl>() as u32
             + sids
@@ -431,6 +561,12 @@ mod windows_private_acl {
                 return Err("private-acl-unsafe: AddAccessAllowedAceEx failed".to_owned());
             }
         }
+        Ok((user, system, admins, acl_buf))
+    }
+
+    pub fn harden_and_verify(path: &Path, directory: bool) -> Result<(), String> {
+        let (user, mut system, mut admins, mut acl_buf) = private_acl(directory)?;
+        let acl_ptr = acl_buf.as_mut_ptr().cast::<Acl>();
         let mut wname = wide_nul(path)?;
         // SAFETY: Applies protected DACL to `wname`.
         if unsafe {
@@ -451,6 +587,58 @@ mod windows_private_acl {
             ));
         }
         verify(path, directory, &user, &mut system, &mut admins)
+    }
+
+    /// Create an exclusive file with its protected DACL installed by the kernel at creation.
+    pub fn create_private_file(path: &Path) -> Result<File, String> {
+        let (user, mut system, mut admins, mut acl_buf) = private_acl(false)?;
+        let mut descriptor = SecurityDescriptor {
+            revision: 0,
+            reserved: 0,
+            control: 0,
+            owner: ptr::null_mut(),
+            group: ptr::null_mut(),
+            sacl: ptr::null_mut(),
+            dacl: ptr::null_mut(),
+        };
+        let descriptor_ptr = (&mut descriptor as *mut SecurityDescriptor).cast::<c_void>();
+        // SAFETY: The descriptor and ACL are initialized, aligned and live through CreateFileW.
+        if unsafe { InitializeSecurityDescriptor(descriptor_ptr, 1) } == 0
+            || unsafe {
+                SetSecurityDescriptorDacl(descriptor_ptr, 1, acl_buf.as_mut_ptr().cast(), 0)
+            } == 0
+            || unsafe { SetSecurityDescriptorControl(descriptor_ptr, 0x1000, 0x1000) } == 0
+        {
+            return Err("private-acl-unsafe: security descriptor initialization failed".to_owned());
+        }
+        let mut attributes = SecurityAttributes {
+            length: std::mem::size_of::<SecurityAttributes>() as u32,
+            descriptor: descriptor_ptr,
+            inherit_handle: 0,
+        };
+        let wname = wide_nul(path)?;
+        // SAFETY: The path and security attributes stay live for the call; CREATE_NEW cannot replace a file.
+        let handle = unsafe {
+            CreateFileW(
+                wname.as_ptr(),
+                0x40000000,
+                0x00000007,
+                &mut attributes,
+                1,
+                0x00000080,
+                ptr::null_mut(),
+            )
+        };
+        if handle == (-1isize as Ptr) {
+            return Err(format!(
+                "private-acl-unsafe: create failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: CreateFileW returned a newly owned file handle.
+        let file = unsafe { File::from_raw_handle(handle) };
+        verify(path, false, &user, &mut system, &mut admins)?;
+        Ok(file)
     }
 
     fn verify(
@@ -495,7 +683,7 @@ mod windows_private_acl {
                 && IsValidSid(owner) != 0
                 && (EqualSid(owner, user[0] as Ptr) != 0
                     || EqualSid(owner, admins.as_mut_ptr().cast()) != 0)
-                && (!root || control & 0x1000 != 0)
+                && control & 0x1000 != 0
         };
         if !ok {
             return Err("private-acl-unsafe: DACL header/owner verification failed".to_owned());
@@ -538,6 +726,57 @@ mod windows_private_acl {
         }
         Ok(())
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::fs;
+        use std::io::Write;
+        use std::process::Command;
+
+        #[test]
+        fn regular_replacement_is_private_under_a_permissive_parent() {
+            struct Scratch(std::path::PathBuf);
+            impl Drop for Scratch {
+                fn drop(&mut self) {
+                    let _ = fs::remove_dir_all(&self.0);
+                }
+            }
+
+            let root = std::env::temp_dir().join(format!(
+                "ocx-child-acl-{}-{}",
+                std::process::id(),
+                crate::platform::random_hex(6).unwrap()
+            ));
+            fs::create_dir(&root).unwrap();
+            let _scratch = Scratch(root.clone());
+            let grant = Command::new("icacls")
+                .arg(&root)
+                .args(["/grant", "*S-1-1-0:(OI)(CI)F"])
+                .output()
+                .unwrap();
+            assert!(
+                grant.status.success(),
+                "could not make fixture parent permissive"
+            );
+            let config = root.join("config.toml");
+            fs::write(&config, b"original").unwrap();
+            harden_and_verify(&config, false).unwrap();
+
+            let temp = root.join("new-private.tmp");
+            let mut created = create_private_file(&temp).unwrap();
+            let user = current_user_sid().unwrap();
+            let mut system = well_known_sid(22).unwrap();
+            let mut admins = well_known_sid(26).unwrap();
+            verify(&temp, false, &user, &mut system, &mut admins).unwrap();
+            created.write_all(b"fixture").unwrap();
+            drop(created);
+
+            crate::platform::write_regular_atomic(&config, b"replacement").unwrap();
+            verify(&config, false, &user, &mut system, &mut admins).unwrap();
+            assert_eq!(fs::read(config).unwrap(), b"replacement");
+        }
+    }
 }
 
 pub fn ensure_private_dir(dir: &Path) -> Result<(), String> {
@@ -570,6 +809,15 @@ pub fn ensure_private_dir(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(unix)]
+pub(crate) fn sync_parent_directory(parent: &Path) -> Result<(), String> {
+    let directory =
+        File::open(parent).map_err(|e| format!("failed to open parent directory: {e}"))?;
+    directory
+        .sync_all()
+        .map_err(|e| format!("failed to sync parent directory: {e}"))
+}
+
 pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path
         .parent()
@@ -579,22 +827,20 @@ pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let nonce = random_hex(8)?;
     let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("state");
     let tmp = parent.join(format!(".{file_name}.tmp.{}.{nonce}", std::process::id()));
-    let mut opts = OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let mut f = opts
-        .open(&tmp)
-        .map_err(|e| format!("failed to create temp file {}: {e}", tmp.display()))?;
     #[cfg(windows)]
-    if let Err(e) = windows_private_acl::harden_and_verify(&tmp, false) {
-        drop(f);
-        let _ = fs::remove_file(&tmp);
-        return Err(e);
-    }
+    let mut f = windows_private_acl::create_private_file(&tmp)?;
+    #[cfg(not(windows))]
+    let mut f = {
+        let mut opts = OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        opts.open(&tmp)
+            .map_err(|e| format!("failed to create temp file {}: {e}", tmp.display()))?
+    };
     if let Err(e) = f.write_all(bytes).and_then(|()| f.sync_all()) {
         let _ = fs::remove_file(&tmp);
         return Err(format!("failed writing {}: {e}", tmp.display()));
@@ -608,6 +854,8 @@ pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
             path.display()
         ));
     }
+    #[cfg(unix)]
+    sync_parent_directory(parent)?;
     Ok(())
 }
 
@@ -629,16 +877,20 @@ pub fn write_regular_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
         ".{file_name}.ocx-child.tmp.{}.{nonce}",
         std::process::id()
     ));
-    let mut opts = OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(preserved_mode.unwrap_or(0o600));
-    }
-    let mut f = opts
-        .open(&tmp)
-        .map_err(|e| format!("failed to create temp file {}: {e}", tmp.display()))?;
+    #[cfg(windows)]
+    let mut f = windows_private_acl::create_private_file(&tmp)?;
+    #[cfg(not(windows))]
+    let mut f = {
+        let mut opts = OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(preserved_mode.unwrap_or(0o600));
+        }
+        opts.open(&tmp)
+            .map_err(|e| format!("failed to create temp file {}: {e}", tmp.display()))?
+    };
     if let Err(e) = f.write_all(bytes).and_then(|()| f.sync_all()) {
         let _ = fs::remove_file(&tmp);
         return Err(format!("failed writing {}: {e}", tmp.display()));
@@ -652,6 +904,8 @@ pub fn write_regular_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
             path.display()
         ));
     }
+    #[cfg(unix)]
+    sync_parent_directory(parent)?;
     Ok(())
 }
 
@@ -667,16 +921,30 @@ pub enum LockAcquireError {
 
 impl FileLock {
     pub fn try_acquire_nonblocking(path: &Path) -> Result<Self, LockAcquireError> {
-        Self::acquire_inner(path, false)
+        Self::acquire_inner(path, false, true)
     }
 
     pub fn acquire_blocking(path: &Path) -> Result<Self, LockAcquireError> {
-        Self::acquire_inner(path, true)
+        Self::acquire_inner(path, true, true)
     }
 
-    fn acquire_inner(path: &Path, blocking: bool) -> Result<Self, LockAcquireError> {
+    /// Lock a file inside a directory the caller does not own (such as `CODEX_HOME`), leaving
+    /// the directory's permissions untouched. The lock file itself is created private.
+    pub fn acquire_in_existing_dir(path: &Path, blocking: bool) -> Result<Self, LockAcquireError> {
+        Self::acquire_inner(path, blocking, false)
+    }
+
+    fn acquire_inner(
+        path: &Path,
+        blocking: bool,
+        harden_parent: bool,
+    ) -> Result<Self, LockAcquireError> {
         let parent = path.parent().ok_or(LockAcquireError::Io)?;
-        ensure_private_dir(parent).map_err(|_| LockAcquireError::Io)?;
+        if harden_parent {
+            ensure_private_dir(parent).map_err(|_| LockAcquireError::Io)?;
+        } else if !fs::symlink_metadata(parent).is_ok_and(|m| m.is_dir()) {
+            return Err(LockAcquireError::Io);
+        }
         reject_symlink(path).map_err(|_| LockAcquireError::Io)?;
         #[cfg(windows)]
         let existed = path.exists();
@@ -757,20 +1025,26 @@ impl Drop for FileLock {
     }
 }
 
+/// Spawn `serve --foreground --lifecycle-start` and write `start_line` to its stdin, which
+/// stays open: the caller later writes the commit line or drops it to make the child exit.
 pub fn spawn_detached_serve(
     exe: &Path,
     opencodex_home: &Path,
     codex_home: &Path,
     listen_port: u16,
-) -> Result<u32, String> {
+    start_line: &str,
+) -> Result<std::process::Child, String> {
     let mut cmd = Command::new(exe);
     cmd.arg("serve")
         .arg("--foreground")
+        .arg("--lifecycle-start")
         .arg("--listen-port")
         .arg(listen_port.to_string())
         .env("OPENCODEX_HOME", opencodex_home)
         .env("CODEX_HOME", codex_home)
-        .stdin(Stdio::null())
+        .env_remove(crate::test_hooks::BARRIER_DIR_ENV)
+        .env_remove(crate::test_hooks::BARRIERS_ENV)
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
@@ -794,10 +1068,22 @@ pub fn spawn_detached_serve(
         cmd.creation_flags(CREATE_BREAKAWAY_FROM_JOB | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
 
-    let child = cmd
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to spawn detached ocx-child serve: {e}"))?;
-    Ok(child.id())
+    let write_result = match child.stdin.as_mut() {
+        Some(stdin) => stdin
+            .write_all(start_line.as_bytes())
+            .and_then(|()| stdin.flush()),
+        None => Err(std::io::Error::other("missing child stdin")),
+    };
+    if let Err(e) = write_result {
+        let cleanup = child.kill().and_then(|()| child.wait().map(|_| ()));
+        return Err(format!(
+            "failed to authorize spawned child: {e}; cleanup: {cleanup:?}"
+        ));
+    }
+    Ok(child)
 }
 
 pub fn process_is_alive(pid: u32) -> bool {
@@ -826,31 +1112,6 @@ pub fn process_is_alive(pid: u32) -> bool {
             let state = WaitForSingleObject(h, 0);
             CloseHandle(h);
             state == WAIT_TIMEOUT
-        }
-    }
-}
-
-pub fn force_terminate_pid(pid: u32, hard_kill: bool) {
-    if pid == 0 {
-        return;
-    }
-    #[cfg(unix)]
-    {
-        let sig = if hard_kill { 9 } else { 15 };
-        // SAFETY: Caller verified PID ownership via `/healthz` before invoking termination.
-        let _ = unsafe { kill(pid as i32, sig) };
-    }
-    #[cfg(windows)]
-    {
-        let _ = hard_kill;
-        const PROCESS_TERMINATE: u32 = 0x0001;
-        // SAFETY: Caller verified PID ownership before invoking TerminateProcess.
-        unsafe {
-            let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
-            if !h.is_null() {
-                let _ = TerminateProcess(h, 1);
-                CloseHandle(h);
-            }
         }
     }
 }
@@ -907,7 +1168,11 @@ pub fn is_managed_plant_executable(
         return Ok(false);
     };
     reject_symlink(parent)?;
-    let expected_name = if cfg!(windows) { "ocx-child.exe" } else { "ocx-child" };
+    let expected_name = if cfg!(windows) {
+        "ocx-child.exe"
+    } else {
+        "ocx-child"
+    };
     if exe_path.file_name().and_then(|n| n.to_str()) != Some(expected_name) {
         return Ok(false);
     }
@@ -936,8 +1201,12 @@ pub fn purge_managed_executable(
     }
     #[cfg(unix)]
     {
-        fs::remove_file(exe_path)
-            .map_err(|e| format!("failed removing planted ocx-child {}: {e}", exe_path.display()))?;
+        fs::remove_file(exe_path).map_err(|e| {
+            format!(
+                "failed removing planted ocx-child {}: {e}",
+                exe_path.display()
+            )
+        })?;
         let _ = exe_path.parent().map(fs::remove_dir);
         let _ = exe_path.parent().and_then(Path::parent).map(fs::remove_dir);
         Ok(PurgeExecutableOutcome::Removed)
@@ -947,13 +1216,19 @@ pub fn purge_managed_executable(
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         const DETACHED_PROCESS: u32 = 0x0000_0008;
-        let parent = exe_path.parent().ok_or_else(|| "missing parent".to_owned())?;
+        let parent = exe_path
+            .parent()
+            .ok_or_else(|| "missing parent".to_owned())?;
         let trashed = parent.join(format!(".ocx-child.purge.{}.old", std::process::id()));
         let _ = fs::remove_file(&trashed);
         fs::rename(exe_path, &trashed)
             .map_err(|e| format!("failed renaming planted ocx-child for purge: {e}"))?;
         let _ = Command::new("cmd.exe")
-            .args(["/d", "/c", "ping -n 2 127.0.0.1 >nul & del /f /q \"%OCX_PURGE_TARGET%\""])
+            .args([
+                "/d",
+                "/c",
+                "ping -n 2 127.0.0.1 >nul & del /f /q \"%OCX_PURGE_TARGET%\"",
+            ])
             .env("OCX_PURGE_TARGET", &trashed)
             .stdin(Stdio::null())
             .stdout(Stdio::null())

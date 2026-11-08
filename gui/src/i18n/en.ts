@@ -1,4 +1,13 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 // English — source of truth. Its keys define the TKey type; de/fr/ko/zh/zh-TW/ru/ja/tr must match (compile-checked).
 // Strings with {cmd} render a <code> chip via <Trans>; {var} are plain interpolations.
 /**
@@ -123,6 +132,15 @@ export const en = {
   "workflowBudget.saveFailed": "Could not save workflow limits.",
   "workflowBudget.saved": "Workflow limits saved.",
   ...desktopCompatibilityCopy("en"),
+  ...shellV2Copy("en"),
+  ...modelsV2Copy("en"),
+  ...accountsV2Copy("en"),
+  ...subagentsV2Copy("en"),
+  ...usageV2Copy("en"),
+  ...logsV2Copy("en"),
+  ...connectV2Copy("en"),
+  ...startupV2Copy("en"),
+  ...proxyV2Copy("en"),
   "claude.tierDefaults.unset": "Unset (keep existing Claude setting)",
   "claude.tierDefaults.recovery": "Apply stopped and automatic restore failed. Check the backup below before retrying.",
   "claude.tierDefaults.title": "CLI tier defaults",
@@ -331,6 +349,9 @@ export const en = {
   "common.remove": "Remove",
   "common.loading": "Loading…",
   "common.retry": "Retry",
+  "prov.affinityResetPending": "The account change was saved, but conversation routing could not finish updating. Retry to finish.",
+  "prov.affinityResetComplete": "Conversation routing has been updated.",
+  "prov.affinityResetRetryUnavailable": "This account is unavailable for retry. Refresh the account list and, if needed, resume the account or sign in again.",
   "common.undo": "Undo",
   "auth.adminTokenTitle": "OpenCodex admin token (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "Account",
@@ -487,6 +508,11 @@ export const en = {
   "startup.viable": "Ready",
   "startup.unhealthy": "Installed but unhealthy",
   "startup.desktopLoginUnverified": "Running · Start at Login not verified",
+  "startup.loginUnverifiedTitle": "Start at Login not verified",
+  "startup.unverified": "Not verified",
+  "startup.loginUnverifiedAction": "Check Start at Login in the OpenCodex menu. On Linux without a tray, inspect ~/.config/autostart/OpenCodex.desktop.",
+  "startup.loginDisabled": "Running · Start at Login off",
+  "startup.desktopRunning": "OpenCodex Desktop runs this proxy.",
   "startup.conflict": "Service conflict",
   "startup.installedDisabled": "Installed but disabled",
   "startup.shimActivationPending": "Installed · activation not confirmed",
@@ -836,6 +862,8 @@ export const en = {
   "subagentSurface.learnMore": "Why this fails",
   "prov.logoutOk": "Logged out of {provider}.",
   "prov.logoutFail": "Could not log out of {provider}. Your account state is unchanged.",
+  "prov.logoutBusy": "An account change is in progress. Wait for it to finish, then try logging out again.",
+  "prov.accountRemoveUnverified": "Could not verify whether {email} was removed. Refresh the account list before retrying.",
   "prov.removed": "Removed \"{name}\".",
   "prov.removedDefault": "Removed \"{name}\". Default provider is now \"{defaultProvider}\".",
   "prov.removedShadowTarget": "Removed \"{name}\". Shadow Call Intercept still targets \"{model}\", so helper calls will fail until you choose another target.",
@@ -2142,6 +2170,13 @@ export const en = {
   "modal.localHint": "No API key is stored. This adds Cursor's static public model catalog for Codex, but live Cursor transport and native file/shell execution remain disabled until audited.",
   "modal.getApiKey": "Get your {label} API key",
   "modal.apiKey": "API key",
+  "modal.vertexProject": "Project ID (optional)",
+  "modal.vertexStaticHint": "Uses the configured model list; the connection test does not verify Vertex credentials.",
+  "modal.vertexLocation": "Location (optional)",
+  "pws.vertexUnverified": "Credentials unverified",
+  "pws.vertexSavedUnverified": "Saved — proxy credentials unverified",
+  "pws.vertexHostAuth": "Host credentials or API key",
+  "modal.vertexAdcHint": "Leave the API key empty to use Application Default Credentials on the proxy host when GOOGLE_CLOUD_API_KEY is unset. Project and location can also come from the proxy environment.",
   "modal.apiKeyTransport": "API key header",
   "modal.apiKeyTransportNative": "x-api-key (Anthropic native)",
   "modal.apiKeyTransportBearer": "Authorization: Bearer",
@@ -2154,7 +2189,7 @@ export const en = {
   "modal.useOauthLogin": "← Use OAuth login",
 "nav.codexAuth": "Codex Auth",
   "nav.codexSet": "Codex",
-  "nav.connect": "Connect",
+  "nav.connect": "Route",
   "nav.usageLogs": "Usage & Logs",
   "nav.sectionNavigation": "Section pages",
   "codexSet.tab.multiauth": "Multi-auth",
@@ -3538,7 +3573,7 @@ export const en = {
   "cws.attention.catalogOmitted": "Missing from the model catalog — member capabilities are incomplete or incompatible (missing context window / metadata, or empty modality intersection). Routing by alias still works",
   "cws.attention.allTargetsExhausted": "All enabled targets are out of quota",
   "cws.emptyTitle": "Create your first combo",
-  "cws.empty.createDesc": "Name a virtual model and chain two or more backends.",
+  "cws.empty.createDesc": "Add at least one target; use two or more for failover.",
   "cws.backToAll": "Back to all combos",
   "cws.allCombos": "All combos",
   "cws.copyModel": "Copy id",
@@ -3902,6 +3937,7 @@ export const en = {
   "models.aliasStale": "stale",
   "connection.discovering": "Discovering local and shared targets…",
   "connection.machineUnavailable": "The local machine plane is unavailable. Shared requests were not redirected locally.",
+  "connection.clientStateChanged": "This Child's saved Remote Link connection is missing or now names another owner or link, so it no longer matches the running Child. Stop or restart this Child and check its connection before linking it again.",
   "connection.linkManaged": "Managed by Home {home} over Remote Link ({linkId}). This dashboard shows the Home's settings and quota read-only; make changes on the Home.",
   "connection.linkManagedUnnamed": "Managed by its Home over Remote Link ({linkId}). This dashboard shows the Home's settings and quota read-only; make changes on the Home.",
   "connection.disconnect": "Disconnect from hub",
@@ -4238,6 +4274,7 @@ export const en = {
   "quotaSummary.warn": "70%+ used",
   "quotaSummary.critical": "90%+ used",
   "quotaSummary.credits": "Credits",
+  "quotaSummary.creditsUnavailable": "Unavailable credits",
   "quotaSummary.refreshFailed": "Last refresh failed; showing the previous reading",
   "quotaSummary.scrollPrev": "Scroll providers left",
   "quotaSummary.scrollNext": "Scroll providers right",

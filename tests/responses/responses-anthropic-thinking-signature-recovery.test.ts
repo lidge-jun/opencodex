@@ -11,6 +11,7 @@ import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning
 import { resetThoughtSignatureReplayForTests } from "../../src/responses/thought-signature-replay";
 import * as thoughtSignatureReplay from "../../src/responses/thought-signature-replay";
 import * as pacing from "../../src/providers/request-pacing";
+import * as proxyEnv from "../../src/lib/proxy-env";
 import { saveCredential, getAccountSet, setActiveAccount } from "../../src/oauth/store";
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
 import { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY } from "../../src/lib/spend-reservation-ledger";
@@ -31,11 +32,16 @@ const REDACTED = "synthetic-redacted-thinking";
 const REJECTION = "Invalid `signature` in `thinking` block. The block is bound to a different conversation. Remove the thinking block and retry.";
 let testDir = "";
 let releaseSpendHome: (() => void) | undefined;
+let configuredFetch: ReturnType<typeof spyOn> | undefined;
 
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-anthropic-thinking-recovery-"));
   process.env.OPENCODEX_HOME = testDir;
   releaseSpendHome = acquireOwnedSpendHome();
+  globalThis.fetch = (() => { throw new Error("No active in-memory thinking-recovery fixture"); }) as typeof fetch;
+  // Media and OAuth helpers may select SOCKS before reaching global fetch. Keep every
+  // configured transport inside the same memory fixture, with no native fallback.
+  configuredFetch = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init) => globalThis.fetch(input, init));
   clearReasoningReplayCacheForTests();
   resetThoughtSignatureReplayForTests();
   resetWorkflowBudgetsForTest();
@@ -48,6 +54,7 @@ beforeEach(() => {
 afterEach(() => {
   try { releaseSpendHome?.(); } finally {
     releaseSpendHome = undefined;
+    configuredFetch?.mockRestore(); configuredFetch = undefined;
     globalThis.fetch = originalFetch;
     clearReasoningReplayCacheForTests();
     resetThoughtSignatureReplayForTests();
@@ -466,13 +473,14 @@ describe("Anthropic thinking-signature recovery through Responses dispatch", () 
     test(`the shared send budget can deny recovery (initialStreamError=${initialStreamError})`, async () => {
       const bodies = fakeUpstream(index => index === 1
         ? initialStreamError ? streamRejection() : rejection() : success(initialStreamError));
+      // The initial physical send consumes the sole slot; the repair must be refused.
       const budget = createRequestExecutionBudget({
-        maxTotalModelSends: 0, baseSendAllowance: 0, finalRecoveryAllowance: 0,
+        maxTotalModelSends: 1, baseSendAllowance: 1, finalRecoveryAllowance: 0,
         maxAlternateTargetSends: 0, maxTargetTransitions: 0,
       }, "thinking-recovery-budget-refused");
       await send(initialStreamError, undefined, { sendBudget: budget });
       expect(bodies).toHaveLength(1);
-      expect(budget.used).toBe(0);
+      expect(budget.used).toBe(1);
       await send(initialStreamError);
       expect(bodies).toHaveLength(2);
       expect(bodies[1]).toContain(SIGNATURE);

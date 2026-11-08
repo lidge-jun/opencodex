@@ -2,14 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { IconRefresh } from "../icons";
 import { type TFn, useI18n } from "../i18n/shared";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
-import { Notice } from "../ui";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
+import { Button } from "@/components/ui-v2/button";
+import { cn } from "@/lib/utils";
+import { Banner, CopyButton, PageHeader } from "../components/v2-startup/primitives";
+import { startupPresentation } from "../startup-health-ui";
 import {
-  StartupDetailsSection,
   StartupHeroSection,
+  StartupOptionsSection,
   StartupRecoverySection,
-  StartupTraySection,
+  StartupTrayCard,
 } from "./startup-sections";
 import {
   isTrayStatusData,
@@ -249,6 +252,7 @@ export default function Startup({ apiBase, machineApiBase = apiBase, connected =
   // warm revisits where `data` is already seeded from session cache.
   const loading = loadState.refreshing;
   const failed = Boolean(data?.diagnosticStale) || loadState.showError;
+  const unverified = data !== null && startupPresentation(data, failed) === "unverified";
 
   useEffect(() => {
     if (!data?.diagnosticStale) return;
@@ -315,84 +319,75 @@ export default function Startup({ apiBase, machineApiBase = apiBase, connected =
   };
 
   return (
-    <>
-      <div className="page-head">
-        <h2>{t("startup.title")}</h2>
-        {/* The back button duplicated the sidebar; the explanatory sentence moved into the hero. */}
-        <div className="startup-page-head-actions">
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => refresh()} disabled={loading}>
-            <IconRefresh /> {t("startup.refresh")}
-          </button>
-        </div>
-      </div>
+    <div className="startup-page flex min-w-0 flex-col gap-5 font-sans text-fg">
+      {/* The back button duplicated the sidebar; the explanatory sentence lives behind the hero's "?". */}
+      <PageHeader title={t("startup.title")} actions={(
+        <Button variant="ghost" size="sm" onClick={() => refresh()} disabled={loading}>
+          <IconRefresh /> {t("startup.refresh")}
+        </Button>
+      )} />
 
       {connected && (
-        <section className="notice startup-page-notice" aria-label={t("connection.machine.title")}>
-          <strong>{t("connection.machine.title")}</strong>
-          <span>{machineShim?.healthy ? t("connection.machine.shimHealthy") : t("connection.machine.shimNeedsAttention")}</span>
-          <div className="startup-page-head-actions">
-            <button type="button" className="btn btn-ghost btn-sm" disabled={machineBusy} onClick={() => void runMachineShim("repair")}>{t("connection.machine.repairShim")}</button>
-            {machineShim?.installed && <button type="button" className="btn btn-ghost btn-sm" disabled={machineBusy} onClick={() => void runMachineShim("uninstall")}>{t("connection.machine.removeShim")}</button>}
-          </div>
-        </section>
+        <Banner tone={machineShim?.healthy ? "ok" : "warn"} className="startup-machine" action={(
+          <>
+            <Button variant="outline" size="sm" disabled={machineBusy} onClick={() => void runMachineShim("repair")}>{t("connection.machine.repairShim")}</Button>
+            {machineShim?.installed && <Button variant="ghost" size="sm" disabled={machineBusy} onClick={() => void runMachineShim("uninstall")}>{t("connection.machine.removeShim")}</Button>}
+          </>
+        )}>
+          <strong className="font-semibold">{t("connection.machine.title")}</strong>{" "}
+          <span className="text-fg-muted">{machineShim?.healthy ? t("connection.machine.shimHealthy") : t("connection.machine.shimNeedsAttention")}</span>
+        </Banner>
       )}
 
       {loadState.showSkeleton && !data ? (
         <DataSurfaceSkeleton label={t("startup.loading")} rows={5} />
       ) : loadState.kind === "failed-cold" ? (
-        <div className="startup-page-notice">
-          <Notice tone="err">{loadState.error instanceof Error ? loadState.error.message : t("startup.error")}</Notice>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => refresh()}>{t("common.retry")}</button>
-        </div>
+        <Banner tone="err" action={<Button variant="outline" size="sm" onClick={() => refresh()}>{t("common.retry")}</Button>}>
+          {loadState.error instanceof Error ? loadState.error.message : t("startup.error")}
+        </Banner>
       ) : data ? (
         <>
-          {loadState.showError && <Notice tone="err">{t("startup.error")}</Notice>}
-          {failed && (
-            <div className="notice notice-warn startup-page-notice" role="alert">
-              {t("startup.staleData")}
-            </div>
-          )}
+          {loadState.showError && !unverified && <Banner tone="err">{t("startup.error")}</Banner>}
+          {failed && !unverified && <Banner tone="warn" role="alert">{t("startup.staleData")}</Banner>}
           {(runtimeNoticePending || codexRuntimeWarning) && (
             <div
-              className={`startup-runtime-notice-slot${runtimeNoticePending && !codexRuntimeWarning ? " startup-runtime-notice-slot--pending" : ""}`}
+              className={cn("startup-runtime-slot", runtimeNoticePending && !codexRuntimeWarning && "min-h-[60px]")}
               aria-hidden={runtimeNoticePending && !codexRuntimeWarning ? true : undefined}
             >
               {codexRuntimeWarning && (
-                <div className="notice notice-warn startup-page-notice startup-runtime-notice" role="status">
-                  <p className="startup-runtime-notice__text">{codexRuntimeWarning}</p>
+                <Banner tone="warn" className="startup-runtime-notice">
+                  <p className="m-0">{codexRuntimeWarning}</p>
                   {codexRuntimeFix && (
-                    <div className="startup-runtime-notice__fix">
-                      <code>{codexRuntimeFix}</code>
-                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => void copyCommand(codexRuntimeFix)}>
-                        {copied === codexRuntimeFix ? t("startup.copied") : t("startup.copy")}
-                      </button>
+                    <div className="mt-2 flex items-center gap-2 rounded-[8px] bg-bg py-1 pr-1 pl-3 ring-1 ring-line">
+                      <code className="min-w-0 flex-1 font-mono text-[12.5px] text-fg-muted [overflow-wrap:anywhere]">{codexRuntimeFix}</code>
+                      <CopyButton copied={copied === codexRuntimeFix} onCopy={() => void copyCommand(codexRuntimeFix)} />
                     </div>
                   )}
-                </div>
+                </Banner>
               )}
             </div>
           )}
           <StartupHeroSection failed={failed} data={data} />
-          <StartupDetailsSection
+          <StartupOptionsSection
             data={data}
             failed={failed}
             loading={loading}
             installBusy={installBusy}
             installResult={installResult}
             onInstall={(action, opts) => { void runInstallAction(action, opts); }}
+            tray={data.platform === "win32" ? (
+              <StartupTrayCard
+                tray={tray}
+                trayLoading={trayLoading}
+                trayError={trayError}
+                trayBusy={trayBusy}
+                onTrayAction={(action) => { void runTrayAction(action); }}
+              />
+            ) : null}
           />
-          {data.platform === "win32" && (
-            <StartupTraySection
-              tray={tray}
-              trayLoading={trayLoading}
-              trayError={trayError}
-              trayBusy={trayBusy}
-              onTrayAction={(action) => { void runTrayAction(action); }}
-            />
-          )}
           <StartupRecoverySection data={data} copied={copied} onCopy={(command) => { void copyCommand(command); }} />
         </>
       ) : null}
-    </>
+    </div>
   );
 }
