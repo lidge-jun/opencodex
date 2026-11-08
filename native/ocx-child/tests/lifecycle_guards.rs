@@ -892,3 +892,45 @@ fn control_connections_that_trickle_their_request_head_are_cut_off() {
     );
     drop(idle);
 }
+
+#[cfg(unix)]
+#[test]
+fn lock_open_refuses_a_symlink_swapped_in_after_the_symlink_check() {
+    let scratch = Scratch::new("lock-symlink");
+    let ocx = scratch.0.join("ocx");
+    let codex = scratch.0.join("codex");
+    fs::create_dir_all(&ocx).unwrap();
+    fs::create_dir_all(&codex).unwrap();
+    let lock = ocx.join("child").join("lifecycle.lock");
+    let target = scratch.0.join("outside-target");
+    let barrier = Barrier::new(&scratch.0, "lock-open");
+    let mut cmd = child_command(&ocx, &codex, distinct_port(&[]), &["detach"]);
+    cmd.stdin(Stdio::null());
+    barrier.apply(&mut cmd, "lock-before-open");
+    let child = cmd.spawn().unwrap();
+    assert!(
+        barrier.wait_reached("lock-before-open", Duration::from_secs(20)),
+        "detach never reached the lock open"
+    );
+    let _ = fs::remove_file(&lock);
+    std::os::unix::fs::symlink(&target, &lock).unwrap();
+    barrier.release("lock-before-open");
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        !target.exists(),
+        "the lock open followed a symlink and created {}: {}",
+        target.display(),
+        text(&out)
+    );
+    assert!(
+        !out.status.success(),
+        "detach ran without its lock: {}",
+        text(&out)
+    );
+    assert!(
+        fs::symlink_metadata(&lock)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}

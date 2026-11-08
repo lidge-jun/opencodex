@@ -298,6 +298,43 @@ pub fn random_hex(byte_len: usize) -> Result<String, String> {
     Ok(hex_encode(&buf))
 }
 
+/// `O_NOFOLLOW` for the open(2) flags of this target, from the libc crate's definitions.
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+))]
+const O_NOFOLLOW: i32 = 0x0100;
+#[cfg(all(
+    any(target_os = "linux", target_os = "android"),
+    any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "powerpc",
+        target_arch = "powerpc64",
+        target_arch = "m68k"
+    )
+))]
+const O_NOFOLLOW: i32 = 0x8000;
+#[cfg(any(
+    all(
+        any(target_os = "linux", target_os = "android"),
+        not(any(
+            target_arch = "aarch64",
+            target_arch = "arm",
+            target_arch = "powerpc",
+            target_arch = "powerpc64",
+            target_arch = "m68k"
+        ))
+    ),
+    target_os = "solaris",
+    target_os = "illumos"
+))]
+const O_NOFOLLOW: i32 = 0x2_0000;
+
 pub fn reject_symlink(path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_symlink() => {
@@ -562,6 +599,12 @@ mod windows_private_acl {
             }
         }
         Ok((user, system, admins, acl_buf))
+    }
+
+    /// Verify, without changing it, that an existing file carries the protected owner-only DACL.
+    pub fn verify_private_file(path: &Path) -> Result<(), String> {
+        let (user, mut system, mut admins, _acl) = private_acl(false)?;
+        verify(path, false, &user, &mut system, &mut admins)
     }
 
     pub fn harden_and_verify(path: &Path, directory: bool) -> Result<(), String> {
@@ -946,6 +989,7 @@ impl FileLock {
             return Err(LockAcquireError::Io);
         }
         reject_symlink(path).map_err(|_| LockAcquireError::Io)?;
+        crate::test_hooks::barrier("lock-before-open");
         #[cfg(windows)]
         let existed = path.exists();
         let mut opts = OpenOptions::new();
@@ -953,13 +997,33 @@ impl FileLock {
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
+            opts.mode(0o600).custom_flags(O_NOFOLLOW);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            opts.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
         }
         let file = opts.open(path).map_err(|_| LockAcquireError::Io)?;
+        // The open did not follow a link; refuse anything that is not a plain file anyway.
+        let metadata = file.metadata().map_err(|_| LockAcquireError::Io)?;
+        if !metadata.is_file() {
+            return Err(LockAcquireError::Io);
+        }
         #[cfg(windows)]
-        if !existed {
-            windows_private_acl::harden_and_verify(path, false)
-                .map_err(|_| LockAcquireError::Io)?;
+        {
+            use std::os::windows::fs::MetadataExt;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+            if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err(LockAcquireError::Io);
+            }
+            let private = if existed {
+                windows_private_acl::verify_private_file(path)
+            } else {
+                windows_private_acl::harden_and_verify(path, false)
+            };
+            private.map_err(|_| LockAcquireError::Io)?;
         }
         #[cfg(unix)]
         {
