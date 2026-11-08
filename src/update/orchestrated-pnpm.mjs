@@ -32,12 +32,12 @@ export function verifyOrchestratedPnpmInstall({ owner, activeRoot, version, runP
       const result = realpathSync.native(path);
       return process.platform === "win32" ? result.toLowerCase() : result;
     };
-    const verify = (path, expected, store) => {
+    const verify = (path, expected, store, globalRoot) => {
       try {
         const manifest = JSON.parse(readFileSync(join(path, "package.json"), "utf8"));
         const source = statSync(join(path, "src", "cli", "index.ts"));
         return { ok: manifest.version === expected && Boolean(manifest.dependencies?.bun && manifest.dependencies?.zod)
-          && source.isFile() && source.size > 0 && verifyPnpmInstallTree(path, expected, store).ok };
+          && source.isFile() && source.size > 0 && verifyPnpmInstallTree(path, expected, store, globalRoot).ok };
       } catch { return { ok: false }; }
     };
     const resolved = resolvePnpmGlobalOwner({ packageName: PACKAGE_NAME, packagePath: activeRoot,

@@ -401,9 +401,9 @@ export function readPnpmGlobalPackage(
     } catch { return { ok: false, reason: "pnpm active package path could not be resolved" }; }
   }
   try {
-    tree = verify(packagePath, version, store);
+    tree = verify(packagePath, version, store, rootPath);
     if (tree?.ok && constraints.expectedPackagePath && constraints.expectedPackagePath !== packagePath) {
-      tree = verify(constraints.expectedPackagePath, version, store);
+      tree = verify(constraints.expectedPackagePath, version, store, rootPath);
     }
   } catch {
     return { ok: false, reason: "the active pnpm package could not be verified" };

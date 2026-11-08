@@ -438,10 +438,15 @@ export function verifyInstallTree(packageDir, expectedVersion) {
  * hoisted linker, so the dependency may sit outside the package directory — but it must
  * still be reachable through a root this package instance owns.
  */
-export function verifyPnpmInstallTree(packageDir, expectedVersion, store) {
+export function verifyPnpmInstallTree(packageDir, expectedVersion, store, globalRoot) {
   let real;
   try { real = realpathSync(packageDir); } catch { return { ok: false, failures: ["pnpm package path could not be resolved"] }; }
   try { if (store) store = realpathSync(store); } catch { return { ok: false, failures: ["pnpm configured store could not be resolved"] }; }
+  if (globalRoot && (!store || !inside(real, store))) {
+    try {
+      if (!inside(real, realpathSync(globalRoot))) return { ok: false, failures: ["pnpm package is outside the selected store and global group"] };
+    } catch { return { ok: false, failures: ["pnpm global group could not be resolved"] }; }
+  }
   let globalLinks;
   try {
     globalLinks = packagePathUsesGlobalLinks(packageDir, store) || (store && inside(real, store));

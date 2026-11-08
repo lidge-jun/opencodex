@@ -337,6 +337,31 @@ describe("#4202 install-tree dependency ownership", () => {
     if (!result.ok) expect(result.reason).toContain("outside the selected store");
   });
 
+  test("refuses a directly listed foreign alternate-layout package registered as the running package", () => {
+    const store = join(root, "selected", "v11"), globalRoot = join(root, "global", "v11");
+    const foreign = join(root, "foreign", "alternate-links", "pkg", "node_modules", ...PKG.split("/"));
+    const exposed = join(globalRoot, "node_modules", ...PKG.split("/"));
+    mkdirSync(store, { recursive: true }); writePackage(foreign, "2.0.0");
+    for (const name of ["bun", "zod"]) {
+      const outside = join(root, "outside", name); writeDependency(outside, name);
+      symlinkSync(outside, join(foreign, "node_modules", name), "dir");
+    }
+    mkdirSync(join(exposed, ".."), { recursive: true }); symlinkSync(foreign, exposed, "dir");
+    const result = resolvePnpmGlobalOwner({ packageName: PKG, packagePath: exposed, commandPaths: [join(root, "pnpm-executable")],
+      runPnpm: (_command, args) => {
+        if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: foreign } } }]) };
+        if (args[0] === "root") return { status: 0, stdout: globalRoot };
+        if (args[0] === "store") return { status: 0, stdout: store };
+        if (args[0] === "config" && ["virtualStoreDir", "globalVirtualStoreDir"].includes(args[2])) return { status: 0, stdout: "undefined" };
+        if (args[2] === "global-dir") return { status: 0, stdout: join(root, "global") };
+        if (args[2] === "global-bin-dir") return { status: 0, stdout: join(root, "bin") };
+        return { status: 1 };
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("outside the selected store and global group");
+  });
+
   test("a pinned global-store owner refuses readback of a package moved outside its store", () => {
     const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
     const store = realpathSync(join(root, "pnpm", "store", "v11"));
