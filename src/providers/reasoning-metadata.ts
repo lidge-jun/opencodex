@@ -518,6 +518,7 @@ function isIncompleteStructuredWrapper(text: string): boolean {
     return true;
   }
   const firstBrace = s.indexOf("{");
+  const lastBrace = s.lastIndexOf("}");
   if (firstBrace !== -1) {
     let openBraces = 0;
     let inString = false;
@@ -542,6 +543,13 @@ function isIncompleteStructuredWrapper(text: string): boolean {
       }
     }
     if (openBraces !== 0) return true;
+    if (lastBrace > firstBrace && s.slice(firstBrace, lastBrace + 1).includes(":")) {
+      try {
+        JSON.parse(s.slice(firstBrace, lastBrace + 1));
+      } catch {
+        return true;
+      }
+    }
   }
   return false;
 }
@@ -579,6 +587,8 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
   }
   if (!parsed || typeof parsed !== "object") {
     if (isIncompleteStructuredWrapper(unescaped)) return true;
+    const hasBraces = unescaped.includes("{") && unescaped.includes("}");
+    if (hasBraces) return true;
     return /\b(?:permission_denied|insufficient_quota|rate_limit_exceeded|model_not_found|context_length_exceeded)\b/i.test(unescaped);
   }
   try {
@@ -915,6 +925,9 @@ export function isReasoningEffortRejection(text: string | undefined, depth = 0):
 
     return false;
   }
+
+  const hasBraces = unescaped.includes("{") && unescaped.includes("}");
+  if (hasBraces) return false;
 
   return diagnosticTextBlamesReasoningEffort(unescaped);
 }

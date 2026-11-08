@@ -7,6 +7,7 @@ import { clearComboSelectionState, clearComboTargetCooldowns, isComboTargetInCoo
 import {
   hasConflictingReasoningEffortCode,
   isReasoningEffortLearnedUnsupported,
+  isReasoningEffortRejection,
   resetReasoningMetadataCachesForTests,
 } from "../../src/providers/reasoning-metadata";
 import type { RequestLogContext } from "../../src/server/request-log";
@@ -77,6 +78,8 @@ const INCOMPLETE_STRUCTURED_WRAPPER_REFUSAL = JSON.stringify({
   param: "reasoning_effort",
   message: 'Provider error 400: {"code":"permission_denied"',
 });
+const BALANCED_MALFORMED_JSON_REFUSAL =
+  'Gateway error 400: {"code":"unknown_terminal_code","message":"Unsupported value for reasoning_effort", invalid_json: }';
 const INCOMPLETE_OUTER_OBJECT_REFUSAL = ' {"param":"reasoning_effort","error":{"code":"unknown_terminal_code"}';
 const ERRORS_BIO_POLICY_REFUSAL = JSON.stringify({
   param: "reasoning_effort",
@@ -748,6 +751,8 @@ describe("rejected reasoning rungs", () => {
   test("hasConflictingReasoningEffortCode unit checks", () => {
     expect(hasConflictingReasoningEffortCode(SERIALIZED_WRAPPER_CONFLICTING_REFUSAL)).toBe(true);
     expect(hasConflictingReasoningEffortCode(UNEXHAUSTED_QUEUE_CANDIDATES_REFUSAL)).toBe(true);
+    expect(hasConflictingReasoningEffortCode(BALANCED_MALFORMED_JSON_REFUSAL)).toBe(true);
+    expect(isReasoningEffortRejection(BALANCED_MALFORMED_JSON_REFUSAL)).toBe(false);
     expect(hasConflictingReasoningEffortCode(VENDOR_EFFORT_REFUSAL)).toBe(false);
     expect(hasConflictingReasoningEffortCode(JSON.stringify({
       param: "reasoning_effort",
@@ -1479,5 +1484,80 @@ describe("rejected reasoning rungs", () => {
     expect(effortOf(outbound[1])).toBe("high");
     expect(response.status).toBe(200);
     expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(true);
+  });
+
+  test("stops before effort replay on balanced malformed JSON refusal (openai-chat)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(BALANCED_MALFORMED_JSON_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = config();
+    const response = await handleResponses(request(), cfg, logCtx);
+    const text = await response.text();
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(text).toContain("unknown_terminal_code");
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("stops before effort replay on balanced malformed JSON refusal (openai-responses)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(BALANCED_MALFORMED_JSON_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = passthroughConfig();
+    const response = await handleResponses(request(), cfg, logCtx);
+    const text = await response.text();
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(text).toContain("unknown_terminal_code");
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("combo stops immediately on balanced malformed JSON refusal without walking ladder", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const attempts: Array<{ host: string; effort: unknown }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      attempts.push({ host: url.host, effort: effortOf(body) });
+      return new Response(BALANCED_MALFORMED_JSON_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const comboConfig = {
+      providers: {
+        first: { adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+        fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
+      },
+      combos: {
+        effort: {
+          strategy: "failover",
+          targets: [{ provider: "first", model: MODEL }, { provider: "fallback", model: MODEL }],
+        },
+      },
+    } as OcxConfig;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const response = await handleResponses(request(false, "combo/effort"), comboConfig, logCtx);
+    const result = await response.text();
+
+    expect(response.status).toBe(400);
+    expect(result).toContain("unknown_terminal_code");
+    expect(attempts).toEqual([
+      { host: "opencode.ai", effort: "max" },
+    ]);
   });
 });
