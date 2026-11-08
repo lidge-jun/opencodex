@@ -10,3 +10,12 @@
 - 선택한 방식: enable Codex deferred exposure for Cursor code-mode rows too, while continuing to omit Cursor's hosted `web_search_tool_type`.
 - 다른 대안 대신 이 방식을 선택한 이유: it removes the known exec-description inflation before Cursor budgeting without weakening the measured transport limit, inventing caller tools, or turning bridge absence into local-execution authority.
 - 장점, 단점 및 영향: Cursor keeps a compact Responses-owned `exec` path under rich tool catalogs and hosted-search behavior remains unchanged; the existing Cursor budget and native-local-exec fail-closed policy remain authoritative.
+
+## Decision record — eagerly expanded Codex MCP catalogs (#8133)
+
+- 목적과 의도: tell an operator when a Codex client expands every MCP tool into the request, which usually means its model metadata is missing or stale and every turn pays the full-catalog payload.
+- 기존 구현 및 제약 조건: an eager catalog is a valid request, and no supported-version evidence shows that every client sending 64+ eager MCP tools has stale metadata (an older client or disabled tool search may send one legitimately). A resumed thread resends earlier turns' `additional_tools`, so a whole-input count misreads history as the current turn.
+- 검토한 주요 대안: refuse with HTTP 400 `codex_catalog_reload_required`; refuse with a config opt-out; warn without refusing.
+- 선택한 방식: warn once per session at `EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD` (64), logging only the count and threshold, and forward the request unchanged; count only the current turn's declarations.
+- 다른 대안 대신 이 방식을 선택한 이유: a refusal turns a recoverable cost problem into a hard outage for any client the heuristic misjudges, and its remedy cannot help a client whose catalog is eager by design. The diagnostic keeps every existing request working.
+- 장점, 단점 및 영향: no request changes behavior; operators get one actionable line per session. A stale client keeps paying the larger payload until it is restarted.

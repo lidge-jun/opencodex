@@ -181,7 +181,7 @@ import {
 } from "./account-change-state";
 
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
-import { codexToolCatalogReloadResponse } from "./codex-tool-catalog";
+import { warnEagerCodexToolCatalog } from "./codex-tool-catalog";
 
 /** Policy-routing evidence. The direct lane's settings-only body has no conversation to scan. */
 function routeEvidence(options: Pick<HandleResponsesOptions, "directRequest">, parsed: OcxParsedRequest): PolicyRequestEvidence {
@@ -254,9 +254,8 @@ export async function prepareResponsesRequest(
     && ((body as { input: unknown[] }).input).some((item: unknown) =>
       typeof item === "object" && item !== null && (item as { type?: string }).type === "compaction_trigger");
   if (inboundWire === "responses" && !concreteSelection) {
-    const surface = options.compactionRecoveryKind === "compaction-v1" || isCompactionTrigger ? "compact" : "responses";
-    const catalogReload = codexToolCatalogReloadResponse(body, req.headers, surface);
-    if (catalogReload) return catalogReload;
+    warnEagerCodexToolCatalog(body, req.headers,
+      options.compactionRecoveryKind === "compaction-v1" || isCompactionTrigger ? "compact" : "responses");
   }
   // Remove display-only artifact paths before helpers, combo dispatch and upstream replay.
   const originalSelector = options.mainHardLockFallbackOverride?.sourceModel ?? options.compactionRoutingOverride?.sourceModel

@@ -9,18 +9,20 @@ Codex loads a local model catalog at startup. After OpenCodex changes that catal
 run `ocx sync --restart-codex` to refresh existing clients. Publishing a new catalog
 file does not update a client that is already running.
 
-If a Codex client sends 64 or more eager MCP tool definitions, OpenCodex refuses the
-request before contacting a model provider with HTTP 400 and error code
-`codex_catalog_reload_required`. This prevents missing or stale model metadata from
-causing repeated large prompts and compactions. Run the restart command and retry.
-The check also covers definitions embedded in Code Mode. It recognizes canonical
-Codex client identities or Codex turn metadata; an incidental `codex` substring in
-another client's name does not activate it. For compaction, including Responses
-API compaction triggers, only the top-level tool catalog is checked:
-`additional_tools` items in the input are history, not
-current declarations. Responses Lite current `additional_tools` declarations
-remain checked. Explicitly deferred tools, conversation text, and other API
-clients retain their existing behavior.
+A Codex client with missing or stale model metadata can send every MCP tool definition
+eagerly instead of using deferred tool discovery, which makes each prompt much larger.
+When a Codex request declares 64 or more eager MCP tool definitions, OpenCodex logs a
+warning once per session with the count and the threshold, then forwards the request
+unchanged. The warning contains no tool names or request content. Run the restart
+command to reload the catalog.
+
+The count covers top-level tools, the current turn's Responses Lite `additional_tools`
+declarations, and MCP tools rendered into the Code Mode `exec` description. Declarations
+from earlier turns of a resumed thread are history and are not counted; compaction,
+including Responses API compaction triggers, counts only the top-level tool catalog.
+The check recognizes canonical Codex client identities or Codex turn metadata; an
+incidental `codex` substring in another client's name does not activate it. Explicitly
+deferred tools, conversation text, and other API clients are not counted.
 
 Routed models advertise deferred discovery. In Code Mode, discover available tools
 through `ALL_TOOLS` and call them through `tools`; a separate `tool_search` function
