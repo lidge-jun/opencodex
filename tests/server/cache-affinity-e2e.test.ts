@@ -8,7 +8,10 @@ import { handleChatCompletions } from "../../src/server/chat-completions";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { loadConfig, saveConfig } from "../../src/config";
 import { addFinalRequestLog, inspectResponseLogJson, nextRequestLogId, type RequestLogContext } from "../../src/server/request-log";
-import { boundEntryIdForLane, clearProviderCacheAffinityForTests, recordProviderCacheAffinity } from "../../src/providers/cache-affinity";
+import { boundEntryIdForLane, clearProviderCacheAffinityForTests, reconcileProviderCacheAffinity, recordProviderCacheAffinity as recordAffinity } from "../../src/providers/cache-affinity";
+import { capturedCacheAffinityIdentity, currentCacheAffinityIdentity } from "../../src/providers/cache-affinity-identity";
+import { routedProviderConfig } from "../../src/providers/routed-config";
+import { stampApiKeyAccountLabel } from "../../src/providers/label";
 import { RequestPacingQueueOverloadError } from "../../src/providers/request-pacing";
 import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
 import { protocolTraceForRequest } from "../../src/protocols/trace";
@@ -16,6 +19,7 @@ import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/key-store";
+import { invalidateResolvedProviderKeyCache } from "../../src/providers/api-key-resolve";
 import { setKeyCooldown } from "../../src/providers/api-key-cooldowns";
 import { consultProviderCacheAffinity } from "../../src/providers/cache-affinity";
 import {
@@ -34,6 +38,10 @@ const seenAuth: string[] = [];
 const failingKeys = new Set<string>();
 // Direct handler calls need the spend-ledger ownership startServer acquires.
 const trackedServers = new Set<ReturnType<typeof startServer>>();
+
+function recordProviderCacheAffinity(input: Omit<Parameters<typeof recordAffinity>[0], "identity">) {
+  recordAffinity({ ...input, identity: currentCacheAffinityIdentity(input.providerName, loadConfig().providers[input.providerName], input.entryId ?? "") });
+}
 
 function makeConfig(): OcxConfig {
   const config = {
@@ -376,6 +384,96 @@ describe("provider cache affinity (end-to-end)", () => {
     expect(seenAuth).toEqual(["Bearer key-a", "Bearer key-b"]);
   });
 
+  test("destination replacement discards old evidence and fences old success", async () => {
+    const config = makeConfig();
+    await turn(config, "destination-bound");
+    const old = await turn(config, "destination-flight", undefined, undefined, false);
+    config.providers["affinity-e2e"]!.baseUrl = "https://other.invalid/v1";
+    config.providers["affinity-e2e"]!.apiKey = "key-b";
+    saveConfig(config);
+    addFinalRequestLog(nextRequestLogId(), Date.now(), old, 200);
+    await turn(config, "destination-bound");
+    await turn(config, "destination-flight");
+    expect(seenAuth).toEqual(["Bearer key-a", "Bearer key-a", "Bearer key-b", "Bearer key-b"]);
+  });
+
+  test.each([200, 401, 429])("old %s completion cannot replace or release newer credential binding", async status => {
+    const config = makeConfig();
+    const old = await turn(config, "newer-binding", undefined, undefined, false);
+    const provider = config.providers["affinity-e2e"]!;
+    provider.apiKeyPool![0]!.key = "replacement-key";
+    provider.apiKey = "replacement-key";
+    await turn(config, "newer-binding");
+    addFinalRequestLog(nextRequestLogId(), Date.now(), old, status);
+    provider.apiKey = "key-b";
+    await turn(config, "newer-binding");
+    expect(seenAuth).toEqual(["Bearer key-a", "Bearer replacement-key", "Bearer replacement-key"]);
+  });
+
+  test("unchanged in-flight credential binds despite committed selection movement", async () => {
+    const config = makeConfig();
+    const old = await turn(config, "unchanged-flight", undefined, undefined, false);
+    config.providers["affinity-e2e"]!.apiKey = "key-b";
+    saveConfig(config);
+    addFinalRequestLog(nextRequestLogId(), Date.now(), old, 200);
+    await turn(config, "unchanged-flight");
+    expect(seenAuth).toEqual(["Bearer key-a", "Bearer key-a"]);
+  });
+
+  test("reconciled credential change and reversion fences an old in-flight success", async () => {
+    const config = makeConfig();
+    const old = await turn(config, "reverted-flight", undefined, undefined, false);
+    const identity = capturedCacheAffinityIdentity(old);
+    expect(identity).toBeDefined();
+    expect(JSON.stringify(old)).not.toContain(identity!);
+    const provider = config.providers["affinity-e2e"]!;
+    const context = { generation: 1, providerNames: new Set(Object.keys(config.providers)), comboIds: new Set<string>(),
+      comboTargets: new Set<string>(), codexAccountIds: new Set<string>(), oauthAccountKeys: new Set<string>(), configRoots: new Set<string>() };
+    provider.apiKeyPool![0]!.key = "replacement-key";
+    reconcileProviderCacheAffinity(context, config.providers);
+    provider.apiKeyPool![0]!.key = "key-a";
+    provider.apiKey = "key-b";
+    reconcileProviderCacheAffinity({ ...context, generation: 2 }, config.providers);
+    saveConfig(config);
+    addFinalRequestLog(nextRequestLogId(), Date.now(), old, 200);
+    await turn(config, "reverted-flight");
+    expect(seenAuth).toEqual(["Bearer key-a", "Bearer key-b"]);
+  });
+
+  test("changed resolved environment credential does not inherit evidence", async () => {
+    const previous = process.env.OCX_AFFINITY_TEST_KEY;
+    try {
+      process.env.OCX_AFFINITY_TEST_KEY = "key-a";
+      const config = makeConfig();
+      const provider = config.providers["affinity-e2e"]!;
+      provider.apiKeyPool![0]!.key = "$OCX_AFFINITY_TEST_KEY";
+      provider.apiKey = "$OCX_AFFINITY_TEST_KEY";
+      await turn(config, "env-change");
+      process.env.OCX_AFFINITY_TEST_KEY = "replacement-key";
+      provider.apiKey = "key-b";
+      await turn(config, "env-change");
+      expect(seenAuth).toEqual(["Bearer key-a", "Bearer key-b"]);
+    } finally {
+      if (previous === undefined) delete process.env.OCX_AFFINITY_TEST_KEY;
+      else process.env.OCX_AFFINITY_TEST_KEY = previous;
+    }
+  });
+
+  test("changed resolved keychain credential does not inherit evidence", async () => {
+    let credential = "key-a";
+    setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => credential, setPassword() {}, deletePassword: () => true }));
+    const config = makeConfig();
+    const provider = config.providers["affinity-e2e"]!;
+    provider.apiKeyPool![0]!.key = "keychain:affinity-e2e/a";
+    provider.apiKey = "keychain:affinity-e2e/a";
+    await turn(config, "keychain-change");
+    credential = "replacement-key";
+    invalidateResolvedProviderKeyCache();
+    provider.apiKey = "key-b";
+    await turn(config, "keychain-change");
+    expect(seenAuth).toEqual(["Bearer key-a", "Bearer key-b"]);
+  });
+
   test.each(["env", "keychain"])(
     "%s pool references survive affinity dispatch re-reads",
     async (kind) => {
@@ -577,12 +675,14 @@ describe("provider cache affinity (end-to-end)", () => {
   });
 
   test.each([false, true])("HTTP 200 structured failure does not bind or replace affinity (bound=%s)", (bound) => {
+    const config = makeConfig();
     const lane = "structured-failure";
     if (bound) recordProviderCacheAffinity({ lane, providerName: "affinity-e2e", entryId: "a", model: "test", cacheWrite: 4000 });
     const log: RequestLogContext = {
       model: "test", provider: "affinity-e2e", affinityLane: lane,
       affinityKeyEntryId: "b", affinityProviderName: "affinity-e2e", cacheAffinityApplicable: true,
     };
+    stampApiKeyAccountLabel(log, "affinity-e2e", routedProviderConfig("affinity-e2e", { ...config.providers["affinity-e2e"]!, apiKey: "key-b" }));
     inspectResponseLogJson(log, JSON.stringify({
       status: "failed", error: { code: "request_send_budget_exhausted", message: "Local send budget exhausted" },
       usage: { input_tokens: 5000, output_tokens: 0 },

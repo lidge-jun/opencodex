@@ -6,6 +6,8 @@ import {
 import { isAnthropicBillingFailure } from "../providers/anthropic-billing-refusal";
 import type { OcxUsage } from "../types";
 import type { RequestLogContext } from "./request-log";
+import { loadConfig } from "../config";
+import { capturedCacheAffinityIdentity, currentCacheAffinityIdentity } from "../providers/cache-affinity-identity";
 
 /** Finalize against the serving credential, never a logical combo's display label. */
 export function finalizeProviderCacheAffinity(
@@ -19,12 +21,15 @@ export function finalizeProviderCacheAffinity(
     affinityProviderName: providerName,
   } = logCtx;
   if (!lane || !entryId || !providerName || logCtx.cacheAffinityApplicable !== true) return;
+  const identity = capturedCacheAffinityIdentity(logCtx);
+  if (!identity || identity !== currentCacheAffinityIdentity(providerName, loadConfig().providers[providerName], entryId)) return;
   if (status >= 200 && status < 300 && logCtx.observedTerminalStatus !== "failed") {
     const previouslyBound = boundEntryIdForLane(lane);
     recordProviderCacheAffinity({
       lane,
       providerName,
       entryId,
+      identity,
       model: logCtx.affinityModel ?? logCtx.model,
       cacheRead: usage?.cacheReadInputTokens ?? usage?.cachedInputTokens,
       cacheWrite: usage?.cacheCreationInputTokens,
@@ -48,7 +53,7 @@ export function finalizeProviderCacheAffinity(
   ) {
     // Only this request's refusal is evidence. A shared cooldown may have been
     // written by another conversation while this request was in flight.
-    if (!releaseProviderCacheAffinity(lane, providerName, entryId)) return;
+    if (!releaseProviderCacheAffinity(lane, providerName, entryId, identity)) return;
     logCtx.cacheAffinity = "released";
     logCtx.cacheAffinityReason = status === 401 ? "auth" : "quota";
   }

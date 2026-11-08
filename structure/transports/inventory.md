@@ -7,6 +7,12 @@ does not revoke a live affinity pick; removed, disabled or replaced entries stil
 or authorize recovery; turning affinity off also revokes an in-flight affinity pick. Final logging reports `released` only when scoped provider/entry release
 actually deletes a binding; a refusal on another entry preserves the binding and prior outcome.
 
+`src/providers/cache-affinity-identity.ts` binds cache evidence to a process-local generation of
+the resolved credential and effective destination. Reconciliation and consult retire changed
+identities; finalization rechecks the captured generation before recording or releasing evidence.
+Observed change-and-reversion also invalidates an in-flight generation. The keyed fingerprints
+and generation tokens stay in memory and are excluded from serialized request logs.
+
 Shared header helpers and bounded local JSON reads follow the
 [local timeout contract](timeouts.md). Disabling
 their clocks retains byte caps, cancellation, manual redirects and transport credential fences.
