@@ -1,17 +1,56 @@
 import { spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
+import { appendFileSync } from "node:fs";
 import { types } from "node:util";
 import * as lockFile from "../../src/codex/native-main-lock-file";
 
-type Injection = "open" | "hardening" | "sqlite";
+type Injection = "open" | "hardening" | "sqlite" | "stall";
+
+export function skipInvalidQuotaTag(platform: string, githubActions: string | undefined, diagnostic: string | undefined): boolean {
+  return platform === "win32" && githubActions === "true" && diagnostic !== "1";
+}
+
+/** Accept only the observer's bounded fields, never arbitrary child output. */
+export function formatClaimDiagnostics(records: string): string {
+  const prefix = '{"fixture":"claim-diagnostics",';
+  const line = records.split("\n").filter(row => row.startsWith(prefix)).findLast(row => {
+    try { JSON.parse(row); return true; } catch { return false; }
+  });
+  if (!line) return "claim diagnostics unavailable";
+  try {
+    const { diagnostics } = JSON.parse(line);
+    const phases = ["not-started", "open", "hardening", "sqlite-open", "sqlite-pragma", "sqlite-journal-mode",
+      "identity-after-hardening", "identity-after-sqlite-setup", "identity-after-transaction", "identity-unknown",
+      "transaction", "transaction-read", "operation"];
+    const codes = ["EACCES", "EPERM", "ENOENT", "EBUSY", "ETIMEDOUT", "EICACLS", "EACLIDENTITY",
+      "SQLITE_BUSY", "SQLITE_LOCKED", "SQLITE_CANTOPEN", "SQLITE_NOTADB"];
+    const steps = ["/grant:r", "/inheritance:r", "/remove:g", "/findsid"];
+    const stages = ["deadline_before_spawn", "spawn_failed", "runner_rejected", "runner_watchdog", "child_result"];
+    const failure = diagnostics?.failure;
+    const safeFailure = failure && typeof failure === "object" ? {
+      ...(phases.includes(failure.phase) ? { phase: failure.phase } : {}),
+      ...(codes.includes(failure.code) ? { code: failure.code } : {}),
+      ...(steps.includes(failure.step) ? { step: failure.step } : {}),
+      ...(stages.includes(failure.stage) ? { stage: failure.stage } : {}),
+      ...(typeof failure.timedOut === "boolean" ? { timedOut: failure.timedOut } : {}),
+    } : undefined;
+    return JSON.stringify({ ...(phases.includes(diagnostics?.phase) ? { phase: diagnostics.phase } : {}),
+      ...(safeFailure ? { failure: safeFailure } : {}) });
+  } catch { return "claim diagnostics unavailable"; }
+}
 
 /** Observe the real claim setup without publishing paths, messages, or subprocess output. */
-export function observeNativeMainClaim(inject?: Injection, testError?: Error) {
+export function observeNativeMainClaim(inject?: Injection, testError?: Error, diagnosticsPath?: string) {
   let phase = "not-started";
   const events: string[] = [];
-  function setPhase(next: string): void { phase = next; events.push(next); }
   let insideOpen = false;
   let failure: Record<string, unknown> | undefined;
+  // Synchronous append makes each bounded snapshot available before a forced child termination.
+  function publish(): void {
+    if (diagnosticsPath) appendFileSync(diagnosticsPath, JSON.stringify({ fixture: "claim-diagnostics", diagnostics: { phase, failure } }) + "\n");
+  }
+  function setPhase(next: string): void { phase = next; events.push(next); publish(); }
+  publish();
   const ownDescriptor = Object.getOwnPropertyDescriptor;
   const hasOwn = Object.hasOwn;
   const isProxy = types.isProxy;
@@ -36,6 +75,7 @@ export function observeNativeMainClaim(inject?: Injection, testError?: Error) {
       failure = { phase, ...(code ? { code } : {}), ...(step ? { step } : {}),
         ...(stage ? { stage } : {}), ...(typeof timedOut === "boolean" ? { timedOut } : {}) };
     } catch { failure = { phase }; }
+    publish();
   }
   const injectedError = testError ?? Object.assign(new Error("private-marker-path-token-message"), { code: "EICACLS", aclFailure: {
       step: "/inheritance:r", stage: "child_result", timedOut: false, stdout: "private-marker-stdout",
@@ -55,6 +95,10 @@ export function observeNativeMainClaim(inject?: Injection, testError?: Error) {
   });
   const hardenSpy = spyOn(lockFile, "hardenStableLockFile").mockImplementation(async (...args) => {
     setPhase("hardening");
+    if (inject === "stall") {
+      console.error("private-marker-child-stderr /private-claim-path fixture-secret-token");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 120_000);
+    }
     try { if (inject === "hardening") throw injectedError; await harden(...args); }
     catch (error) { record(error); throw error; }
   });

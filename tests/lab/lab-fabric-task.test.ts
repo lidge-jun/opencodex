@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as nodeFs from "node:fs";
 import {
@@ -70,6 +71,25 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot } from "../helpers/repo-root";
 
 const REPO_ROOT = repoRoot();
+
+test("scratch directory rejects an adjacent NTFS-sized identity", () => {
+  const root = nodeFs.mkdtempSync(join(tmpdir(), "ocx-scratch-identity-"));
+  const originalFstat = nodeFs.fstatSync, originalLstat = nodeFs.lstatSync;
+  nodeFs.writeFileSync(join(root, "value"), "test");
+  const fdSpy = spyOn(nodeFs, "fstatSync").mockImplementation(((fd, options) => {
+    const stats = options?.bigint ? originalFstat(fd, { bigint: true }) : originalFstat(fd);
+    return Object.assign(Object.create(Object.getPrototypeOf(stats)), stats,
+      { ino: options?.bigint ? 9_007_199_254_740_992n : Number(9_007_199_254_740_992n) });
+  }) as typeof nodeFs.fstatSync);
+  const pathSpy = spyOn(nodeFs, "lstatSync").mockImplementation(((path, options) => {
+    const stats = options?.bigint ? originalLstat(path, { bigint: true }) : originalLstat(path);
+    return samePath(path, root) && options?.bigint ? Object.assign(Object.create(Object.getPrototypeOf(stats)), stats,
+      { ino: 9_007_199_254_740_993n }) : samePath(path, root) ? Object.assign(Object.create(Object.getPrototypeOf(stats)), stats,
+      { ino: Number(9_007_199_254_740_993n) }) : stats;
+  }) as typeof nodeFs.lstatSync);
+  try { expect(() => readScratchFileUtf8(root, "value", 1024)).toThrow("scratch directory identity changed"); }
+  finally { fdSpy.mockRestore(); pathSpy.mockRestore(); removeTreeWithRetry(root); }
+});
 const CHILD_REAP_GRACE_MS = 2_000;
 
 async function awaitChildExitWithin(child: Bun.Subprocess, timeoutMs: number): Promise<boolean> {
