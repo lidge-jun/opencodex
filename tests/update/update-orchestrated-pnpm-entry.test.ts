@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -41,7 +41,8 @@ test.skipIf(process.platform === "win32")("pnpm child reports unchanged active t
     if (instrumented === launcherSource) throw new Error("stop boundary injection point missing");
     writeFileSync(launcher, instrumented);
     const manifest = JSON.parse(readFileSync(repoPath("package.json"), "utf8")); manifest.version = "2.0.0";
-    writeFileSync(join(pkg, "package.json"), JSON.stringify(manifest)); symlinkSync(repoPath("node_modules"), join(pkg, "node_modules"));
+    writeFileSync(join(pkg, "package.json"), JSON.stringify(manifest));
+    cpSync(repoPath("node_modules"), join(pkg, "node_modules"), { recursive: true, verbatimSymlinks: true });
     writeFileSync(join(group, "node_modules/.modules.yaml"), "layoutVersion: 5\n");
     writeFileSync(join(home, "config.json"), JSON.stringify({ port: 1 }));
     const executable = Bun.which("node"); if (!executable) throw new Error("Node required");

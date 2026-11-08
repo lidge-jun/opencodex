@@ -260,6 +260,35 @@ function inspectPnpmMetadata(path, store, escaped, kind) {
   }
 }
 
+/** Legacy isolated and hoisted groups may live outside the content store, but their links
+ * must still stay within the selected global group or the selected content store. */
+function inspectLegacyPnpmLinks(packageDir, store, globalRoot, escaped) {
+  const pending = [packageDir, ...ownedDependencyRoots(packageDir, store)], seen = new Set();
+  while (pending.length) {
+    const current = pending.pop();
+    let stat;
+    try { stat = lstatSync(current); }
+    catch (error) {
+      if (error?.code !== "ENOENT" || current === packageDir) escaped.add("pnpm legacy dependency path could not be resolved");
+      continue;
+    }
+    let real;
+    try { real = realpathSync(current); }
+    catch { escaped.add("pnpm legacy dependency link could not be resolved"); continue; }
+    if (!inside(real, globalRoot) && !inside(real, store)) {
+      escaped.add("pnpm legacy dependency link is outside the selected store and global group"); continue;
+    }
+    if (seen.has(real)) continue;
+    if (seen.size >= 100000) { escaped.add("pnpm legacy dependency traversal exceeds verification limit"); return; }
+    seen.add(real);
+    try {
+      if ((stat.isSymbolicLink() ? statSync(real) : stat).isDirectory()) {
+        for (const name of readdirSync(real)) pending.push(join(real, name));
+      }
+    } catch { escaped.add("pnpm legacy dependency path could not be inspected"); }
+  }
+}
+
 /** Node's global search paths can supply undeclared modules outside the package ancestry. */
 function inspectGlobalLookupRoots(store, escaped) {
   const roots = new Set([...globalPaths, ...String(process.env.NODE_PATH ?? "").split(delimiter).filter(Boolean)]);
@@ -439,12 +468,13 @@ export function verifyInstallTree(packageDir, expectedVersion) {
  * still be reachable through a root this package instance owns.
  */
 export function verifyPnpmInstallTree(packageDir, expectedVersion, store, globalRoot) {
-  let real;
+  let real, canonicalGlobalRoot;
   try { real = realpathSync(packageDir); } catch { return { ok: false, failures: ["pnpm package path could not be resolved"] }; }
   try { if (store) store = realpathSync(store); } catch { return { ok: false, failures: ["pnpm configured store could not be resolved"] }; }
   if (globalRoot && (!store || !inside(real, store))) {
     try {
-      if (!inside(real, realpathSync(globalRoot))) return { ok: false, failures: ["pnpm package is outside the selected store and global group"] };
+      canonicalGlobalRoot = realpathSync(globalRoot);
+      if (!inside(real, canonicalGlobalRoot)) return { ok: false, failures: ["pnpm package is outside the selected store and global group"] };
     } catch { return { ok: false, failures: ["pnpm global group could not be resolved"] }; }
   }
   let globalLinks;
@@ -461,6 +491,7 @@ export function verifyPnpmInstallTree(packageDir, expectedVersion, store, global
   const result = verifyTreeWithDependencyLookup(packageDir, expectedVersion,
     (path, name) => pnpmOwnedDependencyDir(path, name, store, globalLinks, escaped), globalLinks);
   if (globalLinks) inspectGlobalPnpmGraph(real, store, escaped);
+  else if (canonicalGlobalRoot && store) inspectLegacyPnpmLinks(real, store, canonicalGlobalRoot, escaped);
   if (escaped.size) return { ok: false, failures: [...escaped].concat(result.failures) };
   return result;
 }

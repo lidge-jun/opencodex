@@ -219,6 +219,42 @@ describe("#4202 install-tree dependency ownership", () => {
     expect(verifyPnpmInstallTree(packageDir, "2.0.0")).toEqual({ ok: true, failures: [] });
   });
 
+  test("refuses isolated pnpm dependencies linked outside both the global group and selected store", () => {
+    const store = join(root, "selected", "v11"), globalRoot = join(root, "global", "v11");
+    const group = join(globalRoot, "node_modules", ".pnpm", "pkg", "node_modules");
+    const pkg = join(group, ...PKG.split("/"));
+    mkdirSync(store, { recursive: true }); writePackage(pkg, "2.0.0");
+    for (const name of ["bun", "zod"]) {
+      const outside = join(root, "outside", name); writeDependency(outside, name);
+      symlinkSync(outside, join(group, name), "dir");
+    }
+    const result = resolvePnpmGlobalOwner({ packageName: PKG, packagePath: pkg, commandPaths: [join(root, "pnpm")],
+      runPnpm: (_command, args) => {
+        if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: pkg } } }]) };
+        if (args[0] === "root") return { status: 0, stdout: globalRoot };
+        if (args[0] === "store" || (args[0] === "config" && args[2] === "store-dir")) return { status: 0, stdout: store };
+        if (args[0] === "config" && ["virtual-store-dir", "global-virtual-store-dir"].includes(args[2])) return { status: 0, stdout: "undefined" };
+        if (args[2] === "global-dir") return { status: 0, stdout: join(root, "global") };
+        if (args[2] === "global-bin-dir") return { status: 0, stdout: join(root, "bin") };
+        return { status: 1 };
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("outside the selected store and global group");
+  });
+
+  test("accepts an isolated pnpm group whose dependency links stay within that group", () => {
+    const store = join(root, "selected", "v11"), globalRoot = join(root, "global", "v11");
+    const virtualStore = join(globalRoot, "node_modules", ".pnpm");
+    const group = join(virtualStore, "pkg", "node_modules"), pkg = join(group, ...PKG.split("/"));
+    mkdirSync(store, { recursive: true }); writePackage(pkg, "2.0.0");
+    for (const name of ["bun", "zod"]) {
+      const dependency = join(virtualStore, name, "node_modules", name); writeDependency(dependency, name);
+      symlinkSync(dependency, join(group, name), "dir");
+    }
+    expect(verifyPnpmInstallTree(pkg, "2.0.0", store, globalRoot)).toEqual({ ok: true, failures: [] });
+  });
+
   test("an isolated pnpm install below an unrelated versioned links directory remains valid", () => {
     const instance = join(root, "releases", "v2", "links", "global", "node_modules", ".pnpm", "pkg", "node_modules");
     const packageDir = join(instance, ...PKG.split("/"));
