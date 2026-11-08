@@ -146,16 +146,27 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
     });
     // A default is also the Home's desired state. A device write waits for that Child's tick.
     // A Home inherit for a native client sets its switch to the default Children inherit.
-    if (selected === undefined || selected === "home") await applyHome(ctx, write.overwriteConflict, deps, write.client, commit, write.client,
-      homeNative && write.action !== "inherit" ? () => write.intent : undefined);
-    else commit();
+    let decided: RouteClientOutcome | undefined;
+    if (selected === undefined || selected === "home") {
+      decided = (await applyHome(ctx, write.overwriteConflict, deps, write.client, commit, write.client,
+        homeNative && write.action !== "inherit" ? () => write.intent : undefined)).find(row => row.client === write.client);
+    } else commit();
     if (selected && selected !== "home" && write.overwriteConflict) {
       const link = devices(ctx).find(row => row.id === selected)!;
       const run = deps.syncChild ?? (await import("../../routing/route-to-sync-child")).syncRouteToChild;
       const result = await run(link, ctx, true, write.client);
       return reply({ ...await view(ctx, write.device), syncs: [{ id: selected, ...result }] }, result.state === "failed" ? 502 : 200);
     }
-    return reply(await view(ctx, write.device));
+    const status = await view(ctx, write.device);
+    if (decided?.outcome === "conflict" || decided?.outcome === "failed") {
+      // A refused or failed native apply leaves the Home switch, and so the rebuilt row, as it was.
+      // Report this apply's own outcome rather than the rebuilt row's stale reading of it.
+      const row = status.devices.find(device => device.id === "home")?.clients.find(entry => entry.client === write.client);
+      if (row) row.applied = decided.outcome;
+      return reply({ ...status, error: `${selected === undefined ? "Route policy was saved, but the" : "The"} Home did not apply ${write.client} (${decided.outcome})${decided.message ? `: ${decided.message}` : ""}`,
+        code: "route_apply_unresolved", desiredCommitted: selected === undefined }, 409);
+    }
+    return reply(status);
   } catch (error) {
     if (error instanceof LinkApplyBusyError) return reply({ error: desiredCommitted
       ? "Route policy was committed, but local apply is busy; retry sync"

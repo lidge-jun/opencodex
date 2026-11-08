@@ -144,3 +144,33 @@ test("the link listener saves the defaults from the Home's switches before it se
   expect(setIntegrationEnabled('codex', true).ok).toBe(true);
   expect((await childIntent()).codex).toEqual({ enabled: false });
 `), SPAWN_BUDGET_MS);
+
+const firstPartyHome = `
+  const c = loadConfig(); c.claudeCode = { ...c.claudeCode, desktopMode: 'first-party' }; saveConfig(c); Object.assign(live, loadConfig());
+`;
+
+test("turning Desktop off on a first-party Home fails and names the mode switch", () => scenario(`
+  ${firstPartyHome}
+  for (const argv of [['claude-desktop', 'off'], ['claude-desktop', 'off', '--device', 'home']]) {
+    const result = await cli(argv);
+    expect(result.code).not.toBe(0);
+    expect(result.errors).toContain('ocx integrations native claude-desktop off');
+    const response = await call('/api/route-to', { client: 'claude-desktop', action: 'off', ...(argv.length > 2 ? { device: 'home' } : {}) });
+    expect(response.status).toBe(409);
+    expect(response.body.error).toContain('ocx integrations native claude-desktop off');
+    expect(response.body.devices.find(row => row.id === 'home').clients.find(row => row.client === 'claude-desktop').applied).toBe('conflict');
+  }
+  expect(loadConfig().claudeCode?.desktopMode).toBe('first-party');
+`), SPAWN_BUDGET_MS);
+
+test("a decided Home write whose native switch write throws fails", () => scenario(`
+  // Every native switch write in this apply fails; the hook disarms itself after each call.
+  let failing = true;
+  const fail = () => { if (!failing) return; setPersistedConfigMutationBeforeCommitForTests(fail); throw new Error('config storage unavailable'); };
+  setPersistedConfigMutationBeforeCommitForTests(fail);
+  const result = await cli(['codex', 'off', '--device', 'home']);
+  failing = false; setPersistedConfigMutationBeforeCommitForTests(null);
+  expect(result.code).not.toBe(0);
+  expect(result.errors).toContain('did not apply codex (failed)');
+  expect(loadConfig().clientIntegrations?.codex).toBeUndefined();
+`), SPAWN_BUDGET_MS);
