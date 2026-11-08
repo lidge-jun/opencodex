@@ -844,6 +844,8 @@ export const ja: Record<TKey, string> = {
   "subagentSurface.learnMore": "失敗する理由",
   "prov.logoutOk": "{provider} からログアウトしました。",
   "prov.logoutFail": "{provider} からログアウトできませんでした。アカウント状態は変更されていません。",
+  "prov.logoutBusy": "アカウントを変更中です。完了してからログアウトをもう一度お試しください。",
+  "prov.accountRemoveUnverified": "{email} が削除されたか確認できません。再試行する前にアカウント一覧を更新してください。",
   "prov.removed": "\"{name}\" を削除しました。",
   "prov.removedDefault": "\"{name}\" を削除しました。既定のプロバイダーは \"{defaultProvider}\" になりました。",
   "prov.removedShadowTarget": "\"{name}\" を削除しました。シャドウコール傍受の対象はまだ \"{model}\" のため、別の対象を選ぶまで補助呼び出しは失敗します。",

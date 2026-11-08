@@ -862,6 +862,8 @@ export const en = {
   "subagentSurface.learnMore": "Why this fails",
   "prov.logoutOk": "Logged out of {provider}.",
   "prov.logoutFail": "Could not log out of {provider}. Your account state is unchanged.",
+  "prov.logoutBusy": "An account change is in progress. Wait for it to finish, then try logging out again.",
+  "prov.accountRemoveUnverified": "Could not verify whether {email} was removed. Refresh the account list before retrying.",
   "prov.removed": "Removed \"{name}\".",
   "prov.removedDefault": "Removed \"{name}\". Default provider is now \"{defaultProvider}\".",
   "prov.removedShadowTarget": "Removed \"{name}\". Shadow Call Intercept still targets \"{model}\", so helper calls will fail until you choose another target.",

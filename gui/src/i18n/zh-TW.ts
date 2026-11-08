@@ -727,6 +727,8 @@ export const zhTW: Record<TKey, string> = {
   "subagentSurface.learnMore": "為什麼會失敗",
   "prov.logoutOk": "已登出 {provider}。",
   "prov.logoutFail": "無法登出 {provider}。帳號狀態保持不變。",
+  "prov.logoutBusy": "帳戶變更正在進行。請等待完成後再試著登出。",
+  "prov.accountRemoveUnverified": "無法確認是否已移除 {email}。請重新整理帳戶清單後再試。",
   "prov.removed": "已移除 \"{name}\"。",
   "prov.removeFail": "移除 \"{name}\" 失敗。",
   "prov.added": "已新增 \"{name}\"。現已生效 — 執行 {cmd}（或重新啟動）以在 Codex 選擇器中列出其模型。",

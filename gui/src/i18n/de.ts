@@ -839,6 +839,8 @@ export const de: Record<TKey, string> = {
   "subagentSurface.learnMore": "Warum das fehlschlägt",
   "prov.logoutOk": "Von {provider} abgemeldet.",
   "prov.logoutFail": "Abmeldung von {provider} fehlgeschlagen. Der Kontostatus bleibt unverändert.",
+  "prov.logoutBusy": "Eine Kontoänderung läuft. Warten Sie bis zum Abschluss und versuchen Sie die Abmeldung erneut.",
+  "prov.accountRemoveUnverified": "Es konnte nicht geprüft werden, ob {email} entfernt wurde. Aktualisieren Sie vor einem erneuten Versuch die Kontoliste.",
   "prov.removed": "\"{name}\" entfernt.",
   "prov.removedDefault": "\"{name}\" entfernt. Standardanbieter ist jetzt \"{defaultProvider}\".",
   "prov.removedShadowTarget": "\"{name}\" entfernt. Shadow-Call-Abfangen zielt weiterhin auf \"{model}\"; Hilfsaufrufe schlagen fehl, bis Sie ein anderes Ziel wählen.",

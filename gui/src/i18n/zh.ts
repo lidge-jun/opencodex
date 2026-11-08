@@ -845,6 +845,8 @@ export const zh: Record<TKey, string> = {
   "subagentSurface.learnMore": "为什么失败",
   "prov.logoutOk": "已退出 {provider}。",
   "prov.logoutFail": "无法退出 {provider}。账户状态保持不变。",
+  "prov.logoutBusy": "账户更改正在进行。请等待完成后重试退出登录。",
+  "prov.accountRemoveUnverified": "无法确认是否已移除 {email}。请刷新账户列表后再试。",
   "prov.removed": "已移除 \"{name}\"。",
   "prov.removedDefault": "已移除 \"{name}\"。默认提供方现为 \"{defaultProvider}\"。",
   "prov.removedShadowTarget": "已移除 \"{name}\"。影子调用拦截仍指向 \"{model}\"，在选择其他目标之前，辅助调用会失败。",

@@ -384,7 +384,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     apiBase, t: t as unknown as Parameters<typeof useProviderAccountPools>[0]["t"],
     config, oauthStatus: oauthStatusWithCodex, aliveRef,
     notify,
-    fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth,
+    fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth, invalidateOauthStatusReads, setOauthStatus,
   });
   const {
     accountSets, setAccountSets, accountLoadStates, switchingAccounts, pausingAccounts, keyPools, fetchAccountSets, fetchKeyPools, beginAccountLogout,

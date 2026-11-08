@@ -863,6 +863,8 @@ export const pt: Record<TKey, string> = {
   "subagentSurface.learnMore": "Por que isso falha",
   "prov.logoutOk": "Sessão de {provider} encerrada.",
   "prov.logoutFail": "Não foi possível sair de {provider}. O estado da sua conta não mudou.",
+  "prov.logoutBusy": "Uma alteração de conta está em andamento. Aguarde sua conclusão e tente sair novamente.",
+  "prov.accountRemoveUnverified": "Não foi possível confirmar se {email} foi removido. Atualize a lista de contas antes de tentar novamente.",
   "prov.removed": "\"{name}\" removido.",
   "prov.removedDefault": "\"{name}\" removido. O provedor padrão agora é \"{defaultProvider}\".",
   "prov.removedShadowTarget": "\"{name}\" removido. O Shadow Call Intercept ainda aponta para \"{model}\", então as chamadas auxiliares vão falhar até você escolher outro destino.",

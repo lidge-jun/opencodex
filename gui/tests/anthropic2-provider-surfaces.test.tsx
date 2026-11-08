@@ -438,3 +438,58 @@ for (const item of [POOL_A, POOL_B, CUSTOM_B, { ...POOL_A, name: "cursor", adapt
     });
   }
 }
+
+test.each(["switch", "pause"] as const)("logout explains a pending %s and succeeds after it settles", async action => {
+  let release!: (response: Response) => void;
+  let pendingStarted!: () => void;
+  const started = new Promise<void>(resolve => { pendingStarted = resolve; });
+  const notices: string[] = [];
+  respond = async request => {
+    if (request.method === "PUT" && request.path.startsWith("/api/oauth/accounts/")) {
+      pendingStarted(); return new Promise(resolve => { release = resolve; });
+    }
+    if (request.path === "/api/oauth/logout") return Response.json({ ok: true });
+    if (request.path === "/api/oauth/accounts") return Response.json({ activeAccountId: "shared", accounts: accounts("anthropic2") });
+    if (request.path === "/api/pool/settings") return Response.json(poolSettings("anthropic2", false, 55));
+    if (request.path === "/api/anthropic/reset-grants") return Response.json(grantSnapshot("anthropic2", 1));
+    return Response.json({});
+  };
+  function Harness() {
+    const aliveRef = useRef(true);
+    const [status, setOauthStatus] = useState<Record<string, OAuthStatus>>({ anthropic2: { loggedIn: true } });
+    const pools = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key,
+      oauthStatus: status, notify: message => notices.push(message), fetchConfig: async () => {},
+      fetchOauth: async () => {}, fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false });
+    const oauth = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: pools.accountSets,
+      setAccountSets: pools.setAccountSets, setBusy: () => {}, setStatus: () => {}, setLoginInfo: () => {}, setOauthStatus,
+      beginAccountLogout: pools.beginAccountLogout, notify: message => notices.push(message), fetchConfig: async () => {},
+      fetchOauth: async () => {}, fetchAccountSets: pools.fetchAccountSets, fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+    return <ProviderAuthPanel item={POOL_B} apiBase="" oauth={status.anthropic2} accounts={accounts("anthropic2")}
+      authHandlers={{ ...recordingHandlers([]), onSwitchAccount: pools.switchAccount, onPauseAccount: pools.pauseAccount, onLogout: oauth.logoutOAuth }} />;
+  }
+  await render(<Harness />);
+  if (action === "switch") await click(host.querySelectorAll(".pwi-auth-row-main")[1]);
+  else await click(host.querySelectorAll('button[aria-label^="' + en["codexAuth.pause"] + ' — "]')[1]);
+  await started;
+  await click(buttonsByText(en["prov.logout"])[0]);
+  expect(requests.filter(request => request.path === "/api/oauth/logout")).toHaveLength(0);
+  expect(notices).toContain("prov.logoutBusy");
+  await act(async () => { release(Response.json({ activeAccountId: "other", activeAccountChanged: false })); });
+  await tick(); await tick();
+  await click(buttonsByText(en["prov.logout"])[0]);
+  expect(requests.filter(request => request.path === "/api/oauth/logout")).toHaveLength(1);
+});
+
+test("unverified OAuth status never reports a stale roster as logged in or logged out", async () => {
+  respond = async request => request.path === "/api/pool/settings"
+    ? Response.json(poolSettings("anthropic2", false, 55)) : Response.json(grantSnapshot("anthropic2", 1));
+  await render(<ProviderAuthPanel item={POOL_B} apiBase="" accounts={accounts("anthropic2")}
+    accountLoadState="error" authHandlers={recordingHandlers([])} />);
+  expect(host.querySelector(".pwi-auth-status-text")?.textContent).toBe(en["startup.unverified"]);
+  await render(<ProviderAuthPanel item={POOL_B} apiBase="" accounts={[]} accountLoadState="ready"
+    authHandlers={recordingHandlers([])} />);
+  expect(host.querySelector(".pwi-auth-status-text")?.textContent).toBe(en["startup.unverified"]);
+  await render(<ProviderAuthPanel item={POOL_B} apiBase="" accounts={[]} accountLoadState="ready"
+    oauth={{ loggedIn: false }} authHandlers={recordingHandlers([])} />);
+  expect(host.querySelector(".pwi-auth-status-text")?.textContent).toBe(en["pws.notLoggedInTitle"]);
+});

@@ -849,6 +849,8 @@ export const fr: Record<TKey, string> = {
   "subagentSurface.learnMore": "Pourquoi cet échec",
   "prov.logoutOk": "Déconnexion de {provider} réussie.",
   "prov.logoutFail": "Impossible de se déconnecter de {provider}. L’état de votre compte n’a pas changé.",
+  "prov.logoutBusy": "Une modification du compte est en cours. Attendez sa fin avant de réessayer de vous déconnecter.",
+  "prov.accountRemoveUnverified": "Impossible de vérifier si {email} a été supprimé. Actualisez la liste des comptes avant de réessayer.",
   "prov.removed": "« {name} » supprimé.",
   "prov.removedDefault": "« {name} » supprimé. Le fournisseur par défaut est maintenant « {defaultProvider} ».",
   "prov.removedShadowTarget": "« {name} » supprimé. L’interception des appels fantômes cible toujours « {model} » : les appels auxiliaires échoueront tant que vous n’aurez pas choisi une autre cible.",

@@ -122,10 +122,12 @@ export function useProviderAccountPools(deps: {
   fetchOauth: () => Promise<void>;
   fetchProviderQuotas: (refresh?: boolean) => Promise<void>;
   codexActiveNeedsReauth: boolean;
+  invalidateOauthStatusReads?: (provider: string, blocked?: boolean) => boolean;
+  setOauthStatus?: React.Dispatch<React.SetStateAction<Record<string, OAuthStatus>>>;
 }) {
   const {
     apiBase, t, config, aliveRef, notify,
-    fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth,
+    fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth, invalidateOauthStatusReads, setOauthStatus,
   } = deps;
   const accountTarget = useMemo(() => ({ apiBase }), [apiBase]);
   const [accountStateTarget, setAccountStateTarget] = useState(accountTarget);
@@ -815,6 +817,22 @@ export function useProviderAccountPools(deps: {
     invalidateSelectionReads(provider, "oauth");
     const mutation = Symbol();
     selectionMutationsRef.current.set(key, mutation);
+    const statusBlocked = invalidateOauthStatusReads?.(provider, true) === true;
+    const clearStatus = () => setOauthStatus?.(current => {
+      if (!(provider in current)) return current;
+      const next = { ...current };
+      delete next[provider];
+      return next;
+    });
+    if (statusBlocked) clearStatus();
+    let statusSettled = false;
+    const settleStatus = () => {
+      if (statusSettled || !statusBlocked) return;
+      statusSettled = true;
+      if (invalidateOauthStatusReads?.(provider, false) !== true) return;
+      clearStatus();
+      void fetchOauth().catch(() => {});
+    };
     const pending = affinityResetRetries(apiBase)[provider];
     const current = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
       && selectionMutationsRef.current.get(key) === mutation;
@@ -828,8 +846,9 @@ export function useProviderAccountPools(deps: {
       else {
         result = (await res.json().catch(() => ({})) ?? {}) as typeof result;
         partial = result.code === "affinity_reset_not_persisted" && result.retryable === true && result.deletionCommitted === true;
-        if (!partial) { if (current()) notify(t("prov.accountRemoveFail", { email: label }), false); return; }
+        if (!partial) { if (current()) notify(t(result.deletionCommitted === false ? "prov.accountRemoveFail" : "prov.accountRemoveUnverified", { email: label }), false); return; }
       }
+      settleStatus();
       committed = true;
       if (partial) receipt(() => ({ kind: "reset", accountId: account.id }), true, { kind: "unpersisted", accountId: account.id });
       else if (result.affinityResetConfirmed === true) receipt(() => undefined, true, { kind: "confirmed" });
@@ -841,13 +860,14 @@ export function useProviderAccountPools(deps: {
         notify(t("prov.accountRemoved", { email: label }), true);
       }
       await fetchAccountSets([provider]);
-      void fetchOauth().catch(() => {
+      if (!statusBlocked) void fetchOauth().catch(() => {
         if (aliveRef.current && mountedRef.current && serverRef.current === apiBase) notify(t("pws.accountsLoadFailed"), false);
       });
       await fetchProviderQuotas(true);
     } catch {
-      if (current()) notify(t(committed ? "pws.accountsLoadFailed" : "prov.accountRemoveFail", { email: label }), false);
+      if (current()) notify(t(committed ? "pws.accountsLoadFailed" : "prov.accountRemoveUnverified", { email: label }), false);
     } finally {
+      settleStatus();
       receipt();
       if (selectionMutationsRef.current.get(key) === mutation) {
         selectionMutationsRef.current.delete(key);

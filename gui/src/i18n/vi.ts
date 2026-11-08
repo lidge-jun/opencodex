@@ -849,6 +849,8 @@ export const vi: Record<TKey, string> = {
   "subagentSurface.learnMore": "Vì sao việc này thất bại",
   "prov.logoutOk": "Đã đăng xuất khỏi {provider}.",
   "prov.logoutFail": "Không thể đăng xuất khỏi {provider}. Trạng thái tài khoản của bạn vẫn không thay đổi.",
+  "prov.logoutBusy": "Đang thay đổi tài khoản. Hãy đợi hoàn tất rồi thử đăng xuất lại.",
+  "prov.accountRemoveUnverified": "Không thể xác nhận {email} đã được xóa hay chưa. Hãy tải lại danh sách tài khoản trước khi thử lại.",
   "prov.removed": "Đã xóa \"{name}\".",
   "prov.removedDefault": "Đã xoá \"{name}\". Provider mặc định hiện tại là \"{defaultProvider}\".",
   "prov.removedShadowTarget": "Đã xóa \"{name}\". Shadow Call Intercept vẫn trỏ tới \"{model}\", nên các lệnh gọi phụ sẽ thất bại cho đến khi bạn chọn mục tiêu khác.",

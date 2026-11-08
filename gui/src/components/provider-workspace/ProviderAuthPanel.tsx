@@ -331,7 +331,7 @@ export default function ProviderAuthPanel({
       setManualCodeBusy(false);
     }
   };
-  const loggedIn = accounts.length > 0 || oauth?.loggedIn === true;
+  const loggedIn = (accountLoadState === "ready" && accounts.length > 0) || oauth?.loggedIn === true;
   const activeReauthAccount = accounts.find(a => a.active && a.needsReauth);
   const activeNeedsReauth = Boolean(activeReauthAccount);
   const quotaRows = isOauth ? accounts : keys;
@@ -488,7 +488,7 @@ export default function ProviderAuthPanel({
               <span className="pwi-auth-status-text">
                 {loggedIn
                   ? t("pws.loggedInTitle")
-                  : (oauth?.error || t("pws.notLoggedInTitle"))}
+                  : (oauth?.error || (oauth?.loggedIn === false ? t("pws.notLoggedInTitle") : t("startup.unverified")))}
               </span>
               <span className="pwi-auth-actions">
                 {activeReauthAccount && (

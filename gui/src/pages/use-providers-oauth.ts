@@ -263,7 +263,10 @@ export function useProvidersOAuth({
 
   const logoutOAuth = async (provider: string) => {
     const finishLogout = beginAccountLogout?.(provider);
-    if (beginAccountLogout && !finishLogout) return;
+    if (beginAccountLogout && !finishLogout) {
+      if (aliveRef.current) notify(t("prov.logoutBusy"), false);
+      return;
+    }
     if (invalidateOauthStatusReads?.(provider, true) === false) { finishLogout?.(); return; }
     const clearStatus = () => setOauthStatus(current => {
       if (!(provider in current)) return current;
