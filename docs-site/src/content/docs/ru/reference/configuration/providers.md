@@ -193,7 +193,7 @@ cross-route credential fallback не существует. Строки API GPT-
 | `unsafeAllowNativeLocalExec?` | `boolean` | Legacy boolean Cursor, эквивалентен `nativeLocalExec: "on"` только если новое поле не задано. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Политика local-exec для Cursor. `off` — дефолт; `codex-sandbox` сейчас ведёт себя fail-closed как `off`. |
 
-Для нативного Responses эта настройка также охватывает обычный EOF после одних событий жизненного цикла. Ограничения на самодостаточный запрос и число замен сохраняются. Во время проверки SSE-комментарии поддерживают соединение и не считаются выводом модели.
+Для нативного Responses эта настройка также охватывает обычный EOF после одних событий жизненного цикла. Ограничения на самодостаточный запрос и число замен сохраняются.
 
 LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
 

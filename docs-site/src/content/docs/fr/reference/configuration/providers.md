@@ -188,7 +188,7 @@ sauvegarde dont le contenu diffère, puis réécrit en identifiants sans préfix
 | `unsafeAllowNativeLocalExec?` | `boolean` | Ancien booléen de Cursor, équivalent à `nativeLocalExec: "on"` uniquement lorsque le champ plus récent n'est pas défini. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Politique d'exécution locale de Cursor. `off` est la valeur par défaut ; actuellement, `codex-sandbox` échoue de manière sûre comme `off`. |
 
-Pour Responses natif, la même option couvre aussi une fin de flux normale après les seuls événements de cycle de vie. Les limites de requête autonome et de remplacement restent applicables. Pendant l’inspection, des commentaires SSE maintiennent la connexion sans compter comme sortie du modèle.
+Pour Responses natif, la même option couvre aussi une fin de flux normale après les seuls événements de cycle de vie. Les limites de requête autonome et de remplacement restent applicables.
 
 LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
 

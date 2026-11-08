@@ -140,8 +140,9 @@ commits the original stream. An SSE event name that conflicts with its JSON type
 or an unfinished output/error/terminal frame on a rejected read also keeps the original bytes and
 read error; the last SSE event field is authoritative. A clean EOF before output or a terminal is offered only to the native reset recovery
 owner as a distinct pre-output EOF; ordinary combo preflight keeps its existing EOF behavior.
-The deferred native hold emits bounded SSE comment heartbeats without counting them as output,
-and downstream cancellation aborts the hold or an in-flight replacement.
+The deferred native hold emits bounded SSE comment heartbeats without counting them as output.
+Direct streams can receive them during the hold; combo preflight buffers them until selection.
+Downstream cancellation aborts the hold or an in-flight replacement.
 
 - a non-control Responses event (apart from the held mandatory-tool reasoning prelude above) begins client-visible output or a tool/action item, after which the
   target is committed and cross-target replay is forbidden;
