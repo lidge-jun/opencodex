@@ -4,7 +4,7 @@ Round-robin API-key cache-affinity picks carry both request-local affinity and d
 selection ownership. Failure recovery cools their live captured entry and selects a request-local
 replacement without writing the saved active key or revision. An unrelated selection revision
 does not revoke a live affinity pick; removed, disabled or replaced entries still cannot send
-or authorize recovery. Final logging reports `released` only when scoped provider/entry release
+or authorize recovery; turning affinity off also revokes an in-flight affinity pick. Final logging reports `released` only when scoped provider/entry release
 actually deletes a binding; a refusal on another entry preserves the binding and prior outcome.
 
 Shared header helpers and bounded local JSON reads follow the
