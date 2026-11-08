@@ -727,6 +727,7 @@ export function emptyDraft(id = ""): ComboItem {
 }
 
 const JEV_AUTO_MODEL_IDS = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna"] as const;
+export const OPENAI_AUTO_MODEL_IDS = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"] as const;
 
 /** Build the opt-in JEV Combo template from models that are available right now. */
 export function jevAutoDraft(
@@ -734,8 +735,9 @@ export function jevAutoDraft(
   eligibleProviders?: ReadonlySet<string>,
   decisionProvider?: string | null,
   id = "jev-auto",
+  modelIds: readonly string[] = JEV_AUTO_MODEL_IDS,
 ): ComboItem {
-  const targets = JEV_AUTO_MODEL_IDS.flatMap((id) => {
+  const targets = modelIds.flatMap((id) => {
     const model = models.find((candidate) => candidate.id === id
       && (eligibleProviders === undefined || eligibleProviders.has(candidate.provider)));
     return model ? [newComboTarget({ provider: model.provider, model: model.id })] : [];

@@ -21,6 +21,9 @@ const models = [
   { provider: "openai", id: "gpt-6-astra", reasoningEfforts: ["medium", "high"] },
   { provider: "openai", id: "gpt-5.6-sol", reasoningEfforts: ["low", "medium"] },
   { provider: "openai", id: "gpt-5.6-luna", reasoningEfforts: ["low"] },
+  { provider: "openai", id: "gpt-6-luna", reasoningEfforts: ["low", "medium"] },
+  { provider: "openai", id: "gpt-6.1-terra", reasoningEfforts: ["medium", "high"] },
+  { provider: "openai", id: "gpt-6.1-sol", reasoningEfforts: ["low", "medium", "high"] },
 ];
 const providers = [
   { name: "openai", adapter: "openai-responses" },
@@ -75,6 +78,7 @@ function button(host: HTMLElement, text: string): HTMLButtonElement | undefined 
 
 test.each([
   { name: "tev-local", baseUrl: "http://127.0.0.1:11434/v1/systemone", openai: false },
+  { name: "gateway-decisions", baseUrl: "https://ai-gateway.vercel.sh/v1/decisions", openai: false },
   { name: "openai-decisions", baseUrl: "https://api.openai.com/v1/decisions", openai: true },
   { name: "my-router", baseUrl: "https://api.openai.com/v1/decisions", openai: true },
   { name: "my-router", baseUrl: "https://api.openai.com/v1/decisions/", openai: true },
@@ -164,6 +168,11 @@ test.each([
   expect(dialog!.querySelector<HTMLInputElement>("#cwi-new-alias")?.value).toBe(comboId);
   expect(dialog!.querySelector('[role="radio"][aria-checked="true"]')?.textContent)
     .toBe(openai ? "OpenAI Decisions" : "JEV");
+  const targetModels = openai
+    ? ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"]
+    : ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna"];
+  expect([...dialog!.querySelectorAll<HTMLButtonElement>('[role="combobox"][aria-label="Model"]')]
+    .map(select => selectValue(select))).toEqual(targetModels);
   // The deep-linked row selects the external service method; stored method ids stay compatible.
   expect(host.querySelector("#cwi-new-decision-method-systemone")?.getAttribute("aria-pressed")).toBe("true");
   const service = selectTrigger(host, "#cwi-new-decision-provider");
@@ -203,6 +212,7 @@ test.each([
   expect(puts).toHaveLength(1);
   expect(puts[0]!.id).toBe(comboId);
   expect(puts[0]!.combo).toMatchObject({ alias: comboId, strategy: "jev", decisionProvider: name, decisionTimeoutMs: 60000 });
+  expect(puts[0]!.combo.targets).toEqual(targetModels.map(model => ({ provider: "openai", model })));
 });
 
 test("the overview names each JEV combo's service; the editor clears it and hides it off JEV", async () => {

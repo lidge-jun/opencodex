@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   type ComboItem,
   COMBO_EFFORTS,
+  OPENAI_AUTO_MODEL_IDS,
   buildComboAttention,
   comboQuotaState,
   comboPublicModelId,
@@ -222,6 +223,26 @@ describe("combo-workspace-data", () => {
     expect(draft.targets.every(target => typeof target.clientKey === "string")).toBe(true);
     draft.targets.splice(1, 1);
     expect(draft.targets.map(target => target.model)).toEqual(["gpt-6-astra", "gpt-5.6-luna"]);
+  });
+
+  test("OpenAI Auto omits unavailable models and providers, keeping an empty draft editable", () => {
+    const models = [
+      { provider: "off", id: "gpt-6.1-sol" },
+      { provider: "off", id: "gpt-6.1-terra" },
+      { provider: "openai", id: "gpt-6-luna" },
+      { provider: "openai", id: "gpt-6.1-sol" },
+      { provider: "openai", id: "gpt-5.6-sol" },
+    ];
+    const draft = jevAutoDraft(models, new Set(["openai"]), "my-router", "openai-auto", OPENAI_AUTO_MODEL_IDS);
+    expect(draft.targets.map(({ provider, model }) => ({ provider, model }))).toEqual([
+      { provider: "openai", model: "gpt-6.1-sol" },
+      { provider: "openai", model: "gpt-6-luna" },
+    ]);
+    expect(draft).toMatchObject({ alias: "openai-auto", decisionProvider: "my-router", reasoningEffortMode: "adaptive" });
+
+    const empty = jevAutoDraft(models, new Set(), "my-router", "openai-auto", OPENAI_AUTO_MODEL_IDS);
+    expect(empty.targets).toHaveLength(1);
+    expect(empty.targets[0]).toMatchObject({ provider: "", model: "" });
   });
 
   test("parseComboList accepts normalized GET rows and skips malformed entries", () => {

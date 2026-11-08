@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import {
   type ComboItem,
+  OPENAI_AUTO_MODEL_IDS,
   comboModelId,
   emptyDraft,
   filterCombos,
@@ -75,7 +76,8 @@ export default function ComboWorkspace({
       || jevDecisionProviderIssue(addDecisionProvider, providerMap) === null;
     const decisionProvider = usable ? addDecisionProvider : null;
     const openaiDecision = isOpenAIDecisionProvider(providers.find(provider => provider.name === decisionProvider));
-    return jevAutoDraft(models, jevTargetProviders, decisionProvider, openaiDecision ? "openai-auto" : "jev-auto");
+    return jevAutoDraft(models, jevTargetProviders, decisionProvider,
+      openaiDecision ? "openai-auto" : "jev-auto", openaiDecision ? OPENAI_AUTO_MODEL_IDS : undefined);
   }, [addDecisionProvider, addIntent, jevTargetProviders, models, providerMap, providers]);
 
   const filtered = useMemo(() => filterCombos(combos, query), [combos, query]);
