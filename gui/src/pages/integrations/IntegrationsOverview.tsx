@@ -110,6 +110,7 @@ interface BulkDisableState {
   actions: BulkDisableAction[];
   loading: boolean;
   failure: string | null;
+  recovery: PreviewRecovery | null;
   stale: boolean;
   failures: string[];
 }
@@ -476,14 +477,17 @@ export default function IntegrationsOverview({
    * single-client PUT the card uses, so every client gets its own snapshot and
    * its own journal row, and one refusal cannot silently swallow the rest.
    */
-  const requestDisableAll = async () => {
-    if (bulkPending || bulkPlans || appliedClients.length === 0) return;
+  const requestDisableAll = async (
+    /** Recovery replaces the failed plan set it is retrying; the first request never does. */
+    replacing = false,
+  ) => {
+    if (bulkPending || (bulkPlans && !replacing) || appliedClients.length === 0) return;
     const controller = new AbortController();
     const generation = bulkPreviewGenerationRef.current + 1;
     bulkPreviewGenerationRef.current = generation;
     bulkPreviewAbortRef.current?.abort();
     bulkPreviewAbortRef.current = controller;
-    setBulkPlans({ actions: [], loading: true, failure: null, stale: false, failures: [] });
+    setBulkPlans({ actions: [], loading: true, failure: null, recovery: null, stale: false, failures: [] });
     try {
       const actions = await Promise.all(appliedClients.map(async client => {
         const row = rows.find(candidate => candidate.status?.clientId === client.clientId);
@@ -495,17 +499,27 @@ export default function IntegrationsOverview({
       }));
       if (controller.signal.aborted || generation !== bulkPreviewGenerationRef.current) return;
       bulkPreviewAbortRef.current = null;
-      setBulkPlans({ actions, loading: false, failure: null, stale: false, failures: [] });
+      setBulkPlans({ actions, loading: false, failure: null, recovery: null, stale: false, failures: [] });
     } catch (error) {
       if (controller.signal.aborted || generation !== bulkPreviewGenerationRef.current) return;
       bulkPreviewAbortRef.current = null;
-      if (isIntegrationPreviewUnavailable(error)) {
-        setBulkPlans(null);
-        refresh();
-        return;
-      }
-      setBulkPlans({ actions: [], loading: false, failure: t("integrations.preview.failed"), stale: false, failures: [] });
+      const recovery = previewRecoveryFor(error);
+      setBulkPlans({
+        actions: [], loading: false, recovery, stale: false, failures: [],
+        failure: recovery === null ? t("integrations.preview.failed") : null,
+      });
     }
+  };
+
+  const recoverBulkPlans = async () => {
+    try {
+      await loadIntegrationStates(apiBase);
+    } catch {
+      // Fall through: the next preview answers again, and its refusal is the
+      // message the user can act on.
+    }
+    refresh();
+    await requestDisableAll(true);
   };
 
   const closeBulkPlans = () => {
@@ -562,7 +576,7 @@ export default function IntegrationsOverview({
     if (staleActions.length > 0) {
       refresh();
       setBulkPending(false);
-      setBulkPlans({ actions: staleActions, loading: false, failure: null, stale: true, failures: failed });
+      setBulkPlans({ actions: staleActions, loading: false, failure: null, recovery: null, stale: true, failures: failed });
       setBulkResult(failed.length === 0
         ? null
         : { tone: "err", text: t("integrations.bulk.partial", { clients: failed.join("; ") }) });
@@ -1004,6 +1018,8 @@ export default function IntegrationsOverview({
           planStale={bulkPlans.stale}
           planLoading={bulkPlans.loading}
           planFailure={bulkPlans.failure}
+          previewRecovery={bulkPlans.recovery}
+          onPreviewRecovery={recoverBulkPlans}
           onClose={closeBulkPlans}
           onConfirm={async () => { await disableAll(bulkPlans); }}
         />
