@@ -34,6 +34,13 @@ export interface TelemetryState {
   lastSentAt: string | null;
   ineligibleThroughDay: string | null;
   retryAfterUntil: string | null;
+  /**
+   * Set whenever an env opt-out is observed and cleared only by a clean opted-out shutdown or by the
+   * next tick that runs without the opt-out. While it is set, every day up to the current one is
+   * ineligible, because a proxy started under `OCX_TELEMETRY=0` reads the env once and runs no ticks
+   * that could keep `ineligibleThroughDay` current (D2).
+   */
+  envOptOutActiveSince?: string | null;
 }
 
 export function telemetryStatePath(configDir = getConfigDir()): string {
@@ -48,6 +55,7 @@ function emptyState(): TelemetryState {
     lastSentAt: null,
     ineligibleThroughDay: null,
     retryAfterUntil: null,
+    envOptOutActiveSince: null,
   };
 }
 
@@ -74,6 +82,10 @@ export function readTelemetryState(configDir = getConfigDir()): TelemetryState {
       typeof raw.retryAfterUntil === "string" && !Number.isNaN(Date.parse(raw.retryAfterUntil))
         ? raw.retryAfterUntil
         : null;
+    const envOptOutActiveSince =
+      typeof raw.envOptOutActiveSince === "string" && !Number.isNaN(Date.parse(raw.envOptOutActiveSince))
+        ? raw.envOptOutActiveSince
+        : null;
     return {
       version: 1,
       sentDays,
@@ -81,6 +93,7 @@ export function readTelemetryState(configDir = getConfigDir()): TelemetryState {
       lastSentAt: typeof raw.lastSentAt === "string" ? raw.lastSentAt : null,
       ineligibleThroughDay,
       retryAfterUntil,
+      envOptOutActiveSince,
     };
   } catch {
     return emptyState();
@@ -103,13 +116,15 @@ export function writeTelemetryState(state: TelemetryState, configDir = getConfig
     lastSentAt: state.lastSentAt ?? null,
     ineligibleThroughDay: state.ineligibleThroughDay ?? null,
     retryAfterUntil: state.retryAfterUntil ?? null,
+    envOptOutActiveSince: state.envOptOutActiveSince ?? null,
   };
   atomicWriteFileNoFollow(path, `${JSON.stringify(payload, null, 2)}\n`);
 }
 
 /**
- * Persist `ineligibleThroughDay = today's UTC day` in `telemetry-state.json` (atomic no-follow)
- * and delete `telemetry-id.json` whenever an `OCX_TELEMETRY` or `DO_NOT_TRACK` opt-out is observed.
+ * Persist `ineligibleThroughDay = today's UTC day` and the active opt-out marker in
+ * `telemetry-state.json` (atomic no-follow) and delete `telemetry-id.json` whenever an
+ * `OCX_TELEMETRY` or `DO_NOT_TRACK` opt-out is observed.
  */
 export function recordTelemetryEnvOptOut(configDir = getConfigDir(), now = Date.now()): void {
   const todayDay = formatUtcDay(utcMidnightMs(now));
@@ -117,6 +132,24 @@ export function recordTelemetryEnvOptOut(configDir = getConfigDir(), now = Date.
   if (!state.ineligibleThroughDay || state.ineligibleThroughDay < todayDay) {
     state.ineligibleThroughDay = todayDay;
   }
+  state.envOptOutActiveSince ??= new Date(now).toISOString();
+  writeTelemetryState(state, configDir, now);
+  deleteTelemetryInstallId(configDir);
+}
+
+/**
+ * End an observed env opt-out: every day up to today stays ineligible and the marker is cleared, so
+ * only days strictly after today can be sent. Called by a clean shutdown of an opted-out proxy and
+ * by the first tick that runs without the opt-out.
+ */
+export function endTelemetryEnvOptOut(configDir = getConfigDir(), now = Date.now()): void {
+  const state = readTelemetryState(configDir);
+  if (!state.envOptOutActiveSince) return;
+  const todayDay = formatUtcDay(utcMidnightMs(now));
+  if (!state.ineligibleThroughDay || state.ineligibleThroughDay < todayDay) {
+    state.ineligibleThroughDay = todayDay;
+  }
+  state.envOptOutActiveSince = null;
   writeTelemetryState(state, configDir, now);
   deleteTelemetryInstallId(configDir);
 }
@@ -139,6 +172,7 @@ export function latestCompletedUtcDay(now = Date.now()): string {
  * - `status.effective` must be true.
  * - Strictly AFTER the UTC day of `decidedAt ?? noticeShownAt` (D1).
  * - Strictly AFTER `state.ineligibleThroughDay` when set (D2).
+ * - Nothing while an env opt-out marker is still set: that period may have run until today (D2).
  * - Not already recorded in `state.sentDays`.
  */
 export function resolveNextEligibleTelemetryDay(
@@ -148,6 +182,9 @@ export function resolveNextEligibleTelemetryDay(
 ): { day: string | null; reason: string } {
   if (!status.effective) {
     return { day: null, reason: status.reason };
+  }
+  if (state.envOptOutActiveSince) {
+    return { day: null, reason: "env-opt-out-pending" };
   }
   const consentTimestamp = status.decidedAt ?? status.noticeShownAt;
   if (!consentTimestamp) {
@@ -244,6 +281,9 @@ export async function runTelemetryTick(options: TelemetryTickOptions = {}): Prom
     return { sent: false, reason: status.reason };
   }
 
+  if (readTelemetryState(configDir).envOptOutActiveSince) {
+    endTelemetryEnvOptOut(configDir, now);
+  }
   const state = readTelemetryState(configDir);
   if (state.retryAfterUntil) {
     const retryUntilMs = Date.parse(state.retryAfterUntil);
