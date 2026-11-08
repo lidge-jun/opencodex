@@ -521,4 +521,37 @@ describe("rejected reasoning rungs", () => {
     expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
     expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
   });
+
+  test("combo stops immediately on nested policy refusal without walking ladder", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const attempts: Array<{ host: string; effort: unknown }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      attempts.push({ host: url.host, effort: effortOf(body) });
+      return new Response(NESTED_POLICY_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const comboConfig = {
+      providers: {
+        first: { adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+        fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
+      },
+      combos: {
+        effort: {
+          strategy: "failover",
+          targets: [{ provider: "first", model: MODEL }, { provider: "fallback", model: MODEL }],
+        },
+      },
+    } as OcxConfig;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const response = await handleResponses(request(false, "combo/effort"), comboConfig, logCtx);
+    const result = await response.text();
+
+    expect(response.status).toBe(400);
+    expect(result).toContain("bio_policy");
+    expect(attempts).toEqual([
+      { host: "opencode.ai", effort: "max" },
+    ]);
+  });
 });

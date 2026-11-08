@@ -552,7 +552,7 @@ describe("bounded optional-control error envelopes", () => {
     }
   });
   test("rejects conflicting root and nested codes before granting a combo hop for reasoning effort", () => {
-    for (const conflictingCode of ["permission_denied", "context_length_exceeded", "origin_rejected", "unknown_terminal_code"]) {
+    for (const conflictingCode of ["context_length_exceeded", "origin_rejected", "unknown_terminal_code"]) {
       const payloadWithCode = JSON.stringify({
         error: { type: "invalid_request_error", code: conflictingCode, message: "Invalid reasoning effort." },
       });
@@ -566,6 +566,16 @@ describe("bounded optional-control error envelopes", () => {
       expect(comboFailureDecision(400, rootWithCode)).toBe("stop");
       expect(comboFailureCooldownScope(400, rootWithCode)).toBe("target");
     }
+  });
+  test("pins root code behavior against reasoning effort matcher (dev regression)", () => {
+    for (const code of ["insufficient_quota", "model_not_found", "rate_limit_exceeded"]) {
+      const body = JSON.stringify({ code, error: { type: "invalid_request_error", message: "Invalid reasoning effort." } });
+      expect(comboFailureDecision(400, body)).toBe("stop");
+      expect(comboFailureCooldownScope(400, body)).toBe("target");
+    }
+    const permBody = JSON.stringify({ code: "permission_denied", error: { type: "invalid_request_error", message: "Invalid reasoning effort." } });
+    expect(comboFailureDecision(400, permBody)).toBe("hop");
+    expect(comboFailureCooldownScope(400, permBody)).toBe("target");
   });
 });
 

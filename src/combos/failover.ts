@@ -958,9 +958,9 @@ export function comboFailureDecision(
   if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(error.code ?? "")) {
     return "stop";
   }
-  // Quota or permission prose inside a request-validation status (400/422) is not authoritative without a
-  // structured code: the body can quote prompt or parameter text back (#7625, #8173).
-  if (["insufficient_quota", "permission_denied"].includes(error.code ?? "") && (status === 400 || status === 422)) return "stop";
+  // Quota prose inside a request-validation status (400/422) is not authoritative without a
+  // structured code: the body can quote prompt or parameter text back (#7625).
+  if (error.code === "insufficient_quota" && (status === 400 || status === 422)) return "stop";
   // 402 (payment required) and 425 (too early) are provider-state signals, not verdicts about
   // the request: another combo target can still serve it.
   if ([401, 402, 403, 404, 408, 425, 429].includes(status) || status >= 500) return "hop";
