@@ -19,8 +19,10 @@ import {
   unlinkSync,
   writeSync,
   type Stats,
+  type BigIntStats,
 } from "node:fs";
 import { join } from "node:path";
+import { fileIdentityKey, sameFileIdentity, type FileIdentity } from "../../lib/file-identity";
 import {
   ARTIFACT_FILENAME_EXT,
   MAX_BYTES_PER_ARTIFACT,
@@ -72,7 +74,7 @@ function openFlags(base: number, noFollow: boolean): number {
   return base;
 }
 
-function assertRegularFileStats(stats: Stats, label: string): void {
+function assertRegularFileStats(stats: Stats | BigIntStats, label: string): void {
   if (
     !stats.isFile() ||
     stats.isSymbolicLink() ||
@@ -84,19 +86,19 @@ function assertRegularFileStats(stats: Stats, label: string): void {
   ) {
     harnessFailure(`${label}: not a regular file`, "artifact_unsafe_target");
   }
-  if (stats.nlink !== 1) {
+  if (Number(stats.nlink) !== 1) {
     harnessFailure(`${label}: hard links prohibited (nlink=${stats.nlink})`, "artifact_unsafe_target");
   }
 }
 
-function assertDirectoryStats(stats: Stats, label: string): void {
+function assertDirectoryStats(stats: Stats | BigIntStats, label: string): void {
   if (!stats.isDirectory() || stats.isSymbolicLink()) {
     harnessFailure(`${label}: must be a real directory (no symlink/reparse redirection)`, "artifact_unsafe_target");
   }
 }
 
-function identityOf(stats: Stats): string {
-  return `${stats.dev}:${stats.ino}`;
+function identityOf(stats: FileIdentity): string {
+  return fileIdentityKey(stats);
 }
 
 function assertRelativeName(name: string): void {
@@ -154,14 +156,13 @@ function childPath(dir: TrustedArtifactDir, name: string): string {
 
 function assertOpenedPathMatchesDescriptor(dir: TrustedArtifactDir, name: string, fd: number): void {
   if (detectArtifactIoMode(dir) !== "win32_pinned") return;
-  const opened = fstatSync(fd);
+  const opened = fstatSync(fd, { bigint: true });
   assertRegularFileStats(opened, "artifact fd");
-  const pathEntry = lstatSync(childPath(dir, name));
+  const pathEntry = lstatSync(childPath(dir, name), { bigint: true });
   if (
     !pathEntry.isFile() ||
     pathEntry.isSymbolicLink() ||
-    pathEntry.dev !== opened.dev ||
-    pathEntry.ino !== opened.ino
+    !sameFileIdentity(pathEntry, opened)
   ) {
     closeSync(fd);
     harnessFailure("artifact path identity mismatch after open", "artifact_unsafe_target");
@@ -202,7 +203,7 @@ function unlinkAtDir(dir: TrustedArtifactDir, name: string): void {
 }
 
 function revalidateDir(dir: TrustedArtifactDir): void {
-  const stats = fstatSync(dir.fd);
+  const stats = fstatSync(dir.fd, { bigint: true });
   assertDirectoryStats(stats, "artifacts dir");
   if (identityOf(stats) !== dir.identity) {
     harnessFailure("artifacts directory identity changed", "artifact_unsafe_target");
@@ -225,7 +226,7 @@ export function openTrustedArtifactDir(artifactsDir: string): TrustedArtifactDir
     fd = openSync(abs, O_RDONLY);
   }
 
-  const stats = fstatSync(fd);
+  const stats = fstatSync(fd, { bigint: true });
   assertDirectoryStats(stats, "artifacts dir");
   const trusted = { path: abs, fd, identity: identityOf(stats) };
   detectArtifactIoMode(trusted);
