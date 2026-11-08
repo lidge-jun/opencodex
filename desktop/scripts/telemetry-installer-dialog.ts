@@ -148,7 +148,7 @@ ${controls.join("\n")}
         <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
           <Publish Property="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="${TELEMETRY_INSTALLER_SEND}">${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY} = "1"</Publish>
           <Publish Property="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="${TELEMETRY_INSTALLER_OPT_OUT}">NOT (${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY} = "1")</Publish>
-          <Publish Property="${TELEMETRY_INSTALLER_STAMP_PROPERTY}" Value="[Date] [Time]">1</Publish>
+          <Publish Property="${TELEMETRY_INSTALLER_STAMP_PROPERTY}" Value="[Date] [Time]">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} ~&lt;&gt; OCX_TELEMETRY_PREVIOUS_CHOICE</Publish>
           <Publish Event="NewDialog" Value="InstallDirDlg">1</Publish>
         </Control>
         <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">

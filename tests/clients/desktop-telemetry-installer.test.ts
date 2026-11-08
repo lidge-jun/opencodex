@@ -179,12 +179,16 @@ describe("Windows installer telemetry choice", () => {
     );
     // A checked box writes "send", which is never acted on, and the page says so.
     expect(wxs).toContain(`Text="${TELEMETRY_INSTALLER_KEEP_NOTE}"`);
-    // Unchecking records an opt-out with a new stamp.
+    // Unchecking records an opt-out; a new stamp is issued only when the choice differs from the carried one.
     const next = /<Control Id="Next"[\s\S]*?<\/Control>/.exec(wxs)?.[0] ?? "";
     expect(next).toContain(
       `<Publish Property="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="${TELEMETRY_INSTALLER_OPT_OUT}">NOT (${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY} = "1")</Publish>`,
     );
-    expect(next).toContain(`<Publish Property="${TELEMETRY_INSTALLER_STAMP_PROPERTY}" Value="[Date] [Time]">1</Publish>`);
+    expect(next).toContain(
+      `<Publish Property="${TELEMETRY_INSTALLER_STAMP_PROPERTY}" Value="[Date] [Time]">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} ~&lt;&gt; OCX_TELEMETRY_PREVIOUS_CHOICE</Publish>`,
+    );
+    // The stamp is compared after the choice is set.
+    expect(next.indexOf(`Property="${TELEMETRY_INSTALLER_STAMP_PROPERTY}"`)).toBeGreaterThan(next.lastIndexOf(`Property="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}"`));
   });
 
   test("the choice is machine-wide, survives upgrades, and a silent opt-out gets its own stamp", () => {
@@ -239,6 +243,17 @@ describe("Windows installer telemetry choice", () => {
       expect(simulateInstall(wxs, { ui: "full", previous: { choice: send, stamp: "s1" } }).boxPreselected).toBe(true);
       // Checking it records send, which the app never acts on: a saved decline stays declined.
       expect(simulateInstall(wxs, { ui: "full", box: true, previous: { choice: optOut, stamp: "s1" } }).choice).toBe(send);
+    });
+
+    test("the page issues a new stamp only when the person changes the carried choice", () => {
+      // Continuing past a carried opt-out keeps its stamp, so the app does not apply it again over a
+      // dashboard enable made since.
+      expect(simulateInstall(wxs, { ui: "full", previous: { choice: optOut, stamp: "s1" } })).toEqual({ choice: optOut, stamp: "s1", boxPreselected: false });
+      expect(simulateInstall(wxs, { ui: "full", previous: { choice: "OptOut", stamp: "s1" } })).toEqual({ choice: optOut, stamp: "s1", boxPreselected: false });
+      expect(simulateInstall(wxs, { ui: "full", previous: { choice: send, stamp: "s1" } })).toEqual({ choice: send, stamp: "s1", boxPreselected: true });
+      // A change is a new decision.
+      expect(simulateInstall(wxs, { ui: "full", box: false, previous: { choice: send, stamp: "s1" } })).toEqual({ choice: optOut, stamp: UI_STAMP, boxPreselected: true });
+      expect(simulateInstall(wxs, { ui: "full", box: true, previous: { choice: optOut, stamp: "s1" } })).toEqual({ choice: send, stamp: UI_STAMP, boxPreselected: false });
     });
 
     test("a silent install without a choice defaults to send and records no stamp", () => {

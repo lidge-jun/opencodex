@@ -385,7 +385,9 @@ choice and stamp and carries them (`OcxTelemetryKeepChoice`, `OcxTelemetryKeepSt
 an opt-out, with its old stamp, through in-app updates (`/passive`, no UI sequence), reduced-UI
 (`/qr`) and maintenance runs, and the early removal of the old product in a major upgrade; a first
 install defaults to `send`. The box starts checked unless the install already carries an opt-out
-(compared case-insensitively with `~<>`), and pressing Next records the box with a new stamp. A
+(compared case-insensitively with `~<>`). Pressing Next records the box, and issues a new stamp only
+when the box differs from the carried choice (`OCX_TELEMETRY_CHOICE ~<> OCX_TELEMETRY_PREVIOUS_CHOICE`),
+so continuing past a carried opt-out does not apply it again over a later dashboard enable. A
 page note says leaving the box checked keeps the current choice, because `send` is never acted on.
 The installer test evaluates the fragment's conditions through both MSI phases for fresh, silent,
 reduced-UI and upgrade installs.
