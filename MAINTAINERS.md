@@ -146,7 +146,7 @@ Adding or removing a maintainer requires:
 - 2026-09-06 — The owner authorized explicit maintainer integration into `dev` without a second
   maintainer approval. Both current maintainers have `admin` access. The dev-only PR bypass
   includes GitHub's `admin` and `maintain` roles; `write` access alone is insufficient. Contributor
-  review remains the default and the `main`/`preview` rules are unchanged. The optional
+  review remained the default; the former `main`/`preview` branches were later retired. The optional
   `scripts/ci/assert-mergeable-review.sh --maintainer-integration <pr-number> [repo]` path checks
   the authenticated actor against the trusted `dev` roster and live repository permissions,
   preserves outstanding maintainer objections, and binds its result to the current head and base.
@@ -195,10 +195,10 @@ Adding or removing a maintainer requires:
   this addition does not widen the review surface for them.
 
   Code-owner approval and the maintainer-approval requirement above are both
-  enforced, not conventions. `dev`, `main`, and `preview` each carry an active
-  repository ruleset — the classic `/branches/{branch}/protection` endpoint
-  returns 404 for them, which is why this file long described the repository as
-  unprotected. `Protect dev` (id 20763889) requires a pull request with one
+  enforced, not conventions. `dev` carries an active repository ruleset; the
+  classic `/branches/{branch}/protection` endpoint can return 404 for rulesets,
+  which is why this file long described the repository as unprotected.
+  `Protect dev` (id 20763889) requires a pull request with one
   approving review, code-owner review, and extra approval for unattributed
   changes, and it blocks deletion and non-fast-forward pushes. Allowed merge
   methods are merge and squash; rebase merges are off.
