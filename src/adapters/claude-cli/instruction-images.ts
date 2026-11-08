@@ -16,3 +16,16 @@ export function responsesHasInstructionImage(body: unknown): boolean {
     && (item.role === "developer" || item.role === "system")
     && Array.isArray(item.content) && item.content.some(part => record(part) && part.type === "input_image"));
 }
+
+/** File-backed images cannot be resolved by Claude CLI; the parser otherwise turns them into text. */
+export function responsesHasFileImage(body: unknown): boolean {
+  if (!record(body) || !Array.isArray(body.input)) return false;
+  return body.input.some(item => {
+    if (!record(item)) return false;
+    const parts = item.type === "function_call_output" || item.type === "custom_tool_call_output"
+      ? item.output : (item.type === undefined || item.type === "message") ? item.content : undefined;
+    return Array.isArray(parts) && parts.some(part => record(part) && part.type === "input_image"
+      && !(typeof part.image_url === "string" && part.image_url.length > 0)
+      && typeof part.file_id === "string" && part.file_id.length > 0);
+  });
+}

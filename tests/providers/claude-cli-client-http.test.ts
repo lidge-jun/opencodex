@@ -218,7 +218,7 @@ test("instruction images are refused at both HTTP routes before CLI launch", asy
         expect(response.status).toBe(400);
         expect(await response.text()).toContain("unsupported_input_modality");
       }
-      expect(descriptions).toBeGreaterThan(0);
+      expect(descriptions).toBe(0);
       expect(launches).toBe(0);
     } finally {
       await vision.stop(true);
@@ -243,6 +243,16 @@ test("instruction images are refused at both HTTP routes before CLI launch", asy
     expect(otherResponses.status).toBe(200);
     expect(await otherResponses.text()).toContain("other provider answered");
     expect(otherCalls).toBe(2);
+    const otherFileImage = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", body: JSON.stringify({ model: "other/fixture-model", input: [
+        { role: "user", content: [{ type: "input_image", file_id: "file-fixture" }] },
+      ] }),
+    }), otherConfig, { model: "", provider: "" });
+    expect(otherFileImage.status).toBe(200);
+    const otherFileBody = await otherFileImage.text();
+    expect(otherFileBody).toContain("OpenCodex cannot translate file input on this route");
+    expect(otherFileBody).not.toContain("Claude Code CLI");
+    expect(otherCalls).toBe(2);
     const valid = await post("chat/completions", { model, messages: [
       { role: "developer", content: "text policy" },
       { role: "user", content: [{ type: "text", text: "look" }, { type: "image_url", image_url: { url: "data:image/png;base64,QUFB" } }] },
@@ -252,6 +262,54 @@ test("instruction images are refused at both HTTP routes before CLI launch", asy
   } finally {
     definition.create = originalCreate;
     otherDefinition.create = originalOtherCreate;
+    releaseSpend();
+  }
+}, 20000);
+
+test("Responses file-backed images are refused before Claude CLI launch", async () => {
+  const definition = getAdapterDefinition("claude-cli")!;
+  const originalCreate = definition.create;
+  const releaseSpend = acquireOwnedSpendHome();
+  let launches = 0;
+  definition.create = provider => createClaudeCliAdapter(provider, {
+    usageAdmission: async () => ({ state: "unknown" }),
+    which: () => process.execPath,
+    spawn: (_command, args, options) => {
+      launches++;
+      return spawn(process.execPath, [join(import.meta.dir, "../fixtures/claude-efficiency-cli.ts"), JSON.stringify(args), "", "image-replay"], options);
+    },
+  });
+  const config = { port: 0, defaultProvider: "claude-cli", providers: {
+    "claude-cli": { adapter: "claude-cli", baseUrl: "https://api.anthropic.com", authMode: "key", selectedModels: ["claude-sonnet-5-5"] },
+  }, combos: { pair: { strategy: "failover", targets: [{ provider: "claude-cli", model: "claude-sonnet-5-5" }] } } } as OcxConfig;
+  const image = { type: "input_image", file_id: "file-private-fixture" };
+  try {
+    for (const model of ["claude-cli/claude-sonnet-5-5", "pair"]) for (const input of [
+      [{ role: "user", content: [{ type: "input_text", text: "before" }, image] }],
+      [{ type: "function_call", call_id: "call_1", name: "view", arguments: "{}" },
+        { type: "function_call_output", call_id: "call_1", output: [{ type: "input_text", text: "before" }, image] }],
+      [{ type: "custom_tool_call", call_id: "call_2", name: "view", input: "" },
+        { type: "custom_tool_call_output", call_id: "call_2", output: [image] }],
+    ]) {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", body: JSON.stringify({ model, input }),
+      }), config, { model: "", provider: "" });
+      expect(response.status).toBe(400);
+      const body = await response.text();
+      expect(body).toContain("unsupported");
+      expect(body).not.toContain("file-private-fixture");
+    }
+    expect(launches).toBe(0);
+    const valid = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", body: JSON.stringify({ model: "claude-cli/claude-sonnet-5-5", input: [
+        { role: "user", content: [{ ...image, image_url: "data:image/png;base64,QUFB" }] },
+      ] }),
+    }), config, { model: "", provider: "" });
+    expect(valid.status).toBe(200);
+    await valid.text();
+    expect(launches).toBe(1);
+  } finally {
+    definition.create = originalCreate;
     releaseSpend();
   }
 }, 20000);

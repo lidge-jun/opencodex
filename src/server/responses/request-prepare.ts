@@ -72,7 +72,7 @@ import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import type { OcxParsedRequest } from "../../types";
 import { buildToolBridgeMaps } from "./collaboration";
 import { parseRequest } from "../../responses/parser";
-import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
+import { responsesHasFileImage, responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
 import { anthropicSessionKeyFromParts } from "../../oauth/anthropic-routing";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
@@ -243,6 +243,7 @@ export async function prepareResponsesRequest(
     return decodeRequestErrorResponse(err, "responses");
   }
   options.responsesInstructionImage ||= responsesHasInstructionImage(body);
+  options.responsesFileImage ||= responsesHasFileImage(body);
   // Remove display-only artifact paths before helpers, combo dispatch and upstream replay.
   redactHostedImageDisplayPaths(body);
   observeCacheDiagnosticInbound(
@@ -440,6 +441,7 @@ export async function prepareResponsesRequest(
     ?? (body !== originalBody
       && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string");
   options.responsesInstructionImage ||= responsesHasInstructionImage(body);
+  options.responsesFileImage ||= responsesHasFileImage(body);
 
   // Spawn-message compatibility (both directions): agent_message task payloads ride in
   // encrypted_content slots as plaintext. Rewrite them to input_text on the RAW body BEFORE

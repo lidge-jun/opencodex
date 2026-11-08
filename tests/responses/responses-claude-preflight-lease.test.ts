@@ -68,7 +68,7 @@ async function send(input: unknown = "hello"): Promise<Response> {
   }), config, { model: "", provider: "" });
 }
 
-test("an instruction image releases the probe lease before quota admission or dispatch", async () => {
+test("an instruction image is refused before sidecar lease acquisition, quota admission or dispatch", async () => {
   let checks = 0;
   setClaudeUsagePreflightForTests(async () => { checks++; return { state: "available", checkedAt: Date.now() }; });
   const res = await send([
@@ -76,7 +76,7 @@ test("an instruction image releases the probe lease before quota admission or di
     { role: "user", content: "hello" },
   ]);
   expect(res.status).toBe(400);
-  expect(released).toBeGreaterThanOrEqual(1);
+  expect(released).toBe(0);
   expect(checks).toBe(0);
   expect(turns).toBe(0);
 });
