@@ -523,6 +523,14 @@ healthy one.
 `ocx service start`, both still work and the error path names the first one as a fallback. Neither is
 the recommended route any more.
 
+Either verb also recovers a job you booted out by hand. `launchctl bootout` returns before the
+process exits, and while the old process drains `launchctl print` already reports the job absent —
+so an immediate re-bootstrap can still fail with `Bootstrap failed: 5`. The recovery round waits
+between a bounded number of attempts instead of retrying once, so
+`launchctl bootout gui/$(id -u)/com.opencodex.proxy` followed by a single `ocx service restart` or
+`ocx service repair` serves on the first call. A teardown that never finishes still reaches the
+diagnostic error rather than hanging.
+
 Linux and Windows never had this gap: `ocx service restart` there ends in `systemctl --user restart`
 and a stop-then-start of the scheduled task respectively, whichever verb asked.
 
