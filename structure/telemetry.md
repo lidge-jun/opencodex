@@ -63,8 +63,12 @@ with a 10-second `signalWithTimeout` and parses `Retry-After` on HTTP 429/503 re
 `src/telemetry/scheduler.ts` runs an unref'd background timer with startup and interval jitter
 started from `src/server/background-lifecycle.ts`. Whenever an `OCX_TELEMETRY` or `DO_NOT_TRACK`
 opt-out is observed (at startup in `src/server/background-lifecycle.ts` or on a tick),
-`recordTelemetryEnvOptOut` persists `ineligibleThroughDay` (today's UTC day) in
-`telemetry-state.json` and deletes `telemetry-id.json`. Each tick sends at most one completed UTC
+`recordTelemetryEnvOptOut` persists `ineligibleThroughDay` (today's UTC day) and the
+`envOptOutActiveSince` marker in `telemetry-state.json` and deletes `telemetry-id.json`. A proxy
+started under the opt-out reads the env once and runs no ticks, so the marker stands for the whole
+period it ran: while it is set no day is eligible, and `endTelemetryEnvOptOut` closes the period
+(ineligible through the closing day, marker cleared) on that proxy's clean stop or on the first tick
+that runs without the opt-out. Each tick sends at most one completed UTC
 day strictly after the UTC day of `decidedAt ?? noticeShownAt` and strictly after
 `ineligibleThroughDay`, honors `retryAfterUntil` backoffs, re-reads persisted consent and env
 immediately before transmission, and carries an `AbortSignal` cancelled on stop or consent changes.
