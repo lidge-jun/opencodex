@@ -105,7 +105,10 @@ You can disable telemetry at any time through any of these controls:
    choice you made in the dashboard since. If the save fails, a proxy the app starts runs with
    `OCX_TELEMETRY=0`, and the app retries in the background and on the next launch. Leaving the box
    checked does not start sending by itself, and never turns telemetry back on for an account that
-   turned it off; the popup below still appears first.
+   turned it off; the popup below still appears first. A background service from
+   `ocx service install` can start a proxy at logon without the app, so an opt-out recorded by a
+   later installer reaches it the next time the app starts; run `ocx telemetry disable` to stop it
+   at once.
 2. **GUI consent popup** — uncheck **Share anonymous daily usage statistics** and click
    **Continue** when the first-run or post-update dialog appears.
 3. **Proxy details toggle** — open the [Web Dashboard](/guides/web-dashboard/) Overview page, go to
