@@ -15,7 +15,6 @@ import {
 	siOllama,
 	siOpenrouter,
 } from 'simple-icons';
-import demo from '../assets/demo.gif';
 import dashboard from '../assets/dashboard.png';
 import picker from '../assets/codex-app-picker.png';
 import heroFieldLight from '../assets/hero-route-light.png';
@@ -389,7 +388,7 @@ const docsMap = [
 		<h2 class="lp-scrub-title">{t('Watch Codex run on a routed model.', '라우팅된 모델에서 돌아가는 Codex를 직접 보세요.', '看 Codex 在路由模型上运行。', 'Смотрите, как Codex работает на маршрутизированной модели.', 'ルーティング先のモデルで Codex が動く様子をご覧ください。', '看 Codex 在路由模型上執行。', 'Codex’in yönlendirilen bir model üzerinde çalışmasını izleyin.')}</h2>
 		<div class="lp-scrub-stage">
 			<canvas class="lp-scrub-canvas" data-base={base} data-count="158" width="900" height="802" aria-label={t('Codex App running a task on a routed non-OpenAI model', '라우팅된 비 OpenAI 모델에서 작업 중인 Codex App', 'Codex App 在路由的非 OpenAI 模型上执行任务', 'Codex App выполняет задачу на маршрутизированной модели не от OpenAI', 'ルーティングされた非 OpenAI モデルでタスクを実行する Codex App', 'Codex App 在路由的非 OpenAI 模型上執行任務', 'Codex App’in yönlendirilen OpenAI harici bir model üzerinde görev çalıştırması')}></canvas>
-			<Image src={demo} alt={t('Codex App running a task on a routed non-OpenAI model', '라우팅된 비 OpenAI 모델에서 작업 중인 Codex App', 'Codex App 在路由的非 OpenAI 模型上执行任务', 'Codex App выполняет задачу на маршрутизированной модели не от OpenAI', 'ルーティングされた非 OpenAI モデルでタスクを実行する Codex App', 'Codex App 在路由的非 OpenAI 模型上執行任務', 'Codex App’in yönlendirilen OpenAI harici bir model üzerinde görev çalıştırması')} loading="lazy" class="lp-scrub-poster" />
+			<img src={`${base}demo-frames/001.webp`} width="960" height="856" alt={t('Codex App running a task on a routed non-OpenAI model', '라우팅된 비 OpenAI 모델에서 작업 중인 Codex App', 'Codex App 在路由的非 OpenAI 模型上执行任务', 'Codex App выполняет задачу на маршрутизированной модели не от OpenAI', 'ルーティングされた非 OpenAI モデルでタスクを実行する Codex App', 'Codex App 在路由的非 OpenAI 模型上執行任務', 'Codex App’in yönlendirilen OpenAI harici bir model üzerinde görev çalıştırması')} loading="lazy" class="lp-scrub-poster" />
 		</div>
 		<p class="lp-scrub-caption">{t('One task, streamed end to end through opencodex.', '하나의 작업이 처음부터 끝까지 opencodex를 거쳐 스트리밍됩니다.', '一个任务，经 opencodex 全程流式完成。', 'Одна задача — стриминг через opencodex от начала до конца.', '1 つのタスクが opencodex を経てエンドツーエンドでストリーミングされます。', '一個任務，經 opencodex 全程流式完成。', 'Tek bir görev, opencodex üzerinden uçtan uca canlı akışla tamamlanır.')}</p>
 	</div>
@@ -764,7 +763,7 @@ const docsMap = [
 <script>
 	// Frame-sequence scrub (motion.md): the demo capture plays through as the
 	// scrub scene scrolls. Short-circuits under reduced motion / small screens
-	// (the animated poster stays); progressive checkpoint loading.
+	// (the first frame stays); progressive checkpoint loading.
 	const canvas = document.querySelector<HTMLCanvasElement>('.lp-scrub-canvas');
 	const section = document.querySelector<HTMLElement>('.lp-scene-scrub');
 	const poster = document.querySelector<HTMLImageElement>('.lp-scrub-poster');

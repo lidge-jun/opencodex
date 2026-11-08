@@ -2,6 +2,7 @@
 // playwright-core entry and CHROME_PATH pointing to a Chromium executable.
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
+import sharp from 'sharp';
 
 const { chromium } = await import(pathToFileURL(process.env.PLAYWRIGHT_CORE).href);
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH, headless: true });
@@ -34,6 +35,26 @@ const move = async (page) => {
   await page.locator('.lp-hero-field').dispatchEvent('pointermove', { clientX: 1100, clientY: 450 });
   await page.locator('.lp-btn-primary').dispatchEvent('pointermove', { clientX: 1100, clientY: 450 });
   await pause(page);
+};
+const assertStillPoster = async (page) => {
+  const poster = page.locator('.lp-scrub-poster');
+  await poster.scrollIntoViewIfNeeded();
+  await page.waitForFunction(() => {
+    const image = document.querySelector('.lp-scrub-poster');
+    return image.complete && image.naturalWidth > 0;
+  });
+  await poster.evaluate(el => el.decode());
+  assert.equal(await poster.isVisible(), true, 'poster is visible');
+  const src = await poster.evaluate(el => el.currentSrc);
+  const response = await page.request.get(src);
+  assert.equal(response.ok(), true, 'poster asset is served');
+  const bytes = await response.body();
+  const metadata = await sharp(bytes, { animated: true }).metadata();
+  assert.equal(metadata.pages ?? 1, 1, 'served poster has exactly one frame');
+  const base = await page.locator('.lp-scrub-canvas').getAttribute('data-base');
+  const firstFrame = await page.request.get(new URL(`${base}demo-frames/001.webp`, url).href);
+  assert.equal(firstFrame.ok(), true, 'first scrub frame is served');
+  assert.deepEqual(bytes, await firstFrame.body(), 'poster is the first scrub frame');
 };
 try {
   const headerPage = await browser.newPage({ viewport: { width: 1280, height: 800 }, reducedMotion: 'no-preference' });
@@ -92,10 +113,16 @@ try {
   await open(scrubPage);
   await scrubPage.locator('.lp-scene-scrub').scrollIntoViewIfNeeded();
   await scrubPage.waitForFunction(() => getComputedStyle(document.querySelector('.lp-scrub-canvas')).display !== 'none');
+  const initialFrame = await scrubPage.locator('.lp-scrub-canvas').evaluate(el => el.toDataURL());
+  await scrubPage.locator('.lp-scene-scrub').evaluate(el => {
+    const top = el.getBoundingClientRect().top + scrollY;
+    scrollTo(0, top + (el.offsetHeight - innerHeight) * 0.8);
+  });
+  await scrubPage.waitForFunction(previous => document.querySelector('.lp-scrub-canvas').toDataURL() !== previous, initialFrame);
   await scrubPage.emulateMedia({ reducedMotion: 'reduce' });
   await pause(scrubPage, 500);
   assert.equal(await scrubPage.locator('.lp-scrub-canvas').isVisible(), false, 'scrub canvas stops');
-  assert.equal(await scrubPage.locator('.lp-scrub-poster').isVisible(), true, 'still poster restored');
+  await assertStillPoster(scrubPage);
   await scrubPage.evaluate(() => scrollBy(0, 300));
   await pause(scrubPage, 300);
   assert.equal(await scrubPage.locator('.lp-scrub-canvas').isVisible(), false, 'scroll cannot restart scrub');
@@ -103,6 +130,8 @@ try {
 
   const reducedDesktop = await browser.newPage({ viewport: { width: 1280, height: 800 }, reducedMotion: 'reduce' });
   await open(reducedDesktop);
+  await assertStillPoster(reducedDesktop);
+  assert.equal(await reducedDesktop.locator('.lp-scrub-canvas').isVisible(), false, 'initial reduction leaves canvas hidden');
   const desktopBefore = await readMotion(reducedDesktop);
   await move(reducedDesktop);
   assert.deepEqual(await readMotion(reducedDesktop), desktopBefore, 'initial reduction blocks fine-pointer motion');
@@ -114,6 +143,7 @@ try {
 
   const reduced = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' });
   await open(reduced);
+  await assertStillPoster(reduced);
   const before = await readMotion(reduced);
   await move(reduced);
   assert.deepEqual(await readMotion(reduced), before, 'initial reduced preference blocks motion');
