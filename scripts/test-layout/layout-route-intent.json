@@ -24,6 +24,7 @@
   "route-intent-desktop.test.ts": "clients",
   "route-intent-local-receipt.test.ts": "clients",
   "route-intent-materializer.test.ts": "clients",
+  "route-intent-native-originals.test.ts": "clients",
   "route-intent-native-review.test.ts": "clients",
   "route-intent-offline-mode-switch.test.ts": "clients",
   "route-intent-overwrite.test.ts": "clients",
