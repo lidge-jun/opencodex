@@ -51,6 +51,20 @@ function head(text: string): { event: string; data: { type: string; response: Re
 }
 
 describe("OpenGateway completion exact-head receipts", () => {
+  test("lifecycle output_text evidence keeps the original stream (#8333)", async () => {
+    const created = { type: "response.created", response: { id: "resp_1", object: "response", status: "in_progress", output: [], output_text: "already produced" } };
+    const f = await run(sse([created, { type: "response.completed", response: snapshot() }]));
+    expect(f.retries).toBe(0);
+    expect(await f.result.text()).toContain("already produced");
+  });
+
+  test("a terminal snapshot carrying output_text is not well-formed empty (#8333)", async () => {
+    const terminal = { ...snapshot(), output_text: "already produced" };
+    const f = await run(Response.json(terminal));
+    expect(f.retries).toBe(0);
+    expect(await f.result.json()).toMatchObject({ output_text: "already produced" });
+  });
+
   test("SSE empty failure head is response.failed after one physical retry", async () => {
     const first = snapshot();
     const second = snapshot({ input_tokens: 4, output_tokens: 3 });

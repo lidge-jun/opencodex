@@ -20,7 +20,8 @@ recovery; `tests/providers/opengateway-provider.test.ts` covers adapter serializ
 
 `src/server/responses/opengateway-completion-guard.ts` inspects HTTP 200 SSE/JSON only at
 `https://apis.opengateway.ai/v1/responses`. Before any answer or action, a well-formed empty
-completion (including reasoning-only output) becomes `incomplete/max_output_tokens` if reported
+completion (including reasoning-only output, but not a lifecycle or terminal snapshot whose
+aggregate `output_text` is present and non-empty) becomes `incomplete/max_output_tokens` if reported
 output tokens exhaust the requested limit. A malformed empty terminal fails as `invalid_completion`.
 Otherwise replay requires explicit `store: false`, complete input and client-executed tools only,
 as judged by `selfContainedResponsesBody` on the outbound body. Hosted/unknown tools, continuation,

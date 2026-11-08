@@ -27,10 +27,14 @@ function outputCommits(output: unknown): boolean {
   return !Array.isArray(output) || output.some(item => !isPlainObject(item)
     || (item.type !== "reasoning" && (item.type !== "message" || !Array.isArray(item.content) || item.content.some(partCommits))));
 }
+/** A snapshot's aggregate output_text is output too; anything but absent or "" is evidence (#8333). */
+function snapshotTextCommits(snapshot: RecordValue): boolean {
+  return snapshot.output_text !== undefined && snapshot.output_text !== "";
+}
 function wellFormedEmpty(snapshot: unknown): snapshot is RecordValue {
   return isPlainObject(snapshot) && typeof snapshot.id === "string" && snapshot.id.trim().length > 0
     && snapshot.object === "response" && snapshot.status === "completed" && Array.isArray(snapshot.output)
-    && snapshot.error == null && snapshot.incomplete_details == null
+    && snapshot.error == null && snapshot.incomplete_details == null && !snapshotTextCommits(snapshot)
     && snapshot.output.every(item => isPlainObject(item) && typeof item.id === "string" && item.id.length > 0
       && (item.type === "reasoning" || (item.type === "message" && item.role === "assistant"
         && item.status === "completed" && Array.isArray(item.content) && !item.content.some(partCommits))));
@@ -39,7 +43,7 @@ function eventCommits(event: RecordValue): boolean {
   if (event.replayUnsafe === true) return true;
   switch (event.type) {
     case "response.created": case "response.in_progress": case "response.queued": case "response.heartbeat":
-      return isPlainObject(event.response) && outputCommits(event.response.output);
+      return isPlainObject(event.response) && (outputCommits(event.response.output) || snapshotTextCommits(event.response));
     case "response.output_item.added": case "response.output_item.done": return outputCommits([event.item]);
     case "response.content_part.added": case "response.content_part.done": return partCommits(event.part);
     case "response.output_text.delta": return event.delta !== "";
