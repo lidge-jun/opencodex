@@ -772,6 +772,8 @@ jobs:
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
           ref: ${{ needs.changes.outputs.checkout_ref }}
+          # Release history tests verify old tag and dev-baseline trees.
+          fetch-depth: 0
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun

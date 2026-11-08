@@ -55,6 +55,14 @@ const MACOS_JOBS = ["platform-macos", "widget"] as const;
 /** The two smoke jobs whose matrix legs shrink with the event and native selection. */
 const MATRIX_JOBS = ["keyring-smoke", "npm-global-smoke"] as const;
 
+test("release history checks run with complete git history in gates", () => {
+  const steps = jobs.gates?.steps ?? [];
+  const checkout = steps.find(step => step.uses?.startsWith("actions/checkout@"));
+  const releaseTests = steps.find(step => step.run?.includes("release-history.test.cjs"));
+  expect(releaseTests).toBeDefined();
+  expect(checkout?.with?.["fetch-depth"]).toBe(0);
+});
+
 type SelectionInputs = { event_name: string; ci: string; native: string; desktop?: string; docker?: string };
 
 function term(source: string, inputs: SelectionInputs): string | boolean {
