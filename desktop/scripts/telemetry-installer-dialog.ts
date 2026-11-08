@@ -35,9 +35,9 @@ export const TELEMETRY_INSTALLER_STAMP_PROPERTY = "OCX_TELEMETRY_STAMP";
 export const TELEMETRY_INSTALLER_CHOICE_PROPERTY = "OCX_TELEMETRY_CHOICE";
 export const TELEMETRY_INSTALLER_CHECKBOX_PROPERTY = "OCX_TELEMETRY_SEND";
 export const TELEMETRY_INSTALLER_CHECKBOX_TEXT = "Send anonymous usage statistics";
-// Shown under the checkbox: "send" is never acted on, and an opt-out applies to every account.
+// Shown under the checkbox: "send" is never acted on, and a new opt-out applies to every account.
 export const TELEMETRY_INSTALLER_KEEP_NOTE =
-  "Checked keeps each account's current choice; unchecked turns it off for all.";
+  "Checked keeps each account's choice; unchecking turns it off for all.";
 export const TELEMETRY_INSTALLER_SEND = "send";
 export const TELEMETRY_INSTALLER_OPT_OUT = "optout";
 // Fixed so upgrades keep one component identity for the HKLM values (new when the key path moved to HKLM).
@@ -114,12 +114,17 @@ export function renderTelemetryInstallerFragment(): string {
     <Property Id="OCX_TELEMETRY_PREVIOUS_STAMP">
       <RegistrySearch Id="OcxTelemetryPreviousStamp" Root="HKLM" Key="${TELEMETRY_INSTALLER_REGISTRY_KEY}" Name="${TELEMETRY_INSTALLER_STAMP_VALUE}" Type="raw" Win64="$(var.OcxTelemetryWin64)" />
     </Property>
+    <!-- Fail closed: any command-line value other than send (off, 0, a typo, padding) is an opt-out.
+         Compared with "" because a bare property whose value is the integer 0 evaluates false. -->
+    <SetProperty Action="OcxTelemetryNormalizeChoice" Id="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="${TELEMETRY_INSTALLER_OPT_OUT}" Before="OcxTelemetryStampExplicit" Sequence="both">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} &lt;&gt; "" AND ${TELEMETRY_INSTALLER_CHOICE_PROPERTY} ~&lt;&gt; "${TELEMETRY_INSTALLER_SEND}"</SetProperty>
     <!-- A choice given on the command line is a new decision: give it a new stamp. The UI phase passes
          its stamp to the install phase, so a carried choice is never re-stamped without the page. -->
     <SetProperty Action="OcxTelemetryStampExplicit" Id="${TELEMETRY_INSTALLER_STAMP_PROPERTY}" Value="[Date] [Time]" Before="AppSearch" Sequence="both">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} AND NOT ${TELEMETRY_INSTALLER_STAMP_PROPERTY}</SetProperty>
     <SetProperty Action="OcxTelemetryKeepChoice" Id="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="[OCX_TELEMETRY_PREVIOUS_CHOICE]" After="AppSearch" Sequence="both">NOT ${TELEMETRY_INSTALLER_CHOICE_PROPERTY} AND OCX_TELEMETRY_PREVIOUS_CHOICE</SetProperty>
     <SetProperty Action="OcxTelemetryKeepStamp" Id="${TELEMETRY_INSTALLER_STAMP_PROPERTY}" Value="[OCX_TELEMETRY_PREVIOUS_STAMP]" After="OcxTelemetryKeepChoice" Sequence="both">NOT ${TELEMETRY_INSTALLER_STAMP_PROPERTY} AND OCX_TELEMETRY_PREVIOUS_STAMP</SetProperty>
-    <SetProperty Action="OcxTelemetryDefaultChoice" Id="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="${TELEMETRY_INSTALLER_SEND}" After="OcxTelemetryKeepStamp" Sequence="both">NOT ${TELEMETRY_INSTALLER_CHOICE_PROPERTY}</SetProperty>
+    <!-- The stamp the page started from, restored when Next leaves the carried choice unchanged. -->
+    <SetProperty Action="OcxTelemetryCarriedStamp" Id="OCX_TELEMETRY_CARRIED_STAMP" Value="[${TELEMETRY_INSTALLER_STAMP_PROPERTY}]" After="OcxTelemetryKeepStamp" Sequence="ui">${TELEMETRY_INSTALLER_STAMP_PROPERTY}</SetProperty>
+    <SetProperty Action="OcxTelemetryDefaultChoice" Id="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="${TELEMETRY_INSTALLER_SEND}" After="OcxTelemetryCarriedStamp" Sequence="both">NOT ${TELEMETRY_INSTALLER_CHOICE_PROPERTY}</SetProperty>
     <!-- The box starts checked unless this install already carries an opt-out. -->
     <SetProperty Action="OcxTelemetryCheckBox" Id="${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY}" Value="1" After="OcxTelemetryDefaultChoice" Sequence="ui">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} ~&lt;&gt; "${TELEMETRY_INSTALLER_OPT_OUT}"</SetProperty>
     <ComponentGroup Id="${TELEMETRY_INSTALLER_COMPONENT_GROUP}">
@@ -149,14 +154,15 @@ ${controls.join("\n")}
           <Publish Property="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="${TELEMETRY_INSTALLER_SEND}">${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY} = "1"</Publish>
           <Publish Property="${TELEMETRY_INSTALLER_CHOICE_PROPERTY}" Value="${TELEMETRY_INSTALLER_OPT_OUT}">NOT (${TELEMETRY_INSTALLER_CHECKBOX_PROPERTY} = "1")</Publish>
           <Publish Property="${TELEMETRY_INSTALLER_STAMP_PROPERTY}" Value="[Date] [Time]">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} ~&lt;&gt; OCX_TELEMETRY_PREVIOUS_CHOICE</Publish>
+          <Publish Property="${TELEMETRY_INSTALLER_STAMP_PROPERTY}" Value="[OCX_TELEMETRY_CARRIED_STAMP]">${TELEMETRY_INSTALLER_CHOICE_PROPERTY} ~= OCX_TELEMETRY_PREVIOUS_CHOICE AND OCX_TELEMETRY_CARRIED_STAMP</Publish>
           <Publish Event="NewDialog" Value="InstallDirDlg">1</Publish>
         </Control>
         <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
           <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
         </Control>
       </Dialog>
-      <!-- Tauri's template routes WelcomeDlg -> InstallDirDlg at Order 2; the later NewDialog wins. Only on a
-           first install: an installed product's patch route (WelcomeDlg -> VerifyReadyDlg) stays as it is. -->
+      <!-- Tauri's template routes WelcomeDlg -> InstallDirDlg at Order 2; the later NewDialog wins. Only when
+           NOT Installed (a first install or a major upgrade): a patch of the installed product keeps Tauri's route. -->
       <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="${TELEMETRY_INSTALLER_DIALOG}" Order="3">NOT Installed</Publish>
       <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="${TELEMETRY_INSTALLER_DIALOG}" Order="3">NOT Installed</Publish>
     </UI>

@@ -18,12 +18,17 @@
     <Property Id="OCX_TELEMETRY_PREVIOUS_STAMP">
       <RegistrySearch Id="OcxTelemetryPreviousStamp" Root="HKLM" Key="Software\OpenCodex\Telemetry" Name="InstallerChoiceStamp" Type="raw" Win64="$(var.OcxTelemetryWin64)" />
     </Property>
+    <!-- Fail closed: any command-line value other than send (off, 0, a typo, padding) is an opt-out.
+         Compared with "" because a bare property whose value is the integer 0 evaluates false. -->
+    <SetProperty Action="OcxTelemetryNormalizeChoice" Id="OCX_TELEMETRY_CHOICE" Value="optout" Before="OcxTelemetryStampExplicit" Sequence="both">OCX_TELEMETRY_CHOICE &lt;&gt; "" AND OCX_TELEMETRY_CHOICE ~&lt;&gt; "send"</SetProperty>
     <!-- A choice given on the command line is a new decision: give it a new stamp. The UI phase passes
          its stamp to the install phase, so a carried choice is never re-stamped without the page. -->
     <SetProperty Action="OcxTelemetryStampExplicit" Id="OCX_TELEMETRY_STAMP" Value="[Date] [Time]" Before="AppSearch" Sequence="both">OCX_TELEMETRY_CHOICE AND NOT OCX_TELEMETRY_STAMP</SetProperty>
     <SetProperty Action="OcxTelemetryKeepChoice" Id="OCX_TELEMETRY_CHOICE" Value="[OCX_TELEMETRY_PREVIOUS_CHOICE]" After="AppSearch" Sequence="both">NOT OCX_TELEMETRY_CHOICE AND OCX_TELEMETRY_PREVIOUS_CHOICE</SetProperty>
     <SetProperty Action="OcxTelemetryKeepStamp" Id="OCX_TELEMETRY_STAMP" Value="[OCX_TELEMETRY_PREVIOUS_STAMP]" After="OcxTelemetryKeepChoice" Sequence="both">NOT OCX_TELEMETRY_STAMP AND OCX_TELEMETRY_PREVIOUS_STAMP</SetProperty>
-    <SetProperty Action="OcxTelemetryDefaultChoice" Id="OCX_TELEMETRY_CHOICE" Value="send" After="OcxTelemetryKeepStamp" Sequence="both">NOT OCX_TELEMETRY_CHOICE</SetProperty>
+    <!-- The stamp the page started from, restored when Next leaves the carried choice unchanged. -->
+    <SetProperty Action="OcxTelemetryCarriedStamp" Id="OCX_TELEMETRY_CARRIED_STAMP" Value="[OCX_TELEMETRY_STAMP]" After="OcxTelemetryKeepStamp" Sequence="ui">OCX_TELEMETRY_STAMP</SetProperty>
+    <SetProperty Action="OcxTelemetryDefaultChoice" Id="OCX_TELEMETRY_CHOICE" Value="send" After="OcxTelemetryCarriedStamp" Sequence="both">NOT OCX_TELEMETRY_CHOICE</SetProperty>
     <!-- The box starts checked unless this install already carries an opt-out. -->
     <SetProperty Action="OcxTelemetryCheckBox" Id="OCX_TELEMETRY_SEND" Value="1" After="OcxTelemetryDefaultChoice" Sequence="ui">OCX_TELEMETRY_CHOICE ~&lt;&gt; "optout"</SetProperty>
     <ComponentGroup Id="OcxTelemetryInstallerChoice">
@@ -40,7 +45,7 @@
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
         <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Usage statistics" />
         <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="Anonymous daily usage telemetry:" />
-        <Control Id="Point1" Type="Text" X="20" Y="50" Width="330" Height="30" NoPrefix="yes" Text="• Sent once per day to telemetry.opencodex.me: version, OS/arch, install channel, provider kind, coarse model family, active minutes, and request/token/error counts." />
+        <Control Id="Point1" Type="Text" X="20" Y="50" Width="330" Height="30" NoPrefix="yes" Text="• Sent daily to telemetry.opencodex.me: a daily-changing install hash, version, release channel, OS/arch, install channel, first-report flag, provider kind, model family, active minutes, request/token/error counts." />
         <Control Id="Point2" Type="Text" X="20" Y="82" Width="330" Height="30" NoPrefix="yes" Text="• Never sent: prompts, model outputs, request/response bodies, API keys, OAuth tokens, account IDs or emails, custom base URLs, hostnames, file paths, or error text." />
         <Control Id="Point3" Type="Text" X="20" Y="114" Width="330" Height="20" NoPrefix="yes" Text="• Public aggregates: project-wide totals are published at opencodex.me/dashboard." />
         <Control Id="Point4" Type="Text" X="20" Y="136" Width="330" Height="10" NoPrefix="yes" Text="• See the exact payload: ocx telemetry status --json" />
@@ -49,7 +54,7 @@
           <Text><![CDATA[<a href="https://opencodex.me/reference/code-signing/#privacy">Read the full privacy policy</a>]]></Text>
         </Control>
         <Control Id="SendCheckBox" Type="CheckBox" X="20" Y="196" Width="330" Height="17" Property="OCX_TELEMETRY_SEND" CheckBoxValue="1" Text="Send anonymous usage statistics" />
-        <Control Id="KeepNote" Type="Text" X="34" Y="213" Width="316" Height="10" NoPrefix="yes" Text="Checked keeps each account's current choice; unchecked turns it off for all." />
+        <Control Id="KeepNote" Type="Text" X="34" Y="213" Width="316" Height="10" NoPrefix="yes" Text="Checked keeps each account's choice; unchecking turns it off for all." />
         <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
           <Publish Event="NewDialog" Value="WelcomeDlg">1</Publish>
         </Control>
@@ -57,14 +62,15 @@
           <Publish Property="OCX_TELEMETRY_CHOICE" Value="send">OCX_TELEMETRY_SEND = "1"</Publish>
           <Publish Property="OCX_TELEMETRY_CHOICE" Value="optout">NOT (OCX_TELEMETRY_SEND = "1")</Publish>
           <Publish Property="OCX_TELEMETRY_STAMP" Value="[Date] [Time]">OCX_TELEMETRY_CHOICE ~&lt;&gt; OCX_TELEMETRY_PREVIOUS_CHOICE</Publish>
+          <Publish Property="OCX_TELEMETRY_STAMP" Value="[OCX_TELEMETRY_CARRIED_STAMP]">OCX_TELEMETRY_CHOICE ~= OCX_TELEMETRY_PREVIOUS_CHOICE AND OCX_TELEMETRY_CARRIED_STAMP</Publish>
           <Publish Event="NewDialog" Value="InstallDirDlg">1</Publish>
         </Control>
         <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
           <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
         </Control>
       </Dialog>
-      <!-- Tauri's template routes WelcomeDlg -> InstallDirDlg at Order 2; the later NewDialog wins. Only on a
-           first install: an installed product's patch route (WelcomeDlg -> VerifyReadyDlg) stays as it is. -->
+      <!-- Tauri's template routes WelcomeDlg -> InstallDirDlg at Order 2; the later NewDialog wins. Only when
+           NOT Installed (a first install or a major upgrade): a patch of the installed product keeps Tauri's route. -->
       <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="OcxTelemetryDlg" Order="3">NOT Installed</Publish>
       <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="OcxTelemetryDlg" Order="3">NOT Installed</Publish>
     </UI>
