@@ -410,7 +410,9 @@ sources in temporary build checkouts using `scripts/release-version-sources.ts`.
 a real publication or resume requires the repository variable `OCX_DEV_RELEASE_PUBLISH_ENABLED`
 to equal `true`. Independent review of the legacy history mapping, security review, real dry-run
 evidence and settings must be resolved before cutover; this text does not attest those gates.
-Docs publishing is separate.
+Docs publishing is separate. Dispatch inputs are `tag` (`latest` or `preview`), `dry-run`
+(default `true`), `expected-sha`, `version` and `resume-after-npm-publish`; `scripts/release.ts`
+dispatches ordinary runs only, so a resume is dispatched by hand.
 
 The `package-standalone` job in `.github/workflows/release.yml` also builds Bun compiled
 `ocx` archives for Linux, macOS, and Windows, bundles `gui/dist`, smoke-tests `/healthz`, and
