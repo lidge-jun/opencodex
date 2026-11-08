@@ -4,7 +4,7 @@
 
 Canonicalization accepts only plain JSON, preserves arrays/literal values, and sorts object keys, including schema object keys and historical tool arguments. Instruction changes intentionally invalidate that prefix. Tools and schema object keys serialize deterministically, preserving catalog membership, MCP aliases, tool choice, and array order. Object-key sorting intentionally changes model-visible property order while preserving JSON values; integer-like keys follow JavaScript's numeric-key ordering. Invalid non-JSON history supplied by an internal caller fails at the runner's stdin projection as a 502, after launch, and the owned child is terminated. Ordinary HTTP JSON requests cannot carry cycles, accessors or undefined properties.
 
-Images in developer instructions are refused before launch because those instructions are folded into a text-only system prompt. They are never silently remapped into user content.
+Images in system or developer instructions are refused before quota preflight and launch because those instructions are folded into a text-only system prompt. `src/adapters/claude-cli/instruction-images.ts` detects them in the original Chat body before either Chat conversion can discard them; the ingress carries only a boolean to the selected Claude CLI attempt, including combo children. The Responses executor also inspects the Responses input before relying on parsed messages, since parsing folds system items to text. The value-free 400 never remaps images into user content and does not change other providers. `tests/providers/claude-cli-client-http.test.ts` covers both routes, leading and later instructions, streaming and direct encoders.
 
 ## Tool capture
 

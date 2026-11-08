@@ -104,6 +104,118 @@ test("Codex/DSH Responses and Pi Chat retain host-owned tools, inclusive usage a
   }
 }, 20000);
 
+test("instruction images are refused at both HTTP routes before CLI launch", async () => {
+  const definition = getAdapterDefinition("claude-cli")!;
+  const originalCreate = definition.create;
+  const otherDefinition = getAdapterDefinition("codebuddy")!;
+  const originalOtherCreate = otherDefinition.create;
+  let otherCalls = 0;
+  otherDefinition.create = provider => ({ ...originalOtherCreate(provider), name: "codebuddy",
+    async runTurn(_parsed, _incoming, emit) {
+      otherCalls++;
+      emit({ type: "text_delta", text: "other provider answered" });
+      emit({ type: "done" });
+    },
+  });
+  const releaseSpend = acquireOwnedSpendHome();
+  let launches = 0;
+  definition.create = provider => createClaudeCliAdapter(provider, {
+    usageAdmission: async () => ({ state: "unknown" }),
+    which: () => process.execPath,
+    spawn: (_command, args, options) => {
+      launches++;
+      return spawn(process.execPath, [join(import.meta.dir, "../fixtures/claude-efficiency-cli.ts"), JSON.stringify(args), "", "image-replay"], options);
+    },
+  });
+  const model = "claude-cli/claude-sonnet-5-5";
+  const config = { port: 0, defaultProvider: "claude-cli", providers: {
+    "claude-cli": { adapter: "claude-cli", baseUrl: "https://api.anthropic.com", authMode: "key", selectedModels: ["claude-sonnet-5-5"] },
+  } } as OcxConfig;
+  const post = async (path: "responses" | "chat/completions", body: unknown, direct = false) => {
+    const request = new Request(`http://localhost/v1/${path}`, { method: "POST", body: JSON.stringify(body) });
+    const cfg = direct ? { ...config, protocols: { rollout: { directEncoders: true } } } as OcxConfig : config;
+    return path === "responses" ? handleResponses(request, cfg, { model: "", provider: "" })
+      : handleChatCompletions(request, cfg, { model: "", provider: "" });
+  };
+  const chatImage = { type: "image_url", image_url: { url: "https://fixture.invalid/private-image" } };
+  const responseImage = { type: "input_image", image_url: "https://fixture.invalid/private-image" };
+  try {
+    for (const role of ["developer", "system"]) {
+      for (const leading of [true, false]) for (const direct of [false, true]) for (const stream of [false, true]) {
+        const instruction = { role, content: [{ type: "text", text: "policy" }, chatImage] };
+        const user = { role: "user", content: "hello" };
+        const response = await post("chat/completions", { model, stream, messages: leading ? [instruction, user] : [user, instruction, user] }, direct);
+        const body = await response.text();
+        expect(response.status).toBe(400);
+        expect(body).toContain("does not support images in developer instructions");
+        expect(body).not.toContain("private-image");
+      }
+      for (const leading of [true, false]) for (const stream of [false, true]) {
+        const instruction = { role, content: [{ type: "input_text", text: "policy" }, responseImage] };
+        const user = { role: "user", content: "hello" };
+        const response = await post("responses", { model, stream, input: leading ? [instruction, user] : [user, instruction, user] });
+        const body = await response.text();
+        expect(response.status).toBe(400);
+        expect(body).toContain("unsupported_input_modality");
+        expect(body).not.toContain("private-image");
+      }
+    }
+    expect(launches).toBe(0);
+    for (const image of [
+      { type: "image", data: "QUFB", mimeType: "image/png" },
+      { type: "image", source: { type: "url", url: "https://fixture.invalid/private-image" } },
+      { type: "image_url", image_url: {} },
+    ]) {
+      const response = await post("chat/completions", { model, messages: [
+        { role: "user", content: "hello" }, { role: "developer", content: [image] },
+      ] });
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain("does not support images in developer instructions");
+    }
+    const comboConfig = { ...config, combos: { pair: { strategy: "failover", targets: [
+      { provider: "claude-cli", model: "claude-sonnet-5-5" },
+    ] } } } as OcxConfig;
+    const comboResponse = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+      method: "POST", body: JSON.stringify({ model: "pair", messages: [
+        { role: "developer", content: [chatImage] }, { role: "user", content: "hello" },
+      ] }),
+    }), comboConfig, { model: "", provider: "" });
+    expect(comboResponse.status).toBe(400);
+    expect(await comboResponse.text()).toContain("does not support images in developer instructions");
+    expect(launches).toBe(0);
+    const otherConfig = { port: 0, defaultProvider: "other", providers: {
+      other: { adapter: "codebuddy", baseUrl: "https://fixture.invalid", authMode: "key", apiKey: "fixture-key", selectedModels: ["fixture-model"] },
+    } } as OcxConfig;
+    const otherResponse = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+      method: "POST", body: JSON.stringify({ model: "other/fixture-model", messages: [
+        { role: "developer", content: [{ type: "text", text: "policy" }, chatImage] }, { role: "user", content: "hello" },
+      ] }),
+    }), otherConfig, { model: "", provider: "" });
+    expect(otherResponse.status).toBe(200);
+    expect(await otherResponse.text()).toContain("other provider answered");
+    expect(otherCalls).toBe(1);
+    const otherResponses = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", body: JSON.stringify({ model: "other/fixture-model", input: [
+        { role: "developer", content: [{ type: "input_text", text: "policy" }, responseImage] },
+        { role: "user", content: "hello" },
+      ] }),
+    }), otherConfig, { model: "", provider: "" });
+    expect(otherResponses.status).toBe(200);
+    expect(await otherResponses.text()).toContain("other provider answered");
+    expect(otherCalls).toBe(2);
+    const valid = await post("chat/completions", { model, messages: [
+      { role: "developer", content: "text policy" },
+      { role: "user", content: [{ type: "text", text: "look" }, { type: "image_url", image_url: { url: "data:image/png;base64,QUFB" } }] },
+    ] });
+    expect(valid.status).toBe(200);
+    expect(launches).toBe(1);
+  } finally {
+    definition.create = originalCreate;
+    otherDefinition.create = originalOtherCreate;
+    releaseSpend();
+  }
+}, 20000);
+
 
 test("image requests retain Responses history and Chat tool results through CLI stdin", async () => {
   const definition = getAdapterDefinition("claude-cli")!;
