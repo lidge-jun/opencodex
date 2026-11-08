@@ -223,7 +223,9 @@ mock.module("../../src/grok/inject", () => ({
   },
 }));
 const systemEnv = await import("../../src/server/system-env");
-mock.module("../../src/server/system-env", () => ({ ...systemEnv, revertSystemEnv() {} }));
+mock.module("../../src/server/system-env", () => ({ ...systemEnv,
+  revertSystemEnv: () => ({ reverted: false, reason: "not macOS" }),
+}));
 const portReclaim = await import("../../src/server/port-reclaim");
 mock.module("../../src/server/port-reclaim", () => ({ ...portReclaim, reclaimListenPort: async () => {} }));
 // Only shim preflight is unrelated to this stop contract; parsing and dispatch stay real.
@@ -311,7 +313,9 @@ if (options.exitCleanup) {
       return decision;
     },
     stopRestoreWriteGuard: (await import("../../src/cli/stop-restore-guard")).stopRestoreWriteGuard,
-    revertSystemEnv() {}, removePid() {}, removeRuntimePort() {}, serviceEnvironmentOwnedHere: () => true,
+    revertSystemEnv: () => ({ reverted: false, reason: "not macOS" }),
+    revertSystemEnvAtShutdown: restore.revertSystemEnvAtShutdown,
+    removePid() {}, removeRuntimePort() {}, serviceEnvironmentOwnedHere: () => true,
     getCodexHome: () => "fixture", codexHomeIsAbsent: () => false,
     restoreNativeCodex: (restoreOptions?: { withWriteGuard?: <T>(write: () => T) => T }) => {
       const write = () => { calls.native++; return options.restore; };

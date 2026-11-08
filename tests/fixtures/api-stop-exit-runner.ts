@@ -31,7 +31,7 @@ mock.module("../../src/grok/inject", () => ({ ...grok,
 
 const { claimPendingTeardown, readPendingTeardown } = await import("../../src/config/pending-teardown");
 const { isSharedTeardownDeferredOnExit } = await import("../../src/server/stop-teardown");
-const { preserveConnectedClientRoutingOnExit } = await import("../../src/cli/stop-restore");
+const { preserveConnectedClientRoutingOnExit, revertSystemEnvAtShutdown } = await import("../../src/cli/stop-restore");
 const { stopRestoreWriteGuard } = await import("../../src/cli/stop-restore-guard");
 const { decideStartExitTeardown } = await import("../../src/cli/dispatch");
 const { setServerRef, setServerStartupLifecycleReleaseForTests, isRecyclingForExit, markRecyclingForExit } = await import("../../src/server/lifecycle");
@@ -61,7 +61,8 @@ if (from < 0 || to < 0) throw new Error("CLI exit cleanup missing");
 const bindings = {
   catalogHealer: null, routingHealer: null, guardian: { stop() {} }, historyGuardian: null, healthSentinel: null,
   siblingStart: false, isRecyclingForExit, decideStartExitTeardown, preserveConnectedClientRoutingOnExit, stopRestoreWriteGuard,
-  revertSystemEnv() { calls.env++; }, removePid() { calls.pid++; }, removeRuntimePort() { calls.runtime++; },
+  revertSystemEnvAtShutdown, revertSystemEnv() { calls.env++; return { reverted: false, reason: "not macOS" }; },
+  removePid() { calls.pid++; }, removeRuntimePort() { calls.runtime++; },
   serviceEnvironmentOwnedHere: () => true, getCodexHome: () => process.env.CODEX_HOME!, codexHomeIsAbsent: () => false,
   restoreNativeCodex: (options?: { withWriteGuard?: <T>(write: () => T) => T }) => {
     const write = () => { calls.exitNative++; events.push("native-exit"); return restored; };
