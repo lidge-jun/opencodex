@@ -23,8 +23,8 @@ Vous pouvez également installer l’application de bureau via Homebrew Cask :
 brew install --cask opencodex
 ```
 
-- **Mises à jour intégrées (`auto_updates`)** : L’application de bureau intègre son propre système de mise à jour. Le Cask utilise `auto_updates true` afin que les mises à jour intégrées et `brew upgrade` fonctionnent ensemble sans conflit.
-- **CLI et service d’arrière-plan** : Le Cask installe uniquement `OpenCodex.app`, qui intègre son propre CLI et son environnement d’exécution proxy. Si vous souhaitez un CLI autonome ou un démon sans interface, vous pouvez installer `ocx` séparément (via npm ou les archives de publication) et exécuter `ocx service install` ; les deux partagent la configuration dans `~/.opencodex`.
+- **Mises à jour intégrées (`auto_updates`)** : L’application possède son propre système de mise à jour et le Cask déclare `auto_updates true`. Une commande ciblée `brew upgrade --cask opencodex` ou une mise à niveau greedy peut néanmoins remplacer une application mise à jour vers une version plus récente. Vérifiez les versions de l’application installée et du Cask avant une mise à niveau avec Homebrew.
+- **CLI et service d’arrière-plan** : Le Cask installe uniquement `OpenCodex.app`, qui intègre son CLI et son proxy. Vous pouvez installer séparément `ocx` via npm ou les archives de publication pour disposer d’un CLI autonome ou d’un service sans interface ; les deux partagent `~/.opencodex`. Pour confier le service à ce CLI, quittez OpenCodex, sélectionnez explicitement le CLI séparé (en contournant [la redirection du lanceur de paquets vers Desktop](/getting-started/installation/) si elle est activée), puis exécutez `ocx service install`. Voir la [sélection de la commande terminal](/guides/desktop-app/#using-the-ocx-cli-with-the-desktop-app) et la [propriété du runtime](/reference/cli/lifecycle/#runtime-ownership).
 
 ### Windows
 

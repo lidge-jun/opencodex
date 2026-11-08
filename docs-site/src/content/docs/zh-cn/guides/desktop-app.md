@@ -23,8 +23,8 @@ OpenCodex 桌面应用将原生托盘与 web 仪表盘结合。其内置 CLI 会
 brew install --cask opencodex
 ```
 
-- **内置更新（`auto_updates`）**：桌面应用包含内置更新机制。Cask 配置了 `auto_updates true`，内置更新与 `brew upgrade` 可以协同工作，避免冲突。
-- **CLI 与后台服务**：该 Cask 仅安装 `OpenCodex.app`（其内部已内置 CLI 与 proxy 运行时）。如需独立使用命令行或无界面的后台守护进程，可单独安装独立的 `ocx`（通过 npm 或发布包）并运行 `ocx service install` 注册服务；两者共享 `~/.opencodex` 中的配置。
+- **内置更新（`auto_updates`）**：桌面应用包含更新机制，Cask 声明了 `auto_updates true`。但指定 Cask 的 `brew upgrade --cask opencodex` 或 greedy 升级仍可能替换已通过应用内更新升至更高版本的应用。使用 Homebrew 升级前，请检查已安装应用和 Cask 的版本。
+- **CLI 与后台服务**：该 Cask 仅安装包含 CLI 和 proxy 运行时的 `OpenCodex.app`。如需独立 CLI 或无界面服务，可通过 npm 或发布包单独安装 `ocx`；两者共享 `~/.opencodex` 配置。要将服务交给单独安装的 CLI，请退出 OpenCodex，明确选择该 CLI（如已启用 [Desktop 的包启动器交接](/getting-started/installation/)，还需绕过该交接），然后运行 `ocx service install`。参见[终端命令选择](/guides/desktop-app/#using-the-ocx-cli-with-the-desktop-app)和[运行时所有权](/reference/cli/lifecycle/#runtime-ownership)。
 
 ### Windows
 

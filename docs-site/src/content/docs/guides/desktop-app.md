@@ -29,8 +29,8 @@ Alternatively, install the desktop app using Homebrew Cask:
 brew install --cask opencodex
 ```
 
-- **In-app updates (`auto_updates`)**: The desktop app includes a built-in updater. The Cask is configured with `auto_updates true` so in-app updates and `brew upgrade` work together without conflict.
-- **CLI and background service**: The Cask installs `OpenCodex.app` only, which bundles its own CLI and proxy runtime. If you prefer a standalone CLI or headless daemon, you can optionally install `ocx` separately (via npm or release archives) and run `ocx service install`; both share configuration in `~/.opencodex`.
+- **In-app updates (`auto_updates`)**: The desktop app has a built-in updater, and the Cask declares `auto_updates true`. A named `brew upgrade --cask opencodex` or a greedy upgrade can still replace an app updated to a newer version in-app. Check the installed app and Cask versions before upgrading with Homebrew.
+- **CLI and background service**: The Cask installs only `OpenCodex.app`, which bundles its own CLI and proxy runtime. You can install a separate `ocx` via npm or release archives for a standalone CLI or headless service; both share `~/.opencodex`. To give that CLI the service, quit OpenCodex, select the separate CLI explicitly (including bypassing [Desktop’s package-launcher handoff](/getting-started/installation/) if enabled), and run `ocx service install`. See [terminal command selection](/guides/desktop-app/#using-the-ocx-cli-with-the-desktop-app) and [runtime ownership](/reference/cli/lifecycle/#runtime-ownership).
 
 ### Windows
 

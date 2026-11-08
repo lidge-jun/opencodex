@@ -23,8 +23,8 @@ Homebrew Cask を使ってデスクトップアプリをインストールする
 brew install --cask opencodex
 ```
 
-- **アプリ内更新（`auto_updates`）**：デスクトップアプリには自動更新機能が組み込まれています。Cask は `auto_updates true` に設定されているため、アプリ内更新と `brew upgrade` が競合することなく連携します。
-- **CLI とバックグラウンドサービス**：Cask がインストールするのは `OpenCodex.app` のみです（内部に CLI とプロキシランタイムを同梱しています）。デスクトップアプリを使わずにスタンドアロンの CLI やヘッドレスデーモンを利用したい場合は、別途 `ocx` をインストール（npm またはリリースアーカイブ経由）して `ocx service install` でサービスを登録できます。設定は `~/.opencodex` で共有されます。
+- **アプリ内更新（`auto_updates`）**：デスクトップアプリには更新機能があり、Cask は `auto_updates true` を宣言しています。ただし、対象を指定した `brew upgrade --cask opencodex` や greedy アップグレードでは、アプリ内更新でより新しくなったアプリが置き換えられることがあります。Homebrew でアップグレードする前に、インストール済みアプリと Cask のバージョンを確認してください。
+- **CLI とバックグラウンドサービス**：Cask がインストールするのは、CLI と proxy ランタイムを同梱した `OpenCodex.app` のみです。独立した CLI やヘッドレスサービスには、npm またはリリースアーカイブから別途 `ocx` をインストールできます。両者は `~/.opencodex` の設定を共有します。その CLI にサービスを引き継がせるには、OpenCodex を終了し、別途インストールした CLI を明示的に選択して（有効な場合は [Desktop へのパッケージランチャーの引き継ぎ](/getting-started/installation/)も回避し）、`ocx service install` を実行します。[端末コマンドの選択](/guides/desktop-app/#using-the-ocx-cli-with-the-desktop-app)と[ランタイムの所有権](/reference/cli/lifecycle/#runtime-ownership)を参照してください。
 
 ### Windows
 

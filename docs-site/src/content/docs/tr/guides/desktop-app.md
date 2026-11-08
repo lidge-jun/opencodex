@@ -23,8 +23,8 @@ Masaüstü uygulamasını alternatif olarak Homebrew Cask ile de yükleyebilirsi
 brew install --cask opencodex
 ```
 
-- **Uygulama içi güncellemeler (`auto_updates`)**: Masaüstü uygulaması yerleşik bir güncelleyici içerir. Cask `auto_updates true` ile yapılandırılmıştır, böylece uygulama içi güncellemeler ile `brew upgrade` çakışma olmadan birlikte çalışır.
-- **CLI ve arka plan hizmeti**: Cask yalnızca `OpenCodex.app` uygulamasını kurar (kendi CLI ve proxy çalışma zamanını paketinde barındırır). Masaüstü uygulaması yerine bağımsız bir CLI veya arayüzsüz bir arka plan hizmeti isterseniz, isteğe bağlı olarak `ocx` paketini ayrıca yükleyebilir (npm veya sürüm arşivleri aracılığıyla) ve hizmeti kaydetmek için `ocx service install` çalıştırabilirsiniz; her ikisi de `~/.opencodex` içindeki yapılandırmayı paylaşır.
+- **Uygulama içi güncellemeler (`auto_updates`)**: Masaüstü uygulamasının yerleşik bir güncelleyicisi vardır ve Cask `auto_updates true` bildirir. Belirli Cask için `brew upgrade --cask opencodex` veya greedy yükseltme, uygulama içinde daha yeni bir sürüme güncellenmiş uygulamanın yerini alabilir. Homebrew ile yükseltmeden önce yüklü uygulamanın ve Cask’in sürümlerini kontrol edin.
+- **CLI ve arka plan servisi**: Cask yalnızca kendi CLI ve proxy çalışma ortamını içeren `OpenCodex.app` uygulamasını kurar. Bağımsız CLI veya arayüzsüz servis için `ocx` npm ya da sürüm arşivleriyle ayrıca kurulabilir; ikisi de `~/.opencodex` yapılandırmasını paylaşır. Servisi ayrı CLI’ye devretmek için OpenCodex’ten çıkın, ayrı CLI’yi açıkça seçin (etkinse [Desktop paket başlatıcısı devrini](/getting-started/installation/) de atlayın) ve `ocx service install` çalıştırın. [Terminal komutu seçimine](/guides/desktop-app/#using-the-ocx-cli-with-the-desktop-app) ve [çalışma ortamı sahipliğine](/reference/cli/lifecycle/#runtime-ownership) bakın.
 
 ### Windows
 
