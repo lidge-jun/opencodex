@@ -3,7 +3,8 @@
 Baseline: OpenCodex `803d6c0b4dbb4823a9379e485e417f3f9e3d976c`; GOAT
 `64e7198988b69941cd2eec5160fd734df9074302` (`origin/dev`). GOAT paths below
 refer to that read-only Git revision. The independent architecture inventory
-informed this comparison; the roadmap and its independent audit remain open.
+informed this comparison. The audit recorded in `000` covers an earlier named
+snapshot; the current revision and its independent review remain open.
 
 | Surface | Existing evidence | Initial gap to investigate |
 | --- | --- | --- |
@@ -11,7 +12,7 @@ informed this comparison; the roadmap and its independent audit remain open.
 | GOAT Electron integration | GOAT wraps the platform updater and installs a request deadline before first use (`apps/desktop/src/electron/ElectronUpdater.ts:90`, `:100`, `:120`, GOAT revision above); its test verifies lazy initialization and that deadline (`apps/desktop/src/electron/ElectronUpdater.test.ts:38`, `:46`). The Electron app wrapper exposes quit/relaunch and the before-quit-for-update event (`apps/desktop/src/electron/ElectronApp.ts:166`, `:174`, `:234`, GOAT revision above). Automatic-update tests cover pause, retry, reservation and busy-at-admission cases (`apps/desktop/src/updates/DesktopUpdates.automatic.test.ts:91`, `:116`, `:271`, `:652`, GOAT revision above). | Use bounded requests and verify equivalent behavior through Tauri's own owner; no Electron code is imported into OpenCodex. |
 | Desktop download and install | OpenCodex downloads through the pinned updater, which verifies the signature, before its guarded restart and install; failed install can recover the runtime (`desktop/src-tauri/src/updater.rs:388`, `desktop/src-tauri/src/updater.rs:423`). | Expose progress and verified staged readiness while preserving signature verification and drain/recovery. |
 | Desktop badge | The desktop snapshot includes a session, version, availability, timestamp and phase (`src/update/desktop-badge.ts:4`); the badge projection currently exposes availability and unknown but discards the phase (`src/update/desktop-badge.ts:74`). | Carry authoritative progress and failure states to the footer without treating missing or stale evidence as current. |
-| Sidebar | `gui/src/components/sidebar-github-row.tsx:77` polls the badge and `:157` renders the existing download button; `gui/src/App.tsx:591` opens the native update page on desktop. The version is rendered at `gui/src/App.tsx:602` and deliberately ellipsized by `gui/src/design/bridge.css:429`. Native update commands require the trusted update page (`desktop/src-tauri/src/lib.rs:267`). | Make that button the requested stateful update-panel entry and resolve the reported truncated version; retain browser/package behavior and the existing native command origin boundary. |
+| Sidebar | `gui/src/components/sidebar-github-row.tsx:77` polls the badge and `:157` renders the existing download button; `gui/src/App.tsx:591` opens the native update page on desktop. The version is rendered at `gui/src/App.tsx:602` and deliberately ellipsized by `gui/src/design/bridge.css:429`. Native update commands require the trusted update page (`desktop/src-tauri/src/lib.rs:274`). | Make that button the requested stateful update-panel entry and resolve the reported truncated version; retain browser/package behavior and the existing native command origin boundary. |
 | Package updates | The Node launcher imports the existing orchestrated plan/apply, installation ownership, transactional install and guarded runtime mechanisms (`bin/ocx.mjs:50`, `bin/ocx.mjs:69`). The CLI advertises latest/preview plans and token-bound apply (`bin/ocx.mjs:1322`). npm publication uses trusted publishing with generated provenance (`.github/workflows/release.yml:1152`). | Reuse ownership and guarded apply contracts, and require the requested publisher signature verification for update artifacts. Validate a concrete signed supply and its availability before treating provenance as a solution. Distinguish package and signed desktop-bundle supply. |
 | Package notification | Version cache refresh interval is 20 hours, with a 40-hour maximum cache age (`src/update/notify.ts:19`); background refresh is detached when stale (`src/update/notify.ts:182`). The in-process scheduler honors `OCX_DISABLE_UPDATE_CHECK=1`, avoids unsupported installers and backs off after failed checks (`src/update/refresh-scheduler.ts:24`, `:52`, `:87`). | Preserve the existing opt-out and no-refresh semantics while adding explicit independent controls. |
 | Browser dialog | The existing dashboard update dialog offers latest/preview, checks, errors, restart choice and an explicit update action (`gui/src/pages/dashboard-dialogs.tsx:29`). | Keep its installed-package semantics consistent with any shared state and copy. |
@@ -79,7 +80,7 @@ untracked by Git.
 
 The bundled desktop page is `desktop/ui/update.html`; its existing status,
 check and install commands are guarded to that page in
-`desktop/src-tauri/src/lib.rs:267` and `desktop/src-tauri/src/window.rs:115`.
+`desktop/src-tauri/src/lib.rs:274` and `desktop/src-tauri/src/window.rs:115`.
 `tests/clients/desktop-update-surface.test.ts:38` exercises the page and its
 command boundary. The dashboard receives desktop state via
 `src/server/management/sidebar-routes.ts:137`, whose store strictly validates

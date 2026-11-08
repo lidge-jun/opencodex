@@ -6,13 +6,13 @@ Do not treat the current `transport-unsupported` state as final parity.
 
 ## Outcome and proposed transport
 
-For a Child-initiated link with no Home-to-Child SSH exec route, the Child
-polls its authenticated Home connection for a request addressed to its
-locally approved update grant. The existing passive management relay remains
-read-only. A separate versioned update exchange carries bounded signed
-requests/results; the Child checks its own grant, policy, signed candidate,
-installer ownership and idle admission before any effect. Home can request but
-cannot approve or widen the destination grant. Existing link sync remains a
+For a Child-initiated link with no Home-to-Child SSH exec route, the proposed
+Child would poll its authenticated Home connection for a request addressed to
+its locally approved update grant. The existing passive management relay stays
+read-only. A separate versioned exchange would carry bounded signed requests
+and results; the Child would check its grant, policy, candidate, installer
+ownership and idle admission before any effect. Home could request but not
+approve or widen the destination grant. Existing link sync would remain a
 separate operation and status.
 
 The existing Home listener combines its route allowlists in

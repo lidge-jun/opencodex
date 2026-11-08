@@ -6,8 +6,8 @@ implement from this draft yet.
 
 ## Outcome
 
-An operator can see and control eligible Home and Child updates, including
-per-machine state, deferral and failure. Automatic work is permitted only when
+The proposed operator experience would show and control eligible Home and Child
+updates, including per-machine state, deferral and failure. Automatic work would be permitted only when
 the destination's own setting allows it, the exact artifact is signed and
 verified, the destination identity and installer ownership are established,
 compatibility is known, and the guarded stop/drain and idle admission succeed.
@@ -166,11 +166,12 @@ worker handoff must be proven on that platform before accepted work is claimed
 to survive disconnect.
 
 The proposed lock order is `U → O → A → N → L → C → J`: existing home
-sync/update mutex (`U`), installation ownership lease (`O`), link apply
+sync/update mutex (`U`), proposed installation-wide ownership coordination (`O`), link apply
 exclusion (`A`), native integration (`N`), client lifecycle (`L`), config
 mutation (`C`), then a short journal transaction (`J`). Existing client code
 documents `N → L → C` (`src/client/lifecycle-lock.ts:1`); the combined order
-is a proposed extension and must be proven against every caller. No inner lock
+is a proposed extension and must be proven against every caller; `O` is not an
+existing installation-wide lease. No inner lock
 is held over SSH, installer execution or readiness waits. Preparation holds
 only a stage lease while waiting; activation reacquires and revalidates the
 relevant owners. A durable binding epoch must change before a relink, key
@@ -285,7 +286,7 @@ ownership using isolated crash/restart tests, not just schema serialization.
 | NEW / MODIFY | `desktop/src-tauri/src/link_update_bridge.rs`, native update owner in `desktop/src-tauri/src/updater.rs`, `src/link/` destination worker | A destination-owned Desktop app accepts only a locally granted, operation-bound request and applies it through its existing native updater, consent policy and Stop/Quit-aware recovery. A package worker never replaces a Desktop bundle. An offline app, absent local grant or unverifiable app identity returns owner-action/unknown; completing this unit requires supported remote Desktop activation, not a permanent refusal. |
 | NEW / MODIFY | `src/server/management/link-update-routes.ts`, `src/server/management-api.ts`, `src/server/management/route-registry.ts`, `gui/src/remote-link-update-api.ts`, `gui/src/pages/RemoteLink.tsx`, `gui/src/components/remote-link-update-panel.tsx`, all GUI locales and relevant docs-site locales | Register the separate versioned status/action endpoints below, parse their DTOs in the GUI and render destination status, retry and Later. Preserve `parseRemoteLinkStatus` and the old `/api/link/status` response. Never claim completion until destination evidence proves version and health. |
 | MODIFY | `tests/cli/sync-fanout.test.ts`, `tests/clients/link-peer-compatibility.test.ts`, focused `tests/update/` and `tests/clients/` | Cover authenticated identity, mixed old/new peers, Home/Child ordering, duplicate requests, deadlines, signed payload mismatch, busy/idle races, recovery and sync interaction using isolated fixtures. Register new domain test files in both layout maps. |
-| MODIFY | `structure/remote-link.md`, `structure/remote-messaging.md`, `structure/ops/service-and-sidecars.md`, other source owners from the index | Review both `src/link/` owners (`structure/INDEX.md:362`); record actual post-change ownership, wire schema, compatibility, outcomes and invariant tests in affected docs. |
+| MODIFY | `structure/remote-link.md`, `structure/remote-messaging.md`, `structure/ops/service-and-sidecars.md`, other source owners from the index | Review both `src/link/` owners (`structure/INDEX.md:366`); record actual post-change ownership, wire schema, compatibility, outcomes and invariant tests in affected docs. |
 
 ### Dashboard management boundary
 
@@ -409,7 +410,7 @@ not start or replace it as a package. Add isolated POSIX and Windows IPC tests
 for forged or stale app identity, unauthorized callers, changed grant/policy,
 lost replies, process exit, concurrent native-page/remote actions and Stop/Quit
 intent. The IPC boundary is separate from the bundled update-page guard
-(`desktop/src-tauri/src/lib.rs:267`) and requires independent security review.
+(`desktop/src-tauri/src/lib.rs:274`) and requires independent security review.
 
 ## Required activation scenarios
 

@@ -15,20 +15,7 @@ its selected global owner (`src/update/pnpm-global-install.mjs:472`); safe
 independent staging for pnpm and Bun remains to be demonstrated. Existing
 `ocx.update.plan/1` and `ocx.update.result/1` consumers retain their contracts.
 
-An automatic path must verify the signed exact bytes before installation and
-before executing anything acquired as part of the update. npm staging currently
-permits Bun's install script (`src/update/transactional-install.mjs:433`), so
-the plan must account for transitive executable artifacts and lifecycle scripts,
-not only the top-level tarball. If this cannot be proven for a manager, that
-manager reports unsupported and performs no automatic mutation until a later
-in-scope unit supplies the missing guarantee; this is not goal completion.
-
-The signed-supply research recommends extracting a signed, self-contained
-npm-shaped tree as data, without lifecycle scripts, then reusing the existing
-owned sibling swap after verifying the complete signed inventory. Preserve npm
-prefix and bin links and refuse incompatible bin mappings. An initial automatic
-update also needs an authenticated matching previous tree for recovery; a hash
-of a previously unsigned installation is not publisher authentication.
+Automatic preparation must use independently reviewed verification and preserve manager ownership. Any manager without a proven safe preparation and recovery contract remains unsupported.
 
 pnpm's global virtual store and Bun's global metadata/shims need distinct
 adapters and isolated proof that the exact signed local bundle can be installed
@@ -39,9 +26,10 @@ and `100`; this npm unit cannot close them.
 
 Preparation holds only its own stage lease; it does not hold the sync/update
 mutex while waiting for a person or idle. Activation reacquires the existing
-home-scoped sync/update mutex, installation ownership lease and the runtime
-reservation in the order established by the existing owner, revalidates the
-stage and policy, then performs the receipt-backed stop and atomic swap. The
+home-scoped sync/update mutex and service ownership guard, and obtains the
+installation-wide coordination and runtime reservation proposed by `020` only
+after those mechanisms are designed and proven. It revalidates the stage and
+policy before performing the receipt-backed stop and atomic swap. The
 complete lock order and process-exit fencing must be proven against the
 selected manager and platform before the unit is audited.
 
@@ -69,28 +57,34 @@ explicitly unsupported until its own implementation unit proves them.
 | --- | --- | --- |
 | MODIFY | `src/update/transactional-install.mjs` and sibling modules | Extract owner-held `prepare` and `commit` around current isolated staging, tree verification, authorization, swap and rollback. A prepared handle binds verified candidate, exact installation, policy revision and stage identity. Preserve legacy command interfaces and process-tree exit fences while requiring verified supply for installation. |
 | MODIFY | `src/update/orchestrated-plan.ts`, `src/update/orchestrated-entry.ts`, `src/update/orchestrated-node-driver.mjs`, `src/update/orchestrated-session.mjs` | Add a separately versioned automatic preparation/activation contract around the existing identity-bound plan and mutation lease. Enumerate construction, transport, decoding, admission and every consumer before locking design; reject stale policy/owner/candidate. Do not change exact-key existing JSON silently. |
-| REVALIDATE | `src/update/pnpm-global-install.mjs`, Bun-owned update paths | Preserve their command interfaces and ownership refusals while applying the required signed-supply contract. Manager-specific signed automatic implementations belong to `090` and `100`. |
+| REVALIDATE | `src/update/pnpm-global-install.mjs`, Bun-owned update paths | Verify their existing command interfaces and ownership refusals remain unchanged in this unit. Their signed-supply migration and manager-specific automatic implementations belong to `090` and `100`. |
 | MODIFY | `src/update/refresh-scheduler.ts`, package update coordinator sibling | Discovery remains read-only with existing opt-out, cache and backoff; the separately persisted policy owns whether an exact signed target may be downloaded or activated. Integrate admission unit `020`, failed-target suppression and serving-target health readback. |
-| NEW | `src/update/automatic-policy.ts`, `src/server/management/update-policy-routes.ts` | The package owner stores a strict `ocx.update.policy/1` record under its effective OpenCodex configuration directory, atomically updates it with a revision check, and exposes authenticated policy reads/changes through the management owner. Missing uses documented defaults; corrupt/unreadable disables automatic effects and reports an error. Never use a dashboard snapshot as authorization. Wire the route through the existing registry with focused authorization tests. |
+| NEW | `src/update/automatic-policy.ts`, `src/server/management/update-policy-routes.ts` | The package owner stores a strict `ocx.update.policy/1` record under its effective OpenCodex configuration directory, atomically updates it with a revision check, and exposes authenticated policy reads/changes through the management owner. Only an independently established first installation uses documented defaults; missing after initialization, ambiguous, corrupt or unreadable policy disables automatic effects and requires recovery. Never use a dashboard snapshot as authorization. Wire the route through the existing registry with focused authorization tests. |
 | MODIFY | `tests/update/update-transactional.test.ts`, `tests/update/update-orchestrated-*.test.ts`, `tests/update/update-pnpm.test.ts`, `tests/update/update-sync-mutex.test.ts`, relevant CLI/GUI tests | Add red-to-green signature, stage integrity, owner, lease, process-exit, retry, policy and race cases using isolated homes and local fake installers. Register new domain test files in both test-layout maps. |
 | MODIFY | `structure/ops/service-and-sidecars.md`, `structure/ops/update-supervised-recovery.md`, `structure/ops/desktop-supervision.md`, any other mapped owners; docs-site and matching locales | Describe actual supported managers, controls, recovery and manual guidance. |
 
-The legacy explicit commands retain their public argument and result shapes,
-but do **not** retain unsigned execution as a fallback. Migrate each affected
-manual installation entry to the same verified artifact owner; report a clear
-refusal if signed supply is absent. Include Node launcher, Bun and dashboard
-update paths in the call-graph review and security tests. Manager-specific
-support remains an in-scope deliverable, not a reason to execute an unsigned
-dependency while waiting for its adapter.
+Existing explicit package commands retain their current behavior until a
+manager's verified-supply migration ships. The planned migration preserves
+their argument and result interfaces, but may refuse an installation that the
+current command permits when verified supply is unavailable. Ship each
+manager's migration only after its signed adapter, recovery and compatibility
+tests pass; `090` and `100` own pnpm and Bun respectively. Document the change
+and supported manual alternatives. Until then, do not claim those managers
+have verified automatic updates or silently change their existing commands.
 
 ### Package policy contract
 
-`src/update/automatic-policy.ts` owns the strict `ocx.update.policy/1` record
+The proposed `src/update/automatic-policy.ts` would own the strict `ocx.update.policy/1` record
 at `<configDir>/update-policy-v1.json`: `schema`, nonnegative safe-integer
 `revision`, `channel` (`latest`, `preview`, `nightly`), `check` and `download`
-(`automatic`, `manual`), and `install` (`manual`, `when-idle`). For a genuinely
-missing record, use the verified installed-channel provenance defined in `010`
-and automatic check/download with manual installation. Missing or ambiguous
+(`automatic`, `manual`), and `install` (`manual`, `when-idle`). Only an
+independently established first installation may use the verified installed
+channel provenance in `010` and automatic check/download with manual install.
+A missing policy after initialization, or ambiguous initialization state, is a
+recovery error that disables automatic effects; it must not reset earlier
+manual choices. The package owner must preserve a durable revision high-water
+mark and refuse recovery if it cannot establish a fresh revision. Test policy
+deletion after a manual choice, owner restart and stale requests. Missing or ambiguous
 provenance is `channel-unknown`, not a version-derived preview fallback; an owner
 can explicitly choose a channel and establish verified provenance. If the current
 channel or install owner cannot be determined, report unknown and do not start
@@ -141,7 +135,8 @@ compatibility and authorization; no real user home is used.
   target version serving and passing health; uncertain outcomes never trigger a
   duplicate install. Failed targets do not loop automatically.
 - Test npm independently on supported platforms; retain interface and ownership
-  regressions for pnpm and Bun explicit paths while applying signed supply.
+  regressions for unchanged pnpm and Bun explicit paths. Their signed-supply
+  migration belongs to `090` and `100` after each adapter is proven.
   Unsupported or externally managed
   installers display an honest actionable reason. The `090` and `100` units
   remain open until their own automatic adapters are proven.

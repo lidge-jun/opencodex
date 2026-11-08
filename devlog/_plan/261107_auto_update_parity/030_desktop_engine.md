@@ -6,11 +6,11 @@ authorization.
 
 ## Objective and policy proposal
 
-The desktop app checks its selected published channel, can download a signed
-update in the background, exposes progress, and retains a verified stage until
-the person chooses to restart or the selected automatic-install policy permits
-it. Existing download verification and the ownership-aware drain remain the
-only path to installation (`desktop/src-tauri/src/updater.rs:388`,
+The planned desktop app would check its selected published channel, download a
+signed update in the background, expose progress, and retain a verified stage
+until the person chooses to restart or an enabled policy permits installation.
+The design must retain the existing download-verification and ownership-aware
+drain boundaries (`desktop/src-tauri/src/updater.rs:388`,
 `desktop/src-tauri/src/exit.rs:546`).
 
 Proposed defaults: background checks and signed auto-download on; automatic
@@ -82,13 +82,35 @@ app-config directory as `update-policy-v1.json`, is a closed object with
 or `nightly`), `check` and
 `download` (`automatic` or `manual`), and `install` (`manual`, `on-quit` or
 `when-idle`).
-Defaults are automatic checks and downloads, manual install. A missing record
-uses these preferences only when the installed channel is established by the
-verified provenance in `010`; ambiguous or missing channel provenance remains
-unknown and disables automatic effects. Malformed or unreadable existing records
+Proposed first-install defaults are automatic checks and downloads, manual
+install. Apply them only when an independent owner-controlled initialization
+record establishes a genuinely new installation and the installed channel has
+the verified provenance in `010`. A missing policy after initialization, or an
+ambiguous initialization state, is a recovery error and disables automatic
+effects; it is never treated as first install. Ambiguous or missing channel
+provenance likewise disables automatic effects. Malformed or unreadable records
 also disable automatic effects and report an error. Writes are serialized and
 atomic; an unsuccessful write never updates effective policy. Every action
 captures the revision and rechecks it before download and activation.
+
+The proposed owner must durably reserve a strictly increasing revision before
+publishing each policy, including a repair, under the same serialized mutation
+boundary. A separate owner-controlled high-water record must survive a corrupt
+policy and restart; interrupted writes may consume a revision but never reuse
+one. If that record is missing, unreadable, corrupt or exhausted and a genuinely
+new installation cannot be established independently, refuse policy mutation
+and automatic effects rather than reset the counter. Recovery cannot assume a
+revision from an unparseable policy. Tests must cover interruption at each
+durable step, high-water loss, policy deletion after a manual choice, stale
+requests and prepared actions after recovery, concurrent writes, and restart.
+
+The planned native policy owner would also own the guarded local corrupt-policy
+repair command in `050`. It would serialize repair with policy writes, verify
+the current owner-issued observation, preserve recoverable prior data and use
+manual defaults with an explicitly selected channel and a freshly reserved
+revision above the durable high-water mark. A stale observation,
+unreadable record or failed preservation refuses without changing policy.
+Tests must cover repair, competing writes and owner restart before delivery.
 
 Later records the exact staged candidate as deferred until the person explicitly
 installs it or selects a newer candidate; it survives app restart and ordinary
