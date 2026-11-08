@@ -420,6 +420,18 @@ describe("#4202 install-tree dependency ownership", () => {
     expect(result.failures).toContain("pnpm dependency link escapes the selected store: foreign");
   });
 
+  test("refuses a dependency entry point linked outside the selected store", () => {
+    const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
+    const zod = join(root, "pnpm", "store", "v11", "links", "zod", "1.0.0", "h2", "node_modules", "zod");
+    const outside = join(root, "outside-entry.js"); writeFileSync(outside, "module.exports = 1;\n");
+    symlinkSync(outside, join(zod, "index.js"));
+    const resolved = createRequire(join(realpathSync(exposed), "entry.js")).resolve("zod");
+    expect(realpathSync(resolved)).toBe(realpathSync(outside));
+    const result = verifyPnpmInstallTree(exposed, "2.0.0", join(root, "pnpm", "store", "v11"));
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("pnpm package link escapes the selected store");
+  });
+
   test("accepts a nested dependency link inside the selected store", () => {
     const exposed = globalStoreLinksFixture({ depsInOwnGroup: true });
     const store = join(root, "pnpm", "store", "v11");
