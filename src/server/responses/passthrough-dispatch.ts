@@ -1,4 +1,5 @@
 import { clientFacingModelText } from "../../lib/error-destination";
+import { providerAffinityGenerationIsCurrent } from "../../providers/api-key-selection";
 import { markProxyError } from "../../lib/client-error-body";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import { passthroughBuildErrorResponse } from "./passthrough-build-error";
@@ -1206,7 +1207,6 @@ export async function preparePassthroughExchange(
         upstreamResponse = recovered; continue passthroughRecovery;
       }
 
-
     if (
       upstreamResponse.status === 401 && !wasPermanentAccountRefusal(upstreamResponse)
       && (admissionState.authCtx.kind === "main-pool" || admissionState.authCtx.kind === "pool")
@@ -1542,7 +1542,7 @@ export async function preparePassthroughExchange(
    while (
      upstreamResponse.status === 429
       && !isNonReplayableResponse(upstreamResponse)
-     && rateLimitPolicy !== null
+     && rateLimitPolicy !== null && providerAffinityGenerationIsCurrent(config, route.providerName, route.provider)
       && rateLimitRetries < rateLimitPolicy.attempts
       // Checked here rather than inside the helper: prepareSameTarget429Wait releases the 429
       // body, so a refusal discovered after the wait can no longer return the real rate-limit

@@ -1,4 +1,5 @@
 import { recordUpstreamValidationDetail } from "../request-log-failure-detail";
+import { providerAffinityGenerationIsCurrent } from "../../providers/api-key-selection";
 import { clientFacingModelText } from "../../lib/error-destination";
 import { responsesSpendTarget } from "./request-spend-target";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
@@ -1234,7 +1235,7 @@ export async function prepareAdapterExchange(
       // key on rate-limit blips; only after the attempts are exhausted does failover run.
       while (
         upstreamResponse.status === 429 && !isSameTargetRetryHold(upstreamResponse)
-        && rateLimitPolicy !== null
+        && rateLimitPolicy !== null && providerAffinityGenerationIsCurrent(config, route.providerName, route.provider)
         && rateLimitRetries < rateLimitPolicy.attempts
         && !sendBudgetExhausted()
       ) {

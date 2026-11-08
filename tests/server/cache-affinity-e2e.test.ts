@@ -464,6 +464,53 @@ describe("provider cache affinity (end-to-end)", () => {
     expect(seenAuth).toEqual(["Bearer key-a", "Bearer key-b"]);
   });
 
+  test.each([200, 401, 429])("old affinity-selected %s completion preserves a newer binding after reversion", async status => {
+    const config = makeConfig();
+    await turn(config, "reverted-affinity-flight");
+    const old = await turn(config, "reverted-affinity-flight", undefined, undefined, false);
+    expect(old.cacheAffinity).toBe("kept");
+    const provider = config.providers["affinity-e2e"]!;
+    const context = { generation: 1, providerNames: new Set(Object.keys(config.providers)), comboIds: new Set<string>(),
+      comboTargets: new Set<string>(), codexAccountIds: new Set<string>(), oauthAccountKeys: new Set<string>(), configRoots: new Set<string>() };
+    provider.apiKeyPool![0]!.key = "replacement-key";
+    reconcileProviderCacheAffinity(context, config.providers);
+    provider.apiKeyPool![0]!.key = "key-a";
+    provider.apiKey = "key-b";
+    reconcileProviderCacheAffinity({ ...context, generation: 2 }, config.providers);
+    await turn(config, "reverted-affinity-flight");
+    addFinalRequestLog(nextRequestLogId(), Date.now(), old, status);
+    await turn(config, "reverted-affinity-flight");
+    expect(seenAuth).toEqual(["Bearer key-a", "Bearer key-a", "Bearer key-b", "Bearer key-b"]);
+  });
+
+  test("stale affinity failure cannot trigger a paced same-key retry", async () => {
+    const config = makeConfig();
+    const provider = config.providers["affinity-e2e"]!;
+    provider.requestPacing = { enabled: true, keySelection: "round-robin" };
+    provider.retryOn429 = { attempts: 1, intervalMs: 1000, maxIntervalMs: 1000 };
+    await turn(config, "stale-retry");
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends++;
+      const context = { generation: 1, providerNames: new Set(Object.keys(config.providers)), comboIds: new Set<string>(),
+        comboTargets: new Set<string>(), codexAccountIds: new Set<string>(), oauthAccountKeys: new Set<string>(), configRoots: new Set<string>() };
+      provider.apiKeyPool![0]!.key = "replacement-key";
+      reconcileProviderCacheAffinity(context, config.providers);
+      provider.apiKeyPool![0]!.key = "key-a";
+      provider.apiKey = "key-b";
+      reconcileProviderCacheAffinity({ ...context, generation: 2 }, config.providers);
+      saveConfig(config);
+      return new Response(JSON.stringify({ error: { message: "rate limited" } }), { status: 429, headers: { "content-type": "application/json", "retry-after": "0" } });
+    }) as typeof fetch;
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json", "thread-id": "stale-retry" },
+      body: JSON.stringify({ model: "affinity-e2e/test", input: "hello", stream: false, store: false }),
+    }), config, { model: "", provider: "" });
+    await response.text();
+    expect(response.status).toBe(429);
+    expect(sends).toBe(1);
+  });
+
   test("changed resolved environment credential does not inherit evidence", async () => {
     const previous = process.env.OCX_AFFINITY_TEST_KEY;
     try {

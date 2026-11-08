@@ -14,7 +14,8 @@ export {
   getKeyCooldownUntil,
   sweepExpiredApiKeyCooldowns,
 } from "./api-key-cooldowns";
-import { commitProviderApiKeySelection, providerApiKeySelectionIsCurrent } from "./api-key-selection";
+import { affinitySelectionIsCurrent, commitProviderApiKeySelection, providerApiKeySelectionIsCurrent } from "./api-key-selection";
+import { currentCacheAffinityIdentity } from "./cache-affinity-identity";
 import { providerRequestPacingStatus, REQUEST_PACING_MAX_QUEUE_AGE_MS, RequestPacingQueueOverloadError } from "./request-pacing";
 import { isCanonicalMistralChat } from "./mistral-transport";
 import type { ProviderApiKeySelection } from "../types/provider";
@@ -646,6 +647,7 @@ export function selectProactiveApiKeyTransport(
         affinityTransport._apiKeyAttempt = {
           ...affinityTransport._apiKeyAttempt!,
           cacheAffinity: true,
+          cacheAffinityGeneration: currentCacheAffinityIdentity(providerName, configured, entry.id),
           distributed: configured.requestPacing?.enabled === true && configured.requestPacing.keySelection === "round-robin",
         };
         return affinityTransport;
@@ -824,7 +826,7 @@ export function recordDistributedKeyFailure(
 ): boolean {
   const provider = config.providers[providerName];
   if (!selection?.distributed || !provider || provider.authMode === "oauth" || provider.authMode === "forward") return false;
-  if (selection.cacheAffinity && !cacheAffinityApplies(provider)) return false;
+  if (selection.cacheAffinity && (!cacheAffinityApplies(provider) || !affinitySelectionIsCurrent(providerName, provider, selection))) return false;
   const failed = provider.apiKeyPool?.find(entry => entry.id === selection.entryId && entry.key === selection.reference);
   if (!failed || failed.disabled || (!selection.cacheAffinity && provider.apiKeySelectionRevision !== selection.revision)) return false;
   const delay = status === "billing" ? ANTHROPIC_BILLING_COOLDOWN_MS : status === 401 ? MAX_COOLDOWN_MS : quotaResetAt !== undefined

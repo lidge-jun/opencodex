@@ -72,7 +72,7 @@ import {
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
 import { distributedKeyPhysicalFetch, distributedKeyResponseOwner, recordDistributedResponseFailure } from "../providers/api-key-response-ownership";
-import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
+import { providerAffinityGenerationIsCurrent, providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import {
   hasKeyPoolFailover,
@@ -699,6 +699,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
               }
             } else {
               for (let attempt = 0; !providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider); attempt++) {
+                if (!providerAffinityGenerationIsCurrent(config, route.providerName, activeProvider)) throw markProxyError(new Error("Provider affinity selection is no longer available"));
                 if (attempt >= 3) throw markProxyError(new Error("Provider key selection changed repeatedly before native Messages dispatch"));
                 let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
                 if (!current && activeProvider.requestPacing?.enabled
@@ -872,7 +873,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         response.status === 429
         && distributedResponseOwnsKey
         && !isNonReplayableResponse(response)
-        && retryPolicy
+        && retryPolicy && providerAffinityGenerationIsCurrent(config, route.providerName, activeProvider)
         && retries < retryPolicy.attempts
         && keySendAvailable()
       ) {

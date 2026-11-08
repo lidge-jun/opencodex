@@ -69,7 +69,7 @@ import { fastPolicyForModel } from "../providers/service-tier";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import { stampApiKeyAccountLabel } from "../providers/label";
 import { distributedKeyPhysicalFetch, distributedKeyResponseOwner } from "../providers/api-key-response-ownership";
-import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
+import { providerAffinityGenerationIsCurrent, providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
 import type { OcxProviderTransport } from "../providers/xai-transport";
 import type { RouteResult } from "../router";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -523,6 +523,7 @@ export async function runNativeChatAttempt(
             dispatchOverride: async (_input, init, execute, reacquirePacing) => {
               for (let attempt = 0; !providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider); attempt++) {
                 if (outputDelivered) throw new Error("Provider key selection is unavailable during the native Chat turn");
+                if (!providerAffinityGenerationIsCurrent(config, route.providerName, activeProvider)) throw new Error("Provider affinity selection is no longer available");
                 if (attempt >= 3) throw new Error("Provider key selection changed repeatedly before native Chat dispatch");
                 let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
                 if (!current && activeProvider.requestPacing?.enabled
@@ -654,7 +655,7 @@ export async function runNativeChatAttempt(
       // exists to stop. It kept the same shape under the old 502 only because 502 never
       // matched this branch.
       && !isNonReplayableResponse(response) && !isSameTargetRetryHold(response)
-      && retryPolicy
+      && retryPolicy && providerAffinityGenerationIsCurrent(config, route.providerName, activeProvider)
       && retries < retryPolicy.attempts
       && transientSendAvailable()
     ) {

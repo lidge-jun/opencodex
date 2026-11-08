@@ -49,8 +49,10 @@ export function currentCacheAffinityIdentity(providerName: string, provider: Ocx
 }
 
 export function captureCacheAffinityIdentity(context: object, providerName: string, provider: OcxProviderConfig): void {
-  const entryId = provider._apiKeyAttempt?.entryId;
-  const identity = entryId ? observedIdentity(providerName, entryId, cacheAffinityIdentity(provider)) : undefined;
+  const selection = provider._apiKeyAttempt;
+  const entryId = selection?.entryId;
+  const identity = selection?.cacheAffinity ? selection.cacheAffinityGeneration
+    : entryId ? observedIdentity(providerName, entryId, cacheAffinityIdentity(provider)) : undefined;
   if (identity) (context as IdentityContext)[sentIdentity] = identity;
   else delete (context as IdentityContext)[sentIdentity];
 }

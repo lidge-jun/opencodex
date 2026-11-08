@@ -180,7 +180,7 @@ import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve"
 import { hasKeyPoolFailover, rotateProviderTransportOn429, selectProactiveApiKeyTransport, transientRetryPolicyFor } from "../../providers/key-failover";
 import { transientSendCapFor } from "./request-send-budget";
 import { distributedKeyPhysicalFetch, recordDistributedResponseFailure } from "../../providers/api-key-response-ownership";
-import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../providers/api-key-selection";
+import { providerAffinityGenerationIsCurrent, providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../providers/api-key-selection";
 import { stampApiKeyAccountLabel } from "../../providers/label";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
@@ -1236,6 +1236,7 @@ export async function handleResponsesCompact(
           dispatchOverride: sendProvider.authMode !== "forward" && sendProvider.apiKey
             ? async (_input, init, execute, reacquirePacing) => {
               for (let attempt = 0; !providerApiKeySelectionIsCurrent(config, route.providerName, sendProvider); attempt++) {
+                if (!providerAffinityGenerationIsCurrent(config, route.providerName, sendProvider)) throw new Error("Provider affinity selection is no longer available");
                 if (attempt >= 3) throw new Error("Provider key selection changed repeatedly before compact dispatch");
                 let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, sendProvider);
                 if (!current && sendProvider.requestPacing?.enabled

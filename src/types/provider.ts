@@ -34,6 +34,8 @@ export interface ProviderApiKeySelection {
   distributed?: boolean;
   /** Request-local cache-affinity pick; survives selection re-reads while its entry stays live. */
   cacheAffinity?: boolean;
+  /** Opaque process-local credential and destination generation for an affinity pick. */
+  cacheAffinityGeneration?: string;
 }
 
 export interface OpenRouterProviderRouting {

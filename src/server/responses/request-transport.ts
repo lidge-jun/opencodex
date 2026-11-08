@@ -81,6 +81,7 @@ import {
 import { renameRoutedIdentityInContext } from "../../adapters/identity";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import {
+  providerAffinityGenerationIsCurrent,
   providerApiKeySelectionIsCurrent,
   resolveCurrentProviderApiKeyTransport,
 } from "../../providers/api-key-selection";
@@ -787,6 +788,7 @@ export async function prepareResponsesTransport(
         throw new Error("OAuth account selection changed before dispatch");
       }
     } else {
+      if (!providerAffinityGenerationIsCurrent(config, route.providerName, route.provider)) throw new Error("Provider affinity selection is no longer available");
       let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, route.provider);
       if (!current && (route.provider._apiKeyAttempt?.distributed || (route.provider.requestPacing?.enabled
         && (route.provider.requestPacing.keys || route.provider.requestPacing.keySelection === "round-robin")))) {
