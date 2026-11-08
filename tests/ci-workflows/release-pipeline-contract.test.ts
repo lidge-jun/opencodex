@@ -128,6 +128,21 @@ describe("release pipeline contract", () => {
     expect(steps.find(step => step.name === "Bind verified asset digests")?.run).toContain("sha256");
   });
 
+  test("release documentation names every dispatch input and the current recovery rules (#8329)", () => {
+    const doc = readFileSync(repoPath("structure", "ops", "docs-and-release.md"), "utf8");
+    const dispatch = (release.on as { workflow_dispatch?: { inputs?: Record<string, unknown> } } | undefined)?.workflow_dispatch;
+    const inputs = Object.keys(dispatch?.inputs ?? {});
+    expect(inputs).toContain("resume-after-npm-publish");
+    for (const input of inputs) expect(doc, input).toContain(`\`${input}\``);
+    for (const gate of [".github/scripts/release-history.cjs", ".github/scripts/release-resume.cjs", "scripts/verify-release-resume.ts"]) {
+      expect(doc, gate).toContain(gate);
+    }
+    // The pre-#8328 text said resume was refused and any npm history failed the run.
+    expect(doc).not.toContain("refuses resume");
+    expect(doc).not.toContain("Resume is also refused");
+    expect(doc).not.toContain("fails closed on existing npm publications");
+  });
+
   test("attachment checks the entire receipt digest set and never clobbers assets", () => {
     const steps = release.jobs?.["attach-release"]?.steps ?? [];
     const receipt = steps.find(step => step.name === "Require the verification receipt for this commit");

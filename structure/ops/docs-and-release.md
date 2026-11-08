@@ -221,7 +221,7 @@ cannot supply a write-job PR number. If no unique local current-head candidate r
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | Pull requests and manual dispatch | Scoped Ubuntu checks on PRs; full Linux, macOS and Windows evidence via manual `lane=all` on `dev`. The aggregate validates the requested job graph. |
 | `.github/workflows/dev-version-bump.yml` | Manual dispatch | Legacy pre-move and repair tool; it is not part of the new release path. |
-| `.github/workflows/release.yml` | Manual dispatch from `dev` | Resolves qualifying source evidence and stamps build checkouts; publication is held pending history reconciliation and remaining cutover gates. |
+| `.github/workflows/release.yml` | Manual dispatch from `dev` | Resolves qualifying source evidence, stamps build checkouts and reconciles publication history; publishes only when `OCX_DEV_RELEASE_PUBLISH_ENABLED` is `true`, and supports an operator-attested resume that never republishes npm. |
 | `.github/workflows/deploy-docs.yml` | Manual dispatch from `dev` | Builds a published stable release at its resolved commit and deploys to Pages; the PR build gate is `docs-site-build`. |
 | `.github/workflows/service-lifecycle.yml` | Filtered pull requests and manual dispatch | Linux, macOS and Windows service checks; manual dispatch validates an exact `dev` ancestor source SHA. |
 | `.github/workflows/catalog-async-contracts.yml` | Filtered pull requests and manual dispatch | Read-only catalog contracts; PRs run Ubuntu and manual dispatch from `dev` runs all three platforms. |
@@ -407,10 +407,40 @@ Package release is npm-focused. `.github/workflows/release.yml` resolves a quali
 sources in temporary build checkouts using `scripts/release-version-sources.ts`. The sources are
 `package.json`, `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/Cargo.toml`, and the
 `opencodex-desktop` entry in `desktop/src-tauri/Cargo.lock`. The new path remains pre-cutover:
-publication is held by `OCX_DEV_RELEASE_PUBLISH_ENABLED`, and current history reconciliation
-fails closed on existing npm publications. Resume is also refused pending a durable receipt.
-History, security review, real dry-run evidence and settings must be resolved before cutover;
-this text does not attest those gates. Docs publishing is separate.
+a non-dry run fails unless the repository variable `OCX_DEV_RELEASE_PUBLISH_ENABLED` equals `true`.
+Real dry-run evidence and that setting remain maintainer cutover steps; this text does not attest
+them. Docs publishing is separate.
+
+Dispatch inputs are `tag` (`latest` or `preview`), `dry-run` (default `true`), an optional
+`expected-sha` that must be a full `dev` SHA with qualifying CI evidence, an optional `version`
+that must equal the derived version, and `resume-after-npm-publish` (default `false`).
+`scripts/release.ts` dispatches ordinary runs only; a resume is dispatched manually.
+
+An ordinary run reconciles publication history with
+`.github/scripts/release-history.cjs check <source> <version> <channel>` from the trusted workflow
+revision with full Git history, in the `verify-npm` job and again in `publish` immediately before
+`npm publish`.
+The check takes the newest npm publication of each channel as that channel's floor. Every npm
+version published since the older floor must have a GitHub tag at its npm `gitHead` and a
+published GitHub release of the matching channel, and every non-draft GitHub release since then
+must have its npm version; an npm-only or partial publication stops the run for manual
+reconciliation. The candidate version must exceed every published npm version, the candidate must
+be reachable from GitHub `dev`, and its lineage must contain each floor's source. The two fixed
+legacy floors (`2.99.0` and `2.99.0-preview.20261108`) are accepted only at their recorded SHAs
+and only when they differ from the `2.100.0` baseline by the four version files alone. The
+candidate may reuse the newest floor's source only to promote a preview to stable. The evidence is
+read twice and the run fails if npm, tags, releases or `dev` changed in between.
+
+Resume recovers a run that stopped after npm acknowledged the publication. It requires
+`resume-after-npm-publish: true`, `dry-run: false`, and both `expected-sha` and `version` naming
+the original source and version; the version must match the channel's format. It skips history
+reconciliation and npm publish. Instead, `scripts/verify-release-resume.ts` and
+`.github/scripts/release-resume.cjs` require that exact npm version to exist with `gitHead` equal
+to the supplied source, that no newer npm version or `v*` tag exists, and that an existing tag for
+the version points at that source. Existing release assets must match the digests in the receipt
+from this run's `verify-release` job, and a published release missing a verified asset is refused.
+Registry metadata is a consistency check, not cryptographic provenance: the operator attests the
+original source and version, and a source or version that cannot be verified refuses the resume.
 
 The `package-standalone` job in `.github/workflows/release.yml` also builds Bun compiled
 `ocx` archives for Linux, macOS, and Windows, bundles `gui/dist`, smoke-tests `/healthz`, and
@@ -421,7 +451,7 @@ copies those same pinned assets into Tauri resources. The loader and packaged-ap
 `src/lib/standalone.ts` recognizes Bun's file-URL virtual roots after one URL decode, including Windows `%7EBUN`, and resolves runtime assets beside the real executable. Invalid/non-file URLs and double-encoded markers remain source paths; `tests/lib/standalone.test.ts` and `tests/service/standalone-service.test.ts` cover this distinction.
 
 The old `dev-version-bump.yml` pre-move is a legacy manual tool and is not required by the new
-source-selection path. The release workflow remains subject to the unresolved cutover gates above.
+source-selection path. The release workflow remains subject to the cutover steps above.
 
 ### Release notes
 
@@ -456,10 +486,11 @@ deterministic body whenever the maintainer skips it.
 ## Release metadata invariants
 
 A release version must agree across the four stamped version sources, npm package, tag and
-GitHub Release; tags are intended to point to the selected source SHA. Do not infer that historical
-npm publications or legacy tag ancestry have been reconciled. The current workflow refuses resume
-and fails closed when existing npm history is found. Maintainers must reconcile these gates and
-verify recovery before enabling publication; do not force-move public version tags as a workaround.
+GitHub Release; tags point to the selected source SHA. An npm version is never republished: after
+npm acknowledges a publication the workflow records "do not republish this version", and recovery
+uses the attested resume described under [Release workflow](#release-workflow). History that the
+reconciliation cannot verify is repaired by a maintainer before a new release; do not force-move
+public version tags as a workaround.
 
 Cross-platform CI test lanes and release proof live in [Cross-platform CI](cross-platform-ci.md).
 
