@@ -182,13 +182,19 @@ export function comboStreamPayloadCommitsOutput(payload: unknown): boolean {
   if (PRE_OUTPUT_CONTROL_EVENTS.has(type)) {
     // Lifecycle snapshots may already carry output or an error. Neither can be discarded
     // for a replacement, even if the event name otherwise describes only a prelude.
-    const event = payload as { response?: unknown; error?: unknown };
-    if (event.error != null) return true;
+    const event = payload as Record<string, unknown>;
+    const conflictingStatus = (status: unknown) => status != null && status !== "queued" && status !== "in_progress";
+    if (event.error != null || event.last_error != null || event.incomplete_details != null
+      || event.item != null || event.delta != null || event.content != null
+      || event.message != null || event.code != null || conflictingStatus(event.status)) return true;
+    if (event.output !== undefined && (!Array.isArray(event.output) || event.output.length > 0)) return true;
     const response = event.response;
+    if (response != null && (typeof response !== "object" || Array.isArray(response))) return true;
     if (response && typeof response === "object" && !Array.isArray(response)) {
-      const snapshot = response as { output?: unknown; error?: unknown; last_error?: unknown };
+      const snapshot = response as { output?: unknown; error?: unknown; last_error?: unknown; incomplete_details?: unknown; status?: unknown };
       if (snapshot.output !== undefined && (!Array.isArray(snapshot.output) || snapshot.output.length > 0)) return true;
-      if (snapshot.error != null || snapshot.last_error != null) return true;
+      if (snapshot.error != null || snapshot.last_error != null || snapshot.incomplete_details != null
+        || conflictingStatus(snapshot.status)) return true;
     }
   }
   return !PRE_OUTPUT_CONTROL_EVENTS.has(type) && !TERMINAL_EVENTS.has(type);

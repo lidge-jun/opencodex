@@ -993,11 +993,11 @@ describe("combo stream preflight", () => {
   });
 
   for (const type of ["response.created", "response.in_progress", "response.queued", "response.heartbeat"]) {
-    for (const field of ["error", "response.error", "last_error"] as const) {
+    for (const field of ["error", "response.error", "response.last_error", "last_error"] as const) {
       for (const ending of ["eof", "read-error"] as const) {
         test(`${type} preserves ${field} evidence on ${ending}`, async () => {
-          const payload = field === "error"
-            ? { type, error: { message: "original error" }, response: { output: [] } }
+          const payload = field === "error" || field === "last_error"
+            ? { type, [field]: { message: "original error" }, response: { output: [] } }
             : { type, response: { output: [], [field === "response.error" ? "error" : "last_error"]: { message: "original error" } } };
           const frame = `data: ${JSON.stringify(payload)}\n\n`;
           const bytes = new TextEncoder().encode(frame);
@@ -1018,6 +1018,49 @@ describe("combo stream preflight", () => {
         });
       }
     }
+    for (const status of ["completed", "failed", "incomplete", "cancelled", "future_terminal", 400]) {
+      for (const ending of ["eof", "read-error"] as const) {
+        test(`${type} preserves snapshot status ${status} on ${ending}`, async () => {
+          const frame = `data: ${JSON.stringify({ type, response: { output: [], status } })}\n\n`;
+          const bytes = new TextEncoder().encode(frame);
+          const error = new Error("original reset");
+          const original = ending === "eof"
+            ? new Response(bytes, { headers: { "content-type": "text/event-stream" } })
+            : prefixThenReadError(bytes, error).response;
+          let calls = 0;
+          const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async () => {
+            calls++;
+            return sse({ type: "response.completed", response: { id: "replacement" } });
+          });
+          const reader = wrapped.body!.getReader();
+          expect((await reader.read()).value).toEqual(bytes);
+          if (ending === "eof") expect((await reader.read()).done).toBe(true);
+          else await expect(reader.read()).rejects.toBe(error);
+          expect(calls).toBe(0);
+        });
+      }
+    }
+    for (const payload of [
+      { type, status: 400 },
+      { type, last_error: { message: "original" } },
+      { type, output: [{ type: "message" }] },
+      { type, item: { type: "function_call" } },
+      { type, delta: "original output" },
+      { type, response: { output: [], incomplete_details: { reason: "upstream_stall_timeout" } } },
+      { type, response: ["malformed snapshot"] },
+    ]) {
+      test(`${type} preserves contradictory or malformed evidence at EOF (%j)`, async () => {
+        const original = sse(payload);
+        const expected = await original.clone().text();
+        let calls = 0;
+        const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async () => {
+          calls++;
+          return sse({ type: "response.completed", response: { id: "replacement" } });
+        });
+        expect(await wrapped.text()).toBe(expected);
+        expect(calls).toBe(0);
+      });
+    }
     for (const [description, snapshot] of [
       ["output", { output: [{ type: "message", role: "assistant" }] }],
       ["malformed output", { output: { type: "message" } }],
@@ -1037,7 +1080,7 @@ describe("combo stream preflight", () => {
     }
     test(`${type} with an empty snapshot still permits EOF recovery`, async () => {
       let calls = 0;
-      const original = sse({ type, error: null, response: { output: [], error: null, last_error: null } });
+      const original = sse({ type, error: null, last_error: null, response: { output: [], error: null, last_error: null, status: "in_progress" } });
       const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async () => {
         calls++;
         return sse({ type: "response.completed", response: { id: "replacement" } });

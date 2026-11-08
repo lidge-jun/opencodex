@@ -135,9 +135,8 @@ Native post-header reset recovery shares that boundary, because it is asking the
 about the same bytes. With `replayReadErrors`, the preflight reports the stage it observed —
 `headers-only` before any parsed event, `protocol-prelude` after `response.created`,
 `semantic-output` once anything else arrives, including a payload it could not parse — and the
-resend gate decides. A lifecycle snapshot with output items, malformed output, a non-null top-level
-`error`, or a non-null `response.error` or `response.last_error`
-commits the original stream. An SSE event name that conflicts with its JSON type, an opaque frame,
+resend gate decides. A lifecycle event with output, an error, incomplete details, a contradictory
+status, or a malformed snapshot commits the original stream. An SSE event name that conflicts with its JSON type, an opaque frame,
 or an unfinished output/error/terminal frame on a rejected read also keeps the original bytes and
 read error; the last SSE event field is authoritative. A clean EOF before output or a terminal is offered only to the native reset recovery
 owner as a distinct pre-output EOF; ordinary combo preflight keeps its existing EOF behavior.
