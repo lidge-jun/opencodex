@@ -3,8 +3,8 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { CommandLineIcon, ComputerSettingsIcon, LaptopIcon, ServerStack01Icon } from "@hugeicons/core-free-icons";
 import { useI18n, type TKey } from "../i18n/shared";
 import { confirmAction } from "../action-dialogs";
-import { desktopBadgeKey, desktopManagesStartup, startupRiskDetailKey } from "../startup-health-ui";
-import { IconAlert, IconCheck, IconChevron, IconTerminal } from "../icons";
+import { desktopBadgeKey, desktopManagesStartup, desktopSupervisionFailed, startupPresentation, startupRiskDetailKey } from "../startup-health-ui";
+import { IconAlert, IconCheck, IconChevron, IconInfo, IconTerminal } from "../icons";
 import { Button } from "@/components/ui-v2/button";
 import { cn } from "@/lib/utils";
 import { OptionCard } from "../components/v2-startup/option-card";
@@ -39,8 +39,10 @@ export function StartupHeroSection({
 }) {
   const { t } = useI18n();
   const help = useHelp();
-  const risk = failed || data.status === "at-risk";
-  const StatusIcon = risk ? IconAlert : IconCheck;
+  const presentation = startupPresentation(data, failed);
+  const unverified = presentation === "unverified";
+  const risk = presentation === "error" || presentation === "at-risk";
+  const StatusIcon = unverified ? IconInfo : risk ? IconAlert : IconCheck;
 
   const routingKey: TKey = data.routingKind === "opencodex-local" ? "startup.routing.proxy"
     : data.routingKind === "custom-local" ? "startup.routing.customLocal"
@@ -51,7 +53,7 @@ export function StartupHeroSection({
   // The three stat cards that once restated this answer are one labelled line now.
   const facts: Array<[TKey, string]> = [
     ["startup.routing", t(routingKey)],
-    ["startup.restartProtection", t(PROTECTION_KEYS[data.protection])],
+    ["startup.restartProtection", t(unverified ? "startup.unverified" : PROTECTION_KEYS[data.protection])],
     ["startup.preference", t(data.autostartEnabled ? "startup.enabled" : "startup.disabled")],
   ];
 
@@ -59,18 +61,18 @@ export function StartupHeroSection({
     <section className="startup-status flex min-w-0 gap-4 rounded-[12px] bg-surface p-5 ring-1 ring-line" aria-live="polite" data-status={failed ? "error" : data.status}>
       <span aria-hidden="true" className={cn(
         "grid size-11 shrink-0 place-items-center rounded-full [&_svg]:size-[22px]",
-        risk ? "bg-warning-soft text-warning" : "bg-success-soft text-success",
+        unverified ? "bg-surface-2 text-fg-muted" : risk ? "bg-warning-soft text-warning" : "bg-success-soft text-success",
       )}><StatusIcon /></span>
       <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <StateBadge tone={risk ? "warn" : "ok"} className="self-start">
-          {t(failed ? "startup.status.atRisk" : STATUS_KEYS[data.status])}
+        <StateBadge tone={unverified ? "neutral" : risk ? "warn" : "ok"} className="self-start">
+          {t(unverified ? "startup.unverified" : failed ? "startup.status.atRisk" : STATUS_KEYS[data.status])}
         </StateBadge>
         <div className="flex items-start gap-1.5">
-          <h3 className="m-0 text-[20px] leading-7 font-semibold tracking-[-0.02em] text-fg">{t(failed ? "startup.error" : SUMMARY_KEYS[data.status])}</h3>
+          <h3 className="m-0 text-[20px] leading-7 font-semibold tracking-[-0.02em] text-fg">{t(unverified ? desktopManagesStartup(data) ? "startup.loginUnverifiedTitle" : "startup.unverified" : failed ? "startup.error" : SUMMARY_KEYS[data.status])}</h3>
           <span className="mt-0.5"><HelpButton open={help.open} controls={help.id} name={t("startup.title")} onToggle={help.toggle} /></span>
         </div>
         <p className="m-0 max-w-[72ch] text-[14px] leading-[21px] text-fg-muted">
-          {failed ? t("startup.staleData") : data.status === "at-risk" ? t(startupRiskDetailKey(data)) : t("startup.safeDetail")}
+          {unverified ? t(desktopManagesStartup(data) ? "startup.loginUnverifiedAction" : "startup.subtitle") : data.status === "at-risk" && data.routingKind === "opencodex-local" && desktopManagesStartup(data) && !desktopSupervisionFailed(data) ? t("startup.loginUnverifiedAction") : failed ? t("startup.staleData") : data.status === "at-risk" ? t(startupRiskDetailKey(data)) : t("startup.safeDetail")}
         </p>
         <p className="startup-status-line m-0 mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-5">
           {facts.map(([label, value], index) => (
@@ -156,8 +158,9 @@ export function StartupOptionsSection({
       <div className={cn("grid gap-3 sm:grid-cols-2", cards === 3 && "lg:grid-cols-3")}>
         {data.desktop && (
           <OptionCard option="desktop" icon={hugeIcon(LaptopIcon)} title={t("startup.protection.desktop")}
-            badge={{ tone: desktopOk ? "ok" : "warn", label: t(desktopBadgeKey(data.desktop, failed)) }}>
-            <p className="m-0">{t(desktopOk ? "startup.desktopHint" : startupRiskDetailKey(data))}</p>
+            badge={{ tone: desktopOk ? "ok" : startupPresentation(data, failed) === "unverified" ? "neutral" : "warn", label: t(startupPresentation(data, failed) === "unverified" ? "startup.loginUnverifiedTitle" : desktopBadgeKey(data.desktop, failed)) }}>
+            {desktopOk ? <p className="m-0">{t("startup.desktopHint")}</p>
+              : !failed && data.desktop.running ? <p className="m-0">{t("startup.desktopRunning")}</p> : null}
           </OptionCard>
         )}
         <OptionCard option="service" icon={hugeIcon(ServerStack01Icon)} title={t("startup.service")}
@@ -274,7 +277,7 @@ export function StartupRecoverySection({
         The one-click actions above are the primary path; the copyable commands are the
         fallback, open by default only while protection is missing.
       */}
-      <details className="startup-recovery group" open={data.status !== "protected"}>
+      <details className="startup-recovery group" open={startupPresentation(data) === "at-risk"}>
         <summary className="flex cursor-pointer list-none items-center gap-3 rounded-[10px] px-3 py-2.5 transition-colors hover:bg-surface-2/50 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-highlight [&::-webkit-details-marker]:hidden">
           <IconTile className="size-8 rounded-[8px] [&_svg]:size-4"><IconTerminal /></IconTile>
           <span className="flex min-w-0 flex-1 flex-col">
@@ -284,7 +287,7 @@ export function StartupRecoverySection({
           <span aria-hidden="true" className="text-fg-subtle transition-transform duration-200 group-open:rotate-90 [&_svg]:size-4"><IconChevron /></span>
         </summary>
         <div className="flex flex-col gap-3 px-3 pt-1 pb-3">
-          <p className="m-0 text-[13px] leading-5 text-fg-muted">{t(desktopManages ? startupRiskDetailKey(data) : "startup.recoveryHint")}</p>
+          {!desktopManages && <p className="m-0 text-[13px] leading-5 text-fg-muted">{t("startup.recoveryHint")}</p>}
           <div className="flex flex-col divide-y divide-line rounded-[8px] bg-bg ring-1 ring-line">
             {commands.map(([label, command]) => (
               <CommandRow key={label} label={t(label)} command={command} copied={copied === command} onCopy={() => onCopy(command)} />

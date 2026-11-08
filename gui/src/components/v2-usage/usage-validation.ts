@@ -1,10 +1,26 @@
 import type { UsageResponse } from "./usage-model";
+import { USAGE_APPS } from "../../../../src/usage/app-breakdown";
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const integer = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const finite = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0;
 const optional = (row: Record<string, unknown>, names: string[], check: (value: unknown) => boolean) => names.every(name => row[name] === undefined || check(row[name]));
 const numeric = (row: Record<string, unknown>, names: string[]) => names.every(name => integer(row[name]));
+const appClients = new Set<string>(USAGE_APPS);
+
+function validApps(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value) || value.length > appClients.size) return false;
+  const seen = new Set<string>();
+  return value.every(row => {
+    if (!record(row) || typeof row.client !== "string" || !appClients.has(row.client) || seen.has(row.client)
+      || !numeric(row, ["requests", "measuredRequests", "pricedRequests", "unpricedRequests"])
+      || !finite(row.totalTokens) || !finite(row.shareRatio) || (row.shareRatio as number) > 1
+      || !(row.estimatedCostUsd === undefined && row.pricedRequests === 0 || finite(row.estimatedCostUsd))) return false;
+    seen.add(row.client);
+    return true;
+  });
+}
 
 function safeNumbers(value: unknown, depth = 0): boolean {
   if (typeof value === "number") return Number.isFinite(value);
@@ -15,7 +31,7 @@ function safeNumbers(value: unknown, depth = 0): boolean {
 
 /** Validate every field consumed by the Usage report before publishing a shared resource. */
 export function isUsageReport(value: unknown): value is UsageResponse {
-  if (!record(value) || !safeNumbers(value) || !record(value.summary) || !Array.isArray(value.days) || !Array.isArray(value.models) || !Array.isArray(value.providers)
+  if (!record(value) || !validApps(value.apps) || !safeNumbers(value) || !record(value.summary) || !Array.isArray(value.days) || !Array.isArray(value.models) || !Array.isArray(value.providers)
     || !integer(value.generatedAt) || (value.since !== null && !integer(value.since))
     || typeof value.historyTruncated !== "boolean" || typeof value.entriesTruncated !== "boolean"
     || !integer(value.truncatedPrefixBytes) || !integer(value.entriesDropped) || !integer(value.legacyUnclassifiedRequests)

@@ -7,6 +7,7 @@ import { Select } from "../../ui";
 import { cn } from "../../lib/utils";
 import { hostOs } from "../../lib/desktop-shell";
 import { withFetchDeadline } from "../../bounded-fetch";
+import { clientIconClass } from "../../client-icon";
 import { denyUsageSession, usageSessionSnapshot, USAGE_SESSION_CHANGED, USAGE_SOURCE_INVENTORY_CHANGED, sourceInventoryEventMatches } from "../../api";
 import { matchesFacetWindow, matchesSource, noStore, sourceQuery, SOURCE_CLIENTS, type SourceClient, type SourceDevice, type SourceFilter } from "./usage-source";
 
@@ -20,7 +21,7 @@ const defaultDevices: SourceDevice[] = [{ kind: "all" }, { kind: "no-key" }, { k
 const clientMarks: Partial<Record<SourceClient, string>> = { codex: "openai.svg", claude_code: "claude-color.svg", claude_desktop: "claude-color.svg", grok: "grok.svg", opencode: "opencode.svg", aside: "aside.svg" };
 function appMark(client: SourceClient) {
   const mark = clientMarks[client];
-  return mark ? <img className={`usage-source-mark${client === "grok" ? " usage-source-mark--mono" : ""}`} src={`/provider-icons/${mark}`} alt="" /> : <IconGlobe width={16} height={16} aria-hidden="true" />;
+  return mark ? <img className={clientIconClass(mark)} src={`/provider-icons/${mark}`} alt="" /> : <IconGlobe width={16} height={16} aria-hidden="true" />;
 }
 function onSourceKeyDown(event: KeyboardEvent<HTMLDivElement>) {
   if (!["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
@@ -184,11 +185,11 @@ export function UsageSourcePicker({ apiBase, filter, onClient, onDevice, deviceL
   const devices: SourceDevice[] = deviceLocked ? (filter ? [filter.device] : []) : selectedDevice && !available.some(item => sameDevice(item, selectedDevice)) ? [...available, selectedDevice] : available;
   const visibleClients = SOURCE_CLIENTS.filter(client => visible(`${clientLabel(client)} ${appDetail(client)}`));
   const visibleDevices = devices.filter(device => visible(deviceLabel(device)));
-  const selectedClientVisible = visibleClients.includes(filter?.client ?? "codex");
+  const selectedClientVisible = !!filter && visibleClients.includes(filter.client);
   const selectedDeviceVisible = !!filter && visibleDevices.some(item => sameDevice(filter.device, item));
   return <Select.Popup open={open} onOpenChange={next => { setOpen(next); if (!next) setResult({ key: "" }); else setSearch(""); }}
     label={t("usageV2.source")} initialFocusRef={input} maxHeight={700} className="ui-v2 overflow-auto rounded-panel bg-raised p-3 text-[13px] text-fg shadow-lg ring-1 ring-line" onKeyDown={onSourceKeyDown}
-    trigger={<>{appMark(filter?.client ?? "codex")}<span>{clientLabel(filter?.client ?? "codex")}</span><span aria-hidden="true">·</span><span>{filter ? deviceLabel(filter.device) : t("usageV2.unknown")}</span></>}>
+    trigger={<>{appMark(filter?.client ?? "all")}<span>{clientLabel(filter?.client ?? "all")}</span><span aria-hidden="true">·</span><span>{filter ? deviceLabel(filter.device) : t("usageV2.unknown")}</span></>}>
       <input ref={input} className="input w-full" type="search" aria-label={t("usageV2.searchSources")} placeholder={t("usageV2.searchSources")} value={search} onChange={event => setSearch(event.currentTarget.value)} />
       <div role="radiogroup" aria-label={t("usageV2.apps")} className="mt-3">
         <div className="flex justify-between px-2 text-fg-muted"><span>{t("usageV2.apps")}</span><span>{t("usageV2.last30")}</span></div>

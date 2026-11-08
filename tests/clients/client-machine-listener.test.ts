@@ -392,6 +392,7 @@ describe("client machine listener in link mode", () => {
       state, managementAuthState: authState(), linkReadiness: async () => { notifyProbe(); await pending; return { ready: true }; },
     });
     servers.push(server);
+    const reads = spyOn(clientState, "readClientConnectionState");
     try {
       const responsePromise = fetch(new URL("/readyz", server.url));
       await started;
@@ -400,7 +401,8 @@ describe("client machine listener in link mode", () => {
       const response = await responsePromise;
       expect(response.status).toBe(503);
       expect(await response.json()).toMatchObject({ link: { state: "unavailable", reason: "client_state_changed" } });
-    } finally { resolveProbe(); }
+      expect(reads).toHaveBeenCalledTimes(1);
+    } finally { resolveProbe(); reads.mockRestore(); }
   });
 
   test("durable state is read once per readiness and never for unrelated machine routes", async () => {

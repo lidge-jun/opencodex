@@ -7,6 +7,7 @@ import { selectRequestLogPoll } from "../../src/server/request-log-cursor";
 import { requestLogDto } from "../../src/server/management/shared";
 import { parseProtocolTraceV1 } from "../../src/protocols/dto";
 import { filterLogs, DEFAULT_LOG_FILTER_STATE, type LogFilterState, type FilterableLogEntry } from "../../gui/src/pages/logs-filter";
+import type { LogSurface, LogSurfaceFilter } from "../../gui/src/pages/logs-surface-filter";
 import { hashLogConversationQuery } from "../../gui/src/log-conversation-id";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -69,7 +70,7 @@ for (const flags of [
   });
 }
 
-type Fixture = FilterableLogEntry & { id: string };
+type Fixture = FilterableLogEntry & { id: string; surface?: LogSurface };
 const trace = (mode: string) => ({ v: 1, inbound: "responses", mode,
   requestPath: mode === "blocked" ? [] : ["responses"], responsePath: mode === "blocked" ? [] : ["responses"], reasonCodes: [], contractVersion: "1" });
 const rows: Fixture[] = [
@@ -85,10 +86,10 @@ const rows: Fixture[] = [
   { id: "g", status: 200.5, timestamp: "bad", shadowCallRewrittenFrom: false },
   { id: "h", status: "200", timestamp: null },
 ];
-const cases: Array<[string[], Partial<LogFilterState>, string[]]> = [
-  [["--surface=codex"], { surface: "codex" }, ["a", "e", "f", "g", "h"]],
-  [["--surface=claude"], { surface: "claude" }, ["b", "c"]],
-  [["--surface=grok"], { surface: "grok" }, ["d"]],
+const cases: Array<[string[], Partial<LogFilterState> & { surface?: LogSurfaceFilter }, string[], string[]?]> = [
+  [["--surface=codex"], { surface: "codex" }, ["a", "e", "f", "g", "h"], rows.map(row => row.id)],
+  [["--surface=claude"], { surface: "claude" }, ["b", "c"], rows.map(row => row.id)],
+  [["--surface=grok"], { surface: "grok" }, ["d"], rows.map(row => row.id)],
   [["--model", " tArGeT "], { model: "target" }, ["a", "b", "c"]],
   [["--model=retry"], { model: "retry" }, ["b"]],
   [["--model=tar"], { model: "tar" }, []],
@@ -109,11 +110,13 @@ const cases: Array<[string[], Partial<LogFilterState>, string[]]> = [
   [["--model=target", "--surface=claude", "--status=success", "--intercepted-only"],
     { model: "target", surface: "claude", status: "success", interceptedOnly: true }, ["b"]],
 ];
-for (const [flags, filters, expected] of cases) {
+for (const [flags, filters, expected, guiExpected = expected] of cases) {
   test(`independent selections and GUI conformance: ${flags.join(" ")}`, async () => {
     expect(await run(rows, flags)).toBe(0);
     expect(ids()).toEqual(expected);
-    expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, ...filters }, NOW).map(row => row.id)).toEqual(expected);
+    // The CLI still offers a surface selector; the current dashboard displays all apps.
+    const { surface: _surface, ...guiFilters } = filters;
+    expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, ...guiFilters }, NOW).map(row => row.id)).toEqual(guiExpected);
   });
 }
 

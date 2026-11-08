@@ -37,7 +37,22 @@ The child parser accepts `tool_search`, `computer_use` and `image_gen` as recogn
 Its raw body preserves the selector; existing destination compatibility, including routed private
 tool-search lowering, still applies after parsing. Chat translation maps a direct `tool_search`
 choice to its existing synthetic function name. MCP null names also parse inside required allowed-tools lists; function/custom null names remain invalid. A Chat destination is skipped before send when translation would degrade a mandatory choice to auto/none, including the resolved model's auto-only tool-choice policy; exhaustion reports the tool-choice constraint. Eligibility resolves synthetic Fast/effort selectors before model policy, matching child request preparation while preserving exact configured IDs.
+For `required` with nonempty declarations at the top level or in `additional_tools`/`tool_search_output`, final preparation and Copilot renegotiation check the full parsed tool union; an empty union refuses Chat unless top-level hosted search belongs to later sidecar injection. Static candidate checks defer this decision until parsed tools are available.
 Registered OpenAI API virtual models resolve to their wire model before adapter and auto-only policy checks, using the same registry resolver as child normalization. Other providers and unregistered IDs remain literal. Coverage: `tests/server/server-combo-required-tool-contract.test.ts`.
+
+Required allowed-tools lists containing MCP entries also exclude Chat: a function name cannot retain
+the MCP server's ownership, even when a client function has the same name. The shared predicate in
+`src/server/responses/combo-required-tool-contract.ts` also guards direct Chat destinations after final
+normalization in `src/server/responses/request-prepare.ts`. An incompatible direct route returns 400
+before dispatch; an authorized policy candidate uses the [local policy refusal](policy-fallback.md)
+so another originally eligible destination can serve the unchanged choice.
+Copilot targets that negotiate Auto defer the static eligibility verdict to the child's final wire
+and model check. A locally minted policy-candidate refusal survives failure rebuilding and permits a
+hop without inferring authority from its serialized code or text. Non-replayable responses and spent
+replacement grants still stop before this local-skip branch. A local candidate refusal does not cool
+the target, so later compatible requests can select the healthy target again. `tests/providers/github-copilot/github-copilot-auto-runtime.test.ts`
+and `tests/adapters/translator-budget-lifetime.test.ts` cover negotiation and refusal provenance.
+On target-ladder exhaustion, a private tool-specific refusal identity yields the existing 503 combo-unavailable diagnostic only while every observed failure has that identity. Any generic local or upstream failure keeps the ordinary exhaustion result; copied error bytes cannot acquire the identity. A denied later send reservation keeps the retained failure instead of projecting this diagnostic. The diagnostic describes attempted targets, without claiming that eligibility-skipped targets were tried.
 
 Before combo success bookkeeping, native delivery in `src/server/responses/passthrough-delivery.ts`
 uses `src/server/responses/combo-required-tool-contract.ts` to check successful native
@@ -183,3 +198,15 @@ The Devin direct chat adapter (`src/adapters/devin/cloud-direct/chat.ts`) maps a
 Coverage: `tests/routing/router-combo-failover-classification.test.ts`, `tests/providers/devin-hardening.test.ts`, `tests/server/error-fidelity.test.ts`, `tests/codex-integration/combo-codex-exhaustion-cooldown.test.ts`, `tests/server/server-combo-quota-code-provenance.test.ts`, and `tests/responses/responses-combo-run-turn-classified-failure.test.ts`.
 
 Native Chat child error bodies follow [the owned client-body contract](../data-planes/error-detail.md#client-error-bodies-chat). Combo classification consumes the retained legacy envelope through the ordinary bounded reader, while headers and response identity retain their original owners.
+
+## Local workflow send refusals
+
+A root workflow send ceiling stops the entire Combo ladder before another target is dispatched.
+`src/server/workflow-refusal.ts` marks that locally constructed response as non-replayable;
+`src/server/responses/core-combo-failure.ts` and `src/server/chat-completions.ts` preserve its
+`x-opencodex-local-refusal` header and browser exposure when rebuilding the response. This propagation
+requires the in-process proxy-error marker as well as the header: an upstream 429 cannot stop
+ordinary failover by supplying the same header. The wire body remains `rate_limit_exceeded`.
+The message says no additional provider request was sent when the current request already has
+physical sends; an admission refusal before its first send retains the no-provider wording.
+Coverage: `tests/responses/chat-native-spend.test.ts` and `tests/responses/responses-spend-contract-c.test.ts`.

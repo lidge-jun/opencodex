@@ -1,5 +1,24 @@
 import type { ResponsesSendBudget } from "./request-send-budget";
 
+/** Dispose the failed exchange before projecting a refresh refusal or rethrowing its original error. */
+export function createAutoPauseRefreshErrorMapper(
+  response: Response,
+  upstream: { abort(): void },
+  cleanup: () => void,
+  refusal: (error: unknown) => Response | undefined,
+  cancelled: () => boolean,
+  cancelledResponse: () => Response,
+): (error: unknown) => { failed: Response } | undefined {
+  return error => {
+    const clientCancelled = cancelled();
+    try { void response.body?.cancel().catch(() => {}); } catch { /* closed */ }
+    cleanup();
+    upstream.abort();
+    const failed = clientCancelled ? cancelledResponse() : refusal(error);
+    return failed ? { failed } : undefined;
+  };
+}
+
 const moves = new WeakMap<object, number>();
 /** One same-provider credential move, funded by the existing recovery owner. */
 export async function recoverAutoPausedAccount<T>(options: {
@@ -7,6 +26,8 @@ export async function recoverAutoPausedAccount<T>(options: {
   remaining?: number;
   reserve: ResponsesSendBudget["reserveCredentialHop"];
   refresh: () => Promise<boolean>;
+  /** Map a known refresh refusal; unknown errors still propagate after unused-hop cleanup. */
+  mapRefreshError?: (error: unknown) => T | undefined;
   refetch: () => Promise<T>;
   setPermit: (permit: ResponsesSendBudget["pendingHopPermit"]) => void;
 }): Promise<T | undefined> {
@@ -15,7 +36,14 @@ export async function recoverAutoPausedAccount<T>(options: {
   const hop = options.reserve("auth-recovery", "account-auto-pause", true);
   if (!hop.allowed) return;
   try {
-    if (!await options.refresh()) return;
+    let refreshed: boolean;
+    try { refreshed = await options.refresh(); }
+    catch (error) {
+      const failure = options.mapRefreshError?.(error);
+      if (failure !== undefined) return failure;
+      throw error;
+    }
+    if (!refreshed) return;
     moves.set(options.requestKey, count + 1);
     options.setPermit(hop.permit);
     return await options.refetch();

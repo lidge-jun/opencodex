@@ -5,6 +5,7 @@ import {
   beginPollEpoch,
   settingsPollMayCommit,
   mapStartupHealthProbe,
+  startupDesktopContext,
   type StartupHealthProbe,
 } from "../startup-health-ui";
 import {
@@ -103,12 +104,13 @@ export async function fetchStartupHealth(apiBase: string, signal: AbortSignal): 
   try {
     const response = await fetch(`${apiBase}/api/startup-health`, { signal });
     if (!response.ok) throw new Error("startup health unavailable");
-    const data = await response.json() as { status?: unknown; diagnosticStale?: unknown };
+    const data = await response.json() as { status?: unknown; diagnosticStale?: unknown; routingKind?: unknown; desktop?: { owned?: boolean; supervisor?: unknown; loginState?: unknown; running?: boolean; viable?: boolean; supervisionUnknown?: boolean } };
     const mapped = mapStartupHealthProbe(data);
     if (!mapped) throw new Error("invalid startup health response");
     // Carry `stale` through so the caller can re-ask in seconds instead of waiting for
     // the next 30s poll tick while the server resolves the real answer.
-    return { status: mapped, stale: data.diagnosticStale === true };
+    return { status: mapped, stale: data.diagnosticStale === true,
+      ...(startupDesktopContext(data) ? { desktopManaged: true } : {}) };
   } catch (error) {
     // Aborts must propagate so client-resource can discard the generation.
     // Swallowing them as "error" briefly shows "Could not read startup protection"

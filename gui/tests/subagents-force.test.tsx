@@ -53,7 +53,7 @@ afterEach(async () => {
 async function render(apiBase = "") {
   await act(async () => { root!.render(<LanguageProvider><SubagentForceControl key={apiBase} apiBase={apiBase} roster={["retired/model", "combo/featured"]} /></LanguageProvider>); });
 }
-function toggle() { return host.querySelector("button[aria-pressed]") as HTMLButtonElement; }
+function toggle() { return host.querySelector('button[role="switch"]') as HTMLButtonElement; }
 /** The model picker: the app's Select (ui.tsx), never a native select. */
 function picker() { return selectTrigger(host, "[role=combobox]"); }
 async function select(value: string) {
@@ -75,7 +75,7 @@ test("default off requires a model; labeled controls save enable and clear", asy
   await select("combo/featured");
   await act(async () => toggle().click());
   expect(writes).toEqual([{ force: "combo/featured" }]);
-  expect(toggle().getAttribute("aria-pressed")).toBe("true");
+  expect(toggle().getAttribute("aria-checked")).toBe("true");
   expect(host.textContent).toContain(en["sub.forceSaved"]);
   expect(host.textContent).toContain(en["sub.forceOld"]);
   expect(host.textContent).toContain(en["sub.forceOverride"]);
