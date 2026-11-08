@@ -2,12 +2,45 @@ import { describe, expect, test } from "bun:test";
 import type { OcxConfig } from "../../src/types/config";
 import { providerObservationAccountKeyForTests } from "../../src/providers/quota";
 import { clearProviderQuotaCache, clearProviderQuotaCacheFor, fetchProviderQuotaReports, flushProviderQuotaObservationsForTests, setProviderQuotaBeforePublishForTests } from "../../src/providers/quota";
+import { setProviderQuotaBeforeObservationForTests } from "../../src/providers/quota/report-cache";
 import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/key-store";
 import { setQuotaResetSink } from "../../src/quota/reset-observer";
 import { flushQuotaResetStoreForTests, resetQuotaResetStoreForTests } from "../../src/quota/reset-seen-store";
 import type { QuotaResetEvent } from "../../src/quota/reset-detector";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+
+test.each(["disabled", "removed", "key", "provider-clear", "global-clear", "other-clear"] as const)("a deferred key quota reset respects %s", async change => {
+  const originalFetch = globalThis.fetch;
+  const provider = { adapter: "openai-chat", authMode: "key", baseUrl: "https://api.mistral.ai/v1", apiKey: "fixture-reset-key" } as const;
+  const cfg = { defaultProvider: "mistral", providers: { mistral: { ...provider } } } as OcxConfig;
+  const events: QuotaResetEvent[] = [];
+  let percent = 95, resetAt = Date.now() - 30_000;
+  globalThis.fetch = (async input => Response.json(String(input).endsWith("/subscription") ? { plan_name: "TEAM" } : {
+    api_budget: { initial_budget: 100, currency: "EUR", usage_percentage: percent, reset_at: resetAt },
+  })) as typeof fetch;
+  clearProviderQuotaCache(); resetQuotaResetStoreForTests(); setQuotaResetSink(event => events.push(event));
+  try {
+    expect((await fetchProviderQuotaReports(cfg, true)).reports).toHaveLength(1);
+    await flushProviderQuotaObservationsForTests();
+    percent = 2; resetAt = Date.now() + 3_600_000;
+    setProviderQuotaBeforeObservationForTests(() => {
+      setProviderQuotaBeforeObservationForTests(null);
+      if (change === "disabled") cfg.providers.mistral!.disabled = true;
+      if (change === "removed") delete cfg.providers.mistral;
+      if (change === "key") cfg.providers.mistral!.apiKey = "fixture-replacement-key";
+      if (change === "provider-clear") clearProviderQuotaCacheFor("mistral");
+      if (change === "global-clear") clearProviderQuotaCache();
+      if (change === "other-clear") clearProviderQuotaCacheFor("other-provider");
+    });
+    expect((await fetchProviderQuotaReports(cfg, true)).reports).toHaveLength(1);
+    await flushProviderQuotaObservationsForTests();
+    expect(events).toHaveLength(change === "other-clear" ? 1 : 0);
+  } finally {
+    setProviderQuotaBeforeObservationForTests(null); setQuotaResetSink(null); resetQuotaResetStoreForTests();
+    globalThis.fetch = originalFetch; clearProviderQuotaCache();
+  }
+});
 
 describe("provider observation account key", () => {
   function configWithKey(apiKey: string): OcxConfig {

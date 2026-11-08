@@ -175,6 +175,8 @@ function notifyProviderQuotaSnapshot(
   config: OcxConfig,
 ): void {
   if (reports.length === 0) return;
+  const observationEpoch = invalidationEpoch;
+  const observationProviderEpochs = captureProviderReportEpochs();
   // Key-probe identities were captured at the wire; resolve other identities synchronously.
   const observations = reports.map(report => {
     const keyId = keyReportCredentialIds.get(report);
@@ -196,8 +198,10 @@ function notifyProviderQuotaSnapshot(
       for (const observation of observations) {
         if (accountReportObservationKeys.has(observation.report)) {
           getAccountSet(observation.scope);
-          if (!isProviderQuotaReportCurrent(observation.report)) continue;
         }
+        if (observationEpoch !== invalidationEpoch || providerReportEpochChanged(observationProviderEpochs, observation.scope)
+          || !isProviderQuotaReportCurrent(observation.report)
+          || !providerReportCurrentForConfig(observation.report, config.providers[observation.scope])) continue;
         observer.observeQuotaSnapshot({
           scope: observation.scope,
           accountKey: observation.accountKey,
