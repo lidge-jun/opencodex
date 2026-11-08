@@ -941,12 +941,14 @@ function registrationPersistGuard(provider: string, assertBeforePersist?: () => 
 export async function saveCredentialWithReceipt(
   provider: string,
   cred: OAuthCredentials,
-  opts: { preserveIdentityless?: boolean; assertBeforePersist?: () => void } = {},
+  opts: { preserveIdentityless?: boolean; assertBeforePersist?: () => void; beforeApply?: (store: AuthStore) => Promise<void>; assertBeforeApply?: (store: AuthStore) => void } = {},
 ): Promise<OAuthCredentialWriteReceipt | null> {
   if (isAnthropicInstanceId(provider)) assertAnthropicCredentialSource(provider, cred);
   const safe = normalizeCredential(cred);
   if (!safe) return null;
-  const receipt = await mutateStore(store => {
+  const receipt = await mutateStore(async store => {
+    if (opts.beforeApply) await opts.beforeApply(store);
+    opts.assertBeforeApply?.(store);
     if (provider === "anthropic2") assertAnthropicInstanceLoginConfig(loadConfig(), provider);
     if (isAnthropicInstanceId(provider)) assertNoCrossAnthropicRegistration(store, provider, safe);
     const set = store[provider];
@@ -1086,7 +1088,7 @@ export async function saveCredentialWithReceipt(
 export async function saveCredential(
   provider: string,
   cred: OAuthCredentials,
-  opts: { preserveIdentityless?: boolean; assertBeforePersist?: () => void } = {},
+  opts: { preserveIdentityless?: boolean; assertBeforePersist?: () => void; beforeApply?: (store: AuthStore) => Promise<void>; assertBeforeApply?: (store: AuthStore) => void } = {},
 ): Promise<OAuthCredentialWriteReceipt | null> {
   return await saveCredentialWithReceipt(provider, cred, opts);
 }
@@ -1302,13 +1304,15 @@ export async function saveAccountCredential(
   provider: string,
   accountId: string,
   cred: OAuthCredentials,
-  opts: { assertBeforePersist?: () => void; rotateLoginId?: boolean } = {},
+  opts: { assertBeforePersist?: () => void; rotateLoginId?: boolean; beforeApply?: (store: AuthStore) => Promise<void>; assertBeforeApply?: (store: AuthStore) => void } = {},
 ): Promise<boolean> {
   if (isAnthropicInstanceId(provider)) assertAnthropicCredentialSource(provider, cred);
   const safe = normalizeCredential(cred);
   if (!safe) return false;
   let written = false;
-  await mutateStore(store => {
+  await mutateStore(async store => {
+    if (opts.beforeApply) await opts.beforeApply(store);
+    opts.assertBeforeApply?.(store);
     written = false;
     if (provider === "anthropic2") assertAnthropicInstanceLoginConfig(loadConfig(), provider);
     if (isAnthropicInstanceId(provider)) assertNoCrossAnthropicRegistration(store, provider, safe);

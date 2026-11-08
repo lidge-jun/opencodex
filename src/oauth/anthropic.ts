@@ -228,7 +228,7 @@ export async function loginAnthropic(
   if (opts?.instance === "anthropic2" && importLocal !== "off") throw new AnthropicLocalCliImportError();
   if (importLocal !== "off") {
     ctrl.signal?.throwIfAborted();
-    const { observeClaudeCodeToken } = await import("./local-token-detect");
+    const { observeClaudeCodeToken, rememberClaudeLoginSource } = await import("./local-token-detect");
     ctrl.signal?.throwIfAborted();
     const observation = await observeClaudeCodeToken({ fresh: true });
     ctrl.signal?.throwIfAborted();
@@ -236,15 +236,15 @@ export async function loginAnthropic(
       if (importLocal === "fallback") return new AnthropicOAuthFlow(ctrl).login();
       throw new Error("Claude Code credentials are temporarily unavailable. Try again after Keychain access is available.");
     }
-    const local = observation.kind === "present" ? observation.credential : null;
-    if (local) {
+    if (observation.kind === "present") {
+      const local = observation.credential;
       ctrl.signal?.throwIfAborted();
       if (local.expires >= Date.now() + 60_000) {
         ctrl.onProgress?.("Found Claude Code token, importing automatically");
         const identity = await resolveAnthropicAccountIdentity(local.access, ctrl.signal);
         ctrl.signal?.throwIfAborted();
-        return { ...local, ...(identity ? { accountId: identity.accountUuid,
-          anthropicIdentity: normalizeAnthropicIdentity(identity, local.access), plan: identity.plan ?? null } : {}) };
+        return rememberClaudeLoginSource({ ...local, ...(identity ? { accountId: identity.accountUuid,
+          anthropicIdentity: normalizeAnthropicIdentity(identity, local.access), plan: identity.plan ?? null } : {}) }, observation.sourceKey);
       }
       if (importLocal === "only") {
         throw new Error("Claude Code token is expired or nearly expired. Sign in to Claude Code again or run 'ocx login anthropic' for browser OAuth.");

@@ -217,6 +217,129 @@ test("cancelling browser fallback preserves an expired local credential without 
   } finally { response.resolve(); browser.mockRestore(); }
 });
 
+test("local login refuses a Keychain credential rotated while its first read is pending", async () => {
+  const expires = Date.now() + 3_600_000;
+  const original: OAuthCredentials = { access: "synthetic-a", refresh: "synthetic-a-refresh", expires, source: "local-cli" };
+  await saveCredential("anthropic", original);
+  const before = getAccountSet("anthropic");
+  process.env.CLAUDE_CONFIG_DIR = join(tmp, "keychain-only-profile");
+  const entered = deferred(), release = deferred();
+  const payload = (name: string) => JSON.stringify({ claudeAiOauth: {
+    accessToken: `synthetic-${name}`, refreshToken: `synthetic-${name}-refresh`, expiresAt: expires,
+  } });
+  let source = payload("a"), reads = 0;
+  const read = spyOn(claudeKeychain, "read").mockImplementation(async () => {
+    const captured = source;
+    if (++reads === 1) { entered.resolve(); await release.promise; }
+    return { status: "present", value: captured };
+  });
+  try {
+    const login = runLogin("anthropic", {}).catch(error => error);
+    await entered.promise; source = payload("b"); release.resolve();
+    expect(await login).toBeInstanceOf(OAuthTokenRefreshStaleError);
+    expect(getAccountSet("anthropic")).toEqual(before);
+  } finally { release.resolve(); read.mockRestore(); }
+});
+
+test("local login refuses a credential rotated during identity resolution", async () => {
+  const expires = Date.now() + 3_600_000;
+  const original: OAuthCredentials = { access: "synthetic-a", refresh: "synthetic-a-refresh", expires, source: "local-cli" };
+  await saveCredential("anthropic", original);
+  const before = getAccountSet("anthropic");
+  const writeLocal = (name: string) => writeFileSync(join(process.env.CLAUDE_CONFIG_DIR!, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+    accessToken: `synthetic-${name}`, refreshToken: `synthetic-${name}-refresh`, expiresAt: expires,
+  } }));
+  writeLocal("a");
+  const entered = deferred(), release = deferred();
+  globalThis.fetch = (async () => { entered.resolve(); await release.promise; return Response.json({ account: { uuid: "synthetic-account-a" } }); }) as typeof fetch;
+  try {
+    const login = runLogin("anthropic", {}).catch(error => error);
+    await entered.promise; writeLocal("b"); release.resolve();
+    expect(await login).toBeInstanceOf(OAuthTokenRefreshStaleError);
+    expect(getAccountSet("anthropic")).toEqual(before);
+  } finally { release.resolve(); }
+});
+
+for (const reauth of [false, true]) {
+test(`local login cannot overwrite an account changed by a queued writer (reauth: ${reauth})`, async () => {
+  const expires = Date.now() + 3_600_000;
+  const original: OAuthCredentials = { access: "synthetic-a", refresh: "synthetic-a-refresh", expires,
+    source: "local-cli", accountId: "synthetic-account-a" };
+  await saveCredential("anthropic", original);
+  const id = getAccountSet("anthropic")!.activeAccountId;
+  writeFileSync(join(process.env.CLAUDE_CONFIG_DIR!, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+    accessToken: original.access, refreshToken: original.refresh, expiresAt: expires,
+  } }));
+  profiles();
+  const entered = deferred(), release = deferred(), queued = deferred();
+  const newer: OAuthCredentials = { ...original, access: "synthetic-b", refresh: "synthetic-b-refresh" };
+  const writer = mutateStore(async store => {
+    entered.resolve(); await release.promise;
+    const row = store.anthropic!.accounts.find(account => account.id === id)!;
+    row.credential = newer; row.needsReauth = true;
+  });
+  await entered.promise;
+  try {
+    const login = runLogin("anthropic", {}, reauth ? { reauthAccountId: id } : undefined, {
+      saveCredential: (...args) => { queued.resolve(); return saveCredential(...args); },
+      saveAccountCredential: (...args) => { queued.resolve(); return saveAccountCredential(...args); },
+    }).catch(error => error);
+    await queued.promise; release.resolve(); await writer;
+    expect(await login).toBeInstanceOf(OAuthTokenRefreshStaleError);
+    expect(getAccountCredential("anthropic", id)).toEqual(newer);
+    expect(getAccountSet("anthropic")!.accounts.find(account => account.id === id)!.needsReauth).toBe(true);
+  } finally { release.resolve(); await writer; }
+});
+}
+
+for (const reauth of [false, true]) {
+  test(`fresh matching local login persists safely (reauth: ${reauth})`, async () => {
+    const expires = Date.now() + 3_600_000;
+    const original: OAuthCredentials = { access: "synthetic-a", refresh: "synthetic-a-refresh", expires,
+      source: "local-cli", accountId: "synthetic-account-a" };
+    await saveCredential("anthropic", original);
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    writeFileSync(join(process.env.CLAUDE_CONFIG_DIR!, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+      accessToken: original.access, refreshToken: original.refresh, expiresAt: expires,
+    } }));
+    profiles();
+    await expect(runLogin("anthropic", {}, reauth ? { reauthAccountId: id } : undefined)).resolves.toMatchObject({
+      access: original.access, refresh: original.refresh,
+    });
+    expect(getAccountCredential("anthropic", id)).toMatchObject({ access: original.access, refresh: original.refresh });
+  });
+}
+
+for (const outcome of ["owner-changed", "unavailable"] as const) {
+  test(`final local login observation refuses ${outcome} without persisting`, async () => {
+    const expires = Date.now() + 3_600_000;
+    const original: OAuthCredentials = { access: "synthetic-a", refresh: "synthetic-a-refresh", expires, source: "local-cli" };
+    await saveCredential("anthropic", original);
+    const before = getAccountSet("anthropic");
+    process.env.CLAUDE_CONFIG_DIR = join(tmp, "final-keychain-profile");
+    const entered = deferred(), release = deferred();
+    const payload = JSON.stringify({ claudeAiOauth: { accessToken: original.access, refreshToken: original.refresh, expiresAt: expires } });
+    let reads = 0, ownerCurrent = true;
+    const stale = new Error("synthetic login owner changed");
+    const read = spyOn(claudeKeychain, "read").mockImplementation(async () => {
+      if (++reads === 2) {
+        entered.resolve(); await release.promise;
+        if (outcome === "unavailable") return { status: "unavailable" };
+      }
+      return { status: "present", value: payload };
+    });
+    try {
+      const login = runLogin("anthropic", {}, undefined, { assertCurrentOwner: () => { if (!ownerCurrent) throw stale; } }).catch(error => error);
+      await entered.promise; ownerCurrent = outcome !== "owner-changed"; release.resolve();
+      const result = await login;
+      if (outcome === "owner-changed") expect(result).toBe(stale);
+      else expect(result).toBeInstanceOf(OAuthTokenRefreshStaleError);
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(getAccountSet("anthropic")).toEqual(before);
+    } finally { release.resolve(); read.mockRestore(); }
+  });
+}
+
 test("an already cancelled refresh does not read Keychain or create an intent", async () => {
   const { id, credential } = await seed();
   const controller = new AbortController();

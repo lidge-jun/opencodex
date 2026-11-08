@@ -352,6 +352,11 @@ An import requests a fresh Keychain observation. If it is unavailable, import-on
 transiently and fallback login proceeds through browser OAuth without using a local credential;
 cancellation is checked after observation. A local token expiring within 60 seconds is never
 refreshed during login: import-only directs the user to sign in again, while fallback uses browser OAuth.
+Local login keeps a process-private source receipt and snapshots the Anthropic account set before
+observation. Inside the serialized writer it obtains a new matching source and token generation,
+then rechecks the account snapshot and login owner before assignment and again before persistence.
+An unavailable or changed observation, account set, or owner refuses the import. As with refresh
+adoption, this snapshot cannot exclude an external Keychain change after the final observation.
 
 Regression coverage: `tests/oauth/oauth-anthropic-identity.test.ts`, `tests/oauth/oauth-refresh.test.ts`.
 

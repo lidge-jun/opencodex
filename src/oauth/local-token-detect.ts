@@ -97,6 +97,16 @@ export type ClaudeTokenObservation =
   | { kind: "absent" }
   | { kind: "unavailable" };
 
+// The source receipt stays process-local and never becomes credential/store/API data.
+const claudeLoginSources = new WeakMap<OAuthCredentials, string>();
+export function rememberClaudeLoginSource(credential: OAuthCredentials, sourceKey: string): OAuthCredentials {
+  claudeLoginSources.set(credential, sourceKey);
+  return credential;
+}
+export function claudeLoginSource(credential: OAuthCredentials): string | undefined {
+  return claudeLoginSources.get(credential);
+}
+
 /** Preserve source precedence while retaining unavailable as distinct from absence. */
 export async function observeClaudeCodeToken(options: { fresh?: boolean } = {}): Promise<ClaudeTokenObservation> {
   const profile = process.env.CLAUDE_CONFIG_DIR?.trim() ?? "";

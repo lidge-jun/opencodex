@@ -62,7 +62,7 @@ import { preservableApiKeyPool } from "./api-key-pool-preserve";
 import { effectiveGoogleMode, getProviderRegistryEntry, mergeRegistryStaticHeaders, providerMatchesRegistryTransport } from "../providers/registry";
 import { providerModelsUrl, resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 import { resolveProviderTransport } from "../providers/xai-transport";
-import { detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
+import { claudeLoginSource, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 import { logOAuthEvent } from "./log";
 import { MAX_OAUTH_TOKEN_REFRESH_WAITERS, retireSettledOAuthRefreshFlight, tokenRefreshWaiters, type OAuthRefreshFlightEvidence } from "./refresh-flight-retirement";
 export { MAX_OAUTH_TOKEN_REFRESH_WAITERS };
@@ -70,7 +70,7 @@ import { captureConfigGeneration, sweepExpiredOnWrite } from "../lib/state-store
 import { admitLoginFlow, classifyLoginCodeError, clearManualCodeSlot, CodeLoginUnsupportedError, ensureManualCodeSlot, kiroLoginSettling, latestLoginFlowKey, loginAbort, loginFlowProvider, loginState, recordStartedLoginFlow, settleLoginFlow, waitForManualLoginCode, type LoginCodeError, type OAuthLoginHint } from "./login-flow-state";
 export { cancelLoginFlow, clearLoginState, CodeLoginUnsupportedError, isCodeLoginFlow, loginFlowAccountId, reconcileOAuthFlowState, submitLoginCode, submitManualLoginCode, waitForLoginSettled } from "./login-flow-state";
 export type { LoginCodeError, LoginFlowState } from "./login-flow-state";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 export {
   CODEX_HEALTH_AUTH_FAILED_NOTE,
   CODEX_HEALTH_MANAGEMENT_API_UNAVAILABLE_NOTE,
@@ -1589,6 +1589,10 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   config.providers[provider] = next;
 }
 
+function loginAccountSnapshot(set: ReturnType<typeof getAccountSet>): string {
+  return createHash("sha256").update(JSON.stringify(set)).digest("hex");
+}
+
 interface RunLoginDeps {
   saveCredential?: typeof saveCredential;
   saveCredentialWithReceipt?: typeof saveCredentialWithReceipt;
@@ -1647,9 +1651,26 @@ export async function runLogin(
     && getAccountSet("kiro")?.accounts.some(a => a.id === opts.reauthAccountId && a.loginOrigin === "kiro-device")) {
     throw new Error("Native Kiro device accounts cannot be reauthenticated with kiro-cli; remove and re-add the account.");
   }
+  const anthropicSnapshot = provider === "anthropic" ? loginAccountSnapshot(getAccountSet(provider)) : undefined;
   const rawCred = await def.login(ctrl, opts, loginProviderConfig);
   const cred: OAuthCredentials = rawCred.source ? rawCred : { ...rawCred, source: "oauth" };
   if (isAnthropicOAuthInstance(provider)) assertAnthropicCredentialSource(provider, cred);
+  const localSource = provider === "anthropic" && cred.source === "local-cli" ? claudeLoginSource(rawCred) : undefined;
+  if (provider === "anthropic" && cred.source === "local-cli" && !localSource) throw new OAuthTokenRefreshStaleError();
+  const assertLoginOwner = () => {
+    deps.assertCurrentOwner?.();
+    if (localSource && (ctrl.signal?.aborted || loginAccountSnapshot(getAccountSet(provider)) !== anthropicSnapshot)) {
+      throw new OAuthTokenRefreshStaleError();
+    }
+  };
+  const assertLocalState = (store: AuthStore) => {
+    if (loginAccountSnapshot(store[provider] ?? null) !== anthropicSnapshot) throw new OAuthTokenRefreshStaleError();
+    assertLoginOwner();
+  };
+  const beforeApply = localSource ? async (store: AuthStore) => {
+    assertLocalState(store);
+    if (!await freshClaudeGenerationMatches(credentialGeneration(cred), localSource)) throw new OAuthTokenRefreshStaleError();
+  } : undefined;
   const settleKiroTransaction = deps.settleKiroLoginTransaction ?? settleKiroLoginTransaction;
   try {
     deps.assertCurrentOwner?.();
@@ -1681,7 +1702,9 @@ export async function runLogin(
       const reauthPlan = mergeOAuthPlan(cred, existing);
       const reauthCred = reauthPlan === undefined ? cred : { ...cred, plan: reauthPlan };
       const written = await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, reauthCred, {
-        assertBeforePersist: deps.assertCurrentOwner,
+        assertBeforePersist: localSource ? assertLoginOwner : deps.assertCurrentOwner,
+        beforeApply,
+        assertBeforeApply: localSource ? assertLocalState : undefined,
         rotateLoginId: true,
       });
       // A reauth whose account was deleted meanwhile wrote nothing and owns no row to report.
@@ -1689,7 +1712,9 @@ export async function runLogin(
     } else {
       const saveOptions = {
         preserveIdentityless: opts?.forceLogin === true || (provider === "anthropic" && cred.source === "local-cli"),
-        assertBeforePersist: deps.assertCurrentOwner,
+        assertBeforePersist: localSource ? assertLoginOwner : deps.assertCurrentOwner,
+        beforeApply,
+        assertBeforeApply: localSource ? assertLocalState : undefined,
       };
       if (shouldRollbackKiroAccounts && !deps.saveCredential) {
         kiroCredentialWrite = await (deps.saveCredentialWithReceipt ?? saveCredentialWithReceipt)(
