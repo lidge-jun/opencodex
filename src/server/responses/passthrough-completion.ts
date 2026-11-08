@@ -26,9 +26,14 @@ export function isResetReplacementStream(candidate: Response, upstreamRequestsSt
  * Select the native response a reset preflight publishes.
  *
  * The selection waits at most one heartbeat interval, and never longer than the stall budget, for
- * a head; see `selectProtocolSafeResetResponse`. The gateway clock must see upstream reads, not
- * generated comments or held preludes. The published head carries the main quota proof of the
- * physical attempt that produced it, because the replacement send renews the context's proof.
+ * a head; see `selectProtocolSafeResetResponse`. A consumer that measures silence on the bytes it
+ * receives (the gateway completion guard, the canonical buffered collector) cannot tell a held
+ * prelude, its later replay or a generated comment from an upstream read, and it starts after the
+ * selection already waited. Both bodies are therefore guarded before preflight, so each physical
+ * attempt's stall budget runs on its own upstream reads from its own head. The guard's failure is
+ * a timeout, which the reset gate never treats as replayable. The published head carries the main
+ * quota proof of the physical attempt that produced it, because the replacement send renews the
+ * context's proof.
  */
 export function selectPassthroughResetResponse(
   response: Response,
@@ -40,21 +45,21 @@ export function selectPassthroughResetResponse(
     config: Pick<OcxConfig, "stallTimeoutSec">;
     signal: AbortSignal;
     allowMissingContentType: boolean;
+    /** `upstream-activity` is the canonical buffered collector; see the selection's keepalive modes. */
     keepalive: "periodic" | "upstream-activity" | "none";
   },
 ): Promise<Response> {
-  const guard = options.request.url === "https://apis.opengateway.ai/v1/responses"
+  const openGateway = options.request.url === "https://apis.opengateway.ai/v1/responses"
     && response.status === 200 && response.body !== null;
+  const guard = openGateway || options.keepalive === "upstream-activity";
+  const stallMs = resolveStallTimeoutMs(options.config.stallTimeoutSec, { localUpstream: isLocalUpstream(options.request.url) });
   const protect = (source: Response): Response => guard
-    ? carryResponseToolOwnership(source, guardResponseBodyInactivity(
-      source, options.signal, resolveStallTimeoutMs(options.config.stallTimeoutSec),
-    ).response)
+    ? carryResponseToolOwnership(source, guardResponseBodyInactivity(source, options.signal, stallMs).response)
     : source;
   const quotaOwner = (): MainQuotaDispatch | undefined =>
     admission.authCtx.kind === "main" ? admission.authCtx.mainQuotaDispatch : undefined;
   const originalOwner = quotaOwner();
   let replacementOwner: MainQuotaDispatch | undefined;
-  const stallMs = resolveStallTimeoutMs(options.config.stallTimeoutSec, { localUpstream: isLocalUpstream(options.request.url) });
   const heldSince = performance.now();
   return selectProtocolSafeResetResponse(protect(response), logCtx, async (error, stage, signal, accepts) => {
     // Recover returns only a validated, fresh body; wrapping earlier would hide its lock state.
@@ -68,7 +73,7 @@ export function selectPassthroughResetResponse(
     signal: options.signal,
     maxSelectionMs: stallMs > 0 ? stallMs : undefined,
     onCommit: (published, owner) => {
-      if (guard) guardedResetResponses.set(published, heldSince);
+      if (openGateway) guardedResetResponses.set(published, heldSince);
       bindPublishedMainQuotaDispatch(published, owner === "replacement" ? replacementOwner : originalOwner);
     },
   });

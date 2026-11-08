@@ -37,7 +37,8 @@ to the consumer without cancelling a healthy source. Consumed/cancelled prefix r
 released; terminal disposal and consumer cancellation do not await upstream cleanup. SSE inactivity
 keeps the existing stall-timeout policy. When reset preflight is active, its source and any accepted
 reset replacement are guarded before preflight, so the clock follows upstream reads rather than
-synthetic keepalives or held combo frames. The completion guard skips only the duplicate clock for
+synthetic keepalives or held combo frames; canonical buffered JSON shares that guard
+([combo stream boundary](../transports/responses-combo-boundaries.md)). The completion guard skips only the duplicate clock for
 that initial selected body; a later empty-completion retry gets its own guard. Its first hold is
 shortened by the time reset selection already held the head, so both holds share the 30-second
 bound. Rewritten responses preserve tool ownership.

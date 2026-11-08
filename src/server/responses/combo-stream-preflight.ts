@@ -635,6 +635,11 @@ export function sameDeferredResponseMetadata(original: Response, replacement: Re
 export interface DeferredResetRecoveryOptions {
   allowMissingContentType?: boolean;
   heartbeatIntervalMs?: number;
+  /**
+   * `periodic` comments a waiting client once per heartbeat. `upstream-activity` comments only when
+   * the upstream reads non-empty bytes or a replacement head lands behind a committed head, for a
+   * consumer whose silence clock sees only delivered bytes; its owner still bounds real silence.
+   */
   keepalive?: "periodic" | "upstream-activity" | "none";
 }
 
@@ -676,6 +681,8 @@ function createResetSelection(
   let notifyInitialization: (() => void) | undefined;
   let commitEarly: ((published: Response, owner: ResetSelectionOwner) => void) | undefined;
   let activityPending = false;
+  // A replacement head behind a committed head is upstream activity the held stream must report.
+  let replacementHeadPending = false;
   let heartbeatDue = false;
   let closed = false;
   let headCommitted = !early;
@@ -709,6 +716,7 @@ function createResetSelection(
         if (!closed && accepts(replacement)) {
           cancelBody(chosen.response.body, "using protocol-safe replacement stream");
           chosen = { response: replacement, owner: "replacement" };
+          replacementHeadPending = headCommitted && keepalive === "upstream-activity";
         } else {
           cancelBody(replacement.body, "declining protocol-safe replacement stream");
           if (!closed) console.warn("[upstream-retry] replacement response metadata differs from the committed head; preserving original stream");
@@ -777,6 +785,13 @@ function createResetSelection(
           return;
         }
         if (initializationResult.kind === "failed") throw initializationResult.error;
+        if (replacementHeadPending) {
+          // A buffered consumer's silence clock sees only delivered bytes. Without this, a quiet
+          // replacement would inherit the original's last activity and be cut short.
+          replacementHeadPending = false;
+          controller.enqueue(resetPreflightKeepalive());
+          return;
+        }
         reader ??= selection?.response.body?.getReader();
         if (!reader) {
           closed = true;

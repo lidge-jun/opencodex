@@ -558,6 +558,139 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
     expect(sourceCancels).toBe(1);
   });
 
+  describe("buffered stall clock across reset selection", () => {
+    const STALL_MS = 5_000;
+    const stallConfig: OcxConfig = { ...config, stallTimeoutSec: STALL_MS / 1_000, providers: { openai: { ...provider, retryOnReset: {} } } };
+    const created = sseEvent("response.created", { response: { id: "resp_original", status: "in_progress", output: [] } });
+    const heartbeat = sseEvent("response.heartbeat", {});
+    /** An upstream body that yields only what the test sends, at the fake time it sends it. */
+    const scripted = () => {
+      const queue: (string | Error)[] = [];
+      let wake: (() => void) | undefined;
+      let cancels = 0;
+      const body = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          while (queue.length === 0) await new Promise<void>(resolve => { wake = resolve; });
+          const next = queue.shift()!;
+          if (typeof next === "string") controller.enqueue(new TextEncoder().encode(next));
+          else controller.error(next);
+        },
+        cancel() { cancels++; },
+      }, { highWaterMark: 0 });
+      const push = (item: string | Error) => { queue.push(item); wake?.(); wake = undefined; };
+      return { response: new Response(body, { headers: metadataHeaders("first", "first-id", "7") }), push, cancels: () => cancels };
+    };
+    const at = (ms: number, action: () => void) => { setTimeout(action, ms); };
+    /** Step the fake clock until the buffered turn settles; real I/O runs between steps. */
+    const settle = async (pending: Promise<Response>, from: () => number) => {
+      let settled: Response | undefined;
+      void pending.then(response => { settled = response; }, () => undefined);
+      for (;;) {
+        await flushMicrotasks();
+        await new Promise<void>(resolve => setImmediate(resolve));
+        await flushMicrotasks();
+        if (settled) return { response: settled, elapsed: Date.now() - from(), text: await settled.text() };
+        if (Date.now() - from() > 30_000) throw new Error("buffered turn never settled");
+        jest.advanceTimersByTime(100);
+      }
+    };
+    const withFakeClock = async (run: () => Promise<void>) => {
+      jest.useFakeTimers();
+      try { await run(); } finally { jest.clearAllTimers(); jest.useRealTimers(); }
+    };
+
+    test("a silent upstream stalls one budget after its head, not after selection", () => withFakeClock(async () => {
+      const original = scripted();
+      let sends = 0;
+      let sentAt = 0;
+      globalThis.fetch = (async () => { sends++; sentAt = Date.now(); return original.response; }) as typeof fetch;
+      const { response, elapsed, text } = await settle(call(requestBody(false, false), {}, stallConfig), () => sentAt);
+      expect(response.status).toBe(502);
+      expect(text).toContain("stalled before completing");
+      expect(elapsed).toBeGreaterThan(STALL_MS - 100);
+      expect(elapsed).toBeLessThanOrEqual(STALL_MS);
+      // A stall is not a reset: nothing is sent again, and the silent body is released.
+      expect(sends).toBe(1);
+      expect(original.cancels()).toBeGreaterThanOrEqual(1);
+    }));
+
+    test("a prelude held by selection anchors the clock at its read, not at its replay", () => withFakeClock(async () => {
+      const original = scripted();
+      let sends = 0;
+      let sentAt = 0;
+      globalThis.fetch = (async () => {
+        sends++;
+        sentAt = Date.now();
+        at(1_000, () => original.push(created));
+        return original.response;
+      }) as typeof fetch;
+      const { response, elapsed, text } = await settle(call(requestBody(false, false), {}, stallConfig), () => sentAt);
+      expect(response.status).toBe(502);
+      expect(text).toContain("stalled before completing");
+      expect(elapsed).toBeGreaterThan(1_000 + STALL_MS - 100);
+      expect(elapsed).toBeLessThanOrEqual(1_000 + STALL_MS);
+      expect(sends).toBe(1);
+    }));
+
+    test.each([
+      ["completes", 12_000, 200],
+      ["goes silent", 8_000 + STALL_MS, 502],
+    ] as const)("real upstream activity behind a held prelude keeps the turn alive until it %s", (ending, settlesAt, status) =>
+      withFakeClock(async () => {
+        const original = scripted();
+        let sends = 0;
+        let sentAt = 0;
+        globalThis.fetch = (async () => {
+          sends++;
+          sentAt = Date.now();
+          original.push(created);
+          at(4_000, () => original.push(heartbeat));
+          at(8_000, () => original.push(heartbeat));
+          if (ending === "completes") {
+            at(12_000, () => original.push(sseEvent("response.completed", {
+              response: { id: "resp_live", status: "completed", model: "gpt-5.6-sol", output: [] },
+            })));
+          }
+          return original.response;
+        }) as typeof fetch;
+        const { response, elapsed, text } = await settle(call(requestBody(false, false), {}, stallConfig), () => sentAt);
+        expect(response.status).toBe(status);
+        expect(elapsed).toBeGreaterThan(settlesAt - 100);
+        expect(elapsed).toBeLessThanOrEqual(settlesAt);
+        if (ending === "completes") expect(text).toContain("resp_live");
+        else expect(text).toContain("stalled before completing");
+        expect(sends).toBe(1);
+      }));
+
+    test.each([
+      ["before the head is committed", 3_000],
+      ["behind the committed original head", 7_000],
+    ] as const)("a replacement selected %s runs on its own attempt clock", (_name, resetAt) => withFakeClock(async () => {
+      const original = scripted();
+      const replacement = scripted();
+      let sends = 0;
+      let sentAt = 0;
+      globalThis.fetch = (async () => {
+        sends++;
+        if (sends > 1) return replacement.response;
+        sentAt = Date.now();
+        original.push(created);
+        at(4_000, () => original.push(heartbeat));
+        at(resetAt, () => original.push(Object.assign(new Error("fixture pre-output reset"), { code: "ECONNRESET" })));
+        return original.response;
+      }) as typeof fetch;
+      const { response, elapsed, text } = await settle(call(requestBody(false, false), {}, stallConfig), () => sentAt);
+      // The replacement arrived at the reset and never spoke: one budget from its own head.
+      expect(response.status).toBe(502);
+      expect(text).toContain("stalled before completing");
+      expect(elapsed).toBeGreaterThan(resetAt + STALL_MS - 100);
+      expect(elapsed).toBeLessThanOrEqual(resetAt + STALL_MS);
+      // One replacement for the reset; its stall is final and its body is released.
+      expect(sends).toBe(2);
+      expect(replacement.cancels()).toBeGreaterThanOrEqual(1);
+    }));
+  });
+
   for (const ending of ["eof", "read-error"] as const) {
     test(`native streaming preserves lifecycle snapshot output after ${ending}`, async () => {
       let sends = 0;

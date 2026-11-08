@@ -154,9 +154,15 @@ of the attempt that produced it ([OpenAI tiers](../providers/openai-tiers.md)). 
 clients get an SSE comment on their first read after a deadline commit and then once per heartbeat
 interval while the hold lasts. Combo streaming
 children omit those timer-generated comments while their parent holds the headers, so those comments
-cannot consume the retained-chunk cap. For canonical buffered JSON, the hold emits a comment
-only when it reads non-empty upstream bytes: this reports real prelude activity to the collector's
-inactivity clock without making a silent provider appear active. The byte and chunk caps remain in force.
+cannot consume the retained-chunk cap. For canonical buffered JSON, the stall budget runs on upstream
+reads: `src/server/responses/passthrough-completion.ts` guards the original body and any accepted
+replacement before preflight, so each physical attempt is bounded from its own head and only its
+non-empty reads restart the clock. A prelude read during selection and replayed later, or a generated
+comment, cannot extend it, and the collector reports the guard's failure as a stall timeout that the
+reset gate never resends. The hold emits a comment only when it reads non-empty upstream bytes or a
+replacement head lands behind a committed head, so the collector's own clock, which starts after
+selection and sees only delivered bytes, never ends a turn before the guard would. The byte and chunk
+caps and the collector's whole-turn ceiling remain in force.
 Downstream cancellation or the request's abort signal ends the selection or hold at once, aborts an
 in-flight replacement, and never awaits upstream cleanup.
 
