@@ -9,6 +9,8 @@ import { accountHeadroomPercent } from "../../src/oauth/account-quota-rank";
 import { cachedProviderQuotaIsExhausted } from "../../src/combos/resolve";
 import { providerDecisionWindows } from "../../src/providers/quota-decision-publication";
 import type { OAuthCredentials } from "../../src/oauth/types";
+import { buildQuotaSummary, formatQuotaPercent } from "../../gui/src/quota-summary";
+import { freshQuotaReportsFromResponse } from "../../gui/src/provider-workspace/report";
 
 const originalFetch = globalThis.fetch;
 let home: ReturnType<typeof createTempHome>;
@@ -19,6 +21,30 @@ const credentials = (suffix = "a"): OAuthCredentials => ({ access: `fixture-acce
 const amounts = (total = "100", used = "0", remaining = "100") => ({ CycleTotalCapacity: total, CycleUsedCapacity: used, CycleRemainCapacity: remaining, CycleFrozenCapacity: "0" });
 const summary = () => ({ Packages: [{ PackageCode: "fixture-base", ...amounts() }, { PackageCode: "fixture-gift", ...amounts("250", "0", "250") }],
   TotalCredits: "350", CreditGroups: [{ Kind: "plan_base", ...amounts() }, { Kind: "benefit", ...amounts("250", "0", "250") }] });
+
+test("decimal package totals preserve the reported remaining balance", () => {
+  const packages = Array.from({ length: 5 }, () => amounts("1", "0.065", "0.935"));
+  const credits = parseWorkBuddyCredits({ Packages: packages })!;
+  expect(credits.total).toBe(5);
+  expect(credits.remaining).toBe(4.675);
+  expect(credits.used).toBe(0.325);
+  const groups = packages.map(row => ({ Kind: "benefit", ...row }));
+  expect(parseWorkBuddyCredits({ Packages: packages, CreditGroups: groups })?.groups[0]?.remaining).toBe(4.675);
+  expect(parseWorkBuddyCredits({ Packages: [{ CycleTotalCapacity: 0.3, CycleUsedCapacity: 0.2 }] })?.remaining).toBe(0.1);
+  expect(parseWorkBuddyCredits({ Packages: Array.from({ length: 512 }, () => amounts("0.1", "0", "0.1")) })?.total).toBe(51.2);
+  expect(parseWorkBuddyCredits({ Packages: [{ CycleTotalCapacity: 1e-300, CycleUsedCapacity: 0, CycleRemainCapacity: 5e-301 }] })?.remaining).toBe(5e-301);
+});
+
+test("enterprise decimal balance retains half-percent rounding in the dashboard", async () => {
+  globalThis.fetch = (async input => Response.json({ code: 0, data: String(input).endsWith("summary")
+    ? { Packages: [] } : { limitNum: "1", credit: "0.285" } })) as typeof fetch;
+  const credential = credentials();
+  credential.workbuddy!.enterpriseId = "fixture-team";
+  const report = await fetchWorkBuddyQuota("workbuddy-ai", credential);
+  expect(report).toMatchObject({ quota: { workbuddyCredits: { remaining: 0.715 } } });
+  const rows = buildQuotaSummary(freshQuotaReportsFromResponse([report]), provider => provider);
+  expect(formatQuotaPercent(rows[0]?.headline.percent)).toBe("29%");
+});
 function stubSummary(value: unknown) {
   globalThis.fetch = (async (input, init) => {
     expect(String(input)).toStartWith("https://www.workbuddy.ai/billing/meter/");

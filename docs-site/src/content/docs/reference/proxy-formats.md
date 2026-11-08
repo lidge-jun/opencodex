@@ -50,6 +50,18 @@ snapshot omits it. Auto/none, incomplete results and unknown contracts retain th
 
 ## Required tools on translated Chat routes
 
+Before sending, the proxy rejects a mandatory tool choice that the selected Chat destination cannot
+represent, such as `computer_use` or a required allowed-tool list containing MCP selections. A direct
+route returns HTTP 400 without an upstream request. A routing profile can continue to another
+originally eligible destination under its configured fallback policy, preserving the original choice.
+An explicit nonempty catalog with `required` is also refused when no tool survives in the full parsed Chat catalog, including tools supplied through input items. A surviving client tool keeps a mixed catalog eligible; hosted web search retains its later sidecar handling.
+If no eligible target remains and all attempted candidates were locally incompatible, the profile returns the same HTTP 400 diagnostic;
+the Responses API returns HTTP 503 for an exhausted combo, naming the mandatory-tool constraint. Other failures
+retain their existing error handling. Copilot Auto uses the final negotiated model and wire for this check.
+A local incompatibility before inference does not count as a model send, including after a session refresh.
+Negotiating a replacement account or model does not rewrite the attribution of an earlier physical send.
+If a send-budget limit stops traversal first, the proxy retains the preceding failure instead of blaming tool compatibility.
+
 A translated OpenAI Chat response must contain a complete selected client tool call when
 `tool_choice` is required, names a tool, or uses a required allowed-tool selection. If the upstream
 finishes normally without one, the turn fails with `required_tool_not_called` and preserves usage.

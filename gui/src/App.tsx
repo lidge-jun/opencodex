@@ -28,7 +28,7 @@ import { SectionSwitcher } from "./components/SectionSwitcher";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Notice, Select, ToastNotice, type NoticeTone } from "./ui";
 import { bootstrapApiSession, configureApiTargets, DEVICE_PROOF_CHANGED_EVENT, hasApiSession, hasRememberedDashboardDevice, installApiAuthFetch, logoutApiSession, SESSION_CHANGED_EVENT, SESSION_UNAVAILABLE_EVENT } from "./api";
-import { apiBaseForPlane, discoverApiTargets, isConnectedRuntime, runtimeRoleFromDocument, standaloneApiTargets, type ApiTargets } from "./api-targets";
+import { apiBaseForPlane, ClientStateChangedError, discoverApiTargets, isConnectedRuntime, runtimeRoleFromDocument, standaloneApiTargets, type ApiTargets } from "./api-targets";
 import { ConnectPairingForm } from "./connect-pairing";
 import { validateRemoteLinkSession } from "./connect-pairing-transport";
 import { type Page } from "./app-routing";
@@ -156,7 +156,7 @@ export default function App() {
   // Gating the page on discovery made a plain install show remote-hub loading copy before
   // its own dashboard, for a feature the operator never enabled.
   const [targetsSettled, setTargetsSettled] = useState(() => !isConnectedRuntime());
-  const [targetError, setTargetError] = useState(false);
+  const [targetError, setTargetError] = useState<"unavailable" | "client-state-changed" | null>(null);
   const [sharedSessionReady, setSharedSessionReady] = useState(() => hasApiSession("shared"));
   const [sharedSessionEpoch, setSharedSessionEpoch] = useState(0);
   const [hubPairingOpen, setHubPairingOpen] = useState(false);
@@ -207,11 +207,11 @@ export default function App() {
       }
       if (controller.signal.aborted) return;
       setSharedSessionReady(hasApiSession("shared"));
-      setTargetError(false);
+      setTargetError(null);
       setTargetsSettled(true);
-    }).catch(() => {
+    }).catch(error => {
       if (controller.signal.aborted) return;
-      setTargetError(true);
+      setTargetError(error instanceof ClientStateChangedError ? "client-state-changed" : "unavailable");
       setTargetsSettled(true);
     });
     return () => controller.abort();
@@ -665,7 +665,7 @@ export default function App() {
                   need the machine plane report their own errors.
                 */}
                 {targetError && (
-                  <div className="alert alert-err" role="alert">{t("connection.machineUnavailable")}</div>
+                  <div className="alert alert-err" role="alert">{t(targetError === "client-state-changed" ? "connection.clientStateChanged" : "connection.machineUnavailable")}</div>
                 )}
                 {((targets.connected && !sharedSessionReady) || remotePairingFormOpen) && (
                   <ConnectPairingForm key={`${targets.shared.serverOrigin}:${targets.shared.bootstrapPath}`} target={targets.shared} focusOnMount={remotePairingFormOpen} onConnected={async signal => {

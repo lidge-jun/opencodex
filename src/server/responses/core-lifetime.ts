@@ -1,6 +1,7 @@
 import { carryProxyError } from "../../lib/client-error-body";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
+import { carryPolicyCandidateRefusal } from "./policy-request-scope";
 import { finalizeTranslatorBudgetResponse } from "../../lib/translator-budget";
 import { carryReplayRefusal, isNonReplayableResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import { isVerifiedModelNotInPlanResponse, markVerifiedModelNotInPlanResponse } from "../../lib/errors";
@@ -57,6 +58,7 @@ export function finalizeOwnedTranslatorBudget(response: Response, budget: Transl
   if (isVerifiedModelNotInPlanResponse(response)) markVerifiedModelNotInPlanResponse(finalizedResponse);
   if (runTurnAdapterSseResponses.has(response)) runTurnAdapterSseResponses.add(finalizedResponse);
   carryCodexAccountCooldownResponse(response, finalizedResponse);
+  carryPolicyCandidateRefusal(response, finalizedResponse);
   return carryResponseToolOwnership(response, carryFormattedQuotaSource(response, finalizedResponse));
 }
 
@@ -86,6 +88,7 @@ export function finalizeAccountLease(response: Response, release: () => void, on
   if (runTurnAdapterSseResponses.has(response)) runTurnAdapterSseResponses.add(wrapped);
   // Retained compaction delivers through this lease wrapper; keep a local cooldown refusal local (#7850).
   carryCodexAccountCooldownResponse(response, wrapped);
+  carryPolicyCandidateRefusal(response, wrapped);
   return carryResponseToolOwnership(response, carryReplayRefusal(response, carryFormattedQuotaSource(response, wrapped)));
 }
 

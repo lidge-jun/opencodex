@@ -80,10 +80,9 @@ describe("rich Logs filtering", () => {
     expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, provider: "anthropic" }, NOW).map(row => row.id)).toEqual(["claude"]);
   });
 
-  test("composes surface, status, interception, and conversation filters", () => {
+  test("composes status, interception, and conversation filters", () => {
     expect(filterLogs(logs, {
       ...DEFAULT_LOG_FILTER_STATE,
-      surface: "claude",
       status: "success",
       conversationId: "conv-123",
     }, NOW).map(row => row.id)).toEqual(["claude"]);
@@ -92,6 +91,15 @@ describe("rich Logs filtering", () => {
       status: "success",
       interceptedOnly: true,
     }, NOW).map(row => row.id)).toEqual(["helper"]);
+  });
+
+  test("ignores obsolete surface selections rather than hiding rows without a visible control", () => {
+    for (const surface of ["claude", "codex", "grok", "invalid"]) {
+      const obsolete = { ...DEFAULT_LOG_FILTER_STATE, surface };
+      expect(filterLogs(logs, obsolete, NOW)).toEqual(logs);
+      expect(hasActiveLogFilters(obsolete)).toBe(false);
+    }
+    expect(DEFAULT_LOG_FILTER_STATE).not.toHaveProperty("surface");
   });
 
   test("accepts only finite integer HTTP statuses in status buckets", () => {

@@ -20,8 +20,19 @@ import {
 } from "../../src/web-search";
 import { parseAnthropicSidecarSSE, runAnthropicWebSearch } from "../../src/web-search/anthropic-executor";
 import { CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../../src/oauth/anthropic";
-import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
+import type { ProviderAdapter } from "../../src/adapters/base";
 import { repoPath } from "../helpers/repo-root";
+import { createRequestExecutionBudget, type AuxiliaryModelSend } from "../../src/lib/request-execution-budget";
+import { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY, type SpendJournal } from "../../src/lib/spend-reservation-ledger";
+import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
+import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import { estimateTokens } from "../../src/lib/token-estimate";
+import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
+import { runWithWebSearch } from "../../src/web-search/loop";
+import { runTurnWebSearchLoop } from "../../src/web-search/run-turn-loop";
+import { createPassthroughWebSearchBridgeExecutor } from "../../src/web-search/passthrough-bridge";
 
 const routedProvider: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://routed.test/v1", apiKey: "routed-key" };
 const forwardProvider: OcxProviderConfig = { adapter: "openai-responses", baseUrl: "https://chatgpt.test/v1", authMode: "forward" };
@@ -36,6 +47,159 @@ function config(overrides: Partial<OcxConfig> = {}): OcxConfig {
 function parsedWithWebSearch() {
   return parseRequest({ model: "routed/model", input: "Search current docs", stream: true, tools: [{ type: "web_search" }] });
 }
+
+describe("Anthropic helper physical admission", () => {
+  const originalFetch = globalThis.fetch;
+  const settings = { model: "claude-sonnet-5", reasoning: "low", timeoutMs: 5000, describeImages: false };
+  afterEach(() => { globalThis.fetch = originalFetch; oauthAccessError = undefined; });
+  function owner(maxTokens = 100_000, helperPool = "anthropic") {
+    const lines: string[] = [];
+    const journal: SpendJournal = { read: () => [...lines], append: line => { lines.push(line); }, rewrite: next => { lines.splice(0, lines.length, ...next); } };
+    const ledger = createSpendReservationLedger({ journal, policy: { ...DEFAULT_SPEND_RESERVATION_POLICY,
+      pool: { maxTokens }, canonicalProviderIds: ["parent", helperPool] } });
+    const log: Parameters<typeof createRequestSpendTracker>[0] = { provider: "parent", model: "parent", accountLogLabel: "parent-account", spendInputEstimateTokens: 1, spendOutputCeilingTokens: 1 };
+    const tracker = createRequestSpendTracker(log, undefined, ledger);
+    const budget = createRequestExecutionBudget(undefined, "anthropic-helper", tracker);
+    const translatorBudget = createTranslatorBudget();
+    const value = createResponsesSendBudget({ req: new Request("http://localhost/v1/responses"), logCtx: log,
+      options: { sendBudget: budget, translatorBudget } });
+    if (value instanceof Response) { translatorBudget.dispose(); throw new Error("fixture refused"); }
+    return { value, budget, tracker, ledger, lines, log, close: () => translatorBudget.dispose() };
+  }
+  const ok = () => sseResponse([
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+    { type: "content_block_stop", index: 0 }, { type: "message_stop" },
+  ]);
+
+  test("a helper's own output ceiling refuses before fetch despite a tiny parent estimate", async () => {
+    const f = owner(100);
+    let fetches = 0;
+    globalThis.fetch = (async () => { fetches++; return ok(); }) as typeof fetch;
+    try {
+      const out = await runAnthropicWebSearch("q", "anthropic", anthropicProvider, settings, undefined, undefined, f.value.dispatchSidecarSend);
+      expect(fetches).toBe(0);
+      expect(out.error).toBe("anthropic sidecar send_budget_exhausted");
+      expect(f.tracker.refusals).toBe(1);
+      expect(f.budget.used).toBe(0);
+    } finally { f.tracker.settle(undefined); f.close(); }
+  });
+
+  test("a nonterminal auxiliary pool refusal leaves a successful routed answer unmarked", async () => {
+    const f = owner(100, "claude-fixture");
+    let fetches = 0;
+    globalThis.fetch = (async () => { fetches++; return ok(); }) as typeof fetch;
+    const passes: AdapterEvent[][] = [
+      [{ type: "tool_call_start", id: "s1", name: "web_search" }, { type: "tool_call_delta", arguments: '{"query":"fixture"}' }, { type: "tool_call_end" }, { type: "done" }],
+      [{ type: "text_delta", text: "normal answer" }, { type: "done" }],
+    ];
+    const adapter: ProviderAdapter = { name: "nonterminal-auxiliary-fixture",
+      buildRequest: () => ({ url: "https://routed.test", method: "POST", headers: {}, body: "{}" }),
+      fetchResponse: async () => new Response("wire"), async *parseStream() { yield* passes.shift()!; } };
+    const translatorBudget = createTranslatorBudget();
+    try {
+      const response = await runWithWebSearch({ parsed: parsedWithWebSearch(), adapter, backend: "anthropic",
+        anthropicSidecar: { providerName: "claude-fixture", provider: anthropicProvider,
+          config: config({ providers: { routed: routedProvider, "claude-fixture": anthropicProvider } }) },
+        dispatchSidecarSend: f.value.dispatchSidecarSend, settings, maxSearches: 1, hostedTool: { type: "web_search" },
+        selectedForwardHeaders: new Headers(), incomingMeta: { headers: new Headers(), translatorBudget } });
+      expect(await response.text()).toContain("normal answer"); expect(fetches).toBe(0);
+      expect(f.tracker.refusals).toBe(1); expect(f.tracker.lastRefusal?.reason).toBe("workflow-spend-exhausted");
+      expect(f.log.localTerminalReason).toBeUndefined(); expect(f.log.errorCode).toBeUndefined();
+      expect(f.log.terminalSource).toBeUndefined();
+    } finally { f.tracker.settle(undefined); translatorBudget.dispose(); f.close(); }
+  });
+
+  test("each query owns a seed and reset replay counts each actual send", async () => {
+    const f = owner();
+    let fetches = 0;
+    const reserves = () => f.lines.map(line => JSON.parse(line)).filter(row => row.kind === "reserve").length;
+    const countsAtWire: number[] = [];
+    const wireBodies: string[] = [];
+    globalThis.fetch = (async (_url, init) => {
+      wireBodies.push(String(init?.body));
+      fetches++; countsAtWire.push(reserves());
+      if (fetches === 1) throw Object.assign(new Error("connection reset by peer"), { code: "ECONNRESET" });
+      return ok();
+    }) as typeof fetch;
+    try {
+      const first = await runAnthropicWebSearch("q1", "anthropic", anthropicProvider, settings, undefined, undefined, f.value.dispatchSidecarSend);
+      const second = await runAnthropicWebSearch("q2", "anthropic", anthropicProvider, settings, undefined, undefined, f.value.dispatchSidecarSend);
+      expect(first.error).toBeUndefined(); expect(second.error).toBeUndefined();
+      expect(first.text).toBe("ok"); expect(second.text).toBe("ok");
+      expect(fetches).toBe(3);
+      expect(countsAtWire).toEqual([1, 1, 3]);
+      expect(reserves()).toBe(3);
+      expect(f.budget.used).toBe(3);
+      const expectedHold = wireBodies.reduce((total, body) =>
+        total + Math.max(1, estimateTokens(body, settings.model)) + (JSON.parse(body) as { max_tokens: number }).max_tokens, 0);
+      expect(f.ledger.snapshot("pool", "anthropic")!.reserved).toBe(expectedHold);
+      expect(f.ledger.snapshot("identity", "parent-account")).toBeUndefined();
+      expect(f.ledger.snapshot("pool", "parent")).toBeUndefined();
+    } finally { f.tracker.settle(undefined); f.close(); }
+  });
+
+  test("an already aborted query never admits or sends a helper", async () => {
+    const f = owner();
+    let fetches = 0;
+    globalThis.fetch = (async () => { fetches++; return ok(); }) as typeof fetch;
+    try {
+      const out = await runAnthropicWebSearch("q", "anthropic", anthropicProvider, settings, AbortSignal.abort(), undefined, f.value.dispatchSidecarSend);
+      expect(out.error).toBeDefined(); expect(fetches).toBe(0);
+      expect(f.budget.used).toBe(0); expect(f.lines).toHaveLength(0);
+    } finally { f.tracker.settle(undefined); f.close(); }
+  });
+
+  for (const path of ["fetch-loop", "run-turn", "passthrough-bridge"] as const) {
+    test(`${path} forwards helper admission and preserves a refused search as a tool error`, async () => {
+      let admissions = 0, fetches = 0;
+      globalThis.fetch = (async () => { fetches++; return ok(); }) as typeof fetch;
+      const dispatchSidecarSend: AuxiliaryModelSend = async target => {
+        expect(target.poolId).toBe("claude-fixture");
+        expect(target.identityId).toBe("");
+        admissions++; throw new SendBudgetExhaustedError();
+      };
+      const anthropicSidecar = { providerName: "claude-fixture", provider: anthropicProvider, config: config() };
+      const parsed: OcxParsedRequest = { modelId: "fixture", stream: true, options: {}, context: { messages: [], tools: [] } };
+      const search: AdapterEvent[] = [
+        { type: "tool_call_start", id: "search-1", name: "web_search" },
+        { type: "tool_call_delta", arguments: '{"query":"fixture"}' }, { type: "tool_call_end" }, { type: "done" },
+      ];
+      const answer: AdapterEvent[] = [{ type: "text_delta", text: "answer" }, { type: "done" }];
+      async function* stream(events: AdapterEvent[]) { yield* events; }
+      const translatorBudget = createTranslatorBudget();
+      let continued: OcxParsedRequest | undefined;
+      try {
+        if (path === "fetch-loop") {
+          const passes = [search, answer];
+          const adapter: ProviderAdapter = {
+            name: "helper-admission-fixture",
+            buildRequest: request => { continued = request; return { url: "https://routed.test", method: "POST", headers: {}, body: "{}" }; },
+            fetchResponse: async () => new Response("wire"),
+            async *parseStream() { yield* passes.shift()!; },
+          };
+          const response = await runWithWebSearch({ parsed, adapter, backend: "anthropic", anthropicSidecar,
+            dispatchSidecarSend, settings, hostedTool: { type: "web_search" }, maxSearches: 1,
+            selectedForwardHeaders: new Headers(), incomingMeta: { headers: new Headers(), translatorBudget } });
+          expect(await response.text()).toContain("answer");
+        } else if (path === "run-turn") {
+          const events: AdapterEvent[] = [];
+          for await (const event of runTurnWebSearchLoop(stream(search), { parsed, translatorBudget, dispatchSidecarSend,
+            plan: { backend: "anthropic", anthropicSidecar, settings, hostedTool: { type: "web_search" }, maxSearches: 1,
+              routedModelStallTimeoutMs: 1000, stallTimeoutSec: 1, streamRoutedModelOutput: false },
+            dispatch: request => { continued = request; return stream(answer); } })) events.push(event);
+          expect(events.some(event => event.type === "text_delta" && event.text === "answer")).toBe(true);
+        } else {
+          const execute = createPassthroughWebSearchBridgeExecutor({ backend: "anthropic", maxSearches: 1, timeoutMs: 5000 },
+            { auth: { anthropic: anthropicSidecar }, dispatchSidecarSend });
+          expect((await execute(["fixture"])).error).toBe("anthropic sidecar send_budget_exhausted");
+        }
+        if (continued) expect(JSON.stringify(continued.context.messages)).toContain("send_budget_exhausted");
+        expect(admissions).toBe(1); expect(fetches).toBe(0);
+      } finally { translatorBudget.dispose(); }
+    });
+  }
+});
 
 /** Build an Anthropic-style SSE stream Response from frame objects. */
 function sseResponse(frames: Record<string, unknown>[], opts: { crlf?: boolean; unterminated?: boolean; chunkSize?: number } = {}): Response {

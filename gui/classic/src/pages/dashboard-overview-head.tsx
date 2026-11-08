@@ -94,10 +94,11 @@ export function DashboardOverviewHead({
         <div className="startup-health-slot" aria-live="polite">
           {startupHealth ? (
             <button type="button" className="startup-health-bar" onClick={() => navigateHash("startup")}>
-              <span className={`dot ${startupHealth === "error" ? "dot-red" : startupHealth === "at-risk" ? "dot-amber" : "dot-green"}`} aria-hidden="true" />
+              <span className={`dot ${startupHealth === "error" ? "dot-red" : startupHealth === "at-risk" ? "dot-amber" : startupHealth === "unverified" ? "dot-muted" : "dot-green"}`} aria-hidden="true" />
               <span className="startup-health-bar__summary">
                 {t(startupHealth === "error"
                   ? "startup.error"
+                  : startupHealth === "unverified" ? "startup.unverified"
                   : startupHealth === "at-risk"
                     ? "startup.summary.atRisk"
                     : startupHealth === "protected"

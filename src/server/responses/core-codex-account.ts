@@ -73,7 +73,7 @@ import {
   CodexPoolAccountCreditsOffError,
 } from "../../codex/auth-context";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-models";
-import { isRequestExecutionBudget } from "../../lib/request-execution-budget";
+import { createBoundedSameTargetRecovery, hasWorkflowSendObserver, isRequestExecutionBudget } from "../../lib/request-execution-budget";
 import type { SingleUseDispatchPermit } from "../../lib/request-execution-budget";
 import { codexRouteCredentialOwnership, type CodexCredentialOwnershipOptions } from "./core-auth";
 import { bindRouteReasoningReplayScope } from "./core-replay";
@@ -90,7 +90,8 @@ import {
   noteProviderAttemptSend,
 } from "../request-log";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
-import { chargeWorkflowSends } from "../../lib/workflow-budget";
+import { reserveWorkflowSend, workflowSendCeilingReached } from "../../lib/workflow-budget";
+import { currentWorkflowBudgetPolicy } from "../../lib/workflow-budget-config";
 import type { ResponsesTerminalStatus } from "../../bridge";
 
 export function sidecarOutcomeRecorder(
@@ -952,23 +953,6 @@ export async function retryCodexPoolOnAlternateAccount(
   recordAdapterReasoning(logCtx, request);
   recordAdapterTier(logCtx, request);
 
-  await firstResponse.body?.cancel().catch(() => undefined);
-  options.onCodexAuthContextResolved?.(retryAuthCtx);
-  route.provider = retryProvider;
-  logCtx.provider = formatCodexProviderForLog(
-    route.providerName,
-    retryAuthCtx.accountId,
-    config,
-  );
-  logCtx.accountLogLabel = codexAuthContextLogLabel(retryAuthCtx, config);
-  sealRequestAttemptIdentity(
-    logCtx.activeAttempt,
-    logCtx.provider,
-    retryAdapter.name,
-    logCtx.accountLogLabel,
-  );
-  recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, retryAdapter.name);
-
   const retrySameConfirmedAccount = outcomeStatus === 400
     && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(route.modelId)
     && retryAuthCtx.accountId === firstAuthCtx.accountId;
@@ -978,15 +962,6 @@ export async function retryCodexPoolOnAlternateAccount(
   // exact allow-listed body and fresh entitlement before every later send. Alternate-account and
   // quota recovery retain their historical one-send bound.
   //
-  // Two different bounds, and the effective one is the smaller. `maxRetrySends` answers "how
-  // many times is it worth re-asking THIS account for a model its roster still grants"; the
-  // shared budget answers "how many times may this LOGICAL REQUEST reach upstream in total,
-  // across every layer that can re-send". A ladder of eight layered on sends the request had
-  // already made is exactly the per-request multiplication #4546 is about, so the ladder is
-  // capped at what the request has left. The floor of one keeps the single retry this function
-  // was called to make -- the move already paid for itself with its own permit -- and each rung
-  // past the first reserves its own send below, so a refusal stops the ladder with the last
-  // upstream answer intact.
   // The ladder replays to the SAME account, so it must reserve under the same target key the
   // other legs use. Folding the account id in made every rung read as a target change, which
   // spent the one cross-account slot a real move needs on a same-account replay.
@@ -996,18 +971,41 @@ export async function retryCodexPoolOnAlternateAccount(
   // at eight same-account dispatches (tests/server/server-auth.test.ts), and a request that has
   // already spent sends would silently stop short of it. Reconciling an eight-send same-account
   // ladder with a four-send request total is a policy decision, not a clamp to add in passing.
-  // What this diff does fix is that the rungs are now CHARGED instead of free.
+  // Every physical rung still needs the workflow's allowance, including the first same-account
+  // retry and a rung admitted by that historical request-local exception.
   const maxRetrySends = retrySameConfirmedAccount ? 7 : 1;
+  const sameAccountRecovery = retrySameConfirmedAccount && executionBudget
+    ? createBoundedSameTargetRecovery(executionBudget, ladderTargetKey, maxRetrySends) : undefined;
+  const workflowObserved = sameAccountRecovery?.workflowCountObserved
+    ?? (executionBudget && hasWorkflowSendObserver(executionBudget));
+  const claimRetrySend = (permit?: SingleUseDispatchPermit): boolean => {
+    const workflowPolicy = currentWorkflowBudgetPolicy();
+    // Legacy permits cannot refund after use(). Check the root first, then use the permit
+    // and reserve the root in this same synchronous turn. A failed permit claims no root
+    // slot, and a root refusal can still release the unused request reservation.
+    if (!workflowObserved && workflowSendCeilingReached(options.workflowRootId, workflowPolicy)) {
+      permit?.release();
+      return false;
+    }
+    if (permit && !permit.use()) {
+      permit.release();
+      return false;
+    }
+    // Observed sends always own a spend-backed permit, including the bounded same-account
+    // exception. Its use() already claimed the root; a root claim alone is no spend grant.
+    if (workflowObserved) return permit !== undefined;
+    return reserveWorkflowSend(options.workflowRootId, workflowPolicy);
+  };
   let retrySendCount = 0;
   // The gated-model 400 has no roster kind; it stays unattributed as before.
   const moveRecovery: AttemptRecoveryKind | undefined = outcomeStatus === 429 ? "oauth-account-429"
     : outcomeStatus === 402 ? "oauth-account-402"
     : isTransientUpstreamStatus(outcomeStatus) ? "transient-5xx" : undefined;
-  let upstreamResponse: Response;
+  let upstreamResponse = firstResponse;
   try {
     while (true) {
-      // The same-account gated-model 400 ladder below keeps its own `maxRetrySends` bound and
-      // does not take the reserve again; only the move itself does.
+      // A same-account rung uses its bounded recovery owner. Only an account move takes the
+      // ordinary final-recovery reserve and the pool-wide recovery window.
       if (accountMovePermit) {
         // The pool-wide recovery window is consulted BEFORE the request-local permit is used.
         // `reserveDispatch` charges at reservation time and `release()` is the only way back, so
@@ -1027,49 +1025,76 @@ export async function retryCodexPoolOnAlternateAccount(
           recordUnmovedTransientOutcome();
           return { kind: "no-alternate" };
         }
-        const charged = accountMovePermit.use();
-        accountMovePermit = undefined;
-        if (!charged) {
+      }
+      const rung = sameAccountRecovery?.reserve();
+      if (rung && !rung.allowed) {
+        if (retrySendCount > 0) break;
+        releaseCodexAuthContextProbeLease(retryAuthCtx);
+        return { kind: "no-alternate" };
+      }
+      const permit = accountMovePermit ?? (rung?.allowed ? rung.permit : undefined);
+      accountMovePermit = undefined;
+      try {
+        const dispatch = async (): Promise<Response | undefined> => {
+          // Spend admission must see the credential the retry will use. Restore the original
+          // label if admission refuses, while leaving that original response readable.
+          const priorAccountLabel = logCtx.accountLogLabel;
+          logCtx.accountLogLabel = codexAuthContextLogLabel(retryAuthCtx, config);
+          let admitted = false;
+          try {
+            if (!claimRetrySend(permit)) return undefined;
+            admitted = true;
+            await upstreamResponse.body?.cancel().catch(() => undefined);
+            if (retrySendCount === 0) {
+              options.onCodexAuthContextResolved?.(retryAuthCtx);
+              route.provider = retryProvider;
+              logCtx.provider = formatCodexProviderForLog(route.providerName, retryAuthCtx.accountId, config);
+              sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, retryAdapter.name, logCtx.accountLogLabel);
+              recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, retryAdapter.name);
+            }
+            // A move seals the first account's attempt with the answer that account returned.
+            if (logCtx.activeAttempt && logCtx.activeAttempt.status < 100) logCtx.activeAttempt.status = firstResponse.status;
+            noteProviderAttemptSend(logCtx, route.providerName, route.provider, passthroughEstimate, moveRecovery);
+            return await fetchWithHeaderTimeout(
+              request.url,
+              { method: request.method, headers: request.headers, body: request.body },
+              upstream.signal,
+              connectMs,
+              stream,
+              providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                httpOnly,
+                providerName: route.providerName,
+                modelId: route.modelId,
+                preOutputRefusalHold: args.preOutputRefusalHold,
+                accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, codex: retryAuthCtx }, headers),
+                onCodexWsQuota: codexWsQuotaObserver(retryAuthCtx, route.provider, route.modelId),
+                beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
+                  ? createCodexAuthDispatchGuard(retryAuthCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
+              }),
+              // Credential-bearing forward send: never follow a redirect into a
+              // dead-host rejection after the credential was seen (#914).
+              route.provider.authMode === "forward",
+            );
+          } finally {
+            if (!admitted) logCtx.accountLogLabel = priorAccountLabel;
+          }
+        };
+        // Keep the physical producer open through the fetch; use() without its executor span
+        // closes it immediately and loses the selected start before a credential rebind.
+        const response = permit?.execute ? await permit.execute(dispatch) : await dispatch();
+        if (!response) {
+          if (retrySendCount > 0) break;
           releaseCodexAuthContextProbeLease(retryAuthCtx);
           recordUnmovedTransientOutcome();
           return { kind: "no-alternate" };
         }
-        // The move is a physical send like any other, so the root workflow is charged too.
-        chargeWorkflowSends(args.options.workflowRootId, 1);
-      }
-      // A move seals the first account's attempt here. Give it the status that account actually
-      // answered, not the 502 the split infers, and name why the second send exists.
-      if (logCtx.activeAttempt && logCtx.activeAttempt.status < 100) logCtx.activeAttempt.status = firstResponse.status;
-      noteProviderAttemptSend(logCtx, route.providerName, route.provider, passthroughEstimate, moveRecovery);
-      try {
-        upstreamResponse = await fetchWithHeaderTimeout(
-          request.url,
-          {
-            method: request.method,
-            headers: request.headers,
-            body: request.body,
-          },
-          upstream.signal,
-          connectMs,
-          stream,
-          providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-            httpOnly,
-            providerName: route.providerName,
-            modelId: route.modelId,
-            preOutputRefusalHold: args.preOutputRefusalHold,
-            accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, codex: retryAuthCtx }, headers),
-            onCodexWsQuota: codexWsQuotaObserver(retryAuthCtx, route.provider, route.modelId),
-            beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
-              ? createCodexAuthDispatchGuard(retryAuthCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
-          }),
-          // Credential-bearing forward send: never follow a redirect into a
-          // dead-host rejection after the credential was seen (#914).
-          route.provider.authMode === "forward",
-        );
+        upstreamResponse = response;
       } catch (error) {
         // Only the forward send is a transport boundary. Entitlement resolver throws below are
         // deliberately outside this catch so programming errors retain their original path.
         return { kind: "transport", error, authCtx: retryAuthCtx };
+      } finally {
+        permit?.release();
       }
       retrySendCount += 1;
       args.onResponse?.(upstreamResponse, retryAuthCtx, request);
@@ -1112,25 +1137,6 @@ export async function retryCodexPoolOnAlternateAccount(
         throw error;
       }
       if (!entitledCodexAccountIdsForModel(refreshed, route.modelId)?.has(retryAuthCtx.accountId)) break;
-      // The next rung is another physical send of this logical request: a same-account,
-      // same-target replay, charged as an ordinary transient send rather than as a move.
-      // Reserved here, immediately before looping back, so a refusal stops the ladder with the
-      // last upstream 400 intact instead of spending a send it cannot make.
-      // Every rung is CHARGED, and a refusal does not end the ladder. That asymmetry is
-      // deliberate and it is the one place the shared cap yields. This is a same-account,
-      // same-target replay of a model-gating 400 whose own bound is eight dispatches, pinned by
-      // #2097; letting a spent request budget cut it to four would break a recovery that works
-      // today, which is precisely the mistake 040_send_budget.md warns a flat ceiling makes.
-      // The request total still governs everything that changes target or credential.
-      if (executionBudget) {
-        const rung = executionBudget.reserveDispatch({
-          sendClass: "transient",
-          targetKey: ladderTargetKey,
-        });
-        if (rung.allowed) rung.permit.use();
-        chargeWorkflowSends(args.options.workflowRootId, 1);
-      }
-      await upstreamResponse.body?.cancel().catch(() => undefined);
     }
   } finally {
     request.releaseBodyObservation?.();
