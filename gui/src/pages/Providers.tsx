@@ -479,7 +479,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
 
   const { cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled } = useProvidersOAuth({
     apiBase, t, aliveRef, accountSets, setAccountSets,
-    setBusy, setStatus, setLoginInfo, setOauthStatus, invalidateOauthStatusReads, beginAccountLogout, notify,
+    setBusy, setStatus, setLoginInfo, setOauthStatus, invalidateOauthStatusReads, beginAccountLogin: pools.beginAccountLogin, beginAccountLogout, notify,
     fetchConfig, fetchOauth, fetchAccountSets, fetchProviderQuotas, bumpModelsRefresh,
     onLoginSettled: onProviderLoginSettled,
   });

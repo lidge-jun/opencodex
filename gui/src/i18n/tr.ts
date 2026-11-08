@@ -863,6 +863,7 @@ export const tr: Record<TKey, string> = {
   "subagentSurface.learnMore": "Neden başarısız oluyor",
   "prov.logoutOk": "{provider} çıkışı yapıldı.",
   "prov.logoutFail": "{provider} çıkışı yapılamadı.",
+  "prov.accountOperationBusy": "Başka bir hesap işlemi sürüyor. Bitmesini bekleyip tekrar deneyin.",
   "prov.logoutBusy": "Hesap değişikliği sürüyor. Tamamlanmasını bekleyip tekrar çıkış yapmayı deneyin.",
   "prov.accountRemoveUnverified": "{email} hesabının kaldırılıp kaldırılmadığı doğrulanamadı. Yeniden denemeden önce hesap listesini yenileyin.",
   "prov.removed": "\"{name}\" kaldırıldı.",

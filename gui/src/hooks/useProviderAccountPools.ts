@@ -148,6 +148,7 @@ export function useProviderAccountPools(deps: {
   const rosterGenerationRef = useRef<Record<string, number>>({});
   const quotaGenerationRef = useRef<Record<string, number>>({});
   const selectionMutationsRef = useRef(new Map<string, symbol>());
+  const loginOwnersRef = useRef(new Map<string, symbol>());
   const requestsRef = useRef(new Set<AbortController>());
   const pausingAccountRef = useRef(new Map<string, { provider: string; accountId: string }>());
   const switchingAccountRef = useRef(new Map<string, { provider: string; accountId: string }>());
@@ -159,6 +160,7 @@ export function useProviderAccountPools(deps: {
     const rosterGenerations = rosterGenerationRef.current;
     const quotaGenerations = quotaGenerationRef.current;
     const mutations = selectionMutationsRef.current;
+    const loginOwners = loginOwnersRef.current;
     const pausingOwners = pausingAccountRef.current;
     const switchingOwners = switchingAccountRef.current;
     mountedRef.current = true;
@@ -179,6 +181,7 @@ export function useProviderAccountPools(deps: {
       for (const key of Object.keys(rosterGenerations)) rosterGenerations[key] += 1;
       for (const key of Object.keys(quotaGenerations)) quotaGenerations[key] += 1;
       mutations.clear();
+      loginOwners.clear();
       pausingOwners.clear();
       switchingOwners.clear();
       for (const controller of requests) controller.abort();
@@ -400,6 +403,14 @@ export function useProviderAccountPools(deps: {
     }
     // The independent quota generation still owns pending/error flags for surviving IDs.
     return key;
+  };
+
+  const beginAccountLogin = (provider: string): (() => void) | null => {
+    if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase
+      || selectionMutationsRef.current.has(`oauth:${provider}`) || loginOwnersRef.current.has(provider)) return null;
+    const owner = Symbol();
+    loginOwnersRef.current.set(provider, owner);
+    return () => { if (loginOwnersRef.current.get(provider) === owner) loginOwnersRef.current.delete(provider); };
   };
 
   const beginAccountLogout = (provider: string): (() => void) | null => {
@@ -811,8 +822,9 @@ export function useProviderAccountPools(deps: {
       tone: "danger",
     });
     const key = `oauth:${provider}`;
-    if (!consented || !aliveRef.current || !mountedRef.current || serverRef.current !== apiBase
-      || selectionMutationsRef.current.has(key) || switchingAccountRef.current.has(provider)
+    if (!consented || !aliveRef.current || !mountedRef.current || serverRef.current !== apiBase) return;
+    if (loginOwnersRef.current.has(provider)) { notify(t("prov.accountOperationBusy"), false); return; }
+    if (selectionMutationsRef.current.has(key) || switchingAccountRef.current.has(provider)
       || pausingAccountRef.current.has(provider)) return;
     invalidateSelectionReads(provider, "oauth");
     const mutation = Symbol();
@@ -917,7 +929,7 @@ export function useProviderAccountPools(deps: {
   return {
     accountSets, accountLoadStates: accountStateTarget === accountTarget ? accountLoadStates : {}, switchingAccount, pausingAccount, switchingAccounts, pausingAccounts, pendingAffinityResets, retryAffinityReset, openAccounts, keyPools, addingKeyFor, newKeyValue,
     setAccountSets, setAccountLoadStates, setSwitchingAccount, setOpenAccounts, setKeyPools, setAddingKeyFor, setNewKeyValue,
-    fetchAccountSets, fetchKeyPools, refreshAccountRosters, beginAccountLogout, switchAccount, pauseAccount, setAccountPoolThreshold, setAccountThreshold, switchApiKey, removeApiKey, addApiKeyValue, addApiKey, editCredentialAlias, removeAccount,
+    fetchAccountSets, fetchKeyPools, refreshAccountRosters, beginAccountLogin, beginAccountLogout, switchAccount, pauseAccount, setAccountPoolThreshold, setAccountThreshold, switchApiKey, removeApiKey, addApiKeyValue, addApiKey, editCredentialAlias, removeAccount,
     oauthCardProviders, keyCardProviders, activeAccountNeedsReauth,
   };
 }

@@ -844,6 +844,7 @@ export const ja: Record<TKey, string> = {
   "subagentSurface.learnMore": "失敗する理由",
   "prov.logoutOk": "{provider} からログアウトしました。",
   "prov.logoutFail": "{provider} からログアウトできませんでした。アカウント状態は変更されていません。",
+  "prov.accountOperationBusy": "別のアカウント操作が進行中です。完了を待ってから、もう一度お試しください。",
   "prov.logoutBusy": "アカウントを変更中です。完了してからログアウトをもう一度お試しください。",
   "prov.accountRemoveUnverified": "{email} が削除されたか確認できません。再試行する前にアカウント一覧を更新してください。",
   "prov.removed": "\"{name}\" を削除しました。",

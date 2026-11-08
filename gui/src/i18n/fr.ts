@@ -849,6 +849,7 @@ export const fr: Record<TKey, string> = {
   "subagentSurface.learnMore": "Pourquoi cet échec",
   "prov.logoutOk": "Déconnexion de {provider} réussie.",
   "prov.logoutFail": "Impossible de se déconnecter de {provider}. L’état de votre compte n’a pas changé.",
+  "prov.accountOperationBusy": "Une autre opération sur le compte est en cours. Attendez sa fin, puis réessayez.",
   "prov.logoutBusy": "Une modification du compte est en cours. Attendez sa fin avant de réessayer de vous déconnecter.",
   "prov.accountRemoveUnverified": "Impossible de vérifier si {email} a été supprimé. Actualisez la liste des comptes avant de réessayer.",
   "prov.removed": "« {name} » supprimé.",

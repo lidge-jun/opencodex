@@ -20,6 +20,7 @@ import type { OAuthAccountRow, ProviderAuthHandlers } from "../src/components/pr
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 import { useProviderAccountPools, type Config as PoolHookConfig } from "../src/hooks/useProviderAccountPools";
 import { useProvidersOAuth } from "../src/pages/use-providers-oauth";
+import { useProvidersFetch } from "../src/pages/use-providers-fetch";
 import { buildAddModalAccountRows } from "../src/pages/providers-page-utils";
 import type { OAuthAccount, OAuthStatus, ProvidersConfig } from "../src/pages/providers-shared";
 import { oauthTosCopyKeys, oauthTosRisk } from "../src/oauth-tos-risk";
@@ -492,4 +493,137 @@ test("unverified OAuth status never reports a stale roster as logged in or logge
   await render(<ProviderAuthPanel item={POOL_B} apiBase="" accounts={[]} accountLoadState="ready"
     oauth={{ loggedIn: false }} authHandlers={recordingHandlers([])} />);
   expect(host.querySelector(".pwi-auth-status-text")?.textContent).toBe(en["pws.notLoggedInTitle"]);
+});
+
+test.each([
+  ["login-first", "same"], ["confirmation-first", "same"], ["delete-first", "same"], ["login-first", "added"],
+  ["login-first", "missing"], ["login-first", "mismatch"], ["login-first", "error"],
+] as const)("login and deletion coordinate through the account controls: %s / %s", async (order, outcome) => {
+  let releaseDelete!: (response: Response) => void;
+  let releaseLogin!: (response: Response) => void;
+  let pools!: ReturnType<typeof useProviderAccountPools>;
+  const notices: string[] = [];
+  const settled: string[] = [];
+  let modelRefreshes = 0;
+  respond = async request => {
+    if (request.method === "DELETE") return new Promise(resolve => { releaseDelete = resolve; });
+    if (request.path === "/api/oauth/login") return new Promise(resolve => { releaseLogin = resolve; });
+    if (request.path === "/api/oauth/status") return Response.json(outcome === "error" ? { loggedIn: false, error: "provider error" } : {
+      loggedIn: true, done: true, accounts: outcome === "missing" ? [accounts("anthropic2")[1]]
+        : outcome === "mismatch" ? [{ ...accounts("anthropic2")[0], needsReauth: true }]
+          : outcome === "added" ? [...accounts("anthropic2"), { id: "new", active: false }] : accounts("anthropic2"),
+    });
+    if (request.path === "/api/oauth/accounts") return Response.json({ activeAccountId: "shared", accounts: accounts("anthropic2") });
+    if (request.path === "/api/pool/settings") return Response.json(poolSettings("anthropic2", false, 55));
+    if (request.path === "/api/anthropic/reset-grants") return Response.json(grantSnapshot("anthropic2", 1));
+    return Response.json({});
+  };
+  function Harness() {
+    const aliveRef = useRef(true);
+    const [status, setOauthStatus] = useState<Record<string, OAuthStatus>>({ anthropic2: { loggedIn: true } });
+    const [busy, setBusy] = useState<string | null>(null);
+    const [, setStatus] = useState("");
+    const [, setLoginInfo] = useState<Parameters<typeof useProvidersOAuth>[0]["setLoginInfo"] extends React.Dispatch<React.SetStateAction<infer S>> ? S : never>(null);
+    const loader = useProvidersFetch({ apiBase: "", t: key => key, setConfig: () => {}, setOauthProviders: () => {}, setOauthStatus,
+      notify: () => {}, invalidateProviderQuotas: () => {} });
+    pools = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: status,
+      notify: message => notices.push(message), fetchConfig: async () => {}, fetchOauth: async () => {},
+      fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false, invalidateOauthStatusReads: loader.invalidateOauthStatusReads, setOauthStatus });
+    const oauth = useProvidersOAuth({ apiBase: "", t: (key, args) => key === "prov.loginError" ? `${key}:${args?.error}` : key, aliveRef, accountSets: pools.accountSets,
+      setAccountSets: pools.setAccountSets, setBusy, setStatus, setLoginInfo, setOauthStatus,
+      beginAccountLogin: pools.beginAccountLogin, beginAccountLogout: pools.beginAccountLogout, invalidateOauthStatusReads: loader.invalidateOauthStatusReads,
+      notify: message => notices.push(message), fetchConfig: async () => {}, fetchOauth: async () => {},
+      fetchAccountSets: pools.fetchAccountSets, fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => { modelRefreshes++; },
+      onLoginSettled: provider => settled.push(provider) });
+    return <><div id="pool-b"><ProviderAuthPanel item={POOL_B} apiBase="" oauth={status.anthropic2} accounts={pools.accountSets.anthropic2?.accounts ?? []}
+      accountLoadState={pools.accountLoadStates.anthropic2} busy={busy === "anthropic2"}
+      authHandlers={{ ...recordingHandlers([]), onLogin: oauth.loginOAuth, onReauth: (provider, accountId) => oauth.loginOAuth(provider, true, accountId), onRemoveAccount: pools.removeAccount }} /></div>
+      <div id="pool-a"><ProviderAuthPanel item={POOL_A} apiBase="" oauth={{ loggedIn: true }} accounts={accounts("anthropic")}
+        authHandlers={{ ...recordingHandlers([]), onRemoveAccount: pools.removeAccount }} /></div></>;
+  }
+  await render(<Harness />);
+  await act(async () => { await pools.fetchAccountSets(["anthropic2"]); });
+  const remove = () => host.querySelector('#pool-b .pwi-auth-row-remove');
+  const add = () => [...host.querySelectorAll<HTMLButtonElement>("#pool-b button")].find(button =>
+    button.textContent?.trim() === (order === "delete-first" ? en["prov.login"] : en["pws.addAccount"]));
+  const confirm = () => [...win.document.querySelectorAll("dialog button")].find(button => button.textContent === "common.remove");
+  if (order !== "login-first") await click(remove());
+  if (order === "delete-first") await click(confirm());
+  if (outcome === "same" || outcome === "added") await click(add());
+  else await act(async () => { void pools.setAccountSets(current => ({ ...current, anthropic2: { ...current.anthropic2!, accounts: current.anthropic2!.accounts.map((account, index) => index === 0 ? { ...account, needsReauth: true } : account) } })); });
+  if (outcome !== "same" && outcome !== "added") await click(buttonsByText(en["pws.reauthenticate"])[0]);
+  if (order === "login-first") await click(remove());
+  if (order !== "delete-first") await click(confirm());
+  if (order === "delete-first") {
+    expect(requests.filter(request => request.path === "/api/oauth/login")).toHaveLength(0);
+    expect(notices).toContain("prov.accountOperationBusy");
+    await act(async () => { releaseDelete(Response.json({})); });
+  } else {
+    expect(requests.filter(request => request.method === "DELETE")).toHaveLength(0);
+    expect(notices).toContain("prov.accountOperationBusy");
+    if (order === "login-first" && outcome === "same") {
+      await click(host.querySelector("#pool-a .pwi-auth-row-remove"));
+      await click(confirm());
+      expect(requests.filter(request => request.method === "DELETE").map(request => request.provider)).toEqual(["anthropic"]);
+      await act(async () => { releaseDelete(Response.json({})); });
+    }
+    const rosterReads = requests.filter(request => request.path === "/api/oauth/accounts" && request.provider === "anthropic2").length;
+    if (outcome !== "same" && outcome !== "added") {
+      expect(requests.find(request => request.path === "/api/oauth/login")?.body).toMatchObject({ provider: "anthropic2", accountId: "shared", reauth: true });
+    }
+    await act(async () => { releaseLogin(Response.json({ url: "https://example.test/login" })); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 2100)); });
+    expect(notices).toContain(outcome === "same" ? "prov.loginSameAccount" : outcome === "added" ? "prov.loginOk" : outcome === "missing"
+      ? "prov.loginError:prov.reauthAccountMissing" : outcome === "mismatch"
+        ? "prov.loginError:prov.reauthIdentityMismatch" : "prov.loginError:provider error");
+    if (outcome === "same" || outcome === "added") {
+      expect(settled).toEqual(["anthropic2"]);
+      expect(modelRefreshes).toBe(1);
+      expect(requests.filter(request => request.path === "/api/oauth/accounts" && request.provider === "anthropic2").length).toBeGreaterThan(rosterReads);
+    }
+    expect(requests.filter(request => request.path === "/api/oauth/status" && request.provider === "anthropic2")).toHaveLength(1);
+  }
+});
+
+test.each(["delete", "logout"] as const)("%s with failed reads retains explicit logout without claiming authentication", async operation => {
+  let pools!: ReturnType<typeof useProviderAccountPools>;
+  let failReads = false;
+  const notices: string[] = [];
+  respond = async request => {
+    if (request.method === "DELETE") { failReads = true; return Response.json({}); }
+    if (request.path === "/api/oauth/logout") { failReads = true; return new Response(null, { status: 500 }); }
+    if (request.path === "/api/oauth/accounts") return failReads ? new Response(null, { status: 503 }) : Response.json({ activeAccountId: "shared", accounts: accounts("anthropic2") });
+    if (request.path === "/api/oauth/providers") return Response.json({ providers: ["anthropic2", "anthropic"] });
+    if (request.path === "/api/oauth/status") return failReads && request.provider === "anthropic2" ? new Response(null, { status: 503 }) : Response.json({ loggedIn: true });
+    if (request.path === "/api/pool/settings") return Response.json(poolSettings("anthropic2", false, 55));
+    return Response.json(grantSnapshot("anthropic2", 1));
+  };
+  function Harness() {
+    const aliveRef = useRef(true);
+    const [status, setOauthStatus] = useState<Record<string, OAuthStatus>>({ anthropic2: { loggedIn: true }, anthropic: { loggedIn: true } });
+    const loader = useProvidersFetch({ apiBase: "", t: key => key, setConfig: () => {}, setOauthProviders: () => {}, setOauthStatus, notify: () => {}, invalidateProviderQuotas: () => {} });
+    pools = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: status, notify: message => notices.push(message),
+      fetchConfig: async () => {}, fetchOauth: loader.fetchOauth, fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false,
+      invalidateOauthStatusReads: loader.invalidateOauthStatusReads, setOauthStatus });
+    const oauth = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: pools.accountSets, setAccountSets: pools.setAccountSets,
+      setBusy: () => {}, setStatus: () => {}, setLoginInfo: () => {}, setOauthStatus, invalidateOauthStatusReads: loader.invalidateOauthStatusReads,
+      beginAccountLogout: pools.beginAccountLogout, notify: message => notices.push(message), fetchConfig: async () => {}, fetchOauth: loader.fetchOauth,
+      fetchAccountSets: pools.fetchAccountSets, fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+    return <><output data-other>{String(status.anthropic?.loggedIn)}</output><ProviderAuthPanel item={POOL_B} apiBase="" oauth={status.anthropic2} accounts={pools.accountSets.anthropic2?.accounts ?? []}
+      accountLoadState={pools.accountLoadStates.anthropic2} authHandlers={{ ...recordingHandlers([]), onLogout: oauth.logoutOAuth, onRemoveAccount: pools.removeAccount }} /></>;
+  }
+  await render(<Harness />);
+  await act(async () => { await pools.fetchAccountSets(["anthropic2"]); });
+  if (operation === "delete") {
+    await click(host.querySelector(".pwi-auth-row-remove"));
+    await click([...win.document.querySelectorAll("dialog button")].find(button => button.textContent === "common.remove"));
+  } else await click(buttonsByText(en["prov.logout"])[0]);
+  await tick();
+  expect(host.querySelector(".pwi-auth-status-text")?.textContent).toBe(en["startup.unverified"]);
+  expect(host.querySelector("[data-other]")?.textContent).toBe("true");
+  const logoutCount = requests.filter(request => request.path === "/api/oauth/logout").length;
+  await click(buttonsByText(en["prov.logout"])[0]);
+  const logouts = requests.filter(request => request.path === "/api/oauth/logout");
+  expect(logouts).toHaveLength(logoutCount + 1);
+  expect(logouts.every(request => request.provider === "anthropic2")).toBe(true);
 });

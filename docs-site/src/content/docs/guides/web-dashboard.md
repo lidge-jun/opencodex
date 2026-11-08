@@ -164,6 +164,10 @@ to save an incomplete snapshot; choose another order or repair the history befor
 
 ### Account selection
 
+For a provider's OAuth accounts, finish the current sign-in or account removal before starting
+the other operation. If the account list and sign-in status cannot be refreshed, the status remains
+unverified and **Log out** is available to explicitly retry recovery.
+
 Account selection is shared with request routing. Selecting an OAuth account takes effect on the
 next request even when a pool is enabled. A healthy selection is not replaced merely because
 another generic OAuth account has more unused quota. If the account returns 429, automatic

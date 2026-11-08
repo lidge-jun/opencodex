@@ -332,6 +332,7 @@ export default function ProviderAuthPanel({
     }
   };
   const loggedIn = (accountLoadState === "ready" && accounts.length > 0) || oauth?.loggedIn === true;
+  const canLogout = loggedIn || (accountLoadState === "error" && oauth?.loggedIn !== false);
   const activeReauthAccount = accounts.find(a => a.active && a.needsReauth);
   const activeNeedsReauth = Boolean(activeReauthAccount);
   const quotaRows = isOauth ? accounts : keys;
@@ -496,7 +497,7 @@ export default function ProviderAuthPanel({
                     {t("pws.reauthenticate")}
                   </button>
                 )}
-                {loggedIn ? (
+                {canLogout ? (
                   <button type="button" className="btn btn-ghost btn-sm" onClick={() => void authHandlers.onLogout(item.name)}>{t("prov.logout")}</button>
                 ) : (
                   <button ref={item.name === "kiro" ? kiroLoginTriggerRef : undefined} type="button" className="btn btn-primary btn-sm" disabled={busy || (item.name === "kiro" && Boolean(kiroChooser))} onClick={() => openLogin(false)}>

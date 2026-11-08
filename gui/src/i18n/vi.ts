@@ -849,6 +849,7 @@ export const vi: Record<TKey, string> = {
   "subagentSurface.learnMore": "Vì sao việc này thất bại",
   "prov.logoutOk": "Đã đăng xuất khỏi {provider}.",
   "prov.logoutFail": "Không thể đăng xuất khỏi {provider}. Trạng thái tài khoản của bạn vẫn không thay đổi.",
+  "prov.accountOperationBusy": "Một thao tác tài khoản khác đang diễn ra. Hãy đợi hoàn tất rồi thử lại.",
   "prov.logoutBusy": "Đang thay đổi tài khoản. Hãy đợi hoàn tất rồi thử đăng xuất lại.",
   "prov.accountRemoveUnverified": "Không thể xác nhận {email} đã được xóa hay chưa. Hãy tải lại danh sách tài khoản trước khi thử lại.",
   "prov.removed": "Đã xóa \"{name}\".",

@@ -21,6 +21,7 @@ export function useProvidersOAuth({
   setLoginInfo,
   setOauthStatus,
   invalidateOauthStatusReads,
+  beginAccountLogin,
   beginAccountLogout,
   notify,
   fetchConfig,
@@ -40,6 +41,7 @@ export function useProvidersOAuth({
   setLoginInfo: React.Dispatch<React.SetStateAction<{ provider: string; url?: string; instructions?: string; deviceCode?: string; browserLaunch?: BrowserLaunch } | null>>;
   setOauthStatus: React.Dispatch<React.SetStateAction<Record<string, OAuthStatus>>>;
   invalidateOauthStatusReads?: (provider: string, blocked?: boolean) => boolean;
+  beginAccountLogin?: (provider: string) => (() => void) | null;
   beginAccountLogout?: (provider: string) => (() => void) | null;
   notify: (msg: string, ok: boolean) => void;
   fetchConfig: () => Promise<void>;
@@ -121,6 +123,11 @@ export function useProvidersOAuth({
   }, [aliveRef, bumpLoginGeneration, cancelServerLogin, notify, setBusy, setLoginInfo, t]);
 
   const loginOAuth = async (provider: string, addAccount = false, accountId?: string) => {
+    const finishLogin = beginAccountLogin?.(provider);
+    if (beginAccountLogin && !finishLogin) {
+      if (aliveRef.current) notify(t("prov.accountOperationBusy"), false);
+      return;
+    }
     const generation = bumpLoginGeneration(provider);
     activeLoginGenerationsRef.current.set(provider, generation);
     const reauthTargetId = accountId?.trim() || undefined;
@@ -254,10 +261,11 @@ export function useProvidersOAuth({
         notify(t("prov.loginRequestFail", { provider: oauthLabel(provider) }), false);
       }
     } finally {
+      finishLogin?.();
       if (activeLoginGenerationsRef.current.get(provider) === generation) {
         activeLoginGenerationsRef.current.delete(provider);
       }
-      if (aliveRef.current && oauthLoginGenerationRef.current!.get(provider) === generation) setBusy(null);
+      if (aliveRef.current && oauthLoginGenerationRef.current!.get(provider) === generation) setBusy(current => current === provider ? null : current);
     }
   };
 

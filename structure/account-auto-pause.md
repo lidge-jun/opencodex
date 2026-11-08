@@ -110,6 +110,12 @@ timestamp with the app locale. Disabled key rows offer Resume through their exis
 `gui/src/hooks/useProviderAccountPools.ts` resumes before activation, then refreshes the
 roster under its existing selection-mutation fence. No upstream error body is displayed.
 
+The same account-pool hook coordinates dashboard OAuth login and account deletion per provider.
+Deletion rechecks the login owner after confirmation, and login checks for a pending account
+mutation before starting. A refused overlap reports a retry notice; other providers remain independent.
+When the roster and OAuth status cannot be verified, the account panel keeps logout available
+without presenting an unverified account as signed in.
+
 `src/lib/account-auto-pause-response.ts` registers process-local pause/refusal provenance with the pacing owner and retains it when
 adapter error normalization or a leased pacing-body rewrap replaces a response, without exposing metadata in HTTP headers.
 
