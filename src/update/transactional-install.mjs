@@ -207,7 +207,7 @@ function inspectAncestorRoots(packageDir, store, escaped, preserved = false) {
         try {
           if (!inside(realpathSync(root), store)) escaped.add(preserved
             ? "pnpm preserved-symlink lookup root is outside the selected store" : "pnpm ancestor dependency root is outside the selected store");
-          else if (!inside(root, store)) inspectPnpmMetadata(root, store, escaped, "ancestor dependency lookup");
+          else inspectPnpmMetadata(root, store, escaped, "ancestor dependency lookup");
         }
         catch { escaped.add("pnpm ancestor dependency root could not be resolved"); }
       }
