@@ -1289,6 +1289,10 @@ The management OAuth provider list therefore omits Meta Muse for raw-admin-token
 open a session-authenticated dashboard to use that login flow. This changes discovery only,
 not the admission checks on login start or manual continuation.
 
+After upgrading, a previously saved Muse quota without a provider configuration binding is
+treated as unknown. A later quota observation restores the display and ranking evidence; a
+changed adapter, destination, or authentication mode also prevents old readings from returning.
+
 All three seeded `meta-muse` models (Muse Spark 1.3, its Contributor tier and Muse Wonder)
 expose `minimal`/`low`/`medium`/`high`/`xhigh`/`max` to
 routed clients, including Grok's effort picker. Requests use

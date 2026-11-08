@@ -26,7 +26,7 @@ import {
   MUSE_SUBSCRIPTION_USAGE_TYPE,
   parseMuseSubscriptionUsage,
 } from "../../src/providers/muse-subscription-usage";
-import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
+import { captureConfigGeneration, setStateStoreLiveConfigReader } from "../../src/lib/state-store-sweeper";
 import { getAccountSet, saveAccountCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
 import { heldProviderQuotaReports, setProviderQuotaBeforeObservationForTests } from "../../src/providers/quota/report-cache";
 import { fetchMuseKeyQuota } from "../../src/providers/quota/vendor-probes-oauth";
@@ -512,6 +512,66 @@ describe("GET /api/oauth/accounts?quota=1 for a passive provider", () => {
 });
 
 describe("provider-level quota row for a passive provider", () => {
+  test.each(["unchanged", "destination", "adapter", "auth"] as const)("persisted Muse quota requires matching provider configuration after restart (%s)", async change => {
+    writeTwoAccounts(true);
+    const config = museConfig(), originalFetch = globalThis.fetch;
+    setLiveStateStoreConfig(config);
+    globalThis.fetch = (async () => Response.json({ is_subs_active: true,
+      subs_usage: { window: { used_percent: 40, window_duration_mins: 300 } } })) as typeof fetch;
+    try {
+      expect((await fetchMuseKeyQuota("meta-muse", config))?.quota.fiveHourPercent).toBe(40);
+      await Bun.sleep(400);
+      clearAccountQuotaCache();
+      const restarted = structuredClone(config);
+      if (change === "destination") restarted.providers["meta-muse"]!.baseUrl = "https://other.example/v1";
+      if (change === "adapter") restarted.providers["meta-muse"]!.adapter = "openai-chat";
+      if (change === "auth") restarted.providers["meta-muse"]!.authMode = "key";
+      setLiveStateStoreConfig(restarted);
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)?.fiveHourPercent ?? null).toBe(change === "unchanged" ? 40 : null);
+      reconcileLiveStateStores();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)?.fiveHourPercent ?? null).toBe(change === "unchanged" ? 40 : null);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("a hydrated Muse quota stays unknown until the live provider is established", async () => {
+    writeTwoAccounts(true);
+    const config = museConfig(), originalFetch = globalThis.fetch;
+    setLiveStateStoreConfig(config);
+    globalThis.fetch = (async () => Response.json({ is_subs_active: true,
+      subs_usage: { window: { used_percent: 40, window_duration_mins: 300 } } })) as typeof fetch;
+    try {
+      expect((await fetchMuseKeyQuota("meta-muse", config))?.quota.fiveHourPercent).toBe(40);
+      await Bun.sleep(400);
+      clearAccountQuotaCache();
+      setStateStoreLiveConfigReader(() => null);
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+      setLiveStateStoreConfig(config);
+      reconcileLiveStateStores();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)?.fiveHourPercent).toBe(40);
+    } finally { setLiveStateStoreConfig(config); globalThis.fetch = originalFetch; }
+  });
+
+  test.each(["missing", "malformed"] as const)("a persisted Muse row with %s config binding is not restored", async kind => {
+    writeTwoAccounts(true);
+    const config = museConfig(), originalFetch = globalThis.fetch;
+    setLiveStateStoreConfig(config);
+    globalThis.fetch = (async () => Response.json({ is_subs_active: true,
+      subs_usage: { window: { used_percent: 40, window_duration_mins: 300 } } })) as typeof fetch;
+    try {
+      expect((await fetchMuseKeyQuota("meta-muse", config))?.quota.fiveHourPercent).toBe(40);
+      await Bun.sleep(400);
+      const path = join(testDir, "provider-account-quota-cache.json");
+      const disk = JSON.parse(readFileSync(path, "utf8"));
+      const row = disk.rows[`meta-muse\0${ACCOUNT_ID}`];
+      expect(row.museConfigIdentity).toMatch(/^[a-f0-9]{64}$/);
+      if (kind === "missing") delete row.museConfigIdentity; else row.museConfigIdentity = "invalid";
+      writeFileSync(path, JSON.stringify(disk));
+      clearAccountQuotaCache();
+      reconcileLiveStateStores();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
   test.each((["removed", "replaced", "disabled", "destination", "auth"] as const).flatMap(change =>
     [false, true].map(hydrated => ({ change, hydrated }))))("accepted bound row retires on $change, including after hydration=$hydrated", async ({ change, hydrated }) => {
     writeTwoAccounts(true);

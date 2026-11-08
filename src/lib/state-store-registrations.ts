@@ -54,6 +54,7 @@ import {
   reconcileStateGeneration,
   registerStateStore,
   setGenerationContextBuilder,
+  setStateStoreLiveConfigReader,
   type StateStoreRegistration,
 } from "./state-store-sweeper";
 
@@ -82,6 +83,7 @@ export function notifyLiveConfigObservers(config: OcxConfig): void {
 export function setLiveStateStoreConfig(config: OcxConfig): void {
   liveServerConfig = config;
   liveServerConfigRoot = getConfigDir();
+  setStateStoreLiveConfigReader(root => root === liveServerConfigRoot ? liveServerConfig : null);
   // The one place the server's live config object is installed; detached configs (catalog sync)
   // never come through here, so the outbound compression opt-in follows the running server only.
   bindUpstreamRequestCompressionConfig(config);

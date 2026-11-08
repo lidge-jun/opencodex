@@ -17,17 +17,20 @@ import { hasHeadroomEvidence, rankAccountsByHeadroom } from "../../src/oauth/acc
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 import type { ProviderQuota } from "../../src/providers/quota-types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { captureMuseQuotaOwner, type MuseQuotaOwner } from "../../src/providers/quota/muse-owner";
+import { bindMuseQuotaConfig, captureMuseQuotaOwner, type MuseQuotaOwner } from "../../src/providers/quota/muse-owner";
+import { setLiveStateStoreConfig } from "../../src/lib/state-store-registrations";
+import type { OcxConfig } from "../../src/types";
 import { sweepExpiredProviderAccountQuotaRows } from "../../src/providers/quota/account-cache";
 
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 let opencodexHome: string;
+let config: OcxConfig;
 
 const FIRST = { accountId: "muse-first", email: "first@example.com" };
 const SECOND = { accountId: "muse-second", email: "second@example.com" };
 
 function recordPassiveAccountQuota(provider: string, id: string, quota: ProviderQuota, generation: number,
-  owner: MuseQuotaOwner | null = captureMuseQuotaOwner(provider, id)): void {
+  owner: MuseQuotaOwner | null = bindMuseQuotaConfig(captureMuseQuotaOwner(provider, id), config, provider)): void {
   recordWithOwner(provider, id, quota, generation, owner);
 }
 
@@ -58,6 +61,8 @@ async function seedAccounts(...accounts: Array<{ accountId: string; email: strin
 beforeEach(() => {
   opencodexHome = mkdtempSync(join(tmpdir(), "ocx-muse-quota-"));
   process.env.OPENCODEX_HOME = opencodexHome;
+  config = { defaultProvider: "meta-muse", providers: { "meta-muse": { adapter: "openai-responses", baseUrl: "https://api.meta.ai/v1", authMode: "oauth" } } } as OcxConfig;
+  setLiveStateStoreConfig(config);
   clearAccountQuotaCache();
   // The generation-fence test below reconciles with an empty live-key set, which raises
   // lastReconciledGeneration process-wide. Without this reset every later write in the

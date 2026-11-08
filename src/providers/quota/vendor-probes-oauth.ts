@@ -446,7 +446,7 @@ export async function fetchMuseKeyQuota(provider: string, config?: OcxConfig): P
   hydrateAccountQuotaCache();
   const entry = { ts: Date.now(), quota, identity: owner.identity,
     isCurrent: () => epoch === captureProviderAccountQuotaEpoch(provider) && owner.isAccountCurrent(),
-    isConfigCurrent: owner.isConfigCurrent };
+    isConfigCurrent: owner.isConfigCurrent, museConfigIdentity: owner.configIdentity };
   accountQuotaCache.set(probedAccountKey, entry);
   persistAccountQuotaCache();
   return bindMuseReport(report(provider, `${provider}:key-endpoint`, quota), {

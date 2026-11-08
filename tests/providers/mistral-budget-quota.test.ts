@@ -144,7 +144,7 @@ test("a transient rejection does not reject the aggregated report or hide anothe
     await fetchProviderApiKeyQuotas(multi, "mistral", true);
     globalThis.fetch = (async input => {
       const url = String(input);
-      if (!url.includes("mistral.ai")) return Response.json({ is_available: true, balance_infos: [{ currency: "USD", total_balance: "10", granted_balance: "0", topped_up_balance: "10" }] });
+      if (new URL(url).hostname !== "api.mistral.ai") return Response.json({ is_available: true, balance_infos: [{ currency: "USD", total_balance: "10", granted_balance: "0", topped_up_balance: "10" }] });
       if (transient === "budget-500" && url.endsWith("/budget")) return new Response(null, { status: 500 });
       if (transient === "subscription-429" && url.endsWith("/subscription")) return new Response(null, { status: 429 });
       throw new Error("network unavailable");
@@ -218,7 +218,7 @@ test("a removed provider's denial does not suppress a different provider's retai
     : String(input).endsWith("/subscription") ? subscription : budget)) as typeof fetch;
   expect((await fetchProviderQuotaReports(cfg, true)).reports).toHaveLength(2);
   globalThis.fetch = (async input => {
-    if (String(input).includes("mistral.ai")) { delete cfg.providers.mistral; return new Response(null, { status: 403 }); }
+    if (new URL(String(input)).hostname === "api.mistral.ai") { delete cfg.providers.mistral; return new Response(null, { status: 403 }); }
     return new Response(null, { status: 500 });
   }) as typeof fetch;
   expect((await fetchProviderQuotaReports(cfg, true)).reports.map(row => row.provider)).toEqual(["deepseek"]);
@@ -251,7 +251,7 @@ test.each([[100, 0], [0, 100], [undefined, 100]] as const)("passive quota pool e
   globalThis.fetch = (async input => {
     const url = String(input);
     if (new URL(url).hostname === "api.deepseek.com") return Response.json({ is_available: true, balance_infos: [{ currency: "USD", total_balance: "10", granted_balance: "0", topped_up_balance: "10" }] });
-    if (url.includes("openrouter.ai")) return Response.json({ data: { limit: 20, limit_remaining: 15 } });
+    if (new URL(url).hostname === "openrouter.ai") return Response.json({ data: { limit: 20, limit_remaining: 15 } });
     if (url.endsWith("/subscription")) return Response.json(subscription);
     return Response.json({
       api_budget: { ...budget.api_budget, usage_percentage: api, initial_budget: api === undefined ? 0 : 20, reset_at: resetAt },

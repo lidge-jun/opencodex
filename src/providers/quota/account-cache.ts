@@ -7,7 +7,8 @@ import { createHash } from "node:crypto";
 import { getValidAccessTokenForAccount } from "../../oauth";
 import { credentialGeneration, getAccountCredential, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
 import { isAnthropicInstanceId, type AnthropicInstanceId } from "../anthropic-instance-id";
-import type { GenerationContext } from "../../lib/state-store-sweeper";
+import { readStateStoreLiveConfig, type GenerationContext } from "../../lib/state-store-sweeper";
+import { getConfigDir } from "../../config/paths";
 import { ACCOUNT_QUOTA_TTL_MS, toFiniteNumber } from "../quota-wire";
 import { clearKiroAccountUsageState, hydrateKiroUsageVerdict, kiroPersistableVerdicts, reconcileKiroAccountUsageState } from "../kiro-usage";
 import { kiroEvidenceIdentity, sanitizeKiroQuota, type KiroPersistedQuota } from "../kiro-account-state-disk";
@@ -20,7 +21,7 @@ import { isCanonicalCommandCodeBaseUrl, isCanonicalKimiCodeBaseUrl } from "./ven
 import type { AccountQuotaMode, ProviderQuota, ProviderQuotaWindow, QuotaFailureCode } from "../quota-types";
 import { isDisplayOnlyQuota, markDisplayOnlyQuota } from "../quota-types";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
-import { bindMuseQuotaConfig, captureMuseQuotaOwner, type MuseQuotaOwner } from "./muse-owner";
+import { bindMuseQuotaConfig, captureMuseQuotaOwner, museQuotaConfigIdentity, type MuseQuotaOwner } from "./muse-owner";
 import { runPassiveReadSync } from "../../lib/passive-read";
 
 /** Match oauth/index REFRESH_SKEW_MS — use stored access without refresh when still fresh. */
@@ -47,6 +48,8 @@ export type AccountQuotaCacheEntry = {
   anthropicCredentialGeneration?: string;
   isCurrent?: () => boolean;
   isConfigCurrent?: (config: OcxConfig) => boolean;
+  museConfigIdentity?: string;
+  museHydrated?: boolean;
 };
 /** Expired measurements become unknown; missing reset evidence never implies a fresh allowance. */
 export function normalizeAnthropicQuota(quota: ProviderQuota | null | undefined, now: number): ProviderQuota | null {
@@ -137,10 +140,14 @@ export function hydrateAccountQuotaCache(): void {
   for (const [key, quota] of readPersistedAccountQuotas(now)) {
     if (key.startsWith("meta-muse\0")) {
       const owner = captureMuseQuotaOwner("meta-muse", key.slice("meta-muse\0".length));
-      const saved = quota as ProviderQuota & { museIdentity?: string };
-      if (!owner || saved.museIdentity !== owner.identity) continue;
-      const { museIdentity: _identity, ...publicQuota } = saved;
-      if (!accountQuotaCache.has(key)) accountQuotaCache.set(key, { ts: quota.updatedAt, quota: publicQuota, identity: owner.identity, isCurrent: owner.isAccountCurrent });
+      const saved = quota as ProviderQuota & { museIdentity?: string; museConfigIdentity?: string };
+      if (!owner || saved.museIdentity !== owner.identity || !/^[a-f0-9]{64}$/.test(saved.museConfigIdentity ?? "")) continue;
+      const { museIdentity: _identity, museConfigIdentity, ...publicQuota } = saved;
+      const config = readStateStoreLiveConfig(getConfigDir());
+      if (config && museConfigIdentity !== museQuotaConfigIdentity(config, "meta-muse")) continue;
+      const bound = config ? bindMuseQuotaConfig(owner, config, "meta-muse") : null;
+      if (!accountQuotaCache.has(key)) accountQuotaCache.set(key, { ts: quota.updatedAt, quota: publicQuota, identity: owner.identity, museConfigIdentity, museHydrated: true,
+        isCurrent: bound?.isAccountCurrent ?? owner.isAccountCurrent, isConfigCurrent: bound?.isConfigCurrent });
       continue;
     }
     if (key.startsWith("kiro\0")) {
@@ -180,8 +187,8 @@ export function persistAccountQuotaCache(): void {
       // The in-memory provenance is not serialized; never restore display-only bars as decisions.
       if (quota && isDisplayOnlyQuota(quota)) continue;
       if (key.startsWith("meta-muse\0")) {
-        if (quota && entry.identity && entry.isCurrent?.()) {
-          const saved: ProviderQuota & { museIdentity: string } = { ...quota, museIdentity: entry.identity };
+        if (quota && entry.identity && entry.museConfigIdentity && entry.isCurrent?.()) {
+          const saved = { ...quota, museIdentity: entry.identity, museConfigIdentity: entry.museConfigIdentity };
           yield [key, saved] as [string, ProviderQuota];
         }
         continue;
@@ -244,6 +251,10 @@ export function getCachedProviderAccountQuota(provider: string, accountId: strin
   // A cold routing lookup must see persisted passive rows without publishing a roster or hardening files.
   if (provider === "meta-muse") runPassiveReadSync(hydrateAccountQuotaCache);
   const entry = accountQuotaCache.get(accountCacheKey(provider, accountId));
+  if (provider === "meta-muse" && entry?.museConfigIdentity) {
+    const live = readStateStoreLiveConfig(getConfigDir());
+    if (live ? entry.isConfigCurrent?.(live) !== true : entry.museHydrated) return null;
+  }
   if (provider === "kiro") {
     const account = getAccountSet("kiro")?.accounts.find(row => row.id === accountId);
     if (!account || entry?.identity !== kiroEvidenceIdentity(account)) return null;
@@ -404,7 +415,7 @@ export function recordPassiveAccountQuota(
   runPassiveReadSync(hydrateAccountQuotaCache);
   accountQuotaCache.set(key, { ts: Date.now(), quota, identity: owner.identity,
     isCurrent: () => epoch === captureProviderAccountQuotaEpoch(provider) && owner.isAccountCurrent(),
-    isConfigCurrent: owner.isConfigCurrent });
+    isConfigCurrent: owner.isConfigCurrent, museConfigIdentity: owner.configIdentity });
   // Persisted so a restart keeps the last observation: with no probe to re-establish it,
   // a forgotten row stays forgotten until the user happens to run another streaming turn.
   persistAccountQuotaCache();
@@ -433,7 +444,8 @@ export function readPassiveProviderAccountQuotas(provider: string): ProviderAcco
   const rows: ProviderAccountQuota[] = [];
   for (const account of set.accounts) {
     const entry = accountQuotaCache.get(accountCacheKey(provider, account.id));
-    if (entry?.quota && entry.isCurrent?.()) {
+    const live = entry?.museConfigIdentity ? readStateStoreLiveConfig(getConfigDir()) : null;
+    if (entry?.quota && entry.isCurrent?.() && (!entry.museConfigIdentity || (live ? entry.isConfigCurrent?.(live) === true : !entry.museHydrated))) {
       const row: ProviderAccountQuota = { accountId: account.id, quota: entry.quota };
       Object.defineProperty(row, "isCurrent", { value: entry.isCurrent });
       rows.push(row);
@@ -466,7 +478,7 @@ export function reconcileProviderAccountQuotaRows(context: GenerationContext, co
       const provider = config?.providers["meta-muse"];
       // A hydrated row has account ownership but no live provider object yet. Bind it
       // on the first live reconciliation so later replacement or ABA retires it too.
-      if (config && provider && !entry.isConfigCurrent && entry.isCurrent?.() !== false) {
+      if (config && provider && !entry.isConfigCurrent && entry.museConfigIdentity === museQuotaConfigIdentity(config, "meta-muse") && entry.isCurrent?.() !== false) {
         const owner = bindMuseQuotaConfig(captureMuseQuotaOwner("meta-muse", key.slice("meta-muse\0".length)), config, "meta-muse");
         if (owner && owner.identity === entry.identity) {
           const previous = entry.isCurrent;

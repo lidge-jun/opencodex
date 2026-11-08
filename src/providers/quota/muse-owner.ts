@@ -9,9 +9,17 @@ export interface MuseQuotaOwner {
   accountId: string;
   identity: string;
   accountKey: string;
+  configIdentity?: string;
   isCurrent: () => boolean;
   isAccountCurrent: () => boolean;
   isConfigCurrent?: (config: OcxConfig) => boolean;
+}
+
+/** Non-secret stable fingerprint of the provider fields that own an observation. */
+export function museQuotaConfigIdentity(config: OcxConfig, provider: string): string | undefined {
+  const current = config.providers[provider];
+  if (!current || current.disabled || current.authMode !== "oauth") return undefined;
+  return createHash("sha256").update(JSON.stringify([current.adapter, current.baseUrl, current.authMode])).digest("hex");
 }
 
 /** Bind the caller's enabled provider and destination without retaining credentials in DTOs. */
@@ -27,7 +35,7 @@ export function bindMuseQuotaConfig(owner: MuseQuotaOwner | null, config: OcxCon
       || current.adapter !== adapter || current.baseUrl !== baseUrl) retired = true;
     return !retired;
   };
-  return { ...owner, isCurrent: () => captureConfigGeneration() === generation && configCurrent(config) && owner.isCurrent(),
+  return { ...owner, configIdentity: museQuotaConfigIdentity(config, provider), isCurrent: () => captureConfigGeneration() === generation && configCurrent(config) && owner.isCurrent(),
     isAccountCurrent: () => configCurrent(config) && owner.isAccountCurrent(), isConfigCurrent: configCurrent };
 }
 
