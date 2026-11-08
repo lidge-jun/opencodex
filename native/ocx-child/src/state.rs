@@ -30,7 +30,7 @@ impl ChildPaths {
     pub fn new(opencodex_home: PathBuf, codex_home: PathBuf) -> Self {
         let child_dir = opencodex_home.join("child");
         Self {
-            lock_file: child_dir.join("lifecycle.lock"),
+            lock_file: opencodex_home.join("child.lock"),
             state_file: child_dir.join("state.json"),
             key_file: child_dir.join("link-key"),
             journal_file: child_dir.join("codex-journal.json"),
