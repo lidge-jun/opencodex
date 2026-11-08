@@ -993,6 +993,59 @@ describe("combo stream preflight", () => {
   });
 
   for (const type of ["response.created", "response.in_progress", "response.queued", "response.heartbeat"]) {
+    for (const extra of [
+      { output_text: "already produced" },
+      { content: [{ type: "output_text", text: "already produced" }] },
+      { tool_calls: [{ type: "function", name: "act" }] },
+      { future_signal: { effect: "unknown" } },
+      { text: "already produced" },
+      { text: { output_text: "already produced" } },
+      { reasoning: { summary: [{ type: "summary_text", text: "already produced" }] } },
+      { model: { output_text: "already produced" } },
+      { prompt: { output_text: "already produced" } },
+      { tool_choice: { output_text: "already produced" } },
+      { instructions: { output_text: "already produced" } },
+    ]) {
+      for (const ending of ["eof", "read-error"] as const) {
+        test(`${type} preserves unknown snapshot evidence on ${ending}`, async () => {
+          const frame = `data: ${JSON.stringify({ type, response: { output: [], ...extra } })}\n\n`;
+          const bytes = new TextEncoder().encode(frame);
+          const error = new Error("original reset");
+          const original = ending === "eof"
+            ? new Response(bytes, { headers: { "content-type": "text/event-stream" } })
+            : prefixThenReadError(bytes, error).response;
+          let calls = 0;
+          const wrapped = deferProtocolSafeResetRecovery(original, { model: "m1", provider: "a" }, async () => {
+            calls++;
+            return sse({ type: "response.completed", response: { id: "replacement" } });
+          });
+          const reader = wrapped.body!.getReader();
+          expect((await reader.read()).value).toEqual(bytes);
+          if (ending === "eof") expect((await reader.read()).done).toBe(true);
+          else await expect(reader.read()).rejects.toBe(error);
+          expect(calls).toBe(0);
+        });
+      }
+    }
+    test(`${type} with ordinary response metadata remains replayable`, async () => {
+      let calls = 0;
+      const response = {
+        id: "resp_first", object: "response", created_at: 1, completed_at: null, status: type === "response.queued" ? "queued" : "in_progress",
+        model: "m1", output: [], error: null, incomplete_details: null, usage: null,
+        background: false, instructions: null, max_output_tokens: null, max_tool_calls: null,
+        metadata: {}, parallel_tool_calls: true, previous_response_id: null, prompt_cache_key: null,
+        reasoning: { effort: null, summary: null }, safety_identifier: null, service_tier: "default",
+        store: false, temperature: 1, text: { format: { type: "text" } },
+        tool_choice: "auto", tools: [], top_p: 1, truncation: "disabled", user: null,
+      };
+      const wrapped = deferProtocolSafeResetRecovery(sse({ type, response }),
+        { model: "m1", provider: "a" }, async () => {
+          calls++;
+          return sse({ type: "response.completed", response: { id: "replacement" } });
+        });
+      expect(await wrapped.text()).toContain('"replacement"');
+      expect(calls).toBe(1);
+    });
     for (const value of [true, null, "false", 0]) {
       for (const ending of ["eof", "read-error"] as const) {
         test(`${type} preserves replayUnsafe=${JSON.stringify(value)} on ${ending}`, async () => {

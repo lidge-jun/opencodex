@@ -36,6 +36,58 @@ const PRE_OUTPUT_EVENT_FIELDS = new Set([
   "incomplete_details", "status", "output", "item", "delta", "content", "message", "code",
 ]);
 
+// These are response identity and request-configuration fields, not output carriers.
+// Unknown snapshot extensions commit the original instead of guessing whether they hide output.
+const PRE_OUTPUT_SNAPSHOT_FIELDS = new Set([
+  "id", "object", "created_at", "completed_at", "status", "model", "output", "error", "last_error",
+  "incomplete_details", "usage", "background", "instructions", "max_output_tokens", "max_tool_calls",
+  "metadata", "parallel_tool_calls", "previous_response_id", "prompt", "prompt_cache_key",
+  "prompt_cache_retention", "reasoning", "safety_identifier", "service_tier", "store", "temperature",
+  "text", "tool_choice", "tools", "top_p", "top_logprobs", "truncation", "user", "end_turn", "replayUnsafe",
+]);
+
+const PRE_OUTPUT_STRING_FIELDS = [
+  "id", "object", "model", "prompt_cache_key", "prompt_cache_retention", "safety_identifier",
+  "service_tier", "truncation", "user",
+] as const;
+const PRE_OUTPUT_NUMBER_FIELDS = ["created_at", "max_output_tokens", "max_tool_calls", "temperature", "top_p", "top_logprobs"] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function recordWithOnly(value: unknown, fields: readonly string[]): value is Record<string, unknown> {
+  return isRecord(value) && Object.keys(value).every(key => fields.includes(key));
+}
+
+function snapshotMetadataIsSafe(snapshot: Record<string, unknown>): boolean {
+  if (PRE_OUTPUT_STRING_FIELDS.some(key => snapshot[key] != null && typeof snapshot[key] !== "string")) return false;
+  if (snapshot.object != null && snapshot.object !== "response") return false;
+  if (PRE_OUTPUT_NUMBER_FIELDS.some(key => snapshot[key] != null
+    && !(typeof snapshot[key] === "number" && Number.isFinite(snapshot[key])))) return false;
+  if (snapshot.parallel_tool_calls != null && typeof snapshot.parallel_tool_calls !== "boolean") return false;
+  if (snapshot.tools != null && !Array.isArray(snapshot.tools)) return false;
+  if (snapshot.instructions != null && typeof snapshot.instructions !== "string" && !Array.isArray(snapshot.instructions)) return false;
+  if (snapshot.prompt != null && !recordWithOnly(snapshot.prompt, ["id", "version", "variables"])) return false;
+  if (snapshot.tool_choice != null && typeof snapshot.tool_choice !== "string"
+    && !recordWithOnly(snapshot.tool_choice, ["type", "name", "namespace", "function"])) return false;
+  if (snapshot.usage != null && !recordWithOnly(snapshot.usage, ["input_tokens", "output_tokens", "total_tokens", "input_tokens_details", "output_tokens_details"])) return false;
+  if (snapshot.metadata != null && (!isRecord(snapshot.metadata)
+    || Object.values(snapshot.metadata).some(value => typeof value !== "string"))) return false;
+  if (snapshot.reasoning != null) {
+    if (!recordWithOnly(snapshot.reasoning, ["effort", "summary", "generate_summary"])
+      || Object.values(snapshot.reasoning).some(value => value != null && typeof value !== "string")) return false;
+  }
+  if (snapshot.text != null) {
+    if (!recordWithOnly(snapshot.text, ["format", "verbosity"])
+      || (snapshot.text.verbosity != null && typeof snapshot.text.verbosity !== "string")) return false;
+    const format = snapshot.text.format;
+    if (format != null && (!recordWithOnly(format, ["type", "name", "description", "schema", "strict"])
+      || !["text", "json_object", "json_schema"].includes(String(format.type)))) return false;
+  }
+  return true;
+}
+
 const TERMINAL_EVENTS = new Set([
   "response.completed",
   "response.failed",
@@ -200,11 +252,16 @@ export function comboStreamPayloadCommitsOutput(payload: unknown): boolean {
     const response = event.response;
     if (response != null && (typeof response !== "object" || Array.isArray(response))) return true;
     if (response && typeof response === "object" && !Array.isArray(response)) {
-      const snapshot = response as { output?: unknown; error?: unknown; last_error?: unknown; incomplete_details?: unknown; status?: unknown; replayUnsafe?: unknown };
+      const snapshot = response as Record<string, unknown>;
+      if (Object.keys(snapshot).some(key => !PRE_OUTPUT_SNAPSHOT_FIELDS.has(key))) return true;
+      if (!snapshotMetadataIsSafe(snapshot)) return true;
       if (snapshot.output !== undefined && (!Array.isArray(snapshot.output) || snapshot.output.length > 0)) return true;
       if (Object.hasOwn(snapshot, "replayUnsafe") && snapshot.replayUnsafe !== false) return true;
       if (snapshot.error != null || snapshot.last_error != null || snapshot.incomplete_details != null
         || conflictingStatus(snapshot.status)) return true;
+      if (snapshot.completed_at != null || (snapshot.end_turn != null && snapshot.end_turn !== false)
+        || (snapshot.background != null && snapshot.background !== false)
+        || (snapshot.store != null && snapshot.store !== false) || snapshot.previous_response_id != null) return true;
     }
   }
   return !PRE_OUTPUT_CONTROL_EVENTS.has(type) && !TERMINAL_EVENTS.has(type);

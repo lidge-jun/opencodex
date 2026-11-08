@@ -136,7 +136,7 @@ about the same bytes. With `replayReadErrors`, the preflight reports the stage i
 `headers-only` before any parsed event, `protocol-prelude` after `response.created`,
 `semantic-output` once anything else arrives, including a payload it could not parse — and the
 resend gate decides. A lifecycle event with output, an error, incomplete details, a contradictory
-status, a replay-unsafe mark, unknown fields, or a malformed snapshot commits the original stream.
+status, a replay-unsafe mark, unknown event or snapshot fields, or a malformed snapshot commits the original stream.
 An SSE event name that conflicts with its JSON type, an opaque frame,
 or an unfinished output/error/terminal frame on a rejected read also keeps the original bytes and
 read error; the last SSE event field is authoritative. A clean EOF before output or a terminal is offered only to the native reset recovery
