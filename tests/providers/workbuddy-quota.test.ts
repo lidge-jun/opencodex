@@ -47,6 +47,38 @@ test("exact balance metadata stays bounded, validates its numeric projection, an
   expect(normalizeWorkBuddyCredits({ total: 1, used: 0, remaining: 0.995, frozen: 0, groups: [] })?.exact).toBeUndefined();
 });
 
+test("all package and group amounts are summed before conversion to numbers", () => {
+  const row = { CycleTotalCapacity: "0.10000000000000001", CycleUsedCapacity: "0.10000000000000001",
+    CycleRemainCapacity: "0", CycleFrozenCapacity: "0.10000000000000001" };
+  const balance = parseWorkBuddyCredits({ Packages: [row, row, row],
+    CreditGroups: [{ ...row, Kind: "benefit" }, { ...row, Kind: "benefit" }, { ...row, Kind: "benefit" }] })!;
+  expect(balance).toMatchObject({ total: 0.30000000000000004, used: 0.30000000000000004, frozen: 0.30000000000000004 });
+  expect(balance.groups[0]).toMatchObject({ total: 0.30000000000000004, used: 0.30000000000000004, frozen: 0.30000000000000004 });
+  const tiny = `0.${"0".repeat(323)}2`;
+  const tinyRow = { CycleTotalCapacity: tiny, CycleUsedCapacity: tiny, CycleFrozenCapacity: tiny, CycleRemainCapacity: "0" };
+  const tinyBalance = parseWorkBuddyCredits({ Packages: [tinyRow, tinyRow, tinyRow],
+    CreditGroups: [{ ...tinyRow, Kind: "benefit" }, { ...tinyRow, Kind: "benefit" }, { ...tinyRow, Kind: "benefit" }] })!;
+  expect(tinyBalance).toMatchObject({ total: 5e-324, used: 5e-324, frozen: 5e-324 });
+  expect(tinyBalance.groups[0]).toMatchObject({ total: 5e-324, used: 5e-324, frozen: 5e-324 });
+});
+
+test("enterprise fallback retains a positive personal balance that underflows as a number", async () => {
+  const tiny = (digit: string) => `0.${"0".repeat(323)}${digit}`;
+  const requests: string[] = [];
+  globalThis.fetch = (async input => {
+    requests.push(String(input));
+    return Response.json({ code: 0, data: String(input).endsWith("summary")
+      ? { Packages: [{ CycleTotalCapacity: tiny("2"), CycleUsedCapacity: "0", CycleRemainCapacity: tiny("1") }] }
+      : { limitNum: "100", credit: "0" } });
+  }) as typeof fetch;
+  const credential = credentials();
+  credential.workbuddy!.enterpriseId = "fixture-team";
+  const report = await fetchWorkBuddyQuota("workbuddy-ai", credential);
+  const rows = buildQuotaSummary(freshQuotaReportsFromResponse([report]), provider => provider);
+  expect(formatQuotaPercent(rows[0]?.headline.percent)).toBe("50%");
+  expect(requests.some(url => url.endsWith("get-enterprise-user-usage"))).toBe(false);
+});
+
 test("enterprise decimal balance retains half-percent rounding in the dashboard", async () => {
   globalThis.fetch = (async input => Response.json({ code: 0, data: String(input).endsWith("summary")
     ? { Packages: [] } : { limitNum: "1", credit: "0.285" } })) as typeof fetch;

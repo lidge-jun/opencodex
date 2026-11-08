@@ -1,7 +1,7 @@
 import type { OAuthCredentials } from "../../oauth/types";
 import { workBuddyApi, WorkBuddyApiError } from "../../oauth/workbuddy";
 import { workBuddyHeaders } from "../workbuddy";
-import { enterpriseWorkBuddyCredits, parseWorkBuddyCredits, workBuddyCapacity, workBuddyRecord, type WorkBuddyCreditBalance } from "../workbuddy-credit-balance";
+import { enterpriseWorkBuddyCredits, hasWorkBuddyCredits, parseWorkBuddyCredits, workBuddyCapacity, workBuddyRecord, type WorkBuddyCreditBalance } from "../workbuddy-credit-balance";
 import { REQUEST_TIMEOUT_MS } from "../quota-wire";
 import { TERMINAL_QUOTA_FAILURE, type ProviderQuotaProbeResult } from "./report-cache";
 
@@ -63,12 +63,12 @@ export async function fetchWorkBuddyQuota(provider: string, credential: OAuthCre
     const headers = workBuddyHeaders(credential.access, credential.workbuddy);
     const summary = await workBuddyApi("/billing/meter/get-user-resource-summary", headers, signal, true);
     let credits = parseWorkBuddyCredits(summary);
-    if (credential.workbuddy.enterpriseId && (!credits || credits.total === 0)) {
+    if (credential.workbuddy.enterpriseId && (!credits || !hasWorkBuddyCredits(credits, "total"))) {
       const team = await workBuddyApi("/billing/meter/get-enterprise-user-usage", headers, signal, true);
       credits = enterpriseWorkBuddyCredits(team.limitNum, team.credit);
     }
     if (!credits) return null;
-    if (credits.remaining > 0) {
+    if (hasWorkBuddyCredits(credits, "remaining")) {
       // Optional expiry failures must not erase a successful balance reading.
       credits.expiring = await expiringCredits(summary, headers, signal, now).catch(() => undefined);
     }

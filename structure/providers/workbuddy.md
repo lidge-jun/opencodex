@@ -40,11 +40,12 @@ Unavailable discovery degrades to the same-account cache, then the minimal `defa
 `src/providers/quota/workbuddy.ts` reads the authenticated resource summary through the bounded,
 fixed-origin API helper. It sums `Packages` once using bounded decimal arithmetic and retains the
 existing numeric totals alongside optional exact total/remaining strings for the informational
-headline. Quoted provider decimals retain their input precision; JSON numbers have already been
+headline. Total, used, remaining, frozen and group amounts are summed before conversion to
+numbers. Quoted provider decimals retain their input precision; JSON numbers have already been
 parsed as JavaScript numbers. `CreditGroups` is a breakdown;
 explicit remaining/frozen amounts take precedence over arithmetic estimates. Team accounts use
-the enterprise meter when the personal summary has no capacity; estimated remaining credits use
-decimal subtraction on validated amounts. Optional paid/free package
+the enterprise meter when the personal summary has no capacity, with that decision made using the
+exact total when available; estimated remaining credits use decimal subtraction on validated amounts. Optional paid/free package
 queries use summary-owned codes, bounded pagination and the same total deadline; a failure
 omits expiry without losing the balance. Expiry uses the earliest future non-daily package
 and excludes packages absent from the summary.

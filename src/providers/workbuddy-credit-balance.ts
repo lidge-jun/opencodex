@@ -43,12 +43,17 @@ function sumCapacities(values: readonly number[]): number {
   return Number(`${digits}e-${scale}`);
 }
 
-function sumAmounts(rows: readonly WorkBuddyCreditAmount[]): WorkBuddyCreditAmount {
+interface ParsedWorkBuddyAmount {
+  total: WorkBuddyDecimal;
+  used: WorkBuddyDecimal;
+  remaining: WorkBuddyDecimal;
+  frozen: WorkBuddyDecimal;
+}
+
+function sumAmounts(rows: readonly ParsedWorkBuddyAmount[]): WorkBuddyCreditAmount {
+  const sum = (field: keyof ParsedWorkBuddyAmount) => Number(formatWorkBuddyDecimal(sumWorkBuddyDecimals(rows.map(row => row[field]))));
   return {
-    total: sumCapacities(rows.map(row => row.total)),
-    used: sumCapacities(rows.map(row => row.used)),
-    remaining: sumCapacities(rows.map(row => row.remaining)),
-    frozen: sumCapacities(rows.map(row => row.frozen)),
+    total: sum("total"), used: sum("used"), remaining: sum("remaining"), frozen: sum("frozen"),
   };
 }
 
@@ -90,7 +95,7 @@ export function normalizeWorkBuddyCredits(value: unknown): WorkBuddyCreditBalanc
   return { ...balance, groups, ...(exact !== undefined ? { exact } : {}), ...(quantity !== undefined && quantity > 0 && at !== undefined ? { expiring: { amount: quantity, at } } : {}) };
 }
 
-function packageAmount(row: Record<string, unknown>): { amount: WorkBuddyCreditAmount; total: WorkBuddyDecimal; remaining: WorkBuddyDecimal } | undefined {
+function packageAmount(row: Record<string, unknown>): ParsedWorkBuddyAmount | undefined {
   const total = workBuddyCapacity(row.CycleTotalCapacity), used = workBuddyCapacity(row.CycleUsedCapacity);
   const frozen = row.CycleFrozenCapacity === undefined ? 0 : workBuddyCapacity(row.CycleFrozenCapacity);
   const totalDecimal = parseWorkBuddyDecimal(row.CycleTotalCapacity), usedDecimal = parseWorkBuddyDecimal(row.CycleUsedCapacity);
@@ -99,18 +104,18 @@ function packageAmount(row: Record<string, unknown>): { amount: WorkBuddyCreditA
   const remainingDecimal = row.CycleRemainCapacity === undefined
     ? subtractWorkBuddyDecimals(totalDecimal, usedDecimal, frozenDecimal) : parseWorkBuddyDecimal(row.CycleRemainCapacity);
   if (!remainingDecimal || (row.CycleRemainCapacity !== undefined && workBuddyCapacity(row.CycleRemainCapacity) === undefined)) return undefined;
-  return { amount: { total, used, remaining: Number(formatWorkBuddyDecimal(remainingDecimal)), frozen }, total: totalDecimal, remaining: remainingDecimal };
+  return { total: totalDecimal, used: usedDecimal, remaining: remainingDecimal, frozen: frozenDecimal };
 }
 
 export function parseWorkBuddyCredits(value: unknown): WorkBuddyCreditBalance | undefined {
   const summary = workBuddyRecord(value);
   if (!Array.isArray(summary.Packages) || summary.Packages.length > 512) return undefined;
-  const packages: WorkBuddyCreditAmount[] = [];
+  const packages: ParsedWorkBuddyAmount[] = [];
   const totals: WorkBuddyDecimal[] = [], remaining: WorkBuddyDecimal[] = [];
   for (const raw of summary.Packages) {
     const quantities = packageAmount(workBuddyRecord(raw));
     if (!quantities) return undefined;
-    packages.push(quantities.amount); totals.push(quantities.total); remaining.push(quantities.remaining);
+    packages.push(quantities); totals.push(quantities.total); remaining.push(quantities.remaining);
   }
   const totalExact = formatWorkBuddyDecimal(sumWorkBuddyDecimals(totals));
   const remainingExact = formatWorkBuddyDecimal(sumWorkBuddyDecimals(remaining));
@@ -118,13 +123,13 @@ export function parseWorkBuddyCredits(value: unknown): WorkBuddyCreditBalance | 
     exact: { total: totalExact, remaining: remainingExact }, groups: [] };
   // CreditGroups is a breakdown of Packages, not another balance to add to it.
   if (Array.isArray(summary.CreditGroups) && summary.CreditGroups.length <= 16) {
-    const grouped = new Map<WorkBuddyCreditKind, WorkBuddyCreditAmount[]>();
+    const grouped = new Map<WorkBuddyCreditKind, ParsedWorkBuddyAmount[]>();
     for (const raw of summary.CreditGroups) {
       const row = workBuddyRecord(raw), quantities = packageAmount(row);
       if (!quantities) continue;
       const kind = WORKBUDDY_CREDIT_KINDS.find(kind => kind === row.Kind) ?? "other";
       const rows = grouped.get(kind) ?? [];
-      rows.push(quantities.amount);
+      rows.push(quantities);
       grouped.set(kind, rows);
     }
     balance.groups = [...grouped].map(([kind, rows]) => ({ kind, ...sumAmounts(rows) }));
@@ -139,6 +144,15 @@ export function enterpriseWorkBuddyCredits(totalValue: unknown, usedValue: unkno
   if (total === undefined || used === undefined || !totalDecimal || !usedDecimal) return undefined;
   const remaining = formatWorkBuddyDecimal(subtractWorkBuddyDecimals(totalDecimal, usedDecimal));
   return { total, used, remaining: Number(remaining), frozen: 0, groups: [], exact: { total: formatWorkBuddyDecimal(totalDecimal), remaining } };
+}
+
+/** Use exact metadata for zero checks so subnormal balances do not disappear. */
+export function hasWorkBuddyCredits(balance: WorkBuddyCreditBalance, field: "total" | "remaining"): boolean {
+  if (balance.exact) {
+    const value = parseWorkBuddyDecimal(balance.exact[field]);
+    if (value) return value.digits > 0n;
+  }
+  return balance[field] > 0;
 }
 
 /** Percent is informational; malformed exact metadata must not masquerade as an exact result. */
