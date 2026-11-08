@@ -31,7 +31,9 @@ release carries the signature, Windows SmartScreen may warn about an unsigned in
 One installer page describes the anonymous daily usage summary OpenCodex sends, links the
 [privacy statement](/reference/code-signing/#privacy), and has a **Send anonymous usage
 statistics** checkbox, checked by default. Clear it and the app saves the opt-out to your
-opencodex config the first time it starts, before any proxy runs. For a silent install, pass
+opencodex config the first time it starts, before any proxy runs. The choice applies to every
+account on the computer, once for each account, so it also works for a silent install run by an
+administrator or a deployment tool (Intune, SCCM). For a silent install, pass
 `OCX_TELEMETRY_CHOICE=optout`:
 
 ```powershell
@@ -39,10 +41,9 @@ msiexec /i OpenCodex-<version>-windows-x64.msi /qn OCX_TELEMETRY_CHOICE=optout
 ```
 
 Leaving the box checked does not start sending by itself: the dashboard still shows its one-time
-notice first. Updates install without this page and never change an earlier opt-out.
-If an administrator account other than yours approves the install, the choice is recorded for that
-account; your first launch then asks again in the dashboard notice, and nothing is sent before you
-answer.
+notice first. In-app updates install without this page and keep an earlier opt-out. Running a
+newer installer by hand shows the page again, unchecked if you opted out before. If you have since
+turned telemetry on in the dashboard and want to keep it, check the box before you continue.
 
 ### Linux
 
