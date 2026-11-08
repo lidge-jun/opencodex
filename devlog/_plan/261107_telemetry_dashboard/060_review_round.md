@@ -14,7 +14,7 @@ specify only if the behaviour is described in a privacy policy, shown during ins
 disabled at installation. The replacement statement (D12) says exactly that, lands on layer 2 (the first
 layer that can send), and layer 5 links it to the telemetry guide.
 
-## SignPath conditions (open owner decision)
+## SignPath conditions
 
 SignPath Foundation's conditions (https://signpath.org/terms, read 2026-11-08), "Respect user privacy and
 security": "Software that collects user data and transfers it to systems not specified by the user must
@@ -26,9 +26,23 @@ or the "will not transfer" sentence.
 which has no installer, and the MSI, whose installer shows no policy and has no disable option. The CLI
 prompt and the dashboard popup appear on first run, after installation. The release workflow still uses the
 `test-signing` policy, so no production-signed build exists yet. Round 1 treated first-run disclosure as
-"during installation"; that reading is not confirmed. The owner decides whether to add an MSI dialog
-(policy and a disable checkbox) before switching to `release-signing`, to ask SignPath first, or to
-accept first-run disclosure. No layer that can send merges before that decision.
+"during installation"; that reading is not confirmed.
+
+Owner decision (2026-11-08), D21: telemetry stays default-on and the stack satisfies all three:
+
+- (a) The D12 privacy statement (README and translations, code-signing page in English and Turkish,
+  `SPONSORS.md`) and the layer 5 guide describe exactly what is sent and how to opt out.
+- (b, c) MSI: a new layer between 2 and 3 adds an installer page generated from
+  `src/telemetry/disclosure.ts`, the same text the CLI prompt prints. It links the policy and has a
+  "Send anonymous usage statistics" checkbox, checked by default. Unchecked, the choice is recorded in
+  HKCU and the desktop app persists `telemetry.decision = "declined"` into the user's config before it
+  resolves, attaches to or starts any proxy. Tests pin the dialog text source and the persisted opt-out.
+- (b, c) Standalone `ocx.exe` and npm installs have no installer: nothing is sent before
+  `noticeShownAt`, and the notice (the CLI prompt or the GUI popup) shows the policy summary and offers
+  disabling at that moment. A test proves zero sends before `noticeShownAt`.
+
+Layers that can send (2 and above) merge only after the installer layer and the zero-send test are in
+the stack and have passed their reviews and CI.
 
 ## Decisions
 

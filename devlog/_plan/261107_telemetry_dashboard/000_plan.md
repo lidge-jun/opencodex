@@ -58,6 +58,7 @@ footer and in the PR descriptions.
 | --- | --- | --- |
 | 1 | this unit | Docs-only roadmap. |
 | 2 | [010_client_core.md](010_client_core.md) | Config field, consent state, install id, aggregate builder, payload v1, sender, management API, `ocx telemetry`, `structure/telemetry.md`. |
+| 2b | [060_review_round.md](060_review_round.md) D21 | Windows installer page (disclosure, policy link, opt-out checkbox) and the desktop app carrying an installer opt-out into the config. |
 | 3 | [020_gui_consent.md](020_gui_consent.md) | First-run card, post-update popup, Advanced toggle, preview dialog, all locales. |
 | 4 | [030_collector.md](030_collector.md) | Cloudflare Worker + D1: ingest validation, limits, daily rollups, public stats API. |
 | 5 | [040_docs_privacy.md](040_docs_privacy.md) | Telemetry guide, sidebar, configuration reference. |
