@@ -55,8 +55,9 @@ semantics. Unknown or malformed summaries never become zero. Explicit zero balan
 `workbuddyCredits` is a display-only field in the quota DTO, separate from USD balances and
 quota windows, so credit exhaustion does not disable free models or influence account ranking.
 `src/providers/workbuddy-credit-balance.ts` validates numeric fields and bounded exact decimal
-metadata for the GUI. Invalid or inconsistent exact metadata suppresses the headline percentage;
-older payloads without it keep the numeric fallback. The shared provider quota panel shows the remaining credits, usage, group balances and
+metadata for the GUI. Invalid metadata or an exact remaining amount above the exact total
+suppresses the headline percentage, including at subnormal magnitudes; older payloads without
+exact metadata keep the numeric fallback. The shared provider quota panel shows the remaining credits, usage, group balances and
 optional expiry; the existing refresh and stale-state controls apply to it.
 
 ## Verification

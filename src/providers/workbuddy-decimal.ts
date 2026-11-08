@@ -35,6 +35,13 @@ export function subtractWorkBuddyDecimals(total: WorkBuddyDecimal, ...values: Wo
   return { digits: digits > 0n ? digits : 0n, scale };
 }
 
+export function compareWorkBuddyDecimals(a: WorkBuddyDecimal, b: WorkBuddyDecimal): number {
+  const scale = Math.max(a.scale, b.scale);
+  const left = a.digits * 10n ** BigInt(scale - a.scale);
+  const right = b.digits * 10n ** BigInt(scale - b.scale);
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 export function formatWorkBuddyDecimal(value: WorkBuddyDecimal): string {
   let digits = value.digits, scale = value.scale;
   while (scale > 0 && digits % 10n === 0n) { digits /= 10n; scale--; }

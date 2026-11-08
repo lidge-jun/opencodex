@@ -1,4 +1,4 @@
-import { formatWorkBuddyDecimal, parseWorkBuddyDecimal, roundedWorkBuddyUnavailable, subtractWorkBuddyDecimals, sumWorkBuddyDecimals, type WorkBuddyDecimal } from "./workbuddy-decimal";
+import { compareWorkBuddyDecimals, formatWorkBuddyDecimal, parseWorkBuddyDecimal, roundedWorkBuddyUnavailable, subtractWorkBuddyDecimals, sumWorkBuddyDecimals, type WorkBuddyDecimal } from "./workbuddy-decimal";
 
 export interface WorkBuddyCreditAmount {
   total: number;
@@ -143,8 +143,11 @@ export function enterpriseWorkBuddyCredits(totalValue: unknown, usedValue: unkno
 
 /** Percent is informational; malformed exact metadata must not masquerade as an exact result. */
 export function workBuddyUnavailablePercent(balance: WorkBuddyCreditBalance): number | undefined {
-  if (balance.total <= 0 || balance.remaining / balance.total > 1 + Number.EPSILON * 1024 || balance.exact === null) return undefined;
+  if (balance.exact === null) return undefined;
   const total = parseWorkBuddyDecimal(balance.exact?.total ?? balance.total);
   const remaining = parseWorkBuddyDecimal(balance.exact?.remaining ?? balance.remaining);
-  return total && remaining && total.digits > 0n ? roundedWorkBuddyUnavailable(total, remaining) : undefined;
+  if (!total || !remaining || total.digits === 0n) return undefined;
+  if (balance.exact ? compareWorkBuddyDecimals(remaining, total) > 0
+    : balance.remaining / balance.total > 1 + Number.EPSILON * 1024) return undefined;
+  return roundedWorkBuddyUnavailable(total, remaining);
 }

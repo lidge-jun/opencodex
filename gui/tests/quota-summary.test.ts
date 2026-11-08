@@ -116,6 +116,20 @@ describe("quota summary", () => {
       .map(row => formatQuotaPercent(row.headline.percent))).toEqual(["0%", "1%"]);
   });
 
+  test("exact balances retain subnormal precision and reject exact overdraw", () => {
+    const small = (digit: string) => `0.${"0".repeat(323)}${digit}`;
+    const balance = (total: string, remaining: string) => parseWorkBuddyCredits({ Packages: [{
+      CycleTotalCapacity: total, CycleUsedCapacity: "0", CycleRemainCapacity: remaining,
+    }] });
+    const reports = freshQuotaReportsFromResponse([
+      { provider: "tiny", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(small("2"), small("1")) } },
+      { provider: "tiny-over", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance(small("4"), small("7")) } },
+      { provider: "over", updatedAt: now, quota: { updatedAt: now, workbuddyCredits: balance("1", "1.00000000000000005") } },
+    ], now);
+    expect(buildQuotaSummary(reports, name).map(row => [row.provider, formatQuotaPercent(row.headline.percent)]))
+      .toEqual([["tiny", "50%"]]);
+  });
+
   test("WorkBuddy rounds an exact half percent up and a smaller share down", () => {
     const balance = (total: number, remaining: number) => ({ total, used: 0, remaining, frozen: 0, groups: [] });
     const reports = freshQuotaReportsFromResponse([
