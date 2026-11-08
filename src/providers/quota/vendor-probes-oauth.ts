@@ -1,12 +1,15 @@
+import { createHash } from "node:crypto";
 import { markAnthropicFamilyEnumeration } from "./anthropic-family-headers";
 import { effectiveCodexAuthAccountId, fetchMainAccountInfoSnapshot, listCodexAuthAccountsSnapshot } from "../../codex/auth-api";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import { getValidAccessToken } from "../../oauth";
 import { loadConfig } from "../../config";
+import { getConfigDir } from "../../config/paths";
+import { runPassiveReadSync } from "../../lib/passive-read";
 import { configuredAnthropicInstance, type AnthropicInstanceId } from "../anthropic-instance";
 import { captureOAuthAccountSelection, credentialGeneration, getAccountCredential, getAccountSet } from "../../oauth/store";
-import { hydrateKiroAccountState, persistKiroAccountState } from "../kiro-account-state-disk";
-import { kiroProbeCurrent, kiroProbeIdentity } from "./kiro-account-probe";
+import { hydrateKiroAccountState, kiroEvidenceIdentity, persistKiroAccountState } from "../kiro-account-state-disk";
+import { kiroProbeIdentity } from "./kiro-account-probe";
 import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
 import { probeAnthropicUsageQuota, type AnthropicUsageProbe } from "../claude-cli-usage";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "../xai-transport";
@@ -360,25 +363,56 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
  */
 export async function fetchKiroQuota(provider: string): Promise<ProviderQuotaReport | null> {
   hydrateKiroAccountState();
-  const probedAccountId = getAccountSet("kiro")?.activeAccountId;
+  const selection = captureOAuthAccountSelection("kiro");
+  const probedAccountId = selection?.accountId;
   if (!probedAccountId) return null;
   const identity = kiroProbeIdentity(probedAccountId);
   const probedAccountKey = accountCacheKey("kiro", probedAccountId);
   const writerGeneration = captureConfigGeneration();
+  const root = getConfigDir();
   let snapshot: KiroUsageSnapshot | null;
+  let credentialIdentity: string;
+  const currentAccount = () => runPassiveReadSync(() => {
+    if (getConfigDir() !== root) return null;
+    const set = getAccountSet("kiro");
+    const account = set?.accounts.find(row => row.id === probedAccountId);
+    return account && identity && kiroEvidenceIdentity(account) === identity ? { set: set!, credential: account.credential } : null;
+  });
+  const credentialDigest = (credential: NonNullable<ReturnType<typeof currentAccount>>["credential"]) =>
+    createHash("sha256").update(JSON.stringify(credential)).digest("hex");
   try {
-    snapshot = await fetchKiroUsageSnapshot(await kiroUsageContextForAccount(probedAccountId));
+    const context = await kiroUsageContextForAccount(probedAccountId);
+    const credential = currentAccount()?.credential;
+    if (!credential || credential.access !== context.access
+      || credential.kiro?.apiRegion !== context.apiRegion || credential.kiro?.ssoRegion !== context.ssoRegion) return null;
+    credentialIdentity = credentialDigest(credential);
+    snapshot = await fetchKiroUsageSnapshot(context);
   } catch {
     return null;
   }
   if (!snapshot) return null;
-  if (!kiroProbeCurrent(probedAccountId, identity)) return null;
+  const accountCurrent = () => {
+    const credential = currentAccount()?.credential;
+    return !!credential && credentialDigest(credential) === credentialIdentity;
+  };
+  if (!accountCurrent()) return null;
   if (mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
     accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota: snapshot.quota, identity });
     commitKiroAccountUsageState(probedAccountKey, snapshot, identity);
     persistKiroAccountState();
   }
-  return report(provider, "kiro:usage-limits", snapshot.quota);
+  const selectionCurrent = () => {
+    const current = currentAccount();
+    return !!current && credentialDigest(current.credential) === credentialIdentity
+      && current.set.activeAccountId === probedAccountId && current.set.selectionRevision === selection.revision;
+  };
+  if (!selectionCurrent()) return null;
+  const value = report(provider, "kiro:usage-limits", snapshot.quota);
+  if (value) {
+    accountReportCurrent.set(value, selectionCurrent);
+    accountReportObservationKeys.set(value, `kiro\0${createHash("sha256").update(JSON.stringify([root, identity])).digest("hex")}`);
+  }
+  return value;
 }
 
 /**
