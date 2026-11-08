@@ -14,7 +14,7 @@ import { linkStorePath } from "../link/paths";
 import { readLinkStore } from "../link/store";
 import { HOME_NATIVE_ROUTE_CLIENTS, homeNativeRouteDefaults, type HomeNativeRouteClientId, type RouteClientIntent } from "../link/route-intent";
 import type { OcxConfig } from "../types";
-import { readRouteIntentState, updateRouteIntentState, type RouteIntentState } from "./route-intent-state";
+import { readRouteIntentState, routeIntentStatePath, updateRouteIntentState, type RouteIntentState } from "./route-intent-state";
 
 function captured(state: RouteIntentState): boolean {
   return HOME_NATIVE_ROUTE_CLIENTS.every(client => state.defaults[client] !== undefined);
@@ -66,11 +66,48 @@ export function captureHomeRouteDefaults(fallback?: OcxConfig, options: CaptureH
 }
 
 /**
+ * A Home-only switch write refused because the Children's defaults could not be saved first.
+ * Writing the switch anyway would change what Children inherit once the file is repaired.
+ */
+export interface HomeRouteCaptureRefusal {
+  readonly ok: false;
+  readonly reason: "unavailable";
+  readonly retryable: boolean;
+  readonly message: string;
+}
+
+export type HomeIntegrationResult = CodexDesiredStateResult | HomeRouteCaptureRefusal;
+
+/** Only SQLITE_BUSY is contention worth retrying; any other lock failure repeats forever. */
+function lockContention(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  return (error as { code?: unknown }).code === "CONFIG_MUTATION_LOCK_UNAVAILABLE"
+    && (error as { cause?: { code?: unknown } }).cause?.code === "SQLITE_BUSY";
+}
+
+function captureRefusal(error: unknown): HomeRouteCaptureRefusal {
+  const path = routeIntentStatePath();
+  if (lockContention(error)) return { ok: false, reason: "unavailable", retryable: true,
+    message: `Another process is saving the configuration, so the Children's route defaults in ${path} could not be saved first; nothing was changed. Retry in a moment.` };
+  return { ok: false, reason: "unavailable", retryable: false,
+    message: `The Children's route defaults in ${path} could not be read or saved; nothing was changed. Inspect it, fix or remove it, then retry.` };
+}
+
+/** `captureHomeRouteDefaults` for the Home-only switch writers: a failure is a typed refusal, never a throw. */
+export function captureHomeRouteDefaultsBeforeHomeSwitch(): HomeRouteCaptureRefusal | null {
+  try {
+    captureHomeRouteDefaults(undefined, { whenLinked: true });
+    return null;
+  } catch (error) {
+    return captureRefusal(error);
+  }
+}
+
+/**
  * The Home-only switch writers (ocx restore, ocx restore back, Claude Desktop apply from the CLI
  * and the dashboard) go through here. desired-state.ts itself stays free of link state: it is on
  * the always-on request path (tests/lab/core-link-boundary.test.ts).
  */
-export function setHomeIntegrationEnabled(client: DurableIntentClientId, enabled: boolean): CodexDesiredStateResult {
-  captureHomeRouteDefaults(undefined, { whenLinked: true });
-  return setIntegrationEnabled(client, enabled);
+export function setHomeIntegrationEnabled(client: DurableIntentClientId, enabled: boolean): HomeIntegrationResult {
+  return captureHomeRouteDefaultsBeforeHomeSwitch() ?? setIntegrationEnabled(client, enabled);
 }

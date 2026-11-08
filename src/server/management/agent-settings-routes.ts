@@ -9,7 +9,7 @@ import { ensureManagementClaudeIntercept, interceptStartRefusal, interceptStatus
 import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-state";
 import { captureDesktopAppliedMarker, commitDesktopAppliedMarker } from "../../claude/desktop-applied-marker";
 import { isPassiveRead } from "../../lib/passive-read";
-import { captureHomeRouteDefaults } from "../../routing/home-route-capture";
+import { captureHomeRouteDefaultsBeforeHomeSwitch } from "../../routing/home-route-capture";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -1843,14 +1843,16 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       const prepared = prepareClaudeCodePatch(config, body);
       if (prepared instanceof Response) return prepared;
       const { next, nextFastMode } = prepared;
+      // The Claude toggle is this Home's alone: freeze what Children inherit before it moves, and
+      // refuse before anything changes when that cannot be saved.
+      const captureRefused = body.enabled !== undefined ? captureHomeRouteDefaultsBeforeHomeSwitch() : null;
+      if (captureRefused) return jsonResponse({ error: captureRefused.message, code: "route_intent_unavailable" }, captureRefused.retryable ? 409 : 500);
       // Stamps the auth-mode migration sentinel on EVERY persist of this block. Without it,
       // choosing Auto (which DELETES authMode) or merely toggling Claude on (App.tsx PUTs
       // `{enabled}` alone and creates the block) would be converted into a sticky manual
       // subscription by the next startServer, with no way back.
 
       if (body.fastMode !== undefined) config.fastMode = nextFastMode;
-      // The Claude toggle is this Home's alone: freeze what Children inherit before it moves.
-      if (body.enabled !== undefined) captureHomeRouteDefaults(undefined, { whenLinked: true });
       commitClaudeCodeBlock(config, next);
       save(config);
       return null;

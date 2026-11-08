@@ -34,6 +34,7 @@ function scenario(body: string) {
       import { createLinkListenerLifecycle } from './src/server/index/link-listener';
       import { readRouteIntentState, routeIntentStatePath } from './src/routing/route-intent-state';
       import { setPersistedConfigMutationBeforeCommitForTests } from './src/config/persisted-mutation';
+      import { dispatchCommand } from './src/cli/dispatch';
       writeFileSync(join(process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR,'_meta.json'),JSON.stringify({entries:[]}));
       const local = getDefaultConfig(); local.port=18274; local.hostname='127.0.0.1';
       local.defaultProvider='fixture';local.providers={fixture:{adapter:'openai-chat',baseUrl:'http://127.0.0.1:1/v1',allowPrivateNetwork:true,liveModels:false,models:['fixture-model']}};
@@ -173,4 +174,42 @@ test("a decided Home write whose native switch write throws fails", () => scenar
   expect(result.code).not.toBe(0);
   expect(result.errors).toContain('did not apply codex (failed)');
   expect(loadConfig().clientIntegrations?.codex).toBeUndefined();
+`), SPAWN_BUDGET_MS);
+
+test("an unreadable route-intent.json refuses every Home-only switch writer with a typed refusal", () => scenario(`
+  writeFileSync(routeIntentStatePath(), '{not json');
+  const refused = setHomeIntegrationEnabled('codex', false);
+  expect(refused).toMatchObject({ ok: false, reason: 'unavailable', retryable: false });
+  expect(refused.message).toContain(routeIntentStatePath());
+  expect(refused.message).toContain('fix or remove');
+  expect(loadConfig().clientIntegrations?.codex).toBeUndefined();
+  // ocx restore --json still prints exactly one complete envelope and exits nonzero.
+  const out = [], log = console.log, error = console.error;
+  console.log = (...args) => out.push(args.join(' ')); console.error = () => {};
+  let code;
+  try { code = await dispatchCommand({ kind: 'run', command: 'restore', args: ['restore', '--json'] }, { args: ['restore', '--json'] }); }
+  finally { console.log = log; console.error = error; }
+  expect(code).toBe(1);
+  expect(out.length).toBe(1);
+  const envelope = JSON.parse(out[0]);
+  expect(envelope.success).toBe(false);
+  expect(envelope.message).toContain(routeIntentStatePath());
+  expect(envelope.artifacts.config.state).toBe('skipped');
+  const { applyDesktop } = await import('./src/cli/claude-desktop');
+  const desktop = await applyDesktop(undefined, { kind: 'gateway', mode: 'static' }, { findLiveProxyImpl: async () => null });
+  expect(desktop.ok).toBe(false);
+  expect(desktop.reason).toContain(routeIntentStatePath());
+  const patched = await management(handleProtocolRoutes, 'PATCH', '/api/protocols/settings', { messagesEnabled: false });
+  expect(patched.status).toBe(500);
+  expect(patched.body.error.code).toBe('route_intent_unavailable');
+  expect(patched.body.error.message).toContain(routeIntentStatePath());
+  const toggled = await management(handleAgentSettingsRoutes, 'PUT', '/api/claude-code', { enabled: false });
+  expect(toggled.status).toBe(500);
+  expect(toggled.body.code).toBe('route_intent_unavailable');
+  expect(toggled.body.error).toContain(routeIntentStatePath());
+  // Nothing moved: what Children inherit after the repair is still the switches as they were.
+  expect(loadConfig().clientIntegrations?.codex).toBeUndefined();
+  expect(loadConfig().clientIntegrations?.['claude-desktop']).toBeUndefined();
+  expect(loadConfig().claudeCode?.enabled).not.toBe(false);
+  expect(live.claudeCode?.enabled).not.toBe(false);
 `), SPAWN_BUDGET_MS);

@@ -25,7 +25,7 @@ import {
   type LocalClientSkipReason,
 } from "../codex/desired-state";
 import { siblingSkipMessage } from "../codex/sibling-start";
-import { setHomeIntegrationEnabled } from "../routing/home-route-capture";
+import { setHomeIntegrationEnabled, type HomeIntegrationResult } from "../routing/home-route-capture";
 import { syncModelsToCodex } from "../codex/sync";
 import { collectOrcaCodexHomeDiagnostic } from "../codex/home";
 import { restoreNativeCodexAsync, type CodexNativeRestoreResult } from "../codex/inject";
@@ -87,6 +87,12 @@ export function selectDefaultGuiUrl(
   // origin, so replacing 127.0.0.1 with localhost strands its browser flow.
   const guiHost = probeHostname(live?.hostname ?? config.hostname);
   return `http://${guiHost}:${live?.port ?? config.port ?? 10100}`;
+}
+
+/** An unavailable route-intent file names the file to repair; the other refusals keep their reason. */
+function desiredStateRefusal(desired: Extract<HomeIntegrationResult, { ok: false }>): string {
+  return desired.reason === "unavailable" ? `Codex desired state was not saved (unavailable): ${desired.message}`
+    : `Codex desired state was not saved (${desired.reason}).`;
 }
 
 const commandRunners: Record<string, CommandRunner> = {
@@ -175,7 +181,7 @@ const commandRunners: Record<string, CommandRunner> = {
       }
       const desired = setHomeIntegrationEnabled("codex", true);
       if (!desired.ok) {
-        return emitBack(false, `Codex desired state was not saved (${desired.reason}).`, desired.reason === "conflict" ? 2 : 1);
+        return emitBack(false, desiredStateRefusal(desired), desired.reason === "conflict" ? 2 : 1);
       }
       const synced = await syncModelsToCodex(live.port);
       if (synced.status === "skipped") {
@@ -206,9 +212,9 @@ const commandRunners: Record<string, CommandRunner> = {
         // Machine-readable contract: every restore --json outcome emits one
         // schema-complete envelope on stdout, including pre-machinery failures.
         const { skippedRestoreEnvelope } = await import("../codex/inject");
-        console.log(JSON.stringify(skippedRestoreEnvelope(false, `Codex desired state was not saved (${desired.reason}).`)));
+        console.log(JSON.stringify(skippedRestoreEnvelope(false, desiredStateRefusal(desired))));
       } else {
-        console.error(`Codex desired state was not saved (${desired.reason}).`);
+        console.error(desiredStateRefusal(desired));
       }
       return desired.reason === "conflict" ? 2 : 1;
     }
