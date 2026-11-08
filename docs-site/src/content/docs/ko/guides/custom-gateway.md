@@ -29,9 +29,10 @@ provider test는 추론이 아닌 모델 목록 조회를 검사합니다. 정�
 예시 ID는 제공받은 정확한 값으로 바꿉니다. [정적 모델 설정](/ko/reference/configuration/providers/)을 참고하세요.
 프록시가 실행 중일 때 `config.json`을 직접 수정했다면 작업을 저장하고 진행 중인 요청이 끝날 때까지 기다린 뒤
 프록시를 재시작해 변경을 불러오세요. 재시작하면 진행 중인 요청이 중단될 수 있습니다.
-Desktop이 관리하는 프록시는 OpenCodex Desktop에서 중지하고 다시 시작하세요. 서비스 설치는 `ocx service restart`,
-감독되지 않는 프록시는 `ocx stop` 후 `ocx start`를 사용합니다. 그다음 `ocx sync`를 실행하고
-live 카탈로그를 다시 확인합니다. 또는 아래 비용 확인을 거치는 응답 생성 명령에
+Desktop이 관리하는 프록시는 OpenCodex Desktop에서 중지하고 다시 시작하세요. 서비스 설치는 `ocx service restart`를
+사용합니다. 감독되지 않는 프록시는 `ocx stop` 후 기존 `ocx start` 명령과 실행 옵션을 그대로 사용하세요.
+직접 지정한 `--port`도 포함합니다. 시작 명령은 해당 터미널에서 계속 실행하고 다른 터미널에서 `ocx sync`와
+나머지 검사를 실행하세요. 그다음 live 카탈로그를 다시 확인합니다. 또는 아래 비용 확인을 거치는 응답 생성 명령에
 제공받은 원본 ID를 직접 사용할 수 있습니다. 이 테스트에는 카탈로그 행이 필요하지 않습니다.
 
 live 카탈로그에서 실제 `id`, `namespaced`, `disabled`, `initialSelectionPending`을 확인하세요.

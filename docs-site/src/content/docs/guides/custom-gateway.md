@@ -31,9 +31,11 @@ preserving its other fields and replacing the example ID with the supplied value
 [static model catalogs](/reference/configuration/providers/#static-model-allowlists). If you edit
 `config.json` directly while the proxy is running, save your work and wait for active requests to
 finish before restarting the proxy to load the change; a restart can interrupt them. Then:
-use the OpenCodex Desktop app to stop and restart its managed proxy, `ocx service restart` for a
-service install, or `ocx stop` followed by `ocx start` for an unsupervised proxy. Then run
-`ocx sync` and inspect the live catalog again. Alternatively, test the supplied raw ID directly
+use the OpenCodex Desktop app to stop and restart its managed proxy, or `ocx service restart` for
+a service install. For an unsupervised proxy, run `ocx stop`, then start it with its original
+`ocx start` command and launch options, including `--port` if you supplied one. Leave that command
+running in its terminal; run `ocx sync` and the remaining checks from another terminal. Then
+inspect the live catalog again. Alternatively, test the supplied raw ID directly
 with the cost-confirmed completion command below; that test does not require a catalog row.
 
 In the live catalog inspect the actual `id`, `namespaced`, `disabled`, and
