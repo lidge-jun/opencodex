@@ -603,7 +603,7 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
     }
     // Parallel families share the existing per-probe attempts/timeout and absolute
     // deadline. A slow family cannot multiply the serial discovery budget.
-    const hosts = loopbackProbeHosts(hostname).filter(host =>
+    const hosts = recoveryProbeHosts(hostname).filter(host =>
       (io.loopbackAvailabilityFn ?? loopbackFamilyAvailability)(host) !== "unavailable");
     const identities = await Promise.all(hosts.map(async hostname => {
       const identity = await proxyIdentityAtObserved(port, { ...opts, hostname }, probeIo, observer.endpoint);
@@ -715,6 +715,13 @@ function recoveryLoopbackFamily(hostname: string): 4 | 6 | null {
   return /^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(canonical) ? 4 : null;
 }
 
+function recoveryProbeHosts(hostname: string): string[] {
+  if (isWildcardHostname(hostname)) return ["127.0.0.1", "[::1]"];
+  const family = recoveryLoopbackFamily(hostname);
+  if (family) return [probeHostname(hostname), family === 6 ? "127.0.0.1" : "[::1]"];
+  return [probeHostname(hostname)];
+}
+
 /**
  * Loopback addresses to ask about a port whose holder must be identified before a
  * decision that is destructive when it answers "nobody".
@@ -735,9 +742,9 @@ function recoveryLoopbackFamily(hostname: string): 4 | 6 | null {
 export function loopbackProbeHosts(hostname: string | undefined): string[] {
   const normalized = normalizeBindHostname(hostname);
   const primary = probeHostname(normalized);
-  if (isWildcardHostname(normalized)) return ["127.0.0.1", "[::1]"];
-  const family = recoveryLoopbackFamily(normalized);
-  if (family) return [primary, family === 6 ? "127.0.0.1" : "[::1]"];
+  if (isLoopbackHostname(normalized) || isWildcardHostname(normalized)) {
+    return primary === "[::1]" ? ["[::1]", "127.0.0.1"] : ["127.0.0.1", "[::1]"];
+  }
   return [primary];
 }
 

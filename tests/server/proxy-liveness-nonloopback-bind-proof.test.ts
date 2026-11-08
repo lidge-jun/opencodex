@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { createServer } from "node:net";
-import { canBindAddress, findLiveProxy, observeProxyLiveness, type LivenessIo } from "../../src/server/proxy-liveness";
+import { canBindAddress, findLiveProxy, observeProxyLiveness, probeEndpointLiveness, probePortOwner, type LivenessIo } from "../../src/server/proxy-liveness";
 
 // Connecting to this machine's own non-loopback address (a Tailscale IP) with nothing listening can
 // time out instead of being refused. A timeout is "unknown", which startup refuses forever; only a
@@ -18,6 +18,37 @@ function ioFor(bindProofFn: LivenessIo["bindProofFn"], hostname = "100.88.46.13"
     ...(bindProofFn ? { bindProofFn } : {}),
     ...extra,
   };
+}
+
+for (const [hostname, primary] of [
+  ["127.0.0.2", "127.0.0.2"],
+  ["::0:1", "[::1]"],
+  ["::ffff:127.0.0.1", "[::ffff:7f00:1]"],
+] as const) {
+  for (const caller of ["endpoint", "port-owner"] as const) test(`${caller} does not adopt another family's owner for ${hostname}`, async () => {
+    const calls: string[] = [];
+    const fetchFn = (async (url: string) => {
+      const host = new URL(url).hostname;
+      calls.push(host);
+      if (host !== primary) return Response.json({ service: "opencodex", pid: 4242 });
+      throw Object.assign(new Error("refused"), { code: "ECONNREFUSED" });
+    }) as typeof fetch;
+    if (caller === "endpoint") expect(await probeEndpointLiveness({ port: 10100, hostname }, { fetchFn })).toBe("dead");
+    else expect(await probePortOwner(10100, { hostname }, { fetchFn })).toBeNull();
+    expect(calls).toEqual([primary]);
+  });
+  test(`recovery still checks both families for ${hostname}`, async () => {
+    const calls: string[] = [];
+    const io = ioFor(undefined, hostname, { fetchFn: (async (url: string) => {
+      const host = new URL(url).hostname;
+      calls.push(host);
+      if (host !== primary) return Response.json({ service: "opencodex", pid: 4242 });
+      throw Object.assign(new Error("refused"), { code: "ECONNREFUSED" });
+    }) as typeof fetch });
+    expect(await observeProxyLiveness(io)).toMatchObject({ kind: "live", live: { pid: 4242, hostname } });
+    expect(calls).toHaveLength(2);
+    expect(calls).toContain(primary);
+  });
 }
 
 for (const [hostname, primary, other] of [
