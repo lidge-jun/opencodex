@@ -591,6 +591,48 @@ describe("combo zero-output bare Responses error failover", () => {
     expect(hits).toEqual(["a", "b"]);
   });
 
+  test("non-streaming openai-responses zero-output max_output_tokens JSON response fails over to backup target", async () => {
+    const hits: string[] = [];
+    const a = serve(() => {
+      hits.push("a");
+      return Response.json({
+        id: "resp_a",
+        object: "response",
+        status: "incomplete",
+        incomplete_details: { reason: "max_output_tokens" },
+        output: [],
+        usage: { input_tokens: 15, output_tokens: 0, total_tokens: 15 },
+      });
+    });
+    const b = serve(() => {
+      hits.push("b");
+      return Response.json(responsesSuccess("passthrough json backup answer", "m2"));
+    });
+    const config = comboConfig({
+      a: provider("openai-responses", baseUrl(a), "key-a"),
+      b: provider("openai-responses", baseUrl(b), "key-b"),
+    });
+
+    const parent: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/free", input: "hello", stream: false }),
+    }), config, parent);
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.status).toBe("completed");
+    expect(hits).toEqual(["a", "b"]);
+    expect(parent.attempts).toHaveLength(2);
+    expect(parent.attempts?.[0]).toMatchObject({
+      provider: "a",
+      status: 502,
+      usage: { inputTokens: 15, outputTokens: 0, totalTokens: 15 },
+    });
+    expect(isComboTargetInCooldown("combo/free", { provider: "a", model: "m1" })).toBe(false);
+  });
+
   for (const stream of [false, true]) {
     test(`${stream ? "streaming" : "non-streaming"} zero-output max_output_tokens terminal fails over to backup target`, async () => {
       const hits: string[] = [];

@@ -1135,10 +1135,12 @@ export async function executeResponsesRunTurn(
         commitReasoningReplayServingRoute();
       }
       notifyResponseComplete(json);
-      return new Response(JSON.stringify(json), {
+      const response = new Response(JSON.stringify(json), {
         status: (json.error as OcxErrorPayload | undefined)?.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE ? 503 : 200,
         headers: { "Content-Type": "application/json" },
       });
+      runTurnAdapterSseResponses.add(response);
+      return response;
     } catch (error) {
       if (!isTranslatorBudgetExceededError(error)) throw error;
       runTurnAbort.abort();

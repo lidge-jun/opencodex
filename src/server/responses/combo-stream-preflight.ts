@@ -134,19 +134,33 @@ function retryableZeroOutputTerminal(payload: unknown): boolean {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   const event = payload as {
     type?: unknown;
-    response?: { incomplete_details?: { reason?: unknown }; output?: unknown };
+    status?: unknown;
+    incomplete_details?: { reason?: unknown };
+    output?: unknown;
+    error?: { code?: unknown; retryable?: unknown };
+    response?: {
+      status?: unknown;
+      incomplete_details?: { reason?: unknown };
+      output?: unknown;
+      error?: { code?: unknown; retryable?: unknown };
+    };
   };
   if (bareErrorIsRetryable(event)) return true;
-  if (event.type === "response.failed") {
-    const error = (event.response as { error?: { code?: unknown; retryable?: unknown } } | undefined)?.error;
+  if (event.type === "response.failed" || event.status === "failed") {
+    const error = (event.response as { error?: { code?: unknown; retryable?: unknown } } | undefined)?.error
+      ?? event.error;
     const code = error?.code;
     if (code === REQUIRED_TOOL_CONTRACT_CODE && error?.retryable === false) return false;
     return !(typeof code === "string" && NON_REPLAYABLE_FAILED_CODES.has(code));
   }
-  if (event.type !== "response.incomplete") return false;
-  const reason = event.response?.incomplete_details?.reason;
+  const isIncomplete = event.type === "response.incomplete" || event.status === "incomplete";
+  if (!isIncomplete) return false;
+  const target = (event.type === "response.incomplete" && event.response && typeof event.response === "object" && !Array.isArray(event.response))
+    ? event.response
+    : event;
+  const reason = target.incomplete_details?.reason;
   // A terminal-only upstream can carry output without preceding delta/item events.
-  const emptyOutput = !Array.isArray(event.response?.output) || event.response.output.length === 0;
+  const emptyOutput = !Array.isArray(target.output) || target.output.length === 0;
   if (reason === undefined) return emptyOutput;
   if (reason === "max_output_tokens") return emptyOutput;
   return typeof reason === "string" && RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason);
@@ -250,8 +264,8 @@ function failedTerminalResponse(
   const nested = terminalPayload.response;
   const terminalResponse = nested && typeof nested === "object" && !Array.isArray(nested)
     ? nested as Record<string, unknown>
-    : {};
-  const nestedError = terminalResponse.error;
+    : terminalPayload;
+  const nestedError = (nested as Record<string, unknown> | undefined)?.error;
   const topLevelError = terminalPayload.error;
   const error = nestedError && typeof nestedError === "object" && !Array.isArray(nestedError)
     ? nestedError as Record<string, unknown>
@@ -265,12 +279,12 @@ function failedTerminalResponse(
         ? "invalid_request_error" : "upstream_error",
       code: terminalPayload.type === "error" && logCtx.terminalHttpStatus === 400
         ? (typeof terminalPayload.code === "string" ? terminalPayload.code : null)
-        : (terminalPayload.type === "response.incomplete"
+        : ((terminalPayload.type === "response.incomplete" || terminalPayload.status === "incomplete")
           && (terminalResponse.incomplete_details as { reason?: unknown } | undefined)?.reason === "max_output_tokens"
             ? "zero_output_token_limit" : "upstream_server_error"),
       message: typeof terminalPayload.message === "string"
         ? terminalPayload.message
-        : (terminalPayload.type === "response.incomplete"
+        : ((terminalPayload.type === "response.incomplete" || terminalPayload.status === "incomplete")
           && (terminalResponse.incomplete_details as { reason?: unknown } | undefined)?.reason === "max_output_tokens"
             ? "Provider reached its output token limit before producing output"
             : logCtx.upstreamError ?? "Provider stream failed before producing output"),
@@ -307,6 +321,63 @@ export type ComboStreamPreflightResult =
    */
   | { kind: "read-error"; response: Response; error: unknown; stage: RequestFailureStage };
 
+async function preflightComboJsonResponse(
+  response: Response,
+  logCtx: RequestLogContext,
+  retryableTerminal: (payload: unknown) => boolean,
+  options?: { replayReadErrors?: boolean; signal?: AbortSignal },
+): Promise<ComboStreamPreflightResult> {
+  const reader = response.body!.getReader();
+  const cancelRead = () => { reader.cancel(options?.signal?.reason).catch(() => undefined); };
+  if (options?.signal?.aborted) cancelRead();
+  else options?.signal?.addEventListener("abort", cancelRead, { once: true });
+  const buffered: Uint8Array[] = [];
+  let bufferedBytes = 0;
+  try {
+    for (;;) {
+      options?.signal?.throwIfAborted();
+      let next: Awaited<ReturnType<typeof reader.read>>;
+      try {
+        next = await reader.read();
+      } catch (error) {
+        if (!options?.replayReadErrors) throw error;
+        const replay = replayBufferedResponse(response, reader, buffered);
+        return { kind: "read-error", response: replay, error, stage: "headers-only" };
+      }
+      if (next.done) {
+        const text = Buffer.concat(buffered).toString("utf8");
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          return { kind: "accepted", response: replayBufferedResponse(response, reader, buffered) };
+        }
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && retryableTerminal(parsed)) {
+          const failed = failedTerminalResponse(response, parsed as Record<string, unknown>, logCtx);
+          return {
+            kind: "failed",
+            response: failed,
+            ...(failed.status === 400
+              ? { codexModelRefusal: terminalModelRefusal(failed.status, parsed as Record<string, unknown>) }
+              : {}),
+          };
+        }
+        return { kind: "accepted", response: replayBufferedResponse(response, reader, buffered) };
+      }
+      if (bufferedBytes + next.value.byteLength > COMBO_STREAM_PREFLIGHT_MAX_BYTES) {
+        return {
+          kind: "accepted",
+          response: replayBufferedResponse(response, reader, [...buffered, next.value]),
+        };
+      }
+      buffered.push(next.value.slice());
+      bufferedBytes += next.value.byteLength;
+    }
+  } finally {
+    options?.signal?.removeEventListener("abort", cancelRead);
+  }
+}
+
 /**
  * Buffer a Responses SSE only until the request becomes unsafe to replay or reaches a
  * terminal. Combo failover and native post-header reset recovery share this protocol
@@ -323,8 +394,15 @@ export async function preflightComboStreamResponse(
   const contentType = response.headers.get("content-type");
   const isEventStream = hasResponseMediaType(response.headers, "text/event-stream")
     || (!contentType && options?.allowMissingContentType === true);
-  if (!response.ok || !response.body || !isEventStream) {
+  if (!response.ok || !response.body) {
     return { kind: "accepted", response };
+  }
+  if (!isEventStream) {
+    const isJson = hasResponseMediaType(response.headers, "application/json");
+    if (!isJson && contentType) {
+      return { kind: "accepted", response };
+    }
+    return await preflightComboJsonResponse(response, logCtx, retryableTerminal, options);
   }
 
   const reader = response.body.getReader();
