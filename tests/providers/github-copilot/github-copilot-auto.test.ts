@@ -198,13 +198,16 @@ describe("Copilot Auto permissions and negotiation", () => {
     expect((await resolveCopilotAuto(provider, "named", parsed)).modelId).toBe("named");
     expect(calls).toBe(1);
   });
-  test("cancellation and authority guard prevent negotiation sends", async () => {
+  test("cancellation aborts, while an authority change falls back without a negotiation send", async () => {
     let sends = 0;
     const provider = { authMode: "oauth", baseUrl: "https://api.githubcopilot.com", fetch: (async () => {
       sends++; return Response.json({});
     }) as typeof fetch } as OcxProviderConfig;
     await expect(resolveCopilotAuto(provider, "auto", parsed, AbortSignal.abort())).rejects.toThrow();
-    await expect(resolveCopilotAuto(provider, "auto", parsed, undefined, () => false)).rejects.toThrow();
+    // A manual account switch cancels the queued control-plane send. That is not a client
+    // abort: the caller revalidates the selection and rebuilds before dispatch.
+    await expect(resolveCopilotAuto(provider, "auto", parsed, undefined, () => false))
+      .resolves.toMatchObject({ modelId: "auto", auto: false });
     expect(sends).toBe(0);
   });
 });

@@ -130,7 +130,13 @@ export async function resolveCopilotAuto(provider: OcxProviderConfig, requestedM
   let models: CopilotModel[];
   try { models = await fetchCopilotAutoModels(transport, signal, beforeSend, 60_000, concurrency); }
   catch (error) {
-    if (signal?.aborted || error instanceof ProviderOutboundSendCancelledError) throw error;
+    if (signal?.aborted) throw error;
+    // A manual account switch makes `beforeSend` return false, which cancels this
+    // control-plane send. That is not a client abort: fall back to the requested model
+    // so the dispatch path revalidates the selection and rebuilds on the new account.
+    if (error instanceof ProviderOutboundSendCancelledError) {
+      return { provider: transport, modelId: requestedModel, auto: false };
+    }
     // Permission discovery is additive for legacy paid configurations. A temporary
     // discovery outage must not turn a previously usable named route into a refusal.
     return { provider: transport, modelId: requestedModel, auto: false };
