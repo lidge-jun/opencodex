@@ -26,8 +26,12 @@ import { join } from "node:path";
 // and leaves COMBO_NAMESPACE in its temporal dead zone for entry points that start at combos/types.ts.
 import { atomicWriteFile } from "../config/atomic-write";
 import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
-import { extractJsonEnvelope, isHardPolicyOrOriginRefusal } from "../lib/hard-refusal";
-export { extractJsonEnvelope, isHardPolicyOrOriginRefusal };
+import {
+  extractJsonEnvelope,
+  extractJsonEnvelopeWithContext,
+  isHardPolicyOrOriginRefusal,
+} from "../lib/hard-refusal";
+export { extractJsonEnvelope, extractJsonEnvelopeWithContext, isHardPolicyOrOriginRefusal };
 import type { OcxProviderConfig } from "../types";
 import { resolveProviderApiKey } from "./api-key-resolve";
 
@@ -567,6 +571,28 @@ const EFFORT_PARAM_NAMES = new Set([
   "reasoning_parameters",
 ]);
 
+function isConflictingDiagnosticProse(str: string | undefined): boolean {
+  if (!str) return false;
+  const s = str.trim();
+  if (!s) return false;
+  if (
+    /\b(?:permission[-_]denied|insufficient[-_]quota|rate[-_]limit[-_]exceeded|model[-_]not[-_]found|context[-_]length[-_]exceeded|access[-_]denied|unauthorized|invalid[-_]api[-_]key|account[-_]deactivated|billing[-_]hard[-_]limit)\b/i.test(s)
+  ) {
+    return true;
+  }
+  const codeMatch = /\bcode\s*[:=]\s*["']?([a-zA-Z0-9_\-]+)["']?/i.exec(s);
+  if (codeMatch && codeMatch[1]) {
+    const code = codeMatch[1].trim().toLowerCase().replaceAll("-", "_");
+    if (!EFFORT_COMPATIBLE_CODES.has(code)) return true;
+  }
+  const typeMatch = /\btype\s*[:=]\s*["']?([a-zA-Z0-9_\-]+)["']?/i.exec(s);
+  if (typeMatch && typeMatch[1]) {
+    const type = typeMatch[1].trim().toLowerCase().replaceAll("-", "_");
+    if (!EFFORT_COMPATIBLE_TYPES.has(type)) return true;
+  }
+  return false;
+}
+
 /**
  * Rejects error envelopes that carry a conflicting code (e.g. permission_denied, insufficient_quota,
  * rate_limit_exceeded, model_not_found, malformed non-string code) or competing diagnostic parameters
@@ -586,17 +612,27 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
     }
   }
   let parsed: unknown;
+  let outerPrefix = "";
+  let outerSuffix = "";
   try {
     parsed = JSON.parse(unescaped);
   } catch {
-    parsed = extractJsonEnvelope(unescaped);
+    const extracted = extractJsonEnvelopeWithContext(unescaped);
+    if (extracted) {
+      parsed = extracted.value;
+      outerPrefix = extracted.prefix;
+      outerSuffix = extracted.suffix;
+    }
+  }
+  if (isConflictingDiagnosticProse(outerPrefix) || isConflictingDiagnosticProse(outerSuffix)) {
+    return true;
   }
   if (!parsed || typeof parsed !== "object") {
     if (isIncompleteStructuredWrapper(unescaped)) return true;
     const hasBraces = unescaped.includes("{") && unescaped.includes("}");
     const hasBrackets = unescaped.includes('["') || (unescaped.includes("[") && unescaped.includes("]") && unescaped.includes('"'));
     if (hasBraces || hasBrackets) return true;
-    return /\b(?:permission_denied|insufficient_quota|rate_limit_exceeded|model_not_found|context_length_exceeded)\b/i.test(unescaped);
+    return isConflictingDiagnosticProse(unescaped);
   }
   try {
     const queue: unknown[] = [parsed];
@@ -612,9 +648,24 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
             queue.push(item);
           } else if (typeof item === "string") {
             if (item.length > 16_384) return true;
-            const inner = extractJsonEnvelope(item);
-            if (inner && typeof inner === "object") {
-              queue.push(inner);
+            let innerItem: unknown;
+            let innerPrefix = "";
+            let innerSuffix = "";
+            try {
+              innerItem = JSON.parse(item);
+            } catch {
+              const extractedItem = extractJsonEnvelopeWithContext(item);
+              if (extractedItem) {
+                innerItem = extractedItem.value;
+                innerPrefix = extractedItem.prefix;
+                innerSuffix = extractedItem.suffix;
+              }
+            }
+            if (innerItem && typeof innerItem === "object") {
+              if (isConflictingDiagnosticProse(innerPrefix) || isConflictingDiagnosticProse(innerSuffix)) {
+                return true;
+              }
+              queue.push(innerItem);
             } else if (isIncompleteStructuredWrapper(item)) {
               return true;
             } else {
@@ -631,7 +682,7 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
                   return true;
                 }
               } else {
-                if (/\b(?:permission_denied|insufficient_quota|rate_limit_exceeded|model_not_found|context_length_exceeded)\b/i.test(trimmed)) {
+                if (isConflictingDiagnosticProse(trimmed)) {
                   return true;
                 }
               }
@@ -663,12 +714,27 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
         if (val && typeof val === "object") {
           queue.push(val);
         } else if (typeof val === "string") {
-          const inner = extractJsonEnvelope(val);
+          let inner: unknown;
+          let innerPrefix = "";
+          let innerSuffix = "";
+          try {
+            inner = JSON.parse(val);
+          } catch {
+            const extracted = extractJsonEnvelopeWithContext(val);
+            if (extracted) {
+              inner = extracted.value;
+              innerPrefix = extracted.prefix;
+              innerSuffix = extracted.suffix;
+            }
+          }
           if (inner && typeof inner === "object") {
+            if (isConflictingDiagnosticProse(innerPrefix) || isConflictingDiagnosticProse(innerSuffix)) {
+              return true;
+            }
             queue.push(inner);
           } else if (isIncompleteStructuredWrapper(val)) {
             return true;
-          } else if (/\b(?:permission_denied|insufficient_quota|rate_limit_exceeded|model_not_found|context_length_exceeded)\b/i.test(val)) {
+          } else if (isConflictingDiagnosticProse(val)) {
             return true;
           }
         }

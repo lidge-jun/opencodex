@@ -187,6 +187,25 @@ const NESTED_WRAPPED_HARD_REFUSAL_PREFIX = JSON.stringify({
     message: 'origin_rejected: {"error":{"param":"reasoning_effort","message":"Invalid reasoning effort."}}',
   },
 });
+const CONFLICTING_PERMISSION_PREFIX_REFUSAL =
+  'permission_denied: {"error":{"param":"reasoning_effort","message":"Invalid reasoning effort."}}';
+const PREFIXED_ECHOED_PERMISSION_DENIED_REFUSAL =
+  'Gateway error 400: {"error":{"param":"reasoning_effort","message":"Invalid reasoning effort."},"request":{"input":"permission_denied"}}';
+const NESTED_WRAPPED_ECHO_PERMISSION_DENIED = JSON.stringify({
+  error: {
+    type: "upstream_error",
+    message: JSON.stringify({
+      error: { param: "reasoning_effort", message: "Invalid reasoning effort." },
+      request: { input: "permission_denied" },
+    }),
+  },
+});
+const NESTED_WRAPPED_CONFLICTING_PERMISSION_PREFIX = JSON.stringify({
+  error: {
+    type: "upstream_error",
+    message: 'permission_denied: {"error":{"param":"reasoning_effort","message":"Invalid reasoning effort."}}',
+  },
+});
 const VENDOR_EFFORT_REFUSAL = JSON.stringify({ code: "invalid-argument", error: "Invalid reasoning effort." });
 const UNRELATED = JSON.stringify({ error: { type: "invalid_request_error", message: "Invalid upload request." } });
 
@@ -791,6 +810,14 @@ describe("rejected reasoning rungs", () => {
     expect(isReasoningEffortRejection(BALANCED_MALFORMED_JSON_REFUSAL)).toBe(false);
     expect(hasConflictingReasoningEffortCode(BALANCED_MALFORMED_BRACKET_REFUSAL)).toBe(true);
     expect(isReasoningEffortRejection(BALANCED_MALFORMED_BRACKET_REFUSAL)).toBe(false);
+    expect(hasConflictingReasoningEffortCode(CONFLICTING_PERMISSION_PREFIX_REFUSAL)).toBe(true);
+    expect(isReasoningEffortRejection(CONFLICTING_PERMISSION_PREFIX_REFUSAL)).toBe(false);
+    expect(hasConflictingReasoningEffortCode(PREFIXED_ECHOED_PERMISSION_DENIED_REFUSAL)).toBe(false);
+    expect(isReasoningEffortRejection(PREFIXED_ECHOED_PERMISSION_DENIED_REFUSAL)).toBe(true);
+    expect(hasConflictingReasoningEffortCode(NESTED_WRAPPED_CONFLICTING_PERMISSION_PREFIX)).toBe(true);
+    expect(isReasoningEffortRejection(NESTED_WRAPPED_CONFLICTING_PERMISSION_PREFIX)).toBe(false);
+    expect(hasConflictingReasoningEffortCode(NESTED_WRAPPED_ECHO_PERMISSION_DENIED)).toBe(false);
+    expect(isReasoningEffortRejection(NESTED_WRAPPED_ECHO_PERMISSION_DENIED)).toBe(true);
     expect(hasConflictingReasoningEffortCode(VENDOR_EFFORT_REFUSAL)).toBe(false);
     expect(hasConflictingReasoningEffortCode(JSON.stringify({
       param: "reasoning_effort",
@@ -974,6 +1001,7 @@ describe("rejected reasoning rungs", () => {
     ["origin_rejected", PREFIXED_ECHOED_ORIGIN_REJECTED_REFUSAL],
     ["cyber_policy", PREFIXED_ECHOED_CYBER_POLICY_REFUSAL],
     ["bio_policy", PREFIXED_ECHOED_BIO_POLICY_REFUSAL],
+    ["permission_denied", PREFIXED_ECHOED_PERMISSION_DENIED_REFUSAL],
   ])("replays downgrade when prefixed JSON diagnostic echoes %s in request input (openai-chat)", async (_name, payload) => {
     writeSnapshot(["low", "high", "max"]);
     const outbound: Array<Record<string, unknown>> = [];
@@ -1001,6 +1029,7 @@ describe("rejected reasoning rungs", () => {
     ["origin_rejected", PREFIXED_ECHOED_ORIGIN_REJECTED_REFUSAL],
     ["cyber_policy", PREFIXED_ECHOED_CYBER_POLICY_REFUSAL],
     ["bio_policy", PREFIXED_ECHOED_BIO_POLICY_REFUSAL],
+    ["permission_denied", PREFIXED_ECHOED_PERMISSION_DENIED_REFUSAL],
   ])("replays downgrade when prefixed JSON diagnostic echoes %s in request input (openai-responses)", async (_name, payload) => {
     writeSnapshot(["low", "high", "max"]);
     const outbound: Array<Record<string, unknown>> = [];
@@ -1091,6 +1120,28 @@ describe("rejected reasoning rungs", () => {
     const logCtx: RequestLogContext = { model: "", provider: "" };
 
     const cfg = passthroughConfig();
+    const response = await handleResponses(request(), cfg, logCtx);
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test.each([
+    ["openai-chat", config],
+    ["openai-responses", passthroughConfig],
+  ])("stops before effort replay on conflicting permission diagnostic prefix outside extracted envelope (%s)", async (_name, makeConfig) => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(CONFLICTING_PERMISSION_PREFIX_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = makeConfig();
     const response = await handleResponses(request(), cfg, logCtx);
 
     expect(outbound).toHaveLength(1);
