@@ -288,13 +288,14 @@ function asideOptions(ctx: ManagementContext): AsideProfileRouteOptions {
  * profile or all of them, or a profile restore. Undefined for reads, previews, journal and sync.
  */
 async function asideDecisionScope(ctx: ManagementContext, known: unknown): Promise<readonly number[] | "all" | undefined> {
-  const { pathname } = ctx.url;
-  const nested = /^\/api\/client-integrations\/aside\/profiles\/(0|[1-9][0-9]{0,8})(\/restore)?$/.exec(pathname);
-  const toggle = ctx.req.method === "PUT" && (pathname === "/api/client-integrations/aside"
-    || pathname === "/api/client-integrations/aside/profiles" || (nested !== null && nested[2] === undefined));
-  const restore = ctx.req.method === "POST" && nested?.[2] === "/restore";
+  // The paths handleAsideProfileRoutes owns: the whole set, the profile collection, one profile,
+  // and one profile's restore.
+  const match = /^\/api\/client-integrations\/aside(?:\/profiles(?:\/(0|[1-9][0-9]{0,8})(\/restore)?)?)?$/.exec(ctx.url.pathname);
+  if (!match) return undefined;
+  const restore = match[2] !== undefined && ctx.req.method === "POST";
+  const toggle = match[2] === undefined && ctx.req.method === "PUT";
   if (!toggle && !restore) return undefined;
-  const raw = nested?.[1] ?? ctx.url.searchParams.get("profile");
+  const raw = match[1] ?? ctx.url.searchParams.get("profile");
   const id = raw !== null && /^(0|[1-9][0-9]{0,8})$/.test(raw) ? Number(raw) : undefined;
   if (restore) return id === undefined ? [] : [id];
   const body = known !== undefined ? known : await readJsonBody({ ...ctx, req: ctx.req.clone() });
