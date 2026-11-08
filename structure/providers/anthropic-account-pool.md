@@ -318,8 +318,8 @@ A provider refresh also drops proof unless its new bearer carries fresh authenti
 conflicting authenticated UUIDs refuse persistence. Generic display metadata is not promoted to proof.
 
 The refresh owner captures login ID, token generation and identity metadata before observation.
-It rechecks them, pause/removal, CLI generation and selection revision after observation and inside
-serialized persistence. Superseding writes win. An unresolved full rotation leaves the row and
+Local adoption rechecks them, pause/removal, CLI generation and selection revision after observation
+and inside serialized persistence. Superseding writes win. An unresolved full rotation leaves the row and
 pending intent intact, without replaying a possibly consumed refresh or setting reauthentication
 solely from the identity failure. A proven different account may use its own stored refresh only
 when no pending intent blocks it. Intent cleanup follows successful durable adoption.
@@ -336,6 +336,9 @@ Adoption obtains a fresh matching source and generation
 inside the serialized mutation after its pre-persist hook, then synchronously rechecks ownership.
 This snapshot does not exclude external Keychain changes after observation, and the process-local
 slot does not bound surviving children across parent restarts.
+Provider refresh results retain the existing stored-account ownership check: another process can
+rotate the shared grant after the initial observation, so neither the result nor the other process's
+token is guaranteed current. `tests/oauth/oauth-anthropic-identity.test.ts` records this boundary.
 An empty credential file or successful empty Keychain payload is unavailable. A JSON file with no
 OAuth field is absent and does not mask the Keychain; item-not-found remains authoritative absence.
 Malformed or incomplete OAuth payloads and credentials with unknown expiry are unavailable. A

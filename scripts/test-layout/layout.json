@@ -466,7 +466,6 @@
     "claude-sidecar-override.test.ts": "claude-integration",
     "claude-source-envelope.test.ts": "claude-integration",
     "claude-system-env-auto.test.ts": "claude-integration",
-    "claude-system-env-topology.test.ts": "claude-integration",
     "cleanup-orphaned-workflows.test.ts": "ci-workflows",
     "clearable-deadline.test.ts": "lib",
     "cli-account-alias-target.test.ts": "cli", "cli-account-slot-identity.test.ts": "cli",

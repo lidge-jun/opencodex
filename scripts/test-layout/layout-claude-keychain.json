@@ -1,3 +1,4 @@
 {
-  "claude-keychain.test.ts": "oauth"
+  "claude-keychain.test.ts": "oauth",
+  "claude-system-env-topology.test.ts": "claude-integration"
 }

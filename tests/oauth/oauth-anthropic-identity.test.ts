@@ -684,6 +684,28 @@ test("verified different CLI account may refresh its own stored grant without pe
   expect(getAccountCredential("anthropic", id)!.anthropicIdentity).toBeUndefined();
 });
 
+test("a provider rotation is preserved if the CLI changes after refresh dispatch", async () => {
+  const { id, credential } = await seed();
+  const entered = deferred(), release = deferred();
+  const rotated = { access: "synthetic-provider-new", refresh: "synthetic-provider-refresh", expires: Date.now() + 3600_000 };
+  const calls: string[] = [];
+  const pending = refreshAnthropicAccountWithLock("anthropic", id, { ...noRefresh, refresh: async token => {
+    calls.push(token);
+    entered.resolve();
+    await release.promise;
+    return rotated;
+  } }, credential);
+  try {
+    await entered.promise;
+    disk("synthetic-cli-new", "synthetic-cli-refresh");
+    release.resolve();
+    expect(await pending).toBe(rotated.access);
+    expect(calls).toEqual([credential.refresh]);
+    expect(getAccountCredential("anthropic", id)).toMatchObject(rotated);
+    expect(readOAuthRefreshIntent("anthropic", id)).toBeUndefined();
+  } finally { release.resolve(); }
+});
+
 for (const shared of ["access", "refresh"] as const) {
   test(`shared ${shared} preserves metadata without minting stale bearer proof`, async () => {
     const { id, credential } = await seed();
