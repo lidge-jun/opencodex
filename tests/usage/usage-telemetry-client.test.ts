@@ -731,6 +731,32 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
     });
   });
 
+  test("an unreachable or undeployed collector fails the tick quietly and leaves the day for a later retry", async () => {
+    const config = {
+      telemetry: {
+        decision: "accepted" as const,
+        decidedAt: "2026-11-01T10:00:00.000Z",
+        noticeShownAt: "2026-11-01T10:00:00.000Z",
+      },
+    };
+    const consoleSpies = [spyOn(console, "error"), spyOn(console, "warn"), spyOn(console, "log")];
+    try {
+      const dnsFailure = (async () => {
+        throw new TypeError("getaddrinfo ENOTFOUND telemetry.opencodex.me");
+      }) as unknown as typeof fetch;
+      const notDeployed = (async () => new Response("Not Found", { status: 404 })) as unknown as typeof fetch;
+      for (const fetchImpl of [dnsFailure, notDeployed]) {
+        const result = await runTelemetryTick({ configDir: home, config, env: {}, now: NOW, fetch: fetchImpl });
+        expect(result).toMatchObject({ sent: false, day: "2026-11-02", reason: "send-failed" });
+        expect(readTelemetryState(home).sentDays).toEqual({});
+        expect(readTelemetryState(home).retryAfterUntil).toBeNull();
+      }
+      for (const spy of consoleSpies) expect(spy).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of consoleSpies) spy.mockRestore();
+    }
+  });
+
   test("D7: re-reads consent and env before transmission and aborts in-flight ticks on stop or nudge", async () => {
     let fetchCalls = 0;
     const mockFetch = (async () => {
