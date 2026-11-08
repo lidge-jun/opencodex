@@ -88,14 +88,21 @@ record consent on your behalf.
 
 ## How to turn telemetry off
 
-You can disable telemetry at any time through any of five controls:
+You can disable telemetry at any time through any of these controls:
 
-1. **GUI consent popup** — uncheck **Share anonymous daily usage statistics** and click
+1. **Windows installer** — the MSI has a page with this summary, a link to the
+   [privacy statement](/reference/code-signing/#privacy), and a **Send anonymous usage statistics**
+   checkbox, checked by default. Clear it, or pass `OCX_TELEMETRY_CHOICE=optout` to a silent
+   `msiexec /qn` install, and the desktop app writes `"decision": "declined"` to `config.json` the
+   first time it starts, before it resolves or starts any proxy. If that write fails, the app starts
+   its proxy with `OCX_TELEMETRY=0` and tries again on the next launch. Leaving the box checked
+   does not start sending by itself; the popup below still appears first.
+2. **GUI consent popup** — uncheck **Share anonymous daily usage statistics** and click
    **Continue** when the first-run or post-update dialog appears.
-2. **Proxy details toggle** — open the [Web Dashboard](/guides/web-dashboard/) Overview page, go to
+3. **Proxy details toggle** — open the [Web Dashboard](/guides/web-dashboard/) Overview page, go to
    the **Telemetry** section under **Proxy details** (`#proxy-telemetry`), and switch off **Share
    anonymous usage statistics**.
-3. **CLI command**:
+4. **CLI command**:
 
    ```bash
    ocx telemetry disable
@@ -106,9 +113,9 @@ You can disable telemetry at any time through any of five controls:
    `unavailable` or throws during `ocx telemetry enable` or `ocx telemetry disable`, the CLI exits
    non-zero with an actionable error, prints no success line, and does not delete
    `telemetry-id.json` unless the decline persisted.
-4. **`OCX_TELEMETRY=0`** — set `OCX_TELEMETRY=0` (or `false`, `off`, `no`, case-insensitive) in the
+5. **`OCX_TELEMETRY=0`** — set `OCX_TELEMETRY=0` (or `false`, `off`, `no`, case-insensitive) in the
    proxy environment.
-5. **`DO_NOT_TRACK=1`** — set `DO_NOT_TRACK=1` (or `true`, `yes`, case-insensitive) in the proxy
+6. **`DO_NOT_TRACK=1`** — set `DO_NOT_TRACK=1` (or `true`, `yes`, case-insensitive) in the proxy
    environment.
 
 Both environment variables override `config.json` immediately without modifying the saved file.
