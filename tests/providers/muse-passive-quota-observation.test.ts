@@ -28,9 +28,9 @@ import {
 } from "../../src/providers/muse-subscription-usage";
 import { captureConfigGeneration, setStateStoreLiveConfigReader } from "../../src/lib/state-store-sweeper";
 import { getAccountSet, saveAccountCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
-import { heldProviderQuotaReports, setProviderQuotaBeforeObservationForTests } from "../../src/providers/quota/report-cache";
-import { fetchMuseKeyQuota } from "../../src/providers/quota/vendor-probes-oauth";
-import { captureMuseQuotaOwner, type MuseQuotaOwner } from "../../src/providers/quota/muse-owner";
+import { heldProviderQuotaReports, isProviderQuotaReportCurrent, setProviderQuotaBeforeObservationForTests } from "../../src/providers/quota/report-cache";
+import { fetchMuseKeyQuota, fetchPassiveProviderQuota } from "../../src/providers/quota/vendor-probes-oauth";
+import { bindMuseQuotaConfig, captureMuseQuotaOwner, type MuseQuotaOwner } from "../../src/providers/quota/muse-owner";
 import { resetMuseKeyQuotaBackoff } from "../../src/providers/muse-key-quota";
 import { registerDecisionQuotaSink, type DecisionQuotaSink } from "../../src/lib/decision-quota-sink";
 import { handleResponses } from "../../src/server/responses";
@@ -52,7 +52,7 @@ let testDir = "";
 const ACCOUNT_ID = "muse-acct-1";
 
 function recordPassiveAccountQuota(provider: string, id: string, quota: import("../../src/providers/quota-types").ProviderQuota,
-  generation: number, owner: MuseQuotaOwner | null = captureMuseQuotaOwner(provider, id)): void {
+  generation: number, owner: MuseQuotaOwner | null = bindMuseQuotaConfig(captureMuseQuotaOwner(provider, id), museConfig(), provider)): void {
   recordWithOwner(provider, id, quota, generation, owner);
 }
 
@@ -549,6 +549,42 @@ describe("provider-level quota row for a passive provider", () => {
       reconcileLiveStateStores();
       expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)?.fiveHourPercent).toBe(40);
     } finally { setLiveStateStoreConfig(config); globalThis.fetch = originalFetch; }
+  });
+
+  test.each(["no-live", "detached"] as const)("provider-level Muse fallback rejects a mismatched %s configuration", async mode => {
+    writeTwoAccounts(true);
+    const config = museConfig(), originalFetch = globalThis.fetch;
+    setLiveStateStoreConfig(config);
+    globalThis.fetch = (async () => Response.json({ is_subs_active: true,
+      subs_usage: { window: { used_percent: 40, window_duration_mins: 300 } } })) as typeof fetch;
+    try {
+      expect((await fetchMuseKeyQuota("meta-muse", config))?.quota.fiveHourPercent).toBe(40);
+      await Bun.sleep(400);
+      if (mode === "no-live") { clearAccountQuotaCache(); setStateStoreLiveConfigReader(() => null); }
+      const changed = structuredClone(config);
+      changed.providers["meta-muse"]!.baseUrl = "https://other.example/v1";
+      const result = await fetchProviderQuotaReports(changed, true);
+      expect(result.reports.find(row => row.provider === "meta-muse")).toBeUndefined();
+      if (mode === "detached") expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)?.fiveHourPercent).toBe(40);
+    } finally { setLiveStateStoreConfig(config); globalThis.fetch = originalFetch; }
+  });
+
+  test("a held passive Muse report rechecks the caller's configuration without retiring its live owner", async () => {
+    writeTwoAccounts(true);
+    const config = museConfig(), originalFetch = globalThis.fetch;
+    setLiveStateStoreConfig(config);
+    globalThis.fetch = (async () => Response.json({ is_subs_active: true,
+      subs_usage: { window: { used_percent: 40, window_duration_mins: 300 } } })) as typeof fetch;
+    try {
+      expect((await fetchMuseKeyQuota("meta-muse", config))?.quota.fiveHourPercent).toBe(40);
+      const detached = structuredClone(config);
+      const held = await fetchPassiveProviderQuota("meta-muse", detached);
+      expect(held?.quota.fiveHourPercent).toBe(40);
+      expect(isProviderQuotaReportCurrent(held!)).toBe(true);
+      detached.providers["meta-muse"]!.baseUrl = "https://other.example/v1";
+      expect(isProviderQuotaReportCurrent(held!)).toBe(false);
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)?.fiveHourPercent).toBe(40);
+    } finally { globalThis.fetch = originalFetch; }
   });
 
   test.each(["missing", "malformed"] as const)("a persisted Muse row with %s config binding is not restored", async kind => {

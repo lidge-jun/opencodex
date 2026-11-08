@@ -41,6 +41,7 @@ import {
   captureProviderAccountQuotaEpoch,
   accountQuotaCache,
   hydrateAccountQuotaCache,
+  isMuseQuotaEntryCurrent,
   mayCommitAccountQuotaKey,
   persistAccountQuotaCache,
 } from "./account-cache";
@@ -464,7 +465,7 @@ export async function fetchMuseKeyQuota(provider: string, config?: OcxConfig): P
  * `report.updatedAt` is the observation time, which is what both GUI surfaces render
  * as the relative age of the row.
  */
-export async function fetchPassiveProviderQuota(provider: string): Promise<ProviderQuotaReport | null> {
+export async function fetchPassiveProviderQuota(provider: string, config?: OcxConfig): Promise<ProviderQuotaReport | null> {
   const owner = captureMuseQuotaOwner(provider);
   if (!owner) return null;
   // Idempotent; without it a proxy restart shows nothing until the next streaming turn
@@ -472,11 +473,11 @@ export async function fetchPassiveProviderQuota(provider: string): Promise<Provi
   hydrateAccountQuotaCache();
   const key = accountCacheKey(provider, owner.accountId);
   const entry = accountQuotaCache.get(key);
-  if (!entry?.quota || entry.identity !== owner.identity || !entry.isCurrent?.()) return null;
+  if (!entry?.quota || entry.identity !== owner.identity || !isMuseQuotaEntryCurrent(entry, config)) return null;
   const built = report(provider, `${provider}:subscription-observation`, entry.quota);
   // Tagged here rather than inside report(), which every probed path shares.
   return bindMuseReport(built ? { ...built, observed: true } : null, {
-    ...owner, isCurrent: () => accountQuotaCache.get(key) === entry && entry.isCurrent?.() === true && owner.isCurrent(),
+    ...owner, isCurrent: () => accountQuotaCache.get(key) === entry && isMuseQuotaEntryCurrent(entry, config) && owner.isCurrent(),
   });
 }
 

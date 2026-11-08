@@ -132,7 +132,7 @@ async function maybeFetchProviderQuota(
     // imported or pasted one cannot, and falls back to its last in-band observation.
     // The probe is tried first and its failure is never fatal to the row.
     if (provider.authMode === "oauth" && hasPassiveAccountQuota(name)) {
-      return (await fetchMuseKeyQuota(name, config)) ?? await fetchPassiveProviderQuota(name);
+      return (await fetchMuseKeyQuota(name, config)) ?? await fetchPassiveProviderQuota(name, config);
     }
     const reader = keyQuotaReaderForProvider(name, provider);
     // Keep destination/auth fields bound to the same request as the reader's captured

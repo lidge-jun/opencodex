@@ -243,6 +243,14 @@ export function accountCacheKey(provider: string, accountId: string): string {
   return `${provider}\u0000${accountId}`;
 }
 
+/** Validate the saved owner against both the adopted config and the caller's projection. */
+export function isMuseQuotaEntryCurrent(entry: AccountQuotaCacheEntry, config?: OcxConfig): boolean {
+  if (!entry.museConfigIdentity || !entry.isCurrent?.()) return false;
+  if (config && museQuotaConfigIdentity(config, "meta-muse") !== entry.museConfigIdentity) return false;
+  const live = readStateStoreLiveConfig(getConfigDir());
+  return live ? entry.isConfigCurrent?.(live) === true : !entry.museHydrated;
+}
+
 /**
  * Synchronous last-good per-account quota read for routing. Never probes the network.
  * Returns null when nothing is cached (or the cached row has no bars).
