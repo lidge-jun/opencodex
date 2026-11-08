@@ -1,5 +1,6 @@
 import { parseResetCooldownMs } from "../codex/routing";
 import { classifyError, isCyberPolicyCode } from "../lib/errors";
+import { isHardPolicyOrOriginRefusal } from "../lib/hard-refusal";
 import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
 import { isAnthropicBillingFailure } from "../providers/anthropic-billing-refusal";
 import { isKiroAccountProfileRefusal } from "../adapters/kiro-refusal";
@@ -389,8 +390,10 @@ function normalizedFailureCode(code?: string | null): string {
  */
 function isExactInvalidReasoningEffortRefusal(status: number, message: string, code?: string | null): boolean {
   if (status !== 400 || message.length > 16_384) return false;
+  if (code !== undefined && code !== null && typeof code !== "string") return false;
   const outerCode = normalizedFailureCode(code);
   if (!["", "invalid_request_error", "invalid_argument"].includes(outerCode)) return false;
+  if (isHardPolicyOrOriginRefusal(message)) return false;
   let text = message.trim();
   for (let depth = 0; depth < 3; depth += 1) {
     if (text.startsWith("Provider error 400: ")) text = text.slice("Provider error 400: ".length).trim();
@@ -399,14 +402,20 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
     try { payload = JSON.parse(text); } catch { return false; }
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
     const root = payload as Record<string, unknown>;
-    if (normalizedFailureCode(typeof root.code === "string" ? root.code : undefined) === "invalid_argument"
+    if (root.code !== undefined && root.code !== null && typeof root.code !== "string") return false;
+    if (root.type !== undefined && root.type !== null && typeof root.type !== "string") return false;
+    if (root.param !== undefined && root.param !== null && typeof root.param !== "string") return false;
+    if (normalizedFailureCode(root.code as string | undefined) === "invalid_argument"
       && root.error === "Invalid reasoning effort."
       && (root.type === undefined || root.type === "invalid_request_error")
       && (root.param === undefined || root.param === "reasoning_effort" || root.param === "reasoning.effort")) return true;
     const error = root.error;
     if (!error || typeof error !== "object" || Array.isArray(error)) return false;
     const record = error as Record<string, unknown>;
-    const errorCode = normalizedFailureCode(typeof record.code === "string" ? record.code : undefined);
+    if (record.code !== undefined && record.code !== null && typeof record.code !== "string") return false;
+    if (record.type !== undefined && record.type !== null && typeof record.type !== "string") return false;
+    if (record.param !== undefined && record.param !== null && typeof record.param !== "string") return false;
+    const errorCode = normalizedFailureCode(record.code as string | undefined);
     if (record.type === "upstream_error" && typeof record.message === "string"
       && record.message.startsWith("Provider error 400: ")
       && ["", "invalid_request_error", "invalid_argument"].includes(errorCode)) {

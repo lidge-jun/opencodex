@@ -26,6 +26,8 @@ import { join } from "node:path";
 // and leaves COMBO_NAMESPACE in its temporal dead zone for entry points that start at combos/types.ts.
 import { atomicWriteFile } from "../config/atomic-write";
 import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
+import { isHardPolicyOrOriginRefusal } from "../lib/hard-refusal";
+export { isHardPolicyOrOriginRefusal };
 import type { OcxProviderConfig } from "../types";
 import { resolveProviderApiKey } from "./api-key-resolve";
 
@@ -455,6 +457,7 @@ const GENERIC_ERROR_TYPE = /invalid_request_error/gi;
  */
 export function isReasoningEffortRejection(text: string | undefined): boolean {
   if (!text) return false;
+  if (isHardPolicyOrOriginRefusal(text)) return false;
   if (/unsupported.{0,24}effort/i.test(text)) return true;
   // An upstream that names the offending parameter has already said which one it means.
   if (/["']?param["']?\s*[:=]\s*["']?(?:reasoning[._ ]effort|reasoning)/i.test(text)) return true;
@@ -478,6 +481,7 @@ export function planReasoningEffortDowngrade(args: {
   requested?: string;
   rejectionText?: string;
 }): { effort: string; recorded: boolean } | undefined {
+  if (args.rejectionText && isHardPolicyOrOriginRefusal(args.rejectionText)) return undefined;
   const requested = args.requested === "ultra" ? "max" : args.requested;
   if (!requested || !RANKED.includes(requested)) return undefined;
   const recorded = recordUnsupportedReasoningEffort(args.provider, args.modelId, requested, args.rejectionText);

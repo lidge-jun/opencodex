@@ -535,6 +535,22 @@ describe("bounded optional-control error envelopes", () => {
       expect(comboFailureCooldownScope(400, msg)).toBe("none");
     }
   });
+  test("rejects malformed error codes before granting a combo hop for reasoning effort", () => {
+    for (const malformedCode of [42, true, {}, []]) {
+      const payloadWithCode = JSON.stringify({
+        error: { type: "invalid_request_error", code: malformedCode, message: "Invalid reasoning effort." },
+      });
+      expect(comboFailureDecision(400, payloadWithCode)).toBe("stop");
+      expect(comboFailureCooldownScope(400, payloadWithCode)).toBe("target");
+
+      const rootWithCode = JSON.stringify({
+        code: malformedCode,
+        error: "Invalid reasoning effort.",
+      });
+      expect(comboFailureDecision(400, rootWithCode)).toBe("stop");
+      expect(comboFailureCooldownScope(400, rootWithCode)).toBe("target");
+    }
+  });
 });
 
 describe("image rejection classifier bounds", () => {

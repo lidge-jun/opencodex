@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses } from "../../src/server/responses/core";
 import { clearComboSelectionState, clearComboTargetCooldowns, isComboTargetInCooldown } from "../../src/combos";
-import { resetReasoningMetadataCachesForTests } from "../../src/providers/reasoning-metadata";
+import { isReasoningEffortLearnedUnsupported, resetReasoningMetadataCachesForTests } from "../../src/providers/reasoning-metadata";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { chatSuccess } from "../helpers/combo-failover-upstream";
@@ -25,6 +25,14 @@ const REFUSAL = JSON.stringify({
     param: "reasoning.effort",
     type: "invalid_request_error",
     message: "Error from provider (Console Go): Upstream request failed: [invalid_request_error] reasoning_effort max requires an active Muse Code subscription for model muse-spark-1.3-contributor.",
+  },
+});
+const POLICY_REFUSAL = JSON.stringify({
+  error: {
+    type: "invalid_request_error",
+    code: "cyber_policy",
+    param: "reasoning_effort",
+    message: "Request blocked by upstream cybersecurity policy.",
   },
 });
 const VENDOR_EFFORT_REFUSAL = JSON.stringify({ code: "invalid-argument", error: "Invalid reasoning effort." });
@@ -388,5 +396,80 @@ describe("rejected reasoning rungs", () => {
       { host: "custom.example", effort: "high" },
     ]);
     expect(logCtx.activeAttempt?.recoveryKinds).toEqual(["reasoning-effort-downgrade"]);
+  });
+
+  test("stops before walking effort ladder on policy refusal (openai-chat)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(POLICY_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = config();
+    const response = await handleResponses(request(), cfg, logCtx);
+    const text = await response.text();
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(text).toContain("cyber_policy");
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("stops before walking effort ladder on policy refusal (openai-responses)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(POLICY_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = passthroughConfig();
+    const response = await handleResponses(request(), cfg, logCtx);
+    const text = await response.text();
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(text).toContain("cyber_policy");
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("combo stops immediately on policy refusal carrying reasoning_effort without walking ladder", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const attempts: Array<{ host: string; effort: unknown }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      attempts.push({ host: url.host, effort: effortOf(body) });
+      return new Response(POLICY_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const comboConfig = {
+      providers: {
+        first: { adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+        fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
+      },
+      combos: {
+        effort: {
+          strategy: "failover",
+          targets: [{ provider: "first", model: MODEL }, { provider: "fallback", model: MODEL }],
+        },
+      },
+    } as OcxConfig;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const response = await handleResponses(request(false, "combo/effort"), comboConfig, logCtx);
+    const result = await response.text();
+
+    expect(response.status).toBe(400);
+    expect(result).toContain("cyber_policy");
+    expect(attempts).toEqual([
+      { host: "opencode.ai", effort: "max" },
+    ]);
   });
 });
