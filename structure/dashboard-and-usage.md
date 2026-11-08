@@ -548,13 +548,10 @@ enabling it takes effect without a restart.
   reset there before dispatch, so a reset is attempted at most once, across restarts and racing
   observers; a failed delivery is not retried. `src/quota/reset-sinks.ts` delivers to a webhook or
   a local command; each sink is best-effort and isolated from the other.
-- `src/quota/reset-poller.ts` is an opt-in idle refresh (default 15 minutes, floor 10). Without it,
-  quota reports are fetched only when the dashboard or CLI asks, and an overnight reset goes
-  unobserved. Each tick uses the server's adopted live configuration for the current home when
-  available; a detached disk snapshot cannot authorize a provider the live server disabled. The
-  state-store owner supplies that home-scoped live configuration without adding a static poller
-  dependency. `src/quota/reset-activation.ts` installs the sink independently of the poller, so
-  `pollSeconds: 0` observes live traffic only.
+- `src/quota/reset-poller.ts` is an opt-in idle refresh (default 15 minutes; floor 10).
+  Without it, an overnight reset can go unobserved; every tick uses home-scoped live config when available.
+  The state-store owner supplies it dynamically, so detached disk config cannot re-enable a disabled provider.
+  `src/quota/reset-activation.ts` installs the sink independently; `pollSeconds: 0` observes live traffic only.
 
 ## Usage history and model identity
 
