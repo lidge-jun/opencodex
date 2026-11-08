@@ -408,8 +408,9 @@ sources in temporary build checkouts using `scripts/release-version-sources.ts`.
 `package.json`, `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/Cargo.toml`, and the
 `opencodex-desktop` entry in `desktop/src-tauri/Cargo.lock`. The new path remains pre-cutover:
 a non-dry run fails unless the repository variable `OCX_DEV_RELEASE_PUBLISH_ENABLED` equals `true`.
-Independent review of the legacy history mapping, real dry-run evidence and that setting remain
-maintainer cutover steps; this text does not attest them. Docs publishing is separate.
+Independent review of the legacy history mapping, real dry-run evidence and that setting are among
+the maintainer cutover steps listed in `MAINTAINERS.md`; this text does not attest them. Docs
+publishing is separate.
 
 Dispatch inputs are `tag` (`latest` or `preview`), `dry-run` (default `true`), an optional
 `expected-sha` that must be a full `dev` SHA with qualifying CI evidence, an optional `version`
@@ -438,12 +439,14 @@ Resume recovers a run that stopped after npm acknowledged the publication. It re
 the original source and version; the version must match the channel's format. It skips history
 reconciliation and npm publish. Instead, `scripts/verify-release-resume.ts` and
 `.github/scripts/release-resume.cjs` require that exact npm version to exist with `gitHead` equal
-to the supplied source, that no newer npm version or `v*` tag exists, and that an existing tag for
-the version points at that source; an existing GitHub release must carry the channel's prerelease
+to the supplied source, that no newer npm version or version tag (`v` followed by a digit) exists,
+and that an existing tag for the version points at that source; an existing GitHub release must
+carry the channel's prerelease
 flag. The resume rebuilds every asset, and existing release assets must match the digests in the
-receipt from this run's `verify-release` job, so an asset whose rebuild is not byte-identical (for
-example a re-signed Windows binary) refuses the resume. A published release missing a verified
-asset is refused.
+receipt from this run's `verify-release` job. Archives carry timestamps and signed binaries change
+on every signing, so a rebuilt asset almost never matches one already attached: in practice a
+resume completes only when the GitHub release does not exist yet or is a draft without assets. A
+published release missing a verified asset is refused.
 Registry metadata is a consistency check, not cryptographic provenance: the operator attests the
 original source and version, and a source or version that cannot be verified refuses the resume.
 

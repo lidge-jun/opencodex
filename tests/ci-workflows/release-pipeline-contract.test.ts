@@ -139,8 +139,10 @@ describe("release pipeline contract", () => {
     }
     // The pre-#8328 text said resume was refused and any npm history failed the run.
     const ci = readFileSync(repoPath("structure", "ops", "cross-platform-ci.md"), "utf8");
-    for (const [name, text] of [["docs-and-release.md", doc], ["cross-platform-ci.md", ci]] as const) {
-      for (const stale of ["refuses resume", "Resume is also refused", "Resume is refused", "fails closed on existing npm", "fails closed for existing npm"]) {
+    const contributing = readFileSync(repoPath("docs-site", "src", "content", "docs", "contributing.md"), "utf8");
+    for (const [name, text] of [["docs-and-release.md", doc], ["cross-platform-ci.md", ci], ["contributing.md", contributing]] as const) {
+      for (const stale of ["refuses resume", "Resume is also refused", "Resume is refused", "fails closed on existing npm",
+        "fails closed for existing npm", "history reconciliation, independent"]) {
         expect(text, `${name}: ${stale}`).not.toContain(stale);
       }
     }
