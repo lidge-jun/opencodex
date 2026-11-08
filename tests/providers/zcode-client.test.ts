@@ -271,24 +271,25 @@ describe("ocx zcode CLI alias", () => {
     return { deps: { baseUrl: "http://127.0.0.1:10100", fetchImpl }, requests };
   }
 
-  test("enable forwards durable Home route intent for zcode", async () => {
+  // A plain toggle is the Home's own decision, like the dashboard: it never writes the Children's default.
+  test("enable is a Home-only decision for zcode", async () => {
     const { deps, requests } = fakeRuntime();
     const code = await handleZcodeCommand(["enable"], deps);
     expect(code).toBe(0);
-    expect(requests).toEqual([{ path: "/api/route-to", method: "PUT", body: { client: "zcode", action: "on" } }]);
+    expect(requests).toEqual([{ path: "/api/client-integrations/zcode", method: "PUT", body: { enabled: true } }]);
   });
 
   test("a flag before the verb does not swallow it", async () => {
     const { deps, requests } = fakeRuntime();
     const code = await handleZcodeCommand(["--json", "enable"], deps);
     expect(code).toBe(0);
-    expect(requests).toEqual([{ path: "/api/route-to", method: "PUT", body: { client: "zcode", action: "on" } }]);
+    expect(requests).toEqual([{ path: "/api/client-integrations/zcode", method: "PUT", body: { enabled: true } }]);
   });
 
-  test("disable forwards durable Home off intent for zcode", async () => {
+  test("disable is a Home-only decision for zcode", async () => {
     const { deps, requests } = fakeRuntime();
     expect(await handleZcodeCommand(["disable", "--json"], deps)).toBe(0);
-    expect(requests).toEqual([{ path: "/api/route-to", method: "PUT", body: { client: "zcode", action: "off" } }]);
+    expect(requests).toEqual([{ path: "/api/client-integrations/zcode", method: "PUT", body: { enabled: false } }]);
   });
 
   test("bare invocation reads status, never writes", async () => {

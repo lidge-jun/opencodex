@@ -38,10 +38,20 @@ test("native on a Child is refused with the Home device command", async () => {
   expect(err.mock.calls.flat().join("\n")).toContain("ocx route to codex off --device lnk_0123456789abcdef");
 });
 
-test.each(["enable", "disable"])("plain client %s aliases Home route intent", async action => {
+// Like the dashboard toggle, a plain toggle is this Home's own decision; ocx route to changes the Children's default.
+test.each(["enable", "disable"])("plain client %s is a Home-only decision", async action => {
+  const f = fixture({ ok: true, clientId: "pi", state: "current", changed: true });
+  expect(await handleClientIntegrationCommand([action, "--client", "pi", "--json"], { ...f.deps, readChildContext: () => null } as never)).toBe(0);
+  expect(f.calls).toEqual([{ path: "/api/client-integrations/pi", body: { enabled: action === "enable" } }]);
+  expect(err.mock.calls.flat().join("\n")).toContain("linked Children keep their route defaults (ocx route to <client> on|off changes those)");
+});
+
+test("plain client enable on a Child is refused with the Home command", async () => {
   const f = fixture();
-  expect(await handleClientIntegrationCommand([action, "--client", "aside", "--json"], f.deps)).toBe(0);
-  expect(f.calls).toEqual([{ path: "/api/route-to", body: { client: "aside", action: action === "enable" ? "on" : "off" } }]);
+  const deps = { ...f.deps, readChildContext: () => ({ connection: {} as never, linkId: "lnk_0123456789abcdef", homePhrase: "the Home" }) };
+  expect(await handleClientIntegrationCommand(["enable", "--client", "pi"], deps as never)).toBe(5);
+  expect(f.calls).toEqual([]);
+  expect(err.mock.calls.flat().join("\n")).toContain("ocx route to pi on --device lnk_0123456789abcdef");
 });
 
 test("profile-scoped actions preserve local profile addressing", async () => {
@@ -60,14 +70,15 @@ test.each([
   expect(f.calls).toEqual([{ path: `/api/client-integrations/${client}`, body: { enabled: true, ...extra } }]);
 });
 
-test("plain model naming becomes durable Home intent", async () => {
-  const f = fixture();
-  expect(await handleClientIntegrationCommand(["enable", "--client=hermes", "--model-names=alias", "--overwrite-conflict", "--json"], f.deps)).toBe(0);
-  expect(f.calls).toEqual([{ path: "/api/route-to", body: { client: "hermes", action: "on", modelNames: "alias", overwriteConflict: true } }]);
-});
 
 test("explicit profile model naming keeps its legacy scoped path", async () => {
   const f = fixture();
   expect(await handleClientIntegrationCommand(["enable", "--client", "aside", "--profile", "2", "--model-names=alias"], f.deps)).toBe(2);
   expect(f.calls).toEqual([]);
+});
+
+test("plain model naming is a Home-only decision too", async () => {
+  const f = fixture({ ok: true, clientId: "hermes", state: "current", changed: true });
+  expect(await handleClientIntegrationCommand(["enable", "--client=hermes", "--model-names=alias", "--overwrite-conflict", "--json"], { ...f.deps, readChildContext: () => null } as never)).toBe(0);
+  expect(f.calls).toEqual([{ path: "/api/client-integrations/hermes", body: { enabled: true, modelNames: "alias", overwriteConflict: true } }]);
 });

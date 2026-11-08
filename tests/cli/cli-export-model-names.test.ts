@@ -31,7 +31,6 @@ function fixture(client: string, preview = false) {
       return Response.json(url.pathname === "/api/client-config"
         ? { client, format: client === "hermes" ? "yaml" : "json", config: document, text }
         : url.pathname === "/api/models" ? [{ namespaced: "acme/vendor-model-x", provider: "acme", id: "vendor/model-x", disabled: false }]
-        : url.pathname === "/api/route-to" ? { schema: "ocx.route-to/1", devices: [{ id: "home", clients: [{ client, intent: "on", source: "default", applied: "current" }] }] }
         : preview ? { version: 1, clientId: client, operation: JSON.parse(String(init?.body)).operation, state: "absent", foreignEdit: "none", changes: [], fingerprint: token, canApply: true, willChange: false }
           : { ok: true, clientId: client, state: "current", changed: true });
     }) as typeof fetch,
@@ -65,9 +64,7 @@ for (const client of ["hermes", "commandcode"]) for (const mode of ["alias", "ro
     for (const bound of [false, true]) {
       const f = fixture(client);
       expect(await handleClientIntegrationCommand(["enable", "--client", client, "--model-names", mode, ...(bound ? ["--plan-fingerprint", token] : []), "--json"], f.deps)).toBe(0);
-      expect(f.calls).toEqual(bound
-        ? [{ path: `/api/client-integrations/${client}`, method: "PUT", body: { enabled: true, modelNames: mode, operation: "apply", planFingerprint: token } }]
-        : [{ path: "/api/route-to", method: "PUT", body: { client, action: "on", modelNames: mode } }]);
+      expect(f.calls).toEqual([{ path: `/api/client-integrations/${client}`, method: "PUT", body: { enabled: true, modelNames: mode, ...(bound ? { operation: "apply", planFingerprint: token } : {}) } }]);
     }
   });
   test(`${client} preview ${mode} forwards modelNames`, async () => {
@@ -79,7 +76,7 @@ for (const client of ["hermes", "commandcode"]) for (const mode of ["alias", "ro
 test("ordinary enable omission does not insert a mode", async () => {
   const f = fixture("hermes");
   expect(await handleClientIntegrationCommand(["enable", "--client", "hermes", "--json"], f.deps)).toBe(0);
-  expect(f.calls[0]).toEqual({ path: "/api/route-to", method: "PUT", body: { client: "hermes", action: "on" } });
+  expect(f.calls[0]?.body).toEqual({ enabled: true });
 });
 test("overwrite enable and preview carry the selected mode", async () => {
   const f = fixture("hermes");
