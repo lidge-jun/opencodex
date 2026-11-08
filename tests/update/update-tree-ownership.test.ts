@@ -280,7 +280,8 @@ describe("#4202 install-tree dependency ownership", () => {
         if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: exposed } } }]) };
         if (args[0] === "root") return { status: 0, stdout: globalRoot };
         if (args[0] === "store") return { status: 0, stdout: store };
-        if (args[0] === "config" && ["virtualStoreDir", "globalVirtualStoreDir"].includes(args[2])) return { status: 0, stdout: "undefined" };
+        if (args[0] === "config" && args[2] === "store-dir") return { status: 0, stdout: store };
+        if (args[0] === "config" && ["virtual-store-dir", "global-virtual-store-dir"].includes(args[2])) return { status: 0, stdout: "undefined" };
         if (args[2] === "global-dir") return { status: 0, stdout: join(root, "pnpm", "global", "v11") };
         if (args[2] === "global-bin-dir") return { status: 0, stdout: join(root, "bin") };
         return { status: 1 };
@@ -294,7 +295,7 @@ describe("#4202 install-tree dependency ownership", () => {
     const globalRoot = join(root, "pnpm", "global", "v11", "g1");
     const globalDir = join(root, "pnpm", "global", "v11");
     const bin = join(root, "pnpm", "bin");
-    const store = join(root, "actual-custom-store");
+    const store = join(root, "actual-custom-store", "v11");
     mkdirSync(store, { recursive: true });
     const result = resolvePnpmGlobalOwner({ packageName: PKG, packagePath: exposed,
       commandPaths: [join(root, "pnpm-executable")],
@@ -302,7 +303,8 @@ describe("#4202 install-tree dependency ownership", () => {
         if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: exposed } } }]) };
         if (args[0] === "root") return { status: 0, stdout: globalRoot };
         if (args[0] === "store") return { status: 0, stdout: store };
-        if (args[0] === "config" && ["virtualStoreDir", "globalVirtualStoreDir"].includes(args[2])) return { status: 0, stdout: "undefined" };
+        if (args[0] === "config" && args[2] === "store-dir") return { status: 0, stdout: store };
+        if (args[0] === "config" && ["virtual-store-dir", "global-virtual-store-dir"].includes(args[2])) return { status: 0, stdout: "undefined" };
         if (args[2] === "global-dir") return { status: 0, stdout: globalDir };
         if (args[2] === "global-bin-dir") return { status: 0, stdout: bin };
         return { status: 1 };
@@ -327,7 +329,8 @@ describe("#4202 install-tree dependency ownership", () => {
         if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: foreign } } }]) };
         if (args[0] === "root") return { status: 0, stdout: globalRoot };
         if (args[0] === "store") return { status: 0, stdout: store };
-        if (args[0] === "config" && ["virtualStoreDir", "globalVirtualStoreDir"].includes(args[2])) return { status: 0, stdout: "undefined" };
+        if (args[0] === "config" && args[2] === "store-dir") return { status: 0, stdout: store };
+        if (args[0] === "config" && ["virtual-store-dir", "global-virtual-store-dir"].includes(args[2])) return { status: 0, stdout: "undefined" };
         if (args[2] === "global-dir") return { status: 0, stdout: join(root, "global") };
         if (args[2] === "global-bin-dir") return { status: 0, stdout: join(root, "bin") };
         return { status: 1 };
@@ -352,7 +355,8 @@ describe("#4202 install-tree dependency ownership", () => {
         if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: foreign } } }]) };
         if (args[0] === "root") return { status: 0, stdout: globalRoot };
         if (args[0] === "store") return { status: 0, stdout: store };
-        if (args[0] === "config" && ["virtualStoreDir", "globalVirtualStoreDir"].includes(args[2])) return { status: 0, stdout: "undefined" };
+        if (args[0] === "config" && args[2] === "store-dir") return { status: 0, stdout: store };
+        if (args[0] === "config" && ["virtual-store-dir", "global-virtual-store-dir"].includes(args[2])) return { status: 0, stdout: "undefined" };
         if (args[2] === "global-dir") return { status: 0, stdout: join(root, "global") };
         if (args[2] === "global-bin-dir") return { status: 0, stdout: join(root, "bin") };
         return { status: 1 };
@@ -372,7 +376,8 @@ describe("#4202 install-tree dependency ownership", () => {
     const result = readPnpmGlobalPackage(PKG, args => {
       if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: outside } } }]) };
       if (args[0] === "store") return { status: 0, stdout: store };
-        if (args[0] === "config" && ["virtualStoreDir", "globalVirtualStoreDir"].includes(args[2])) return { status: 0, stdout: "undefined" };
+        if (args[0] === "config" && args[2] === "store-dir") return { status: 0, stdout: store };
+        if (args[0] === "config" && ["virtual-store-dir", "global-virtual-store-dir"].includes(args[2])) return { status: 0, stdout: "undefined" };
       return { status: 1 };
     }, () => ({ ok: true }), { owner, checkShims: false });
     expect(result.ok).toBe(false);
@@ -399,7 +404,8 @@ describe("#4202 install-tree dependency ownership", () => {
           if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: listed } } }]) };
           if (args[0] === "root") return { status: 0, stdout: globalRoot };
           if (args[0] === "store") return { status: 0, stdout: store };
-        if (args[0] === "config" && ["virtualStoreDir", "globalVirtualStoreDir"].includes(args[2])) return { status: 0, stdout: "undefined" };
+        if (args[0] === "config" && args[2] === "store-dir") return { status: 0, stdout: store };
+        if (args[0] === "config" && ["virtual-store-dir", "global-virtual-store-dir"].includes(args[2])) return { status: 0, stdout: "undefined" };
           if (args[2] === "global-dir") return { status: 0, stdout: join(root, "global") };
           if (args[2] === "global-bin-dir") return { status: 0, stdout: join(root, "bin") };
           return { status: 1 };
@@ -784,8 +790,9 @@ describe("#4202 install-tree dependency ownership", () => {
         if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: packageDir } } }]) };
         if (args[0] === "root") return { status: 0, stdout: globalRoot };
         if (args[0] === "store") return { status: 0, stdout: store };
-        if (args[0] === "config" && args[2] === "virtualStoreDir") return { status: 0, stdout: configured };
-        if (args[0] === "config" && args[2] === "globalVirtualStoreDir") return { status: 0, stdout: "undefined" };
+        if (args[0] === "config" && args[2] === "store-dir") return { status: 0, stdout: store };
+        if (args[0] === "config" && args[2] === "virtual-store-dir") return { status: 0, stdout: configured };
+        if (args[0] === "config" && args[2] === "global-virtual-store-dir") return { status: 0, stdout: "undefined" };
         if (args[2] === "global-dir") return { status: 0, stdout: join(root, "global") };
         if (args[2] === "global-bin-dir") return { status: 0, stdout: join(root, "bin") };
         return { status: 1 };
@@ -799,7 +806,7 @@ describe("#4202 install-tree dependency ownership", () => {
     expect(result.failures).toContain("pnpm dependency link escapes the selected store: zod");
   });
 
-  test.each(["virtualStoreDir", "globalVirtualStoreDir"])("refuses %s outside the selected store", setting => {
+  test.each(["virtual-store-dir", "global-virtual-store-dir"])("refuses %s outside the selected store", setting => {
     const globalRoot = join(root, "global", "v11"), store = join(root, "selected", "v11"), outside = join(root, "outside-virtual");
     const packageDir = join(outside, "pkg", "node_modules", ...PKG.split("/"));
     mkdirSync(store, { recursive: true }); writePackage(packageDir, "2.0.0");
@@ -809,8 +816,9 @@ describe("#4202 install-tree dependency ownership", () => {
         if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: globalRoot, dependencies: { [PKG]: { version: "2.0.0", path: packageDir } } }]) };
         if (args[0] === "root") return { status: 0, stdout: globalRoot };
         if (args[0] === "store") return { status: 0, stdout: store };
+        if (args[0] === "config" && args[2] === "store-dir") return { status: 0, stdout: store };
         if (args[0] === "config" && args[2] === setting) return { status: 0, stdout: outside };
-        if (args[0] === "config" && ["virtualStoreDir", "globalVirtualStoreDir"].includes(args[2])) return { status: 0, stdout: "undefined" };
+        if (args[0] === "config" && ["virtual-store-dir", "global-virtual-store-dir"].includes(args[2])) return { status: 0, stdout: "undefined" };
         if (args[2] === "global-dir") return { status: 0, stdout: join(root, "global") };
         if (args[2] === "global-bin-dir") return { status: 0, stdout: join(root, "bin") };
         return { status: 1 };
