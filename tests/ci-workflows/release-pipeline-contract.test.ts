@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, win32 } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
@@ -81,6 +81,12 @@ function releaseTestBash(): string | null {
     } catch { /* Try another native installation; no shell means an explicit local skip. */ }
   }
   return null;
+}
+
+function releaseShellPath(nodeDirectory: string, bashPath: string, windows: boolean): string {
+  if (!windows) return `${nodeDirectory}:/usr/bin:/bin`;
+  const shellDirectory = win32.dirname(bashPath);
+  return [nodeDirectory, shellDirectory, win32.join(shellDirectory, "..", "usr", "bin")].join(";");
 }
 
 /**
@@ -669,6 +675,27 @@ describe("release pipeline contract", () => {
       if (process.env.CI || process.platform !== "win32") expect(bash).not.toBeNull();
     });
 
+    test("Git Bash receives native Windows PATH entries separated by semicolons", () => {
+      const nodeDir = "C:\\Program Files\\nodejs";
+      const gitBash = "C:\\Program Files\\Git\\bin\\bash.exe";
+      expect(releaseShellPath(nodeDir, gitBash, true).split(";")).toEqual([
+        nodeDir, win32.dirname(gitBash), win32.join(win32.dirname(gitBash), "..", "usr", "bin"),
+      ]);
+    });
+
+    shellTest("Bash can run Node on a temporary checker file", () => {
+      const cwd = mkdtempSync(join(tmpdir(), "ocx-bash-checker-"));
+      try {
+        const result = Bun.spawnSync([bash!, "--noprofile", "--norc", "-e", "-c",
+          `cat > "$RUNNER_TEMP/check.cjs" <<'NODE'\nprocess.stdout.write('checker-ran');\nNODE\nnode "$RUNNER_TEMP/check.cjs"`], {
+          cwd, env: releaseTestEnv({ PATH: releaseShellPath(dirname(Bun.which("node")!), bash!, process.platform === "win32"), RUNNER_TEMP: "." }),
+          timeout: 3_000, maxBuffer: 16_384,
+        });
+        expect(result.exitCode, result.stderr.toString()).toBe(0);
+        expect(result.stdout.toString()).toBe("checker-ran");
+      } finally { removeTreeWithRetry(cwd); }
+    });
+
     /** Run the actual YAML block with an allowlisted gh mock. */
     function attach(env: Record<string, string> = {}) {
       const run = release.jobs?.["attach-release"]?.steps
@@ -699,13 +726,13 @@ describe("release pipeline contract", () => {
           }
           ${run}
           printf 'attach-completed\\n'
-        `], { cwd, env: releaseTestEnv({ PATH: `${dirname(Bun.which("node")!)}:/usr/bin:/bin`, RUNNER_TEMP: cwd, RELEASE_VERSION: "2.65.0", DRAFT_STATE: "true",
+        `], { cwd, env: releaseTestEnv({ PATH: releaseShellPath(dirname(Bun.which("node")!), bash!, process.platform === "win32"), RUNNER_TEMP: ".", RELEASE_VERSION: "2.65.0", DRAFT_STATE: "true",
           RELEASE_INFO: '{"isDraft":true,"assets":[]}', INITIAL_STATUS: "0",
           FINAL_INFO: JSON.stringify({ isDraft: true, assets: [{ name: "app.zip", state: "uploaded", digest: `sha256:${digest}` }] }),
           UPLOAD_STATUS: "0", VIEW_STATUS: "0", EDIT_STATUS: "0", ...env }),
           timeout: 3_000, maxBuffer: 16_384 });
         const calls = result.stderr.toString().split(/\r?\n/).filter(line => line.startsWith("gh:"));
-        return { code: result.exitCode, calls, completed: result.stdout.toString().includes("attach-completed") };
+        return { code: result.exitCode, calls, completed: result.stdout.toString().includes("attach-completed"), stderr: result.stderr.toString() };
       } finally {
         removeTreeWithRetry(cwd);
       }
@@ -716,33 +743,39 @@ describe("release pipeline contract", () => {
     const view = "gh:release view v2.65.0 --json isDraft --jq .isDraft";
     const edit = "gh:release edit v2.65.0 --draft=false";
 
+    function expectAttach(env: Record<string, string>, expected: { code: number; calls: string[]; completed: boolean }) {
+      const { stderr, ...actual } = attach(env);
+      expect(actual, stderr).toEqual(expected);
+      return stderr;
+    }
+
     shellTest("lookup failure propagates even when stdout says true", () => {
-      expect(attach({ VIEW_STATUS: "41" })).toEqual({ code: 41, calls: [initial, upload, initial, view], completed: false });
+      expectAttach({ VIEW_STATUS: "41" }, { code: 41, calls: [initial, upload, initial, view], completed: false });
     });
     for (const value of ["", "null", "TRUE", " true", "{}", "true\nfalse"]) {
       shellTest(`unexpected draft state ${JSON.stringify(value)} never publishes`, () => {
-        expect(attach({ DRAFT_STATE: value })).toEqual({ code: 1, calls: [initial, upload, initial, view], completed: false });
+        expectAttach({ DRAFT_STATE: value }, { code: 1, calls: [initial, upload, initial, view], completed: false });
       });
     }
     shellTest("a draft is published exactly once, after upload and lookup", () => {
-      expect(attach()).toEqual({ code: 0, calls: [initial, upload, initial, view, edit], completed: true });
+      expectAttach({}, { code: 0, calls: [initial, upload, initial, view, edit], completed: true });
     });
     shellTest("an explicitly public release is not edited again", () => {
-      expect(attach({ DRAFT_STATE: "false" })).toEqual({ code: 0, calls: [initial, upload, initial, view], completed: true });
+      expectAttach({ DRAFT_STATE: "false" }, { code: 0, calls: [initial, upload, initial, view], completed: true });
     });
     shellTest("upload failure prevents lookup and publication", () => {
-      expect(attach({ UPLOAD_STATUS: "42" })).toEqual({ code: 42, calls: [initial, upload], completed: false });
+      expectAttach({ UPLOAD_STATUS: "42" }, { code: 42, calls: [initial, upload], completed: false });
     });
     shellTest("publication failure remains a failed step", () => {
-      expect(attach({ EDIT_STATUS: "43" })).toEqual({ code: 43, calls: [initial, upload, initial, view, edit], completed: false });
+      expectAttach({ EDIT_STATUS: "43" }, { code: 43, calls: [initial, upload, initial, view, edit], completed: false });
     });
     shellTest("existing release assets fail before any upload", () => {
-      expect(attach({ RELEASE_INFO: '{"isDraft":true,"assets":[{"name":"old"}]}' }))
-        .toEqual({ code: 1, calls: [initial], completed: false });
+      expect(expectAttach({ RELEASE_INFO: '{"isDraft":true,"assets":[{"name":"old"}]}' },
+        { code: 1, calls: [initial], completed: false })).toContain("existing asset is unexpected");
     });
     shellTest("an already published release fails before any upload", () => {
-      expect(attach({ RELEASE_INFO: '{"isDraft":false,"assets":[]}' }))
-        .toEqual({ code: 1, calls: [initial], completed: false });
+      expect(expectAttach({ RELEASE_INFO: '{"isDraft":false,"assets":[]}' },
+        { code: 1, calls: [initial], completed: false })).toContain("release is missing verified assets");
     });
   });
 
