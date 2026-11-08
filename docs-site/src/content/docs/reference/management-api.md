@@ -745,6 +745,21 @@ When Antigravity's quota-summary endpoint has no usable response, quota reports 
 per-model Cloud Code Assist usage windows when the model-discovery response provides them. These
 measurements are diagnostic; an absent model window does not establish that the model is unavailable.
 
+For a row using the `claude-cli` adapter, the report is the last recorded Claude subscription
+observation (`observed: true`) rather than an active probe, and only for the account Claude Code is
+signed in to. `refresh=1` re-reads the local sign-in and that snapshot. Fetching this Claude CLI
+report never spawns the CLI or calls Anthropic; other configured providers can still run their
+normal quota probes. The row is absent until a usage check records quota windows for the signed-in
+account. A sign-out or account switch clears it at once with `refresh=1` and within a minute (the
+sign-in cache) on a normal cached read. A newer recorded observation, including one without windows,
+replaces it on the next read. Passive reads use the last recorded sign-in and snapshot without
+resolving credentials or probing providers, so an external sign-in change appears after another
+operation records it. `GET /api/quota-pool` reads no
+sign-in of its own: it lists the Claude CLI account only for the sign-in this proxy last read, and
+only when that account has a recorded snapshot. After an external sign-out or account switch it keeps
+the previous account until the dashboard or a Claude turn reads the sign-in again; after a restart
+the row is absent until such a read.
+
 With `quota=1`, an Anthropic or Antigravity account row whose probe returned no quota carries
 `quotaUnavailable: true` and, when the cause is known, a closed `quotaFailure` code:
 `account_unavailable` (sign the account in again), `access_denied`, `rate_limited`, `timeout`,

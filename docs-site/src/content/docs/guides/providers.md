@@ -1534,6 +1534,12 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
   OpenCodex runs as, so every request routed through this row — from any client of the proxy —
   spends that one Claude account. There is no per-client account, no pooling and no multiplexing;
   giving several people their own Claude usage needs one proxy user per sign-in.
+- **Subscription usage:** the Providers workspace shows the plan's 5-hour, weekly and model-scoped
+  windows from the last usage check OpenCodex recorded before a turn, for the account Claude Code is
+  signed in to now. Opening the page never probes or launches the CLI, and **Refresh all quotas**
+  re-reads the local sign-in and that recorded observation rather than Anthropic's endpoint. After a
+  sign-out or account switch the previous account's row disappears on **Refresh all quotas**, and
+  within a minute otherwise; a newly signed-in account shows nothing until its first Claude turn.
 - **Input media:** the row advertises text and image input. The stable replay sends native image
   blocks directly through the official CLI, following the labelled message they belong to. This
   includes multiple attachments, retained historical images and images returned by client tools. Text and images retain their order within each message.
