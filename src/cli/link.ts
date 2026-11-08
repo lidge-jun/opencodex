@@ -15,6 +15,7 @@ import { linkStorePath } from "../link/paths";
 import { isLinkPort } from "../link/ports";
 import { readLinkStore, type LinkDirection, type LinkStore } from "../link/store";
 import { findAvailablePort } from "../server/ports";
+import { viaLocalControlSocket, type LocalControlDeps } from "./link-local-control";
 import {
   CliUsageError,
   RuntimeApiError,
@@ -56,7 +57,7 @@ export interface LinkIssuePayload {
   listenerPort: number;
 }
 
-export interface LinkCliDeps extends RuntimeApiDeps, Omit<LinkCleanupDeps, "readStore"> {
+export interface LinkCliDeps extends RuntimeApiDeps, LocalControlDeps, Omit<LinkCleanupDeps, "readStore"> {
   /** Test seam can shorten, never extend, the whole enrollment deadline. */
   enrollmentTimeoutMs?: number;
   choosePort?: () => Promise<number>;
@@ -297,7 +298,8 @@ async function runStatus(args: string[], deps: LinkCliDeps): Promise<void> {
   }
   // A proxy older than the compatibility report or the tunnel diagnostics ignores the query and
   // answers without those fields.
-  const result = validateStatus(await linkRequest<unknown>("/api/link/status?compatibility=1&diagnostics=1", {}, { ...deps, baseUrl }));
+  const result = validateStatus(await viaLocalControlSocket(baseUrl, deps,
+    statusDeps => linkRequest<unknown>("/api/link/status?compatibility=1&diagnostics=1", {}, statusDeps)));
   console.log(JSON.stringify(result));
 }
 

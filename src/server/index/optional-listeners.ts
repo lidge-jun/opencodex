@@ -20,6 +20,7 @@ import { linkChildParityRouteAllowed } from "../../link/child-parity";
 import { saveConfigPreservingClaudeCode } from "../../config/live-reconcile";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { startJevQuotaActivation } from "../../combos/jev-quota-activation";
+import { createLocalControlListener } from "./local-control-listener";
 export { LINK_INGRESS_HOSTNAME } from "./link-listener";
 import type { ServerIngress } from "./serve-options";
 
@@ -54,6 +55,7 @@ export interface OptionalListenerSet<T> {
 export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): OptionalListenerSet<T> {
   const claudeIntercept: ClaudeInterceptLifecycle<T> = createClaudeInterceptLifecycle<T>();
   const linkListener: LinkListenerLifecycle<T> = createLinkListenerLifecycle<T>(linkDeps);
+  const localControl = createLocalControlListener<T>();
   let activeConfig: OcxConfig | undefined;
   let stopJevQuotaActivation: (() => void) | undefined;
   const supervisor = createLinkSupervisor({
@@ -85,6 +87,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
     ingressOf(server) {
       if (linkListener.ownsListener(server)) return "hub-link";
       if (claudeIntercept.ownsListener(server)) return "claude-intercept";
+      if (localControl.ownsListener(server)) return "local-control";
       return undefined;
     },
     // The Home's link listener admits the data plane plus the read-only management relay
@@ -102,6 +105,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
     linkSupervisor: () => supervisor,
     start(ctx) {
       activeConfig = ctx.config;
+      localControl.start({ config: ctx.config, publicPort: ctx.publicPort, dispatch: ctx.dispatch });
       linkListener.start({ dispatch: ctx.dispatch, maxRequestBodySize: ctx.maxRequestBodySize,
         connectionGeneration: linkId => supervisor.connectionGeneration?.(linkId),
         keyFingerprints: apiKeyId => {
@@ -144,6 +148,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
       }
       try { await linkListener.stop(); } catch (error) { failure ??= error; }
       try { await claudeIntercept.stop(); } catch (error) { failure ??= error; }
+      try { await localControl.stop(); } catch (error) { failure ??= error; }
       unregisterSupervisorAdmission?.();
       unregisterSupervisorAdmission = undefined;
       stopJevQuotaActivation?.();
