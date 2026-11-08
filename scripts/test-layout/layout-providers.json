@@ -7,5 +7,6 @@
   "free-directory-runcrate.test.ts": "providers",
   "cc-switch-import.test.ts": "providers",
   "kiro-completion-with-real-tools.test.ts": "providers/kiro",
-  "mistral-image-limit.test.ts": "providers"
+  "mistral-image-limit.test.ts": "providers",
+  "meta-muse-plan-refusal.test.ts": "providers"
 }

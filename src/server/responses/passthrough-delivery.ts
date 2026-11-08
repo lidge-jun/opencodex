@@ -57,6 +57,7 @@ import { clientCancelledResponse, readDisplaySafeErrorText } from "./core-errors
 import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
 import { formatPassthroughUpstreamError } from "./passthrough-error";
 import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
+import { stampMetaMusePlanRefusal } from "../../providers/meta-muse-plan-refusal";
 import {
   resolvePassthroughWebSearchBridgeAuth,
   planPassthroughWebSearchBridge,
@@ -665,6 +666,8 @@ export async function deliverPassthroughResponse(
         turnAdmissionLease: options.turnAdmissionLease,
       });
       if (policyRefusal) return policyRefusal;
+      // Meta's Muse Code refusal is a plan restriction, not a rejected credential (#8352).
+      stampMetaMusePlanRefusal(logCtx, upstreamResponse.status, errorText);
       return carryPolicyCandidateRefusal(upstreamResponse, carryProxyError(upstreamResponse, formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
         statusText: upstreamResponse.statusText,
         headers,
