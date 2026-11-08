@@ -96,7 +96,7 @@ describe("provider cache affinity store", () => {
     expect(consult("lane-1", provider(), "m1", NOW + 61 * 60_000)).toBeNull();
   });
 
-  test.each(["same", "provider", "entry", "model", "short-write", "expired"])("read-only retention follows matching identity (%s)", kind => {
+  test.each(["same", "provider", "entry", "model", "short-write", "expired"])("read retention follows matching identity (%s)", kind => {
     recordProviderCacheAffinity({ lane: "lane-1", providerName: "kimi", entryId: "a", model: "m1",
       cacheWrite: 4000, cacheWriteLong: 4000, now: NOW });
     const name = kind === "provider" ? "other" : "kimi";
@@ -106,7 +106,64 @@ describe("provider cache affinity store", () => {
     recordProviderCacheAffinity({ lane: "lane-1", providerName: name, entryId, model,
       cacheRead: 4000, cacheWrite: kind === "short-write" ? 100 : 0, now: readAt });
     const hit = consultProviderCacheAffinity({ lane: "lane-1", providerName: name, provider: provider(), model, now: readAt + 6 * 60_000 });
-    expect(hit?.entryId).toBe(kind === "same" ? "a" : undefined);
+    expect(hit?.entryId).toBe(kind === "same" || kind === "short-write" ? "a" : undefined);
+  });
+
+  test.each([0, 100])("matching read with short write %i retains only the original long deadline", cacheWrite => {
+    recordProviderCacheAffinity({ lane: "lane-1", providerName: "kimi", entryId: "a", model: "m1",
+      cacheWrite: 4000, cacheWriteLong: 4000, now: NOW });
+    for (const minute of [10, 20]) {
+      recordProviderCacheAffinity({ lane: "lane-1", providerName: "kimi", entryId: "a", model: "m1",
+        cacheRead: 4000, cacheWrite, now: NOW + minute * 60_000 });
+    }
+    expect(consult("lane-1", provider(), "m1", NOW + 30 * 60_000)?.entryId).toBe("a");
+    expect(consult("lane-1", provider(), "m1", NOW + 60 * 60_000)?.entryId).toBe("a");
+    expect(consult("lane-1", provider(), "m1", NOW + 60 * 60_000 + 1)).toBeNull();
+  });
+
+  test.each(["provider", "entry", "model", "expired"])("mixed read/write cannot inherit a long deadline after %s changes", kind => {
+    recordProviderCacheAffinity({ lane: "lane-1", providerName: "kimi", entryId: "a", model: "m1",
+      cacheWrite: 4000, cacheWriteLong: 4000, now: NOW });
+    const providerName = kind === "provider" ? "other" : "kimi";
+    const entryId = kind === "entry" ? "b" : "a";
+    const model = kind === "model" ? "m2" : "m1";
+    const now = NOW + (kind === "expired" ? 61 : 10) * 60_000;
+    recordProviderCacheAffinity({ lane: "lane-1", providerName, entryId, model,
+      cacheRead: 4000, cacheWrite: 100, now });
+    expect(consultProviderCacheAffinity({ lane: "lane-1", providerName, provider: provider(), model,
+      now: now + 6 * 60_000 })).toBeNull();
+  });
+
+  test("a replacement credential's mixed read and short write cannot inherit the old long deadline", () => {
+    const oldProvider = provider();
+    const newProvider = provider({ apiKeyPool: [{ id: "a", key: "replacement-key" }, { id: "b", key: "key-b" }] });
+    recordAffinity({ lane: "lane-1", providerName: "kimi", entryId: "a", model: "m1",
+      identity: currentCacheAffinityIdentity("kimi", oldProvider, "a"), cacheWrite: 4000, cacheWriteLong: 4000, now: NOW });
+    recordAffinity({ lane: "lane-1", providerName: "kimi", entryId: "a", model: "m1",
+      identity: currentCacheAffinityIdentity("kimi", newProvider, "a"), cacheRead: 4000, cacheWrite: 100, now: NOW + 10 * 60_000 });
+    expect(consult("lane-1", newProvider, "m1", NOW + 11 * 60_000)?.entryId).toBe("a");
+    expect(consult("lane-1", newProvider, "m1", NOW + 16 * 60_000)).toBeNull();
+  });
+
+  test("a late short suffix remains warm for its own five minutes", () => {
+    recordProviderCacheAffinity({ lane: "lane-1", providerName: "kimi", entryId: "a", model: "m1",
+      cacheWrite: 4000, cacheWriteLong: 4000, now: NOW });
+    recordProviderCacheAffinity({ lane: "lane-1", providerName: "kimi", entryId: "a", model: "m1",
+      cacheRead: 4000, cacheWrite: 100, now: NOW + 58 * 60_000 });
+    expect(consult("lane-1", provider(), "m1", NOW + 63 * 60_000)?.entryId).toBe("a");
+    expect(consult("lane-1", provider(), "m1", NOW + 63 * 60_000 + 1)).toBeNull();
+  });
+
+  test("a new long write establishes a new deadline; a short-only write does not inherit it", () => {
+    recordProviderCacheAffinity({ lane: "lane-1", providerName: "kimi", entryId: "a", model: "m1",
+      cacheWrite: 4000, cacheWriteLong: 4000, now: NOW });
+    recordProviderCacheAffinity({ lane: "lane-1", providerName: "kimi", entryId: "a", model: "m1",
+      cacheRead: 4000, cacheWrite: 2000, cacheWriteLong: 2000, now: NOW + 30 * 60_000 });
+    expect(consult("lane-1", provider(), "m1", NOW + 89 * 60_000)?.entryId).toBe("a");
+    expect(consult("lane-1", provider(), "m1", NOW + 90 * 60_000 + 1)).toBeNull();
+    recordProviderCacheAffinity({ lane: "lane-1", providerName: "kimi", entryId: "a", model: "m1",
+      cacheRead: 0, cacheWrite: 4000, now: NOW + 40 * 60_000 });
+    expect(consult("lane-1", provider(), "m1", NOW + 46 * 60_000)).toBeNull();
   });
 
   test("turn mode keeps only detected continuations, regardless of worth", () => {

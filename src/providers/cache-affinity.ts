@@ -60,7 +60,7 @@ interface Binding {
   model: string;
   cacheRead: number;
   cacheWrite: number;
-  longRetention: boolean;
+  longExpiresAt?: number;
   at: number;
 }
 
@@ -121,16 +121,15 @@ export function consultProviderCacheAffinity(input: ConsultProviderCacheAffinity
     return null;
   }
   const mode = cacheAffinityMode(provider);
-  const age = now - binding.at;
-  const warmMs = binding.longRetention ? CACHE_AFFINITY_COLD_LONG_MS : CACHE_AFFINITY_COLD_MS;
+  const warmUntil = Math.max(binding.at + CACHE_AFFINITY_COLD_MS, binding.longExpiresAt ?? 0);
   if (mode === "session") return { entryId: binding.entryId, reason: "session" };
   if (input.continuation === true) {
-    if (age > warmMs) return null;
+    if (now > warmUntil) return null;
     return { entryId: binding.entryId, reason: mode === "turn" ? "turn" : "continuation" };
   }
   if (mode === "turn") return null;
   // auto, across turns: only measured-worth bindings that are still warm.
-  if (age > warmMs) return null;
+  if (now > warmUntil) return null;
   const worth = binding.cacheRead + binding.cacheWrite;
   return worth >= CACHE_AFFINITY_WORTH_TOKENS ? { entryId: binding.entryId, reason: "cache" } : null;
 }
@@ -165,10 +164,10 @@ export function recordProviderCacheAffinity(input: RecordProviderCacheAffinityIn
   const cacheWrite = input.cacheWrite ?? input.inputTokens ?? 0;
   const now = input.now ?? Date.now();
   const previous = bindings.get(lane);
-  const matchingLongRead = cacheRead > 0 && (input.cacheWrite ?? 0) === 0
-    && previous?.longRetention === true && previous.providerName === providerName
+  const matchingLongRead = cacheRead > 0 && previous?.longExpiresAt !== undefined
+    && previous.providerName === providerName
     && previous.entryId === entryId && previous.identity === identity && previous.model === model
-    && now >= previous.at && now - previous.at <= CACHE_AFFINITY_COLD_LONG_MS;
+    && now >= previous.at && now <= previous.longExpiresAt;
   const binding: Binding = {
     providerName,
     entryId,
@@ -176,7 +175,8 @@ export function recordProviderCacheAffinity(input: RecordProviderCacheAffinityIn
     model,
     cacheRead,
     cacheWrite,
-    longRetention: (input.cacheWriteLong ?? 0) > 0 || matchingLongRead,
+    longExpiresAt: (input.cacheWriteLong ?? 0) > 0 ? now + CACHE_AFFINITY_COLD_LONG_MS
+      : matchingLongRead ? previous.longExpiresAt : undefined,
     at: now,
   };
   if (bindingBytes(lane, binding) > ENTRY_BYTES_MAX) return;

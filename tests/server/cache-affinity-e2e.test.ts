@@ -384,6 +384,30 @@ describe("provider cache affinity (end-to-end)", () => {
     expect(seenAuth).toEqual(["Bearer key-a", "Bearer key-b"]);
   });
 
+  test("principal lanes survive replacement and disable while an old success completes", async () => {
+    const config = makeConfig();
+    config.apiKeys = [
+      { id: "client-a", name: "A", createdAt: "2026-01-01", key: "synthetic-client-a" },
+      { id: "client-b", name: "B", createdAt: "2026-01-01", key: "synthetic-client-b" },
+    ];
+    const a = resolveDataPlaneAdmissionSecret("synthetic-client-a", config)!;
+    const b = resolveDataPlaneAdmissionSecret("synthetic-client-b", config)!;
+    const old = await turn(config, "shared-replacement", undefined, a, false);
+    const provider = config.providers["affinity-e2e"]!;
+    provider.apiKey = "key-b";
+    const other = await turn(config, "shared-replacement", undefined, b);
+    provider.apiKeyPool![0]!.key = "replacement-key";
+    provider.apiKeyPool![0]!.disabled = true;
+    saveConfig(config);
+    addFinalRequestLog(nextRequestLogId(), Date.now(), old, 200);
+    const first = await turn(config, "shared-replacement", undefined, a);
+    const again = await turn(config, "shared-replacement", undefined, b);
+    expect(first.affinityLane).not.toBe(other.affinityLane);
+    expect(first.cacheAffinity).toBe("bound");
+    expect(again.cacheAffinity).toBe("kept");
+    expect(seenAuth).toEqual(["Bearer key-a", "Bearer key-b", "Bearer key-b", "Bearer key-b"]);
+  });
+
   test("destination replacement discards old evidence and fences old success", async () => {
     const config = makeConfig();
     await turn(config, "destination-bound");
