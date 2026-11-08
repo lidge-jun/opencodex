@@ -562,6 +562,27 @@ describe("provider-level quota row for a passive provider", () => {
     } finally { globalThis.fetch = originalFetch; }
   });
 
+  test("a rejected persisted Muse row cannot revive after external credential ABA across restarts", async () => {
+    writeTwoAccounts(true);
+    const config = museConfig(), originalFetch = globalThis.fetch;
+    setLiveStateStoreConfig(config);
+    globalThis.fetch = (async () => Response.json({ is_subs_active: true,
+      subs_usage: { window: { used_percent: 40, window_duration_mins: 300 } } })) as typeof fetch;
+    try {
+      expect((await fetchMuseKeyQuota("meta-muse", config))?.quota.fiveHourPercent).toBe(40);
+      await Bun.sleep(400);
+      const path = join(testDir, "auth.json"), original = readFileSync(path, "utf8"), changed = JSON.parse(original);
+      changed["meta-muse"].accounts[0].credential.access = "external-replacement";
+      writeFileSync(path, JSON.stringify(changed), { mode: 0o600 });
+      clearAccountQuotaCache(); setLiveStateStoreConfig(config); reconcileLiveStateStores();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+      await Bun.sleep(400);
+      writeFileSync(path, original, { mode: 0o600 });
+      clearAccountQuotaCache(); setLiveStateStoreConfig(config); reconcileLiveStateStores();
+      expect(getCachedProviderAccountQuota("meta-muse", ACCOUNT_ID)).toBeNull();
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
   test("observed external Muse credential ABA permanently retires the captured owner", () => {
     writeTwoAccounts();
     const owner = captureMuseQuotaOwner("meta-muse", ACCOUNT_ID)!;
@@ -594,6 +615,29 @@ describe("provider-level quota row for a passive provider", () => {
     try {
       expect(rankAccountsByHeadroom("meta-muse", [ACCOUNT_ID, "account-b"], undefined, undefined, config)).toEqual([ACCOUNT_ID, "account-b"]);
     } finally { spy.mockRestore(); }
+  });
+
+  test("reset-first does not switch away from the active account when evidence becomes stale", async () => {
+    writeTwoAccounts();
+    const config = museConfig();
+    config.pool = { kernel: true };
+    config.providers["meta-muse"]!.oauthAccountFailover = { enabled: true, strategy: "reset-first" };
+    setLiveStateStoreConfig(config);
+    for (const [id, percent] of [[ACCOUNT_ID, 10], ["account-b", 70]] as const) {
+      await setActiveAccount("meta-muse", id);
+      recordWithOwner("meta-muse", id, { fiveHourPercent: percent, fiveHourResetAt: Date.now() + 3_600_000, updatedAt: Date.now() },
+        captureConfigGeneration(), bindMuseQuotaConfig(captureMuseQuotaOwner("meta-muse", id), config, "meta-muse"));
+    }
+    const path = join(testDir, "auth.json"), original = readFileSync(path, "utf8"), changed = JSON.parse(original);
+    changed["meta-muse"].accounts[0].credential.access = "external-replacement";
+    const realRead = fs.readFileSync;
+    let reads = 0;
+    const spy = spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+      if (String(args[0]) === path && ++reads === 6) writeFileSync(path, JSON.stringify(changed), { mode: 0o600 });
+      return (realRead as (...args: Parameters<typeof fs.readFileSync>) => ReturnType<typeof fs.readFileSync>)(...args);
+    }) as typeof fs.readFileSync);
+    try { expect(preferredInitialAccount(config, "meta-muse")).toBeNull(); }
+    finally { spy.mockRestore(); }
   });
 
   test("reset-first Muse ranking reads each account twice at most per decision", async () => {

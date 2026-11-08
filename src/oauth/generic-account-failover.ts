@@ -840,7 +840,8 @@ export function preferredInitialAccount(
     const eligibleNow = preferKiroModelSupport(providerName,
       eligibleFailoverAccounts(providerName, now, family), requestedModelId, config);
     if (eligibleNow.length === 0 || !hasHeadroomEvidence(providerName, eligibleNow, requestedModelId, accountRows, config)) return null;
-    const best = rankAccountsByResetFirst(providerName, eligibleNow, requestedModelId, now, accountRows, config)[0] ?? null;
+    const ring = active && eligibleNow.includes(active) ? [active, ...eligibleNow.filter(id => id !== active)] : eligibleNow;
+    const best = rankAccountsByResetFirst(providerName, ring, requestedModelId, now, accountRows, config)[0] ?? null;
     return best && best !== active ? best : null;
   }
 

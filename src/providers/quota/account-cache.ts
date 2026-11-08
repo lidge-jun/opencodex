@@ -142,7 +142,7 @@ export function hydrateAccountQuotaCache(): void {
     if (key.startsWith("meta-muse\0")) {
       const owner = captureMuseQuotaOwner("meta-muse", key.slice("meta-muse\0".length));
       const saved = quota as ProviderQuota & { museIdentity?: string; museConfigIdentity?: string };
-      if (!owner || saved.museIdentity !== owner.identity || !/^[a-f0-9]{64}$/.test(saved.museConfigIdentity ?? "")) continue;
+      if (!owner || saved.museIdentity !== owner.identity || !/^[a-f0-9]{64}$/.test(saved.museConfigIdentity ?? "")) { rejectedPersistedMuse = true; continue; }
       const { museIdentity: _identity, museConfigIdentity, ...publicQuota } = saved;
       const config = readStateStoreLiveConfig(getConfigDir());
       if (config && museConfigIdentity !== museQuotaConfigIdentity(config, "meta-muse")) { rejectedPersistedMuse = true; continue; }
