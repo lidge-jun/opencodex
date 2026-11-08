@@ -4,9 +4,11 @@
  *
  * One idempotent capture freezes the four native defaults into route-intent.json. It runs before
  * a Home default write and at Child enrollment, and, only once the Home has a link, when its link
- * listener binds and before any Home-only decision changes a switch. On a Home with no link a Child
- * enrolled later inherits the switches as they stand at enrollment. Reads never capture. Once a
- * default is saved it is never captured again; only a Home default write changes it.
+ * listener binds (a failure there is retried, see link-listener.ts) and before any Home-only
+ * decision changes a switch. On a Home with no link Home-only decisions leave route-intent.json
+ * alone, so a Child enrolled later inherits the switches as they stand at enrollment unless a Home
+ * default write already saved them. Reads never capture. Once a default is saved it is never
+ * captured again; only a Home default write changes it.
  */
 import { readConfigDiagnostics } from "../config";
 import { withConfigMutationLockSync } from "../config/mutation-lock";
@@ -29,7 +31,7 @@ export function homeHasLinks(): boolean {
 export interface CaptureHomeRouteDefaultsOptions {
   /**
    * Every Home-only switch writer passes this: a Home without any link has no Child to protect
-   * yet, and a Child enrolled later inherits the switches as they stand at its enrollment.
+   * yet, so route-intent.json is neither read nor written for it.
    */
   whenLinked?: boolean;
 }

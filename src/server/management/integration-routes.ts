@@ -48,6 +48,8 @@ import {
   setIntegrationMutationFlightTestHook,
 } from "../../integrations/mutation-flight";
 import { jsonResponse } from "../auth-cors";
+import { isRouteClientId } from "../../link/route-intent";
+import { readRouteIntentState, recordHomeFileIntegrationDecision, routeIntentStatePath, RouteIntentStateUnreadableError } from "../../routing/route-intent-state";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import { managementInferencePort, type ManagementContext } from "./context";
 import { exportSnapshotIdentity, loadExportModels, previewExportSnapshot } from "./model-rows";
@@ -1131,6 +1133,10 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
   }
 
   try {
+    // On a Home that uses route intent the toggle is recorded as the Home's decision below; an
+    // unreadable route-intent.json refuses first, while nothing has changed.
+    const recordsDecision = ctx.config.runtimeRole !== "client" && isRouteClientId(requestedClient) && !hermesRequestScope(req)?.resolvedPaths;
+    if (recordsDecision) readRouteIntentState();
     /*
      * A bound request is built from the same passive roster the guard re-plans against, and an
      * unbound one keeps its existing refreshing path. Building the refreshing input first would
@@ -1177,6 +1183,15 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     const stale = guard?.response();
     if (stale) return stale;
     if (!result.ok) return writerFailureResponse(requestedClient, result, ctx);
+    if (recordsDecision) {
+      try {
+        recordHomeFileIntegrationDecision(requestedClient, { enabled: parsed.enabled,
+          ...(modelNames !== undefined && (requestedClient === "hermes" || requestedClient === "commandcode") ? { modelNames } : {}) });
+      } catch {
+        return jsonResponse({ error: `The ${requestedClient} integration was changed, but route intent in ${routeIntentStatePath()} could not record it, so ocx sync may undo it. Inspect it, fix or remove it, then toggle it again.`,
+          code: "route_intent_unavailable", clientId: requestedClient, integrationChanged: true }, 500, req, ctx.config);
+      }
+    }
     return jsonResponse(result satisfies IntegrationToggleEnvelope, 200, req, ctx.config);
   } catch (error) {
     if (error instanceof IntegrationMutationBusyError || error instanceof IntegrationWriterLockBusyError) {
@@ -1185,6 +1200,9 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
         code: "integration_mutation_busy",
         clientId: requestedClient,
       }, 409, req, ctx.config);
+    }
+    if (error instanceof RouteIntentStateUnreadableError) {
+      return jsonResponse({ error: error.message, code: "route_intent_unavailable", clientId: requestedClient }, 500, req, ctx.config);
     }
     return internalErrorResponse(error, ctx);
   }

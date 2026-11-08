@@ -200,9 +200,8 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
       }
     }
     if (synced.status !== "refused") {
-      const { readRouteIntentState } = await import("../routing/route-intent-state");
-      const intent = readRouteIntentState();
-      if (Object.keys(intent.defaults).length || Object.keys(intent.devices.home ?? {}).length) {
+      const { homeRouteIntentInUse, readRouteIntentState } = await import("../routing/route-intent-state");
+      if (homeRouteIntentInUse(readRouteIntentState())) {
         const { syncHomeRouteTo } = await import("../routing/route-to-local");
         const { packageVersion } = await import("../lib/package-version");
         const outcomes = await syncHomeRouteTo({ ...deps.loadConfig(), ...(live ? { port: live.port } : {}) }, packageVersion("0.0.0"), syncArgs.includes("--overwrite-conflict"), flags.overwriteClient);

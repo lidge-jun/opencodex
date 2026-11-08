@@ -7,7 +7,8 @@ import { ensureManagementClaudeIntercept, interceptStartRefusal } from "./claude
 import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-state";
 import { commitClaudeCodeBlock } from "../../claude/claude-code-block";
 import { HomeAsideIntentDerivationError, initializeHomeRouteIntentDefaults } from "../../routing/home-route-intent";
-import { recordHomeNativeDecision } from "../../routing/route-intent-state";
+import { homeHasLinks } from "../../routing/home-route-capture";
+import { recordHomeNativeDecision, RouteIntentStateUnreadableError } from "../../routing/route-intent-state";
 import { withDurableRouteNativeSettings } from "../../routing/route-to-live-settings";
 import { withLinkApply, LinkApplyBusyError } from "../../client/link-home";
 import { ConfigMutationLockError, withConfigMutationLockSync } from "../../config/mutation-lock";
@@ -309,14 +310,16 @@ async function commitNativeDecision(
     return await settleConfigRoot(configRoot(), () => withConfigMutationLockSync(() => {
       // Capture the Children's defaults from the durable switches before this one changes, under
       // the rule every Home-only switch writer follows: only once the Home has a link. Another
-      // process may have changed the switches since this server loaded its snapshot.
-      initializeHomeRouteIntentDefaults(withDurableRouteNativeSettings(ctx.config), ctx.version, undefined, { whenLinked: true });
+      // process may have changed the switches since this server loaded its snapshot. A Home with
+      // no link has no Child to protect, so the toggle changes only the switch.
+      const linked = homeHasLinks();
+      if (linked) initializeHomeRouteIntentDefaults(withDurableRouteNativeSettings(ctx.config), ctx.version);
       const result = persist();
       if (result instanceof Response) return result;
       published = result;
       if (published && ctx.decisionProgress) ctx.decisionProgress.desiredEnabled = enabled;
       // The switch just written is the Home's decision; route intent keeps no Home entry for it.
-      recordHomeNativeDecision(clientId);
+      if (linked) recordHomeNativeDecision(clientId);
       if (ctx.decisionProgress) ctx.decisionProgress.desiredEnabled = enabled;
       return null;
     }));
@@ -328,6 +331,7 @@ async function commitNativeDecision(
     }
     if (error instanceof HomeAsideIntentDerivationError) return refusal(409, clientId, "metadata_unreadable",
       "Existing Aside ownership could not be resolved. Repair the Aside accounts.json manifest and stable userId selection, or choose an explicit Home Aside intent with ocx route to aside on or ocx route to aside off, then retry. Existing policy was preserved.");
+    if (error instanceof RouteIntentStateUnreadableError && !published) return refusal(500, clientId, "metadata_unreadable", error.message);
     if (published || error instanceof ConfigWritePublishedError) {
       if (clientId === "claude-desktop" && error instanceof ConfigWritePublishedError) mirrorDesiredEnabledOntoSnapshot(ctx.config, clientId, enabled);
       const busy = isConfigLockError(error) && isConfigMutationContention(error);

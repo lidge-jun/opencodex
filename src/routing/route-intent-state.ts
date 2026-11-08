@@ -12,6 +12,19 @@ export type { RouteIntentState } from "../link/route-intent";
 
 const MAX_STATE_BYTES = 1024 * 1024;
 export function routeIntentStatePath(): string { return join(getConfigDir(), "route-intent.json"); }
+
+/**
+ * `route-intent.json` exists but cannot be read or parsed. Writers answer it with a typed refusal
+ * that names the file, because only the operator can fix or remove it.
+ */
+export class RouteIntentStateUnreadableError extends Error {
+  readonly path: string;
+  constructor(path: string, cause: unknown) {
+    super(`Route intent in ${path} could not be read; nothing was changed. Inspect it, fix or remove it, then retry.`, { cause });
+    this.name = "RouteIntentStateUnreadableError";
+    this.path = path;
+  }
+}
 function deviceIdAllowed(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(value) && !["__proto__", "constructor", "prototype"].includes(value);
 }
@@ -59,7 +72,7 @@ export function readRouteIntentState(path = routeIntentStatePath()): RouteIntent
     return parseRouteIntentState(JSON.parse(readFileSync(path, "utf8")));
   } catch (error) {
     if (isMissingPathError(error)) return emptyRouteIntentState();
-    throw error;
+    throw new RouteIntentStateUnreadableError(path, error);
   }
 }
 function writeState(state: RouteIntentState, path: string): void {
@@ -125,6 +138,26 @@ export function recordHomeNativeDecision(client: HomeNativeRouteClientId): Route
   return updateRouteIntentState(state => {
     dropHomeNativeOverrides(state, [client]);
     return state;
+  });
+}
+
+/** ocx sync applies route intent to every Home client once the file holds a default or a Home entry. */
+export function homeRouteIntentInUse(state: RouteIntentState): boolean {
+  return Object.keys(state.defaults).length > 0 || Object.keys(state.devices.home ?? {}).length > 0;
+}
+
+/**
+ * A file integration toggle on the Home (the dashboard, `PUT /api/client-integrations/<id>`) is the
+ * Home's own decision for that client. Once the Home uses route intent, ocx sync applies it to every
+ * client, so the toggle is recorded as a `devices.home` entry and Children keep their defaults.
+ * Without route intent nothing is written. Returns whether a decision was recorded.
+ */
+export function recordHomeFileIntegrationDecision(client: RouteClientId, intent: RouteClientIntent): boolean {
+  if (isHomeNativeRouteClient(client) || client === "aside") return false;
+  return withConfigMutationLockSync(() => {
+    if (!homeRouteIntentInUse(readRouteIntentState())) return false;
+    setRouteClientIntent(client, intent, "home");
+    return true;
   });
 }
 

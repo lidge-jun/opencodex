@@ -7,9 +7,10 @@ import { readLinkStore, type LinkRecord } from "../../link/store";
 import { linkStorePath } from "../../link/paths";
 import { homeLinkChildParity } from "../../link/child-parity";
 import { homeRouteIntentWatch } from "../../link/route-intent-watch";
-import { ROUTE_CLIENT_IDS, isHomeNativeRouteClient, parseRouteClientIntent, type RouteClientId, type RouteClientIntent, type RouteClientOutcome } from "../../link/route-intent";
-import { clearRouteClientIntent, recordHomeNativeDecision, setRouteClientIntent } from "../../routing/route-intent-state";
+import { ROUTE_CLIENT_IDS, isHomeNativeRouteClient, parseRouteClientIntent, type HomeNativeRouteClientId, type RouteClientId, type RouteClientIntent, type RouteClientOutcome } from "../../link/route-intent";
+import { clearRouteClientIntent, recordHomeNativeDecision, RouteIntentStateUnreadableError, setRouteClientIntent } from "../../routing/route-intent-state";
 import { initializeHomeRouteIntentDefaults, projectChildRouteIntent, reconcileHomeRouteDevices } from "../../routing/home-route-intent";
+import { homeHasLinks } from "../../routing/home-route-capture";
 import { routeToDeviceStatus, type RouteToStatus } from "../../routing/route-to-status";
 import { refreshRouteNativeSettings, withDurableRouteNativeSettings } from "../../routing/route-to-live-settings";
 import { withLinkApply, LinkApplyBusyError } from "../../client/link-home";
@@ -69,6 +70,12 @@ async function applyHome(ctx: ManagementContext, overwriteConflict: boolean, dep
 
 function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+/** The Home's durable native switch for a client (absent is on), as another process may have left it. */
+function durableHomeSwitch(config: OcxConfig, client: HomeNativeRouteClientId): boolean {
+  const durable = withDurableRouteNativeSettings(config);
+  return client === "claude" ? durable.claudeCode?.enabled !== false : durable.clientIntegrations?.[client] !== false;
 }
 function parseWrite(value: unknown): { client: RouteClientId; action: "on" | "off" | "inherit"; device?: string; intent: RouteClientIntent; overwriteConflict: boolean } | null {
   if (!record(value) || Object.keys(value).some(key => !["client", "action", "device", "accounts", "modelNames", "overwriteConflict"].includes(key))) return null;
@@ -133,16 +140,23 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
     const selected = resolveDevice(write.device, devices(ctx));
     // On the Home itself a native client's decision is its native switch, written by the apply below.
     const homeNative = selected === "home" && isHomeNativeRouteClient(write.client) ? write.client : undefined;
+    const switchBefore = homeNative ? durableHomeSwitch(ctx.config, homeNative) : undefined;
     const commit = () => withConfigMutationLockSync(() => {
-      reconcileHomeRouteDevices(devices(ctx).map(link => link.id));
-      // A Home-only decision captures the Children's native defaults only once the Home has a link,
-      // as every Home-only switch writer does. Until then a Home inherit takes the builtin.
-      initializeHomeRouteIntentDefaults(withDurableRouteNativeSettings(ctx.config), ctx.version, selected === undefined ? write.client : undefined,
-        { whenLinked: selected === "home" });
-      if (homeNative) recordHomeNativeDecision(homeNative);
+      // A Home native decision on a Home with no link is only its switch: like every Home-only
+      // switch writer there, it leaves route-intent.json alone. Until defaults are saved a Home
+      // inherit takes the builtin.
+      const routeIntentUntouched = homeNative !== undefined && !homeHasLinks();
+      if (!routeIntentUntouched) {
+        reconcileHomeRouteDevices(devices(ctx).map(link => link.id));
+        // A Home-only decision captures the Children's native defaults only once the Home has a link.
+        initializeHomeRouteIntentDefaults(withDurableRouteNativeSettings(ctx.config), ctx.version, selected === undefined ? write.client : undefined,
+          { whenLinked: selected === "home" });
+      }
+      if (homeNative) { if (!routeIntentUntouched) recordHomeNativeDecision(homeNative); }
       else if (write.action === "inherit") clearRouteClientIntent(write.client, selected!);
       else setRouteClientIntent(write.client, write.intent, selected);
-      desiredCommitted = true;
+      // A Home native decision is committed only once the apply writes its switch (below).
+      if (!homeNative) desiredCommitted = true;
       // Desired state remains committed if subsequent reconciliation fails.
       if (selected === undefined) for (const link of devices(ctx)) homeRouteIntentWatch.notify(link.id);
       else if (selected !== "home") homeRouteIntentWatch.notify(selected);
@@ -166,17 +180,30 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
       // Report this apply's own outcome rather than the rebuilt row's stale reading of it.
       const row = status.devices.find(device => device.id === "home")?.clients.find(entry => entry.client === write.client);
       if (row) row.applied = decided.outcome;
-      // A default or a non-native devices.home override is saved route policy; a Home native
-      // decision is its switch, which the refused apply left as it was.
-      const policySaved = desiredCommitted && !homeNative;
-      return reply({ ...status, error: `${policySaved ? "Route policy was saved, but the" : "The"} Home did not apply ${write.client} (${decided.outcome})${decided.message ? `: ${decided.message}` : ""}`,
-        code: "route_apply_unresolved", desiredCommitted: policySaved }, 409);
+      const detail = decided.message ? `: ${decided.message}` : "";
+      // A Home native decision is its switch. Most refusals come after the apply saved it (an
+      // external Codex provider, an incomplete Grok block, a changed Desktop profile), so the durable
+      // switch, not the outcome, says whether anything was saved. First-party Desktop refuses first.
+      if (homeNative) {
+        const saved = durableHomeSwitch(ctx.config, homeNative) !== switchBefore;
+        return reply({ ...status, error: saved
+          ? `The Home's ${write.client} switch was saved, but applying it ended in ${decided.outcome}${detail}`
+          : `The Home did not apply ${write.client} (${decided.outcome})${detail}`,
+        code: "route_apply_unresolved", desiredCommitted: saved }, 409);
+      }
+      // A default or a non-native devices.home override is route policy saved before the apply.
+      return reply({ ...status, error: `${desiredCommitted ? "Route policy was saved, but the" : "The"} Home did not apply ${write.client} (${decided.outcome})${detail}`,
+        code: "route_apply_unresolved", desiredCommitted }, 409);
     }
     return reply(status);
   } catch (error) {
     if (error instanceof LinkApplyBusyError) return reply({ error: desiredCommitted
       ? "Route policy was committed, but local apply is busy; retry sync"
       : "Another Home apply is running; no route policy was written", code: "route_apply_busy", desiredCommitted }, 409);
+    // Names the file the operator has to fix or remove; nothing else from the local exception.
+    if (error instanceof RouteIntentStateUnreadableError) return reply({ error: desiredCommitted
+      ? `Route policy was saved, but route intent in ${error.path} could not be read afterwards. Inspect it, fix or remove it, then retry sync.`
+      : error.message, code: "route_intent_unavailable", desiredCommitted }, 500);
     if (error instanceof Error && error.message === "ambiguous_device") return reply({ error: "ambiguous device alias: use an exact link id", code: "ambiguous_device" }, 409);
     if (error instanceof Error && error.message === "unknown_device") return reply({ error: "unknown device: use home, this, or a link id or alias from ocx link status", code: "unknown_device" }, 404);
     // Do not project paths, config bytes, or transport credentials from a local exception.
