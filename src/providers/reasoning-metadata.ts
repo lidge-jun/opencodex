@@ -581,6 +581,7 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
       examined += 1;
       if (!candidate || typeof candidate !== "object") continue;
       if (Array.isArray(candidate)) {
+        if (candidate.length > 32) return true;
         for (const item of candidate) {
           if (item && typeof item === "object") queue.push(item);
         }
@@ -597,7 +598,7 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
         const type = rec.type.trim().toLowerCase().replaceAll("-", "_");
         if (!EFFORT_COMPATIBLE_TYPES.has(type)) return true;
       }
-      for (const field of ["message", "error", "details", "response", "last_error"] as const) {
+      for (const field of ["message", "error", "details", "response", "last_error", "errors"] as const) {
         const val = rec[field];
         if (val && typeof val === "object") {
           queue.push(val);

@@ -391,11 +391,13 @@ function normalizedFailureCode(code?: string | null): string {
 const EXACT_EFFORT_COMPATIBLE_CODES = new Set(["", "invalid_request_error", "invalid_argument"]);
 const EXACT_EFFORT_COMPATIBLE_TYPES = new Set(["", "invalid_request_error", "upstream_error"]);
 
-function hasIncompatibleDiagnosticCarrier(val: unknown): boolean {
+function hasIncompatibleDiagnosticCarrier(val: unknown, depth = 0): boolean {
   if (val === undefined || val === null) return false;
+  if (depth > 8) return true;
   if (Array.isArray(val)) {
-    for (const item of val.slice(0, 32)) {
-      if (hasIncompatibleDiagnosticCarrier(item)) return true;
+    if (val.length > 32) return true;
+    for (const item of val) {
+      if (hasIncompatibleDiagnosticCarrier(item, depth + 1)) return true;
     }
     return false;
   }
@@ -409,17 +411,20 @@ function hasIncompatibleDiagnosticCarrier(val: unknown): boolean {
       if (typeof rec.type !== "string") return true;
       if (!EXACT_EFFORT_COMPATIBLE_TYPES.has(normalizedFailureCode(rec.type))) return true;
     }
+    if (rec.error !== undefined && rec.error !== null) {
+      if (hasIncompatibleDiagnosticCarrier(rec.error, depth + 1)) return true;
+    }
     if (rec.response !== undefined && rec.response !== null) {
-      if (hasIncompatibleDiagnosticCarrier(rec.response)) return true;
+      if (hasIncompatibleDiagnosticCarrier(rec.response, depth + 1)) return true;
     }
     if (rec.last_error !== undefined && rec.last_error !== null) {
-      if (hasIncompatibleDiagnosticCarrier(rec.last_error)) return true;
+      if (hasIncompatibleDiagnosticCarrier(rec.last_error, depth + 1)) return true;
     }
     if (rec.details !== undefined && rec.details !== null) {
-      if (hasIncompatibleDiagnosticCarrier(rec.details)) return true;
+      if (hasIncompatibleDiagnosticCarrier(rec.details, depth + 1)) return true;
     }
     if (rec.errors !== undefined && rec.errors !== null) {
-      if (hasIncompatibleDiagnosticCarrier(rec.errors)) return true;
+      if (hasIncompatibleDiagnosticCarrier(rec.errors, depth + 1)) return true;
     }
     return false;
   }
