@@ -27,6 +27,7 @@ interface OutputTextBlock {
   annotations?: AnnotationLike[];
 }
 interface OutputItem {
+  id?: string;
   type?: string;
   content?: OutputTextBlock[];
 }
@@ -34,7 +35,11 @@ interface OutputItem {
  * Completed output text and citations. `parts` holds each output_text block's text keyed by
  * `output_index:content_index`, and `incomplete` marks skipped malformed entries.
  */
-type CompletedOutput = WebSearchResult & { incomplete: boolean; parts: Map<string, string> };
+type CompletedOutput = WebSearchResult & {
+  incomplete: boolean;
+  parts: Map<string, string>;
+  identities: Map<string, { itemId: string; contentIndex: number; singleContent: boolean }>;
+};
 /** Streamed text for one `output_text` content part. */
 interface StreamedPart {
   key: string;
@@ -136,7 +141,7 @@ function comparePartKeys(left: string, right: string): number {
 
 /** One part's streamed text: its done text when present, otherwise its deltas. */
 function streamedPartText(part: StreamedPart): string {
-  return part.done?.trim() ? part.done : part.delta;
+  return part.done ?? part.delta;
 }
 
 /** Keep earlier content-only siblings before a part promoted to an indexed identity. */
@@ -177,6 +182,21 @@ function mergeIncompleteOutput(completed: Map<string, string>, streamed: Map<str
     const part = streamed.get(key);
     return part ? streamedPartText(part) : text ?? "";
   }).join("");
+}
+
+/** Match completed items to uniquely identified unindexed parts before filling missing output. */
+function reconcileCompletedParts(final: CompletedOutput, streamed: Map<string, StreamedPart>, lookup: PartLookup): Map<string, StreamedPart> {
+  const reconciled = new Map(streamed);
+  const matched = new Set<StreamedPart>();
+  for (const [key, identity] of final.identities) {
+    if (reconciled.has(key)) continue;
+    const part = identifiedPart(lookup, identity.itemId, identity.contentIndex, true);
+    if (!part || matched.has(part) || (part.contentIndex === undefined && !identity.singleContent)) continue;
+    matched.add(part);
+    reconciled.delete(part.key);
+    reconciled.set(key, { ...part, key });
+  }
+  return reconciled;
 }
 
 // Keep this compatibility export for non-Responses sidecar executors and bounded error bodies.
@@ -397,6 +417,7 @@ function fromOutputArray(output: OutputItem[], seen: Set<string>): CompletedOutp
   let text = "";
   let incomplete = false;
   const parts = new Map<string, string>();
+  const identities: CompletedOutput["identities"] = new Map();
   const sources: WebSearchSource[] = [];
   for (const [outputIndex, item] of output.entries()) {
     if (!item || typeof item !== "object") { incomplete = true; continue; }
@@ -407,12 +428,16 @@ function fromOutputArray(output: OutputItem[], seen: Set<string>): CompletedOutp
       if (block.type === "output_text") {
         if (typeof block.text !== "string") { incomplete = true; continue; }
         text += block.text;
-        parts.set(`${outputIndex}:${contentIndex}`, block.text);
+        const key = `${outputIndex}:${contentIndex}`;
+        parts.set(key, block.text);
+        if (typeof item.id === "string" && item.id) {
+          identities.set(key, { itemId: item.id, contentIndex, singleContent: item.content.length === 1 });
+        }
         for (const ann of Array.isArray(block.annotations) ? block.annotations : []) collectAnnotation(ann, sources, seen);
       }
     }
   }
-  return { text, sources, incomplete, parts };
+  return { text, sources, incomplete, parts, identities };
 }
 
 export function cancelReaderWithoutWaiting(
@@ -585,13 +610,14 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
 
   // Prefer the authoritative completed output[], then the done text, then accumulated deltas.
   // Each streamed content part contributes its done text, or its deltas when the done event never
-  // arrived. A completed output that skipped malformed entries may be partial: indexed streams fill
-  // only the parts it lacks, while a wholly unindexed stream replaces it as a whole.
+  // arrived. A completed output that skipped malformed entries may be partial: identified parts
+  // can be matched by item ID, and indexed streams fill only the parts that output lacks.
   const streamedText = assembleStreamedText(acc.parts);
   const completedText = acc.final?.text.trim() ? acc.final.text : "";
   let text = completedText || streamedText;
   if (acc.final?.incomplete) {
-    const repaired = [...acc.parts.keys()].some(isIndexedPartKey) ? mergeIncompleteOutput(acc.final.parts, acc.parts) : streamedText;
+    const reconciled = reconcileCompletedParts(acc.final, acc.parts, partLookup);
+    const repaired = [...reconciled.keys()].some(isIndexedPartKey) ? mergeIncompleteOutput(acc.final.parts, reconciled) : streamedText;
     if (repaired.trim()) text = repaired;
   }
   // Merge sources from the final output[] and the streaming annotation events.

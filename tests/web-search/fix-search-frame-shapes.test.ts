@@ -116,6 +116,16 @@ describe("sidecar text-done snapshots", () => {
     expect(result).toEqual({ text: "Final version Other part.", sources: [] });
   });
 
+  test.each(["", "   "])("a blank final snapshot replaces the draft: %j", async text => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", output_index: 0, content_index: 0, delta: "draft" },
+      { type: "response.output_text.done", output_index: 0, content_index: 0, text: "final" },
+      { type: "response.output_text.done", output_index: 0, content_index: 0, text },
+      { type: "response.completed" },
+    ]));
+    expect(result).toEqual({ text, sources: [] });
+  });
+
   test("distinct parts with identical done text remain distinct", async () => {
     const result = await parseSidecarSSE(response([
       { type: "response.output_text.done", output_index: 0, content_index: 0, text: "Same." },
@@ -136,6 +146,17 @@ describe("sidecar text-done snapshots", () => {
     expect(result).toEqual({ text: "Final second", sources: [] });
   });
 
+  test("a blank snapshot does not restore a missing part's draft during partial completion", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", output_index: 0, content_index: 0, delta: "draft" },
+      { type: "response.output_text.done", output_index: 0, content_index: 0, text: "" },
+      { type: "response.completed", response: { output: [
+        null, { type: "message", content: [{ type: "output_text", text: "second" }] },
+      ] } },
+    ]));
+    expect(result).toEqual({ text: "second", sources: [] });
+  });
+
   test("repeated full snapshots still consume the decoded payload budget", async () => {
     const done = { type: "response.output_text.done", output_index: 0, content_index: 0,
       text: "x".repeat(Math.floor(MAX_SIDECAR_DECODED_CHARS / 2) + 1) };
@@ -145,6 +166,29 @@ describe("sidecar text-done snapshots", () => {
 });
 
 describe("search SSE field shapes", () => {
+  test("matches completed item identity to an unindexed stream during partial completion", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", item_id: "a", delta: "draft " },
+      { type: "response.output_text.done", item_id: "b", text: "second" },
+      { type: "response.completed", response: { output: [
+        { id: "a", type: "message", content: [{ type: "output_text", text: "authoritative " }] }, null,
+      ] } },
+    ]));
+    expect(result).toEqual({ text: "authoritative second", sources: [] });
+  });
+  test("matches identified content parts independently during partial completion", async () => {
+    const result = await parseSidecarSSE(response([
+      { type: "response.output_text.delta", item_id: "a", content_index: 1, delta: "draft second" },
+      { type: "response.output_text.delta", item_id: "a", content_index: 0, delta: "draft first" },
+      { type: "response.output_text.done", item_id: "b", text: " third" },
+      { type: "response.completed", response: { output: [
+        { id: "a", type: "message", content: [
+          { type: "output_text", text: "first" }, { type: "output_text", text: " second" },
+        ] }, null,
+      ] } },
+    ]));
+    expect(result).toEqual({ text: "first second third", sources: [] });
+  });
   for (const identity of [{ item_id: "a" }, { output_index: 1 }]) {
     test(`retains a content part when it gains identity ${JSON.stringify(identity)}`, async () => {
       const result = await parseSidecarSSE(response([
