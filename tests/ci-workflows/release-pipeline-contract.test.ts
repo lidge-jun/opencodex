@@ -678,8 +678,12 @@ describe("release pipeline contract", () => {
     test("Git Bash receives native Windows PATH entries separated by semicolons", () => {
       const nodeDir = "C:\\Program Files\\nodejs";
       const gitBash = "C:\\Program Files\\Git\\bin\\bash.exe";
+      // Literal expectations: rebuilding them with win32.dirname/win32.join would mirror the
+      // implementation and pass even if those operations produced the wrong entries (#8336).
       expect(releaseShellPath(nodeDir, gitBash, true).split(";")).toEqual([
-        nodeDir, win32.dirname(gitBash), win32.join(win32.dirname(gitBash), "..", "usr", "bin"),
+        "C:\\Program Files\\nodejs",
+        "C:\\Program Files\\Git\\bin",
+        "C:\\Program Files\\Git\\usr\\bin",
       ]);
     });
 
