@@ -1,88 +1,88 @@
 import { expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertResumeSourceMetadata } from "../../scripts/verify-release-resume";
 import { repoPath, repoRoot } from "../helpers/repo-root";
-import { createTempHome } from "../helpers/temp-home";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const SHA = "a".repeat(40);
 const workflow = Bun.YAML.parse(readFileSync(repoPath(".github/workflows/release.yml"), "utf8")) as {
-  jobs: { publish: { steps: Array<{ name: string; id?: string; env?: Record<string, string>; run?: string }> } };
+  jobs: { "validate-dispatch": { steps: Array<{ name: string; run?: string }> }; publish: { steps: Array<{ name: string; run?: string; if?: string; uses?: string; with?: Record<string, unknown> }> } };
 };
-const steps = workflow.jobs.publish.steps;
-const metadata = steps.find(step => step.name === "Preflight release metadata")!;
-const publication = steps.find(step => step.name === "Publish (or dry-run)")!;
+const sourceStep = workflow.jobs["validate-dispatch"].steps.find(step => step.name === "Resolve eligible source")!;
 
 test.each(["", "null", "{}", "[]", '"short"', JSON.stringify("b".repeat(40)), JSON.stringify(SHA.toUpperCase()), JSON.stringify(` ${SHA}`), JSON.stringify("x".repeat(1025))])("resume rejects nonmatching or nonscalar registry metadata %s", raw => {
   expect(() => assertResumeSourceMetadata(raw, SHA)).toThrow();
 });
-test("resume accepts only exact audited source metadata", () => {
+test("resume metadata helper accepts only exact audited source metadata", () => {
   expect(() => assertResumeSourceMetadata(JSON.stringify(SHA), SHA)).not.toThrow();
-  expect(metadata.id).toBe("metadata");
-  expect(publication.env?.VERIFIED_RESUME_SHA).toBe("${{ steps.metadata.outputs.resume_sha }}");
 });
 
-async function runResume(raw: string, status = 0, omitVerification = false) {
-  const home = createTempHome("ocx-resume-identity-");
-  const output = join(home.root, "output");
-  const summary = join(home.root, "summary");
-  const calls = join(home.root, "calls");
-  for (const path of [output, summary, calls]) writeFileSync(path, "");
-  const prelude = String.raw`
-    node() { echo '@fixture/release'; }
-    bun() { "$TEST_BUN" "$@"; }
-    git() { return 0; }
-    gh() { return 1; }
-    npm() {
-      echo "npm $*" >> "$CALLS"
-      if [ "$1" = view ] && [ "$3" = version ]; then echo 9.8.7; return 0; fi
-      if [ "$1" = view ] && [ "$3" = gitHead ]; then
-        [ "$4" = --json ] && [ "$5" = --registry=https://registry.npmjs.org ] && [ "$6" = --fetch-retries=0 ] && [ "$7" = --fetch-timeout=8000 ] || return 99
-        [ "$REGISTRY_STATUS" = 0 ] || return "$REGISTRY_STATUS"
-        printf '%s\n' "$REGISTRY_JSON"; return 0
-      fi
-      echo 'unexpected npm mutation' >&2; return 98
-    }
-    timeout() {
-      [ "$1" = --kill-after=2s ] && [ "$2" = 10s ] || return 99
-      shift 2; "$@"
-    }
-  `;
-  const preflight = omitVerification ? "" : metadata.run!;
-  const script = prelude + preflight + '\nVERIFIED_RESUME_SHA=$(sed -n "s/^resume_sha=//p" "$GITHUB_OUTPUT")\n'
-    + publication.run + '\necho tag-created >> "$CALLS"\necho release-created >> "$CALLS"\n';
+test.skipIf(process.platform === "win32")("publication receipt is recorded only after acknowledgement and binds the original assets", () => {
+  const steps = workflow.jobs.publish.steps;
+  const publication = steps.find(step => step.name === "Publish verified npm tarball")!;
+  const prepare = steps.find(step => step.name === "Prepare publication receipt")!;
+  const create = steps.find(step => step.name === "Record acknowledged publication")!;
+  const upload = steps.find(step => step.name === "Upload publication receipt")!;
+  expect(create?.run).toBeDefined();
+  expect(prepare?.run).toBeDefined();
+  expect(create?.if).toContain("steps.publication.outputs.published == 'true'");
+  expect(upload?.if).toContain("steps.publication.outputs.published == 'true'");
+  expect(upload?.with?.name).toBe("release-publication-receipt");
+  expect(steps.indexOf(create)).toBeGreaterThan(steps.indexOf(publication));
+  expect(steps.indexOf(prepare)).toBeLessThan(steps.indexOf(publication));
+  expect(steps.indexOf(upload)).toBeGreaterThan(steps.indexOf(create));
+  const root = mkdtempSync(join(tmpdir(), "ocx-publication-receipt-"));
   try {
-    const child = Bun.spawn(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
-      cwd: repoRoot(),
-      env: { ...process.env, TEST_BUN: process.execPath, RESUME: "true", DRY_RUN: "false", NPM_DIST_TAG: "latest",
-        RELEASE_VERSION: "9.8.7", GITHUB_SHA: SHA, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary,
-        CALLS: calls, REGISTRY_JSON: raw, REGISTRY_STATUS: String(status) },
-      stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    mkdirSync(join(root, "verification")); mkdirSync(join(root, "publication"));
+    const workflowSha = "b".repeat(40), digest = "c".repeat(64), assetDigest = "d".repeat(64);
+    const assetReceipt = { version: "9.8.7", sha: SHA, workflowSha, repo: "org/repo", runId: "123", attempt: "2", assets: { "app.zip": assetDigest } };
+    writeFileSync(join(root, "verification/receipt.json"), JSON.stringify(assetReceipt));
+    const run = (script: string, extra: Record<string, string> = {}) => Bun.spawnSync(["bash", "-e", "-c", script], { cwd: root, env: {
+      PATH: process.env.PATH ?? "/usr/bin:/bin", SOURCE_SHA: SHA, WORKFLOW_SHA: workflowSha, RELEASE_VERSION: "9.8.7",
+      NPM_DIST_TAG: "latest", EXPECTED_DIGEST: digest, GITHUB_REPOSITORY: "org/repo", GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "2", ...extra,
+    }, stdout: "pipe", stderr: "pipe" });
+    for (const bad of [{ SOURCE_SHA: "e".repeat(40) }, { WORKFLOW_SHA: "e".repeat(40) }, { RELEASE_VERSION: "9.8.8" },
+      { EXPECTED_DIGEST: "bad" }, { GITHUB_RUN_ATTEMPT: "3" }, { GITHUB_RUN_ID: "1e2" }, { NPM_DIST_TAG: "other" }]) {
+      expect(run(prepare.run!, bad).exitCode, JSON.stringify(bad)).not.toBe(0);
+      expect(existsSync(join(root, "publication/receipt.json"))).toBe(false);
+      expect(existsSync(join(root, "publication/pending.json"))).toBe(false);
+    }
+    writeFileSync(join(root, "verification/receipt.json"), JSON.stringify({ ...assetReceipt, assets: { "app.zip": "bad" } }));
+    expect(run(prepare.run!).exitCode).not.toBe(0);
+    expect(existsSync(join(root, "publication/pending.json"))).toBe(false);
+    unlinkSync(join(root, "verification/receipt.json"));
+    expect(run(prepare.run!).exitCode).not.toBe(0);
+    expect(existsSync(join(root, "publication/pending.json"))).toBe(false);
+    const previewVersion = "9.8.7-preview.20261108.1";
+    writeFileSync(join(root, "verification/receipt.json"), JSON.stringify({ ...assetReceipt, version: previewVersion }));
+    const preview = run(prepare.run!, { RELEASE_VERSION: previewVersion, NPM_DIST_TAG: "preview" });
+    expect(preview.exitCode, preview.stderr.toString()).toBe(0);
+    expect(JSON.parse(readFileSync(join(root, "publication/pending.json"), "utf8")).channel).toBe("preview");
+    unlinkSync(join(root, "publication/pending.json"));
+    writeFileSync(join(root, "verification/receipt.json"), JSON.stringify(assetReceipt));
+    const valid = run(prepare.run!); expect(valid.exitCode, valid.stderr.toString()).toBe(0);
+    expect(existsSync(join(root, "publication/receipt.json"))).toBe(false);
+    const acknowledged = run(create.run!); expect(acknowledged.exitCode, acknowledged.stderr.toString()).toBe(0);
+    expect(JSON.parse(readFileSync(join(root, "publication/receipt.json"), "utf8"))).toEqual({
+      sourceSha: SHA, workflowSha, version: "9.8.7", channel: "stable", sha256: digest,
+      runId: 123, attempt: 2, published: true, assets: { "app.zip": assetDigest },
     });
-    const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    return { exit, stdout, stderr, output: readFileSync(output, "utf8"), calls: readFileSync(calls, "utf8") };
-  } finally { home.remove(); }
-}
-
-test.skipIf(process.platform === "win32")("the real resume shell refuses before acknowledgement and Git publication", async () => {
-  for (const [raw, status] of [[JSON.stringify("b".repeat(40)), 0], ["", 0], ["{}", 0], ["[]", 0], ["null", 0], ["not-json", 0], [JSON.stringify(SHA), 1], [JSON.stringify(SHA), 124]] as const) {
-    const result = await runResume(raw, status);
-    expect(result.exit, result.stdout + result.stderr).not.toBe(0);
-    expect(result.output).not.toContain("published=true");
-    expect(result.calls).not.toContain("npm publish");
-    expect(result.calls).not.toContain("tag-created");
-    expect(result.calls).not.toContain("release-created");
-  }
-  const absent = await runResume(JSON.stringify(SHA), 0, true);
-  expect(absent.exit).not.toBe(0);
-  expect(absent.output).not.toContain("published=true");
+    expect(run(create.run!).exitCode).not.toBe(0);
+  } finally { removeTreeWithRetry(root); }
 });
 
-test.skipIf(process.platform === "win32")("matching source metadata resumes without republishing npm", async () => {
-  const result = await runResume(JSON.stringify(SHA));
-  expect(result.exit, result.stdout + result.stderr).toBe(0);
-  expect(result.output).toContain(`resume_sha=${SHA}`);
-  expect(result.output).toContain("published=true");
-  expect(result.calls).not.toContain("npm publish");
-  expect(result.calls).toContain("release-created");
+test.skipIf(process.platform === "win32")("dispatch refuses resume before evidence lookup or publication", () => {
+  expect(sourceStep.run).toBeDefined();
+  for (const dryRun of ["true", "false"]) {
+    const result = Bun.spawnSync(["bash", "-e", "-c", sourceStep.run!], { cwd: repoRoot(), env: {
+      PATH: process.env.PATH ?? "/usr/bin:/bin", GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_REF: "refs/heads/dev",
+      GITHUB_SHA: SHA, REQUESTED_SHA: SHA, RESUME: "true", DRY_RUN: dryRun,
+    }, stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout.toString() + result.stderr.toString()).toContain("Resume requires a durable verified receipt");
+  }
+  const publication = workflow.jobs.publish.steps.find(step => step.name === "Publish verified npm tarball")!;
+  expect(publication.run).not.toContain("RESUME");
 });
