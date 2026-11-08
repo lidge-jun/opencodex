@@ -5,6 +5,22 @@ import { verifyPnpmInstallTree } from "./transactional-install.mjs";
 
 const PACKAGE_NAME = "@bitkyc08/opencodex";
 
+const OWNER_PATHS = ["commandPath", "packagePath", "globalDir", "globalRoot", "globalBinDir", "store"];
+
+/** Freeze physical owner paths at observation time; failure to resolve any path refuses the update. */
+export function canonicalOrchestratedPnpmOwner(owner) {
+  return Object.fromEntries(OWNER_PATHS.map(field => [field, realpathSync.native(owner[field])]));
+}
+
+export function matchesOrchestratedPnpmOwner(expected, owner) {
+  if (!expected || !owner) return false;
+  try {
+    const actual = canonicalOrchestratedPnpmOwner(owner);
+    return OWNER_PATHS.every(field => process.platform === "win32"
+      ? actual[field].toLowerCase() === expected[field].toLowerCase() : actual[field] === expected[field]);
+  } catch { return false; }
+}
+
 /** Re-resolve the selected pnpm group and verify its active tree and generated shims. */
 export function verifyOrchestratedPnpmInstall({ owner, activeRoot, version, runPnpm }) {
   try {
