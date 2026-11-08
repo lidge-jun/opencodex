@@ -20,11 +20,12 @@
         <Control Id="Point2" Type="Text" X="20" Y="82" Width="330" Height="30" NoPrefix="yes" Text="• Never sent: prompts, model outputs, request/response bodies, API keys, OAuth tokens, account IDs or emails, custom base URLs, hostnames, file paths, or error text." />
         <Control Id="Point3" Type="Text" X="20" Y="114" Width="330" Height="20" NoPrefix="yes" Text="• Public aggregates: project-wide totals are published at opencodex.me/dashboard." />
         <Control Id="Point4" Type="Text" X="20" Y="136" Width="330" Height="10" NoPrefix="yes" Text="• See the exact payload: ocx telemetry status --json" />
-        <Control Id="Point5" Type="Text" X="20" Y="148" Width="330" Height="20" NoPrefix="yes" Text="• Turn off anytime: ocx telemetry disable, OCX_TELEMETRY=0, DO_NOT_TRACK=1, or the Proxy details toggle in the dashboard." />
-        <Control Id="PolicyLink" Type="Hyperlink" X="20" Y="172" Width="330" Height="12">
+        <Control Id="Point5" Type="Text" X="20" Y="148" Width="330" Height="30" NoPrefix="yes" Text="• Turn off anytime: ocx telemetry disable, the Proxy details toggle in the dashboard, or OCX_TELEMETRY=0 / DO_NOT_TRACK=1 in the proxy's own environment (a service does not see variables set in your shell)." />
+        <Control Id="PolicyLink" Type="Hyperlink" X="20" Y="182" Width="330" Height="12">
           <Text><![CDATA[<a href="https://opencodex.me/reference/code-signing/#privacy">Read the full privacy policy</a>]]></Text>
         </Control>
-        <Control Id="SendCheckBox" Type="CheckBox" X="20" Y="186" Width="330" Height="17" Property="OCX_TELEMETRY_SEND" CheckBoxValue="1" Text="Send anonymous usage statistics" />
+        <Control Id="SendCheckBox" Type="CheckBox" X="20" Y="196" Width="330" Height="17" Property="OCX_TELEMETRY_SEND" CheckBoxValue="1" Text="Send anonymous usage statistics" />
+        <Control Id="KeepNote" Type="Text" X="34" Y="213" Width="316" Height="10" NoPrefix="yes" Text="Leaving it checked keeps your current choice; it never turns telemetry back on." />
         <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
           <Publish Event="NewDialog" Value="WelcomeDlg">1</Publish>
         </Control>

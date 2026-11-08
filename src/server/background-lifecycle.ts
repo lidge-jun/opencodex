@@ -33,6 +33,7 @@ import {
   type MemoryWatchdog,
 } from "./memory-watchdog";
 import { ensureQuotaPoolIdentity } from "../quota-pool/identity";
+import { isTelemetryEnvOptOut } from "../telemetry/consent";
 import { endTelemetryEnvOptOut, recordTelemetryEnvOptOut } from "../telemetry/scheduler";
 
 type PolicyApply = (policy: StorageCleanupPolicy) => void;
@@ -65,13 +66,6 @@ let telemetryLoopGeneration = 0;
 let stopTelemetryLoop: (() => void) | null = null;
 // This process started under an env opt-out; its clean stop closes the opt-out period (D2).
 let telemetryEnvOptOutObserved = false;
-
-function isTelemetryDisabledByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
-  const ocx = env.OCX_TELEMETRY?.trim().toLowerCase();
-  if (ocx === "0" || ocx === "false" || ocx === "off" || ocx === "no") return true;
-  const dnt = env.DO_NOT_TRACK?.trim().toLowerCase();
-  return dnt === "1" || dnt === "true" || dnt === "yes";
-}
 
 function setLivePolicyOwner(applyPolicy: PolicyApply | null): void {
   setStorageCleanupPolicyLiveSink(applyPolicy);
@@ -137,7 +131,7 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
         // The next poll tick retries.
       });
     const generation = ++telemetryLoopGeneration;
-    if (!isTelemetryDisabledByEnv()) {
+    if (isTelemetryEnvOptOut(process.env) === null) {
       void import("../telemetry/scheduler")
         .then(scheduler => {
           if (generation !== telemetryLoopGeneration) return;

@@ -8,13 +8,16 @@
 //! bundled `ocx telemetry disable`, which persists `telemetry.decision = "declined"`. The value is
 //! then rewritten to `applied`, so a later choice made in the dashboard is never overridden.
 //!
-//! When the decline could not be persisted, the sidecar this app starts runs with
-//! `OCX_TELEMETRY=0`, so nothing is sent in that session, and the next launch tries again.
+//! When the decline could not be persisted, a sidecar this app starts runs with
+//! `OCX_TELEMETRY=0`, and the save is retried in the background (`RETRY_DELAYS`) and again on the
+//! next launch. A proxy this app only attaches to was started elsewhere with its own environment;
+//! it follows the saved decline once a retry succeeds (it re-reads the config on every tick).
 //!
 //! An MSI install does not put `ocx.exe` on PATH; the terminal command is installed by this app.
 //! The app therefore runs before any proxy from that install can.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use tauri::AppHandle;
 use tauri_plugin_shell::ShellExt;
 use tokio::time::{timeout_at, Instant};
@@ -29,6 +32,15 @@ pub const OPT_OUT: &str = "optout";
 pub const APPLIED: &str = "applied";
 
 static SIDECAR_ENV_OPT_OUT: AtomicBool = AtomicBool::new(false);
+
+/// Background retries after a failed save, so an attached proxy does not keep its old setting.
+pub const RETRY_DELAYS: [Duration; 4] = [
+    Duration::from_secs(10),
+    Duration::from_secs(30),
+    Duration::from_secs(120),
+    Duration::from_secs(600),
+];
+const RETRY_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -90,8 +102,10 @@ pub async fn apply(app: &AppHandle, deadline: Instant) -> Outcome {
             SIDECAR_ENV_OPT_OUT.store(true, Ordering::SeqCst);
             crate::logging::log_once(
                 "the installer's telemetry opt-out could not be saved",
-                "this session runs with OCX_TELEMETRY=0 and the next launch tries again",
+                "a proxy this app starts runs with OCX_TELEMETRY=0; saving is retried in the background",
             );
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move { retry(app).await });
         }
         Outcome::AppliedUnmarked => crate::logging::log_once(
             "the installer's telemetry opt-out was saved but not marked as applied",
@@ -100,6 +114,25 @@ pub async fn apply(app: &AppHandle, deadline: Instant) -> Outcome {
         Outcome::NothingPending | Outcome::Applied => {}
     }
     outcome
+}
+
+async fn retry(app: AppHandle) {
+    for delay in RETRY_DELAYS {
+        tokio::time::sleep(delay).await;
+        if disable(&app, Instant::now() + RETRY_TIMEOUT).await {
+            if !os::mark_applied() {
+                crate::logging::log_once(
+                    "the installer's telemetry opt-out was saved but not marked as applied",
+                    "the next launch saves the decline again",
+                );
+            }
+            return;
+        }
+    }
+    crate::logging::log_once(
+        "the installer's telemetry opt-out could not be saved after retries",
+        "the next launch tries again; check that config.json is writable",
+    );
 }
 
 async fn disable(app: &AppHandle, deadline: Instant) -> bool {

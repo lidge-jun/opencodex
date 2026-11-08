@@ -15,5 +15,5 @@ export const TELEMETRY_DISCLOSURE_POINTS: readonly string[] = Object.freeze([
   "Never sent: prompts, model outputs, request/response bodies, API keys, OAuth tokens, account IDs or emails, custom base URLs, hostnames, file paths, or error text.",
   "Public aggregates: project-wide totals are published at opencodex.me/dashboard.",
   "See the exact payload: ocx telemetry status --json",
-  "Turn off anytime: ocx telemetry disable, OCX_TELEMETRY=0, DO_NOT_TRACK=1, or the Proxy details toggle in the dashboard.",
+  "Turn off anytime: ocx telemetry disable, the Proxy details toggle in the dashboard, or OCX_TELEMETRY=0 / DO_NOT_TRACK=1 in the proxy's own environment (a service does not see variables set in your shell).",
 ]);

@@ -5,7 +5,7 @@ import { readConfigDiagnostics } from "../config/diagnostics";
 import { getConfigDir } from "../config/paths";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { registerOptionalShutdownHook } from "../lib/optional-shutdown-hooks";
-import type { OcxConfig } from "../types";
+import type { OcxConfig, OcxTelemetryConfig } from "../types";
 import { aggregateTelemetryForDay, type DailyTelemetryAggregate } from "./aggregate";
 import { isTelemetryEnvOptOut, resolveTelemetryStatus, type TelemetryConsentStatus } from "./consent";
 import { parseCalendarUtcDayMs } from "./contract";
@@ -41,6 +41,15 @@ export interface TelemetryState {
    * that could keep `ineligibleThroughDay` current (D2).
    */
   envOptOutActiveSince?: string | null;
+  /**
+   * A decision made before `config.json` exists (the Windows installer opt-out, `ocx telemetry
+   * disable` or the dashboard on a fresh install). Writing the config would turn the install into a
+   * configured one and make `ocx init` skip setup, so the decision waits here and applies until a
+   * decision is written into the config.
+   */
+  pendingDecision?: OcxTelemetryConfig | null;
+  /** Set once any report was accepted, so an id minted after an opt-out is not counted as a new install. */
+  everReported?: boolean;
 }
 
 export function telemetryStatePath(configDir = getConfigDir()): string {
@@ -56,7 +65,20 @@ function emptyState(): TelemetryState {
     ineligibleThroughDay: null,
     retryAfterUntil: null,
     envOptOutActiveSince: null,
+    pendingDecision: null,
+    everReported: false,
   };
+}
+
+function parsePendingDecision(raw: unknown): OcxTelemetryConfig | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const value = raw as Record<string, unknown>;
+  if (value.decision !== "accepted" && value.decision !== "declined") return null;
+  const stamp = (key: string): string | null =>
+    typeof value[key] === "string" && !Number.isNaN(Date.parse(value[key] as string)) ? (value[key] as string) : null;
+  const decidedAt = stamp("decidedAt");
+  if (!decidedAt) return null;
+  return { decision: value.decision, decidedAt, noticeShownAt: stamp("noticeShownAt") ?? decidedAt };
 }
 
 export function readTelemetryState(configDir = getConfigDir()): TelemetryState {
@@ -94,6 +116,8 @@ export function readTelemetryState(configDir = getConfigDir()): TelemetryState {
       ineligibleThroughDay,
       retryAfterUntil,
       envOptOutActiveSince,
+      pendingDecision: parsePendingDecision(raw.pendingDecision),
+      everReported: raw.everReported === true,
     };
   } catch {
     return emptyState();
@@ -117,8 +141,43 @@ export function writeTelemetryState(state: TelemetryState, configDir = getConfig
     ineligibleThroughDay: state.ineligibleThroughDay ?? null,
     retryAfterUntil: state.retryAfterUntil ?? null,
     envOptOutActiveSince: state.envOptOutActiveSince ?? null,
+    pendingDecision: state.pendingDecision ?? null,
+    everReported: state.everReported === true,
   };
   atomicWriteFileNoFollow(path, `${JSON.stringify(payload, null, 2)}\n`);
+}
+
+/** Hold a decision made before `config.json` exists. */
+export function recordPendingTelemetryDecision(
+  decision: OcxTelemetryConfig,
+  configDir = getConfigDir(),
+  now = Date.now(),
+): void {
+  const state = readTelemetryState(configDir);
+  state.pendingDecision = structuredClone(decision);
+  writeTelemetryState(state, configDir, now);
+}
+
+/** Drop the pending decision once a decision is written into `config.json`. */
+export function clearPendingTelemetryDecision(configDir = getConfigDir(), now = Date.now()): void {
+  const state = readTelemetryState(configDir);
+  if (!state.pendingDecision) return;
+  state.pendingDecision = null;
+  writeTelemetryState(state, configDir, now);
+}
+
+/**
+ * The telemetry block consent is resolved from: the config's own decision when it has one,
+ * otherwise a decision held from before `config.json` existed, otherwise whatever the config says.
+ */
+export function withPendingTelemetryDecision<T extends Pick<OcxConfig, "telemetry">>(
+  config: T | null | undefined,
+  configDir = getConfigDir(),
+): Pick<OcxConfig, "telemetry"> | null | undefined {
+  if (config?.telemetry?.decision) return config;
+  const pending = readTelemetryState(configDir).pendingDecision;
+  if (!pending) return config;
+  return { ...(config ?? {}), telemetry: structuredClone(pending) };
 }
 
 /**
@@ -254,7 +313,7 @@ export async function runTelemetryTick(options: TelemetryTickOptions = {}): Prom
   const now = options.now ?? Date.now();
   const configDir = options.configDir ?? getConfigDir();
   const readCurrentEnv = (): Record<string, string | undefined> => options.env ?? process.env;
-  const readCurrentConfig = (): Pick<OcxConfig, "telemetry"> | undefined => {
+  const readRawConfig = (): Pick<OcxConfig, "telemetry"> | undefined => {
     if (options.readConfig) return options.readConfig();
     const diskConfig = readConfigDiagnostics({ passive: true }).config;
     if (options.config) {
@@ -268,6 +327,9 @@ export async function runTelemetryTick(options: TelemetryTickOptions = {}): Prom
     }
     return diskConfig;
   };
+  // A decision held from before config.json existed applies until the config carries its own.
+  const readCurrentConfig = (): Pick<OcxConfig, "telemetry"> | undefined =>
+    withPendingTelemetryDecision(readRawConfig(), configDir) ?? undefined;
 
   const initialEnv = readCurrentEnv();
   if (isTelemetryEnvOptOut(initialEnv) !== null) {
@@ -340,7 +402,8 @@ export async function runTelemetryTick(options: TelemetryTickOptions = {}): Prom
     }
 
     const { identity } = ensureTelemetryInstallId(configDir);
-    const newInstall = identity.firstReportSent !== true;
+    // An id minted after an opt-out is a returning install, not a new one.
+    const newInstall = identity.firstReportSent !== true && preSendState.everReported !== true;
     const installDayHash = computeInstallDayHash(identity.installId, targetDay);
     const payload = buildTelemetryPayloadV1({
       aggregate,
@@ -370,6 +433,7 @@ export async function runTelemetryTick(options: TelemetryTickOptions = {}): Prom
     const freshState = readTelemetryState(configDir);
     const nowIso = new Date(now).toISOString();
     freshState.sentDays[targetDay] = nowIso;
+    freshState.everReported = true;
     freshState.lastSentDay = targetDay;
     freshState.lastSentAt = nowIso;
     freshState.retryAfterUntil = null;

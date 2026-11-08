@@ -44,8 +44,12 @@ Only a human can transition an undecided install to active sending:
   and record neither `noticeShownAt` nor `decision`.
 - `src/telemetry/disclosure.ts` is the one source for the disclosure text: the CLI prompt prints
   it and the Windows installer dialog is generated from it (`structure/desktop-shell.md`,
-  "Windows installer telemetry choice"). A decline on a fresh install creates `config.json`
-  through `initializePersistedConfigIfMissing`.
+  "Windows installer telemetry choice").
+- A decision made before `config.json` exists (`ocx telemetry disable`, the dashboard popup on a
+  fresh install, the Windows installer opt-out) is held as `pendingDecision` in
+  `telemetry-state.json` instead of creating the config, so `ocx init` still runs setup.
+  `withPendingTelemetryDecision` applies it wherever consent is resolved (scheduler, status route,
+  CLI prompt) until a decision is written into the config, which clears it.
 
 ## Identity, aggregation, and scheduling
 
