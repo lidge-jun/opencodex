@@ -148,6 +148,12 @@ fn two_child_homes_sharing_one_codex_home_are_serialized_and_exclusive() {
 
     let out_a = a.wait_with_output().unwrap();
     assert!(out_a.status.success(), "A attach failed: {}", text(&out_a));
+    assert!(
+        !String::from_utf8_lossy(&out_a.stdout).contains(KEY_ID)
+            && !String::from_utf8_lossy(&out_a.stderr).contains(KEY_ID),
+        "attach output must not name the link key id: {}",
+        text(&out_a)
+    );
     let after_a = snapshot_dir(&codex);
     let out_b = b.wait_with_output().unwrap();
     assert!(

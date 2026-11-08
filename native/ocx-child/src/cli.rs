@@ -978,7 +978,7 @@ fn attach_locked(guard: &mut CodexHomeGuard, request: AttachRequest) -> Result<(
             }
         }
     }
-    println!("Connected to http://127.0.0.1:{tunnel_port} as key {api_key_id}.");
+    println!("Connected to http://127.0.0.1:{tunnel_port}.");
     println!("Local Codex CLI: ready (ephemeral ocx-child Design B attached).");
     Ok(())
 }
