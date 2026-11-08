@@ -28,14 +28,16 @@ credentials, upstream access, and provider configuration before selecting a mode
 A gateway can serve completions without a model-list endpoint. If its operator supplies a supported
 raw ID, configure `liveModels: false` and `models: ["vendor/model"]` on the existing provider,
 preserving its other fields and replacing the example ID with the supplied value. See
-[static model catalogs](/reference/configuration/providers/#static-model-allowlists). If you edit
-`config.json` directly while the proxy is running, save your work and wait for active requests to
-finish before restarting the proxy to load the change; a restart can interrupt them. Then:
-use the OpenCodex Desktop app to stop and restart its managed proxy, or `ocx service restart` for
-a service install. For an unsupervised proxy, run `ocx stop`, then start it with its original
-`ocx start` command and launch options, including `--port` if you supplied one. Leave that command
-running in its terminal; run `ocx sync` and the remaining checks from another terminal. Then
-inspect the live catalog again. Alternatively, test the supplied raw ID directly
+[static model catalogs](/reference/configuration/providers/#static-model-allowlists).
+
+Before editing `config.json` directly, save your work and wait for active requests to finish;
+stopping the proxy can interrupt them. Stop the proxy through its owner: quit OpenCodex Desktop
+from its tray, run `ocx service stop` for a service install, or run `ocx stop` for an unsupervised
+proxy. Confirm it is stopped, then edit and save the file without running other configuration
+writers. Start it again through the same owner: reopen Desktop, run `ocx service start`, or run the
+original `ocx start` command with its launch options, including `--port` if supplied. For a
+foreground start, leave it running in its terminal and run `ocx sync` and the remaining checks from
+another terminal. Then inspect the live catalog again. Alternatively, test the supplied raw ID directly
 with the cost-confirmed completion command below; that test does not require a catalog row.
 
 In the live catalog inspect the actual `id`, `namespaced`, `disabled`, and
