@@ -45,7 +45,7 @@ import {
 } from "../providers/quota/account-cache";
 import { parseQuotaFailureCode } from "../providers/quota-types";
 import { getAccountSet } from "../oauth/store";
-import { peekClaudeUsageObservation } from "../adapters/claude-cli/usage-admission";
+import { claudeSignedInIdentity, peekClaudeUsageObservation } from "../providers/claude-cli-usage-state";
 import {
   QUOTA_POOL_SCHEMA,
   type QuotaPool,
@@ -68,6 +68,8 @@ export interface QuotaPoolDeps {
   now?: () => number;
   /** Test seam for the Claude CLI admission file. */
   claudeUsageStatePath?: string;
+  /** Test seam for a suspended passive Codex snapshot. */
+  codexSnapshot?: typeof listCodexAuthAccountsSnapshot;
 }
 
 export type QuotaPoolResult = { ok: true; pool: QuotaPool } | { ok: false; error: "quota_pool_identity_unavailable" };
@@ -276,8 +278,14 @@ function oauthAccounts(identity: QuotaPoolIdentity, provider: string, now: numbe
   });
 }
 
+/**
+ * The signed-in Claude account's row, by the identity the last sign-in read recorded. The pool is a
+ * passive read and may not read the Keychain itself; the Home's dashboard and turns keep it current.
+ */
 function claudeCliAccounts(identity: QuotaPoolIdentity, provider: string, deps: QuotaPoolDeps, now: number): TrackedAccount[] {
-  const observation = peekClaudeUsageObservation(deps.claudeUsageStatePath ? { statePath: deps.claudeUsageStatePath } : {});
+  const signedIn = claudeSignedInIdentity();
+  if (!signedIn) return [];
+  const observation = peekClaudeUsageObservation({ ...(deps.claudeUsageStatePath ? { statePath: deps.claudeUsageStatePath } : {}), identity: signedIn });
   if (!observation) return [];
   const windows = observation.quota ? providerQuotaWindows(observation.quota, "measured", now) : [];
   if (finite(observation.refusalUntil) && observation.refusalUntil > now) {
@@ -306,7 +314,7 @@ function enabled(provider: OcxProviderConfig | undefined): provider is OcxProvid
 
 async function assemble(config: OcxConfig, identity: QuotaPoolIdentity, deps: QuotaPoolDeps): Promise<QuotaPool> {
   const now = (deps.now ?? Date.now)();
-  const codex = hasCodexPoolProvider(config) ? (await listCodexAuthAccountsSnapshot(config)).accounts : [];
+  const codex = hasCodexPoolProvider(config) ? (await (deps.codexSnapshot ?? listCodexAuthAccountsSnapshot)(config)).accounts : [];
   // The snapshot yields; select providers and validate held reports against the same current
   // configuration used below, with no further await between validation and projection.
   const names = Object.keys(config.providers).filter(name => enabled(config.providers[name])).sort();
@@ -334,15 +342,14 @@ async function assemble(config: OcxConfig, identity: QuotaPoolIdentity, deps: Qu
     }
     const report = reports.get(name);
     if (!tracked && !report) continue;
-    // Account rows are the evidence a held report was computed from, at least as new and with
-    // their own observation times; the report stands in only where there are no rows.
+    // Claude's held report cannot outlive the identity that produced it.
     const evidence = report && (routingEvidence.get(report) ?? keyScopedEvidence.get(report));
     const credential = resolveEnvValue(provider.apiKey)?.trim();
     const reportQuota = report && (keyReportCredentialIds.has(report)
       ? (provider.apiKeyPool?.length ?? 0) <= 1 && credential && evidence?.binding === providerQuotaRoutingBinding(name, provider, credential)
         ? evidence.quota : undefined
       : report.quota);
-    const windows = poolFromRows && rows.length > 0
+    const windows = poolFromRows && (rows.length > 0 || provider.adapter === "claude-cli")
       ? pooledWindows(rows.map(row => row.pool), now)
       : report && reportQuota ? providerQuotaWindows(reportQuota, reportSource(report), now) : [];
     const pooled: QuotaPoolProvider["pooled"] = { windows };

@@ -10,11 +10,16 @@ import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TI
 import { accountReportCurrent, accountReportObservationKeys, antigravityEvidence, bindProviderReportProbe, report, type ProviderQuotaReport } from "./report-cache";
 import { captureAntigravityQuotaReceipt, decisionQuotaSinkActive } from "../../lib/decision-quota-sink";
 import { antigravityDecisionWindows } from "../quota-decision-publication";
-import { antigravityQuotaCredentialGeneration, isAntigravityArgonIdentity } from "../antigravity-quota-identity";
-import type { OcxProviderConfig } from "../../types";
+import { ANTIGRAVITY_OAUTH_STORE_KEY, antigravityQuotaCredentialGeneration, isAntigravityArgonIdentity } from "../antigravity-quota-identity";
+import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { quotaCredentialIdentity } from "./account-cache";
 import type { ProviderQuota, ProviderQuotaWindow, QuotaFailureCode } from "../quota-types";
 import { httpQuotaFailure } from "./failure-codes";
+
+// External store changes need an active observation after each suspension, before accepting reports.
+export function observeAntigravityOwner(config: OcxConfig): void {
+  if (config.providers[ANTIGRAVITY_OAUTH_STORE_KEY]?.authMode === "oauth") getAccountSet(ANTIGRAVITY_OAUTH_STORE_KEY);
+}
 
 export function antigravityQuotaDiagnosticIdentity(accountId: string, credential = getAccountCredential("google-antigravity", accountId)): string | undefined {
   return credential ? quotaCredentialIdentity("google-antigravity", accountId, credential, {

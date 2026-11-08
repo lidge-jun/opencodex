@@ -260,7 +260,7 @@ describe("CI review lanes", () => {
     expect(enabled("macos-control", "schedule", "", "false", "false", "false")).toBe(true);
     expect(ci.jobs["select-windows-runner"]!.if).toBeUndefined();
     expect(ci.jobs["platform-windows"]!.needs).toEqual(["changes", "select-windows-runner"]);
-    expect(ci.jobs.ci!.if).toBe("always()");
+    expect(ci.jobs.ci!.if).toBe("always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.lane != 'windows-native-claim')");
     expect(ci.jobs.ci!.needs).toEqual(expect.arrayContaining([
       "changes", "select-windows-runner",
       "test", "platform-macos", "gates", "storage-policy", "api-usage",
@@ -376,15 +376,22 @@ describe("Windows and nightly CI contracts", () => {
     expect(windows?.run).toBe("bash scripts/ci/windows-sensitive-diff.sh");
     expect(windows?.run).not.toContain("${{");
     let checkouts = 0;
+    let diagnosticCheckouts = 0;
     for (const [name, job] of Object.entries(ci.jobs)) {
       if (name === "changes") continue;
       for (const step of job.steps ?? []) {
         if (!step.uses?.startsWith("actions/checkout@")) continue;
+        if (name === "windows-native-claim") {
+          expect(step.with?.ref, `${name} checkout`).toBe("${{ github.sha }}");
+          diagnosticCheckouts += 1;
+          continue;
+        }
         expect(step.with?.ref, `${name} checkout`).toBe("${{ needs.changes.outputs.checkout_ref }}");
         checkouts += 1;
       }
     }
     expect(checkouts).toBe(18);
+    expect(diagnosticCheckouts).toBe(1);
   });
 
   test.skipIf(process.platform === "win32" || !Bun.which("jq"))("aggregate never requests Windows on a pull request and requests both diagnostic jobs nightly", async () => {

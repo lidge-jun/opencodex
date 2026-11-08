@@ -34,6 +34,11 @@ const providerReportBindings = new WeakMap<ProviderQuotaReport, ProviderReportBi
 function providerReportBinding(name: string, provider: OcxProviderConfig): ProviderReportBinding {
   return { name, authMode: provider.authMode ?? "key", adapter: provider.adapter, baseUrl: provider.baseUrl };
 }
+/** Bind a synchronous report to the configuration whose projection produced it. */
+export function bindProviderReport<T extends ProviderQuotaProbeResult>(value: T, name: string, provider: OcxProviderConfig): T {
+  if (value && typeof value !== "symbol" && !providerReportBindings.has(value)) providerReportBindings.set(value, providerReportBinding(name, provider));
+  return value;
+}
 /** Bind a provider-level probe before it awaits, without changing account-level report DTOs. */
 export async function bindProviderReportProbe<T extends ProviderQuotaProbeResult>(result: Promise<T>, name: string, provider: OcxProviderConfig): Promise<T> {
   const binding = providerReportBinding(name, provider);
@@ -87,6 +92,9 @@ export const TERMINAL_QUOTA_FAILURE = Symbol("terminal-quota-failure");
  * Suppression is shared with `TERMINAL_QUOTA_FAILURE`; only the reason differs.
  */
 export const AUTHORITATIVE_EMPTY_QUOTA = Symbol("authoritative-empty-quota");
+export function terminalQuotaProviders(entries: ReadonlyArray<readonly [string, OcxProviderConfig]>, results: readonly ProviderQuotaProbeResult[]): Set<string> {
+  return new Set(entries.map(([name]) => name).filter((_, index) => results[index] === TERMINAL_QUOTA_FAILURE || results[index] === AUTHORITATIVE_EMPTY_QUOTA));
+}
 export type ProviderQuotaProbeResult =
   | ProviderQuotaReport
   | null
