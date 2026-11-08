@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::codex_home::{ClaimPolicy, CodexHomeError, CodexHomeGuard, OwnershipPhase};
 use crate::codex_settings::{
     HomeCodexSettings, HomeCodexSettingsDocument, HomeIdentity, codex_settings_digest,
     parse_home_codex_settings_document,
@@ -333,7 +334,11 @@ impl AttachRollbackSnapshot {
         }
     }
 
-    pub fn capture(paths: &ChildPaths, prior_state: Option<ChildStateV1>) -> Result<Self, String> {
+    pub fn capture(
+        guard: &CodexHomeGuard,
+        prior_state: Option<ChildStateV1>,
+    ) -> Result<Self, String> {
+        let paths = guard.paths();
         ensure_private_dir(&paths.child_dir)?;
         let mut builder = fs::DirBuilder::new();
         builder.recursive(true);
@@ -439,7 +444,8 @@ impl AttachRollbackSnapshot {
         result
     }
 
-    fn recover(paths: &ChildPaths) -> Result<bool, String> {
+    fn recover(guard: &CodexHomeGuard) -> Result<bool, String> {
+        let paths = guard.paths();
         reject_symlink(&paths.rollback_file)?;
         let file = match fs::File::open(&paths.rollback_file) {
             Ok(file) => file,
@@ -490,7 +496,7 @@ impl AttachRollbackSnapshot {
             state_bytes: record.state_bytes.take(),
         };
         let _ = record.prior_was_serving;
-        snapshot.restore(paths)?;
+        snapshot.restore(guard)?;
         Ok(true)
     }
 
@@ -530,7 +536,8 @@ impl AttachRollbackSnapshot {
         }
     }
 
-    pub fn restore(&self, paths: &ChildPaths) -> Result<(), String> {
+    pub fn restore(&self, guard: &CodexHomeGuard) -> Result<(), String> {
+        let paths = guard.paths();
         self.validate_homes(paths)?;
         let mut errors = Vec::new();
         Self::restore_path(
@@ -617,9 +624,14 @@ impl AttachRollbackSnapshot {
         }
     }
 
-    fn restore_and_report(&self, paths: &ChildPaths) {
-        if let Err(rb_err) = self.restore(paths) {
-            eprintln!("{rb_err}");
+    /// Restore after a failed attach; true when every file and record was restored.
+    fn restore_and_report(&self, guard: &CodexHomeGuard) -> bool {
+        match self.restore(guard) {
+            Ok(()) => true,
+            Err(rb_err) => {
+                eprintln!("{rb_err}");
+                false
+            }
         }
     }
 }
@@ -681,8 +693,8 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
         }
     };
 
-    let paths = current_paths();
-    let _lock = match FileLock::acquire_blocking(&paths.lock_file) {
+    let local_paths = current_paths();
+    let _lock = match FileLock::acquire_blocking(&local_paths.lock_file) {
         Ok(l) => l,
         Err(_) => {
             eprintln!("attach failed: could not acquire child lifecycle lock");
@@ -690,11 +702,68 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
         }
     };
 
-    crate::test_hooks::barrier("attach-protected");
-    if !matches!(rollback_pending(&paths), Ok(false)) {
+    if !matches!(rollback_pending(&local_paths), Ok(false)) {
         eprintln!("attach refused: incomplete attach requires detach recovery");
         return 1;
     }
+    let mut guard = match CodexHomeGuard::acquire(&local_paths, true, true, ClaimPolicy::Attach) {
+        Ok(guard) => guard,
+        Err(e) => {
+            eprintln!("attach refused: {}", e.message());
+            return 1;
+        }
+    };
+    crate::test_hooks::barrier("attach-protected");
+    let request = AttachRequest {
+        link_id,
+        tunnel_port,
+        listen_port,
+        start_daemon,
+        api_key_id,
+        raw_key,
+    };
+    match attach_locked(&mut guard, request) {
+        Ok(()) => 0,
+        Err(failure) => {
+            if failure.left_no_changes
+                && let Err(e) = guard.revert_claim()
+            {
+                eprintln!("attach could not release Codex home ownership: {e}");
+            }
+            failure.code
+        }
+    }
+}
+
+struct AttachRequest {
+    link_id: String,
+    tunnel_port: u16,
+    listen_port: u16,
+    start_daemon: bool,
+    api_key_id: String,
+    raw_key: SecretBytes,
+}
+
+struct AttachFailure {
+    code: u8,
+    /// True when nothing was changed, or every change was rolled back and recorded as such.
+    left_no_changes: bool,
+}
+
+fn attach_locked(guard: &mut CodexHomeGuard, request: AttachRequest) -> Result<(), AttachFailure> {
+    let AttachRequest {
+        link_id,
+        tunnel_port,
+        listen_port,
+        start_daemon,
+        api_key_id,
+        raw_key,
+    } = request;
+    let paths = guard.paths().clone();
+    let refuse = |code: u8| AttachFailure {
+        code,
+        left_no_changes: true,
+    };
     let prior_state = match read_child_state(&paths.state_file) {
         StateReadOutcome::Valid(st) => Some(*st),
         _ => None,
@@ -705,14 +774,14 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
         .and_then(|prev| prev.daemon_pid);
     if let Err(e) = ensure_port_available_for_attach(listen_port, existing_pid) {
         eprintln!("{e}");
-        return 1;
+        return Err(refuse(1));
     }
 
     let raw_key_str = match std::str::from_utf8(raw_key.as_slice()) {
         Ok(s) => s,
         Err(_) => {
             eprintln!("invalid credential encoding");
-            return 2;
+            return Err(refuse(2));
         }
     };
     let fp = crate::relay_auth::token_fingerprint_hex(raw_key_str);
@@ -736,11 +805,11 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
         Ok((h, _, _)) if h.status == 200 => {}
         Ok((h, _, _)) => {
             eprintln!("Home /readyz returned HTTP {}", h.status);
-            return 1;
+            return Err(refuse(1));
         }
         Err(e) => {
             eprintln!("Home /readyz unreachable over tunnel: {e:?}");
-            return 1;
+            return Err(refuse(1));
         }
     }
 
@@ -756,11 +825,11 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
         Ok((h, b, _)) if h.status == 200 => b,
         Ok((h, _, _)) => {
             eprintln!("Home /v1/catalog returned HTTP {}", h.status);
-            return 1;
+            return Err(refuse(1));
         }
         Err(e) => {
             eprintln!("Home /v1/catalog failed: {e:?}");
-            return 1;
+            return Err(refuse(1));
         }
     };
 
@@ -768,20 +837,25 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
         Ok(d) => d,
         Err(e) => {
             eprintln!("{e}");
-            return 1;
+            return Err(refuse(1));
         }
     };
 
-    let rollback = match AttachRollbackSnapshot::capture(&paths, prior_state.clone()) {
+    let rollback = match AttachRollbackSnapshot::capture(guard, prior_state.clone()) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("{e}");
-            return 1;
+            // A persisted snapshot means changes may need recovery; keep ownership for detach.
+            let left_no_changes = matches!(rollback_pending(&paths), Ok(false));
+            return Err(AttachFailure {
+                code: 1,
+                left_no_changes,
+            });
         }
     };
 
     let journal = match apply_attach_or_sync(
-        &paths,
+        guard,
         &link_id,
         &api_key_id,
         listen_port,
@@ -790,16 +864,22 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
     ) {
         Ok(j) => j,
         Err(e) => {
-            rollback.restore_and_report(&paths);
+            let restored = rollback.restore_and_report(guard);
             eprintln!("{e}");
-            return 1;
+            return Err(AttachFailure {
+                code: 1,
+                left_no_changes: restored,
+            });
         }
     };
 
     if let Err(e) = write_link_key(&paths.key_file, raw_key_str) {
-        rollback.restore_and_report(&paths);
+        let restored = rollback.restore_and_report(guard);
         eprintln!("{e}");
-        return 1;
+        return Err(AttachFailure {
+            code: 1,
+            left_no_changes: restored,
+        });
     }
 
     let now_ms = now_epoch_ms();
@@ -808,21 +888,27 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
     let shutdown_secret = match random_hex(24) {
         Ok(s) => s,
         Err(e) => {
-            rollback.restore_and_report(&paths);
+            let restored = rollback.restore_and_report(guard);
             eprintln!("{e}");
-            return 1;
+            return Err(AttachFailure {
+                code: 1,
+                left_no_changes: restored,
+            });
         }
     };
     if let Some(prev) = &prior_state
         && prev.listen_port != listen_port
         && let Err(e) = stop_owned_daemon(prev)
     {
-        rollback.restore_and_report(&paths);
+        let restored = rollback.restore_and_report(guard);
         eprintln!(
             "attach failed stopping previous relay on port {}: {e}",
             prev.listen_port
         );
-        return 1;
+        return Err(AttachFailure {
+            code: 1,
+            left_no_changes: restored,
+        });
     }
     let mut state = ChildStateV1 {
         schema: CHILD_STATE_SCHEMA.to_owned(),
@@ -849,9 +935,12 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
         }),
     };
     if let Err(e) = write_child_state(&paths.state_file, &state) {
-        rollback.restore_and_report(&paths);
+        let restored = rollback.restore_and_report(guard);
         eprintln!("{e}");
-        return 1;
+        return Err(AttachFailure {
+            code: 1,
+            left_no_changes: restored,
+        });
     }
 
     if start_daemon {
@@ -869,20 +958,34 @@ fn cmd_attach_or_connect(args: &[String], native_attach_default_start: bool) -> 
                 let _ = post_child_parity_report(tunnel_port, &creds, &report);
             }
             Err(e) => {
-                rollback.restore_and_report(&paths);
+                let restored = rollback.restore_and_report(guard);
                 eprintln!("{e}");
-                return 1;
+                return Err(AttachFailure {
+                    code: 1,
+                    left_no_changes: restored,
+                });
             }
         }
     }
 
+    if let Err(e) = guard.set_phase(OwnershipPhase::Attached) {
+        let restored = rollback.restore_and_report(guard);
+        eprintln!("attach failed recording Codex home ownership: {e}");
+        return Err(AttachFailure {
+            code: 1,
+            left_no_changes: restored,
+        });
+    }
     if let Err(e) = remove_optional_file(&paths.rollback_file) {
         eprintln!("attach failed to clear rollback snapshot: {e}");
-        return 1;
+        return Err(AttachFailure {
+            code: 1,
+            left_no_changes: false,
+        });
     }
     println!("Connected to http://127.0.0.1:{tunnel_port} as key {api_key_id}.");
     println!("Local Codex CLI: ready (ephemeral ocx-child Design B attached).");
-    0
+    Ok(())
 }
 
 fn cmd_serve(args: &[String]) -> u8 {
@@ -973,6 +1076,14 @@ fn cmd_restart() -> u8 {
         eprintln!("restart refused: incomplete attach requires detach recovery");
         return 1;
     }
+    let codex_guard = match CodexHomeGuard::acquire(&paths, true, false, ClaimPolicy::Continue) {
+        Ok(guard) => guard,
+        Err(e) => {
+            eprintln!("restart refused: {}", e.message());
+            return 1;
+        }
+    };
+    let paths = codex_guard.paths().clone();
     let mut state = match read_child_state(&paths.state_file) {
         StateReadOutcome::Valid(st) if st.pending_operation.is_none() => *st,
         StateReadOutcome::Absent => {
@@ -1180,6 +1291,23 @@ fn cmd_sync(args: &[String]) -> u8 {
     {
         return emit_expectation_mismatch("child_link_mismatch", "other_link");
     }
+    let codex_guard =
+        match CodexHomeGuard::acquire(&paths, !has_expectation, false, ClaimPolicy::Continue) {
+            Ok(guard) => guard,
+            Err(e) => {
+                if expect_link.is_some() {
+                    let reason = if e == CodexHomeError::Busy {
+                        "pending_operation"
+                    } else {
+                        "invalid_state"
+                    };
+                    return emit_expectation_mismatch("child_link_mismatch", reason);
+                }
+                eprintln!("sync refused: {}", e.message());
+                return 1;
+            }
+        };
+    let paths = codex_guard.paths().clone();
     if !matches!(validate_existing_journal_paths(&paths), Ok(true)) {
         if expect_link.is_some() {
             return emit_expectation_mismatch("child_link_mismatch", "invalid_state");
@@ -1260,7 +1388,7 @@ fn cmd_sync(args: &[String]) -> u8 {
     };
 
     let journal = match apply_attach_or_sync(
-        &paths,
+        &codex_guard,
         &state.link_id,
         &state.api_key_id,
         state.listen_port,
@@ -1351,14 +1479,30 @@ fn cmd_sync(args: &[String]) -> u8 {
 fn cmd_detach(args: &[String]) -> u8 {
     let keep_catalog = args.iter().any(|a| a == "--keep-catalog");
     let json_mode = args.iter().any(|a| a == "--json");
-    let paths = current_paths();
-    let _lock = match FileLock::acquire_blocking(&paths.lock_file) {
+    let local_paths = current_paths();
+    let _lock = match FileLock::acquire_blocking(&local_paths.lock_file) {
         Ok(l) => l,
         Err(_) => {
             eprintln!("detach failed: child lifecycle lock busy");
             return 1;
         }
     };
+    let mut codex_guard =
+        match CodexHomeGuard::acquire(&local_paths, true, false, ClaimPolicy::Detach) {
+            Ok(guard) => guard,
+            Err(CodexHomeError::Missing) => {
+                return detach_without_codex_home(&local_paths, json_mode);
+            }
+            Err(e) => {
+                eprintln!("detach refused: {}", e.message());
+                return 1;
+            }
+        };
+    let paths = codex_guard.paths().clone();
+    if let Err(e) = codex_guard.set_phase(OwnershipPhase::Detaching) {
+        eprintln!("detach failed recording Codex home ownership phase: {e}");
+        return 1;
+    }
     let _startup_gate = match FileLock::acquire_blocking(&paths.child_dir.join("daemon-start.lock"))
     {
         Ok(lock) => lock,
@@ -1367,7 +1511,7 @@ fn cmd_detach(args: &[String]) -> u8 {
             return 1;
         }
     };
-    if let Err(e) = AttachRollbackSnapshot::recover(&paths) {
+    if let Err(e) = AttachRollbackSnapshot::recover(&codex_guard) {
         eprintln!("detach recovery failed: {e}");
         return 1;
     }
@@ -1412,7 +1556,7 @@ fn cmd_detach(args: &[String]) -> u8 {
             return 1;
         }
     }
-    let outcome = match offline_detach_deferred(&paths, keep_catalog) {
+    let outcome = match offline_detach_deferred(&codex_guard, keep_catalog) {
         Ok(o) => o,
         Err(DetachError::Conflict(msg)) => {
             eprintln!("detach conflict: {msg}");
@@ -1434,6 +1578,17 @@ fn cmd_detach(args: &[String]) -> u8 {
             return 1;
         }
     }
+    // Ownership is released last, after cleanup is durable, so a crash before this point
+    // leaves a record that only this OpenCodex home's detach can resume.
+    if let Err(e) = codex_guard.release() {
+        eprintln!("detach cleanup failed releasing Codex home ownership: {e}");
+        return 1;
+    }
+    print_detached(json_mode, outcome);
+    0
+}
+
+fn print_detached(json_mode: bool, outcome: crate::journal::DetachOutcome) {
     if json_mode {
         println!("{{\"restored\":true,\"outcome\":\"{outcome:?}\",\"daemonRunning\":false}}");
     } else {
@@ -1441,6 +1596,32 @@ fn cmd_detach(args: &[String]) -> u8 {
             "Disconnected ephemeral Remote Link Child ({outcome:?}); zero background daemon running."
         );
     }
+}
+
+/// Detach when `CODEX_HOME` does not exist: succeed only if nothing needs restoring.
+fn detach_without_codex_home(paths: &ChildPaths, json_mode: bool) -> u8 {
+    for path in [
+        &paths.rollback_file,
+        &paths.journal_file,
+        &paths.state_file,
+        &paths.key_file,
+        &paths.catalog_backup_file,
+    ] {
+        match fs::symlink_metadata(path) {
+            Ok(_) => {
+                eprintln!(
+                    "detach refused: Codex home does not exist; child recovery records were kept"
+                );
+                return 1;
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                eprintln!("detach refused: cannot inspect child recovery material: {e}");
+                return 1;
+            }
+        }
+    }
+    print_detached(json_mode, crate::journal::DetachOutcome::NotAttached);
     0
 }
 

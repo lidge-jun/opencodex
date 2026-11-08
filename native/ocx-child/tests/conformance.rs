@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 use ocx_child::cli::AttachRollbackSnapshot;
+use ocx_child::codex_home::{ClaimPolicy, CodexHomeGuard};
 use ocx_child::codex_settings::{
     HomeCodexSettings, codex_settings_digest, codex_settings_digest_payload,
     parse_home_codex_settings_document,
@@ -69,7 +70,7 @@ fn detached_reconciled_cache_can_be_retried_after_backup_cleanup() {
         subagent_defaults: None,
     };
     apply_attach_or_sync(
-        &paths,
+        &owned(&paths),
         "lnk_0123456789abcdef",
         "link:t",
         10100,
@@ -85,10 +86,11 @@ fn detached_reconciled_cache_can_be_retried_after_backup_cleanup() {
         .unwrap()
         .push(serde_json::json!({"slug":"local-added"}));
     fs::write(&cache_path, serde_json::to_vec(&cache).unwrap()).unwrap();
-    offline_detach_deferred(&paths, false).unwrap();
+    offline_detach_deferred(&detach_guard(&paths), false).unwrap();
     let restored = fs::read(&cache_path).unwrap();
     fs::remove_file(&paths.catalog_backup_file).unwrap();
-    offline_detach_deferred(&paths, false).expect("retry must not depend on removed backup");
+    offline_detach_deferred(&detach_guard(&paths), false)
+        .expect("retry must not depend on removed backup");
     assert_eq!(fs::read(cache_path).unwrap(), restored);
     assert!(String::from_utf8(restored).unwrap().contains("local-added"));
 }
@@ -113,7 +115,7 @@ fn sync_preserves_new_external_cache_models_through_detach() {
         subagent_defaults: None,
     };
     apply_attach_or_sync(
-        &paths,
+        &owned(&paths),
         "lnk_0123456789abcdef",
         "link:t",
         10100,
@@ -130,7 +132,7 @@ fn sync_preserves_new_external_cache_models_through_detach() {
         .push(serde_json::json!({"slug":"local-added"}));
     fs::write(&cache_path, serde_json::to_vec(&cache).unwrap()).unwrap();
     apply_attach_or_sync(
-        &paths,
+        &owned(&paths),
         "lnk_0123456789abcdef",
         "link:t",
         10100,
@@ -144,7 +146,7 @@ fn sync_preserves_new_external_cache_models_through_detach() {
             .contains("local-added")
     );
     apply_attach_or_sync(
-        &paths,
+        &owned(&paths),
         "lnk_0123456789abcdef",
         "link:t",
         10100,
@@ -157,7 +159,7 @@ fn sync_preserves_new_external_cache_models_through_detach() {
             .unwrap()
             .contains("local-added")
     );
-    offline_detach(&paths, false).unwrap();
+    offline_detach(&detach_guard(&paths), false).unwrap();
     let detached = fs::read_to_string(cache_path).unwrap();
     assert!(detached.contains("local-added"));
     assert!(
@@ -427,7 +429,7 @@ fn conformance_journal_roundtrips_and_1798_detach_match_typescript() {
 
         let sample_catalog = b"{\"models\":[{\"slug\":\"home-m1\"}]}\n";
         let attach_res = apply_attach_or_sync(
-            &paths,
+            &owned(&paths),
             "lnk_0123456789abcdef",
             "link:test",
             row.listen_port,
@@ -442,7 +444,7 @@ fn conformance_journal_roundtrips_and_1798_detach_match_typescript() {
         );
 
         if !row.expected_attach_ok {
-            let detach_res = offline_detach(&paths, false).unwrap();
+            let detach_res = offline_detach(&detach_guard(&paths), false).unwrap();
             assert_eq!(detach_res, DetachOutcome::NotAttached, "case {}", row.id);
             let final_toml = fs::read_to_string(paths.codex_config_path()).ok();
             let final_cat = fs::read_to_string(paths.codex_catalog_path()).ok();
@@ -454,7 +456,7 @@ fn conformance_journal_roundtrips_and_1798_detach_match_typescript() {
 
         if let Some(sync_set) = &row.sync_settings {
             apply_attach_or_sync(
-                &paths,
+                &owned(&paths),
                 "lnk_0123456789abcdef",
                 "link:test",
                 row.listen_port,
@@ -549,7 +551,7 @@ fn conformance_journal_roundtrips_and_1798_detach_match_typescript() {
         let snap_cat = fs::read(paths.codex_catalog_path()).ok();
         let snap_journal = fs::read(&paths.journal_file).ok();
 
-        match offline_detach(&paths, false) {
+        match offline_detach(&detach_guard(&paths), false) {
             Ok(DetachOutcome::ExactRestore) => {
                 assert_eq!(
                     row.expected_detach_outcome, "exact_restore",
@@ -626,6 +628,16 @@ fn conformance_journal_roundtrips_and_1798_detach_match_typescript() {
     }
 }
 
+/// Lock and claim a Codex home the way attach and sync do.
+fn owned(paths: &ChildPaths) -> CodexHomeGuard {
+    CodexHomeGuard::acquire(paths, true, true, ClaimPolicy::Attach).expect("claim Codex home")
+}
+
+/// Lock a Codex home the way detach does.
+fn detach_guard(paths: &ChildPaths) -> CodexHomeGuard {
+    CodexHomeGuard::acquire(paths, true, false, ClaimPolicy::Detach).expect("lock Codex home")
+}
+
 struct ScratchGuard(PathBuf);
 
 impl Drop for ScratchGuard {
@@ -664,7 +676,7 @@ fn detach_refuses_a_different_codex_home_before_mutating_the_original() {
     )
     .unwrap();
     apply_attach_or_sync(
-        &original,
+        &owned(&original),
         "lnk_0123456789abcdef",
         "link:t",
         10100,
@@ -677,7 +689,7 @@ fn detach_refuses_a_different_codex_home_before_mutating_the_original() {
     let journal_before = fs::read(&original.journal_file).unwrap();
 
     assert!(matches!(
-        offline_detach(&other, false),
+        offline_detach(&detach_guard(&other), false),
         Err(DetachError::Conflict(_))
     ));
     assert_eq!(
@@ -696,7 +708,7 @@ fn detach_refuses_a_different_codex_home_before_mutating_the_original() {
 fn sync_refuses_a_different_codex_home_without_rewriting_the_journal() {
     let (_guard, original, other, settings) = homes_fixture();
     apply_attach_or_sync(
-        &original,
+        &owned(&original),
         "lnk_0123456789abcdef",
         "link:t",
         10100,
@@ -705,9 +717,15 @@ fn sync_refuses_a_different_codex_home_without_rewriting_the_journal() {
     )
     .unwrap();
     let journal_before = fs::read(&original.journal_file).unwrap();
+    // Neither the sync nor the attach policy may claim a Codex home that the existing
+    // journal does not target, so journal application never runs against it.
+    for policy in [ClaimPolicy::Continue, ClaimPolicy::Attach] {
+        assert!(CodexHomeGuard::acquire(&other, true, false, policy).is_err());
+    }
+    let unowned = detach_guard(&other);
     assert!(
         apply_attach_or_sync(
-            &other,
+            &unowned,
             "lnk_0123456789abcdef",
             "link:t",
             10100,
@@ -716,8 +734,10 @@ fn sync_refuses_a_different_codex_home_without_rewriting_the_journal() {
         )
         .is_err()
     );
+    drop(unowned);
     assert_eq!(fs::read(&original.journal_file).unwrap(), journal_before);
     assert!(!other.codex_config_path().exists());
+    assert!(!other.codex_owner_path().exists());
 }
 
 #[cfg(unix)]
@@ -727,7 +747,7 @@ fn detach_accepts_an_alias_of_the_same_canonical_codex_home() {
 
     let (guard, original, _other, settings) = homes_fixture();
     apply_attach_or_sync(
-        &original,
+        &owned(&original),
         "lnk_0123456789abcdef",
         "link:t",
         10100,
@@ -739,7 +759,7 @@ fn detach_accepts_an_alias_of_the_same_canonical_codex_home() {
     symlink(&original.codex_home, &alias).unwrap();
     let equivalent = ChildPaths::new(original.opencodex_home.clone(), alias);
     assert_eq!(
-        offline_detach(&equivalent, false).unwrap(),
+        offline_detach(&detach_guard(&equivalent), false).unwrap(),
         DetachOutcome::ExactRestore
     );
 }
@@ -754,7 +774,7 @@ fn detach_refuses_a_retargeted_codex_home_alias() {
     symlink(&original.codex_home, &alias).unwrap();
     let aliased = ChildPaths::new(original.opencodex_home.clone(), alias.clone());
     apply_attach_or_sync(
-        &aliased,
+        &owned(&aliased),
         "lnk_0123456789abcdef",
         "link:t",
         10100,
@@ -768,7 +788,7 @@ fn detach_refuses_a_retargeted_codex_home_alias() {
     symlink(&other.codex_home, &alias).unwrap();
 
     assert!(matches!(
-        offline_detach(&aliased, false),
+        offline_detach(&detach_guard(&aliased), false),
         Err(DetachError::Conflict(_))
     ));
     assert!(fs::read(original.codex_config_path()).unwrap() == original_config);
@@ -781,7 +801,7 @@ fn detach_refuses_a_retargeted_codex_home_alias() {
 fn detach_refuses_a_replaced_codex_home_directory() {
     let (guard, original, _other, settings) = homes_fixture();
     apply_attach_or_sync(
-        &original,
+        &owned(&original),
         "lnk_0123456789abcdef",
         "link:t",
         10100,
@@ -794,7 +814,7 @@ fn detach_refuses_a_replaced_codex_home_directory() {
     fs::create_dir(&original.codex_home).unwrap();
 
     assert!(matches!(
-        offline_detach(&original, false),
+        offline_detach(&detach_guard(&original), false),
         Err(DetachError::Conflict(_))
     ));
     assert!(original.journal_file.is_file());
@@ -805,11 +825,11 @@ fn detach_refuses_a_replaced_codex_home_directory() {
 fn immediate_rollback_refuses_a_replaced_codex_home() {
     let (guard, original, _other, _settings) = homes_fixture();
     fs::write(original.codex_config_path(), b"original config").unwrap();
-    let rollback = AttachRollbackSnapshot::capture(&original, None).unwrap();
+    let rollback = AttachRollbackSnapshot::capture(&owned(&original), None).unwrap();
     fs::rename(&original.codex_home, guard.0.join("saved-home")).unwrap();
     fs::create_dir(&original.codex_home).unwrap();
     fs::write(original.codex_config_path(), b"replacement config").unwrap();
-    assert!(rollback.restore(&original).is_err());
+    assert!(rollback.restore(&detach_guard(&original)).is_err());
     assert_eq!(
         fs::read(original.codex_config_path()).unwrap(),
         b"replacement config"
@@ -827,7 +847,7 @@ fn detach_refuses_missing_or_invalid_catalog_snapshot_before_mutation() {
         )
         .unwrap();
         apply_attach_or_sync(
-            &paths,
+            &owned(&paths),
             "lnk_0123456789abcdef",
             "link:t",
             10100,
@@ -844,7 +864,7 @@ fn detach_refuses_missing_or_invalid_catalog_snapshot_before_mutation() {
         let journal_before = fs::read(&paths.journal_file).unwrap();
 
         assert!(matches!(
-            offline_detach(&paths, false),
+            offline_detach(&detach_guard(&paths), false),
             Err(DetachError::Conflict(_))
         ));
         assert!(fs::read(paths.codex_config_path()).unwrap() == config_before);
@@ -857,7 +877,7 @@ fn detach_refuses_missing_or_invalid_catalog_snapshot_before_mutation() {
 fn detach_refuses_a_journal_with_a_foreign_catalog_target() {
     let (_guard, original, other, settings) = homes_fixture();
     apply_attach_or_sync(
-        &original,
+        &owned(&original),
         "lnk_0123456789abcdef",
         "link:t",
         10100,
@@ -877,7 +897,7 @@ fn detach_refuses_a_journal_with_a_foreign_catalog_target() {
     .unwrap();
 
     assert!(matches!(
-        offline_detach(&original, false),
+        offline_detach(&detach_guard(&original), false),
         Err(DetachError::Conflict(_))
     ));
     assert_eq!(fs::read(foreign).unwrap(), b"foreign");
@@ -890,9 +910,9 @@ fn failed_first_attach_rollback_keeps_the_recovery_journal() {
     fs::create_dir_all(&paths.child_dir).unwrap();
     fs::write(&paths.key_file, b"previous-fixture-key").unwrap();
     fs::write(&paths.state_file, b"previous-fixture-state").unwrap();
-    let snapshot = AttachRollbackSnapshot::capture(&paths, None).unwrap();
+    let snapshot = AttachRollbackSnapshot::capture(&owned(&paths), None).unwrap();
     apply_attach_or_sync(
-        &paths,
+        &owned(&paths),
         "lnk_0123456789abcdef",
         "link:t",
         10100,
@@ -904,7 +924,7 @@ fn failed_first_attach_rollback_keeps_the_recovery_journal() {
     fs::remove_file(paths.codex_config_path()).unwrap();
     fs::create_dir(paths.codex_config_path()).unwrap();
 
-    assert!(snapshot.restore(&paths).is_err());
+    assert!(snapshot.restore(&detach_guard(&paths)).is_err());
     assert!(
         paths.journal_file.is_file(),
         "recovery journal must survive an incomplete rollback"
@@ -922,9 +942,9 @@ fn failed_first_attach_rollback_keeps_the_recovery_journal() {
 #[test]
 fn detach_recovers_a_durable_incomplete_attach_snapshot() {
     let (_guard, paths, other, settings) = homes_fixture();
-    let snapshot = AttachRollbackSnapshot::capture(&paths, None).unwrap();
+    let snapshot = AttachRollbackSnapshot::capture(&owned(&paths), None).unwrap();
     apply_attach_or_sync(
-        &paths,
+        &owned(&paths),
         "lnk_0123456789abcdef",
         "link:t",
         10100,
@@ -934,7 +954,7 @@ fn detach_recovers_a_durable_incomplete_attach_snapshot() {
     .unwrap();
     fs::remove_file(paths.codex_config_path()).unwrap();
     fs::create_dir(paths.codex_config_path()).unwrap();
-    assert!(snapshot.restore(&paths).is_err());
+    assert!(snapshot.restore(&detach_guard(&paths)).is_err());
     assert!(paths.rollback_file.is_file());
     let wrong_home = std::process::Command::new(env!("CARGO_BIN_EXE_ocx-child"))
         .arg("detach")
@@ -967,9 +987,9 @@ fn detach_recovers_a_durable_incomplete_attach_snapshot() {
 #[test]
 fn rollback_recovery_refuses_a_replaced_codex_home_directory() {
     let (guard, paths, _other, settings) = homes_fixture();
-    let snapshot = AttachRollbackSnapshot::capture(&paths, None).unwrap();
+    let snapshot = AttachRollbackSnapshot::capture(&owned(&paths), None).unwrap();
     apply_attach_or_sync(
-        &paths,
+        &owned(&paths),
         "lnk_0123456789abcdef",
         "link:t",
         10100,
@@ -979,7 +999,7 @@ fn rollback_recovery_refuses_a_replaced_codex_home_directory() {
     .unwrap();
     fs::remove_file(paths.codex_config_path()).unwrap();
     fs::create_dir(paths.codex_config_path()).unwrap();
-    assert!(snapshot.restore(&paths).is_err());
+    assert!(snapshot.restore(&detach_guard(&paths)).is_err());
     let saved = guard.0.join("saved-codex");
     fs::rename(&paths.codex_home, &saved).unwrap();
     fs::create_dir(&paths.codex_home).unwrap();
@@ -1028,7 +1048,7 @@ fn detach_keeps_recovery_journal_when_required_file_removal_fails() {
 
     let (_guard, paths, _other, settings) = homes_fixture();
     apply_attach_or_sync(
-        &paths,
+        &owned(&paths),
         "lnk_0123456789abcdef",
         "link:t",
         10100,
@@ -1041,7 +1061,7 @@ fn detach_keeps_recovery_journal_when_required_file_removal_fails() {
     fs::set_permissions(&paths.codex_home, fs::Permissions::from_mode(0o500)).unwrap();
 
     assert!(matches!(
-        offline_detach(&paths, false),
+        offline_detach(&detach_guard(&paths), false),
         Err(DetachError::Io(_))
     ));
     assert!(paths.journal_file.is_file());
@@ -1072,7 +1092,7 @@ fn conformance_multiline_placement_and_write_ahead_journal_crash_recovery() {
     };
     let cat_v1 = b"{\"models\":[{\"slug\":\"m-v1\"}]}\n";
     apply_attach_or_sync(
-        &paths,
+        &owned(&paths),
         "lnk_0123456789abcdef",
         "link:t",
         10100,
@@ -1102,7 +1122,7 @@ fn conformance_multiline_placement_and_write_ahead_journal_crash_recovery() {
     };
     assert!(
         apply_attach_or_sync_with_fault(
-            &paths,
+            &owned(&paths),
             "lnk_0123456789abcdef",
             "link:t",
             10100,
@@ -1114,7 +1134,7 @@ fn conformance_multiline_placement_and_write_ahead_journal_crash_recovery() {
     );
     assert!(
         apply_attach_or_sync_with_fault(
-            &paths,
+            &owned(&paths),
             "lnk_0123456789abcdef",
             "link:t",
             10100,
@@ -1131,7 +1151,7 @@ fn conformance_multiline_placement_and_write_ahead_journal_crash_recovery() {
         injected
     );
 
-    let outcome = offline_detach(&paths, false).unwrap();
+    let outcome = offline_detach(&detach_guard(&paths), false).unwrap();
     assert_eq!(outcome, DetachOutcome::ExactRestore);
     assert_eq!(
         fs::read_to_string(paths.codex_config_path()).unwrap(),
@@ -1143,7 +1163,7 @@ fn conformance_multiline_placement_and_write_ahead_journal_crash_recovery() {
     // 3. Two consecutive failed catalog writes (AfterJournalWrite twice) with no pre-attach catalog/cache
     fs::remove_file(paths.codex_catalog_path()).unwrap();
     apply_attach_or_sync(
-        &paths,
+        &owned(&paths),
         "lnk_0123456789abcdef",
         "link:t",
         10100,
@@ -1157,7 +1177,7 @@ fn conformance_multiline_placement_and_write_ahead_journal_crash_recovery() {
     ] {
         assert!(
             apply_attach_or_sync_with_fault(
-                &paths,
+                &owned(&paths),
                 "lnk_0123456789abcdef",
                 "link:t",
                 10100,
@@ -1171,7 +1191,7 @@ fn conformance_multiline_placement_and_write_ahead_journal_crash_recovery() {
     assert_eq!(fs::read(paths.codex_catalog_path()).unwrap(), cat_v1);
     assert!(paths.codex_models_cache_path().exists());
 
-    let outcome = offline_detach(&paths, false).unwrap();
+    let outcome = offline_detach(&detach_guard(&paths), false).unwrap();
     assert_eq!(outcome, DetachOutcome::ExactRestore);
     assert_eq!(
         fs::read_to_string(paths.codex_config_path()).unwrap(),
@@ -1249,7 +1269,7 @@ fn strict_settings_validation_chunk_eof_and_catalog_sync_ownership_guards() {
         subagent_defaults: None,
     };
     apply_attach_or_sync(
-        &paths,
+        &owned(&paths),
         "lnk_0123456789abcdef",
         "link:t",
         10100,
@@ -1260,7 +1280,7 @@ fn strict_settings_validation_chunk_eof_and_catalog_sync_ownership_guards() {
     let user_cat = b"{\"models\":[{\"slug\":\"user-edited\"}]}\n";
     fs::write(paths.codex_catalog_path(), user_cat).unwrap();
     let sync_err = apply_attach_or_sync(
-        &paths,
+        &owned(&paths),
         "lnk_0123456789abcdef",
         "link:t",
         10100,
@@ -1271,7 +1291,7 @@ fn strict_settings_validation_chunk_eof_and_catalog_sync_ownership_guards() {
     assert!(sync_err.contains("client_catalog_ownership_changed"));
     assert_eq!(fs::read(paths.codex_catalog_path()).unwrap(), user_cat);
     assert!(matches!(
-        offline_detach(&paths, false),
+        offline_detach(&detach_guard(&paths), false),
         Err(DetachError::Conflict(_))
     ));
     assert_eq!(fs::read(paths.codex_catalog_path()).unwrap(), user_cat);
@@ -1283,8 +1303,7 @@ fn strict_settings_validation_chunk_eof_and_catalog_sync_ownership_guards() {
     fs::create_dir_all(&paths.codex_home).unwrap();
     let pre_cache = br#"{"fetched_at":"2000-01-01T00:00:00Z","client_version":"0.0.0","models":[{"slug":"shared-m","context_window":1}]}"#;
     fs::write(paths.codex_models_cache_path(), pre_cache).unwrap();
-    apply_attach_or_sync(
-        &paths,
+    apply_attach_or_sync(&owned(&paths),
         "lnk_0123456789abcdef",
         "link:t",
         10100,
@@ -1295,7 +1314,7 @@ fn strict_settings_validation_chunk_eof_and_catalog_sync_ownership_guards() {
     // Invalid cache JSON fails closed without deleting journal
     fs::write(paths.codex_models_cache_path(), b"{invalid").unwrap();
     assert!(matches!(
-        offline_detach(&paths, false),
+        offline_detach(&detach_guard(&paths), false),
         Err(DetachError::Conflict(_))
     ));
     assert!(paths.journal_file.exists());
@@ -1305,14 +1324,14 @@ fn strict_settings_validation_chunk_eof_and_catalog_sync_ownership_guards() {
     let saved_backup = fs::read(&paths.catalog_backup_file).unwrap();
     fs::remove_file(&paths.catalog_backup_file).unwrap();
     assert!(matches!(
-        offline_detach(&paths, false),
+        offline_detach(&detach_guard(&paths), false),
         Err(DetachError::Conflict(_))
     ));
     assert!(paths.journal_file.exists());
     // Restore backup -> detach succeeds, restores shared-m context_window: 1, drops home-only, preserves ext-native
     fs::write(&paths.catalog_backup_file, &saved_backup).unwrap();
     assert_eq!(
-        offline_detach(&paths, false).unwrap(),
+        offline_detach(&detach_guard(&paths), false).unwrap(),
         DetachOutcome::ExactRestore
     );
     let final_cache: serde_json::Value =
@@ -1325,17 +1344,17 @@ fn strict_settings_validation_chunk_eof_and_catalog_sync_ownership_guards() {
     assert_eq!(models[1]["context_window"], 9);
 
     // 5. AttachRollbackSnapshot::capture rejects non-NotFound read failure & restore reports incomplete rollback
-    let snap_ok = AttachRollbackSnapshot::capture(&paths, None).unwrap();
+    let snap_ok = AttachRollbackSnapshot::capture(&owned(&paths), None).unwrap();
     let _ = fs::remove_file(paths.codex_config_path());
     fs::create_dir_all(paths.codex_config_path()).unwrap();
-    let cap_err = AttachRollbackSnapshot::capture(&paths, None)
+    let cap_err = AttachRollbackSnapshot::capture(&owned(&paths), None)
         .err()
         .expect("directory config.toml must fail capture");
     assert!(
         cap_err.contains("attach failed reading"),
         "err was: {cap_err}"
     );
-    let rb_err = snap_ok.restore(&paths).unwrap_err();
+    let rb_err = snap_ok.restore(&detach_guard(&paths)).unwrap_err();
     assert!(
         rb_err.contains("attach rollback incomplete"),
         "err was: {rb_err}"

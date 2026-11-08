@@ -20,6 +20,8 @@ pub struct ChildPaths {
     pub journal_file: PathBuf,
     pub rollback_file: PathBuf,
     pub catalog_backup_file: PathBuf,
+    /// Random owner id this OpenCodex home uses in a `CODEX_HOME` ownership record.
+    pub owner_id_file: PathBuf,
 }
 
 impl ChildPaths {
@@ -32,6 +34,7 @@ impl ChildPaths {
             journal_file: child_dir.join("codex-journal.json"),
             rollback_file: child_dir.join("attach-rollback.json"),
             catalog_backup_file: child_dir.join("last-catalog.json"),
+            owner_id_file: child_dir.join("codex-home-owner-id"),
             opencodex_home,
             codex_home,
             child_dir,
@@ -48,6 +51,17 @@ impl ChildPaths {
 
     pub fn codex_models_cache_path(&self) -> PathBuf {
         self.codex_home.join("models_cache.json")
+    }
+
+    /// Fixed lock serializing every ocx-child that writes this `CODEX_HOME`; never removed.
+    pub fn codex_lock_path(&self) -> PathBuf {
+        self.codex_home
+            .join(crate::codex_home::CODEX_HOME_LOCK_FILE)
+    }
+
+    pub fn codex_owner_path(&self) -> PathBuf {
+        self.codex_home
+            .join(crate::codex_home::CODEX_HOME_OWNER_FILE)
     }
 }
 

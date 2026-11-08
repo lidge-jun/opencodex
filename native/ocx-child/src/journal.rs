@@ -6,6 +6,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 
+use crate::codex_home::CodexHomeGuard;
 use crate::codex_settings::HomeCodexSettings;
 use crate::platform::{
     DirectoryIdentity, directory_identity, ensure_private_dir, reject_symlink, sha256_hex,
@@ -277,7 +278,7 @@ pub fn refresh_codex_models_cache(
 }
 
 pub fn apply_attach_or_sync(
-    paths: &ChildPaths,
+    guard: &CodexHomeGuard,
     link_id: &str,
     api_key_id: &str,
     listen_port: u16,
@@ -285,7 +286,7 @@ pub fn apply_attach_or_sync(
     settings: &HomeCodexSettings,
 ) -> Result<ChildJournalV1, String> {
     apply_attach_or_sync_with_fault(
-        paths,
+        guard,
         link_id,
         api_key_id,
         listen_port,
@@ -296,7 +297,7 @@ pub fn apply_attach_or_sync(
 }
 
 pub fn apply_attach_or_sync_with_fault(
-    paths: &ChildPaths,
+    guard: &CodexHomeGuard,
     link_id: &str,
     api_key_id: &str,
     listen_port: u16,
@@ -304,6 +305,10 @@ pub fn apply_attach_or_sync_with_fault(
     settings: &HomeCodexSettings,
     fault: Option<JournalWriteFault>,
 ) -> Result<ChildJournalV1, String> {
+    if !guard.is_owner() {
+        return Err("attach refused: this OpenCodex home does not own the Codex home".to_owned());
+    }
+    let paths = guard.paths();
     assert_no_full_ocx_conflict(paths)?;
     let catalog_models = validate_catalog_json(catalog_bytes)?;
     let config_path = paths.codex_config_path();
@@ -587,18 +592,18 @@ pub fn apply_attach_or_sync_with_fault(
 
 /// Performs 100% offline two-tier restoration of `config.toml`, `opencodex-catalog.json`, and `models_cache.json`.
 pub fn offline_detach(
-    paths: &ChildPaths,
+    guard: &CodexHomeGuard,
     keep_catalog: bool,
 ) -> Result<DetachOutcome, DetachError> {
-    offline_detach_inner(paths, keep_catalog, false)
+    offline_detach_inner(guard, keep_catalog, false)
 }
 
 /// Restore client files while retaining recovery records until lifecycle cleanup succeeds.
 pub fn offline_detach_deferred(
-    paths: &ChildPaths,
+    guard: &CodexHomeGuard,
     keep_catalog: bool,
 ) -> Result<DetachOutcome, DetachError> {
-    offline_detach_inner(paths, keep_catalog, true)
+    offline_detach_inner(guard, keep_catalog, true)
 }
 
 pub fn remove_optional_file(path: &Path) -> Result<(), String> {
@@ -623,10 +628,11 @@ pub fn remove_optional_file(path: &Path) -> Result<(), String> {
 }
 
 fn offline_detach_inner(
-    paths: &ChildPaths,
+    guard: &CodexHomeGuard,
     keep_catalog: bool,
     defer_cleanup: bool,
 ) -> Result<DetachOutcome, DetachError> {
+    let paths = guard.paths();
     let Some(mut journal) = read_journal(&paths.journal_file).map_err(DetachError::Io)? else {
         return Ok(DetachOutcome::NotAttached);
     };

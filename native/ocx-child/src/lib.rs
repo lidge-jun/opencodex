@@ -1,6 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod cli;
+pub mod codex_home;
 pub mod codex_settings;
 pub mod daemon;
 pub mod http_wire;

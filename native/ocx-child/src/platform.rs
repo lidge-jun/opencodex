@@ -921,16 +921,30 @@ pub enum LockAcquireError {
 
 impl FileLock {
     pub fn try_acquire_nonblocking(path: &Path) -> Result<Self, LockAcquireError> {
-        Self::acquire_inner(path, false)
+        Self::acquire_inner(path, false, true)
     }
 
     pub fn acquire_blocking(path: &Path) -> Result<Self, LockAcquireError> {
-        Self::acquire_inner(path, true)
+        Self::acquire_inner(path, true, true)
     }
 
-    fn acquire_inner(path: &Path, blocking: bool) -> Result<Self, LockAcquireError> {
+    /// Lock a file inside a directory the caller does not own (such as `CODEX_HOME`), leaving
+    /// the directory's permissions untouched. The lock file itself is created private.
+    pub fn acquire_in_existing_dir(path: &Path, blocking: bool) -> Result<Self, LockAcquireError> {
+        Self::acquire_inner(path, blocking, false)
+    }
+
+    fn acquire_inner(
+        path: &Path,
+        blocking: bool,
+        harden_parent: bool,
+    ) -> Result<Self, LockAcquireError> {
         let parent = path.parent().ok_or(LockAcquireError::Io)?;
-        ensure_private_dir(parent).map_err(|_| LockAcquireError::Io)?;
+        if harden_parent {
+            ensure_private_dir(parent).map_err(|_| LockAcquireError::Io)?;
+        } else if !fs::symlink_metadata(parent).is_ok_and(|m| m.is_dir()) {
+            return Err(LockAcquireError::Io);
+        }
         reject_symlink(path).map_err(|_| LockAcquireError::Io)?;
         #[cfg(windows)]
         let existed = path.exists();

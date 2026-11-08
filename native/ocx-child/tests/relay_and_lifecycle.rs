@@ -709,7 +709,7 @@ fn full_lifecycle_sse_relay_spoof_rejection_sync_rollover_and_offline_1798_detac
         Some(cred_json.as_bytes()),
     );
     assert_ne!(rc_conflict, 0);
-    assert!(err_conflict.contains("full OpenCodex runtime state"));
+    assert!(err_conflict.contains("full OpenCodex runtime state"), "{err_conflict}");
     fs::remove_file(ocx_home.join("runtime-port.json")).unwrap();
 
     // 3. Clean enrollment: connect + restart
