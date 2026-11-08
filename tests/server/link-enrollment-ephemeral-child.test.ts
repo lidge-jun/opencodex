@@ -30,7 +30,7 @@ const fakeBinary = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 1, 2, 3, 4]);
 const fakeSha = createHash("sha256").update(fakeBinary).digest("hex");
 const ok = (stdout = "", code = 0, stderr = ""): SshRunResult => ({ code, stdout, stderr });
 const http200 = (body: unknown) => ok(`${JSON.stringify(body)}\n200`);
-type Step = "inspect" | "plant" | "purgePlant" | "port" | "config" | "curl" | "before" | "connect" | "restart" | "health" | "catalog" | "disconnect" | "disconnectPurge";
+type Step = "inspect" | "plant" | "purgePlant" | "port" | "config" | "curl" | "before" | "connect" | "restart" | "health" | "catalog" | "disconnect" | "disconnectPurge" | "managedPurge";
 
 function buildHarness() {
   const remoteOcx = (args: string[]) => quoteRemote(remoteOcxArgv(args, "posix"));
@@ -87,6 +87,7 @@ function buildHarness() {
       const step: Step = command === inspectCmd ? "inspect"
         : command === plantCmd ? "plant"
         : command === purgePlantCmd ? "purgePlant"
+        : command.includes("ocx-managed-purge") ? "managedPurge"
         : command === remoteOcx(["link", "port"]) ? "port"
         : command === remoteOcx(["config", "show", "--json"]) ? "config"
         : command.includes("ocx-curl-preflight") ? "curl"
@@ -122,6 +123,7 @@ function buildHarness() {
         }
         case "disconnect": return ok();
         case "disconnectPurge": return ok();
+        case "managedPurge": return ok('{"restored":true,"outcome":"Restored","daemonRunning":false,"purged":true}\n');
       }
     },
     spawnTunnel() { throw new Error("unused"); },
@@ -209,7 +211,45 @@ describe("Home Remote Link enrollment, SSH plant, and --purge removal with ephem
 
     const del = await h.request("DELETE", `/api/link/${body.linkId}`, { purge: true });
     expect(del.status).toBe(200);
-    expect(h.events).toContain("disconnectPurge");
+    expect(h.events).toContain("managedPurge");
+    expect(h.events).not.toContain("disconnectPurge");
+    expect(h.store.links).toHaveLength(0);
+  });
+
+  test("DELETE --purge targets the managed planted binary and reports a binary it did not remove as a failure", async () => {
+    const h = buildHarness();
+    const { linkId } = await (await h.request("POST", "/api/link/apply", { alias: "devbox" })).json() as { linkId: string };
+    h.overrides.managedPurge = () => ok('{"restored":true,"outcome":"NotAttached","daemonRunning":false,"purged":false}\n');
+    const kept = await h.request("DELETE", "/api/link/" + linkId, { purge: true });
+    expect(kept.status).toBe(502);
+    expect((await kept.json() as { error: { code: string; hint?: string } }).error).toMatchObject({ code: "remote_disconnect_failed", hint: "purge_incomplete" });
+    expect(h.store.links).toHaveLength(1);
+    expect(h.events).not.toContain("disconnectPurge");
+
+    h.overrides.managedPurge = () => ok("", 1, "ocx-purge-error:managed_child_missing\n");
+    const missing = await h.request("DELETE", "/api/link/" + linkId, { purge: true });
+    expect(missing.status).toBe(502);
+    expect((await missing.json() as { error: { hint?: string } }).error.hint).toBe("managed_child_missing");
+    expect(h.store.links).toHaveLength(1);
+  });
+
+  test("DELETE --purge on a link enrolled without childKind inspects the Child instead of silently skipping the purge", async () => {
+    const h = buildHarness();
+    const { linkId } = await (await h.request("POST", "/api/link/apply", { alias: "devbox" })).json() as { linkId: string };
+    delete (h.store.links[0] as { childKind?: string }).childKind;
+    const start = h.events.length;
+    h.overrides.inspect = () => ok("ocx-inspect:uname:Linux:x86_64\nocx-inspect:kind:full\nocx-inspect:version:opencodex 2.98.0\n");
+    const full = await h.request("DELETE", "/api/link/" + linkId, { purge: true });
+    expect(full.status).toBe(409);
+    expect((await full.json() as { error: { code: string } }).error.code).toBe("purge_unsupported");
+    expect(h.events.slice(start)).toContain("inspect");
+    expect(h.events.slice(start).filter(e => e === "disconnect" || e === "disconnectPurge" || e === "managedPurge")).toEqual([]);
+    expect(h.store.links).toHaveLength(1);
+
+    h.overrides.inspect = () => ok("ocx-inspect:uname:Linux:x86_64\nocx-inspect:kind:ephemeral\nocx-inspect:version:ocx-child 2.98.0\n");
+    const eph = await h.request("DELETE", "/api/link/" + linkId, { purge: true });
+    expect(eph.status).toBe(200);
+    expect(h.events.slice(start)).toContain("managedPurge");
     expect(h.store.links).toHaveLength(0);
   });
 

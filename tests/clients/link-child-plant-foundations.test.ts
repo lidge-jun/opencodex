@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,15 +10,18 @@ import {
 } from "../../src/link/child-binary-source";
 import {
   classifyChildAttachConflict,
+  parsePurgeDisconnectReport,
   parseRemoteRuntimeInspection,
   parseTargetTriple,
   remoteInspectRuntimeArgv,
+  remoteManagedPurgeDisconnectArgv,
   remotePlantChildArgv,
   remotePurgePlantedChildArgv,
 } from "../../src/link/remote-plant";
 import {
   POWERSHELL_ENCODED_MAX,
   windowsInspectRuntimeArgv,
+  windowsManagedPurgeDisconnectArgv,
   windowsOcxArgv,
   windowsPlantChildArgv,
   windowsPurgePlantedChildArgv,
@@ -141,6 +144,7 @@ describe("remote-plant POSIX & Windows command contracts", () => {
       windowsOcxArgv(["disconnect", "--purge"]),
       windowsPlantChildArgv(950_000, sha),
       windowsPurgePlantedChildArgv(),
+      windowsManagedPurgeDisconnectArgv(),
     ]) {
       expect(argv[0]).toBe("powershell.exe");
       expect(argv[5]!.length).toBeLessThanOrEqual(POWERSHELL_ENCODED_MAX);
@@ -265,5 +269,30 @@ describe("remote-plant POSIX & Windows command contracts", () => {
     const bad = Bun.spawnSync(["/bin/sh", ...remotePlantChildArgv("posix", payload.byteLength, wrongSha).slice(1)], { env: { HOME: badHome, PATH: bin }, stdin: payload });
     expect(bad.exitCode).not.toBe(0);
     expect(existsSync(join(badHome, ".cache", "opencodex", "bin", "ocx-child"))).toBe(false);
+  });
+
+  test("POSIX purge disconnect runs only the managed planted binary and needs its purged report", () => {
+    if (process.platform === "win32") return;
+    const fakeHome = join(scratch, "purge-target-home");
+    const localBin = join(fakeHome, ".local", "bin");
+    mkdirSync(localBin, { recursive: true });
+    const recorded = join(scratch, "purge-target-args");
+    writeFileSync(join(localBin, "ocx-child"), "#!/bin/sh\necho local >> '" + recorded + "'\necho '{\"purged\":false}'\n", { mode: 0o755 });
+    const argv = remoteManagedPurgeDisconnectArgv("posix");
+    const env = { HOME: fakeHome, PATH: localBin + ":/usr/bin:/bin" };
+    const missing = Bun.spawnSync(["/bin/sh", ...argv.slice(1)], { env });
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stderr.toString("utf8")).toContain("ocx-purge-error:managed_child_missing");
+    expect(existsSync(recorded)).toBe(false);
+
+    const managedBin = join(fakeHome, ".cache", "opencodex", "bin");
+    mkdirSync(managedBin, { recursive: true });
+    writeFileSync(join(managedBin, "ocx-child"), "#!/bin/sh\necho \"$@\" >> '" + recorded + "'\necho '{\"restored\":true,\"outcome\":\"NotAttached\",\"daemonRunning\":false,\"purged\":true}'\n", { mode: 0o755 });
+    const ran = Bun.spawnSync(["/bin/sh", ...argv.slice(1)], { env });
+    expect(ran.exitCode).toBe(0);
+    expect(readFileSync(recorded, "utf8")).toBe("disconnect --purge --json\n");
+    expect(parsePurgeDisconnectReport(ran.stdout.toString("utf8"))).toBe(true);
+    expect(parsePurgeDisconnectReport('{"restored":true,"purged":false}\n')).toBe(false);
+    expect(parsePurgeDisconnectReport("Disconnected (purged=true)\n")).toBeNull();
   });
 });

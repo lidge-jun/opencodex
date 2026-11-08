@@ -1,7 +1,7 @@
 import { CHILD_TARGET_TRIPLES, type ChildTargetTriple } from "./child-binary-source";
-import { windowsInspectRuntimeArgv, windowsPlantChildArgv, windowsPurgePlantedChildArgv } from "./remote-windows";
+import { MANAGED_PURGE_CHILD_MISSING_MARKER, windowsInspectRuntimeArgv, windowsManagedPurgeDisconnectArgv, windowsPlantChildArgv, windowsPurgePlantedChildArgv } from "./remote-windows";
 import { buildExecArgv } from "./ssh-argv";
-import type { SshRunner } from "./ssh-runner";
+import { sshFailureHint, sshRunnerErrorHint, type SshRunner } from "./ssh-runner";
 
 export type RemoteRuntimeKind = "full" | "ephemeral" | "missing";
 export type ChildAttachConflictCode = "child_port_busy" | "child_external_provider_conflict";
@@ -209,6 +209,75 @@ export function remotePurgePlantedChildArgv(platform: "posix" | "windows" = "pos
   return platform === "windows"
     ? windowsPurgePlantedChildArgv()
     : ["sh", "-c", POSIX_PURGE_PLANTED_SCRIPT, "ocx-purge-plant"];
+}
+
+/**
+ * Runs disconnect through the managed planted binary only. A PATH or ~/.local/bin candidate cannot
+ * purge itself (it lives outside the managed directory), so the generic resolver is never used here.
+ */
+export const POSIX_MANAGED_PURGE_DISCONNECT_SCRIPT = [
+  "case \"$(uname -s 2>/dev/null)\" in Windows*|MSYS*|MINGW*|CYGWIN*) exit 125;; esac",
+  "for p in \"$HOME/.cache\" \"$HOME/.cache/opencodex\" \"$HOME/.cache/opencodex/bin\" \"$HOME/.cache/opencodex/bin/ocx-child\"; do",
+  "  if [ -L \"$p\" ]; then printf 'Refusing symlink in managed plant path: %s\\n' \"$p\" >&2; exit 1; fi",
+  "done",
+  "dest=\"$HOME/.cache/opencodex/bin/ocx-child\"",
+  `if [ ! -f "$dest" ] || [ ! -x "$dest" ]; then printf '${MANAGED_PURGE_CHILD_MISSING_MARKER}\\n' >&2; exit 1; fi`,
+  "exec \"$dest\" disconnect --purge --json",
+].join("\n");
+
+export function remoteManagedPurgeDisconnectArgv(platform: "posix" | "windows" = "posix"): string[] {
+  return platform === "windows"
+    ? windowsManagedPurgeDisconnectArgv()
+    : ["sh", "-c", POSIX_MANAGED_PURGE_DISCONNECT_SCRIPT, "ocx-managed-purge"];
+}
+
+/** The `purged` flag from `ocx-child disconnect --json`, or null when no such report was printed. */
+export function parsePurgeDisconnectReport(stdout: string): boolean | null {
+  for (const raw of stdout.split(/\r?\n/).reverse()) {
+    const line = raw.trim();
+    if (!line.startsWith("{")) continue;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (parsed && typeof parsed === "object" && typeof (parsed as { purged?: unknown }).purged === "boolean") return (parsed as { purged: boolean }).purged;
+    } catch { /* not the report line */ }
+  }
+  return null;
+}
+
+export type PurgeDisconnectOutcome =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly status: number; readonly code: string; readonly message: string; readonly hint?: string };
+
+/**
+ * Disconnect with --purge. A link enrolled before childKind existed is inspected first; only an
+ * ocx-child Child can be purged, and success requires the binary's own report that it was removed.
+ */
+export async function purgeDisconnectRemote(
+  runner: Pick<SshRunner, "run">,
+  alias: string,
+  knownHostsFile: string,
+  platform: "posix" | "windows",
+  childKind: "ephemeral" | "full" | undefined,
+): Promise<PurgeDisconnectOutcome> {
+  const failed = (message: string, hint?: string): PurgeDisconnectOutcome => ({ ok: false, status: 502, code: "remote_disconnect_failed", message, ...(hint ? { hint } : {}) });
+  let kind = childKind;
+  if (kind === undefined) {
+    let inspected: ParsedRemoteRuntimeInspection | null;
+    try { inspected = await inspectRemoteChildRuntime(runner, alias, knownHostsFile, platform); } catch (error) { return failed("The Child runtime could not be inspected, so --purge was not attempted.", sshRunnerErrorHint(error) ?? "child_kind_unknown"); }
+    if (!inspected || inspected.runtimeKind === "missing") return failed("The Child runtime could not be identified, so --purge was not attempted.", "child_kind_unknown");
+    kind = inspected.runtimeKind;
+  }
+  if (kind !== "ephemeral") {
+    return { ok: false, status: 409, code: "purge_unsupported", message: "This Child runs a full OpenCodex install; --purge removes only a planted ocx-child. Disconnect without --purge." };
+  }
+  let result;
+  try { result = await runner.run(buildExecArgv({ alias, argv: remoteManagedPurgeDisconnectArgv(platform), knownHostsFile }), { timeoutMs: 30_000 }); } catch (error) { return failed("The remote client could not be disconnected.", sshRunnerErrorHint(error)); }
+  if (result.code !== 0) {
+    if (result.stderr.includes(MANAGED_PURGE_CHILD_MISSING_MARKER)) return failed("No planted ocx-child was found in the managed directory, so nothing was purged.", "managed_child_missing");
+    return failed("The remote client could not be disconnected.", sshFailureHint(result.stderr));
+  }
+  if (parsePurgeDisconnectReport(result.stdout) !== true) return failed("The Child disconnected but did not report removing the planted ocx-child binary.", "purge_incomplete");
+  return { ok: true };
 }
 
 /** The distinct reason a plant failed on the Child, when the plant script reported one. */
