@@ -649,6 +649,56 @@ describe("bounded optional-control error envelopes", () => {
     expect(comboFailureDecision(400, payload)).toBe("stop");
     expect(comboFailureCooldownScope(400, payload)).toBe("target");
   });
+
+  test("rejects competing root or nested diagnostic messages before granting exact-effort hop", () => {
+    // Competing root message on vendor envelope elevates to target cooldown or stop, never cooldown none
+    const permPayload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      message: "permission_denied",
+    });
+    expect(comboFailureDecision(400, permPayload)).toBe("hop");
+    expect(comboFailureCooldownScope(400, permPayload)).toBe("target");
+
+    for (const competing of ["unknown_terminal_code", "invalid_request_error", "unsupported parameter: user"]) {
+      const payload = JSON.stringify({
+        code: "invalid-argument",
+        error: "Invalid reasoning effort.",
+        message: competing,
+      });
+      expect(comboFailureDecision(400, payload)).toBe("stop");
+      expect(comboFailureCooldownScope(400, payload)).toBe("target");
+
+      const nestedPayload = JSON.stringify({
+        message: competing,
+        error: {
+          type: "invalid_request_error",
+          message: "Invalid reasoning effort.",
+        },
+      });
+      expect(comboFailureDecision(400, nestedPayload)).toBe("stop");
+      expect(comboFailureCooldownScope(400, nestedPayload)).toBe("target");
+
+      const competingNestedError = JSON.stringify({
+        error: {
+          type: "invalid_request_error",
+          message: "Invalid reasoning effort.",
+          error: competing,
+        },
+      });
+      expect(comboFailureDecision(400, competingNestedError)).toBe("stop");
+      expect(comboFailureCooldownScope(400, competingNestedError)).toBe("target");
+    }
+
+    // Reconciled matching message grants hop without cooldown
+    const matchingPayload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      message: "Invalid reasoning effort.",
+    });
+    expect(comboFailureDecision(400, matchingPayload)).toBe("hop");
+    expect(comboFailureCooldownScope(400, matchingPayload)).toBe("none");
+  });
 });
 
 describe("image rejection classifier bounds", () => {

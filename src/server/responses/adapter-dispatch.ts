@@ -664,12 +664,6 @@ export async function prepareAdapterExchange(
         } catch (err) {
           const authRefusal = options.abortSignal?.aborted ? undefined : codexAdapterBuildRefusal(err, admissionState.authCtx, route.codexAccountNamespace, () => { cleanupUpstreamAbort(); upstream.abort(); });
           if (authRefusal) return { failed: authRefusal };
-          // A rotated credential that cannot be shaped keeps the refusal it was meant to
-          // replace. The image-tier rebuild is different: the request itself failed to shape,
-          // and its established 413/400 build-error contract stays authoritative.
-          if (preserveFailureResponse && recovery !== "image-413" && !options.abortSignal?.aborted) {
-            return { failed: preserveFailureResponse };
-          }
           // A rotated/rebuilt adapter build failure is a request-shaping error, not an
           // upstream connect failure: tear the abort link down and map it as 400. A
           // translator-budget refusal keeps its established 413 here as well — adapters
@@ -683,6 +677,12 @@ export async function prepareAdapterExchange(
             return { failed: formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
               code: "translation_buffer_limit",
             }) };
+          }
+          // A rotated credential that cannot be shaped keeps the refusal it was meant to
+          // replace. The image-tier and reasoning-effort rebuilds are different: the request itself
+          // failed to shape, and their established build-error contracts stay authoritative.
+          if (preserveFailureResponse && recovery !== "image-413" && recovery !== "reasoning-effort-downgrade") {
+            return { failed: preserveFailureResponse };
           }
           const msg = err instanceof Error ? err.message : String(err);
           return { failed: formatErrorResponse(400, "invalid_request_error", redactSecretString(msg)) };
@@ -849,7 +849,7 @@ export async function prepareAdapterExchange(
           releaseCodexAuthContextProbeLease(admissionState.authCtx);
           return { failed: codexRefusal };
         }
-        if (preserveFailureResponse && !replacementAdmitted && !options.abortSignal?.aborted)
+        if (preserveFailureResponse && (recovery !== "reasoning-effort-downgrade" || err instanceof SendBudgetExhaustedError) && !replacementAdmitted && !options.abortSignal?.aborted)
           return { failed: preserveFailureResponse };
         cleanupUpstreamAbort();
         upstream.abort();

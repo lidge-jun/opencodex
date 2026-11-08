@@ -3,6 +3,7 @@ import { classifyError, isCyberPolicyCode } from "../lib/errors";
 import { isHardPolicyOrOriginRefusal } from "../lib/hard-refusal";
 import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
 import { isAnthropicBillingFailure } from "../providers/anthropic-billing-refusal";
+import { hasConflictingReasoningEffortCode } from "../providers/reasoning-metadata";
 import { isKiroAccountProfileRefusal } from "../adapters/kiro-refusal";
 import type { OcxComboTarget } from "../types";
 import { targetKey } from "./types";
@@ -445,6 +446,9 @@ function hasIncompatibleDiagnosticCarrier(val: unknown, depth = 0): boolean {
     if (rec.errors !== undefined && rec.errors !== null) {
       if (hasIncompatibleDiagnosticCarrier(rec.errors, depth + 1)) return true;
     }
+    if (rec.message !== undefined && rec.message !== null) {
+      if (typeof rec.message !== "string" || rec.message !== "Invalid reasoning effort.") return true;
+    }
     return false;
   }
   return false;
@@ -455,7 +459,7 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
   if (code !== undefined && code !== null && typeof code !== "string") return false;
   const outerCode = normalizedFailureCode(code);
   if (!EXACT_EFFORT_COMPATIBLE_CODES.has(outerCode)) return false;
-  if (isHardPolicyOrOriginRefusal(message)) return false;
+  if (isHardPolicyOrOriginRefusal(message) || hasConflictingReasoningEffortCode(message)) return false;
   let text = message.trim();
   for (let depth = 0; depth < 3; depth += 1) {
     if (text.startsWith("Provider error 400: ")) text = text.slice("Provider error 400: ".length).trim();
@@ -466,6 +470,7 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
     const root = payload as Record<string, unknown>;
     if (root.code !== undefined && root.code !== null && typeof root.code !== "string") return false;
     if (root.type !== undefined && root.type !== null && typeof root.type !== "string") return false;
+    if (root.message !== undefined && root.message !== null && typeof root.message !== "string") return false;
     if (root.param !== undefined && root.param !== null) {
       if (typeof root.param !== "string") return false;
       const param = root.param.trim().toLowerCase();
@@ -483,12 +488,17 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
     if (rootCode === "invalid_argument"
       && root.error === "Invalid reasoning effort."
       && (root.type === undefined || root.type === "invalid_request_error")
-      && (root.param === undefined || root.param === "reasoning_effort" || root.param === "reasoning.effort")) return true;
+      && (root.param === undefined || root.param === "reasoning_effort" || root.param === "reasoning.effort")) {
+      if (root.message !== undefined && root.message !== null && root.message !== "Invalid reasoning effort.") return false;
+      return true;
+    }
     const error = root.error;
     if (!error || typeof error !== "object" || Array.isArray(error)) return false;
     const record = error as Record<string, unknown>;
     if (record.code !== undefined && record.code !== null && typeof record.code !== "string") return false;
     if (record.type !== undefined && record.type !== null && typeof record.type !== "string") return false;
+    if (record.message !== undefined && record.message !== null && typeof record.message !== "string") return false;
+    if (record.error !== undefined && record.error !== null && typeof record.error !== "string") return false;
     if (record.param !== undefined && record.param !== null) {
       if (typeof record.param !== "string") return false;
       const param = record.param.trim().toLowerCase();
@@ -512,6 +522,14 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
       text = record.message;
       continue;
     }
+    if (root.type === "upstream_error" && typeof root.message === "string"
+      && root.message.startsWith("Provider error 400: ")
+      && EXACT_EFFORT_COMPATIBLE_CODES.has(rootCode)) {
+      text = root.message;
+      continue;
+    }
+    if (root.message !== undefined && root.message !== null && root.message !== "Invalid reasoning effort.") return false;
+    if (record.error !== undefined && record.error !== null && record.error !== "Invalid reasoning effort.") return false;
     return record.type === "invalid_request_error"
       && record.message === "Invalid reasoning effort."
       && EXACT_EFFORT_COMPATIBLE_CODES.has(errorCode)

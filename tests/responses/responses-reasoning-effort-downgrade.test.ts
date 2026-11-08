@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1856,35 +1856,41 @@ describe("rejected reasoning rungs", () => {
     expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
   });
 
-  test("stops before effort replay on balanced malformed JSON refusal (openai-responses)", async () => {
+  test.each([
+    ["JSON", BALANCED_MALFORMED_JSON_REFUSAL],
+    ["bracket", BALANCED_MALFORMED_BRACKET_REFUSAL],
+  ])("stops before effort replay on balanced malformed %s refusal", async (_label, refusal) => {
     writeSnapshot(["low", "high", "max"]);
-    const outbound: Array<Record<string, unknown>> = [];
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-      return new Response(BALANCED_MALFORMED_JSON_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
-    }) as typeof fetch;
-    const logCtx: RequestLogContext = { model: "", provider: "" };
-
-    const cfg = passthroughConfig();
-    const response = await handleResponses(request(), cfg, logCtx);
-    const text = await response.text();
-
-    expect(outbound).toHaveLength(1);
-    expect(effortOf(outbound[0])).toBe("max");
-    expect(response.status).toBe(400);
-    expect(text).toContain("unknown_terminal_code");
-    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
-    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+    for (const [, getCfg] of [["chat", config], ["responses", passthroughConfig]] as const) {
+      const outbound: Array<Record<string, unknown>> = [];
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(refusal, { status: 400, headers: { "content-type": "application/json" } });
+      }) as typeof fetch;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+      const cfg = getCfg();
+      const response = await handleResponses(request(), cfg, logCtx);
+      const text = await response.text();
+      expect(outbound).toHaveLength(1);
+      expect(effortOf(outbound[0])).toBe("max");
+      expect(response.status).toBe(400);
+      expect(text).toContain("unknown_terminal_code");
+      expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+      expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+    }
   });
 
-  test("combo stops immediately on balanced malformed JSON refusal without walking ladder", async () => {
+  test.each([
+    ["JSON", BALANCED_MALFORMED_JSON_REFUSAL],
+    ["bracket", BALANCED_MALFORMED_BRACKET_REFUSAL],
+  ])("combo stops immediately on balanced malformed %s refusal without walking ladder", async (_label, refusal) => {
     writeSnapshot(["low", "high", "max"]);
     const attempts: Array<{ host: string; effort: unknown }> = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       attempts.push({ host: url.host, effort: effortOf(body) });
-      return new Response(BALANCED_MALFORMED_JSON_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+      return new Response(refusal, { status: 400, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
     const comboConfig = {
       providers: {
@@ -1905,61 +1911,19 @@ describe("rejected reasoning rungs", () => {
 
     expect(response.status).toBe(400);
     expect(result).toContain("unknown_terminal_code");
-    expect(attempts).toEqual([
-      { host: "opencode.ai", effort: "max" },
-    ]);
+    expect(attempts).toEqual([{ host: "opencode.ai", effort: "max" }]);
   });
 
-  test("stops before effort replay on balanced malformed bracket refusal (openai-chat)", async () => {
-    writeSnapshot(["low", "high", "max"]);
-    const outbound: Array<Record<string, unknown>> = [];
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-      return new Response(BALANCED_MALFORMED_BRACKET_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
-    }) as typeof fetch;
-    const logCtx: RequestLogContext = { model: "", provider: "" };
-
-    const cfg = config();
-    const response = await handleResponses(request(), cfg, logCtx);
-    const text = await response.text();
-
-    expect(outbound).toHaveLength(1);
-    expect(effortOf(outbound[0])).toBe("max");
-    expect(response.status).toBe(400);
-    expect(text).toContain("unknown_terminal_code");
-    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
-    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
-  });
-
-  test("stops before effort replay on balanced malformed bracket refusal (openai-responses)", async () => {
-    writeSnapshot(["low", "high", "max"]);
-    const outbound: Array<Record<string, unknown>> = [];
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-      return new Response(BALANCED_MALFORMED_BRACKET_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
-    }) as typeof fetch;
-    const logCtx: RequestLogContext = { model: "", provider: "" };
-
-    const cfg = passthroughConfig();
-    const response = await handleResponses(request(), cfg, logCtx);
-    const text = await response.text();
-
-    expect(outbound).toHaveLength(1);
-    expect(effortOf(outbound[0])).toBe("max");
-    expect(response.status).toBe(400);
-    expect(text).toContain("unknown_terminal_code");
-    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
-    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
-  });
-
-  test("combo stops immediately on balanced malformed bracket refusal without walking ladder", async () => {
+  test("combo preserves 413 translation-budget refusal on rebuild without trying fallback", async () => {
     writeSnapshot(["low", "high", "max"]);
     const attempts: Array<{ host: string; effort: unknown }> = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       attempts.push({ host: url.host, effort: effortOf(body) });
-      return new Response(BALANCED_MALFORMED_BRACKET_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+      return url.host === "fallback.example"
+        ? chatSuccess("fallback served the turn", MODEL)
+        : new Response(VENDOR_EFFORT_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
     const comboConfig = {
       providers: {
@@ -1975,13 +1939,33 @@ describe("rejected reasoning rungs", () => {
     } as OcxConfig;
     const logCtx: RequestLogContext = { model: "", provider: "" };
 
-    const response = await handleResponses(request(false, "combo/effort"), comboConfig, logCtx);
-    const result = await response.text();
+    const adapterRegistry = await import("../../src/adapters/registry");
+    const originalCreate = adapterRegistry.createRegisteredAdapter;
+    let buildAttempts = 0;
+    const spy = spyOn(adapterRegistry, "createRegisteredAdapter").mockImplementation((wire, provider, ctx) => {
+      const adapter = originalCreate(wire, provider, ctx);
+      const originalBuild = adapter.buildRequest.bind(adapter);
+      adapter.buildRequest = async (parsed, opts) => {
+        buildAttempts += 1;
+        if (buildAttempts === 2) {
+          const { TranslatorBudgetExceededError } = await import("../../src/lib/translator-budget");
+          throw new TranslatorBudgetExceededError("live_transient", 1);
+        }
+        return originalBuild(parsed, opts);
+      };
+      return adapter;
+    });
 
-    expect(response.status).toBe(400);
-    expect(result).toContain("unknown_terminal_code");
-    expect(attempts).toEqual([
-      { host: "opencode.ai", effort: "max" },
-    ]);
+    try {
+      const response = await handleResponses(request(false, "combo/effort"), comboConfig, logCtx);
+      expect(response.status).toBe(413);
+      const json = await response.json() as Record<string, any>;
+      expect(json.error?.code).toBe("context_length_exceeded");
+      expect(attempts).toEqual([
+        { host: "opencode.ai", effort: "max" },
+      ]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
