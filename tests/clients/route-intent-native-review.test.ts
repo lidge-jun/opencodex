@@ -68,6 +68,7 @@ test("Desktop off refuses first-party routing without changing its intent or fil
   const before=readFileSync(join(library,'_meta.json'),'utf8');
   const result=await reconcile(false);
   expect(result.outcome).toBe('conflict');
+  expect(result.message).toContain('ocx integrations native claude-desktop off');
   expect(loadConfig().clientIntegrations?.['claude-desktop']).toBeUndefined();
   expect(loadConfig().claudeCode.desktopMode).toBe('first-party');
   expect(readFileSync(join(library,'_meta.json'),'utf8')).toBe(before);
@@ -103,7 +104,8 @@ test("unrelated Home routing change preserves default-on Grok and first-party De
   const child=projectHomeRouteIntent(localConfig,'1','lnk_0123456789abcdef',readHomeRouteIntentState(localConfig));
   expect(child.clients.grok.enabled).toBe(false);
   expect(child.clients['claude-desktop'].enabled).toBe(false);
-  expect(outcomes.find(row=>row.client==='claude-desktop').outcome).not.toBe('current');
+  // First-party Desktop already routes through OpenCodex: enabled intent is satisfied, so Home sync stays green.
+  expect(outcomes.find(row=>row.client==='claude-desktop').outcome).toBe('current');
 `), SPAWN_BUDGET_MS);
 
 for (const evidence of ["marker", "settings"]) {
@@ -115,8 +117,11 @@ for (const evidence of ["marker", "settings"]) {
     const before=readFileSync(join(library,'_meta.json'),'utf8');
     const settingsPath=join(root,'.claude','settings.json');
     const settings=existsSync(settingsPath)?readFileSync(settingsPath,'utf8'):null;
-    expect((await reconcile()).outcome).toBe('conflict');
-    expect((await reconcile(true,{overwriteConflict:true,overwriteClient:'claude-desktop'})).outcome).toBe('conflict');
+    expect((await reconcile()).outcome).toBe('current');
+    expect((await reconcile(true,{overwriteConflict:true,overwriteClient:'claude-desktop'})).outcome).toBe('current');
+    const off=await reconcile(false);
+    expect(off.outcome).toBe('conflict');
+    expect(off.message).toContain('ocx claude desktop apply --gateway');
     expect(readFileSync(join(library,'_meta.json'),'utf8')).toBe(before);
     if(settings!==null)expect(readFileSync(settingsPath,'utf8')).toBe(settings);
     expect(existsSync(join(getConfigDir(),'desktop-remote','state.json'))).toBe(false);
@@ -258,7 +263,8 @@ test("Home stale gateway apply rechecks first-party mode at write admission", ()
   const row=await reconcile(true,{beforeWrite:()=>{
     if(inspected&&!switched){switched=true;const c=loadConfig();c.claudeCode={...c.claudeCode,desktopMode:'first-party'};saveConfig(c);}
   }});
-  expect(switched).toBe(true);expect(row.outcome).toBe('conflict');
+  // The admission recheck sees first-party: enabled intent is satisfied without writing a gateway.
+  expect(switched).toBe(true);expect(row.outcome).toBe('current');
   expect(loadConfig().claudeCode.desktopMode).toBe('first-party');
   expect(selected()?.value.inferenceProvider).not.toBe('gateway');
 `), SPAWN_BUDGET_MS);

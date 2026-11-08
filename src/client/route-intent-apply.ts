@@ -38,6 +38,19 @@ function implicitHomeIntent(document: HomeRouteIntentDocument, client: RouteClie
 const IMPLICIT_DESKTOP_MESSAGE = "No OpenCodex-owned Claude Desktop profile to refresh; choose ocx route to claude-desktop on to create one";
 
 /**
+ * First-party Desktop already routes through OpenCodex, so an enabled intent is satisfied without
+ * a write. Turning it off changes the Desktop mode, which only its own transaction may do.
+ */
+function firstPartyDesktopOutcome(enabled: boolean, target?: string): RouteClientOutcome {
+  const base = { client: "claude-desktop" as const, ...(target === undefined ? {} : { target }) };
+  if (enabled) return { ...base, outcome: "current", message: "Claude Desktop first-party mode already routes through OpenCodex" };
+  const command = readClientConnectionState().kind === "connected"
+    ? "switch modes with ocx claude desktop apply --gateway, then run ocx route to sync"
+    : "turn it off with ocx integrations native claude-desktop off";
+  return { ...base, outcome: "conflict", message: `Claude Desktop is in first-party mode; ${command}` };
+}
+
+/**
  * Caller holds the lifecycle fence; the config coordinator rechecks guard before each commit.
  * `recordStandalone` is true only for a Child's link write: it records the standalone value
  * write-ahead so disconnect or a failed enrollment can restore it. Home writes are the
@@ -103,7 +116,7 @@ async function applyNative(
     // Only a connected Child's write displaces a standalone value; the Home owns its own flags.
     return persistNativeRouteIntent(client, intent.enabled, guard, input.config, readClientConnectionState().kind === "connected");
   }), options.lifecycleLockDeps);
-  if (committedConfig === null) return { client, outcome: "conflict", message: "Claude Desktop first-party mode needs its existing mode-switch transaction" };
+  if (committedConfig === null) return firstPartyDesktopOutcome(intent.enabled);
   if (client === "codex") {
     const { getCodexHome, CODEX_CONFIG_PATH, DEFAULT_CATALOG_PATH } = await import("../codex/paths");
     const { injectCodexConfig, restoreNativeCodexAsync, currentExternalCodexModelProvider, isCodexRoutingInjected } = await import("../codex/inject");
@@ -185,7 +198,7 @@ async function applyNative(
       input.models.filter(model => !model.native).map(model => ({ provider: model.provider, id: model.id, contextWindow: model.contextWindow })));
     return withClientLifecycleSync(held => withConfigMutationLockSync(() => {
       guard();
-      if (firstParty(loadConfig())) return modeConflict;
+      if (firstParty(loadConfig())) return firstPartyDesktopOutcome(true, target);
       const token = readServiceApiTokenState();
       if (token.kind !== "present") return { client, target, outcome: "failed", message: "Child service credential is unavailable" };
       const result = applyRemoteDesktopStore(held, {
@@ -214,7 +227,7 @@ async function applyNative(
   return runDesktopTransition<RouteClientOutcome>(getClaudePickerController(), async () => withClientLifecycleSync(held => withConfigMutationLockSync(() => {
     guard();
     const config = loadConfig();
-    if (firstParty(config)) return modeConflict;
+    if (firstParty(config)) return firstPartyDesktopOutcome(true, target);
     const profile = config.claudeCode?.desktopProfile;
     const result = desktop.writeDesktop3pConfig(input.config.port,
       input.models.filter(model => model.native).map(model => model.id),

@@ -80,7 +80,8 @@ test("offline CLI first-party switch excludes a separate-process materializer af
   const settings=JSON.parse(readFileSync(join(root,'.claude','settings.json'),'utf8'));
   expect(settings.env.HTTPS_PROXY).toContain('127.0.0.1');
   const retry=await materializeLocalRouteIntent(loadConfig(),document,models,options);
-  expect(retry.outcomes.find(row=>row.client==='claude-desktop').outcome).toBe('conflict');
+  // First-party already routes Desktop: the enabled intent is current and writes no gateway.
+  expect(retry.outcomes.find(row=>row.client==='claude-desktop').outcome).toBe('current');
   expect(selected()?.value.inferenceProvider).not.toBe('gateway');
 `), SPAWN_BUDGET_MS);
 

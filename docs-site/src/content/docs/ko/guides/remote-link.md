@@ -75,7 +75,7 @@ ocx disconnect
 
 Home의 Route to 의도는 Child에 기본으로 동기화됩니다. 각 기기는 자신의 설치된 클라이언트, 경로, 수신 포트, 제공 모델 카탈로그로 설정을 생성합니다. 우선순위는 기기 override > Home 기본값 > 내장 기본값(Codex·Claude Code만 켜짐)입니다.
 
-등록 시 클라이언트를 명시적으로 선택하지 않으면 Child는 Home 기본값과 이후 변경을 상속합니다. 클라이언트별 명령은 해당 클라이언트의 실패를 반환하고 다른 클라이언트의 미해결 충돌은 경고하며, 전체 sync는 모든 미해결 실패를 보고합니다. Claude Desktop first-party 모드를 바꾸거나 끄는 요청은 기존 모드 전환을 거칠 때까지 충돌로 표시합니다.
+등록 시 클라이언트를 명시적으로 선택하지 않으면 Child는 Home 기본값과 이후 변경을 상속합니다. 클라이언트별 명령은 해당 클라이언트의 실패를 반환하고 다른 클라이언트의 미해결 충돌은 경고하며, 전체 sync는 모든 미해결 실패를 보고합니다. Claude Desktop first-party 모드는 이미 OpenCodex를 거치므로 켜기 의도는 아무것도 쓰지 않고 `current`로 표시합니다. 끄기 의도는 실행할 모드 전환 명령(Home에서는 `ocx integrations native claude-desktop off`, Child에서는 `ocx claude desktop apply --gateway` 후 `ocx route to sync`)을 알려 주는 충돌로 표시합니다.
 
 기존 Home에서 Grok 또는 Claude Desktop 통합 플래그를 설정하지 않았다면, 명시적으로 경로를 선택하기 전까지 그 Home의 기존 활성화 의도를 유지합니다. 이것만으로 Child의 해당 클라이언트가 켜지지는 않습니다. 이 암묵적 의도는 시작 시 동작과 같은 범위만 적용합니다. Grok은 시작 시 동기화 규칙을 따르고, Claude Desktop은 OpenCodex가 이미 소유한 gateway 프로필만 갱신하며 새로 만들거나 Desktop 모드를 바꾸지 않습니다. Desktop 프로필을 만들려면 `ocx route to claude-desktop on --device home`을 실행하거나 Home 기본값을 설정하세요.
 
@@ -118,7 +118,7 @@ ocx link reconnect --link-id <id> [--json]
 
 비대화형 실행(TTY 없음)에서는 `--expect-fingerprint`가 필수입니다. 대화형 터미널에서는 옵션을 생략할 수 있지만, 제시된 지문을 명시적으로 확인해야 합니다.
 
-기존 대시보드의 native 토글은 Home 기기 override를 저장하여 Child 기본값을 유지합니다. 링크를 폐기하면 그 기기의 override도 정리합니다. Claude Desktop의 first-party 모드는 보존하며, 기존 모드 전환을 마치기 전에는 상속된 gateway 적용을 conflict로 표시합니다.
+기존 대시보드의 native 토글은 Home 기기 override를 저장하여 Child 기본값을 유지합니다. 링크를 폐기하면 그 기기의 override도 정리합니다. Claude Desktop의 first-party 모드는 보존합니다. 켜기 의도는 쓰기 없이 `current`이며, 끄기 의도는 모드 전환을 마칠 때까지 conflict로 표시합니다.
 
 ## 관련 가이드
 
