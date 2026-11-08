@@ -13,6 +13,15 @@ import { getConfigDir } from "../config/paths";
 /** sun_path is 104 bytes on macOS and 108 on Linux, both including the terminating NUL. */
 export const LOCAL_CONTROL_SOCKET_PATH_MAX = 103;
 
+/**
+ * Whether the kernel can bind this path. sun_path counts the BYTES of the encoded path, not
+ * JavaScript's UTF-16 code units, so a home directory with non-ASCII characters needs a shorter
+ * name than path.length suggests.
+ */
+export function localControlSocketPathFits(path: string): boolean {
+  return Buffer.byteLength(path, "utf8") <= LOCAL_CONTROL_SOCKET_PATH_MAX;
+}
+
 export function localControlSocketSupported(): boolean {
   return process.platform !== "win32" && typeof process.getuid === "function";
 }
@@ -27,12 +36,12 @@ export function localControlSocketPath(port: number, configDir?: string): string
 }
 
 /**
- * The address Bun itself binds for one runtime. It is process-specific, so a shutdown can only
- * ever unlink its own listener, and the public path above is a hard link to this socket. The name
- * is never longer than the public one (`.c65535.zzzzzz` vs `control-65535.sock`).
+ * The address Bun itself binds for one runtime. It is instance-specific, so a shutdown can only
+ * ever unlink its own listener and a restart in the same process cannot collide with the instance
+ * it is replacing; the public path above is a hard link to this socket.
  */
-export function localControlPrivateSocketPath(port: number, configDir?: string): string {
-  return join(localControlSocketDir(configDir), `.c${port}.${process.pid.toString(36)}`);
+export function localControlPrivateSocketPath(port: number, token: string, configDir?: string): string {
+  return join(localControlSocketDir(configDir), `.c${port}.${token}`);
 }
 
 /**
@@ -61,7 +70,7 @@ export function isPrivateSocketDir(dir: string): boolean {
 export function usableLocalControlSocket(port: number, configDir?: string): string | null {
   if (!localControlSocketSupported() || !Number.isInteger(port) || port <= 0 || port > 65535) return null;
   const path = localControlSocketPath(port, configDir);
-  if (path.length > LOCAL_CONTROL_SOCKET_PATH_MAX || !isPrivateSocketDir(localControlSocketDir(configDir))) return null;
+  if (!localControlSocketPathFits(path) || !isPrivateSocketDir(localControlSocketDir(configDir))) return null;
   try {
     const stat = lstatSync(path);
     return stat.isSocket() && stat.uid === process.getuid!() ? path : null;

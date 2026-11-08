@@ -1,5 +1,5 @@
 import { usableLocalControlSocket } from "../lib/local-control-socket";
-import { RuntimeApiError, type RuntimeApiDeps } from "./runtime-api";
+import type { RuntimeApiDeps } from "./runtime-api";
 
 export interface LocalControlDeps {
   /** Test seam: the socket a live runtime on this port exposes, or null. */
@@ -24,16 +24,26 @@ export async function viaLocalControlSocket<T, D extends RuntimeApiDeps & LocalC
   const socket = (deps.localControlSocket ?? usableLocalControlSocket)(port);
   if (!socket) return request(tcp);
   const fetchImpl = deps.fetchImpl ?? fetch;
+  // The marker is set by the transport itself, never inferred from the answer. A runtime that
+  // answers 503 with an empty or non-JSON body is still answering, and replacing that answer with
+  // the TCP listener's 403 would be a worse report than the one the socket gave.
+  let unreachable = false;
   try {
     return await request({
       ...deps,
       baseUrl: "http://localhost",
-      fetchImpl: ((url: string | URL | Request, init?: RequestInit) =>
-        fetchImpl(url, { ...init, unix: socket } as RequestInit)) as typeof fetch,
+      fetchImpl: (async (url: string | URL | Request, init?: RequestInit) => {
+        try {
+          return await fetchImpl(url, { ...init, unix: socket } as RequestInit);
+        } catch (error) {
+          unreachable = true;
+          throw error;
+        }
+      }) as typeof fetch,
     });
   } catch (error) {
     // Only a transport failure falls back: an answer from the socket is the runtime's answer.
-    if (error instanceof RuntimeApiError && error.status === 503 && error.body === null) return request(tcp);
+    if (unreachable) return request(tcp);
     throw error;
   }
 }

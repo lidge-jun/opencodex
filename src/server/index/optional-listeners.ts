@@ -46,6 +46,12 @@ export interface OptionalListenerSet<T> {
   linkStatus(): LinkListenerStatus;
   linkSupervisor(): LinkSupervisor;
   start(ctx: OptionalListenerStartContext<T>): void;
+  /**
+   * Synchronous rollback for a startup that failed after `start`. The local control socket holds a
+   * live lease, and `startServer` cannot await a teardown, so that lease is released here instead of
+   * being left for a successor to mistake for a running runtime.
+   */
+  abortStart(): void;
   ensureStarted(): Promise<void>;
   close(): Promise<void>;
   registerSupervisorStop(stop: () => Promise<void>): () => void;
@@ -132,6 +138,9 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
       });
       // Last, after every listener started: JEV advisory quota follows the live config while serving.
       stopJevQuotaActivation = startJevQuotaActivation(ctx.config);
+    },
+    abortStart() {
+      try { localControl.abort(); } catch { /* the startup error is the one worth reporting */ }
     },
     ensureStarted: () => linkListener.ensureStarted(),
     close: () => linkListener.close(),

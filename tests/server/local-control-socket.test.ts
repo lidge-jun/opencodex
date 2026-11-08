@@ -6,19 +6,29 @@
  * real servers and prove three things: the admin token stays refused on every TCP listener, the
  * private Unix socket admits it for the one status read and nothing else, and the socket's access
  * boundary is the filesystem, which no TCP relay or forged header can reach.
+ *
+ * The ownership cases run real second and third processes. A same-process imitation cannot show
+ * what a lease is for: two runtimes in one process share a pid, so only a separate process proves
+ * that a live incumbent keeps its socket and that a killed one is replaced.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import {
+  chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
+  unlinkSync, writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { startServer, waitForFailedStartRollback } from "../../src/server";
 import { runLinkCommand } from "../../src/cli/link";
+import { ownEvidence, ownerDefaults } from "../../src/codex/prompt-lock-owner";
+import { removeOwnedConfigState } from "../../src/lib/config-ownership";
 import {
+  LOCAL_CONTROL_SOCKET_PATH_MAX,
   localControlLeasePath,
   localControlSocketDir,
   localControlSocketPath,
+  localControlSocketPathFits,
   usableLocalControlSocket,
 } from "../../src/lib/local-control-socket";
 import {
@@ -26,9 +36,11 @@ import {
   localControlRouteAllowed,
   localControlSocketWanted,
 } from "../../src/server/index/local-control-listener";
+import { createOptionalListenerSet } from "../../src/server/index/optional-listeners";
 import { AuxiliaryListenerBindError, findAvailablePort, isAddrInUse } from "../../src/server/ports";
 import type { OcxConfig } from "../../src/types";
-import { SERVER_BUDGET_MS } from "../helpers/test-budget";
+import { repoPath } from "../helpers/repo-root";
+import { SPAWN_BUDGET_MS, SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
@@ -37,6 +49,12 @@ const previousHome = process.env.OPENCODEX_HOME;
 const ADMIN = "admin-secret";
 const STATUS = "/api/link/status?compatibility=1&diagnostics=1";
 const unixSupported = process.platform !== "win32";
+/**
+ * sun_path is 103 bytes, and os.tmpdir() on macOS is /var/folders/..., which pushes
+ * <home>/run/control-65535.sock past it. The socket cases therefore pin a short root; the
+ * long-path case below exercises the default shape on purpose instead of skipping it.
+ */
+const SOCKET_ROOT = "/tmp";
 let testDir = "";
 
 function hubConfig(managementPort: number, hostname = "0.0.0.0"): OcxConfig {
@@ -81,11 +99,95 @@ async function runQuietly(args: string[], deps: Parameters<typeof runLinkCommand
 }
 
 function overSocket(socket: string, path: string, init: RequestInit = {}): Promise<Response> {
-  return fetch(`http://localhost${path}`, { ...init, unix: socket } as RequestInit);
+  return fetch("http://localhost" + path, { ...init, unix: socket } as RequestInit);
+}
+
+/**
+ * The child runtime for the ownership cases. It reports that it reached the barrier, waits for the
+ * parent to release it, then starts a listener and records what it got. A loser exits; a winner
+ * stays alive because its Bun server holds the event loop open.
+ */
+const CHILD_SCRIPT = [
+  "(async () => {",
+  "  const fs = await import('node:fs');",
+  "  const { createLocalControlListener } = await import(process.env.OCX_CHILD_MODULE);",
+  "  fs.writeFileSync(process.env.OCX_CHILD_READY, 'ready');",
+  "  while (!fs.existsSync(process.env.OCX_CHILD_BARRIER)) await Bun.sleep(2);",
+  "  const listener = createLocalControlListener();",
+  "  listener.start({",
+  "    config: { hostname: '0.0.0.0' },",
+  "    publicPort: Number(process.env.OCX_CHILD_PORT),",
+  "    dispatch: async () => Response.json({ owner: process.env.OCX_CHILD_OWNER }),",
+  "  });",
+  "  fs.writeFileSync(process.env.OCX_CHILD_RESULT, JSON.stringify({",
+  "    pid: process.pid, owner: process.env.OCX_CHILD_OWNER, socketPath: listener.socketPath(),",
+  "  }));",
+  "  if (!listener.socketPath()) process.exit(0);",
+  "})().catch(error => { process.stderr.write(String((error && error.stack) || error)); process.exit(1); });",
+].join("\n");
+
+interface ChildReport { pid: number; owner: string; socketPath: string | null }
+
+async function waitForFile(path: string, label: string, timeoutMs = SPAWN_BUDGET_MS): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(path)) return;
+    await Bun.sleep(5);
+  }
+  throw new Error("timed out waiting for " + label);
+}
+
+function childEnv(tag: string, publicPort: number, owner: string, barrier: string) {
+  return {
+    ...process.env,
+    OCX_CHILD_MODULE: repoPath("src/server/index/local-control-listener.ts"),
+    OCX_CHILD_PORT: String(publicPort),
+    OCX_CHILD_OWNER: owner,
+    OCX_CHILD_READY: join(testDir, tag + ".ready"),
+    OCX_CHILD_BARRIER: barrier,
+    OCX_CHILD_RESULT: join(testDir, tag + ".json"),
+  };
+}
+
+function spawnChild(tag: string, publicPort: number, owner: string, barrier: string) {
+  return Bun.spawn([process.execPath, "-e", CHILD_SCRIPT], {
+    env: childEnv(tag, publicPort, owner, barrier),
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+}
+
+interface Child { tag: string; owner: string; process: ReturnType<typeof Bun.spawn> }
+
+async function stopChildren(children: Child[]): Promise<void> {
+  for (const child of children) child.process.kill("SIGKILL");
+  await Promise.all(children.map(child => child.process.exited));
+}
+
+/**
+ * Release every child at the same instant, then read what each one decided. The winner stays alive
+ * to serve the socket, so the caller owns the teardown and must stop the children after asserting.
+ */
+async function raceListeners(publicPort: number, owners: string[], barrierTag: string): Promise<{ reports: ChildReport[]; children: Child[] }> {
+  const barrier = join(testDir, barrierTag);
+  const children = owners.map((owner, index) => {
+    const tag = barrierTag + "-" + index;
+    return { owner, tag, process: spawnChild(tag, publicPort, owner, barrier) };
+  });
+  try {
+    for (const child of children) await waitForFile(join(testDir, child.tag + ".ready"), "child " + child.owner + " at the barrier");
+    writeFileSync(barrier, "go");
+    for (const child of children) await waitForFile(join(testDir, child.tag + ".json"), "child " + child.owner + " result");
+    return { reports: children.map(child => JSON.parse(readFileSync(join(testDir, child.tag + ".json"), "utf8")) as ChildReport), children };
+  } catch (error) {
+    await stopChildren(children);
+    throw error;
+  }
 }
 
 beforeEach(() => {
-  testDir = mkdtempSync(join(tmpdir(), "ocx-lc-"));
+  testDir = mkdtempSync(join(SOCKET_ROOT, "ocx-lc-"));
   process.env.OPENCODEX_HOME = testDir;
   process.env.OPENCODEX_API_AUTH_TOKEN = "public-secret";
   process.env.OPENCODEX_ADMIN_AUTH_TOKEN = ADMIN;
@@ -103,7 +205,7 @@ afterEach(() => {
 describe("local control socket route table", () => {
   test("admits only GET /api/link/status", () => {
     const allowed = (method: string, path: string, headers: Record<string, string> = {}) =>
-      localControlRouteAllowed(new URL(`http://localhost${path}`), new Request(`http://localhost${path}`, { method, headers }));
+      localControlRouteAllowed(new URL("http://localhost" + path), new Request("http://localhost" + path, { method, headers }));
     expect(allowed("GET", STATUS)).toBe(true);
     expect(allowed("GET", "/api/link/status")).toBe(true);
     expect(allowed("POST", "/api/link/status")).toBe(false);
@@ -122,6 +224,18 @@ describe("local control socket route table", () => {
   });
 });
 
+describe("local control socket path bound", () => {
+  test("counts bytes, not UTF-16 code units", () => {
+    const ascii = "/" + "a".repeat(LOCAL_CONTROL_SOCKET_PATH_MAX - 1);
+    expect(localControlSocketPathFits(ascii)).toBe(true);
+    expect(localControlSocketPathFits(ascii + "a")).toBe(false);
+    // 60 Hangul syllables are 60 code units and 180 bytes: a length check would admit them.
+    const wide = "/" + "\uAC00".repeat(60);
+    expect(wide.length).toBe(61);
+    expect(localControlSocketPathFits(wide)).toBe(false);
+  });
+});
+
 describe.skipIf(!unixSupported)("hub with a non-loopback public listener (#8184)", () => {
   test("refuses the admin token on every TCP listener and admits it on the private socket", async () => {
     const { server, managementPort, publicPort } = await startHub();
@@ -137,7 +251,7 @@ describe.skipIf(!unixSupported)("hub with a non-loopback public listener (#8184)
         "x-opencodex-ingress": "local-control",
       };
       for (const port of [managementPort, publicPort]) {
-        const response = await fetch(`http://127.0.0.1:${port}${STATUS}`, { headers: forged });
+        const response = await fetch("http://127.0.0.1:" + port + STATUS, { headers: forged });
         expect(response.status).toBe(403);
         expect(((await response.json()) as { error: { code: string } }).error.code).toBe("forbidden");
       }
@@ -198,6 +312,25 @@ describe.skipIf(!unixSupported)("hub with a non-loopback public listener (#8184)
     expect(existsSync(localControlLeasePath(publicPort))).toBe(false);
   }, SERVER_BUDGET_MS);
 
+  test("a home whose socket path exceeds sun_path is refused without leaving a lease", async () => {
+    // The default TMPDIR on macOS is long enough to exceed the bound; this is that shape.
+    const longHome = join(testDir, "h".repeat(90));
+    mkdirSync(longHome, { recursive: true, mode: 0o700 });
+    process.env.OPENCODEX_HOME = longHome;
+    const publicPort = await findAvailablePort(0, "0.0.0.0");
+    const socket = localControlSocketPath(publicPort);
+    expect(localControlSocketPathFits(socket)).toBe(false);
+    saveConfig(hubConfig(await findAvailablePort(0, "127.0.0.1")));
+    const server = startServer(publicPort);
+    try {
+      expect(existsSync(socket)).toBe(false);
+      expect(existsSync(localControlLeasePath(publicPort))).toBe(false);
+      expect(usableLocalControlSocket(publicPort)).toBeNull();
+    } finally {
+      await server.stop(true);
+    }
+  }, SERVER_BUDGET_MS);
+
   test("a loopback public listener serves no socket", async () => {
     const { server, publicPort } = await startHub("127.0.0.1");
     try {
@@ -226,6 +359,22 @@ describe.skipIf(!unixSupported)("hub with a non-loopback public listener (#8184)
       await server.stop(true);
     }
   }, SERVER_BUDGET_MS);
+
+  test("the run directory is registered so uninstall removes it", async () => {
+    const { server } = await startHub();
+    const runDir = localControlSocketDir();
+    try {
+      expect(lstatSync(runDir).isDirectory()).toBe(true);
+      const manifest = JSON.parse(readFileSync(join(testDir, ".opencodex-uninstall.json"), "utf8")) as { paths: string[] };
+      expect(manifest.paths).toContain("run");
+    } finally {
+      await server.stop(true);
+    }
+    const result = removeOwnedConfigState(testDir);
+    // Other recorded state can be left behind by this fixture; the socket directory must not be.
+    expect(result.residualPaths).not.toContain(runDir);
+    expect(existsSync(runDir)).toBe(false);
+  }, SERVER_BUDGET_MS);
 });
 
 describe.skipIf(!unixSupported)("local control socket ownership (#8184)", () => {
@@ -233,6 +382,7 @@ describe.skipIf(!unixSupported)("local control socket ownership (#8184)", () => 
 
   test("a live incumbent keeps its socket when a second runtime starts on the same port", async () => {
     const publicPort = await findAvailablePort(0, "0.0.0.0");
+    saveConfig(hubConfig(await findAvailablePort(0, "127.0.0.1")));
     const first = createLocalControlListener();
     const second = createLocalControlListener();
     first.start({ config: hubConfig(0), publicPort, dispatch: dispatchFor("first") });
@@ -275,20 +425,75 @@ describe.skipIf(!unixSupported)("local control socket ownership (#8184)", () => 
     }
   }, SERVER_BUDGET_MS);
 
+  test("each instance gets its own private socket name and lease token", async () => {
+    const publicPort = await findAvailablePort(0, "0.0.0.0");
+    saveConfig(hubConfig(await findAvailablePort(0, "127.0.0.1")));
+    // Sockets only: the lease and its claim directory share the prefix.
+    const privateNames = () => readdirSync(localControlSocketDir())
+      .filter(name => name.startsWith(".c" + publicPort + "."))
+      .filter(name => lstatSync(join(localControlSocketDir(), name)).isSocket())
+      .sort();
+    const first = createLocalControlListener();
+    first.start({ config: hubConfig(0), publicPort, dispatch: dispatchFor("first") });
+    const firstToken = (JSON.parse(readFileSync(localControlLeasePath(publicPort), "utf8")) as { token: string }).token;
+    expect(privateNames()).toEqual([".c" + publicPort + "." + firstToken]);
+    first.abort();
+
+    const second = createLocalControlListener();
+    second.start({ config: hubConfig(0), publicPort, dispatch: dispatchFor("second") });
+    try {
+      const secondToken = (JSON.parse(readFileSync(localControlLeasePath(publicPort), "utf8")) as { token: string }).token;
+      // A same-pid restart must not reuse the name or the record it is replacing.
+      expect(secondToken).not.toBe(firstToken);
+      expect(privateNames()).toEqual([".c" + publicPort + "." + secondToken]);
+      expect(await (await overSocket(localControlSocketPath(publicPort), STATUS)).json()).toEqual({ owner: "second" });
+    } finally {
+      await second.stop();
+    }
+  }, SERVER_BUDGET_MS);
+
+  test("a startup that fails after the socket started releases its lease", async () => {
+    const publicPort = await findAvailablePort(0, "0.0.0.0");
+    saveConfig(hubConfig(await findAvailablePort(0, "127.0.0.1")));
+    const listeners = createOptionalListenerSet();
+    const socket = localControlSocketPath(publicPort);
+    try {
+      listeners.start({ config: hubConfig(0), publicPort, maxRequestBodySize: 0, dispatch: dispatchFor("failed") });
+      expect(existsSync(socket)).toBe(true);
+      expect(existsSync(localControlLeasePath(publicPort))).toBe(true);
+      // What startServer's catch does when a later optional listener throws.
+      listeners.abortStart();
+      expect(existsSync(socket)).toBe(false);
+      expect(existsSync(localControlLeasePath(publicPort))).toBe(false);
+    } finally {
+      await listeners.stop();
+    }
+    // A lease nobody serves would keep the next runtime off the port; it must be gone.
+    const successor = createLocalControlListener();
+    successor.start({ config: hubConfig(0), publicPort, dispatch: dispatchFor("successor") });
+    try {
+      expect(successor.socketPath()).toBe(socket);
+      expect(await (await overSocket(socket, STATUS)).json()).toEqual({ owner: "successor" });
+    } finally {
+      await successor.stop();
+    }
+  }, SERVER_BUDGET_MS);
+
   test("a crashed predecessor's lease and dead socket are replaced", async () => {
     const publicPort = await findAvailablePort(0, "0.0.0.0");
     const socket = localControlSocketPath(publicPort);
     const lease = localControlLeasePath(publicPort);
+    saveConfig(hubConfig(await findAvailablePort(0, "127.0.0.1")));
     mkdirSync(localControlSocketDir(), { recursive: true, mode: 0o700 });
     // A dead socket: bind a private address, publish it, then stop the binder. Bun unlinks only
     // the private name, so the public hard link survives as the crash residue a real crash leaves.
-    const deadPrivate = join(localControlSocketDir(), `.c${publicPort}.dead`);
+    const deadPrivate = join(localControlSocketDir(), ".c" + publicPort + ".dead");
     const dead = Bun.serve({ unix: deadPrivate, fetch: () => new Response("dead") });
     linkSync(deadPrivate, socket);
     await dead.stop(true);
     const deadPid = spawnSync("/bin/sh", ["-c", "exit 0"]).pid!;
-    writeFileSync(lease, JSON.stringify({ pid: deadPid, start: "ps:gone", token: `.c${publicPort}.dead` }), { mode: 0o600 });
-    saveConfig(hubConfig(await findAvailablePort(0, "127.0.0.1")));
+    // The record this host would have written, for a pid that is gone.
+    writeFileSync(lease, JSON.stringify({ ...ownEvidence(ownerDefaults), pid: deadPid, token: "0123456789abcdef" }), { mode: 0o600 });
 
     const server = startServer(publicPort);
     try {
@@ -301,9 +506,84 @@ describe.skipIf(!unixSupported)("local control socket ownership (#8184)", () => 
     expect(existsSync(socket)).toBe(false);
     expect(existsSync(lease)).toBe(false);
   }, SERVER_BUDGET_MS);
+
+  test("concurrent runtimes racing for a free port produce exactly one owner", async () => {
+    const publicPort = await findAvailablePort(0, "0.0.0.0");
+    saveConfig(hubConfig(await findAvailablePort(0, "127.0.0.1")));
+    const race = await raceListeners(publicPort, ["a", "b", "c", "d"], "barrier-live");
+    try {
+      const winners = race.reports.filter(report => report.socketPath !== null);
+      expect(winners).toHaveLength(1);
+      const socket = localControlSocketPath(publicPort);
+      expect(winners[0]!.socketPath).toBe(socket);
+      // The public socket is the winner's: it names that runtime, not a loser that also published.
+      expect(await (await overSocket(socket, STATUS)).json()).toEqual({ owner: winners[0]!.owner });
+      const lease = JSON.parse(readFileSync(localControlLeasePath(publicPort), "utf8")) as { pid: number };
+      expect(lease.pid).toBe(winners[0]!.pid);
+    } finally {
+      await stopChildren(race.children);
+    }
+  }, SPAWN_BUDGET_MS);
+
+  test("concurrent runtimes recovering one crashed lease still produce one owner", async () => {
+    const publicPort = await findAvailablePort(0, "0.0.0.0");
+    saveConfig(hubConfig(await findAvailablePort(0, "127.0.0.1")));
+    mkdirSync(localControlSocketDir(), { recursive: true, mode: 0o700 });
+    const deadPrivate = join(localControlSocketDir(), ".c" + publicPort + ".dead");
+    const dead = Bun.serve({ unix: deadPrivate, fetch: () => new Response("dead") });
+    linkSync(deadPrivate, localControlSocketPath(publicPort));
+    await dead.stop(true);
+    const deadPid = spawnSync("/bin/sh", ["-c", "exit 0"]).pid!;
+    writeFileSync(localControlLeasePath(publicPort), JSON.stringify({ ...ownEvidence(ownerDefaults), pid: deadPid, token: "0123456789abcdef" }), { mode: 0o600 });
+
+    const race = await raceListeners(publicPort, ["a", "b", "c", "d"], "barrier-stale");
+    try {
+      const winners = race.reports.filter(report => report.socketPath !== null);
+      expect(winners).toHaveLength(1);
+      const socket = localControlSocketPath(publicPort);
+      expect(await (await overSocket(socket, STATUS)).json()).toEqual({ owner: winners[0]!.owner });
+      // The record names the winner now: the dead predecessor is gone and no loser overwrote it.
+      const lease = JSON.parse(readFileSync(localControlLeasePath(publicPort), "utf8")) as { pid: number };
+      expect(lease.pid).toBe(winners[0]!.pid);
+    } finally {
+      await stopChildren(race.children);
+    }
+  }, SPAWN_BUDGET_MS);
+
+  test("a runtime takes over a socket whose owner was SIGKILLed and reaped", async () => {
+    const publicPort = await findAvailablePort(0, "0.0.0.0");
+    saveConfig(hubConfig(await findAvailablePort(0, "127.0.0.1")));
+    const barrier = join(testDir, "barrier-sigkill");
+    writeFileSync(barrier, "go");
+    const child = spawnChild("sigkill", publicPort, "killed", barrier);
+    try {
+      await waitForFile(join(testDir, "sigkill.json"), "the child runtime");
+      const report = JSON.parse(readFileSync(join(testDir, "sigkill.json"), "utf8")) as ChildReport;
+      const socket = localControlSocketPath(publicPort);
+      expect(report.socketPath).toBe(socket);
+      expect(await (await overSocket(socket, STATUS)).json()).toEqual({ owner: "killed" });
+
+      child.kill("SIGKILL");
+      await child.exited;
+
+      const successor = createLocalControlListener();
+      successor.start({ config: hubConfig(0), publicPort, dispatch: dispatchFor("successor") });
+      try {
+        expect(successor.socketPath()).toBe(socket);
+        expect(await (await overSocket(socket, STATUS)).json()).toEqual({ owner: "successor" });
+      } finally {
+        await successor.stop();
+      }
+    } finally {
+      child.kill("SIGKILL");
+      await child.exited;
+    }
+  }, SPAWN_BUDGET_MS);
 });
 
 describe("ocx link status socket selection", () => {
+  const unavailable = () => new Response(JSON.stringify({ error: "management API unavailable" }), { status: 503, headers: { "content-type": "application/json" } });
+
   test("falls back to TCP only when the socket cannot be reached", async () => {
     const calls: Array<{ url: string; unix?: string }> = [];
     const body = JSON.stringify({ error: { code: "forbidden" } });
@@ -318,14 +598,47 @@ describe("ocx link status socket selection", () => {
       }) as unknown as typeof fetch,
     });
     expect((await runQuietly(["status"], deps("transport"))).err).toContain("(403)");
-    expect(calls.map(call => call.unix ?? call.url)).toEqual(["/tmp/ocx-test.sock", `http://127.0.0.1:4100${STATUS}`]);
+    expect(calls.map(call => call.unix ?? call.url)).toEqual(["/tmp/ocx-test.sock", "http://127.0.0.1:4100" + STATUS]);
     calls.length = 0;
     // An answer from the socket is final: a refusal there is not retried over TCP.
     expect((await runQuietly(["status"], deps("forbidden"))).err).toContain("(403)");
-    expect(calls).toEqual([{ url: `http://localhost${STATUS}`, unix: "/tmp/ocx-test.sock" }]);
+    expect(calls).toEqual([{ url: "http://localhost" + STATUS, unix: "/tmp/ocx-test.sock" }]);
     calls.length = 0;
     // An explicit base URL is honoured as given.
     expect((await runQuietly(["status"], { ...deps("transport"), baseUrl: "http://127.0.0.1:4200" })).err).toContain("(403)");
-    expect(calls).toEqual([{ url: `http://127.0.0.1:4200${STATUS}` }]);
+    expect(calls).toEqual([{ url: "http://127.0.0.1:4200" + STATUS }]);
+  });
+
+  test("a 503 from the socket is not replaced by the TCP listener's 403", async () => {
+    // The runtime answered, and its answer is authoritative. A body that carries no error code
+    // (a string error, an empty body, or a non-JSON body) used to read as a transport failure and
+    // silently downgrade the real 503 into the TCP listener's 403.
+    const answers = [
+      unavailable(),
+      new Response("", { status: 503 }),
+      new Response("gateway down", { status: 503, headers: { "content-type": "text/plain" } }),
+    ];
+    for (const answer of answers) {
+      const calls: Array<{ url: string; unix?: string }> = [];
+      const deps = {
+        findLiveProxy: async () => ({ pid: 1, port: 4100, hostname: "0.0.0.0", source: "runtime" as const }),
+        readAdminToken: () => ADMIN,
+        localControlSocket: () => "/tmp/ocx-test.sock",
+        fetchImpl: (async (url: string, init?: RequestInit & { unix?: string }) => {
+          calls.push({ url: String(url), ...(init?.unix ? { unix: init.unix } : {}) });
+          if (!init?.unix) return new Response(JSON.stringify({ error: { code: "forbidden" } }), { status: 403, headers: { "content-type": "application/json" } });
+          return answer.clone();
+        }) as unknown as typeof fetch,
+      };
+      const run = await runQuietly(["status"], deps);
+      expect(run.code).toBe(1);
+      expect(run.err).toContain("(503)");
+      expect(run.err).not.toContain("(403)");
+      // No second request: the socket answered, so TCP was never tried.
+      expect(calls).toEqual([{ url: "http://localhost" + STATUS, unix: "/tmp/ocx-test.sock" }]);
+      // The sanitized error carries no body, so a one-time key or a runtime message is not echoed.
+      expect(run.err).not.toContain("management API unavailable");
+      expect(run.err).not.toContain("gateway down");
+    }
   });
 });

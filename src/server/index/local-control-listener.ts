@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   chmodSync,
@@ -12,17 +11,21 @@ import {
   writeFileSync,
   type Stats,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Server } from "bun";
 import { isLoopbackHostname } from "../../codex/loopback-target";
+import { withLockClaim } from "../../codex/prompt-lock-claim";
+import { ownEvidence, ownerDefaults, ownerState, type OwnerEvidence } from "../../codex/prompt-lock-owner";
+import { getConfigDir } from "../../config/paths";
+import { ConfigOwnershipLockError, registerOwnedConfigPath } from "../../lib/config-ownership";
 import { assertNotRealHomeUnderTest } from "../../lib/test-home-guard";
 import {
-  LOCAL_CONTROL_SOCKET_PATH_MAX,
   isPrivateSocketDir,
   localControlLeasePath,
   localControlPrivateSocketPath,
   localControlSocketDir,
   localControlSocketPath,
+  localControlSocketPathFits,
   localControlSocketSupported,
 } from "../../lib/local-control-socket";
 import type { OcxConfig } from "../../types";
@@ -54,6 +57,12 @@ export interface LocalControlListener<T> {
   ownsListener(server: Server<T>): boolean;
   socketPath(): string | null;
   start(ctx: LocalControlStartContext<T>): void;
+  /**
+   * Synchronous teardown for a startup that failed after this listener started. `startServer` is
+   * synchronous, so the ownership record has to go before the startup error propagates; an
+   * awaited `stop()` would leave a live lease nobody serves.
+   */
+  abort(): void;
   stop(): Promise<void>;
 }
 
@@ -70,18 +79,67 @@ function preparePrivateDir(dir: string): void {
 
 interface FileIdentity { dev: number; ino: number }
 
-interface LocalControlLease { pid: number; start: string; token: string }
+/**
+ * The per-port ownership record. `host` and `processStart` come from the shared owner evidence
+ * (`src/codex/prompt-lock-owner.ts`), so a record from another machine, or from a pid that has
+ * been reused, is never mistaken for a crashed predecessor.
+ */
+interface LocalControlLease extends OwnerEvidence { token: string }
 
-const UNKNOWN_PROCESS_START = "unknown";
-const LEASE_STARTING_GRACE_MS = 5_000;
+type LeaseRead =
+  | { kind: "absent" }
+  | { kind: "record"; lease: LocalControlLease }
+  | { kind: "unsafe" };
+
+type LeaseDecision =
+  | { kind: "acquired" }
+  | { kind: "held" }
+  | { kind: "unsafe" }
+  | { kind: "contended" }
+  | { kind: "failed"; error: unknown };
+
 const PUBLISH_ATTEMPTS = 4;
+/** `withLockClaim` is a try-lock; a contender retries a bounded number of times and then refuses. */
+const LEASE_LOCK_ATTEMPTS = 8;
+const LEASE_LOCK_RETRY_MS = 2;
+/** Filesystems without hard links reject `link` with one of these; the socket cannot be published. */
+const HARD_LINK_UNSUPPORTED = new Set(["EPERM", "EOPNOTSUPP", "ENOTSUP", "ENOSYS", "EXDEV", "EMLINK"]);
 
 function isCode(error: unknown, code: string): boolean {
   return !!error && typeof error === "object" && (error as { code?: unknown }).code === code;
 }
 
-function randomSuffix(): string {
-  return randomBytes(6).toString("hex");
+function hardLinkUnsupported(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && HARD_LINK_UNSUPPORTED.has(code);
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** A fresh identity per listener instance, so a same-pid restart never reuses a name or a record. */
+function randomToken(): string {
+  return randomBytes(8).toString("hex");
+}
+
+/**
+ * Record the run directory as state uninstall may remove. Another runtime may hold the ownership
+ * lock for a moment, and refusing the socket over that transient would silently drop the only
+ * ingress `ocx link status` has on a hub, so a busy lock is retried briefly.
+ */
+function registerRunDirectory(root: string, dir: string): void {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      if (registerOwnedConfigPath(root, dir) === "full") {
+        console.warn("[local-control] the config ownership manifest is full; the run directory may survive uninstall");
+      }
+      return;
+    } catch (error) {
+      if (!(error instanceof ConfigOwnershipLockError) || attempt >= 2) throw error;
+      Bun.sleepSync(5);
+    }
+  }
 }
 
 function identityOf(path: string): FileIdentity | null {
@@ -99,138 +157,41 @@ function sameIdentity(path: string, identity: FileIdentity): boolean {
 }
 
 /**
- * A pid alone can be reused, so a lease records the process start time as well. Linux reads it
- * from /proc, macOS from ps; where neither is available the pid is all we have and a live pid is
- * treated as the owner rather than risking a takeover.
+ * A record that exists but cannot be read is `unsafe`, never `absent`: treating a corrupt lease
+ * as "no owner" is how a live runtime gets displaced by a reader that could not parse it.
  */
-function processStartIdentity(pid: number): string | null {
-  if (process.platform === "linux") {
-    try {
-      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-      const close = stat.lastIndexOf(")");
-      if (close < 0) return null;
-      // Field 22 of /proc/<pid>/stat: the first field after `)` is field 3.
-      const starttime = stat.slice(close + 2).split(" ")[19];
-      return starttime ? `linux:${starttime}` : null;
-    } catch {
-      return null;
-    }
-  }
-  if (process.platform === "darwin") {
-    try {
-      const started = execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
-        encoding: "utf8",
-        env: { ...process.env, LC_ALL: "C" },
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: 2_000,
-      }).trim();
-      return started ? `ps:${started}` : null;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-function readLease(path: string): LocalControlLease | null {
+function readLease(path: string): LeaseRead {
+  let body: string;
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<LocalControlLease>;
-    if (typeof parsed.pid !== "number" || typeof parsed.start !== "string" || typeof parsed.token !== "string") return null;
-    return { pid: parsed.pid, start: parsed.start, token: parsed.token };
-  } catch {
-    return null;
-  }
-}
-
-function leaseOwnerIsLive(lease: LocalControlLease): boolean {
-  if (!Number.isInteger(lease.pid) || lease.pid <= 0) return false;
-  try {
-    process.kill(lease.pid, 0);
+    body = readFileSync(path, "utf8");
   } catch (error) {
-    // ESRCH, EINVAL and an out-of-range pid all prove the owner is gone; EPERM and anything
-    // else mean a process with that pid still exists.
-    return !(isCode(error, "ESRCH") || isCode(error, "EINVAL") || isCode(error, "ERR_OUT_OF_RANGE"));
+    return isCode(error, "ENOENT") ? { kind: "absent" } : { kind: "unsafe" };
   }
-  if (lease.start === UNKNOWN_PROCESS_START) return true;
-  const start = processStartIdentity(lease.pid);
-  return start === null || start === lease.start;
-}
-
-function leaseIsFresh(path: string): boolean {
   try {
-    return Date.now() - lstatSync(path).mtimeMs < LEASE_STARTING_GRACE_MS;
+    const parsed = JSON.parse(body) as Partial<LocalControlLease>;
+    if (typeof parsed.token !== "string" || parsed.token.length === 0) return { kind: "unsafe" };
+    return { kind: "record", lease: parsed as LocalControlLease };
   } catch {
-    return false;
+    return { kind: "unsafe" };
   }
 }
 
-/**
- * Remove the lease only if it is still the record the caller judged. The entry is taken with an
- * atomic rename first, so two starters recovering the same stale record cannot both win: the loser
- * sees the winner's record, puts it back, and refuses.
- */
-function takeLease(path: string, matches: (lease: LocalControlLease | null) => boolean): boolean {
-  const aside = `${path}.${process.pid}.${randomSuffix()}.taken`;
-  try {
-    renameSync(path, aside);
-  } catch (error) {
-    if (isCode(error, "ENOENT")) return true;
-    throw error;
-  }
-  if (matches(readLease(aside))) {
-    try { unlinkSync(aside); } catch { /* ignore */ }
-    return true;
-  }
-  try { linkSync(aside, path); unlinkSync(aside); } catch { /* leave the aside entry */ }
-  return false;
-}
-
-/** Create the lease with its full record in one atomic link, so a reader never sees a blank file. */
-function createLease(path: string, lease: LocalControlLease): boolean {
-  const temp = `${path}.${process.pid}.${randomSuffix()}.tmp`;
+/** Replace the record in one rename, so no reader ever sees a half-written lease. */
+function writeLease(path: string, lease: LocalControlLease): void {
+  const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   try {
     writeFileSync(temp, JSON.stringify(lease), { mode: 0o600 });
-    try {
-      linkSync(temp, path);
-      return true;
-    } catch (error) {
-      if (isCode(error, "EEXIST")) return false;
-      throw error;
-    }
+    renameSync(temp, path);
   } finally {
-    try { unlinkSync(temp); } catch { /* already gone */ }
+    try { unlinkSync(temp); } catch { /* renamed or never written */ }
   }
 }
 
-/**
- * Take the port's ownership record. A live owner is never displaced; a record whose process is
- * gone is a crashed predecessor and is replaced. A record that exists but cannot be read is only
- * treated as stale after the grace window, so a concurrent starter is never mistaken for one.
- */
-function acquireLease(path: string, token: string): boolean {
-  const lease: LocalControlLease = {
-    pid: process.pid,
-    start: processStartIdentity(process.pid) ?? UNKNOWN_PROCESS_START,
-    token,
-  };
-  for (let attempt = 0; attempt < PUBLISH_ATTEMPTS; attempt += 1) {
-    if (createLease(path, lease)) return true;
-    const owner = readLease(path);
-    if (owner && leaseOwnerIsLive(owner)) return false;
-    if (!owner && leaseIsFresh(path)) return false;
-    const stale = owner === null
-      ? (candidate: LocalControlLease | null) => candidate === null
-      : (candidate: LocalControlLease | null) => candidate !== null
-        && candidate.pid === owner.pid && candidate.start === owner.start && candidate.token === owner.token;
-    if (!takeLease(path, stale)) return false;
-  }
-  return false;
-}
-
-function releaseLease(path: string, token: string): void {
-  try {
-    takeLease(path, owner => owner === null || owner.token === token);
-  } catch { /* not ours any more */ }
+/** Remove the record only when it is still this instance's; the caller holds the claim mutex. */
+function removeOwnedLease(path: string, token: string): void {
+  const current = readLease(path);
+  if (current.kind !== "record" || current.lease.token !== token) return;
+  try { unlinkSync(path); } catch { /* already gone */ }
 }
 
 /**
@@ -254,9 +215,9 @@ function removeOrphanPrivateSockets(port: number, configDir: string | undefined)
 }
 
 /**
- * Publish the private socket at the public path with an atomic hard link. A same-user socket that
- * is already there can only be a crashed predecessor's, because a live owner holds the lease; it
- * is moved aside and verified by inode before it is discarded. Any other file is left alone.
+ * Publish the private socket at the public path with an atomic hard link. The caller holds the
+ * lease, so a same-user socket already there can only be a crashed predecessor's and is removed;
+ * any other file is left alone and the socket is not served.
  */
 function publishPublicLink(target: string, privateTarget: string): void {
   for (let attempt = 0; attempt < PUBLISH_ATTEMPTS; attempt += 1) {
@@ -274,48 +235,63 @@ function publishPublicLink(target: string, privateTarget: string): void {
       throw error;
     }
     if (!existing.isSocket() || existing.uid !== process.getuid!()) throw new Error("socket path is occupied");
-    discardStaleLink(target, existing);
+    unlinkSync(target);
   }
-  throw new Error("socket path is occupied");
-}
-
-function discardStaleLink(target: string, expected: Stats): void {
-  const aside = `${target}.${process.pid}.${randomSuffix()}.stale`;
-  try {
-    renameSync(target, aside);
-  } catch (error) {
-    if (isCode(error, "ENOENT")) return;
-    throw error;
-  }
-  const moved = identityOf(aside);
-  if (moved && moved.dev === expected.dev && moved.ino === expected.ino) {
-    try { unlinkSync(aside); } catch { /* ignore */ }
-    return;
-  }
-  // The entry changed between the stat and the rename: put the newcomer back and refuse.
-  try { linkSync(aside, target); unlinkSync(aside); } catch { /* leave the aside entry */ }
   throw new Error("socket path is occupied");
 }
 
 /**
- * Remove one directory entry only if it is still the inode this runtime published. Bun's stop()
- * unlinks whatever path it was given, so the public path is never handed to Bun; this check is
- * what keeps an old runtime's shutdown from unlinking a successor's socket.
+ * Read the record, decide, and publish, all inside the shared claim mutex
+ * (`withLockClaim`, `src/codex/prompt-lock-claim.ts`). The mutex is what makes this a decision
+ * rather than a recheck: no other runtime can be between its own read and its own write, so a
+ * record judged stale cannot be replaced by a live one before this runtime publishes.
  */
-function unlinkOwnedEntry(path: string, identity: FileIdentity): void {
-  if (!sameIdentity(path, identity)) return;
-  const aside = `${path}.${process.pid}.${randomSuffix()}.stopped`;
+function acquireLease(leasePath: string, token: string, publish: () => void): LeaseDecision {
+  for (let attempt = 0; attempt < LEASE_LOCK_ATTEMPTS; attempt += 1) {
+    const outcome = withLockClaim(leasePath, token, ownerDefaults, (): LeaseDecision => {
+      const current = readLease(leasePath);
+      if (current.kind === "unsafe") return { kind: "unsafe" };
+      if (current.kind === "record") {
+        const state = ownerState(current.lease, ownerDefaults);
+        if (state !== "dead") return { kind: state === "live" ? "held" : "unsafe" };
+      }
+      // Absent, or provably a crashed predecessor: this runtime owns the port now.
+      writeLease(leasePath, { ...ownEvidence(ownerDefaults), token });
+      try {
+        publish();
+      } catch (error) {
+        removeOwnedLease(leasePath, token);
+        return { kind: "failed", error };
+      }
+      return { kind: "acquired" };
+    });
+    if (outcome.ok) return outcome.value;
+    if (attempt + 1 < LEASE_LOCK_ATTEMPTS) Bun.sleepSync(LEASE_LOCK_RETRY_MS);
+  }
+  return { kind: "contended" };
+}
+
+/**
+ * Give the port back. The lease is held for the whole teardown, so no successor can publish into
+ * these paths while they are being removed; the identity checks keep a successor's socket safe if
+ * a previous teardown is still in flight.
+ */
+function releaseOwnedSocket(state: {
+  leasePath: string;
+  token: string;
+  publicPath: string | null;
+  privatePath: string | null;
+  identity: FileIdentity | null;
+}): void {
   try {
-    renameSync(path, aside);
+    withLockClaim(state.leasePath, state.token, ownerDefaults, () => {
+      if (state.publicPath && state.identity && sameIdentity(state.publicPath, state.identity)) unlinkSync(state.publicPath);
+      if (state.privatePath && state.identity && sameIdentity(state.privatePath, state.identity)) unlinkSync(state.privatePath);
+      removeOwnedLease(state.leasePath, state.token);
+    });
   } catch {
-    return;
+    // A foreign, unreadable or vanished record is left for the next runtime to judge.
   }
-  const moved = identityOf(aside);
-  if (moved && moved.dev === identity.dev && moved.ino === identity.ino) {
-    try { unlinkSync(aside); } catch { /* ignore */ }
-    return;
-  }
-  try { linkSync(aside, path); unlinkSync(aside); } catch { /* leave the aside entry */ }
 }
 
 const notFound = () => Response.json(
@@ -330,30 +306,55 @@ export function createLocalControlListener<T>(): LocalControlListener<T> {
   let identity: FileIdentity | null = null;
   let leasePath: string | null = null;
   let leaseToken: string | null = null;
+
+  const release = (state: {
+    lease: string | null;
+    token: string | null;
+    publicPath: string | null;
+    privatePath: string | null;
+    identity: FileIdentity | null;
+  }): void => {
+    if (!state.lease || !state.token) return;
+    releaseOwnedSocket({
+      leasePath: state.lease,
+      token: state.token,
+      publicPath: state.publicPath,
+      privatePath: state.privatePath,
+      identity: state.identity,
+    });
+  };
+
   return {
     ownsListener: candidate => server !== null && candidate === server,
     socketPath: () => publicPath,
     start(ctx) {
       if (server || !localControlSocketWanted(ctx.config)) return;
       const target = localControlSocketPath(ctx.publicPort, ctx.configDir);
-      const privateTarget = localControlPrivateSocketPath(ctx.publicPort, ctx.configDir);
-      const lease = localControlLeasePath(ctx.publicPort, ctx.configDir);
-      if ([target, privateTarget, lease].some(candidate => candidate.length > LOCAL_CONTROL_SOCKET_PATH_MAX)) {
+      const leaseFile = localControlLeasePath(ctx.publicPort, ctx.configDir);
+      const token = randomToken();
+      const privateTarget = localControlPrivateSocketPath(ctx.publicPort, token, ctx.configDir);
+      if (!localControlSocketPathFits(target) || !localControlSocketPathFits(privateTarget)) {
         console.warn("[local-control] socket path is too long; ocx link status will use the TCP listener");
         return;
       }
-      const token = basename(privateTarget);
-      let bound: Server<T> | null = null;
-      let holdsLease = false;
       try {
         preparePrivateDir(dirname(target));
-        // The lease is the ownership decision. A live owner keeps its socket; only a record whose
-        // process is gone lets this runtime replace what it left behind.
-        holdsLease = acquireLease(lease, token);
-        if (!holdsLease) {
-          console.warn("[local-control] another runtime owns this port's control socket; leaving it in place");
-          return;
-        }
+      } catch (error) {
+        console.warn(`[local-control] socket unavailable: ${messageOf(error)}`);
+        return;
+      }
+      try {
+        // The run directory is state this runtime creates inside the config home, so uninstall has
+        // to know about it. Only the directory is recorded: the sockets and the lease inside it are
+        // transient, and the ownership API refuses to adopt an entry it did not record.
+        registerRunDirectory(ctx.configDir ?? getConfigDir(), dirname(target));
+      } catch (error) {
+        console.warn(`[local-control] socket unavailable: ${messageOf(error)}`);
+        return;
+      }
+      let bound: Server<T> | null = null;
+      let published: FileIdentity | null = null;
+      const publish = (): void => {
         removeOrphanPrivateSockets(ctx.publicPort, ctx.configDir);
         // Bun binds a process-specific address, so its own stop() can only ever unlink this one.
         bound = Bun.serve<T, never>({
@@ -367,28 +368,65 @@ export function createLocalControlListener<T>(): LocalControlListener<T> {
         });
         // The private directory is the access boundary; the socket mode is a second fence.
         chmodSync(privateTarget, 0o600);
-        const published = identityOf(privateTarget);
-        if (!published) throw new Error("socket identity unavailable");
+        const socketIdentity = identityOf(privateTarget);
+        if (!socketIdentity) throw new Error("socket identity unavailable");
         publishPublicLink(target, privateTarget);
-        server = bound;
-        publicPath = target;
-        privatePath = privateTarget;
-        identity = published;
-        leasePath = lease;
-        leaseToken = token;
+        published = socketIdentity;
+      };
+      let decision: LeaseDecision;
+      try {
+        decision = acquireLease(leaseFile, token, publish);
       } catch (error) {
-        if (bound) void bound.stop(true).catch(() => {});
-        if (holdsLease) releaseLease(lease, token);
-        console.warn(`[local-control] socket unavailable: ${error instanceof Error ? error.message : String(error)}`);
+        if (bound) void (bound as Server<T>).stop(true).catch(() => {});
+        console.warn(hardLinkUnsupported(error)
+          ? "[local-control] the socket directory's filesystem does not support hard links; ocx link status will use the TCP listener"
+          : `[local-control] socket unavailable: ${messageOf(error)}`);
+        return;
       }
+      if (decision.kind === "failed") {
+        if (bound) void (bound as Server<T>).stop(true).catch(() => {});
+        console.warn(`[local-control] socket unavailable: ${messageOf(decision.error)}`);
+        return;
+      }
+      if (decision.kind === "held") {
+        console.warn("[local-control] another runtime owns this port's control socket; leaving it in place");
+        return;
+      }
+      if (decision.kind === "unsafe") {
+        console.warn("[local-control] the control socket ownership record is not this machine's; leaving it in place");
+        return;
+      }
+      if (decision.kind === "contended") {
+        console.warn("[local-control] could not take the control socket ownership record; leaving it in place");
+        return;
+      }
+      server = bound;
+      publicPath = target;
+      privatePath = privateTarget;
+      identity = published;
+      leasePath = leaseFile;
+      leaseToken = token;
+    },
+    abort() {
+      const running = server;
+      const state = { lease: leasePath, token: leaseToken, publicPath, privatePath: null, identity };
+      server = null;
+      publicPath = null;
+      privatePath = null;
+      identity = null;
+      leasePath = null;
+      leaseToken = null;
+      // startServer is synchronous, so this rollback cannot await. Bun begins closing the listen
+      // socket on the call itself and unlinks its own private name; the published link and the
+      // lease must go now, because a stranded live lease keeps the next runtime off a dead socket.
+      if (running) {
+        try { void running.stop(true).catch(() => {}); } catch { /* the startup error is the one to report */ }
+      }
+      release(state);
     },
     async stop() {
       const running = server;
-      const published = publicPath;
-      const privateSocket = privatePath;
-      const publishedIdentity = identity;
-      const lease = leasePath;
-      const token = leaseToken;
+      const state = { lease: leasePath, token: leaseToken, publicPath, privatePath, identity };
       server = null;
       publicPath = null;
       privatePath = null;
@@ -398,12 +436,7 @@ export function createLocalControlListener<T>(): LocalControlListener<T> {
       try {
         if (running) await running.stop(true);
       } finally {
-        try {
-          if (published && publishedIdentity) unlinkOwnedEntry(published, publishedIdentity);
-          if (privateSocket && publishedIdentity) unlinkOwnedEntry(privateSocket, publishedIdentity);
-        } finally {
-          if (lease && token) releaseLease(lease, token);
-        }
+        release(state);
       }
     },
   };
