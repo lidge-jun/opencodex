@@ -12,6 +12,15 @@ EOF output, retain the [shared byte-accounting contract](../transports/byte-acco
 
 ## Vertex API-key endpoint selection
 
+Vertex requests may use host ADC without an API key. The ambient API key stays out of generic provider configuration: `src/providers/vertex-environment-authority.ts` keeps a keyed process-local digest and observed generation with the selected route, and only the Google adapter reads the key. For ADC, routed project and location are captured and rechecked before dispatch. `src/lib/gcp-adc.ts` identifies file and marker sources by keyed content digest and observed generation, checks the source before and after token exchange, and binds its identity to the built request. Shared token refresh has independently cancellable waiters. `src/server/responses/request-transport.ts` checks the provider and request binding after pacing, transfers it on rebuild, and checks the final selection, target and credential after plugin rewrites. The `project: "auto"` auxiliary probe checks the same selection before sending. Unreadable credentials fail closed. A service-account marker selects its named credential instead of the ambient key. Metadata identity changes and an external A→B→A change entirely between observations cannot be detected locally. `tests/adapters/google/gcp-adc.test.ts` covers synthetic key, ADC and physical-dispatch boundaries.
+
+Vertex rejects forward authentication before registry normalization, including a canonical row
+whose saved adapter differs from its registry transport. A credential rebuild during
+schema repair retains the repaired body only if the rebuilt original body is unchanged; otherwise
+it refuses the replay. New dashboard presets select a static catalog explicitly, while older rows
+with no `liveModels` value retain live discovery without adding an implicit undiscovered default.
+The Settings toggle remains editable for Vertex, including canonical rows with old saved URLs.
+
 `src/adapters/google-vertex-endpoint.ts` selects the Vertex endpoint once per request and the
 same selection feeds the thought-signature replay namespace. API keys follow explicit provider
 configuration only: `provider.project` selects

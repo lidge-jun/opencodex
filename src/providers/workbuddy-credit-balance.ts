@@ -24,6 +24,35 @@ export function workBuddyCapacity(value: unknown): number | undefined {
   return Number.isFinite(number) && number >= 0 && number <= Number.MAX_SAFE_INTEGER ? number : undefined;
 }
 
+/** Sum bounded numeric capacities as decimals before converting the result back to a number. */
+function sumCapacities(values: readonly number[]): number {
+  const parts = values.map(value => {
+    const [coefficient, exponent = "0"] = value.toString().split("e");
+    const [whole, fraction = ""] = coefficient!.split(".");
+    let digits = BigInt(`${whole}${fraction}`);
+    let scale = fraction.length - Number(exponent);
+    if (scale < 0) { digits *= 10n ** BigInt(-scale); scale = 0; }
+    return { digits, scale };
+  });
+  const scale = Math.max(0, ...parts.map(part => part.scale));
+  const digits = parts.reduce((sum, part) => sum + part.digits * 10n ** BigInt(scale - part.scale), 0n);
+  return Number(`${digits}e-${scale}`);
+}
+
+function sumAmounts(rows: readonly WorkBuddyCreditAmount[]): WorkBuddyCreditAmount {
+  return {
+    total: sumCapacities(rows.map(row => row.total)),
+    used: sumCapacities(rows.map(row => row.used)),
+    remaining: sumCapacities(rows.map(row => row.remaining)),
+    frozen: sumCapacities(rows.map(row => row.frozen)),
+  };
+}
+
+/** Remaining credits when the provider omits them, bounded below by zero. */
+export function remainingWorkBuddyCredits(total: number, used: number, frozen = 0): number {
+  return Math.max(0, sumCapacities([total, -used, -frozen]));
+}
+
 function amount(value: unknown): WorkBuddyCreditAmount | undefined {
   const row = workBuddyRecord(value);
   const total = workBuddyCapacity(row.total), used = workBuddyCapacity(row.used);
@@ -53,29 +82,32 @@ function packageAmount(row: Record<string, unknown>): WorkBuddyCreditAmount | un
   const total = workBuddyCapacity(row.CycleTotalCapacity), used = workBuddyCapacity(row.CycleUsedCapacity);
   const frozen = row.CycleFrozenCapacity === undefined ? 0 : workBuddyCapacity(row.CycleFrozenCapacity);
   if (total === undefined || used === undefined || frozen === undefined) return undefined;
-  const remaining = row.CycleRemainCapacity === undefined ? Math.max(0, total - used - frozen) : workBuddyCapacity(row.CycleRemainCapacity);
+  const remaining = row.CycleRemainCapacity === undefined ? remainingWorkBuddyCredits(total, used, frozen) : workBuddyCapacity(row.CycleRemainCapacity);
   return remaining === undefined ? undefined : { total, used, remaining, frozen };
 }
 
 export function parseWorkBuddyCredits(value: unknown): WorkBuddyCreditBalance | undefined {
   const summary = workBuddyRecord(value);
   if (!Array.isArray(summary.Packages) || summary.Packages.length > 512) return undefined;
-  const balance: WorkBuddyCreditBalance = { total: 0, used: 0, remaining: 0, frozen: 0, groups: [] };
+  const packages: WorkBuddyCreditAmount[] = [];
   for (const raw of summary.Packages) {
     const quantities = packageAmount(workBuddyRecord(raw));
     if (!quantities) return undefined;
-    for (const key of ["total", "used", "remaining", "frozen"] as const) balance[key] += quantities[key];
+    packages.push(quantities);
   }
+  const balance: WorkBuddyCreditBalance = { ...sumAmounts(packages), groups: [] };
   // CreditGroups is a breakdown of Packages, not another balance to add to it.
   if (Array.isArray(summary.CreditGroups) && summary.CreditGroups.length <= 16) {
+    const grouped = new Map<WorkBuddyCreditKind, WorkBuddyCreditAmount[]>();
     for (const raw of summary.CreditGroups) {
       const row = workBuddyRecord(raw), quantities = packageAmount(row);
       if (!quantities) continue;
       const kind = WORKBUDDY_CREDIT_KINDS.find(kind => kind === row.Kind) ?? "other";
-      const existing = balance.groups.find(group => group.kind === kind);
-      if (existing) for (const key of ["total", "used", "remaining", "frozen"] as const) existing[key] += quantities[key];
-      else balance.groups.push({ kind, ...quantities });
+      const rows = grouped.get(kind) ?? [];
+      rows.push(quantities);
+      grouped.set(kind, rows);
     }
+    balance.groups = [...grouped].map(([kind, rows]) => ({ kind, ...sumAmounts(rows) }));
   }
   return normalizeWorkBuddyCredits(balance);
 }
