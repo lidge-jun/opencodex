@@ -1000,7 +1000,7 @@
   "lab-read-filter-validation.test.ts": "lab", "lab-read-surfaces.test.ts": "lab",
   "launchd-port-fallback.test.ts": "service", "launchd-repair.test.ts": "service", "legacy-shell-compat.test.ts": "responses",
   "live-call-bindings.test.ts": "server", "live-native-calls.test.ts": "server",
-  "usage-telemetry-profile-contract.test.ts": "usage", "usage-telemetry-profile-sync.test.ts": "usage", "usage-telemetry-profile-collector.test.ts": "usage", "server-telemetry-profile-routes.test.ts": "server", "cli-telemetry-profile.test.ts": "cli",
+  "usage-telemetry-profile-contract.test.ts": "usage", "usage-telemetry-profile-sync.test.ts": "usage", "usage-telemetry-profile-collector.test.ts": "usage", "server-telemetry-profile-routes.test.ts": "server", "cli-telemetry-profile.test.ts": "cli", "docs-telemetry-leaderboard.test.ts": "ci-workflows",
   "live-service-manager-guard.test.ts": "service",
   "linux-desktop-packaged-e2e.test.ts": "ci-workflows", "link-boundary.test.ts": "clients",
   "link-ssh-argv.test.ts": "clients", "link-ssh-runner.test.ts": "clients", "link-ssh-argv-discovery.test.ts": "clients", "link-ssh-config.test.ts": "clients",
