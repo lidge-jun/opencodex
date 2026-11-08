@@ -444,7 +444,13 @@ export async function fetchPassiveProviderQuota(provider: string): Promise<Provi
 export async function fetchClaudeCliObservedQuota(provider: string, forceRefresh: boolean): Promise<ProviderQuotaProbeResult> {
   // Lazy: the adapter's sign-in reader (Keychain, child process) stays off the core request path.
   const { currentClaudeIdentityKey } = await import("../../adapters/claude-cli/usage-admission");
-  const identity = await currentClaudeIdentityKey(forceRefresh);
+  await currentClaudeIdentityKey(forceRefresh);
+  return heldClaudeCliObservedQuota(provider);
+}
+
+/** Resolve against the latest recorded identity without accessing credentials or probing. */
+export function heldClaudeCliObservedQuota(provider: string): ProviderQuotaProbeResult {
+  const identity = claudeSignedInIdentity();
   if (!identity) return AUTHORITATIVE_EMPTY_QUOTA;
   const observation = peekClaudeUsageObservation({ identity });
   if (!observation?.quota) return AUTHORITATIVE_EMPTY_QUOTA;
@@ -454,6 +460,16 @@ export async function fetchClaudeCliObservedQuota(provider: string, forceRefresh
   const row = { ...built, observed: true };
   accountReportCurrent.set(row, () => claudeSignedInIdentity() === identity);
   return row;
+}
+
+/** Refresh only Claude CLI rows in a held response; other providers keep their cached readings. */
+export function refreshHeldClaudeCliReports(config: OcxConfig, reports: ProviderQuotaReport[]): ProviderQuotaReport[] {
+  const claude = Object.entries(config.providers).filter(([, provider]) => provider.adapter === "claude-cli" && provider.disabled !== true);
+  if (!claude.length) return reports;
+  const names = new Set(claude.map(([name]) => name));
+  const current = claude.map(([name]) => heldClaudeCliObservedQuota(name))
+    .filter((item): item is ProviderQuotaReport => item !== null && item !== TERMINAL_QUOTA_FAILURE && item !== AUTHORITATIVE_EMPTY_QUOTA);
+  return [...reports.filter(item => !names.has(item.provider)), ...current];
 }
 
 /**

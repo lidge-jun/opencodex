@@ -38,7 +38,9 @@ every caller, and reads only caches other paths filled:
   sign-out or account switch it keeps the previous account's row until the Home's dashboard or a turn
   records the new sign-in, and after a restart (no identity recorded yet) it has no row until such a
   read, and then only if that account has a snapshot. A parsed CLI limit refusal is a `custom`
-  window `refusal` with `exhausted: true` and source `estimated`.
+  window `refusal` with `exhausted: true` and source `estimated`. Claude pooled windows come only
+  from the current account row; a held report cannot substitute when that row is absent, including
+  when the recorded identity changes while another source is being assembled.
 - Provider reports: `heldProviderQuotaReports`, the reports the Home last published. They are the
   `pooled` windows only where account rows do not serve the configured provider: a provider with
   no account rows (an API-key provider's credits, for example) or a per-account provider configured

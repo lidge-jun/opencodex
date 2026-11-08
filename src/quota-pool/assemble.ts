@@ -65,6 +65,8 @@ export interface QuotaPoolDeps {
   now?: () => number;
   /** Test seam for the Claude CLI admission file. */
   claudeUsageStatePath?: string;
+  /** Test seam for a suspended passive Codex snapshot. */
+  codexSnapshot?: typeof listCodexAuthAccountsSnapshot;
 }
 
 export type QuotaPoolResult = { ok: true; pool: QuotaPool } | { ok: false; error: "quota_pool_identity_unavailable" };
@@ -311,7 +313,7 @@ async function assemble(config: OcxConfig, identity: QuotaPoolIdentity, deps: Qu
   const names = Object.keys(config.providers).filter(name => enabled(config.providers[name])).sort();
   const reports = new Map(heldProviderQuotaReports(names).reports.map(report => [report.provider, report]));
   const codexPool = hasCodexPoolProvider(config);
-  const codex = codexPool ? (await listCodexAuthAccountsSnapshot(config)).accounts : [];
+  const codex = codexPool ? (await (deps.codexSnapshot ?? listCodexAuthAccountsSnapshot)(config)).accounts : [];
   const providers: QuotaPoolProvider[] = [];
   for (const name of names) {
     const provider = config.providers[name]!;
@@ -334,9 +336,9 @@ async function assemble(config: OcxConfig, identity: QuotaPoolIdentity, deps: Qu
     }
     const report = reports.get(name);
     if (!tracked && !report) continue;
-    // Account rows are the evidence a held report was computed from, at least as new and with
-    // their own observation times; the report stands in only where there are no rows.
-    const windows = poolFromRows && rows.length > 0
+    // Account rows carry their own observation times. Claude never falls back to a held report,
+    // which may have been captured before the most recent recorded identity change.
+    const windows = poolFromRows && (rows.length > 0 || provider.adapter === "claude-cli")
       ? pooledWindows(rows.map(row => row.pool), now)
       : report ? providerQuotaWindows(report.quota, reportSource(report), now) : [];
     const pooled: QuotaPoolProvider["pooled"] = { windows };

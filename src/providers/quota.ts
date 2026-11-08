@@ -62,7 +62,7 @@ import {
 import {
   fetchAnthropicQuota,
   fetchChatGptForwardQuota,
-  fetchClaudeCliObservedQuota,
+  fetchClaudeCliObservedQuota, heldClaudeCliObservedQuota, refreshHeldClaudeCliReports,
   refreshClaudeCliSignIn,
   fetchCursorQuota,
   fetchKiroQuota,
@@ -261,8 +261,11 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
   const cacheFresh = currentCache && currentCache.key === key && now - currentCache.ts < CACHE_TTL_MS
     && currentCache.response.reports.every(item =>
       (item.observed === true || now - item.updatedAt < LAST_GOOD_MAX_AGE_MS)
-      && isProviderQuotaReportCurrent(item));
-  if (!forceRefresh && cacheFresh) return currentCache!.response;
+      && (config.providers[item.provider]?.adapter === "claude-cli" || isProviderQuotaReportCurrent(item)));
+  if (!forceRefresh && cacheFresh) {
+    const response = currentCache!.response, reports = refreshHeldClaudeCliReports(config, response.reports);
+    return reports === response.reports ? response : { ...response, reports };
+  }
   const joinable = inflight.get(key);
   if (!forceRefresh && joinable && joinable.epoch === invalidationEpoch) return joinable.promise;
   // A forced probe takes commit authority: older in-flight probes must not overwrite its result.
@@ -277,26 +280,23 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
         maybeFetchProviderQuota(name, provider, config, forceRefresh, prefetchedCodexSnapshot)
       )),
     );
-    const fresh = probeResults.filter((item): item is ProviderQuotaReport => (
-      item !== null && item !== TERMINAL_QUOTA_FAILURE && item !== AUTHORITATIVE_EMPTY_QUOTA
-    ));
-    // Both sentinels suppress the previous row. A terminal failure means the response was
-    // invalid; an authoritative empty means the response was valid and said there are no
-    // model windows. Either way the old row is no longer true, which is what separates them
-    // from `null` (told us nothing — keep the last-good row).
-    const terminalFailures = new Set(
-      Object.keys(config.providers).filter((_, index) => (
-        probeResults[index] === TERMINAL_QUOTA_FAILURE
-        || probeResults[index] === AUTHORITATIVE_EMPTY_QUOTA
-      )),
-    );
     await providerQuotaBeforePublishForTests?.();
     let commitKey: string | null = null;
     if (epoch === invalidationEpoch) {
       const commitKeyCandidate = cacheKeyWithAggregationState(config);
       commitKey = typeof commitKeyCandidate === "string" ? commitKeyCandidate : await commitKeyCandidate;
     }
-
+    // Reconcile both rows and empty results after all awaits against the last recorded sign-in.
+    Object.entries(config.providers).forEach(([name, provider], index) => {
+      if (provider.adapter === "claude-cli" && provider.disabled !== true) probeResults[index] = heldClaudeCliObservedQuota(name);
+    });
+    const fresh = probeResults.filter((item): item is ProviderQuotaReport => (
+      item !== null && item !== TERMINAL_QUOTA_FAILURE && item !== AUTHORITATIVE_EMPTY_QUOTA
+    ));
+    // Both sentinels suppress the previous row; null alone keeps the last-good row.
+    const terminalFailures = new Set(Object.keys(config.providers).filter((_, index) => (
+      probeResults[index] === TERMINAL_QUOTA_FAILURE || probeResults[index] === AUTHORITATIVE_EMPTY_QUOTA
+    )));
     // Keep bounded last-good rows when a probe fails transiently; terminal-invalid provider
     // responses explicitly suppress their old row. Never re-stamp preserved timestamps.
     // Note: the cache key encodes the provider set (name/adapter/authMode/disabled/baseUrl),

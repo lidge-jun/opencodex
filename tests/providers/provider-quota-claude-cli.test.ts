@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { currentClaudeIdentityKey, setClaudeIdentityForTests } from "../../src/adapters/claude-cli/usage-admission";
 import { clearProviderQuotaCache, fetchProviderQuotaReports, flushProviderQuotaObservationsForTests } from "../../src/providers/quota";
+import { setProviderQuotaBeforePublishForTests } from "../../src/providers/quota/report-cache";
 import { saveClaudeUsageSnapshot } from "../../src/providers/claude-cli-usage-state";
 import { setQuotaResetSink } from "../../src/quota/reset-observer";
 import { resetQuotaResetStoreForTests } from "../../src/quota/reset-seen-store";
@@ -72,6 +73,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await flushProviderQuotaObservationsForTests();
+  setProviderQuotaBeforePublishForTests(null);
   setQuotaResetSink(null);
   setClaudeIdentityForTests();
   setSystemTime();
@@ -219,4 +221,68 @@ test.each([ACCOUNT_A, ACCOUNT_B])("display-only Claude CLI snapshots never trigg
   await flushProviderQuotaObservationsForTests();
   expect(response.reports[0]?.quota.fiveHourPercent).toBe(10);
   expect(resets).toEqual([]);
+});
+
+test("overlapping sign-in reads publish the newer account after an older sign-out finishes", async () => {
+  let release!: (value: null) => void;
+  let started!: () => void;
+  const waiting = new Promise<void>(resolve => { started = resolve; });
+  let mode: "a" | "wait" | "b" = "a";
+  setClaudeIdentityForTests(() => {
+    if (mode === "wait") { started(); return new Promise<null>(resolve => { release = resolve; }); }
+    return { key: mode === "a" ? ACCOUNT_A : ACCOUNT_B, access: "synthetic" };
+  });
+  seedObservation(Date.now() - 60_000);
+  expect(claudeRow(await fetchProviderQuotaReports(config()))?.quota.weeklyPercent).toBe(51);
+  mode = "wait";
+  const older = fetchProviderQuotaReports(config(), true);
+  await waiting;
+  mode = "b";
+  const now = Date.now();
+  saveClaudeUsageSnapshot(join(home, "claude-usage-admission.json"), { identity: ACCOUNT_B, checkedAt: now, quota: { weeklyPercent: 7, updatedAt: now } });
+  expect(await currentClaudeIdentityKey(true)).toBe(ACCOUNT_B);
+  release(null);
+  await older;
+  expect(claudeRow(await fetchProviderQuotaReports(config()))?.quota.weeklyPercent).toBe(7);
+});
+
+test("publication uses the identity recorded after collection", async () => {
+  seedObservation(Date.now() - 60_000);
+  setProviderQuotaBeforePublishForTests(async () => {
+    signedIn = ACCOUNT_B;
+    const now = Date.now();
+    saveClaudeUsageSnapshot(join(home, "claude-usage-admission.json"), { identity: ACCOUNT_B, checkedAt: now, quota: { weeklyPercent: 7, updatedAt: now } });
+    await currentClaudeIdentityKey(true);
+  });
+  expect(claudeRow(await fetchProviderQuotaReports(config(), true))?.quota.weeklyPercent).toBe(7);
+});
+
+test("a cached empty report becomes the newly recorded account without a forced refresh", async () => {
+  signedIn = null;
+  expect(claudeRow(await fetchProviderQuotaReports(config(), true))).toBeUndefined();
+  signedIn = ACCOUNT_B;
+  const now = Date.now();
+  saveClaudeUsageSnapshot(join(home, "claude-usage-admission.json"), { identity: ACCOUNT_B, checkedAt: now, quota: { weeklyPercent: 7, updatedAt: now } });
+  await currentClaudeIdentityKey(true);
+  expect(claudeRow(await fetchProviderQuotaReports(config()))?.quota.weeklyPercent).toBe(7);
+});
+
+test("an identity switch refreshes only the Claude row in a cached multi-provider response", async () => {
+  let requests = 0;
+  globalThis.fetch = (async () => { requests++; return Response.json({ data: { limit: 20, limit_remaining: 10 } }); }) as typeof fetch;
+  const multi = config();
+  multi.providers.openrouter = { adapter: "openai-chat", authMode: "key", baseUrl: "https://openrouter.ai/api/v1", apiKey: "synthetic-key" } as never;
+  seedObservation(Date.now() - 60_000);
+  const first = await fetchProviderQuotaReports(multi, true);
+  const other = first.reports.find(row => row.provider === "openrouter");
+  expect(other).toBeDefined();
+  expect(requests).toBe(1);
+  signedIn = ACCOUNT_B;
+  const now = Date.now();
+  saveClaudeUsageSnapshot(join(home, "claude-usage-admission.json"), { identity: ACCOUNT_B, checkedAt: now, quota: { weeklyPercent: 7, updatedAt: now } });
+  await currentClaudeIdentityKey(true);
+  const second = await fetchProviderQuotaReports(multi);
+  expect(claudeRow(second)?.quota.weeklyPercent).toBe(7);
+  expect(second.reports.find(row => row.provider === "openrouter")).toEqual(other);
+  expect(requests).toBe(1);
 });
