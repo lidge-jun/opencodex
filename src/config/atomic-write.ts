@@ -550,6 +550,8 @@ export async function atomicWriteFileAsync(
       }
       try { chmodSync(tempPath, 0o600); } catch { /* platform may ignore chmod */ }
     },
+    // The read-only catalog repair (#8358) is wired only into the sync writer; no async
+    // caller writes the Codex catalog today. Route one through publishWithReadOnlyRepair too.
     rename: renameAtomicFileAsync,
     truncate: target => truncateSync(target, 0),
     unlink: unlinkSync,

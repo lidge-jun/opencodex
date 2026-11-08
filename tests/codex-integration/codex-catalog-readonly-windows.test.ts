@@ -38,6 +38,7 @@ import { atomicWriteFile, type AtomicWriteIO } from "../../src/config";
 import {
   CodexCatalogReadOnlyError,
   catalogReadOnlyRepairFor,
+  publishWithReadOnlyRepair,
   type CatalogReadOnlyRepair,
 } from "../../src/lib/codex-catalog-read-only";
 import {
@@ -197,3 +198,35 @@ test("the repair is a Windows rule, and a POSIX catalog publication keeps the pl
   expect(sim.renameAttempts()).toBe(1);
   expect(existsSync(catalogPath)).toBe(true);
 });
+
+/** Review of #8382: the named error is reserved for a destination that is still read-only. */
+function denial(code: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`${code}: simulated`), { code });
+}
+
+test("a failed attribute clear is reported as the read-only catalog, with its cause", () => {
+  const chmodFailure = denial("EPERM");
+  let renames = 0;
+  let failure: unknown;
+  try {
+    publishWithReadOnlyRepair(() => { renames += 1; throw denial("EPERM"); }, "C:/u/.codex/opencodex-catalog.json", {
+      platform: "win32", isReadOnly: () => true, makeWritable: () => { throw chmodFailure; },
+    });
+  } catch (error) { failure = error; }
+  expect(failure).toBeInstanceOf(CodexCatalogReadOnlyError);
+  expect((failure as Error).cause).toBe(chmodFailure);
+  expect(renames).toBe(1);
+});
+
+test("a retry that fails for another reason keeps that error instead of claiming read-only", () => {
+  const diskFull = denial("ENOSPC");
+  let renames = 0;
+  let failure: unknown;
+  try {
+    publishWithReadOnlyRepair(() => { renames += 1; throw renames === 1 ? denial("EPERM") : diskFull; },
+      "C:/u/.codex/opencodex-catalog.json", { platform: "win32", isReadOnly: () => true, makeWritable: () => {} });
+  } catch (error) { failure = error; }
+  expect(failure).toBe(diskFull);
+  expect(renames).toBe(2);
+});
+

@@ -105,7 +105,14 @@ export function publishWithReadOnlyRepair(
   catch (error) {
     if (repair.platform !== "win32" || !isPermissionDenial(error) || !repair.isReadOnly(target)) throw error;
   }
-  repair.makeWritable(target);
+  // A clear that fails leaves the attribute in place: that is still the read-only catalog.
+  try { repair.makeWritable(target); }
+  catch (clearError) { throw new CodexCatalogReadOnlyError(target, { cause: clearError }); }
   try { rename(); }
-  catch (retryError) { throw new CodexCatalogReadOnlyError(target, { cause: retryError }); }
+  catch (retryError) {
+    // Only a destination that still refuses is named read-only; a full disk or a scanner
+    // lock after the clear keeps its own error so the report names the real cause.
+    if (isPermissionDenial(retryError)) throw new CodexCatalogReadOnlyError(target, { cause: retryError });
+    throw retryError;
+  }
 }
