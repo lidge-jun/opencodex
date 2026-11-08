@@ -222,21 +222,21 @@ function orderedPartKeys(completed: Iterable<string>, streamed: Map<string, Stre
   const ordered = (key: string): boolean => isIndexedPartKey(key) || streamed.get(key)?.outputIndex !== undefined;
   const indexed = [...new Set([...completed, ...streamed.keys()].filter(ordered))]
     .sort((left, right) => comparePartKeys(left, right, streamed));
-  const contentOnly = [...streamed.values()].filter(part => part.key.startsWith("content:"))
-    .sort((a, b) => a.order - b.order);
+  const contentOnly = [...streamed].filter(([key]) => key.startsWith("content:") && !ordered(key))
+    .sort((a, b) => a[1].order - b[1].order);
   const keys: string[] = [];
   let next = 0;
   for (const key of indexed) {
     const part = streamed.get(key);
     if (part?.promotedFromContent) {
-      while (next < contentOnly.length && contentOnly[next]!.order < part.order) keys.push(contentOnly[next++]!.key);
+      while (next < contentOnly.length && contentOnly[next]![1].order < part.order) keys.push(contentOnly[next++]![0]);
     }
     keys.push(key);
   }
-  const emitted = new Set(contentOnly.slice(0, next));
-  const remaining = [...streamed.values()].filter(part => !ordered(part.key) && !emitted.has(part));
-  remaining.sort((a, b) => a.order - b.order);
-  keys.push(...remaining.map(part => part.key));
+  const emitted = new Set(contentOnly.slice(0, next).map(([key]) => key));
+  const remaining = [...streamed].filter(([key]) => !ordered(key) && !emitted.has(key));
+  remaining.sort((a, b) => a[1].order - b[1].order);
+  keys.push(...remaining.map(([key]) => key));
   return keys;
 }
 

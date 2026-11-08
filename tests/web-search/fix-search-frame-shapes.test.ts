@@ -4,6 +4,26 @@ import { MAX_SIDECAR_DECODED_CHARS, parseSidecarSSE } from "../../src/web-search
 const response = (frames: unknown[]) => new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join(""));
 
 describe("identity transition matrix", () => {
+  test("emits positioned content-key parts once across promotions and partial finals", async () => {
+    for (const kind of ["delta", "done"]) for (const partial of [false, true]) {
+      const event = (identity: object, text: string) => ({
+        type: `response.output_text.${kind}`, ...identity, [kind === "done" ? "text" : "delta"]: text,
+      });
+      const result = await parseSidecarSSE(response([
+        event({ content_index: 0 }, "A"),
+        event({ item_id: "a", content_index: 0 }, kind === "done" ? "A" : ""),
+        event({ item_id: "b", output_index: 0, content_index: 0 }, "B"),
+        event({ item_id: "a", output_index: 0 }, kind === "done" ? "A" : ""),
+        event({ content_index: 1 }, "C"),
+        event({ content_index: 1, output_index: 1 }, kind === "done" ? "C" : ""),
+        partial ? { type: "response.completed", response: { output: [
+          { id: "x", type: "message", content: [{ type: "output_text", text: "X" }] }, null,
+        ] } } : { type: "response.completed" },
+      ]));
+      expect({ kind, partial, text: result.text }).toEqual({ kind, partial, text: partial ? "XABC" : "ABC" });
+    }
+  });
+
   test("reconciles output-only snapshots when a later snapshot links the item", async () => {
     const event = (kind: string, identity: object, text: string) => ({
       type: `response.output_text.${kind}`, ...identity, [kind === "done" ? "text" : "delta"]: text,
