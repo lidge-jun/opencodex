@@ -198,6 +198,27 @@ describe("Copilot Auto permissions and negotiation", () => {
     expect((await resolveCopilotAuto(provider, "named", parsed)).modelId).toBe("named");
     expect(calls).toBe(1);
   });
+  for (const cancelAt of ["/models/session", "/models/session/intent"] as const) {
+    test(`an authority change during ${cancelAt} also falls back instead of failing negotiation`, async () => {
+      const seen: string[] = [];
+      let allowed = true;
+      const provider = { authMode: "oauth", baseUrl: "https://api.githubcopilot.com", fetch: (async (url: string | URL | Request) => {
+        const path = new URL(String(url instanceof Request ? url.url : url)).pathname;
+        seen.push(path);
+        if (path.endsWith("/models")) return Response.json({ data: [{ id: "eligible", model_picker_enabled: false, supported_endpoints: ["/responses"] }] });
+        if (path.endsWith("/models/session")) return Response.json({ session_token: "private-session", available_models: ["eligible"], expires_at: Math.floor(Date.now() / 1000) + 3600 });
+        return Response.json({ candidate_models: ["eligible"] });
+      }) as typeof fetch } as OcxProviderConfig;
+      // The switch lands just before the named control-plane send.
+      const beforeSend = () => {
+        if (seen.length === (cancelAt === "/models/session" ? 1 : 2)) allowed = false;
+        return allowed;
+      };
+      await expect(resolveCopilotAuto(provider, "auto", parsed, undefined, beforeSend))
+        .resolves.toMatchObject({ modelId: "auto", auto: false });
+      expect(seen.some(path => path.endsWith(cancelAt))).toBe(false);
+    });
+  }
   test("cancellation aborts, while an authority change falls back without a negotiation send", async () => {
     let sends = 0;
     const provider = { authMode: "oauth", baseUrl: "https://api.githubcopilot.com", fetch: (async () => {
