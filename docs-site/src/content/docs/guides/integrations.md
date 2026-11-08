@@ -33,6 +33,8 @@ file, and removes it again. Each client below has its own switch:
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | JSON | immediately via file watching | none — keyless loopback |
 | T3 Code | `$T3CODE_HOME/userdata/settings.json` (default `~/.t3/userdata/settings.json`) | JSON | immediately — T3 Code watches the file | non-secret loopback marker |
 
+From the CLI, a plain `ocx integration client enable|disable --client <id>` (without `--profile`, preview, fingerprint or Droid policy options) saves the Home's route-to default for that client: it applies on this machine and every linked Remote Link Child inherits it on its next sync. On a Remote Link Child the command is refused and prints the Home command for that device; use `ocx route to <client> off --local` there to opt that Child out. Profile, preview/fingerprint and Droid policy operations keep their local scope. See [Remote Link](/guides/remote-link/#route-clients-per-device).
+
 ## Gentle Shell
 
 Choose **Connect → Gentle Shell**, or use the same managed-integration commands:
