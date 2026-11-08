@@ -41,7 +41,12 @@ footer and in the PR descriptions.
 - The collector stores no IP address and no raw install id: reports carry a per-day install hash,
   rate limiting uses a salted hourly IP hash pruned after two hours, and only the first report per
   install and day counts.
-- No backfill: days before the disclosure are never sent; at most one day is sent per scheduler tick.
+- No backfill: only UTC days strictly after the day of the disclosure or decision are sent, days
+  covered by an `OCX_TELEMETRY=0` / `DO_NOT_TRACK=1` opt-out are never sent (060 D2), and at most one
+  day is sent per scheduler tick.
+- The published privacy statement (README and its seven translations, the docs-site code-signing
+  page in English and Turkish, `SPONSORS.md`) describes default-on telemetry and every way to turn it
+  off. It changes in layer 2, the first layer that can send, never later (060 D12).
 - The collector URL is a constant; it is not configurable from `config.json`.
 - Telemetry code stays off the core request path: `src/router.ts`,
   `src/server/lifecycle.ts` and `src/server/responses/core.ts` must not import `src/telemetry/`.
