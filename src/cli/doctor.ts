@@ -1610,8 +1610,13 @@ export async function runDoctor(args: string[] = []): Promise<void> {
 
   // The bundled dependency is the install's own runtime, distinct from whatever Bun is running
   // doctor or serving the proxy. A skipped postinstall (#8361) is invisible here otherwise.
-  console.log("\nBundled Bun runtime");
-  for (const line of formatBundledBunDiagnosticLines(collectBundledBunDiagnostic())) console.log(line);
+  // A source checkout or standalone binary has no bundled `bun` dependency, so the
+  // section has nothing to say there and prints no heading.
+  const bundledBunLines = formatBundledBunDiagnosticLines(collectBundledBunDiagnostic());
+  if (bundledBunLines.length > 0) {
+    console.log("\nBundled Bun runtime");
+    for (const line of bundledBunLines) console.log(line);
+  }
 
   console.log("\nWHAM reachability");
   const probe = await probeWham();

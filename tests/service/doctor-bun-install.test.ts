@@ -87,6 +87,18 @@ describe("doctor bundled Bun install guidance (#8361)", () => {
     expect(report).not.toContain("npm install -g --allow-scripts=bun");
   }, STORE_BUDGET_MS);
 
+  test("a source checkout prints no empty Bundled Bun runtime heading", async () => {
+    const bundled = spyOn(bunRuntime, "bundledBunPath").mockReturnValue(null);
+    restore.push(() => bundled.mockRestore());
+    const detection = spyOn(installDetection, "detectInstallOwnershipFromPath")
+      .mockReturnValue({ installer: "source" });
+    restore.push(() => detection.mockRestore());
+
+    await runDoctor([]);
+
+    expect(logged.join("\n")).not.toContain("Bundled Bun runtime");
+  }, STORE_BUDGET_MS);
+
   test("a Windows npm install stops the proxy before reinstalling, since a live bun.exe holds bin", () => {
     // Windows fails the manual reinstall with EBUSY while the service's bun.exe is running.
     // `ocx update` handles this itself; the printed instruction has to match what it does.

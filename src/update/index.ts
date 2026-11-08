@@ -367,8 +367,9 @@ export function updateCommand(installer: Installer, tag: Channel, resolvedVersio
   // npm 11 blocks dependency lifecycle scripts by default, and bun's postinstall is what
   // copies the selected @oven/bun-* executable into bun/bin. Without this narrow approval
   // the install succeeds but leaves bun's un-downloaded placeholder, so the next `ocx`
-  // cannot start (#8361). npm 8 through 11 accept the flag on global installs, so it is
-  // unconditional rather than version-gated.
+  // cannot start (#8361). npm 6 through 11 install with the flag on global installs, so it
+  // is unconditional rather than version-gated; npm 11.5 through 11.15 print an "Unknown
+  // cli config" warning for it but still run bun's postinstall.
   const args = ["install", "-g", "--allow-scripts=bun", `${PKG}@${target}`];
   return { bin, args };
 }
