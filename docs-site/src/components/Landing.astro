@@ -497,7 +497,8 @@ const docsMap = [
 	//  - cards: cursor spotlight + spring-smoothed tilt
 	//  - magnetic CTAs and a counting star total
 	const root = document.documentElement;
-	const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+	const motionPreference = matchMedia('(prefers-reduced-motion: reduce)');
+	const reduceMotion = motionPreference.matches;
 	const finePointer = matchMedia('(hover: hover) and (pointer: fine)').matches;
 	const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
 
@@ -645,7 +646,7 @@ const docsMap = [
 	// Korean: "Codex를"). Here the slot takes each word's measured width and
 	// eases between them while the words roll through a blur.
 	const drum = document.querySelector<HTMLElement>('.lp-drum');
-	if (drum && !reduceMotion) {
+	if (drum) {
 		const faces = Array.from(drum.querySelectorAll<HTMLElement>('.lp-drum-spin .lp-drum-face')).slice(0, 2);
 		const roll = document.createElement('span');
 		roll.className = 'lp-roll';
@@ -658,10 +659,11 @@ const docsMap = [
 			roll.append(word);
 			return word;
 		});
-		drum.replaceChildren(roll);
+		drum.querySelector('.lp-drum-spin')?.replaceWith(roll);
 		drum.classList.add('lp-drum-js');
 		let index = 0;
 		const fit = () => {
+			if (motionPreference.matches) return;
 			roll.style.width = `${words[index].getBoundingClientRect().width}px`;
 		};
 		// fonts swap in late; measure again once they have
@@ -669,7 +671,9 @@ const docsMap = [
 		document.fonts?.ready.then(fit);
 		addEventListener('resize', fit, { passive: true });
 		const HOLD_MS = 2600;
-		setInterval(() => {
+		let timer: ReturnType<typeof setInterval> | undefined;
+		let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+		const advance = () => {
 			if (document.hidden) return;
 			const prev = words[index];
 			index = (index + 1) % words.length;
@@ -679,8 +683,20 @@ const docsMap = [
 			next.classList.remove('is-out');
 			next.classList.add('is-on');
 			fit();
-			setTimeout(() => prev.classList.remove('is-out'), 700);
-		}, HOLD_MS);
+			cleanupTimer = setTimeout(() => prev.classList.remove('is-out'), 700);
+		};
+		const syncMotion = () => {
+			clearInterval(timer);
+			clearTimeout(cleanupTimer);
+			timer = undefined;
+			words.forEach((word) => word.classList.remove('is-out'));
+			if (!motionPreference.matches) {
+				fit();
+				timer = setInterval(advance, HOLD_MS);
+			}
+		};
+		motionPreference.addEventListener('change', syncMotion);
+		syncMotion();
 	}
 
 	// The star total counts up once the closing panel comes into view, using

@@ -864,4 +864,8 @@ footer.sl-flex { border-top: 1px dashed var(--cl-border); }
 }
 .lp-roll-word.is-on { opacity: 1; transform: none; filter: none; }
 .lp-roll-word.is-out { opacity: 0; transform: translateY(-0.55em); filter: blur(10px); }
+@media (prefers-reduced-motion: reduce) {
+  .lp-drum-js { display: inline-grid; }
+  .lp-drum-js .lp-roll { display: none; }
+}
 .lp-next { scroll-margin-top: calc(var(--sl-nav-height) + 1rem); }

@@ -1015,14 +1015,21 @@ const contributing: NavLink = {
 	document.addEventListener('click', (e) => {
 		if (!(e.target instanceof Element) || !e.target.closest('.glass-nav, .lp-menu, .header-preference')) closeAll();
 	});
-	document.addEventListener('keydown', (e) => {
-		if (e.key === 'Escape') closeAll();
-	});
-
 	// The full-screen splash menu locks page scroll while it is open, and
 	// following one of its links (same-page anchors included) closes it.
 	const menuBtn = document.querySelector<HTMLButtonElement>('.lp-menu-btn');
+	document.addEventListener('keydown', (e) => {
+		if (e.key !== 'Escape') return;
+		const restoreFocus = menuBtn?.getAttribute('aria-expanded') === 'true'
+			&& menuBtn.parentElement?.contains(document.activeElement);
+		closeAll();
+		if (restoreFocus) menuBtn?.focus();
+	});
 	if (menuBtn) {
+		menuBtn.parentElement?.addEventListener('focusout', (e) => {
+			if (menuBtn.getAttribute('aria-expanded') === 'true'
+				&& (!(e.relatedTarget instanceof Node) || !menuBtn.parentElement?.contains(e.relatedTarget))) closeAll();
+		});
 		new MutationObserver(() => {
 			document.documentElement.style.overflow =
 				menuBtn.getAttribute('aria-expanded') === 'true' ? 'hidden' : '';
