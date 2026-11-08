@@ -220,7 +220,8 @@ export function tapAnthropicSseForLog(
       appendPart(text.slice(start, end));
     }
     // The relay may reframe this read: a combo child judges a retryable error by what followed it here.
-    if (errorSeen && !isHarmlessSseTail([...frameParts, ...pendingParts].join(""))) logCtx.streamErrorFollowed = true;
+    if (errorSeen && !logCtx.streamErrorFollowed
+      && (frameParts.length > 0 || !isHarmlessSseTail(pendingParts.join("")))) logCtx.streamErrorFollowed = true;
   };
   // The last block can sit in the buffer without its blank line: an upstream that stopped after
   // it, or a held trailing CR. Count it before deciding how the turn ended (the Responses relay

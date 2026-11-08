@@ -1009,7 +1009,8 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
       ...resolvePassthroughBodyGuard(config, upstream.signal),
       ...(activeProvider.anthropicEofTolerance === true ? { eofTolerant: true } : {}),
     };
-    const raw = options.sendBudget ? observeNativeMessagesReplayBoundary(response.body, logCtx) : response.body;
+    const replay = { committed: false, pending: false };
+    const raw = options.sendBudget ? observeNativeMessagesReplayBoundary(response.body, logCtx, replay) : response.body;
     const observed = logIds && onFirstOutput ? observeFirstChunk(raw, onFirstOutput) : raw;
     const renamed = activeRequest.oauthToolNames
       ? restoreOAuthToolNamesInSse(observed, activeRequest.oauthToolNames, translatorBudget)
@@ -1049,10 +1050,11 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
       }), response.headers);
       if (options.sendBudget) {
         try {
-          const preflight = await preflightNativeMessagesResponse(delivered, logCtx, translatorBudget);
+          const preflight = await preflightNativeMessagesResponse(delivered, logCtx, translatorBudget, replay);
           if (preflight.kind === "failed") { bindUsage(logCtx.usage); return preflight.response; }
           delivered = new Response(watchFirstOutput(preflight.response.body!), { status: preflight.response.status, headers: preflight.response.headers });
         } catch (error) {
+          committed ||= replay.committed || replay.pending;
           cleanupAbort(); releaseStreamTurn(); upstream.abort();
           if (req.signal.aborted) return fail(499, "Client cancelled request", "api_error");
           if (isTranslatorBudgetExceededError(error)) return fail(502, "upstream translation buffer exceeded the safe limit", "api_error", "translation_buffer_limit");
@@ -1070,7 +1072,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
     const collectorVerdictSink: MessagesFailureVerdictSink = {};
     try {
       if (options.sendBudget) {
-        const preflight = await preflightNativeMessagesResponse(new Response(tapped, { headers: response.headers }), logCtx, translatorBudget);
+        const preflight = await preflightNativeMessagesResponse(new Response(tapped, { headers: response.headers }), logCtx, translatorBudget, replay);
         if (preflight.kind === "failed") {
           cleanupAbort(); upstream.abort(); bindUsage(logCtx.usage);
           finishLog(preflight.response.status, logCtx.upstreamError);
@@ -1131,6 +1133,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
       if (committed && finalStatus >= 400) markResponseNonReplayable(collectedResponse);
       return collectedResponse;
     } catch (error) {
+      committed ||= replay.committed || replay.pending;
       cleanupAbort();
       upstream.abort();
       bindUsage(logCtx.usage);

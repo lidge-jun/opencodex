@@ -101,6 +101,66 @@ async function send(options: { stream?: boolean; config?: OcxConfig; messages?: 
 }
 
 describe("native Messages candidates in a combo", () => {
+  for (const [name, raw, replayable] of [
+    ["empty prelude", prelude + frame("ping"), true],
+    ["unknown frame", prelude + frame("fixture_unknown"), false],
+    ["empty data", prelude + "data:\n\n", false],
+    ["malformed error", prelude + frame("error"), false],
+    ["nonempty message start", frame("message_start", { message }), false],
+    ["unfinished frame", prelude + "event: content_block_start\n", false],
+  ] as const) {
+    test(`rewrite failure preserves raw replay evidence: ${name}`, async () => {
+      const budgets = await import("../../src/lib/translator-budget");
+      const create = budgets.createTranslatorBudget;
+      let refused = false;
+      const spy = spyOn(budgets, "createTranslatorBudget").mockImplementation(options => {
+        const budget = create(options);
+        const reserve = budget.reserveTransient.bind(budget);
+        budget.reserveTransient = (bytes, scope) => {
+          if (!refused && scope.kind === "live_transient") {
+            refused = true;
+            throw new budgets.TranslatorBudgetExceededError(scope.kind, 1);
+          }
+          return reserve(bytes, scope);
+        };
+        return budget;
+      });
+      try {
+        answer = () => stream(raw);
+        const { text } = await send({ tools: [] });
+        expect(refused).toBe(true);
+        expect(text.includes("fallback reply")).toBe(replayable);
+        expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(replayable ? ["api.anthropic.com", "backup.fixture.invalid"] : ["api.anthropic.com"]);
+      } finally { spy.mockRestore(); }
+    });
+  }
+  for (const streamed of [true, false]) for (const budgetFailure of [true, false]) {
+    test(`a rewrite ${budgetFailure ? "budget refusal" : "read failure"} after raw tool output cannot replay (${streamed ? "stream" : "fold"})`, async () => {
+      const budgets = await import("../../src/lib/translator-budget");
+      const create = budgets.createTranslatorBudget;
+      let refused = 0;
+      const spy = spyOn(budgets, "createTranslatorBudget").mockImplementation(options => {
+        const budget = create(options);
+        const charge = budget.chargeRetained.bind(budget);
+        budget.chargeRetained = (bytes, scope) => {
+          if (scope.kind === "live_transient" && bytes === 32) {
+            refused++;
+            if (budgetFailure) throw new budgets.TranslatorBudgetExceededError(scope.kind, 1);
+            throw new Error("fixture rewrite failure");
+          }
+          charge(bytes, scope);
+        };
+        return budget;
+      });
+      try {
+        answer = () => stream(prelude + frame("content_block_start", { index: 0, content_block: { type: "server_tool_use", id: "fixture", name: "web_search", input: {} } }) + terminal);
+        const { text } = await send({ stream: streamed, tools: [] });
+        expect(refused).toBe(1);
+        expect(text).not.toContain("fallback reply");
+        expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["api.anthropic.com"]);
+      } finally { spy.mockRestore(); }
+    });
+  }
   for (const streamed of [true, false]) {
     test(`OAuth error and content in one upstream read cannot replay (${streamed ? "stream" : "fold"})`, async () => {
       await saveCredential("anthropic", { access: "synthetic-combo-access", refresh: "synthetic-combo-refresh", expires: Date.now() + 3_600_000, accountId: "synthetic-combo-uuid", source: "oauth" });
@@ -131,6 +191,12 @@ describe("native Messages candidates in a combo", () => {
     });
     test(`error followed by an empty named content frame cannot replay (${streamed ? "stream" : "fold"})`, async () => {
       answer = () => stream(prelude + refusal + "event: content_block_start\ndata:\n\n");
+      const { text } = await send({ stream: streamed });
+      expect(text).not.toContain("fallback reply");
+      expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["api.anthropic.com"]);
+    });
+    test(`error followed by empty data cannot replay (${streamed ? "stream" : "fold"})`, async () => {
+      answer = () => stream(prelude + refusal + "data:\n\n");
       const { text } = await send({ stream: streamed });
       expect(text).not.toContain("fallback reply");
       expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["api.anthropic.com"]);

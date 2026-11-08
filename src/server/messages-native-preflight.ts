@@ -12,7 +12,7 @@ type Rec = Record<string, unknown>;
 const isRec = (value: unknown): value is Rec => value !== null && typeof value === "object" && !Array.isArray(value);
 
 /** Capture replay evidence before any relay can split a physical upstream read into frames. */
-export function observeNativeMessagesReplayBoundary(body: ReadableStream<Uint8Array>, logCtx: RequestLogContext): ReadableStream<Uint8Array> {
+export function observeNativeMessagesReplayBoundary(body: ReadableStream<Uint8Array>, logCtx: RequestLogContext, replay: { committed: boolean; pending: boolean }): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const inspector = new BoundedSseFrameBuffer();
   const decoder = new TextDecoder();
@@ -30,20 +30,25 @@ export function observeNativeMessagesReplayBoundary(body: ReadableStream<Uint8Ar
               if (frame.continuation) continue;
               const lines = decoder.decode(frame.block).split(/\r\n|\r|\n/);
               const event = lines.map(line => sseFieldValue(line, "event")).findLast(value => value !== null) ?? null;
-              const data = lines.map(line => sseFieldValue(line, "data")).filter(value => value !== null).join("\n");
+              const dataFields = lines.map(line => sseFieldValue(line, "data")).filter(value => value !== null);
+              const data = dataFields.join("\n");
               let payload: unknown;
               try { payload = JSON.parse(data); } catch { payload = undefined; }
               const type = isRec(payload) && (event === null || event === payload.type) ? payload.type : undefined;
-              if (errorSeen && (event !== null || data) && type !== "ping") logCtx.streamErrorFollowed = true;
-              if (type === "error") errorSeen = true;
-              else if ((event !== null || data) && type !== "ping" && type !== "message_start") finished = true;
+              if (errorSeen && (event !== null || dataFields.length > 0) && type !== "ping") logCtx.streamErrorFollowed = true;
+              if (type === "error" && isRec(payload) && isRec(payload.error)) errorSeen = true;
+              else if ((event !== null || dataFields.length > 0) && type !== "ping" && !(type === "message_start" && isRec(payload) && isRec(payload.message) && Array.isArray(payload.message.content) && payload.message.content.length === 0)) {
+                replay.committed = true; finished = true;
+              }
             }
+            replay.pending = inspector.pendingBytes > 0;
             // An unfinished event can still acquire a different name or payload on the next read.
             if (errorSeen && inspector.pendingBytes > 0) logCtx.streamErrorFollowed = true;
             if (errorSeen || finished) { active = false; inspector.dispose(); }
           } catch (error) {
             if (!(error instanceof SseFrameTooLargeError || error instanceof SseFrameCountLimitError)) throw error;
             logCtx.streamErrorFollowed = true;
+            replay.committed = true;
             active = false; inspector.dispose();
           }
         }
@@ -56,7 +61,7 @@ export function observeNativeMessagesReplayBoundary(body: ReadableStream<Uint8Ar
 
 /** Inspect only the bounded protocol prelude. Any block, unknown payload or cap commits. */
 export async function preflightNativeMessagesResponse(
-  response: Response, logCtx: RequestLogContext, budget: TranslatorBudget,
+  response: Response, logCtx: RequestLogContext, budget: TranslatorBudget, replay?: { committed: boolean },
 ): Promise<{ kind: "accepted" | "failed"; response: Response }> {
   if (!response.ok || !response.body || !response.headers.get("content-type")?.includes("text/event-stream")) {
     return { kind: "accepted", response };
@@ -127,7 +132,7 @@ export async function preflightNativeMessagesResponse(
       if (committed || terminal || failure) break;
     }
     // The tap read the original upstream chunk; output after the error there commits too.
-    if (failure && !committed && !logCtx.streamErrorFollowed) {
+    if (failure && !committed && !replay?.committed && !logCtx.streamErrorFollowed) {
       logCtx.usage = anthropicUsageToOcx(usage);
       const message = redactSecretString(typeof failure.message === "string" ? failure.message : "Provider stream failed before output");
       logCtx.upstreamError = `Provider stream failed (${failureStatus})`;

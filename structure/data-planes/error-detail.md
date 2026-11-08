@@ -441,7 +441,7 @@ inspection or serialization.
 
 `src/server/messages-native-tool-guard.ts`, `src/server/messages-shared.ts` and
 `src/server/sse-payload-rewrite.ts` carry complete-frame construction identity.
-Native combo replay evidence is collected before framing transforms; the accounting tap remains the owner of stream outcomes and error presentation.
+Native combo replay evidence is collected before framing transforms; if a transform fails before preflight, complete output or opaque frames and an unfinished raw frame prevent replay. A complete empty message prelude and ping remain replayable. The accounting tap remains the owner of stream outcomes and error presentation; after an error it conservatively marks a long unfinished frame as followed, bounding repeated tail inspection.
 Native and passthrough Messages SSE apply error-response normalization after echo, guard,
 accounting tap and the existing configured-only overflow rewrite. The final enqueue stage in
 `src/server/messages-sse-error-filter.ts` introduces no stream queue, timer or possible-prefix hold.
