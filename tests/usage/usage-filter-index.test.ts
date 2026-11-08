@@ -541,9 +541,11 @@ describe("filtered usage index crash and multi-writer safety", () => {
     // were still intact; only the successful publish prunes them.
     expect(observedPublished).toBe(8);
     expect(observedOther).toBe(1);
-    expect(indexGenerations()).toHaveLength(1);
+    // The retired published generation is pruned; the live writer's staging is kept so its own
+    // publish can fail the fence and retry instead of losing rows mid-ingest.
     expect(indexRowCount(published)).toBe(0);
-    expect(indexRowCount("other-writer")).toBe(0);
+    expect(indexRowCount("other-writer")).toBe(1);
+    expect(indexGenerations()).toContain("other-writer");
   });
 
   test("a competing publish is fenced out and the loser retries", async () => {
@@ -773,6 +775,203 @@ console.log(JSON.stringify({ requests: summary.summary.requests, candidates: res
       // The stale projection would have selected the pre-swap row and dropped it during
       // filtering, under-reporting by one. The read detects the move and rebuilds.
       expect(result.filterIndex).toBeDefined();
+     expect(summary(result).summary.requests).toBe(expected);
+    } finally {
+      setUsageFilterIndexTestHooksForTests(null);
+    }
+  });
++
+  test("a same-size rewrite before the trailing boundary forces a rebuild", async () => {
+    // Large enough that row zero sits far outside the trailing 64 KiB digest window.
+    const rows = Array.from({ length: 4000 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    expect(statSync(ledgerPath()).size).toBeGreaterThan(64 * 1024 * 2);
+    const expected = rows.filter(row => row.provider === "google").length + 1;
+    let rewritten = false;
+    setUsageFilterIndexTestHooksForTests({
+      afterPublish: () => {
+        if (rewritten) return;
+        rewritten = true;
+        const lines = readFileSync(ledgerPath(), "utf8").split("\n");
+        // Row zero becomes a match, at the same byte length, outside the digest window.
+        lines[0] = lines[0]!.replace('"provider":"openai"', '"provider":"google"');
+        writeFileSync(ledgerPath(), lines.join("\n"));
+      },
+    });
+    try {
+      const result = await getFilteredUsageAggregate({ provider: "google" });
+      expect(result.filterIndex).toBeDefined();
+      expect(summary(result).summary.requests).toBe(expected);
+    } finally {
+      setUsageFilterIndexTestHooksForTests(null);
+    }
+  });
+
+  test("a zero-candidate query still validates the snapshot", async () => {
+    const rows = Array.from({ length: 4000 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    let rewritten = false;
+    setUsageFilterIndexTestHooksForTests({
+      afterPublish: () => {
+        if (rewritten) return;
+        rewritten = true;
+        const lines = readFileSync(ledgerPath(), "utf8").split("\n");
+        // Same length, so only the revision check can see it; row zero now matches.
+        lines[0] = lines[0]!.replace('"provider":"openai"', '"provider":"zzzzzz"');
+        writeFileSync(ledgerPath(), lines.join("\n"));
+      },
+    });
+    try {
+      const result = await getFilteredUsageAggregate({ provider: "zzzzzz" });
+      expect(result.filterIndex).toBeDefined();
+      expect(summary(result).summary.requests).toBe(1);
+    } finally {
+      setUsageFilterIndexTestHooksForTests(null);
+    }
+  });
+
+  test("registry and lease become visible together", async () => {
+    const rows = Array.from({ length: 600 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({ provider: "kimi" });
+    writeRows(rows.slice(0, 400));
+
+    const observed: string[] = [];
+    setUsageFilterIndexTestHooksForTests({
+      betweenStagingWrites: ({ dbPath, generation }) => {
+        // A second connection sees the last committed snapshot only: the registry row and its
+        // lease must never be observable apart.
+        const probe = new Database(dbPath, { readonly: true });
+        try {
+          const registry = probe.query("SELECT 1 AS present FROM usage_filter_index_generations WHERE generation = ?")
+            .get(generation) as { present: number } | null;
+          const lease = probe.query("SELECT pid FROM usage_filter_index_writers WHERE generation = ?")
+            .get(generation) as { pid: number } | null;
+          observed.push(`${registry === null ? "none" : "registry"}/${lease === null ? "none" : "lease"}`);
+        } catch (error) {
+          observed.push(`busy:${(error as Error).message}`);
+        } finally {
+          probe.close();
+        }
+      },
+    });
+    try {
+      const result = await getFilteredUsageAggregate({ provider: "kimi" });
+      expect(result.filterIndex?.totalRows).toBe(400);
+    } finally {
+      setUsageFilterIndexTestHooksForTests(null);
+    }
+    // The uncommitted transaction is invisible to the other connection: no half-registered row.
+    expect(observed.length).toBeGreaterThan(0);
+    for (const seen of observed) expect(seen).toBe("none/none");
+    expect(totalIndexRows()).toBe(ledgerRowCount());
+  });
++
+  test("a replaced ledger between the index refresh and the read is caught", async () => {
+    const rows = Array.from({ length: 20 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    const expected = rows.filter(row => row.provider === "google").length + 1;
+    let replaced = false;
+    setUsageFilterIndexTestHooksForTests({
+      afterPublish: () => {
+        if (replaced) return;
+        replaced = true;
+        renameSync(ledgerPath(), `${ledgerPath()}.old`);
+        writeRows(rows.map((row, index) => (index === 0 ? { ...row, provider: "google" } : row)));
+      },
+    });
+    try {
+      const result = await getFilteredUsageAggregate({ provider: "google" });
+      expect(result.filterIndex).toBeDefined();
+      expect(summary(result).summary.requests).toBe(expected);
+    } finally {
+      setUsageFilterIndexTestHooksForTests(null);
+    }
+  });
+
+  test("a reclaimer re-reads eligibility under its write lock", async () => {
+    const rows = Array.from({ length: 30 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({ provider: "kimi" });
+
+    // A registry row without a lease looks abandoned to the pre-check.
+    const db = new Database(usageFilterIndexPath(testDir));
+    db.query("INSERT OR REPLACE INTO usage_filter_index_generations (generation, created_at) VALUES ('racing-writer', ?)")
+      .run(NOW);
+    db.close();
+
+    let registered = false;
+    setUsageFilterIndexTestHooksForTests({
+      betweenReclaimCheckAndLock: ({ dbPath }) => {
+        if (registered) return;
+        registered = true;
+        // The live writer registers its lease between the pre-check and the lock.
+        const other = new Database(dbPath);
+        try {
+          other.query(
+            "INSERT OR REPLACE INTO usage_filter_index_writers (generation, pid, started_at, heartbeat_at) VALUES ('racing-writer', ?, ?, ?)",
+          ).run(process.pid, NOW, NOW);
+        } finally {
+          other.close();
+        }
+      },
+    });
+    try {
+      appendRows([syntheticRow(900)]);
+      await getFilteredUsageAggregate({ provider: "kimi" });
+    } finally {
+      setUsageFilterIndexTestHooksForTests(null);
+    }
+
+    const probe = new Database(usageFilterIndexPath(testDir), { readonly: true });
+    try {
+      expect(probe.query("SELECT 1 FROM usage_filter_index_generations WHERE generation = 'racing-writer'").get())
+        .not.toBeNull();
+    } finally {
+      probe.close();
+    }
+  });
+
+  test("a lease without a registered generation is pruned", async () => {
+    const rows = Array.from({ length: 10 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({ provider: "kimi" });
+    const db = new Database(usageFilterIndexPath(testDir));
+    db.query(
+      "INSERT OR REPLACE INTO usage_filter_index_writers (generation, pid, started_at, heartbeat_at) VALUES ('orphan-lease', 999999, ?, ?)",
+    ).run(NOW, NOW);
+    db.close();
+
+    appendRows([syntheticRow(900)]);
+    await getFilteredUsageAggregate({ provider: "kimi" });
+
+    const probe = new Database(usageFilterIndexPath(testDir), { readonly: true });
+    try {
+      expect(probe.query("SELECT 1 FROM usage_filter_index_writers WHERE generation = 'orphan-lease'").get())
+        .toBeNull();
+    } finally {
+      probe.close();
+    }
+  });
++
+  test("an unchanged retained projection still validates the ledger", async () => {
+    const rows = Array.from({ length: 40 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({ provider: "google" });
+    const expected = rows.filter(row => row.provider === "google").length + 1;
+    let rewritten = false;
+    setUsageFilterIndexTestHooksForTests({
+      afterRefresh: () => {
+        if (rewritten) return;
+        rewritten = true;
+        const lines = readFileSync(ledgerPath(), "utf8").split("\n");
+        lines[0] = lines[0]!.replace('"provider":"openai"', '"provider":"google"');
+        writeFileSync(ledgerPath(), lines.join("\n"));
+      },
+    });
+    try {
+      // The retained projection is still current, so this takes the unchanged path.
+      const result = await getFilteredUsageAggregate({ provider: "google" });
       expect(summary(result).summary.requests).toBe(expected);
     } finally {
       setUsageFilterIndexTestHooksForTests(null);
@@ -916,6 +1115,23 @@ describe("filtered usage index availability", () => {
     expect(summary(passive).summary.requests)
       .toBe(rows.filter(row => row.provider === "openai").length);
   });
++
+  test("a foreign SQLite file with a coincidental meta table is not adopted", async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    const foreign = new Database(usageFilterIndexPath(testDir));
+    try {
+      foreign.exec("CREATE TABLE usage_filter_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+      foreign.query("INSERT INTO usage_filter_index_meta (key, value) VALUES ('schema_version', '4')").run();
+      foreign.query("INSERT INTO usage_filter_index_meta (key, value) VALUES ('generation', 'x')").run();
+    } finally {
+      foreign.close();
+    }
+    const passive = await runPassiveRead(async () => getFilteredUsageAggregate({ provider: "openai" }));
+    expect(passive.filterIndex).toBeUndefined();
+    expect(summary(passive).summary.requests)
+      .toBe(rows.filter(row => row.provider === "openai").length);
+  });
 
 });
 
@@ -969,6 +1185,9 @@ describe("filtered usage index selection evidence", () => {
       usageFilterCandidatePlan(query).join("\n");
     expect(plan({ provider: "openai", model: "m-0", apiKeyId: null }))
       .toContain("idx_usage_attr_provider");
+    // Both UNION branches are index-driven: the attribution side and the unattributable rows.
+    expect(plan({ provider: "openai", model: "m-0", apiKeyId: null }))
+      .toContain("idx_usage_rows_unattributable");
     expect(plan({ provider: null, model: null, apiKeyId: "key-a" }))
       .toContain("idx_usage_rows_key");
     expect(plan({

@@ -470,7 +470,11 @@ async function accumulateCandidates(
   read: UsageFilterCandidateRead,
   filter: NormalizedUsageFilter,
 ): Promise<void> {
-  for (let start = 0; start < read.offsets.length; start += FILTER_ROW_READ_BATCH) {
+  // Always read at least once, even with no candidates: the reader validates the snapshot
+  // against the ledger, and an empty selection must not skip that check.
+  const batchCount = Math.max(1, Math.ceil(read.offsets.length / FILTER_ROW_READ_BATCH));
+  for (let batch = 0; batch < batchCount; batch += 1) {
+    const start = batch * FILTER_ROW_READ_BATCH;
     const rows = await readUsageLedgerRowsAtOffsets({
       offsets: read.offsets.slice(start, start + FILTER_ROW_READ_BATCH),
       expectedIdentityKey: read.snapshot.identityKey,
@@ -650,6 +654,15 @@ async function refreshFilteredAggregate(
       return rebuildFilteredAggregate(key, filter, window, overlayVersion, timeZone);
     }
     if (state.processedThroughBytes === read.snapshot.indexedOffset) {
+      // Even an unchanged retained projection validates the ledger against the snapshot, so a
+      // rewrite in the window between the index refresh and this return is not served stale.
+      await readUsageLedgerRowsAtOffsets({
+        offsets: [],
+        expectedIdentityKey: read.snapshot.identityKey,
+        expectedRevisionKey: usageLogRevisionKey(read.snapshot.revision),
+        expectedProcessedThroughBytes: read.snapshot.indexedOffset,
+        expectedProcessedThroughDigest: read.snapshot.processedThroughDigest,
+      });
       state.retainedAt = Date.now();
       // Whole-ledger diagnostics can move without the boundary moving: a torn oversized or
       // malformed suffix is observed by every append scan and never advances the offset.

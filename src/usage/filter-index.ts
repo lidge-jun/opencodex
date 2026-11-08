@@ -68,6 +68,7 @@ import {
   type UsageLogRevision,
 } from "./log";
 import {
+  readUsageLedgerRowsAtOffsets,
   scanUsageLedgerCooperatively,
   UsageLedgerRebuildRequiredError,
   type UsageLedgerScanResult,
@@ -251,6 +252,14 @@ export interface UsageFilterIndexTestHooks {
   }) => void | Promise<void>;
   /** Runs after a publish committed, before the caller reads the projection. */
   afterPublish?: (info: { dbPath: string; generation: string }) => void | Promise<void>;
+  /** Runs after a staging generation registered its lease, before its first row. */
+  afterStagingRegistered?: (info: { dbPath: string; generation: string }) => void | Promise<void>;
+  /** Runs inside the staging transaction, between the registry and lease writes. */
+  betweenStagingWrites?: (info: { dbPath: string; generation: string }) => void;
+  /** Runs after a reclamation pre-check, before its write transaction takes the lock. */
+  betweenReclaimCheckAndLock?: (info: { dbPath: string; candidates: string[] }) => void;
+  /** Runs after a refresh, before the candidate select reads the projection. */
+  afterRefresh?: (info: { dbPath: string }) => void;
 }
 
 interface IndexMeta {
@@ -696,13 +705,23 @@ function processAlive(pid: number): boolean {
  * with rows but no lease cannot belong to a live writer. Reclamation uses the recorded pid as
  * owner evidence; a timestamp alone never deletes a generation whose writer is alive.
  */
-function beginStaging(db: Database, generation: string): void {
-  const now = Date.now();
-  db.query("INSERT OR REPLACE INTO usage_filter_index_generations (generation, created_at) VALUES (?, ?)")
-    .run(generation, now);
-  db.query(
-    "INSERT OR REPLACE INTO usage_filter_index_writers (generation, pid, started_at, heartbeat_at) VALUES (?, ?, ?, ?)",
-  ).run(generation, process.pid, now, now);
+function beginStaging(db: Database, path: string, generation: string): void {
+  // Registry and lease must become visible together: a reclaimer that saw the registry row
+  // without the lease would treat a live writer's generation as abandoned.
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const now = Date.now();
+    db.query("INSERT OR REPLACE INTO usage_filter_index_generations (generation, created_at) VALUES (?, ?)")
+      .run(generation, now);
+    testHooks?.betweenStagingWrites?.({ dbPath: path, generation });
+    db.query(
+      "INSERT OR REPLACE INTO usage_filter_index_writers (generation, pid, started_at, heartbeat_at) VALUES (?, ?, ?, ?)",
+    ).run(generation, process.pid, now, now);
+    db.exec("COMMIT");
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch { /* the close releases the lock */ }
+    throw error;
+  }
 }
 
 function heartbeatLease(db: Database, generation: string): void {
@@ -723,25 +742,44 @@ function endLease(db: Database, generation: string): void {
  * never touched, which is what keeps this from repeating the multi-writer row loss it cleans up
  * after. The published generation never has a lease and is never a candidate.
  */
-function reclaimAbandonedStaging(db: Database, published: string): void {
+function reclaimAbandonedStaging(db: Database, path: string, published: string): void {
+  // Cheap pre-check without the write lock: most refreshes have nothing to reclaim.
   const generations = db.query(
     "SELECT g.generation AS generation, w.pid AS pid FROM usage_filter_index_generations g LEFT JOIN usage_filter_index_writers w ON w.generation = g.generation",
   ).all() as Array<{ generation: string; pid: number | null }>;
-  const abandoned = new Set<string>();
+  const maybe = new Set<string>();
   for (const entry of generations) {
     if (entry.generation === published) continue;
     // No lease means no live writer ever owned it; a dead pid means its writer is gone.
-    if (entry.pid === null || !processAlive(entry.pid)) abandoned.add(entry.generation);
+    if (entry.pid === null || !processAlive(entry.pid)) maybe.add(entry.generation);
   }
-  if (abandoned.size === 0) return;
+  // A lease whose generation is no longer registered cannot belong to a live writer, because
+  // registration and the lease commit together.
+  const orphanLease = db.query(
+    "SELECT 1 AS present FROM usage_filter_index_writers WHERE generation NOT IN (SELECT generation FROM usage_filter_index_generations) LIMIT 1",
+  ).get() !== null;
+  if (maybe.size === 0 && !orphanLease) return;
+  testHooks?.betweenReclaimCheckAndLock?.({ dbPath: path, candidates: [...maybe] });
   db.exec("BEGIN IMMEDIATE");
   try {
-    for (const generation of abandoned) {
+    // Re-read under the write lock: a writer may have registered its lease, or a publish may
+    // have moved the watermark, since the pre-check. Eligibility is decided here, not outside.
+    const currentPublished = metaText(db, META_KEYS.generation);
+    for (const generation of maybe) {
+      if (generation === currentPublished) continue;
+      const lease = db.query("SELECT pid FROM usage_filter_index_writers WHERE generation = ?")
+        .get(generation) as { pid: number } | null;
+      if (lease && processAlive(lease.pid)) continue;
       db.query("DELETE FROM usage_rows WHERE generation = ?").run(generation);
       db.query("DELETE FROM usage_attributions WHERE generation = ?").run(generation);
       db.query("DELETE FROM usage_filter_index_writers WHERE generation = ?").run(generation);
       db.query("DELETE FROM usage_filter_index_generations WHERE generation = ?").run(generation);
     }
+    // A lease whose generation is no longer registered cannot belong to a live writer:
+    // registration is atomic, so this is a leftover record rather than an active one.
+    db.query(
+      "DELETE FROM usage_filter_index_writers WHERE generation NOT IN (SELECT generation FROM usage_filter_index_generations)",
+    ).run();
     db.exec("COMMIT");
   } catch (error) {
     try { db.exec("ROLLBACK"); } catch { /* the close releases the lock */ }
@@ -786,9 +824,17 @@ function publish(
     ).all(next.generation) as Array<{ generation: string }>;
     for (const { generation } of retired) {
       if (generation === "") continue;
+      // A live writer still owns its staging generation. Its own publish will fail the fence
+      // and retry, so leaving it here is what keeps its rows from being deleted mid-ingest.
+      const liveLease = db.query("SELECT pid FROM usage_filter_index_writers WHERE generation = ?")
+        .get(generation) as { pid: number } | null;
+      if (liveLease && processAlive(liveLease.pid)) continue;
       db.query("DELETE FROM usage_rows WHERE generation = ?").run(generation);
       db.query("DELETE FROM usage_attributions WHERE generation = ?").run(generation);
       db.query("DELETE FROM usage_filter_index_generations WHERE generation = ?").run(generation);
+      // Drop a dead writer's record with its generation; a live writer keeps its lease so the
+      // fence can make it retry rather than look abandoned.
+      db.query("DELETE FROM usage_filter_index_writers WHERE generation = ?").run(generation);
     }
     db.exec("COMMIT");
     return true;
@@ -809,9 +855,10 @@ async function rebuild(
   prior: IndexMeta,
 ): Promise<UsageFilterIndexSnapshot | null> {
   const staging = randomUUID();
-  beginStaging(db, staging);
+  beginStaging(db, path, staging);
   let published = false;
   try {
+    await testHooks?.afterStagingRegistered?.({ dbPath: path, generation: staging });
     const result = await ingest(db, staging, 0, null, () => heartbeatLease(db, staging));
     const next: IndexMeta = {
       schemaVersion: USAGE_FILTER_INDEX_SCHEMA_VERSION,
@@ -898,7 +945,7 @@ async function refreshOnce(
 ): Promise<UsageFilterIndexSnapshot | null> {
   assertHomeUnchanged(dir);
   const meta = readMeta(db);
-  reclaimAbandonedStaging(db, meta.generation);
+  reclaimAbandonedStaging(db, path, meta.generation);
   const revision = currentUsageLogRevision();
   if (meta.schemaVersion !== USAGE_FILTER_INDEX_SCHEMA_VERSION
     || !meta.generation
@@ -1092,7 +1139,7 @@ function buildCandidateSelect(
   // hand-edited row with a missing model must fail a provider/model filter exactly as the
   // streaming read does rather than disappear from the result.
   return {
-    sql: `SELECT DISTINCT a.byte_offset AS byteOffset FROM usage_attributions a INDEXED BY ${attrIndex} WHERE a.generation = ? AND ${attrClauses.join(" AND ")} AND a.byte_offset <= ? AND EXISTS (SELECT 1 FROM usage_rows r WHERE r.generation = a.generation AND r.byte_offset = a.byte_offset AND ${rowSql}) UNION SELECT r.byte_offset AS byteOffset FROM usage_rows r WHERE r.generation = ? AND r.unattributable = 1 AND ${rowSql} ORDER BY byteOffset`,
+    sql: `SELECT DISTINCT a.byte_offset AS byteOffset FROM usage_attributions a INDEXED BY ${attrIndex} WHERE a.generation = ? AND ${attrClauses.join(" AND ")} AND a.byte_offset <= ? AND EXISTS (SELECT 1 FROM usage_rows r WHERE r.generation = a.generation AND r.byte_offset = a.byte_offset AND ${rowSql}) UNION SELECT r.byte_offset AS byteOffset FROM usage_rows r INDEXED BY idx_usage_rows_unattributable WHERE r.generation = ? AND r.unattributable = 1 AND ${rowSql} ORDER BY byteOffset`,
     values: [
       snapshot.generation,
       ...attrValues,
@@ -1138,6 +1185,7 @@ async function readActive(
   query: UsageFilterIndexQuery,
 ): Promise<UsageFilterCandidateRead> {
   const refreshed = await refreshUsageFilterIndex(dir, path);
+  testHooks?.afterRefresh?.({ dbPath: path });
   const db = openIndexForRead(path);
   try {
     db.exec("BEGIN");
@@ -1219,9 +1267,9 @@ export async function readUsageFilterCandidates(
  * Returns null unless the projection is current for the exact ledger revision, in which case
  * the caller keeps its streaming read. No database, WAL or ownership write happens here.
  */
-export function readUsageFilterCandidatesPassive(
+export async function readUsageFilterCandidatesPassive(
   query: UsageFilterIndexQuery,
-): UsageFilterCandidateRead | null {
+): Promise<UsageFilterCandidateRead | null> {
   const path = indexPathForCurrentHome();
   if (!existsSync(path)) return null;
   let db: Database;
@@ -1231,6 +1279,14 @@ export function readUsageFilterCandidatesPassive(
     return null;
   }
   try {
+    // A foreign SQLite file that happens to carry a meta table is not this projection.
+    const tables = new Set(tableNames(db));
+    if (!tables.has(META_TABLE)
+      || !tables.has("usage_rows")
+      || !tables.has("usage_attributions")
+      || !tables.has("usage_filter_index_writers")) {
+      return null;
+    }
     db.exec("BEGIN");
     try {
       const meta = readMeta(db);
@@ -1240,6 +1296,15 @@ export function readUsageFilterCandidatesPassive(
       if (!revision || meta.indexedOffset !== revision.size) return null;
       if (usageLogRevisionKey(meta.revision) !== usageLogRevisionKey(revision)) return null;
       const snapshot = snapshotFrom(meta, 0, 0);
+      // The exact revision match above already proves the ledger is the one indexed; the
+      // empty read keeps the passive path on the same validation as the active one.
+      await readUsageLedgerRowsAtOffsets({
+        offsets: [],
+        expectedIdentityKey: snapshot.identityKey,
+        expectedRevisionKey: usageLogRevisionKey(snapshot.revision),
+        expectedProcessedThroughBytes: snapshot.indexedOffset,
+        expectedProcessedThroughDigest: snapshot.processedThroughDigest,
+      });
       const offsets = selectCandidates(db, snapshot, query);
       if (offsets.length === 0 && meta.indexedRows > 0 && !hasPublishedRows(db, meta.generation)) {
         // Same guard as the active read: a published generation that lost its rows must not

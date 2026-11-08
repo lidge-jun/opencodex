@@ -553,6 +553,10 @@ export async function readUsageLedgerRowsAtOffsets(
       if (boundary === undefined || options.expectedProcessedThroughDigest === undefined) {
         throw rebuildRequired("content_changed");
       }
+      // At the snapshot boundary the file cannot have grown, so a moved revision is an
+      // in-place rewrite. The trailing digest cannot see a rewrite earlier than its 64 KiB
+      // window, so this must rebuild rather than trust the offsets.
+      if (size === boundary) throw rebuildRequired("content_changed");
       const digest = digestRangeSync(
         fd,
         Math.max(0, boundary - USAGE_LEDGER_BOUNDARY_DIGEST_BYTES),
@@ -655,6 +659,11 @@ export async function readUsageLedgerRowsAtOffsets(
     const mutated = usageLogRevisionKey(endingRevision) !== usageLogRevisionKey(openedRevision)
       || usageLogRevisionKey(pathRevision) !== usageLogRevisionKey(openedRevision);
     if (mutated) {
+      // A write at an unchanged size is an in-place rewrite. Re-reading the selected rows
+      // cannot see a rewrite that turns a non-candidate into a match, so this must rebuild.
+      if (boundary !== undefined && endingRevision.size === boundary) {
+        throw rebuildRequired("content_changed");
+      }
       const verified = createHash("sha256");
       const recheck = walk((bytes, offset) => {
         verified.update(bytes);

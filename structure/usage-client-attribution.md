@@ -48,6 +48,11 @@ The reader also receives the snapshot's revision, boundary offset and trailing d
 revision moved since the snapshot it re-verifies that boundary before trusting any offset, so a
 rewrite between the index refresh and the row read becomes a rebuild rather than a silently
 different row set; a candidate that no longer normalizes is reported unreadable for the same reason.
+At an unchanged size a moved revision is always a rebuild, because the file cannot have grown: the
+trailing digest is only the append contract for a file that grew, and a rewrite earlier than that
+window accompanied by growth remains the base aggregate's documented limit. An empty selection still
+performs this validation, so a query with no candidates cannot skip it, and a retained projection
+that reports "unchanged" validates the ledger the same way before returning.
 
 Rows belong to a generation; a small registry lists every generation and meta names the one
 published. A rebuild stages a fresh generation under a writer lease and publishes it in one short
@@ -65,12 +70,19 @@ A staging generation registers itself and its writer pid before its first row. A
 discards its own generation in a finally; a process that dies without running it leaves a lease
 whose pid is no longer alive, and the next refresh reclaims that generation. A generation whose
 writer is alive is never reclaimed. The registry is the complete set of generations, so reclamation
-and pruning delete by equality instead of scanning the row table under the write lock.
+and pruning delete by equality instead of scanning the row table under the write lock. The registry
+row and the lease commit together, and reclamation re-reads the published generation and the lease
+inside its own write transaction before deleting, so a generation that registered while the
+pre-check was running is never treated as abandoned. A retired generation's dead writer record is
+removed with it; a live writer keeps its registry row and lease, so another writer's prune leaves
+its staging alone and its own publish fails the fence and retries. A lease whose generation is no
+longer registered cannot belong to a live writer and is pruned.
 
 The projection is created 0600 through the shared private-SQLite path, its WAL and shared-memory
 sidecars are registered for uninstall only when this module creates them, and a file at that path
 that is not this projection is never modified. A passive management read opens an existing
-projection read-only and only when it is current for the exact ledger revision; otherwise it streams,
+projection read-only, requires this projection's full table set rather than a coincidental meta
+table, and only uses it when it is current for the exact ledger revision; otherwise it streams,
 and it never creates, writes or registers anything. Any other index-side failure -- unwritable home,
 full disk, contention, a corrupt or foreign file -- falls back to the authoritative streaming scan
 instead of failing a request the scan can answer; a failure to read `usage.jsonl` itself is
