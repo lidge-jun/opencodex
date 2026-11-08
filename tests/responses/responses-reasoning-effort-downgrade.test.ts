@@ -278,17 +278,20 @@ describe("rejected reasoning rungs", () => {
       ]);
     });
 
-    test(`unfunded downgrade stops walking and hops to fallback when send budget exhausts (${adapter})`, async () => {
-      // With 4+ rungs (minimal, low, medium, high, max), walking the full ladder would need 5 sends.
-      // With COMBO_TARGET_BASE_SENDS = 3, per-target sends exhaust after 3 sends to opencode.ai.
-      // The unfunded downgrade returns the 400, and the combo hops to the fallback target.
-      writeSnapshot(["minimal", "low", "medium", "high", "max"]);
+    test.each([
+      ["serves the turn", true],
+      ["also refuses", false],
+    ])(`unfunded downgrade keeps the refusal and hops to fallback, which %s (${adapter})`, async (_label, fallbackServes) => {
+      // Five ranked rungs need five sends to walk, but the first target's send scope holds one back
+      // for the declared fallback, so the fifth rung (low) is unfunded. The combo must keep that
+      // target's original 400 -- no send-budget 429 and no cooldown -- and hop to the fallback.
+      writeSnapshot(["low", "medium", "high", "xhigh", "max"]);
       const attempts: Array<{ host: string; effort: unknown }> = [];
       globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = new URL(input instanceof Request ? input.url : String(input));
         const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
         attempts.push({ host: url.host, effort: effortOf(body) });
-        return url.host === "fallback.example"
+        return url.host === "fallback.example" && fallbackServes
           ? chatSuccess("fallback served the turn", MODEL)
           : new Response(VENDOR_EFFORT_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
       }) as typeof fetch;
@@ -309,14 +312,20 @@ describe("rejected reasoning rungs", () => {
       const response = await handleResponses(request(false, "combo/effort"), comboConfig, logCtx);
       const result = await response.text();
 
-      expect(response.status).toBe(200);
-      expect(result).toContain("fallback served the turn");
+      if (fallbackServes) {
+        expect(response.status, result).toBe(200);
+        expect(result).toContain("fallback served the turn");
+      } else {
+        expect(response.status, result).toBe(400);
+        expect(result).toContain("Invalid reasoning effort.");
+        expect(result).not.toContain("request_send_budget_exhausted");
+      }
       expect(isComboTargetInCooldown("effort", { provider: "first", model: MODEL })).toBe(false);
       expect(attempts).toEqual([
         { host: "opencode.ai", effort: "max" },
+        { host: "opencode.ai", effort: "xhigh" },
         { host: "opencode.ai", effort: "high" },
         { host: "opencode.ai", effort: "medium" },
-        { host: "opencode.ai", effort: "low" },
         { host: "fallback.example", effort: "max" },
       ]);
     });
