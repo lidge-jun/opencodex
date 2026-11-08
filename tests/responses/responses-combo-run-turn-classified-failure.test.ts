@@ -3,7 +3,7 @@
  * The child's status and code drive hop and cooldown decisions; the combo's own failure
  * consumer still decides what reaches the client.
  */
-import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,6 +42,7 @@ mock.module("../../src/server/adapter-resolve", () => ({
 }));
 
 const { handleResponses } = await import("../../src/server/responses");
+const traeClient = await import("../../src/adapters/trae-cn/client");
 const { formatErrorResponse } = await import("../../src/bridge");
 const { SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE } = await import("../../src/lib/errors");
 const { saveCredential } = await import("../../src/oauth/store");
@@ -116,6 +117,45 @@ afterEach(() => {
 });
 
 for (const stream of [false, true]) {
+  test(`an empty TRAE completion stops the combo after its accepted prompt (stream=${stream})`, async () => {
+    childFailure = { type: "error", status: 502, errorType: "upstream_error", code: "trae_empty_response",
+      message: "TRAE CN ended without a text response.", retryable: false, usage: { inputTokens: 12, outputTokens: 0 } };
+    const cfg = config([{ provider: "trae-cn", model: "test-model" }, { provider: "fallback", model: MODEL }]);
+    cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", authMode: "key", models: ["test-model"], liveModels: false };
+    const open = spyOn(traeClient, "openTraeSession").mockResolvedValue({
+      models: ["test-model"],
+      async prompt(_model, _text, emit, _signal, dispatch) {
+        runTurnCalls++;
+        dispatch?.beforeSend();
+        dispatch?.onSend();
+        emit(childFailure!);
+      },
+      async close() {},
+    });
+    try {
+      const response = await respond(cfg, stream);
+      expect(response.status).toBe(502);
+      // Client error projection keeps its closed public vocabulary.
+      expect(JSON.parse(response.text).error.code).toBe("upstream_server_error");
+      expect(runTurnCalls).toBe(1);
+      expect(fallbackCalls).toBe(0);
+    } finally { open.mockRestore(); }
+  });
+
+  test(`a TRAE startup failure may fail over before any prompt is dispatched (stream=${stream})`, async () => {
+    const cfg = config([{ provider: "trae-cn", model: "test-model" }, { provider: "fallback", model: MODEL }]);
+    cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", authMode: "key", models: ["test-model"], liveModels: false };
+    const open = spyOn(traeClient, "openTraeSession").mockRejectedValue(new traeClient.TraeAcpError("TRAE CN CLI not found.", "cli_not_found"));
+    try {
+      const response = await respond(cfg, stream);
+      expect(response.status).toBe(200);
+      expect(response.text).toContain("fallback answered");
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(runTurnCalls).toBe(0);
+      expect(fallbackCalls).toBe(1);
+    } finally { open.mockRestore(); }
+  });
+
   for (const status of [400, 422]) {
     for (const code of [undefined, "invalid_argument"]) {
       test(`reflected quota prose stays terminal through runTurn (stream=${stream}, status=${status}, code=${code})`, async () => {

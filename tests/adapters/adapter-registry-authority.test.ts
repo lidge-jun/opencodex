@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { EventEmitter, once } from "node:events";
 import { chmodSync, existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { posix } from "node:path";
+import { posix, win32 } from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import { PassThrough, Writable } from "node:stream";
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
@@ -11,6 +11,7 @@ import { traePosixInvocation, traeStopPipe } from "../../src/adapters/trae-cn/pr
 import { prepareTraeWindowsJob, TraeWindowsJobFrames, traeWindowsCommandLine, traeWindowsJobExecutable } from "../../src/adapters/trae-cn/windows-job";
 import { commandInvocation } from "../../src/lib/win-exec";
 import { buildCatalogEntries } from "../../src/codex/catalog";
+import { buildResponseJSON } from "../../src/bridge";
 import { resolveTraeCli, traeCnChildEnv } from "../../src/adapters/trae-cn/profile";
 import { fetchProviderModels, fetchProviderModelsWithAuth, observedModelsAuthResolver, refreshingModelsAuthResolver } from "../../src/codex/catalog/provider-models";
 import { captureProviderGather } from "../../src/codex/catalog/gather-capture";
@@ -234,7 +235,8 @@ describe("TRAE CN ACP regression contract", () => {
     await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta({
       sendBudget: budget.budget, onPhysicalSend: () => reports.push(fixture.requests.at(-1)!.method),
     }), event => events.push(event));
-    expect(events.map(event => event.type)).toEqual(["thinking_delta", "text_delta", "done"]);
+    expect(events.map(event => event.type)).toEqual(["heartbeat", "thinking_delta", "text_delta", "done"]);
+    expect(events[0]).toEqual({ type: "heartbeat", replayUnsafe: true });
     expect(events.at(-1)).toMatchObject({ type: "done", usage: { inputTokens: 10, outputTokens: 2 } });
     expect(reports).toEqual(["session/prompt"]);
     expect(budget.state).toEqual({ used: 1, refunded: 0, closed: 1 });
@@ -265,7 +267,7 @@ describe("TRAE CN ACP regression contract", () => {
         }), event => events.push(event));
       } finally { clearTimeout(watchdog); }
       expect(deadlineReached).toBe(false);
-      expect(events).toEqual([]);
+      expect(events).toEqual(phase === "session/prompt" ? [{ type: "heartbeat", replayUnsafe: true }] : []);
       expect(fixture.child.killed).toBe(true);
       expect(existsSync(String(fixture.options()!.env!.HOME))).toBe(false);
       expect(existsSync(String(fixture.options()!.cwd))).toBe(false);
@@ -414,7 +416,7 @@ describe("TRAE CN ACP regression contract", () => {
     });
     const events: AdapterEvent[] = [];
     await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
-    expect(events).toMatchObject([{ type: "error", message: "TRAE CN ACP ended with an invalid protocol response.", retryable: false }]);
+    expect(events).toMatchObject([{ type: "heartbeat", replayUnsafe: true }, { type: "error", message: "TRAE CN ACP ended with an invalid protocol response.", retryable: false }]);
   });
 
   test("an upstream cancellation without client abort emits a terminal event and usage", async () => {
@@ -425,7 +427,7 @@ describe("TRAE CN ACP regression contract", () => {
     });
     const events: AdapterEvent[] = [];
     await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
-    expect(events).toMatchObject([{ type: "incomplete", reason: "upstream_cancelled", retryable: false, usage: { inputTokens: 3, outputTokens: 0 } }]);
+    expect(events).toMatchObject([{ type: "heartbeat", replayUnsafe: true }, { type: "incomplete", reason: "upstream_cancelled", retryable: false, usage: { inputTokens: 3, outputTokens: 0 } }]);
   });
 
   for (const selected of ["test-model", "unexpected-model"]) {
@@ -492,8 +494,8 @@ describe("TRAE CN ACP regression contract", () => {
     expect(events.some(event => event.type === "done")).toBe(false);
   });
 
-  for (const stopReason of ["end_turn", "max_tokens", "max_turn_requests"]) {
-    test("a failed reasoning-only completion preserves usage: " + stopReason, async () => {
+  for (const stopReason of ["end_turn", "max_tokens", "max_turn_requests", "fixture_unknown_stop"]) {
+    test("a reasoning-only completion preserves its reason and usage: " + stopReason, async () => {
       const fixture = traeFixture(request => {
         if (request.method !== "session/prompt") return false;
         fixture.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: {
@@ -504,9 +506,16 @@ describe("TRAE CN ACP regression contract", () => {
       });
       const events: AdapterEvent[] = [];
       await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
-      expect(events.at(-1)).toMatchObject({ type: "error", code: stopReason === "max_turn_requests" ? "trae_acp_protocol_error" : "trae_empty_response", retryable: false,
-        usage: { inputTokens: 123, outputTokens: 456, totalTokens: 579 } });
-      expect(events.some(event => event.type === "done")).toBe(false);
+      const terminal = events.at(-1)!;
+      expect(terminal).toMatchObject({ usage: { inputTokens: 123, outputTokens: 456, totalTokens: 579 } });
+      if (stopReason === "max_tokens") {
+        expect(terminal).toMatchObject({ type: "done", stopReason: "max_tokens" });
+        expect(buildResponseJSON(events, "test-model")).toMatchObject({ status: "incomplete", incomplete_details: { reason: "max_output_tokens" } });
+      } else {
+        const code = stopReason === "end_turn" ? "trae_empty_response" : stopReason === "max_turn_requests" ? "trae_turn_stopped" : "trae_acp_protocol_error";
+        expect(terminal).toMatchObject({ type: "error", code, retryable: false });
+        expect(events.some(event => event.type === "done")).toBe(false);
+      }
     });
   }
 
@@ -740,6 +749,16 @@ describe("TRAE CN ACP regression contract", () => {
     expect(traeCnChildEnv({ HOME: "/fixture/operator", TRAE_HOME: "./selected-trae" }, "linux").TRAE_HOME)
       .toBe(posix.resolve("./selected-trae"));
   });
+
+  for (const platform of ["linux", "win32"] as const) {
+    test("a relative user-local CLI fallback resolves before changing cwd: " + platform, () => {
+      const pathApi = platform === "win32" ? win32 : posix;
+      const expected = pathApi.resolve("relative-user", ".local", "bin", platform === "win32" ? "traecli.exe" : "traecli");
+      const result = resolveTraeCli({ platform, env: { PATH: "", HOME: "relative-user", USERPROFILE: "relative-user" }, exists: path => path === expected });
+      expect(result).toBe(expected);
+      if (platform === "win32") expect(traeWindowsJobExecutable(result!, {})).toBe(expected);
+    });
+  }
 
   test("static catalogs never open ACP and retain unknown text-only models", async () => {
     const open = spyOn(traeClient, "openTraeSession").mockRejectedValue(new Error("must not discover"));

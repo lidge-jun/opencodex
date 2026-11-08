@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { join, posix, win32 } from "node:path";
+import { posix, win32 } from "node:path";
 import { whichFromPath, type PathLookupDeps } from "../coding-agent/profile";
 import { baseScopedEnv } from "../coding-agent/turn";
 
@@ -25,6 +25,6 @@ export function resolveTraeCli(deps: PathLookupDeps = {}): string | undefined {
   if (onPath) return (platform === "win32" ? win32 : posix).resolve(onPath);
   const home = (deps.env ?? process.env)[platform === "win32" ? "USERPROFILE" : "HOME"];
   if (!home) return undefined;
-  const local = join(home, ".local", "bin", platform === "win32" ? "traecli.exe" : "traecli");
+  const local = (platform === "win32" ? win32 : posix).resolve(home, ".local", "bin", platform === "win32" ? "traecli.exe" : "traecli");
   return (deps.exists ?? existsSync)(local) ? local : undefined;
 }

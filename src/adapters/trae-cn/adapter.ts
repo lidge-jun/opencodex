@@ -98,7 +98,10 @@ export function createTraeCnAdapter(provider: OcxProviderConfig, deps: TraeCnAda
               incoming.beforePhysicalSend?.();
               if (permit && !permit.use()) throw new SendBudgetExhaustedError();
             },
-            onSend: () => incoming.onPhysicalSend?.({ ordinal: 1 }),
+            onSend: () => {
+              emit({ type: "heartbeat", replayUnsafe: true });
+              incoming.onPhysicalSend?.({ ordinal: 1 });
+            },
           });
         } finally {
           await session.close();

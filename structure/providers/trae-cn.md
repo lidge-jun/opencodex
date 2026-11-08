@@ -6,7 +6,9 @@ model roster and one selected-model turn. The JSON-RPC reader bounds frames, upd
 and request time; cancellation and cleanup terminate the child. Text and thought chunks retain their
 distinct adapter events. Tool input/replay and non-text media are rejected, permission requests are
 denied and terminate the session. Tool notifications fail with `trae_tool_call_unsupported`; only a
-normal `end_turn` or `max_tokens` completion without text fails with `trae_empty_response`.
+normal `end_turn` completion without text fails with `trae_empty_response`. An outputless `max_tokens`
+completion retains its truncation verdict and maps to an incomplete Responses result. ACP
+`max_turn_requests` reports `trae_turn_stopped` rather than a protocol parsing error.
 Empty completions and unsupported stop reasons retain reported usage in their terminal error. Refusals
 emit a non-retryable `content_filter` incomplete event with usage. The CLI uses
 an empty temporary workspace with disallow rules and no session MCP/skills. `src/codex/catalog/trae-cn-models.ts` publishes discovered
@@ -21,7 +23,7 @@ are refused before CLI startup, including explicit direct routing.
 Observed-auth gathers use only cached evidence; only refreshing gathers and explicit connection
 probes may launch the CLI. Management convergence refreshes CLI-owned evidence before catalog
 admission, so a cold automatic tick can populate it. Lost-generation discovery rereads the current
-cache before attaching its revision. Relative PATH entries resolve before the child changes its cwd.
+cache before attaching its revision. Relative PATH and user-local fallback entries resolve before the child changes its cwd.
 Custom catalog rows and combo members receive the wire modality/verbosity ceiling before optional sidecar publication.
 
 Cancellation is bound before the first initialization RPC. Pending RPCs fail as shutdown starts;
@@ -39,8 +41,10 @@ absolute executable/dispatcher path. Unsupported supervision fails before launch
 No numeric PID is reopened.
 Unconfirmed shutdown is an error and retains owned temporary files; the adapter publishes its terminal
 event after cleanup, preserving received usage even when cleanup fails. A failed workspace allocation removes an
-already-created owned HOME. Prompt dispatch alone consumes and reports the reserved send; startup
-failure or unavailable models return unused reservations. Replay over 1,000,000 UTF-16 code units is
+already-created owned HOME. Prompt dispatch alone consumes and reports the reserved send. The adapter
+also emits a replay-unsafe heartbeat at that write, so combo preflight cannot resend the turn
+after an empty result or another post-dispatch failure. Startup failures and unavailable models
+return unused reservations and keep their existing routing policy. Replay over 1,000,000 UTF-16 code units is
 rejected before startup. Unexpected EOF diagnostics retain bounded, redacted stderr after process
 cleanup, including stderr that arrives after stdout closes. Once stderr exceeds 8192 characters,
 all diagnostic text is suppressed so truncation cannot separate a secret from its redaction label.

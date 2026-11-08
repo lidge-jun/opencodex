@@ -378,7 +378,7 @@ export async function openTraeSession(
           }
           const terminalError = stop !== "stop" && stop !== "max_tokens"
             ? { message: "TRAE CN stopped the turn: " + stop, code: "trae_turn_stopped" }
-            : !output ? { message: "TRAE CN ended without a text response.", code: "trae_empty_response" } : undefined;
+            : !output && stop !== "max_tokens" ? { message: "TRAE CN ended without a text response.", code: "trae_empty_response" } : undefined;
           if (terminalError) {
             emit({ type: "error", ...terminalError,
               status: 502, errorType: "upstream_error", retryable: false, ...(usage ? { usage } : {}) });

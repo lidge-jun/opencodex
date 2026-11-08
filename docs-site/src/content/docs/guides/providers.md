@@ -1494,11 +1494,11 @@ The `trae-cn` preset uses the signed-in official TRAE CN CLI through
   client tools, tool replay, images, audio, video and attached documents. Model capability overrides
   cannot enable native image input or verbosity. Images require the vision sidecar to describe them first.
   Permission requests fail with `trae_client_request_unsupported`; internal tool notifications fail
-  with `trae_tool_call_unsupported`. A normal `end_turn` or `max_tokens` completion with no text
-  fails with `trae_empty_response`. Empty responses and refusals preserve usage and terminate without retry.
+  with `trae_tool_call_unsupported`. An empty `end_turn` fails with `trae_empty_response`; `max_tokens` without text stays incomplete.
+  These completions and refusals retain usage. OpenCodex does not replay a dispatched TRAE prompt on another provider.
   Client cancellation is silent; cancellation initiated by the CLI returns an incomplete turn.
   Requests with an output-token limit fail with `unsupported_max_output_tokens` because this
-  adapter has no verified ACP field for that limit.
+  adapter has no verified ACP field for that limit. ACP `max_turn_requests` returns `trae_turn_stopped`.
 - **CLI process:** The CLI uses an empty temporary workspace, no session MCP/skills and a finite tool denylist.
   Shutdown targets the owned POSIX process group or Windows Job Object (Windows 10+, PowerShell 5.1). POSIX descendants
   that detach into another group can survive; this mechanism does not contain untrusted hooks or tools.

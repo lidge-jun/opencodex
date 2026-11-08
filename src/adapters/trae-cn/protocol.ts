@@ -99,6 +99,7 @@ export function traeStopReason(result: unknown): string {
   const stop = record(result)?.stopReason;
   if (stop === "end_turn") return "stop";
   if (stop === "max_tokens") return "max_tokens";
+  if (stop === "max_turn_requests") return "max_turn_requests";
   if (stop === "refusal") return "refusal";
   if (stop === "cancelled") return "cancelled";
   throw new TraeAcpProtocolError(`Unsupported ACP stop reason: ${String(stop)}`);
