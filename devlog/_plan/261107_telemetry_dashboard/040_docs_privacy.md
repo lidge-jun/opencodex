@@ -18,8 +18,9 @@ the guide:
 - `SPONSORS.md` ("opencodex does not collect any" telemetry).
 
 The statement replaces SignPath's "will not transfer any information …" sentence, which SignPath
-allows only as an alternative to linking a privacy policy. Whether first-run disclosure satisfies
-SignPath's install-time conditions is an open owner decision (060, "SignPath conditions").
+allows only as an alternative to linking a privacy policy. How the stack meets SignPath's
+install-time conditions is recorded in 060 ("SignPath conditions", D21); layer 2b adds the Windows
+installer option to these files.
 
 ## Public docs
 

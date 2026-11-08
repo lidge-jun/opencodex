@@ -439,6 +439,40 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
     expect(resolveInstallChannel({ env: {}, exists: () => false, detectOwnership: () => ({ installer: "mystery" }) })).toBe("unknown");
   });
 
+  test("nothing is ever sent before noticeShownAt, however long the proxy runs undecided", async () => {
+    let fetchCalls = 0;
+    const sentDays: string[] = [];
+    const mockFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      fetchCalls += 1;
+      sentDays.push((JSON.parse(String(init?.body)) as TelemetryPayloadV1).day);
+      return new Response(JSON.stringify({ ok: true }), { status: 202 });
+    }) as unknown as typeof fetch;
+    // Undecided installs with no recorded notice: an absent block, an empty block, and explicit nulls.
+    const undisclosed: Array<Pick<OcxConfig, "telemetry">> = [
+      {},
+      { telemetry: {} },
+      { telemetry: { decision: null, decidedAt: null, noticeShownAt: null } },
+    ] as Array<Pick<OcxConfig, "telemetry">>;
+    for (const config of undisclosed) {
+      for (let day = 0; day < 10; day++) {
+        for (const hour of ["00:30", "06:30", "12:30", "18:30"]) {
+          const now = Date.parse(`2026-11-${String(day + 1).padStart(2, "0")}T${hour}:00.000Z`);
+          const result = await runTelemetryTick({ configDir: home, config, env: {}, now, fetch: mockFetch });
+          expect(result).toEqual({ sent: false, reason: "awaiting-notice" });
+        }
+      }
+    }
+    expect(fetchCalls).toBe(0);
+    expect(readTelemetryInstallId(home)).toBeNull();
+    expect(readTelemetryState(home).sentDays).toEqual({});
+
+    // The notice is shown on 2026-11-10; only completed days after it are ever sent.
+    const disclosed = { telemetry: { decision: null, decidedAt: null, noticeShownAt: "2026-11-10T09:00:00.000Z" } } as Pick<OcxConfig, "telemetry">;
+    expect((await runTelemetryTick({ configDir: home, config: disclosed, env: {}, now: Date.parse("2026-11-11T12:00:00.000Z"), fetch: mockFetch })).sent).toBe(false);
+    expect(await runTelemetryTick({ configDir: home, config: disclosed, env: {}, now: Date.parse("2026-11-12T12:00:00.000Z"), fetch: mockFetch })).toMatchObject({ sent: true, day: "2026-11-11" });
+    expect(sentDays).toEqual(["2026-11-11"]);
+  });
+
   test("scheduler sends nothing when not effective, skips pre-consent days, and sends at most one day per tick oldest first", async () => {
     const sentPayloads: TelemetryPayloadV1[] = [];
     const mockFetch = (async (_url: string | URL | Request, init?: RequestInit) => {

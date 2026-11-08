@@ -1,11 +1,12 @@
 import { lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isatty } from "node:tty";
-import { getConfigDir, mutatePersistedConfig, readConfigDiagnostics } from "../config";
+import { getConfigDir, getDefaultConfig, initializePersistedConfigIfMissing, mutatePersistedConfig, readConfigDiagnostics } from "../config";
 import { atomicWriteFileNoFollow } from "../config/atomic-write";
 import { withConfigDirHardeningSettled } from "../config/paths";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { resolveTelemetryStatus } from "../telemetry/consent";
+import { TELEMETRY_DISCLOSURE_HEADING, TELEMETRY_DISCLOSURE_POINTS } from "../telemetry/disclosure";
 import { deleteTelemetryInstallId } from "../telemetry/install-id";
 import { buildTelemetryStatusSnapshot, type TelemetryStatusSnapshot } from "../telemetry/routes";
 import type { OcxTelemetryConfig, OcxTelemetryDecision } from "../types";
@@ -31,12 +32,8 @@ export const TELEMETRY_DEFERRAL_FILE = ".telemetry-deferred";
 const DEFERRAL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const TELEMETRY_CLI_DISCLOSURE_LINES = Object.freeze([
-  "  Anonymous daily usage telemetry:",
-  "  • Sent once per day to telemetry.opencodex.me: version, OS/arch, install channel, provider kind, coarse model family, active minutes, and request/token/error counts.",
-  "  • Never sent: prompts, model outputs, request/response bodies, API keys, OAuth tokens, account IDs or emails, custom base URLs, hostnames, file paths, or error text.",
-  "  • Public aggregates: project-wide totals are published at opencodex.me/dashboard.",
-  "  • See the exact payload: ocx telemetry status --json",
-  "  • Turn off anytime: ocx telemetry disable, OCX_TELEMETRY=0, DO_NOT_TRACK=1, or the Proxy details toggle in the dashboard.",
+  `  ${TELEMETRY_DISCLOSURE_HEADING}`,
+  ...TELEMETRY_DISCLOSURE_POINTS.map(point => `  • ${point}`),
 ]);
 
 export function printTelemetryDisclosure(): void {
@@ -76,7 +73,7 @@ function isInteractiveTty(): boolean {
 async function persistTelemetryDecision(decision: OcxTelemetryDecision): Promise<void> {
   const nowIso = new Date().toISOString();
   const dir = getConfigDir();
-  const outcome = await withConfigDirHardeningSettled(dir, () =>
+  const mutate = () =>
     mutatePersistedConfig(fresh => {
       const prev = fresh.telemetry;
       const next: OcxTelemetryConfig = {
@@ -87,8 +84,19 @@ async function persistTelemetryDecision(decision: OcxTelemetryDecision): Promise
       const changed = JSON.stringify(prev) !== JSON.stringify(next);
       fresh.telemetry = next;
       return { changed, value: next };
-    }),
-  );
+    });
+  const outcome = await withConfigDirHardeningSettled(dir, () => {
+    const first = mutate();
+    if (first.status !== "unavailable" || first.reason !== "missing") return first;
+    // A fresh install has no config.json yet; the Windows installer's opt-out arrives exactly
+    // then. Create it the way a first start would, carrying the decision. A concurrent first
+    // start that wins the race leaves a file to patch instead.
+    const created = initializePersistedConfigIfMissing({
+      ...getDefaultConfig(),
+      telemetry: { decision, decidedAt: nowIso, noticeShownAt: nowIso },
+    });
+    return created === "created" ? { status: "committed" as const, value: null } : mutate();
+  });
   if (outcome.status === "unavailable") {
     throw new Error(
       `Cannot update telemetry configuration: config.json is ${outcome.reason}. Fix or restore config.json before retrying.`,

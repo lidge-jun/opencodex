@@ -56,6 +56,10 @@ Casual-path consent guards require human interaction before transitioning an und
   `opencodex.me/dashboard`, `ocx telemetry status --json`, and opt-out controls) before the `[Y/n]`
   prompt; agent-driven, non-TTY, or service starts print a once-per-version notice and record
   neither `noticeShownAt` nor `decision`.
+- `src/telemetry/disclosure.ts` is the one source for the disclosure text: the CLI prompt prints
+  it and the Windows installer dialog is generated from it (`structure/desktop-shell.md`,
+  "Windows installer telemetry choice"). A decline on a fresh install creates `config.json`
+  through `initializePersistedConfigIfMissing`.
 
 ## Identity, aggregation, and scheduling
 
