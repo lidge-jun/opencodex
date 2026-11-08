@@ -54,8 +54,8 @@ Bun.plugin({ name: "Messages refusal boundary fixture", setup(build) {
   build.onLoad({ filter: filters.native }, ({ path }) => {
     hooks.nativeLoads++;
     return { loader: "ts", contents: replaceOnce(readOriginal(path),
-      "const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);",
-      "const proactiveKeyProvider = globalThis.__nativePacingPreflight ? (() => { globalThis.__fixtureHooks.nativeHits++; throw globalThis.__nativePacingPreflight; })() : selectProactiveApiKeyTransport(config, route.providerName, route.provider);") };
+      "const proactiveKeyProvider = selectProactiveApiKeyTransport(",
+      "if (globalThis.__nativePacingPreflight) { globalThis.__fixtureHooks.nativeHits++; throw globalThis.__nativePacingPreflight; }\n      const proactiveKeyProvider = selectProactiveApiKeyTransport(") };
   });
   build.onLoad({ filter: filters.verdict }, ({ path }) => {
     hooks.verdictLoads++;
