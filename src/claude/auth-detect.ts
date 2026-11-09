@@ -14,7 +14,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { claudeKeychainReader, isSyncTimeout, type ClaudeKeychainReader } from "../oauth/claude-keychain-read";
+import { CLAUDE_KEYCHAIN_SERVICE, claudeKeychainReader, isSyncTimeout, type ClaudeKeychainReader } from "../oauth/claude-keychain-read";
 
 export type AuthPresence = "present" | "absent" | "unknown";
 
@@ -35,7 +35,7 @@ export type AuthSourceId =
  */
 export const PROXY_MARKER = "opencodex-proxy";
 
-const KEYCHAIN_SERVICE = "Claude Code-credentials";
+const KEYCHAIN_SERVICE = CLAUDE_KEYCHAIN_SERVICE;
 /** `security` exit code for "the item does not exist" — a real absent, not a failure. */
 const KEYCHAIN_ITEM_NOT_FOUND = 44;
 const KEYCHAIN_TIMEOUT_MS = 1_500;

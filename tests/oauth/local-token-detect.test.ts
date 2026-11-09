@@ -1,16 +1,18 @@
-import { afterEach, beforeAll, afterAll, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeAll, afterAll, describe, expect, mock, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  detectClaudeCodeToken,
+  detectClaudeCodeTokenAsync,
   detectGrokCliToken,
   hasClaudeCredentialContinuity,
   parseClaudeOauthPayload,
   readClaudeCredentialsFile,
   shouldAdoptGrokGeneration,
 } from "../../src/oauth/local-token-detect";
-import { createClaudeKeychainReader, isSyncTimeout } from "../../src/oauth/claude-keychain-read";
+import { claudeKeychainReader, createClaudeKeychainReader, isSyncTimeout } from "../../src/oauth/claude-keychain-read";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 let tmp: string;
@@ -424,5 +426,65 @@ describe("Claude Keychain reader never kills a blocked security child (#8161)", 
     expect(h.syncRuns).toHaveLength(0);
     h.advance(60_001);
     expect(h.reader.syncReadBlocked()).toBe(false);
+  });
+
+  test("stdout past the 1 MiB cap is not a credential, even across chunks", async () => {
+    const h = harness();
+    const read = h.reader.readAsync();
+    const chunk = Buffer.alloc(600 * 1024, 0x61);
+    h.children[0]!.stdout.emit("data", chunk);
+    h.children[0]!.stdout.emit("data", chunk);
+    h.children[0]!.emit("close", 0, null);
+    expect(await read).toBeNull();
+  });
+});
+
+describe("Claude token detection reads the Keychain through the shared reader (#8161)", () => {
+  const payload = JSON.stringify({ claudeAiOauth: { accessToken: "kc-access", refreshToken: "kc-refresh", expiresAt: 4_102_444_800_000 } });
+
+  test("both detectors fall through to the shared reader when the profile has no file", async () => {
+    process.env.CLAUDE_CONFIG_DIR = join(tmp, "no-file-profile");
+    const sync = spyOn(claudeKeychainReader, "readSync").mockReturnValue(payload);
+    const async = spyOn(claudeKeychainReader, "readAsync").mockResolvedValue(payload);
+    try {
+      expect(detectClaudeCodeToken()?.access).toBe("kc-access");
+      expect((await detectClaudeCodeTokenAsync())?.access).toBe("kc-access");
+      expect(sync).toHaveBeenCalledTimes(1);
+      expect(async).toHaveBeenCalledTimes(1);
+    } finally {
+      sync.mockRestore();
+      async.mockRestore();
+    }
+  });
+
+  test("an empty Keychain value is null, so the detectors move on to the credentials file", async () => {
+    // Reader side: a whitespace-only secret is no credential, on both paths.
+    const reader = createClaudeKeychainReader({
+      platform: "darwin",
+      spawn: () => {
+        const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), pid: 7 });
+        queueMicrotask(() => { child.stdout.emit("data", " \n"); child.emit("close", 0, null); });
+        return child as never;
+      },
+      execSync: () => "  \n",
+      now: () => 0,
+      schedule: () => () => {},
+    });
+    expect(await reader.readAsync()).toBeNull();
+    expect(reader.readSync()).toBeNull();
+    // Detector side: with the profile file present, a null Keychain read leaves the file's token.
+    const dir = join(tmp, "empty-keychain-profile");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, ".credentials.json"), payload.replace(/kc-/g, "file-"));
+    process.env.CLAUDE_CONFIG_DIR = dir;
+    const sync = spyOn(claudeKeychainReader, "readSync").mockReturnValue(null);
+    const async = spyOn(claudeKeychainReader, "readAsync").mockResolvedValue(null);
+    try {
+      expect(detectClaudeCodeToken()?.access).toBe("file-access");
+      expect((await detectClaudeCodeTokenAsync())?.access).toBe("file-access");
+    } finally {
+      sync.mockRestore();
+      async.mockRestore();
+    }
   });
 });
