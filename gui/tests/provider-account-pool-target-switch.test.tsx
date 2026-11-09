@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, useLayoutEffect, useRef } from "react";
+import { act, useEffect, useLayoutEffect, useRef } from "react";
 import type { Root } from "react-dom/client";
 import { configureApiTargets } from "../src/api";
 import { standaloneApiTargets } from "../src/api-targets";
@@ -25,6 +25,7 @@ let originalFetch: typeof globalThis.fetch;
 let pools!: ReturnType<typeof useProviderAccountPools>;
 let snapshots: Array<{ accounts: string[]; keys: string[]; load?: string }> = [];
 let notified: string[] = [];
+let passiveSettled: (() => void) | null = null;
 
 type Row = {
   id: string;
@@ -138,21 +139,30 @@ function Probe({ targetKey, onSwitch }: { targetKey: string; onSwitch?: () => vo
       load: controller.accountLoadStates.anthropic,
     });
   });
+  // Declared after the hook, so this runs after the hook's target-change cleanup and
+  // setup. Resolving it is the explicit barrier a test uses instead of a timeout.
+  useEffect(() => {
+    passiveSettled?.();
+    passiveSettled = null;
+  });
   return null;
 }
 
 async function mount(targetKey: string) {
   const { createRoot } = await import("react-dom/client");
   await act(async () => { root = createRoot(host); root.render(<Probe targetKey={targetKey} />); });
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
 }
 
 async function switchTarget(targetKey: string, releasePrevious: () => void) {
   configureApiTargets(relay("/same", targetKey));
+  const settled = new Promise<void>(resolve => { passiveSettled = resolve; });
   actEnvironment(false);
   try {
     root!.render(<Probe targetKey={targetKey} onSwitch={releasePrevious} />);
-    await new Promise(resolve => setTimeout(resolve, 0));
+    // The hook's target-change cleanup and setup are passive effects. Starting the new
+    // target's read before that flush lets the cleanup bump its generation, which makes
+    // a legitimate read return false. Wait for the flush itself, not a timer.
+    await settled;
   } finally {
     actEnvironment(true);
   }
