@@ -705,10 +705,45 @@ const STRUCTURAL_EFFORT_WORDS = new Set([
   "rungs",
 ]);
 
+const SUBJECT_FOLLOWING_VERBS = new Set([
+  "is",
+  "are",
+  "was",
+  "were",
+  "be",
+  "been",
+  "being",
+  "has",
+  "have",
+  "had",
+  "does",
+  "do",
+  "did",
+  "cannot",
+  "cant",
+  "can",
+  "could",
+  "will",
+  "would",
+  "shall",
+  "should",
+  "may",
+  "might",
+  "must",
+]);
+
 const REASONING_EFFORT_CONTEXT_REGEX = /\b(?:reasoning[._\s]+effort|reasoning[._\s]+parameters|reasoning|effort)\b/i;
 
 function isExplicitFieldOrParameter(text: string, matchIndex: number, param: string): boolean {
-  const pre = text.slice(Math.max(0, matchIndex - 32), matchIndex);
+  if (SUBJECT_FOLLOWING_VERBS.has(param)) return false;
+  const pre = text.slice(Math.max(0, matchIndex - 48), matchIndex);
+  if (
+    /\b(?:reasoning[._\s]+effort|reasoning[._\s]+parameters|reasoning|effort)\s+(?:parameter|param|argument|arg|field|property)\s*(?:[:=]\s*['"`]?|['"`]|\s+)\s*$/i.test(
+      pre
+    )
+  ) {
+    return false;
+  }
   if (/\b(?:parameter|param|argument|arg|field|property)\s*(?:[:=]\s*['"`]?|['"`]|\s+)\s*$/i.test(pre)) return true;
   const post = text.slice(matchIndex + param.length, Math.min(text.length, matchIndex + param.length + 32));
   if (/^\s*['"`]?\s+(?:parameter|param|argument|arg|field|property)\b/i.test(post)) return true;
@@ -734,7 +769,7 @@ function tokenStartIndex(m: RegExpExecArray, rawToken: string, isPrefixToken: bo
 
 function isCompetingParameterToken(text: string, tokenIndex: number, rawToken: string): boolean {
   const p = cleanParam(rawToken);
-  if (!p || EFFORT_PARAM_NAMES.has(p)) return false;
+  if (!p || EFFORT_PARAM_NAMES.has(p) || SUBJECT_FOLLOWING_VERBS.has(p)) return false;
   if (isExplicitFieldOrParameter(text, tokenIndex, p)) return true;
   if (GENERIC_PARAM_WORDS.has(p)) return false;
   if (isEffortDescriptorInContext(text, tokenIndex, p)) return false;

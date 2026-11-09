@@ -132,6 +132,12 @@ const INVALID_FIELD_ULTRA_COLON_REFUSAL = JSON.stringify({
     message: "Invalid reasoning effort. Invalid field: ultra.",
   },
 });
+const REASONING_EFFORT_PARAMETER_IS_UNSUPPORTED_REFUSAL = JSON.stringify({
+  error: {
+    type: "invalid_request_error",
+    message: "The reasoning effort parameter is unsupported",
+  },
+});
 const VENDOR_EFFORT_REFUSAL = JSON.stringify({ code: "invalid-argument", error: "Invalid reasoning effort." });
 const UNRELATED = JSON.stringify({ error: { type: "invalid_request_error", message: "Invalid upload request." } });
 
@@ -956,6 +962,7 @@ describe("rejected reasoning rungs", () => {
     ["standard error envelope", SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
     ["vendor string error", VENDOR_SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
     ["ultra descriptor", ULTRA_EFFORT_REFUSAL],
+    ["reasoning effort parameter is unsupported", REASONING_EFFORT_PARAMETER_IS_UNSUPPORTED_REFUSAL],
   ])("classifies named effort value or descriptor as valid effort rejection (%s)", (_label, refusal) => {
     expect(hasConflictingReasoningEffortCode(refusal)).toBe(false);
     expect(isReasoningEffortRejection(refusal)).toBe(true);
@@ -965,11 +972,13 @@ describe("rejected reasoning rungs", () => {
     ["openai-chat", "standard error", SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
     ["openai-chat", "vendor error", VENDOR_SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
     ["openai-chat", "ultra descriptor", ULTRA_EFFORT_REFUSAL],
+    ["openai-chat", "verb following effort parameter", REASONING_EFFORT_PARAMETER_IS_UNSUPPORTED_REFUSAL],
     ["openai-responses", "standard error", SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
     ["openai-responses", "vendor error", VENDOR_SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
     ["openai-responses", "ultra descriptor", ULTRA_EFFORT_REFUSAL],
+    ["openai-responses", "verb following effort parameter", REASONING_EFFORT_PARAMETER_IS_UNSUPPORTED_REFUSAL],
   ] as const)(
-    "replays and downgrades from max to high when effort value is in separate sentence or ultra descriptor (%s, %s)",
+    "replays and downgrades from max to high when effort value is in separate sentence, ultra descriptor, or verb follows effort parameter (%s, %s)",
     async (adapter, _kind, refusal) => {
       writeSnapshot(["low", "high", "max"]);
       const attempts: Array<{ host: string; effort: unknown }> = [];
@@ -1001,9 +1010,11 @@ describe("rejected reasoning rungs", () => {
     ["openai-chat", "standard error", SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
     ["openai-chat", "vendor error", VENDOR_SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
     ["openai-chat", "ultra descriptor", ULTRA_EFFORT_REFUSAL],
+    ["openai-chat", "verb following effort parameter", REASONING_EFFORT_PARAMETER_IS_UNSUPPORTED_REFUSAL],
     ["openai-responses", "standard error", SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
     ["openai-responses", "vendor error", VENDOR_SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
     ["openai-responses", "ultra descriptor", ULTRA_EFFORT_REFUSAL],
+    ["openai-responses", "verb following effort parameter", REASONING_EFFORT_PARAMETER_IS_UNSUPPORTED_REFUSAL],
   ] as const)(
     "combo probe downgrades effort and succeeds on lower rung when effort value is in separate sentence (%s, %s)",
     async (adapter, _kind, refusal) => {
