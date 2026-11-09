@@ -487,4 +487,22 @@ describe("Claude token detection reads the Keychain through the shared reader (#
       async.mockRestore();
     }
   });
+
+  test("a profile's credentials file wins without asking the Keychain", async () => {
+    const dir = join(tmp, "file-first-profile");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, ".credentials.json"), payload.replace(/kc-/g, "file-"));
+    process.env.CLAUDE_CONFIG_DIR = dir;
+    const sync = spyOn(claudeKeychainReader, "readSync").mockReturnValue(payload);
+    const async = spyOn(claudeKeychainReader, "readAsync").mockResolvedValue(payload);
+    try {
+      expect(detectClaudeCodeToken()?.access).toBe("file-access");
+      expect((await detectClaudeCodeTokenAsync())?.access).toBe("file-access");
+      expect(sync).not.toHaveBeenCalled();
+      expect(async).not.toHaveBeenCalled();
+    } finally {
+      sync.mockRestore();
+      async.mockRestore();
+    }
+  });
 });
