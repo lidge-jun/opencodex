@@ -395,4 +395,34 @@ describe("Claude Keychain reader never kills a blocked security child (#8161)", 
     expect(isSyncTimeout(Object.assign(new Error("e"), { status: 44, signal: null }))).toBe(false);
     expect(isSyncTimeout(null)).toBe(false);
   });
+
+  test("an error from a child that did start keeps its slot until that child closes", async () => {
+    const h = harness();
+    const first = h.reader.readAsync();
+    // A started process: its error event does not mean it is gone, so no sibling may start.
+    Object.assign(h.children[0]!, { pid: 4242 });
+    h.children[0]!.emit("error", new Error("stdio failure"));
+    expect(await first).toBeNull();
+    expect(h.reader.syncReadBlocked()).toBe(true);
+    expect(await h.reader.readAsync()).toBeNull();
+    expect(h.reader.readSync()).toBeNull();
+    expect(h.children).toHaveLength(1);
+    expect(h.syncRuns).toHaveLength(0);
+    h.children[0]!.emit("close", 1, null);
+    expect(h.reader.syncReadBlocked()).toBe(false);
+    void h.reader.readAsync();
+    expect(h.children).toHaveLength(2);
+  });
+
+  test("another lookup's timeout starts the same backoff", async () => {
+    const h = harness();
+    h.reader.noteSyncTimeout();
+    expect(h.reader.syncReadBlocked()).toBe(true);
+    expect(await h.reader.readAsync()).toBeNull();
+    expect(h.reader.readSync()).toBeNull();
+    expect(h.children).toHaveLength(0);
+    expect(h.syncRuns).toHaveLength(0);
+    h.advance(60_001);
+    expect(h.reader.syncReadBlocked()).toBe(false);
+  });
 });

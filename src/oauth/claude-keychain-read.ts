@@ -21,6 +21,8 @@ interface UnrefHandle { unref?(): unknown }
 
 /** The subset of a spawned child the reader relies on. */
 export interface KeychainChild extends UnrefHandle {
+  /** Set once the process exists; undefined when the spawn itself failed. */
+  pid?: number | undefined;
   stdout: (UnrefHandle & { on(event: "data", listener: (chunk: Buffer | string) => void): unknown }) | null;
   once(event: "close", listener: (code: number | null, signal: string | null) => void): unknown;
   once(event: "error", listener: (error: Error) => void): unknown;
@@ -48,6 +50,11 @@ export interface ClaudeKeychainReader {
   readSync(): string | null;
   /** True while a child is still running or a timeout backoff is active. */
   syncReadBlocked(): boolean;
+  /**
+   * Record a timeout of another synchronous Keychain lookup (the metadata probe), so it starts
+   * the same backoff and no read or probe spawns again inside that window.
+   */
+  noteSyncTimeout(): void;
 }
 
 export function createClaudeKeychainReader(deps: ClaudeKeychainReaderDeps): ClaudeKeychainReader {
@@ -101,7 +108,9 @@ export function createClaudeKeychainReader(deps: ClaudeKeychainReaderDeps): Clau
         if (stdoutBytes <= MAX_STDOUT_BYTES) chunks.push(bytes);
       });
       child.once("error", () => {
-        release();
+        // Once a process exists, an error event does not prove it ended; only its own close may
+        // release the slot, or a second child could start beside one still blocked on the prompt.
+        if (child.pid === undefined) release();
         settle(null);
       });
       // `close`, not `exit`: `exit` can fire before stdout is drained, which would truncate
@@ -130,6 +139,7 @@ export function createClaudeKeychainReader(deps: ClaudeKeychainReaderDeps): Clau
     readAsync,
     readSync,
     syncReadBlocked: () => runningChild !== undefined || backingOff(),
+    noteSyncTimeout: startBackoff,
   };
 }
 

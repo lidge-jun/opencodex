@@ -345,7 +345,13 @@ null after five seconds and leaves the child to exit on its own, keeps one child
 and backs off for sixty seconds after a timeout; a child that never exits keeps that slot, so the
 process stays on the credentials file rather than raising a second prompt. The synchronous reader does not spawn while a
 child is running or the backoff is active; its own timeout, which does kill, starts the backoff.
-Every null falls back to the credentials file. `tests/oauth/local-token-detect.test.ts` covers this.
+Only the child's own close frees the slot once it has a process: an error event after spawn does
+not prove it ended. The metadata probe in `src/claude/auth-detect.ts` (`probeClaudeKeychain`, no
+`-w`) runs under the same admission: it answers `unknown` without spawning while a read is blocked
+or backing off, and its own timeout starts the backoff. The synchronous reader and the probe still
+signal their child on timeout, at most once per window; moving them onto the async reader is the
+remaining part of #8161. Every null falls back to the credentials file.
+`tests/oauth/local-token-detect.test.ts` and `tests/claude-integration/claude-auth-detect.test.ts` cover this.
 
 ## Model routes
 
