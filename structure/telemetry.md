@@ -126,10 +126,13 @@ it as ineligible through the UTC day six hours from now, and the status snapshot
 every 6 hours (`TELEMETRY_ENV_OPT_OUT_REFRESH_MS`), within that window. A held decline whose
 timestamp is damaged still applies. The state code lives in
 `src/telemetry/state.ts`, which `background-lifecycle.ts` imports statically; the scheduler, its
-aggregation and sender stay behind the dynamic import. Each tick sends at most one completed UTC
-day strictly after the UTC day of `decidedAt ?? noticeShownAt` and strictly after
-`ineligibleThroughDay`, honors `retryAfterUntil` backoffs, re-reads persisted consent and env
-immediately before transmission, and carries an `AbortSignal` cancelled on stop or consent changes.
+aggregation and sender stay behind the dynamic import. Each tick carries an `AbortSignal`
+cancelled by shutdown or consent changes (`nudgeTelemetryScheduler`), sends at most one completed
+UTC day strictly after the consent/disclosure UTC day (`day > formatUtcDay(decidedAt ?? noticeShownAt)`)
+and strictly after `ineligibleThroughDay` (`day > ineligibleThroughDay`), re-reads persisted consent
+and environment variables immediately before transmission, and honors HTTP `429` / `503`
+`Retry-After` responses by persisting `retryAfterUntil` in `telemetry-state.json` and skipping ticks
+until then.
 
 ## Collector and public documentation
 
