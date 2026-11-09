@@ -28,6 +28,8 @@ import { useCopyFeedback } from "./use-copy-feedback";
 import { DEFAULT_ACCOUNT_POOL_STRATEGY } from "../account-pool-strategy";
 import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
 import { createBoundedFetch, type BoundedFetch } from "../bounded-fetch";
+import { isApiTargetCaptureCurrent, targetFetch } from "../api";
+import { useRenderTargetCapture } from "../use-render-target-capture";
 import CodexQuotaAutoRefreshSetting from "./CodexQuotaAutoRefreshSetting";
 import { CodexCreditSpendSwitch } from "./CodexCreditSpend";
 import { creditSpendSummary } from "../codex-credit-spend";
@@ -67,6 +69,8 @@ export default function CodexAccountPool({ apiBase, targetKey, accountModeState 
   controller?: CodexAccountPoolController;
 }) {
   const t = useT();
+  // The component's render owns the target for its own settings mutations.
+  const renderCapture = useRenderTargetCapture(apiBase, targetKey);
   const autoSwitch = useCodexAutoSwitch(apiBase, {
     updated: t("codexAuth.autoSwitchUpdated"),
     updateFailed: t("codexAuth.autoSwitchUpdateFailed"),
@@ -83,7 +87,7 @@ export default function CodexAccountPool({ apiBase, targetKey, accountModeState 
   const { accounts, activeId, loadState, refreshFailed, switchingId, pauseUpdatingId, priorityUpdatingId, autoSwitchUpdatingId, pausingExhausted, activePinnedId, load } = controller;
   // #3898: the native-main device reauth drives the dedicated namespace; a
   // completed flow refreshes the account list so the card leaves reauth state.
-  const mainReauth = useMainDeviceReauth(apiBase, () => { void load(); });
+  const mainReauth = useMainDeviceReauth(apiBase, () => { void load(); }, targetKey);
   const mainReauthActive = mainReauth.state.phase === "starting"
     || mainReauth.state.phase === "pending"
     || mainReauth.state.phase === "committing";
@@ -130,7 +134,7 @@ export default function CodexAccountPool({ apiBase, targetKey, accountModeState 
   const [quotaReadRevision, setQuotaReadRevision] = useState(0);
   const [quotaOrigin, setQuotaOrigin] = useState(apiBase);
   const [quotaFeedback, setQuotaFeedback] = useState<{ apiBase: string; message: string; failed: boolean } | null>(null);
-  const failedQuotaTarget = useRef<{ apiBase: string; enabled: boolean } | null>(null);
+  const failedQuotaTarget = useRef<{ apiBase: string; identity: string; enabled: boolean } | null>(null);
   const quotaCurrent = quotaState?.apiBase === apiBase && quotaState.revision === quotaReadRevision ? quotaState : null;
   const quotaAutoRefreshSettings = quotaCurrent?.settings ?? null;
   const quotaLoadError = quotaCurrent?.error ?? false;
@@ -150,6 +154,29 @@ export default function CodexAccountPool({ apiBase, targetKey, accountModeState 
   const [creditDetails, setCreditDetails] = useState<{ granted_at: string; expires_at: string }[] | null>(null);
   const [creditDetailsLoading, setCreditDetailsLoading] = useState(false);
   const doctorCopy = useCopyFeedback<string>();
+  // A modal, a reauth, a confirmation or a catalog notice belongs to the target that
+  // opened it. A relay keeps the same apiBase across a re-pair, so the logical target is
+  // the identity: close them at the prop boundary rather than reviving A's frame under B.
+  const targetIdentity = targetKey ?? apiBase;
+  const [frameIdentity, setFrameIdentity] = useState(targetIdentity);
+  if (frameIdentity !== targetIdentity) {
+    setFrameIdentity(targetIdentity);
+    setShowAdd(false);
+    setReauthId(null);
+    setModelsNotice(null);
+    setConfirm(null);
+    setUnpinFor(null);
+    setResetPopup(null);
+    setResetConfirm(false);
+    setCreditDetails(null);
+    setActionFeedback(null);
+    setActionFeedbackTone(null);
+    // The activation settings and their retry belong to the target that read them.
+    setQuotaReadRevision(value => value + 1);
+    setQuotaState(null);
+    setQuotaBusyScope(null);
+    setQuotaFeedback(null);
+  }
 
   const showActionFeedback = useCallback((text: string, tone: NoticeTone = "ok") => {
     if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
@@ -375,10 +402,14 @@ export default function CodexAccountPool({ apiBase, targetKey, accountModeState 
   const toggleQuotaAutoRefresh = async (enabled: boolean) => {
     const scope = quotaScopeRef.current;
     if (quotaMutationRef.current || !scope || scope.signal.aborted || quotaAutoRefreshSettings === null || loadState !== "ready") return;
+    // The write belongs to the target this render read the settings from. A relay keeps
+    // the same apiBase across a re-pair, so only the capture can tell A from B.
+    const capture = { ...renderCapture };
     const pending = createBoundedFetch(30_000);
     quotaMutationRef.current = pending;
     quotaAutoRefreshMutationRevisionRef.current += 1;
-    const current = () => quotaScopeRef.current === scope && !scope.signal.aborted;
+    const current = () => quotaScopeRef.current === scope && !scope.signal.aborted
+      && isApiTargetCaptureCurrent(capture);
     const windows = quotaActivationWindows(accounts, quotaAutoRefreshSettings);
     setQuotaBusyScope(apiBase);
     setQuotaFeedback(null);
@@ -397,7 +428,7 @@ export default function CodexAccountPool({ apiBase, targetKey, accountModeState 
           // changes. Parallel dispatch would spend the rest of the batch before
           // cancellation can take effect (covered by the deferred-write test).
           // react-doctor-disable-next-line react-doctor/async-await-in-loop -- intentional sequential settings mutations
-          const response = await fetch(`${apiBase}/api/settings`, {
+          const response = await targetFetch(capture, `${capture.apiBase}/api/settings`, {
             method: "PUT", headers: { "content-type": "application/json" }, signal: pending.signal,
             body: JSON.stringify({ codexQuotaAutoRefresh: { id: target.id, window: target.window, enabled: requested } }),
           });
@@ -411,7 +442,7 @@ export default function CodexAccountPool({ apiBase, targetKey, accountModeState 
       const read = createBoundedFetch(15_000);
       quotaMutationRef.current = read;
       try {
-        const response = await fetch(`${apiBase}/api/settings`, { signal: read.signal });
+        const response = await targetFetch(capture, `${capture.apiBase}/api/settings`, { signal: read.signal });
         if (!response.ok) throw new Error("read");
         const saved = readQuotaActivationSettings(await response.json());
         if (!current()) return;
@@ -424,7 +455,7 @@ export default function CodexAccountPool({ apiBase, targetKey, accountModeState 
         setQuotaState({ apiBase, revision: quotaReadRevision, settings: null, error: true });
       } finally { read.clear(); }
       if (!current()) return;
-      failedQuotaTarget.current = failed ? { apiBase, enabled } : null;
+      failedQuotaTarget.current = failed ? { apiBase, identity: targetIdentity, enabled } : null;
       setQuotaFeedback({ apiBase, message: t(failed ? "codexAuth.quotaAutoRefreshPartial" : "codexAuth.quotaAutoRefreshUpdated"), failed });
     } finally {
       pending.clear();
@@ -674,7 +705,7 @@ export default function CodexAccountPool({ apiBase, targetKey, accountModeState 
             if (quotaLoadError || quotaAutoRefreshSettings === null || loadState !== "ready") {
               setQuotaReadRevision(value => value + 1);
               void load();
-            } else if (failedQuotaTarget.current?.apiBase === apiBase) {
+            } else if (failedQuotaTarget.current?.identity === targetIdentity) {
               void toggleQuotaAutoRefresh(failedQuotaTarget.current.enabled);
             }
           }}
@@ -745,6 +776,7 @@ export default function CodexAccountPool({ apiBase, targetKey, accountModeState 
       {showAdd && (
         <AddCodexAccountModal
           apiBase={apiBase}
+          targetKey={targetKey}
           reauthAccountId={reauthId ?? undefined}
           onClose={closeAddModal}
           onAdded={handleAccountAdded}

@@ -15,7 +15,7 @@ import { useProviderAccountPools, type AccountSelectionTarget } from "../hooks/u
 import { useCodexAccountPool } from "../hooks/useCodexAccountPool";
 import { useJsonConfigEditor } from "../hooks/useJsonConfigEditor";
 import { createProviderDraftStore, providerDraftTargetLabel } from "../provider-workspace/target-drafts";
-import { TARGET_PREFLIGHT_LEGACY_EVENT } from "../api";
+import { useLegacyTargetPreflightNotice } from "./use-legacy-target-preflight-notice";
 import { useKeyedClientResource } from "../client-resource";
 import { readSessionListCache } from "../session-list-cache";
 import type { ProvidersConfig } from "./providers-shared";
@@ -294,17 +294,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
     setStatusTone("err");
   }, []);
 
-  const legacyPreflightNoticesRef = useRef(new Set<string>());
-  useEffect(() => {
-    const onLegacyPreflight = (event: Event) => {
-      const detail = (event as CustomEvent<{ targetKey?: string }>).detail;
-      if (!detail?.targetKey || detail.targetKey !== draftTargetKey || legacyPreflightNoticesRef.current.has(detail.targetKey)) return;
-      legacyPreflightNoticesRef.current.add(detail.targetKey);
-      notify(t("prov.legacyTargetPreflight"), false, "warn");
-    };
-    window.addEventListener(TARGET_PREFLIGHT_LEGACY_EVENT, onLegacyPreflight);
-    return () => window.removeEventListener(TARGET_PREFLIGHT_LEGACY_EVENT, onLegacyPreflight);
-  }, [draftTargetKey, notify, t]);
+  useLegacyTargetPreflightNotice(draftTargetKey, () => notify(t("prov.legacyTargetPreflight"), false, "warn"));
 
   const notifyCodexCompletion = useCallback((completion: CodexAccountMutationCompletion) => {
     if (completion.validationPending || completion.catalogRefreshPending) {
