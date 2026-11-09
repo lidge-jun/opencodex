@@ -30,7 +30,10 @@ export function readHomeRouteIntentState(config: OcxConfig, options: { store?: I
     const intent = parseRouteClientIntent({ enabled: true, ...(owner.modelNames ? { modelNames: owner.modelNames } : {}) });
     if (intent) state.defaults[client as keyof typeof state.defaults] = intent;
   }
-  if (state.defaults.aside !== undefined) return state;
+  // A saved Home Aside decision is the Home's own answer, so it never needs the Children's default
+  // derived from ownership. Deriving it here would refuse exactly the Home the recovery command
+  // (`ocx route to aside on|off --device home`) exists for: owned profiles without stable userIds.
+  if (state.defaults.aside !== undefined || state.devices.home?.aside !== undefined) return state;
   const aside = deriveHomeAsideIntent(config, { store, home: options.home });
   if (aside) state.defaults.aside = aside;
   return state;

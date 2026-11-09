@@ -8,9 +8,9 @@ import { linkStorePath } from "../../link/paths";
 import { homeLinkChildParity } from "../../link/child-parity";
 import { homeRouteIntentWatch } from "../../link/route-intent-watch";
 import { ROUTE_CLIENT_IDS, isHomeNativeRouteClient, parseRouteClientIntent, type HomeNativeRouteClientId, type RouteClientId, type RouteClientIntent, type RouteClientOutcome } from "../../link/route-intent";
-import { clearRouteClientIntent, recordHomeNativeDecision, RouteIntentStateUnreadableError, setRouteClientIntent } from "../../routing/route-intent-state";
+import { clearRouteClientIntent, readRouteIntentState, recordHomeNativeDecision, RouteIntentStateUnreadableError, setRouteClientIntent } from "../../routing/route-intent-state";
 import { initializeHomeRouteIntentDefaults, projectChildRouteIntent, reconcileHomeRouteDevices } from "../../routing/home-route-intent";
-import { homeHasLinks } from "../../routing/home-route-capture";
+import { captureHomeRouteDefaults, homeHasLinks } from "../../routing/home-route-capture";
 import { EPHEMERAL_NO_ROUTE_INTENT, routeToDeviceStatus, unsupportedRouteToDevice, type RouteToStatus, type RouteToSyncRow } from "../../routing/route-to-status";
 import { refreshRouteNativeSettings, withDurableRouteNativeSettings } from "../../routing/route-to-live-settings";
 import { withLinkApply, LinkApplyBusyError } from "../../client/link-home";
@@ -63,13 +63,13 @@ async function view(ctx: ManagementContext, selected?: string): Promise<RouteToS
 }
 
 async function applyHome(ctx: ManagementContext, overwriteConflict: boolean, deps: RouteToRouteDeps, overwriteClient?: RouteClientId, commit?: () => void,
-  onlyClient?: RouteClientId, onlyIntent?: () => RouteClientIntent | undefined): Promise<RouteClientOutcome[]> {
+  onlyClient?: RouteClientId, onlyIntent?: () => RouteClientIntent | undefined, homeAsideDecision = false): Promise<RouteClientOutcome[]> {
   if (deps.applyHome) return withLinkApply(async () => { commit?.(); return deps.applyHome!(ctx, overwriteConflict, overwriteClient); });
   const { syncHomeRouteTo } = await import("../../routing/route-to-local");
   const local = { ...ctx.config, port: managementInferencePort(ctx) };
   const outcomes = deps.materializeHome
     ? await withLinkApply(async () => { commit?.(); return deps.materializeHome!(local, ctx.version, overwriteConflict, overwriteClient); })
-    : await syncHomeRouteTo(local, ctx.version, overwriteConflict, overwriteClient, commit, { onlyClient, onlyIntent });
+    : await syncHomeRouteTo(local, ctx.version, overwriteConflict, overwriteClient, commit, { onlyClient, onlyIntent, homeAsideDecision });
   refreshRouteNativeSettings(ctx.config);
   return outcomes;
 }
@@ -156,6 +156,9 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
     // On the Home itself a native client's decision is its native switch, written by the apply below.
     const homeNative = selected === "home" && isHomeNativeRouteClient(write.client) ? write.client : undefined;
     const switchBefore = homeNative ? durableHomeSwitch(ctx.config, homeNative) : undefined;
+    // `ocx route to aside on|off --device home` decides the Home alone. A plain default write
+    // still refuses an unresolved Aside default, because that one decides what Children inherit.
+    const homeAsideDecision = selected === "home" && write.client === "aside" && write.action !== "inherit";
     if (homeNative) nativeBefore = { client: homeNative, enabled: switchBefore! };
     const commit = () => withConfigMutationLockSync(() => {
       // A Home native decision on a Home with no link is only its switch: like every Home-only
@@ -165,8 +168,17 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
       if (!routeIntentUntouched) {
         reconcileHomeRouteDevices(devices(ctx).map(link => link.id));
         // A Home-only decision captures the Children's native defaults only once the Home has a link.
-        initializeHomeRouteIntentDefaults(withDurableRouteNativeSettings(ctx.config), ctx.version, selected === undefined ? write.client : undefined,
-          { whenLinked: selected === "home" });
+        // An explicit Home Aside decision saves no default: it is the Home's own row, and the
+        // Children's Aside default stays absent rather than guessed from unresolved ownership.
+        // A saved Home Aside entry also means the Children's Aside default is not this write's to
+        // derive, so the defaults capture runs without a deciding client.
+        const asideDecided = homeAsideDecision || (write.client === "aside" && readRouteIntentState().devices.home?.aside !== undefined);
+        if (!asideDecided) {
+          initializeHomeRouteIntentDefaults(withDurableRouteNativeSettings(ctx.config), ctx.version, selected === undefined ? write.client : undefined,
+            { whenLinked: selected === "home" });
+        } else if (selected === "home") {
+          captureHomeRouteDefaults(undefined, { whenLinked: true });
+        }
       }
       if (homeNative) { if (!routeIntentUntouched) recordHomeNativeDecision(homeNative); }
       else if (write.action === "inherit") clearRouteClientIntent(write.client, selected!);
@@ -182,7 +194,7 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
     let decided: RouteClientOutcome | undefined;
     if (selected === undefined || selected === "home") {
       decided = (await applyHome(ctx, write.overwriteConflict, deps, write.client, commit, write.client,
-        homeNative && write.action !== "inherit" ? () => write.intent : undefined)).find(row => row.client === write.client);
+        homeNative && write.action !== "inherit" ? () => write.intent : undefined, homeAsideDecision)).find(row => row.client === write.client);
     } else commit();
     if (selected && selected !== "home" && write.overwriteConflict) {
       const link = devices(ctx).find(row => row.id === selected)!;

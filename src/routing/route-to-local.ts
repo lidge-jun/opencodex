@@ -6,7 +6,7 @@ import { HomeAsideIntentDerivationError, initializeHomeRouteIntentDefaults, read
 import { captureHomeRouteDefaults } from "./home-route-capture";
 import { routeToDeviceStatus, type RouteToDeviceStatus, type RouteToStatus } from "./route-to-status";
 import { withDurableRouteNativeSettings } from "./route-to-live-settings";
-import { dropLegacyHomeNativeOverrides, readRouteIntentState } from "./route-intent-state";
+import { dropLegacyHomeNativeOverrides, readRouteIntentState, type RouteIntentState } from "./route-intent-state";
 import { readLocalRouteIntentOff, readRouteIntentReceipt, setLocalRouteIntentOff } from "../integrations/route-intent";
 import type { LinkChildContext } from "../cli/link-child";
 import type { OcxConfig } from "../types";
@@ -31,19 +31,31 @@ export const HOME_ASIDE_UNRESOLVED_MESSAGE = "Aside was left unchanged on this H
  * has no saved Aside decision, leaves Aside exactly as it is and applies every other client, calling
  * `onAsideUnresolved`. A Home upgraded with such profiles therefore keeps a working `ocx sync`;
  * only a write that decides Aside still refuses until the person resolves it.
+ *
+ * `homeAsideDecision` is the one exception: an explicit `--device home` Aside write is the Home's
+ * own decision, so it is applied without deriving the Children's Aside default, which stays absent.
+ * The saved `devices.home.aside` entry is what a later full sync reads, so it keeps the decision.
  */
 export async function syncHomeRouteTo(config: OcxConfig, version: string, overwriteConflict = false, overwriteClient?: RouteClientId, commit?: () => void,
   deps: { loadModels?: typeof import("../server/management/model-rows").loadExportModels; materialize?: typeof import("../client/route-intent-apply").materializeLocalRouteIntent;
-    onlyClient?: RouteClientId; onlyIntent?: () => RouteClientIntent | undefined; onAsideUnresolved?: (message: string) => void } = {}): Promise<RouteClientOutcome[]> {
+    onlyClient?: RouteClientId; onlyIntent?: () => RouteClientIntent | undefined; onAsideUnresolved?: (message: string) => void;
+    homeAsideDecision?: boolean } = {}): Promise<RouteClientOutcome[]> {
   return withLinkApply(async () => {
     commit?.();
     const local = withDurableRouteNativeSettings(config);
-    const leaveAside = deps.onlyClient === undefined || deps.onlyClient !== "aside";
+    // A Home-only Aside decision never needs the Children's Aside default; only a write that sets
+    // that default (or a full sync reading it) does.
+    const leaveAside = deps.homeAsideDecision === true || deps.onlyClient === undefined || deps.onlyClient !== "aside";
     let asideUnresolved = false;
     // The Home's own apply is Home-only: it captures the Children's native defaults only once the
     // Home has a link. A default write's commit above has already captured them. Without a link it
     // saves no defaults, and only drops a legacy devices.home native entry if one is there.
-    try { initializeHomeRouteIntentDefaults(local, version, undefined, { whenLinked: true }); }
+    // A saved Home Aside entry means this apply must not derive the Children's Aside default at all.
+    const homeAsideSaved = readRouteIntentState().devices.home?.aside !== undefined;
+    try {
+      if (homeAsideSaved) captureHomeRouteDefaults(undefined, { whenLinked: true });
+      else initializeHomeRouteIntentDefaults(local, version, undefined, { whenLinked: true });
+    }
     catch (error) {
       if (!(error instanceof HomeAsideIntentDerivationError) || !leaveAside) throw error;
       // Save what can be saved: the native defaults, never a guessed Aside default.
@@ -58,7 +70,8 @@ export async function syncHomeRouteTo(config: OcxConfig, version: string, overwr
       if (!(error instanceof HomeAsideIntentDerivationError) || !leaveAside) throw error;
       asideUnresolved = true;
       // A placeholder so the document is complete; Aside is excluded from materialization below.
-      const pinned = readRouteIntentState();
+      // A saved Home Aside entry returned above instead, so this placeholder is never a default.
+      const pinned: RouteIntentState = readRouteIntentState();
       pinned.defaults.aside = { enabled: false };
       state = readHomeRouteIntentState(local, { state: pinned });
     }

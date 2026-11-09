@@ -42,7 +42,7 @@ function scenario(body: string) {
       const live = loadConfig();
       const management = async (handler, method, path, body) => {
         const req = new Request('http://localhost'+path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-        const response = await handler({ req, url: new URL(req.url), config: live, version: 'test', deps: { readRuntimePort: () => null } });
+        const response = await handler({ req, url: new URL(req.url), config: loadConfig(), version: 'test', deps: { readRuntimePort: () => null } });
         return { status: response?.status, body: await response?.json() };
       };
       const call = (path, body) => management(handleRouteToRoutes, path.endsWith('/sync') ? 'POST' : 'PUT', path, body);
@@ -56,8 +56,10 @@ function scenario(body: string) {
       const piPath = INTEGRATION_CLIENTS.pi.configPath({}, process.env.HOME);
       mkdirSync(INTEGRATION_CLIENTS.pi.detectDir({}, process.env.HOME), { recursive: true });
       const piRouted = () => !!store.readRecords().pi && existsSync(piPath) && readFileSync(piPath, 'utf8').includes('opencodex');
+      // The client argument only picks a report row; every call is a full Home sync.
       const homeSync = async client => (await syncHomeRouteTo(loadConfig(), 'test', false, undefined, undefined, { loadModels: async () => [] }))
         .find(row => row.client === client);
+      const fullHomeSync = () => syncHomeRouteTo(loadConfig(), 'test', false, undefined, undefined, { loadModels: async () => [] });
       const asideRoot = join(process.env.HOME, '.aside');
       const asideModels = join(asideRoot, 'u', '0', 'models.json');
       const asideProfile = (userId) => {
@@ -189,5 +191,36 @@ test("on an upgraded linked Home whose Aside profiles have no stable userId, a f
   expect(piRouted()).toBe(true);
   expect(unresolved).toHaveLength(1);
   expect(unresolved[0]).toContain('ocx route to aside');
+  expect(readRouteIntentState().defaults.aside).toBeUndefined();
+`), SPAWN_BUDGET_MS);
+
+test("an explicit Home Aside decision on unresolved ownership is saved and survives a full sync", () => scenario(`
+  asideProfile(undefined);
+  // An upgraded Home: Aside is already owned, before any route intent exists.
+  expect(applyIntegration({ clientId: 'aside', config: loadConfig(), port: 18274, models: [], store, home: process.env.HOME, env: process.env }).ok).toBe(true);
+  expect(asideRouted()).toBe(true);
+  expect(applyIntegration({ clientId: 'pi', config: loadConfig(), port: 18274, models: [], store, home: process.env.HOME, env: process.env }).ok).toBe(true);
+  const listener = createLinkListenerLifecycle({ serve: () => ({ port: 19100, stop: async () => {} }), warn: () => {} });
+  listener.start({ dispatch: async () => new Response(null), maxRequestBodySize: 1024 });
+  await listener.stop();
+  expect(readRouteIntentState().defaults.aside).toBeUndefined();
+  // The recovery command the sync message advertises decides only this Home.
+  const off = await call('/api/route-to', { client: 'aside', action: 'off', device: 'home' });
+  expect(off.status).toBe(200);
+  expect(asideRouted()).toBe(false);
+  expect(readRouteIntentState().defaults.aside).toBeUndefined();
+  expect(readRouteIntentState().devices.home?.aside).toEqual({ enabled: false });
+  const afterOff = await fullHomeSync();
+  expect(afterOff.find(row => row.client === 'aside')?.outcome).toBe('current');
+  expect(asideRouted()).toBe(false);
+  expect(readRouteIntentState().defaults.aside).toBeUndefined();
+  const on = await call('/api/route-to', { client: 'aside', action: 'on', device: 'home' });
+  expect(on.status).toBe(200);
+  expect(asideRouted()).toBe(true);
+  expect(readRouteIntentState().defaults.aside).toBeUndefined();
+  expect(readRouteIntentState().devices.home?.aside?.enabled).toBe(true);
+  const afterOn = await fullHomeSync();
+  expect(afterOn.find(row => row.client === 'aside')?.outcome).toBe('current');
+  expect(asideRouted()).toBe(true);
   expect(readRouteIntentState().defaults.aside).toBeUndefined();
 `), SPAWN_BUDGET_MS);
