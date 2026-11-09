@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { resetAppOwnedMemoryForTests } from "../../src/lib/app-owned-memory";
+import { initializeConfigOwnership } from "../../src/lib/config-ownership";
 import { runPassiveRead } from "../../src/lib/passive-read";
 import {
   getFilteredUsageAggregate,
@@ -1131,6 +1132,8 @@ describe("filtered usage index availability", () => {
     // On Windows a changed config directory re-runs its ACL harden, which moves usage.jsonl's
     // ChangeTime and forces whole-ledger rebuilds; SQLite deleting its WAL sidecars on every
     // close changed the directory on each filtered query.
+    // Discriminates only on stock SQLite (Linux, Windows): macOS's system SQLite already keeps
+    // the sidecars, so a local macOS pass is not evidence for this guard.
     writeRows(Array.from({ length: 20 }, (_, index) => syntheticRow(index)));
     const first = await getFilteredUsageAggregate({ provider: "openai" });
     const observeHome = () => {
@@ -1148,6 +1151,29 @@ describe("filtered usage index availability", () => {
     expect(appended.filterIndex?.totalRows).toBe(21);
     // The kept WAL is empty after the writer's clean close.
     expect(statSync(`${usageFilterIndexPath(testDir)}-wal`).size).toBe(0);
+  });
+
+  test("sidecars of a projection built before WAL persistence are registered for uninstall", async () => {
+    // A projection from a build that deleted its WAL sidecars on every close has no sidecars on
+    // disk and none in the uninstall manifest. Once they persist they must be owned, or uninstall
+    // leaves them behind.
+    expect(initializeConfigOwnership(testDir)).toBe(true);
+    writeRows(Array.from({ length: 20 }, (_, index) => syntheticRow(index)));
+    await getFilteredUsageAggregate({ provider: "openai" });
+    const indexPath = usageFilterIndexPath(testDir);
+    const manifestPath = join(testDir, ".opencodex-uninstall.json");
+    const owned = () => (JSON.parse(readFileSync(manifestPath, "utf8")) as { paths: string[] }).paths;
+    const sidecars = ["usage-filter-index.sqlite-wal", "usage-filter-index.sqlite-shm"];
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { paths: string[] };
+    writeFileSync(manifestPath, JSON.stringify({ ...manifest, paths: manifest.paths.filter(path => !sidecars.includes(path)) }, null, 2));
+    for (const suffix of ["-wal", "-shm"]) rmSync(`${indexPath}${suffix}`, { force: true });
+    resetUsageAggregateCacheForTests();
+    resetAppOwnedMemoryForTests();
+    expect(owned().filter(path => sidecars.includes(path))).toEqual([]);
+
+    appendRows([{ ...syntheticRow(99), requestId: "after-upgrade" }]);
+    expect((await getFilteredUsageAggregate({ provider: "openai" })).filterIndex).toBeDefined();
+    expect(owned().filter(path => sidecars.includes(path)).sort()).toEqual([...sidecars].sort());
   });
 
   test("a passive read never creates or writes index files", async () => {

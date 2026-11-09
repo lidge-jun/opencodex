@@ -282,6 +282,8 @@ interface IndexMeta {
 let ingestFlight: { path: string; promise: Promise<UsageFilterIndexSnapshot> } | null = null;
 const ingestPassesByPath = new Map<string, number>();
 const rebuildRequestedPaths = new Set<string>();
+/** Index paths whose kept sidecars this process has already registered for uninstall. */
+const sidecarOwnershipChecked = new Set<string>();
 let testHooks: UsageFilterIndexTestHooks | null = null;
 
 export function usageFilterIndexPath(configDir: string): string {
@@ -522,6 +524,23 @@ function keepWalSidecars(db: Database): void {
   db.exec(`PRAGMA journal_size_limit = ${RETAINED_WAL_LIMIT_BYTES}`);
 }
 
+/**
+ * Register the WAL sidecars that now persist beside this projection.
+ *
+ * A projection built before persistence deleted them on every close, so it was opened as an
+ * existing file with nothing on disk to register, and the sidecars it keeps from here on would
+ * otherwise survive uninstall. Called only after the file classified as this projection and WAL
+ * mode is on, so every sidecar present is this database's own.
+ */
+function registerKeptSidecars(dir: string, path: string): void {
+  if (sidecarOwnershipChecked.has(path)) return;
+  for (const suffix of ["-wal", "-shm"] as const) {
+    const sidecar = `${path}${suffix}`;
+    if (existsSync(sidecar)) recordOwnedConfigPath(dir, sidecar);
+  }
+  sidecarOwnershipChecked.add(path);
+}
+
 function openIndexForWrite(dir: string, path: string): Database {
   const existed = existsSync(path);
   preparePrivateSqliteDatabase(path);
@@ -547,6 +566,7 @@ function openIndexForWrite(dir: string, path: string): Database {
       hardenSecretPath(path, { required: false });
     }
     db.exec("PRAGMA journal_mode = WAL");
+    registerKeptSidecars(dir, path);
     ensureSchema(db, classification);
     return db;
   } catch (error) {
@@ -1103,8 +1123,9 @@ async function refreshUsageFilterIndex(
       }
       return await refreshWithRetry(db, dir, path);
     } finally {
-      // A reader in another process can still hold the WAL; then this checkpoint is partial and
-      // the next writer's close empties it.
+      // A reader in another process can still pin the WAL; then this checkpoint is partial (SQLite
+      // reports that as a result row, not an error) and a later writer's TRUNCATE empties it once
+      // no reader pins it. The close itself never empties a kept WAL that still has frames.
       try { db.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } catch { /* the close below still runs */ }
       db.close();
     }
@@ -1436,5 +1457,6 @@ export function resetUsageFilterIndexForTests(): void {
   ingestFlight = null;
   ingestPassesByPath.clear();
   rebuildRequestedPaths.clear();
+  sidecarOwnershipChecked.clear();
   testHooks = null;
 }
