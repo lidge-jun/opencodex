@@ -288,6 +288,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
   const readLastActive = useCallback(() => lastActiveRef.current?.value, []);
 
   const load = useCallback(async (refreshQuota = false, options: { validatePending?: boolean } = {}): Promise<boolean> => {
+    const capture = captureApiTarget("shared");
     const generation = ++loadGenerationRef.current;
     const validatePending = options.validatePending === true;
     // Validation can include token recovery, WHAM and two 30s model attempts.
@@ -317,7 +318,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
 
       const accountsTask = (async (): Promise<boolean> => {
         try {
-          const response = await fetch(`${apiBase}/api/codex-auth/accounts${validatePending ? "/refresh" : refreshQuota ? "?refresh=1" : ""}`, {
+          const response = await targetFetch(capture, `${apiBase}/api/codex-auth/accounts${validatePending ? "/refresh" : refreshQuota ? "?refresh=1" : ""}`, {
             method: validatePending ? "POST" : "GET",
             signal: bounded.signal,
           });
@@ -361,7 +362,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
 
       const activeTask = (async (): Promise<boolean> => {
         try {
-          const response = await fetch(`${apiBase}/api/codex-auth/active`, { signal: bounded.signal });
+          const response = await targetFetch(capture, `${apiBase}/api/codex-auth/active`, { signal: bounded.signal });
           if (!response.ok) throw new Error("active account load failed");
           const active = await response.json();
           if (loadGenerationRef.current === generation) {
@@ -529,8 +530,9 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
   }, [apiBase, load]);
 
   const saveAlias = useCallback(async (id: string, alias: string) => {
+    const capture = captureApiTarget("shared");
     try {
-      const response = await fetch(`${apiBase}/api/codex-auth/accounts/alias`, {
+      const response = await targetFetch(capture, `${apiBase}/api/codex-auth/accounts/alias`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, alias: alias.trim() }),
@@ -544,11 +546,12 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
   }, [apiBase, load]);
 
   const setAccountPaused = useCallback(async (id: string, paused: boolean) => {
+    const capture = captureApiTarget("shared");
     if (pauseMutationRef.current) return { ok: false, reason: "busy" } as const;
     pauseMutationRef.current = { accountId: id };
     setPauseUpdatingId(id);
     try {
-      const response = await fetch(`${apiBase}/api/codex-auth/accounts/pause`, {
+      const response = await targetFetch(capture, `${apiBase}/api/codex-auth/accounts/pause`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, paused }),
@@ -585,13 +588,14 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
   }, [apiBase, load]);
 
   const setAccountPriority = useCallback(async (id: string, priority: number | null) => {
+    const capture = captureApiTarget("shared");
     // The other half of the cross-gate in switchAccount: an order write clears the
     // pin that a switch sets, so the two cannot be in flight together.
     if (priorityMutationRef.current || switchingRef.current) return { ok: false, reason: "busy" } as const;
     priorityMutationRef.current = { accountId: id };
     setPriorityUpdatingId(id);
     try {
-      const response = await fetch(`${apiBase}/api/codex-auth/accounts/priority`, {
+      const response = await targetFetch(capture, `${apiBase}/api/codex-auth/accounts/priority`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, priority }),
@@ -632,11 +636,12 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
     id: string,
     threshold: number | null,
   ) => {
+    const capture = captureApiTarget("shared");
     if (autoSwitchMutationRef.current) return { ok: false, reason: "busy" } as const;
     autoSwitchMutationRef.current = { accountId: id };
     setAutoSwitchUpdatingId(id);
     try {
-      const response = await fetch(`${apiBase}/api/codex-auth/auto-switch`, {
+      const response = await targetFetch(capture, `${apiBase}/api/codex-auth/auto-switch`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, threshold }),
@@ -671,11 +676,12 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
     body: { id: string; creditsAfterLimit: boolean } | { all: boolean },
     apply: (account: CodexAccountEntry) => CodexAccountEntry,
   ) => {
+    const capture = captureApiTarget("shared");
     if (creditsAfterLimitMutationRef.current) return { ok: false, reason: "busy" } as const;
     creditsAfterLimitMutationRef.current = true;
     setCreditsAfterLimitUpdatingId(updatingId);
     try {
-      const response = await fetch(`${apiBase}/api/codex-auth/accounts/credits`, {
+      const response = await targetFetch(capture, `${apiBase}/api/codex-auth/accounts/credits`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -705,11 +711,12 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
   ), [writeCreditsAfterLimit]);
 
   const pauseExhaustedAccounts = useCallback(async () => {
+    const capture = captureApiTarget("shared");
     if (pauseMutationRef.current) return { ok: false, reason: "busy" } as const;
     pauseMutationRef.current = "bulk";
     setPausingExhausted(true);
     try {
-      const response = await fetch(`${apiBase}/api/codex-auth/accounts/pause-exhausted`, { method: "PUT" });
+      const response = await targetFetch(capture, `${apiBase}/api/codex-auth/accounts/pause-exhausted`, { method: "PUT" });
       if (!response.ok) return { ok: false, reason: "request" } as const;
       const raw = await response.json().catch(() => ({}));
       const result = (raw && typeof raw === "object" ? raw : {}) as {

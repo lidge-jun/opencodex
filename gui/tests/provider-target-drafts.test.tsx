@@ -214,6 +214,19 @@ describe("Provider Settings drafts are scoped to their dashboard target", () => 
     expect(noteField().value).toBe("second edit");
   });
 
+  test("a removal while a save is in flight does not resurrect the draft", async () => {
+    const store = createProviderDraftStore();
+    let finish!: (result: { ok: boolean }) => void;
+    const update = async () => await new Promise<{ ok: boolean }>(resolve => { finish = resolve; });
+    await render(<ProviderSettings item={item("a", "saved A")} targetKey="/a" draftStore={store} onUpdateProvider={update} />);
+    await typeNote("draft before removal");
+    await act(async () => { saveButton().click(); await Promise.resolve(); });
+    store.clear("/a", "shared-provider");
+    await act(async () => { finish({ ok: true }); await Promise.resolve(); });
+
+    expect(store.read("/a", "shared-provider")).toBeUndefined();
+  });
+
   test("discarding from the leave dialog clears the parked Settings draft", async () => {
     const store = createProviderDraftStore();
     await render(

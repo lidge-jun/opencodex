@@ -266,6 +266,18 @@ export async function targetFetch(
   init?: RequestInit,
 ): Promise<Response> {
   if (!targetCaptureMatches(capture)) return targetChangedResponse();
+  let requestUrl: URL;
+  try {
+    requestUrl = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+  } catch {
+    return targetChangedResponse();
+  }
+  const capturedBase = new URL(capture.apiBase || "/", window.location.href);
+  const capturedPath = capturedBase.pathname.replace(/\/$/, "");
+  if (requestUrl.origin !== capturedBase.origin
+    || (capturedPath !== "" && requestUrl.pathname !== capturedPath && !requestUrl.pathname.startsWith(`${capturedPath}/`))) {
+    return targetChangedResponse();
+  }
   const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
   const mutation = method !== "GET" && method !== "HEAD";
   const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
@@ -278,7 +290,14 @@ export async function targetFetch(
       if (!targetCaptureMatches(capture)) return targetChangedResponse();
     }
   }
-  return globalThis.fetch(input, { ...init, headers });
+  const response = await globalThis.fetch(input, { ...init, headers });
+  if (capture.transport === "relay" && response.status === 409) {
+    const body = await response.clone().json().catch(() => null) as { error?: unknown } | null;
+    if (body?.error === "target_changed") {
+      try { window.dispatchEvent(new window.Event(TARGET_CHANGED_EVENT)); } catch { /* non-browser */ }
+    }
+  }
+  return response;
 }
 
 function clearSessionIfCurrent(plane: ApiPlane, expected: string | null): void {
