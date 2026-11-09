@@ -384,6 +384,28 @@ describe("hub-link listener lifecycle", () => {
     expect(attempts).toBe(1);
   });
 
+  test("a bound listener cancels the owed capture retry when it closes", async () => {
+    tempHome = mkdtempSync(join(tmpdir(), "ocx-link-capture-bound-close-"));
+    const current = { value: store() };
+    let attempts = 0;
+    const lifecycle = makeLifecycle(current, {
+      warn: () => {},
+      writeStore: (_path, next) => { current.value = next; },
+      serve: served => { const actual = Bun.serve(served); servers.push(actual); return actual; },
+      captureRetryDelayMs: () => 5,
+      captureRouteDefaults: () => { attempts += 1; throw new Error("config lock busy"); },
+    });
+    lifecycle.start(context());
+    // The bind succeeded, so this is the bound-listener retry path, not the bind-failure path.
+    expect(lifecycle.status().state).toBe("listening");
+    expect(attempts).toBe(1);
+    await lifecycle.close();
+    expect(lifecycle.status()).toEqual({ state: "off", port: null, reason: null });
+    await Bun.sleep(30);
+    expect(attempts).toBe(1);
+    await lifecycle.stop();
+  });
+
   test("a closed listener cancels the owed capture's retry timer like stop", async () => {
     tempHome = mkdtempSync(join(tmpdir(), "ocx-link-capture-close-"));
     let attempts = 0;
