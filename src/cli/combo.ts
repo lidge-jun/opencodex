@@ -176,6 +176,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
     if (quotaSignals !== undefined && quotaSignals !== "-" || quotaTiers !== undefined && quotaTiers !== "-") throw new CliUsageError("quota settings apply only to jev", USAGE);
     if (sessionPinMs !== undefined) throw new CliUsageError("--session-pin applies only to the jev strategy", USAGE);
     if (decisionTimeoutMs != null) throw new CliUsageError("--decision-timeout applies only to the jev strategy", USAGE);
+    if (additional.jevEffortMode === "client") throw new CliUsageError("--jev-effort-mode client applies only to the jev strategy", USAGE);
   };
   if (strategyRaw !== undefined) requireStrategyFlags(strategyRaw);
   deps = { ...deps, baseUrl: await runtimeBaseUrl(deps) };
