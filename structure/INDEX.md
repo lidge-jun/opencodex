@@ -147,7 +147,7 @@ The dashboard, the management API, and third-party client config ownership.
 | [`clients/t3code.md`](clients/t3code.md) | T3 Code settings.json Claude provider-instance ownership, proxy environment, custom models and loopback marker rules. |
 | [`companion.md`](companion.md) | Shared timeline filtering, usage/quotas, native and web tray title, and WidgetKit display contracts. |
 | [`codex-account-controls.md`](codex-account-controls.md) | Account selection order, custom usage thresholds, and stable account-card editing. |
-| [`telemetry.md`](telemetry.md) | Anonymous daily usage telemetry contract, consent state, install identity, ledger aggregation, scheduler, management API, and CLI. |
+| [`telemetry.md`](telemetry.md) | Anonymous daily usage telemetry contract, consent state, install identity, ledger aggregation, scheduler, management API, CLI, and Cloudflare Worker collector. |
 
 ### Tier 6 — Operations and process
 
@@ -211,6 +211,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `scripts/generate-ocx-skill-surface.ts` | [`cli-management.md`](cli-management.md) |
 | `scripts/test-run-lock-gate.ts` | [`ops/test-sandbox-cleanup.md`](ops/test-sandbox-cleanup.md) |
 | `scripts/test-run-lock.ts` | [`ops/test-sandbox-cleanup.md`](ops/test-sandbox-cleanup.md) |
+| `services/telemetry-collector/` | [`telemetry.md`](telemetry.md) |
 | `skills/ocx/` | [`cli-management.md`](cli-management.md) |
 | `src/adapters/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers/claude-cli-replay.md`](providers/claude-cli-replay.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/cursor.md`](providers/cursor.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md)<br>[`adapters/registry.md`](adapters/registry.md) |
 | `src/adapters/anthropic-rejection-memo.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
