@@ -71,8 +71,9 @@ writer's own publish fails the fence and retries, and a reader only ever sees on
 generation. A
 crash before publish leaves the previously published generation complete. An append writes into the
 published generation and publishes its cursor, digest, counts and span in the same transaction,
-fenced on the cursor so a stale append cannot regress it. Readers take meta and the candidate
-select in one read transaction and reject a generation that changed under them. A published
+fenced on the cursor so a stale append cannot regress it. Each candidate page re-reads meta and
+selects inside its own short read transaction, and a generation or schema change aborts the read --
+the per-page recheck described with the paging contract above. A published
 generation that claims rows it no longer holds is rebuilt rather than served as a complete zero, in
 both the active and the passive read.
 
@@ -93,10 +94,17 @@ sidecars are registered for uninstall only when this module creates them, and a 
 that is not this projection is never modified. A passive management read opens an existing
 projection read-only, requires this projection's full table set rather than a coincidental meta
 table, and only uses it when it is current for the exact ledger revision; otherwise it streams,
-and it never creates, writes or registers anything. Any other index-side failure -- unwritable home,
+and it never creates, writes or registers anything. Index reads retry contention on nine delays
+totaling about 6.4 s and a rebuild-required read on three short delays before degrading. Any other
+index-side failure -- unwritable home,
 full disk, contention, a corrupt or foreign file -- falls back to the authoritative streaming scan
 instead of failing a request the scan can answer; a failure to read `usage.jsonl` itself is
-propagated. A nonselective filter (`client=all`, `device=all`, no provider/model/key) still reads
+propagated. A `UsageFilterIndexPageError` from a `src/usage/filter-index.ts` page read clears the
+retained filtered aggregate, then retries the authoritative streaming scan under
+`withFilterIndexRetry` (`MAX_FILTER_INDEX_ATTEMPTS` attempts) in
+`src/server/management/usage-aggregate-cache.ts`: only a concurrent ledger replacement or an
+aggregation-input change is retried, the unusable index is never re-entered, and unrelated ledger
+I/O failures still propagate. A nonselective filter (`client=all`, `device=all`, no provider/model/key) still reads
 every row in its window; `candidateRows` counts the rows selected and normalized for that call and
 `scope` says whether that is the whole candidate set or only the appended suffix, not how many SQL
 index entries were examined. `tests/usage/usage-filter-index.test.ts` asserts candidate counts against the whole
@@ -138,7 +146,3 @@ filtered HEAD reads, whose empty body cannot confirm the scope. Requests without
 newly scoped by that rule. `src/server/hub-usage.ts` binds a client-filtered data-plane read to its authenticated
 key and emits a safe scope echo; `src/remote/hub-usage.ts` projects it without key IDs, and
 `src/client/hub-client.ts` rejects a missing or mismatched echo.
-
-Page-time index failure fallback retries the authoritative streaming scan within the same bounded
-retry policy for concurrent ledger replacement and aggregation-input changes. It does not retry the
-unusable index, and unrelated ledger I/O failures still propagate.

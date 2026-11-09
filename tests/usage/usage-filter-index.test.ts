@@ -1351,6 +1351,36 @@ describe("filtered usage index availability", () => {
     });
   }
 
+  test("a generation change between pages keeps the rebuild retry and correct totals", async () => {
+    const rows = Array.from({ length: 2_500 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({});
+
+    // Explicit nulls match the normalized query shape; a bare `{}` is not a valid caller query.
+    const read = await filterIndexModule.readUsageFilterCandidates({
+      provider: null, model: null, apiKeyId: null,
+    });
+    expect(read).not.toBeNull();
+    // A full first page proves this reader has another page left to validate.
+    expect(read!.nextPage()).toHaveLength(2_000);
+
+    try {
+      // Publish a new generation under the open reader through the normal rebuild flow.
+      filterIndexModule.requestUsageFilterIndexRebuild();
+      await getFilteredUsageAggregate({});
+      let caught: unknown;
+      try { read!.nextPage(); } catch (error) { caught = error; }
+      expect(caught).toBeInstanceOf(ledgerScannerModule.UsageLedgerRebuildRequiredError);
+      expect(caught).not.toBeInstanceOf(UsageFilterIndexPageError);
+    } finally {
+      read!.close();
+    }
+
+    // The retried aggregate still answers from the fresh generation, matching the oracle.
+    resetUsageAggregateCacheForTests();
+    await expectMatchesFullScan({});
+  });
+
   test("a projection that vanishes before the read is not recreated", async () => {
     const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
     writeRows(rows);
