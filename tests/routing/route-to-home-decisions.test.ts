@@ -168,3 +168,26 @@ test("on a Home with no link an unreadable route-intent.json neither blocks a da
   expect(piRouted()).toBe(false);
   expect(readFileSync(routeIntentStatePath(), 'utf8')).toBe('{not json');
 `), SPAWN_BUDGET_MS);
+
+test("on an upgraded linked Home whose Aside profiles have no stable userId, a full Home sync leaves Aside routed and still applies the rest", () => scenario(`
+  writeLinkStore(linkStorePath(), { version: 1, listenerPort: 19100, links: [] });
+  asideProfile(undefined);
+  expect((await management(handleIntegrationRoutes, 'PUT', '/api/client-integrations/aside/profiles/0', { enabled: true })).status).toBe(200);
+  expect(asideRouted()).toBe(true);
+  expect(applyIntegration({ clientId: 'pi', config: loadConfig(), port: 18274, models: [], store, home: process.env.HOME, env: process.env }).ok).toBe(true);
+  // A link enrolled by an earlier version: no route-intent.json yet.
+  writeLinkStore(linkStorePath(), { version: 1, listenerPort: 19100, links: [{ id: 'lnk_0123456789abcdef', alias: 'child', direction: 'client-initiated', hostKeyFingerprint: null, tunnelPort: 19200, apiKeyId: 'key-test', createdAt: '2026-11-07T00:00:00.000Z' }] });
+  const listener = createLinkListenerLifecycle({ serve: () => ({ port: 19100, stop: async () => {} }), warn: () => {} });
+  listener.start({ dispatch: async () => new Response(null), maxRequestBodySize: 1024 });
+  await listener.stop();
+  expect(readRouteIntentState().defaults.aside).toBeUndefined();
+  const unresolved = [];
+  const outcomes = await syncHomeRouteTo(loadConfig(), 'test', false, undefined, undefined, { loadModels: async () => [], onAsideUnresolved: message => unresolved.push(message) });
+  expect(outcomes.find(row => row.client === 'aside')).toBeUndefined();
+  expect(outcomes.find(row => row.client === 'pi')?.outcome).toBe('current');
+  expect(asideRouted()).toBe(true);
+  expect(piRouted()).toBe(true);
+  expect(unresolved).toHaveLength(1);
+  expect(unresolved[0]).toContain('ocx route to aside');
+  expect(readRouteIntentState().defaults.aside).toBeUndefined();
+`), SPAWN_BUDGET_MS);
