@@ -33,6 +33,7 @@ let activeSignature = "";
 let activeConfigured = new Set<string>();
 let activeAccountProviders = codexAccountProviders([]);
 let version = 0;
+let creditPriceByProvider: ReadonlyMap<string, number> = new Map();
 let preservedDiskOnlyProviders: Record<string, OcxProviderConfig> | null = null;
 
 /**
@@ -259,9 +260,12 @@ export function refreshUserCostOverlays(config: OcxConfig): void {
   commitPersistedProviderDeletions(config);
 
   const rows: ExpectedPriceOverlay[] = [];
+  const creditPrices = new Map<string, number>();
   const providers = config.providers;
   if (providers) {
     for (const [providerName, provider] of Object.entries(providers)) {
+      const creditPrice = provider?.creditPriceUsd;
+      if (typeof creditPrice === "number" && Number.isFinite(creditPrice) && creditPrice >= 0) creditPrices.set(providerName, creditPrice);
       const costs = provider?.modelCosts;
       if (!costs || typeof costs !== "object" || Array.isArray(costs)) continue;
       for (const [modelId, cost4] of Object.entries(costs)) {
@@ -311,13 +315,20 @@ export function refreshUserCostOverlays(config: OcxConfig): void {
   const configuredNames = Object.keys(providers ?? {}).sort();
   const accountProviders = codexAccountProviders(config.codexAccounts);
   const accountEntries = [...accountProviders].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
-  const signature = `${JSON.stringify(configuredNames)}\u0000${JSON.stringify(rows)}\u0000${JSON.stringify(accountEntries)}`;
+  const creditEntries = [...creditPrices].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  const signature = `${JSON.stringify(configuredNames)}\u0000${JSON.stringify(rows)}\u0000${JSON.stringify(accountEntries)}\u0000${JSON.stringify(creditEntries)}`;
   if (signature === activeSignature) return;
   activeSignature = signature;
   active = rows;
+  creditPriceByProvider = new Map(creditEntries);
   activeConfigured = new Set(configuredNames);
   activeAccountProviders = accountProviders;
   version++;
+}
+
+/** USD per provider credit, by configured provider name (`providers.<name>.creditPriceUsd`). */
+export function activeCreditPrices(): ReadonlyMap<string, number> {
+  return creditPriceByProvider;
 }
 
 /** Active user-configured overlay rows (stable identity until the next refresh). */
