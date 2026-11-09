@@ -197,3 +197,64 @@ test("a read from an earlier visit to the same target cannot repaint it after a 
   expect(seen!.activeId).toBe("a2-new");
   expect(seen!.loadState).toBe("ready");
 });
+
+test("an old visit's read must not give back the new visit's in-flight count", async () => {
+  const server = serve([
+    { id: "a4-old", accounts: ["a4-old"] },
+    { id: "b4", accounts: ["b4"] },
+    { id: "a4-new", accounts: ["a4-new"] },
+  ]);
+  configureApiTargets(relay("/same", "hub-a4"));
+  await mount("hub-a4");
+  expect(server.reads()).toBe(1);
+
+  await switchTarget("hub-b4", () => {});
+  await act(async () => { server.release(1); await new Promise(resolve => setTimeout(resolve, 10)); });
+  expect(ids()).toEqual(["b4"]);
+
+  // Back to A with its first read still held. The new A read starts and stays in flight, so the
+  // surface is refreshing again.
+  await switchTarget("hub-a4", () => {});
+  expect(server.reads()).toBe(3);
+  expect(seen!.refreshing).toBe(true);
+
+  // The old A read settles now. The reset discarded its increment, so its completion must not
+  // clear the new A read's count.
+  await act(async () => { server.release(0); await new Promise(resolve => setTimeout(resolve, 10)); });
+  expect(ids()).toEqual([]);
+  expect(seen!.refreshing).toBe(true);
+
+  await act(async () => { server.release(2); await new Promise(resolve => setTimeout(resolve, 10)); });
+  expect(ids()).toEqual(["a4-new"]);
+  expect(seen!.refreshing).toBe(false);
+});
+
+test("a superseded read on the same target still releases its own in-flight count", async () => {
+  const server = serve([
+    { id: "c5", accounts: ["c5"] },
+    { id: "c5-first", accounts: ["c5-first"] },
+    { id: "c5-second", accounts: ["c5-second"] },
+  ]);
+  configureApiTargets(relay("/same", "hub-c5"));
+  await mount("hub-c5");
+  await act(async () => { server.release(0); await new Promise(resolve => setTimeout(resolve, 10)); });
+  expect(ids()).toEqual(["c5"]);
+  expect(seen!.refreshing).toBe(false);
+
+  let first!: Promise<boolean>;
+  let second!: Promise<boolean>;
+  await act(async () => {
+    first = seen!.load();
+    second = seen!.load();
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+  expect(seen!.refreshing).toBe(true);
+
+  // The older read is superseded for state, but its increment is still the counter's.
+  await act(async () => { server.release(1); await first; });
+  expect(seen!.refreshing).toBe(true);
+
+  await act(async () => { server.release(2); await second; });
+  expect(seen!.refreshing).toBe(false);
+  expect(ids()).toEqual(["c5-second"]);
+});

@@ -276,8 +276,13 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
   // accounts for a frame. The refs below move in an effect: they are read by in-flight
   // loads, and a render-phase ref write is what the compiler rejects.
   const [syncedSeedKey, setSyncedSeedKey] = useState(seedKey);
+  // Which reset the in-flight counter belongs to. The seed key alone cannot say: A -> B -> A
+  // returns to the same key, and a read issued before the first A must not give back an
+  // increment the clear already discarded.
+  const [targetEpoch, setTargetEpoch] = useState(0);
   if (syncedSeedKey !== seedKey) {
     setSyncedSeedKey(seedKey);
+    setTargetEpoch(targetEpoch + 1);
     setAccounts([]);
     setActiveId(null);
     setLoadState("loading");
@@ -291,7 +296,11 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
   // commit's layout phase but before its passive effects, so a passive ref write would
   // still name the old target when the response lands.
   const seedKeyRef = useRef(seedKey);
-  useLayoutEffect(() => { seedKeyRef.current = seedKey; }, [seedKey]);
+  const targetEpochRef = useRef(targetEpoch);
+  useLayoutEffect(() => {
+    seedKeyRef.current = seedKey;
+    targetEpochRef.current = targetEpoch;
+  }, [seedKey, targetEpoch]);
   useEffect(() => {
     if (previousSeedKeyRef.current === seedKey) return;
     previousSeedKeyRef.current = seedKey;
@@ -336,6 +345,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
   const load = useCallback(async (refreshQuota = false, options: { validatePending?: boolean } = {}): Promise<boolean> => {
     const capture = renderCapture;
     const targetSeedKey = seedKey;
+    const epoch = targetEpoch;
     // A callback captured by an earlier render can still be invoked after this surface moved
     // (a poll timer armed for A, say). Its request belongs to the target that render owned, so
     // it must not start here at all: the counter and the first-attempt flag it would touch are
@@ -477,14 +487,15 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
         pauseTokensRef.current!.delete(validationLease);
         setPauseCount(pauseTokensRef.current!.size);
       }
-      // The counter describes the target this render owns, and the render-phase clear zeroed it
-      // when the target moved, so a read issued for the previous target must not give its
-      // increment back here. The first-attempt flag belongs to the newest read only.
-      if (seedKeyRef.current === targetSeedKey) setInflightCount(count => Math.max(0, count - 1));
+      // The counter belongs to the reset that created it. A read from before that reset must not
+      // give back an increment the render-phase clear already discarded, while a read superseded
+      // by a newer read on the same target still has to release its own. The first-attempt flag
+      // belongs to the newest read only.
+      if (targetEpochRef.current === epoch) setInflightCount(count => Math.max(0, count - 1));
       if (loadIsCurrent()) setFirstAttemptSettled(true);
     }
   // oxlint-disable-next-line react/react-compiler -- preserve existing callback dependency semantics during Oxlint migration
-  }, [apiBase, seedKey, renderCapture, captureIsCurrent]);
+  }, [apiBase, seedKey, targetEpoch, renderCapture, captureIsCurrent]);
 
   // Initial load plus background refresh. Owned here so mounting or unmounting a surface
   // never changes the request count.
