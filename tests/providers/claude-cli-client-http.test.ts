@@ -5,9 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createClaudeCliAdapter } from "../../src/adapters/claude-cli/adapter";
 import { getAdapterDefinition } from "../../src/adapters/registry";
-import { handleOwnedResponses as handleResponses } from "../helpers/response-replay-owner";
+import { handleOwnedResponses as handleResponses, rememberOwnedResponseState } from "../helpers/response-replay-owner";
 import { handleChatCompletions } from "../../src/server/chat-completions";
-import { rememberResponseState } from "../../src/responses/state";
 import { buildDshClientConfig } from "../../src/clients/config-export/dsh";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import type { OcxConfig } from "../../src/types";
@@ -353,7 +352,7 @@ test("Responses file-backed images are refused before Claude CLI launch", async 
       expect(body).not.toContain("file-private-fixture");
     }
     expect(launches).toBe(0);
-    rememberResponseState({ input: [{ type: "agent_message", content: [image] }] },
+    rememberOwnedResponseState({ input: [{ type: "agent_message", content: [image] }] },
       { id: "resp_agent_file_fixture", status: "completed", output: [] });
     for (const model of ["claude-cli/claude-sonnet-5-5", "pair"]) {
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
