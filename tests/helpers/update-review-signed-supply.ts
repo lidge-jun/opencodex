@@ -42,11 +42,16 @@ export const signedSupplyReview: UpdateReviewTable = {
   primitive: [
     ["src/update/update-signed-version.mjs:validVersion:VERSION.exec", "pure: RegExp#exec on a version string, not a process exec"],
     ["src/update/update-bounded-json.mjs:parseBoundedJson:NUMBER.exec", "pure: RegExp#exec on JSON number text, not a process exec"],
-    ["src/update/signed-supply.mjs:verifyExternalMetadataEvidence:Reflect", "pure: Reflect.ownKeys counts a descriptor snapshot's own keys; no capability acquisition"],
-    ["src/update/update-checkpoint-codec.mjs:record:Reflect", "pure: Reflect.ownKeys checks a decoded record's exact key set; no capability acquisition"],
-    ["src/update/update-checkpoint-codec.mjs:list:Reflect", "pure: Reflect.ownKeys checks a decoded list's exact index keys; no capability acquisition"],
+    // Keyed on the complete expression: any other Reflect member at these sites is still flagged.
+    ["src/update/signed-supply.mjs:verifyExternalMetadataEvidence:Reflect.ownKeys(descriptors)", "pure: counts a descriptor snapshot's own keys; no capability acquisition"],
+    ["src/update/update-checkpoint-codec.mjs:record:Reflect.ownKeys(value)", "pure: checks a decoded record's exact key set; no capability acquisition"],
+    ["src/update/update-checkpoint-codec.mjs:list:Reflect.ownKeys(value)", "pure: checks a decoded list's exact index keys; no capability acquisition"],
   ],
   process: [],
-  contracts: [],
+  contracts: [
+    ["src/update/signed-supply.mjs", "verifyExternalMetadataEvidence", "Reflect.ownKeys(descriptors)", 1, "read-only: exact own-key count of a caller descriptor snapshot before any field is trusted"],
+    ["src/update/update-checkpoint-codec.mjs", "record", "Reflect.ownKeys(value)", 1, "read-only: exact key set of a decoded checkpoint record"],
+    ["src/update/update-checkpoint-codec.mjs", "list", "Reflect.ownKeys(value)", 1, "read-only: exact index keys of a decoded checkpoint list"],
+  ],
 };
 
