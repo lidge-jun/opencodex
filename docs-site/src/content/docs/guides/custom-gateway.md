@@ -10,6 +10,10 @@ dashboard, name it `my-gateway`, select `openai-chat`, and enter the authorized 
 form. Save it without putting the key in commands or shared examples. A saved provider is not yet
 proof that discovery or inference works.
 
+On a [Remote Link](/guides/remote-link/) Child, providers come from the Home: the Child's dashboard
+refuses provider changes and its requests are served by the Home's providers. Register and verify
+the gateway on the Home instead.
+
 Check the boundaries separately, using the configured local port if it differs from the default:
 
 ```sh
