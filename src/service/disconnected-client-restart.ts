@@ -15,14 +15,17 @@ export interface DisconnectedClientRestartDeps {
 
 /** A service stop can leave a detached Child alive (notably Task Scheduler /end).
  * Settle that exact, home-verified process before the manager starts standalone.
- * Connected Children and foreign/unproven processes never enter this cleanup path.
+ * Connected Children, foreign/unproven processes and an interrupted disconnect never enter this
+ * cleanup path: the restart then proceeds exactly as it did before this cleanup existed, and an
+ * interrupted disconnect is finished by running `ocx disconnect` again.
  */
 export async function prepareDisconnectedClientServiceRestart(deps: DisconnectedClientRestartDeps): Promise<void> {
   const disconnected = deps.disconnected ?? (() => {
     assertNoClientDisconnectPending();
     return readClientConnectionState().kind === "disconnected" && !pendingClientConnectMayOwnToken();
   });
-  if (!disconnected()) return;
+  try { if (!disconnected()) return; }
+  catch { return; }
   const live = await (deps.findLive ?? (() => findLiveProxy({ ...SERVICE_STOP_LIVENESS, acceptPackageTreeFenced: true })))();
   if (live?.role !== "client") return;
   const pid = live.pid;
@@ -37,7 +40,9 @@ export async function prepareDisconnectedClientServiceRestart(deps: Disconnected
     // home binding still applies, but process identity must be proved again.
     return homeVerified ? verifyPidIdentity(candidate) : null;
   });
-  if (verify(pid) !== pid || !disconnected()) throw new Error("Disconnected client ownership changed; rerun 'ocx disconnect', then 'ocx service restart'.");
+  // A client proxy this home cannot prove is its own is not ours to stop.
+  if (verify(pid) !== pid) return;
+  if (!disconnected()) throw new Error("Disconnected client ownership changed; rerun 'ocx disconnect', then 'ocx service restart'.");
   deps.beforeStop?.();
   await deps.stopManager();
   deps.beforeStop?.();

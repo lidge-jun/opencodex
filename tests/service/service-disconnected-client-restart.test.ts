@@ -52,7 +52,7 @@ test("a surviving detached client exits before standalone can start", async () =
   expect(running).toBe(false);
 });
 
-test.each(["connected", "standalone", "foreign", "pending"])("%s runtime is never killed", async mode => {
+test.each(["connected", "standalone", "foreign", "pending"])("%s runtime is never killed and the restart goes ahead as before", async mode => {
   const calls: string[] = [];
   const invoke = () => prepareDisconnectedClientServiceRestart({
     disconnected: () => {
@@ -63,8 +63,9 @@ test.each(["connected", "standalone", "foreign", "pending"])("%s runtime is neve
     verify: () => null, alive: () => true,
     stopManager: () => { calls.push("manager"); }, stop: async () => { calls.push("kill"); },
   });
-  if (mode === "foreign" || mode === "pending") await expect(invoke()).rejects.toThrow();
-  else await invoke();
+  // A proxy this home cannot prove is its own, and an interrupted disconnect, are not this
+  // cleanup's case: it touches nothing and lets the restart proceed as it did before.
+  await invoke();
   expect(calls).toEqual([]);
 });
 
@@ -85,14 +86,14 @@ test("a stop that leaves the client alive refuses a replacement", async () => {
   })).rejects.toThrow("did not exit");
 });
 
-test("default identity verification refuses a PID absent from this home's runtime record", async () => {
+test("default identity verification leaves a PID absent from this home's runtime record alone", async () => {
   let touched = false;
   const read = spyOn(processState, "readRuntimePort").mockReturnValue(null);
   try {
-    await expect(prepareDisconnectedClientServiceRestart({
+    await prepareDisconnectedClientServiceRestart({
       disconnected: () => true, findLive: async () => ({ pid: 42, role: "client" }),
       alive: () => true, stopManager: () => { touched = true; }, stop: async () => { touched = true; },
-    })).rejects.toThrow("ownership changed");
+    });
     expect(read).toHaveBeenCalledWith();
     expect(touched).toBe(false);
   } finally { read.mockRestore(); }
