@@ -512,8 +512,10 @@ function ensureSchema(db: Database, classification: "fresh" | "ours"): void {
  * connections that can write set it, and only after the file classified as this projection: a
  * foreign WAL database keeps SQLite's default and leaves nothing behind.
  *
- * A size limit makes the retained WAL truncate to empty when the last connection closes, so a
- * large rebuild does not leave its WAL on disk; the file stays, the bytes do not.
+ * The writer also checkpoints with TRUNCATE before it closes (see refreshUsageFilterIndex), so a
+ * clean close leaves the kept WAL empty on every SQLite build: a large rebuild does not leave its
+ * bytes on disk, and no stale frames remain to replay into whatever file later sits at this path.
+ * The size limit bounds the WAL between checkpoints.
  */
 function keepWalSidecars(db: Database): void {
   db.fileControl(sqliteConstants.SQLITE_FCNTL_PERSIST_WAL, 1);
@@ -1101,6 +1103,9 @@ async function refreshUsageFilterIndex(
       }
       return await refreshWithRetry(db, dir, path);
     } finally {
+      // A reader in another process can still hold the WAL; then this checkpoint is partial and
+      // the next writer's close empties it.
+      try { db.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } catch { /* the close below still runs */ }
       db.close();
     }
   })();

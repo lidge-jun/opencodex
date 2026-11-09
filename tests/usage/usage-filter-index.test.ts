@@ -1146,6 +1146,8 @@ describe("filtered usage index availability", () => {
     for (const result of [first, other, appended]) expect(result.filterIndex).toBeDefined();
     // The append really went through a writable refresh, not a retained answer.
     expect(appended.filterIndex?.totalRows).toBe(21);
+    // The kept WAL is empty after the writer's clean close.
+    expect(statSync(`${usageFilterIndexPath(testDir)}-wal`).size).toBe(0);
   });
 
   test("a passive read never creates or writes index files", async () => {
