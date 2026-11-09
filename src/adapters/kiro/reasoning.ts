@@ -50,6 +50,17 @@ export const KIRO_NATIVE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const KIRO_LUNA_TERRA_NATIVE_EFFORTS = new Set(["low", "medium", "high", "max"]);
 // Kiro rejects a native xhigh for these two (HTTP 400, live probe 2026-11-07); it stays emulated.
 const KIRO_NO_XHIGH_NATIVE_MODELS = new Set(["claude-opus-4.6", "claude-sonnet-4.6"]);
+// These models used the emulated block for every effort before native effort was verified, so an
+// effort outside the native ladder (`minimal`) keeps that block rather than becoming an error.
+const KIRO_EMULATED_EXTRA_EFFORT_MODELS = new Set([
+  "claude-opus-4.8",
+  "claude-opus-4.7",
+  "claude-opus-4.6",
+  "claude-sonnet-5.5",
+  "claude-sonnet-5",
+  "claude-sonnet-4.6",
+  "claude-haiku-5.5",
+]);
 
 export function kiroNativeEffortField(
   modelId: string,
@@ -59,7 +70,15 @@ export function kiroNativeEffortField(
   if ((model === "gpt-5.6-luna" || model === "gpt-5.6-terra")
     && effort !== undefined && !KIRO_LUNA_TERRA_NATIVE_EFFORTS.has(effort)) return undefined;
   if (KIRO_NO_XHIGH_NATIVE_MODELS.has(model) && effort === "xhigh") return undefined;
+  if (KIRO_EMULATED_EXTRA_EFFORT_MODELS.has(model) && effort !== undefined && !KIRO_NATIVE_EFFORTS.includes(effort)) {
+    return undefined;
+  }
   return KIRO_NATIVE_EFFORT_FIELDS[model];
+}
+
+/** True when an effort outside the native ladder keeps the emulated path instead of failing. */
+export function kiroEmulatesUnsupportedEffort(modelId: string): boolean {
+  return KIRO_EMULATED_EXTRA_EFFORT_MODELS.has(normalizeKiroModelId(modelId));
 }
 
 export function kiroReasoningMode(modelId: string, effort?: string): KiroReasoningMode {

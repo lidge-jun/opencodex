@@ -1,6 +1,6 @@
 import type { AdapterEvent, OcxParsedRequest, OcxUsage } from "../../types";
 import { KIRO_STRUCTURED_OUTPUT_TOOL_NAME } from "../kiro-constants";
-import { sanitizeKiroSchema } from "../kiro-tools";
+import { kiroRejectedSchemaKeys, sanitizeKiroSchema } from "../kiro-tools";
 import { readKiroJson } from "./structured-output-json";
 import { assertKiroStrictSchemaSupported, kiroStrictSchemaProblem, rewriteKiroWrappedRefs } from "./structured-output-schema";
 
@@ -79,7 +79,7 @@ export function kiroStructuredOutputSpec(parsed: OcxParsedRequest): KiroStructur
   if (!schema) return { toolSchema: { type: "object" }, wrapped: false, ...meta };
   if (strict) assertKiroStrictSchemaSupported(schema);
   const contract = { schema, ...(strict ? { strict } : {}) };
-  const sanitized = sanitizeKiroSchema(schema) as JsonRecord;
+  const sanitized = sanitizeKiroSchema(schema, kiroRejectedSchemaKeys(parsed.modelId)) as JsonRecord;
   if (isPlainObjectRoot(schema)) return { ...contract, toolSchema: sanitized, wrapped: false, ...meta };
   // `#/$defs/...` references resolve against the document root, which is now the wrapper. Hoist the
   // definitions with them so a referenced schema still resolves after it moves under `value`, and
