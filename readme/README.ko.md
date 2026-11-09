@@ -15,7 +15,7 @@
 </p>
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx start
 ```
 
@@ -88,7 +88,7 @@ opencodex는 코딩 도구와 모델 프로바이더를 연결하는 가벼운 �
 ### 개인 설치 (CLI)
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+; Bun 런타임은 자동으로 번들됩니다
+npm install -g --allow-scripts=bun @bitkyc08/opencodex   # Node 18+; Bun 런타임은 자동으로 번들됩니다
 ocx start                         # 프록시 + 대시보드: localhost:10100
 ```
 
@@ -241,7 +241,7 @@ bun run src/cli/index.ts start
 <summary>에이전트용</summary>
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx start     # 또는 `ocx service`
 ocx init      # 대화형 설정: ~/.opencodex/config.json을 쓰고 Codex를 연결합니다
 ```

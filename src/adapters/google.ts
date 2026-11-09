@@ -22,6 +22,7 @@ import { contentPartsToText, parseDataUrl } from "./image";
 import { bindVertexRequestAuthority, GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount, getVertexAccessTokenWithAuthority } from "../lib/gcp-adc";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
+import { readDisplaySafeErrorPayloadText } from "./upstream-http-error";
 import { isVertexTruncatedTurn, vertexTruncationErrorEvent } from "./google-truncation";
 import { antigravitySessionAnchor, antigravityUserAgentForWireModel, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
 import { summarizeGoogleWireShape } from "./google-wire-shape";
@@ -946,11 +947,15 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
   // session replay cache), but durable-store eviction is intentionally narrower: it only runs
   // when the error text explicitly mentions a signature, so a generic tool-schema
   // INVALID_ARGUMENT does not destroy valid durable signatures.
-  function handleSignatureRejection(errorMessage?: string) {
+  //
+  // `httpStatus` is the real upstream status when the rejection arrived as an HTTP error. The
+  // normalized Vertex/Antigravity error text keeps only Google's message, not its status enum,
+  // so a 400 such as "bad model" would otherwise leave the poisoned session entry in place (#8054).
+  function handleSignatureRejection(errorMessage?: string, httpStatus?: number) {
     const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
     const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
     const text = errorMessage ?? "";
-    const isInvalidArgument = /invalid_argument|invalid argument/i.test(text);
+    const isInvalidArgument = httpStatus === 400 || /invalid_argument|invalid argument/i.test(text);
     const isSignatureError = /signature|thought_signature|thoughtSignature/i.test(text);
     // The in-memory Antigravity replay cache only exists for CCA/Vertex, so clearing it stays
     // scoped to those modes (replayModel/replaySession are undefined elsewhere anyway).
@@ -982,12 +987,23 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
     // 429 rotation and raw error formatting.
     ...(provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist"
       ? {
-          fetchResponse: (request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response> =>
-            (provider.googleMode === "cloud-code-assist" ? fetchAntigravityWithRetry : fetchVertexWithRetry)(
+          fetchResponse: async (request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response> => {
+            const res = await (provider.googleMode === "cloud-code-assist" ? fetchAntigravityWithRetry : fetchVertexWithRetry)(
               request,
               ctx,
               { toolSchemaProfile, toolSchemaPolicy },
-            ),
+            );
+            // A rejected replay usually arrives as a real HTTP 400, and the dispatcher reports a
+            // non-ok response without ever calling parseStream/parseResponse — the only other
+            // callers of clear-on-invalid. Without this, the bad signature stays cached and is
+            // replayed on every turn until the TTL expires (#8054). Read a clone so the body the
+            // dispatcher formats is untouched, and await it so the next turn cannot race ahead of
+            // the eviction. No resend here: payload rejection stays resend-is-futile.
+            if (res.status === 400) {
+              handleSignatureRejection(await readDisplaySafeErrorPayloadText(res.clone(), ctx?.abortSignal), res.status);
+            }
+            return res;
+          },
           formatErrorBody: (status: number, _headers: Headers, payloadText: string): string =>
             (provider.googleMode === "cloud-code-assist" ? safeAntigravityHttpErrorMessage : safeVertexHttpErrorMessage)(status, payloadText),
         }

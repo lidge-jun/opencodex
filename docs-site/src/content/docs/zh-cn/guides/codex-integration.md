@@ -149,7 +149,7 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-在 macOS 上，opencodex 在显式选择、shim、PATH、既有安装路径和可运行的裸 `codex` 后备命令之后，依次检查 `/Applications/ChatGPT.app` 和 `~/Applications/ChatGPT.app` 中的 Codex 应用内置 CLI，要求其 XML `Info.plist` 标识为 `com.openai.codex`，且不会用应用候选项自动替换仍可运行的已保存选择。
+在 macOS 上，opencodex 在显式选择、shim、PATH、既有安装路径和可运行的裸 `codex` 后备命令之后，依次检查 `/Applications/ChatGPT.app` 和 `~/Applications/ChatGPT.app` 中的 Codex 应用内置 CLI，要求其 XML `Info.plist` 标识为 `com.openai.codex`，且不会用应用候选项自动替换仍可运行的已保存选择。 如果完全没有发现 Codex CLI，则 `ocx connect status` 就绪状态背后的目录探测也会尝试这些内置位置，因此仅装有应用内置 CLI 的 Child 会报告其支持的推理级别，而不是 `unverified`；执行时仍会应用下述检查。
 
 执行检查还会识别任意位置的 `Codex.app` 和 `ChatGPT.app`，包括移动后的应用包、显式
 `CODEX_CLI_PATH` 或配置的运行时命令，以及符号链接别名。名称只触发验证，不代表可信。

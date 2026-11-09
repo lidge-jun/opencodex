@@ -38,6 +38,7 @@ import { retainedNativeInheritanceTemplate } from "./native-template";
 import type { RawCatalog, RawEntry } from "./parsing";
 import { isSpawnableCodexCandidate } from "../exec-invocation";
 import { validatedCodexExecInvocation, validatedCodexExecInvocationAsync } from "../exec-boundary";
+import { macCodexAppCommands } from "../mac-app-bundle";
 import { isPlainObject } from "../../lib/plain-data";
 import {
   parsePersistedCodexRuntime,
@@ -51,6 +52,7 @@ import {
 import type {
   DeepReadonly,
   EffortClampDiagnostic,
+  ResolveCodexRuntimeResult,
   ResolvedCodexRuntime,
 } from "../runtime";
 import type {
@@ -332,6 +334,37 @@ function bundledRuntimeDeps(deps: BundledCatalogDeps) {
   };
 }
 
+/**
+ * Candidates for the bundled-catalog probe.
+ *
+ * When discovery finds no Codex CLI it answers with the bare `codex` sentinel, so the probe
+ * asks a command that does not exist while a real CLI sits inside ChatGPT.app. Discovery only
+ * offers that app candidate after classifying the bundle's XML `Info.plist` identity, so a
+ * bundle it cannot classify (a binary plist, or an identity assertion that moved with an app
+ * update) left `ocx connect status` reporting `unverified` on a macOS Child whose only Codex
+ * was the bundled CLI (#8360).
+ *
+ * The known app locations are therefore added after a bare sentinel. This list grants no
+ * trust: every execution still passes the app-bundle signature and ownership gate in
+ * `exec-boundary.ts`, so an unverifiable bundle yields `null` rather than an invented ladder.
+ * Windows needs no entry here because its Codex App install root under LOCALAPPDATA is already
+ * enumerated by `installedCodexCandidates` in `runtime.ts`.
+ */
+function bundledCatalogCandidates(
+  deps: BundledCatalogDeps,
+  resolved: ResolveCodexRuntimeResult | null,
+): string[] {
+  const candidates = deps.commandCandidates?.() ?? [resolved!.runtime.command];
+  // An explicit empty list asks for no probe at all.
+  if (candidates.length === 0) return candidates;
+  if ((deps.platform ?? process.platform) !== "darwin") return candidates;
+  // Only the unresolved sentinel is a bare name; a PATH or installed selection is absolute, and
+  // that selection is the runtime the operator is already running, not a gap to fill.
+  if (candidates.some(command => command.includes("/") || command.includes("\\"))) return candidates;
+  const exists = deps.existsSync ?? existsSync;
+  return [...candidates, ...macCodexAppCommands(deps).filter(command => exists(command))];
+}
+
 function* bundledCatalogSteps(
   candidates: string[],
   cacheKey: string | null,
@@ -390,7 +423,7 @@ export function loadBundledCodexCatalog(deps: BundledCatalogDeps = {}): Readonly
   const useCache = !deps.commandCandidates && !deps.execFileSync && !deps.execFile && !deps.configDir && !deps.env;
   const resolved = deps.commandCandidates ? null : resolveAndPersistCodexRuntime(bundledRuntimeDeps(deps));
   const inputs = codexRuntimeSelectionIdentity(bundledRuntimeDeps(deps));
-  const steps = bundledCatalogSteps(deps.commandCandidates?.() ?? [resolved!.runtime.command],
+  const steps = bundledCatalogSteps(bundledCatalogCandidates(deps, resolved),
     useCache ? bundledRuntimeKey(resolved!.runtime) : null,
     () => inputs === codexRuntimeSelectionIdentity(bundledRuntimeDeps(deps)));
   let step = steps.next();
@@ -449,7 +482,7 @@ export function loadBundledCodexCatalogAsync(
     const runtimeEpoch = codexRuntimeStateEpoch();
     const current = () => active() && runtimeEpoch === codexRuntimeStateEpoch()
       && flight.inputs === codexRuntimeSelectionIdentity(runtimeDeps);
-    const steps = bundledCatalogSteps(deps.commandCandidates?.() ?? [resolved!.runtime.command],
+    const steps = bundledCatalogSteps(bundledCatalogCandidates(deps, resolved),
       useCache ? bundledRuntimeKey(resolved!.runtime) : null, current, false);
     let step = steps.next();
     while (!step.done) {
