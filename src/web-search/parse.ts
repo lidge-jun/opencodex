@@ -147,9 +147,11 @@ function streamedPartKey(data: Record<string, unknown>, parts: Map<string, Strea
       indexPart(lookup, match, false);
       parts.delete(match.key);
       // The linking frame can omit a field that the identified draft already supplied.
-      indexPart(lookup, anonymous, false);
-      anonymous.contentIndex ??= match.contentIndex;
-      indexPart(lookup, anonymous, true);
+      if (anonymous.contentIndex === undefined && matchedContent !== undefined) {
+        indexPart(lookup, anonymous, false);
+        anonymous.contentIndex = matchedContent;
+        indexPart(lookup, anonymous, true);
+      }
       return anonymous.key;
     }
   }

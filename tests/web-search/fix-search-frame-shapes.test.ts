@@ -4,6 +4,29 @@ import { MAX_SIDECAR_DECODED_CHARS, parseSidecarSSE } from "../../src/web-search
 const response = (frames: unknown[]) => new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join(""));
 
 describe("identity transition matrix", () => {
+  test.each([
+    { draft: 0, anonymous: 1, initial: "X", other: "Y", final: "Second.", expected: "Second.Y" },
+    { draft: 1, anonymous: 0, initial: "X", other: "Y", final: "Second.", expected: "YSecond." },
+    { draft: 0, anonymous: 1, initial: "A", other: "B", final: "A2", expected: "A2B" },
+  ])("preserves both known content positions when the link omits its index: %j", async entry => {
+    expect(await parseSidecarSSE(response([
+      { type: "response.output_text.done", item_id: "a", output_index: 0, content_index: entry.draft, text: entry.initial },
+      { type: "response.output_text.done", output_index: 0, content_index: entry.anonymous, text: entry.other },
+      { type: "response.output_text.done", item_id: "a", output_index: 0, text: entry.final },
+      { type: "response.completed" },
+    ]))).toEqual({ text: entry.expected, sources: [] });
+  });
+
+  test("links a unique item-only draft to an anonymous part with a known content index", async () => {
+    expect(await parseSidecarSSE(response([
+      { type: "response.output_text.delta", item_id: "a", delta: "A" },
+      { type: "response.output_text.delta", item_id: "b", delta: "draft" },
+      { type: "response.output_text.done", output_index: 1, content_index: 0, text: "B" },
+      { type: "response.output_text.done", item_id: "b", output_index: 1, text: "B" },
+      { type: "response.completed" },
+    ]))).toEqual({ text: "BA", sources: [] });
+  });
+
   test("emits positioned content-key parts once across promotions and partial finals", async () => {
     for (const kind of ["delta", "done"]) for (const partial of [false, true]) {
       const event = (identity: object, text: string) => ({
