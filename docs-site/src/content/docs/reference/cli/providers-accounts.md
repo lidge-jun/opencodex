@@ -111,7 +111,10 @@ ocx provider snapshot --json
 
 Live add uses the target's presets and refuses an observed existing provider
 without `--force`. The check and server upsert are not atomic: concurrent changes
-can race. Custom providers still need `--adapter` and `--base-url`. `--live`
+can race. Custom providers still need `--adapter` and `--base-url`; a name the
+target does not offer as a preset, given without both, exits 2 with a message
+naming it, and so does canonical `openai` when the target lacks its preset.
+Nothing is written in either case. `--live`
 never falls back to a local save; combining it with `--sync` is invalid.
 Credentials belong in the supported human login or stdin flow, not CLI examples.
 

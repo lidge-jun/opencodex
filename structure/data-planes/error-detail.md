@@ -12,7 +12,10 @@ through the disk reader. A row keeps:
   value (an upstream code that reached a writer) collapses to the status fallback (`invalid_request_error`,
   `invalid_api_key`, `permission_denied`, `rate_limit_exceeded`, `client_closed_request`,
   `server_is_overloaded`, `upstream_server_error`, `http_NNN`, else `upstream_error`). Attempt codes are
-  normalized the same way, and upstream text fields removed from attempts, in place.
+  normalized the same way, and upstream text fields removed from attempts, in place. `classifyError`
+  keeps Meta's Muse Code subscription refusal in `subscription_required` rather than
+  `permission_denied`: a 403 whose whole `error.message` is that sentence names a plan restriction on
+  a valid key, so the row must not read as an expired credential that needs a re-login.
 - `upstreamCondition`, a member of the closed set in `src/lib/upstream-condition.ts`, derived only for a
   failed row with upstream evidence; a client close (499, `client_closed_request`, `client_cancelled`) gets
   none, and a stored condition is kept only under the same rules. Text set through
@@ -441,6 +444,7 @@ inspection or serialization.
 
 `src/server/messages-native-tool-guard.ts`, `src/server/messages-shared.ts` and
 `src/server/sse-payload-rewrite.ts` carry complete-frame construction identity.
+Native combo replay evidence is collected before framing transforms; if a transform fails before preflight, complete output or opaque frames and an unfinished raw frame prevent replay. A complete empty message prelude and ping remain replayable. The accounting tap remains the owner of stream outcomes and error presentation; after an error it conservatively marks a long unfinished frame as followed, bounding repeated tail inspection.
 Native and passthrough Messages SSE apply error-response normalization after echo, guard,
 accounting tap and the existing configured-only overflow rewrite. The final enqueue stage in
 `src/server/messages-sse-error-filter.ts` introduces no stream queue, timer or possible-prefix hold.

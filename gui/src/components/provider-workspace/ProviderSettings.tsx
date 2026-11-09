@@ -21,7 +21,7 @@ import { isCatalogProviderId } from "../../provider-icons";
 import { openAiAccountProviderState } from "../../provider-payload";
 import { canConfigureResponsesReasoningReplay } from "../../responses-reasoning-replay";
 import { ResponsesReasoningReplayControl } from "../responses-reasoning-replay-control";
-import { providerSupportsLiveModelDiscovery } from "../../provider-workspace/catalog";
+import { isVertexProvider, providerSupportsLiveModelDiscovery } from "../../provider-workspace/catalog";
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import { authModeLabel } from "./ProviderRail";
 import { ProviderProtocolPanel } from "./ProviderProtocolPanel";
@@ -85,6 +85,8 @@ export default function ProviderSettings({
   const savedCursorHttpVersion = effectiveCursorHttpVersion(item.upstreamHttpVersion);
   const [adapter, setAdapter] = useState(item.adapter);
   const [baseUrl, setBaseUrl] = useState(item.baseUrl);
+  const [project, setProject] = useState(item.project ?? "");
+  const [location, setLocation] = useState(item.location ?? "");
   const [defaultModel, setDefaultModel] = useState(item.defaultModel ?? "");
   const [authMode, setAuthMode] = useState(initialAuth);
   const [apiKeyTransport, setApiKeyTransport] = useState(item.apiKeyTransport ?? "x-api-key");
@@ -118,6 +120,8 @@ export default function ProviderSettings({
   useEffect(() => {
     setAdapter(item.adapter);
     setBaseUrl(item.baseUrl);
+    setProject(item.project ?? "");
+    setLocation(item.location ?? "");
     setDefaultModel(item.defaultModel ?? "");
     setAuthMode(String(item.authMode ?? (item.keyOptional ? "local" : "key")));
     setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
@@ -135,7 +139,7 @@ export default function ProviderSettings({
     setMsg(null);
     setModeMsg(null);
     queueMicrotask(() => setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl)));
-  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, item.preserveResponsesReasoningContent, savedLiveModels, savedCursorHttpVersion, item.requestPacing, baseUrlChoices]);
+  }, [item.adapter, item.baseUrl, item.project, item.location, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, item.preserveResponsesReasoningContent, savedLiveModels, savedCursorHttpVersion, item.requestPacing, baseUrlChoices]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Account mode syncs on its own: a mode PATCH refresh must not reset an in-progress
@@ -209,8 +213,10 @@ export default function ProviderSettings({
   const supportsReasoningReplay = !isCatalogProviderId(item.name)
     && canConfigureResponsesReasoningReplay({ adapter, baseUrl, authMode });
   const reasoningReplayDirty = supportsReasoningReplay && preserveReasoningReplay !== (item.preserveResponsesReasoningContent === true);
+  const vertexSettings = isVertexProvider(item) && (item.name === "google-vertex" || adapter.trim() === "google");
   const dirty = reasoningReplayDirty || adapter.trim() !== item.adapter
     || baseUrl.trim() !== item.baseUrl
+    || (vertexSettings && (project.trim() !== (item.project ?? "") || location.trim() !== (item.location ?? "")))
     || defaultModel.trim() !== (item.defaultModel ?? "")
     || authMode !== String(item.authMode ?? (item.keyOptional ? "local" : "key"))
     || (adapter.trim() === "anthropic" && authMode === "key" && apiKeyTransport !== (item.apiKeyTransport ?? "x-api-key"))
@@ -281,6 +287,8 @@ export default function ProviderSettings({
             ...(pacingDirty ? { requestPacing: pacingDraft } : {}),
           };
       if (!pacingOnly) {
+        if (vertexSettings && project.trim() !== (item.project ?? "")) patch.project = project.trim();
+        if (vertexSettings && location.trim() !== (item.location ?? "")) patch.location = location.trim();
         // Keep omitted legacy values omitted unless the user actually changes this toggle.
         // Otherwise an unrelated settings save manufactures `liveModels: true` provenance.
         if (liveModelDiscoverySupported && liveModels !== (item.liveModels !== false)) patch.liveModels = liveModels;
@@ -342,7 +350,7 @@ export default function ProviderSettings({
   };
 
   const discard = () => {
-    setAdapter(item.adapter); setBaseUrl(item.baseUrl);
+    setAdapter(item.adapter); setBaseUrl(item.baseUrl); setProject(item.project ?? ""); setLocation(item.location ?? "");
     setDefaultModel(item.defaultModel ?? ""); setAuthMode(initialAuth);
     setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
     setNote(item.note ?? ""); setAllowPrivateNetwork(item.allowPrivateNetwork ?? false); setLiveModels(savedLiveModels);
@@ -434,6 +442,16 @@ export default function ProviderSettings({
           <input className="input" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} readOnly={plainBaseUrlLocked} disabled={plainBaseUrlLocked} />
         </label>
       )}
+      {vertexSettings && <>
+        <label className="pwi-settings-field">
+          <span className="pwi-settings-label">{t("modal.vertexProject")}</span>
+          <input className="input" value={project} onChange={e => setProject(e.target.value)} />
+        </label>
+        <label className="pwi-settings-field">
+          <span className="pwi-settings-label">{t("modal.vertexLocation")}</span>
+          <input className="input" value={location} onChange={e => setLocation(e.target.value)} placeholder="us-central1" />
+        </label>
+      </>}
       {adapter.trim() === "cursor" && (
         <label className="pwi-settings-field">
           <span className="pwi-settings-label">{t("pws.cursorTransport")}</span>

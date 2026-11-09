@@ -510,27 +510,33 @@ describe("retained usage aggregate cache", () => {
       const retained = await getFilteredUsageAggregate({ provider: "OPENAI" });
       const different = await getFilteredUsageAggregate({ provider: "anthropic" });
 
-      expect(scans).toBe(2);
+      // One shared ingest serves every filter; a distinct filter reads its candidates
+      // instead of scanning the ledger again.
+      expect(scans).toBe(1);
       expect(requests(first)).toBe(2);
       expect(first.accumulator).toBe(concurrent.accumulator);
       expect(retained.update).toBe("unchanged");
       expect(retained.accumulator).toBe(first.accumulator);
       expect(requests(different)).toBe(0);
+      expect(different.filterIndex).toMatchObject({ totalRows: 2, candidateRows: 0, ingestPasses: 1 });
       expect(usageAggregateRetainedStats().count).toBe(2);
     } finally {
       scanSpy.mockRestore();
     }
   });
 
-  test("distinct filtered scans have bounded concurrency while identical callers share a flight", async () => {
-    writeFileSync(join(testDir, "usage.jsonl"), line("one"));
-    const originalScan = usageLedgerScannerModule.scanUsageLedgerCooperatively;
+  test("distinct filtered reads have bounded concurrency while identical callers share a flight", async () => {
+    // One matching row per filter, so every flight reaches the per-filter ledger read.
+    writeFileSync(join(testDir, "usage.jsonl"), [0, 1, 2, 3]
+      .map(index => `${JSON.stringify({ ...entry(`row-${index}`), provider: `provider-${index}` })}\n`)
+      .join(""));
+    const originalRead = usageLedgerScannerModule.readUsageLedgerRowsAtOffsets;
     let releaseScans!: () => void;
     const scansBlocked = new Promise<void>(resolve => { releaseScans = resolve; });
-    const scanSpy = spyOn(usageLedgerScannerModule, "scanUsageLedgerCooperatively")
+    const scanSpy = spyOn(usageLedgerScannerModule, "readUsageLedgerRowsAtOffsets")
       .mockImplementation(async options => {
         await scansBlocked;
-        return originalScan(options);
+        return originalRead(options);
       });
     try {
       const flights = Array.from({ length: 4 }, (_, index) =>
@@ -574,8 +580,10 @@ describe("retained usage aggregate cache", () => {
       } as unknown as OcxConfig);
       const refreshed = await getFilteredUsageAggregate({ provider: "openai" });
 
-      expect(scans).toBe(2);
+      // Repricing rebuilds the accumulator from the same index; it does not re-ingest.
+      expect(scans).toBe(1);
       expect(refreshed.update).toBe("rebuild");
+      expect(refreshed.filterIndex?.ingestPasses).toBe(1);
       expect(refreshed.accumulator).not.toBe(first.accumulator);
       expect(usageAggregateRetainedStats().count).toBe(1);
     } finally {

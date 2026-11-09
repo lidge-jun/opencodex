@@ -79,7 +79,9 @@ The dashboard shows Pro, Max 5x, or Ultra beside Claude account quotas, using su
 metadata from the authenticated profile. Both `ultra` and `claude_max_20x` display as Ultra
 (the existing `ultra` and `max_20x` tier aliases are retained). Unfamiliar validated tiers retain their original name without
 failing the usage read. Claude account rows prefer your alias, then a masked email, and
-fall back to a numbered label when no safe identity is available.
+fall back to a numbered label when no safe identity is available. The provider Overview shows the
+same label as a separate current-account field when its account list is verified. Set
+`privacy.maskEmails` to `false` to show the full email in these rows instead.
 
 You can log in multiple Claude accounts via the Providers dashboard (`ocx login anthropic` /
 add-account). By default every request uses the **active** account only.
@@ -156,6 +158,7 @@ thinking fallback. Adaptive thinking without an explicit effort stays blank. The
 request controls; they do not confirm what effort the upstream applied or change the wire body.
 
 An enabled Anthropic account pool prefers native Messages for eligible direct Anthropic routes
+and canonical Anthropic children of strict failover combos without a default effort
 when neither native rollout flag explicitly disables that path. In Providers → Anthropic →
 Account pooling → **How account selection works**, **Preserve native Claude requests** stores
 `anthropicAccountPool.nativeMessages` (default true). Turning it off selects the legacy bridge
@@ -1105,9 +1108,16 @@ other 5xx `api_error`. `Retry-After` is sent as whole seconds (an HTTP date beco
 and the penultimate user message, plus top-level automatic `cache_control`. Stable turns normally
 produce about a 99.9% cache hit rate.
 
-**Native OpenAI/ChatGPT routing:** derives a session-scoped `prompt_cache_key` (from
-`metadata.user_id` when present, falling back to a system-content hash) and `session_id` header
-for cache affinity. The cache key includes model and full tool schemas.
+**Native OpenAI/ChatGPT routing:** derives a `prompt_cache_key` for cache affinity, and a
+`session_id` header only from a session identity, never from the shared fallback key. When
+`metadata.user_id` is a string, the key is session-scoped. Remote Claude Code puts a JSON object in
+that string and adds a per-turn attribution token (`tk`) to it; when the object has other keys,
+`tk` is dropped before hashing, so every turn of one session keeps one cache key and one
+conversation id. Any other string (not JSON, a JSON array, or a JSON object holding only `tk`) is
+hashed unchanged, and the `user` field is still derived from the raw string. Without a string
+`metadata.user_id`, and when system content is present, the key falls back to a hash of the
+resolved model, system prompt and full tool schemas: a cohort key shared by requests with the same
+values, not a session key.
 
 **Token math:** Anthropic output subtracts `cached_tokens` and `cache_write_tokens` from
 `input_tokens`, exposing them as `cache_read_input_tokens` and `cache_creation_input_tokens`.

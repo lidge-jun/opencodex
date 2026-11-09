@@ -912,7 +912,7 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
     }
   })();
   const clientConnection = collectClientConnectionStatus(Date.now(), undefined, {
-    selectedCodexCommand: resolvedRuntime.runtime.command,
+    selectedCodexRuntime: resolvedRuntime.runtime,
   });
   // Asked before the local probes below so a connected client's report is hub-sourced from its
   // first line. Bounded and failure-tolerant: an offline hub degrades the remoteHub block, it

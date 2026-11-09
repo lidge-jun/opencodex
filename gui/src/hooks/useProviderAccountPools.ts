@@ -19,6 +19,7 @@ export interface OAuthAccount extends AccountQuotaReading {
   id: string;
   alias?: string;
   email?: string;
+  accountLabel?: string;
   maskedLabel?: string;
   active: boolean;
   needsReauth?: boolean;
@@ -122,11 +123,15 @@ export function useProviderAccountPools(deps: {
   fetchOauth: () => Promise<void>;
   fetchProviderQuotas: (refresh?: boolean) => Promise<void>;
   codexActiveNeedsReauth: boolean;
+  invalidateOauthStatusReads?: (provider: string, blocked?: boolean) => boolean;
+  setOauthStatus?: React.Dispatch<React.SetStateAction<Record<string, OAuthStatus>>>;
 }) {
   const {
     apiBase, t, config, aliveRef, notify,
-    fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth,
+    fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth, invalidateOauthStatusReads, setOauthStatus,
   } = deps;
+  const accountTarget = useMemo(() => ({ apiBase }), [apiBase]);
+  const [accountStateTarget, setAccountStateTarget] = useState(accountTarget);
   const [accountSets, setAccountSets] = useState<Record<string, { activeAccountId: string | null; accounts: OAuthAccount[] }>>({});
   const [accountLoadStates, setAccountLoadStates] = useState<Record<string, AccountLoadState>>({});
   const [switchingAccounts, setSwitchingAccounts] = useState<Record<string, { provider: string; accountId: string }>>({});
@@ -167,6 +172,7 @@ export function useProviderAccountPools(deps: {
       setSwitchingAccounts({});
       setKeyPools({});
       setAccountLoadStates({});
+      setAccountStateTarget(accountTarget);
     });
     return () => {
       mountedRef.current = false;
@@ -179,7 +185,7 @@ export function useProviderAccountPools(deps: {
       for (const controller of requests) controller.abort();
       requests.clear();
     };
-  }, [apiBase]);
+  }, [apiBase, accountTarget]);
   // Provider lists this instance has already fetched for. The deferred loads below are deliberately
   // uncancellable, and StrictMode double-invokes their effects, so dedupe by list identity here.
   const accountSetsKeyRef = useRef<string | null>(null);
@@ -232,7 +238,8 @@ export function useProviderAccountPools(deps: {
           activeAccountId: data.activeAccountId ?? null,
           accounts: mergeQuotaRows(rows, current[provider]?.accounts ?? [], false),
         } } : current);
-        setAccountLoadStates(current => currentRoster() ? { ...current, [provider]: "ready" } : current);
+        setAccountLoadStates(current => currentRoster() ? { ...current,
+          [provider]: selectionMutationsRef.current.has(key) ? "loading" : "ready" } : current);
         if (!rows.some(supportsQuotaRead)) return true;
 
         const enrich = async (): Promise<boolean> => {
@@ -352,13 +359,16 @@ export function useProviderAccountPools(deps: {
       if (selectionMutationsRef.current.has(key)) return false;
       const generation = (rosterGenerationRef.current[key] ?? 0) + 1;
       rosterGenerationRef.current[key] = generation;
-      const currentRequest = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
-        && !signal?.aborted && rosterGenerationRef.current[key] === generation && !selectionMutationsRef.current.has(key);
+      const ownsRoster = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
+        && rosterGenerationRef.current[key] === generation && !selectionMutationsRef.current.has(key);
+      const currentRequest = () => ownsRoster() && !signal?.aborted;
+      if (kind === "oauth") setAccountLoadStates(current => currentRequest() ? { ...current, [provider]: "loading" } : current);
       try {
         if (kind === "oauth") {
           const data = await readRoster<{ activeAccountId?: string | null; accounts?: OAuthAccount[] }>(
             `${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}`, signal);
-          if (!Array.isArray(data.accounts) || !currentRequest()) return false;
+          if (!Array.isArray(data.accounts)) throw new Error("Invalid account roster");
+          if (!currentRequest()) return false;
           const rows = selectionRows(data.accounts, data.activeAccountId);
           setAccountSets(current => currentRequest() ? { ...current, [provider]: {
             activeAccountId: data.activeAccountId === undefined ? rows.find(row => row.active)?.id ?? null : data.activeAccountId,
@@ -375,6 +385,7 @@ export function useProviderAccountPools(deps: {
         return true;
       } catch {
         // A missed invalidation read does not change quota health; recovery retries it.
+        if (kind === "oauth") setAccountLoadStates(current => ownsRoster() ? { ...current, [provider]: "error" } : current);
         return false;
       }
     }));
@@ -385,8 +396,25 @@ export function useProviderAccountPools(deps: {
     const key = `${kind === "oauth" ? "oauth" : "key"}:${provider}`;
     accountRequestGenerationRef.current[key] = (accountRequestGenerationRef.current[key] ?? 0) + 1;
     rosterGenerationRef.current[key] = (rosterGenerationRef.current[key] ?? 0) + 1;
+    if (kind === "oauth" && aliveRef.current && mountedRef.current && serverRef.current === apiBase) {
+      setAccountLoadStates(current => ({ ...current, [provider]: "loading" }));
+    }
     // The independent quota generation still owns pending/error flags for surviving IDs.
     return key;
+  };
+
+  const beginAccountLogout = (provider: string): (() => void) | null => {
+    const key = `oauth:${provider}`;
+    if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase
+      || selectionMutationsRef.current.has(key)) return null;
+    invalidateSelectionReads(provider, "oauth");
+    const owner = Symbol();
+    selectionMutationsRef.current.set(key, owner);
+    return () => {
+      if (selectionMutationsRef.current.get(key) !== owner) return;
+      invalidateSelectionReads(provider, "oauth");
+      selectionMutationsRef.current.delete(key);
+    };
   };
 
   const setAccountPoolThreshold = async (provider: string, threshold: number): Promise<boolean> => {
@@ -602,6 +630,7 @@ export function useProviderAccountPools(deps: {
     const rememberedRetry = affinityResetRetries(apiBase)[provider];
     const target = { provider, accountId };
     const mutation = Symbol();
+    invalidateSelectionReads(provider, "oauth");
     selectionMutationsRef.current.set(key, mutation);
     switchingAccountRef.current.set(provider, target);
     setSwitchingAccounts(current => ({ ...current, [provider]: target }));
@@ -632,7 +661,13 @@ export function useProviderAccountPools(deps: {
       if (currentRetry()) notify(t("prov.affinityResetPending"), false);
     } finally {
       receipt();
-      if (selectionMutationsRef.current.get(key) === mutation) selectionMutationsRef.current.delete(key);
+      if (selectionMutationsRef.current.get(key) === mutation) {
+        selectionMutationsRef.current.delete(key);
+        if (aliveRef.current && mountedRef.current && serverRef.current === apiBase) {
+          invalidateSelectionReads(provider, "oauth");
+          void refreshAccountRosters({ provider, kind: "oauth" });
+        }
+      }
       if (switchingAccountRef.current.get(provider) === target) {
         switchingAccountRef.current.delete(provider);
         if (aliveRef.current && mountedRef.current && serverRef.current === apiBase) {
@@ -778,12 +813,28 @@ export function useProviderAccountPools(deps: {
       tone: "danger",
     });
     const key = `oauth:${provider}`;
-    if (!consented || !aliveRef.current || !mountedRef.current || serverRef.current !== apiBase
-      || selectionMutationsRef.current.has(key) || switchingAccountRef.current.has(provider)
+    if (!consented || !aliveRef.current || !mountedRef.current || serverRef.current !== apiBase) return;
+    if (selectionMutationsRef.current.has(key) || switchingAccountRef.current.has(provider)
       || pausingAccountRef.current.has(provider)) return;
     invalidateSelectionReads(provider, "oauth");
     const mutation = Symbol();
     selectionMutationsRef.current.set(key, mutation);
+    const statusBlocked = invalidateOauthStatusReads?.(provider, true) === true;
+    const clearStatus = () => setOauthStatus?.(current => {
+      if (!(provider in current)) return current;
+      const next = { ...current };
+      delete next[provider];
+      return next;
+    });
+    if (statusBlocked) clearStatus();
+    let statusSettled = false;
+    const settleStatus = () => {
+      if (statusSettled || !statusBlocked) return;
+      statusSettled = true;
+      if (invalidateOauthStatusReads?.(provider, false) !== true) return;
+      clearStatus();
+      void fetchOauth().catch(() => {});
+    };
     const pending = affinityResetRetries(apiBase)[provider];
     const current = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
       && selectionMutationsRef.current.get(key) === mutation;
@@ -797,8 +848,15 @@ export function useProviderAccountPools(deps: {
       else {
         result = (await res.json().catch(() => ({})) ?? {}) as typeof result;
         partial = result.code === "affinity_reset_not_persisted" && result.retryable === true && result.deletionCommitted === true;
-        if (!partial) { if (current()) notify(t("prov.accountRemoveFail", { email: label }), false); return; }
+        if (!partial) {
+          if (current()) {
+            if (result.deletionCommitted === false) notify(t("prov.accountRemoveFail", { email: label }), false);
+            else notify(t("prov.accountRemoveUnverified", { email: label }), false);
+          }
+          return;
+        }
       }
+      settleStatus();
       committed = true;
       if (partial) receipt(() => ({ kind: "reset", accountId: account.id }), true, { kind: "unpersisted", accountId: account.id });
       else if (result.affinityResetConfirmed === true) receipt(() => undefined, true, { kind: "confirmed" });
@@ -810,14 +868,18 @@ export function useProviderAccountPools(deps: {
         notify(t("prov.accountRemoved", { email: label }), true);
       }
       await fetchAccountSets([provider]);
-      await Promise.all([fetchOauth(), fetchProviderQuotas(true)]);
+      if (!statusBlocked) void fetchOauth().catch(() => {
+        if (aliveRef.current && mountedRef.current && serverRef.current === apiBase) notify(t("pws.accountsLoadFailed"), false);
+      });
+      await fetchProviderQuotas(true);
     } catch {
-      if (current()) notify(t(committed ? "pws.accountsLoadFailed" : "prov.accountRemoveFail", { email: label }), false);
+      if (current()) notify(t(committed ? "pws.accountsLoadFailed" : "prov.accountRemoveUnverified", { email: label }), false);
     } finally {
+      settleStatus();
       receipt();
       if (selectionMutationsRef.current.get(key) === mutation) {
         selectionMutationsRef.current.delete(key);
-        if (committed && aliveRef.current && mountedRef.current && serverRef.current === apiBase) {
+        if (aliveRef.current && mountedRef.current && serverRef.current === apiBase) {
           invalidateSelectionReads(provider, "oauth");
           void refreshAccountRosters({ provider, kind: "oauth" });
         }
@@ -861,9 +923,9 @@ export function useProviderAccountPools(deps: {
   );
 
   return {
-    accountSets, accountLoadStates, switchingAccount, pausingAccount, switchingAccounts, pausingAccounts, pendingAffinityResets, retryAffinityReset, openAccounts, keyPools, addingKeyFor, newKeyValue,
+    accountSets, accountLoadStates: accountStateTarget === accountTarget ? accountLoadStates : {}, switchingAccount, pausingAccount, switchingAccounts, pausingAccounts, pendingAffinityResets, retryAffinityReset, openAccounts, keyPools, addingKeyFor, newKeyValue,
     setAccountSets, setAccountLoadStates, setSwitchingAccount, setOpenAccounts, setKeyPools, setAddingKeyFor, setNewKeyValue,
-    fetchAccountSets, fetchKeyPools, refreshAccountRosters, switchAccount, pauseAccount, setAccountPoolThreshold, setAccountThreshold, switchApiKey, removeApiKey, addApiKeyValue, addApiKey, editCredentialAlias, removeAccount,
+    fetchAccountSets, fetchKeyPools, refreshAccountRosters, beginAccountLogout, switchAccount, pauseAccount, setAccountPoolThreshold, setAccountThreshold, switchApiKey, removeApiKey, addApiKeyValue, addApiKey, editCredentialAlias, removeAccount,
     oauthCardProviders, keyCardProviders, activeAccountNeedsReauth,
   };
 }

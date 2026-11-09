@@ -7,7 +7,7 @@ import type { ManagementPrincipal } from "../../src/server/management-auth";
 import type { ManagementRequestIngress } from "../../src/server/management/context";
 import { TELEMETRY_PREVIEW_HASH_PLACEHOLDER, readTelemetryInstallId, resetTelemetryInstallIdMemoForTests, telemetryIdPath } from "../../src/telemetry/install-id";
 import { buildTelemetryStatusSnapshot } from "../../src/telemetry/routes";
-import { latestCompletedUtcDay, readTelemetryState, runTelemetryTick } from "../../src/telemetry/scheduler";
+import { latestCompletedUtcDay, readTelemetryState, recordPendingTelemetryDecision, runTelemetryTick } from "../../src/telemetry/scheduler";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -253,6 +253,34 @@ describe("/api/telemetry management routes", () => {
     expect(readTelemetryState(home).pendingDecision?.decision).toBe("declined");
     // A later GET from a process that only sees the defaults still reports the held decline.
     config = { port: 10100, defaultProvider: "openai", providers: {} } as unknown as OcxConfig;
+    const status = await call("GET", "/api/telemetry");
+    expect(status.body).toMatchObject({ effective: false, decision: "declined" });
+  });
+
+  test("a decline held before config.json exists survives a management request that creates config.json", async () => {
+    // Fresh install: the dashboard popup accepts before any config.json exists ...
+    unlinkSync(join(home, "config.json"));
+    config = {
+      port: 10100,
+      logLevel: "info",
+      defaultProvider: "fixture",
+      providers: { fixture: { adapter: "openai-chat", baseUrl: "https://fixture.example.test" } },
+    } as unknown as OcxConfig;
+    const accepted = await call("PUT", "/api/telemetry", {
+      body: { decision: "accepted" },
+      principal: "gui-session",
+      ingress: { trustedLoopback: true, guiSessionIssuance: "loopback-bootstrap" },
+    });
+    expect(accepted.status).toBe(200);
+    // ... the held decision is not copied into the running proxy's config ...
+    expect(config.telemetry).toBeUndefined();
+    // ... then "ocx telemetry disable" replaces the held decision with a decline.
+    recordPendingTelemetryDecision({ decision: "declined", decidedAt: "2026-11-08T12:00:00.000Z", noticeShownAt: "2026-11-08T12:00:00.000Z" }, home);
+    // An admin-token request that creates config.json from the in-memory config.
+    const created = await call("PUT", "/api/subagent-models", { body: { force: null } });
+    expect(created.status).toBe(200);
+    expect(existsSync(join(home, "config.json"))).toBe(true);
+    expect((JSON.parse(readFileSync(join(home, "config.json"), "utf8")) as OcxConfig).telemetry).toBeUndefined();
     const status = await call("GET", "/api/telemetry");
     expect(status.body).toMatchObject({ effective: false, decision: "declined" });
   });
