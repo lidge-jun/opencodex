@@ -8,6 +8,12 @@ const { chromium } = await import(pathToFileURL(process.env.PLAYWRIGHT_CORE).hre
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH, headless: true });
 const url = process.env.DOCS_URL ?? 'http://127.0.0.1:4317/';
 const pause = (page, ms = 150) => page.waitForTimeout(ms);
+const withHeaderCount = html => html.replace(/<a class="github-link[\s\S]*?<\/a>/, link => {
+  const scope = link.match(/<span class="gh-main([^\"]*)"/)?.[1];
+  assert.ok(scope?.includes('astro-'), 'header star fixture retains the component scope');
+  const withoutCount = link.replace(/<span class="gh-count[^>]*data-gh-stars="\d+"[^>]*>[^<]*<\/span>/, '');
+  return withoutCount.replace('</a>', `<span class="gh-count${scope}" data-gh-stars="18300" aria-hidden="true">18.3k</span></a>`);
+});
 const open = async (page, waitUntil = 'load') => {
   // Keep the counter test deterministic when GitHub is unavailable at build time.
   await page.route(url, async (route) => {
@@ -17,10 +23,7 @@ const open = async (page, waitUntil = 'load') => {
       const withoutCount = link.replace(/<span data-gh-stars="\d+">[^<]*<\/span>/, '');
       return withoutCount.replace('</a>', '<span data-gh-stars="18300">18.3k</span></a>');
     });
-    const body = landing.replace(/<a class="github-link[\s\S]*?<\/a>/, (link) => {
-      const withoutCount = link.replace(/<span class="gh-count[^>]*data-gh-stars="\d+"[^>]*>[^<]*<\/span>/, '');
-      return withoutCount.replace('</a>', '<span class="gh-count" data-gh-stars="18300">18.3k</span></a>');
-    });
+    const body = withHeaderCount(landing);
     await route.fulfill({ response, body });
   });
   await page.goto(url, { waitUntil });
@@ -135,10 +138,7 @@ try {
         await navPage.route(navUrl, async route => {
           const response = await route.fetch();
           const html = await response.text();
-          const body = html.replace(/<a class="github-link[\s\S]*?<\/a>/, link => {
-            const withoutCount = link.replace(/<span class="gh-count[^>]*data-gh-stars="\d+"[^>]*>[^<]*<\/span>/, '');
-            return withoutCount.replace('</a>', '<span class="gh-count" data-gh-stars="18300" aria-hidden="true">18.3k</span></a>');
-          });
+          const body = withHeaderCount(html);
           await route.fulfill({ response, body });
         });
         await navPage.goto(navUrl, { waitUntil: 'load' });
