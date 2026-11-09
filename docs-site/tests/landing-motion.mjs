@@ -76,6 +76,54 @@ const assertScrubMoves = async (page) => {
   await page.waitForFunction(previous => document.querySelector('.lp-scrub-canvas').toDataURL() !== previous, first, { timeout: 5000 });
 };
 try {
+  // A short desktop viewport must keep the entire dropdown reachable by keyboard,
+  // and reduced motion must also stop the two sliding navigation highlights.
+  const shortNav = await browser.newPage({ viewport: { width: 1280, height: 360 }, reducedMotion: 'reduce' });
+  await shortNav.route('https://api.github.com/**', route => route.abort());
+  await shortNav.goto(new URL('guides/providers/', url).href, { waitUntil: 'load' });
+  await shortNav.locator('[aria-controls="nav-drop-2"]').click();
+  const referencePanel = shortNav.locator('#nav-drop-2 .nav-panel');
+  const referenceLinks = referencePanel.locator('ul a');
+  await referenceLinks.first().focus();
+  for (let i = 1; i < await referenceLinks.count(); i++) await shortNav.keyboard.press('Tab');
+  assert.equal(await referenceLinks.last().evaluate(el => el === document.activeElement), true, 'Tab reaches the last reference link');
+  const shortNavState = await referencePanel.evaluate(panel => {
+    const link = document.activeElement.getBoundingClientRect();
+    const rect = panel.getBoundingClientRect();
+    const highlight = panel.querySelector('.nav-hl');
+    const topHighlight = document.querySelector('.nav-top-hl');
+    const hlRect = highlight.getBoundingClientRect();
+    return { bottom: rect.bottom, viewport: innerHeight, overflow: getComputedStyle(panel).overflowY,
+      scrollTop: panel.scrollTop, linkTop: link.top, linkBottom: link.bottom, panelTop: rect.top,
+      highlightTop: hlRect.top, highlightTransitions: getComputedStyle(highlight).transitionDuration,
+      topTransitions: getComputedStyle(topHighlight).transitionDuration };
+  });
+  assert.ok(shortNavState.bottom <= shortNavState.viewport + 1, `dropdown fits viewport: ${JSON.stringify(shortNavState)}`);
+  assert.equal(shortNavState.overflow, 'auto', 'dropdown scrolls when its contents exceed the viewport');
+  assert.ok(shortNavState.scrollTop > 0 && shortNavState.linkTop >= shortNavState.panelTop && shortNavState.linkBottom <= shortNavState.bottom,
+    `last keyboard-focused link is visible: ${JSON.stringify(shortNavState)}`);
+  assert.ok(Math.abs(shortNavState.highlightTop - shortNavState.linkTop) <= 2, `highlight follows the scrolled link: ${JSON.stringify(shortNavState)}`);
+  for (const transitions of [shortNavState.highlightTransitions, shortNavState.topTransitions]) {
+    assert.ok(transitions.split(',').every(duration => parseFloat(duration) === 0), `reduced-motion highlights do not animate: ${transitions}`);
+  }
+  await shortNav.close();
+
+  const animatedNav = await browser.newPage({ viewport: { width: 1280, height: 360 }, reducedMotion: 'no-preference' });
+  await animatedNav.route('https://api.github.com/**', route => route.abort());
+  await animatedNav.goto(new URL('guides/providers/', url).href, { waitUntil: 'load' });
+  await animatedNav.locator('[aria-controls="nav-drop-2"]').click();
+  const animatedPanel = animatedNav.locator('#nav-drop-2 .nav-panel');
+  const animatedLinks = animatedPanel.locator('ul a');
+  await animatedLinks.first().focus();
+  for (let i = 1; i < await animatedLinks.count(); i++) await animatedNav.keyboard.press('Tab');
+  await animatedNav.waitForFunction(() => {
+    const panel = document.querySelector('#nav-drop-2 .nav-panel');
+    const highlight = panel.querySelector('.nav-hl').getBoundingClientRect();
+    const link = document.activeElement.getBoundingClientRect();
+    return panel.scrollTop > 0 && Math.abs(highlight.top - link.top) <= 2;
+  }, null, { timeout: 3000 });
+  await animatedNav.close();
+
   // The desktop header must contain its controls even when translations are wide.
   // Cover both the landing and docs headers at the nav breakpoint and wide rail cap.
   for (const locale of ['', 'fr/', 'ko/', 'zh-cn/', 'zh-tw/', 'ru/', 'ja/', 'tr/']) {
@@ -98,10 +146,20 @@ try {
         const bounds = await navPage.evaluate(() => {
           const bar = document.querySelector('header.header > .header');
           const barRect = bar.getBoundingClientRect();
-          return [...bar.children].filter(el => getComputedStyle(el).display !== 'none').map(el => {
+          const items = [...bar.children].filter(el => getComputedStyle(el).display !== 'none').map(el => {
             const rect = el.getBoundingClientRect();
             return { name: el.className, left: rect.left - barRect.left, right: rect.right - barRect.right };
           });
+          const nav = bar.querySelector('.glass-nav');
+          if (nav && getComputedStyle(nav).display !== 'none') {
+            const navRect = nav.getBoundingClientRect();
+            for (const el of nav.querySelectorAll(':scope > ul > li > .nav-link')) {
+              const rect = el.getBoundingClientRect();
+              items.push({ name: `nav control ${el.textContent.trim()}`,
+                left: rect.left - navRect.left, right: rect.right - navRect.right });
+            }
+          }
+          return items;
         });
         for (const item of bounds) {
           assert.ok(item.left >= -1 && item.right <= 1,

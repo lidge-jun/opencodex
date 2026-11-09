@@ -720,6 +720,9 @@ const contributing: NavLink = {
 		.nav-panel {
 			position: relative;
 			width: 19rem;
+			max-height: max(0px, calc(100dvh - var(--sl-nav-height) - 1.5rem));
+			overflow-y: auto;
+			overscroll-behavior: contain;
 			padding: 0.5rem;
 			border: 1px solid color-mix(in srgb, var(--sl-color-white) 9%, transparent);
 			border-radius: 1rem;
@@ -876,6 +879,8 @@ const contributing: NavLink = {
 	@media (prefers-reduced-motion: reduce) {
 		.nav-link svg,
 		.nav-drop,
+		.nav-hl,
+		.nav-top-hl,
 		.nav-tile,
 		.nav-arrow {
 			transition: none !important;
@@ -1228,8 +1233,8 @@ const contributing: NavLink = {
 			const c = container.getBoundingClientRect();
 			const r = item.getBoundingClientRect();
 			if (snap) hl.setAttribute('data-snap', '');
-			hl.style.setProperty('--hl-x', `${r.left - c.left}px`);
-			hl.style.setProperty('--hl-y', `${r.top - c.top}px`);
+			hl.style.setProperty('--hl-x', `${r.left - c.left + container.scrollLeft}px`);
+			hl.style.setProperty('--hl-y', `${r.top - c.top + container.scrollTop}px`);
 			hl.style.setProperty('--hl-w', `${r.width}px`);
 			hl.style.setProperty('--hl-h', `${r.height}px`);
 			if (snap) {
