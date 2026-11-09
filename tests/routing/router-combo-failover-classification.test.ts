@@ -218,11 +218,27 @@ describe("combo failure cooldown scope", () => {
       expect(failure.openRouterOpaque400).toBe(false);
       expect(comboFailureDecision(400, failure.classificationText, {
         code: failure.upstreamCode,
-        upstreamType: failure.upstreamType,
         openRouterOpaque400: failure.openRouterOpaque400,
         malformedResponseFormat: failure.malformedResponseFormat,
       })).toBe("stop");
     }
+  });
+
+  test("a typed root keeps an opaque-looking nested 400 terminal over HTTP, as it does over SSE", async () => {
+    const body = JSON.stringify({ type: "invalid_request_error", error: {
+      message: "Provider returned error", code: 400, metadata: { raw: "ERROR", provider_name: "Stealth" },
+    } });
+    expect(isOpenRouterOpaque400Envelope(body)).toBe(false);
+    const failure = await consumeComboFailure(new Response(body, {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }));
+    expect(failure.openRouterOpaque400).toBe(false);
+    expect(comboFailureDecision(400, failure.classificationText, {
+      code: failure.upstreamCode,
+      openRouterOpaque400: failure.openRouterOpaque400,
+      malformedResponseFormat: failure.malformedResponseFormat,
+    })).toBe("stop");
   });
 
   test("preserves complete evidence across display truncation for longer envelopes and late details", async () => {
@@ -275,7 +291,6 @@ describe("combo failure cooldown scope", () => {
     expect(malformedFailure.malformedResponseFormat).toBe(true);
     expect(comboFailureDecision(400, malformedFailure.classificationText, {
       code: malformedFailure.upstreamCode,
-      upstreamType: malformedFailure.upstreamType,
       openRouterOpaque400: malformedFailure.openRouterOpaque400,
       malformedResponseFormat: malformedFailure.malformedResponseFormat,
     })).toBe("stop");
@@ -297,7 +312,6 @@ describe("combo failure cooldown scope", () => {
     expect(rootDetailFailure.openRouterOpaque400).toBe(true);
     expect(comboFailureDecision(400, rootDetailFailure.classificationText, {
       code: rootDetailFailure.upstreamCode,
-      upstreamType: rootDetailFailure.upstreamType,
       openRouterOpaque400: rootDetailFailure.openRouterOpaque400,
       malformedResponseFormat: rootDetailFailure.malformedResponseFormat,
     })).toBe("stop");

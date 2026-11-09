@@ -146,13 +146,6 @@ function bareErrorIsRetryable(payload: unknown): boolean {
     : typeof nestedRawCode === "number" && Number.isFinite(nestedRawCode)
       ? String(nestedRawCode)
       : null;
-  if (rootCode !== null && nestedCode !== null && rootCode !== nestedCode) {
-    return false;
-  }
-  const code = nestedCode ?? rootCode;
-  const upstreamType = typeof error.type === "string"
-    ? error.type
-    : typeof event.type === "string" ? event.type : null;
   const message = typeof error.message === "string"
     ? error.message
     : typeof event.message === "string" ? event.message : "";
@@ -162,10 +155,14 @@ function bareErrorIsRetryable(payload: unknown): boolean {
   };
   const malformedResponseFormat = status === 400 ? isMalformedResponseFormatRecord(rawRecord, message) : undefined;
   const openRouterOpaque400 = status === 400 ? isOpenRouterOpaque400Record(rawRecord) : undefined;
-  return comboFailureDecision(status, message, {
+  const hops = (code: string | null): boolean => comboFailureDecision(status, message, {
     code, codexModelRefusal: terminalModelRefusal(status, event),
     malformedResponseFormat, openRouterOpaque400,
   }) === "hop";
+  // Conflicting root and nested codes may hop only when each would hop on its own, so a root hard
+  // stop is never hidden behind a retryable nested code (and a retryable pair keeps dev's hop).
+  if (rootCode !== null && nestedCode !== null && rootCode !== nestedCode) return hops(rootCode) && hops(nestedCode);
+  return hops(nestedCode ?? rootCode);
 }
 
 function retryableZeroOutputTerminal(payload: unknown): boolean {

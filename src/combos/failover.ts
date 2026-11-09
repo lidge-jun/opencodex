@@ -444,7 +444,25 @@ export function isOpenRouterOpaque400Record(record?: Record<string, unknown>): b
 
 /** Recognize OpenRouter's uncoded numeric-400 wrapper for an opaque provider failure. */
 export function isOpenRouterOpaque400Envelope(message: string): boolean {
-  return isOpenRouterOpaque400Record(http400ErrorRecord(message));
+  return isOpenRouterOpaque400Record(http400ErrorRecord(message)) && !http400RootIsTyped(message);
+}
+
+/**
+ * A typed root (`{"type":"invalid_request_error","error":{...}}`) names its own verdict even when the
+ * nested record looks opaque; the SSE path already refuses that shape through the frame's own type.
+ */
+function http400RootIsTyped(message: string): boolean {
+  let text = message.trim();
+  if (text.startsWith("Provider error 400: ")) text = text.slice("Provider error 400: ".length).trim();
+  if (text.startsWith("data:") && !text.includes("\n")) text = text.slice("data:".length).trim();
+  try {
+    const root: unknown = JSON.parse(text);
+    if (!root || typeof root !== "object" || Array.isArray(root)) return false;
+    const type = (root as Record<string, unknown>).type;
+    return type !== undefined && type !== null && type !== "error";
+  } catch {
+    return false;
+  }
 }
 
 /** Check whether an uncoded numeric 400 is an opaque OpenRouter failure that may safely advance without cooling. */

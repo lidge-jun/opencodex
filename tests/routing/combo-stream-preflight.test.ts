@@ -428,6 +428,18 @@ describe("combo stream preflight", () => {
     expect(result.kind).toBe("accepted");
   });
 
+  test("a conflicting root and nested code still fails over when each would on its own", async () => {
+    // Neither code is a hard stop, so the conflict alone is no reason to keep a retryable failure.
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      code: "server_error",
+      status: 503,
+      error: { message: "overloaded", code: "server_is_overloaded" },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("failed");
+  });
+
   test("treats a zero-output opaque OpenRouter numeric 400 carrying root code invalid_request_error as terminal", async () => {
     const result = await preflightComboStreamResponse(sse({
       type: "error",
