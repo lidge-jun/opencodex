@@ -60,6 +60,8 @@ import {
   providerHeadersConfigError,
   providerForwardClientHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
+  thinkingDisplayConfigError,
+  modelThinkingDisplayConfigError,
   credentialPinnedProviderConfigError,
 } from "../provider-validation";
 import {
@@ -765,6 +767,26 @@ export const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "modelReasoningSummaryDelivery"],
         message: reasoningSummaryDeliveryError,
+      });
+    }
+    const thinkingDisplayError = thinkingDisplayConfigError(
+      (provider as { thinkingDisplay?: unknown }).thinkingDisplay,
+    );
+    if (thinkingDisplayError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "thinkingDisplay"],
+        message: thinkingDisplayError,
+      });
+    }
+    const modelThinkingDisplayError = modelThinkingDisplayConfigError(
+      (provider as { modelThinkingDisplay?: unknown }).modelThinkingDisplay,
+    );
+    if (modelThinkingDisplayError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "modelThinkingDisplay"],
+        message: modelThinkingDisplayError,
       });
     }
     const minMaxOutputError = positiveIntegerConfigError(

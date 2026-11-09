@@ -156,7 +156,10 @@ const VALUE_REQUIRED: ReadonlySet<FailureDetailCode> = new Set([
 export function failureDetailLabel(value: unknown, t: TFn): string | undefined {
   const detail = boundedFailureDetail(value);
   if (!detail) return undefined;
-  if (detail.code === "provider_error" && detail.type) return t("logs.failureDetail.providerErrorTyped", { type: detail.type });
+  if (detail.code === "provider_error") {
+    const label = detail.type ? t("logs.failureDetail.providerErrorTyped", { type: detail.type }) : t(FAILURE_DETAIL_KEYS.provider_error);
+    return detail.validation ? `${label}: ${detail.validation.map(issue => `${issue.field} [${issue.type}]`).join("; ")}` : label;
+  }
   if (detail.code === "header_timeout" && detail.value !== undefined) {
     return t("logs.failureDetail.headerTimeoutAfter", { value: detail.value });
   }

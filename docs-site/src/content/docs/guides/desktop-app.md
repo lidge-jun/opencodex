@@ -105,7 +105,8 @@ when they verify that the app runs its bundled proxy, even without recorded owne
 CLI service repairs for that runtime. On macOS and Linux, turn on **Start at Login**
 in the OpenCodex menu instead of installing a background service. Startup safety credits the app only when its login registration is verified;
 if it cannot be verified, follow the Desktop guidance in status.
-The Startup page then labels the Desktop row **Running · Start at Login not verified**.
+The Startup page shows a quiet **Start at Login not verified** note when the app's
+registration cannot be checked. A verified disabled registration is shown as action required.
 On macOS the menu's **Start at Login** item is checked only when Startup safety would
 verify the same registration. Otherwise the item is unchecked and its label says why:
 **disabled by macOS** opens System Settings → General → Login Items & Extensions, where
@@ -174,7 +175,7 @@ On Linux, the pinned autostart backend writes the login entry to
 `~/.config/autostart/OpenCodex.desktop`, even when `$XDG_CONFIG_HOME` is set. Startup
 safety reads that entry and the desktop install-id under `~/.config`. When
 `$XDG_CONFIG_HOME` points elsewhere, the login session searches a different autostart
-directory, so startup safety stays **At risk** instead of crediting the entry.
+directory, so startup safety does not credit the entry as restart protection.
 The entry counts only while it is not marked `Hidden=true` or
 `X-GNOME-Autostart-enabled=false`, and has no `OnlyShowIn`, `NotShowIn`, or `TryExec`
 condition. Its `Exec` must be an unquoted absolute path to `opencodex-desktop`, without
@@ -183,12 +184,15 @@ executable must still be named `opencodex-desktop`, with its bundled `ocx` besid
 Startup safety reads the full evidence chain twice and grants protection only when
 both reads agree.
 
-AppImage installations remain **At risk**: the autostart backend registers the outer
+AppImage installations do not receive verified Desktop protection: the autostart backend registers the outer
 AppImage path, while the live desktop process runs inside its mount. Startup safety
 cannot verify that relationship and does not credit AppImage protection.
-A missing or stale check remains **At risk**. If the desktop app owns the proxy but
-protection cannot be verified, reopen OpenCodex and check **Start at Login**. Service
-and launcher installation or repair stays disabled while that ownership remains;
+A missing or stale check does not earn restart-protection credit. If Desktop owns or
+supervises the proxy, the page shows an informational note and asks you to check
+**Start at Login** in the OpenCodex menu. Service installation or repair stays disabled
+while that ownership remains. The launcher shim can still be installed when diagnostics are fresh;
+its Install button is disabled while diagnostics are stale. On Linux without a tray, inspect
+`~/.config/autostart/OpenCodex.desktop` and the conditions described above. The command
 `ocx restore` is still available to undo Codex routing.
 
 Normal desktop updates replace the bundled CLI with the fixed startup probe. No local

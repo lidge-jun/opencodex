@@ -1,0 +1,31 @@
+[package]
+name = "opencodex-child"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "ocx-child"
+path = "src/main.rs"
+
+[lib]
+name = "ocx_child"
+path = "src/lib.rs"
+
+[dependencies]
+base64 = "=0.22.1"
+hmac = "=0.12.1"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+sha2 = "=0.10.9"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = "s"
+strip = "symbols"
+
+[profile.release.build-override]
+strip = false

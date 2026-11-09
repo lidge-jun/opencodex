@@ -66,35 +66,22 @@ dizinindedir:
 cd docs-site && bun install && bun dev
 ```
 
-## Dokümantasyon yayınlama
+## CI / Release / Pages
 
-Genel dokümantasyon GitHub Pages üzerinde <https://opencodex.me/> adresinde
-yayınlanır. `.github/workflows/deploy-docs.yml` iş akışı, `docs-site/**`
-dizinini veya iş akışının kendisini etkileyen `main` dalı gönderimlerinde
-çalışır, `docs-site`'ı derler ve oluşturulan siteyi dağıtır. Dokümantasyon
-değişikliklerini göndermeden önce çalıştırın:
+Yayınlama, CI, sürümler ve dallar için [İngilizce kaynak belgeye](/contributing/) bakın.
 
-```bash
-cd docs-site
-bun install --frozen-lockfile
-bun run build
-```
 
-## CI ve sürümler
+Go yerel portunu taşıyan `dev2-go` hattı ve onunla birlikte çift hat taşıma
+politikası kullanımdan kaldırılmıştır. Geçmişi
+[lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive)
+adresinde salt okunur olarak yayınlanmaktadır. `dev` dalındaki Bun-yerel
+TypeScript tek çalışma zamanı hattıdır.
 
-GitHub Actions iş akışları kasıtlı olarak yalın tutulur:
+Rebase çekme istekleri memnuniyetle karşılanır. Eski bir dalı mevcut head
+seviyesine getirmek gürültü değil, normal bir katkıdır — açıklamadaki kaynak
+commit'leri belirtin.
 
-- **Çapraz platform CI** (`.github/workflows/ci.yml`), çalışma zamanı, testler,
-  paket, betik, TypeScript veya iş akışı dosyalarını etkileyen çekme
-  isteklerinde ve `main` gönderimlerinde çalışır. Bun matrisi; Linux, Windows ve
-  macOS üzerinde kurulum, tip denetimi, testler, gizlilik taraması, sürüm
-  yardımcısı duman testi, GUI derlemesi ve `ocx help` adımlarını kapsar. İkinci
-  bir üç işletim sistemli hat, paketin yerleşik çalışma zamanını kullanarak ayrı
-  bir Bun kurulu olmadan npm global kurulumunun çalıştığını kanıtlar.
-- **Sürüm** (`.github/workflows/release.yml`) manuel olarak yürütülür. İkinci
-  bir tam CI hattı görevi görmez; deneme çalıştırması (dry-run) veya yayınlama
-  öncesinde tam sürüm commit'inin (`GITHUB_SHA`) zaten başarılı bir Çapraz
-  Platform CI çalıştırmasına sahip olmasını gerektirir.
+
 - **Hareketsiz bilgi bekleyenler** (`.github/workflows/stale-needs-info.yml`)
   varsayılan dalda günlük olarak çalışır. 14 gün boyunca etkinlik olmayan
   `needs-info` etiketli açık sorunlar bir uyarı alır; 7 gün daha hareketsiz
@@ -115,52 +102,12 @@ GitHub Actions iş akışları kasıtlı olarak yalın tutulur:
   workflow_dispatch `backfill_open_areas` ile tüm açık sorunlara alan
   etiketlerini yeniden uygulayabilir.
 
-Sürümler için yardımcıyı kullanın:
-
-
-Helper’ı çalıştırmadan önce hedef sürümü belirleyin ve varsayılan daldan
-`.github/workflows/dev-version-bump.yml` iş akışını `intended-version=<version>`
-ve `mode=pre-move` ile başlatın. Açılan PR’ı inceleyip `dev` dalına birleştirin;
-ardından `main` veya `preview` dalına yükseltip helper’ı çalıştırın. `dev` sürümü
-zaten hedef sürümden ilerideyse iş akışı `changed=false` döndürür ve sürüm PR’ı
-gerekmez. Yayın için tam sürüm commit’inin CI kontrollerinden geçmesi hâlâ zorunludur.
-
-```bash
-bun run release <version>           # sürüm artışını commit/push eder; yayınlama iş akışı varsayılan olarak kuru çalıştırmadır (dry-run)
-bun run release --bump minor        # tag'ler ve npm kanallarından sonraki patch, minor veya major sürümü türetir
-bun run release <version> --publish # CI onaylı kuru çalıştırma anlaşıldıktan sonra yayınlayın
-bun run release:watch               # en yeni Sürüm iş akışı çalıştırmasını izleyin
-```
-
-Açık bir sürüm yerine `--bump patch|minor|major` kullanılabilir. Daha yüksek bir core için preview
-tag'i açıldıktan sonra `--bump patch`, eski stable patch hattını sürdürmeyi reddeder; düzeltmeyi açık
-preview core içinde yayınlayın.
-
-## Dallar
-
-- `dev` — tek entegrasyon hedefi. Çekme isteğinizi burada açın.
-- `main` — yalnızca sürümler içindir. `dev` dalından bakımcı kontrollü yükseltme
-  ile ilerler; doğrudan buna karşı özellik çekme istekleri açmayın.
-- `preview` — ön sürüm treni.
-
-Go yerel portunu taşıyan `dev2-go` hattı ve onunla birlikte çift hat taşıma
-politikası kullanımdan kaldırılmıştır. Geçmişi
-[lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive)
-adresinde salt okunur olarak yayınlanmaktadır. `dev` dalındaki Bun-yerel
-TypeScript tek çalışma zamanı hattıdır.
-
-Rebase çekme istekleri memnuniyetle karşılanır. Eski bir dalı mevcut head
-seviyesine getirmek gürültü değil, normal bir katkıdır — açıklamadaki kaynak
-commit'leri belirtin.
-
 ## Çekme istekleri
 
-- Hedef **`dev`** dalıdır. **`main`** dalına karşı özellik veya düzeltme çekme
-  istekleri açmayın.
-- **`main`** yerine geçerli **`dev`** ucundan dallanın. Gerekli
-  **`enforce-target`** denetimi, çekme isteği tabanının çok gerisinde kalırken
-  birleştirme tabanı **`main`** ucunda oturan head'leri reddeder (#644'te
-  görülen hata modu).
+- Hedef **`dev`** dalıdır ve aynı zamanda deponun varsayılan dalıdır.
+  **`main`** ve **`preview`**, tek dal modeli yürürlüğe girdiğinde silindi.
+  Gerekli **`enforce-target`** denetimi, tabanı **`dev`** dışında olan çekme
+  isteklerini reddeder (yığılmış alt PR'ler hariç).
 - Gerçek bir açıklama yazın: Neyin neden değiştiğine dair bir **Özet** (Summary)
   ve bir **Test planı** (veya eşdeğer içerik). Boş gövdeler, yalnızca yer tutucu
   metinler ve gerçek satır sonları yerine kaçışlı `\n` kullanan açıklamalar
@@ -178,7 +125,7 @@ commit'leri belirtin.
 ## Proje bakımcıları
 
 Mevcut bakımcılar, sorumlulukları ve inceleme ile birleştirme politikası
-[`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/main/MAINTAINERS.md)
+[`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/dev/MAINTAINERS.md)
 dosyasında belgelenmiştir. Depo ve güvenliğe duyarlı yollar için GitHub inceleme
 sahipliği `.github/CODEOWNERS` dosyasında bildirilmiştir.
 

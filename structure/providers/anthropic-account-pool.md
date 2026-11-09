@@ -47,11 +47,15 @@ Refresh gives the profile read a 2-second deadline because a refresh can sit on 
 a missed read leaves the stored label in place.
 An account replacement cannot inherit another account's label. `src/providers/anthropic-subscription.ts`
 projects optional management `planLabel`: Pro, Max 5x, Ultra (both `ultra` and `max_20x`),
-or the original unfamiliar validated tier. Dashboard Claude account rows use ordinal labels,
-omit account IDs/emails and show the subscription beside quota. The same ordinal policy in
-`gui/src/provider-workspace/auth.ts` covers reset-grant dialogs and account mutation
-confirmations/notifications through `gui/src/hooks/useProviderAccountPools.ts`; custom providers
-retain their existing alias/email labels. `gui/src/pages/providers-page-utils.ts` also strips
+or the original unfamiliar validated tier. Dashboard OAuth rows prefer a user alias, then the
+management roster's `accountLabel`, then its always-masked `maskedLabel`, then a localized
+ordinal. `accountLabel` follows `privacy.maskEmails` (#8286): the validated masked identity by
+default, the trimmed stored email when the operator sets the flag to `false`. The same
+policy in `gui/src/provider-workspace/auth.ts` covers reset-grant dialogs and account mutation
+confirmations/notifications through `gui/src/hooks/useProviderAccountPools.ts`. The roster label
+`maskedLabel`, which tray surfaces read, never follows the unmasked email projection; malformed
+identities are omitted from both labels in masked mode.
+`gui/src/pages/providers-page-utils.ts` also strips
 Claude email metadata from the catalog/Add Provider account-status projection without mutating
 the source OAuth status; generic/custom account-status labels remain intact. The current quota section keeps
 that label even if usage is unavailable. Pro, Max 5x and Team retain measured five-hour and

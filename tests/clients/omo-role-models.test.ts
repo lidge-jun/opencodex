@@ -104,6 +104,25 @@ describe("omo role models", () => {
     expect(readFileSync(path, "utf8")).toBe(text);
   });
 
+  test("a double BOM is invalid and the original file is left byte for byte", () => {
+    const text = '\ufeff\ufeff{ "other": "keep", "[codex]": {} }\n';
+    const path = file(text);
+    expect(writeOmoRoleModel("explorer", "m", path)).toBe("invalid");
+    expect(readFileSync(path)).toEqual(Buffer.from(text));
+    expect(readOmoRoleModels(path)).toEqual({ state: "invalid" });
+  });
+
+  test("a single BOM is accepted and retained when writing", () => {
+    const path = file('\ufeff{ "other": "keep", "[codex]": {} }\n');
+    expect(writeOmoRoleModel("explorer", "m", path)).toBe("written");
+    const written = readFileSync(path, "utf8");
+    expect(written.startsWith("\ufeff{")).toBe(true);
+    expect(JSON.parse(written.slice(1))).toEqual({
+      other: "keep", "[codex]": { agents: { explorer: { model: "m" } } },
+    });
+    expect(readOmoRoleModels(path)).toEqual({ state: "present", models: { explorer: "m" } });
+  });
+
   test("a missing file is reported absent and not created", () => {
     const path = file();
     expect(writeOmoRoleModel("explorer", "m", path)).toBe("absent");

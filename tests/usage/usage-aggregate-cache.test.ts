@@ -81,6 +81,24 @@ afterEach(() => {
 });
 
 describe("retained usage aggregate cache", () => {
+  test("app breakdowns survive filtered cache appends and match fresh scans", async () => {
+    const path = join(testDir, "usage.jsonl");
+    const row = (id: string, client: "codex_cli" | "claude_code", apiKeyId: string) => ({ ...entry(id), client, apiKeyId });
+    writeFileSync(path, `${JSON.stringify(row("first", "codex_cli", "A"))}\n`);
+    const all = { sourceFilter: { client: "all" as const, device: { kind: "all" as const } } };
+    const keyed = { sourceFilter: { client: "all" as const, device: { kind: "key" as const, id: "A" } } };
+    await Promise.all([getFilteredUsageAggregate(all), getFilteredUsageAggregate(keyed)]);
+    appendFileSync(path, [row("second", "claude_code", "A"), row("other-key", "codex_cli", "B")].map(value => JSON.stringify(value)).join("\n") + "\n");
+    const [appendedAll, appendedKey] = await Promise.all([getFilteredUsageAggregate(all), getFilteredUsageAggregate(keyed)]);
+    expect(appendedAll.update).toBe("append");
+    expect(appendedKey.update).toBe("append");
+    const summarize = (result: UsageAggregateResult) => result.accumulator.summarize("all", NOW).apps;
+    const actual = [summarize(appendedAll), summarize(appendedKey)];
+    resetUsageAggregateCacheForTests();
+    const rebuilt = await Promise.all([getFilteredUsageAggregate(all), getFilteredUsageAggregate(keyed)]);
+    expect(actual).toEqual(rebuilt.map(summarize));
+    expect(actual[1]).toMatchObject([{ client: "codex", requests: 1 }, { client: "claude_code", requests: 1 }]);
+  });
   test("unconfigured reports retain invalid-row diagnostics across incremental scans", async () => {
     const path = join(testDir, "usage.jsonl");
     writeFileSync(path, line("valid"));
@@ -492,27 +510,33 @@ describe("retained usage aggregate cache", () => {
       const retained = await getFilteredUsageAggregate({ provider: "OPENAI" });
       const different = await getFilteredUsageAggregate({ provider: "anthropic" });
 
-      expect(scans).toBe(2);
+      // One shared ingest serves every filter; a distinct filter reads its candidates
+      // instead of scanning the ledger again.
+      expect(scans).toBe(1);
       expect(requests(first)).toBe(2);
       expect(first.accumulator).toBe(concurrent.accumulator);
       expect(retained.update).toBe("unchanged");
       expect(retained.accumulator).toBe(first.accumulator);
       expect(requests(different)).toBe(0);
+      expect(different.filterIndex).toMatchObject({ totalRows: 2, candidateRows: 0, ingestPasses: 1 });
       expect(usageAggregateRetainedStats().count).toBe(2);
     } finally {
       scanSpy.mockRestore();
     }
   });
 
-  test("distinct filtered scans have bounded concurrency while identical callers share a flight", async () => {
-    writeFileSync(join(testDir, "usage.jsonl"), line("one"));
-    const originalScan = usageLedgerScannerModule.scanUsageLedgerCooperatively;
+  test("distinct filtered reads have bounded concurrency while identical callers share a flight", async () => {
+    // One matching row per filter, so every flight reaches the per-filter ledger read.
+    writeFileSync(join(testDir, "usage.jsonl"), [0, 1, 2, 3]
+      .map(index => `${JSON.stringify({ ...entry(`row-${index}`), provider: `provider-${index}` })}\n`)
+      .join(""));
+    const originalRead = usageLedgerScannerModule.readUsageLedgerRowsAtOffsets;
     let releaseScans!: () => void;
     const scansBlocked = new Promise<void>(resolve => { releaseScans = resolve; });
-    const scanSpy = spyOn(usageLedgerScannerModule, "scanUsageLedgerCooperatively")
+    const scanSpy = spyOn(usageLedgerScannerModule, "readUsageLedgerRowsAtOffsets")
       .mockImplementation(async options => {
         await scansBlocked;
-        return originalScan(options);
+        return originalRead(options);
       });
     try {
       const flights = Array.from({ length: 4 }, (_, index) =>
@@ -556,8 +580,10 @@ describe("retained usage aggregate cache", () => {
       } as unknown as OcxConfig);
       const refreshed = await getFilteredUsageAggregate({ provider: "openai" });
 
-      expect(scans).toBe(2);
+      // Repricing rebuilds the accumulator from the same index; it does not re-ingest.
+      expect(scans).toBe(1);
       expect(refreshed.update).toBe("rebuild");
+      expect(refreshed.filterIndex?.ingestPasses).toBe(1);
       expect(refreshed.accumulator).not.toBe(first.accumulator);
       expect(usageAggregateRetainedStats().count).toBe(1);
     } finally {

@@ -120,6 +120,7 @@ import {
 } from "../auth-cors";
 import { providerCatalogCapabilityConfigError } from "./provider-capability-config";
 import { providerEmptyToolOutputConfigError } from "../../config/provider-validation";
+import { applyThinkingDisplayPatchFields } from "./provider-thinking-display-patch";
 import { applySystemEnvToggle } from "../system-env";
 import {
   LOCAL_PROVIDER_RELOAD_NAME_HEADER,
@@ -381,6 +382,14 @@ function applyProviderPatchFields(
     const dm = rawBody.defaultModel.trim();
     if (dm) next.defaultModel = dm;
     else delete next.defaultModel;
+    touched = true;
+  }
+  for (const field of ["project", "location"] as const) {
+    if (!Object.hasOwn(rawBody, field)) continue;
+    const value = rawBody[field];
+    if (typeof value !== "string") return { error: `${field} must be a string` };
+    if (value.trim()) next[field] = value.trim();
+    else delete next[field];
     touched = true;
   }
   if (Object.hasOwn(rawBody, "authMode")) {
@@ -678,6 +687,11 @@ function applyProviderPatchFields(
       if (Object.keys(capabilities).length > 0) next.modelSuppressSyntheticMax = capabilities;
       else delete next.modelSuppressSyntheticMax;
     }
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "thinkingDisplay") || Object.hasOwn(rawBody, "modelThinkingDisplay")) {
+    const displayError = applyThinkingDisplayPatchFields(next, rawBody);
+    if (displayError) return displayError;
     touched = true;
   }
   if (Object.hasOwn(rawBody, "noStructuredOutputModels")) {
