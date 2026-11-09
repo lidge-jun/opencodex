@@ -395,11 +395,6 @@ MiMo model Command Code serves.
   (`reasoning.summary: "none"`) keeps the provider default. Native Opus 5.5 on `api.anthropic.com`
   defaults to `display: "updates"`; explicit `reasoning.summary: "concise"` or `"detailed"`
   selects `"summarized"` without the updates beta. See [Opus 5.5 progress updates](/guides/providers/#claude-opus-55-progress-updates).
-  The provider or exact-model `thinkingDisplay` setting overrides that default:
-  `summarized` forces `display: "summarized"`, `updates` keeps progress commentary, and
-  `omitted` drops the display field so a Chat client receives no reasoning deltas during the
-  think. An explicit request summary still wins. See
-  [provider configuration](/reference/configuration/providers/).
 - **Structured output:** Responses `text.format` and Chat Completions `response_format` requests
   with `type: "json_schema"` become Anthropic `output_config.format`. The format merges into an
   existing adaptive-thinking output configuration, preserving a compatible `output_config.effort`.
