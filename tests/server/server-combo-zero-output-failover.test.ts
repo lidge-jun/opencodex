@@ -591,18 +591,21 @@ describe("combo zero-output bare Responses error failover", () => {
     expect(hits).toEqual(["a", "b"]);
   });
 
-  test("non-streaming openai-responses zero-output max_output_tokens JSON response fails over to backup target", async () => {
+  test("non-streaming openai-responses JSON is not inspected: its empty max_output_tokens limit reaches the client", async () => {
+    // Non-streaming native JSON stays outside the combo preflight; only SSE and runTurn children fail
+    // over on an empty max_output_tokens limit.
     const hits: string[] = [];
+    const incomplete = {
+      id: "resp_a",
+      object: "response",
+      status: "incomplete",
+      incomplete_details: { reason: "max_output_tokens" },
+      output: [],
+      usage: { input_tokens: 15, output_tokens: 0, total_tokens: 15 },
+    };
     const a = serve(() => {
       hits.push("a");
-      return Response.json({
-        id: "resp_a",
-        object: "response",
-        status: "incomplete",
-        incomplete_details: { reason: "max_output_tokens" },
-        output: [],
-        usage: { input_tokens: 15, output_tokens: 0, total_tokens: 15 },
-      });
+      return Response.json(incomplete);
     });
     const b = serve(() => {
       hits.push("b");
@@ -613,24 +616,17 @@ describe("combo zero-output bare Responses error failover", () => {
       b: provider("openai-responses", baseUrl(b), "key-b"),
     });
 
-    const parent: RequestLogContext = { model: "", provider: "" };
     const response = await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: "combo/free", input: "hello", stream: false }),
-    }), config, parent);
+    }), config, { model: "", provider: "" });
 
     expect(response.status).toBe(200);
-    const body = await response.json();
-    expect(body.status).toBe("completed");
-    expect(hits).toEqual(["a", "b"]);
-    expect(parent.attempts).toHaveLength(2);
-    expect(parent.attempts?.[0]).toMatchObject({
-      provider: "a",
-      status: 502,
-      usage: { inputTokens: 15, outputTokens: 0, totalTokens: 15 },
-    });
-    expect(isComboTargetInCooldown("combo/free", { provider: "a", model: "m1" })).toBe(false);
+    const body = await response.json() as { status?: string; incomplete_details?: { reason?: string } };
+    expect(body.status).toBe("incomplete");
+    expect(body.incomplete_details?.reason).toBe("max_output_tokens");
+    expect(hits).toEqual(["a"]);
   });
 
   for (const stream of [false, true]) {

@@ -128,10 +128,10 @@ downstream Responses SSE through `src/server/responses/combo-stream-preflight.ts
 reader and buffers only until one of these boundaries:
 
 SSE selection uses the [exact internal media-type match](inventory.md#internal-response-media-types).
-Explicit non-SSE types pass through unread by default, including parameters or longer subtypes containing the
-event-stream token. A caller can opt into inspecting direct non-streaming JSON responses via `inspectJsonResponse: true`
-or a response without a content type. That inspection fails over on exactly one shape, an `incomplete` response with
-`max_output_tokens` and no output; every other JSON body, including a zero-output `failed` one, is accepted unchanged as before.
+Explicit non-SSE types pass through unread, including parameters or longer subtypes containing the
+event-stream token. A caller can still opt into inspecting a response without a content type. Non-streaming
+JSON from a native (non-runTurn) child is therefore never inspected here: an empty `max_output_tokens`
+limit in such a body is returned to the client unchanged, and only SSE and runTurn children fail over on it.
 
 Native post-header reset recovery shares that boundary, because it is asking the same question about
 the same bytes. With `replayReadErrors`, a read error that arrives while the preflight is still

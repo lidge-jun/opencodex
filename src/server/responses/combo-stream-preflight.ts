@@ -344,93 +344,6 @@ export type ComboStreamPreflightResult =
   | { kind: "read-error"; response: Response; error: unknown; stage: RequestFailureStage };
 
 /**
- * The one non-streaming answer a combo inspects: an incomplete response that hit
- * `max_output_tokens` before producing any output. Every other JSON body is accepted as it always
- * was, so non-streaming combos keep their existing failover and pass-through behavior.
- */
-function zeroOutputTokenLimitJson(payload: unknown): boolean {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
-  const record = payload as Record<string, unknown>;
-  const target = record.response && typeof record.response === "object" && !Array.isArray(record.response)
-    ? record.response as Record<string, unknown>
-    : record;
-  const incomplete = record.type === "response.incomplete" || record.status === "incomplete" || target.status === "incomplete";
-  const details = target.incomplete_details;
-  const reason = details && typeof details === "object" && !Array.isArray(details)
-    ? (details as { reason?: unknown }).reason
-    : undefined;
-  return incomplete && reason === "max_output_tokens" && retryableZeroOutputTerminal(payload);
-}
-
-async function preflightComboJsonResponse(
-  response: Response,
-  logCtx: RequestLogContext,
-  retryableTerminal: (payload: unknown) => boolean,
-  options?: { replayReadErrors?: boolean; signal?: AbortSignal },
-): Promise<ComboStreamPreflightResult> {
-  const reader = response.body!.getReader();
-  const cancelRead = () => { reader.cancel(options?.signal?.reason).catch(() => undefined); };
-  if (options?.signal?.aborted) cancelRead();
-  else options?.signal?.addEventListener("abort", cancelRead, { once: true });
-  const buffered: Uint8Array[] = [];
-  let bufferedBytes = 0;
-  try {
-    for (;;) {
-      options?.signal?.throwIfAborted();
-      let next: Awaited<ReturnType<typeof reader.read>>;
-      try {
-        next = await reader.read();
-      } catch (error) {
-        if (!options?.replayReadErrors) throw error;
-        const replay = replayBufferedResponse(response, reader, buffered);
-        return { kind: "read-error", response: replay, error, stage: "headers-only" };
-      }
-      if (next.done) {
-        const text = Buffer.concat(buffered).toString("utf8");
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(text);
-        } catch {
-          return { kind: "accepted", response: replayBufferedResponse(response, reader, buffered) };
-        }
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          const payloadRecord = parsed as Record<string, unknown>;
-          const target = (payloadRecord.response && typeof payloadRecord.response === "object" && !Array.isArray(payloadRecord.response))
-            ? payloadRecord.response as Record<string, unknown>
-            : payloadRecord;
-          const hasOutput = (Array.isArray(payloadRecord.output) && payloadRecord.output.length > 0)
-            || (Array.isArray(target.output) && target.output.length > 0);
-          if (!hasOutput && retryableTerminal(parsed)) {
-            const failed = failedTerminalResponse(response, payloadRecord, logCtx);
-            return {
-              kind: "failed",
-              response: failed,
-              ...(failed.status === 400
-                ? { codexModelRefusal: terminalModelRefusal(failed.status, payloadRecord) }
-                : {}),
-            };
-          }
-        }
-        return { kind: "accepted", response: replayBufferedResponse(response, reader, buffered) };
-      }
-      if (
-        bufferedBytes + next.value.byteLength > COMBO_STREAM_PREFLIGHT_MAX_BYTES
-        || buffered.length >= COMBO_STREAM_PREFLIGHT_MAX_CHUNKS
-      ) {
-        return {
-          kind: "accepted",
-          response: replayBufferedResponse(response, reader, [...buffered, next.value]),
-        };
-      }
-      buffered.push(next.value.slice());
-      bufferedBytes += next.value.byteLength;
-    }
-  } finally {
-    options?.signal?.removeEventListener("abort", cancelRead);
-  }
-}
-
-/**
  * Buffer a Responses SSE only until the request becomes unsafe to replay or reaches a
  * terminal. Combo failover and native post-header reset recovery share this protocol
  * boundary, because they are asking the same question about the same bytes. This owns exactly
@@ -443,7 +356,6 @@ export async function preflightComboStreamResponse(
   retryableTerminal: (payload: unknown) => boolean = retryableZeroOutputTerminal,
   options?: {
     allowMissingContentType?: boolean;
-    inspectJsonResponse?: boolean;
     replayReadErrors?: boolean;
     requiredToolPrelude?: boolean;
     signal?: AbortSignal;
@@ -456,9 +368,6 @@ export async function preflightComboStreamResponse(
     return { kind: "accepted", response };
   }
   if (!isEventStream) {
-    if (options?.inspectJsonResponse && (hasResponseMediaType(response.headers, "application/json") || !contentType)) {
-      return await preflightComboJsonResponse(response, logCtx, zeroOutputTokenLimitJson, options);
-    }
     return { kind: "accepted", response };
   }
 
