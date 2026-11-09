@@ -6,6 +6,10 @@ description: Entrées du fournisseur, authentification, points de terminaison, c
 Un fournisseur indique à opencodex où se trouve un modèle, quel adaptateur de protocole il utilise et comment les requêtes sont
 authentifiées.
 
+## Nombre d’images par requête Mistral
+
+La limite d’images de Mistral et le réglage `mistralMaxImages` sont décrits dans la [référence canonique en anglais](/reference/configuration/providers/#mistral-images-per-request). Les références d’image absentes, vides ou non textuelles sont remplacées par du texte dans la copie sortante et ne consomment pas cette limite. Seules les chaînes non vides sont comptées ; la syntaxe et l’accessibilité des URL ne sont pas vérifiées. Les deux formes acceptées sont `image_url` et `image_url.url`. Les autres destinations restent inchangées.
+
 ## Contexte des fournisseurs personnalisés
 
 En l’absence de fenêtre déclarée ou configurée, OpenCodex utilise les métadonnées Azure, puis celles du modèle dans les tables embarquées du fabricant ou des agrégateurs, puis le Context cap activé, et enfin 128k. Le minimum des valeurs déclarées/configurées est conservé et le cap reste une limite. Les fournisseurs intégrés ne changent pas. L’ID exact est prioritaire ; les variantes de casse ou point/tiret doivent être non ambiguës. L’estimation affecte la compaction de Codex et les catalogues clients, dont Claude, mais ne prouve pas la capacité du relais pour le routage. Configurez modelContextWindows ou Context cap si le relais accepte moins. Aucun cap n’est activé automatiquement et aucune requête de test n’est envoyée au modèle. Les limites de l’API OpenAI ne sont pas celles de l’abonnement Codex.
