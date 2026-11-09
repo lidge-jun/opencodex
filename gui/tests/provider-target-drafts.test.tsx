@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, useEffect, useState } from "react";
+import { act, useEffect, useLayoutEffect, useState } from "react";
 import type { Root } from "react-dom/client";
 import ProviderJsonEditor from "../src/components/provider-workspace/ProviderJsonEditor";
 import ProviderDetails from "../src/components/provider-workspace/ProviderDetails";
@@ -847,12 +847,15 @@ describe("a render gap cannot retarget a provider mutation", () => {
       return Response.json({});
     }) as typeof fetch;
     function Harness() {
-      crud = useProvidersCrud({
+      const controller = useProvidersCrud({
         apiBase: "/same", targetKey: "hub-a", t: key => key,
         removeBusyRef: { current: false } as React.MutableRefObject<boolean>,
         workspaceSelected: null, setWorkspaceSelected: () => {}, setRemoveConfirmName: () => {},
         notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchProviderQuotas: async () => {},
       });
+      // Publish after commit: the compiler rejects a render-phase write of a hook result
+      // into a module binding, and the test body only reads it after act().
+      useLayoutEffect(() => { crud = controller; });
       return null;
     }
     configureApiTargets(relayTargets("/same", "hub-a"));
@@ -868,12 +871,13 @@ describe("a render gap cannot retarget a provider mutation", () => {
     let crud!: ReturnType<typeof useProvidersCrud>;
     globalThis.fetch = (async () => { calls += 1; return Response.json({ success: true }); }) as typeof fetch;
     function Harness({ target }: { target: string }) {
-      crud = useProvidersCrud({
+      const controller = useProvidersCrud({
         apiBase: "/same", targetKey: target, t: key => key,
         removeBusyRef: { current: false } as React.MutableRefObject<boolean>,
         workspaceSelected: null, setWorkspaceSelected: () => {}, setRemoveConfirmName: () => {},
         notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchProviderQuotas: async () => {},
       });
+      useLayoutEffect(() => { crud = controller; });
       return null;
     }
     configureApiTargets(relayTargets("/same", "hub-a"));
@@ -907,12 +911,13 @@ describe("a render gap cannot retarget a provider mutation", () => {
       return Response.json({});
     }) as typeof fetch;
     function Harness({ base = "/same", target = "hub-a" }: { base?: string; target?: string }) {
-      crud = useProvidersCrud({
+      const controller = useProvidersCrud({
         apiBase: base, targetKey: target, t: label => label,
         removeBusyRef: { current: false } as React.MutableRefObject<boolean>,
         workspaceSelected: null, setWorkspaceSelected: () => {}, setRemoveConfirmName: () => {},
         notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchProviderQuotas: async () => {},
       });
+      useLayoutEffect(() => { crud = controller; });
       return null;
     }
     configureApiTargets(relayTargets("/same", "hub-a"));

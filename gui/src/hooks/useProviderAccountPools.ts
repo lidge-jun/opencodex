@@ -2,7 +2,7 @@ import { parseQuotaFailureCode } from "../../../src/providers/quota-types";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import type { AccountLoadState, AccountQuotaReading } from "../components/provider-workspace/types";
 import { createBoundedFetch } from "../bounded-fetch";
-import { isApiTargetCaptureCurrent, targetFetch } from "../api";
+import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
 import { useRenderTargetCapture } from "../use-render-target-capture";
 import { confirmAction, requestTextValue } from "../action-dialogs";
 import { credentialAliasRejection, CREDENTIAL_ALIAS_MAX_LENGTH } from "../credential-alias";
@@ -114,6 +114,37 @@ export function buildActiveAccountNeedsReauthMap(
   return map;
 }
 
+/**
+ * One bounded roster read, released on every path.
+ *
+ * This lives outside the hook on purpose: a `try`/`finally` inside the memoized callback
+ * makes the compiler unable to infer its dependencies, so it reports the capture the read
+ * actually uses as an extra dependency. The callback below stays a plain delegation.
+ */
+async function readRosterWithCleanup<T>(
+  capture: ApiTargetCapture,
+  url: string,
+  signal: AbortSignal | undefined,
+  requests: Set<AbortController>,
+): Promise<T> {
+  const bounded = createBoundedFetch(20_000);
+  const abort = () => bounded.controller.abort();
+  if (signal?.aborted) abort();
+  signal?.addEventListener("abort", abort, { once: true });
+  requests.add(bounded.controller);
+  try {
+    const response = await targetFetch(capture, url, { signal: bounded.signal });
+    if (!response.ok) throw new Error(String(response.status));
+    const data = await response.json() as T;
+    if (bounded.signal.aborted) throw new Error("Quota roster deadline exceeded");
+    return data;
+  } finally {
+    bounded.clear();
+    signal?.removeEventListener("abort", abort);
+    requests.delete(bounded.controller);
+  }
+}
+
 export function useProviderAccountPools(deps: {
   apiBase: string;
   /** Stable logical target; a relay apiBase can stay the same across a re-pair. */
@@ -209,26 +240,10 @@ export function useProviderAccountPools(deps: {
   const accountSetsKeyRef = useRef<string | null>(null);
   const keyPoolsKeyRef = useRef<string | null>(null);
 
-  const readRoster = useCallback(async <T,>(url: string, signal?: AbortSignal): Promise<T> => {
-    const bounded = createBoundedFetch(20_000);
-    const abort = () => bounded.controller.abort();
-    if (signal?.aborted) abort();
-    signal?.addEventListener("abort", abort, { once: true });
-    requestsRef.current.add(bounded.controller);
-    try {
-      // A read belongs to this render's target too. A stale capture is refused before
-      // fetch, so a stale render cannot paint the new target's roster.
-      const response = await targetFetch(renderCapture, url, { signal: bounded.signal });
-      if (!response.ok) throw new Error(String(response.status));
-      const data = await response.json() as T;
-      if (bounded.signal.aborted) throw new Error("Quota roster deadline exceeded");
-      return data;
-    } finally {
-      bounded.clear();
-      signal?.removeEventListener("abort", abort);
-      requestsRef.current.delete(bounded.controller);
-    }
-  }, [renderCapture]);
+  // A read belongs to this render's target too. A stale capture is refused before
+  // fetch, so a stale render cannot paint the new target's roster.
+  const readRoster = useCallback(async <T,>(url: string, signal?: AbortSignal): Promise<T> =>
+    await readRosterWithCleanup<T>(renderCapture, url, signal, requestsRef.current), [renderCapture]);
 
   const fetchAccountSets = useCallback(async (providers: string[], refresh = false): Promise<boolean> => {
     if (!aliveRef.current || !mountedRef.current || serverRef.current !== serverIdentity) return false;

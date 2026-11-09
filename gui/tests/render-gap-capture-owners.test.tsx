@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act, useLayoutEffect, useRef } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import type { Root } from "react-dom/client";
 import { configureApiTargets } from "../src/api";
 import { standaloneApiTargets } from "../src/api-targets";
 import { useProviderAccountPools } from "../src/hooks/useProviderAccountPools";
@@ -39,12 +39,14 @@ function relay(apiBase: string, origin: string) {
 
 function Harness({ base, target }: { base: string; target: string }) {
   const aliveRef = useRef(true);
-  pools = useProviderAccountPools({
+  const controller = useProviderAccountPools({
     apiBase: base, targetKey: target, config: null, aliveRef, t: key => key, oauthStatus: {},
     notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchProviderQuotas: async () => {},
     codexActiveNeedsReauth: false,
   });
-  useLayoutEffect(() => {}, [pools]);
+  // Publish after commit: writing a hook result into a module binding during render is
+  // what the compiler rejects, and the test body only reads it after act().
+  useLayoutEffect(() => { pools = controller; });
   return null;
 }
 
@@ -123,12 +125,13 @@ describe("other capture owners", () => {
     let actions!: ReturnType<typeof useProvidersOAuth>;
     function OAuthHarness() {
       const aliveRef = useRef(true);
-      actions = useProvidersOAuth({
+      const controller = useProvidersOAuth({
         apiBase: "/same", targetKey: "hub-a", t: key => key, aliveRef, accountSets: {}, setAccountSets: () => {},
         setBusy: () => {}, setStatus: () => {}, setLoginInfo: () => {}, setOauthStatus: () => {},
         notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchAccountSets: async () => {},
         fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {},
       });
+      useLayoutEffect(() => { actions = controller; });
       return null;
     }
     configureApiTargets(relay("/same", "hub-a"));
@@ -147,9 +150,10 @@ describe("other capture owners", () => {
     let actions!: ReturnType<typeof useAddProviderOAuth>;
     function AddOAuthHarness() {
       const aliveRef = useRef(true);
-      actions = useAddProviderOAuth({
+      const controller = useAddProviderOAuth({
         apiBase: "/same", targetKey: "hub-a", t: key => key, aliveRef, onAdded: () => {},
       });
+      useLayoutEffect(() => { actions = controller; });
       return null;
     }
     configureApiTargets(relay("/same", "hub-a"));
@@ -171,7 +175,8 @@ describe("other capture owners", () => {
   test("Kiro start is refused before fetch after a render gap", async () => {
     let login!: ReturnType<typeof useKiroDeviceLogin>;
     function KiroHarness() {
-      login = useKiroDeviceLogin("/same", () => {}, undefined, "hub-a");
+      const controller = useKiroDeviceLogin("/same", () => {}, undefined, "hub-a");
+      useLayoutEffect(() => { login = controller; });
       return null;
     }
     configureApiTargets(relay("/same", "hub-a"));
@@ -188,7 +193,8 @@ describe("other capture owners", () => {
   test("the auto-switch save is refused before fetch after a render gap", async () => {
     let controller!: ReturnType<typeof useCodexAutoSwitch>;
     function AutoSwitchHarness() {
-      controller = useCodexAutoSwitch("/same", { updated: "u", updateFailed: "f", invalid: "i" }, "hub-a");
+      const current = useCodexAutoSwitch("/same", { updated: "u", updateFailed: "f", invalid: "i" }, "hub-a");
+      useLayoutEffect(() => { controller = current; });
       return null;
     }
     configureApiTargets(relay("/same", "hub-a"));
@@ -206,7 +212,8 @@ describe("other capture owners", () => {
   test("a Codex pool action is refused before fetch after a render gap", async () => {
     let controller!: ReturnType<typeof useCodexAccountPool>;
     function CodexHarness() {
-      controller = useCodexAccountPool("/same", true, "hub-a");
+      const current = useCodexAccountPool("/same", true, "hub-a");
+      useLayoutEffect(() => { controller = current; });
       return null;
     }
     configureApiTargets(relay("/same", "hub-a"));

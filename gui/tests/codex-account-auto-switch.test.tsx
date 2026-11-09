@@ -300,7 +300,7 @@ describe("Codex account auto-switch threshold", () => {
 
   test("the auto-switch save carries the captured relay target", async () => {
     const { Window } = await import("happy-dom");
-    const { act } = await import("react");
+    const { act, useLayoutEffect } = await import("react");
     const { createRoot } = await import("react-dom/client");
     const { configureApiTargets } = await import("../src/api");
     const { standaloneApiTargets } = await import("../src/api-targets");
@@ -332,7 +332,10 @@ describe("Codex account auto-switch threshold", () => {
     }) as typeof fetch;
     let controller!: ReturnType<typeof useCodexAutoSwitch>;
     function Probe() {
-      controller = useCodexAutoSwitch("/api/machine/hub-relay", { updated: "u", updateFailed: "f", invalid: "i" });
+      const current = useCodexAutoSwitch("/api/machine/hub-relay", { updated: "u", updateFailed: "f", invalid: "i" });
+      // Publish after commit: the compiler rejects a render-phase write of a hook result
+      // into a module binding, and the test body only reads it after act().
+      useLayoutEffect(() => { controller = current; });
       return null;
     }
     const host = win.document.createElement("div");

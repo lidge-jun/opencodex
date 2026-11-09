@@ -62,16 +62,19 @@ export function useProvidersFetch({
     // new target's in-flight config read look superseded.
     if (activeTarget.current !== target) return "superseded";
     const request = ++configRequest.current;
+    // A read that started before this target or revision moved must not publish. Named
+    // because the check is only meaningful after the read settles, never before it.
+    const superseded = () => activeTarget.current !== target || request !== configRequest.current;
     try {
       const res = await fetch(`${apiBase}/api/config`);
       const data = await readJsonOrThrow<ProvidersConfig>(res);
-      if (activeTarget.current !== target || request !== configRequest.current) return "superseded";
+      if (superseded()) return "superseded";
       if (!data) throw new Error("config response missing");
       setConfig(data ?? null);
       if (configCacheKey && data) writeSessionListCache(configCacheKey, data);
       return "applied";
     } catch {
-      if (activeTarget.current !== target || request !== configRequest.current) return "superseded";
+      if (superseded()) return "superseded";
       notify(t("prov.loadConfigFail"), false);
       return "failed";
     }

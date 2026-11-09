@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, useRef, useState, type ReactNode } from "react";
+import { act, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Root } from "react-dom/client";
 import { useProvidersFetch } from "../src/pages/use-providers-fetch";
 import { useProvidersOAuth } from "../src/pages/use-providers-oauth";
@@ -53,15 +53,17 @@ test.each(["failed refresh", "late read", "read during logout"] as const)("logou
   } });
   function Harness() {
     const [state, setOauthStatus] = useState<Record<string, OAuthStatus>>({});
-    statuses = state;
     const aliveRef = useRef(true);
-    loader = useProvidersFetch({ apiBase: "", t: key => key, setConfig: () => {}, setOauthProviders: () => {}, setOauthStatus,
+    const loaderController = useProvidersFetch({ apiBase: "", t: key => key, setConfig: () => {}, setOauthProviders: () => {}, setOauthStatus,
       notify: () => {}, invalidateProviderQuotas: () => {} });
-    actions = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: {}, setAccountSets: () => {},
+    const actionsController = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: {}, setAccountSets: () => {},
       setBusy: () => {}, setStatus: () => {}, setLoginInfo: () => {}, setOauthStatus,
-      invalidateOauthStatusReads: loader.invalidateOauthStatusReads, beginAccountLogout: () => () => {}, notify: () => {},
-      fetchConfig: async () => {}, fetchOauth: loader.fetchOauth, fetchAccountSets: async () => {},
+      invalidateOauthStatusReads: loaderController.invalidateOauthStatusReads, beginAccountLogout: () => () => {}, notify: () => {},
+      fetchConfig: async () => {}, fetchOauth: loaderController.fetchOauth, fetchAccountSets: async () => {},
       fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+    // Publish after commit: a render-phase write of a hook result into a module binding is
+    // what the compiler rejects, and the test body only reads it after act().
+    useLayoutEffect(() => { statuses = state; loader = loaderController; actions = actionsController; });
     return null;
   }
   await render(<Harness />);
@@ -123,13 +125,13 @@ test.each(["success", "partial", "failure", "network"] as const)("account deleti
   } });
   function Harness() {
     const [state, setOauthStatus] = useState<Record<string, OAuthStatus>>({});
-    statuses = state;
     const aliveRef = useRef(true);
-    loader = useProvidersFetch({ apiBase: "", t: key => key, setConfig: () => {}, setOauthProviders: () => {}, setOauthStatus,
+    const loaderController = useProvidersFetch({ apiBase: "", t: key => key, setConfig: () => {}, setOauthProviders: () => {}, setOauthStatus,
       notify: () => {}, invalidateProviderQuotas: () => {} });
-    pools = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: state, notify: () => {},
-      fetchConfig: async () => {}, fetchOauth: loader.fetchOauth, fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false,
-      invalidateOauthStatusReads: loader.invalidateOauthStatusReads, setOauthStatus });
+    const poolsController = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: state, notify: () => {},
+      fetchConfig: async () => {}, fetchOauth: loaderController.fetchOauth, fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false,
+      invalidateOauthStatusReads: loaderController.invalidateOauthStatusReads, setOauthStatus });
+    useLayoutEffect(() => { statuses = state; loader = loaderController; pools = poolsController; });
     return null;
   }
   try {
@@ -186,13 +188,13 @@ test("a deletion settling after a target change cannot clear or refresh the new 
   } });
   function Harness({ base }: { base: string }) {
     const [state, setOauthStatus] = useState<Record<string, OAuthStatus>>({});
-    statuses = state;
     const aliveRef = useRef(true);
-    loader = useProvidersFetch({ apiBase: base, t: key => key, setConfig: () => {}, setOauthProviders: () => {}, setOauthStatus,
+    const loaderController = useProvidersFetch({ apiBase: base, t: key => key, setConfig: () => {}, setOauthProviders: () => {}, setOauthStatus,
       notify: () => {}, invalidateProviderQuotas: () => {} });
-    pools = useProviderAccountPools({ apiBase: base, config: null, aliveRef, t: key => key, oauthStatus: state, notify: () => {},
-      fetchConfig: async () => {}, fetchOauth: loader.fetchOauth, fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false,
-      invalidateOauthStatusReads: loader.invalidateOauthStatusReads, setOauthStatus });
+    const poolsController = useProviderAccountPools({ apiBase: base, config: null, aliveRef, t: key => key, oauthStatus: state, notify: () => {},
+      fetchConfig: async () => {}, fetchOauth: loaderController.fetchOauth, fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false,
+      invalidateOauthStatusReads: loaderController.invalidateOauthStatusReads, setOauthStatus });
+    useLayoutEffect(() => { statuses = state; loader = loaderController; pools = poolsController; });
     return null;
   }
   try {
@@ -238,19 +240,19 @@ test("a login status read predating account deletion cannot restore the deleted 
   } });
   function Harness() {
     const [state, setOauthStatus] = useState<Record<string, OAuthStatus>>({});
-    statuses = state;
     const aliveRef = useRef(true);
     const [, setBusy] = useState<string | null>(null);
     const [, setLoginInfo] = useState<Parameters<typeof useProvidersOAuth>[0]["setLoginInfo"] extends React.Dispatch<React.SetStateAction<infer S>> ? S : never>(null);
     const loader = useProvidersFetch({ apiBase: "", t: key => key, setConfig: () => {}, setOauthProviders: () => {}, setOauthStatus,
       notify: () => {}, invalidateProviderQuotas: () => {} });
-    pools = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: state, notify: () => {},
+    const poolsController = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: state, notify: () => {},
       fetchConfig: async () => {}, fetchOauth: async () => {}, fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false,
       invalidateOauthStatusReads: loader.invalidateOauthStatusReads, setOauthStatus });
-    actions = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: pools.accountSets, setAccountSets: pools.setAccountSets,
+    const actionsController = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: poolsController.accountSets, setAccountSets: poolsController.setAccountSets,
       setBusy, setStatus: () => {}, setLoginInfo, setOauthStatus, invalidateOauthStatusReads: loader.invalidateOauthStatusReads, captureOauthStatusRead: loader.captureOauthStatusRead,
-      notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchAccountSets: pools.fetchAccountSets,
+      notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchAccountSets: poolsController.fetchAccountSets,
       fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+    useLayoutEffect(() => { statuses = state; pools = poolsController; actions = actionsController; });
     return null;
   }
   try {
@@ -301,10 +303,11 @@ test("an old target's login failure cannot cancel the new target's login", async
   } });
   function Harness({ targetKey }: { targetKey: string }) {
     const aliveRef = useRef(true);
-    actions = useProvidersOAuth({ apiBase: "/api/machine/hub-relay", targetKey, t: key => key, aliveRef, accountSets: {},
+    const controller = useProvidersOAuth({ apiBase: "/api/machine/hub-relay", targetKey, t: key => key, aliveRef, accountSets: {},
       setAccountSets: () => {}, ...stableSetters, setOauthStatus: () => {},
       notify: message => { notices.push(message); }, fetchConfig: async () => {}, fetchOauth: async () => {},
       fetchAccountSets: async () => {}, fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+    useLayoutEffect(() => { actions = controller; });
     return null;
   }
   try {
@@ -335,10 +338,11 @@ test("a logout failure settling after a target change does not notify the new ta
   } });
   function Harness({ base }: { base: string }) {
     const aliveRef = useRef(true);
-    actions = useProvidersOAuth({ apiBase: base, t: key => key, aliveRef, accountSets: {}, setAccountSets: () => {},
+    const controller = useProvidersOAuth({ apiBase: base, t: key => key, aliveRef, accountSets: {}, setAccountSets: () => {},
       setBusy: () => {}, setStatus: () => {}, setLoginInfo: () => {}, setOauthStatus: () => {},
       notify: message => { notices.push(message); }, fetchConfig: async () => {}, fetchOauth: async () => {},
       fetchAccountSets: async () => {}, fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+    useLayoutEffect(() => { actions = controller; });
     return null;
   }
   await render(<Harness base="/old" />);
@@ -366,10 +370,11 @@ test("key remove, add and alias completions after a target change do not toast o
   } });
   function Harness({ base }: { base: string }) {
     const aliveRef = useRef(true);
-    pools = useProviderAccountPools({ apiBase: base, config: null, aliveRef, t: key => key, oauthStatus: {},
+    const controller = useProviderAccountPools({ apiBase: base, config: null, aliveRef, t: key => key, oauthStatus: {},
       notify: (message: string) => { notices.push(message); }, fetchConfig: async () => { reloads.push("config"); },
       fetchOauth: async () => { reloads.push("oauth"); }, fetchProviderQuotas: async () => { reloads.push("quotas"); },
       codexActiveNeedsReauth: false });
+    useLayoutEffect(() => { pools = controller; });
     return null;
   }
   const run = async (start: () => Promise<unknown>, base: string, next: string) => {
@@ -399,9 +404,10 @@ test("an add-key form typed on one target does not survive the target change", a
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: async () => Response.json({}) });
   function Harness({ base }: { base: string }) {
     const aliveRef = useRef(true);
-    pools = useProviderAccountPools({ apiBase: base, config: null, aliveRef, t: key => key, oauthStatus: {},
+    const controller = useProviderAccountPools({ apiBase: base, config: null, aliveRef, t: key => key, oauthStatus: {},
       notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchProviderQuotas: async () => {},
       codexActiveNeedsReauth: false });
+    useLayoutEffect(() => { pools = controller; });
     return null;
   }
   await render(<Harness base="/a" />);

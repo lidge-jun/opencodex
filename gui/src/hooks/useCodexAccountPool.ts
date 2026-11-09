@@ -272,10 +272,12 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
   const hasLoadedRef = useRef(seed != null);
   // A logical target change must not leave the previous target's rows looking ready.
   const previousSeedKeyRef = useRef(seedKey);
-  useEffect(() => {
-    if (previousSeedKeyRef.current === seedKey) return;
-    previousSeedKeyRef.current = seedKey;
-    loadGenerationRef.current += 1;
+  // The rows clear while rendering, so the new target never paints the previous target's
+  // accounts for a frame. The refs below move in an effect: they are read by in-flight
+  // loads, and a render-phase ref write is what the compiler rejects.
+  const [syncedSeedKey, setSyncedSeedKey] = useState(seedKey);
+  if (syncedSeedKey !== seedKey) {
+    setSyncedSeedKey(seedKey);
     setAccounts([]);
     setActiveId(null);
     setLoadState("loading");
@@ -283,6 +285,11 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
     setActivePinnedId(null);
     setFirstAttemptSettled(false);
     setInflightCount(0);
+  }
+  useEffect(() => {
+    if (previousSeedKeyRef.current === seedKey) return;
+    previousSeedKeyRef.current = seedKey;
+    loadGenerationRef.current += 1;
     hasAccountsRef.current = false;
     hasLoadedRef.current = false;
     initialLoadKeyRef.current = null;
@@ -297,9 +304,9 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
   // is a target change even though the module-level topology never moved.
   const apiBaseRef = useRef(apiBase);
   useLayoutEffect(() => { apiBaseRef.current = apiBase; }, [apiBase]);
-  /** May this action still apply its result here? */
-  const captureIsCurrent = (capture: ApiTargetCapture) =>
-    isApiTargetCaptureCurrent(capture) && capture.apiBase === apiBaseRef.current;
+  /** May this action still apply its result here? A ref read keeps this callback stable. */
+  const captureIsCurrent = useCallback((capture: ApiTargetCapture) =>
+    isApiTargetCaptureCurrent(capture) && capture.apiBase === apiBaseRef.current, []);
 
   const subscribeLoadObserver = useCallback((observer: CodexAccountLoadObserver) => {
     observersRef.current!.add(observer);
@@ -572,7 +579,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
         setSwitchingId(null);
       }
     }
-  }, [accounts, apiBase, load, renderCapture]);
+  }, [accounts, apiBase, captureIsCurrent, load, renderCapture]);
 
   const saveAlias = useCallback(async (id: string, alias: string) => {
     const capture = renderCapture;
@@ -589,7 +596,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
     } catch {
       return { ok: false, reason: "request" } as const;
     }
-  }, [apiBase, load, renderCapture]);
+  }, [apiBase, captureIsCurrent, load, renderCapture]);
 
   const setAccountPaused = useCallback(async (id: string, paused: boolean) => {
     const capture = renderCapture;
@@ -635,7 +642,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
         setPauseUpdatingId(null);
       }
     }
-  }, [apiBase, load, renderCapture]);
+  }, [apiBase, captureIsCurrent, load, renderCapture]);
 
   const setAccountPriority = useCallback(async (id: string, priority: number | null) => {
     const capture = renderCapture;
@@ -683,7 +690,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
         setPriorityUpdatingId(null);
       }
     }
-  }, [apiBase, load, renderCapture]);
+  }, [apiBase, captureIsCurrent, load, renderCapture]);
 
   const setAccountAutoSwitchThreshold = useCallback(async (
     id: string,
@@ -723,7 +730,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
         setAutoSwitchUpdatingId(null);
       }
     }
-  }, [apiBase, load, renderCapture]);
+  }, [apiBase, captureIsCurrent, load, renderCapture]);
 
   // One writer for the per-account and the global switch: they edit the same list, so a second
   // write while one is in flight is refused rather than raced.
@@ -753,7 +760,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
       creditsAfterLimitMutationRef.current = false;
       setCreditsAfterLimitUpdatingId(null);
     }
-  }, [apiBase, load, renderCapture]);
+  }, [apiBase, captureIsCurrent, load, renderCapture]);
 
   const setAccountCreditsAfterLimit = useCallback((id: string, enabled: boolean) => writeCreditsAfterLimit(
     id,
@@ -809,7 +816,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
         setPausingExhausted(false);
       }
     }
-  }, [apiBase, load, renderCapture]);
+  }, [apiBase, captureIsCurrent, load, renderCapture]);
 
   const removeAccount = useCallback(async (id: string) => {
     const capture = renderCapture;
@@ -828,7 +835,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
     } catch {
       return { ok: false, reason: "request" } as const;
     }
-  }, [apiBase, load, renderCapture]);
+  }, [apiBase, captureIsCurrent, load, renderCapture]);
 
   const syncAfterAccountAdded = useCallback(async () => {
     const ok = await load();

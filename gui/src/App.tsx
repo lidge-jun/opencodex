@@ -217,16 +217,16 @@ export default function App() {
     void discovery.refresh();
     const refresh = () => { void discovery.refresh(); };
     const visibility = () => { if (document.visibilityState === "visible") refresh(); };
-    for (const event of [SESSION_CHANGED_EVENT, DEVICE_PROOF_CHANGED_EVENT, TARGET_CHANGED_EVENT]) {
-      window.addEventListener(event, refresh);
-    }
+    window.addEventListener(SESSION_CHANGED_EVENT, refresh);
+    window.addEventListener(DEVICE_PROOF_CHANGED_EVENT, refresh);
+    window.addEventListener(TARGET_CHANGED_EVENT, refresh);
     window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", visibility);
     return () => {
       discovery.dispose();
-      for (const event of [SESSION_CHANGED_EVENT, DEVICE_PROOF_CHANGED_EVENT, TARGET_CHANGED_EVENT]) {
-        window.removeEventListener(event, refresh);
-      }
+      window.removeEventListener(SESSION_CHANGED_EVENT, refresh);
+      window.removeEventListener(DEVICE_PROOF_CHANGED_EVENT, refresh);
+      window.removeEventListener(TARGET_CHANGED_EVENT, refresh);
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", visibility);
     };

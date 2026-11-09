@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { act, useEffect, useRef, useState } from "react";
+import { act, useLayoutEffect, useRef } from "react";
 import type { Root } from "react-dom/client";
 import { Window } from "happy-dom";
 import { useProvidersCrud } from "../src/pages/use-providers-crud";
@@ -109,13 +109,13 @@ async function mountCrud(overrides: {
       refreshCodexAccount: overrides.refreshCodexAccount,
       onProviderRemoved: overrides.onProviderRemoved,
     });
-    const [ready, setReady] = useState(false);
-    useEffect(() => {
+    // Publish after commit, before the test body reads the callbacks. A layout effect
+    // keeps that order without a second render to flip a ready flag.
+    useLayoutEffect(() => {
       updateProvider = crud.updateProvider;
       confirmRemoveProvider = crud.confirmRemoveProvider;
-      setReady(true);
     }, [crud.updateProvider, crud.confirmRemoveProvider]);
-    return ready ? <div data-ready="1" /> : null;
+    return <div data-ready="1" />;
   }
 
   await act(async () => {

@@ -68,7 +68,9 @@ test("a same-target refresh keeps the request generation and sends the captured 
   configureApiTargets(relayTargets(HUB_A, "expected-target-v1"));
   const capture = captureApiTarget("shared");
   configureApiTargets(relayTargets(HUB_A, "expected-target-v1"));
-  expect((await mutation()).status).toBe(200);
+  // The capture taken before the same-target refresh is still current: the refresh
+  // keeps the generation, so the header it carries is the one the mutation sends.
+  expect((await targetFetch(capture, "/api/machine/hub-relay/api/providers?name=p", { method: "PATCH", body: "{}" })).status).toBe(200);
   expect(seen).toEqual([{ url: "/api/machine/hub-relay/api/providers?name=p", expected: HUB_A }]);
 });
 
