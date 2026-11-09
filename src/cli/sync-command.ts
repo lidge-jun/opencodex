@@ -204,7 +204,8 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
       if (homeRouteIntentInUse(readRouteIntentState())) {
         const { syncHomeRouteTo } = await import("../routing/route-to-local");
         const { packageVersion } = await import("../lib/package-version");
-        const outcomes = await syncHomeRouteTo({ ...deps.loadConfig(), ...(live ? { port: live.port } : {}) }, packageVersion("0.0.0"), syncArgs.includes("--overwrite-conflict"), flags.overwriteClient);
+        const outcomes = await syncHomeRouteTo({ ...deps.loadConfig(), ...(live ? { port: live.port } : {}) }, packageVersion("0.0.0"), syncArgs.includes("--overwrite-conflict"), flags.overwriteClient,
+          undefined, { onAsideUnresolved: message => console.warn(message) });
         for (const row of outcomes) {
           if (row.outcome !== "current" && row.outcome !== "not_installed") { console.error(`${row.client}: ${row.outcome}`); code = 1; }
         }
