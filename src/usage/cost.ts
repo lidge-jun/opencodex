@@ -20,7 +20,7 @@ import { canonicalFastTierMarker } from "../providers/fastwire";
 import { baseProviderLabel } from "../providers/label";
 import type { PersistedUsageAttempt, UsageStatus } from "./log";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
-import { activeAccountPricingProviders, activeConfiguredProviders, activeUserCostOverlays, userCostOverlayVersion } from "./user-cost-overlays";
+import { activeAccountPricingProviders, activeConfiguredProviders, activeCreditPrices, activeUserCostOverlays, userCostOverlayVersion } from "./user-cost-overlays";
 import {
   EXPECTED_PRICE_OVERLAYS,
   findExpectedPriceOverlay,
@@ -610,11 +610,26 @@ function isOpenRouterPriorityLowerBound(
  * catalogs), priority/long-context tiers applied. Null when usage or price is
  * missing so combos can fail closed.
  */
+/** Billed cost from provider credits, when the provider has a configured credit price. */
+function creditCost(provider: string, usage: OcxUsage, creditPrices: ReadonlyMap<string, number>): CostBreakdown | null {
+  const price = creditPrices.get(provider);
+  if (price === undefined) return null;
+  const credits = usage.providerCredits;
+  if (typeof credits === "number" && Number.isFinite(credits) && credits >= 0) {
+    return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: credits * price };
+  }
+  // A credit-billed provider reports credits on every metered response; no credits and no output
+  // means the request was refused or cancelled before generation, which the provider does not bill.
+  if (usage.outputTokens === 0) return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+  return null;
+}
+
 export function estimateAttemptCost(
   attempt: AttemptCostInput,
   overlays: readonly ExpectedPriceOverlay[] = EXPECTED_PRICE_OVERLAYS,
   serviceTier?: ServiceTierInput,
   userOverlays: readonly ExpectedPriceOverlay[] = activeUserCostOverlays(),
+  creditPrices: ReadonlyMap<string, number> = activeCreditPrices(),
 ): AttemptCostEstimate | null {
   if (!isMeasuredStatus(attempt.usageStatus) || !attempt.usage) return null;
   const tokens = normalizeCostTokens(attempt.usage);
@@ -638,7 +653,7 @@ export function estimateAttemptCost(
     model: attempt.model,
     tokens,
     price,
-    cost: calculateCost(tokens, effectiveCost4),
+    cost: creditCost(attempt.provider, attempt.usage, creditPrices) ?? calculateCost(tokens, effectiveCost4),
     estimated: isEstimated(attempt.usage, attempt.usageStatus, price.status),
     ...(multiplier !== 1 ? { priorityMultiplier: multiplier } : {}),
     ...(contextTier ? { contextTier } : {}),
@@ -706,6 +721,7 @@ export function estimateRequestCost(
   },
   overlays: readonly ExpectedPriceOverlay[] = EXPECTED_PRICE_OVERLAYS,
   userOverlays: readonly ExpectedPriceOverlay[] = activeUserCostOverlays(),
+  creditPrices: ReadonlyMap<string, number> = activeCreditPrices(),
 ): CostEstimate | null {
   if (!isMeasuredStatus(input.usageStatus) || !input.usage) return null;
   const tokens = normalizeCostTokens(input.usage);
@@ -725,7 +741,7 @@ export function estimateRequestCost(
   return {
     tokens,
     price,
-    cost: calculateCost(tokens, effectiveCost4),
+    cost: creditCost(input.provider, input.usage, creditPrices) ?? calculateCost(tokens, effectiveCost4),
     estimated: isEstimated(input.usage, input.usageStatus, price.status),
     ...(multiplier !== 1 ? { priorityMultiplier: multiplier } : {}),
     ...(contextTier ? { contextTier } : {}),

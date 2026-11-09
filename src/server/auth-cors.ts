@@ -1154,6 +1154,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   minMaxOutputTokens: "editor",
   modelMaxOutputTokens: "editor",
   modelCosts: "editor",
+  creditPriceUsd: "editor",
   headers: "redacted",
   forwardClientHeaders: "editor",
   openRouterRouting: "editor",

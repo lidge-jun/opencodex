@@ -802,6 +802,14 @@ export const configSchema = z.object({
         message: minMaxOutputError,
       });
     }
+    const creditPrice = (provider as { creditPriceUsd?: unknown }).creditPriceUsd;
+    if (creditPrice !== undefined && !(typeof creditPrice === "number" && Number.isFinite(creditPrice) && creditPrice >= 0)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "creditPriceUsd"],
+        message: "creditPriceUsd must be a finite number greater than or equal to 0",
+      });
+    }
     const defaultMaxOutputError = positiveIntegerConfigError(
       (provider as { defaultMaxOutputTokens?: unknown }).defaultMaxOutputTokens,
       "defaultMaxOutputTokens",
