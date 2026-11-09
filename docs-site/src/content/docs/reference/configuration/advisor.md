@@ -206,6 +206,10 @@ consultation never switches the session's main model.
 - Native OpenAI passthrough turns (ChatGPT-pool workers) do not get the synthetic tool; advisor
   support covers routed (translated) providers. Preflight consultation applies to run-turn
   adapters; the tool does not.
+- Translated `/v1/messages` requests (for example Claude Code routed to a translated provider)
+  get the synthetic tool and preflight like `/v1/responses` and `/v1/chat/completions`. The
+  same `policy` and context-sharing consent rules apply, and the settings are read from the live
+  config, so a consent revocation also blocks consultations for requests already in flight.
 - No semantic stuck detection, completion review, escalation tiers, multiple advisors or voting.
   Adaptive consultation requires the structured validation/edit/retry evidence described above.
 - The preflight dedup ledger is process-local; after a proxy restart, a task in progress may

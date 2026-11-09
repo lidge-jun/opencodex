@@ -21,7 +21,9 @@ when an active factory is used, so its process-local ledger is not constructed b
 install. `sidecar-execution.ts` reads the core-owned slot, not Advisor settings or runtime.
 Request-scoped copies of the live config, such as the Claude replay config `/v1/messages` passes to
 the Responses pipeline, are linked with `linkAdvisorPlanConfig` so they resolve the live config's
-factory at lookup time (`tests/advisor/advisor-messages-replay-config.test.ts`).
+factory at lookup time. The view's `advisor` reads through to the live config, so a consent
+revocation after the copy still blocks outbound transfer
+(`tests/advisor/advisor-messages-replay-config.test.ts`).
 Advisor settings admit the complete synchronous candidate/read/patch/save/activation phase through the [config admission contract](config.md). Production uses the current disk candidate when present, preserving unrelated disk edits during admission. Successful saves adopt the committed Advisor subtree and its field-scoped live baseline together, including known absence after reset, without advancing unrelated pending live edits. Fallback or error-bearing diagnostics are refused before mutation. Deadline refusal leaves live and durable settings untouched and retains the existing `write_failed` response. Successful receipts are serialized in that callback before another settings mutation can run.
 Management loads `advisor-routes.ts` only for the Advisor namespace. The guard is attached through
 `_advisorGuard`. `tests/advisor/advisor-core-boundary.test.ts` enforces the transitive load-time

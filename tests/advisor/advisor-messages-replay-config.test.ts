@@ -1,10 +1,18 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { createAdvisorRuntimePlan } from "../../src/advisor/runtime";
+import { createAdvisorTaskBudget } from "../../src/advisor/budget";
+import { createAdvisorActivityStore } from "../../src/advisor/activity";
+import { createAdvisorPreflightLedger } from "../../src/advisor/state";
+import { parseRequest } from "../../src/responses/parser";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import {
   createRegisteredAdvisorPlan, linkAdvisorPlanConfig, setAdvisorPlanFactory, type AdvisorPlanInput,
 } from "../../src/server/responses/advisor-plan-slot";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
-import type { OcxConfig } from "../../src/types";
+import type { OcxConfig, OcxParsedRequest } from "../../src/types";
 
 // The Advisor factory is registered on the live config object, but /v1/messages hands the
 // Responses pipeline a request-scoped replay view (`buildClaudeReplayConfig` plus cacheRetention).
@@ -14,11 +22,18 @@ import type { OcxConfig } from "../../src/types";
 const workerStream = 'data: {"choices":[{"delta":{"content":"fixture"},"finish_reason":null}]}\n\n'
   + 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n';
 
-const plan = (seen: AdvisorPlanInput[]) => async (input: AdvisorPlanInput) => {
+const originalFetch = globalThis.fetch;
+const roots: string[] = [];
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+const plan = (seen: AdvisorPlanInput[], preflights: OcxParsedRequest[] = []) => async (input: AdvisorPlanInput) => {
   seen.push(input);
   return {
     tool: { name: "advisor", description: "fixture", parameters: { type: "object", properties: {} }, advisor: true },
-    preflightInject: async () => false,
+    preflightInject: async (parsed: OcxParsedRequest) => { preflights.push(parsed); return false; },
     attachGuard: () => {},
   };
 };
@@ -36,6 +51,8 @@ test("a linked request view resolves the live factory at lookup time", async () 
     // The plan still receives the view it was asked for, not the live object.
     expect(seen.map(input => input.config)).toEqual([view, nested]);
     expect(seen[0]!.config).toBe(view);
+    // The read-through accessor keeps the view cloneable (#7974).
+    expect(structuredClone(view).cacheRetention).toBe("short");
     // An unrelated copy never inherits a factory it was not linked to.
     expect(createRegisteredAdvisorPlan({ config: { ...live }, workerIdentity: "w", workerModelId: "w" })).toBeNull();
   } finally { setAdvisorPlanFactory(live, null); }
@@ -47,6 +64,7 @@ test("/v1/messages reaches the factory registered on the live config and sends t
   const release = acquireOwnedSpendHome();
   const workerBodies: Record<string, unknown>[] = [];
   const seen: AdvisorPlanInput[] = [];
+  const preflights: OcxParsedRequest[] = [];
   const config: OcxConfig = {
     defaultProvider: "worker",
     providers: { worker: { adapter: "openai-chat", apiKey: "fixture", models: ["m"], liveModels: false,
@@ -56,7 +74,7 @@ test("/v1/messages reaches the factory registered on the live config and sends t
         return new Response(workerStream, { headers: { "content-type": "text/event-stream" } });
       }) as typeof fetch } },
   };
-  setAdvisorPlanFactory(config, plan(seen));
+  setAdvisorPlanFactory(config, plan(seen, preflights));
   try {
     const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
       method: "POST", headers: { "content-type": "application/json" },
@@ -66,8 +84,41 @@ test("/v1/messages reaches the factory registered on the live config and sends t
     expect(response.status).toBe(200);
     expect(seen).toHaveLength(1);
     expect(seen[0]!.config).not.toBe(config);
+    // The Messages turn runs the automatic preflight pass, not only the tool declaration.
+    expect(preflights).toHaveLength(1);
+    expect(JSON.stringify(preflights[0]!.context.messages)).toContain("fixture");
     expect(workerBodies).toHaveLength(1);
     const tools = (workerBodies[0]!.tools ?? []) as { function?: { name?: string } }[];
     expect(tools.map(tool => tool.function?.name)).toContain("advisor");
   } finally { setAdvisorPlanFactory(config, null); release(); }
+});
+
+test("consent revoked on the live config after the view was copied blocks the consultation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "advisor-messages-consent-")); roots.push(root);
+  const calls: unknown[] = [];
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push(init?.body);
+    return Response.json({ choices: [{ message: { content: "advice" } }] });
+  }) as typeof fetch;
+  const live = { port: 10100, providers: {}, advisor: {
+    enabled: true, model: "expert", policy: "manual", effort: "high", contextSharingConsent: "v1",
+  } } as OcxConfig;
+  const view = linkAdvisorPlanConfig(live, { ...live, cacheRetention: "short" as const });
+  setAdvisorPlanFactory(live, async input => createAdvisorRuntimePlan({
+    ...input, baseUrlOverride: "http://expert.test", ledger: createAdvisorPreflightLedger(),
+    budget: createAdvisorTaskBudget(join(root, "budget.sqlite")), activities: createAdvisorActivityStore(),
+  }));
+  try {
+    const registered = await createRegisteredAdvisorPlan({ config: view, workerIdentity: "w", workerModelId: "w" });
+    expect(registered?.consult).toBeDefined();
+    // Management writes replace the live object (`config.advisor = ...`) rather than mutating it.
+    const { contextSharingConsent: _revoked, ...rest } = live.advisor!;
+    live.advisor = rest;
+    const parsed = parseRequest({ model: "w", stream: false, input: [{ role: "user", content: "private-task-text" }] });
+    const result = await registered!.consult!(parsed, "manual", "question");
+    expect(result.blocked).toBe("consent");
+    expect(calls).toHaveLength(0);
+    // Request-scoped overrides on the view are untouched.
+    expect(view.cacheRetention).toBe("short");
+  } finally { setAdvisorPlanFactory(live, null); }
 });
