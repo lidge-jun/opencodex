@@ -30,11 +30,7 @@ SignPath Foundation policy forbids signing them with the project certificate.
 
 ### Privacy
 
-This program will not transfer any information to other networked systems unless specifically
-requested by the user or the person installing or operating it. In practice, OpenCodex forwards
-requests to the providers you configure. To look for new versions it also reads release
-metadata from GitHub and the npm registry, and those checks carry none of your prompts,
-credentials or usage data.
+opencodex sends one anonymous daily usage summary (a per-day install hash that changes daily, version, release channel, platform, install channel, provider kind, coarse model family, active minutes and request, token and error counts; never prompts, model outputs, keys, accounts, hostnames or paths) to telemetry.opencodex.me, and only after the person installing or operating it has seen the notice in the dashboard or an interactive CLI prompt and has not declined. It can be turned off in that notice, in the Windows installer ("Send anonymous usage statistics", checked by default), in Proxy details, or with ocx telemetry disable, OCX_TELEMETRY=0 or DO_NOT_TRACK=1. Only project-wide aggregates of this anonymous data are public. A separate public leaderboard profile is off unless you connect one yourself (dashboard Home or ocx telemetry profile connect); it shares only a chosen handle, display name and colour and your daily request, token and model-family totals, never your anonymous telemetry ID, and disconnecting deletes it. Everything else goes only to the providers and services you configure. To look for new versions, opencodex also reads release metadata from GitHub and the npm registry, and those version checks carry none of your prompts or credentials. See [Telemetry and Privacy](/guides/telemetry/).
 
 ## Verifying a download
 

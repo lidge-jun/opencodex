@@ -31,7 +31,7 @@ GUI session 簽發到服務的頁面中，並在到期或代理重啟時靜默�
 儀表板本身仍然只在記憶體中保留 token，不會寫入 `localStorage` 或 `sessionStorage`；是否儲存完全
 由瀏覽器或密碼管理員決定。
 
-**記住此裝置** 預設關閉。直接 HTTPS 儀表板（或本機回環）會將管理員權杖交換為伺服器簽發的 HttpOnly、SameSite=Strict 裝置 Cookie，以及另外存入本站 localStorage 的裝置證明。HTTPS 下 Cookie 使用 Secure，且僅限本主機。Cookie 和證明都不是管理員權杖，且都不能單獨使用。同一主機名稱的不同連接埠共用 Cookie；依來源隔離的證明將記住的裝置綁定至本儀表板來源。仍建議使用專用主機名稱。管理員權杖不存入 localStorage 或 sessionStorage。瀏覽器儲存空間無法使用或無法儲存證明時，記住裝置會回報無法使用。
+**記住此裝置** 預設關閉。直接 HTTPS 儀表板（或本機回環）會將管理員權杖交換為伺服器簽發的 HttpOnly、SameSite=Strict 裝置 Cookie，以及另外存入本站 localStorage 的裝置證明。HTTPS 下 Cookie 使用 Secure，且僅限本主機。Cookie 和證明都不是管理員權杖，且都不能單獨使用。同一主機名稱的不同連接埠共用 Cookie；依來源隔離的證明將記住的裝置綁定至本儀表板來源。仍建議使用專用主機名稱。管理員權杖不存入 localStorage 或 sessionStorage。瀏覽器儲存空間無法使用或無法儲存證明時，記住裝置會回報無法使用。對於位於終止 TLS 的反向代理後方的獨立儀表板，OpenCodex 看到的是一般 HTTP 請求，因此會拒絕為該位址記住裝置；登入對話框會說明原因並關閉該選項，不勾選記住裝置仍可正常登入。受信任的 Hub 管理監聽器例外，仍可記住裝置。
 
 私有 dashboard-sessions.json 儲存 Cookie、證明、管理員憑證和瀏覽器識別的雜湊、伺服器來源及固定30天有效期。重新開啟 Safari 主畫面應用程式時，有效裝置記錄可恢復短期工作階段。記住的工作階段無法核准需要同意的操作：GitHub 星號、重設額度消耗、提示詞層編輯、Meta Muse 登入、桌面相容性變更或配額驗證。這些操作請使用新的本機工作階段或已配對工作階段。中繼、跨來源和遠端明文 HTTP 不支援記住裝置。過期、瀏覽器識別變更，或更換管理員權杖並重新啟動伺服器後需重新登入。
 
@@ -67,6 +67,7 @@ GUI session 簽發到服務的頁面中，並在到期或代理重啟時靜默�
 | **啟動安全** | 顯示注入的 Codex 路由能否在重啟後繼續工作，並分別顯示服務、launcher shim 狀態和準確的修復命令。 |
 | **Windows 托盤** | 安裝使用者登入托盤，一鍵控制代理啟動、停止、重啟、面板和狀態。托盤不是代理重啟服務。 |
 | **Codex 自動啟動** | 允許已安裝的 Codex launcher shim 執行 `ocx ensure`。此開關不會安裝 shim 或後臺服務。 |
+| **遙測** | 在 **Proxy details**（`#proxy-telemetry`）下切換**共享匿名使用統計**並檢視**預覽 JSON**。首次執行或更新後的同意彈窗僅在點擊**繼續**時儲存選擇（`PUT /api/telemetry`），關閉彈窗不會記錄任何內容。請參閱[遙測與隱私](/zh-tw/guides/telemetry/)。 |
 | **Providers** | 新增、編輯、啟用/停用、刪除 provider，並在支援時管理 OAuth 帳號池和 API key 池。額度重新整理會略過暫停的 OAuth 帳號與停用的 API key；這些被略過的列即使沒有快取讀值，仍會顯示不可用，但不影響重新整理結果。當未暫停的 OAuth 帳號或已啟用且支援額度讀取的 API key 讀值不可用時，重新整理會回報失敗。 |
 | **Add provider** | 分頁上方的單一搜尋框可同時搜尋帳號、免費、本機、付費四個分頁。搜尋時選取的分頁不會跳轉，結果依分頁分組並顯示數量。本機執行環境（Ollama、vLLM、LM Studio、LiteLLM）有專屬分頁，過長的說明會截斷為兩行，點擊即可查看全文。 |
 | **Codex Auth** | 新增 ChatGPT/Codex 池帳號，選擇下一 session 的帳號，重新整理 5h / 每週 / 30d 配額，啟用或停用配額自動切換，設定其 1–100% 閾值和臨時故障 failover。 |

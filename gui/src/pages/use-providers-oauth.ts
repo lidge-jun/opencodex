@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type { TFn } from "../i18n/shared";
 import { readJsonIfOk } from "../fetch-json";
 import { openBrowserRequestField } from "../oauth-open-browser-pref";
@@ -7,11 +7,15 @@ import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch"
 import { loginPollAttempts } from "../oauth-login-budget";
 import type { OAuthAccount, OAuthStatus } from "./providers-shared";
 import { oauthLabel } from "./providers-shared";
+import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
+import { errorMessageFrom } from "../api-error";
+import { useRenderTargetCapture } from "../use-render-target-capture";
 
 type AccountSet = { activeAccountId: string | null; accounts: OAuthAccount[] };
 
 export function useProvidersOAuth({
   apiBase,
+  targetKey,
   t,
   aliveRef,
   accountSets,
@@ -32,6 +36,8 @@ export function useProvidersOAuth({
   onLoginSettled,
 }: {
   apiBase: string;
+  /** Stable logical target; a relay apiBase can stay the same across a re-pair. */
+  targetKey?: string;
   t: TFn;
   aliveRef: React.MutableRefObject<boolean>;
   accountSets: Record<string, AccountSet>;
@@ -54,7 +60,24 @@ export function useProvidersOAuth({
 }) {
   const oauthLoginGenerationRef = useRef<Map<string, number> | null>(null);
   if (oauthLoginGenerationRef.current === null) oauthLoginGenerationRef.current = new Map();
+  // The hook's render owns the target for login and logout actions.
+  const renderCapture = useRenderTargetCapture(apiBase, targetKey);
+  const targetKeyRef = useRef(targetKey ?? apiBase);
+  useLayoutEffect(() => { targetKeyRef.current = targetKey ?? apiBase; }, [apiBase, targetKey]);
   const activeLoginGenerationsRef = useRef(new Map<string, number>());
+  const activeLoginCapturesRef = useRef(new Map<string, ApiTargetCapture>());
+  useEffect(() => {
+    // The old target's busy state and device URL must not survive under the new label.
+    // Cancel each active login on the target it actually started against; the map is the
+    // only place that capture survives once the target key changes.
+    const active = [...activeLoginCapturesRef.current];
+    activeLoginGenerationsRef.current.clear();
+    activeLoginCapturesRef.current.clear();
+    setBusy(null);
+    setLoginInfo(null);
+    setStatus("");
+    for (const [provider, capture] of active) void cancelOAuthLogin(capture, provider);
+  }, [setBusy, setLoginInfo, setStatus, targetKey]);
 
   const bumpLoginGeneration = useCallback((provider: string) => {
     const gen = (oauthLoginGenerationRef.current!.get(provider) ?? 0) + 1;
@@ -62,8 +85,12 @@ export function useProvidersOAuth({
     return gen;
   }, []);
 
-  const cancelServerLogin = useCallback((provider: string) =>
-    cancelOAuthLogin(apiBase, provider), [apiBase]);
+  /**
+   * Cancel a login on the target it started against. A missing capture fails closed:
+   * falling back to the live target would send an old login's cancel to the new server.
+   */
+  const cancelServerLogin = useCallback((capture: ApiTargetCapture, provider: string) =>
+    cancelOAuthLogin(capture, provider), []);
 
   const reloadAccountsAfterLogin = useCallback(async (provider: string) => {
     const knownProviders = Object.keys(accountSets);
@@ -96,12 +123,15 @@ export function useProvidersOAuth({
       const active = [...activeLoginGenerationsRef.current];
       activeLoginGenerationsRef.current.clear();
       for (const [provider, generation] of active) {
+        const capture = activeLoginCapturesRef.current.get(provider);
+        activeLoginCapturesRef.current.delete(provider);
         if (oauthLoginGenerationRef.current!.get(provider) === generation) bumpLoginGeneration(provider);
         if (clearUi) {
           setBusy(current => current === provider ? null : current);
           setLoginInfo(current => current?.provider === provider ? null : current);
         }
-        void cancelServerLogin(provider);
+        // Fail closed when the capture is gone: never cancel on whatever target is live now.
+        if (capture) void cancelServerLogin(capture, provider);
       }
     };
     const onPageHide = () => cancelActiveLogins(true);
@@ -114,25 +144,37 @@ export function useProvidersOAuth({
 
   const cancelLoginOAuth = useCallback(async (provider: string) => {
     const gen = bumpLoginGeneration(provider);
+    const cancelTarget = targetKey ?? apiBase;
+    const capture = activeLoginCapturesRef.current.get(provider);
     activeLoginGenerationsRef.current.delete(provider);
-    await cancelServerLogin(provider);
-    if (!aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== gen) return;
+    activeLoginCapturesRef.current.delete(provider);
+    // Clear the local UI at the click, even if the captured target has already changed.
     setBusy(current => current === provider ? null : current);
     setLoginInfo(current => current?.provider === provider ? null : current);
+    if (capture) await cancelServerLogin(capture, provider);
+    if (targetKeyRef.current !== cancelTarget || !aliveRef.current
+      || (capture !== undefined && !isApiTargetCaptureCurrent(capture))
+      || oauthLoginGenerationRef.current!.get(provider) !== gen) return;
     notify(t("prov.loginCancelled", { provider: oauthLabel(provider) }), false);
-  }, [aliveRef, bumpLoginGeneration, cancelServerLogin, notify, setBusy, setLoginInfo, t]);
+  }, [aliveRef, apiBase, bumpLoginGeneration, cancelServerLogin, notify, setBusy, setLoginInfo, t, targetKey]);
 
   const loginOAuth = async (provider: string, addAccount = false, accountId?: string) => {
+    const capture = renderCapture;
+    activeLoginCapturesRef.current.set(provider, capture);
     const generation = bumpLoginGeneration(provider);
+    const targetId = targetKey ?? apiBase;
+    // The key alone cannot tell A from A again after A-B-A; the capture generation does.
+    const targetCurrent = () => aliveRef.current && targetKeyRef.current === targetId
+      && isApiTargetCaptureCurrent(capture);
     activeLoginGenerationsRef.current.set(provider, generation);
     const reauthTargetId = accountId?.trim() || undefined;
     setBusy(provider);
     setStatus("");
     setLoginInfo(null);
     try {
-      const res = await afterOAuthCancellation(apiBase, provider, () => {
-        if (!aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
-        return fetch(`${apiBase}/api/oauth/login`, {
+      const res = await afterOAuthCancellation(capture, provider, () => {
+        if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
+        return targetFetch(capture, `${apiBase}/api/oauth/login`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -146,15 +188,19 @@ export function useProvidersOAuth({
           }),
         });
       });
-      if (!res || oauthLoginGenerationRef.current!.get(provider) !== generation || !aliveRef.current) return;
+      if (!res || oauthLoginGenerationRef.current!.get(provider) !== generation || !targetCurrent()) return;
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
-        if (!aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
-        notify(data.error || t("prov.loginFailStart", { provider: oauthLabel(provider) }), false);
+        if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
+        notify(errorMessageFrom(
+          data,
+          t("prov.loginFailStart", { provider: oauthLabel(provider) }),
+          t("prov.targetChanged"),
+        ), false);
         return;
       }
       const data = await res.json() as { url?: string; instructions?: string; deviceCode?: string; browserLaunch?: unknown };
-      if (!aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
+      if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
       const browserLaunch = parseBrowserLaunch(data.browserLaunch);
       if (data.url || data.instructions || data.deviceCode) {
         setLoginInfo({ provider, url: data.url, instructions: data.instructions, deviceCode: data.deviceCode, browserLaunch });
@@ -164,15 +210,15 @@ export function useProvidersOAuth({
       // A device code can arrive with the POST or with a later status hint; either one stretches
       // the budget to the grant's lifetime (see oauth-login-budget.ts).
       let deviceFlow = Boolean(data.deviceCode);
-      for (let i = 0; i < loginPollAttempts(deviceFlow, 2000, 150) && aliveRef.current && oauthLoginGenerationRef.current!.get(provider) === generation; i++) {
+      for (let i = 0; i < loginPollAttempts(deviceFlow, 2000, 150) && targetCurrent() && oauthLoginGenerationRef.current!.get(provider) === generation; i++) {
         await new Promise(r => setTimeout(r, 2000));
-        if (oauthLoginGenerationRef.current!.get(provider) !== generation || !aliveRef.current) return;
+        if (oauthLoginGenerationRef.current!.get(provider) !== generation || !targetCurrent()) return;
         const isCurrentStatusRead = captureOauthStatusRead?.(provider);
-        const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${provider}`).catch(() => null);
+        const sRes = await targetFetch(capture, `${apiBase}/api/oauth/status?provider=${provider}`).catch(() => null);
         const s: (OAuthStatus & { accounts?: OAuthAccount[]; activeAccountId?: string | null }) | null = sRes
           ? ((await readJsonIfOk<OAuthStatus & { accounts?: OAuthAccount[]; activeAccountId?: string | null }>(sRes)) ?? null)
           : null;
-        if (!aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
+        if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
         if (isCurrentStatusRead && !isCurrentStatusRead()) continue;
         if (!s) continue;
         if (s.error) {
@@ -226,7 +272,7 @@ export function useProvidersOAuth({
           setLoginInfo(null);
           onLoginSettled?.(provider);
           await reloadAccountsAfterLogin(provider);
-          if (!aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
+          if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
           const sameIdentityAdd = addAccount && !reauthTargetId && statusCount <= baselineCount;
           if (sameIdentityAdd) {
             notify(t("prov.loginSameAccount", { provider: oauthLabel(provider) }), false);
@@ -246,26 +292,30 @@ export function useProvidersOAuth({
         }
       }
       if (!finished && oauthLoginGenerationRef.current!.get(provider) === generation && aliveRef.current) {
-        await cancelServerLogin(provider);
-        if (!aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
+        // The cancel belongs to the login's own target, never to whatever is live now.
+        await cancelServerLogin(capture, provider);
+        if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
         notify(t("prov.loginTimeout", { provider: oauthLabel(provider) }), false);
         setLoginInfo(null);
       }
     } catch {
       if (oauthLoginGenerationRef.current!.get(provider) === generation) {
-        await cancelServerLogin(provider);
-        if (!aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
+        await cancelServerLogin(capture, provider);
+        if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
         notify(t("prov.loginRequestFail", { provider: oauthLabel(provider) }), false);
       }
     } finally {
       if (activeLoginGenerationsRef.current.get(provider) === generation) {
         activeLoginGenerationsRef.current.delete(provider);
+        activeLoginCapturesRef.current.delete(provider);
       }
-      if (aliveRef.current && oauthLoginGenerationRef.current!.get(provider) === generation) setBusy(current => current === provider ? null : current);
+      if (targetCurrent() && oauthLoginGenerationRef.current!.get(provider) === generation) setBusy(current => current === provider ? null : current);
     }
   };
 
   const logoutOAuth = async (provider: string) => {
+    const capture = renderCapture;
+    const logoutTarget = targetKey ?? apiBase;
     const finishLogout = beginAccountLogout?.(provider);
     if (beginAccountLogout && !finishLogout) {
       if (aliveRef.current) notify(t("prov.logoutBusy"), false);
@@ -284,18 +334,20 @@ export function useProvidersOAuth({
     setBusy(current => current === provider ? null : current);
     setLoginInfo(current => current?.provider === provider ? null : current);
     let success = false;
+    let failed = false;
     try {
-      const res = await fetch(`${apiBase}/api/oauth/logout?provider=${encodeURIComponent(provider)}`, { method: "POST" });
-      if (!res.ok) {
-        notify(t("prov.logoutFail", { provider: oauthLabel(provider) }), false);
-      } else {
-        success = true;
-      }
+      const res = await targetFetch(capture, `${apiBase}/api/oauth/logout?provider=${encodeURIComponent(provider)}`, { method: "POST" });
+      if (res.ok) success = true;
+      else failed = true;
     } catch {
-      notify(t("prov.logoutFail", { provider: oauthLabel(provider) }), false);
+      failed = true;
     } finally {
       finishLogout?.();
     }
+    // A failure that arrives after the dashboard moved belongs to the old target: no toast,
+    // no status clear and no roster read on the new one.
+    if (targetKeyRef.current !== logoutTarget || !isApiTargetCaptureCurrent(capture)) return;
+    if (failed) notify(t("prov.logoutFail", { provider: oauthLabel(provider) }), false);
     // A read started while the server was processing logout can still describe
     // the old account. Only a read started after settlement can verify status.
     if (invalidateOauthStatusReads?.(provider, false) === false) return;
@@ -310,11 +362,16 @@ export function useProvidersOAuth({
         fetchAccountSets([provider]), fetchOauth(), fetchConfig(), fetchProviderQuotas(true),
       ]);
       bumpModelsRefresh();
-      notify(t("prov.logoutOk", { provider: oauthLabel(provider) }), true);
+      if (targetKeyRef.current === logoutTarget && isApiTargetCaptureCurrent(capture))
+        notify(t("prov.logoutOk", { provider: oauthLabel(provider) }), true);
     } catch {
-      notify(t("prov.logoutFail", { provider: oauthLabel(provider) }), false);
+      if (targetKeyRef.current === logoutTarget && isApiTargetCaptureCurrent(capture))
+        notify(t("prov.logoutFail", { provider: oauthLabel(provider) }), false);
     }
   };
 
-  return { cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled };
+  return {
+    cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled,
+    loginCapture: (provider: string) => activeLoginCapturesRef.current.get(provider),
+  };
 }

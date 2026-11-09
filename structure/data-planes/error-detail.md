@@ -12,7 +12,10 @@ through the disk reader. A row keeps:
   value (an upstream code that reached a writer) collapses to the status fallback (`invalid_request_error`,
   `invalid_api_key`, `permission_denied`, `rate_limit_exceeded`, `client_closed_request`,
   `server_is_overloaded`, `upstream_server_error`, `http_NNN`, else `upstream_error`). Attempt codes are
-  normalized the same way, and upstream text fields removed from attempts, in place.
+  normalized the same way, and upstream text fields removed from attempts, in place. `classifyError`
+  keeps Meta's Muse Code subscription refusal in `subscription_required` rather than
+  `permission_denied`: a 403 whose whole `error.message` is that sentence names a plan restriction on
+  a valid key, so the row must not read as an expired credential that needs a re-login.
 - `upstreamCondition`, a member of the closed set in `src/lib/upstream-condition.ts`, derived only for a
   failed row with upstream evidence; a client close (499, `client_closed_request`, `client_cancelled`) gets
   none, and a stored condition is kept only under the same rules. Text set through

@@ -90,6 +90,8 @@ export const RESPONSES_CORE_MODULES = [
   "completion-policy.ts",
   "run-turn-execution.ts",
   "adapter-dispatch.ts",
+  // Reached from adapter-dispatch.ts: the non-2xx upstream message this proxy composes (#8352).
+  "adapter-failure-message.ts",
   "antigravity-validation-refusal.ts",
   "antigravity-model-denial-recovery.ts",
   "adapter-continuation.ts",

@@ -807,6 +807,13 @@ export interface UsageSummaryAccumulator {
   add(entry: PersistedUsageEntry): void;
   /** Return a mutation-independent snapshot that may continue accepting rows. */
   clone(): UsageSummaryAccumulator;
+  /**
+   * Widen the reported ledger span with rows this accumulator was never fed.
+   *
+   * A filtered query backed by a candidate index only reads the rows that match, so the span
+   * it would derive from those rows is narrower than the ledger it describes.
+   */
+  noteLedgerSpan(start: number | null, end: number | null): void;
   summarize(
     range: UsageRange,
     now: number,
@@ -1342,6 +1349,15 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
 
   get snapshotWindow(): { start: number | null; end: number | null } {
     return { start: this.snapshotStart, end: this.snapshotEnd };
+  }
+
+  noteLedgerSpan(start: number | null, end: number | null): void {
+    if (start !== null && Number.isFinite(start)) {
+      this.snapshotStart = this.snapshotStart === null ? start : Math.min(this.snapshotStart, start);
+    }
+    if (end !== null && Number.isFinite(end)) {
+      this.snapshotEnd = this.snapshotEnd === null ? end : Math.max(this.snapshotEnd, end);
+    }
   }
 
   get estimatedBytes(): number {

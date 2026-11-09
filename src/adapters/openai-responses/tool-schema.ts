@@ -10,12 +10,17 @@ import {
 import { isPlainObject } from "./internal";
 import { hasItemProvenance, isHistoricalItem } from "../../responses/item-provenance";
 
-function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean): unknown | undefined {
+function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean, chatDefaults: boolean): unknown | undefined {
   if (!isPlainObject(tool) || tool.type !== "function") return tool;
   // Runs for every Responses destination, forward auth included: the ChatGPT backend is where
   // the `\p{…}` rejection was observed, and it reaches this function through the same seam.
   const compatible = stripUnicodePropertyPatterns(tool);
-  const source = isPlainObject(compatible) ? compatible : tool;
+  const compatibleTool = isPlainObject(compatible) ? compatible : tool;
+  // Chat defaults to non-strict; OpenAI Responses otherwise normalizes an omitted flag to
+  // strict, making optional alternatives (such as pointer index vs coordinates) required.
+  const source = chatDefaults && compatibleTool.strict === undefined
+    ? { ...compatibleTool, strict: false }
+    : compatibleTool;
   if (xaiTarget) {
     const parameters = normalizeXaiToolParameters(isPlainObject(source.parameters) ? source.parameters : {});
     return parameters === undefined ? undefined : { ...source, parameters };
@@ -73,7 +78,7 @@ function reconcileToolChoiceForOmittedTools(
   return body;
 }
 
-export function normalizeToolSchemas(body: unknown, xaiTarget: boolean): unknown {
+export function normalizeToolSchemas(body: unknown, xaiTarget: boolean, chatDefaults = false): unknown {
   if (!isPlainObject(body)) return body;
 
   const omittedFunctionNames = new Set<string>();
@@ -81,7 +86,7 @@ export function normalizeToolSchemas(body: unknown, xaiTarget: boolean): unknown
     let changed = false;
     const normalized: unknown[] = [];
     for (const tool of tools) {
-      const fixed = normalizeFunctionToolSchema(tool, xaiTarget);
+      const fixed = normalizeFunctionToolSchema(tool, xaiTarget, chatDefaults);
       if (fixed === undefined) {
         changed = true;
         if (isPlainObject(tool) && typeof tool.name === "string") omittedFunctionNames.add(tool.name);
