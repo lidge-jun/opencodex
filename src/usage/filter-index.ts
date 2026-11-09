@@ -1411,12 +1411,17 @@ export async function readUsageFilterCandidates(
       return await readActive(dir, path, query);
     } catch (error) {
       if (error instanceof UsageFilterIndexSourceError) throw error;
-      if (error instanceof UsageFilterIndexForeignError
-        || error instanceof UnsafeSqlitePathError
-        || error instanceof UsageFilterIndexHomeChangedError) {
+      // A changed home never heals on a re-check; every later open targets the new directory.
+      if (error instanceof UsageFilterIndexHomeChangedError) {
         return null;
       }
-      if (error instanceof UsageLedgerRebuildRequiredError) {
+      // A foreign classification or unsafe-path flag can be a transient view of a projection
+      // another process is still creating (the schema's statements commit one by one, and a
+      // journal sidecar can vanish mid-stat). Give them the short re-check schedule before
+      // degrading, exactly like a moved publish.
+      if (error instanceof UsageLedgerRebuildRequiredError
+        || error instanceof UsageFilterIndexForeignError
+        || error instanceof UnsafeSqlitePathError) {
         const delay = REBUILD_RETRY_DELAYS_MS[attempt];
         if (delay === undefined) return null;
         await new Promise<void>(resolve => setTimeout(resolve, delay));
