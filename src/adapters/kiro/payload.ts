@@ -199,8 +199,9 @@ export function buildKiroPayload(
     : undefined;
   // A tool-free structured-output turn advertises only its output channel. The catalog nudge is a
   // work-tool contract (shell, file search, result counting) and would describe tools that do not
-  // exist, so it is reserved for turns that carry real tools.
-  const toolCatalogNudge = structuredOutput && ordinaryTools.length === 0
+  // exist, so it is reserved for turns that carry real tools. Claude Code and Claude Desktop send
+  // their own tool rules with the full catalog, so the Codex-oriented nudge only repeats it.
+  const toolCatalogNudge = (structuredOutput && ordinaryTools.length === 0) || parsed._anthropicInbound
     ? undefined
     : buildNonOpenAIToolCatalogNudgeFromNames(
       kiroToolWireNames(kiroTools),
