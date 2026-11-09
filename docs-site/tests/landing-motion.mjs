@@ -79,6 +79,29 @@ const assertScrubMoves = async (page) => {
   await page.waitForFunction(previous => document.querySelector('.lp-scrub-canvas').toDataURL() !== previous, first, { timeout: 5000 });
 };
 try {
+  // On docs pages Starlight's fixed menu button must not cover the GitHub link.
+  for (const width of [320, 375, 414, 640, 768, 799]) {
+    const docsHeader = await browser.newPage({ viewport: { width, height: 800 }, reducedMotion: 'reduce' });
+    await docsHeader.route('https://api.github.com/**', route => route.abort());
+    const docsUrl = new URL('guides/providers/', url).href;
+    await docsHeader.route(docsUrl, async route => {
+      const response = await route.fetch();
+      await route.fulfill({ response, body: withHeaderCount(await response.text()) });
+    });
+    await docsHeader.goto(docsUrl, { waitUntil: 'load' });
+    const github = docsHeader.locator('.github-link');
+    const hitTest = await github.evaluate(el => {
+      const rect = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      const menu = document.querySelector('starlight-menu-button button').getBoundingClientRect();
+      return { receivesPointer: !!hit && el.contains(hit), linkRight: rect.right, menuLeft: menu.left };
+    });
+    assert.equal(hitTest.receivesPointer, true, `GitHub link receives pointer input at ${width}px`);
+    assert.ok(hitTest.linkRight <= hitTest.menuLeft + 1, `GitHub link does not overlap the docs menu at ${width}px`);
+    await github.click({ trial: true, timeout: 2000 });
+    await docsHeader.close();
+  }
+
   // A short desktop viewport must keep the entire dropdown reachable by keyboard,
   // and reduced motion must also stop the two sliding navigation highlights.
   const shortNav = await browser.newPage({ viewport: { width: 1280, height: 360 }, reducedMotion: 'reduce' });

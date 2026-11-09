@@ -184,6 +184,12 @@ header.header > .header {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
+/* Starlight's fixed docs menu button sits outside this bar on narrow screens. */
+@media (max-width: 49.99rem) {
+  html[data-has-sidebar] header.header > .header {
+    padding-inline-end: calc(44px + 0.5rem);
+  }
+}
 /* the glass lives on a pseudo-element: backdrop-filter on the bar itself
    would become the containing block of the fixed full-screen menu */
 header.header > .header::before {
