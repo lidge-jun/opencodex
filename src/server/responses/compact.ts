@@ -671,6 +671,11 @@ export async function bufferCompactResponse(
 
 
 
+/**
+ * Route one `/v1/responses/compact` request: validate the body (rejecting malformed
+ * proxy-owned retained envelopes before routing or credential resolution), select the
+ * compact target, and dispatch through the adapter pipeline.
+ */
 export async function handleResponsesCompact(
   req: Request,
   config: OcxConfig,
