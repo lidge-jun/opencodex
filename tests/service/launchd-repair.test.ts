@@ -1319,7 +1319,10 @@ describe("a manual bootout still tearing down is waited out (#8362)", () => {
    * settled), and the next `failures` bootstraps answer 5/EIO. The (failures + 1)-th
    * succeeds and the job is loaded from then on.
    */
-  function manualBootoutStillTearingDown(failures: number) {
+  function manualBootoutStillTearingDown(
+    failures: number,
+    shape: [status: number, stderr: string] = [5, "Bootstrap failed: 5: Input/output error"],
+  ) {
     const argv: string[][] = [];
     let attempts = 0;
     let loaded = false;
@@ -1330,7 +1333,7 @@ describe("a manual bootout still tearing down is waited out (#8362)", () => {
         case "bootout": return fail(3, "Boot-out failed: 3: No such process");
         case "bootstrap": {
           attempts += 1;
-          if (attempts <= failures) return fail(5, "Bootstrap failed: 5: Input/output error");
+          if (attempts <= failures) return fail(...shape);
           loaded = true;
           return ok();
         }
@@ -1399,6 +1402,34 @@ describe("a manual bootout still tearing down is waited out (#8362)", () => {
     expect(verbs(argv).filter(v => v === "bootstrap")).toHaveLength(4);
     expect(verbs(argv)).not.toContain("kickstart");
     expect(restarts).toEqual([]);
+  });
+
+  // Only the teardown shapes wait. Exit 37 and the legacy "Load failed" are the same race;
+  // EPERM is not, and waiting would only delay the real error.
+  for (const shape of [
+    [37, "Bootstrap failed: 37: Operation already in progress"],
+    [1, "Load failed: 5: Input/output error"],
+  ] as Array<[number, string]>) {
+    test(`the teardown shape "${shape[1]}" is waited out`, async () => {
+      const { argv, launchctl, probe, attempts } = manualBootoutStillTearingDown(3, shape);
+      const sleeps: number[] = [];
+      await repairService(darwinDeps("repair", fixturePlist(), launchctl, probe, sleeps, []));
+      expect(attempts()).toBe(4);
+      expect(sleeps).toEqual([500, 500]);
+      expect(verbs(argv).filter(v => v === "bootstrap")).toHaveLength(4);
+    });
+  }
+
+  test("a refused bootstrap (EPERM) is reported at once, never retried", async () => {
+    const { argv, launchctl, probe, attempts } = manualBootoutStillTearingDown(
+      Number.POSITIVE_INFINITY, [1, "Bootstrap failed: 1: Operation not permitted"],
+    );
+    const sleeps: number[] = [];
+    await expect(repairService(darwinDeps("repair", fixturePlist(), launchctl, probe, sleeps, [])))
+      .rejects.toThrow(/could not bootstrap/);
+    expect(attempts()).toBe(1);
+    expect(sleeps).toEqual([]);
+    expect(verbs(argv).filter(v => v === "bootstrap")).toHaveLength(1);
   });
 
   // The wait must be BOUNDED: a genuinely wedged domain reaches the diagnosable throw rather

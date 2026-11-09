@@ -357,8 +357,9 @@ function launchctlBootstrapRacedTeardown(result: {
 }
 
 /**
- * Up to 50 × 500 ms = 25 s: the same launchd `ExitTimeOut` bound the eviction settle loop
- * waits out, so an unregistered-but-draining job gets the same patience.
+ * Up to 50 attempts with 49 waits of 500 ms between them (24.5 s), past launchd's 20 s
+ * `ExitTimeOut`, so an unregistered-but-draining job gets the patience the eviction settle
+ * loop gives a registered one.
  */
 const LAUNCHD_BOOTSTRAP_TEARDOWN_ATTEMPTS = 50;
 
