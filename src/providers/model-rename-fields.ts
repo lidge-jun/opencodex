@@ -103,6 +103,8 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   modelSupportsVerbosity: "record",
   supportsVerbosity: "none",
   modelReasoningSummaryDelivery: "record",
+  thinkingDisplay: "none",
+  modelThinkingDisplay: "record",
   modelPreferHostedTools: "record",
   supportsOpenAiWebSearchToolFields: "none",
   xaiResponsesXSearch: "none",
