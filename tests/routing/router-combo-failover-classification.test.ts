@@ -203,6 +203,28 @@ describe("combo failure cooldown scope", () => {
     })).toBe("none");
   });
 
+  test("a typed 400 with a numeric vendor code stays terminal", async () => {
+    // Only the untyped OpenRouter shape is target-local; a typed envelope names its own verdict.
+    for (const body of [
+      JSON.stringify({ error: { type: "upstream_error", message: "bad thing", code: 1001 } }),
+      JSON.stringify({ error: { type: "invalid_request_error", message: "Provider returned error", code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth" } } }),
+    ]) {
+      expect(isOpenRouterOpaque400Envelope(body)).toBe(false);
+      const failure = await consumeComboFailure(new Response(body, {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      }));
+      expect(failure.openRouterOpaque400).toBe(false);
+      expect(comboFailureDecision(400, failure.classificationText, {
+        code: failure.upstreamCode,
+        upstreamType: failure.upstreamType,
+        openRouterOpaque400: failure.openRouterOpaque400,
+        malformedResponseFormat: failure.malformedResponseFormat,
+      })).toBe("stop");
+    }
+  });
+
   test("preserves complete evidence across display truncation for longer envelopes and late details", async () => {
     const longPadding = "x".repeat(600);
     const longOpenRouterBody = JSON.stringify({
