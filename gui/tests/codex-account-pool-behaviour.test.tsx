@@ -301,9 +301,13 @@ test("a pause accepted on the old target cannot mark the new target's account pa
   await rerender("/new");
   await act(async () => { releaseAccounts(); await new Promise(r => setTimeout(r, 20)); });
   expect(seen.current!.accounts.find(account => account.id === "a1")?.paused).toBe(false);
+  // Gate the completion's follow-up reload so it cannot mask a stale write.
+  let releaseFollowUp!: () => void;
+  nextAccountsResponseGate = new Promise<void>(resolve => { releaseFollowUp = resolve; });
   await act(async () => { releasePause(); await pending; });
   expect(seen.current!.accounts.find(account => account.id === "a1")?.paused).toBe(false);
   expect(seen.current!.pauseUpdatingId).toBeNull();
+  await act(async () => { releaseFollowUp(); await new Promise(r => setTimeout(r, 10)); });
 });
 
 test("the controller loads once on mount", async () => {

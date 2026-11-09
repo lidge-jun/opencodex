@@ -5,6 +5,8 @@ import type { Root } from "react-dom/client";
 import { useProvidersFetch } from "../src/pages/use-providers-fetch";
 import { useProvidersOAuth } from "../src/pages/use-providers-oauth";
 import type { OAuthStatus } from "../src/pages/providers-shared";
+import { configureApiTargets } from "../src/api";
+import { standaloneApiTargets } from "../src/api-targets";
 
 const keys = ["window", "document", "navigator", "localStorage", "sessionStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let saved: Record<string, unknown>;
@@ -267,37 +269,57 @@ test("a login status read predating account deletion cannot restore the deleted 
 });
 
 test("an old target's login failure cannot cancel the new target's login", async () => {
+  const relay = (origin: string) => {
+    const base = standaloneApiTargets("");
+    return {
+      ...base,
+      connected: true,
+      shared: { ...base.shared, baseUrl: "/api/machine/hub-relay", serverOrigin: origin, transport: "relay" as const },
+      apiKeyId: "fixture-key",
+      relayTargetCheck: "expected-target-v1" as const,
+    };
+  };
+  configureApiTargets(relay("https://hub-a.example"));
   let actions!: ReturnType<typeof useProvidersOAuth>;
-  const requests: Array<{ path: string; method: string }> = [];
+  const cancels: Array<{ expected: string | null }> = [];
   const notices: string[] = [];
   let rejectOld!: (error: Error) => void;
+  // Stable identities: the hook's pagehide effect depends on these setters, and a fresh
+  // arrow per render would make React re-run its cleanup (and bump the login generation).
+  const stableSetters = { setBusy: () => {}, setStatus: () => {}, setLoginInfo: () => {} };
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
-    requests.push({ path: url.pathname, method: init?.method ?? "GET" });
-    if (url.pathname === "/old/api/oauth/login") {
+    const headers = new Headers(init?.headers);
+    if (url.pathname.endsWith("/api/oauth/login/cancel")) {
+      cancels.push({ expected: headers.get("x-opencodex-expected-target") });
+      return Response.json({ ok: true });
+    }
+    if (url.pathname.endsWith("/api/oauth/login")) {
       return new Promise<Response>((_, reject) => { rejectOld = reject; });
     }
     return Response.json({ ok: true });
   } });
-  function Harness({ base }: { base: string }) {
+  function Harness({ targetKey }: { targetKey: string }) {
     const aliveRef = useRef(true);
-    actions = useProvidersOAuth({ apiBase: base, t: key => key, aliveRef, accountSets: {}, setAccountSets: () => {},
-      setBusy: () => {}, setStatus: () => {}, setLoginInfo: () => {}, setOauthStatus: () => {},
+    actions = useProvidersOAuth({ apiBase: "/api/machine/hub-relay", targetKey, t: key => key, aliveRef, accountSets: {},
+      setAccountSets: () => {}, ...stableSetters, setOauthStatus: () => {},
       notify: message => { notices.push(message); }, fetchConfig: async () => {}, fetchOauth: async () => {},
       fetchAccountSets: async () => {}, fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
     return null;
   }
-  await render(<Harness base="/old" />);
-  let login!: Promise<void>;
-  await act(async () => { login = actions.loginOAuth("anthropic"); await Promise.resolve(); });
-  await render(<Harness base="/new" />);
-  // The abandoned login is cancelled on the target it started against.
-  expect(requests.filter(request => request.path === "/old/api/oauth/login/cancel")).toHaveLength(1);
-  await act(async () => { rejectOld(new Error("old request failed")); await login; });
-  // Its failure path must not send a cancel (or a notice) to the new target.
-  expect(requests.filter(request => request.path === "/new/api/oauth/login/cancel")).toHaveLength(0);
-  expect(requests.filter(request => request.path === "/old/api/oauth/login/cancel")).toHaveLength(1);
-  expect(notices).toEqual([]);
+  try {
+    await render(<Harness targetKey="hub-a" />);
+    let login!: Promise<void>;
+    await act(async () => { login = actions.loginOAuth("anthropic"); await Promise.resolve(); });
+    configureApiTargets(relay("https://hub-b.example"));
+    await render(<Harness targetKey="hub-b" />);
+    await act(async () => { rejectOld(new Error("old request failed")); await login; });
+    // The captured A target is stale, so neither its cleanup nor its failure may reach B.
+    expect(cancels).toEqual([]);
+    expect(notices).toEqual([]);
+  } finally {
+    configureApiTargets(standaloneApiTargets(""));
+  }
 });
 
 test("a logout failure settling after a target change does not notify the new target", async () => {
