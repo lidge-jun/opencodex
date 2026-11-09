@@ -8,6 +8,7 @@ export interface RetainedCompaction {
   reasoning: string[];
 }
 
+/** Raised when a proxy-owned retained compaction envelope fails to decode. */
 export class InvalidRetainedCompactionEnvelopeError extends Error {
   constructor() {
     super("Invalid OpenCodex retained compaction envelope");
@@ -35,6 +36,7 @@ export function decodeRetainedCompaction(value: string): RetainedCompaction | nu
   } catch { return null; }
 }
 
+/** True when `item` carries a proxy-owned retained envelope marker, valid payload or not. */
 function isRetainedCompactionEnvelopeItem(item: unknown): item is { type: string; encrypted_content: string } {
   if (!item || typeof item !== "object") return false;
   const candidate = item as { type?: unknown; encrypted_content?: unknown };
