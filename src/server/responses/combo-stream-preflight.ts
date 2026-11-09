@@ -153,11 +153,13 @@ function retryableZeroOutputTerminal(payload: unknown): boolean {
     && (!Array.isArray(target.output) || target.output.length === 0);
 
   if (event.type === "response.failed" || event.status === "failed") {
-    if (!emptyOutput) return false;
     const error = (event.response as { error?: { code?: unknown; retryable?: unknown } } | undefined)?.error
       ?? event.error;
     const code = error?.code;
-    if (code === REQUIRED_TOOL_CONTRACT_CODE && error?.retryable === false) return false;
+    // The required-tool guard synthesizes this terminal over output it held back from the client,
+    // so that output is not evidence of anything sent; it keeps the retryability it carries.
+    if (code === REQUIRED_TOOL_CONTRACT_CODE) return error?.retryable !== false;
+    if (!emptyOutput) return false;
     return !(typeof code === "string" && NON_REPLAYABLE_FAILED_CODES.has(code));
   }
   const isIncomplete = event.type === "response.incomplete" || event.status === "incomplete";
