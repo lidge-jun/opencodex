@@ -15,7 +15,7 @@
 </p>
 
 ```bash
-npm install -g --allow-scripts=bun @bitkyc08/opencodex
+npm install -g @bitkyc08/opencodex
 ocx start
 ```
 
@@ -88,7 +88,7 @@ opencodex est une passerelle locale légère entre vos outils de programmation e
 ### Installation personnelle (CLI)
 
 ```bash
-npm install -g --allow-scripts=bun @bitkyc08/opencodex   # Node 18+ ; le runtime Bun est inclus automatiquement
+npm install -g @bitkyc08/opencodex   # Node 18+ ; le runtime Bun est inclus automatiquement
 ocx start                         # proxy + tableau de bord sur localhost:10100
 ```
 
@@ -250,7 +250,7 @@ leur arrivée dans le paquet npm.
 <summary>Pour les agents</summary>
 
 ```bash
-npm install -g --allow-scripts=bun @bitkyc08/opencodex
+npm install -g @bitkyc08/opencodex
 ocx start     # ou `ocx service`
 ocx init      # configuration interactive : écrit ~/.opencodex/config.json et relie Codex
 ```

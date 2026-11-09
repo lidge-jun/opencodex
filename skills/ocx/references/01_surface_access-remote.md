@@ -81,7 +81,6 @@ State-changing: yes. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--clients` | string | Initial device selection; defaults to Codex and Claude Code. Other Home client defaults remain inherited. |
 | `--alias` | string | SSH host alias for the linked machine. |
 | `--tunnel-port` | number | Remote loopback port for the reverse tunnel. |
 | `--json` | boolean | Emit the issue result as JSON. |
@@ -329,7 +328,7 @@ State-changing: yes. JSON mode: `payload`.
 
 ### `ocx disconnect`
 
-Usage: `ocx disconnect [--keep-catalog] [--recover-config --yes] [--json] | ocx disconnect --orphaned-token --yes [--json]`
+Usage: `ocx disconnect [--keep-catalog] [--json] | ocx disconnect --orphaned-token --yes [--json]`
 
 Disconnect a client or preserve orphaned token files for recovery.
 
@@ -340,9 +339,8 @@ Drives no management route.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--keep-catalog` | boolean | Keep the connected client's catalog during ordinary disconnect. |
-| `--recover-config` | boolean | With --yes, snapshot current Codex artifacts and recover only evidenced owned keys; unknown ownership still refuses. |
 | `--orphaned-token` | boolean | Preserve unowned service-token files in a private backup when disconnected. |
-| `--yes` | boolean | Explicitly confirm --recover-config or --orphaned-token recovery. |
+| `--yes` | boolean | Explicitly confirm orphan-token recovery; requires --orphaned-token. |
 | `--json` | boolean | Emit the local result and backup location as JSON. |
 
 - Orphan recovery requires a disconnected durable state, no pending connect or disconnect, no Hub or admission-secret use, no installed or unverified service, and verified absence of a client runtime. It preserves rather than deletes token files and does not establish their ownership.

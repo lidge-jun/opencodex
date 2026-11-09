@@ -1,5 +1,4 @@
 import * as z from "zod/v4";
-import { EXPORT_CLIENT_IDS } from "../../clients/client-ids";
 import { accountAutoPausePolicySchema, accountPauseDetailsSchema } from "./account-auto-pause";
 import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { join } from "node:path";
@@ -30,7 +29,6 @@ import {
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
   pinnedWireAdapter,
   PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS,
-  THINKING_DISPLAY_VALUES,
   UPSTREAM_HTTP_VERSION_VALUES,
   type OcxProviderConfig,
   type OcxConfig,
@@ -362,10 +360,6 @@ export const providerConfigSchema = z.object({
   inferContextWindow: z.boolean().optional(),
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
   modelSuppressSyntheticMax: z.record(z.string().min(1), z.boolean()).optional(),
-  // Validated against a closed vocabulary here as well as at the write boundaries, so a
-  // hand-edited typo cannot load silently and leave the operator with the built-in display (#8363).
-  thinkingDisplay: z.enum(THINKING_DISPLAY_VALUES).optional(),
-  modelThinkingDisplay: z.record(z.string().min(1), z.enum(THINKING_DISPLAY_VALUES)).optional(),
   promoteAdditionalTools: z.boolean().optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),
   preserveResponsesInputItemIds: z.boolean().optional(),
@@ -963,7 +957,7 @@ export const remoteGuiConfigSchema = z.object({
   allowInsecureHttp: z.boolean().optional(),
 }).strict();
 
-const connectedClientIdSchema = z.enum(["codex", "claude", "claude-desktop", "grok", ...EXPORT_CLIENT_IDS]);
+const connectedClientIdSchema = z.enum(["codex", "claude"]);
 const clientTimestampSchema = z.string().datetime({ offset: true });
 const clientTransportSchema = z.enum(["hub", "link"]);
 const linkTransportSchema = z.object({
@@ -986,7 +980,7 @@ export const clientConnectionSchema = z.object({
   managementTransport: z.enum(["direct", "relay"]),
   transport: clientTransportSchema.optional(),
   link: linkTransportSchema.optional(),
-  selectedClients: z.array(connectedClientIdSchema).superRefine((clients, ctx) => {
+  selectedClients: z.array(connectedClientIdSchema).min(1).max(2).superRefine((clients, ctx) => {
     if (new Set(clients).size !== clients.length) {
       ctx.addIssue({ code: "custom", message: "must contain unique client ids" });
     }

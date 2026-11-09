@@ -7,12 +7,11 @@ import { resolve } from "node:path";
 import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
 import { loadConfig, mutatePersistedConfig, withConfigMutationLockSync } from "../config";
 import { claudeDesktopIntegrationEnabledNow, setIntegrationEnabled } from "../codex/desired-state";
-import { setHomeIntegrationEnabled } from "../routing/home-route-capture";
 import { readClientConnectionState, assertClientConnectionUnchanged, assertNoClientDisconnectPending, type ClientConnectionState } from "../client/state";
 import { downloadDesktop3pModels, HubClientError, normalizeHubOrigin } from "../client/hub-client";
 import { readServiceApiTokenState } from "../lib/service-secrets";
 import { applyRemoteDesktopStore, type DesktopStoreResult } from "../claude/desktop-remote-store";
-import { assertClientLifecycleHeld, withClientLifecycle, withClientLifecycleSync, type ClientLifecycleHeld, type ClientLifecycleLockDeps } from "../client/lifecycle-lock";
+import { withClientLifecycleSync, type ClientLifecycleLockDeps } from "../client/lifecycle-lock";
 import {
   DESKTOP_FAMILIES,
   moveDesktopRoute,
@@ -306,16 +305,12 @@ async function applyConnectedDesktopProfile(
 }
 
 /** Persist the operator's Desktop mode choice; a failed marker save never undoes the apply. */
-async function saveDesktopMode(mode: ClaudeDesktopMode, deps: ApplyProfileDeps, held?: ClientLifecycleHeld): Promise<boolean> {
+async function saveDesktopMode(mode: ClaudeDesktopMode, deps: ApplyProfileDeps): Promise<boolean> {
   try {
-    return await settleConfigRoot(configRoot(), () => {
-      const save = () => {
-        const outcome = mutatePersistedConfig(current => recordClaudeDesktopMode(current, mode));
-        return outcome.status !== "unavailable";
-      };
-      if (held) { assertClientLifecycleHeld(held); return save(); }
-      return withClientLifecycleSync(save, deps.lifecycleLockDeps);
-    });
+    return await settleConfigRoot(configRoot(), () => withClientLifecycleSync(() => {
+      const outcome = mutatePersistedConfig(current => recordClaudeDesktopMode(current, mode));
+      return outcome.status !== "unavailable";
+    }, deps.lifecycleLockDeps));
   } catch {
     return false;
   }
@@ -440,21 +435,8 @@ async function applyFirstPartyDesktop(
       return { ok: false, path: "", reason: error instanceof Error ? error.message : "daemon apply failed" };
     }
   }
-  // The offline path has no picker controller to serialize CLI/server writers. Keep L
-  // across settings, gateway retirement, mode publication and any conditional rollback.
-  try { return await withClientLifecycle(held => applyFirstPartyDesktopOffline(deps, held), deps.lifecycleLockDeps); }
-  catch (error) {
-    return { ok: false, path: "", reason: error instanceof Error && error.message === "client_lifecycle_busy"
-      ? "client_lifecycle_busy" : "desktop_apply_failed" };
-  }
-}
-
-async function applyFirstPartyDesktopOffline(deps: ApplyProfileDeps, held: ClientLifecycleHeld): Promise<DesktopApplyResult> {
-  assertClientLifecycleHeld(held);
-  assertNoClientDisconnectPending();
-  if (readClientConnectionState().kind !== "disconnected") return { ok: false, path: "", reason: "client_connection_invalid" };
   const config = loadConfig();
-  const desired = await withFirstPartySecretsSettled(getConfigDir(), () => setHomeIntegrationEnabled("claude-desktop", true));
+  const desired = await withFirstPartySecretsSettled(getConfigDir(), () => setIntegrationEnabled("claude-desktop", true));
   if (!desired.ok) return "path" in desired ? desired : { ok: false, path: "", reason: desired.message };
   // Establish the replacement before deleting the working gateway. A refused
   // cleanup restores only our managed env keys, preserving unrelated settings.
@@ -470,8 +452,7 @@ async function applyFirstPartyDesktopOffline(deps: ApplyProfileDeps, held: Clien
   const library = inspectDesktop3pConfigLibrary({ appliedFingerprint });
   if (library.kind === "gateway_ours" || library.kind === "gateway_drifted") {
     let removed: ReturnType<typeof removeDesktop3pStandardPivot>;
-    try { removed = await settleConfigRoot(configRoot(), () => removeDesktop3pStandardPivot({ appliedFingerprint: readConfigForAdmittedMutation().claudeCode?.desktopProfile?.appliedFingerprint ?? null, replaceWhileEnabled: true,
-      lifecycleLockDeps: deps.lifecycleLockDeps, lifecycleHeld: held })); }
+    try { removed = await settleConfigRoot(configRoot(), () => removeDesktop3pStandardPivot({ appliedFingerprint: readConfigForAdmittedMutation().claudeCode?.desktopProfile?.appliedFingerprint ?? null, replaceWhileEnabled: true })); }
     catch (error) {
       removed = { ok: false, changed: false, kind: "write_failed", libraryPath: library.libraryPath,
         reason: error instanceof WindowsSecretAclSettleTimeoutError ? "acl_settlement_timeout" : "desktop_mutation_failed" };
@@ -479,7 +460,7 @@ async function applyFirstPartyDesktopOffline(deps: ApplyProfileDeps, held: Clien
     gatewayRemoved = removed.changed;
     if (!removed.ok) {
       const restored = removed.changed || !applied.changed || await rollbackDesktopFirstPartySettled(getConfigDir(), rollback).catch(() => false);
-      const modeSaved = !removed.changed || await saveDesktopMode("first-party", deps, held);
+      const modeSaved = !removed.changed || await saveDesktopMode("first-party", deps);
       const warning = [restored ? "" : "first-party settings rollback did not complete",
         modeSaved ? "" : "first-party is active but its mode marker was not saved"].filter(Boolean).join("; ");
       return { ok: false, path: library.selectedProfilePath ?? "", reason: removed.kind === "cleanup_incomplete" ? "gateway_cleanup_incomplete" : `gateway_profile_active:${removed.reason ?? removed.kind}`,
@@ -487,7 +468,7 @@ async function applyFirstPartyDesktopOffline(deps: ApplyProfileDeps, held: Clien
         ...(warning ? { warning } : {}) };
     }
   }
-  const saved = await saveDesktopMode("first-party", deps, held);
+  const saved = await saveDesktopMode("first-party", deps);
   modeCommitted = saved;
   return {
     ok: true,
@@ -540,7 +521,7 @@ export async function applyProfile(
   // so a process crash cannot leave a gateway profile that startup immediately removes.
   let committedIntent = false, savedProfile = false, gatewayApplied = false;
   try {
-    const desired = await settleConfigRoot(configRoot(), () => setHomeIntegrationEnabled("claude-desktop", true));
+    const desired = await settleConfigRoot(configRoot(), () => setIntegrationEnabled("claude-desktop", true));
     if (!desired.ok) return { ok: false, path: "", reason: desired.message };
     committedIntent = true;
     const config = loadConfig();

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
@@ -11,7 +11,6 @@ import type { SshRunner, SshRunResult } from "../../src/link/ssh-runner";
 import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
 import { remoteInspectRuntimeArgv, remotePlantChildArgv, remotePurgePlantedChildArgv } from "../../src/link/remote-plant";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { routeIntentStatePath } from "../../src/routing/route-intent-state";
 
 let root: string;
 let previousHome: string | undefined;
@@ -199,9 +198,6 @@ describe("Home Remote Link enrollment, SSH plant, and --purge removal with ephem
     const body = await res.json() as { linkId: string };
     expect(body.linkId).toMatch(/^lnk_[0-9a-f]{16}$/);
     expect(h.store.links[0]?.childKind).toBe("ephemeral");
-    // An ephemeral ocx-child never reads route intent, so its enrollment saves none: no device
-    // policy, and no Home defaults that would make ocx sync apply route intent on the Home.
-    expect(existsSync(routeIntentStatePath())).toBe(false);
 
     const adminStatus = await (await h.request("GET", "/api/link/status", undefined, "admin-token")).json() as Record<string, unknown>;
     expect(adminStatus).not.toHaveProperty("homeCodexSettingsDigest");

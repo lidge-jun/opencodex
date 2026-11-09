@@ -16,7 +16,7 @@ and connect OpenCode, Pi, Qoder, WorkBuddy, Kilo, Cline, T3 Code and more throug
 </p>
 
 ```bash
-npm install -g --allow-scripts=bun @bitkyc08/opencodex
+npm install -g @bitkyc08/opencodex
 ocx start
 ```
 
@@ -94,7 +94,7 @@ providers with Codex, Claude Code, Claude Desktop, Grok Build and the tools list
 ### Personal install (CLI)
 
 ```bash
-npm install -g --allow-scripts=bun @bitkyc08/opencodex   # Node 18+; the Bun runtime is bundled automatically
+npm install -g @bitkyc08/opencodex   # Node 18+; the Bun runtime is bundled automatically
 ocx start                         # proxy + dashboard on localhost:10100
 ```
 
@@ -253,7 +253,7 @@ they reach the npm package.
 <summary>For agents</summary>
 
 ```bash
-npm install -g --allow-scripts=bun @bitkyc08/opencodex
+npm install -g @bitkyc08/opencodex
 ocx start     # or `ocx service`
 ocx init      # interactive setup: writes ~/.opencodex/config.json and wires Codex
 ```

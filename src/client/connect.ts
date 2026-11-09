@@ -2,12 +2,10 @@ import { createHash } from "node:crypto";
 import {
   existsSync,
   lstatSync,
-  mkdirSync,
   readFileSync,
   unlinkSync,
 } from "node:fs";
 import { hostname } from "node:os";
-import { dirname } from "node:path";
 import { atomicWriteFile, loadConfig, withConfigMutationLockSync } from "../config";
 import { claudeDesktopIntegrationEnabledNow } from "../codex/desired-state";
 import { siblingOfLivePort, siblingSkipMessage } from "../codex/sibling-start";
@@ -30,11 +28,9 @@ import {
   type CodexRoutingTarget,
 } from "../codex/inject";
 import {
-  JOURNAL_PATH,
   journalOwner,
   restoreJournalState,
 } from "../codex/journal";
-import { readCodexHomeJournal } from "../codex/codex-home-owner";
 import { DEFAULT_CATALOG_PATH, getCodexHome } from "../codex/paths";
 import {
   readServiceApiTokenState,
@@ -100,15 +96,7 @@ import {
 import { hubStateCachePath } from "./hub-state";
 import { ClientLinkStateError, clearClientLinkState, readClientLinkState } from "./link-state";
 import { isLinkPort } from "../link/ports";
-import { assertRouteIntentPort, clientSyncRuntimeGuard, ClientSyncRuntimeError } from "./sync-runtime";
-import { prepareConnectedRouteIntent, initialConnectRouteIntent, connectedRouteSelectedClients, applyConnectedRouteIntent } from "../integrations/route-intent-connected";
-import { clearRouteIntentReceipt, readRouteIntentReceiptStrict } from "../integrations/route-intent-state";
-import type { RouteIntentReceipt } from "../integrations/route-intent-contract";
-import { clearHomeRouteIntentRecord } from "./link-home";
-import { clearInitialRouteIntent, recordInitialRouteIntent } from "../integrations/route-intent-initial";
-import { cleanupConnectedRouteIntent } from "../integrations/route-intent-disconnect";
-import { nativeIntentOriginalsPath, readNativeIntentOriginals, restoreNativeIntentOriginals } from "./route-intent-native-originals";
-import { clearFileIntentOriginals } from "./route-intent-file-originals";
+import { clientSyncRuntimeGuard, ClientSyncRuntimeError } from "./sync-runtime";
 
 class RotationRecoveryRequiredError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -122,8 +110,6 @@ export interface ConnectOptions {
   managementUrl?: string;
   credential: OneTimeConnectCredential | LinkClientCredential;
   selectedClients: OcxConnectedClientId[];
-  /** Provisioning selection retained until Home revises that client's device policy. */
-  selectedClientsExplicit?: boolean;
   managementTransport: "direct" | "relay";
   transport?: "hub" | "link";
   link?: { tunnelPort: number; linkId: string };
@@ -619,9 +605,7 @@ async function connectClientUnlocked(
   let priorCatalog: CatalogSnapshot | null = null;
   let writtenCatalogFingerprint: string | null = null;
   let injectionCommitted = false;
-  let restoreNativeIntent = false;
   let committed = false;
-  let initialSelectionWritten = false;
   // Before any catalog, journal, client-state or credential write: `CODEX_HOME` is shared with the
   // live proxy a sibling instance runs beside, and connecting re-points it (`sibling-start.ts`).
   if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
@@ -652,7 +636,6 @@ async function connectClientUnlocked(
     // Only link mode needs the local port before the hub is contacted; hub mode keeps reading config
     // after the catalog download, so its stderr order (catalog refusal first) is unchanged.
     const earlyConfig = linkMode ? loadConfig() : undefined;
-    if (earlyConfig) assertRouteIntentPort(earlyConfig.port);
     if (earlyConfig && (!Number.isInteger(earlyConfig.port) || earlyConfig.port < 1 || earlyConfig.port > 65535)) {
       throw new Error("link mode requires a valid local config port");
     }
@@ -738,62 +721,37 @@ async function connectClientUnlocked(
     assertClientCatalogCompatible(catalog.body, deps.catalogCompatibility);
     writtenCatalogFingerprint = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
       assertActiveConnectingState(persisted.fingerprint);
-      mkdirSync(dirname(DEFAULT_CATALOG_PATH), { recursive: true });
       atomicWriteFile(DEFAULT_CATALOG_PATH, catalog.body);
       return sha256(catalog.body);
     }), deps.lifecycleLockDeps);
 
     const config = earlyConfig ?? loadConfig();
-    const routeIntent = initialConnectRouteIntent(linkMode && linkMetadata
-      ? await prepareConnectedRouteIntent({ transport: "link", link: linkMetadata, apiKeyId }, admissionToken, deps.linkHome,
-        () => assertActiveConnectingState(persisted.fingerprint)) : undefined,
-      options.selectedClients, options.selectedClientsExplicit);
-    const selectedClients = connectedRouteSelectedClients(routeIntent, options.selectedClients);
     const target = routingTarget(serverUrl, linkMode ? config.port : undefined, config);
     // A link Child writes the Home's OpenCodex-owned Codex settings, not its own (#6957). A read
     // that fails here keeps the local values; the next `ocx sync` applies the Home's.
     // Read only: the record is written after the connection commits, so a rollback leaves none.
-    const homeSettings = linkMode && linkMetadata && selectedClients.includes("codex")
+    const homeSettings = linkMode && linkMetadata && options.selectedClients.includes("codex")
       ? await fetchHomeCodexSettings({ transport: "link", link: linkMetadata, apiKeyId }, admissionToken, deps.linkHome)
       : undefined;
     const injectConfig = {
       ...(homeSettings?.kind === "fresh" ? overlayHomeCodexSettings(config, homeSettings.document.settings) : config),
       syncResumeHistory: false,
     };
-    const beforeCodexWrite = () => {
-      assertActiveConnectingState(persisted.fingerprint);
-      if (routeIntent && (!connectedRouteSelectedClients(routeIntent, options.selectedClients).includes("codex")
-        || loadConfig().port !== config.port)) throw new Error("Codex route intent or runtime changed; retry connect");
-    };
-    if (!options.noSync && routeIntent && selectedClients.includes("codex") && existsSync(getCodexHome())) {
-      const { persistNativeRouteIntent } = await import("./route-intent-apply");
-      // Armed before publication: the write-ahead originals record can exist even when the
-      // config write or its bookkeeping throws, and rollback must still put the field back.
-      restoreNativeIntent = true;
-      withClientLifecycleSync(() => withConfigMutationLockSync(() => {
-        beforeCodexWrite();
-        // Home intent owns a selected installed client, including a standalone OFF. Keep
-        // compensation field-scoped: a failed enrollment restores the recorded standalone
-        // value, keeps a later edit by the person, and keeps disjoint config changes.
-        persistNativeRouteIntent("codex", true, beforeCodexWrite, injectConfig, true);
-      }), deps.lifecycleLockDeps);
-    }
-    const preflight = !selectedClients.includes("codex") || (routeIntent && !existsSync(getCodexHome()))
-      ? { success: true, message: "Codex is not selected or installed" } : await injectCodexConfig(config.port, injectConfig, {
+    const preflight = await injectCodexConfig(config.port, injectConfig, {
       validateOnly: true,
       routingTarget: target,
       catalogPath: DEFAULT_CATALOG_PATH,
       journalOwner: { kind: "client", apiKeyId },
-      beforeClientWrite: beforeCodexWrite,
+      beforeClientWrite: () => assertActiveConnectingState(persisted.fingerprint),
     });
     if (!preflight.success) throw new Error(preflight.message);
 
-    if (!options.noSync && selectedClients.includes("codex") && (!routeIntent || existsSync(getCodexHome()))) {
+    if (!options.noSync && options.selectedClients.includes("codex")) {
       const injected = await injectCodexConfig(config.port, injectConfig, {
         routingTarget: target,
         catalogPath: DEFAULT_CATALOG_PATH,
         journalOwner: { kind: "client", apiKeyId },
-        beforeClientWrite: beforeCodexWrite,
+        beforeClientWrite: () => assertActiveConnectingState(persisted.fingerprint),
       });
       if (!injected.success || injected.status === "skipped") throw new Error(injected.message);
       injectionCommitted = true;
@@ -805,7 +763,7 @@ async function connectClientUnlocked(
       serverUrl,
       managementUrl,
       managementTransport: options.managementTransport,
-      selectedClients: [...selectedClients],
+      selectedClients: [...options.selectedClients],
       tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
       apiKeyId,
       tokenFingerprint: persisted.fingerprint,
@@ -821,10 +779,6 @@ async function connectClientUnlocked(
     };
     withClientLifecycleSync(() => withConfigMutationLockSync(() => {
       assertActiveConnectingState(persisted.fingerprint);
-      if (linkMetadata && options.selectedClientsExplicit) {
-        recordInitialRouteIntent(linkMetadata.linkId, routeIntent?.document, options.selectedClients);
-        initialSelectionWritten = true;
-      }
       clearClientConnectPending(persisted.fingerprint);
       commitClientConnection(connection);
       committed = true;
@@ -841,21 +795,6 @@ async function connectClientUnlocked(
         console.warn("Warning: the Home's Codex settings were applied, but the apply record was not written; run 'ocx sync' to record it.");
       }
     }
-    if (!options.noSync && routeIntent) {
-      const appliedConnection = withClientLifecycleSync(() => {
-        const current = readClientConnectionState();
-        if (current.kind !== "connected" || !Bun.deepEquals(current.value, connection, true)) throw new Error("client_connection_changed");
-        return current.value;
-      }, deps.lifecycleLockDeps);
-      try { await applyConnectedRouteIntent(connection, admissionToken, routeIntent, {
-        codexApplied: injectionCommitted, lifecycleLockDeps: deps.lifecycleLockDeps, beforeWrite: () => {
-          deps.signal?.throwIfAborted(); assertClientConnectionUnchanged(appliedConnection);
-          const token = readServiceApiTokenState();
-          if (token.kind !== "present" || token.fingerprint !== connection.tokenFingerprint) throw new Error("client_token_changed");
-        },
-      }, deps.linkHome); }
-      catch { console.warn("Warning: local route intent needs reconciliation; run 'ocx route to sync'."); }
-    }
     return connection;
   } catch (error) {
     const rollbackFailures: string[] = [];
@@ -866,25 +805,10 @@ async function connectClientUnlocked(
     try {
       withClientLifecycleSync(() => withConfigMutationLockSync(() => {
         assertNoClientDisconnectPending();
-        if (initialSelectionWritten && !committed && linkMetadata) {
-          try { clearInitialRouteIntent(linkMetadata.linkId); }
-          catch { rollbackFailures.push("initial route selection rollback unavailable"); }
-        }
-        let nativeRestoreFailed = false;
-        if (restoreNativeIntent && !committed && pendingConnectFingerprint) {
-          const fingerprint = pendingConnectFingerprint;
-          try { restoreNativeIntentOriginals(() => assertConnectingState(fingerprint)); }
-          catch {
-            // Like disconnect, keep the token (and the marker proving it is this attempt's) until the
-            // standalone switches are back; ocx disconnect finishes this rollback.
-            nativeRestoreFailed = true;
-            rollbackFailures.push(`Standalone native switches were not restored, so the enrollment token was kept. Repair the config or ${nativeIntentOriginalsPath()}, then run ocx disconnect to finish the rollback.`);
-          }
-        }
         if (priorCatalog && writtenCatalogFingerprint && !restoreCatalogSnapshot(priorCatalog, writtenCatalogFingerprint)) {
           rollbackFailures.push("catalog rollback did not match the written artifact");
         }
-        if (pendingConnectFingerprint && !nativeRestoreFailed) {
+        if (pendingConnectFingerprint) {
           const removed = removeServiceApiTokenFileIfOwned(pendingConnectFingerprint);
           if (removed === "changed") rollbackFailures.push("service token changed during rollback");
           // Final commit may fail after this attempt already cleared its marker under the same lock.
@@ -915,7 +839,6 @@ async function connectClientUnlocked(
 }
 
 export interface ConnectedSyncResult {
-  routeIntent?: RouteIntentReceipt;
   catalogWritten: boolean;
   cacheSynced: boolean;
   injected: boolean;
@@ -935,8 +858,6 @@ export interface ConnectedSyncResult {
 
 export interface ConnectedSyncOptions {
   restartCodex?: boolean;
-  overwriteConflict?: boolean;
-  overwriteClient?: import("../link/route-intent").RouteClientId;
   /**
    * #7694: refuse unless this is the connection found under the lock. A mismatch throws
    * `ClientSyncExpectationError` before any request or write.
@@ -1009,21 +930,17 @@ async function syncConnectedClientUnlocked(
   // with one it cannot. Refusing leaves the connection and the existing catalog exactly as
   // they were, which is the known-good state.
   if (downloaded) assertClientCatalogCompatible(downloaded.body, deps.catalogCompatibility);
-  const routeIntent = await prepareConnectedRouteIntent(initial.connection, initial.token.token, deps.linkHome, () => {
-    initial.assertRuntimeCurrent(); assertClientConnectionUnchanged(initial.connection);
-  });
   const next = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
     initial.assertRuntimeCurrent();
     assertClientConnectionUnchanged(initial.connection);
     const token = readServiceApiTokenState();
     if (token.kind !== "present" || token.fingerprint !== initial.token.fingerprint) throw new Error("client_token_changed");
-    if (!downloaded) validLocalCatalog();
-    else atomicWriteFile(DEFAULT_CATALOG_PATH, downloaded.body);
+    if (!downloaded) { validLocalCatalog(); return initial.connection; }
+    atomicWriteFile(DEFAULT_CATALOG_PATH, downloaded.body);
     const updated = {
       ...initial.connection,
-      selectedClients: [...connectedRouteSelectedClients(routeIntent, initial.connection.selectedClients)],
-      ...(downloaded ? { catalogFingerprint: createHash("sha256").update(downloaded.body).digest("base64url"),
-        catalogSyncedAt: (deps.now ?? (() => new Date()))().toISOString() } : {}),
+      catalogFingerprint: createHash("sha256").update(downloaded.body).digest("base64url"),
+      catalogSyncedAt: (deps.now ?? (() => new Date()))().toISOString(),
     };
     commitClientConnection(updated);
     return updated;
@@ -1031,7 +948,6 @@ async function syncConnectedClientUnlocked(
   // Read-only: injection invokes this while N/C are held. Acquiring L here would invert C→L.
   const beforeClientWrite = () => {
     initial.assertRuntimeCurrent();
-    if (isLinkConnection(next)) assertRouteIntentPort(loadConfig().port);
     assertClientConnectionUnchanged(next);
     const token = readServiceApiTokenState();
     if (next.pendingOperation || token.kind !== "present" || token.fingerprint !== next.tokenFingerprint) throw new Error("client_token_changed");
@@ -1041,13 +957,7 @@ async function syncConnectedClientUnlocked(
   let homeSettings: HomeCodexSettingsSource | undefined;
   let appliedRecord: HomeCodexSettingsRecord | undefined;
   let applyRecordFailed = false;
-  if (next.selectedClients.includes("codex") && (!routeIntent || existsSync(getCodexHome()))) {
-    const beforeCodexWrite = () => {
-      beforeClientWrite();
-      if (routeIntent && !connectedRouteSelectedClients(routeIntent, next.selectedClients).includes("codex")) {
-        throw new Error("Codex route intent changed; retry sync");
-      }
-    };
+  if (next.selectedClients.includes("codex")) {
     let config = loadConfig();
     // #6957: a link Child applies the Home's OpenCodex-owned Codex settings with the catalog.
     if (isLinkConnection(next)) {
@@ -1061,15 +971,9 @@ async function syncConnectedClientUnlocked(
         withClientWrite(() => withdrawChangingHomeCodexSettingsRecord(linkId, document));
       }
     }
-    // Off persisted false. Reconcile the effective Home intent before the injector rereads
-    // that durable gate, retaining local opt-outs and the owner/runtime/token commit fences.
-    if (routeIntent) {
-      const { persistNativeRouteIntent } = await import("./route-intent-apply");
-      withClientLifecycleSync(() => persistNativeRouteIntent("codex", true, beforeCodexWrite, config, true), deps.lifecycleLockDeps);
-    }
     const result = await injectCodexConfig(config.port, { ...config, syncResumeHistory: false }, {
       routingTarget: routingTarget(next.serverUrl, isLinkConnection(next) ? config.port : undefined, config), catalogPath: DEFAULT_CATALOG_PATH,
-      journalOwner: { kind: "client", apiKeyId: next.apiKeyId }, beforeClientWrite: beforeCodexWrite,
+      journalOwner: { kind: "client", apiKeyId: next.apiKeyId }, beforeClientWrite,
     });
     if (!result.success || result.status === "skipped") throw new Error(result.message);
     injected = true;
@@ -1088,9 +992,6 @@ async function syncConnectedClientUnlocked(
       }
     }
   }
-  const routeReceipt = await applyConnectedRouteIntent(next, initial.token.token, routeIntent,
-    { beforeWrite: beforeClientWrite, codexApplied: injected, lifecycleLockDeps: deps.lifecycleLockDeps,
-      overwriteConflict: options.overwriteConflict, overwriteClient: options.overwriteClient }, deps.linkHome);
   const cacheSynced = withClientLifecycleSync(() => {
     // Acquire K before the guarded C commit; never acquire K from inside C.
     const owningHome = getCodexHome();
@@ -1100,11 +1001,10 @@ async function syncConnectedClientUnlocked(
     return result.kind === "completed" && result.value;
   }, deps.lifecycleLockDeps);
   return {
-    catalogWritten: downloaded !== undefined, cacheSynced, injected, stale: stale || routeReceipt?.catalogPending === true || routeIntent?.stale === true,
+    catalogWritten: downloaded !== undefined, cacheSynced, injected, stale,
     ...(homeSettings ? { homeSettings } : {}),
     ...(appliedRecord ? { appliedRecord } : {}),
     ...(applyRecordFailed ? { applyRecordFailed } : {}),
-    ...(routeReceipt ? { routeIntent: routeReceipt } : {}),
     connection: next,
   };
 }
@@ -1169,101 +1069,28 @@ function verifyDisconnectCatalog(receipt: DesktopDisconnectReceipt): void {
   }
 }
 
-function restoreConnectedCodex(connection: OcxClientConnectionConfig, receipt: DesktopDisconnectReceipt, recoverConfig = false): string | undefined {
-  const inspection = readCodexHomeJournal(JOURNAL_PATH);
-  const owner = journalOwner({ readOnly: true });
-  const explicitOwner = inspection.kind === "read" ? inspection.journal.owner as Record<string, unknown> | undefined : undefined;
-  const invalidOwner = explicitOwner !== undefined && (!explicitOwner || typeof explicitOwner !== "object" || Array.isArray(explicitOwner)
-    || !(explicitOwner.kind === "client" && typeof explicitOwner.apiKeyId === "string" && explicitOwner.apiKeyId.length > 0
-      || explicitOwner.kind === "process" && typeof explicitOwner.pid === "number" && Number.isSafeInteger(explicitOwner.pid) && explicitOwner.pid > 0));
-  if (inspection.kind === "unknown" || invalidOwner || (inspection.kind === "read" && owner === null)) {
-    throw new Error("disconnect refused: Codex journal ownership is unknown; journal and connection credentials were retained");
-  }
-  // Deselection records desired state, not completed cleanup. A failed off still leaves
-  // this client's journal to drain; an unrelated process journal grants no such authority.
-  if (!connection.selectedClients.includes("codex") && owner?.kind !== "client") {
-    if (inspection.kind === "missing" && isCodexRoutingInjected()) {
-      throw new Error("disconnect refused: Codex routing is injected but no journal records the original state");
-    }
-    return;
-  }
+function restoreConnectedCodex(connection: OcxClientConnectionConfig): void {
+  if (!connection.selectedClients.includes("codex")) return;
+  const owner = journalOwner();
   if (owner && owner.kind === "client" && owner.apiKeyId !== connection.apiKeyId) {
     throw new Error("disconnect refused: Codex journal ownership conflicts with the connected key");
   }
   if (owner !== null) {
-    const restored = restoreJournalState({ preserveConfigEdits: true,
-      ...(recoverConfig ? { recoverConfigForClient: connection.apiKeyId } : {}),
-      beforeWrite: () => {
-        const state = readClientConnectionState(), currentReceipt = readDesktopDisconnectReceipt();
-        const token = readServiceApiTokenState();
-        if (state.kind !== "connected" || JSON.stringify(state.value) !== JSON.stringify(connection)
-          || currentReceipt.kind !== "valid" || JSON.stringify(currentReceipt.value) !== JSON.stringify(receipt)
-          || token.kind !== "present" || token.fingerprint !== receipt.tokenFingerprint) throw new Error("client_disconnect_owner_changed");
-      },
-    });
-    if (!restored.complete) throw new Error(
-      "disconnect refused: Codex journal restore was partial; journal and connection credentials were retained. "
-      + "Retry 'ocx disconnect --recover-config --yes' to privately back up current Codex config/profile and restore only evidenced OCX-owned fields (retain --keep-catalog if originally requested). "
-      + "Unknown ownership and edited or unverified profiles remain refused.",
-    );
-    return restored.recoveryBackupDir;
+    if (!restoreJournalState().complete) throw new Error("disconnect refused: Codex journal restore was partial");
   } else if (isCodexRoutingInjected()) {
     throw new Error("disconnect refused: Codex routing is injected but no journal records the original state");
   }
 }
 
-/**
- * A disconnected machine with no unfinished disconnect can still hold the standalone native
- * switches an interrupted or failed enrollment displaced, and the token that enrollment kept
- * because it could not restore them. Plain `ocx disconnect` restores the switches, then removes
- * that token only while the pending-connect marker proves it is the enrollment's own.
- * `ocx disconnect --orphaned-token` never touches the record.
- */
-function drainLoneNativeIntentOriginals(lifecycleLockDeps?: ClientLifecycleLockDeps): {
-  restored: true; tokenRemoved: boolean; catalogRemoved: false; catalogRestored: false; apiKeyId: string; restartRequired: false; nativeIntentOnly: true;
-} | null {
-  const refused = (error: unknown) => new Error(`disconnect refused: the standalone native switches recorded in ${nativeIntentOriginalsPath()} were not restored (${error instanceof Error ? error.message : String(error)}). Repair the config or that record (remove it only after setting the switches by hand), then rerun ocx disconnect.`);
-  return withClientLifecycleSync(() => withConfigMutationLockSync(() => {
-    const read = readDesktopDisconnectReceipt();
-    if (read.kind === "unsafe" || (read.kind === "valid" && read.value.phase !== "complete")) return null;
-    if (readClientConnectionState().kind !== "disconnected") return null;
-    let present: boolean;
-    try { present = readNativeIntentOriginals() !== null; } catch (error) { throw refused(error); }
-    if (!present) return null;
-    try {
-      restoreNativeIntentOriginals(() => {
-        assertNoClientDisconnectPending();
-        if (readClientConnectionState().kind !== "disconnected") throw new Error("client_connection_changed");
-      });
-    } catch (error) { throw refused(error); }
-    const token = readServiceApiTokenState();
-    let tokenRemoved = false;
-    if (token.kind === "present" && pendingClientConnectMayOwnToken(token.fingerprint)) {
-      const removed = removeServiceApiTokenFileIfOwned(token.fingerprint);
-      if (removed === "changed") throw new Error("client_token_changed");
-      tokenRemoved = removed === "removed";
-      clearClientConnectPending(token.fingerprint);
-    }
-    return { restored: true, tokenRemoved, catalogRemoved: false, catalogRestored: false, apiKeyId: "", restartRequired: false, nativeIntentOnly: true };
-  }), lifecycleLockDeps);
-}
-
 export async function disconnectClient(
-  options: { keepCatalog?: boolean; expectedOwner?: DesktopRemoteOwner; recoverConfig?: boolean } = {},
+  options: { keepCatalog?: boolean; expectedOwner?: DesktopRemoteOwner } = {},
   deps: Pick<ClientConnectDeps, "lifecycleLockDeps"> = {},
 ): Promise<{
   restored: boolean; tokenRemoved: boolean; catalogRemoved: boolean; catalogRestored: boolean; apiKeyId: string;
   desktopRestoration?: "owned_projection" | "standard_fallback" | "selection_preserved";
   restartRequired: boolean;
-  recoveryBackupDir?: string;
-  /** Only standalone native switches an interrupted enrollment displaced were restored. */
-  nativeIntentOnly?: true;
 }> {
   if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
-  if (!options.expectedOwner) {
-    const drained = drainLoneNativeIntentOriginals(deps.lifecycleLockDeps);
-    if (drained) return drained;
-  }
   const keepCatalog = options.keepCatalog === true;
   const prepared = withClientLifecycleSync(held => withConfigMutationLockSync(() => {
     const read = readDesktopDisconnectReceipt();
@@ -1303,14 +1130,11 @@ export async function disconnectClient(
     return { receipt, connection };
   }), deps.lifecycleLockDeps);
 
-  // This sibling step owns only file integrations; failures retain the prepared receipt/token.
-  if (prepared.connection?.transport === "link" && !disconnectAtLeast(prepared.receipt, "desktop_restored")) {
-    await cleanupConnectedRouteIntent(prepared.connection, prepared.receipt, deps.lifecycleLockDeps, options.recoverConfig === true);
-  }
   // The prepared receipt blocks even a sync queued for its actual N/C injection commit.
   // Codex-only restore MUST stay outside L; it never invokes Desktop cleanup.
-  const recoveryBackupDir = prepared.connection && !disconnectAtLeast(prepared.receipt, "desktop_restored")
-    ? restoreConnectedCodex(prepared.connection, prepared.receipt, options.recoverConfig === true) : undefined;
+  if (prepared.connection && !disconnectAtLeast(prepared.receipt, "desktop_restored")) {
+    restoreConnectedCodex(prepared.connection);
+  }
 
   return withClientLifecycleSync(held => withConfigMutationLockSync(() => {
     const read = readDesktopDisconnectReceipt();
@@ -1361,17 +1185,6 @@ export async function disconnectClient(
       }
       advance("catalog_settled", { catalogAfter: catalogAfterState() });
     } else verifyDisconnectCatalog(receipt);
-    if (connection?.transport === "link" && !disconnectAtLeast(receipt, "removing_token")) {
-      if (connection.link) clearInitialRouteIntent(connection.link.linkId);
-      clearHomeRouteIntentRecord();
-      // Its clients were restored by the route cleanup above, which phase gating never reruns.
-      clearFileIntentOriginals();
-      if (readRouteIntentReceiptStrict()?.linkId === connection.link?.linkId) clearRouteIntentReceipt();
-    }
-    // Standalone native switches come back before the token that displaced them is removed.
-    // The record is machine-scoped, so any transport drains one a crashed enrollment left.
-    // The locks and the receipt checked above already fence this; a retry is idempotent.
-    if (!disconnectAtLeast(receipt, "removing_token")) restoreNativeIntentOriginals(() => {});
     if (!disconnectAtLeast(receipt, "removing_token")) advance("removing_token");
     const tokenRemoval = removeServiceApiTokenFileIfOwned(receipt.tokenFingerprint);
     if (tokenRemoval === "changed") throw new Error("client_token_changed");
@@ -1395,7 +1208,6 @@ export async function disconnectClient(
     requireDesktopResult(finishRemoteDesktopCleanup(held, receipt.owner));
     if (receipt.phase !== "complete") advance("complete");
     return {
-      ...(recoveryBackupDir ? { recoveryBackupDir } : {}),
       restored: true, tokenRemoved: tokenRemoval === "removed",
       catalogRemoved: !keepCatalog, catalogRestored: !keepCatalog && receipt.catalogAfter?.kind === "file",
       apiKeyId: receipt.owner.apiKeyId, restartRequired: desktop.restartRequired,
