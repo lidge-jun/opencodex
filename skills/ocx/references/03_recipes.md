@@ -674,6 +674,8 @@ values. `--reasoning-effort-mode strict|adaptive` is distinct from
 accepts `on`, `off`, or legacy bare true. To remove an incompatible retained native
 alias, the requested edit must pair `--native-alias off --alias -`. Combo set is
 an upsert without CAS; re-read instead of assuming a concurrent edit was protected.
+`--jev-effort-mode decide|client` sets who owns a JEV combo's wire effort; omission
+preserves it and explicit `decide` clears a saved `client`.
 
 Statistics are observation only and do not run a decision probe:
 

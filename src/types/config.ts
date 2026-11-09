@@ -1540,6 +1540,7 @@ export interface OcxComboConfig {
    * explicitly empty target ladder suppresses the whole combo's effort control.
    */
   reasoningEffortMode?: OcxComboReasoningEffortMode;
+  jevEffortMode?: import("./combo-jev-effort-mode").OcxComboJevEffortMode; // wire-effort owner on a `jev` combo; omitted = "decide"
   /**
    * Disable image input even when every target supports it.
    * Omitted / `"auto"` keeps automatic capability derivation (default: enabled when
