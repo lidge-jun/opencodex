@@ -80,6 +80,16 @@ const LEVEL_INVALID_REFUSAL = JSON.stringify({
     message: "reasoning effort is unsupported; level is invalid",
   },
 });
+const SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL = JSON.stringify({
+  error: {
+    type: "invalid_request_error",
+    message: "Invalid reasoning effort. Max is not supported for this model.",
+  },
+});
+const VENDOR_SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL = JSON.stringify({
+  code: "invalid-argument",
+  error: "Invalid reasoning effort. Max is not supported for this model.",
+});
 const VENDOR_EFFORT_REFUSAL = JSON.stringify({ code: "invalid-argument", error: "Invalid reasoning effort." });
 const UNRELATED = JSON.stringify({ error: { type: "invalid_request_error", message: "Invalid upload request." } });
 
@@ -897,6 +907,93 @@ describe("rejected reasoning rungs", () => {
         { host: "opencode.ai", effort: "max" },
       ]);
       expect(isReasoningEffortLearnedUnsupported(comboConfig.providers.first, MODEL, "max")).toBe(false);
+    },
+  );
+
+  test.each([
+    ["standard error envelope", SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
+    ["vendor string error", VENDOR_SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
+  ])("classifies named effort value in separate sentence as valid effort rejection (%s)", (_label, refusal) => {
+    expect(hasConflictingReasoningEffortCode(refusal)).toBe(false);
+    expect(isReasoningEffortRejection(refusal)).toBe(true);
+  });
+
+  test.each([
+    ["openai-chat", "standard error", SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
+    ["openai-chat", "vendor error", VENDOR_SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
+    ["openai-responses", "standard error", SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
+    ["openai-responses", "vendor error", VENDOR_SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
+  ] as const)(
+    "replays and downgrades from max to high when effort value is in separate sentence (%s, %s)",
+    async (adapter, _kind, refusal) => {
+      writeSnapshot(["low", "high", "max"]);
+      const attempts: Array<{ host: string; effort: unknown }> = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        attempts.push({ host: url.host, effort: effortOf(body) });
+        return attempts.length === 1
+          ? new Response(refusal, { status: 400, headers: { "content-type": "application/json" } })
+          : chatSuccess("served at high effort", MODEL);
+      }) as typeof fetch;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+
+      const cfg = adapter === "openai-chat" ? config() : passthroughConfig();
+      const response = await handleResponses(request(), cfg, logCtx);
+      const text = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(text).toContain("served at high effort");
+      expect(attempts).toEqual([
+        { host: "opencode.ai", effort: "max" },
+        { host: "opencode.ai", effort: "high" },
+      ]);
+      expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(true);
+    },
+  );
+
+  test.each([
+    ["openai-chat", "standard error", SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
+    ["openai-chat", "vendor error", VENDOR_SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
+    ["openai-responses", "standard error", SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
+    ["openai-responses", "vendor error", VENDOR_SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
+  ] as const)(
+    "combo probe downgrades effort and succeeds on lower rung when effort value is in separate sentence (%s, %s)",
+    async (adapter, _kind, refusal) => {
+      writeSnapshot(["low", "high", "max"]);
+      const attempts: Array<{ host: string; effort: unknown }> = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        attempts.push({ host: url.host, effort: effortOf(body) });
+        return attempts.length === 1
+          ? new Response(refusal, { status: 400, headers: { "content-type": "application/json" } })
+          : chatSuccess("served at high effort", MODEL);
+      }) as typeof fetch;
+      const comboConfig = {
+        providers: {
+          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
+        },
+        combos: {
+          effort: {
+            strategy: "failover",
+            targets: [{ provider: "first", model: MODEL }, { provider: "fallback", model: MODEL }],
+          },
+        },
+      } as OcxConfig;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+
+      const response = await handleResponses(request(false, "combo/effort"), comboConfig, logCtx);
+      const result = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(result).toContain("served at high effort");
+      expect(attempts).toEqual([
+        { host: "opencode.ai", effort: "max" },
+        { host: "opencode.ai", effort: "high" },
+      ]);
+      expect(isReasoningEffortLearnedUnsupported(comboConfig.providers.first, MODEL, "max")).toBe(true);
     },
   );
 });

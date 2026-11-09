@@ -685,7 +685,8 @@ const GENERIC_PARAM_WORDS = new Set([
   "none",
 ]);
 
-const EFFORT_VALUE_WORDS = new Set([
+const EFFORT_RUNGS = new Set([
+  "none",
   "low",
   "medium",
   "high",
@@ -694,16 +695,26 @@ const EFFORT_VALUE_WORDS = new Set([
   "minimal",
   "standard",
   "default",
+]);
+
+const STRUCTURAL_EFFORT_WORDS = new Set([
   "level",
   "mode",
   "rung",
   "rungs",
 ]);
 
+const REASONING_EFFORT_CONTEXT_REGEX = /\b(?:reasoning[._\s]+effort|reasoning[._\s]+parameters|reasoning|effort)\b/i;
+
 function isEffortDescriptorInContext(text: string, matchIndex: number, param: string): boolean {
-  if (!EFFORT_VALUE_WORDS.has(param)) return false;
-  const preText = text.slice(Math.max(0, matchIndex - 32), matchIndex);
-  return /(?:reasoning[._\s]+effort|reasoning|effort)\s*[:=]?\s*['"`]?$/i.test(preText);
+  if (EFFORT_RUNGS.has(param)) {
+    return REASONING_EFFORT_CONTEXT_REGEX.test(text);
+  }
+  if (STRUCTURAL_EFFORT_WORDS.has(param)) {
+    const preText = text.slice(Math.max(0, matchIndex - 32), matchIndex);
+    return /(?:reasoning[._\s]+effort|reasoning|effort)\s*[:=]?\s*['"`]?$/i.test(preText);
+  }
+  return false;
 }
 
 function diagnosticTextNamesOtherParameter(text: string): boolean {
