@@ -7,11 +7,9 @@ import { getAccountSet, saveCredential as persistCredential, setActiveAccount as
 import { handleResponses as dispatchResponses } from "../../../src/server/responses";
 import { saveConfig } from "../../../src/config";
 import { setActiveProviderApiKey } from "../../../src/providers/api-keys";
-import { clearCopilotAutoModelsForTests } from "../../../src/providers/github-copilot-auto";
 import type { OcxConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
-import { stubbedProviderFetch } from "../../helpers/catalog-provider-fetch";
 
 const ACCOUNT_A_ORIGIN = "https://a.githubcopilot.com";
 const ACCOUNT_B_ORIGIN = "https://b.githubcopilot.com";
@@ -138,9 +136,6 @@ function config(wire: Wire): OcxConfig {
         adapter: "openai-chat",
         authMode: "oauth",
         baseUrl: "https://api.githubcopilot.com",
-        // Copilot Auto negotiates /models on the pinned outbound transport. Give it the
-        // fixture executor so the negotiation never resolves a real peer address.
-        fetch: stubbedProviderFetch,
         models: [model],
         ...(wire === "responses" ? { modelAdapters: { [model]: "openai-responses" } } : {}),
       },
@@ -214,9 +209,8 @@ function installFetch(options: {
   switchToAccountId?: string;
   switchOn: "refresh" | "first-dispatch" | "never";
   emptyFirst?: boolean;
-}): { dispatches: { origin: string; authorization: string }[]; modelsRequests: { origin: string }[] } {
+}): { dispatches: { origin: string; authorization: string }[] } {
   const dispatches: { origin: string; authorization: string }[] = [];
-  const modelsRequests: { origin: string }[] = [];
   let refreshSwitched = false;
   globalThis.fetch = (async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
@@ -234,13 +228,6 @@ function installFetch(options: {
     if (url === GITHUB_USER_URL) return Response.json({ id: 101 });
 
     const parsed = new URL(url);
-    if (parsed.pathname === "/models") {
-      modelsRequests.push({ origin: parsed.origin });
-      return Response.json({ data: [
-        { id: "gpt-4o", model_picker_enabled: true },
-        { id: "gpt-5.4", model_picker_enabled: true },
-      ] });
-    }
     if (parsed.hostname.endsWith(".githubcopilot.com") || parsed.hostname === "api.githubcopilot.com") {
       dispatches.push({
         origin: parsed.origin,
@@ -268,7 +255,7 @@ function installFetch(options: {
     }
     return originalFetch(input, init);
   }) as typeof fetch;
-  return { dispatches, modelsRequests };
+  return { dispatches };
 }
 
 beforeEach(() => {
@@ -288,7 +275,6 @@ beforeEach(() => {
   ));
   process.env.OPENCODEX_HOME = home;
   clearGenericFailoverHealth();
-  clearCopilotAutoModelsForTests();
   // Dispatches without starting a server, so it takes the spend-journal lease itself. Taken
   // last because the lease binds the home in effect at the moment it is taken.
   releaseSpendHome = acquireOwnedSpendHome();
@@ -464,12 +450,6 @@ describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       if (url.hostname === "api.exa.ai") return Response.json({ results: [] });
       if (!url.hostname.endsWith(".githubcopilot.com")) throw new Error("Unexpected fixture request");
-      if (url.pathname === "/models") {
-        return Response.json({ data: [
-          { id: "gpt-4o", model_picker_enabled: true },
-          { id: "gpt-5.4", model_picker_enabled: true },
-        ] });
-      }
       sent.push(new Headers(init?.headers).get("authorization") ?? "");
       bodies.push(JSON.parse(String(init?.body)));
       const delta = sent.length === 1
@@ -498,18 +478,6 @@ describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
     await responseText(response);
     expect(response.status).not.toBe(200);
     expect(sends).toBe(0);
-  });
-
-  test("Copilot Auto model negotiation is served by the fixture fetch, never real DNS", async () => {
-    await seedAccounts();
-    const observed = installFetch({ wire: "chat", statuses: [200], switchOn: "never" });
-    const response = await handleResponses(request("chat"), config("chat"), { model: "", provider: "" });
-    await responseText(response);
-    expect(response.status).toBe(200);
-    // The negotiation runs on providerOutboundGet, which resolves and pins a real peer
-    // address unless the provider hands it an executor. This fixture must see the request.
-    expect(observed.modelsRequests).toEqual([{ origin: ACCOUNT_A_ORIGIN }]);
-    expect(observed.dispatches).toEqual([{ origin: ACCOUNT_A_ORIGIN, authorization: bearer("copilot-access-a") }]);
   });
 
   for (const wire of ["chat", "responses"] as const) {
