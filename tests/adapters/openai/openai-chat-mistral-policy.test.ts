@@ -80,12 +80,14 @@ test("the final policy removes rejected controls even when another serializer ge
   expect(body).toEqual({ max_tokens: 12 });
 });
 
-test("the final policy strips message reasoning_content without mutating the caller's message objects", () => {
+test("the final policy strips message reasoning_content without mutating the caller's history", () => {
   const assistant = { role: "assistant", content: "Hi", reasoning_content: "gone" };
-  const body = { messages: [{ role: "user", content: "hi" }, assistant] };
+  const messages = [{ role: "user", content: "hi" }, assistant];
+  const body = { messages };
   applyChatDestinationPolicy(body, provider());
   expect(body.messages).toEqual([{ role: "user", content: "hi" }, { role: "assistant", content: "Hi" }]);
-  expect(assistant.reasoning_content).toBe("gone");
+  expect(body.messages).not.toBe(messages);
+  expect(messages[1]).toEqual({ role: "assistant", content: "Hi", reasoning_content: "gone" });
 });
 
 test("typed response normalization preserves choices, tools, usage, and existing reasoning", () => {

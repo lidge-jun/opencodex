@@ -19,6 +19,7 @@ export function applyChatDestinationPolicy(body: Record<string, unknown>, provid
   for (const field of MISTRAL_CHAT_POLICY.omit) delete body[field];
   const messages = body.messages;
   if (Array.isArray(messages)) {
+    let sanitized: unknown[] | undefined;
     for (let index = 0; index < messages.length; index++) {
       const message = messages[index];
       if (message === null || typeof message !== "object" || Array.isArray(message)) continue;
@@ -26,8 +27,9 @@ export function applyChatDestinationPolicy(body: Record<string, unknown>, provid
       if (!MISTRAL_CHAT_POLICY.omitMessageFields.some((field) => field in record)) continue;
       const copy = { ...record };
       for (const field of MISTRAL_CHAT_POLICY.omitMessageFields) delete copy[field];
-      messages[index] = copy;
+      (sanitized ??= [...messages])[index] = copy;
     }
+    if (sanitized) body.messages = sanitized;
   }
 }
 

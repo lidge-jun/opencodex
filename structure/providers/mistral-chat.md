@@ -5,8 +5,9 @@
 `max_completion_tokens` to `max_tokens` without overwriting an existing non-null limit, and omit `user`, `store`,
 `thinking`, `include_reasoning`, `reasoning` and `top_k`. The same projection drops `reasoning_content` from
 every message in the history before egress: reasoning-capable Chat clients replay the field their responses
-carried (#8420), and Mistral's strict Chat schema rejects it with HTTP 422. Caller message objects are never
-mutated; each touched message is replaced by a stripped copy. Native effort follows the declared model ladder
+carried (#8420), and Mistral's strict Chat schema rejects it with HTTP 422. Caller history is never
+mutated: when a message carries a stripped field the projection swaps in a copied array holding
+stripped copies of just those messages. Native effort follows the declared model ladder
 using the shared at-or-below resolver: DeepSeek/GLM `medium` becomes `low`, supported rungs and `none`
 remain, and an operator ladder wins. Other destinations retain native caller controls. The Mistral
 registry seeds `foldDeveloperRoleToSystem: true`; explicit false still wins.
