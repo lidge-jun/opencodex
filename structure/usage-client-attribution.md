@@ -138,3 +138,7 @@ filtered HEAD reads, whose empty body cannot confirm the scope. Requests without
 newly scoped by that rule. `src/server/hub-usage.ts` binds a client-filtered data-plane read to its authenticated
 key and emits a safe scope echo; `src/remote/hub-usage.ts` projects it without key IDs, and
 `src/client/hub-client.ts` rejects a missing or mismatched echo.
+
+Page-time index failure fallback retries the authoritative streaming scan within the same bounded
+retry policy for concurrent ledger replacement and aggregation-input changes. It does not retry the
+unusable index, and unrelated ledger I/O failures still propagate.

@@ -698,7 +698,9 @@ async function refreshFilteredAggregate(
       // A page failed after its reader was handed out: the index cannot serve this query,
       // so answer from the authoritative ledger scan instead of failing the request.
       retainedFilteredAggregates.delete(key);
-      return rebuildFilteredAggregateStreaming(key, filter, window, userCostOverlayVersion(), currentTimeZone());
+      return withFilterIndexRetry(() =>
+        rebuildFilteredAggregateStreaming(key, filter, window, userCostOverlayVersion(), currentTimeZone()),
+      );
     }
     throw error;
   }

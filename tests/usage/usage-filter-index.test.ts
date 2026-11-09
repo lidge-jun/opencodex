@@ -1229,6 +1229,128 @@ describe("filtered usage index availability", () => {
     }
   });
 
+  test("page fallback retries a concurrent ledger replacement", async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({ provider: "openai" });
+    resetUsageAggregateCacheForTests();
+
+    const expected = rows.filter(row => row.provider === "openai").length;
+    const spy = spyOn(filterIndexModule, "readUsageFilterCandidates").mockImplementation(async () => ({
+      snapshot: {
+        revision: null,
+        identityKey: "",
+        generation: "",
+        indexedOffset: 0,
+        processedThroughDigest: "",
+        indexedRows: 0,
+        invalidRows: 0,
+        oversizedRows: 0,
+        minTimestamp: null,
+        maxTimestamp: null,
+        ingestPasses: 0,
+        ingestedRows: 0,
+      },
+      candidateRows: 0,
+      nextPage() {
+        throw new UsageFilterIndexPageError(new Error("SQLITE_CORRUPT"));
+      },
+      close() {},
+    }));
+    const realScan = ledgerScannerModule.scanUsageLedgerCooperatively;
+    let scans = 0;
+    const scanSpy = spyOn(ledgerScannerModule, "scanUsageLedgerCooperatively").mockImplementation(async options => {
+      if (++scans === 1) throw new ledgerScannerModule.UsageLedgerRebuildRequiredError("content_changed");
+      return realScan(options);
+    });
+    try {
+      const result = await getFilteredUsageAggregate({ provider: "openai" });
+      expect(summary(result).summary.requests).toBe(expected);
+      expect(result.filterIndex).toBeUndefined();
+      expect(scans).toBe(2);
+    } finally {
+      spy.mockRestore();
+      scanSpy.mockRestore();
+    }
+  });
+
+  test("page fallback retries an overlay change", async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({ provider: "openai" });
+    resetUsageAggregateCacheForTests();
+
+    const expected = rows.filter(row => row.provider === "openai").length;
+    const spy = spyOn(filterIndexModule, "readUsageFilterCandidates").mockImplementation(async () => ({
+      snapshot: {
+        revision: null,
+        identityKey: "",
+        generation: "",
+        indexedOffset: 0,
+        processedThroughDigest: "",
+        indexedRows: 0,
+        invalidRows: 0,
+        oversizedRows: 0,
+        minTimestamp: null,
+        maxTimestamp: null,
+        ingestPasses: 0,
+        ingestedRows: 0,
+      },
+      candidateRows: 0,
+      nextPage() {
+        throw new UsageFilterIndexPageError(new Error("SQLITE_CORRUPT"));
+      },
+      close() {},
+    }));
+    const realScan = ledgerScannerModule.scanUsageLedgerCooperatively;
+    let scans = 0;
+    const scanSpy = spyOn(ledgerScannerModule, "scanUsageLedgerCooperatively").mockImplementation(async options => {
+      const result = await realScan(options);
+      if (++scans === 1) refreshUserCostOverlays({ providers: { openai: {} } } as unknown as OcxConfig);
+      return result;
+    });
+    try {
+      const result = await getFilteredUsageAggregate({ provider: "openai" });
+      expect(summary(result).summary.requests).toBe(expected);
+      expect(result.filterIndex).toBeUndefined();
+      expect(scans).toBe(2);
+    } finally {
+      spy.mockRestore();
+      scanSpy.mockRestore();
+    }
+  });
+
+  for (const passive of [false, true]) {
+    test(`real SQLite page failure rolls back and wraps the error (passive=${passive})`, async () => {
+      writeRows(Array.from({ length: 5 }, (_, i) => syntheticRow(i)));
+      await getFilteredUsageAggregate({ provider: "openai" });
+      const read = await (passive
+        ? filterIndexModule.readUsageFilterCandidatesPassive({})
+        : filterIndexModule.readUsageFilterCandidates({}));
+      expect(read).not.toBeNull();
+      const writer = new Database(usageFilterIndexPath(testDir));
+      writer.exec("DROP TABLE usage_rows");
+      writer.close();
+      const realExec = Database.prototype.exec;
+      let rolledBack = false;
+      const execSpy = spyOn(Database.prototype, "exec").mockImplementation(function (this: Database, sql: string) {
+        const result = realExec.call(this, sql);
+        if (sql === "ROLLBACK") rolledBack = !this.inTransaction;
+        return result;
+      });
+      try {
+        let caught: unknown;
+        try { read!.nextPage(); } catch (error) { caught = error; }
+        expect(caught).toBeInstanceOf(UsageFilterIndexPageError);
+        expect(String((caught as UsageFilterIndexPageError).pageError)).toContain("no such table");
+        expect(rolledBack).toBe(true);
+      } finally {
+        execSpy.mockRestore();
+        read!.close();
+      }
+    });
+  }
+
   test("a projection that vanishes before the read is not recreated", async () => {
     const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
     writeRows(rows);
