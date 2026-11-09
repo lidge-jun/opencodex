@@ -6,7 +6,8 @@ import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
 export { sealRequestAttemptIdentity };
 export { noteAttemptRecoveryWithheld } from "./request-log-attempt-recovery";
-import { captureUpstreamTerminalDiagnostics, upstreamDiagnosticLogFields, type UpstreamErrorDiagnostics, type UpstreamErrorPayload } from "./request-log-terminal-status";
+import { captureUpstreamTerminalDiagnostics, diagnosticValueAllowed, upstreamDiagnosticLogFields, type UpstreamErrorDiagnostics, type UpstreamErrorPayload } from "./request-log-terminal-status";
+import { isUntypedBareUpstreamError } from "./bare-upstream-error";
 export { noteUpstreamRequestId } from "./request-log-terminal-status";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import type { ResponsesTerminalStatus } from "../bridge";
@@ -1177,7 +1178,9 @@ function captureUpstreamErrorParsed(
     if (logCtx.upstreamError) return;
     const message = upstreamErrorMessageFromPayload(parsed);
     if (typeof message === "string" && message.trim()) {
-      logCtx.upstreamError = redactSecretString(message).slice(0, 500);
+      const safeMessage = redactSecretString(message).slice(0, 500);
+      logCtx.upstreamError = untypedSse && isUntypedBareUpstreamError(parsed) && !diagnosticValueAllowed(message)
+        ? "[REDACTED]" : safeMessage;
       return;
     }
     // No human-readable error message: fall back to the structured incomplete reason emitted by

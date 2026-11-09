@@ -11,6 +11,7 @@ import { TranslatorBudgetExceededError } from "../../src/lib/translator-budget";
 import { createOutboundCredentialMask, createTerminalErrorRedactionBlockRewrite } from "../../src/server/responses/terminal-error-redaction";
 import { pumpResponsesSseToWebSocket, type WsData } from "../../src/server/ws-bridge";
 import type { ServerWebSocket } from "bun";
+import { OutboundCredentialRegistry, setOutboundCredentialRegistryForTests } from "../../src/lib/outbound-credential-registry";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -987,6 +988,18 @@ describe("untyped upstream error envelopes", () => {
     const result = rewrite(block).join("\n");
     expect(result).not.toContain(secret);
     expect(JSON.parse(result.slice("data: ".length)).error.message).toContain("[REDACTED]");
+  });
+
+  test("does not retain an echoed outbound credential in untyped error diagnostics", () => {
+    const credential = "fixture_selected_credential_8299";
+    const registry = new OutboundCredentialRegistry();
+    registry.remember({ authorization: `Bearer ${credential}` });
+    const restore = setOutboundCredentialRegistryForTests(registry);
+    try {
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      inspectResponseLogSsePayload(log, JSON.stringify({ error: { message: `fixture ${credential}` } }));
+      expect(log.upstreamError ?? "").not.toContain(credential);
+    } finally { restore(); }
   });
 });
 
