@@ -258,6 +258,12 @@ describe("conversationIdFromClaudeMetadata", () => {
     for (const raw of ['{"tk":"only"}', '{ "session_id": "s" }', '["tk"]', "not json"]) {
       expect(conversationIdFromClaudeMetadata({ user_id: raw })).toBe(digest32(raw));
     }
+    // Logs search with any turn's user_id finds the session; older raw-keyed rows still match.
+    expect(matchesLogConversationId(digest32(session), turn("turn-3"))).toBe(true);
+    expect(matchesLogConversationId(digest32(turn("turn-3")), turn("turn-3"))).toBe(true);
+    // Oversized ids are not parsed and stay unpersistable.
+    const huge = JSON.stringify({ session_id: "s", tk: "t", pad: "x".repeat(5000) });
+    expect(conversationIdFromClaudeMetadata({ user_id: huge })).toBeUndefined();
   });
 });
 
