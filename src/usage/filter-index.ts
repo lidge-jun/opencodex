@@ -447,10 +447,18 @@ function createSchema(db: Database): void {
 /**
  * Recreate the projection's own tables. Only called for a database already classified as
  * ours, so a file this module did not create is never dropped.
+ *
+ * `onlyIfStale` re-reads the schema under the write lock first: two processes that both saw an
+ * outdated schema must not have the second drop the tables (and any staged rows) the first just
+ * recreated.
  */
-function recreateSchema(db: Database): void {
+function recreateSchema(db: Database, options: { onlyIfStale?: boolean } = {}): void {
   db.exec("BEGIN IMMEDIATE");
   try {
+    if (options.onlyIfStale && schemaIsCurrent(db)) {
+      db.exec("COMMIT");
+      return;
+    }
     db.exec("DROP TABLE IF EXISTS usage_rows");
     db.exec("DROP TABLE IF EXISTS usage_attributions");
     db.exec("DROP TABLE IF EXISTS usage_filter_index_writers");
@@ -468,21 +476,24 @@ function recreateSchema(db: Database): void {
   }
 }
 
+function schemaIsCurrent(db: Database): boolean {
+  const tables = new Set(tableNames(db));
+  return metaNumber(db, META_KEYS.schemaVersion) === USAGE_FILTER_INDEX_SCHEMA_VERSION
+    && tables.has("usage_rows")
+    && tables.has("usage_attributions")
+    && tables.has("usage_filter_index_writers")
+    && tables.has("usage_filter_index_generations");
+}
+
 function ensureSchema(db: Database, classification: "fresh" | "ours"): void {
   if (classification === "fresh") {
     createSchema(db);
     // Another process may have created the schema first; verify it like any existing one.
   }
-  const tables = new Set(tableNames(db));
-  const current = metaNumber(db, META_KEYS.schemaVersion) === USAGE_FILTER_INDEX_SCHEMA_VERSION
-    && tables.has("usage_rows")
-    && tables.has("usage_attributions")
-    && tables.has("usage_filter_index_writers")
-    && tables.has("usage_filter_index_generations");
-  if (current) return;
+  if (schemaIsCurrent(db)) return;
   // A schema change can alter column shape, so the derived tables are recreated rather than
   // migrated. The ledger is untouched and the next refresh rebuilds from it.
-  recreateSchema(db);
+  recreateSchema(db, { onlyIfStale: true });
 }
 
 function openIndexForWrite(dir: string, path: string): Database {
