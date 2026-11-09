@@ -105,6 +105,7 @@ export function registerComboContextOverflowCases<Server>({
       message: "Invalid 'tools[0].function.name': 'prompt is too long'. Expected a string that matches the pattern '^[a-zA-Z0-9_-]+$'." } }),
     JSON.stringify({ error: { message: 'Invalid value for "user": "maximum context length" is not allowed.' } }),
     "The model's context cache is full",
+    "The context window is full of cached tokens but fine",
     "Model context service is at capacity, please retry later",
     "The model's context window is not full; the request is invalid",
     "The input must not exceed the model context window",

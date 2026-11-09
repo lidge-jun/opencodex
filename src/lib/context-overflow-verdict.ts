@@ -25,7 +25,7 @@ const DEFINITE_CONTEXT_OVERFLOW_PHRASES = [
 /** Provider wording that says the conversation has reached/passed its model's context capacity. */
 const CONTEXT_WINDOW_POSITION_VERDICTS: readonly RegExp[] = [
   /\b(?:history|conversation|input|prompt|request|turn|messages?)\b[^;!?\n.]{0,120}\b(?:at\s+or\s+past|at\s+(?:the\s+)?limit|past|over|beyond|exceed(?:s|ed|ing)?|reached)\b[^;!?\n.]{0,60}\b(?:(?:the|this|selected|its)\s+)?(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\b/i,
-  /\b(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\s+(?:(?:is|are|was|were|has\s+been|have\s+been)\s+)?(?:full|exceed(?:s|ed|ing)?|exhausted)\b/i,
+  /\b(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\s+(?:(?:is|are|was|were|has\s+been|have\s+been)\s+)?(?:full(?!\s+of\b)|exceed(?:s|ed|ing)?|exhausted)\b/i,
 ];
 
 /** Explicit provider wording that an input is too long for a model's context capacity. */
