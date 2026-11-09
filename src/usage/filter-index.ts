@@ -396,12 +396,17 @@ function tableNames(db: Database): string[] {
   return rows.map(row => row.name);
 }
 
-/** `fresh` is an empty database, `ours` carries this projection's meta table, anything else is foreign. */
+/**
+ * `fresh` is an empty database, `ours` carries this projection's meta table, anything else is
+ * foreign. Contention is not an answer: a lock held by another writer rethrows, so the caller
+ * retries instead of classifying a projection it simply could not read yet as someone else's.
+ */
 function classifyDatabase(db: Database): "fresh" | "ours" | "foreign" {
   let names: string[];
   try {
     names = tableNames(db);
-  } catch {
+  } catch (error) {
+    if (isBusyError(error)) throw error;
     return "foreign";
   }
   if (names.length === 0) return "fresh";
@@ -412,12 +417,31 @@ function classifyDatabase(db: Database): "fresh" | "ours" | "foreign" {
   return ours ? "ours" : "foreign";
 }
 
+/**
+ * Create the schema in one transaction, deciding under the write lock.
+ *
+ * Two processes can both see the empty file. Created table by table, the second could observe the
+ * meta table without the data tables and classify a half-built projection as foreign, giving up
+ * the index for that request. One transaction makes the schema appear whole, and re-reading the
+ * table list under the lock adopts a schema another process finished first.
+ */
 function createSchema(db: Database): void {
-  db.exec(SCHEMA_DDL);
-  const generation = randomUUID();
-  writeMetaStatements(db, emptyMeta(generation));
-  db.query("INSERT OR REPLACE INTO usage_filter_index_generations (generation, created_at) VALUES (?, ?)")
-    .run(generation, Date.now());
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const classification = classifyDatabase(db);
+    if (classification === "foreign") throw new UsageFilterIndexForeignError();
+    if (classification === "fresh") {
+      db.exec(SCHEMA_DDL);
+      const generation = randomUUID();
+      writeMetaStatements(db, emptyMeta(generation));
+      db.query("INSERT OR REPLACE INTO usage_filter_index_generations (generation, created_at) VALUES (?, ?)")
+        .run(generation, Date.now());
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch { /* the close releases the lock */ }
+    throw error;
+  }
 }
 
 /**
@@ -447,7 +471,7 @@ function recreateSchema(db: Database): void {
 function ensureSchema(db: Database, classification: "fresh" | "ours"): void {
   if (classification === "fresh") {
     createSchema(db);
-    return;
+    // Another process may have created the schema first; verify it like any existing one.
   }
   const tables = new Set(tableNames(db));
   const current = metaNumber(db, META_KEYS.schemaVersion) === USAGE_FILTER_INDEX_SCHEMA_VERSION
@@ -466,6 +490,9 @@ function openIndexForWrite(dir: string, path: string): Database {
   preparePrivateSqliteDatabase(path);
   const db = new Database(path, { create: true });
   try {
+    // Before the first read: another process creating or writing the projection holds its lock
+    // for a moment, and that must wait (then retry), never read as a foreign file.
+    db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
     const classification = classifyDatabase(db);
     if (classification === "foreign") throw new UsageFilterIndexForeignError();
     if (!existed) {
@@ -482,7 +509,6 @@ function openIndexForWrite(dir: string, path: string): Database {
       hardenSecretPath(path, { required: false });
     }
     db.exec("PRAGMA journal_mode = WAL");
-    db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
     ensureSchema(db, classification);
     return db;
   } catch (error) {
