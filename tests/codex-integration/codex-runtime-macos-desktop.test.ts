@@ -327,7 +327,8 @@ describe("bundled app catalog consumer", () => {
  * selection on the bare `codex` sentinel. The readiness probe then asked a command that does
  * not exist while a real, trusted Codex sat inside the app.
  */
-describe("app-bundled CLI fallback for connect readiness (#8360)", () => {
+// The virtual app paths below are POSIX; on Windows the exec boundary treats them as relative.
+describe.skipIf(process.platform === "win32")("app-bundled CLI fallback for connect readiness (#8360)", () => {
   /** A catalog with a distinctive ladder, so a warm fixture value cannot pass by accident. */
   const bundledCatalog = JSON.stringify({ models: [{
     slug: "gpt-5.6-sol",
@@ -357,6 +358,7 @@ describe("app-bundled CLI fallback for connect readiness (#8360)", () => {
 
     const efforts = codexSupportedReasoningEfforts({
       ...f.deps, execFileSync: exec, commandCandidates: () => [selected.runtime.command],
+      selectedRuntime: selected.runtime,
     });
     expect(efforts).toEqual(new Set(["low", "high"]));
     expect(inspectClientCatalogReadiness("present", bundledCatalog, { supportedEfforts: () => efforts }))
@@ -371,6 +373,7 @@ describe("app-bundled CLI fallback for connect readiness (#8360)", () => {
     const exec = bundledOnlyExec(f.current, spawned);
     const efforts = codexSupportedReasoningEfforts({
       ...f.deps, execFileSync: exec, commandCandidates: () => ["codex"],
+      selectedRuntime: { command: "codex", version: null, source: "fallback" },
     });
     expect(efforts).toBeNull();
     // No app binary exists, so none is offered; the bare sentinel cannot resolve at the exec
@@ -394,6 +397,25 @@ describe("app-bundled CLI fallback for connect readiness (#8360)", () => {
     expect(spawned).toEqual([standalone]);
   });
 
+  test("a selected runnable bare command keeps its own answer instead of borrowing the app's ladder", () => {
+    const f = fixture();
+    f.versions.set(f.current, "0.166.0-alpha.6");
+    const spawned: string[] = [];
+    // Only the app answers. The selected bare command was runnable when it was resolved (it has a
+    // version), so it is the operator's runtime rather than the unresolved sentinel: its failure to
+    // report a catalog must leave the ladder unverified, not substitute the app's.
+    const exec = bundledOnlyExec(f.current, spawned);
+    for (const selectedRuntime of [
+      { command: "codex", version: "0.140.0", source: "fallback" },
+      { command: "codex-beta", version: "0.141.0", source: "environment" },
+    ] as const) {
+      expect(codexSupportedReasoningEfforts({
+        ...f.deps, execFileSync: exec, commandCandidates: () => [selectedRuntime.command], selectedRuntime,
+      })).toBeNull();
+    }
+    expect(spawned).not.toContain(f.current);
+  });
+
   test("the async bundled-catalog driver widens a bare sentinel the same way", async () => {
     const f = fixture();
     f.versions.set(f.current, "0.166.0-alpha.6");
@@ -402,6 +424,7 @@ describe("app-bundled CLI fallback for connect readiness (#8360)", () => {
     const catalog = await loadBundledCodexCatalogAsync({
       ...f.deps,
       commandCandidates: () => ["codex"],
+      selectedRuntime: { command: "codex", version: null, source: "fallback" },
       execFileSync: exec as never,
       execFile: async (file, args) => exec(file, args),
     });

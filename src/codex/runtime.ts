@@ -55,6 +55,15 @@ export interface EffortClampDiagnostic {
   readonly affectedModels: readonly string[];
 }
 
+/**
+ * True for the selection the resolver returns when no candidate ran: the bare `codex` fallback
+ * with no version. A runnable candidate always carries the version its probe parsed, so a bare
+ * command that actually ran (a PATH fallback, or a bare CODEX_CLI_PATH) is not this sentinel.
+ */
+export function codexRuntimeIsUnresolved(runtime: Pick<ResolvedCodexRuntime, "source" | "version">): boolean {
+  return runtime.source === "fallback" && runtime.version === null;
+}
+
 export interface ResolveCodexRuntimeResult {
   readonly runtime: ResolvedCodexRuntime;
   readonly failures: readonly RuntimeProbeFailure[];

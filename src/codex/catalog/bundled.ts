@@ -48,6 +48,7 @@ import {
   codexRuntimeSelectionIdentity,
   codexRuntimeStateEpoch,
   execCodexFileAsync,
+  codexRuntimeIsUnresolved,
 } from "../runtime";
 import type {
   DeepReadonly,
@@ -190,6 +191,12 @@ export interface BundledCatalogDeps {
   /** Already-observed source for server clamping; null never triggers a probe. */
   observedCatalog?: ReadonlyRawCatalog | null;
   commandCandidates?: () => string[];
+  /**
+   * The resolver selection `commandCandidates` came from, when the caller resolved first. Only an
+   * unresolved selection lets the macOS probe add the ChatGPT.app CLI (#8360); without it, injected
+   * candidates are probed as given.
+   */
+  selectedRuntime?: Pick<ResolvedCodexRuntime, "source" | "version">;
   execFileSync?: ExecFile;
   execFile?: (...args: Parameters<ExecFile>) => Promise<string>;
   onEffortClamp?: (diagnostic: EffortClampDiagnostic) => void;
@@ -358,9 +365,11 @@ function bundledCatalogCandidates(
   // An explicit empty list asks for no probe at all.
   if (candidates.length === 0) return candidates;
   if ((deps.platform ?? process.platform) !== "darwin") return candidates;
-  // Only the unresolved sentinel is a bare name; a PATH or installed selection is absolute, and
-  // that selection is the runtime the operator is already running, not a gap to fill.
-  if (candidates.some(command => command.includes("/") || command.includes("\\"))) return candidates;
+  // Decide from the resolver's own result, not from the command's shape: a bare command that ran
+  // (a PATH fallback or a bare CODEX_CLI_PATH) is the operator's runtime, and borrowing the app's
+  // catalog for it would report a ladder that runtime may reject.
+  const selection = resolved?.runtime ?? deps.selectedRuntime;
+  if (!selection || !codexRuntimeIsUnresolved(selection)) return candidates;
   const exists = deps.existsSync ?? existsSync;
   return [...candidates, ...macCodexAppCommands(deps).filter(command => exists(command))];
 }
