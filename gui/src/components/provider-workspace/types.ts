@@ -10,7 +10,7 @@ import type { BrowserLaunch } from "../../oauth-browser-launch";
 export type { ProviderSortMode, WorkspaceItem };
 
 /** Rail status facets (all on by default). */
-export type StatusFilter = { ready: boolean; needsSetup: boolean; disabled: boolean };
+export type StatusFilter = { ready: boolean; needsSetup: boolean; unverified: boolean; disabled: boolean };
 
 /** Rail pricing facets. */
 export type PricingFilter = { free: boolean; paid: boolean };
@@ -59,6 +59,8 @@ export type OAuthAccountRow = AccountQuotaReading & {
   id: string;
   alias?: string;
   email?: string;
+  accountLabel?: string;
+  maskedLabel?: string;
   active: boolean;
   expiresAt?: number;
   needsReauth?: boolean;
@@ -103,6 +105,8 @@ export interface ProviderAuthHandlers {
   onReauth: (provider: string, accountId?: string) => void | Promise<void>;
   onSwitchAccount: (provider: string, account: OAuthAccountRow) => void | Promise<void>;
   onPauseAccount: (provider: string, account: OAuthAccountRow, paused: boolean) => void | Promise<void>;
+  pendingAffinityResets?: Readonly<Record<string, { accountId: string }>>;
+  onRetryAffinityReset?: (provider: string) => void | Promise<void>;
   onAccountThreshold?: (provider: string, account: OAuthAccountRow, threshold: number | null) => Promise<boolean>;
   onAccountPoolThreshold?: (provider: string, threshold: number) => void | Promise<boolean>;
   onRemoveAccount: (provider: string, account: OAuthAccountRow) => void | Promise<void>;
@@ -126,6 +130,8 @@ export type ProviderUpdatePatch = {
   adapter?: string;
   baseUrl?: string;
   defaultModel?: string;
+  project?: string;
+  location?: string;
   apiKey?: string;
   apiKeyTransport?: "x-api-key" | "bearer" | "";
   authMode?: string;

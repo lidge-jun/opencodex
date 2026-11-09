@@ -39,7 +39,7 @@ remplissage automatique. Le tableau de bord lui-même ne conserve le jeton qu'en
 dans `localStorage` ni dans `sessionStorage` ; son enregistrement dépend entièrement du navigateur ou du
 gestionnaire de mots de passe.
 
-**Mémoriser cet appareil** est désactivé par défaut. Sur un tableau de bord HTTPS direct (ou en boucle locale), le serveur échange le jeton administrateur contre un cookie d’appareil HttpOnly, SameSite=Strict et une preuve distincte stockée dans le localStorage de ce site. Le cookie est Secure en HTTPS et limité à l’hôte. Ni le cookie ni la preuve ne sont le jeton administrateur, et aucun ne fonctionne seul. Les cookies sont partagés entre les ports d’un même nom d’hôte ; la preuve, limitée à l’origine, lie l’appareil mémorisé à l’origine de ce tableau de bord. Préférez tout de même un nom d’hôte dédié. Le jeton administrateur n’est jamais écrit dans localStorage ou sessionStorage. Si le stockage du navigateur est indisponible ou ne peut enregistrer la preuve, la mémorisation est signalée comme indisponible.
+**Mémoriser cet appareil** est désactivé par défaut. Sur un tableau de bord HTTPS direct (ou en boucle locale), le serveur échange le jeton administrateur contre un cookie d’appareil HttpOnly, SameSite=Strict et une preuve distincte stockée dans le localStorage de ce site. Le cookie est Secure en HTTPS et limité à l’hôte. Ni le cookie ni la preuve ne sont le jeton administrateur, et aucun ne fonctionne seul. Les cookies sont partagés entre les ports d’un même nom d’hôte ; la preuve, limitée à l’origine, lie l’appareil mémorisé à l’origine de ce tableau de bord. Préférez tout de même un nom d’hôte dédié. Le jeton administrateur n’est jamais écrit dans localStorage ou sessionStorage. Si le stockage du navigateur est indisponible ou ne peut enregistrer la preuve, la mémorisation est signalée comme indisponible. Pour un tableau de bord autonome derrière un proxy inverse qui termine TLS, OpenCodex voit une requête HTTP simple et refuse donc la mémorisation pour cette adresse ; la fenêtre de connexion l’explique et désactive l’option, et la connexion sans mémorisation fonctionne toujours. Un écouteur de gestion Hub de confiance fait exception et peut toujours mémoriser les appareils.
 
 Le fichier privé dashboard-sessions.json conserve les empreintes du cookie, de la preuve, du jeton administrateur et de l’identité du navigateur, l’origine du serveur et une expiration fixe de 30 jours. La relance de l’application Safari reprend une session courte tant que cet appareil reste autorisé. Les sessions mémorisées ne peuvent pas approuver les actions de consentement : étoile GitHub, consommation de crédits de réinitialisation, modification des couches de prompt, connexion Meta Muse, changements de compatibilité du bureau ou validation des quotas. Utilisez une nouvelle session locale ou appairée pour ces actions. Les tableaux de bord relayés, inter-origines ou HTTP distant ne prennent pas en charge la mémorisation. L’expiration, un changement d’identité du navigateur ou la rotation du jeton suivie d’un redémarrage imposent une nouvelle connexion.
 
@@ -55,6 +55,8 @@ force jamais d'actualisation en amont.
 
 - Chaque étiquette affiche la fenêtre signalée prioritaire : d'abord hebdomadaire, puis mensuelle,
   puis 5 heures, puis une fenêtre nommée par le fournisseur ou des crédits prépayés.
+- Les crédits prépayés utilisés à 90 % ou plus deviennent prioritaires si la fenêtre habituelle
+  préférée n'est pas critique. Si elle est aussi critique, elle reste affichée en priorité.
 - Une étiquette passe en ambre à 70 % d'utilisation et en rouge à 90 %.
 - Survolez une étiquette ou donnez-lui le focus au clavier pour voir toutes les fenêtres signalées
   avec leur heure de réinitialisation et l'heure de la lecture. Sur un écran tactile, le premier
@@ -91,15 +93,23 @@ force jamais d'actualisation en amont.
 
 Les vues Utilisation, Tableau de bord, Fournisseurs, Catalogue des fournisseurs et Clés API signalent les enregistrements exclus, même sans résultat lisible. Les décomptes, les dates et les classements reposent uniquement sur les lignes lisibles. L’enregistrement de l’ordre des modèles par utilisation est refusé si l’historique est incomplet : choisissez un autre ordre ou réparez l’historique avant de réessayer.
 
+### Utilisation par application
+
+La page Utilisation s’ouvre avec **Toutes les applications**, **Tous les appareils** et **30 jours** dans le périmètre d’accès actuel. Vous pouvez restreindre l’application, l’appareil ou la période pendant que la page reste ouverte ; la rouvrir rétablit ces valeurs par défaut.
+
+Avec toutes les applications sélectionnées, la section **Applications** apparaît après Modèles et Fournisseurs. Pour les appareils et la période choisis, elle indique la part du total des jetons, le nombre de jetons, le coût estimé au tarif catalogue de l’API, le nombre de requêtes et celui des requêtes dont l’utilisation a été mesurée, par application. Codex CLI, bureau et IDE sont regroupés sous Codex. Les anciens enregistrements sans attribution client sont **Non classés**, distincts de **Inconnu** et **Autre**. Sélectionner une seule application masque cette répartition. Un proxy qui ne fournit pas cette répartition l’affiche comme indisponible ; une répartition vide indique l’absence d’utilisation par application dans le rapport.
+
 ### Filtrer les requêtes
 
 Le détail d’une requête privilégie la cause d’échec amont enregistrée plutôt qu’un message générique d’erreur du proxy. Le nombre d’envois physiques est toujours affiché lorsqu’il est valide ; une comptabilité absente ou invalide affiche **Unavailable**, et non zéro. **Retries** compte les envois après le premier uniquement lorsqu’une seule tentative entièrement réglée et cohérente est enregistrée. Les tentatives multiples, les comptabilités non résolues ou incohérentes et les normalisations avec perte omettent les retries au lieu d’en inventer. Une cause persistante inconnue revient au titre fondé sur le statut, sans attribution brute. **Upstream reason** affiche une condition fournisseur classée (par exemple limite de débit atteinte, quota ou crédits épuisés, fenêtre de contexte dépassée, emplacement non pris en charge, vérification du compte requise ou modèle indisponible), et **Failure detail** affiche un texte rédigé par le proxy, comme un délai d’inactivité ou une limite d’octets ; les nouvelles lignes ne conservent pas le texte d’erreur propre au fournisseur. D’anciens fichiers `usage.jsonl` peuvent encore le contenir, mais le tableau de bord l’écarte à la lecture.
 
-Les filtres combinent interface, requêtes interceptées, fournisseur, modèle exact, statut, période, vitesse et identifiant de conversation dans le journal chargé. Les choix incluent les tentatives de repli ; les modèles ignorent la casse et les espaces externes, sans correspondance partielle. Un choix disparu revient à Tous.
+Les journaux réunissent toutes les applications et affichent une pastille client contenant uniquement une icône sur chaque requête, à la place des onglets par application. Les clients reconnus utilisent leur logo SVG ; les clients inconnus ou autres utilisent une icône neutre en forme de point d’interrogation. Les noms des applications restent accessibles aux lecteurs d’écran, sans texte visible. L’absence d’attribution client n’implique ni Codex ni un échec de la requête. La pastille identifie l’application cliente indépendamment du fournisseur et du protocole ; ce n’est pas un filtre d’application.
+
+Les filtres combinent requêtes interceptées, fournisseur, modèle exact, statut, période, vitesse et identifiant de conversation dans le journal chargé. Les choix incluent les tentatives de repli ; les modèles ignorent la casse et les espaces externes, sans correspondance partielle. Un choix disparu revient à Tous.
 
 Les périodes de 15 minutes, une heure et un jour évoluent toutes les 30 secondes dans l’onglet Logs, même sans actualisation automatique. La vitesse mesure les jetons de sortie par seconde sur toute la durée : moins de 15, de 15 à moins de 50, ou au moins 50 ; les valeurs indisponibles sont exclues quand ce filtre est actif. Réussite : 2xx ; erreur : 4xx/5xx.
 
-Le compteur compare les résultats au total chargé ; la réinitialisation restaure toutes les lignes. Aucun résultat diffère d’un journal vide. Flèches et Home/End pilotent le sélecteur d’interface. Aucun historique au-delà du journal chargé n’est interrogé.
+Le compteur compare les résultats au total chargé ; la réinitialisation restaure toutes les lignes. Aucun résultat diffère d’un journal vide. Aucun historique au-delà du journal chargé n’est interrogé.
 
 ### Liens directs vers une section
 

@@ -92,7 +92,7 @@ A host that has both a Task Scheduler entry and a WinSW service is in a conflict
 
 ### The CLI
 
-`npm install -g @bitkyc08/opencodex` puts `ocx` on the PATH from npm's global prefix, and the
+`npm install -g --allow-scripts=bun @bitkyc08/opencodex` puts `ocx` on the PATH from npm's global prefix, and the
 Bun runtime it needs is bundled inside that package. There is no separate runtime to install and
 no WSL layer on Windows.
 

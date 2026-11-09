@@ -361,12 +361,12 @@ Stream headers precede final accounting; they identify the row owned by the turn
 attest to successful persistence. Authentication, origin, drain and active-turn rejections
 without a request-log owner, and count_tokens, receive no OCX correlation id.
 
-`src/server/messages-response-headers.ts` retains only an upstream `request-id` matching
-`req_[A-Za-z0-9_-]{1,128}` on native delivered results and upstream HTTP errors. At the final
-HTTP boundary, `src/server/index/startup-warnings.ts` moves this diagnostic value into
-`x-opencodex-upstream-request-id` and assigns the OCX id to `request-id`. Missing or nonconforming
-upstream ids are omitted; translated adapter ids are not inferred. The standard/custom OCX
-headers and the optional upstream header are exposed through CORS alongside existing names.
+`src/server/messages-response-headers.ts` omits upstream request IDs. At the final HTTP boundary,
+`src/server/index/startup-warnings.ts` assigns the OCX ledger id to `request-id` and keeps
+`x-opencodex-request-id`, removing the upstream diagnostic header and its existing exposure token.
+The proxy correlation headers remain exposed through CORS alongside other existing names.
+The [Messages error and header contract](error-detail.md#messages-error-bodies-and-headers)
+also covers buffered errors, literal type/code rendering and original collector evidence.
 `tests/claude-integration/messages-request-id-endpoint.test.ts` covers the protocol boundary;
 `tests/claude-integration/messages-request-id-headers.test.ts` covers header and stream identity.
 Responses retains its existing custom-header contract.
@@ -374,8 +374,8 @@ Responses retains its existing custom-header contract.
 ## Claude context rejection
 
 Claude Messages preserves the classified `context_length_exceeded` error (`src/claude/outbound.ts`, `src/protocols/encoders/messages.ts`, `src/server/claude-messages.ts`): one streaming `invalid_request_error` terminal, or HTTP 400 without a retry hint when collected or failed-JSON.
-`anthropicErrorBody` words that envelope as Anthropic does (`prompt is too long: ...`, counts only when the upstream states both), because Claude Code compacts reactively only on that wording; a throughput limit the classifier files under that code (`per minute`, `rate limit`, `quota`, `TPM`) keeps its text.
-The native Messages lane (`src/server/messages-native.ts`) does the same for a configured provider's own 400/413 or streamed `invalid_request_error` refusal without changing the envelope shape; the stream rewrite sits after the log tap so stall timing still reads raw bytes, and Anthropic pools skip it.
+Buffered and converted error writers use the fixed `CLAUDE_CONTEXT_OVERFLOW_MESSAGE` after their original overflow-versus-throughput decision; type/code presence and final status follow each lane's original decision, independently of message replacement.
+The configured native streaming lane retains its separate `claudeOverflowSsePayload` rewrite after the log tap, so stall timing and observers read the original bytes; Anthropic pools skip that rewrite. Final client enqueue applies [first-field error-response normalization](error-detail.md#messages-error-bodies-and-headers), emitting eligible final errors with only the closed declaration, data and terminator under its 1 MiB bound; leading comments and within-bound non-error rename replay retain their bytes. FOLD-502 changes the native collected-error final status only; OVERSIZE-1M changes over-bound error data/recognition with issued status unchanged. Buffered native refusals use the fixed wording without adding a code.
 This adds no recovery send or context pruning; replay refusal and translation-buffer limits keep their handling.
 History: `devlog/_plan/261009_claude_1m_default/010_prompt_too_long_envelope.md`.
 

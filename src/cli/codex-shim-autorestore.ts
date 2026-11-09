@@ -24,6 +24,8 @@ export function skipsCodexShimAutoRestore(command: string | undefined, args: str
   if (command === "update" && isOrchestratedUpdateArgv(args)) return true;
   if (command === "sync") return true;
   if (command === "status" || command === "doctor") return true;
+  // Explicit orphan-token recovery must not mutate Codex before its guards run.
+  if (command === "disconnect" && args.includes("--orphaned-token")) return true;
   // The launcher owns shim handoff after classifying routing, including native fast paths.
   if (command === "codex") return true;
   // Exec admission only observes the selected target; it must never repair a shim first.
@@ -35,6 +37,11 @@ export function skipsCodexShimAutoRestore(command: string | undefined, args: str
   // `resolve` is read-only inspection for embedding shells: a lookup made to populate
   // a consent surface must not trigger a shim repair side effect first.
   if (command === "resolve") return true;
+  // Local model inventory is read-only; mutations and live commands keep preflight.
+  if (command === "models" || command === "model") {
+    const subcommand = args[1];
+    if (!subcommand || subcommand.startsWith("-") || subcommand === "list" || subcommand === "list-custom") return true;
+  }
   // `service status --json` is a passive inventory read for peers such as GOAT: a shim repair
   // before dispatch would change the installation it was asked only to describe.
   // Flags may precede the verb (`ocx service --json status`), exactly as parseServiceArgs reads it.

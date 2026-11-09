@@ -118,7 +118,7 @@ ocx login anthropic
 Поставляемая help-surface выглядит так:
 
 ```text
-Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
+Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|reset-affinity|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
@@ -132,6 +132,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
 strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
@@ -148,7 +149,7 @@ Codex pool selection applies to the next request after clearing existing affinit
 
 Подкоманды требуют запущенного прокси и сами определяют записанный runtime-port, кроме `import-orca`: предпросмотр работает только локально, а `import-orca --apply` требует остановленного прокси. Успешные
 операции завершаются с кодом 0. Некорректное использование, неизвестный провайдер, account/key id,
-недостижимый прокси или ошибка API приводят к коду 1. Поля credential'ов выводятся ровно в том
+недостижимый прокси или ошибка API обычно приводят к коду 1. Для `reset-affinity` HTTP 404 означает код выхода 4, HTTP 409 — код 5; остальные ошибки API и неподтверждённые результаты дают код 1. Поля credential'ов выводятся ровно в том
 виде, как их возвращает management API (включая его masking); сырые API-key'и и OAuth-token'ы
 никогда не возвращаются. Display convenience синтезируется на стороне клиента, как и в дашборде:
 `main` — это alias CLI для логина Codex App внутри пула `openai`, OAuth-аккаунты без email
@@ -397,18 +398,19 @@ ocx account main recover [--rollback --yes] [--json]
 
 ### `ocx models [subcommand]` · `ocx model <subcommand>`
 
-`ocx model` — alias команды `ocx models`. Без подкоманды команда показывает модели, статически
-засеянные в настроенных провайдерах. `--provider` фильтрует один провайдер, а `--json` возвращает
+`ocx model` — alias команды `ocx models`. Без подкоманды команда показывает сохранённые и известные маршрутизатору ID моделей, включая записи реестра, пользовательские модели и кэш обнаружения этого процесса CLI. Кэш нового процесса может быть пустым и не является каталогом работающего прокси. Некоторые старые пресеты с ключом сохраняют записи реестра после смены адреса. `--provider` фильтрует один провайдер, а `--json` возвращает
 метаданные моделей. `live` читает работающий каталог; `add`, `edit`, `remove` и `list-custom`
 управляют ручными записями каталога; `enable`, `disable` и `provider` управляют видимостью;
 `selected` управляет allowlist'ом провайдера; `context` — provider context cap'ами; `shadow`
 управляет intercept'ом background shadow-call'ов.
 
+Поле `reasoningEfforts` отображается только с `--json`. Значение `null` означает, что список неизвестен или не запрашивался, в том числе когда для проверки пришлось бы открыть системное хранилище ключей. Пустой массив `[]` означает явно пустой список либо отключённый для модели уровень рассуждения, например через `noReasoningModels`. Каталог работающего прокси доступен через `ocx models live`.
+
 `add` и `remove` по умолчанию сохраняют локально; `--live` меняет работающий прокси. Без прокси локальное сохранение с `--json` возвращает `sync.status: "not-attempted"`, `needsSync: true` и код 0. Неудачная попытка синхронизации сохраняет запись и возвращает ненулевой код. `list-custom` читает локальный список. `display-name` использует исходный upstream ID, а `order` — публичные ID picker. Полная перестановка, префикс featured и сброс native-порядка описаны в [английской инструкции](/reference/cli/providers-accounts/#display-names-and-picker-identities).
 
 | Подкоманда | Поддерживаемые флаги | Действие |
 | --- | --- | --- |
-| `list` (default) | `--provider <name>`, `--json` | Показать модели, засеянные в настроенных провайдерах. |
+| `list` (default) | `--provider <name>`, `--json` | Показать локально сохранённые и известные маршрутизатору модели. |
 | `live` | `--provider <name>`, `--json` | Прочитать работающий каталог, включая модели, обнаруженные во время выполнения. Строки помечаются как `native`/`routed`, `custom` и `enabled`/`disabled`. |
 | `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | Регистрирует custom-модель локально или на работающем прокси с `--live`. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Изменить custom-модель. `-` очищает поле; `0` очищает context window. |

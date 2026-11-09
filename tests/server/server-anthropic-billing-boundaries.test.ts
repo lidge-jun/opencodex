@@ -149,7 +149,7 @@ for (const entry of ["messages", "responses", "chat"] as const) {
     });
     expect(recovered.result.status).toBe(200);
     expect(exhausted.result.status).toBe(400);
-    expect(exhausted.result.body).toContain(entry === "chat" ? upstreamConditionMessage("billing_exhausted") : "credit balance is too low");
+    expect(exhausted.result.body).toContain(entry === "responses" ? "credit balance is too low" : upstreamConditionMessage("billing_exhausted"));
     // Non-vacuous: the rotation and exhaustion lines were captured, naming ids and the reason.
     expect(recovered.lines.some(line => line.includes("credit-balance refusal on key k0; rotating to key k1"))).toBe(true);
     expect(exhausted.lines.some(line => line.includes("keys in cooldown after credit-balance refusal"))).toBe(true);

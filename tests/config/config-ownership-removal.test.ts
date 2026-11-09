@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -55,6 +55,53 @@ describe("owned path removal stays inside the config root", () => {
     setOwnedDirectoryListedHookForTests(null);
     setWindowsOwnerAclRunnerForTests(null);
     setWindowsElevationProbeForTests(null);
+  });
+
+  windows("elevated uninstall refuses a junction before changing owned state", () => {
+    const { parent, dir } = ownedHome("ocx-removal-windows-junction-");
+    const target = join(parent, "external"), link = join(dir, "artifacts");
+    try {
+      mkdirSync(target);
+      writeFileSync(join(target, "keep.txt"), "keep");
+      expect(recordOwnedConfigPath(dir, link)).toBe(true);
+      const manifest = readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8");
+      const owner = readFileSync(join(dir, CONFIG_OWNER_FILE), "utf8");
+      const ownedConfig = readFileSync(join(dir, "config.json"), "utf8");
+      const lock = join(dir, CONFIG_OWNERSHIP_LOCK);
+      expect(existsSync(lock)).toBe(true);
+      unlinkSync(lock);
+      setUninstallElevationProbeForTests(() => true);
+      const sid = "S-1-5-21-9-9-9-1001";
+      const passing = (count: number) => [`U|${sid}|${sid}|False`,
+        ...Array.from({ length: count }, (_, index) => [`E|${index}|${sid}|4100|1`, `A|${index}|0|3|2032127|${sid}|False`]).flat(),
+        "END", ""].join("\n");
+      let calls = 0;
+      setWindowsOwnerAclRunnerForTests(entries => { calls++; return { success: true, timedOut: false, stdout: passing(entries.length) }; });
+      expect(uninstallPrivilegeRefusal(dir)).toBeNull();
+      expect(calls).toBeGreaterThan(0);
+      symlinkSync(target, link, "junction");
+      expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      const linkTarget = readlinkSync(link);
+      const entries = readdirSync(dir).sort();
+      calls = 0;
+      expect(uninstallPrivilegeRefusal(dir)).toBe(ELEVATED_UNINSTALL_REFUSAL);
+      expect(calls).toBe(0);
+      expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      calls = 0;
+      const result = removeOwnedConfigState(dir);
+      expect(result.status).toBe("refused");
+      expect(result.reason).toBe(ELEVATED_UNINSTALL_REFUSAL);
+      expect(result.residualPaths).toEqual([dir]);
+      expect(calls).toBe(0);
+      expect(existsSync(lock)).toBe(false);
+      expect(readdirSync(dir).sort()).toEqual(entries);
+      expect(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8")).toBe(manifest);
+      expect(readFileSync(join(dir, CONFIG_OWNER_FILE), "utf8")).toBe(owner);
+      expect(readFileSync(join(dir, "config.json"), "utf8")).toBe(ownedConfig);
+      expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(link)).toBe(linkTarget);
+      expect(readFileSync(join(target, "keep.txt"), "utf8")).toBe("keep");
+    } finally { removeTreeWithRetry(parent); }
   });
 
   posix("an elevated run refuses a recorded parent another account can write, before writing anything", () => {
@@ -561,6 +608,7 @@ describe("owned path removal stays inside the config root", () => {
       mkdirSync(join(dir, "Nested"));
       // A case-sensitive volume (most Linux runners) cannot show this; there is nothing to check.
       if (!existsSync(join(dir, "nested"))) return;
+      if (process.platform === "win32") setUninstallElevationProbeForTests(() => false);
       const recorded = join(dir, "nested", "owned.txt");
       expect(recordOwnedConfigPath(dir, recorded)).toBe(true);
       writeFileSync(recorded, "owned");

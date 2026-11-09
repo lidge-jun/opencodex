@@ -271,6 +271,9 @@ test("Remote Link session validation distinguishes 401, 403 and Cloudflare chall
     "<html><title>Just a moment...</title><script>challenge-platform</script></html>",
     { status: 403, headers: { "content-type": "text/html" } },
   )) as typeof fetch)).rejects.toMatchObject({ kind: "cloudflare-challenge" });
+  await expect(validateRemoteLinkSession("https://hub.example.test",
+    (async () => Response.json({ error: "client_state_changed" }, { status: 503 })) as typeof fetch))
+    .rejects.toMatchObject({ kind: "client-state-changed" });
 });
 
 test("pairing refuses a returned session bound to a different browser origin", async () => {

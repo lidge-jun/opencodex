@@ -182,7 +182,7 @@ covers the source mapping, the cap, the 404 and the parameter bounds.
 ingress parsed. It keeps that body by reference for the request only, scans its features on the
 first `features()` call and caches them, and hands out `freshBody()` copies, each a
 `structuredClone` charged under `request_copies`, so a consumer that rewrites its body cannot
-leak the rewrite into another consumer's input.
+leak the rewrite into another consumer's input; `releaseBody(copy)` hands that charge back. `readBody()` returns the source itself, uncharged, for read-only checks, so combo judging charges no copy; only a dispatched native child holds one.
 
 `src/protocols/codecs/{chat,messages,responses}.ts` are named entry points over the existing
 translators — `chatToResponsesBody` is `chatCompletionsToResponsesBody`,
@@ -197,7 +197,7 @@ Messages ingresses call the bridge through them.
 hop (the internal Responses body) still does.
 
 Only when `resolveProtocolSettings(config).unrepresentable === "reject"` do the Chat and Messages
-ingresses build an envelope and run the guard, after the route and its wire settle and before the
+ingresses run the guard, and build an envelope for it, after the route and its wire settle and before the
 request is sent: Chat on the native path when the native lane was chosen, otherwise on the
 bridge path to the settled adapter's wire; Messages on the native path when the managed native
 lane was chosen, otherwise on the bridge path. Combo and policy routes
@@ -205,8 +205,8 @@ and an unroutable model are not judged at ingress; with `nativeChatCombos` on, a
 candidates are judged one by one inside the combo loop (below). A refusal answers 400 in the ingress's own
 error shape (Chat `invalid_request_error` / `unsupported_feature`; Anthropic
 `invalid_request_error`) naming feature keys only, marks the trace blocked, and writes the
-final log row with no upstream send. Under the default `legacy` policy nothing is built and the
-would-be loss appears only as the trace's `featureEffects`. The Messages envelope's features are
+final log row with no upstream send. Under the default `legacy` policy the guard does not run and the would-be loss appears only as the trace's
+`featureEffects`; a Messages combo-model request still builds an envelope, as a replay source, when some provider enables `managedMessagesNative`. The Messages envelope's features are
 fixed at the bridge entry mark, before an effort override rewrites `thinking`.
 `tests/responses/protocol-envelope.test.ts`, `tests/responses/protocol-guard.test.ts` and
 `tests/responses/protocol-ingress-guard.test.ts` pin them.
@@ -225,9 +225,9 @@ the wire-silence heartbeat and live-destination stall watchdog ([timeout policy]
 converters' own helpers, exported from `src/chat/outbound.ts` and `src/claude/outbound.ts`
 (ids, chunk and frame builders, usage mapping, `chatCompletionsStreamErrorPayload`,
 `chatCompletionsFailedResponse`, `chatCompletionsIncompleteOutcome`,
-`anthropicIncompleteOutcome`, `anthropicFailedStatus`, the message snapshot, the web-search pair),
+`anthropicIncompleteOutcome`, `anthropicFailedStatus`, `isContextOverflowError`, the message snapshot, the web-search pair),
 so the frames a client receives are the converters' frames. A fold is the encoded stream read by
-the existing collector. Only producer-marked watchdog/EOF terminals retain local Chat wording; upstream copies of their reason or message follow [client error normalization](error-detail.md#client-error-bodies-chat). Explicit incomplete reasons use the [shared normalization contract](../transports/responses-wire-shapes.md#adapter-incomplete-reasons) before the writers classify the outcome.
+the existing collector. Messages terminal errors use the shared overflow verdict for their code as well as their status: definite generic-coded refusals carry `context_length_exceeded` even when marked retryable; the deterministic undeclared-tool refusal keeps its code. Producer-marked reader exceptions retain transport classification even when their text contains overflow wording; `tests/claude-integration/messages-error-normalization.test.ts` checks that they do not acquire a context-overflow code. `tests/responses/protocol-direct-encoders-messages.test.ts` checks stream/fold parity for all four generic codes, plus an `upstream_error` type variant. The original adapter evidence and proxy/transport metadata still reach the [owned Messages formatter](error-detail.md#messages-error-bodies-and-headers). Only producer-marked watchdog/EOF terminals retain local Chat wording; upstream copies of their reason or message follow [client error normalization](error-detail.md#client-error-bodies-chat). Explicit incomplete reasons use the [shared normalization contract](../transports/responses-wire-shapes.md#adapter-incomplete-reasons) before the writers classify the outcome.
 
 Deliberate equivalences, pinned by the parity tests: a Chat function call is delivered as one
 complete tool-call chunk when it completes, as the converter always did; Messages streams
@@ -376,18 +376,19 @@ probe uses the bridge's credential-free affinity headers, existing plan and auth
 short-lived selection lease; uncertain admission keeps the bridge. Without a runnable plan search alone
 does not decline native Messages. `count_tokens` and the planner lack runtime facts and remain conservative.
 
+Failover combos reuse this lane for eligible concrete first-party Anthropic children through the existing `core-combo-native.ts` source/dispatcher seam. Only strict failover without a default effort qualifies; policy/JEV/other strategies and bridge-only rewrites retain the bridge. The shared executor inherits the combo's attempt, target budget, prepaid permit and gated callbacks, opening no second tracker/final row. Key source system/messages/tools/cache markers retain the native allowlist, image/tool-id safety; explicit operator TTL wins, otherwise TTL-less combo breakpoints stay unchanged. OAuth keeps its preamble/metadata/tool transformations. Counts/previews still decline logical combos without picking accounts. A source declaring a tool the translated body drops with no out-of-body lane (`hasNativeOnlyTool` in `src/claude/inbound-content-options.ts`: `bash_*`, `text_editor_*`, ...; unrestricted `web_search_*` stays portable, while `web_fetch_*` and a domain- or location-restricted `web_search_*` stay portable only to a first-party Anthropic bridge child) makes every translated child unpickable under any `unrepresentable` policy, so a refused native child surfaces its own failure instead of continuing without the tool; non-combo translated routes are unchanged. [Commit boundaries](../transports/responses-combo-boundaries.md) own failover and preserve upstream read evidence before OAuth framing; `tests/claude-integration/messages-native-combo.test.ts` covers the boundary and mocked prefix preservation, not live cache-hit metrics.
+
 With the switch on, a declined route re-marks its bridge entry with the decline reason (after
 any `effort-row` / `fast-row`), so the trace says why the bridge was taken; with it off nothing is
 added. `claudeCode.stabilizePromptCache` is not a decline rule: it is a Claude-app cache
 optimization rather than routing policy, applies only on the translated path, and is a recorded
 gap of the native lane.
-
 `src/server/claude-messages.ts` decides the lane after the route and its wire settle and after the
 managed-client steps already applied to the body (alias/modelMap resolution, `ocx-route`, effort
 directives). The caller-forward passthrough is decided earlier, on the caller's own credential,
 and returns before this point; the two branches share no credential and no header. The body sent
 is `envelope.freshBody()` when a source envelope exists, otherwise the ingress's own body.
-`src/server/messages-native.ts` is imported lazily, only for an eligible route. Native Messages errors reuse the shared OpenCode Zen guidance before resolving client retry headers. A Zen rate-limit 429, identified by message or explicit `rate_limit_error` type, without an upstream retry hint receives the same 15-second hint as the translated path; quota/billing and spent-usage-limit errors remain unchanged and valid upstream retry headers retain precedence. Both native Messages and `src/server/responses/adapter-dispatch.ts` forward parsed error types and codes to the shared guidance.
+`src/server/messages-native.ts` is imported lazily, only for an eligible route. Native Messages errors reuse the shared OpenCode Zen guidance before resolving client retry headers. A Zen rate-limit 429, identified by message or explicit `rate_limit_error` type, without an upstream retry hint receives the same 15-second hint as the translated path; quota/billing and spent-usage-limit errors remain unchanged and valid upstream retry headers retain precedence. Both native Messages and `src/server/responses/adapter-dispatch.ts` forward parsed error types and codes to the shared guidance. Local workflow errors retain the Anthropic envelope and refusal metadata under the [physical-send contract](../transports/responses-spend.md#workflow-physical-send-ceiling).
 
 Configured admission-key model scope also applies to separately billed Advisor models before
 managed native key or OAuth dispatch. Scope intersections retain each member's tool-model restrictions. `src/server/messages-native-scope.ts` resolves active
@@ -439,8 +440,7 @@ The TypeScript Agent SDK's `sdk-ts` entrypoint is accepted alongside `cli`, `sdk
 with the same required headers and bounds, so its first-party native feature betas are retained.
 Duplicates, oversized/invalid values and headers named by `Connection` cannot gain forwarding
 authority. The handle stores its headers privately in a WeakMap and serializes without them.
-The native builder applies it only for first-party Anthropic, independently of bearer/UUID
-selection. Operator `provider.headers` names take precedence case-insensitively over the observed
+The native builder applies it only for first-party Anthropic, independently of bearer/UUID selection. Operator `provider.headers` names take precedence case-insensitively over the observed
 identity bundle without duplicate spelling; unconfigured names retain the observed client values.
 Caller credentials, proxy/hop headers, arbitrary SDK names and betas are never part of the bundle.
 These are compatibility observations, not authorization or proof of client provenance. Missing
@@ -524,7 +524,7 @@ terminal and applies the body stall and size guards; a non-streaming caller gets
 (or a folded stream). Either way `model` is rewritten to the selector the client sent, as the
 translated lane answers (`message_start.message.model` in the first 64 KiB); explicit empty catalogs apply the
 [declared-tool guard](../transports/responses-wire-shapes.md#declared-tool-membership-by-inbound-wire). Upstream errors answer in Anthropic shape with the translated lane's status
-policy (transient 5xx as 529, replay refusals kept non-retryable). `count_tokens` estimates the
+policy (transient 5xx as 529, replay refusals kept non-retryable), with [Messages error normalization](error-detail.md#messages-error-bodies-and-headers). `count_tokens` estimates the
 body the builder would send when the route is eligible, and sends nothing.
 `tests/adapters/anthropic/anthropic-messages-passthrough.test.ts`,
 `tests/adapters/anthropic/anthropic-beta-allowlist.test.ts`,

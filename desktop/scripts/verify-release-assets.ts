@@ -11,9 +11,10 @@
  * version and commit before it uploads anything, so publication can only ever
  * consume the verified bundle.
  */
-import { createHash, createPublicKey, verify as ed25519Verify, type KeyObject } from "node:crypto";
+import { createHash, type KeyObject } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { decodePublicKey, verifyLegacyMinisignBytes } from "../../src/update/minisign.mjs";
 import {
   standaloneArchiveName,
   standaloneTargets as sharedStandaloneTargets,
@@ -122,8 +123,6 @@ export function verifyChecksums(dir: string): number {
   return checksumFiles.length;
 }
 
-const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
-
 export interface MinisignPublicKey {
   keyId: string;
   publicKey: KeyObject;
@@ -146,31 +145,10 @@ function decodeBox(text: string, what: string): string {
   return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(payload);
 }
 
-function boxLines(text: string): string[] {
-  // Accept minisign text with LF or CRLF and an optional terminal newline;
-  // signatures authenticate decoded bytes/comments, not transport line endings.
-  return text.replace(/\r\n/g, "\n").replace(/\n$/, "").split("\n");
-}
-
 /** minisign public key: base64 of algorithm ("Ed") || key id (8) || raw key (32). */
 export function parseMinisignPublicKey(text: string): MinisignPublicKey {
-  const lines = boxLines(text);
-  if (lines.length !== 2 || !lines[0]!.startsWith("untrusted comment: ")) {
-    throw new Error("Malformed minisign public key box");
-  }
-  const payload = decodeBase64(lines[1]!, "minisign public key", 42);
-  const algorithm = payload.subarray(0, 2).toString("utf8");
-  if (algorithm !== "Ed") {
-    throw new Error(`Unsupported minisign public key algorithm: ${JSON.stringify(algorithm)}`);
-  }
-  return {
-    keyId: payload.subarray(2, 10).toString("hex"),
-    publicKey: createPublicKey({
-      key: Buffer.concat([ED25519_SPKI_PREFIX, payload.subarray(10, 42)]),
-      format: "der",
-      type: "spki",
-    }),
-  };
+  const { keyId, publicKey } = decodePublicKey(text);
+  return { keyId, publicKey };
 }
 
 /** The updater public key pinned in the Tauri configuration. */
@@ -187,34 +165,10 @@ export function loadUpdaterPublicKey(tauriConfPath: string): MinisignPublicKey {
 export function verifyUpdaterSignature(filePath: string, key: MinisignPublicKey): void {
   const signaturePath = `${filePath}.sig`;
   if (!existsSync(signaturePath)) throw new Error(`Missing signature: ${signaturePath}`);
-  const lines = boxLines(decodeBox(readFileSync(signaturePath, "utf8"), "Tauri signature"));
-  const trustedPrefix = "trusted comment: ";
-  if (lines.length !== 4 || !lines[0]!.startsWith("untrusted comment: ")
-    || !lines[2]!.startsWith(trustedPrefix)) {
-    throw new Error(`Malformed signature box in ${signaturePath}`);
-  }
-  const payload = decodeBase64(lines[1]!, "signature packet", 74);
-  const globalSignature = decodeBase64(lines[3]!, "comment signature", 64);
-  const algorithm = payload.subarray(0, 2).toString("utf8");
-  if (algorithm !== "ED") {
-    throw new Error(`Unsupported signature algorithm in ${signaturePath}: ${JSON.stringify(algorithm)}`);
-  }
-  const keyId = payload.subarray(2, 10).toString("hex");
-  if (keyId !== key.keyId) {
-    throw new Error(`Signature ${signaturePath} was made by key ${keyId}, not the pinned updater key ${key.keyId}`);
-  }
-  const signature = payload.subarray(10, 74);
-  // ED is ordinary Ed25519 over the BLAKE2b-512 digest, not Ed25519ph.
-  const digest = createHash("blake2b512").update(readFileSync(filePath)).digest();
-  if (!ed25519Verify(null, digest, key.publicKey, signature)) {
-    throw new Error(`Signature verification failed for ${filePath}`);
-  }
-  // minisign signs the raw signature + trimmed trusted comment, without its
-  // prefix or line terminator. The original filename may differ after collection.
-  const trustedComment = lines[2]!.slice(trustedPrefix.length).trim();
-  const message = Buffer.concat([signature, Buffer.from(trustedComment, "utf8")]);
-  if (!ed25519Verify(null, message, key.publicKey, globalSignature)) {
-    throw new Error(`Comment signature verification failed for ${filePath}`);
+  try {
+    verifyLegacyMinisignBytes(readFileSync(filePath), readFileSync(signaturePath, "utf8"), key);
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}: ${filePath}`);
   }
 }
 

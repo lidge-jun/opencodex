@@ -1,4 +1,8 @@
+import { recordUpstreamValidationDetail, type FailureDetail } from "../request-log-failure-detail";
+import { carryProxyErrorPresentation } from "../../lib/client-error-body";
+import { carryPolicyCandidateRefusal } from "./policy-request-scope";
 import { comboFailureEvidence, carryProxyError } from "../../lib/client-error-body";
+import { carryWorkflowRefusal } from "../workflow-refusal";
 import { codexAccountModelRefusal, codexAccountModelRefusalHardStopCode, type CodexAccountModelRefusal } from "../../combos/failover";
 import { parseRetryAfterMs } from "../../combos";
 import type { ConsumedComboFailure, HandleResponsesOptions } from "./core-options";
@@ -40,6 +44,7 @@ export async function consumeComboFailure(
   response: Response,
   signal?: AbortSignal,
   now = Date.now(),
+  logCtx?: { failureDetail?: FailureDetail },
 ): Promise<ConsumedComboFailure> {
   // Read before the body: the marker lives on this Response object, and the failure below is
   // rebuilt as a new one that would otherwise lose it.
@@ -78,6 +83,7 @@ export async function consumeComboFailure(
         && isRateLimitOrQuotaFailureMessage(quotaMessage);
     }
     if (body.displaySafe && !body.truncated) {
+      if (logCtx) recordUpstreamValidationDetail(logCtx, response.status, body.text);
       if (response.status === 400) codexModelRefusal = codexAccountModelRefusal(response.status, body.text);
       const normalized = normalizeUpstreamErrorText(body.text, fallback);
       if (utf8Trusted || isCyberPolicyCode(normalized.code) || isCyberPolicyMessage(normalized.safeText)) {
@@ -143,7 +149,10 @@ export async function consumeComboFailure(
   );
   if (nonReplayable) markResponseNonReplayable(failureResponse);
   carryProxyError(response, failureResponse);
+  carryWorkflowRefusal(response, failureResponse);
   carryReplayRefusal(response, failureResponse);
+  carryProxyErrorPresentation(response, failureResponse);
+  carryPolicyCandidateRefusal(response, failureResponse);
   if (verifiedPlanRefusal) markVerifiedModelNotInPlanResponse(failureResponse);
   carryAnthropicRefusalCredential(response, failureResponse);
   carryCodexAccountCooldownResponse(response, failureResponse);

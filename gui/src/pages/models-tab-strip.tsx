@@ -62,7 +62,7 @@ export function ModelsTabStrip({
   };
 
   return (
-    <div className="page-tabs" role="tablist" aria-label={t("models.tabsLabel")}>
+    <div className="page-tabs models-page-tabs" role="tablist" aria-label={t("models.tabsLabel")}>
       {MODELS_TABS.map(candidate => {
         const active = candidate === tab;
         const count = meta?.[candidate];
@@ -84,7 +84,7 @@ export function ModelsTabStrip({
             onKeyDown={onKeyDown}
           >
             {t(TAB_LABEL[candidate])}
-            {count ? <span className="section-tab-meta">{count}</span> : null}
+            {count ? <span className="section-tab-meta tabular-nums">{count}</span> : null}
           </button>
         );
       })}

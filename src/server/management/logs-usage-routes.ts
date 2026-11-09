@@ -23,6 +23,7 @@ import {
 } from "../../oauth";
 import { removeCredential } from "../../oauth/store";
 import { getFailureProjection } from "../../usage/failure-projection-cache";
+import { MAX_USAGE_CONFIGURED_KEYS, parseUsageSource, snapshotConfiguredKeyIds } from "../../usage/source-filter";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
@@ -110,6 +111,17 @@ function refreshedUsageSummary<T extends UsageSummary & { historyTruncated: bool
   return { ...summary, since, generatedAt: now };
 }
 
+function configuredUsageKeyIds(config: OcxConfig): string[] {
+  const keys = config.apiKeys ?? [];
+  if (keys.length > MAX_USAGE_CONFIGURED_KEYS) throw new Error("configured key snapshot exceeds limit");
+  return snapshotConfiguredKeyIds(keys.map(key => key.id));
+}
+
+/** Only used after a previously authorized session expires during an async read. */
+function expiredUsageSession(): Response {
+  return Response.json({ error: "session_expired" }, { status: 401, headers: { "cache-control": "no-store" } });
+}
+
 export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, syncClaudeAgentDefsBestEffort } = ctx;
 
@@ -185,7 +197,67 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     return jsonResponse(setDebugSettings(partial));
   }
 
+  if (url.pathname === "/api/usage/source-facets" && req.method === "GET") {
+    const { auth, readStoreFor } = await import("./link-route-state");
+    const denied = auth(ctx, "dashboard");
+    if (denied) return denied;
+    if (config.runtimeRole === "client") return jsonResponse({ error: "source facets unavailable on a child" }, 403);
+    const parsed = parseUsageSource(url.searchParams);
+    if (parsed.kind !== "filtered" || [...url.searchParams.keys()].some(key => !["client", "device", "apiKeyId"].includes(key))) {
+      return Response.json({ error: "invalid usage source filter" }, { status: 400, headers: { "cache-control": "no-store" } });
+    }
+    try {
+      const ids = configuredUsageKeyIds(config);
+      if (parsed.filter.device.kind === "key" && !ids.includes(parsed.filter.device.id)) {
+        return Response.json({ error: "unknown key" }, { status: 400, headers: { "cache-control": "no-store" } });
+      }
+      const links = JSON.stringify(readStoreFor(ctx).links.map(({ apiKeyId, alias }) => [apiKeyId, alias]).sort());
+      const { getUsageSourceFacets } = await import("./usage-source-facets");
+      const facets = await getUsageSourceFacets(parsed.filter, ids);
+      const revoked = auth(ctx, "dashboard");
+      if (revoked) return expiredUsageSession();
+      const currentIds = configuredUsageKeyIds(config);
+      const currentLinks = JSON.stringify(readStoreFor(ctx).links.map(({ apiKeyId, alias }) => [apiKeyId, alias]).sort());
+      if (JSON.stringify(ids) !== JSON.stringify(currentIds) || links !== currentLinks) throw new Error("inventory changed");
+      return Response.json(facets, { headers: { "cache-control": "no-store" } });
+    } catch {
+      if (auth(ctx, "dashboard")) return expiredUsageSession();
+      return Response.json({ error: "usage_facets_unavailable" }, { status: 503, headers: { "cache-control": "no-store", "retry-after": "1" } });
+    }
+  }
+
+  if (url.pathname === "/api/usage/devices" && req.method === "GET") {
+    const { auth, readStoreFor } = await import("./link-route-state");
+    const denied = auth(ctx, "dashboard");
+    if (denied) return denied;
+    if (ctx.config.runtimeRole === "client") return jsonResponse({ error: "device inventory unavailable on a child" }, 403);
+    try {
+      const aliases = new Map<string, string | null>();
+      for (const link of readStoreFor(ctx).links) {
+        aliases.set(link.apiKeyId, aliases.has(link.apiKeyId) ? null : link.alias);
+      }
+      const devices = [...aliases].sort(([left], [right]) => left.localeCompare(right))
+        .map(([apiKeyId, alias]) => ({ apiKeyId, alias }));
+      return Response.json({ devices }, { headers: { "cache-control": "no-store" } });
+    } catch {
+      return jsonResponse({ error: "link_store_unavailable" }, 503);
+    }
+  }
+
   if (url.pathname === "/api/usage" && req.method === "GET") {
+    const source = parseUsageSource(url.searchParams);
+    if (source.kind === "invalid") return jsonResponse({ error: "invalid usage source filter" }, 400);
+    const unconfigured = source.kind === "filtered" && source.filter.device.kind === "unconfigured";
+    const sessionGuard = unconfigured ? (await import("./link-route-state")).auth : null;
+    if (sessionGuard) {
+      const denied = sessionGuard(ctx, "dashboard");
+      if (denied) return denied;
+    }
+    let configuredIds: string[] | undefined;
+    if (unconfigured) {
+      try { configuredIds = configuredUsageKeyIds(config); }
+      catch { return Response.json({ error: "usage_inventory_unavailable" }, { status: 503, headers: { "cache-control": "no-store" } }); }
+    }
     if (url.searchParams.get("jev") === "1") {
       const range = parseRange(url.searchParams.get("range"));
       const rawComboId = url.searchParams.get("comboId");
@@ -244,8 +316,10 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       provider: url.searchParams.get("provider"),
       model: url.searchParams.get("model"),
       apiKeyId: url.searchParams.get("apiKeyId"),
+      ...(source.kind === "filtered" ? { sourceFilter: source.filter } : {}),
+      ...(configuredIds ? { configuredApiKeyIds: configuredIds } : {}),
     };
-    const filterRequested = window !== undefined || [filter.provider, filter.model, filter.apiKeyId]
+    const filterRequested = source.kind === "filtered" || window !== undefined || [filter.provider, filter.model, filter.apiKeyId]
       .some(value => typeof value === "string" && value.trim() !== "");
     const now = Date.now();
     try {
@@ -272,17 +346,27 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       if (cached && !filterRequested) discardUsageSummaryCacheEntry(cacheKey);
       if (filterRequested) {
         const filteredAggregate = await getFilteredUsageAggregate(filter, window);
+        if (sessionGuard) {
+          const denied = sessionGuard(ctx, "dashboard");
+          if (denied) return expiredUsageSession();
+          const currentIds = configuredUsageKeyIds(config);
+          if (JSON.stringify(currentIds) !== JSON.stringify(configuredIds)) {
+            return Response.json({ error: "usage_inventory_changed" }, { status: 503, headers: { "cache-control": "no-store" } });
+          }
+        }
         const accumulator = filteredAggregate.accumulator;
-        return jsonResponse({
+        const body = {
           ...accumulator.summarize(range, now, surface),
-          ...(filteredAggregate.usageIncomplete ? { usageIncomplete: true as const, usageIncompleteReason: "oversized_rows" as const } : {}),
+          ...(filteredAggregate.usageIncomplete ? { usageIncomplete: true as const, usageIncompleteReason: "oversized_rows" as const }
+            : unconfigured && filteredAggregate.usageInvalidRows ? { usageIncomplete: true as const } : {}),
           historyTruncated: false,
           truncatedPrefixBytes: 0,
           entriesTruncated: false,
           entriesDropped: 0,
           snapshotWindowStart: accumulator.snapshotWindow.start,
           snapshotWindowEnd: accumulator.snapshotWindow.end,
-        });
+        };
+        return unconfigured ? Response.json(body, { headers: { "cache-control": "no-store" } }) : jsonResponse(body);
       }
 
       const configuredApiKeyIds = (config.apiKeys ?? []).map(key => key.id);
@@ -348,6 +432,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       }
       return jsonResponse(requestedSummary);
     } catch {
+      if (sessionGuard && sessionGuard(ctx, "dashboard")) return expiredUsageSession();
       // A missing ledger is handled as an empty installation by the reader. Reaching this catch
       // therefore means the report is unavailable, not that usage was measured as zero. Keep the
       // transport status aligned with the JEV projection above so every dashboard consumer can

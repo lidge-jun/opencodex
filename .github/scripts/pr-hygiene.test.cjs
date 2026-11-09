@@ -314,7 +314,7 @@ describe("pr-hygiene workflow trust boundary", () => {
     assert.ok(ref, "trusted checkout must declare ref");
     assert.equal(
       ref.replace(/\s+/g, " ").trim(),
-      "${{ github.event.pull_request.base.ref == 'main' && 'main' || 'dev' }}",
+      "dev",
     );
     // A stacked child PR's base is another open PR's head; neither a base nor
     // a head ref may select the code that runs with the write-capable token.
@@ -355,7 +355,7 @@ describe("pr-hygiene workflow trust boundary", () => {
     const checkouts = workflow.match(/uses:\s*actions\/checkout@[\s\S]*?(?=\n {6}- name:|$)/g) ?? [];
     for (const step of checkouts) {
       const stepRef = (step.match(/^\s*ref:\s*(.+)$/m)?.[1] ?? "").replace(/\s+/g, " ").trim();
-      assert.equal(stepRef, "${{ github.event.pull_request.base.ref == 'main' && 'main' || 'dev' }}", "every checkout must use the trusted ref");
+      assert.equal(stepRef, "dev", "every checkout must use the trusted ref");
       assert.doesNotMatch(step, /repository:/, "a checkout must not retarget its repository");
     }
     // Checkout is not the only way to obtain PR-controlled code. A `run:` step

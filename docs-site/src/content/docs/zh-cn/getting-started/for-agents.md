@@ -10,7 +10,7 @@ description: 为受代理驱动或脚本控制的终端安装并操作 opencodex
 安装已发布的包，并确认 `ocx` 已在 `PATH` 中：
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
 ```
 
