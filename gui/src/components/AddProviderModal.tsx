@@ -64,8 +64,12 @@ export default function AddProviderModal({
     initialCustom,
     (custom) => createInitialAddProviderState(custom, t("modal.customProvider")),
   );
-  const [renderCapture] = useState<ApiTargetCapture>(() => captureApiTarget("shared"));
-  const renderedTargetKey = targetKey ?? renderCapture.targetKey;
+  const [renderCapture] = useState<ApiTargetCapture>(() => captureApiTarget("shared", apiBase));
+  // An empty string is a legacy "the caller had no logical key", not a target named "".
+  // Only an explicit non-empty key is validated against the render capture; otherwise the
+  // capture this modal rendered under is authoritative.
+  const suppliedTargetKey = targetKey && targetKey.trim() ? targetKey : undefined;
+  const renderedTargetKey = suppliedTargetKey ?? renderCapture.targetKey;
   const aliveRef = useRef(true);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -78,8 +82,8 @@ export default function AddProviderModal({
   const [catalogQuery, setCatalogQuery] = useState("");
 
   const oauthPoll = useKeyedClientResource(
-    `add-provider-oauth:${targetKey ?? apiBase}`,
-    [apiBase, targetKey],
+    `add-provider-oauth:${suppliedTargetKey ?? apiBase}`,
+    [apiBase, suppliedTargetKey],
     async (signal) => {
       const res = await fetch(`${apiBase}/api/oauth/providers`, { signal });
       if (!res.ok) return [] as string[];
@@ -88,8 +92,8 @@ export default function AddProviderModal({
     },
   );
   const presetsPoll = useKeyedClientResource(
-    `add-provider-presets:${targetKey ?? apiBase}`,
-    [apiBase, targetKey],
+    `add-provider-presets:${suppliedTargetKey ?? apiBase}`,
+    [apiBase, suppliedTargetKey],
     async (signal) => {
       const res = await fetch(`${apiBase}/api/provider-presets`, { signal });
       if (!res.ok) throw new Error(String(res.status));
@@ -98,8 +102,8 @@ export default function AddProviderModal({
     },
   );
   const usagePoll = useKeyedClientResource(
-    usageSummary30dResourceKey(apiBase, "all", targetKey),
-    [apiBase, targetKey],
+    usageSummary30dResourceKey(apiBase, "all", suppliedTargetKey),
+    [apiBase, suppliedTargetKey],
     async (signal) => {
       const res = await fetch(`${apiBase}/api/usage?range=30d`, { signal });
       return await readUsageResponseJson<UsageReadMetadata & { providers?: Array<{ provider: string; requests: number }> }>(res);
@@ -216,7 +220,12 @@ export default function AddProviderModal({
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({})) as { error?: string };
-        dispatch({ type: "set-error", error: d.error || t("modal.failedStatus", { status: res.status }) });
+        dispatch({
+          type: "set-error",
+          error: d.error === "target_changed"
+            ? t("prov.targetChanged")
+            : (d.error || t("modal.failedStatus", { status: res.status })),
+        });
         return;
       }
       onAdded(postBody.name);
@@ -231,7 +240,7 @@ export default function AddProviderModal({
     cancelLoginOAuth,
     loginOAuth,
     submitManualCode: submitManualCodeApi,
-  } = useAddProviderOAuth({ apiBase, targetKey, t, aliveRef, onAdded });
+  } = useAddProviderOAuth({ apiBase, targetKey: suppliedTargetKey, t, aliveRef, onAdded });
 
   const oauthSetters = {
     setOauthBusy: (busy: boolean) => dispatch({ type: "set-oauth-busy", busy }),

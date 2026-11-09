@@ -247,7 +247,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const setActive = async (id: string | null) => {
     const result = await controller.switchAccount(id);
     if (!result.ok) {
-      if (result.reason === "busy") return;
+      if (result.reason === "busy" || result.reason === "stale") return;
       showActionFeedback(t("codexAuth.switchFailed"), "err");
       return;
     }
@@ -265,7 +265,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     if (!activeUnpinFor) return;
     const result = await controller.switchAccount(null, { expectedPinnedAccountId: activeUnpinFor.id });
     if (!result.ok) {
-      if (result.reason === "busy") return;
+      if (result.reason === "busy" || result.reason === "stale") return;
       // The confirmation described an old pin, or the saved result is uncertain.
       // A fresh attempt must start from the refreshed card and a new confirmation.
       setUnpinFor(null);
@@ -291,7 +291,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const togglePaused = async (account: CodexAccountEntry) => {
     const paused = !account.paused;
     const result = await controller.setAccountPaused(account.id, paused);
-    if (!result.ok && result.reason === "busy") return;
+    if (!result.ok && (result.reason === "busy" || result.reason === "stale")) return;
     setConfirm(current => current?.id === account.id ? null : current);
     showActionFeedback(t(result.ok
       ? paused ? "codexAuth.pauseSucceeded" : "codexAuth.resumeSucceeded"
@@ -302,7 +302,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
 
   const toggleAllCreditsAfterLimit = async (enabled: boolean) => {
     const result = await controller.setAllCreditsAfterLimit(enabled);
-    if (!result.ok && result.reason === "busy") return;
+    if (!result.ok && (result.reason === "busy" || result.reason === "stale")) return;
     showActionFeedback(t(result.ok
       ? enabled ? "codexAuth.creditsAllOnSucceeded" : "codexAuth.creditsAllOffSucceeded"
       : "codexAuth.creditsAllUpdateFailed"), result.ok ? "ok" : "err");
@@ -318,7 +318,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     // the widget, not at the route, where a same-value write really is a statement.
     if (priority === account.priority) return;
     const result = await controller.setAccountPriority(account.id, priority);
-    if (!result.ok && result.reason === "busy") return;
+    if (!result.ok && (result.reason === "busy" || result.reason === "stale")) return;
     showActionFeedback(t(result.ok ? "accountPool.priorityUpdated" : "accountPool.priorityUpdateFailed", {
       email: account.alias ?? account.email,
     }), result.ok ? "ok" : "err");
@@ -330,7 +330,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   ) => {
     if (threshold === account.autoSwitchThresholdOverride) return true;
     const result = await controller.setAccountAutoSwitchThreshold(account.id, threshold);
-    if (!result.ok && result.reason === "busy") return false;
+    if (!result.ok && (result.reason === "busy" || result.reason === "stale")) return false;
     showActionFeedback(t(result.ok
       ? "accountPool.autoSwitchUpdated"
       : "accountPool.autoSwitchUpdateFailed", {
@@ -341,7 +341,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
 
   const toggleCreditsAfterLimit = async (account: CodexAccountEntry, enabled: boolean) => {
     const result = await controller.setAccountCreditsAfterLimit(account.id, enabled);
-    if (!result.ok && result.reason === "busy") return;
+    if (!result.ok && (result.reason === "busy" || result.reason === "stale")) return;
     showActionFeedback(t(result.ok
       ? enabled ? "codexAuth.creditsOnSucceeded" : "codexAuth.creditsOffSucceeded"
       : "codexAuth.creditsUpdateFailed", {
@@ -448,7 +448,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
 
   const pauseExhausted = async () => {
     const result = await controller.pauseExhaustedAccounts();
-    if (!result.ok && result.reason === "busy") return;
+    if (!result.ok && (result.reason === "busy" || result.reason === "stale")) return;
     showActionFeedback(result.ok
       ? result.pausedCount > 0
         ? t("codexAuth.pauseExhaustedSucceeded", { count: String(result.pausedCount) })

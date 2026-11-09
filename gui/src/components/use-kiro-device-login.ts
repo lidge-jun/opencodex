@@ -81,7 +81,7 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
 
   const start = useCallback(async (method: KiroDeviceMethod, iam?: KiroIamOptions) => {
     if (sessionRef.current) return;
-    const capture = captureApiTarget("shared");
+    const capture = captureApiTarget("shared", apiBase);
     const session: Session = { closed: false, closedController: new AbortController(), capture };
     sessionRef.current = session;
     setState({ phase: "starting" });

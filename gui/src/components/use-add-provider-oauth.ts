@@ -6,7 +6,7 @@ import { afterOAuthCancellation, cancelOAuthLogin } from "../oauth-cancellation-
 import type { LoginHintData } from "./login-url-block";
 import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch";
 import { loginPollAttempts } from "../oauth-login-budget";
-import { captureApiTarget, targetFetch, type ApiTargetCapture } from "../api";
+import { captureApiTarget, isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
 
 export const OAUTH_LOGIN_POLL_INTERVAL_MS = 2_000;
 
@@ -39,9 +39,20 @@ export function useAddProviderOAuth({
   const targetKeyRef = useRef(targetKey);
   useLayoutEffect(() => { targetKeyRef.current = targetKey; }, [targetKey]);
   useEffect(() => {
+    const active = [...activeProvidersRef.current];
+    const captures = [...activeCapturesRef.current];
     activeProvidersRef.current.clear();
     activeCapturesRef.current.clear();
     loginGenerationRef.current.clear();
+    // The old target's busy spinner and device URL must not survive under the new label.
+    // A login started on the new target registers after this reset.
+    for (const [providerId, setters] of active) {
+      setters.setOauthBusy(false);
+      setters.setOauthUrl("", providerId);
+      setters.setOauthMsg("");
+    }
+    // Cancel each abandoned login on the target it started against.
+    for (const [providerId, capture] of captures) void cancelOAuthLogin(capture, providerId);
   }, [targetKey]);
 
   const bumpLoginGeneration = useCallback((providerId: string) => {
@@ -50,13 +61,19 @@ export function useAddProviderOAuth({
     return generation;
   }, []);
 
-  const cancelServerLogin = useCallback((providerId: string) =>
-    cancelOAuthLogin(activeCapturesRef.current.get(providerId) ?? captureApiTarget("shared"), providerId), []);
+  /**
+   * Cancel a login on the target it started against. A missing capture fails closed:
+   * falling back to the live target would send an old login's cancel to the new server.
+   */
+  const cancelServerLogin = useCallback((capture: ApiTargetCapture, providerId: string) =>
+    cancelOAuthLogin(capture, providerId), []);
 
   useEffect(() => {
     const cancelActiveLogins = (clearUi: boolean) => {
       const providers = [...activeProvidersRef.current];
+      const captures = new Map(activeCapturesRef.current);
       activeProvidersRef.current.clear();
+      activeCapturesRef.current.clear();
       for (const [providerId, setters] of providers) {
         bumpLoginGeneration(providerId);
         if (clearUi) {
@@ -64,7 +81,8 @@ export function useAddProviderOAuth({
           setters.setOauthUrl("", providerId);
           setters.setOauthMsg("");
         }
-        void cancelServerLogin(providerId);
+        const capture = captures.get(providerId);
+        if (capture) void cancelServerLogin(capture, providerId);
       }
     };
     const onPageHide = () => cancelActiveLogins(true);
@@ -81,8 +99,10 @@ export function useAddProviderOAuth({
     providerLabel = providerId,
   ) => {
     const generation = bumpLoginGeneration(providerId);
+    const capture = activeCapturesRef.current.get(providerId);
     activeProvidersRef.current.delete(providerId);
-    await cancelServerLogin(providerId);
+    activeCapturesRef.current.delete(providerId);
+    if (capture) await cancelServerLogin(capture, providerId);
     if (!aliveRef.current || loginGenerationRef.current.get(providerId) !== generation) return;
     setters.setOauthBusy(false);
     setters.setOauthUrl("", providerId);
@@ -94,12 +114,18 @@ export function useAddProviderOAuth({
     providerId: string,
     setters: OAuthLoginSetters,
   ) => {
-    const capture = captureApiTarget("shared");
+    const capture = captureApiTarget("shared", apiBase);
     activeCapturesRef.current.set(providerId, capture);
     const { setOauthBusy, setOauthMsg, setOauthMsgTone, setOauthUrl, setManualCode, setManualCodeMsg, setManualCodeOk } = setters;
     const generation = bumpLoginGeneration(providerId);
     const isCurrent = () => loginGenerationRef.current.get(providerId) === generation
-      && (targetKey === undefined || targetKeyRef.current === targetKey);
+      && (targetKey === undefined || targetKeyRef.current === targetKey)
+      && isApiTargetCaptureCurrent(capture);
+    // Only the login that still owns the surface may remove its setters; an older login's
+    // completion must not erase the replacement that superseded it.
+    const releaseSetters = () => {
+      if (activeProvidersRef.current.get(providerId) === setters) activeProvidersRef.current.delete(providerId);
+    };
     activeProvidersRef.current.set(providerId, setters);
     setOauthBusy(true);
     setOauthMsg("");
@@ -119,13 +145,15 @@ export function useAddProviderOAuth({
       });
       if (!res || !aliveRef.current || !isCurrent()) return;
       if (!res.ok) {
-        activeProvidersRef.current.delete(providerId);
+        releaseSetters();
         const data = await res.json().catch(() => ({})) as { error?: string };
         if (!aliveRef.current || !isCurrent()) return;
         setOauthMsgTone("warn");
-        setOauthMsg(data.error === "unknown oauth provider"
-          ? t("modal.oauthComingSoonShort")
-          : (data.error || t("modal.loginFailStart")));
+        setOauthMsg(data.error === "target_changed"
+          ? t("prov.targetChanged")
+          : data.error === "unknown oauth provider"
+            ? t("modal.oauthComingSoonShort")
+            : (data.error || t("modal.loginFailStart")));
         return;
       }
       // A device flow may return a user code with no URL, and `instructions` may
@@ -145,13 +173,15 @@ export function useAddProviderOAuth({
         const s = sRes ? await readJsonIfOk<{ loggedIn?: boolean; error?: string; hint?: LoginHintData }>(sRes) : null;
         if (!aliveRef.current || !isCurrent()) return;
         if (s?.error) {
-          activeProvidersRef.current.delete(providerId);
+          releaseSetters();
           setOauthMsgTone("warn");
-          setOauthMsg(t("modal.loginError", { error: s.error }));
+          setOauthMsg(s.error === "target_changed"
+            ? t("prov.targetChanged")
+            : t("modal.loginError", { error: s.error }));
           return;
         }
         if (s?.loggedIn) {
-          activeProvidersRef.current.delete(providerId);
+          releaseSetters();
           setOauthMsg("");
           onAdded(providerId);
           return;
@@ -165,20 +195,20 @@ export function useAddProviderOAuth({
             : (hint.instructions || t("modal.loggingIn")));
         }
       }
-      await cancelServerLogin(providerId);
+      await cancelServerLogin(capture, providerId);
       if (!aliveRef.current || !isCurrent()) return;
-      activeProvidersRef.current.delete(providerId);
+      releaseSetters();
       setOauthMsgTone("warn");
       setOauthMsg(t("modal.loginTimeout"));
     } catch {
-      if (isCurrent()) await cancelServerLogin(providerId);
-      if (isCurrent()) activeProvidersRef.current.delete(providerId);
+      if (isCurrent()) await cancelServerLogin(capture, providerId);
+      if (isCurrent()) releaseSetters();
       if (aliveRef.current && isCurrent()) {
         setOauthMsgTone("warn");
         setOauthMsg(t("modal.networkError"));
       }
     } finally {
-      activeCapturesRef.current.delete(providerId);
+      if (activeCapturesRef.current.get(providerId) === capture) activeCapturesRef.current.delete(providerId);
       if (aliveRef.current && isCurrent()) {
         setOauthBusy(false);
         setOauthUrl("", providerId);
@@ -202,18 +232,34 @@ export function useAddProviderOAuth({
     const { setManualCodeBusy, setManualCode, setManualCodeOk, setManualCodeMsg } = setters;
     setManualCodeBusy(true);
     setManualCodeMsg("");
+    // The code belongs to the login that produced the device URL. Without its capture the
+    // flow is gone (target changed or it ended), so refuse instead of posting to the live
+    // target — a stale code must never reach another server.
+    const capture = activeCapturesRef.current.get(providerId);
+    if (!capture) {
+      setManualCodeBusy(false);
+      setManualCodeOk(false);
+      setManualCodeMsg(t("prov.targetChanged"));
+      return;
+    }
     try {
-      const capture = activeCapturesRef.current.get(providerId) ?? captureApiTarget("shared");
       const res = await targetFetch(capture, `${apiBase}/api/oauth/login/code`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider: providerId, input }),
       });
       if (!aliveRef.current) return;
+      if (!isApiTargetCaptureCurrent(capture)) {
+        setManualCodeOk(false);
+        setManualCodeMsg(t("prov.targetChanged"));
+        return;
+      }
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
         setManualCodeOk(false);
-        setManualCodeMsg(t("prov.pasteFail", { error: data.error || res.statusText }));
+        setManualCodeMsg(data.error === "target_changed"
+          ? t("prov.targetChanged")
+          : t("prov.pasteFail", { error: data.error || res.statusText }));
         return;
       }
       setManualCode("");

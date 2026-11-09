@@ -64,7 +64,7 @@ export function useProvidersCrud({
   const confirmRemoveProvider = useCallback(async (removeConfirmName: string | null) => {
     const name = removeConfirmName;
     if (!name || removeBusyRef.current) return;
-    const capture = captureApiTarget("shared");
+    const capture = captureApiTarget("shared", apiBase);
     removeBusyRef.current = true;
     setRemoveConfirmName(null);
     const fallback = t("prov.removeFail", { name });
@@ -96,14 +96,18 @@ export function useProvidersCrud({
   }, [apiBase, fetchConfig, fetchOauth, fetchProviderQuotas, notify, onProviderRemoved, removeBusyRef, setRemoveConfirmName, setWorkspaceSelected, t, workspaceSelected]);
 
   const setProviderDisabled = useCallback(async (name: string, disabled: boolean) => {
-    const capture = captureApiTarget("shared");
+    const capture = captureApiTarget("shared", apiBase);
     const res = await targetFetch(capture, `${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ disabled }),
     });
     if (!res.ok) {
-      notify(await apiErrorMessage(res, disabled ? t("prov.disableFail", { name }) : t("prov.enableFail", { name })), false);
+      notify(await apiErrorMessage(
+        res,
+        disabled ? t("prov.disableFail", { name }) : t("prov.enableFail", { name }),
+        t("prov.targetChanged"),
+      ), false);
       return;
     }
     const data = await res.json().catch(() => ({})) as { dependentShadowIntercept?: unknown };
@@ -117,7 +121,7 @@ export function useProvidersCrud({
   }, [apiBase, fetchConfig, fetchOauth, fetchProviderQuotas, notify, t]);
 
   const updateProvider = useCallback(async (name: string, patch: ProviderUpdatePatch): Promise<ProviderUpdateResult> => {
-    const capture = captureApiTarget("shared");
+    const capture = captureApiTarget("shared", apiBase);
     try {
       const res = await targetFetch(capture, `${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
         method: "PATCH",
@@ -125,7 +129,7 @@ export function useProvidersCrud({
         body: JSON.stringify(patch),
       });
       if (!res.ok) {
-        return { ok: false, error: await apiErrorMessage(res, t("prov.updateFail")) };
+        return { ok: false, error: await apiErrorMessage(res, t("prov.updateFail"), t("prov.targetChanged")) };
       }
       const data = await res.json().catch(() => ({})) as { xaiResponsesOptInState?: unknown };
       // Await refresh so callers (e.g. notes editor) only leave edit mode once
@@ -151,7 +155,7 @@ export function useProvidersCrud({
   }, [apiBase, fetchConfig, fetchProviderQuotas, refreshCodexAccount, t]);
 
   const setDefaultProvider = useCallback(async (name: string): Promise<boolean> => {
-    const capture = captureApiTarget("shared");
+    const capture = captureApiTarget("shared", apiBase);
     try {
       const res = await targetFetch(capture, `${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
         method: "PATCH",

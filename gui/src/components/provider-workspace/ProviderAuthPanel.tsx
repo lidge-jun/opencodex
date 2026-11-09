@@ -32,7 +32,7 @@ import { useGrokResetCoupons } from "../../hooks/useGrokResetCoupons";
 import { useAnthropicResetGrants } from "../../hooks/useAnthropicResetGrants";
 import { Switch } from "../../ui";
 import { kiroSkipReasonKey } from "../../kiro-device-login-helpers";
-import { captureApiTarget, targetFetch, type ApiTargetCapture } from "../../api";
+import { captureApiTarget, isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../../api";
 import KiroDeviceLoginDialog from "../KiroDeviceLoginDialog";
 import type {
   AccountLoadState,
@@ -322,10 +322,17 @@ export default function ProviderAuthPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider: item.name, input }),
       });
+      if (!isApiTargetCaptureCurrent(loginCapture)) {
+        setManualCodeOk(false);
+        setManualCodeMsg(t("prov.targetChanged"));
+        return;
+      }
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
         setManualCodeOk(false);
-        setManualCodeMsg(t("prov.pasteFail", { error: data.error || res.statusText }));
+        setManualCodeMsg(data.error === "target_changed"
+          ? t("prov.targetChanged")
+          : t("prov.pasteFail", { error: data.error || res.statusText }));
         return;
       }
       setManualCode("");
@@ -363,7 +370,7 @@ export default function ProviderAuthPanel({
     setImportBusy(true);
     setImportStatus("idle");
     setImportResult(null);
-    const capture = captureApiTarget("shared");
+    const capture = captureApiTarget("shared", apiBase);
     try {
       if (!file.name.toLowerCase().endsWith(".json") || file.size > COCKPIT_IMPORT_MAX_BYTES) {
         setImportStatus("invalid");

@@ -444,7 +444,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const switchAccount = async (provider: string, account: OAuthAccount, retryPending = false) => {
-    const capture = captureApiTarget("shared");
+    const capture = captureApiTarget("shared", apiBase);
     if (account.active && !retryPending || account.needsReauth || account.paused || switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider) || selectionMutationsRef.current.has(`oauth:${provider}`)) return;
     const target = { provider, accountId: account.id };
     switchingAccountRef.current.set(provider, target);
@@ -501,7 +501,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const setAccountThreshold = async (provider: string, account: OAuthAccount, threshold: number | null): Promise<boolean> => {
-    const capture = captureApiTarget("shared");
+    const capture = captureApiTarget("shared", apiBase);
     const key = `oauth:${provider}`;
     if (switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider) || selectionMutationsRef.current.has(key)) return false;
     const mutationKey = invalidateSelectionReads(provider, "oauth");
@@ -552,7 +552,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const pauseAccount = async (provider: string, account: OAuthAccount, paused: boolean, retryAffinityReset = false) => {
-    const capture = captureApiTarget("shared");
+    const capture = captureApiTarget("shared", apiBase);
     if (switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider) || selectionMutationsRef.current.has(`oauth:${provider}`)) return;
     const target = { provider, accountId: account.id };
     pausingAccountRef.current.set(provider, target);
@@ -632,7 +632,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const retryAffinityResetOnly = async (provider: string, accountId: string) => {
-    const capture = captureApiTarget("shared");
+    const capture = captureApiTarget("shared", apiBase);
     const key = `oauth:${provider}`;
     if (selectionMutationsRef.current.has(key) || switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider)) return;
     const retry = { kind: "reset" as const, accountId };
@@ -706,7 +706,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const switchApiKey = async (provider: string, entry: ApiKeyEntry) => {
-    const capture = captureApiTarget("shared");
+    const capture = captureApiTarget("shared", apiBase);
     if (entry.active && !entry.disabled || selectionMutationsRef.current.has(`key:${provider}`)) return;
     const key = invalidateSelectionReads(provider, "api-key");
     const mutation = Symbol();
@@ -746,7 +746,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const removeApiKey = async (provider: string, entry: ApiKeyEntry) => {
-    const capture = captureApiTarget("shared");
+    const capture = captureApiTarget("shared", apiBase);
     const consented = await confirmAction({
       message: t("prov.keyRemoveConfirm", { key: entry.label ?? entry.masked }),
       confirmLabel: t("common.remove"),
@@ -763,7 +763,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const addApiKeyValue = async (provider: string, rawKey: string): Promise<boolean> => {
-    const capture = captureApiTarget("shared");
+    const capture = captureApiTarget("shared", apiBase);
     const key = rawKey.trim();
     if (!key) return false;
     try {
@@ -792,7 +792,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const editCredentialAlias = async (provider: string, type: "oauth" | "api-key", id: string, current?: string) => {
-    const capture = captureApiTarget("shared");
+    const capture = captureApiTarget("shared", apiBase);
     const entered = await requestTextValue({
       message: t("prov.aliasPrompt"),
       initialValue: current ?? "",
@@ -820,7 +820,7 @@ export function useProviderAccountPools(deps: {
   );
 
   const removeAccount = async (provider: string, account: OAuthAccount) => {
-    const capture = captureApiTarget("shared");
+    const capture = captureApiTarget("shared", apiBase);
     const label = accountLabel(provider, account);
     const consented = await confirmAction({
       message: t("prov.accountRemoveConfirm", { email: label }),

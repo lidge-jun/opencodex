@@ -99,7 +99,7 @@ export function useJsonConfigEditor(deps: {
   const saveConfig = useCallback(async (): Promise<boolean> => {
     const saveTargetKey = targetKey;
     const saveApiBase = apiBase;
-    const saveCapture = captureApiTarget("shared");
+    const saveCapture = captureApiTarget("shared", apiBase);
     if (saveCapture.apiBase !== saveApiBase || (targetKey !== apiBase && saveCapture.targetKey !== targetKey)) {
       notify(t("prov.targetChanged"), false);
       return false;
@@ -137,7 +137,7 @@ export function useJsonConfigEditor(deps: {
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string; code?: string };
         if (apiBaseRef.current === saveApiBase && targetKeyRef.current === saveTargetKey) {
-          notify(data.error || t("prov.saveFailed"), false);
+          notify(data.error === "target_changed" ? t("prov.targetChanged") : (data.error || t("prov.saveFailed")), false);
           // A stale baseline means the saved config moved; re-read it so the conflict
           // banner can offer an explicit choice instead of repeating the same failure.
           if (data.code === "stale_provider_editor_baseline") void fetchConfig();

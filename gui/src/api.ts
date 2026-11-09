@@ -15,6 +15,12 @@ export interface ApiTargetCapture {
   requestGeneration: number;
   transport: ApiTarget["transport"];
   relayTargetCheck?: "expected-target-v1";
+  /**
+   * An embedded component supplied its own base while this dashboard had no discovered
+   * topology. Such a capture is authoritative only until discovery configures a machine
+   * or shared plane; after that the live target wins and the capture is stale.
+   */
+  standalone?: true;
 }
 
 /** Non-secret generation fencing every Usage report and inventory. */
@@ -208,10 +214,30 @@ function runtime(plane: ApiPlane): TargetRuntime {
   return runtimes.get(plane)!;
 }
 
-/** Capture the logical target at the user action boundary, before any await. */
-export function captureApiTarget(plane: ApiPlane = "shared"): ApiTargetCapture {
+/**
+ * Capture the logical target at the user action boundary, before any await.
+ *
+ * A component may be mounted with its own `apiBase` (the dashboard's public embedding
+ * contract). While this page has no discovered topology that base is the target: the
+ * dashboard is standalone and the prop names the server the component manages. Once
+ * discovery configures a machine/shared plane the live target is authoritative, so a
+ * caller cannot retarget a configured dashboard by passing a different base.
+ */
+export function captureApiTarget(plane: ApiPlane = "shared", explicitBase?: string): ApiTargetCapture {
   const targets = ensureTargets();
   const state = runtime(plane);
+  const supplied = typeof explicitBase === "string" ? explicitBase.replace(/\/+$/, "") : "";
+  if (!targets.connected && supplied !== "") {
+    const resolved = new URL(supplied || "/", window.location.href);
+    return {
+      apiBase: supplied,
+      targetKey: resolved.origin,
+      origin: resolved.origin,
+      requestGeneration: apiTargetGeneration,
+      transport: "same-origin",
+      standalone: true,
+    };
+  }
   return {
     apiBase: state.target.baseUrl,
     targetKey: apiTargetIdentity(targets).key,
@@ -228,6 +254,11 @@ function targetChangedResponse(): Response {
 
 function targetCaptureMatches(capture: ApiTargetCapture): boolean {
   const targets = ensureTargets();
+  if (capture.standalone) {
+    // Discovery invalidates an embedded base: the connected plane, not the prop, owns
+    // the target from then on.
+    return !targets.connected && apiTargetGeneration === capture.requestGeneration;
+  }
   const state = runtime("shared");
   return apiTargetGeneration === capture.requestGeneration
     && apiTargetIdentity(targets).key === capture.targetKey

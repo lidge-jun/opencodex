@@ -146,7 +146,9 @@ function validStatus(value: unknown): value is MachineStatusV1 {
     && typeof row.machineBase === "string" && typeof row.sharedBase === "string"
     && typeof row.sharedServerOrigin === "string" && typeof row.apiKeyId === "string"
     && row.apiKeyId.trim().length > 0 && typeof row.connectedAt === "string"
-    && (row.relayTargetCheck === undefined || row.relayTargetCheck === "expected-target-v1")
+    // An unknown capability string belongs to a relay we do not understand; it reads as
+    // legacy rather than a malformed status. Only the exact negotiated value opts in.
+    && (row.relayTargetCheck === undefined || typeof row.relayTargetCheck === "string")
     && (row.catalogSyncedAt === undefined || typeof row.catalogSyncedAt === "string");
 }
 
@@ -212,9 +214,10 @@ export function apiBaseForPlane(plane: ApiPlane, targets: ApiTargets): string {
  * Stable identity for the server a dashboard plane actually manages.
  *
  * A relay plane's base URL is always `<machine>/api/machine/hub-relay`, so re-pairing the
- * machine to another hub keeps the same request base. The advertised hub origin and the
- * machine key id distinguish those logical targets. The key is for in-memory scoping only;
- * the label never carries the key id.
+ * machine to another hub keeps the same request base. The advertised hub origin and, in
+ * link mode, the link id distinguish those logical targets. Rotating the machine API key
+ * is not a target change. The key is for in-memory scoping only; the label never carries
+ * key material.
  */
 export function apiTargetIdentity(targets: ApiTargets): { key: string; label: string } {
   const linkKey = targets.link?.linkId ? `link:${targets.link.linkId}` : null;
