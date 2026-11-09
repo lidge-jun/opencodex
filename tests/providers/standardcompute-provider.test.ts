@@ -53,7 +53,7 @@ describe("standardcompute provider", () => {
     expect(KEY_LOGIN_PROVIDERS.standardcompute).toMatchObject({ apiKeyValidation: "unknown" });
   });
 
-  test("seeds the catalog models with their windows, and only kimi-k3 reads images", () => {
+  test("seeds the catalog models with their windows, and only kimi-k3 and the routed id read images", () => {
     const seeded = config().providers.standardcompute!;
     expect(seeded).toMatchObject({ adapter: "openai-chat", baseUrl, defaultModel: "StandardCompute", liveModels: true });
     expect(entry().models).toEqual([...MODELS]);
@@ -62,7 +62,7 @@ describe("standardcompute provider", () => {
       "z-ai/glm-5.3": 1_048_576, "moonshotai/kimi-k3": 1_048_576,
     });
     for (const model of MODELS) {
-      expect(isModelVisionSidecarConsumer(seeded, model)).toBe(model !== "moonshotai/kimi-k3");
+      expect(isModelVisionSidecarConsumer(seeded, model)).toBe(model !== "moonshotai/kimi-k3" && model !== "StandardCompute");
     }
   });
 

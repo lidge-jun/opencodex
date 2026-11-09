@@ -1387,8 +1387,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // GET /v1/models is public, so a successful /models probe cannot validate a submitted key.
     // The routed id StandardCompute sends each request to the cheapest enabled model that can
     // handle it, with automatic fallback; vendor/model ids from the live list pin one model.
-    // Every inbound stays on Chat Completions. Context windows and input modalities are from the
-    // public catalog. The env reference derived from the id is ${STANDARDCOMPUTE_API_KEY}.
+    // Every inbound stays on Chat Completions. Context windows and pinned-model input modalities
+    // are from the public catalog. The routed id sends image requests to a vision-capable model,
+    // so it keeps original images instead of using the vision sidecar. The env reference derived from the id is ${STANDARDCOMPUTE_API_KEY}.
     id: "standardcompute",
     label: "Standard Compute",
     adapter: "openai-chat",
@@ -1405,7 +1406,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       "z-ai/glm-5.3": 1_048_576, "moonshotai/kimi-k3": 1_048_576,
     },
     modelInputModalities: {
-      StandardCompute: ["text"], "deepseek/deepseek-v4-pro": ["text"], "deepseek/deepseek-v4-flash": ["text"],
+      StandardCompute: ["text", "image"], "deepseek/deepseek-v4-pro": ["text"], "deepseek/deepseek-v4-flash": ["text"],
       "z-ai/glm-5.3": ["text"], "moonshotai/kimi-k3": ["text", "image"],
     },
     note: "OpenAI-compatible API whose routed StandardCompute model sends each request to the cheapest enabled model that can handle it, with automatic fallback. A vendor/model id from the public live list, such as deepseek/deepseek-v4-pro, pins one model. Create an API key at standardcompute.com/dashboard. The same key works on the EU (eu.stdcmpt.com/v1) and US (us.stdcmpt.com/v1) hosts; where requests run is set per key in the dashboard. Chat Completions only.",
