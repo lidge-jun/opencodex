@@ -1019,6 +1019,33 @@ describe("provider moderation refusal", () => {
     expect(comboFailureCooldownScope(400, body)).toBe("none");
   });
 
+  test("root content_filter code does not exempt nested validation error with disallowed param", () => {
+    const body = JSON.stringify({
+      code: "content_filter",
+      error: {
+        message: "Invalid temperature: must be between 0 and 2",
+        param: "temperature",
+      },
+    });
+    expect(isProviderModerationRefusal(400, body)).toBe(false);
+    expect(comboFailureDecision(400, body)).toBe("stop");
+  });
+
+  test("truncated body with root moderation message and nested validation error prefers error envelope", () => {
+    const raw = JSON.stringify({
+      message: "The input was refused by moderation. Categories: harassment.",
+      extra: { info: "nested" },
+      error: {
+        message: "Invalid parameter: prompt is missing",
+        param: "prompt",
+        padding: "z".repeat(600),
+      },
+    });
+    const truncated = raw.slice(0, 180);
+    expect(isProviderModerationRefusal(400, truncated)).toBe(false);
+    expect(comboFailureDecision(400, truncated)).toBe("stop");
+  });
+
   test("generic 400 errors without moderation phrasing stay terminal", () => {
     for (const message of [
       "Invalid JSON in request body",

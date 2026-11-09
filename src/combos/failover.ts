@@ -732,9 +732,10 @@ export function isProviderModerationRefusal(
         ) {
           return false;
         }
-        // Match error/response envelope containing message and optionally param
+        // Match authoritative error/response envelope containing message and optionally param.
+        // A dedicated "error": { ... } or "response": { ... } takes precedence over root message.
         const envelopeMatch = /"(?:error|response)"\s*:\s*\{([^{}]*?"message"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"[^{}]*)/.exec(text)
-          ?? /^\s*\{\s*([^{}]*?"message"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"[^{}]*)/.exec(text);
+          ?? (!/"(?:error|response)"\s*:\s*\{/.test(text) ? /^\{\s*([^{}]*?"message"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"[^{}]*)/.exec(text) : null);
         if (envelopeMatch) {
           const envelopeContent = envelopeMatch[1];
           const rawMessage = envelopeMatch[2];
@@ -768,7 +769,6 @@ export function isProviderModerationRefusal(
 
     const rootCode = normalizedFailureCode(typeof rec.code === "string" ? rec.code : undefined);
     const errCode = normalizedFailureCode(typeof e.code === "string" ? e.code : undefined);
-    let explicitErrorModerationCode = false;
     for (const c of [rootCode, errCode]) {
       if (
         isCyberPolicyCode(c)
@@ -779,12 +779,12 @@ export function isProviderModerationRefusal(
       }
       if (c === "moderation_refusal" || c === "content_filter") {
         moderationCodeSeen = true;
-        explicitErrorModerationCode = true;
       }
     }
 
+    const errorObjectModerationCode = errCode === "moderation_refusal" || errCode === "content_filter";
     if (typeof e.param === "string" && e.param) {
-      if (!isAllowedModerationParam(e.param) && !explicitErrorModerationCode) {
+      if (!isAllowedModerationParam(e.param) && !errorObjectModerationCode) {
         return false;
       }
     }
