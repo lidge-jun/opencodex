@@ -122,6 +122,12 @@ async function maybeFetchProviderQuota(
 ): Promise<ProviderQuotaProbeResult> {
   if (provider.disabled === true) return null;
   try {
+    if (provider.adapter === "muse-msp") {
+      const { readMuseUsage } = await import("../adapters/muse-msp/discovery");
+      const { report } = await import("./quota/report-cache");
+      const quota = await readMuseUsage();
+      return quota ? report(name, "muse-cli:usage", quota) : null;
+    }
     if (provider.adapter === "claude-cli") return await fetchClaudeCliObservedQuota(name, forceRefresh);
     if (isBuiltInChatGptForwardProvider(name, provider)) {
       return fetchChatGptForwardQuota(config, name, provider, forceRefresh, prefetchedCodexSnapshot);

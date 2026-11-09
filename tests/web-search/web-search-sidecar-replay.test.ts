@@ -197,6 +197,48 @@ test("a failed cell keeps its error flag when a recorded result is restored", ()
   expect(result?.isError).toBe(true);
 });
 
+test("Muse replay uses its existing Codex principal and isolates other callers", () => {
+  const cell={type:"web_search_call",id:"ws_muse_fixture",status:"completed",action:{type:"search",query:"q"}};
+  const bind=(principal:string,thread:string)=>{
+    const parsed=parseRequest(nextTurn(cell));
+    parsed._reasoningReplayScope={clientThreadId:thread};
+    parsed._museCodexPrincipal=principal;
+    parsed._codexOwnThreadId=thread;
+    parsed._museNativeRoute={providerName:"muse-code",providerDestinationIdentity:"dest",adapterName:"muse-msp",modelId:"m",credentialIdentity:"host"};
+    return parsed;
+  };
+  const owner=bind("a".repeat(64),"thread-a");
+  rememberSidecarSearch(owner,"ws_muse_fixture",{id:"call",arguments:{query:"q"}},"fixture result","hidden commentary");
+  restoreSidecarSearchResults(owner);
+  expect(searchPair(owner.context.messages,"call").result?.content).toBe("fixture result");
+  const searchMessage=owner.context.messages.find(message=>message.role==="assistant" && message.content.some(part=>part.type==="toolCall" && part.name==="web_search"));
+  expect(searchMessage?.role === "assistant" && searchMessage.content.filter(part=>part.type==="text").map(part=>part.text)).toEqual(["hidden commentary"]);
+  restoreSidecarSearchResults(owner);
+  expect(searchMessage?.role === "assistant" && searchMessage.content.filter(part=>part.type==="text")).toHaveLength(1);
+  for(const other of [bind("b".repeat(64),"thread-a"),bind("a".repeat(64),"thread-b")]){
+    restoreSidecarSearchResults(other);
+    expect(searchPair(other.context.messages,"ws_muse_fixture").result?.content).not.toBe("fixture result");
+    expect(JSON.stringify(other.context.messages)).not.toContain("hidden commentary");
+  }
+});
+
+test("Muse replays serial searches before a subsequent client tool and preserves failed searches", () => {
+  const first = { ...cell("ws_first"), status: "failed" };
+  const parsed = parseRequest(body([{ role: "user", content: "go" }, first, cell("ws_second"), call("client"), output("client")]));
+  parsed._reasoningReplayScope = { clientThreadId: "thread" };
+  parsed._museCodexPrincipal = "a".repeat(64);
+  parsed._codexOwnThreadId = "thread";
+  parsed._museNativeRoute = { providerName: "muse-code", providerDestinationIdentity: "dest", adapterName: "muse-msp", modelId: "m", credentialIdentity: "host" };
+  rememberSidecarSearch(parsed, "ws_first", { id: "search-1", arguments: {} }, "failed", "first commentary");
+  rememberSidecarSearch(parsed, "ws_second", { id: "search-2", arguments: { query: "q" } }, "found", "second commentary");
+  restoreSidecarSearchResults(parsed);
+  expect(callOrder(parsed.context.messages)).toEqual(["user", "assistant[text,search-1]", "result:search-1", "assistant[text,search-2]", "result:search-2", "assistant[client]", "result:client"]);
+  expect(searchPair(parsed.context.messages, "search-1").result).toMatchObject({ content: "failed", isError: true });
+  expect(searchPair(parsed.context.messages, "search-2").result).toMatchObject({ content: "found", isError: false });
+  restoreSidecarSearchResults(parsed);
+  expect(callOrder(parsed.context.messages)).toEqual(["user", "assistant[text,search-1]", "result:search-1", "assistant[text,search-2]", "result:search-2", "assistant[client]", "result:client"]);
+});
+
 test("synthetic call ids never collide with client call ids or with each other", () => {
   const parsed = parseRequest(body([{ role: "user", content: "go" }, cell("ws_replay"),
     { type: "web_search_call", status: "completed", action: { type: "search", query: "no id" } },

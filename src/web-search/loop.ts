@@ -59,6 +59,8 @@ interface WebSearchCall {
   // empty array means the model called the tool with neither `query` nor `queries` (handled as an
   // empty-query placeholder).
   queries: string[];
+  /** Exact call arguments when a stateful adapter must validate its continuation. */
+  originalArguments?: Record<string, unknown>;
   /**
    * Provider-opaque metadata from the originating part (issue #1735). Stored PER CALL so a
    * signature can never migrate to a different call when the model batches several.
@@ -91,7 +93,7 @@ function parseQueries(argsBuf: string): string[] {
  * (Codex never sees the synthetic tool); every other event — text, thinking, real tool calls, done —
  * is preserved in order.
  */
-export function scanEventsForWebSearch(events: AdapterEvent[], options: { advisor?: boolean; clientAdvisorAllowed?: boolean } = {}): {
+export function scanEventsForWebSearch(events: AdapterEvent[], options: { advisor?: boolean; clientAdvisorAllowed?: boolean; preserveSearchArguments?: boolean } = {}): {
   calls: WebSearchCall[];
   passthrough: AdapterEvent[];
   hasRealToolCall: boolean;
@@ -148,7 +150,12 @@ export function scanEventsForWebSearch(events: AdapterEvent[], options: { adviso
           hasMalformedToolCall = true;
           if (!advisor) passthrough.push(...pending.events);
         } else if (pending.name === WEB_SEARCH_TOOL_NAME) {
-          calls.push({ id: pending.id, queries: parseQueries(pending.argsBuf), providerMetadata: pending.providerMetadata });
+          let originalArguments: Record<string, unknown> | undefined;
+          if (options.preserveSearchArguments) {
+            try { const value: unknown = JSON.parse(pending.argsBuf || "{}"); if (value && typeof value === "object" && !Array.isArray(value)) originalArguments = value as Record<string, unknown>; } catch { /* malformed arguments remain an empty query */ }
+          }
+          calls.push({ id: pending.id, queries: parseQueries(pending.argsBuf), providerMetadata: pending.providerMetadata,
+            ...(originalArguments ? { originalArguments } : {}) });
         } else if (advisor) {
           calls.push({
             id: pending.id,

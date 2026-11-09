@@ -1253,6 +1253,21 @@ Without the opt-in, destination validation rejects inference and model discovery
 This requirement concerns the provider endpoint; the browser callback listener needs no such opt-in.
 Re-run the login after a relay `401`; OrcaRouter keys are durable and do not have a refresh-token grant.
 
+**Muse Code CLI (`muse-code`).** Install the official Muse Code CLI, sign in on the same
+machine, and add the Muse Code provider. OpenCodex starts the CLI over MSP using its
+file-based login; it does not fall back to a Meta Model API key. Models are discovered from
+the CLI, with Contributor variants available for supported Spark models. For a local Codex
+session, no separate OpenCodex API key is needed.
+
+Muse merges Codex developer instructions with its own, so their behavior may differ from
+the original. Text history is projected into new Muse sessions when needed.
+Only supported text and client-owned tools are handled. The CLI may send multiple model
+requests within one admitted segment, so the segment counter is not a physical-request cap.
+Requests with an enforced token spend limit are rejected before Muse is started, because the
+CLI does not expose a per-send admission hook for this route.
+Meta's permission for third-party integrations to use a Muse Code subscription is not established;
+consult [Meta's subscription documentation](https://dev.meta.ai/docs/muse-code/subscriptions).
+
 **Meta Model API (`meta-model`).** Muse Spark on Meta's own OpenAI-compatible endpoint,
 served over `/v1/responses`. Create a key in
 [the Meta developer console](https://dev.meta.ai/docs/authentication) — Meta calls this

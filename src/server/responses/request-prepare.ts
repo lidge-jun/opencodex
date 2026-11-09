@@ -42,6 +42,7 @@ import {
   reasoningReplayConversationIdFromResponsesRequest,
 } from "../request-log-conversation";
 import { contextPrincipalIdOf, resolveContextPrincipal } from "../auth-cors";
+import { museCodexPrincipal } from "../../adapters/muse-msp/codex-principal";
 import { responseTurnMembership } from "./turn-membership";
 import { resolveSkillsSnapshotScopeKey, snapshotSkillsCatalogInBody } from "./skills-snapshot";
 import {
@@ -643,6 +644,7 @@ export async function prepareResponsesRequest(
       : resolveContextPrincipal(req, config, options.admission);
     parsed._reasoningReplayScope = { ...parsed._reasoningReplayScope, clientPrincipalId };
   }
+  parsed._museCodexPrincipal = museCodexPrincipal(req.headers, config, options.admission);
   // Prefer a pre-populated id (routed Claude) over Responses headers that may be
   // absent or synthetically injected (session_id from prompt_cache_key). A Hermes-only id
   // is a log fallback: native resolution replaces it, and it only fills an empty slot.
@@ -1164,6 +1166,7 @@ export async function prepareResponsesRequest(
             "_promptCacheKeyIsSharedCohort",
             "_cursorClientThreadId",
             "_reasoningReplayScope",
+            "_museCodexPrincipal",
             "_nativeReasoningRetention",
             "_cursorIsolateConversation",
           ];

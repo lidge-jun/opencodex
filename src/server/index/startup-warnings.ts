@@ -142,6 +142,8 @@ export function withRequestLogId(response: Response, requestId: string): Respons
 }
 
 export interface StartServerDeps {
+  /** Test-only server-owned Muse runtime pool. */
+  museNativeRuntimePool?: import("../../adapters/muse-msp/runtime-pool").MuseNativeRuntimePool;
   /** Test-only CONNECT binder; permits kernel-assigned ports without probe-and-release races. */
   startClaudeInterceptProxy?: typeof import("../../claude/intercept/connect-proxy").startConnectProxy;
   /** Test-only seam; production always initializes its own management credential state. */

@@ -203,15 +203,23 @@ import { createPackageTreeIntegrityGuardForServer } from "./index/package-tree-g
 import { inspectStartupOwnership, logProxyEndpoints, resolveInboundBodyLimitWithWarning, setStartupCacheInvalidationWrite, warnAgentTaskRecoveryStartup, warnPlaintextV2AgentMessagesStartup, type StartServerDeps } from "./index/startup-warnings";
 import { acquireSpendLedgerServerLifecycle, recordFailedStartRollback, type SpendLedgerServerLifecycle } from "./index/spend-ledger-lifecycle";
 import { withLocalCredentialObservation } from "../local-credentials/runtime-observation";
+import { MuseNativeRuntimePool } from "../adapters/muse-msp/runtime-pool";
 export { waitForFailedStartRollback } from "./index/spend-ledger-lifecycle";
 
 export function startServer(port?: number, deps: StartServerDeps = {}): Server<WsData> {
   const spendLedgerLifecycle = acquireSpendLedgerServerLifecycle(getConfigDir());
-  try { return withLocalCredentialObservation(() => startServerWithSpendLedgerOwner(port, deps, spendLedgerLifecycle)); }
-  catch (error) { recordFailedStartRollback(error, spendLedgerLifecycle.releaseAfterFailedStart()); throw error; }
+  const museNativeRuntimePool = deps.museNativeRuntimePool ?? new MuseNativeRuntimePool();
+  try { return withLocalCredentialObservation(() => startServerWithSpendLedgerOwner(port, deps, spendLedgerLifecycle, museNativeRuntimePool)); }
+  catch (error) {
+    const rollback = Promise.allSettled([spendLedgerLifecycle.releaseAfterFailedStart(), museNativeRuntimePool.close()]).then(results => {
+      const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected").map(result => result.reason);
+      if (failures.length) throw new AggregateError(failures, "startup rollback failed");
+    });
+    recordFailedStartRollback(error, rollback); throw error;
+  }
 }
 
-function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartServerDeps, spendLedgerLifecycle: SpendLedgerServerLifecycle): Server<WsData> {
+function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartServerDeps, spendLedgerLifecycle: SpendLedgerServerLifecycle, museNativeRuntimePool: MuseNativeRuntimePool): Server<WsData> {
   const localAttestationSecret = deps.localAttestationSecret ?? createLocalAttestationSecret();
   // Captured before loadConfig() starts the optional ACL flight so stop() drains the same dir
   // even if OPENCODEX_HOME changes underneath a long-lived process.
@@ -639,6 +647,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     // Poll external pricing edits; the startup catch releases this owner-scoped lease.
     userCostOverlayReconciler = startUserCostOverlayReconciler({ liveConfig: config });
     const serveOptions = createServeOptions({
+      museNativeRuntimePool,
       drainingResponse,
       ingressForServer,
       loopbackRouteAllowed,
@@ -751,6 +760,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
             ? [() => managementIngressRef.stop(closeActiveConnections)]
             : []),
           () => optionalListeners.stop(),
+          () => museNativeRuntimePool.close(),
           async () => { await remoteWorkspaceShutdown?.(); },
           async () => { await desktopCompatibilityStartup?.shutdown(); await desktopCompatibilityShutdown?.(); },
           async () => {

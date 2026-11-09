@@ -43,6 +43,8 @@ export interface BridgeSearchReplayEntry {
   argumentsText: string;
   /** The tool result the bridge produced for that call. */
   output: string;
+  /** Muse commentary withheld by the sidecar before its hosted search cell. */
+  museHiddenText?: string;
 }
 
 interface StoredEntry {
@@ -124,6 +126,7 @@ export function rememberBridgeSearchReplay(
     + entry.name.length
     + entry.argumentsText.length
     + entry.output.length
+    + (entry.museHiddenText?.length ?? 0)
   );
   // A single oversized result is refused outright rather than evicting the whole store for it.
   if (bytes > MAX_TOTAL_BYTES) return;

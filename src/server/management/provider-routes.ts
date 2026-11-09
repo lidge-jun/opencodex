@@ -1981,7 +1981,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
   // Complete GUI picker presets, derived from the canonical provider registry. The GUI is a
   // standalone Vite package, so it consumes this runtime view instead of importing repo-root src.
   if (url.pathname === "/api/provider-presets" && req.method === "GET") {
-    return jsonResponse({ providers: deriveProviderPresets() });
+    return jsonResponse({ providers: deriveProviderPresets().filter(provider => provider.id !== "meta-muse") });
   }
   return null;
 }

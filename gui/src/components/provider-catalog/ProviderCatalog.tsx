@@ -21,7 +21,7 @@ import { type CatalogLoginHint } from "./login-hint-visibility";
 import CatalogAccountRow from "./CatalogAccountRow";
 import type { AccountLoginRow, AccountLoginStatus } from "./account-row-types";
 import { ProviderIcon } from "../provider-workspace/ProviderRail";
-import { isSubscriptionCliProvider } from "../../provider-workspace/subscription-cli";
+import { isMuseNativeCliProvider, isSubscriptionCliProvider } from "../../provider-workspace/subscription-cli";
 
 export type { AccountLoginRow, AccountLoginStatus };
 
@@ -227,7 +227,9 @@ export default function ProviderCatalog({
     // A subscription CLI row is keyless because the CLI owns the account, not because it is
     // free: it gets its own badge, and neither the Free nor the API-key badge.
     const subscriptionCli = isSubscriptionCliProvider(p);
+    const museCli = isMuseNativeCliProvider(p);
     const auth = subscriptionCli ? <span className="badge badge-amber">{t("modal.badge.subscriptionCli")}</span>
+      : museCli ? <span className="badge badge-amber">{t("modal.badge.museCli")}</span>
       : p.codexAccountMode === "direct" ? <span className="badge badge-green">{t("modal.badge.direct")}</span>
       : p.codexAccountMode === "pool" ? <span className="badge badge-accent">{t("modal.badge.pool")}</span>
       : p.auth === "oauth" ? <span className="badge badge-accent">{t("modal.badge.oauth")}</span>
@@ -237,7 +239,7 @@ export default function ProviderCatalog({
       : <span className="badge badge-muted">{t("modal.badge.apiKey")}</span>;
     // Free pricing is orthogonal to auth: NVIDIA (freeTier + key required) shows BOTH
     // the Free badge and the API-key badge — free pricing never hides a key requirement.
-    const free = (p.freeTier || p.keyOptional) && p.auth === "key" && !subscriptionCli
+    const free = (p.freeTier || p.keyOptional) && p.auth === "key" && !subscriptionCli && !museCli
       ? <span className="badge badge-green">{t("modal.badge.free")}</span>
       : null;
     const sponsor = p.sponsor

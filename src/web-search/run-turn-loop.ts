@@ -296,13 +296,19 @@ export async function* runTurnWebSearchLoop(
   };
 
   async function* runSearchCall(
-    call: { id: string; queries: string[]; providerMetadata?: Parameters<typeof cloneProviderOpaqueToolCallMetadata>[0] },
+    call: { id: string; queries: string[]; originalArguments?: Record<string, unknown>; providerMetadata?: Parameters<typeof cloneProviderOpaqueToolCallMetadata>[0] },
     precedingContent: OcxAssistantContentPart[],
+    museHiddenText?: string,
   ): AsyncGenerator<AdapterEvent> {
     const results: { query: string; outcome: SidecarOutcome }[] = [];
     let beganCell = false;
     const cellItemId = newSidecarSearchCellId();
     if (call.queries.length === 0) {
+      // A stateful Muse continuation must be able to replay even a failed empty query.
+      if (parsed._museNativeRoute) {
+        beganCell = true;
+        yield { type: "web_search_call_begin", id: call.id, itemId: cellItemId };
+      }
       searchesExecuted++;
       results.push({ query: "", outcome: { text: "", sources: [], error: "the model called web_search with an empty query" } });
     }
@@ -344,9 +350,9 @@ export async function* runTurnWebSearchLoop(
       results.push({ query, outcome });
     }
     const now = Date.now();
-    const callArgs: Record<string, unknown> = call.queries.length > 1
+    const callArgs: Record<string, unknown> = call.originalArguments ?? (call.queries.length > 1
       ? { queries: call.queries }
-      : { query: call.queries[0] ?? "" };
+      : { query: call.queries[0] ?? "" });
     appendMessage({
       role: "assistant",
       content: [
@@ -371,7 +377,7 @@ export async function* runTurnWebSearchLoop(
       isError: allFailed, timestamp: now,
     });
     if (beganCell) {
-      rememberSidecarSearch(parsed, cellItemId, { id: call.id, arguments: callArgs }, resultText);
+      rememberSidecarSearch(parsed, cellItemId, { id: call.id, arguments: callArgs }, resultText, museHiddenText);
       const anySuccess = results.some(r => !r.outcome.error);
       const sources: { url: string; title?: string }[] = [];
       const seenSrc = new Set<string>();
@@ -472,7 +478,7 @@ export async function* runTurnWebSearchLoop(
           message: "web-search runTurn stream must end with exactly one terminal event" };
         return;
       }
-      const split = scanEventsForWebSearch(events);
+      const split = scanEventsForWebSearch(events, { preserveSearchArguments: !!parsed._museNativeRoute });
       const terminal = terminals[0];
       const replayEvents = split.passthrough.slice(streamedCount);
       if (terminal.type === "incomplete") {
@@ -552,7 +558,10 @@ export async function* runTurnWebSearchLoop(
       const iterationContent = extractIterationContent(split.passthrough);
       for (const [callIndex, call] of split.calls.entries()) {
         if (abortSignal?.aborted) { yield abortEvent(); return; }
-        yield* runSearchCall(call, callIndex === 0 ? iterationContent : []);
+        const hidden = parsed._museNativeRoute && streamedCount === 0 && callIndex === 0
+          && iterationContent.every(part => part.type === "text")
+          ? iterationContent.map(part => part.type === "text" ? part.text : "").join("") : undefined;
+        yield* runSearchCall(call, callIndex === 0 ? iterationContent : [], hidden);
       }
       if (abortSignal?.aborted) {
         yield abortEvent();

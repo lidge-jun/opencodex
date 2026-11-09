@@ -81,6 +81,7 @@ const RUNTURN_WS_ROUTE_STATE_KEYS = [
   "_nativeReasoningRetainedAcrossRoute",
   "_dropForeignReasoningItemIds",
   "_reasoningReplayScope",
+  "_museNativeRoute",
 ] as const;
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
@@ -429,6 +430,7 @@ export async function executeResponsesRunTurn(
     // synthetic web_search tool; later iterations get their own queue so the
     // search loop can buffer each turn's events before deciding to intercept.
     const wsFirstParsed = wsPlan ? runTurnWebSearchInitialParsed(parsed) : parsed;
+    let renderedRunTurnParsed = wsFirstParsed;
     const runTurn = async (): Promise<void> => runTurnAttempt(queue, undefined, true, wsFirstParsed, initialPacingSlot);
     const runTurnFailoverArmed = () =>
       route.provider.authMode === "oauth"
@@ -436,6 +438,7 @@ export async function executeResponsesRunTurn(
       || !!(transportState.genericFailoverAccountId
         && isGenericOAuthFailoverEnabled(config, route.providerName));
     const dispatchSearchIteration = (iterParsed: PreparedResponsesRequest["parsed"]): AsyncIterable<AdapterEvent> => {
+      renderedRunTurnParsed = iterParsed;
       const iterQueue = createAdapterEventQueue({
         onBacklogExceeded: () => runTurnAbort.abort(),
       });
@@ -950,6 +953,9 @@ export async function executeResponsesRunTurn(
                 },
               );
             }
+            if (!runTurnAbort.signal.aborted && transportState.runTurnAdapter.onResponseRendered) {
+              try { transportState.runTurnAdapter.onResponseRendered(renderedRunTurnParsed, structuredClone(response)); } catch { /* the response remains independently deliverable */ }
+            }
             notifyResponseComplete(response);
           },
         },
@@ -1115,6 +1121,9 @@ export async function executeResponsesRunTurn(
       await awaitThoughtSignatureDurability();
       if (adapterResponseReachedServingTerminal(events, json)) {
         commitReasoningReplayServingRoute();
+      }
+      if (!runTurnAbort.signal.aborted && transportState.runTurnAdapter.onResponseRendered) {
+        try { transportState.runTurnAdapter.onResponseRendered(renderedRunTurnParsed, structuredClone(json)); } catch { /* the response remains independently deliverable */ }
       }
       notifyResponseComplete(json);
       return new Response(JSON.stringify(json), {

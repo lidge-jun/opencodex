@@ -193,6 +193,19 @@ export async function fetchProviderModelsWithAuth(
   // generation, so a request started with the former account cannot later publish its result.
   const cacheGeneration = captureModelCacheGeneration(name);
   const isCurrentCacheGeneration = () => isModelCacheGenerationCurrent(name, cacheGeneration);
+  if (prov.adapter === "muse-msp") {
+    try {
+      const { discoverMuseModels } = await import("../../adapters/muse-msp/discovery");
+      const models = (await discoverMuseModels()).map(row => ({ ...row, provider: name,
+        contextWindow: applyProviderContextCap(row.contextWindow, contextCap) }));
+      if (!isCurrentCacheGeneration()) return observed([], "degraded");
+      markProviderDiscoveryOk(name, models.length);
+      return observed(models, "authoritative");
+    } catch {
+      if (isCurrentCacheGeneration()) markProviderDiscoveryFailed(name, { reason: "provider" });
+      return observed([], "degraded");
+    }
+  }
   const anthropicSelection = isAnthropicOAuthInstance(name) && prov.authMode === "oauth" && mayResolveModelsOAuth(name, prov)
     ? captureOAuthAccountSelection(name) : null;
   if (prov.authMode === "forward") return observed([], "authoritative"); // ChatGPT backend has no /models

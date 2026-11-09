@@ -1203,15 +1203,17 @@ describe("provider registry parity", () => {
     }
   });
 
-  test("LiteLLM is the only registry seed with optional key authentication", () => {
+  test("optional-key seeds include CLI-owned Muse and Claude sessions", () => {
     const litellm = PROVIDER_REGISTRY.find(entry => entry.id === "litellm");
     const optionalKeyProviders = PROVIDER_REGISTRY.filter(entry => entry.keyOptional).map(entry => entry.id);
 
     expect(litellm?.authKind).toBe("key");
     expect(providerConfigSeed(litellm!).keyOptional).toBe(true);
-    // claude-cli joins them as the first CLI-backed member: its row is `key` because the turn
-    // leaves this machine, and keyless because the Claude Code CLI reads the operator's sign-in.
-    expect(optionalKeyProviders).toEqual(["litellm", "mimo-free", "claude-cli"]);
+    const muse = PROVIDER_REGISTRY.find(entry => entry.id === "muse-code");
+    expect(muse?.authKind).toBe("key");
+    expect(providerConfigSeed(muse!).keyOptional).toBe(true);
+    // The CLI-backed rows reach remote services, but their CLIs own the sign-in.
+    expect(optionalKeyProviders).toEqual(["muse-code", "litellm", "mimo-free", "claude-cli"]);
   });
 
   test("NVIDIA NIM is free-tier priced but still requires an API key", () => {

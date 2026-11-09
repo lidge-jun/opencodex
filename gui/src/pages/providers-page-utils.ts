@@ -20,6 +20,7 @@ export function buildAddModalAccountRows(
         href: "#codex-set",
       })),
     ...oauthProviders
+      .filter(id => id !== "meta-muse")
       .toSorted((a, b) => a.localeCompare(b))
       .map(id => ({ id, label: oauthLabel(id), kind: "oauth" as const })),
   ];

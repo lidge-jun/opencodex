@@ -220,6 +220,13 @@ initializeNodeLauncherContext();
 if (process.argv[2] === "__keyring-load-check") { console.log(JSON.stringify((await import("../lib/keyring-native")).inspectKeyringBinding())); process.exit(0); }
 if (process.argv[2] === HEALTH_SENTINEL_STANDALONE_ARG) process.exit(await (await import("../service/health-sentinel-main")).runHealthSentinelProcess());
 
+// Private capture-only MSP tool bridge; its endpoint and token are supplied in the environment.
+if (process.argv[2] === "__muse-mcp") {
+  const { runMuseCaptureChild } = await import("../adapters/muse-msp/capture-child");
+  try { await runMuseCaptureChild(process.env); } catch { process.exit(1); }
+  await new Promise<never>(() => {});
+}
+
 // The compiled executable also launches the isolated MCP servers.
 // Handle these private entrypoints before CLI preflight or command dispatch.
 if (process.argv[2] === "__codebuddy-mcp" || process.argv[2] === "__qoder-mcp") {

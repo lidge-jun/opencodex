@@ -40,6 +40,20 @@ for (const live of [false, true]) test(`signed search progress is displayed once
 });
 
 describe("runTurn search recovery", () => {
+  test("Muse exposes empty-query failures and preserves original arguments for continuation", async () => {
+    const muse: OcxParsedRequest = { ...parsed, context: { messages: [], tools: [] },
+      _museCodexPrincipal: "a".repeat(64), _codexOwnThreadId: "fixture",
+      _museNativeRoute: { providerName: "muse-code", providerDestinationIdentity: "dest", adapterName: "muse-msp", modelId: "m", credentialIdentity: "host" } };
+    const requests: OcxParsedRequest[] = [];
+    const empty: AdapterEvent[] = [{ type: "tool_call_start", id: "empty", name: "web_search" },
+      { type: "tool_call_delta", arguments: "{}" }, { type: "tool_call_end" }, done];
+    const out = await collect(runTurnWebSearchLoop(stream(empty), { parsed: muse, plan,
+      dispatch: request => { requests.push(structuredClone(request)); return stream(answer); } }));
+    expect(out.find(event => event.type === "web_search_call_end")).toMatchObject({ id: "empty", status: "failed" });
+    const assistant = requests[0]!.context.messages.find(message => message.role === "assistant");
+    expect(assistant?.role === "assistant" && assistant.content.find(part => part.type === "toolCall")).toMatchObject({ arguments: {} });
+    expect(requests[0]!.context.messages.find(message => message.role === "toolResult")).toMatchObject({ isError: true });
+  });
   test("complete search survives a truncated done", async () => {
     let calls = 0;
     const out = await collect(runTurnWebSearchLoop(stream([...search, { type: "done", stopReason: "max_tokens" }]), {
