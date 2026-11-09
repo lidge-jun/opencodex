@@ -45,10 +45,10 @@ const USAGE = `Usage:
   ocx account reset-credits <account-id|main> [--consume --yes [--operation-id <uuid>]] [--json]
   ocx account grok-reset-coupons [<account-id>] [--consume --yes [--token-id <token-id>] [--operation-id <uuid>]] [--json]
 
---device runs the OpenAI device-code login instead of the browser callback: use
-it when the proxy has no browser or nothing can reach localhost:1455, such as a
-headless or remote hub. Enter the printed code at the printed URL from any other
-machine.
+--device runs the device-code login instead of the browser callback (codex and
+xai): use it when the proxy has no browser or nothing can reach its localhost
+callback, such as a headless or remote hub. Enter the printed code at the
+printed URL from any other machine.
 
 The redirect URL or authorization code is a short-lived credential. Pipe it in
 rather than passing it as an argument, where it lands in shell history and is
@@ -162,6 +162,8 @@ const STDIN_SENTINEL = "-";
 
 /** Providers whose ONLY login is already a device flow; --device is redundant, not wrong. */
 const DEVICE_NATIVE_PROVIDERS = new Set(["kimi", "nous", "github-copilot"]);
+/** Providers with a device grant besides their browser login; --device selects it. */
+const DEVICE_OPT_IN_PROVIDERS = new Set(["xai"]);
 const stripTerminalControls = (value: string): string => value.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, "");
 export function formatKiroDeviceInstructions(start: { verificationUriComplete?: string; verificationUri?: string; userCode?: string; flowId?: string }): string {
   return [
@@ -225,7 +227,7 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
   // kimi, nous, and github-copilot are already device flows, so --device is a
   // true statement about them and is accepted as a no-op rather than an error.
   // Anything else has no device grant at all and must fail loudly.
-  if (device && !CODEX_NAMES.has(provider) && !DEVICE_NATIVE_PROVIDERS.has(provider)) {
+  if (device && !CODEX_NAMES.has(provider) && !DEVICE_NATIVE_PROVIDERS.has(provider) && !DEVICE_OPT_IN_PROVIDERS.has(provider)) {
     throw new CliUsageError("--device is not supported for this provider", USAGE);
   }
   if (addAccount !== undefined && (reauth || CODEX_NAMES.has(provider))) throw new CliUsageError("--add-account is only valid for fresh provider OAuth login", USAGE);
@@ -327,7 +329,7 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
 
   const start = publicLoginStart(await runtimeRequest<unknown>("/api/oauth/login", {
     method: "POST", redirect: "error",
-    body: JSON.stringify({ provider, addAccount: addAccount ?? !reauth, ...(openBrowser === undefined ? {} : { openBrowser }), ...(reauth && id ? { accountId: id, reauth: true } : {}) }),
+    body: JSON.stringify({ provider, addAccount: addAccount ?? !reauth, ...(device && DEVICE_OPT_IN_PROVIDERS.has(provider) ? { device: true } : {}), ...(openBrowser === undefined ? {} : { openBrowser }), ...(reauth && id ? { accountId: id, reauth: true } : {}) }),
   }, pinned));
   if (!wantsJson) {
     writeLoginInstructions([
@@ -347,7 +349,8 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
     printData({ ...start, modelSelection: modelSelectionNextSteps(provider, true) }, wantsJson, modelSelectionGuidance(provider, true));
     return;
   }
-  for (let attempt = 0; attempt < 100; attempt++) {
+  // A device grant waits on a person at another machine; match the codex device window.
+  for (let attempt = 0; attempt < (device ? 480 : 100); attempt++) {
     await Bun.sleep(2_000);
     const raw = await runtimeRequest<Record<string, unknown>>(`/api/oauth/status?provider=${encodeURIComponent(provider)}`, { redirect: "error" }, pinned);
     if (loginObject(raw).error) throw new Error("Provider login failed");

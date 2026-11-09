@@ -633,6 +633,67 @@ describe("OAuth code-display login", () => {
     }
   });
 
+  test("device: true starts xAI's device grant and opens nothing; anywhere else it is refused", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://auth.x.ai/.well-known/openid-configuration") {
+        return Response.json({ authorization_endpoint: "https://auth.x.ai/oauth2/authorize", token_endpoint: "https://auth.x.ai/oauth2/token", device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code" });
+      }
+      if (url === "https://auth.x.ai/oauth2/device/code") {
+        return Response.json({ device_code: "dev", user_code: "ABCD-EFGH", verification_uri: "https://accounts.x.ai/oauth2/device", expires_in: 60, interval: 0.01 });
+      }
+      if (url === "https://auth.x.ai/oauth2/token") return Response.json({ error: "access_denied" }, { status: 400 });
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    const server = startServer(0);
+    const login = async (body: unknown) => await fetch(new URL("/api/oauth/login", server.url), {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    try {
+      for (const body of [
+        { provider: "anthropic", device: true },
+        { provider: "xai", device: true, mode: "code" },
+        { provider: "xai", device: "yes" },
+      ]) expect((await login(body)).status).toBe(400);
+      expect(getLoginStatus("xai").status).toBe("idle");
+      const response = await login({ provider: "xai", device: true, openBrowser: true });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ url: "https://accounts.x.ai/oauth2/device", deviceCode: "ABCD-EFGH", browserLaunch: "skipped" });
+      await waitForLoginSettled("xai");
+      expect(getLoginStatus("xai").loggedIn).not.toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await server.stop(true);
+      clearLoginState("xai");
+    }
+  });
+
+  test("ocx login xai --headless runs the device grant and asks for nothing", async () => {
+    const { handleLogin } = await import("../../src/oauth/login-cli");
+    const asked: string[] = [];
+    let seenOpts: { codeMode?: boolean; flow?: string } | undefined;
+    let printed = "";
+    const logSpy = spyOn(console, "log").mockImplementation((...args: unknown[]) => { printed += `${args.join(" ")}\n`; });
+    try {
+      await handleLogin("xai", {
+        openUrl: async () => { throw new Error("must not launch"); },
+        ask: async (question: string) => { asked.push(question); return ""; },
+        runLogin: async (_provider, ctrl, opts) => {
+          seenOpts = opts;
+          ctrl.onAuth?.({ url: "https://accounts.x.ai/oauth2/device?user_code=ABCD", instructions: "confirm the code ABCD", deviceCode: "ABCD" });
+          return { refresh: "r", access: "a", expires: Date.now() + 3600_000 };
+        },
+      }, { codeMode: true });
+    } finally {
+      logSpy.mockRestore();
+    }
+    expect(seenOpts).toEqual({ flow: "device" });
+    expect(asked).toEqual([]);
+    expect(printed).toContain("https://accounts.x.ai/oauth2/device?user_code=ABCD");
+    expect(printed).toContain("confirm the code ABCD");
+  });
+
   test("an unknown mode is rejected before any flow starts", async () => {
     const server = startServer(0);
     try {
@@ -694,7 +755,7 @@ describe("OAuth code-display login", () => {
   // The spec's CLI half: `ocx login anthropic --headless`.
   test("ocx login --headless runs the code flow, launches nothing, and reads the code back", async () => {
     const { handleLogin, listCodeLoginProviders } = await import("../../src/oauth/login-cli");
-    expect(listCodeLoginProviders()).toEqual(["anthropic", "anthropic2"]);
+    expect(listCodeLoginProviders()).toEqual(["xai", "anthropic", "anthropic2"]);
 
     const launched: string[] = [];
     const asked: string[] = [];

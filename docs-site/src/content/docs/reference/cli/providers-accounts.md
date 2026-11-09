@@ -310,7 +310,9 @@ ocx login anthropic --headless # no browser, no local port
 `--headless` runs the **code-display** login for hosts whose browser cannot reach the proxy's loopback
 callback (containers, remote servers). The command prints an authorization URL; approve it in any
 browser, and the provider shows a `code#state` string to paste back at the prompt. No callback port
-is bound and no browser is launched. Only `anthropic` and `anthropic2` support it today; any other provider exits
+is bound and no browser is launched. `anthropic` and `anthropic2` support it. `xai` has no code page, so
+`--headless` runs its device login instead: the command prints a URL and a short code, you confirm the
+code in any browser, and it finishes on its own with nothing to paste. Any other provider exits
 with the list of providers that do. For Codex accounts use the device-code login instead,
 `ocx account login codex --device` — `ocx login codex --headless` is refused rather than passed on.
 The paste window is 10 minutes, and each login accepts one code: if the exchange fails, start a new login. A successful login becomes the provider's active account, exactly
@@ -1064,7 +1066,8 @@ ocx account login openai --device --no-wait --json
 Open that URL on any other machine, enter the short code, and the login completes. Without
 `--no-wait` the command polls until you finish; the device grant lives 15 minutes, and the
 command waits that long rather than the 5 minutes a browser login allows, because the point
-is that you walk away to another device. `kimi`, `nous`, and `github-copilot` accept the flag
+is that you walk away to another device. `ocx account login xai --device` runs xAI's device
+login the same way. `kimi`, `nous`, and `github-copilot` accept the flag
 as a no-op because their only login is already a device flow; a provider with no device grant
 rejects it.
 

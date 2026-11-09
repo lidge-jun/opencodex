@@ -34,6 +34,7 @@ import {
   submitLoginCode,
   submitManualLoginCode,
   supportsCodeLoginMode,
+  supportsDeviceLoginMode,
   waitForLoginSettled,
 } from "../../oauth";
 import { OAuthMutationBusyError, removeCredential } from "../../oauth/store";
@@ -260,7 +261,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // the provider's loopback callback server (inside this process) captures the redirect in the
   // background, then the credential is persisted. The GUI opens the URL and polls /api/oauth/status.
   if (url.pathname === "/api/oauth/login" && req.method === "POST") {
-    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown; method?: unknown; mode?: unknown; startUrl?: unknown; region?: unknown; flowId?: unknown; profileArn?: unknown };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown; method?: unknown; mode?: unknown; device?: unknown; startUrl?: unknown; region?: unknown; flowId?: unknown; profileArn?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     // Omitted mode is the localhost-callback flow this route has always run.
@@ -270,6 +271,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const codeMode = body.mode === "code";
     if (codeMode && !supportsCodeLoginMode(provider)) {
       return jsonResponse({ error: "code_mode_unsupported" }, 400);
+    }
+    // `device: true` picks the provider's device grant over its browser callback (xAI).
+    if (body.device !== undefined && body.device !== true) return jsonResponse({ error: "device must be true" }, 400);
+    const device = body.device === true;
+    if (device && (codeMode || !supportsDeviceLoginMode(provider))) {
+      return jsonResponse({ error: "device_login_unsupported" }, 400);
     }
     // Muse may import a local Keychain credential or start a device grant; add-account
     // and reauth skip the import. All management login paths require the dashboard
@@ -329,6 +336,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         forceLogin: body.addAccount === true || reauth,
         ...(accountId ? { reauthAccountId: accountId } : {}),
         ...(codeMode ? { codeMode: true } : {}),
+        ...(device ? { flow: "device" as const } : {}),
       }, {
         ...(flowId ? { flowId } : {}),
         // startLoginFlow returns the authorization URL before background persistence completes.

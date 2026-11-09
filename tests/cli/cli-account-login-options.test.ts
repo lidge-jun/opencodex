@@ -139,6 +139,15 @@ describe("login flow-specific options", () => {
     expect(await handleAccountAuthCommand("login", [...args, "--code", "-"], f.deps)).toBe(2);
     expect(f.calls).toHaveLength(0); expect(f.probes()).toBe(0); expect(f.reads()).toBe(0);
   });
+  test("xAI --device asks the proxy for its device grant; a provider without one is refused", async () => {
+    const f = fixture([{ url: "https://accounts.x.ai/oauth2/device?user_code=ABCD", deviceCode: "ABCD", browserLaunch: "skipped" }]);
+    expect(await handleAccountAuthCommand("login", ["xai", "--device", "--no-wait", "--json"], f.deps)).toBe(0);
+    expect(f.calls[0]?.body).toEqual({ provider: "xai", addAccount: true, device: true });
+    expect(output().deviceCode).toBe("ABCD");
+    const refused = fixture();
+    expect(await handleAccountAuthCommand("login", ["anthropic", "--device", "--no-wait"], refused.deps)).toBe(2);
+    expect(refused.calls).toHaveLength(0);
+  });
   test("Codex device omission preserves its device payload and public grant", async () => {
     const f = fixture([{ flowId: "flow-1", deviceCode: "USER-CODE", url: "https://example.test/verify", accessToken: SECRET }]);
     expect(await handleAccountAuthCommand("login", ["openai", "--device", "--no-wait", "--json"], f.deps)).toBe(0);

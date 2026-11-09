@@ -9,7 +9,7 @@ import {
   requestBoundLocalProviderReload,
   type LocalProviderReloadResult,
 } from "../server/local-provider-reload-client";
-import { DEPRECATED_OAUTH_PROVIDER_ALIASES, isPublicOAuthProvider, listOAuthProviders, publicOAuthAuthenticationErrorMessage, runLogin, supportsCodeLoginMode } from "./index";
+import { DEPRECATED_OAUTH_PROVIDER_ALIASES, isPublicOAuthProvider, listOAuthProviders, publicOAuthAuthenticationErrorMessage, runLogin, supportsCodeLoginMode, supportsDeviceLoginMode } from "./index";
 import { classifyLoginCodeError } from "./login-flow-state";
 import { KEY_LOGIN_PROVIDERS, isKeyLoginProvider, validateApiKey, type KeyLoginProvider } from "./key-providers";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -116,7 +116,8 @@ export function warnIfLiveReloadSkipped(result: LocalProviderReloadResult | null
  */
 export function loginUsageMessage(): string {
   return `Usage: ocx login <provider> [--headless]\n`
-    + `  --headless:    no browser and no local port — approve in any browser, paste the code\n`
+    + `  --headless:    no browser and no local port — approve in any browser, then paste the code\n`
+    + `                 it shows or confirm the device code printed here\n`
     + `                 (${listCodeLoginProviders().join(", ")})\n`
     + `  Codex / ChatGPT: ocx login codex   (account pool, needs a running proxy; 'chatgpt' and\n`
     + `                   'openai' are the same route. An OpenAI platform key is 'openai-apikey'.)\n`
@@ -155,9 +156,9 @@ export async function handleLogin(provider?: string, deps: LoginCliDeps = {}, op
   process.exit(1);
 }
 
-/** OAuth providers that accept `ocx login <provider> --headless`. */
+/** OAuth providers that accept `ocx login <provider> --headless`: a code-display or a device login. */
 export function listCodeLoginProviders(): string[] {
-  return listOAuthProviders().filter(supportsCodeLoginMode);
+  return listOAuthProviders().filter(name => supportsCodeLoginMode(name) || supportsDeviceLoginMode(name));
 }
 
 /**
@@ -166,7 +167,10 @@ export function listCodeLoginProviders(): string[] {
  */
 async function handleCodeLogin(name: string, deps: LoginCliDeps): Promise<void> {
   const login = deps.runLogin ?? runLogin;
-  if (!supportsCodeLoginMode(name)) {
+  // A provider without a code-display page but with a device grant (xAI) is headless the same
+  // way: the browser is elsewhere and nothing listens here. It shows a code instead of asking for one.
+  const device = !supportsCodeLoginMode(name) && supportsDeviceLoginMode(name);
+  if (!device && !supportsCodeLoginMode(name)) {
     console.error(`${name} has no code-display login. Providers that do: ${listCodeLoginProviders().join(", ")}`);
     process.exit(1);
   }
@@ -179,7 +183,7 @@ async function handleCodeLogin(name: string, deps: LoginCliDeps): Promise<void> 
         },
         onProgress: (m) => console.log(`   ${m}`),
         onManualCodeInput: async () => await ask("Paste the code shown after approval: "),
-      }, { codeMode: true });
+      }, device ? { flow: "device" } : { codeMode: true });
     });
   } catch (error) {
     // Never let the raw error reach stderr: a token endpoint's error body can quote the pasted

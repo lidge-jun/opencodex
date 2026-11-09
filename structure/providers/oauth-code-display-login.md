@@ -18,6 +18,10 @@ unchanged.
   `chatgpt`) refuse `--headless` and point at `ocx account login codex --device`
   (`src/cli/dispatch.ts`). The flag is not called `--code` because that name carries a secret value
   elsewhere in the CLI and `src/cli/secret-args.ts` scrubs the word after it from stderr.
+- **Device login.** `device: true` (callback mode only) starts a provider's device grant instead,
+  for providers flagged `deviceLogin` (`supportsDeviceLoginMode`; today `xai`). The start returns
+  the verification `url` and `deviceCode` and opens no browser; status settles by polling. Any
+  other provider, a non-`true` value, or `mode: "code"` with it answers `400`.
 - **Flow identity and ownership.** A code-mode start returns `{ mode: "code", flowId, expiresAt }`.
   Flows are keyed by `flowId` in `src/oauth/login-flow-state.ts`, so several code logins for one
   provider can be in flight at once; a callback-mode flow still serialises per provider. Every

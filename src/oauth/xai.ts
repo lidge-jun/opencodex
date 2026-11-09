@@ -22,11 +22,14 @@ export const XAI_LOCAL_CLI_DETACH_WARNING =
 interface XaiDiscovery {
   authorizationEndpoint: string;
   tokenEndpoint: string;
+  /** RFC 8628 endpoint, when the issuer advertises one. */
+  deviceAuthorizationEndpoint?: string;
 }
 
 interface XaiDiscoveryPayload {
   authorization_endpoint?: unknown;
   token_endpoint?: unknown;
+  device_authorization_endpoint?: unknown;
 }
 
 export interface XaiTokenPayload {
@@ -85,6 +88,9 @@ export async function discoverXaiOAuthEndpoints(signal?: AbortSignal): Promise<X
   return {
     authorizationEndpoint: validateXaiEndpoint(payload.authorization_endpoint),
     tokenEndpoint: validateXaiEndpoint(payload.token_endpoint),
+    ...(typeof payload.device_authorization_endpoint === "string"
+      ? { deviceAuthorizationEndpoint: validateXaiEndpoint(payload.device_authorization_endpoint) }
+      : {}),
   };
 }
 
@@ -336,10 +342,92 @@ export class XaiOAuthFlow extends OAuthCallbackFlow {
   }
 }
 
+const XAI_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
+const XAI_DEVICE_DEFAULT_TTL_S = 900;
+const XAI_DEVICE_DEFAULT_INTERVAL_S = 5;
+const XAI_DEVICE_MAX_INTERVAL_MS = 60_000;
+
+interface XaiDeviceAuthorization {
+  device_code?: unknown;
+  user_code?: unknown;
+  verification_uri?: unknown;
+  verification_uri_complete?: unknown;
+  expires_in?: unknown;
+  interval?: unknown;
+}
+
+const positiveSeconds = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+
+/**
+ * RFC 8628 device login, for a host whose browser cannot reach the 127.0.0.1:56121 callback:
+ * the user opens the URL in any browser, confirms the short code, and this polls for the token.
+ */
+export async function loginXaiDevice(
+  ctrl: OAuthController,
+  deps: { sleep?: (ms: number) => Promise<void> } = {},
+): Promise<OAuthCredentials> {
+  const signal = ctrl.signal;
+  const sleep = deps.sleep ?? ((ms: number) => sleepWithAbort(ms, signal));
+  const discovery = await discoverXaiOAuthEndpoints(signal);
+  if (!discovery.deviceAuthorizationEndpoint) {
+    throw new Error("xAI OAuth discovery does not advertise device authorization");
+  }
+  const response = await fetch(discovery.deviceAuthorizationEndpoint, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: XAI_OAUTH_CLIENT_ID, scope: XAI_OAUTH_SCOPE }).toString(),
+    signal: requestSignal(signal),
+  });
+  if (!response.ok) throw await readTokenError(response);
+  const device = (await response.json()) as XaiDeviceAuthorization;
+  const verificationUri = typeof device.verification_uri_complete === "string"
+    ? device.verification_uri_complete
+    : device.verification_uri;
+  if (
+    typeof device.device_code !== "string" || !device.device_code
+    || typeof device.user_code !== "string" || !device.user_code
+    || typeof verificationUri !== "string"
+  ) {
+    throw new Error("xAI device authorization response is incomplete");
+  }
+  // Validate before the optional call: `onAuth?.(…)` skips evaluating its argument when unset.
+  const url = validateXaiEndpoint(verificationUri);
+  ctrl.onAuth?.({
+    url,
+    instructions: `Open this URL in any browser and confirm the code ${device.user_code}.`,
+    deviceCode: device.user_code,
+  });
+  const deadline = Date.now() + (positiveSeconds(device.expires_in) ?? XAI_DEVICE_DEFAULT_TTL_S) * 1000;
+  let waitMs = (positiveSeconds(device.interval) ?? XAI_DEVICE_DEFAULT_INTERVAL_S) * 1000;
+  for (let remaining = deadline - Date.now(); remaining > 0; remaining = deadline - Date.now()) {
+    await sleep(Math.min(waitMs, remaining));
+    try {
+      const payload = await postXaiToken(
+        discovery.tokenEndpoint,
+        { grant_type: XAI_DEVICE_GRANT, client_id: XAI_OAUTH_CLIENT_ID, device_code: device.device_code },
+        signal,
+      );
+      return credentialsFromTokenPayload(payload);
+    } catch (error) {
+      if (!(error instanceof XaiTokenRequestError) || signal?.aborted) throw error;
+      // Still waiting for approval, or a network failure the poll can outlast: keep polling.
+      if (error.oauthError === "authorization_pending" || error.status === undefined) continue;
+      if (error.oauthError === "slow_down") {
+        waitMs = Math.min(XAI_DEVICE_MAX_INTERVAL_MS, waitMs + 5_000);
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new XaiTokenRequestError(undefined, "expired_token", "xAI device authorization expired");
+}
+
 export async function loginXai(
   ctrl: OAuthController,
-  opts?: { importLocal?: LocalTokenImportMode },
+  opts?: { importLocal?: LocalTokenImportMode; device?: boolean },
 ): Promise<OAuthCredentials> {
+  if (opts?.device) return loginXaiDevice(ctrl);
   const importLocal = opts?.importLocal ?? "off";
   if (importLocal !== "off") {
     const { detectGrokCliToken } = await import("./local-token-detect");
