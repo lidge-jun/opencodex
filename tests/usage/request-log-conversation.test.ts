@@ -248,6 +248,17 @@ describe("conversationIdFromClaudeMetadata", () => {
     expect(conversationIdFromClaudeCacheKey("system", "system-hash")).toBeUndefined();
     expect(conversationIdFromClaudeCacheKey("metadata", digest32("session-user"))).toBe(digest32("session-user"));
   });
+
+  test("a Claude Code turn token (tk) keeps one conversation, and so one pooled account", () => {
+    const session = JSON.stringify({ device_id: "d", account_uuid: "a", session_id: "s" });
+    const turn = (tk: string) => JSON.stringify({ device_id: "d", account_uuid: "a", session_id: "s", tk });
+    expect(conversationIdFromClaudeMetadata({ user_id: turn("turn-1") })).toBe(digest32(session));
+    expect(conversationIdFromClaudeMetadata({ user_id: turn("turn-2") })).toBe(digest32(session));
+    // Anything else keys on its raw string, as before.
+    for (const raw of ['{"tk":"only"}', '{ "session_id": "s" }', '["tk"]', "not json"]) {
+      expect(conversationIdFromClaudeMetadata({ user_id: raw })).toBe(digest32(raw));
+    }
+  });
 });
 
 describe("summarizeConversationLogs", () => {

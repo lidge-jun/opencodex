@@ -33,6 +33,9 @@ import {
   type MemoryWatchdog,
 } from "./memory-watchdog";
 import { ensureQuotaPoolIdentity } from "../quota-pool/identity";
+import { isTelemetryEnvOptOut } from "../telemetry/consent";
+// The state module alone: the scheduler and its aggregation stay behind the dynamic import below.
+import { TELEMETRY_ENV_OPT_OUT_REFRESH_MS, endTelemetryEnvOptOut, recordTelemetryEnvOptOut } from "../telemetry/state";
 
 type PolicyApply = (policy: StorageCleanupPolicy) => void;
 
@@ -60,6 +63,21 @@ export type ServerBackgroundLifecycleLease = {
 const owners: LeaseOwner[] = [];
 let processLoops: ProcessLoops | null = null;
 let cleanupInProgress = false;
+let telemetryLoopGeneration = 0;
+let stopTelemetryLoop: (() => void) | null = null;
+// This process started under an env opt-out; its clean stop closes the opt-out period (D2).
+let telemetryEnvOptOutObserved = false;
+let telemetryEnvOptOutRefreshMsOverride: number | null = null;
+let telemetryEnvOptOutRefresh: ReturnType<typeof setInterval> | null = null;
+
+export function setTelemetryEnvOptOutRefreshMsForTests(ms: number | null): void {
+  telemetryEnvOptOutRefreshMsOverride = ms;
+}
+
+function clearTelemetryEnvOptOutRefresh(): void {
+  if (telemetryEnvOptOutRefresh) clearInterval(telemetryEnvOptOutRefresh);
+  telemetryEnvOptOutRefresh = null;
+}
 
 function setLivePolicyOwner(applyPolicy: PolicyApply | null): void {
   setStorageCleanupPolicyLiveSink(applyPolicy);
@@ -124,8 +142,31 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
       .catch(() => {
         // The next poll tick retries.
       });
+    const generation = ++telemetryLoopGeneration;
+    if (isTelemetryEnvOptOut(process.env) === null) {
+      void import("../telemetry/scheduler")
+        .then(scheduler => {
+          if (generation !== telemetryLoopGeneration) return;
+          stopTelemetryLoop = scheduler.startTelemetryScheduler();
+        })
+        .catch(() => {
+          // Optional background loop.
+        });
+    } else {
+      telemetryEnvOptOutObserved = true;
+      // Recorded under this pid, so a proxy sharing the home cannot end the period while this one runs.
+      try { recordTelemetryEnvOptOut(undefined, undefined, process.pid); } catch { /* best-effort */ }
+      telemetryEnvOptOutRefresh = setInterval(() => {
+        try { recordTelemetryEnvOptOut(undefined, undefined, process.pid); } catch { /* best-effort */ }
+      }, telemetryEnvOptOutRefreshMsOverride ?? TELEMETRY_ENV_OPT_OUT_REFRESH_MS);
+      telemetryEnvOptOutRefresh.unref?.();
+    }
     return { memoryWatchdog, stateStoreSweeper };
   } catch (error) {
+    telemetryLoopGeneration += 1;
+    stopTelemetryLoop?.();
+    stopTelemetryLoop = null;
+    clearTelemetryEnvOptOutRefresh();
     memoryWatchdog?.stop();
     stateStoreSweeper?.stop();
     stopStorageCleanupScheduler();
@@ -138,6 +179,15 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
 }
 
 function stopProcessLoops(): void {
+  telemetryLoopGeneration += 1;
+  const stopTelemetry = stopTelemetryLoop;
+  stopTelemetryLoop = null;
+  stopTelemetry?.();
+  clearTelemetryEnvOptOutRefresh();
+  if (telemetryEnvOptOutObserved) {
+    telemetryEnvOptOutObserved = false;
+    try { endTelemetryEnvOptOut(undefined, undefined, process.pid); } catch { /* best-effort; the next tick ends it once this pid has exited */ }
+  }
   const loops = processLoops;
   processLoops = null;
   loops?.memoryWatchdog.stop();

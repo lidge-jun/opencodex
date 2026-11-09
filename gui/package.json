@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && vite build -c vite.classic.config.ts",
     "lint": "oxlint .",
     "test": "bun ../scripts/test-with-pinned-bun.ts --isolate tests",
     "lint:i18n": "oxlint src/pages src/components src/App.tsx src/main.tsx src/ui.tsx src/provider-workspace-data.ts",
@@ -17,11 +17,21 @@
     "test:shared-scroll": "bun tests/shared-scroll-browser.ts"
   },
   "dependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "@hugeicons/core-free-icons": "^4.4.0",
+    "@hugeicons/react": "^1.1.10",
+    "@tabler/icons-react": "^3.50.0",
     "@tanstack/react-virtual": "^3.14.9",
+    "clsx": "^2.1.1",
+    "motion": "^14.9.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "tailwind-merge": "^3.7.0",
+    "wanted-sans": "^1.0.3"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@types/estree-jsx": "1.0.5",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
@@ -30,6 +40,7 @@
     "happy-dom": "21.0.4",
     "oxlint": "1.78.0",
     "react-refresh": "^0.18.0",
+    "tailwindcss": "^4.3.3",
     "typescript": "~6.0.2",
     "vite": "^8.2.4"
   },

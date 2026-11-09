@@ -187,7 +187,7 @@ describe("Kiro structured output through public server endpoints", () => {
       const response = await post(url, "/v1/messages", t3TitleRequest(false));
       const wire = await response.text();
       expect(response.status).toBeGreaterThanOrEqual(400);
-      expect(wire).toContain("structured output");
+      expect(JSON.parse(wire)).toMatchObject({ type: "error", error: { type: "overloaded_error", message: "The provider failed to complete the request." } });
       expect(wire).not.toContain("Here is a title");
       expect(requests).toHaveLength(2);
     });
@@ -226,7 +226,7 @@ describe("Kiro holds a Messages schema to full conformance", () => {
       const response = await post(url, "/v1/messages", optionalTitleRequest());
       const wire = await response.text();
       expect(response.status).toBeGreaterThanOrEqual(400);
-      expect(wire).toContain("structured output");
+      expect(JSON.parse(wire)).toMatchObject({ type: "error", error: { type: "overloaded_error", message: "The provider failed to complete the request." } });
       expect(wire).not.toContain("42");
       expect(wire).not.toContain("43");
       expect(requests).toHaveLength(2);

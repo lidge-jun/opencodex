@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import {
   apiBaseForPlane,
+  ClientStateChangedError,
   discoverApiTargets,
   relayUrlForPath,
   standaloneApiTargets,
@@ -96,13 +97,20 @@ describe("two-plane API targets", () => {
       link: { linkId: `lnk_${"a".repeat(16)}`, home: "home-box", readOnly: true },
     });
     expect(linked.shared).toMatchObject({ baseUrl: "/api/machine/hub-relay", serverOrigin: machine, transport: "relay" });
+    expect(linked.usageTopology).toBe("link");
     expect(linked.link).toEqual({ linkId: `lnk_${"a".repeat(16)}`, home: "home-box" });
     const malformed = targetsFromMachineStatus("", {
       ...status("relay"),
       link: { linkId: "not-a-link", home: "x", readOnly: true },
     });
     expect(malformed.link).toBeUndefined();
-    expect(targetsFromMachineStatus("", status("relay")).link).toBeUndefined();
+    expect(malformed.usageTopology).toBe("unknown");
+    const hubRelay = targetsFromMachineStatus("", status("relay"));
+    expect(hubRelay.link).toBeUndefined();
+    expect(hubRelay.usageTopology).toBe("hub");
+    expect(targetsFromMachineStatus("", { ...status("relay"), sharedServerOrigin: machine }).usageTopology).toBe("unknown");
+    expect(targetsFromMachineStatus("", status("direct")).usageTopology).toBe("hub");
+    expect(standaloneApiTargets("").usageTopology).toBe("home");
   });
 
   test("rejects a non-string catalog fetch timestamp", async () => {
@@ -137,5 +145,14 @@ describe("two-plane API targets", () => {
     globalThis.fetch = (async () => { calls += 1; return new Response(null, { status: 404 }); }) as typeof fetch;
     await discoverApiTargets("");
     expect(calls).toBe(1);
+  });
+
+  test("a Child whose saved connection diverged reports client_state_changed instead of a generic refusal", async () => {
+    globalThis.fetch = (async () => Response.json({ error: "client_state_changed" }, { status: 503 })) as typeof fetch;
+    await expect(discoverApiTargets("")).rejects.toBeInstanceOf(ClientStateChangedError);
+    globalThis.fetch = (async () => Response.json({ error: "busy" }, { status: 503 })) as typeof fetch;
+    const generic = discoverApiTargets("");
+    await expect(generic).rejects.toThrow("local machine plane refused discovery (503)");
+    await expect(generic).rejects.not.toBeInstanceOf(ClientStateChangedError);
   });
 });

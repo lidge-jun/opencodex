@@ -37,6 +37,12 @@ a missing credential produces no sidecar plan and the request takes the normal r
 
 ## Web-search sidecar
 
+Anthropic search-model calls and their connection-reset retries also consume the logical request's
+shared model-send and token allowances on routed Responses, including RunTurn adapters and the
+passthrough search bridge. `maxSearchesPerTurn` does not grant extra model sends. If admission is
+exhausted, that search returns an error result without contacting Anthropic. Helper admission does
+not spend the routed model's final-recovery reserve. Standalone `/v1/alpha/search` keeps its existing behavior.
+
 When Codex requests hosted `web_search` for a non-passthrough routed model, opencodex:
 
 1. **Drops** the hosted `web_search` tool and exposes a synthetic `web_search(query)` function tool
@@ -284,10 +290,12 @@ intended account and workload.
 
 See the [Configuration reference](/reference/configuration/server/#sidecars) for every field.
 
-Search responses with malformed optional fields retain valid answer text and citations. Invalid error-message values use a generic failure message.
+Search responses with malformed optional fields retain valid answer text and citations. Invalid error-message values use a generic failure message. A repeated full-text completion for the same output part replaces its previous snapshot instead of duplicating the answer; distinct output parts remain separate.
 
-The OpenAI search and vision sidecars accept CR, LF and CRLF line endings, including mixed endings and CRLF split across network chunks. They read a final completion or failure event even when the server closes the body without a trailing newline. An unfinished response or one stopped by a size limit still reports an error.
+The OpenAI search and vision sidecars accept CR, LF and CRLF line endings, including mixed endings and CRLF split across network chunks. They read a final completion or failure event even when the server closes the body without a trailing newline. The first terminal event or `[DONE]` ends collection; later frames are ignored even when they share its network chunk. An unfinished response or one stopped by a size limit still reports an error.
 
 When a search answer ends with a Sources list, an unmatched list item stays in the answer instead of being removed as a citation. A title followed by its URL is still consumed as one citation. Non-HTTP URI-like text inside inline code, such as `mode:fast`, stays in the answer; code-formatted HTTP(S) URLs are still citations.
+
+Final response citations supply the title for a URL already seen during streaming. If the final title is missing or invalid, a valid streamed title is retained. Streaming-only sources are kept within the existing source-count, URL, title and byte limits.
 
 Long search queries and answers are shortened without splitting a UTF-16 surrogate pair, so a single character such as 😀 is never cut in half by the result limits. A sequence of several characters, such as emoji joined with a zero-width joiner, can still be cut between its parts.

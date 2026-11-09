@@ -125,11 +125,11 @@ A body timeout publishes a typed read failure and cancels only that body's reade
 it does not abort the request-wide signal before the enclosing bridge can emit
 its failure terminal. A caught body failure is classified before signal state, so a
 source cancellation that synchronously aborts the shared signal still reports the
-stall. Buffered initial timeouts return HTTP 504; continuation
-timeouts become an in-stream error with status 504, while caller cancellation
-retains status 499. Normal completion does not abort a shared request.
+stall. Buffered initial and locally marked continuation timeouts return HTTP 504; streamed initial,
+recovery and continuation timeouts emit `upstream_stall_timeout` and retain 504 terminal classification.
+Provider-supplied codes cannot mint the local marker; caller cancellation retains 499. Normal completion does not abort a shared request.
 
-Regression coverage lives in `tests/lib/abort-idle-deadline.test.ts`.
+Regression coverage lives in `tests/lib/abort-idle-deadline.test.ts` and `tests/server/terminal-guard-server.test.ts`.
 
 ### Pre-stream provider input overflow
 
@@ -397,8 +397,8 @@ accompany results, but privileged messages, unrelated IDs and duplicate results 
 implementation pins routing, models and tools; validated generation overrides follow the
 [continuation-setting contract](#steering-settings-public-api-and-diagnostic-probe). A failed steer does not
 cancel an explicit continuation already dispatched. Explicit continuations
-are paced and recheck the captured dispatch guard after waiting. No tools, accepted input
-or ambiguously delivered sends are automatically replayed.
+are paced, recheck the captured dispatch guard and follow the [workflow physical-send ceiling](responses-spend.md#workflow-physical-send-ceiling) under the existing turn lease.
+No tools, accepted input or ambiguously delivered sends are automatically replayed; a known local budget refusal is not an upstream failure.
 
 `src/server/responses/native-steering-replay.ts` journals only committed native input into
 the existing thread-scoped replay cache. Rejected/uncommitted steer text is excluded. Sparse
@@ -463,7 +463,7 @@ unreturned advertised calls retain the socket. Late tool results still reach tha
 socket. A `response_already_completed` failure is relayed unchanged, including its
 returned input; only an explicit same-parent/lane/settings client create can supply
 those saved outputs once. The existing continuation pacing and captured dispatch
-guard run again. The proxy never reruns tools, invents acceptance, switches accounts
+guard and [physical-send admission](responses-spend.md#workflow-physical-send-ceiling) run again. The proxy never reruns tools, invents acceptance, switches accounts
 or automatically creates a recovery response. Unknown delivery terminates without
 HTTP fallback or replay. The client decides how to recover other failures.
 

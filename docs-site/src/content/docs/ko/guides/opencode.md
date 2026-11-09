@@ -34,6 +34,8 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 확인할 수 있으며, 기존의 공급자, 에이전트, 키 바인딩, MCP 항목, 그리고 상대 경로
 `{file:…}` 참조는 계속 원래 파일을 기준으로 해석됩니다.
 
+JSONC를 읽을 때 일부 Windows 편집기가 파일 맨 앞에 붙이는 UTF-8 BOM 하나를 허용합니다. 문자열 안의 BOM 문자는 그대로 유지합니다.
+
 이번 실행에서만 opencodex는 생성된 `provider.opencodex`와 `providers.opencodex` 블록을 OpenCode의 인라인
 런타임 레이어를 통해 추가합니다. 이 레이어는 전역/사용자 지정/프로젝트 구성 뒤에
 병합되며, 자식 프로세스에서는 충돌하는 키만 덮어씁니다.

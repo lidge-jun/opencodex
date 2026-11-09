@@ -15,7 +15,7 @@ kalır; bkz. [Web Kontrol Paneli](/tr/guides/web-dashboard/).
 Yayınlanan paketi kurun ve `ocx`'in `PATH` üzerinde olduğunu doğrulayın:
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
 ```
 

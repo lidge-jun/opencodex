@@ -21,12 +21,14 @@ const modulePath = repoPath("src/lib/config-ownership.ts");
 const BARRIER_MS = 20_000;
 // Exit codes: 0 recorded, 2 not recorded, 3 refused by the uninstall tombstone, 1 anything else.
 // With a gate, the child creates its file, announces it, and records only once the gate opens.
-const childScript = (dir: string, rel: string, gate?: { ready: string; go: string }) => [
+const childScript = (dir: string, rel: string, gate?: { ready: string; go: string }, createPath = true) => [
   "import { existsSync, writeFileSync } from \"node:fs\";",
   "import { ConfigUninstallInProgressError, recordOwnedConfigPath } from " + JSON.stringify(modulePath) + ";",
   "const path = " + JSON.stringify(join(dir, rel)) + ";",
-  gate ? "writeFileSync(path, \"child\"); writeFileSync(" + JSON.stringify(gate.ready) + ", \"\");" : "",
+  gate && createPath ? "writeFileSync(path, \"child\");" : "",
+  gate ? "writeFileSync(" + JSON.stringify(gate.ready) + ", \"\");" : "",
   gate ? "const until = Date.now() + " + BARRIER_MS + "; while (!existsSync(" + JSON.stringify(gate.go) + ") && Date.now() < until) Bun.sleepSync(5);" : "",
+  gate ? "if (!existsSync(" + JSON.stringify(gate.go) + ")) process.exit(1);" : "",
   // A busy ownership lock fails fast; callers retry, and so does this child.
   "let code = 1;",
   "for (let attempt = 0; attempt < 400; attempt++) {",
@@ -111,8 +113,7 @@ describe("serialized ownership manifest (#8093)", () => {
     expect(existsSync(join(dir, CONFIG_OWNERSHIP_LOCK))).toBe(false);
   }), 60_000);
 
-  test("an interrupted uninstall refuses registrations, cached paths included, and a rerun finishes it",
-    { skip: process.platform === "win32" || process.getuid?.() === 0 },
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an interrupted uninstall refuses registrations, cached paths included, and a rerun finishes it",
     withHome(async dir => {
       // This process records (and caches) paths, as a long-running proxy would.
       expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
@@ -189,7 +190,28 @@ describe("serialized ownership manifest (#8093)", () => {
 });
 
 describe("callers that create files after registering them (#8093)", () => {
-  test("service log rotation goes ahead unrecorded once the ownership lock keeps failing", { skip: process.platform === "win32" },
+  test("service log rotation goes ahead unrecorded while the ownership lock is busy", withHome(async dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    const { startServiceLogging, SERVICE_LOG_MAX_BYTES } = await import("../../src/service/logging");
+    const path = join(dir, "service.log");
+    writeFileSync(path, "x".repeat(SERVICE_LOG_MAX_BYTES + 1));
+    expect(manifest(dir).paths).not.toContain("service.log.1");
+    const release = holdLock(dir);
+    let stop: (() => void) | undefined;
+    try {
+      expect(() => recordOwnedConfigPath(dir, path + ".1")).toThrow(ConfigOwnershipLockError);
+      stop = startServiceLogging(path, { OCX_SERVICE: "1" }, 10);
+      expect(existsSync(path + ".1")).toBe(false);
+      const deadline = Date.now() + 3_000;
+      while (!existsSync(path + ".1") && Date.now() < deadline) await Bun.sleep(10);
+      expect(existsSync(path + ".1")).toBe(true);
+      expect(manifest(dir).paths).not.toContain("service.log.1");
+    } finally {
+      try { stop?.(); } finally { release(); }
+    }
+  }));
+
+  test.skipIf(process.platform === "win32")("service log rotation goes ahead unrecorded once the ownership lock keeps failing",
     withHome(async dir => {
       expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
       // A second link to the lock file is refused on every attempt: a lock fault that persists.
@@ -274,8 +296,7 @@ describe("manifest limits and uninstall leftovers (#8093)", () => {
 });
 
 describe("upgraded homes near the manifest byte limit (#8093)", () => {
-  test("an interrupted uninstall of a near-limit manifest still resumes after the tombstone",
-    { skip: process.platform === "win32" || process.getuid?.() === 0 },
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an interrupted uninstall of a near-limit manifest still resumes after the tombstone",
     withHome(dir => {
       expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
       // An older version could fill the manifest up to the limit with no tombstone reserve.
@@ -329,8 +350,11 @@ describe("interrupted metadata writes (#8093)", () => {
     writeFileSync(truncated, JSON.stringify(manifest(dir)).slice(0, 40));
     writeFileSync(otherHome, JSON.stringify({ ...manifest(dir), ownerId: crypto.randomUUID() }));
     const result = removeOwnedConfigState(dir);
-    expect(result.status).toBe("partial");
-    expect([...result.residualPaths].sort()).toEqual([userData, truncated, otherHome].sort());
+    expect({ ...result, residualPaths: [...result.residualPaths].sort() }).toEqual({
+      status: "partial",
+      reason: "unowned files remain in the config directory",
+      residualPaths: [userData, truncated, otherHome].sort(),
+    });
     expect(readFileSync(userData, "utf8")).toBe("user data");
   }));
 
@@ -401,17 +425,22 @@ describe("teardown scope ends cleanly (#8093)", () => {
 });
 
 describe("concurrent first registrations on an absent home (#8093)", () => {
+  test("a worker whose first-registration barrier expired exits without creating the home", withHome(dir => {
+    const gate = { ready: join(dirname(dir), "expired.ready"), go: join(dirname(dir), "never-go") };
+    const clock = "let tick = 0; Date.now = () => tick++ * " + BARRIER_MS + ";\n";
+    const child = Bun.spawnSync([process.execPath, "-e", clock + childScript(dir, "cold", gate, false)]);
+    expect(existsSync(gate.ready)).toBe(true);
+    expect(child.exitCode).toBe(1);
+    expect(existsSync(dir)).toBe(false);
+  }));
+
   test("processes that start together on an absent home all record their paths", withHome(async dir => {
     const names = Array.from({ length: 6 }, (_, i) => "cold-" + i);
     const signals = dirname(dir);
     const go = join(signals, "go-cold");
-    const script = (rel: string) => [
-      "import { existsSync, writeFileSync } from \"node:fs\";",
-      "import { recordOwnedConfigPath } from " + JSON.stringify(modulePath) + ";",
-      "writeFileSync(" + JSON.stringify(join(signals, rel + ".ready")) + ", \"\");",
-      "const until = Date.now() + " + BARRIER_MS + "; while (!existsSync(" + JSON.stringify(go) + ") && Date.now() < until) Bun.sleepSync(2);",
-      "process.exit(recordOwnedConfigPath(" + JSON.stringify(dir) + ", " + JSON.stringify(join(dir, rel)) + ") ? 0 : 2);",
-    ].join("\n");
+    // Use the same bounded busy-lock retry as other registration children, while
+    // leaving the home absent until the synchronized first registration starts.
+    const script = (rel: string) => childScript(dir, rel, { ready: join(signals, rel + ".ready"), go }, false);
     const children = names.map(name => Bun.spawn([process.execPath, "-e", script(name)], { stderr: "inherit" }));
     const deadline = Date.now() + BARRIER_MS;
     while (Date.now() < deadline && !names.every(name => existsSync(join(signals, name + ".ready")))) await Bun.sleep(10);
@@ -498,7 +527,7 @@ describe("paths recorded after the uninstall snapshot (#8093)", () => {
     expect(existsSync(join(dir, "fresh-between"))).toBe(false);
   }), 60_000);
 
-  test("a finishing uninstall leaves a lock file another installation created in place", { skip: process.platform === "win32" },
+  test.skipIf(process.platform === "win32")("a finishing uninstall leaves a lock file another installation created in place",
     withHome(async dir => {
       const { setUninstallStepHookForTests } = await import("../../src/lib/config-ownership");
       expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
@@ -682,7 +711,7 @@ describe("ownership edge cases from review (#8093)", () => {
     expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
   }));
 
-  test("a finishing uninstall unlinks its lock file before releasing it", { skip: process.platform === "win32" }, withHome(dir => {
+  test.skipIf(process.platform === "win32")("a finishing uninstall unlinks its lock file before releasing it", withHome(dir => {
     expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
     // A process that takes the old file after release must see the path change and retry, so the
     // path is gone while this run still holds the lock.
@@ -756,7 +785,7 @@ describe("ownership edge cases from review (#8093)", () => {
     expect(existsSync(join(dir, "config-mutation.sqlite"))).toBe(true);
   }));
 
-  test("a listed symlink whose target is gone is removed", { skip: process.platform === "win32" }, withHome(dir => {
+  test.skipIf(process.platform === "win32")("a listed symlink whose target is gone is removed", withHome(dir => {
     expect(recordOwnedConfigPath(dir, join(dir, "linked"))).toBe(true);
     symlinkSync(join(dirname(dir), "missing-target"), join(dir, "linked"));
     expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });

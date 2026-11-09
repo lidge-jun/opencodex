@@ -13,6 +13,11 @@ does not release a hosted hop while its runTurn producer is active; producer set
 unsent hop and clears only its matching pending reference. Standalone Images and direct callers
 retain their existing behavior.
 
+For a selected Claude CLI adapter, Responses request handling refuses instruction images and
+file-backed image references in messages, agent messages or tool results before vision preprocessing or helper
+dispatch. Other provider routes retain their own image handling; a usable image URL takes
+precedence over a file ID. `tests/providers/claude-cli-client-http.test.ts` covers this boundary.
+
 Mistral's registry entry in `src/providers/registry/entries-extended.ts` declares `zai-glm-5-3` native input as text-only, so registry enrichment enrolls that model in the enabled vision sidecar for existing configurations: the catalog advertises image attachments and request preprocessing sends GLM descriptions. Native Mistral vision models and explicit operator modalities retain precedence (`tests/vision/mistral-vision-sidecar.test.ts`).
 
 A registry entry can also declare `inputModalities` for the whole provider. It covers ids the per-model maps do not list, such as models from live discovery, and a per-model declaration still wins. AI Stupid Level declares text, so an image for one of its pinned models is described or stripped instead of being sent to the router (`tests/providers/aistupidlevel-provider.test.ts`).

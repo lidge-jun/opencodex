@@ -12,6 +12,7 @@ import { guardedRun, guardedSpawn, guardedSpawnSync, guardedExit, probeProcessAl
 import { probeSpawn, probeSpawnSync } from "../src/update/mutation-guard.mjs";
 import { createSupervisionLatch, inspectDesktopSupervision } from "../src/service/desktop-supervision.mjs";
 import { planDesktopCliHandoff, runDesktopCliHandoff } from "../src/lib/desktop-cli-handoff.mjs";
+import { forwardLauncherSignals } from "../src/lib/launcher-signal-forwarding.mjs";
 import { acquireSyncGuard } from "../src/update/sync-update-mutex.mjs";
 import { desktopCliRecordPath } from "../src/lib/desktop-cli-record.mjs";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
@@ -330,7 +331,7 @@ async function runPackageManagerSelfUpdate(manager, child) {
   const latestInvocation = managerInvocation(["view", `${PKG}@${selector}`, "version"]);
   const installArgs = manager === "pnpm"
     ? ["add", "-g", "--allow-build=bun", `${PKG}@${selector}`]
-    : ["install", "-g", `${PKG}@${selector}`];
+    : ["install", "-g", "--allow-scripts=bun", `${PKG}@${selector}`];
   const installInvocation = managerInvocation(installArgs);
   if (!latestInvocation || !installInvocation) {
     console.error(`opencodex: could not resolve ${manager} from a trusted absolute PATH entry; aborting before stopping the proxy.`);
@@ -1444,7 +1445,7 @@ if (desktopPlan.kind === "handoff") {
     // Signal delivery is asynchronous; never resume package repair or Bun lookup.
     await new Promise(() => {});
   }
-  // Only confirmed target ENOENT reaches the ordinary package path below.
+  // A selected Desktop never falls back to the package after a launch failure.
 }
 
 if (!orchestratedUpdate && process.argv[2] === "update" && installMethod === "mise") {
@@ -1608,6 +1609,8 @@ function createNodeLaunchContext() {
   return { launchProof, launchContext, inheritedEnv };
 }
 
+// Forwarders precede the spawn so no signal can kill this launcher by default action while the child runs.
+const forwarding = forwardLauncherSignals();
 const child = probeSpawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, ...process.argv.slice(2).filter(arg => !arg.startsWith(NODE_LAUNCH_PROOF_PREFIX))], {
   stdio: "inherit",
   // A headless Windows parent (Task Scheduler, dashboard restart, shortcut) has no
@@ -1622,6 +1625,7 @@ const child = probeSpawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProo
     [BUN_RUNTIME_PATH_ENV]: bunRuntime.path,
   },
 });
+forwarding.attach(child);
 let delegateError = false;
 if (child.pid) {
   try { addSyncDelegate(child.pid); }
@@ -1632,31 +1636,14 @@ if (child.pid) {
   }
 }
 
-// Windows has no real POSIX signals (no SIGHUP); forwarding is best-effort there.
-const FORWARDED = process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
-const handlers = FORWARDED.map(sig => {
-  const handler = () => {
-    try {
-      child.kill(sig);
-    } catch {
-      /* child already exited */
-    }
-  };
-  process.on(sig, handler);
-  return [sig, handler];
-});
-const clearHandlers = () => {
-  for (const [sig, handler] of handlers) process.removeListener(sig, handler);
-};
-
 child.on("error", err => {
-  clearHandlers();
+  forwarding.clear();
   console.error(`opencodex: failed to launch Bun runtime: ${err.message}`);
   process.exit(1);
 });
 
 child.on("exit", (code, signal) => {
-  clearHandlers();
+  forwarding.clear();
   releaseSyncLease();
   if (delegateError) process.exit(1);
   // Mirror the child's terminating signal/exit code so this launcher's status matches.

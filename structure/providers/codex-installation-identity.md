@@ -60,6 +60,15 @@ JSON send, including live's converted multipart session. Live inspects JSON cont
 of Content-Type; non-JSON SDP retains its original bytes. Their selected headers authoritatively
 replace or remove mixed-case provider identity defaults; main and main-pool preserve caller values.
 Vision, audio and sidecar credential selection share materialization.
+Dictation in `src/server/audio-dictation.ts` has a 600,000 ms recording budget and
+opts into a separate 60,000 ms finalization window after a validated `session.close`.
+`src/server/index/live-sideband.ts` replaces the recording timer on that event;
+expiry and cancellation retain the existing authenticated transport cleanup and lease ownership.
+Recording and finalization budget expiry is neutral for account health; an upstream connection timeout remains a timeout.
+The forwarded session TTL does not shorten the recording budget; other audio transports do not opt in.
+Dictation validation also accepts ScribeTray's bounded identifiers, stop-request capability,
+language, asset mode `none`, minimal server VAD, and nonterminal `audio.flush`.
+Optional VAD values retain their numeric bounds; start/close ordering and PCM checks remain enforced.
 `src/server/audio-live.ts` projects the authenticated call's cloned session before JSON or
 multipart serialization and returns a sanitized 503 without sending on identity failure.
 Its socket resolver and `src/server/audio-dictation.ts` carry the selected auth context through
@@ -68,6 +77,10 @@ same context. `src/server/index/websocket-handler.ts` and `src/server/index/live
 apply Pool projection at every immediate or queued upstream frame send, including JSON carried
 in binary frames. Unchanged frames retain their original bytes and encoding; derivation failure
 closes the relay with a sanitized reason without forwarding the failed frame or the queue tail.
+New inbound Responses inference turns retain the handshake's parent/thread headers and pass through
+the same workflow admission as HTTP before dispatch or native control ownership. Their workflow
+lease follows the active turn through terminal output and cancellation; an admission refusal is
+framed as the same local 429, including its workflow-refusal header.
 The optional availability probe in `src/server/claude-messages.ts` treats an installation-identity
 failure as helper unavailability, allowing an independent native Messages route to continue.
 `src/codex/affinity-debug.ts` reports only process-local keyed equality tags, never raw identities.

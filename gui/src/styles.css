@@ -172,21 +172,6 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* single ambient soft-focus wash behind the app (OpenAI organic-blur grammar).
-   One wash per viewport; the glass rail and modals refract it via backdrop-filter. */
-body::before {
-  content: "";
-  position: fixed;
-  inset: -20%;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(42% 38% at 12% 6%,  light-dark(rgba(164, 196, 255, 0.42), rgba(96, 130, 200, 0.16)), transparent 70%),
-    radial-gradient(46% 42% at 88% 18%, light-dark(rgba(168, 226, 197, 0.38), rgba(88, 160, 130, 0.13)), transparent 70%),
-    radial-gradient(40% 36% at 70% 92%, light-dark(rgba(255, 224, 194, 0.30), rgba(180, 140, 100, 0.08)), transparent 72%);
-  filter: blur(70px);
-}
-
 a { color: var(--text); text-decoration: underline; text-decoration-color: var(--faint); text-underline-offset: 2px; }
 a:hover { text-decoration-color: var(--text); }
 
@@ -416,7 +401,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .sidebar-orb:disabled { opacity: 0.5; cursor: default; }
 
 .main { min-width: 0; }
-.main-inner { max-width: 980px; margin: 0 auto; padding: 32px 36px 64px; container-type: inline-size; }
+.main-inner { max-width: 1120px; margin: 0 auto; padding: 28px 40px 64px; container-type: inline-size; }
 .main-inner.main-inner--combos {
   max-width: none;
   margin: 0;
@@ -1127,7 +1112,6 @@ a.btn, a.btn:hover { text-decoration: none; }
 .input:focus { border-color: var(--faint); outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
 textarea.input { resize: vertical; font-family: var(--font-code); line-height: var(--leading-relaxed); }
 .field-label { font-size: var(--text-label); color: var(--muted); font-weight: var(--weight-medium); margin-bottom: 5px; display: block; }
-select.input { appearance: none; }
 .select-sm {
   padding: 6px 12px; border-radius: var(--radius-pill);
   background: color-mix(in oklab, canvas 75%, transparent);
@@ -1955,10 +1939,6 @@ dialog.modal-overlay::backdrop {
 .notice-warn:not([hidden]) { display: flex; }
 .notice-warn svg { width: 14px; height: 14px; flex-shrink: 0; color: var(--amber); }
 
-.startup-runtime-notice__text,
-.startup-runtime-notice__fix code {
-  color: inherit;
-}
 /* `.card` carries no padding of its own — `.card-row` and `.card-sub` each inset themselves,
    so a card built from plain children leaves the title and controls flush against the border
    while the hints sit 16px in. Pad the card and flatten the hints, as the auto-switch card does. */
@@ -1978,22 +1958,6 @@ dialog.modal-overlay::backdrop {
 .codex-account-priority-label { font-size: var(--text-label); color: var(--muted); font-weight: var(--weight-medium); white-space: nowrap; }
 .codex-account-priority .select-trigger { max-width: 100%; padding: 4px 9px; font-size: var(--text-label); }
 
-.startup-page-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.startup-runtime-notice-slot {
-  margin-bottom: 12px;
-  min-height: 52px;
-}
-.startup-runtime-notice-slot--pending {
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--amber-soft) 45%, transparent);
-}
-.startup-runtime-notice-slot .startup-runtime-notice { margin-bottom: 0; }
-/* Match hero/panels: beat .notice / .notice-warn 70ch prose measure. */
-.notice.notice-warn.startup-page-notice {
-  max-width: none;
-  width: 100%;
-  box-sizing: border-box;
-}
 /* Message above, command+copy below. */
 .notice.notice-warn.startup-runtime-notice:not([hidden]) {
   display: flex;
@@ -2003,60 +1967,9 @@ dialog.modal-overlay::backdrop {
   align-items: stretch;
   gap: 8px;
 }
-.startup-runtime-notice__text {
-  margin: 0;
-  max-width: none;
-}
-.startup-runtime-notice__fix {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-width: 0;
-}
-.startup-runtime-notice__fix code {
-  margin: 0;
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.startup-runtime-notice__fix .btn {
-  flex: 0 0 auto;
-}
-.startup-hero { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 16px; }
-.startup-hero--safe { border-color: color-mix(in srgb, var(--green) 34%, var(--border)); background: color-mix(in srgb, var(--green-soft) 64%, var(--surface)); }
-.startup-hero--risk { border-color: color-mix(in srgb, var(--amber) 40%, var(--border)); background: color-mix(in srgb, var(--amber-soft) 72%, var(--surface)); }
-.startup-hero--native { border-color: color-mix(in srgb, var(--accent) 20%, var(--border)); }
-.startup-hero-icon { width: 42px; height: 42px; border-radius: var(--radius); display: grid; place-items: center; background: var(--raised); flex: 0 0 auto; }
-.startup-hero-icon svg { width: 21px; height: 21px; }
-.startup-hero-copy h3 { margin: 10px 0 4px; font-size: var(--text-title); }
-.startup-hero-copy p { margin: 0; color: var(--muted); line-height: var(--leading-body); max-width: var(--prose-measure); }
-.startup-state-line { margin: 8px 0 0; font-size: var(--text-control); }
-.startup-recovery-details > summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; }
-.startup-recovery-details > summary::-webkit-details-marker { display: none; }
-.startup-recovery-details > summary::before { content: ""; width: 0; height: 0; border-left: 5px solid var(--muted); border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform var(--motion-fast); }
-.startup-recovery-details[open] > summary::before { transform: rotate(90deg); }
-.startup-recovery-details[open] > summary { margin-bottom: 8px; }
-.startup-details, .startup-actions { margin-bottom: 16px; }
-.startup-actions .panel-head > svg { width: 18px; height: 18px; flex: 0 0 auto; }
-.startup-detail-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-top: 1px solid var(--border-soft); }
-.startup-detail-row > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.startup-detail-row > .startup-detail-actions { flex-direction: row; align-items: center; justify-content: flex-end; flex: 0 0 auto; gap: 8px; }
-.startup-detail-row span:not(.badge) { color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); }
-.startup-actions > .muted { margin: -4px 0 14px; font-size: var(--text-control); max-width: var(--prose-measure); }
-.startup-tray-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; min-height: 36px; }
-.startup-tray-error { margin-top: 12px; }
-.startup-command-list { border: 1px solid var(--border-soft); border-radius: var(--radius-sm); overflow: hidden; }
-.startup-command-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px; }
-.startup-command-row + .startup-command-row { border-top: 1px solid var(--border-soft); }
-.startup-command-row > div { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.startup-command-row strong { font-size: var(--text-control); }
-.startup-command-row code { color: var(--muted); font-size: var(--text-label); overflow-wrap: anywhere; }
-.startup-action-notice { margin: 14px 0 0; }
+
 @media (max-width: 700px) {
-  .startup-command-row { align-items: flex-start; }
-  .startup-detail-row { align-items: flex-start; }
-  .startup-detail-row > .startup-detail-actions { flex-direction: column; align-items: flex-end; }
+
 }
 .modal-desc { font-size: var(--text-control); line-height: var(--leading-body); color: var(--muted); margin-bottom: 14px; max-width: var(--prose-measure); }
 .modal-actions { display: flex; gap: 8px; margin-top: 16px; }
@@ -2528,7 +2441,7 @@ button.prov-account-row.active { cursor: default; }
 .usage-segmented-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: none; background: transparent; color: var(--muted); padding: 4px 12px; border-radius: var(--radius-pill); cursor: pointer; font: inherit; white-space: nowrap; }
 .usage-segmented-btn.active { background: var(--raised); color: var(--text); font-weight: var(--weight-semibold); }
 .usage-source-mark { width: var(--icon-sm); height: var(--icon-sm); flex: 0 0 auto; object-fit: contain; }
-/* Only monochrome source marks (Grok) are inverted for dark themes. Brand-colored
+/* Monochrome source marks (Grok, OpenCode and Aside) are inverted for dark themes. Brand-colored
    marks (Claude, Codex/OpenAI) must keep their brand color; inverting shifts the hue. */
 :root[data-theme="dark"] .usage-source-mark--mono { filter: invert(1); }
 
@@ -2758,7 +2671,6 @@ button.prov-account-row.active { cursor: default; }
   from { opacity: 0; }
   to { opacity: 1; }
 }
-
 
 /* Invisible full-area control for native <dialog> backdrop dismiss (a11y). */
 .modal-backdrop-dismiss {

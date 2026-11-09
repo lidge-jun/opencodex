@@ -31,7 +31,8 @@ budget, pacing, accounting and abort path. Even a replacement HTTP 503 or connec
 add another physical send. Discarded usage is recorded once per attempt; a second empty completion
 fails as `empty_completion_retry_failed`, while HTTP failures and budget refusals retain their response.
 `src/server/responses/passthrough-dispatch.ts` caps that recovery's allowance at one send and disables ambiguous reset resends on it.
-Text, refusal, tool/action or unknown events release the original bytes without replay. Inspection
+Text, refusal, tool/action or unknown events release the original bytes without replay; so does a
+lifecycle or terminal snapshot whose aggregate `output_text` is neither absent, `null` nor `""`. Inspection
 holds at most 1 MiB, 1,024 events/chunks or 30 seconds, then hands the held prefix and pending read
 to the consumer without cancelling a healthy source. Consumed/cancelled prefix references are
 released; terminal disposal and consumer cancellation do not await upstream cleanup. SSE inactivity

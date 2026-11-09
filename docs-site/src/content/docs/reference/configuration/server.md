@@ -92,10 +92,12 @@ Use `GET /api/native-reasoning-retention` to read the resolved booleans and `PUT
 
 OpenCodex bounds how much one task may fan out. A task is the root conversation, identified by the client's `x-codex-parent-thread-id` header, together with every subagent it starts. Three count ceilings apply to each task, and requests over any of them are refused locally with HTTP 429 and an `x-opencodex-local-refusal` header naming the ceiling (`workflow_concurrency_exhausted`, `workflow_sends_exhausted` or `workflow_children_exhausted`); no provider is contacted.
 
+If physical admission refuses a request after token reservation, its unstarted reservation is returned immediately. Started sends and other pending bookings remain accounted for. Native continuation refusals retain HTTP 429 in the request log as well as in the client error.
+
 | Field | Default | Allowed | Meaning |
 | --- | --- | --- | --- |
 | `maxConcurrentChildren` | `8` | 2–64 | Turns one task may run at the same time. One slot is always reserved for the task's own conversation, so subagents may use one fewer. |
-| `maxPhysicalSends` | `256` | 1–10000 | Upstream sends, retries included, after which the task's new requests are refused for the rest of the 10-minute window. The count is checked when a request is admitted, so retries inside a request that was already admitted, and requests admitted concurrently, can take the total past the ceiling. |
+| `maxPhysicalSends` | `256` | 1–10000 | Upstream send admissions, retries included, per 10-minute window. Every physical admission checks and claims a slot atomically, so concurrent requests and retries share the same ceiling. An unused dispatch permit consumes no slot; a claimed physical start remains counted even if it later fails. |
 | `maxDistinctChildren` | `64` | 1–1024 | Distinct subagent threads one task may start inside the same window. |
 
 The defaults suit most installs. Raise them when a workflow that legitimately runs many subagents in parallel keeps hitting a ceiling; lower them to stop a runaway fan-out sooner:
@@ -110,6 +112,8 @@ The defaults suit most installs. Raise them when a workflow that legitimately ru
 ```
 
 The **Subagents** page of the dashboard shows the effective ceilings and edits them. `GET /api/workflow-budget/settings` returns the effective values with their defaults and allowed ranges; `PUT` with a partial object updates them, and JSON `null` restores the defaults. Dashboard/API changes apply to the next request without a restart and never reset what a task has already used; `POST /api/workflow-budget/clear` remains the way to forgive one task. A malformed file block is ignored with a warning and the built-in ceilings stay in force. Local `ocx config set/unset` edits require a restart to converge the running proxy. The 10-minute window, the reserved interactive slot and the 512 tracked tasks are not configurable.
+
+An idle task keeps its tracking slot while it has unexpired sends or child history, even if it has only partly used a limit. The proxy reuses only slots with no active turn, no remaining count history and no exhausted token budget. If all 512 slots must be retained, a new task receives local HTTP 429 with `workflow_tracking_exhausted` instead of resetting another task's allowance. Slots become reusable as their count windows expire; durable token ceilings remain independent. Count history is process-local and is not made persistent by this retention rule.
 
 ## Upstream transport recovery
 
@@ -459,13 +463,18 @@ use `ssh -g -L`, broad container publishing, or forwarding modes that expose the
 
 ## Account email masking (`privacy`)
 
-Stored account emails are masked everywhere they leave the proxy — the dashboard account lists,
+Stored account emails are masked by default wherever they leave the proxy — the dashboard account lists,
 `GET /api/codex-auth/accounts`, `GET /api/oauth/status`, and the `ocx status` logins section all
 show `p***n@example.com` rather than the address on file.
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `privacy.maskEmails?` | `boolean` | `true` | Set to `false` to show stored account emails in full. Absent, `true`, and any malformed value all keep masking, so only a deliberate `false` reveals an address. |
+| `privacy.maskEmails?` | `boolean` | `true` | Set to `false` to reveal stored account emails in projected email fields. Absent, `true`, and any malformed value keep masking, so only a deliberate `false` reveals an address. |
+
+Dashboard labels for OAuth accounts (Claude, Grok, Kiro, and the other OAuth providers) follow this
+flag: masked by default, the stored email when it is `false`. An account alias takes precedence over
+the email label. The active account uses the same label in Overview, the reset and coupon dialogs,
+and the remove confirmation. The desktop tray surfaces keep showing the masked form either way.
 
 Turn it off when you run many accounts on a machine you control and cannot tell them apart from
 masked forms. Read the flag as a disclosure decision rather than a display preference: management
@@ -673,7 +682,7 @@ modes, the preview, and the per-request trace.
 | --- | --- | --- | --- |
 | `protocols.unrepresentable?` | `"legacy" \| "reject"` | `"legacy"` | `legacy` sends a request whose path drops a feature and records the loss in the trace. `reject` refuses it with HTTP 400 before any send, naming only the feature keys. |
 | `protocols.rollout.nativeChatCombos?` | `boolean` | `false` | Send an eligible Chat candidate inside a combo natively from its own copy of the client body. |
-| `protocols.rollout.managedMessagesNative?` | `boolean` | `false` | Send Messages natively to a direct, key-authenticated Anthropic provider instead of through the internal Responses bridge. |
+| `protocols.rollout.managedMessagesNative?` | `boolean` | `false` | Send Messages natively to an eligible direct Anthropic provider or canonical Anthropic child in a strict failover combo without a default effort. Other combo strategies, policy routes and bridge-only rewrites retain the bridge. |
 | `protocols.rollout.managedMessagesNativeOAuth?` | `boolean` | `false` | Native Messages for the `anthropic` OAuth provider on `api.anthropic.com`, including stored account pools. Requires `managedMessagesNative`. For the settled `anthropic` provider, an enabled pool supplies true for absent native flags when `anthropicAccountPool.nativeMessages` is absent or true. Explicit false/malformed flags and a false/malformed pool preference remain off. Other providers and pool-off keep explicit rollout behavior. Eligible pooled requests retain shared selection, affinity and bounded pre-output recovery. Recognized JSON-string `metadata.user_id` account UUIDs are aligned with the serving OAuth credential; device and session fields are preserved. |
 | `protocols.rollout.directEncoders?` | `boolean` | `false` | Encode Chat and Messages answers from a non-Responses upstream directly from adapter events. |
 | `protocols.rollout.antigravityDirect?` | `boolean` | `true` | Send a Chat or Messages request to a single Google Antigravity route without the internal Responses body in either direction. Request settings still pass through the usual policies, and a request the lane cannot carry uses the bridge. Set `false` to turn it off. |

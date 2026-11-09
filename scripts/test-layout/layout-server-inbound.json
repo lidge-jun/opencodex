@@ -1,4 +1,5 @@
 {
+  "local-control-socket.test.ts": "server",
   "config-concurrent-inbound-body.test.ts": "config",
   "inbound-body-admission.test.ts": "server",
   "inbound-body-budget.test.ts": "server",
@@ -11,5 +12,25 @@
   "server-ollama-inbound-lifecycle.test.ts": "server",
   "server-ollama-inbound-errors.test.ts": "server",
   "protocol-trace-suppression.test.ts": "server",
-  "responses-ollama-codec.test.ts": "responses"
+  "responses-ollama-codec.test.ts": "responses",
+  "messages-error-normalization.test.ts": "claude-integration",
+  "messages-header-normalization.test.ts": "claude-integration",
+  "messages-lane-errors.test.ts": "claude-integration",
+  "messages-error-contracts.test.ts": "claude-integration", "messages-overflow-verdicts.test.ts": "claude-integration", "messages-review-regressions.test.ts": "claude-integration", "messages-proxy-refusals.test.ts": "claude-integration", "messages-overflow-native.test.ts": "claude-integration", "messages-overflow-builtin.test.ts": "claude-integration", "messages-overflow-translated.test.ts": "claude-integration", "messages-overflow-stream.test.ts": "claude-integration", "messages-overflow-collectors.test.ts": "claude-integration", "messages-success-media-types.test.ts": "claude-integration", "messages-native-stream-parity.test.ts": "claude-integration", "messages-overflow-baseline-contract.test.ts": "claude-integration",
+  "messages-sse-builtin-errors.test.ts": "claude-integration",
+  "messages-sse-count-tokens-errors.test.ts": "claude-integration",
+  "messages-sse-fold-errors.test.ts": "claude-integration",
+  "messages-sse-guard-errors.test.ts": "claude-integration",
+  "messages-sse-native-errors.test.ts": "claude-integration",
+  "messages-sse-passthrough-errors.test.ts": "claude-integration",
+  "messages-sse-tap-tails.test.ts": "claude-integration",
+  "messages-sse-workflow-refusal.test.ts": "claude-integration",
+  "messages-sse-error-filter.test.ts": "server",
+  "messages-sse-error-lifecycle.test.ts": "server",
+  "messages-sse-error-presentation.test.ts": "lib",
+  "messages-sse-delivery.test.ts": "claude-integration",
+  "messages-sse-baseline-contract.test.ts": "claude-integration",
+  "messages-sse-control-fields.test.ts": "claude-integration",
+  "messages-sse-continuation.test.ts": "claude-integration",
+  "sse-payload-rewrite-continuation.test.ts": "responses"
 }

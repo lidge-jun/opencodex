@@ -59,7 +59,7 @@ test("supervision without verified login uses Desktop recovery and stale reading
     supervisor: { supervisorPid: 3131, runtimePid: 4242, app: "/fixture/opencodex-desktop" } };
   const health = deriveStartupHealth({ ...base, desktop });
   expect(health).toMatchObject({ status: "at-risk", protection: "none", recommendedCommand: null,
-    recommendedAction: "Turn on Start at Login in the OpenCodex menu so the desktop app starts this proxy after a restart." });
+    recommendedAction: "Check Start at Login in the OpenCodex menu and follow its guidance." });
   expect(startupHealthSummary(health)).toContain("OpenCodex Desktop runs this proxy");
   expect(startupHealthSummary(health)).toContain("Start at Login could not be verified");
   expect(startupHealthSummary(health)).not.toContain("run '");
