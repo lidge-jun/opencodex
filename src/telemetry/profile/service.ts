@@ -56,7 +56,7 @@ export interface ProfileServiceOptions extends ProfileClientOptions {
 }
 
 const PREVIEW_CACHE_MS = 10 * 60 * 1000;
-let previewCache: { configDir: string; day: string; at: number; preview: ProfileDayV1 | null } | null = null;
+let previewCache: { configDir: string; connectedAt: string; day: string; at: number; preview: ProfileDayV1 | null } | null = null;
 const RANK_CACHE_MS = 5 * 60 * 1000;
 let rankCache: { configDir: string; handle: string; at: number; rank: ProfileRankV1 } | null = null;
 
@@ -87,11 +87,11 @@ export async function buildProfileStatusSnapshot(
   let preview: ProfileDayV1 | null = null;
   if (next.day) {
     const hit = previewCache;
-    if (options.cachePreview && hit && hit.configDir === configDir && hit.day === next.day && now - hit.at >= 0 && now - hit.at < PREVIEW_CACHE_MS) {
+    if (options.cachePreview && hit && hit.configDir === configDir && hit.connectedAt === profile.connectedAt && hit.day === next.day && now - hit.at >= 0 && now - hit.at < PREVIEW_CACHE_MS) {
       preview = hit.preview;
     } else {
       preview = buildProfileDay(await aggregateTelemetryForDay(next.day));
-      if (options.cachePreview) previewCache = { configDir, day: next.day, at: now, preview };
+      if (options.cachePreview) previewCache = { configDir, connectedAt: profile.connectedAt, day: next.day, at: now, preview };
     }
   }
   return { ...base, profile: toPublicProfileState(profile), nextDay: next.day, nextDayReason: next.reason, preview };
@@ -166,6 +166,7 @@ export async function connectTelemetryProfile(
   };
   writeTelemetryProfileState(state, configDir, now);
   rankCache = null;
+  previewCache = null;
   return toPublicProfileState(state);
 }
 
@@ -199,6 +200,7 @@ export async function disconnectTelemetryProfile(options: ProfileServiceOptions 
   if (!state) return { status: "not_connected" };
   if (!state.pendingDelete) writeTelemetryProfileState({ ...state, pendingDelete: true, retryAfterUntil: null }, configDir, now);
   rankCache = null;
+  previewCache = null;
   const result = await deleteProfile(state.secret, options);
   if (result.deleted) {
     if (deleteTelemetryProfileFile(configDir)) return { status: "deleted" };

@@ -258,9 +258,13 @@ export function isProfileSchedulerRunning(): boolean {
   return running;
 }
 
-/** Run a tick soon (after a connect), starting the loop if this process has none yet. */
+/** Run a tick soon (after a connect or a pending disconnect), starting the loop only for a profile file that exists. */
 export function nudgeProfileScheduler(): void {
-  if (!running) startProfileScheduler();
+  if (!running) {
+    const file = readTelemetryProfileFile();
+    if (!file.state && !file.unreadable) return;
+    startProfileScheduler();
+  }
   if (nudgeTimer) clearTimeout(nudgeTimer);
   nudgeTimer = setTimeout(() => {
     nudgeTimer = null;

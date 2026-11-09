@@ -208,7 +208,12 @@ export async function handleLeaderboard(request: Request, env: CollectorEnv, now
     leaderboardCache.clear();
     leaderboardCacheDb = env.DB;
   }
-  const key = `${period}:${metric}:${limit}`;
+  // The window moves at UTC midnight; keying on it means a cached board never outlives its day.
+  const { to } = profilePeriodWindow(period, now);
+  const key = `${period}:${metric}:${limit}:${to}`;
+  for (const [cachedKey, entry] of leaderboardCache) {
+    if (now >= entry.expiresAt || !cachedKey.endsWith(`:${to}`)) leaderboardCache.delete(cachedKey);
+  }
   const cached = leaderboardCache.get(key);
   if (cached && now >= cached.cachedAt && now < cached.expiresAt) {
     return new Response(cached.body, { status: 200, headers: { "content-type": "application/json; charset=utf-8", "x-robots-tag": "noindex", "cache-control": "public, max-age=300" } });

@@ -237,6 +237,18 @@ describe("opt-in public profile: client sync", () => {
     expect(await runProfileTick({ configDir: home, env, now: CONNECT_AT + 4 * DAY_MS + 1000, aggregateDay })).toMatchObject({ sent: true, day: "2026-11-08" });
   });
 
+  test("a collector creation day earlier than the client's day keeps the client's day as the floor", async () => {
+    // The client clock is ahead: it is 2026-11-05 here, the collector created the profile on 2026-11-04.
+    respond = call => call.method === "POST" && call.url.endsWith("/v1/profiles")
+      ? Response.json({ ok: true, profile: { handle: "jun", displayName: "Jun", avatar: "blue" }, createdDay: "2026-11-04", secret: SECRET }, { status: 201 })
+      : Response.json({ ok: true, deduplicated: false });
+    await connect();
+    expect(readTelemetryProfileFile(home).state?.connectedDay).toBe("2026-11-05");
+    const aggregateDay = async (day: string) => aggregate(day, [["openai", "gpt-6", 1, 1]]);
+    // The first day offered is strictly after both days, so the collector accepts it.
+    expect(await runProfileTick({ configDir: home, env, now: CONNECT_AT + 2 * DAY_MS, aggregateDay })).toMatchObject({ sent: true, day: "2026-11-06" });
+  });
+
   test("an unreadable profile file can always be cleared with disconnect", async () => {
     writeFileSync(telemetryProfilePath(home), "{ not json");
     await expect(connect()).rejects.toMatchObject({ code: "profile_unreadable" });

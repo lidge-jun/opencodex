@@ -204,6 +204,24 @@ test("a connected profile stays visible to disconnect while anonymous telemetry 
   expect(buttonByText("Disconnect")).toBeTruthy();
 });
 
+test("a pending deletion shows from the disconnect reply even when the refresh cannot reach the proxy", async () => {
+  status = { ...status, connected: true, profile: PROFILE };
+  await mount();
+  const realFetch = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method ?? "GET") === "DELETE") return Response.json({ ok: true, status: "deletion_pending", deleted: false });
+      if (new URL(String(input), "http://127.0.0.1").pathname === "/api/telemetry/profile") return new Response("down", { status: 503 });
+      return realFetch(input, init);
+    },
+  });
+  await click(buttonByText("Disconnect"));
+  await click(buttonByText("Delete profile"));
+  await settle(50);
+  expect(card()?.textContent).toContain("Deletion is pending");
+});
+
 test("an unreadable profile file offers Disconnect, which clears it", async () => {
   status = { ...status, connected: false, unreadable: true, profile: null };
   deleteReply = { ok: true, status: "local_removed", deleted: false };

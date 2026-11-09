@@ -177,6 +177,18 @@ describe("telemetry collector: opt-in profiles", () => {
     expect((await submit(secret, "2026-11-07", 1, 1)).status).toBe(401);
   });
 
+  test("a cached leaderboard never outlives its UTC day window", async () => {
+    const secret = await create("alpha", "192.0.2.1", NOW - 6 * DAY_MS);
+    await submit(secret, "2026-11-08", 1, 10);
+    const lateNight = Date.parse("2026-11-09T23:59:00.000Z");
+    const before = (await (await send("/v1/leaderboard?period=day", {}, lateNight)).json()) as { to: string; total: number };
+    expect(before.to).toBe("2026-11-08");
+    const afterMidnight = Date.parse("2026-11-10T00:01:00.000Z");
+    const after = (await (await send("/v1/leaderboard?period=day", {}, afterMidnight)).json()) as { to: string; total: number };
+    expect(after.to).toBe("2026-11-09");
+    expect(after.total).toBe(0);
+  });
+
   test("bearer and write routes are never preflighted; public reads are", async () => {
     for (const path of ["/v1/profiles", "/v1/profiles/me", "/v1/profiles/me/days"]) {
       const res = await send(path, { method: "OPTIONS", origin: "https://opencodex.me" });

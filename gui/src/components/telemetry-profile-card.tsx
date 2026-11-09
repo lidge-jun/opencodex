@@ -74,6 +74,7 @@ export function TelemetryProfileCard({ apiBase }: { apiBase: string }) {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<ReturnType<typeof errorKey> | null>(null);
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
+  const [deletionPending, setDeletionPending] = useState(false);
 
   if (isConnectedRuntime() || !status.data) return null;
   const s = status.data;
@@ -102,7 +103,9 @@ export function TelemetryProfileCard({ apiBase }: { apiBase: string }) {
     setBusy(true);
     setFailure(null);
     try {
-      await disconnectProfile(apiBase);
+      const outcome = await disconnectProfile(apiBase);
+      // Show what the server answered, even if the refresh below cannot reach it.
+      setDeletionPending(outcome === "deletion_pending");
       setConfirmingDisconnect(false);
     } catch (error) {
       setFailure(errorKey(error));
@@ -187,7 +190,7 @@ export function TelemetryProfileCard({ apiBase }: { apiBase: string }) {
               <span className="truncate font-mono text-xs text-fg-subtle">@{profile.handle}</span>
             </span>
           </div>
-          {profile.pendingDelete ? (
+          {profile.pendingDelete || deletionPending ? (
             <p className="m-0 text-[14px] text-warning">{t("telemetryProfile.deletionPending")}</p>
           ) : profile.revoked ? (
             <p className="m-0 text-[14px] text-warning">{t("telemetryProfile.revoked")}</p>
@@ -233,7 +236,7 @@ export function TelemetryProfileCard({ apiBase }: { apiBase: string }) {
                 {t("telemetryProfile.viewLeaderboard")}
               </a>
             )}
-            {profile.pendingDelete ? (
+            {profile.pendingDelete || deletionPending ? (
               <Button variant="outline" disabled={busy} onClick={() => { void disconnect(); }}>{t("telemetryProfile.retry")}</Button>
             ) : confirmingDisconnect ? (
               <>
