@@ -76,7 +76,8 @@ export function logConversationQueryCandidates(query: string): string[] {
   const trimmed = query.trim();
   const unwrapped = unwrapLogConversationQuery(trimmed);
   // A pasted Claude Code metadata.user_id is stored without its per-turn `tk`.
-  return [...new Set([unwrapped, trimmed, claudeSessionUserId(trimmed)])];
+  const session = trimmed.length > LOG_CONVERSATION_ID_INPUT_MAX ? trimmed : claudeSessionUserId(trimmed);
+  return [...new Set([unwrapped, trimmed, session])];
 }
 
 /**
@@ -225,11 +226,10 @@ export function fillHermesLogConversationFallback(slot: LogConversationSlot, hea
 /**
  * Remote Claude Code adds a per-turn attribution token (`tk`) to its metadata.user_id JSON
  * blob. Drop it, as Claude Code itself does, so every turn of one session keeps one identity.
- * Any other user_id, including one that is nothing but `tk` or one too long to persist,
- * is returned unchanged.
+ * Any other user_id, including one that is nothing but `tk`, is returned unchanged.
  */
 export function claudeSessionUserId(userId: string): string {
-  if (userId.length > LOG_CONVERSATION_ID_INPUT_MAX || !userId.trimStart().startsWith("{")) return userId;
+  if (!userId.trimStart().startsWith("{")) return userId;
   try {
     const parsed: unknown = JSON.parse(userId);
     if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && "tk" in parsed) {
@@ -248,6 +248,8 @@ export function conversationIdFromClaudeMetadata(
   metadata: { user_id?: unknown } | null | undefined,
 ): string | undefined {
   if (!metadata || typeof metadata.user_id !== "string") return undefined;
+  // Too long to persist: skip parsing a blob normalizeLogConversationId rejects anyway.
+  if (metadata.user_id.trim().length > LOG_CONVERSATION_ID_INPUT_MAX) return undefined;
   return normalizeLogConversationId(claudeSessionUserId(metadata.user_id));
 }
 

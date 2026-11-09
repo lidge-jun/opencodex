@@ -49,12 +49,13 @@ export function unwrapLogConversationQuery(query: string): string {
 function logConversationQueryCandidates(query: string): string[] {
   const trimmed = query.trim();
   const unwrapped = unwrapLogConversationQuery(trimmed);
-  return [...new Set([unwrapped, trimmed, claudeSessionUserId(trimmed)])];
+  const session = trimmed.length > 4096 ? trimmed : claudeSessionUserId(trimmed);
+  return [...new Set([unwrapped, trimmed, session])];
 }
 
 /** Mirrors src/server/request-log-conversation.claudeSessionUserId: drops Claude Code's per-turn `tk`. */
 function claudeSessionUserId(userId: string): string {
-  if (userId.length > 4096 || !userId.trimStart().startsWith("{")) return userId;
+  if (!userId.trimStart().startsWith("{")) return userId;
   try {
     const parsed: unknown = JSON.parse(userId);
     if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && "tk" in parsed) {
