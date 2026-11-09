@@ -536,6 +536,8 @@ function keepWalSidecars(db: Database): void {
  */
 function registerKeptSidecars(dir: string, path: string): void {
   if (sidecarOwnershipChecked.has(path)) return;
+  // The same crash leaves the projection file itself unrecorded; it is this projection now.
+  recordOwnedConfigPath(dir, path);
   let present = 0;
   for (const suffix of ["-wal", "-shm"] as const) {
     const sidecar = `${path}${suffix}`;

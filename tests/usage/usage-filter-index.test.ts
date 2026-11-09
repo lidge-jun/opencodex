@@ -1175,7 +1175,7 @@ describe("filtered usage index availability", () => {
     expect(owned().filter(path => sidecars.includes(path)).sort()).toEqual([...sidecars].sort());
   });
 
-  test("sidecars beside a 0-byte projection left by a crash are registered once they appear", async () => {
+  test("a 0-byte projection left by a crash and its sidecars are registered once they appear", async () => {
     // A crash between the private create and the first open leaves an empty file, so the next open
     // sees an existing projection and skips creation-time registration. The sidecars only appear
     // once SQLite uses the WAL, after this open checked, so a later open in the same process must
@@ -1185,13 +1185,13 @@ describe("filtered usage index availability", () => {
     const indexPath = usageFilterIndexPath(testDir);
     writeFileSync(indexPath, "", { mode: 0o600 });
     const manifestPath = join(testDir, ".opencodex-uninstall.json");
-    const sidecars = ["usage-filter-index.sqlite-wal", "usage-filter-index.sqlite-shm"];
+    const projection = ["usage-filter-index.sqlite", "usage-filter-index.sqlite-wal", "usage-filter-index.sqlite-shm"];
     const ownedSidecars = () => (JSON.parse(readFileSync(manifestPath, "utf8")) as { paths: string[] }).paths
-      .filter(path => sidecars.includes(path)).sort();
+      .filter(path => projection.includes(path)).sort();
     expect((await getFilteredUsageAggregate({ provider: "openai" })).filterIndex).toBeDefined();
     appendRows([{ ...syntheticRow(99), requestId: "after-crash" }]);
     expect((await getFilteredUsageAggregate({ provider: "openai" })).filterIndex).toBeDefined();
-    expect(ownedSidecars()).toEqual([...sidecars].sort());
+    expect(ownedSidecars()).toEqual([...projection].sort());
   });
 
   test("a passive read never creates or writes index files", async () => {

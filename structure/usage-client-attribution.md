@@ -107,9 +107,10 @@ table without the data tables, and a schema another process committed first is a
 verified. An outdated schema is recreated only after re-checking it under the same lock, so two
 processes that both saw it stale cannot drop each other's fresh tables.
 
-The projection is created 0600 through the shared private-SQLite path, its WAL and shared-memory
-sidecars are registered for uninstall only when this module creates them, and a file at that path
-that is not this projection is never modified. A passive management read opens an existing
+The projection is created 0600 through the shared private-SQLite path. It and its WAL and
+shared-memory sidecars are registered for uninstall when this module creates them, or, beside an
+existing file that classified as this projection, once they appear; a file at that path that is
+not this projection is never registered or modified. A passive management read opens an existing
 projection read-only, requires this projection's full table set rather than a coincidental meta
 table, and only uses it when it is current for the exact ledger revision; otherwise it streams,
 and it never creates, writes or registers anything. Any other index-side failure -- unwritable home,
