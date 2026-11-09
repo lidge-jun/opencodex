@@ -36,7 +36,9 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   `provider add` warns before creating one.
 - `claude-cli` inherits the `codebuddy` contract. Claude Code speaks the same stream-json
   protocol this repository already parses for CodeBuddy and Qoder, so the wire is inherited and the
-  family module (`src/adapters/claude-cli/`) supplies only its own arguments and child environment.
+  family module (`src/adapters/claude-cli/`) supplies its arguments, child environment and stable
+  replay. Native image blocks remain with their labelled message, including tool-result images;
+  the shared `src/adapters/coding-agent/protocol.ts` owns base64/URL image encoding.
   That profile is the first credentialless one: it omits `tokenEnv`, the CLI reads the operator's
   own Claude Code sign-in, and the turn neither requires nor injects an API key. The proxy-safety
   controls are set per invocation, through CLI arguments and the child environment, and
@@ -230,7 +232,7 @@ Pool quota producers and account commands follow the [bounded raw-observation co
 
 Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary. Translated and native Chat builders share explicit gateway-object and tool-bearing effort-omission policy after provider resolution; native Chat otherwise preserves caller controls and removes effort for an explicit empty declaration or no-reasoning model.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary. Translated and native Chat builders share explicit gateway-object and tool-bearing effort-omission policy after provider resolution; native Chat otherwise preserves caller controls and removes effort for an explicit empty declaration or no-reasoning model. The [canonical Mistral wire policy](../providers/mistral-chat.md) additionally clamps native effort to the declared model ladder.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 

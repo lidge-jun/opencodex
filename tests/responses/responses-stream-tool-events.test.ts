@@ -41,7 +41,7 @@ describe("Responses streaming tool event contract", () => {
     expect(frames.some(frame => frame.event === "response.completed")).toBe(false);
     const failed = frames.find(frame => frame.event === "response.failed")?.data.response as Record<string, unknown>;
     expect((failed.error as Record<string, unknown>).message).toContain("undeclared client tool");
-    expect((failed.error as Record<string, unknown>).message).toContain("other_tool");
+    expect((failed.error as Record<string, unknown>).message).not.toContain("other_tool");
   });
 
   test("adapter tool events produce OpenAI-compatible streamed function-call frames", async () => {

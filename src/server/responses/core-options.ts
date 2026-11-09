@@ -1,3 +1,4 @@
+import type { ClientFacingModelLabel } from "../../lib/error-destination";
 import type { CodexAccountModelRefusal } from "../../combos/failover";
 import type { NativeResponseControl } from "./native-response-control";
 import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig } from "../../types";
@@ -96,6 +97,10 @@ export interface DirectRequestOption {
 }
 
 export interface HandleResponsesOptions {
+  /** Original caller label, carried through synthetic children without route substitution. */
+  clientModelLabel?: ClientFacingModelLabel;
+  /** Original client envelope label when a combo was selected by a synthetic rewrite. */
+  clientResponseModelLabel?: ClientFacingModelLabel;
   /** Immutable caller scope inherited by a capability-authenticated internal sidecar request. */
   admissionScope?: AdmissionModelScope;
   /** Captured synchronously at ingress, before parsing or child replay can suspend. */
@@ -118,6 +123,8 @@ export interface HandleResponsesOptions {
   claudeGoAffinity?: { sessionLane?: string };
   /** Validated Claude metadata identity; projected only into final canonical attempt headers. */
   claudeNativeSessionId?: string;
+  /** Private Claude bridge pool identity (validated, principal-scoped when derived); completes session-id/thread-id only on Codex account-selection headers. */
+  claudeBridgePoolSession?: string;
   /** Original live policy owner; separate from caller-specific routing/sidecar snapshots. */
   codexAuthPolicy?: CodexAuthPolicyConfig;
   turnAdmissionLease?: AdmissionLease;
@@ -191,11 +198,13 @@ export interface HandleResponsesOptions {
   anthropicServerTools?: readonly Record<string, unknown>[];
   /** The Claude client's replayable server-tool exchanges (`replayedAnthropicServerBlocks`); same scope. */
   anthropicServerReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>;
+  /** The caller's cached system prefix (`systemCachePrefix`); same scope. */
+  anthropicSystemCachePrefix?: string;
   /** Metadata-qualified Messages discovery evidence, never caller JSON or a preselected destination. */
   anthropicToolLoadingSource?: Readonly<Record<string, unknown>>;
   /** Droid's per-request effort default; each concrete combo or policy target applies it only if its ladder allows it. */
   droidDefaultEffort?: string;
-  /** PF-07: the Chat source a combo child may send natively; set only by the Chat ingress. */
+  /** The Chat or Messages source a combo child may send natively; set only by that ingress. */
   protocolSource?: import("./core-combo-native").ComboProtocolSource;
   /** Internal transport identity for route-scoped upstream compatibility policy. */
   inboundTransport?: "websocket";
@@ -284,6 +293,12 @@ export interface HandleResponsesOptions {
   clientEncoder?: ClientEncoderOption;
   /** Chat ingress raw-channel delivery preference; never an upstream generation option. */
   chatRawReasoningVisible?: boolean;
+  /** Value-free fact retained before Chat instruction content is projected to text. */
+  chatInstructionImage?: boolean;
+  /** Original Responses instruction image, retained across preprocessing and combo replay. */
+  responsesInstructionImage?: boolean;
+  /** File-backed Responses image retained before parsing and replay. */
+  responsesFileImage?: boolean;
   /** Set only by the Chat or Messages ingress on an eligible Antigravity route; see {@link DirectRequestOption}. */
   directRequest?: DirectRequestOption;
 }

@@ -5,7 +5,7 @@ discovers the loopback proxy, lazily retries management authentication, starts
 the bundled `ocx` sidecar only when the configured endpoint is unreachable,
 and owns the tray, autostart, single-instance, and window lifecycle behavior.
 
-The desktop Cargo package requires Rust 1.88 or newer.
+The desktop Cargo package requires Rust 1.90 or newer, matching its pinned Tauri build, runtime, utils and updater crates.
 The manual-poll test in `desktop/src-tauri/src/process_spawn.rs` uses `std::task::Waker::noop()` (stable since Rust 1.85).
 The lockfile selects patched `serde_with` and `time` releases, with compatible exact
 `serde` and `serde_json` pins in `desktop/src-tauri/Cargo.toml`. Build and test with the
@@ -380,8 +380,8 @@ The lane takes about 15 minutes, so a pull request selects it only through the `
 (`scripts/build-standalone.ts`, `scripts/standalone-targets.ts`, `src/lib/standalone.ts`,
 `src/lib/bun-runtime.ts`), native keyring staging (`scripts/standalone-keyring.ts`,
 `src/lib/keyring-native.ts`), `package.json`, `bun.lock` and `ci.yml` itself. Ordinary `src/**` and
-`gui/**` edits do not run it on a pull request; promotion pushes to `main` and `preview` and
-`workflow_dispatch` always do, so a packaging regression from such an edit surfaces at promotion.
+`gui/**` edits do not run it on a pull request; a manual `workflow_dispatch` on `dev` always does,
+so a packaging regression from such an edit surfaces in the batched full run.
 
 Extraction is intentional. A GitHub-hosted runner is disposable but its package database is still a
 shared job resource, and a normal pull request does not need passwordless package installation or GUI
@@ -420,9 +420,17 @@ packaging matrices, verifies every checksum and every updater signature, and wri
 platforms to have updater signatures. Publication waits for that verification, and the
 attachment job uploads the verified bundle only after the verification receipt names
 the same version and commit.
-Updater signature verification decodes Tauri’s outer-base64 minisign box, checks the
+Updater signature verification uses the shared offline minisign primitive in
+`src/update/minisign.mjs`. Its release adapter preserves the existing trimmed
+trusted-comment convention; the strict primitive verifies exact comment bytes
+and grants no update or installation authority by itself. It decodes Tauri’s outer-base64 minisign box, checks the
 `ED` signature over the BLAKE2b-512 digest against the pinned key, and verifies the
 trusted-comment signature. Missing or malformed fields fail before publication.
+`scripts/generate-update-trust-root.ts` derives identical offline root files at
+`src/update/trust-root.json` and `desktop/src-tauri/update-trust-root.json` from
+the pinned public key and emits their digest in `src/update/update-trust-anchor.mjs`;
+`--check` detects drift. These files do not yet authorize
+updates or change the Tauri updater's existing trust configuration.
 On macOS, in-app updates download `OpenCodex-<version>-macos.app.tar.gz`; the DMG is for
 the first installation.
 

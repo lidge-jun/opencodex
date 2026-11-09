@@ -60,7 +60,7 @@ export { buildRaycastClientConfig, summarizeRaycast, buildRaycastContribution } 
 export { droidHomeDir, droidConfigPath, buildDroidClientConfig, summarizeDroid, buildDroidContribution, droidReasoningModels, droidDefaultsFromOwnedRows, validateDroidReasoningDefaults } from "./config-export/droid";
 export type { DroidModelEntry, DroidGeneratedConfig } from "./config-export/droid";
 
-import type { OpencodeLaunchEnv, OpencodeCatalogModel, ExportContext, PiModelEntry, ManagedContribution, ManagedFragment, ExportClientId, ExportClientSpec } from "./config-export/contracts";
+import type { ExportModel, OpencodeLaunchEnv, OpencodeCatalogModel, ExportContext, PiModelEntry, ManagedContribution, ManagedFragment, ExportClientId, ExportClientSpec } from "./config-export/contracts";
 import { OPENCODE_API_KEY_ENV_REF, OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG, OPENCODE_CONFIG_SCHEMA, OPENCODE_PROVIDER_ID, PI_API_DIALECT, LOOPBACK_API_KEY_PLACEHOLDER, HERMES_API_KEY_ENV_REF, OPENCLAW_API_KEY_ENV_REF, OPENCODE_API_KEY_ENV, HERMES_API_KEY_ENV, OPENCLAW_API_KEY_ENV, KILO_API_KEY_ENV } from "./config-export/constants";
 import { exportModelLabel, authoritativeContextWindow, outputBudgetFor, inputBudgetFor, normalizeExportModels, inputModalitiesForClient, opencodeModelCapabilities, proxyAdmissionHeaders, singleFragment } from "./config-export/model-metadata";
 import { exportReasoningEfforts, exportDefaultReasoningEffort, legacyReasoningMetadata, type LegacyEffortVariant } from "./config-export/reasoning-metadata";
@@ -974,13 +974,36 @@ export interface KimiProviderBlock {
  * authoritative context window is omitted from the document entirely rather
  * than guessed at. Catalog image input becomes `image_in`; other capabilities
  * are not inferred from routed model names.
+ * A declared effort ladder becomes `support_efforts` (limited to Kimi Code's
+ * documented levels) plus the `thinking` capability, and a declared default in
+ * that ladder becomes `default_effort` (#8095).
  */
 export interface KimiModelBlock {
   provider: string;
   model: string;
   max_context_size: number;
   display_name?: string;
-  capabilities?: ["image_in"];
+  capabilities?: Array<"thinking" | "image_in">;
+  support_efforts?: KimiEffort[];
+  default_effort?: KimiEffort;
+}
+
+/** Kimi Code's thinking efforts, in its documented order; anything else fails its config validation. */
+const KIMI_EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"] as const;
+type KimiEffort = typeof KIMI_EFFORT_ORDER[number];
+
+function kimiEfforts(model: ExportModel): { support_efforts?: KimiEffort[]; default_effort?: KimiEffort } {
+  // An explicit "no reasoning" declaration outranks any ladder that reached the exporter.
+  if (model.supportsReasoning === false || model.supportsReasoningEffort === false) return {};
+  const offered = new Set((model.reasoningEfforts ?? [])
+    .filter((effort): effort is string => typeof effort === "string")
+    .map(effort => effort.trim().toLowerCase()));
+  const support = KIMI_EFFORT_ORDER.filter(effort => offered.has(effort));
+  if (support.length === 0) return {};
+  const declared = typeof model.defaultReasoningEffort === "string"
+    ? model.defaultReasoningEffort.trim().toLowerCase() : undefined;
+  const fallback = support.find(effort => effort === declared);
+  return { support_efforts: support, ...(fallback ? { default_effort: fallback } : {}) };
 }
 
 export interface KimiGeneratedConfig {
@@ -1176,12 +1199,18 @@ function buildKimiClientConfig(ctx: ExportContext): KimiGeneratedConfig {
     // so a model without an authoritative window is left out rather than
     // shipped with a number we invented.
     if (context === undefined) continue;
+    const efforts = kimiEfforts(model);
+    const capabilities: Array<"thinking" | "image_in"> = [
+      ...(efforts.support_efforts ? ["thinking" as const] : []),
+      ...(model.inputModalities?.includes("image") ? ["image_in" as const] : []),
+    ];
     models[kimiModelAlias(model.namespaced)] = {
       provider: OPENCODE_PROVIDER_ID,
       model: model.namespaced,
       max_context_size: context,
       ...(model.displayName ? { display_name: model.displayName } : {}),
-      ...(model.inputModalities?.includes("image") ? { capabilities: ["image_in"] as ["image_in"] } : {}),
+      ...(capabilities.length > 0 ? { capabilities } : {}),
+      ...efforts,
     };
   }
   return {

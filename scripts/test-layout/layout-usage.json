@@ -1,4 +1,15 @@
 {
+  "usage-client-attribution.test.ts": "usage",
+  "usage-filter-index.test.ts": "usage",
   "request-log.test.ts": "usage",
-  "request-log-normalization.test.ts": "usage"
+  "request-log-normalization.test.ts": "usage",
+  "request-log-error-detail.test.ts": "usage",
+  "upstream-condition.test.ts": "lib",
+  "client-retry-after.test.ts": "lib",
+  "client-retry-after-sites.test.ts": "server",
+  "upstream-error-detail-boundaries.test.ts": "server",
+  "request-log-identity-bounds.test.ts": "usage",
+  "safe-response-headers.test.ts": "server",
+  "turn-state-handles.test.ts": "server",
+  "turn-state-handles-e2e.test.ts": "server"
 }

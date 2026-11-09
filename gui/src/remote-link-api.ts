@@ -1,6 +1,8 @@
 export const LINK_ERROR_CODES = [
   "admission_timeout",
   "admission_failed",
+  "child_external_provider_conflict",
+  "child_port_busy",
   "compensation_failed",
   "fingerprint_failed",
   "forbidden",
@@ -28,11 +30,15 @@ export const LINK_ERROR_CODES = [
   "link_unavailable",
   "listener_unavailable",
   "probe_failed",
+  "purge_unsupported",
   "remote_connect_failed",
   "remote_disconnect_failed",
   "remote_ocx_missing",
   "remote_ocx_outdated",
   "remote_ocx_unrecognized",
+  "remote_plant_failed",
+  "remote_plant_timeout",
+  "remote_plant_unavailable",
   "remote_port_failed",
   "standalone_required",
   "tailscale_session_refused",
@@ -44,13 +50,33 @@ export type LinkErrorCode = typeof LINK_ERROR_CODES[number];
 export type LinkWireDirection = "hub-initiated" | "client-initiated";
 export type LinkWireState = "connecting" | "connected" | "reconnecting" | "failed" | "idle";
 export type LinkListenerState = "off" | "listening" | "failed";
+export type LinkRuntimeKind = "full" | "ephemeral" | "missing";
 export const LINK_JOIN_DENIALS = ["pairing_required", "standalone_required", "join_port_mismatch"] as const;
 export type LinkJoinDenied = typeof LINK_JOIN_DENIALS[number];
 
 export interface LinkCandidateView { alias: string; source: string }
 export interface LinkProbeView { alias: string; fingerprint: string; keyType: string }
-export interface LinkConfirmHostView { alias: string; fingerprint: string; ocxVersion: string }
-export interface LinkRowWire { id: string; alias: string; direction: LinkWireDirection; state: LinkWireState; since: string; reason: string | null; tunnelPort: number }
+export interface LinkConfirmHostView {
+  alias: string;
+  fingerprint: string;
+  ocxVersion: string | null;
+  runtimeKind: LinkRuntimeKind;
+  targetTriple: string | null;
+  plantable: boolean;
+  binarySizeBytes: number | null;
+  plantUnavailableReason: string | null;
+}
+export interface LinkRowWire {
+  id: string;
+  alias: string;
+  direction: LinkWireDirection;
+  state: LinkWireState;
+  since: string;
+  reason: string | null;
+  tunnelPort: number;
+  childKind?: "full" | "ephemeral" | null;
+  appliedCodexSettingsDigest?: string | null;
+}
 export interface RemoteLinkStatusWire {
   role: "standalone" | "home" | "child";
   listener: { state: LinkListenerState; port: number | null };
@@ -64,6 +90,7 @@ export interface RemoteLinkStatusWire {
   joinAvailable: boolean;
   /** GUI-only gate explanation. Older servers may omit it; unknown reasons normalize to null. */
   joinDenied?: LinkJoinDenied | null;
+  homeCodexSettingsDigest?: string | null;
 }
 
 const LINK_STATES: readonly LinkWireState[] = ["connecting", "connected", "reconnecting", "failed", "idle"];
@@ -118,7 +145,9 @@ export function parseRemoteLinkStatus(value: unknown): RemoteLinkStatusWire {
   if (!Array.isArray(value.links)) throw new Error("invalid links");
   const links = value.links.map(item => {
     if (!isRecord(item) || !nonEmpty(item.id) || !nonEmpty(item.alias) || !["hub-initiated", "client-initiated"].includes(String(item.direction)) || !isLinkState(item.state) || !nonEmpty(item.since) || (item.reason !== null && typeof item.reason !== "string") || typeof item.tunnelPort !== "number") throw new Error("invalid link");
-    return { id: item.id, alias: item.alias, direction: item.direction as LinkWireDirection, state: item.state, since: item.since, reason: item.reason as string | null, tunnelPort: item.tunnelPort };
+    const childKind: "full" | "ephemeral" | null = item.childKind === "full" || item.childKind === "ephemeral" ? item.childKind : null;
+    const appliedCodexSettingsDigest = nonEmpty(item.appliedCodexSettingsDigest) ? item.appliedCodexSettingsDigest : null;
+    return { id: item.id, alias: item.alias, direction: item.direction as LinkWireDirection, state: item.state, since: item.since, reason: item.reason as string | null, tunnelPort: item.tunnelPort, childKind, appliedCodexSettingsDigest };
   });
   let child: RemoteLinkStatusWire["child"] = null;
   if (value.child !== null) {
@@ -126,7 +155,33 @@ export function parseRemoteLinkStatus(value: unknown): RemoteLinkStatusWire {
     child = { alias: value.child.alias, state: value.child.state, since: value.child.since, reason: value.child.reason as string | null };
   }
   const joinDenied = LINK_JOIN_DENIALS.includes(value.joinDenied as LinkJoinDenied) ? value.joinDenied as LinkJoinDenied : null;
-  return { role: value.role as RemoteLinkStatusWire["role"], listener: { state: listener.state as LinkListenerState, port: listener.port as number | null }, links, child, joinAvailable: value.joinAvailable === true, joinDenied };
+  const homeCodexSettingsDigest = nonEmpty(value.homeCodexSettingsDigest) ? value.homeCodexSettingsDigest : null;
+  return { role: value.role as RemoteLinkStatusWire["role"], listener: { state: listener.state as LinkListenerState, port: listener.port as number | null }, links, child, joinAvailable: value.joinAvailable === true, joinDenied, homeCodexSettingsDigest };
+}
+
+export function parseRemoteLinkConfirmation(value: unknown): LinkConfirmHostView {
+  if (!isRecord(value) || !nonEmpty(value.alias) || !nonEmpty(value.fingerprint)) throw new Error("invalid confirmation");
+  const runtimeKind: LinkRuntimeKind = value.runtimeKind === "ephemeral" || value.runtimeKind === "missing" ? value.runtimeKind : "full";
+  if (runtimeKind === "missing") {
+    if (value.ocxVersion !== null && value.ocxVersion !== undefined) throw new Error("invalid confirmation");
+  } else if (!nonEmpty(value.ocxVersion)) {
+    throw new Error("invalid confirmation");
+  }
+  return {
+    alias: value.alias,
+    fingerprint: value.fingerprint,
+    ocxVersion: runtimeKind === "missing" ? null : String(value.ocxVersion),
+    runtimeKind,
+    targetTriple: nonEmpty(value.targetTriple) ? value.targetTriple : null,
+    plantable: value.plantable === true,
+    binarySizeBytes: typeof value.binarySizeBytes === "number" && Number.isFinite(value.binarySizeBytes) && value.binarySizeBytes > 0 ? value.binarySizeBytes : null,
+    plantUnavailableReason: nonEmpty(value.plantUnavailableReason) ? value.plantUnavailableReason : null,
+  };
+}
+
+export function formatBinaryMegabytes(bytes: number | null): string {
+  if (!bytes || !Number.isFinite(bytes) || bytes <= 0) return "~0.9 MB";
+  return `~${Math.max(0.1, bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /** Read link-route JSON and preserve the server's machine-readable error code. */

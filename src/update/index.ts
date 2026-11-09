@@ -5,11 +5,13 @@ import { manualUpdateFailureGuidance } from "./update-failure-guidance.mjs";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "./stop-contract.mjs";
 import { proxyIdentityAt } from "../server/proxy-liveness";
 import { probeProxyLiveness } from "./proxy-liveness-probe.mjs";
+import { verifyOrchestratedInstall } from "./orchestrated-tree.mjs";
 import { decidePostStopUpdate } from "./stop-decision.mjs";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
-import { getConfigDir, loadConfig } from "../config";
+import { getConfigDir, getConfigPath, loadConfig } from "../config";
+import { runConfigPreflight } from "./config-preflight";
 import { readPid, readRuntimePort, getRuntimePortPath } from "../config/process-state";
 import { pendingTeardownOutstanding } from "../config/pending-teardown";
 import type { ServiceOwnership } from "../service/state";
@@ -43,6 +45,11 @@ import { withoutSiblingMarker } from "../codex/sibling-start";
 import { packageVersion } from "../lib/package-version";
 import { isStandaloneModuleUrl } from "../lib/standalone";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
+import { createLegacyUpdateSession, createOrchestratedChildSession, decodeOrchestratedExpect } from "./orchestrated-session.mjs";
+import { runPosixInstallerSync } from "./posix-install-supervisor.mjs";
+import { runWindowsInstallerSync } from "./npm-install.mjs";
+import { protectOrchestratedWorkerSignals } from "./orchestrated-child.mjs";
+import type { OrchestratedChildArgs } from "./orchestrated-arguments.mjs";
 import { PNPM_READ_CWD, withPnpmCommandCwd, pnpmReadEnvironment } from "./pnpm-read-policy.mjs";
 import {
   freshServingPid, hasRestartableServiceManager, readParentPid, readServiceManagerPid, restartServiceManagerJob,
@@ -109,6 +116,7 @@ function runPnpmCandidate(
   args: readonly string[],
   capture = false,
   probeSpawn: typeof probeSpawnSync = probeSpawnSync,
+  probeEnv: NodeJS.ProcessEnv = process.env,
 ): { status: number | null; stdout?: string | null; stderr?: string | null } {
   const invocation = pnpmInvocationForPath(commandPath, args);
   if (!invocation) return { status: 1 };
@@ -118,7 +126,7 @@ function runPnpmCandidate(
     timeout: 20_000,
     windowsHide: true,
     cwd: PNPM_READ_CWD,
-    env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(process.env)),
+    env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(probeEnv)),
     ...invocation.options,
   });
 }
@@ -126,7 +134,7 @@ function runPnpmCandidate(
 /** Resolve the exact pnpm executable/group/bin that own this package. */
 export function resolveCurrentPnpmGlobalOwner(
   invoked = process.argv[1],
-  deps: { commandPaths?: readonly string[]; spawn?: typeof probeSpawnSync } = {},
+  deps: { commandPaths?: readonly string[]; spawn?: typeof probeSpawnSync; env?: NodeJS.ProcessEnv } = {},
 ): PnpmGlobalOwnerResult {
   const probeSpawn = deps.spawn ?? probeSpawnSync;
   return resolvePnpmGlobalOwner({
@@ -134,7 +142,7 @@ export function resolveCurrentPnpmGlobalOwner(
     packagePath: packageRoot(),
     commandPaths: deps.commandPaths ?? resolvePnpmCommands(),
     runningShimPath: runningPnpmShimPath(invoked),
-    runPnpm: (commandPath, args, capture) => runPnpmCandidate(commandPath, args, capture, probeSpawn),
+    runPnpm: (commandPath, args, capture) => runPnpmCandidate(commandPath, args, capture, probeSpawn, deps.env),
   });
 }
 
@@ -159,10 +167,30 @@ export function runOwnedPnpm(
   stdio: "inherit" | "pipe" | "ignore" = capture ? "pipe" : "inherit",
   probeSpawn: typeof probeSpawnSync = probeSpawnSync,
   authorizeMutation: (kind: "package") => boolean = () => ["root", "bin", "list", "config", "view", "--version"].includes(args[0] ?? ""),
-): { status: number | null; stdout?: string | null; stderr?: string | null } {
+  session?: Pick<ReturnType<typeof createOrchestratedChildSession>, "retainInstallerFence" | "noteUntrackedInstaller" | "confirmInstallerExit">,
+  markerPath = join(getConfigDir(), "update-orchestrated.json"),
+): { status: number | null; stdout?: string | null; stderr?: string | null; processTreeExited?: boolean } {
   const target = ownerPnpmTarget(owner, args);
   if (!target) return { status: 1 };
-  return withPnpmCommandCwd(args, cwd => authorizeMutation("package") ? guardedSpawnSync(authorizeMutation, "package", target.bin, target.args, {
+  const mutating = ["add", "install", "update", "remove", "uninstall"].includes(args[0] ?? "");
+  try { return withPnpmCommandCwd(args, cwd => {
+    if (mutating && !capture && session && authorizeMutation("package")) {
+      const env = pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(target.env));
+      if (process.platform === "win32") {
+        session.noteUntrackedInstaller();
+        const result = runWindowsInstallerSync({ file: target.bin, args: target.args, options: target.options }, { cwd, env, authorizeMutation });
+        if (result.processTreeExited && Number.isInteger(result.status)) session.confirmInstallerExit();
+        else { session.retainInstallerFence(); return { ...result, processTreeExited: false }; }
+        return result;
+      }
+      const result = runPosixInstallerSync({ file: target.bin, args: target.args, markerPath, cwd, env, authorizeMutation });
+      if (!Number.isInteger(result.status) || result.signal || !result.groupExited || result.groupKilled !== false || result.processTreeExited === false) {
+        session.retainInstallerFence();
+        return { ...result, processTreeExited: false };
+      }
+      return { ...result, processTreeExited: true };
+    }
+    const result = authorizeMutation("package") ? guardedSpawnSync(authorizeMutation, "package", target.bin, target.args, {
     stdio,
     encoding: "utf8",
     timeout: 180_000,
@@ -172,7 +200,10 @@ export function runOwnedPnpm(
     cwd,
     env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(target.env)),
     ...target.options,
-  }, probeSpawn) : { status: 1 });
+    }, probeSpawn) : { status: 1, signal: null };
+    if (mutating && (!Number.isInteger(result.status) || result.signal)) session?.retainInstallerFence();
+    return result;
+  }); } catch (error) { if (mutating) session?.retainInstallerFence(); throw error; }
 }
 
 /** Re-read the owning group's active package and return its verified launcher. */
@@ -221,9 +252,9 @@ function npmSpawnTarget(args: readonly string[]): SpawnTarget | null {
   return { bin: invocation.file, args: invocation.args, options: invocation.options };
 }
 
-function pnpmSpawnTarget(args: readonly string[], owner?: PnpmGlobalOwner): SpawnTarget | null {
+function pnpmSpawnTarget(args: readonly string[], owner?: PnpmGlobalOwner, env?: NodeJS.ProcessEnv): SpawnTarget | null {
   if (owner) {
-    const invocation = pnpmOwnerInvocation(owner, args);
+    const invocation = pnpmOwnerInvocation(owner, args, process.platform, env);
     if (!invocation) return null;
     return {
       bin: invocation.file,
@@ -241,19 +272,20 @@ export function registrySpawnTarget(
   installer: Installer,
   args: readonly string[],
   owner?: PnpmGlobalOwner,
+  env?: NodeJS.ProcessEnv,
 ): SpawnTarget | null {
   if (installer === "standalone") return null;
   // A pnpm command without an owner would silently fall back to the first PATH
   // candidate. That is unsafe when multiple PNPM_HOME installations expose the
   // same version, so registry queries use the same hard binding as mutation.
   return installer === "pnpm"
-    ? owner ? pnpmSpawnTarget(args, owner) : null
+    ? owner ? pnpmSpawnTarget(args, owner, env) : null
     : npmSpawnTarget(args);
 }
 
-function selectedPnpmOwner(owner?: PnpmGlobalOwner): PnpmGlobalOwner | undefined {
+function selectedPnpmOwner(owner?: PnpmGlobalOwner, probeSpawn?: typeof probeSpawnSync, env?: NodeJS.ProcessEnv): PnpmGlobalOwner | undefined {
   if (owner) return owner;
-  const result = resolveCurrentPnpmGlobalOwner();
+  const result = resolveCurrentPnpmGlobalOwner(undefined, { spawn: probeSpawn, env });
   return result.ok ? result.owner : undefined;
 }
 
@@ -299,10 +331,11 @@ export function latestVersion(
   installer: Installer = detectInstall(),
   owner?: PnpmGlobalOwner,
   probeSpawn: typeof probeSpawnSync = probeSpawnSync,
+  probeEnv?: NodeJS.ProcessEnv,
 ): string | null {
-  const resolvedOwner = installer === "pnpm" ? selectedPnpmOwner(owner) : undefined;
+  const resolvedOwner = installer === "pnpm" ? selectedPnpmOwner(owner, probeSpawn, probeEnv) : undefined;
   if (installer === "pnpm" && !resolvedOwner) return null;
-  const manager = registrySpawnTarget(installer, ["view", `${PKG}@${tag}`, "version"], resolvedOwner);
+  const manager = registrySpawnTarget(installer, ["view", `${PKG}@${tag}`, "version"], resolvedOwner, probeEnv);
   if (!manager) return null;
   const r = probeSpawn(manager.bin, manager.args, {
     encoding: "utf8",
@@ -310,8 +343,8 @@ export function latestVersion(
     windowsHide: true,
     cwd: installer === "pnpm" ? PNPM_READ_CWD : undefined,
     env: installer === "pnpm"
-      ? pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(manager.env ?? process.env))
-      : unprivilegedOwnershipMutationEnvironment(manager.env ?? process.env),
+      ? pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(manager.env ?? probeEnv ?? process.env))
+      : unprivilegedOwnershipMutationEnvironment(manager.env ?? probeEnv ?? process.env),
     ...manager.options,
   });
   return r.status === 0 && typeof r.stdout === "string" ? (r.stdout.trim() || null) : null;
@@ -331,7 +364,13 @@ export function updateCommand(installer: Installer, tag: Channel, resolvedVersio
     return { bin: "pnpm", args: ["add", "-g", "--allow-build=bun", `${PKG}@${target}`] };
   }
   const bin = "npm";
-  const args = ["install", "-g", `${PKG}@${target}`];
+  // npm 12 blocks dependency lifecycle scripts by default, and bun's postinstall is what
+  // copies the selected @oven/bun-* executable into bun/bin. Without this narrow approval
+  // the install succeeds but leaves bun's un-downloaded placeholder, so the next `ocx`
+  // cannot start (#8361). npm 6 through 11 run bun's postinstall anyway and install with the
+  // flag on global installs, so it is unconditional rather than version-gated; some npm 11
+  // releases print an "Unknown cli config" warning for it and still install.
+  const args = ["install", "-g", "--allow-scripts=bun", `${PKG}@${target}`];
   return { bin, args };
 }
 
@@ -417,9 +456,35 @@ async function resolvedRuntimeOwnership(): Promise<RuntimeOwnershipObservation> 
  * are updated in the Node bin launcher before Bun starts, so Windows does not replace the running
  * Bun binary.
  */
-export async function runUpdate(): Promise<void> {
+export async function runUpdate(child?: Extract<OrchestratedChildArgs, { ok: true }>): Promise<void> {
+  let session: ReturnType<typeof createOrchestratedChildSession> | undefined;
+  if (child) {
+    try {
+      const expect = decodeOrchestratedExpect(child.expect);
+      session = createOrchestratedChildSession({ home: getConfigDir(), resultPath: child.resultPath, resultCapability: child.resultCapability, expect, notAfter: child.notAfter,
+        verifyIdentity: async () => (await import("./orchestrated-entry")).verifyOrchestratedChildIdentity(expect, child.version) });
+      if (!session.start().ok) { process.exitCode = 10; return; }
+      protectOrchestratedWorkerSignals();
+    } catch (error) {
+      console.error(`Orchestrated update preflight failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+      return;
+    }
+  } else {
+    session = createLegacyUpdateSession({ home: getConfigDir() });
+    const started = session.start();
+    if (!started.ok) { console.error(`opencodex: ${started.error}`); process.exitCode = 1; return; }
+    process.once("exit", () => session?.finishPreflight());
+  }
+  try { await runUpdateWithSession(child, session); }
+  finally { session?.finishPreflight(); }
+}
+
+async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: true }> | undefined,
+  session: ReturnType<typeof createOrchestratedChildSession> | undefined): Promise<void> {
   const ownership = detectInstallOwnership();
   const installer = ownership.installer;
+  if (child && installer !== "bun") { process.exitCode = 1; return; }
   const current = currentVersion();
   const tag = updateTag(current);
   console.log(`opencodex v${current} (installed via ${installer}, tag ${tag})`);
@@ -454,9 +519,10 @@ export async function runUpdate(): Promise<void> {
     process.exit(1);
   }
   const owner = ownerResult?.ok ? ownerResult.owner : undefined;
-  const latest = latestVersion(tag, installer, owner);
+  const latest = child?.version ?? latestVersion(tag, installer, owner);
   if (latest && latest === current) {
     console.log(`Already on the latest ${tag} version (v${latest}).`);
+    if (child) process.exitCode = 1;
     return;
   }
 
@@ -465,6 +531,7 @@ export async function runUpdate(): Promise<void> {
   const integrity = checkUpdatePackageIntegrity(latest, probeSpawnSync, installer, owner);
   if (integrity.ok === false) {
     console.error(`⚠️  ${integrity.reason} — aborting the update before stopping the proxy.`);
+    if (child) { process.exitCode = 1; return; }
     process.exit(1);
   }
   if (integrity.ok === "skipped") {
@@ -487,16 +554,33 @@ export async function runUpdate(): Promise<void> {
     : updateSpawnTarget(bin, cmdArgs);
   if (!target) {
     console.error(`⚠️  Could not resolve ${bin} from a trusted absolute PATH entry; aborting before stopping the proxy.`);
+    if (child) { process.exitCode = 1; return; }
     process.exit(1);
   }
 
   const { serviceStatePaths } = await import("../service");
-  const updateExitCode = await withUpdateOwnershipLease(serviceStatePaths(), async mutation => {
+  let mutationStarted = false, completed = false, installerUncertain = false, installedRoot: string | undefined;
+  let updateExitCode: number | undefined;
+  try {
+  updateExitCode = await withUpdateOwnershipLease(serviceStatePaths(), async mutation => {
   // Ownership inspection imports the service CLI, which reaches this update entry again.
   // Load it only after entering the lease; the policy itself stays a dependency-free import.
   const { inspectUpdateServiceHome } = await import("./service-home-authority");
   const homePolicy = createUpdateServiceHomePolicy(inspectUpdateServiceHome, message => console.warn(message), process.argv.includes("--update-package-only"), parseUpdateWorkerHome(process.argv));
   if (!homePolicy.authorizeMutation("package")) return 1;
+  const configPath = getConfigPath(), configPreflight = runConfigPreflight(configPath);
+  if (!configPreflight.ok) {
+    console.error(`⚠️  Configuration preflight failed for ${configPath}; aborting update before stopping services.`);
+    if (configPreflight.error) console.error(`    ${configPreflight.error}`);
+    if (configPreflight.reason === "read_error") {
+      console.error("    Inspect the config path, permissions, and any symlink target; correct them or restore a readable regular config from a trusted backup, then retry.");
+      console.error("    'ocx config validate' may report defaults if a symlink target is missing; it does not change the file.");
+    } else {
+      console.error("    Run 'ocx config validate' to diagnose the configuration; it does not change the file. Back up and correct the file, then retry.");
+    }
+    return 1;
+  }
+
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
   // unloads it, so a successful update must repair/restart it afterwards.
   let serviceWasInstalled = false;
@@ -518,6 +602,11 @@ export async function runUpdate(): Promise<void> {
   if (!runtimePlan.mayReplacePackage) {
     console.error("⚠️  Update stopped before tray handoff, runtime stop, or package replacement because runtime authority does not permit it.");
     return 1;
+  }
+  if (session) {
+    const admission = await session.enterMutation();
+    if (!admission.ok) return 10;
+    mutationStarted = true;
   }
   let trayWasInstalled = false;
   let trayWasRunning = false;
@@ -869,6 +958,7 @@ export async function runUpdate(): Promise<void> {
   // Every post-update action below receives the verified active launcher.
   if (installer === "pnpm") {
     let update: ReturnType<typeof runPnpmGlobalUpdate>;
+    installerUncertain = true;
     try {
       if (!homePolicy.authorizeMutation("package")) return 1;
       update = runPnpmGlobalUpdate({
@@ -883,7 +973,7 @@ export async function runUpdate(): Promise<void> {
           args,
           capture,
           capture ? "pipe" : installStdio,
-          probeSpawnSync, homePolicy.authorizeMutation,
+          probeSpawnSync, homePolicy.authorizeMutation, session,
         ) : { status: 1, stdout: "", stderr: "" },
         log: line => console.log(line),
       });
@@ -894,9 +984,12 @@ export async function runUpdate(): Promise<void> {
         ok: false,
         phase: "rollback",
         rolledBack: false,
+        processTreeExited: false,
         error: "pnpm update failed unexpectedly; active package could not be verified",
       };
+      session?.retainInstallerFence();
     }
+    installerUncertain = !update.ok && update.processTreeExited === false;
     if (update.ok) {
       postUpdateLauncher = join(update.path, "bin", "ocx.mjs");
       postUpdateLauncherUsable = true;
@@ -909,14 +1002,35 @@ export async function runUpdate(): Promise<void> {
     }
   } else {
     if (!homePolicy.authorizeMutation("package")) return 1;
-    r = guardedSpawnSync(homePolicy.authorizeMutation, "package", target.bin, target.args, {
+    installerUncertain = true;
+    if (session && process.platform === "win32") {
+      session.noteUntrackedInstaller();
+      const supervised = runWindowsInstallerSync({ file: target.bin, args: target.args, options: target.options }, {
+        env: mutation.unprivilegedEnvironment(), authorizeMutation: homePolicy.authorizeMutation,
+      });
+      if (supervised.processTreeExited === true && Number.isInteger(supervised.status)) session.confirmInstallerExit();
+      else session.retainInstallerFence();
+      r = supervised;
+      installerUncertain = supervised.processTreeExited !== true || !Number.isInteger(supervised.status);
+    } else if (session) {
+      try {
+        const supervised = runPosixInstallerSync({ file: target.bin, args: target.args,
+          markerPath: join(getConfigDir(), "update-orchestrated.json"),
+          authorizeMutation: homePolicy.authorizeMutation, env: mutation.unprivilegedEnvironment() });
+        installerUncertain = !Number.isInteger(supervised.status) || Boolean(supervised.signal) || !supervised.groupExited || supervised.groupKilled !== false || supervised.processTreeExited === false;
+        if (installerUncertain) session.retainInstallerFence();
+        r = supervised;
+      } catch (error) { session.retainInstallerFence(); throw error; }
+    } else r = guardedSpawnSync(homePolicy.authorizeMutation, "package", target.bin, target.args, {
       stdio: installStdio,
       encoding: installStdio === "pipe" ? "utf8" : undefined,
-      timeout: 180000,
+      // The parent watchdog reports overrun without killing an active transaction.
+      timeout: child ? undefined : 180000,
       windowsHide: true,
       ...target.options,
       env: mutation.unprivilegedEnvironment(),
     });
+    if (!session) installerUncertain = r.status === null;
   }
   if (r && installStdio === "pipe") logSpawnOutput("", r);
   }
@@ -932,6 +1046,11 @@ export async function runUpdate(): Promise<void> {
     return 1;
   }
   if (!r) throw new Error("update replacement returned no result");
+  if (installerUncertain) { console.error("Installer termination was not confirmed; update recovery is deferred."); return 1; }
+  if (session && r.status === 0 && latest) {
+    const root = realpathSync.native(packageRoot());
+    if (verifyOrchestratedInstall(root, latest, "bun")) installedRoot = root;
+  }
   const postInstallPlan = planUpdateRuntimeHandling({
     ...(await resolvedRuntimeOwnership()),
     serviceInstalled: serviceWasInstalled,
@@ -1186,12 +1305,21 @@ export async function runUpdate(): Promise<void> {
     return 1;
   }
   } catch (error) {
-    await recoverStoppedRuntime("update failed unexpectedly");
-    if (trayWasRunning) {
+    if (!installerUncertain) await recoverStoppedRuntime("update failed unexpectedly");
+    if (trayWasRunning && !installerUncertain) {
       try { const { guardedStartWindowsTray } = await import("./guarded-tray-ops"); if (homePolicy.authorizeMutation("own-tray")) guardedStartWindowsTray(homePolicy.authorizeMutation); } catch { /* retain original failure */ }
     }
     throw error;
   }
   });
-  if (updateExitCode) process.exit(updateExitCode);
+  completed = true;
+  } finally {
+    if (session && mutationStarted) session.finish(installedRoot
+      ? { phase: "installed", activeRoot: installedRoot, ...(!completed || updateExitCode ? { recoveryFailed: true, error: "runtime-unhealthy" } : {}) }
+      : { phase: "failed", error: installerUncertain ? "installer-timeout" : "update-failed", ...(installerUncertain ? { terminationConfirmed: false } : {}) });
+  }
+  if (updateExitCode) {
+    if (child) process.exitCode = updateExitCode;
+    else process.exit(updateExitCode);
+  } else if (child && !mutationStarted) process.exitCode = 1;
 }

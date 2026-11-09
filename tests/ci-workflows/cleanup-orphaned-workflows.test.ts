@@ -30,9 +30,9 @@ function mockFetch(routes: MockRoute[], calls: string[]) {
 
 function baseRoutes(extra: MockRoute[]): MockRoute[] {
   return [
-    { path: "/repos/lidge-jun/opencodex", body: { default_branch: "main" } },
+    { path: "/repos/lidge-jun/opencodex", body: { default_branch: "dev" } },
     {
-      path: "/repos/lidge-jun/opencodex/contents/.github/workflows?ref=main",
+      path: "/repos/lidge-jun/opencodex/contents/.github/workflows?ref=dev",
       body: [
         { type: "file", path: ".github/workflows/ci.yml" },
         { type: "file", path: ".github/workflows/cleanup-orphaned-workflows.yml" },
@@ -56,7 +56,10 @@ describe("orphaned GitHub Actions cleanup", () => {
       }>;
     };
 
-    expect(Object.keys(workflow.on ?? {}).sort()).toEqual(["push", "schedule"]);
+    // Only the daily schedule remains. The old one-time `push` on `main` was a
+    // backlog bootstrap for a branch that no longer exists, and a `dev` push
+    // trigger is forbidden by policy.
+    expect(Object.keys(workflow.on ?? {}).sort()).toEqual(["schedule"]);
     expect(workflow.permissions).toEqual({
       actions: "write",
       contents: "read",

@@ -1,5 +1,22 @@
 import type { ProxyRestartResult } from "./tray-proxy";
 
+export type RestartSupervisor = "desktop" | "service";
+
+/** Only the bound client's explicit refusal establishes a supervisor for sync. */
+export function supervisedRestartRefusal(result: ProxyRestartResult): RestartSupervisor | null {
+  if (result.ok || result.phase !== "request" || !(result.error instanceof Error)) return null;
+  if (result.error.message === "restart_supervised_desktop") return "desktop";
+  if (result.error.message === "restart_supervised_service") return "service";
+  return null;
+}
+
+export function deferSupervisedRestart(result: ProxyRestartResult, notify: (supervisor: RestartSupervisor) => void): boolean {
+  const supervisor = supervisedRestartRefusal(result);
+  if (!supervisor) return false;
+  notify(supervisor);
+  return true;
+}
+
 export const INCOMPLETE_INSTALL_RECOVERY = "If the installer already exited or failed, run `ocx status`, stop any running proxy through its owner (`ocx stop`, or its service or desktop app), then reinstall with the same package manager and start it again (see https://opencodex.me/troubleshooting/update-failed/).";
 
 export function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: false }>): void {

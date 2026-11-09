@@ -1,5 +1,7 @@
 {
+  "claude-endpoint-lifetime.test.ts": "claude-integration",
   "omo-responses-loop.test.ts": "clients",
+  "codex-launcher-endpoint.test.ts": "codex-integration",
   "claude-translated-tool-restrictions.test.ts": "claude-integration",
   "windows-config-root-async-writers.test.ts": "windows",
   "t3code-client-lifecycle.test.ts": "clients",
@@ -151,6 +153,7 @@
   "client-link-connect.test.ts": "clients",
   "client-link-relay.test.ts": "clients",
   "client-link-runtime.test.ts": "clients",
+  "client-link-stop.test.ts": "clients",
   "link-routes.test.ts": "clients",
   "client-link-state.test.ts": "clients",
   "client-link-status.test.ts": "clients",
@@ -170,5 +173,10 @@
   "hermes-profile-routes.test.ts": "clients",
   "cli-sync-expect-link.test.ts": "cli",
   "link-connection-generation.test.ts": "clients",
-  "ci-pr-hygiene-approvals.test.ts": "ci-workflows"
+  "ci-pr-hygiene-approvals.test.ts": "ci-workflows",
+  "link-ocx-child-conformance.test.ts": "clients",
+  "link-ephemeral-child-discovery.test.ts": "clients",
+  "link-enrollment-ephemeral-child.test.ts": "server",
+  "link-ocx-child-e2e.test.ts": "clients",
+  "link-child-plant-foundations.test.ts": "clients"
 }

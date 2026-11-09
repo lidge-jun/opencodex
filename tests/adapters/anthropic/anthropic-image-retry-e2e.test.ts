@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync} from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../../src/config";
@@ -8,16 +8,20 @@ import { startServer } from "../../../src/server";
 import { resetNormalizeStateForTests } from "../../../src/adapters/anthropic-image-normalize";
 import { sniffImageDimensions } from "../../../src/adapters/anthropic-image-guard";
 import type { OcxConfig } from "../../../src/types";
+import { trackBackgroundWork } from "../../../src/lib/background-work";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../../helpers/isolated-codex-home";
-import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import { BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS, removeTreeAfterBackgroundWork } from "../../helpers/remove-tree";
 
 let testDir = "";
 let previousHome: string | undefined;
+let previousCodexHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 let upstream: ReturnType<typeof Bun.serve> | null = null;
+let proxy: ReturnType<typeof startServer> | undefined;
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
+  previousCodexHome = process.env.CODEX_HOME;
   isolatedCodexHome = installIsolatedCodexHome("ocx-imgretry-e2e-codex-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-imgretry-e2e-"));
   process.env.OPENCODEX_HOME = testDir;
@@ -25,16 +29,88 @@ beforeEach(() => {
   resetNormalizeStateForTests();
 });
 
-afterEach(() => {
-  upstream?.stop(true);
-  upstream = null;
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  isolatedCodexHome?.restore();
+/** Restore process state even when shutdown rejects; retain trees until drain succeeds. */
+async function cleanupFixture(): Promise<void> {
+  const codexHome = isolatedCodexHome;
+  const directory = testDir;
   isolatedCodexHome = null;
-  if (testDir) removeTreeWithRetry(testDir);
-  clearKeyCooldowns();
-});
+  testDir = "";
+  try {
+    try { await proxy?.stop(true); }
+    finally {
+      proxy = undefined;
+      try { await upstream?.stop(true); }
+      finally { upstream = null; }
+    }
+    if (directory) await removeTreeAfterBackgroundWork(directory);
+  } finally {
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    codexHome?.restoreEnvironment();
+    clearKeyCooldowns();
+  }
+  // A failed stop or drain must leave both owned trees intact for their wrapper.
+  codexHome?.removeAfterDrain();
+}
+
+afterEach(cleanupFixture, BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
+
+for (const rejecting of ["proxy", "upstream"] as const) {
+  test(`fixture cleanup restores environment after ${rejecting} shutdown rejects`, async () => {
+    const directory = testDir, codexHome = isolatedCodexHome!;
+    const expectedHome = previousHome;
+    const failure = new Error(`synthetic ${rejecting} stop failure`);
+    const stopped: string[] = [];
+    // No real producer starts: these controlled failures exercise the hook itself.
+    proxy = { async stop() { stopped.push("proxy"); if (rejecting === "proxy") throw failure; } } as unknown as typeof proxy;
+    upstream = { async stop() { stopped.push("upstream"); if (rejecting === "upstream") throw failure; } } as unknown as typeof upstream;
+    try {
+      await expect(cleanupFixture()).rejects.toBe(failure);
+      expect(stopped).toEqual(["proxy", "upstream"]);
+      expect(proxy).toBeUndefined();
+      expect(upstream).toBeNull();
+      expect(isolatedCodexHome).toBeNull();
+      expect(process.env.OPENCODEX_HOME).toBe(expectedHome);
+      expect(process.env.CODEX_HOME).toBe(previousCodexHome);
+      expect(existsSync(directory)).toBe(true);
+      expect(existsSync(codexHome.path)).toBe(true);
+    } finally {
+      // The synthetic stoppers own no live handles; clean up even if a regression fails.
+      proxy = undefined; upstream = null; isolatedCodexHome = null; testDir = "";
+      if (expectedHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = expectedHome;
+      codexHome.restoreEnvironment();
+      await removeTreeAfterBackgroundWork(directory);
+      codexHome.removeAfterDrain();
+    }
+  });
+}
+
+test("fixture cleanup restores environment and retains trees when drain fails", async () => {
+  const directory = testDir, codexHome = isolatedCodexHome!;
+  const expectedHome = previousHome;
+  let release!: () => void;
+  const work = trackBackgroundWork("image-retry fixture drain rejection", new Promise<void>(resolve => { release = resolve; }));
+  try {
+    await expect(cleanupFixture()).rejects.toThrow("in-process background work still running: image-retry fixture drain rejection");
+    expect(proxy).toBeUndefined();
+    expect(upstream).toBeNull();
+    expect(isolatedCodexHome).toBeNull();
+    expect(process.env.OPENCODEX_HOME).toBe(expectedHome);
+    expect(process.env.CODEX_HOME).toBe(previousCodexHome);
+    expect(existsSync(directory)).toBe(true);
+    expect(existsSync(codexHome.path)).toBe(true);
+  } finally {
+    release();
+    await work;
+    proxy = undefined; upstream = null; isolatedCodexHome = null; testDir = "";
+    if (expectedHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = expectedHome;
+    codexHome.restoreEnvironment();
+    await removeTreeAfterBackgroundWork(directory);
+    codexHome.removeAfterDrain();
+  }
+}, BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
 
 const ONE_PX_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -81,6 +157,7 @@ function anthropicConfig(baseUrl: string, pool = false): OcxConfig {
   return {
     port: 0,
     hostname: "127.0.0.1",
+    clientIntegrations: { codex: false },
     defaultProvider: "anthropic-test",
     providers: {
       "anthropic-test": {
@@ -121,14 +198,30 @@ async function postImageRequest(serverUrl: string, dataUrl: string): Promise<Res
   });
 }
 
+function imageRetryScenario(
+  name: string, statuses: number[], pool: boolean,
+  verify: (res: Response, seen: SeenRequest[]) => void | Promise<void>,
+): void {
+  describe(name, () => {
+    let seen: SeenRequest[];
+    let dataUrl: string;
+    // Real Windows config/ACL and server setup is separate from the 5s request assertions.
+    beforeEach(async () => {
+      seen = [];
+      upstream = scriptedUpstream(statuses, seen);
+      saveConfig(anthropicConfig(upstream.url.toString().replace(/\/$/, ""), pool));
+      proxy = startServer(0);
+      dataUrl = await realPngDataUrl(1500, 1000);
+    }, 10_000);
+    test("preserves the response and retry contract", async () => {
+      const res = await postImageRequest(String(proxy!.url), dataUrl);
+      await verify(res, seen);
+    });
+  });
+}
+
 describe("anthropic 413 tightened-retry (end-to-end)", () => {
-  test("R1: upstream 413 then 200 — exactly one biased rebuild, images re-encoded a tier lower", async () => {
-    const seen: SeenRequest[] = [];
-    upstream = scriptedUpstream([413, 200], seen);
-    saveConfig(anthropicConfig(upstream.url.toString().replace(/\/$/, "")));
-    const server = startServer(0);
-    try {
-      const res = await postImageRequest(String(server.url), await realPngDataUrl(1500, 1000));
+  imageRetryScenario("R1: upstream 413 then 200 — exactly one biased rebuild, images re-encoded a tier lower", [413, 200], false, async (res, seen) => {
       expect(res.status).toBe(200);
       expect(seen).toHaveLength(2);
       // First attempt: 1500px PNG rides tier-0 pass-through.
@@ -139,18 +232,9 @@ describe("anthropic 413 tightened-retry (end-to-end)", () => {
       expect(second?.media_type).toBe("image/jpeg");
       const dims = sniffImageDimensions(second?.data ?? "");
       expect(Math.max(dims!.width, dims!.height)).toBeLessThanOrEqual(1024);
-    } finally {
-      await server.stop(true);
-    }
   });
 
-  test("R2: upstream 413 twice — exactly two calls, honest 413 surfaces, no spiral", async () => {
-    const seen: SeenRequest[] = [];
-    upstream = scriptedUpstream([413, 413], seen);
-    saveConfig(anthropicConfig(upstream.url.toString().replace(/\/$/, "")));
-    const server = startServer(0);
-    try {
-      const res = await postImageRequest(String(server.url), await realPngDataUrl(1500, 1000));
+  imageRetryScenario("R2: upstream 413 twice — exactly two calls, honest 413 surfaces, no spiral", [413, 413], false, async (res, seen) => {
       expect(res.status).toBe(413);
       expect(seen).toHaveLength(2);
       expect(res.headers.get("content-type")).toContain("application/json");
@@ -160,18 +244,9 @@ describe("anthropic 413 tightened-retry (end-to-end)", () => {
         type: "invalid_request_error",
         code: "context_length_exceeded",
       });
-    } finally {
-      await server.stop(true);
-    }
   });
 
-  test("R4: 413 → biased retry → 429 → key rotation keeps the tightened tiers", async () => {
-    const seen: SeenRequest[] = [];
-    upstream = scriptedUpstream([413, 429, 200], seen);
-    saveConfig(anthropicConfig(upstream.url.toString().replace(/\/$/, ""), true));
-    const server = startServer(0);
-    try {
-      const res = await postImageRequest(String(server.url), await realPngDataUrl(1500, 1000));
+  imageRetryScenario("R4: 413 → biased retry → 429 → key rotation keeps the tightened tiers", [413, 429, 200], true, async (res, seen) => {
       expect(res.status).toBe(200);
       expect(seen).toHaveLength(3);
       // Rotation happened after the biased 413 retry hit 429.
@@ -181,8 +256,5 @@ describe("anthropic 413 tightened-retry (end-to-end)", () => {
       expect(third?.media_type).toBe("image/jpeg");
       const dims = sniffImageDimensions(third?.data ?? "");
       expect(Math.max(dims!.width, dims!.height)).toBeLessThanOrEqual(1024);
-    } finally {
-      await server.stop(true);
-    }
   });
 });

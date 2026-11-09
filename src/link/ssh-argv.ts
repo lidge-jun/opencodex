@@ -19,7 +19,7 @@
  */
 
 import { isAbsolute } from "node:path";
-import { POWERSHELL_ENCODED_MAX, windowsOcxArgv } from "./remote-windows";
+import { POWERSHELL_ENCODED_MAX, windowsOcxArgv, windowsPinnedSyncArgv } from "./remote-windows";
 
 export type TunnelDirection = "R" | "L";
 
@@ -146,15 +146,20 @@ export const REMOTE_PLATFORM_UNSUPPORTED = 125;
  * ocx as `"$@"` without another round of parsing. Desktop binaries precede PATH candidates;
  * each candidate must run --version successfully. A missing runnable ocx exits 127.
  */
-export const REMOTE_OCX_SCRIPT = `export PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
-case "$(uname -s 2>/dev/null)" in Windows*|MSYS*|MINGW*|CYGWIN*) exit ${REMOTE_PLATFORM_UNSUPPORTED};; esac
-try_ocx() {
-  if [ -x "$1" ] && "$1" --version >/dev/null 2>&1; then
-    executable=$1
-    shift
-    exec "$executable" "$@"
-  fi
+const REMOTE_OCX_CANDIDATES = `run_ocx_child() {
+  for candidate in "$HOME/.local/bin/ocx-child" "$HOME/.cache/opencodex/bin/ocx-child"; do
+    try_ocx "$candidate" "$@"
+  done
+  remaining=$PATH
+  while :; do
+    directory=\${remaining%%:*}
+    try_ocx "\${directory:-.}/ocx-child" "$@"
+    case "$remaining" in *:*) remaining=\${remaining#*:};; *) break;; esac
+  done
 }
+if [ -f "\${OPENCODEX_HOME:-$HOME/.opencodex}/child/state.json" ]; then
+  run_ocx_child "$@"
+fi
 for candidate in "$HOME/.opencodex-desktop/bin/ocx" "/Applications/OpenCodex.app/Contents/MacOS/ocx" "/usr/bin/ocx"; do
   try_ocx "$candidate" "$@"
 done
@@ -164,6 +169,18 @@ while :; do
   try_ocx "\${directory:-.}/ocx" "$@"
   case "$remaining" in *:*) remaining=\${remaining#*:};; *) break;; esac
 done
+run_ocx_child "$@"`;
+
+export const REMOTE_OCX_SCRIPT = `export PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+case "$(uname -s 2>/dev/null)" in Windows*|MSYS*|MINGW*|CYGWIN*) exit ${REMOTE_PLATFORM_UNSUPPORTED};; esac
+try_ocx() {
+  if [ -x "$1" ] && "$1" --version >/dev/null 2>&1; then
+    executable=$1
+    shift
+    exec "$executable" "$@"
+  fi
+}
+${REMOTE_OCX_CANDIDATES}
 exit ${REMOTE_COMMAND_NOT_FOUND}`;
 
 export function remoteOcxArgv(args: readonly string[], platform: "posix" | "windows" = "posix"): string[] {
@@ -237,4 +254,55 @@ export function quoteRemote(argv: readonly string[]): string {
     if (index === 0) return "sh";
     return `'${arg.replaceAll("'", `'"'"'`)}'`;
   }).join(" ");
+}
+
+const REMOTE_PINNED_SYNC_SCRIPT = `export PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+case "$(uname -s 2>/dev/null)" in Windows*|MSYS*|MINGW*|CYGWIN*) exit ${REMOTE_PLATFORM_UNSUPPORTED};; esac
+umask 077
+dir=$(mktemp -d "\${TMPDIR:-/tmp}/ocx-fanout.XXXXXXXX") || exit 127
+tmp=$dir/version; ready=$dir/ready
+trap 'rm -rf "$dir"' EXIT HUP INT TERM
+try_ocx() {
+  c=$1; shift
+  [ -x "$c" ] || return
+  ( ulimit -c 0; ulimit -f 1; exec "$c" --version ) >"$tmp" 2>/dev/null & vp=$!
+  ( sleep 10 & timer=$!; trap 'kill "$timer" 2>/dev/null; wait "$timer" 2>/dev/null; exit' TERM HUP INT; : > "$ready"; wait "$timer" 2>/dev/null; kill -9 "$vp" 2>/dev/null ) >/dev/null 2>&1 & watchdog=$!
+  while [ ! -f "$ready" ]; do kill -0 "$watchdog" 2>/dev/null || break; sleep 0.01 >/dev/null 2>&1; done
+  { wait "$vp"; status=$?; } 2>/dev/null
+  kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null; rm -f "$ready"
+  [ "$status" -eq 0 ] || return
+  bytes=$(wc -c < "$tmp" 2>/dev/null) || return
+  [ "$bytes" -le 256 ] 2>/dev/null || return
+  version=$(cat "$tmp"); version=\${version#opencodex }
+  printf '%s\\n' "$version" | awk '
+    function idlist(s,pre, n,a,i) {
+      n=split(s,a,/\\./); if (!n) return 0;
+      for(i=1;i<=n;i++) if(a[i]=="" || a[i] !~ /^[0-9A-Za-z-]+$/ || (pre && a[i] ~ /^[0-9]+$/ && length(a[i])>1 && substr(a[i],1,1)=="0")) return 0;
+      return 1
+    }
+    function cmp(a,b) { if(length(a)!=length(b)) return length(a)>length(b)?1:-1; return ("x" a)==("x" b)?0:(("x" a)>("x" b)?1:-1) }
+    NR==1 {
+      v=$0; if(length(v)>128) { result=2; next }
+      plus=index(v,"+"); if(plus) { build=substr(v,plus+1); v=substr(v,1,plus-1); if(!idlist(build,0)) {result=2; next} }
+      dash=index(v,"-"); if(dash) { pre=substr(v,dash+1); v=substr(v,1,dash-1); if(!idlist(pre,1)) {result=2; next} }
+      if(split(v,a,/\\./)!=3) { result=2; next }
+      for(i=1;i<=3;i++) if(a[i] !~ /^(0|[1-9][0-9]*)$/) { result=2; next }
+      c=cmp(a[1],"2"); if(!c)c=cmp(a[2],"93"); if(!c)c=cmp(a[3],"0"); if(c<0 || (!c && dash))result=1
+    }
+    NR>1 {result=2}
+    END {exit result}
+  ' 2>/dev/null
+  status=$?
+  if [ "$status" -eq 1 ]; then printf '%s\\n' 'ocx-fanout:child-ocx-lacks-expect-link' >&2; exit 121; fi
+  if [ "$status" -ne 0 ]; then printf '%s\\n' 'ocx-fanout:child-ocx-version-unknown' >&2; exit 121; fi
+  rm -rf "$dir"; trap - EXIT HUP INT TERM
+  printf 'ocx-fanout:selected:%s\\n' "$version" >&2
+  printf '%s\\n' 'ocx-fanout:stdout-begin'
+  exec "$c" sync --expect-link "$1" --json
+}
+${REMOTE_OCX_CANDIDATES}
+exit ${REMOTE_COMMAND_NOT_FOUND}`;
+
+export function remotePinnedSyncArgv(linkId: string, platform: "posix" | "windows" = "posix"): string[] {
+  return platform === "windows" ? windowsPinnedSyncArgv(linkId) : ["sh", "-c", REMOTE_PINNED_SYNC_SCRIPT, "ocx", linkId];
 }

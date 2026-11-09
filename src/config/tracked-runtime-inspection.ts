@@ -59,7 +59,7 @@ export type TrackedRecordRefusal =
   | "unverified";
 
 export type TrackedRecordInspection =
-  | { status: "verified"; pid: number; port: number; hostname: string }
+  | { status: "verified"; pid: number; port: number; hostname: string | undefined }
   | { status: "refused"; reason: TrackedRecordRefusal };
 
 /**
@@ -147,7 +147,7 @@ export function inspectTrackedRuntimeRecord(
     if (parsed.pid !== pid) {
       return { status: "refused", reason: "runtime-record-pid-mismatch" };
     }
-    return { status: "verified", pid, port: parsed.port, hostname: parsed.hostname ?? "" };
+    return { status: "verified", pid, port: parsed.port, hostname: parsed.hostname };
   } catch {
     return { status: "refused", reason: "unverified" };
   }
@@ -180,7 +180,7 @@ const TRACKED_REFUSAL_CAUSES: Record<TrackedRecordRefusal, string> = {
  */
 export function describeTrackedRuntimeTarget(
   deps: TrackedRecordProbeDeps = {},
-): { pid: number; port: number; hostname: string } | { untracked: string } {
+): { pid: number; port: number; hostname: string | undefined } | { untracked: string } {
   const inspection = inspectTrackedRuntimeRecord(deps);
   return inspection.status === "verified"
     ? { pid: inspection.pid, port: inspection.port, hostname: inspection.hostname }

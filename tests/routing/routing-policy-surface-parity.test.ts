@@ -229,7 +229,8 @@ describe("routing policy request evidence parity (via dev handlers)", () => {
           expect(response.status).toBe(404);
           const payload = await response.json() as { error: { type: string; message: string } };
           expect(payload.error.type).toBe("invalid_request_error");
-          expect(payload.error.message).toStartWith("Unknown routing policy:");
+          if (path === "/v1/messages") expect(payload.error.message).toBe("Unknown routing policy");
+          else expect(payload.error.message).toStartWith("Unknown routing policy:");
           expect(log.routeDecision).toBeUndefined();
           expect(adapterCalls).toBe(0);
         }

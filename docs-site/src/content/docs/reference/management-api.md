@@ -61,6 +61,7 @@ route-specific results rather than repeating this table.
 | --- | --- | --- |
 | 401 | `opencodex admin token required` | The admin token or GUI session is missing, invalid, expired, origin-mismatched, or missing CSRF evidence |
 | 403 | `cross-origin request blocked` | The request origin is outside the management allowlist |
+| 403 | `cross-origin request blocked` with `code: "remember_requires_direct_origin"` | `POST /api/session/remember` only: this dashboard address cannot hold a remembered device (for example a standalone dashboard behind a TLS-terminating proxy); sign in without Remember |
 | 404 | `not_found` | No management route matched the method and path |
 | 413 | `request body too large` | A POST, PUT, or PATCH body exceeds the 2 MiB management limit |
 | 503 | `management API unavailable` | Admin credential initialization or hardening is unavailable |
@@ -332,6 +333,8 @@ timing method unknown)** and a visible explanation of the timing method when a r
 | `GET /api/debug/injection-logs` | Read bounded guidance-injection debug entries | — |
 | `GET /api/claude/inbound-debug` | Read Claude inbound debug state and entries | — |
 | `GET /api/usage` | Scan the usage ledger into compact aggregates of readable rows, then incrementally fold verified appends; summarize by preset or inclusive custom window and client surface, with a Codex `accounts` breakdown keyed by stable non-PII log labels | 400 invalid custom bounds; 500 `{ "error": "read_failed" }` if storage cannot be read |
+| `GET /api/usage/devices` | List current Remote Link key IDs and aliases for an authorized dashboard session | 403 without the required dashboard session; 503 if the link store cannot be read |
+| `GET /api/usage/source-facets` | Count recent app and device choices for an authorized dashboard session | 400 for invalid filters; 403 without the required session; 503 if the scan or inventory is unavailable |
 | `GET /api/usage?jev=1` | Project persisted JEV decisions and their physical target sends. Optional `comboId` selects one Combo; `range` accepts `7d`, `30d`, or `all` (default `30d`). | 400 invalid `comboId`; 500 `{ "error": "read_failed" }` if the ledger cannot be read |
 | `GET /api/usage/timeline` | Bucketed usage by model/account; accepts `hours`, `bucketMinutes`, `metric`, `aggregation`, `grouping`, comma-separated `models` and repeated `hiddenProvider` filters | 400 invalid query or limits |
 | `GET /api/metrics` | Return process-local Prometheus text metrics for requests and cached Kiro quota. Kiro accounts use bounded opaque digest labels; raw account and credential identifiers are never exported. | 404 when `metricsExport.enabled` was not true at startup; ordinary management authentication is required and data-plane credentials grant no access |
@@ -424,6 +427,43 @@ are observed before image/search loops or continuation guards combine their usag
 sum the flat attempts by provider/account and do not add the parent combo total again. These
 records identify usage; provider quota percentages remain separate upstream observations.
 
+For app and device attribution, `GET /api/usage` accepts both `client` and `device` together.
+`client` is `all`, `codex`, `claude_code`, `claude_desktop`, `grok`, `opencode`, `aside`,
+`other`, or `unknown`. `device` is `all`, `no-key`, `key`, or `unconfigured`; `key` requires exactly one
+case-sensitive `apiKeyId`. These filters require `surface=all` or an omitted surface and cannot
+be combined with the JEV or failure projections. Invalid or repeated source options return 400.
+The response echoes the applied `sourceFilter` and `legacyUnclassifiedRequests` so consumers can
+verify the filter was applied. Earlier records with no app field remain explicitly unclassified;
+the Codex selection includes legacy Codex-surface records in that count without assigning them a
+specific app. `no-key` includes requests without a configured key, including older and
+environment-admitted records; it does not prove a request came from a particular physical device.
+`unconfigured` requires a dashboard session and selects configured-admission rows whose key ID is
+absent from the current configured-key list. It describes current configuration, not proof that a
+key was deleted or which device used it; older rows without admission metadata are not included.
+The dashboard-session-only `/api/usage/source-facets` accepts the same `client` and `device`
+parameters and provides counts for a captured 30-day window, the filter echo and incomplete-read
+status. App counts respect the chosen device; device counts respect the chosen app. Individual key
+counts are limited to configured keys. Its `legacyUnclassifiedRequests` is the unclassified subset
+of the Codex option for the chosen device, regardless of the selected app. This endpoint and
+`unconfigured` reports use `no-store`.
+Configured IDs that cannot be selected exactly, such as IDs with surrounding whitespace, remain in
+the configured snapshot but are omitted from individual device choices and counted in
+`unavailableConfiguredKeys`; they are never silently trimmed or classified as unconfigured.
+If a dashboard session expires during an authorized facets or `unconfigured` scan, the server
+returns 401 instead of the 403 used for a credential that lacks the required dashboard scope.
+For bounded resource use they refuse snapshots with more than 1,024 configured keys, an ID over
+256 characters, or more than 65,536 total ID characters rather than silently truncating them.
+Client labels are best-effort classifications of inbound headers, not authentication, and raw
+headers are not stored as client attribution. The current classifier recognizes documented Codex,
+Claude and OpenCode signatures; it does not yet identify Grok, Aside or other Chat API apps
+automatically, so their unrecognized requests remain `unknown`. The `/v1/usage` data-key endpoint accepts `client`
+and echoes its authenticated-key scope without exposing the key ID. A Remote Link management relay
+accepts new source filters only for its authenticated link key; source-filtered snapshot bounds
+describe matching rows, not the whole ledger. The Child requires the Home to echo the requested
+scope and refuses an unconfirmed response. Source-filtered HEAD requests through the Child return
+405 because a bodyless response cannot confirm the scope. Existing requests without the new source
+dimensions retain their earlier behavior.
+
 `GET /api/usage` reads `~/.opencodex/usage.jsonl` from the beginning through the current ledger
 snapshot on a cold start. It processes fixed 1 MiB chunks and retains compact aggregate state rather
 than every normalized request row. Later refreshes validate the previous line boundary and fold only
@@ -444,6 +484,25 @@ and last days. They preserve `surface`, `provider`, `model`, and `apiKeyId` filt
 or overwrite unfiltered preset summaries. The daily chart remains capped at 366 local calendar days;
 totals cover the full requested interval. Snapshot-window fields describe the scanned ledger before
 the time filter, so they can extend beyond the requested bounds.
+
+Provider, model, `apiKeyId`, source and custom-window queries are answered from a derived candidate
+index (`~/.opencodex/usage-filter-index.sqlite`) instead of a whole-ledger scan. The index records each
+complete row's byte offset with the fields those filters select on, so a new filter combination reads
+and normalizes only its matching rows. The first filtered query after the index is missing or invalid
+performs one full ingest; later queries ingest only newly appended bytes. The totals are unchanged by
+the index: a filtered response reports what a full scan would report. The index is disposable and
+rebuildable — delete the file and the next filtered query rebuilds it from `usage.jsonl`, which stays
+the only authority and is never truncated or rewritten. A replaced, truncated or rewritten ledger
+rebuilds the index rather than extending stale rows.
+
+The index is created private to your user, and a file at that path that is not this index is left
+alone. If the index cannot be used — an unwritable home, a full disk, another process holding it, or
+a damaged file — filtered usage falls back to reading `usage.jsonl` directly, which is slower but
+returns the same totals. A passive management read from a Remote Link Child only uses an index that
+is already current and never creates or modifies one. A query that selects most of the ledger (for
+example `client=all&device=all` with no provider, model or key) still has to read every row in its
+window; the index removes the repeated whole-ledger work for selective filters, not the cost of a
+report whose result is the whole ledger.
 
 The Usage page accepts local date/time inputs. Its selected ending minute includes the entire
 minute through `:59.999`. Choosing a preset or clearing the custom window restores preset behavior.
@@ -615,8 +674,8 @@ Labels are read on login/import or refresh, never inferred from quota percentage
 | `POST /api/oauth/logout` | Remove the selected provider credential | 400 unknown provider; `oauth_mutation_busy` |
 | `GET /api/oauth/accounts` | List masked accounts; Anthropic and generic OAuth account rows include their `paused` state. Kiro rows include `autoSelectable` and a closed `skipReason` when excluded from automatic selection; an active singleton may still send. Quota remains opt-in. | 400 invalid provider |
 | `DELETE /api/oauth/accounts` | Remove one account | 400 invalid provider/id; 404 account missing; `oauth_mutation_busy` |
-| `PUT /api/oauth/accounts/active` | Select the active OAuth account | 400 invalid provider/account; 404 account missing; 409 account paused; `oauth_mutation_busy` |
-| `PUT /api/oauth/accounts/pause` | Pause or resume one Anthropic or generic OAuth account. Body `{ provider, accountId, paused }`; pausing the active account selects the next usable account when available. Pause is durable and independent of pool enablement; resume preserves health and credentials. | 400 unsupported provider or invalid body; 404 account missing; `oauth_mutation_busy` |
+| `PUT /api/oauth/accounts/active` | Select the active OAuth account | 400 invalid provider/account; 404 account missing; 409 account paused; `oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `selectionCommitted: true`, `retryable: true`; account change saved; resend the same request even if already active) |
+| `PUT /api/oauth/accounts/pause` | Pause or resume one Anthropic or generic OAuth account. Body `{ provider, accountId, paused }`; pausing the active account selects the next usable account when available. Pause is durable and independent of pool enablement; resume preserves health and credentials. | 400 unsupported provider or invalid body; 404 account missing; `oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `pauseCommitted: true`, `retryable: true`; pause state saved; preserve the account and pause state, add `retryAffinityReset: true`, and retry to confirm the reset even after a server restart) |
 | `GET, PUT, PATCH /api/pool/settings` | Read or update pool policy for any kind (codex, anthropic, generic); answers with the same keys for all three and declares in `supported` which the kind honours | 400 unknown provider, a field the kind does not support, or an invalid value |
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | Legacy per-pool policy for Anthropic and generic OAuth providers; superseded by `/api/pool/settings` and kept for existing clients | 400 codex or api-key provider, or invalid policy |
 | `POST /api/oauth/accounts/clear-cooldown` | Clear one OAuth account's runtime cooldown | 400 invalid provider/account |
@@ -625,6 +684,9 @@ Labels are read on login/import or refresh, never inferred from quota percentage
 | `PUT /api/providers/keys/active` | Select a provider's active key | 400 invalid input; 404 provider/key missing |
 | `PUT /api/providers/keys/alias` | Set or clear a provider-key alias | 400 invalid input; 404 provider/key missing |
 | `GET, POST, PATCH, DELETE /api/keys` | List, create, edit, or delete data-plane admission keys | 400 invalid body/id; 404 key missing |
+| `PUT /api/oauth/accounts/affinity-reset` | Confirm a provider-wide session-affinity reset without requiring an account. Body `{ provider }`; success includes `affinityResetConfirmed: true`. CLI: `ocx account reset-affinity anthropic --json` (`anthropic2` supported). | 400 invalid body/provider; 503 `affinity_reset_not_persisted`, `retryable: true` |
+
+The dashboard retains an unconfirmed affinity-reset warning even when the saved account disappears. Loading errors and paused or reauthentication-blocked active targets keep their retry with feedback. Once a loaded list confirms absence, Retry uses `PUT /api/oauth/accounts/affinity-reset` with `{ provider }`; it clears the warning only after `affinityResetConfirmed: true`. This provider-wide operation clears all bindings, including those created since the first failure, without selecting or resuming an account, and also works with an empty roster. Deleting an account with an outstanding reset sends `retryAffinityReset=true`; a failed publication returns 503 `affinity_reset_not_persisted`, `deletionCommitted: true` and `retryable: true`. The account is already deleted: retry the reset-only endpoint, not deletion. Plain deletion preserves surviving-account affinity. Reset-only cleanup is limited to the registered Anthropic OAuth instances and retains the ordinary management authentication/origin checks.
 
 `POST /api/oauth/login/cancel` can also dismiss the selected settled failed login attempt. It leaves stored credentials and successful login results intact; status then reports the remaining flow or idle. Cancelling an in-progress attempt still records its cancelled outcome.
 
@@ -702,6 +764,21 @@ for its default-off, custom-provider-only behavior.
 When Antigravity's quota-summary endpoint has no usable response, quota reports may also include
 per-model Cloud Code Assist usage windows when the model-discovery response provides them. These
 measurements are diagnostic; an absent model window does not establish that the model is unavailable.
+
+For a row using the `claude-cli` adapter, the report is the last recorded Claude subscription
+observation (`observed: true`) rather than an active probe, and only for the account Claude Code is
+signed in to. `refresh=1` re-reads the local sign-in and that snapshot. Fetching this Claude CLI
+report never spawns the CLI or calls Anthropic; other configured providers can still run their
+normal quota probes. The row is absent until a usage check records quota windows for the signed-in
+account. A sign-out or account switch clears it at once with `refresh=1` and within a minute (the
+sign-in cache) on a normal cached read. A newer recorded observation, including one without windows,
+replaces it on the next read. Passive reads use the last recorded sign-in and snapshot without
+resolving credentials or probing providers, so an external sign-in change appears after another
+operation records it. `GET /api/quota-pool` reads no
+sign-in of its own: it lists the Claude CLI account only for the sign-in this proxy last read, and
+only when that account has a recorded snapshot. After an external sign-out or account switch it keeps
+the previous account until the dashboard or a Claude turn reads the sign-in again; after a restart
+the row is absent until such a read.
 
 With `quota=1`, an Anthropic or Antigravity account row whose probe returned no quota carries
 `quotaUnavailable: true` and, when the cause is known, a closed `quotaFailure` code:

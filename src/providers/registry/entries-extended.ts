@@ -1044,8 +1044,31 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
   {
     id: "mistral", label: "Mistral", baseUrl: "https://api.mistral.ai/v1", adapter: "openai-chat", authKind: "key",
     dashboardUrl: "https://console.mistral.ai/api-keys", defaultModel: "codestral-latest", promptCacheKey: true,
+    foldDeveloperRoleToSystem: true,
     // Native text-only input enrolls this model in the existing vision sidecar.
     modelInputModalities: { "zai-glm-5-3": ["text"] },
+    // Images per request above the documented 8, measured on api.mistral.ai on 2026-11-04 as the
+    // largest count accepted before a refusal (Flash answers HTTP 503, code 3800, at 21; Large 4
+    // answers HTTP 400 at 101). GLM 5.3 Flash accepted every count tried, up to 256.
+    modelCapabilities: {
+      "deepseek-v4-1-flash-1017": { mistralMaxImages: 20 },
+      "mistral-large-4": { mistralMaxImages: 100 },
+      "mistral-large-4-0": { mistralMaxImages: 100 },
+      "zai-glm-5-3-flash": { mistralMaxImages: 256 },
+    },
+    // Effort rungs Mistral accepts per model (#8254); without them exports offer the whole
+    // low..ultra ladder and Mistral refuses medium/xhigh with 400 and ultra with 422. GLM 5.3,
+    // GLM 5.3 Flash and Large 4 follow docs.mistral.ai/capabilities/reasoning. DeepSeek V4.1
+    // Flash 1017 has no documented values: its rungs are the reporter's measured HTTP 200 set
+    // (2026-11), every one inside Mistral's OpenAPI ReasoningEffort enum; medium and ultra were
+    // measured refusals. An operator modelReasoningEfforts entry still replaces any row here.
+    modelReasoningEfforts: {
+      "zai-glm-5-3": ["low", "high", "max"],
+      "zai-glm-5-3-flash": ["low", "high", "max"],
+      "mistral-large-4": ["low", "medium", "high"],
+      "mistral-large-4-0": ["low", "medium", "high"],
+      "deepseek-v4-1-flash-1017": ["low", "high", "xhigh", "max"],
+    },
   },
   {
     id: "minimax", label: "MiniMax — Coding Plan", baseUrl: "https://api.minimax.io/v1", adapter: "openai-chat", authKind: "key",
@@ -1641,15 +1664,11 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // request entirely (src/codex/catalog/provider-models.ts).
     liveModels: false,
     modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
-    // Text-only for v1, not the image modality the Messages API rows publish. The CLI parses an
-    // image frame (verified against 2.1.270), but a headless turn has no verified contract that the
-    // harness hands those bytes to the model, and advertising a modality the route cannot honour
-    // makes a route selection pick this row for a picture it then answers blind. The adapter refuses
-    // direct image input for the same reason; the vision sidecar still captions images into text.
-    noVisionModels: [...ANTHROPIC_MODELS],
+    // The CLI receives native image blocks through Claude's stable conversation replay.
+    modelInputModalities: { ...ANTHROPIC_MODEL_INPUT_MODALITIES },
     reasoningEfforts: ANTHROPIC_REASONING_EFFORTS,
     modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
-    note: "Runs Claude subscription traffic through Anthropic's own harness: the official Claude Code CLI headlessly (`claude -p`), one turn per request. OpenCodex stores no Claude token, reads none and injects none — the CLI signs in and bills the account itself, which is why this row is keyless and an API key saved here never reaches the harness (use `anthropic-apikey` for key billing). The sign-in is the one of the user this proxy runs as, so every request served through this row — by any client of this proxy — spends that same account; OpenCodex neither pools nor multiplexes Claude sign-ins. Requires the CLI (`npm i -g @anthropic-ai/claude-code`) and a signed-in session (`claude` -> /login). v1 disables CLI tools (--tools \"\", --strict-mcp-config) so the client retains tool ownership: text/reasoning only for now. Subscription routing authorization flagged for maintainer review.",
+    note: "Runs Claude subscription traffic through Anthropic's own harness: the official Claude Code CLI headlessly (`claude -p`), one turn per request. OpenCodex stores no Claude token and injects none into CLI requests (quota admission only reads it in memory) — the CLI signs in and bills the account itself, which is why this row is keyless and an API key saved here never reaches the harness (use `anthropic-apikey` for key billing). The sign-in is the one of the user this proxy runs as, so every request served through this row — by any client of this proxy — spends that same account; OpenCodex neither pools nor multiplexes Claude sign-ins. Requires the CLI (`npm i -g @anthropic-ai/claude-code`) and a signed-in session (`claude` -> /login). v1 disables CLI tools (--tools \"\", --strict-mcp-config) so the client retains tool ownership; text, reasoning and native image input are supported. Subscription routing authorization flagged for maintainer review.",
   },
 ];

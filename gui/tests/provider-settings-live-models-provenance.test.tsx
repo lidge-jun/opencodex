@@ -6,6 +6,7 @@ import ProviderSettings from "../src/components/provider-workspace/ProviderSetti
 import type { ProviderUpdatePatch } from "../src/components/provider-workspace/types";
 import { LanguageProvider } from "../src/i18n/provider";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
+import { selectValue } from "./helpers/custom-select";
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
@@ -117,6 +118,20 @@ test("changing an explicit false to true sends an explicit liveModels choice", a
   await act(async () => { root.unmount(); });
 });
 
+test("a static Vertex provider can enable live discovery", async () => {
+  const { root, container, patches } = await mountSettings({
+    name: "google-vertex", adapter: "google", baseUrl: "https://aiplatform.googleapis.com",
+    googleMode: "vertex", authMode: "key", liveModels: false,
+  } as WorkspaceItem);
+  const toggle = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')[1]!;
+  expect(toggle.disabled).toBe(false);
+  expect(toggle.checked).toBe(false);
+  await act(async () => { toggle.click(); });
+  await save(container);
+  expect(patches[0]?.liveModels).toBe(true);
+  await act(async () => { root.unmount(); });
+});
+
 test("canonical ClinePass shows the static catalog as disabled even with stale liveModels true", async () => {
   const { root, container } = await mountSettings({
     name: "cline-pass",
@@ -154,8 +169,9 @@ test("key-optional auth fallback remains local for unrelated providers", async (
     baseUrl: "https://example.test/v1",
     keyOptional: true,
   } as WorkspaceItem);
-  const selects = container.querySelectorAll<HTMLSelectElement>("select.input");
+  const authMode = container.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="Auth mode"]');
 
-  expect(selects[1]?.value).toBe("local");
+  expect(authMode).not.toBeNull();
+  expect(selectValue(authMode!)).toBe("local");
   await act(async () => { root.unmount(); });
 });

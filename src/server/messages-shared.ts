@@ -1,3 +1,6 @@
+import type { MessagesSseErrorFilter } from "./messages-sse-error-filter";
+import { MessagesSseFrameContext, messagesSseLocalFrame, type MessagesSseLocalOrigin } from "../lib/messages-sse-error-presentation";
+import { markProxyError } from "../lib/client-error-body";
 /**
  * Accounting and measurement pieces shared by the two Claude Messages lanes.
  *
@@ -25,9 +28,11 @@ import { redactSecretString } from "../lib/redact";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { estimateTokens } from "../lib/token-estimate";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
+import { httpStatusFromTerminalError } from "../lib/errors";
 import { AnthropicRequestError, isRec, type Rec } from "../claude/inbound-records";
 import type { RequestLogContext } from "./request-log";
 import { recordGenerationEvent } from "./request-log-generation-window";
+import { recordLocalFailureDetail } from "./request-log-failure-detail";
 import type { OcxConfig } from "../types";
 
 export function anthropicUsageToOcx(usage: Rec | undefined): { inputTokens: number; outputTokens: number; cachedInputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number; cacheCreation1hInputTokens?: number } | undefined {
@@ -109,6 +114,8 @@ export function tapAnthropicSseForLog(
   logCtx: RequestLogContext,
   finalize: (status: number, meta: PassthroughFinalizeMeta) => void,
   guard?: PassthroughBodyGuard,
+  frames?: MessagesSseFrameContext,
+  clientFilter?: MessagesSseErrorFilter,
 ): ReadableStream<Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
@@ -140,6 +147,7 @@ export function tapAnthropicSseForLog(
   let usageAcc: Rec = {};
   // message_stop or an upstream error event: the turn's own terminal already went through.
   let terminalSeen = false;
+  let errorSeen = false;
   // stop_reason of the latest message event the client received as a complete SSE event. Any
   // later message event (resumed content) clears it; pings and comments do not.
   let lastDeliveredStop: string | null = null;
@@ -159,6 +167,7 @@ export function tapAnthropicSseForLog(
     if (!dataLine) return;
     let data: unknown;
     try { data = JSON.parse(dataLine); } catch { data = null; }
+    if (errorSeen && !(isRec(data) && named(event, data, "ping"))) logCtx.streamErrorFollowed = true;
     if (!isRec(data)) {
       // A malformed event after a stop reason means the turn kept going and was cut.
       if (delivered) lastDeliveredStop = null;
@@ -172,6 +181,12 @@ export function tapAnthropicSseForLog(
     }
     if (named(event, data, "message_stop") || named(event, data, "error")) {
       terminalSeen = true;
+      if (data.type === "error") {
+        errorSeen = true;
+        const error = isRec(data.error) ? data.error : {};
+        logCtx.streamErrorStatus = httpStatusFromTerminalError({ type: typeof error.type === "string" ? error.type : undefined,
+          code: typeof error.code === "string" ? error.code : undefined, message: typeof error.message === "string" ? error.message : undefined });
+      }
     } else if (delivered && !named(event, data, "ping")) {
       const delta = isRec(data.delta) ? data.delta : undefined;
       lastDeliveredStop = named(event, data, "message_delta") && typeof delta?.stop_reason === "string"
@@ -204,6 +219,9 @@ export function tapAnthropicSseForLog(
       const end = text.length - (heldLf ? 1 : 0);
       appendPart(text.slice(start, end));
     }
+    // The relay may reframe this read: a combo child judges a retryable error by what followed it here.
+    if (errorSeen && !logCtx.streamErrorFollowed
+      && (frameParts.length > 0 || !isHarmlessSseTail(pendingParts.join("")))) logCtx.streamErrorFollowed = true;
   };
   // The last block can sit in the buffer without its blank line: an upstream that stopped after
   // it, or a held trailing CR. Count it before deciding how the turn ended (the Responses relay
@@ -235,16 +253,32 @@ export function tapAnthropicSseForLog(
   let bodyBytes = 0;
   let tapController: ReadableStreamDefaultController<Uint8Array> | undefined;
 
+  let deliveryFailed = false;
+  const enqueue = (bytes: Uint8Array): number => {
+    let count = 0;
+    try {
+      if (clientFilter) clientFilter.push(bytes, value => { tapController!.enqueue(value); count++; });
+      else { tapController!.enqueue(bytes); count++; }
+      return count;
+    } catch (error) {
+      deliveryFailed = clientFilter !== undefined;
+      clientFilter?.dispose();
+      throw error;
+    }
+  };
+  const close = () => { clientFilter?.finish(value => tapController!.enqueue(value)); tapController!.close(); };
   const recordUsage = () => {
     logCtx.usage = anthropicUsageToOcx(Object.keys(usageAcc).length > 0 ? usageAcc : undefined);
   };
-  const closeWithErrorFrame = (errType: string, message: string) => {
+  const closeWithErrorFrame = (errType: string, message: string, origin: MessagesSseLocalOrigin) => {
     const payload = JSON.stringify({ type: "error", error: { type: errType, message } });
     try {
       // Leading blank line terminates any partial SSE block so the frame parses cleanly
       // (relaySseWithFailedTail policy, Anthropic wire shape).
-      tapController?.enqueue(encoder.encode(`\n\nevent: error\ndata: ${payload}\n\n`));
-      tapController?.close();
+      const bytes = encoder.encode(`\n\nevent: error\ndata: ${payload}\n\n`);
+      frames?.register(bytes, { client: messagesSseLocalFrame(origin, message) });
+      enqueue(bytes);
+      close();
     } catch { /* client already torn down */ }
   };
   const failBody = (closeReason: "body_stall" | "body_overflow", errType: string, message: string) => {
@@ -260,16 +294,17 @@ export function tapAnthropicSseForLog(
       // including the restored blank line for a terminal found only in the tail.
       finalize(200, { closeReason: "terminal" });
       try {
-        if (terminalInTail) tapController?.enqueue(encoder.encode("\n\n"));
-        tapController?.close();
+        if (terminalInTail) enqueue(encoder.encode("\n\n"));
+        close();
       } catch { /* client already torn down */ }
     } else {
       // A cut-short turn, logged as the Responses relay logs a stall-timeout incomplete
       // (httpStatusForRequestLogTerminal: only a max_output_tokens incomplete is a 200). A 200
       // row with no terminalStatus also lost its failure diagnostics in usage.jsonl.
-      logCtx.upstreamError = message.slice(0, 500);
+      recordLocalFailureDetail(logCtx, message, closeReason === "body_stall"
+        ? { code: "body_stall", value: guard?.stallMs ?? 0 } : { code: "body_overflow", value: guard?.maxBytes ?? 0 });
       finalize(502, { terminalStatus: "incomplete", closeReason });
-      closeWithErrorFrame(errType, message);
+      closeWithErrorFrame(errType, message, closeReason === "body_stall" ? "stall" : "cap");
     }
     reader.cancel(new DOMException(message, closeReason === "body_stall" ? "TimeoutError" : "QuotaExceededError")).catch(() => {});
   };
@@ -289,7 +324,9 @@ export function tapAnthropicSseForLog(
     settled = true;
     idle.cancel();
     detachAbort();
+    recordUsage();
     finalize(499, { closeReason: "client_cancel" });
+    clientFilter?.dispose();
     try { tapController?.close(); } catch { /* downstream already torn down */ }
     reader.cancel(guard?.reqSignal?.reason).catch(() => {});
   };
@@ -311,64 +348,66 @@ export function tapAnthropicSseForLog(
     async pull(controller) {
       if (settled) return;
       try {
-        idle.reset();
-        const { done, value } = await reader.read();
-        idle.pause();
-        if (settled) return; // stall/overflow/abort won the race while we awaited
-        if (done) {
-          // Bun can resolve a cancelled read as done before the abort listener runs: a client
-          // that left is a cancel, not a cut upstream.
-          if (guard?.reqSignal?.aborted) {
-            onClientAbort();
+        for (;;) {
+          idle.reset();
+          const { done, value } = await reader.read();
+          idle.pause();
+          if (settled) return; // stall/overflow/abort won the race while we awaited
+          if (done) {
+            // Bun can resolve a cancelled read as done before the abort listener runs: a client
+            // that left is a cancel, not a cut upstream.
+            if (guard?.reqSignal?.aborted) {
+              onClientAbort();
+              return;
+            }
+            settled = true;
+            idle.cancel();
+            detachAbort();
+            const { terminalInTail, tailClean } = flushTail();
+            recordUsage();
+            // A clean EOF ends the turn only when the client already has its terminal, or a
+            // complete non-error stop_reason with nothing cut after it (compatible providers may
+            // omit message_stop; the translated adapter accepts the same shape). The opt-in
+            // anthropicEofTolerance profile keeps a content-only EOF as it always was.
+            const failure = terminalSeen
+              ? null
+              : lastDeliveredStop === "error"
+                ? 'upstream ended the turn with stop_reason "error"'
+                : !tailClean
+                  ? "anthropic passthrough upstream stream ended before message_stop"
+                  : lastDeliveredStop !== null || guard?.eofTolerant === true
+                    ? null
+                    : "anthropic passthrough upstream stream ended before message_stop";
+            if (failure === null) {
+              finalize(200, { closeReason: "terminal" });
+              if (terminalInTail) enqueue(encoder.encode("\n\n"));
+              close();
+              return;
+            }
+            // A body that stopped short is a failed turn, logged and surfaced like a mid-stream
+            // reset (below), so the client never reads a partial answer as a finished message.
+            logCtx.transportPhase = "mid_stream";
+            logCtx.terminalSource = "synthetic";
+            recordLocalFailureDetail(logCtx, failure, { code: lastDeliveredStop === "error" ? "stream_error_stop" : "stream_ended_early" });
+            if (logCtx.activeAttempt) logCtx.activeAttempt.streamAborted = true;
+            finalize(502, { terminalStatus: "failed", closeReason: "terminal" });
+            closeWithErrorFrame("api_error", failure, lastDeliveredStop === "error" ? "stop-error" : "eof");
             return;
           }
-          settled = true;
-          idle.cancel();
-          detachAbort();
-          const { terminalInTail, tailClean } = flushTail();
-          recordUsage();
-          // A clean EOF ends the turn only when the client already has its terminal, or a
-          // complete non-error stop_reason with nothing cut after it (compatible providers may
-          // omit message_stop; the translated adapter accepts the same shape). The opt-in
-          // anthropicEofTolerance profile keeps a content-only EOF as it always was.
-          const failure = terminalSeen
-            ? null
-            : lastDeliveredStop === "error"
-              ? 'upstream ended the turn with stop_reason "error"'
-              : !tailClean
-                ? "anthropic passthrough upstream stream ended before message_stop"
-                : lastDeliveredStop !== null || guard?.eofTolerant === true
-                  ? null
-                  : "anthropic passthrough upstream stream ended before message_stop";
-          if (failure === null) {
-            finalize(200, { closeReason: "terminal" });
-            if (terminalInTail) controller.enqueue(encoder.encode("\n\n"));
-            controller.close();
-            return;
+          if (value.byteLength > 0) {
+            bodyBytes += value.byteLength;
+            if (guard && guard.maxBytes > 0 && bodyBytes > guard.maxBytes) {
+              failBody(
+                "body_overflow",
+                "api_error",
+                `anthropic passthrough body exceeded ${guard.maxBytes} bytes`,
+              );
+              return;
+            }
           }
-          // A body that stopped short is a failed turn, logged and surfaced like a mid-stream
-          // reset (below), so the client never reads a partial answer as a finished message.
-          logCtx.transportPhase = "mid_stream";
-          logCtx.terminalSource = "synthetic";
-          logCtx.upstreamError = failure;
-          if (logCtx.activeAttempt) logCtx.activeAttempt.streamAborted = true;
-          finalize(502, { terminalStatus: "failed", closeReason: "terminal" });
-          closeWithErrorFrame("api_error", failure);
-          return;
+          inspect(value);
+          if (enqueue(value) > 0) return;
         }
-        if (value.byteLength > 0) {
-          bodyBytes += value.byteLength;
-          if (guard && guard.maxBytes > 0 && bodyBytes > guard.maxBytes) {
-            failBody(
-              "body_overflow",
-              "api_error",
-              `anthropic passthrough body exceeded ${guard.maxBytes} bytes`,
-            );
-            return;
-          }
-        }
-        inspect(value);
-        controller.enqueue(value);
       } catch (err) {
         if (settled) return;
         // Bun can settle a fetch body read before it dispatches the abort listeners
@@ -387,6 +426,7 @@ export function tapAnthropicSseForLog(
           // A local cap, not an upstream failure: the non-streaming native Messages fold
           // maps this error to a 413 itself, so it still errors the stream.
           finalize(200, { closeReason: "terminal" });
+          clientFilter?.dispose();
           try { controller.error(err); } catch { /* torn down */ }
           return;
         }
@@ -397,8 +437,11 @@ export function tapAnthropicSseForLog(
           try {
             // An SSE parser drops an event that EOF cuts off before its blank line, so restore
             // the delimiter when the terminal was only found in that unterminated tail.
-            if (terminalInTail) controller.enqueue(encoder.encode("\n\n"));
-            controller.close();
+            if (deliveryFailed) controller.error(err);
+            else {
+              if (terminalInTail) enqueue(encoder.encode("\n\n"));
+              close();
+            }
           } catch { /* torn down */ }
           reader.cancel(err).catch(() => {});
           return;
@@ -411,18 +454,23 @@ export function tapAnthropicSseForLog(
         const message = redactSecretString(`anthropic passthrough upstream stream failed: ${err instanceof Error ? err.message : String(err)}`);
         logCtx.transportPhase = "mid_stream";
         logCtx.terminalSource = "synthetic";
+        // The runtime error text stays internal; the row keeps the fixed sentence only.
+        recordLocalFailureDetail(logCtx, "anthropic passthrough upstream stream failed", { code: "stream_failed" });
         logCtx.upstreamError = message.slice(0, 500);
         if (logCtx.activeAttempt) logCtx.activeAttempt.streamAborted = true;
         finalize(502, { terminalStatus: "failed", closeReason: "terminal" });
-        closeWithErrorFrame("api_error", message);
+        if (deliveryFailed) { clientFilter?.dispose(); try { controller.error(err); } catch { /* torn down */ } }
+        else closeWithErrorFrame("api_error", message, "read");
         reader.cancel(err).catch(() => {});
       }
     },
     cancel(reason) {
+      clientFilter?.dispose();
       if (!settled) {
         settled = true;
         idle.cancel();
         detachAbort();
+        recordUsage();
         finalize(499, { closeReason: "client_cancel" });
       }
       reader.cancel(reason).catch(() => {});
@@ -463,7 +511,7 @@ export function sanitizePassthroughToolCallIds(messages: unknown[]): void {
     const field = fieldOf(block);
     if (!field || typeof block[field] !== "string") continue;
     const wire = callIds.allocate(block[field] as string);
-    if (wire === undefined) throw new AnthropicRequestError(`${block.type} block has an empty ${field}`);
+    if (wire === undefined) throw markProxyError(new AnthropicRequestError(field === "id" ? "tool_use block has an empty id" : "tool_result block has an empty tool_use_id"));
     block[field] = wire;
   }
 }

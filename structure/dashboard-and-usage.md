@@ -100,7 +100,7 @@ Accounts tab through `revealProviderAccounts` instead; following the same link a
 the entry when its filter is edited, and both targets re-read the hash on `hashchange`/`popstate`,
 so Back and Forward restore the prefilter. Tests live in `gui/tests/provider-protocol-panel.test.tsx`,
 `gui/tests/compatibility-protocol-filter.test.tsx`, `gui/tests/protocol-deep-links.test.ts`, `gui/tests/providers-deep-link.test.tsx`,
-`gui/tests/quota-summary-bar.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`; `gui/tests/quota-summary-hover-browser.ts` checks real pointer travel across the quota popover gap with production CSS.
+`gui/tests/quota-summary-bar.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`; `gui/tests/quota-summary-hover-browser.ts` checks real pointer travel across the quota popover gap with production CSS. `gui/src/quota-summary.ts` selects fixed windows by semantic label and promotes critical credits over a noncritical preferred window; a critical preferred window retains priority. For a positive WorkBuddy credit total it derives the unavailable share from remaining credits, including frozen amounts, with neutral severity, nearest-whole-percent display and no partial expiry presented as a balance reset. `gui/tests/quota-summary.test.ts` covers this projection, precedence and provider-label collisions.
 
 The API workspace gives `gui/src/components/section-tabs.tsx` its mobile reading
 line so scroll-spy and the top-bar offset agree; other consumers keep their
@@ -165,7 +165,7 @@ keeps the saved state and renders fixed `ocx sync` guidance without server/accou
 `OcxUsage.providerCredits` preserves provider-reported credit spend in request and attempt rows
 through `src/usage/log.ts` normalization and ledger reloads. Missing readings stay absent, and zero
 is a measured value. Separate attempts add credits when usage is merged. The field is independent
-of token estimation (`estimated` describes tokens) and is never treated as USD or token usage. The human log projection in `src/cli/observe.ts` includes the persisted request ID as `id=...` for direct use with `ocx logs get` and `ocx logs explain`. Rows without an ID or with control characters in their ID omit it rather than rewriting the lookup key; JSON and JSONL keep the API payload. `ocx logs history` pages the same derived index the dashboard uses (`GET /api/request-history`) with a resumable `nextCursor`.
+of token estimation (`estimated` describes tokens) and is never treated as USD or token usage. The shared heuristic in `src/lib/token-estimate.ts` counts supplementary Han surrogate pairs as two CJK code units alongside its existing BMP buckets; model ratios and context-window caps stay unchanged. The human log projection in `src/cli/observe.ts` includes the persisted request ID as `id=...` for direct use with `ocx logs get` and `ocx logs explain`. Rows without an ID or with control characters in their ID omit it rather than rewriting the lookup key; JSON and JSONL keep the API payload. `ocx logs history` pages the same derived index the dashboard uses (`GET /api/request-history`) with a resumable `nextCursor`. Client labels follow the [attribution contract](usage-client-attribution.md).
 
 ### Upstream key account attribution
 
@@ -180,7 +180,7 @@ identity; rotating the secret behind the same reference preserves the logical ac
 `src/usage/jev-stats.ts` owns the parallel content-free JEV projection; its accumulator contract lives in [providers/jev-decision.md](./providers/jev-decision.md).
 
 `src/providers/label.ts` stamps only key authentication, including implicit custom-provider
-keys. `src/server/request-log.ts` commits identity at dispatch after queued selection changes,
+keys. `src/server/request-log.ts` (with recovery markers in `src/server/request-log-attempt-recovery.ts`) commits identity at dispatch after queued selection changes,
 retains separate flat records when retries change keys, and isolates each record's raw usage
 from parent combo totals and adapter-loop aggregation. Reported failure usage is retained;
 missing usage and historical identities remain unknown. Native wire snapshots replace only the
@@ -192,7 +192,7 @@ observations separate from token or API-equivalent cost totals.
 
 Custom usage windows are immutable bounds on the streaming accumulator, applied before attribution and daily
 aggregation. The filtered cache includes both inclusive millisecond bounds in its identity and retains the existing ledger revision, overlay-version and timezone checks.
-At most four distinct filtered scans may run concurrently; identical requests share one scan and excess distinct
+At most four distinct filtered reads may run concurrently; identical requests share one flight and excess distinct
 work fails closed. Preset warming never consumes custom summaries.
 The response retains its preset range discriminator for compatibility and explicitly marks
 `customWindow`, `since`, and `until`; the chart uses the window's local calendar days with
@@ -267,7 +267,7 @@ An opt-in shadow-call rewrite persists the bounded, redacted original helper mod
 request content or inferring a helper subtype from timing.
 A failed request persists closed `failureStage` and `failureCause` members on the attempt that ended
 it and on the logical row, derived once at `addFinalRequestLog` from facts that are themselves
-closed; `errorCode` and `upstreamError` carry upstream text and are deliberately not read there. The
+closed; `errorCode` and the context's `upstreamError` are open inputs and are deliberately not read there. The
 resend verdict they imply is never stored — `/api/logs` computes `resendPermission` at read time, so
 a row written by an older build cannot assert a permission the current tables refuse. An attempt also
 carries `deliverySummary`: adapter events, relayed frames, semantic bytes, side effects and terminal
@@ -353,7 +353,7 @@ An oversized row is skipped inside the scanner bound without shortening identiti
 64 KiB checkpoint followed by file growth is intentionally outside the incremental detector's
 contract: validating arbitrary historical rewrites on every refresh would require rereading the
 whole prefix. Replace or truncate the file, or restart the proxy, after manually changing historical
-rows so the next request performs a cold rebuild.
+rows so the next request performs a cold rebuild. The candidate index shares that contract and is stricter about it: any same-size metadata movement rebuilds it.
 
 The wire fields `historyTruncated`, `truncatedPrefixBytes`, `entriesTruncated`, and `entriesDropped`
 remain in the response for compatibility with older GUI and CLI clients. A successful whole-ledger
@@ -555,14 +555,14 @@ enabling it takes effect without a restart.
 
 ## Usage history and model identity
 
-`src/server/request-log-terminal-status.ts` owns the diagnostics shared by request contexts and final rows in `src/server/request-log.ts`. It provisionally maps bare upstream `error` events with recognized rate-limit classes to 429 and explicit overload to 503; an unknown code takes the 5xx its Codex WebSocket wrapper states (top-level integer `status` or `status_code`, not both, read by `codexWsWrapperStatus` in `src/server/responses/codex-ws-wire.ts`, as the native client does), otherwise it remains 502; a wrapper 4xx is not adopted because it would move quota or credential routing, and policy refusals retain precedence (#6740). Genuine completed, failed, or incomplete terminals supersede provisional status before account-health recording. Final rows keep the first `upstreamErrorType` (closed provider-class vocabulary), `upstreamErrorCode` (nested envelopes, or a known bare class) and `upstreamRequestId` within the 128-character token allowlist, and drop any value that repeats a credential: `src/server/configured-credentials.ts` reads every configured provider key, pool key, header value and OAuth-store token when checking (observe-only and quiet; rebuilt when the bytes of `config.json` or `auth.json` change (every check reads both stores and compares a content digest, never inode/size/mtime, so a same-length rewrite inside one timestamp tick or a timestamp-preserving writer is still seen), when a keychain secret is replaced in this process, or when a referenced env value changes; an incomplete set is retried after 30 s; `upstreamDiagnosticLogFields` takes one snapshot per projected row, only once a field is populated), and `src/lib/outbound-credential-registry.ts` records final HTTP (`sendWithConnectionPolicy`) and Codex WebSocket headers in a strict tier (credential-named, any length) and a best-effort tier (8+ characters, never disabling), split into components. The check runs at capture, in warnings and at projection; an incomplete configured source (until it recovers) or an evicted strict value (until restart) makes all three fields fail closed; the event discriminator is not an error class. It preserves upstream `servedModel` independently of route-derived
+`src/server/request-log-terminal-status.ts` owns the diagnostics shared by request contexts and final rows in `src/server/request-log.ts`. It provisionally maps bare upstream `error` events with recognized rate-limit classes to 429 and explicit overload to 503; an unknown code takes the 5xx its Codex WebSocket wrapper states (top-level integer `status` or `status_code`, not both, read by `codexWsWrapperStatus` in `src/server/responses/codex-ws-wire.ts`, as the native client does), otherwise it remains 502; a wrapper 4xx is not adopted because it would move quota or credential routing, and policy refusals retain precedence (#6740). Genuine completed, failed, or incomplete terminals supersede provisional status before account-health recording. The request context keeps the first `upstreamErrorType` (closed provider-class vocabulary), `upstreamErrorCode` (nested envelopes, or a known bare class) and `upstreamRequestId` within the 128-character token allowlist for classification and the service warning (rows drop all three, see [proxy-owned error detail](data-planes/error-detail.md)), and drops any value that repeats a credential: `src/server/configured-credentials.ts` reads every configured provider key, pool key, header value and OAuth-store token when checking (observe-only and quiet; rebuilt when the bytes of `config.json` or `auth.json` change (every check reads both stores and compares a content digest, never inode/size/mtime, so a same-length rewrite inside one timestamp tick or a timestamp-preserving writer is still seen), when a keychain secret is replaced in this process, or when a referenced env value changes; an incomplete set is retried after 30 s; `upstreamDiagnosticLogFields` takes one snapshot per projected row, only once a field is populated), and `src/lib/outbound-credential-registry.ts` records final HTTP (`sendWithConnectionPolicy`) and Codex WebSocket headers in a strict tier (credential-named, any length) and a best-effort tier (8+ characters, never disabling), split into components. The check runs at capture, in warnings and at projection; an incomplete configured source (until it recovers) or an evicted strict value (until restart) makes all three fields fail closed; the event discriminator is not an error class. It preserves upstream `servedModel` independently of route-derived
 `resolvedModel`; `src/usage/log.ts` persists it with `wireModel`. The Logs model column and detail view
 compare `servedModel` with `wireModel ?? model`. `recordObservedServedModel` in `src/usage/log.ts` refuses
 the client's own selector echoed in `response.model` (Anthropic routes keep `anthropic/<model>` there), and
 `modelIdentityLogFields` drops the same echo from older rows on read, so neither draws a false reroute.
 An absent upstream model stays absent; the tooltip
 retains all available model identities. Historical Codex `openai`, `chatgpt` and `openai-multi` main
-labels collapse for reporting; configured provider names ending in `-main` remain separate. Native Messages request and attempt `requestedEffort` labels follow the [native Messages logging contract](data-planes/protocol-paths.md#managed-native-messages).
+labels collapse for reporting; configured provider names ending in `-main` remain separate. Native Messages request and attempt `requestedEffort` labels follow the [native Messages logging contract](data-planes/protocol-paths.md#managed-native-messages). Row error fields follow [Proxy-Owned Error Detail](data-planes/error-detail.md): closed codes, a classified condition, a numeric quota reset and proxy-authored failure detail; upstream error text never reaches a row.
 
 The Logs request detail headline prefers a recognized request-level cause over the HTTP status label and omits the status description; unknown persisted causes are dropped and use the status fallback without raw attribution. Physical sends are unavailable for absent or invalid spend; retries appear only for one attempt with fully settled, consistent accounting and no flagged loss during attempt normalization, as sends after the first, floored at zero. Direct request-log ingress validates attempts with the persistence normalization rule, marks any loss, and retains the original live roster and its metadata. The ledger writer removes malformed attempts and persists the loss flag, so hydrated rosters can differ from live ones; both suppress retries when loss is marked. A loss detected while normalizing a legacy row is a non-enumerable in-memory flag, retained through re-normalization without changing JSON serialization; an explicitly persisted true flag stays enumerable. The persisted-to-request-log conversion and direct DTO projection preserve the flag. Other attempts and recovery reasons remain visible. Rows also carry the observed protocol path (`protocolTrace`), persisted in `usage.jsonl` and
 re-validated on read; the Logs list shows it as a text badge, the detail dialog as a section, and

@@ -7,6 +7,45 @@ const start = 'data: {"type":"message_start","message":{"usage":{"input_tokens":
 const delta = 'data: {"type":"message_delta","usage":{"output_tokens":5}}';
 const stop = 'data: {"type":"message_stop"}';
 
+test("post-error fragments do not repeatedly join an already committed tail", async () => {
+  const bytes = encoder.encode(`data: {"type":"error","error":{"type":"overloaded_error"}}\n\ndata: ${"x".repeat(256 * 1024)}`);
+  const original = Array.prototype.join;
+  let joinedChars = 0;
+  const join = spyOn(Array.prototype, "join");
+  join.mockImplementation(function (this: unknown[], separator?: string) {
+    if (separator === "") for (const part of this) if (typeof part === "string") joinedChars += part.length;
+    return Reflect.apply(original, this, [separator]);
+  });
+  try {
+    const result = tap(bytes, 256);
+    const output = new Uint8Array(await new Response(result.stream).arrayBuffer());
+    join.mockRestore();
+    expect(output).toEqual(bytes);
+    expect(result.log.streamErrorFollowed).toBe(true);
+    expect(result.calls).toEqual([{ status: 200, meta: { closeReason: "terminal" } }]);
+    expect(joinedChars).toBeLessThanOrEqual(bytes.length * 5);
+  } finally { join.mockRestore(); }
+});
+
+test("an oversized unfinished comment after an error is bounded and conservatively commits", async () => {
+  const bytes = encoder.encode(`data: {"type":"error","error":{"type":"overloaded_error"}}\n\n:${"x".repeat(256 * 1024)}`);
+  const original = Array.prototype.join;
+  let joinedChars = 0;
+  const join = spyOn(Array.prototype, "join");
+  join.mockImplementation(function (this: unknown[], separator?: string) {
+    if (separator === "") for (const part of this) if (typeof part === "string") joinedChars += part.length;
+    return Reflect.apply(original, this, [separator]);
+  });
+  try {
+    const result = tap(bytes, 256);
+    const output = new Uint8Array(await new Response(result.stream).arrayBuffer());
+    join.mockRestore();
+    expect(output).toEqual(bytes);
+    expect(result.log.streamErrorFollowed).toBe(true);
+    expect(joinedChars).toBeLessThanOrEqual(bytes.length * 5);
+  } finally { join.mockRestore(); }
+});
+
 function tap(bytes: Uint8Array, chunkSize: number, ending: "close" | "error" | "stall" = "close", guard?: PassthroughBodyGuard) {
   let offset = 0;
   let cancelled = false;
@@ -121,4 +160,15 @@ test("client cancellation still settles once and cancels the source", async () =
   await text;
   expect(result.calls).toEqual([{ status: 499, meta: { closeReason: "client_cancel" } }]);
   expect(result.cancelled()).toBe(true);
+});
+
+for (const how of ["reader cancel", "signal abort"] as const) test(`a ${how} keeps the usage already received`, async () => {
+  const abort = new AbortController();
+  const result = tap(encoder.encode(`${start}\n\n`), 4096, "stall", { stallMs: 0, maxBytes: 0, reqSignal: abort.signal });
+  const reader = result.stream.getReader();
+  await reader.read();
+  if (how === "reader cancel") await reader.cancel();
+  else { abort.abort(); await new Promise(resolve => setTimeout(resolve, 0)); }
+  expect(result.calls).toEqual([{ status: 499, meta: { closeReason: "client_cancel" } }]);
+  expect(result.log.usage).toMatchObject({ inputTokens: 12 });
 });

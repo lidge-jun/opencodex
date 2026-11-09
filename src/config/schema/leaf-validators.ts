@@ -29,6 +29,7 @@ import {
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
   pinnedWireAdapter,
   PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS,
+  THINKING_DISPLAY_VALUES,
   UPSTREAM_HTTP_VERSION_VALUES,
   type OcxProviderConfig,
   type OcxConfig,
@@ -360,6 +361,10 @@ export const providerConfigSchema = z.object({
   inferContextWindow: z.boolean().optional(),
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
   modelSuppressSyntheticMax: z.record(z.string().min(1), z.boolean()).optional(),
+  // Validated against a closed vocabulary here as well as at the write boundaries, so a
+  // hand-edited typo cannot load silently and leave the operator with the built-in display (#8363).
+  thinkingDisplay: z.enum(THINKING_DISPLAY_VALUES).optional(),
+  modelThinkingDisplay: z.record(z.string().min(1), z.enum(THINKING_DISPLAY_VALUES)).optional(),
   promoteAdditionalTools: z.boolean().optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),
   preserveResponsesInputItemIds: z.boolean().optional(),
@@ -1045,6 +1050,7 @@ export const clientConnectionSchema = z.object({
 export const codexPoolSchema = z.object({
   excludedPlans: z.array(z.string().trim().min(1)).optional(),
   startIdleWindows: z.boolean().optional(),
+  requestOwnedAffinity: z.boolean().optional(),
   lowQuotaProtection: z.object({
     enabled: z.boolean(),
     threshold: z.number().finite().min(1).max(100),

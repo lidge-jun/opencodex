@@ -8,6 +8,7 @@ import {
   writeVersionSources,
 } from "../../scripts/release-version-sources";
 import { repoPath, repoRoot } from "../helpers/repo-root";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 
 /**
@@ -160,24 +161,22 @@ function stepIndex(steps: WorkflowStep[], name: string): number {
 }
 
 describe("every version move covers all four sources", () => {
-  test("release.yml refuses a drifted source before the desktop build and again before publish", () => {
+  test("release.yml stamps version sources before desktop and npm builds", () => {
     const desktop = workflowSteps("release.yml", "package-desktop");
     const gate = desktop[stepIndex(desktop, "Verify every version source matches the release")]!;
     expect(gate.shell).toBe("bash");
-    expect(gate.env).toEqual({ RELEASE_VERSION: "$" + "{{ inputs.version }}" });
-    expect(gate.run?.trim()).toBe('bun scripts/release-version-sources.ts check "$RELEASE_VERSION"');
+    expect(gate.env).toEqual({ RELEASE_VERSION: "$" + "{{ needs.validate-dispatch.outputs.version }}" });
+    expect(gate.run?.trim()).toBe('bun trusted-release-policy/scripts/release-version-sources.ts check "$RELEASE_VERSION" --root .');
     const gateAt = stepIndex(desktop, "Verify every version source matches the release");
     for (const later of ["Install project dependencies", "Build WidgetKit extension", "Build desktop bundles", "Upload desktop release"]) {
       expect(gateAt, later).toBeLessThan(stepIndex(desktop, later));
     }
 
-    const publish = workflowSteps("release.yml", "publish");
-    const verify = publish[stepIndex(publish, "Verify every version source matches the requested version")]!;
-    expect(verify.env).toEqual({ RELEASE_VERSION: "$" + "{{ inputs.version }}" });
-    expect(verify.run).toContain('bun scripts/release-version-sources.ts check "$RELEASE_VERSION" || {');
-    expect(verify.run).toContain("exit 1;");
-    expect(stepIndex(publish, "Setup project Bun")).toBeLessThan(stepIndex(publish, "Verify every version source matches the requested version"));
-    expect(stepIndex(publish, "Verify every version source matches the requested version")).toBeLessThan(stepIndex(publish, "Publish (or dry-run)"));
+    const npm = workflowSteps("release.yml", "package-npm");
+    const stamp = npm[stepIndex(npm, "Stamp and verify release version")]!;
+    expect(stamp.run).toContain('release-version-sources.ts sync "$RELEASE_VERSION" --root .');
+    expect(stamp.run).toContain('release-version-sources.ts check "$RELEASE_VERSION" --root .');
+    expect(stepIndex(npm, "Stamp and verify release version")).toBeLessThan(stepIndex(npm, "Install dependencies"));
   });
 
   test("the dev bump stages exactly the four sources and checks them before committing", () => {
@@ -243,15 +242,54 @@ describe("every version move covers all four sources", () => {
     }
   });
 
-  test("scripts/release.ts syncs, probes and stages the same four sources", () => {
-    const source = readFileSync(repoPath("scripts", "release.ts"), "utf8");
-    const sync = source.indexOf('await runLoud(["bun", "scripts/release-version-sources.ts", "sync", version]);');
-    expect(sync).toBeGreaterThanOrEqual(0);
-    expect(source).toContain('import { VERSION_SOURCE_PATHS } from "./release-version-sources";');
-    const probe = source.indexOf('capture(["git", "status", "--porcelain", "--", ...VERSION_SOURCE_PATHS])');
-    const add = source.indexOf('runLoud(["git", "add", "--", ...VERSION_SOURCE_PATHS])');
-    expect(probe).toBeGreaterThan(sync);
-    expect(add).toBeGreaterThan(probe);
-    expect(source).not.toContain('runLoud(["git", "add", "package.json"])');
+  bashTest("every source build executes its own trusted stamp against all four files", () => {
+    const root = scratchCopy();
+    try {
+      const trusted = join(root, "trusted-release-policy", "scripts");
+      mkdirSync(trusted, { recursive: true });
+      copyFileSync(CLI, join(trusted, "release-version-sources.ts"));
+      const env = { ...process.env, HOME: root, GIT_CONFIG_NOSYSTEM: "1",
+        GIT_AUTHOR_NAME: "fixture", GIT_AUTHOR_EMAIL: "fixture@example.test",
+        GIT_COMMITTER_NAME: "fixture", GIT_COMMITTER_EMAIL: "fixture@example.test" };
+      const git = (...args: string[]) => {
+        const result = Bun.spawnSync(["git", ...args], { cwd: root, env, timeout: INTERNAL_DEADLINE_MS, stdout: "pipe", stderr: "pipe" });
+        expect(result.exitCode, result.stderr.toString()).toBe(0);
+        return result.stdout.toString().trim();
+      };
+      git("init", "-q");
+      git("add", "--", ...VERSION_SOURCE_PATHS);
+      git("commit", "-q", "-m", "source fixture");
+      const sourceSha = git("rev-parse", "HEAD");
+      const workflowSha = sourceSha === "b".repeat(40) ? "a".repeat(40) : "b".repeat(40);
+      const version = "9.8.7-preview.20261108.1";
+      const workflow = Bun.YAML.parse(readFileSync(repoPath(".github", "workflows", "release.yml"), "utf8")) as {
+        jobs: Record<string, { steps: Array<WorkflowStep & { if?: string; with?: Record<string, string> }> }>;
+      };
+      for (const jobName of ["package-standalone", "package-desktop", "package-npm"]) {
+        const steps = workflow.jobs[jobName]!.steps;
+        const source = steps[stepIndex(steps, jobName === "package-npm" ? "Checkout selected source" : "Checkout")]!;
+        const policy = steps[stepIndex(steps, "Checkout trusted release policy")]!;
+        const stampIndex = stepIndex(steps, "Stamp and verify release version");
+        const stamp = steps[stampIndex]!;
+        expect(source.with?.ref, jobName).toBe("${{ needs.validate-dispatch.outputs.source_sha }}");
+        expect(policy.with?.ref, jobName).toBe("${{ needs.validate-dispatch.outputs.workflow_sha }}");
+        expect(stamp.if, jobName).toBeUndefined();
+        const install = steps.findIndex(step => /install.*dependenc/i.test(step.name ?? ""));
+        if (install >= 0) expect(stampIndex, jobName).toBeLessThan(install);
+        git("checkout", "--", ...VERSION_SOURCE_PATHS);
+        const before = snapshot(root);
+        const execute = (sha: string) => Bun.spawnSync(["bash", "-e", "-c", stamp.run!], {
+          cwd: root, env: { ...env, SOURCE_SHA: sha, WORKFLOW_SHA: workflowSha, RELEASE_VERSION: version },
+          timeout: INTERNAL_DEADLINE_MS, stdout: "pipe", stderr: "pipe",
+        });
+        expect(execute("c".repeat(40)).exitCode, jobName).not.toBe(0);
+        expect(snapshot(root), jobName).toEqual(before);
+        const result = execute(sourceSha);
+        expect(result.exitCode, `${jobName}: ${result.stderr.toString()}`).toBe(0);
+        expect(readVersionSources(root).map(entry => entry.version), jobName).toEqual([version, version, version, version]);
+        const after = snapshot(root);
+        for (const path of VERSION_SOURCE_PATHS) expect(after[path], `${jobName}: ${path}`).not.toBe(before[path]);
+      }
+    } finally { removeTreeWithRetry(root); }
   });
 });
