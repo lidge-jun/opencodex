@@ -150,6 +150,13 @@ let lastReconciledGeneration = 0;
 const lockedManifestIdentity = new Map<string, string>();
 const warnedFullManifest = new Set<string>();
 /**
+ * The metadata state in which a creation wait already ran out for a home, keyed as
+ * {@link ownershipCache}. An unowned home whose manifest and owner marker keep the same identity
+ * has no publication left to wait for (a stopped creation, or a corrupt marker), so a registration
+ * must not pay the bounded wait again; either file changing re-arms a single wait.
+ */
+const expiredCreationWait = new Map<string, string>();
+/**
  * Open while this process runs `ocx uninstall` itself. Its own registrations then skip the
  * tombstone check: the same process runs removeOwnedConfigState afterwards, whose locked snapshot
  * includes whatever they add, so nothing it records is orphaned. Without this, a rerun after an
@@ -190,6 +197,27 @@ function manifestIdentity(configDir: string): string | undefined {
   }
 }
 
+/**
+ * Which file each ownership metadata name refers to while a manifest exists, in the same
+ * dev:ino:size:mtime terms {@link manifestIdentity} uses, or null when no manifest exists: without
+ * one the publication wait ends in a single pass, so there is no spent wait to remember. The
+ * manifest is replaced atomically and the owner marker written once, so either file changing
+ * produces a new identity and re-arms a single wait.
+ */
+function creationWaitIdentity(configDir: string): string | null {
+  const describe = (name: string): string | null => {
+    try {
+      const entry = lstatSync(join(configDir, name), { bigint: true });
+      return `${entry.dev}:${entry.ino}:${entry.size}:${entry.mtimeNs}`;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return code === "ENOENT" ? null : `unreadable:${code ?? "unknown"}`;
+    }
+  };
+  const manifest = describe(CONFIG_UNINSTALL_MANIFEST);
+  return manifest === null ? null : `${manifest}|${describe(CONFIG_OWNER_FILE)}`;
+}
+
 export function listLiveConfigOwnershipRoots(currentConfigDir: string): ReadonlySet<string> {
   const currentRoot = ownershipCacheKey(currentConfigDir);
   const roots = new Set<string>([currentRoot]);
@@ -211,6 +239,7 @@ export function reconcileConfigOwnershipRoots(context: GenerationContext): numbe
       existsSync(join(root, ...rel.split("/"))));
     if (hasLiveOwnedPath) continue;
     ownershipCache.delete(root);
+    expiredCreationWait.delete(root);
     removed += 1;
   }
   lastReconciledGeneration = context.generation;
@@ -525,12 +554,25 @@ export function initializeConfigOwnership(configDir: string): boolean {
   const cacheKey = ownershipCacheKey(configDir);
   if (!existsSync(configDir)) {
     ownershipCache.delete(cacheKey);
+    expiredCreationWait.delete(cacheKey);
     mkdirSync(configDir, { recursive: true, mode: 0o700 });
   }
   let ownership = ownershipCache.get(cacheKey);
   if (ownership === undefined || ownership === null) {
-    // A previously unowned home can enter creation later; use the same bounded publication wait.
-    ownership = loadOrCreateOwnership(configDir);
+    // A previously unowned home can enter creation later; use the same bounded publication wait,
+    // but spend it at most once per unchanged metadata pair. A manifest left without a valid
+    // owner marker — a stopped creation, or a corrupt marker — is not a creation still in
+    // progress, and registrations run on the request path: charging each of them the full wait
+    // stalls every request to that home. Either file changing re-arms a single wait.
+    const observed = creationWaitIdentity(configDir);
+    if (observed !== null && expiredCreationWait.get(cacheKey) === observed) {
+      ownership = null;
+    } else {
+      ownership = loadOrCreateOwnership(configDir);
+      const current = creationWaitIdentity(configDir);
+      if (ownership === null && current !== null) expiredCreationWait.set(cacheKey, current);
+      else expiredCreationWait.delete(cacheKey);
+    }
     ownershipCache.set(cacheKey, ownership);
   }
   return ownership !== null;

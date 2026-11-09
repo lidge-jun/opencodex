@@ -49,6 +49,10 @@ function observeOwnerPublication(dir: string, completedOwner: string | null, cac
     "import { writeFileSync } from \"node:fs\";",
     "import { initializeConfigOwnership, registerOwnedConfigPath } from " + JSON.stringify(modulePath) + ";",
     cacheUnowned ? "if (initializeConfigOwnership(" + JSON.stringify(dir) + ")) throw new Error(\"fixture unexpectedly owned before publication\");" : "",
+    // The spent publication wait is remembered per unchanged metadata pair; only a changed owner
+    // marker re-arms it, so the cached-unowned publication case needs a new incomplete marker to
+    // wait on. The unfinished variants keep theirs: unchanged files must not re-enter the wait.
+    cacheUnowned && completedOwner !== null ? "writeFileSync(" + JSON.stringify(join(dir, ".opencodex-owner.json")) + ", \"still-incomplete\");" : "",
     "const completedOwner = " + JSON.stringify(completedOwner) + ";",
     "const realNow = Date.now; let reads = 0;",
     "Date.now = () => {",
@@ -859,5 +863,33 @@ describe("ownership edge cases from review (#8093)", () => {
     const result = JSON.parse(Bun.spawnSync([process.execPath, "-e", script]).stdout.toString()) as { recorded: boolean; waited: number };
     expect(result.recorded).toBe(false);
     expect(result.waited).toBeGreaterThanOrEqual(90);
+  }));
+
+  test("an unchanged ownerless manifest spends the publication wait once, not per registration", withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    const ownerPath = join(dir, ".opencodex-owner.json");
+    const owner = JSON.parse(readFileSync(ownerPath, "utf8"));
+    // A creation stopped after the manifest, or a corrupt marker: the pair never validates.
+    writeFileSync(ownerPath, JSON.stringify({ ...owner, ownerId: "00000000-0000-4000-8000-000000000000" }));
+    // The locked reload drops the stale cache entry; the next registration pays the one wait.
+    expect(recordOwnedConfigPath(dir, join(dir, "observer"))).toBe(false);
+    let sleeps = 0;
+    const realSleep = Bun.sleepSync;
+    Bun.sleepSync = (ms: number) => { sleeps += 1; realSleep(ms); };
+    let waitedMs = 0;
+    try {
+      const first = performance.now();
+      expect(recordOwnedConfigPath(dir, join(dir, "first"))).toBe(false);
+      waitedMs = performance.now() - first;
+      const firstSleeps = sleeps;
+      expect(firstSleeps).toBeGreaterThan(0);
+      const repeats = performance.now();
+      for (let i = 0; i < 20; i += 1) expect(recordOwnedConfigPath(dir, join(dir, `repeat-${i}`))).toBe(false);
+      // Twenty repeats stay under the single wait the first registration already paid: with the
+      // wait wrongly spent per call this would take twenty times as long.
+      expect(performance.now() - repeats).toBeLessThan(waitedMs);
+      expect(sleeps - firstSleeps).toBe(0);
+    } finally { Bun.sleepSync = realSleep; }
+    expect(waitedMs).toBeGreaterThanOrEqual(90);
   }));
 });
