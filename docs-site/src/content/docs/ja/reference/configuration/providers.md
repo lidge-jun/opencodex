@@ -7,7 +7,7 @@ description: プロバイダー エントリ、認証、エンドポイント、
 
 ## Mistral のリクエストごとの画像数
 
-Mistral の画像数制限と `mistralMaxImages` の設定は[英語の正規リファレンス](/reference/configuration/providers/#mistral-images-per-request)を参照してください。リミッターに届いた `image_url` 要素の画像参照が欠落、空、または文字列でない場合、送信用コピー内でテキストに置き換えられ、画像数の上限を消費しません。変換される Responses リクエストでは、有効な URL もファイル ID もない `input_image` をパーサーが省略します。空でない `file_id` があり、空でない `image_url` がない場合、メディアガードが Mistral への送信前にリクエストを拒否し、ファイル ID のテキストマーカーは送信しません。リミッターは `image_url` または `image_url.url` の空でない文字列のみを数え、URL の構文や到達可能性は検証しません。他の送信先の動作は変わりません。
+Mistral の画像数制限と `mistralMaxImages` の設定は[英語の正規リファレンス](/reference/configuration/providers/#mistral-images-per-request)を参照してください。リミッターに届いた `image_url` 要素の画像参照が欠落、空、または文字列でない場合、送信用コピー内でテキストに置き換えられ、画像数の上限を消費しません。変換される Responses リクエストでは、有効な URL もファイル ID もない `input_image` をパーサーが省略します。メッセージやツール出力のブロック内で、空でない `file_id` があり空でない `image_url` がない場合、メディアガードが Mistral への送信前にリクエストを拒否します。ガードが検査しない再生済みの `agent_message` 内では、パーサーが代わりに `[image: <file id>]` テキストマーカーを出力し、通常のテキストとして送信され画像数の上限を消費しません。リミッターは `image_url` または `image_url.url` の空でない文字列のみを数え、URL の構文や到達可能性は検証しません。他の送信先の動作は変わりません。
 
 ## カスタムプロバイダーのコンテキスト
 

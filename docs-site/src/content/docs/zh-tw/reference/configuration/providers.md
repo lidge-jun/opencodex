@@ -7,7 +7,7 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 
 ## Mistral 每次請求的圖片數量
 
-Mistral 圖片數量限制及 `mistralMaxImages` 設定請參閱[英文規範參考](/reference/configuration/providers/#mistral-images-per-request)。對於到達限制器的 `image_url` 項目，缺少、空字串或非字串的圖片參照會在傳出副本中替換為文字，且不占用圖片限額。對於經過轉換的 Responses 請求，剖析器會省略既沒有可用 URL 也沒有檔案 ID 的 `input_image`。若有非空 `file_id` 而沒有非空 `image_url`，媒體防護會在傳送至 Mistral 前拒絕請求，不會傳送包含檔案 ID 的文字標記。限制器僅計算 `image_url` 或 `image_url.url` 中的非空字串，不驗證 URL 語法或可存取性。其他目的地的行為維持不變。
+Mistral 圖片數量限制及 `mistralMaxImages` 設定請參閱[英文規範參考](/reference/configuration/providers/#mistral-images-per-request)。對於到達限制器的 `image_url` 項目，缺少、空字串或非字串的圖片參照會在傳出副本中替換為文字，且不占用圖片限額。對於經過轉換的 Responses 請求，剖析器會省略既沒有可用 URL 也沒有檔案 ID 的 `input_image`。在訊息或工具輸出區塊中，若有非空 `file_id` 而沒有非空 `image_url`，媒體防護會在傳送至 Mistral 前拒絕請求；在防護不檢查的重放 `agent_message` 內，剖析器會改為輸出 `[image: <file id>]` 文字標記，作為一般文字傳送且不占用圖片限額。限制器僅計算 `image_url` 或 `image_url.url` 中的非空字串，不驗證 URL 語法或可存取性。其他目的地的行為維持不變。
 
 ## 自訂供應商的上下文視窗
 
