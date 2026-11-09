@@ -12,6 +12,7 @@ import { assertSshAlias } from "./ssh-argv";
  * It never holds a key: keys live in the running proxy's `apiKeys`, and admission reads them there.
  */
 export type LinkDirection = "hub-initiated" | "client-initiated";
+export type LinkChildKind = "full" | "ephemeral";
 
 export interface LinkRecord {
   id: string;
@@ -28,6 +29,7 @@ export interface LinkRecord {
   apiKeyId: string;
   createdAt: string;
   remotePlatform?: "posix" | "windows";
+  childKind?: LinkChildKind;
 }
 
 export interface LinkStore {
@@ -52,7 +54,7 @@ export function newLinkId(): string {
   return `lnk_${randomBytes(8).toString("hex")}`;
 }
 
-const RECORD_KEYS = new Set(["id", "alias", "direction", "hostKeyFingerprint", "tunnelPort", "apiKeyId", "createdAt", "remotePlatform"]);
+const RECORD_KEYS = new Set(["id", "alias", "direction", "hostKeyFingerprint", "tunnelPort", "apiKeyId", "createdAt", "remotePlatform", "childKind"]);
 const STORE_KEYS = new Set(["version", "listenerPort", "links"]);
 const API_KEY_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/;
 const FINGERPRINT = /^[A-Z0-9]+:[A-Za-z0-9+/=]{16,128}$/;
@@ -77,6 +79,7 @@ function parseRecord(value: unknown, index: number): LinkRecord {
   try { assertSshAlias(raw.alias as string); } catch { fail("alias"); }
   if (raw.direction !== "hub-initiated" && raw.direction !== "client-initiated") fail("direction");
   if (raw.remotePlatform !== undefined && raw.remotePlatform !== "posix" && raw.remotePlatform !== "windows") fail("remotePlatform");
+  if (raw.childKind !== undefined && raw.childKind !== "full" && raw.childKind !== "ephemeral") fail("childKind");
   const fingerprint = raw.hostKeyFingerprint;
   if (fingerprint === null ? raw.direction !== "client-initiated"
     : typeof fingerprint !== "string" || !FINGERPRINT.test(fingerprint)) fail("hostKeyFingerprint");
@@ -92,6 +95,7 @@ function parseRecord(value: unknown, index: number): LinkRecord {
     apiKeyId: raw.apiKeyId as string,
     createdAt: raw.createdAt as string,
     ...(raw.remotePlatform === undefined ? {} : { remotePlatform: raw.remotePlatform as "posix" | "windows" }),
+    ...(raw.childKind === undefined ? {} : { childKind: raw.childKind as LinkChildKind }),
   };
 }
 

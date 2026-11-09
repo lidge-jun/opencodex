@@ -1,9 +1,8 @@
 name: PR Labeler
 
 # pull_request_target always loads this workflow from the repository DEFAULT
-# branch (currently `main`), not from `dev`. Landing here on `dev` alone does
-# not change live labeler behavior until the change is also on that default
-# branch — same promotion model as enforce-issue-quality.yml.
+# branch, which is `dev`. A change lands on the live labeler as soon as it is on
+# `dev` — same model as enforce-issue-quality.yml.
 on:
   pull_request_target:
     # labeled/unlabeled let a human type-label change enqueue a fresher run in the

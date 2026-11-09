@@ -205,6 +205,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `gui/src/account-pause-display.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `gui/src/components/ModelPriceDialog.tsx` | [`pricing.md`](pricing.md) |
 | `gui/src/hooks/useProviderAccountPools.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
+| `native/ocx-child/` | [`remote-link.md`](remote-link.md) |
 | `scripts/` | [`overview.md`](overview.md)<br>[`clients/client-support-matrix.md`](clients/client-support-matrix.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `scripts/generate-ocx-skill-surface.ts` | [`cli-management.md`](cli-management.md) |
 | `scripts/test-run-lock-gate.ts` | [`ops/test-sandbox-cleanup.md`](ops/test-sandbox-cleanup.md) |
@@ -253,6 +254,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/cli/desktop-runtime-guidance.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/cli/ensure-desktop-cold-start.ts` | [`desktop-recovery.md`](desktop-recovery.md) |
 | `src/cli/link-apply-restart.ts` | [`remote-link.md`](remote-link.md) |
+| `src/cli/link-local-control.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/models-runtime.ts` | [`pricing.md`](pricing.md) |
 | `src/cli/status-codex-settings.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/status-link.ts` | [`remote-link.md`](remote-link.md) |
@@ -353,6 +355,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/lib/error-destination.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/lib/failure-detail.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/lib/gui-pair-intent.ts` | [`remote-link.md`](remote-link.md) |
+| `src/lib/local-control-socket.ts` | [`remote-link.md`](remote-link.md) |
 | `src/lib/local-upstream.ts` | [`transports/timeouts.md`](transports/timeouts.md) |
 | `src/lib/messages-error-body.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/lib/messages-sse-error-presentation.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
@@ -434,6 +437,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/index/` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/index/link-management.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index/live-sideband.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/server/index/local-control-listener.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index/ollama-routes.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
 | `src/server/index/serve-options.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/index/startup-warnings.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
@@ -444,6 +448,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/management/anthropic-pool-settings.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
 | `src/server/management/codex-cli-update-routes.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/server/management/companion-routes.ts` | [`desktop-shell.md`](desktop-shell.md) |
+| `src/server/management/link-enrollment.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/management/link-routes.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/management/logs-usage-routes.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/management/model-routes.ts` | [`pricing.md`](pricing.md) |

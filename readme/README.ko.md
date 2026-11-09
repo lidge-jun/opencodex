@@ -10,12 +10,12 @@
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="X에서 @claudeebum 팔로우"></a>
   <a href="https://www.npmjs.com/package/@bitkyc08/opencodex"><img src="https://img.shields.io/npm/v/@bitkyc08/opencodex?color=cb3837&label=npm&logo=npm" alt="npm version"></a>
-  <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="license"></a>
+  <a href="https://github.com/lidge-jun/opencodex/blob/dev/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="license"></a>
   <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="node version">
 </p>
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx start
 ```
 
@@ -88,7 +88,7 @@ opencodex는 코딩 도구와 모델 프로바이더를 연결하는 가벼운 �
 ### 개인 설치 (CLI)
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+; Bun 런타임은 자동으로 번들됩니다
+npm install -g --allow-scripts=bun @bitkyc08/opencodex   # Node 18+; Bun 런타임은 자동으로 번들됩니다
 ocx start                         # 프록시 + 대시보드: localhost:10100
 ```
 
@@ -196,7 +196,7 @@ services:
   hub:
     pull_policy: build
     build:
-      context: https://github.com/lidge-jun/opencodex.git#main
+      context: https://github.com/lidge-jun/opencodex.git#dev
       dockerfile: Dockerfile
       target: runtime
       args:
@@ -241,7 +241,7 @@ bun run src/cli/index.ts start
 <summary>에이전트용</summary>
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx start     # 또는 `ocx service`
 ocx init      # 대화형 설정: ~/.opencodex/config.json을 쓰고 Codex를 연결합니다
 ```

@@ -1345,6 +1345,42 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     inputModalities: ["text"],
     note: "Smart Router that sends each request to a model chosen from AI Stupid Level's benchmarks, using the provider keys saved on your AI Stupid Level account (OpenAI, Anthropic, Google, DeepSeek, Kimi, GLM), so each provider bills you directly with no markup. Routing modes: auto-coding (the default), auto-tooling, auto-reasoning, auto-best, plus value and speed modes. A real model id from the live list, such as claude-opus-5-5, pins one model. The X-AISM-Model response header names the model that answered. Text only.",
   },
+  {
+    // cheapaimodel, operated by LINKOVA PTE. LTD. (Singapore). Contract checked 2026-10-28:
+    // https://cheapaimodel.ai/docs/api/create-chat-completion and
+    // https://cheapaimodel.ai/docs/api/list-models. GET /v1/models answers 401 without a valid key,
+    // so the default discovery URL doubles as key validation. Chat Completions is the one interface
+    // every catalog model supports, so every inbound stays on Chat and the preset does not use the
+    // gateway's Responses or Anthropic Messages endpoints. Context windows and
+    // input modalities are from the live catalog at https://cheapaimodel.ai/models. kimi-k3 rejects
+    // any temperature other than 0.6 or 1 and rejects top_p 0.9 and 1.0, so both are dropped for it.
+    // deepseek-v4-1-flash takes reasoning_effort none, low, high and max, and an omitted effort runs
+    // at high (https://cheapaimodel.ai/blog/deepseek-v4-1-flash-reasoning-effort), so it keeps the
+    // DeepSeek Flash ladder and sends an explicit none instead of dropping it.
+    // The env reference derived from the id is ${CHEAPAIMODEL_API_KEY}.
+    id: "cheapaimodel",
+    label: "cheapaimodel",
+    adapter: "openai-chat",
+    baseUrl: "https://api.cheapaimodel.ai/v1",
+    authKind: "key",
+    dashboardUrl: "https://console.cheapaimodel.ai/keys",
+    liveModels: true,
+    preserveCustomDestination: true,
+    defaultModel: "deepseek-v4-1-flash",
+    models: ["deepseek-v4-1-flash", "glm-5.3", "glm-5.3-flash", "kimi-k3", "grok-4.7"],
+    modelContextWindows: {
+      "deepseek-v4-1-flash": 1_000_000, "glm-5.3": 1_000_000, "glm-5.3-flash": 1_000_000, "kimi-k3": 1_000_000, "grok-4.7": 500_000,
+    },
+    modelInputModalities: {
+      "deepseek-v4-1-flash": ["text", "image"], "glm-5.3": ["text"], "glm-5.3-flash": ["text", "image"],
+      "kimi-k3": ["text", "image"], "grok-4.7": ["text", "image"],
+    },
+    noTemperatureModels: ["kimi-k3"],
+    noTopPModels: ["kimi-k3"],
+    modelReasoningEfforts: { "deepseek-v4-1-flash": deepseekThinkingEffortsFor("deepseek-v4-1-flash") },
+    modelReasoningEffortMap: { "deepseek-v4-1-flash": { ...deepseekReasoningMapFor("deepseek-v4-1-flash"), none: "none" } },
+    note: "Pay-per-token API gateway for open-weight models (DeepSeek, GLM, Kimi) and Grok, billed from a prepaid USD balance. Create an API key at console.cheapaimodel.ai. Live discovery lists the models your key can call; deepseek-v4-1-flash is the default. Chat Completions only.",
+  },
   // Xiaomi retires mimo-v2.5 and mimo-v2.5-pro on 2026-10-21 with no redirect
   // (https://mimo.mi.com/docs/en-US/updates/deprecate), so the first-party presets default to V2.6.
   // Saved defaults are not rewritten; V2.5 stays listed until it stops answering.
@@ -1664,15 +1700,11 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // request entirely (src/codex/catalog/provider-models.ts).
     liveModels: false,
     modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
-    // Text-only for v1, not the image modality the Messages API rows publish. The CLI parses an
-    // image frame (verified against 2.1.270), but a headless turn has no verified contract that the
-    // harness hands those bytes to the model, and advertising a modality the route cannot honour
-    // makes a route selection pick this row for a picture it then answers blind. The adapter refuses
-    // direct image input for the same reason; the vision sidecar still captions images into text.
-    noVisionModels: [...ANTHROPIC_MODELS],
+    // The CLI receives native image blocks through Claude's stable conversation replay.
+    modelInputModalities: { ...ANTHROPIC_MODEL_INPUT_MODALITIES },
     reasoningEfforts: ANTHROPIC_REASONING_EFFORTS,
     modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
-    note: "Runs Claude subscription traffic through Anthropic's own harness: the official Claude Code CLI headlessly (`claude -p`), one turn per request. OpenCodex stores no Claude token, reads none and injects none — the CLI signs in and bills the account itself, which is why this row is keyless and an API key saved here never reaches the harness (use `anthropic-apikey` for key billing). The sign-in is the one of the user this proxy runs as, so every request served through this row — by any client of this proxy — spends that same account; OpenCodex neither pools nor multiplexes Claude sign-ins. Requires the CLI (`npm i -g @anthropic-ai/claude-code`) and a signed-in session (`claude` -> /login). v1 disables CLI tools (--tools \"\", --strict-mcp-config) so the client retains tool ownership: text/reasoning only for now. Subscription routing authorization flagged for maintainer review.",
+    note: "Runs Claude subscription traffic through Anthropic's own harness: the official Claude Code CLI headlessly (`claude -p`), one turn per request. OpenCodex stores no Claude token and injects none into CLI requests (quota admission only reads it in memory) — the CLI signs in and bills the account itself, which is why this row is keyless and an API key saved here never reaches the harness (use `anthropic-apikey` for key billing). The sign-in is the one of the user this proxy runs as, so every request served through this row — by any client of this proxy — spends that same account; OpenCodex neither pools nor multiplexes Claude sign-ins. Requires the CLI (`npm i -g @anthropic-ai/claude-code`) and a signed-in session (`claude` -> /login). v1 disables CLI tools (--tools \"\", --strict-mcp-config) so the client retains tool ownership; text, reasoning and native image input are supported. Subscription routing authorization flagged for maintainer review.",
   },
 ];

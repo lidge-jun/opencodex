@@ -128,6 +128,30 @@ describe("release pipeline contract", () => {
     expect(steps.find(step => step.name === "Bind verified asset digests")?.run).toContain("sha256");
   });
 
+  test("release documentation names every dispatch input and the current recovery rules (#8329)", () => {
+    const doc = readFileSync(repoPath("structure", "ops", "docs-and-release.md"), "utf8");
+    const start = doc.indexOf("\n## Release workflow");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = doc.indexOf("\n## ", start + 1);
+    const section = doc.slice(start, end < 0 ? undefined : end);
+    const dispatch = (release.on as { workflow_dispatch?: { inputs?: Record<string, unknown> } } | undefined)?.workflow_dispatch;
+    const inputs = Object.keys(dispatch?.inputs ?? {});
+    expect(inputs).toContain("resume-after-npm-publish");
+    for (const input of inputs) expect(section, input).toContain(`\`${input}\``);
+    for (const gate of [".github/scripts/release-history.cjs", ".github/scripts/release-resume.cjs", "scripts/verify-release-resume.ts"]) {
+      expect(section, gate).toContain(gate);
+    }
+    // The pre-#8328 text said resume was refused, npm history failed the run, and reconciliation was outstanding.
+    const ci = readFileSync(repoPath("structure", "ops", "cross-platform-ci.md"), "utf8");
+    const contributing = readFileSync(repoPath("docs-site", "src", "content", "docs", "contributing.md"), "utf8");
+    for (const [name, text] of [["docs-and-release.md", doc], ["cross-platform-ci.md", ci], ["contributing.md", contributing]] as const) {
+      for (const stale of ["refuses resume", "Resume is also refused", "Resume is refused", "fails closed on existing npm",
+        "fails closed for existing npm", "history reconciliation, independent"]) {
+        expect(text, `${name}: ${stale}`).not.toContain(stale);
+      }
+    }
+  });
+
   test("attachment checks the entire receipt digest set and never clobbers assets", () => {
     const steps = release.jobs?.["attach-release"]?.steps ?? [];
     const receipt = steps.find(step => step.name === "Require the verification receipt for this commit");
@@ -678,8 +702,12 @@ describe("release pipeline contract", () => {
     test("Git Bash receives native Windows PATH entries separated by semicolons", () => {
       const nodeDir = "C:\\Program Files\\nodejs";
       const gitBash = "C:\\Program Files\\Git\\bin\\bash.exe";
+      // Literal expectations: rebuilding them with win32.dirname/win32.join would mirror the
+      // implementation and pass even if those operations produced the wrong entries (#8336).
       expect(releaseShellPath(nodeDir, gitBash, true).split(";")).toEqual([
-        nodeDir, win32.dirname(gitBash), win32.join(win32.dirname(gitBash), "..", "usr", "bin"),
+        "C:\\Program Files\\nodejs",
+        "C:\\Program Files\\Git\\bin",
+        "C:\\Program Files\\Git\\usr\\bin",
       ]);
     });
 

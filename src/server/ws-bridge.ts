@@ -58,6 +58,8 @@ export interface WsData {
   liveFinish?: AudioSocketTarget["finish"];
   liveOutcome?: number | "timeout" | "connect_error";
   liveMaxSessionMs?: number;
+  liveFinalizationMs?: number;
+  liveFinalizing?: boolean;
   liveConnectTimer?: ReturnType<typeof setTimeout>;
   liveSessionTimer?: ReturnType<typeof setTimeout>;
   liveAbortSignal?: AbortSignal;

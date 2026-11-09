@@ -10,12 +10,12 @@
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="X で @claudeebum をフォロー"></a>
   <a href="https://www.npmjs.com/package/@bitkyc08/opencodex"><img src="https://img.shields.io/npm/v/@bitkyc08/opencodex?color=cb3837&label=npm&logo=npm" alt="npm version"></a>
-  <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="license"></a>
+  <a href="https://github.com/lidge-jun/opencodex/blob/dev/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="license"></a>
   <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="node version">
 </p>
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx start
 ```
 
@@ -88,7 +88,7 @@ opencodex は、コーディングツールとモデルプロバイダーをつ�
 ### 個人向けインストール（CLI）
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18 以上。Bun ランタイムは自動で同梱されます
+npm install -g --allow-scripts=bun @bitkyc08/opencodex   # Node 18 以上。Bun ランタイムは自動で同梱されます
 ocx start                         # プロキシとダッシュボードが localhost:10100 で起動
 ```
 
@@ -200,7 +200,7 @@ services:
   hub:
     pull_policy: build
     build:
-      context: https://github.com/lidge-jun/opencodex.git#main
+      context: https://github.com/lidge-jun/opencodex.git#dev
       dockerfile: Dockerfile
       target: runtime
       args:
@@ -246,7 +246,7 @@ bun run src/cli/index.ts start
 <summary>エージェント向け</summary>
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx start     # または `ocx service`
 ocx init      # 対話式セットアップ: ~/.opencodex/config.json を書き、Codex を接続します
 ```

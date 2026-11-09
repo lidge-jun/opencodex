@@ -23,7 +23,7 @@ import { repoPath } from "../helpers/repo-root";
  */
 
 const workflow = Bun.YAML.parse(readFileSync(repoPath(".github", "workflows", "ci.yml"), "utf8")) as {
-  on?: { push?: { branches?: string[] } };
+  on?: { push?: { branches?: string[] }; workflow_dispatch?: { inputs?: { lane?: { options?: string[] } } } };
   jobs?: Record<string, {
     name?: string;
     if?: string;
@@ -34,6 +34,7 @@ const workflow = Bun.YAML.parse(readFileSync(repoPath(".github", "workflows", "c
     steps?: Array<{
       name?: string;
       id?: string;
+      shell?: string;
       run?: string;
       env?: Record<string, string>;
       uses?: string;
@@ -63,7 +64,7 @@ test("release history checks run with complete git history in gates", () => {
   expect(checkout?.with?.["fetch-depth"]).toBe(0);
 });
 
-type SelectionInputs = { event_name: string; ci: string; native: string; desktop?: string; docker?: string };
+type SelectionInputs = { event_name: string; ci: string; native: string; desktop?: string; docker?: string; lane?: string; ref?: string };
 
 function term(source: string, inputs: SelectionInputs): string | boolean {
   const text = source.trim();
@@ -76,6 +77,9 @@ function term(source: string, inputs: SelectionInputs): string | boolean {
   const literal = /^'([^']*)'$/.exec(text);
   if (literal) return literal[1]!;
   if (text === "github.event_name") return inputs.event_name;
+  if (text === "github.event.inputs.lane") return inputs.lane ?? "";
+  if (text === "github.ref") return inputs.ref ?? "";
+  if (text === "always()") return true;
   const output = /^needs\.changes\.outputs\.([a-z-]+)$/.exec(text);
   if (output) {
     if (output[1] === "ci") return inputs.ci;
@@ -324,6 +328,60 @@ describe("the dispatch trigger", () => {
   });
 });
 
+test.skipIf(process.platform === "win32")("the unavoidable selector refuses non-dev manual dispatches", () => {
+  const selector = jobs["select-windows-runner"]!;
+  expect(selector.if).toBeUndefined();
+  expect(selector.needs).toBeUndefined();
+  const guard = selector.steps?.find(step => step.name === "Validate dispatch source");
+  expect(guard?.shell).toBe("bash");
+  expect(guard?.env).toEqual({ EVENT_NAME: "${{ github.event_name }}", REF: "${{ github.ref }}" });
+  expect(guard?.run).toBeDefined();
+  expect(guard?.run).not.toContain("${{");
+  for (const [event, ref, expected] of [
+    ["workflow_dispatch", "refs/heads/main", 1],
+    ["workflow_dispatch", "refs/heads/feature", 1],
+    ["workflow_dispatch", "refs/heads/dev", 0],
+    ["pull_request", "refs/pull/1/merge", 0],
+  ] as const) {
+    const result = Bun.spawnSync(["/bin/bash", "-e", "-c", guard!.run!], { env: { EVENT_NAME: event, REF: ref } });
+    expect(result.exitCode, `${event} ${ref}`).toBe(expected);
+  }
+});
+
+test("Windows claim diagnostic is dev-only and bypasses the full graph", () => {
+  const lane = "windows-native-claim";
+  expect(workflow.on?.workflow_dispatch?.inputs?.lane?.options).toContain(lane);
+  const diagnostic = jobs[lane]!;
+  expect(diagnostic["runs-on"]).toBe("windows-latest");
+  expect(diagnostic.needs).toBeUndefined();
+  const base = { ci: "false", native: "false", event_name: "workflow_dispatch", ref: "refs/heads/dev", lane };
+  expect(evaluate(diagnostic.if!, base)).toBe(true);
+  for (const variation of [{ event_name: "pull_request" }, { event_name: "push" }, { ref: "refs/heads/main" }, { lane: "all" }, { lane: "release-gates" }, { lane: "macos-control" }, { lane: "" }]) {
+    expect(evaluate(diagnostic.if!, { ...base, ...variation })).toBe(false);
+  }
+  expect(evaluate(changes!.if!, base)).toBe(false);
+  expect(evaluate(jobs.ci!.if!, base)).toBe(false);
+  for (const lane of ["", "all", "release-gates", "macos-control"]) {
+    expect(evaluate(changes!.if!, { ...base, lane })).toBe(true);
+    expect(evaluate(jobs.ci!.if!, { ...base, lane })).toBe(true);
+  }
+  expect(evaluate(changes!.if!, { ...base, event_name: "pull_request" })).toBe(true);
+  expect(evaluate(jobs.ci!.if!, { ...base, event_name: "pull_request" })).toBe(true);
+  for (const [name, job] of Object.entries(jobs)) {
+    if ([lane, "select-windows-runner", "changes", "ci"].includes(name)) continue;
+    expect(Array.isArray(job.needs) ? job.needs : [job.needs], name).toContain("changes");
+    expect(job.if ?? "", name).not.toMatch(/\b(always|failure|cancelled)\s*\(/);
+  }
+  const steps = diagnostic.steps ?? [];
+  const checkout = steps.find(step => step.uses?.startsWith("actions/checkout@"));
+  expect(checkout?.with?.ref).toBe("${{ github.sha }}");
+  expect(checkout?.with?.["persist-credentials"]).toBe(false);
+  expect(steps.find(step => step.uses === "./.github/actions/setup-project-bun")?.with?.role).toBe("test-runner");
+  expect(steps.some(step => step.run?.includes("bun install --frozen-lockfile"))).toBe(true);
+  expect(steps.some(step => step.run?.includes("bun test tests/codex-integration/main-quota-provenance.test.ts"))).toBe(true);
+  expect(steps.some(step => step.run?.includes("OPENCODEX_HOME") && step.run.includes("CODEX_HOME") && step.run.includes("GITHUB_ENV"))).toBe(true);
+});
+
 describe("Docker PR selection", () => {
   test("selects only its Ubuntu smoke for matching inputs without widening event policy", () => {
     const job = jobs["docker-smoke"]!;
@@ -513,9 +571,9 @@ describe("the aggregate gate", () => {
     expect(step?.env?.CHANGES_CI).toBe("${{ needs.changes.outputs.ci }}");
   });
 
-  test.skipIf(cannotRunGate)("gates every job by name, with the aggregate itself excepted", () => {
+  test.skipIf(cannotRunGate)("gates every ordinary job by name, excluding the standalone diagnostic", () => {
     const { gatedJobs } = runGate(PR_WITHOUT_NATIVE, {});
-    expect(gatedJobs.sort()).toEqual(Object.keys(jobs).filter(name => name !== "ci").sort());
+    expect(gatedJobs.sort()).toEqual(Object.keys(jobs).filter(name => !["ci", "windows-native-claim"].includes(name)).sort());
   });
 
   test.skipIf(cannotRunGate)("treats an unselected native job as not-requested and stays green over skips", () => {
@@ -531,7 +589,7 @@ describe("the aggregate gate", () => {
     // Results consistent with those expectations must pass the gate: skipped is
     // the correct outcome for a job this event never asked for.
     const consistent = Object.fromEntries(Object.keys(jobs)
-      .filter(name => name !== "ci")
+      .filter(name => !["ci", "windows-native-claim"].includes(name))
       .map(name => [name, expectations[name] === "requested" ? "success" : "skipped"]));
     const { bad } = runGate(PR_WITHOUT_NATIVE, consistent);
     expect(bad).toBe("");
@@ -559,7 +617,7 @@ describe("the aggregate gate", () => {
     expect([outOfScope.test, outOfScope["test-changed"]]).toEqual(["not-requested", "not-requested"]);
     // Results consistent with the fast lane pass; a shard that ran anyway fails by name.
     const consistent = Object.fromEntries(Object.keys(jobs)
-      .filter(name => name !== "ci")
+      .filter(name => !["ci", "windows-native-claim"].includes(name))
       .map(name => [name, fast[name] === "requested" ? "success" : "skipped"]));
     expect(runGate({ ...PR_WITHOUT_NATIVE, fast: "true" }, consistent).bad).toBe("");
     expect(runGate({ ...PR_WITHOUT_NATIVE, fast: "true" }, { ...consistent, test: "success" }).bad).toContain("test was not requested");
@@ -627,7 +685,7 @@ describe("the aggregate gate", () => {
     }
     // Results consistent with the narrowed expectations pass; a smoke job that ran anyway fails by name.
     const consistent = Object.fromEntries(Object.keys(jobs)
-      .filter(name => name !== "ci")
+      .filter(name => !["ci", "windows-native-claim"].includes(name))
       .map(name => [name, expectations[name] === "requested" ? "success" : "skipped"]));
     expect(runGate(narrow, consistent).bad).toBe("");
     expect(runGate(narrow, { ...consistent, "docker-smoke": "success" }).bad).toContain("docker-smoke");

@@ -637,6 +637,21 @@ describe("prompt cache key provenance (devlog 130 B3)", () => {
     expect(body.prompt_cache_key).toBe(createHash("sha256").update(userId).digest("hex").slice(0, 32));
   });
 
+  test("a Claude Code turn token (tk) does not move the session's prompt_cache_key", () => {
+    const key = (meta: object) => anthropicToResponsesTranslation({
+      model: "m", max_tokens: 1, messages, metadata: { user_id: JSON.stringify(meta) },
+    }).body.prompt_cache_key;
+    const session = { device_id: "d".repeat(64), account_uuid: "acct", session_id: "s".repeat(36) };
+    // Remote Claude Code adds a per-turn attribution token; every turn is still one session.
+    expect(key({ ...session, tk: "turn-1" })).toBe(key({ ...session, tk: "turn-2" }));
+    expect(key({ ...session, tk: "turn-1" })).toBe(key(session));
+    expect(key({ ...session, session_id: "t".repeat(36), tk: "turn-1" })).not.toBe(key(session));
+    // `user` still carries the hash of the raw user_id.
+    const raw = JSON.stringify({ ...session, tk: "turn-1" });
+    expect(anthropicToResponsesTranslation({ model: "m", max_tokens: 1, messages, metadata: { user_id: raw } }).body.user)
+      .toBe(createHash("sha256").update(raw).digest("hex"));
+  });
+
   test("metadata.user_id boundary: exactly 64 chars forwarded, 65 chars hashed", () => {
     const atLimit = "u".repeat(64);
     const overLimit = "u".repeat(65);

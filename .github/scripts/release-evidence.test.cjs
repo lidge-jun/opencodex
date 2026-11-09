@@ -67,7 +67,7 @@ test('run identity rejects forged titles, wrong repository, branch, event and at
   const workflow = {id:42};
   const run = {id:7, workflow_id:42, repository:{id:1273824907}, head_repository:{id:1273824907}, event:'workflow_dispatch', head_branch:'dev', status:'completed', conclusion:'success', run_attempt:1, head_sha:SHA, display_title:`ocx-ci-v1 lane=all sha=${SHA}`};
   assert.doesNotThrow(() => validateRun(run, workflow, 'ci', SHA));
-  for (const change of [{event:'push'}, {head_branch:'main'}, {conclusion:'failure'}, {run_attempt:0}, {repository:{id:2}}, {head_repository:{id:2}}, {display_title:`ocx-ci-v1 lane=release-gates sha=${SHA}`}, {head_sha:'b'.repeat(40)}]) {
+  for (const change of [{event:'push'}, {head_branch:'main'}, {conclusion:'failure'}, {run_attempt:0}, {repository:{id:2}}, {head_repository:{id:2}}, {display_title:`ocx-ci-v1 lane=release-gates sha=${SHA}`}, {display_title:`ocx-ci-v1 lane=windows-native-claim sha=${SHA}`}, {head_sha:'b'.repeat(40)}]) {
     assert.throws(() => validateRun({...run, ...change}, workflow, 'ci', SHA));
   }
 });

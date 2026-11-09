@@ -536,7 +536,9 @@ Vercel AI Gateway 可以在多个底层推理提供者之间路由一个模型�
 才会恢复原始原生名称。外部更改的显示名称仍受现有原生元数据规范化规则约束。
 例如，Astra (`gpt-6-astra`) 仍会将不同于固定原生名称的名称替换为该固定名称。
 显示名称覆盖不会改变模型 ID、元数据（包括能力）、排序、路由组合别名和带账户限定的条目。
-此本地目录覆盖不会重命名 HTTP 模型列表中的条目或虚拟 `*-pro` 条目。
+`GET /api/models` 也会为不带前缀的原生条目提供这些名称，客户端导出和 `ocx opencode` 启动器会使用它们。
+OpenCode 保留现有后缀，例如 `sol (native)`。重新运行 `ocx opencode` 或刷新托管集成后，生成的配置才会更新。
+未设置覆盖时，现有导出名称保持不变。`/v1/models` 和虚拟 `*-pro` 条目保持不变。
 
 预览版 GPT-5.6 回退条目使用相同机制。OpenAI API key 预设会为基础和 Pro id 设定 `1050000` 上下文和 `922000` 最大输入；OpenRouter 会为 `openai/gpt-5.6-sol`、`openai/gpt-5.6-terra` 和 `openai/gpt-5.6-luna` 设定 `1050000` 上下文。原生 Pool/Direct 的窗口遵循[保留 OpenAI 供应商策略](/reference/configuration/providers/#reserved-openai-providers)；同步后的目录会声明 `max`，同时保留 `xhigh` 的独立性。
 
