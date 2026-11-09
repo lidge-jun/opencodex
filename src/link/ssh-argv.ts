@@ -146,7 +146,21 @@ export const REMOTE_PLATFORM_UNSUPPORTED = 125;
  * ocx as `"$@"` without another round of parsing. Desktop binaries precede PATH candidates;
  * each candidate must run --version successfully. A missing runnable ocx exits 127.
  */
-const REMOTE_OCX_CANDIDATES = `for candidate in "$HOME/.opencodex-desktop/bin/ocx" "/Applications/OpenCodex.app/Contents/MacOS/ocx" "/usr/bin/ocx"; do
+const REMOTE_OCX_CANDIDATES = `run_ocx_child() {
+  for candidate in "$HOME/.local/bin/ocx-child" "$HOME/.cache/opencodex/bin/ocx-child"; do
+    try_ocx "$candidate" "$@"
+  done
+  remaining=$PATH
+  while :; do
+    directory=\${remaining%%:*}
+    try_ocx "\${directory:-.}/ocx-child" "$@"
+    case "$remaining" in *:*) remaining=\${remaining#*:};; *) break;; esac
+  done
+}
+if [ -f "\${OPENCODEX_HOME:-$HOME/.opencodex}/child/state.json" ]; then
+  run_ocx_child "$@"
+fi
+for candidate in "$HOME/.opencodex-desktop/bin/ocx" "/Applications/OpenCodex.app/Contents/MacOS/ocx" "/usr/bin/ocx"; do
   try_ocx "$candidate" "$@"
 done
 remaining=$PATH
@@ -154,7 +168,8 @@ while :; do
   directory=\${remaining%%:*}
   try_ocx "\${directory:-.}/ocx" "$@"
   case "$remaining" in *:*) remaining=\${remaining#*:};; *) break;; esac
-done`;
+done
+run_ocx_child "$@"`;
 
 export const REMOTE_OCX_SCRIPT = `export PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
 case "$(uname -s 2>/dev/null)" in Windows*|MSYS*|MINGW*|CYGWIN*) exit ${REMOTE_PLATFORM_UNSUPPORTED};; esac

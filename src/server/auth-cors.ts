@@ -29,6 +29,8 @@ import {
   providerHeadersConfigError,
   providerForwardClientHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
+  thinkingDisplayConfigError,
+  modelThinkingDisplayConfigError,
   upstreamHttpVersionConfigError,
   credentialPinnedProviderConfigError,
 } from "../config/provider-validation";
@@ -949,6 +951,10 @@ export function providerManagementConfigError(
     raw.modelSupportsReasoningSummaries,
   );
   if (reasoningSummaryDeliveryError) return `provider ${name} ${reasoningSummaryDeliveryError}`;
+  const thinkingDisplayError = thinkingDisplayConfigError(raw.thinkingDisplay);
+  if (thinkingDisplayError) return `provider ${name} ${thinkingDisplayError}`;
+  const modelThinkingDisplayError = modelThinkingDisplayConfigError(raw.modelThinkingDisplay);
+  if (modelThinkingDisplayError) return `provider ${name} ${modelThinkingDisplayError}`;
   const modelAdaptersError = modelAdapterRecordConfigError(raw.modelAdapters, "modelAdapters", name, typed);
   if (modelAdaptersError) return `provider ${name} ${modelAdaptersError}`;
   const credentialPinError = credentialPinnedProviderConfigError(name, typed);
@@ -1175,6 +1181,8 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   modelSupportsVerbosity: "editor",
   supportsVerbosity: "editor",
   modelReasoningSummaryDelivery: "editor",
+  thinkingDisplay: "editor",
+  modelThinkingDisplay: "editor",
   modelPreferHostedTools: "editor",
   supportsOpenAiWebSearchToolFields: "editor",
   xaiResponsesXSearch: "editor",
@@ -1191,6 +1199,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   noTemperatureModels: "editor",
   noTopPModels: "editor",
   noStopModels: "editor",
+  arkKimiResponsesModels: "editor",
   noPenaltyModels: "editor",
   noStructuredOutputModels: "editor",
   noJsonSchemaModels: "editor",
@@ -1360,6 +1369,16 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       hasApiKey: !!provider.apiKey,
       hasHeaders: !!provider.headers && Object.keys(provider.headers).length > 0,
     };
+    const registry = getProviderRegistryEntry(name);
+    const vertex = (provider.adapter === "google" && effectiveGoogleMode(name, provider) === "vertex")
+      || (registry?.adapter === "google" && (provider.googleMode ?? registry.googleMode) === "vertex"
+        && providerMatchesRegistryTransport(name, provider));
+    if (vertex) {
+      const key = provider.apiKey;
+      dto.vertexCredentialKind = key?.startsWith("gcp-sa:") ? "marker"
+        : !key?.trim() || key === "N/A" || key.startsWith("<") ? "ambient"
+          : key.startsWith("keychain:") || /^\$\{?\w+\}?$/.test(key) ? "reference" : "api-key";
+    }
     if (name === "xai") {
       dto.xaiResponsesOptInState = xaiResponsesOptInState(provider);
     }

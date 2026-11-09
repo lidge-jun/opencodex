@@ -26,7 +26,7 @@ bun run dev:gui
 
 远程仪表盘会显示标准密码表单，浏览器密码管理器可以提示保存并自动填充 token。仪表盘本身只在内存中保存 token，不会写入 `localStorage` 或 `sessionStorage`；是否持久保存完全由浏览器或密码管理器决定。
 
-**记住此设备** 默认关闭。直接 HTTPS 仪表板（或本地回环）会将管理员令牌交换为服务器签发的 HttpOnly、SameSite=Strict 设备 Cookie，以及单独存入本站 localStorage 的设备证明。HTTPS 下 Cookie 启用 Secure 且仅限本主机。Cookie 和证明都不是管理员令牌，且都不能单独使用。同一主机名的不同端口共享 Cookie；按来源隔离的证明将记住的设备绑定到本仪表板来源。仍建议使用专用主机名。管理员令牌不存入 localStorage 或 sessionStorage。浏览器存储不可用或无法保存证明时，记住设备会报告不可用。
+**记住此设备** 默认关闭。直接 HTTPS 仪表板（或本地回环）会将管理员令牌交换为服务器签发的 HttpOnly、SameSite=Strict 设备 Cookie，以及单独存入本站 localStorage 的设备证明。HTTPS 下 Cookie 启用 Secure 且仅限本主机。Cookie 和证明都不是管理员令牌，且都不能单独使用。同一主机名的不同端口共享 Cookie；按来源隔离的证明将记住的设备绑定到本仪表板来源。仍建议使用专用主机名。管理员令牌不存入 localStorage 或 sessionStorage。浏览器存储不可用或无法保存证明时，记住设备会报告不可用。对于位于终止 TLS 的反向代理之后的独立仪表板，OpenCodex 看到的是普通 HTTP 请求，因此会拒绝为该地址记住设备；登录对话框会说明原因并关闭该选项，不勾选记住设备仍可正常登录。受信任的 Hub 管理监听器例外，仍可记住设备。
 
 私有 dashboard-sessions.json 保存 Cookie、证明、管理员凭据和浏览器标识的哈希、服务器来源及固定30天有效期。重新打开 Safari 主屏幕应用时，有效设备记录可恢复短期会话。记住的会话不能批准需要同意的操作：GitHub 星标、重置额度消费、提示词层编辑、Meta Muse 登录、桌面兼容性更改或配额验证。这些操作请使用新的本地会话或已配对会话。中继、跨来源和远程明文 HTTP 不支持记住设备。过期、浏览器标识改变，或更换管理员令牌并重启服务器后需重新登录。
 

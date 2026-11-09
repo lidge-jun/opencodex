@@ -61,6 +61,7 @@ route-specific results rather than repeating this table.
 | --- | --- | --- |
 | 401 | `opencodex admin token required` | The admin token or GUI session is missing, invalid, expired, origin-mismatched, or missing CSRF evidence |
 | 403 | `cross-origin request blocked` | The request origin is outside the management allowlist |
+| 403 | `code: "remember_requires_direct_origin"` | `POST /api/session/remember` only: this dashboard address cannot hold a remembered device (for example a standalone dashboard behind a TLS-terminating proxy); sign in without Remember. The `error` text is `cross-origin request blocked` when the origin check refuses the request, and `Remember requires a direct HTTPS dashboard (or loopback) and matching Origin` when the origin check allows the request but the route still refuses it, for example because the address is not a direct HTTPS or loopback dashboard or no matching `Origin` header was sent; match on `code` |
 | 404 | `not_found` | No management route matched the method and path |
 | 413 | `request body too large` | A POST, PUT, or PATCH body exceeds the 2 MiB management limit |
 | 503 | `management API unavailable` | Admin credential initialization or hardening is unavailable |
@@ -484,6 +485,25 @@ or overwrite unfiltered preset summaries. The daily chart remains capped at 366 
 totals cover the full requested interval. Snapshot-window fields describe the scanned ledger before
 the time filter, so they can extend beyond the requested bounds.
 
+Provider, model, `apiKeyId`, source and custom-window queries are answered from a derived candidate
+index (`~/.opencodex/usage-filter-index.sqlite`) instead of a whole-ledger scan. The index records each
+complete row's byte offset with the fields those filters select on, so a new filter combination reads
+and normalizes only its matching rows. The first filtered query after the index is missing or invalid
+performs one full ingest; later queries ingest only newly appended bytes. The totals are unchanged by
+the index: a filtered response reports what a full scan would report. The index is disposable and
+rebuildable — delete the file and the next filtered query rebuilds it from `usage.jsonl`, which stays
+the only authority and is never truncated or rewritten. A replaced, truncated or rewritten ledger
+rebuilds the index rather than extending stale rows.
+
+The index is created private to your user, and a file at that path that is not this index is left
+alone. If the index cannot be used — an unwritable home, a full disk, another process holding it, or
+a damaged file — filtered usage falls back to reading `usage.jsonl` directly, which is slower but
+returns the same totals. A passive management read from a Remote Link Child only uses an index that
+is already current and never creates or modifies one. A query that selects most of the ledger (for
+example `client=all&device=all` with no provider, model or key) still has to read every row in its
+window; the index removes the repeated whole-ledger work for selective filters, not the cost of a
+report whose result is the whole ledger.
+
 The Usage page accepts local date/time inputs. Its selected ending minute includes the entire
 minute through `:59.999`. Choosing a preset or clearing the custom window restores preset behavior.
 This adds exact range selection and existing cost estimates; it does not add hourly chart buckets
@@ -744,6 +764,21 @@ for its default-off, custom-provider-only behavior.
 When Antigravity's quota-summary endpoint has no usable response, quota reports may also include
 per-model Cloud Code Assist usage windows when the model-discovery response provides them. These
 measurements are diagnostic; an absent model window does not establish that the model is unavailable.
+
+For a row using the `claude-cli` adapter, the report is the last recorded Claude subscription
+observation (`observed: true`) rather than an active probe, and only for the account Claude Code is
+signed in to. `refresh=1` re-reads the local sign-in and that snapshot. Fetching this Claude CLI
+report never spawns the CLI or calls Anthropic; other configured providers can still run their
+normal quota probes. The row is absent until a usage check records quota windows for the signed-in
+account. A sign-out or account switch clears it at once with `refresh=1` and within a minute (the
+sign-in cache) on a normal cached read. A newer recorded observation, including one without windows,
+replaces it on the next read. Passive reads use the last recorded sign-in and snapshot without
+resolving credentials or probing providers, so an external sign-in change appears after another
+operation records it. `GET /api/quota-pool` reads no
+sign-in of its own: it lists the Claude CLI account only for the sign-in this proxy last read, and
+only when that account has a recorded snapshot. After an external sign-out or account switch it keeps
+the previous account until the dashboard or a Claude turn reads the sign-in again; after a restart
+the row is absent until such a read.
 
 With `quota=1`, an Anthropic or Antigravity account row whose probe returned no quota carries
 `quotaUnavailable: true` and, when the cause is known, a closed `quotaFailure` code:

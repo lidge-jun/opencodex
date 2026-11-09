@@ -62,9 +62,11 @@ before the tombstone can still create its file afterwards; see the last item bel
   including one from a process that cached the ownership earlier, is refused as an uninstall in
   progress, not treated as an unowned home. A home cached as unowned is re-read on later
   registrations, so an owner marker another process writes late is picked up, and a root that has
-  become empty is claimed like an absent one. A first registration that finds a manifest without an
-  owner marker waits up to 100 ms for the process creating the home, then records nothing; uninstall
-  reports a file it writes meanwhile as a residual path.
+  become empty is claimed like an absent one. An uncached or previously unowned registration with a
+  manifest but no valid matching ownership pair waits up to 100 ms for publication to finish, including when the owner
+  file exists but its JSON is still being written. A complete pair loads immediately; a tombstoned
+  manifest without an owner is not treated as creation. Expiry records nothing, and damaged or
+  mismatched metadata never grants ownership; uninstall reports an unrecorded file as a residual.
 - An interrupted uninstall (a crash, or a path it could not remove) leaves the tombstone. Registrations
   keep refusing, and the next `ocx uninstall` finishes from the same manifest. The rerun's own cleanup
   steps (Desktop picker, disconnect, integrations) run inside `beginConfigOwnershipTeardown`, where this

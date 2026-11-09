@@ -9,6 +9,7 @@ export interface Config {
 const PROVIDER_EDITOR_DERIVED_FIELDS = [
   "hasApiKey",
   "hasHeaders",
+  "vertexCredentialKind",
   "xaiResponsesOptInState",
   "initialModelSelection",
 ] as const;

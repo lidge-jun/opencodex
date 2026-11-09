@@ -209,7 +209,7 @@ Visibility, selected-model and preset writes refresh already-owned catalog contr
 Command Code) after persisting the selection. Explicit sync also refreshes owned OpenCode, Kilo, Command Code and default-profile Hermes blocks. The shared catalog-refresh
 fan-out loads the filtered roster lazily once, leaves unowned clients alone, and reports each
 refusal independently. Existing coordinated writers retain all no-clobber and ownership checks. A background catalog auto-refresh that changes the served set calls `syncEnabledClientIntegrations` unattended from `src/server/background-lifecycle.ts`: it refreshes only an existing Grok fence, a Desktop gateway profile that is still selected and byte-identical to the last applied write (keeping its static, hybrid or discovery mode), and owned file and Aside blocks without a first apply; it skips Cline, includes Hermes (its managed `providers.opencodex` range is patched byte-wise and a hand-edited or never-connected block is never claimed), honours the hub and sibling gate, and the coordinated writer's synchronous `guard` refuses any write once the scheduler generation has stopped or the owner captured for that delivery has revoked fan-out admission or released its lease; a later delivery may select a surviving owner. Each write also requires the projection's configuration snapshot to remain current, ignoring only Desktop's applied fingerprint and timestamp; Grok rechecks its complete fence and refuses symlinked config or backup paths inside the synchronous injector, then revalidates admission and unchanged regular-file bytes in the no-follow writer's pre-rename hook without copying a backup.
-Implicit refresh operations use distinct flight keys: overlapping desired catalogs return busy rather than joining a write of a different catalog and reporting false success.
+Implicit refresh operations use distinct flight keys: overlapping desired catalogs return busy rather than joining a write of a different catalog and reporting false success. An implicit refresh of an owned file client whose home was removed afterwards is left alone: `refreshOwnedIntegration` in `src/integrations/owned-refresh.ts` returns `null` for the writer's `not_installed` refusal, exactly as for a never-connected client, so a model toggle or sync no longer reports "<client> is not installed" for a client the user uninstalled. The ownership record is kept, so a reinstall resumes refreshing, and explicit enable still refuses with `not_installed`. Aside keeps its per-profile report. `tests/clients/sync-client-integrations.test.ts` covers the left-alone and Aside-report cases; `tests/clients/integrations-writer.test.ts` covers the explicit-enable refusal.
 Hermes refresh is limited to the [default profile](hermes.md); named profiles expose stale status and require explicit Apply. A current contribution returns unchanged before `src/integrations/hermes-refresh.ts` checks actual preflight bytes against the ownership fingerprint. When a catalog update is pending, that check refuses even edits outside managed fragments until the change is explicitly applied. An unchanged refresh or Apply does not adopt a new baseline.
 On a sibling instance ([Codex home](../codex-home.md#codex-home)), including one identified from another home's managed client destination, `src/integrations/catalog-refresh.ts`
 and `syncEnabledClientIntegrations` in `src/server/management/config-routes.ts` refresh nothing: the
@@ -507,7 +507,7 @@ was, re-serialized with the file's indentation, line endings, and BOM.
 
 It never creates the file and never writes one it would damage: a missing file reports
 `absent`, a document that is not an object or whose `[codex]`, `[codex].agents`, or role entry is
-not an object reports `invalid`, and a file containing any `//` or block comment reports
+not an object or a comment-free document with more than one leading BOM reports `invalid`; a file containing any `//` or block comment reports
 `skipped_comments`, because re-serializing JSONC would drop those comments. The management
 response carries that status and the dashboard shows it; the role TOML write described in
 [subagents](../subagents.md#per-role-model-pins) is not rolled back by a skipped mirror.
@@ -528,7 +528,7 @@ and without opening omo.jsonc, and `PUT` answers 409 `lazycodex_not_detected` be
 Kilo owns only `provider.opencodex` in the first existing global file among `kilo.jsonc`,
 `kilo.json`, `opencode.jsonc`, `opencode.json`, and `config.json` under `~/.config/kilo`
 (`XDG_CONFIG_HOME` relocates that directory); when none exists, the destination is
-`kilo.jsonc`. Parse accepts JSONC comments (including CR, LF and CRLF line endings) and trailing
+`kilo.jsonc`. Parse accepts one leading UTF-8 BOM, JSONC comments (including CR, LF and CRLF line endings) and trailing
 commas after actual members, but refuses a comma in an otherwise empty container; serialize rewrites the whole file as pretty JSON, so comments in other keys are
 not preserved. Kilo and OpenCode participate in the implicit owned-catalog fan-out; unowned, removed or hand-edited blocks are never claimed or overwritten. Remote admission uses
 the same `{env:OPENCODEX_KILO_API_KEY}` / `x-opencodex-api-key` rule as OpenCode.

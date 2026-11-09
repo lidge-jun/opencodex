@@ -1,672 +1,163 @@
 #!/usr/bin/env bun
-/**
- * Release helper (jawcode-style, single package). Not shipped in the npm tarball.
- *
- * Usage:
- *   bun scripts/release.ts <version> [--tag latest|preview] [--publish]
- *   bun scripts/release.ts --bump patch|minor|major [--tag latest|preview] [--publish]
- *       Preflight (clean tree + dependency audit + typecheck + tests + privacy scan) → bump package.json and the
- *       desktop version sources (scripts/release-version-sources.ts) → commit → push →
- *       wait for Cross-platform CI → dispatch the Release workflow → watch it.
- *       The version bump commit/push is real; the Release workflow publish step is dry-run by default.
- *       Pass --publish to publish.
+/** Dispatch the trusted dev release workflow for a CI-verified source commit.
+ * Usage: bun scripts/release.ts latest|preview [full-source-sha] [--publish]
  *   bun scripts/release.ts watch
- *       Watch the most recent Release run.
- *
- * Example:  bun scripts/release.ts 0.1.0            # commit/push bump, workflow dry-run publish
- *           bun scripts/release.ts 0.1.0 --publish  # actually publish 0.1.0
- *           bun scripts/release.ts --bump minor     # resolve the next version from tags + npm channels
- *
- * Requires: gh CLI (authed). Publishing is tokenless via Trusted Publishing (OIDC) — no NPM_TOKEN.
- *
- * Protected-branch push: `main` and `preview` carry rulesets that require a pull request, and the
- * admin bypass is `bypass_mode: "pull_request"` — enough to merge a PR, not enough to push. Set
- * `OCX_RELEASE_SSH_KEY` to the private key of the dedicated write deploy key registered as a
- * `DeployKey` bypass actor on those rulesets, and the version-bump push (and only that push) uses
- * it. Override the SSH remote with `OCX_RELEASE_SSH_REPO` when releasing a fork. Unset, the push
- * behaves exactly as before.
+ * The workflow derives and stamps the version. Publication defaults to dry-run.
  */
+import { join } from "node:path";
 import { commandInvocation } from "../src/lib/win-exec";
-import { VERSION_SOURCE_PATHS } from "./release-version-sources";
-import { getTestRunnerBun } from "./lib/test-runner-bun";
-import {
-  compareVersions as compareReleaseVersions,
-  nextPreviewRelease,
-  nextStableRelease,
-  parseVersion,
-  type ReleaseBumpKind,
-} from "./version-line";
 
-const args = process.argv.slice(2);
-interface GhRun {
-  conclusion: string | null;
-  createdAt?: string;
+export { compareVersions as compareReleaseVersions } from "./version-line";
+
+const usage = "Usage: bun scripts/release.ts latest|preview [full-source-sha] [--publish] | watch";
+const fullSha = /^[0-9a-f]{40}$/;
+const releaseRepository = "lidge-jun/opencodex";
+
+async function command(args: string[], label: string, env?: Record<string, string | undefined>): Promise<string> {
+  const [binary, ...rest] = args;
+  const invocation = commandInvocation(binary ?? "", rest);
+  const child = Bun.spawn([invocation.file, ...invocation.args], {
+    stdout: "pipe", stderr: "pipe",
+    ...(env ? { env: { ...process.env, ...env } } : {}),
+    ...(invocation.options.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+  });
+  const [exitCode, stdout] = await Promise.all([
+    child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+  ]);
+  // Child stderr may contain credentials, including on authentication or resolver errors.
+  if (exitCode !== 0) throw new Error(`${label} failed (exit ${exitCode})`);
+  return stdout.trim();
+}
+
+/** Like {@link command}, but the operator sees the child's stdout live; stderr stays captured and unprinted. */
+async function streamCommand(args: string[], label: string): Promise<void> {
+  const [binary, ...rest] = args;
+  const invocation = commandInvocation(binary ?? "", rest);
+  const child = Bun.spawn([invocation.file, ...invocation.args], {
+    stdout: "inherit", stderr: "pipe",
+    ...(invocation.options.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+  });
+  const [exitCode] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+  if (exitCode !== 0) throw new Error(`${label} failed (exit ${exitCode})`);
+}
+
+interface ReleaseRun {
+  createdAt: string;
   databaseId: number;
   headSha: string;
+  headBranch: string;
+  event: string;
+  workflowDatabaseId: number;
   status: string;
   url: string;
 }
 
-interface CommandResult {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-}
+const githubRepo = `github.com/${releaseRepository}`;
+const runUrlPrefix = `https://github.com/${releaseRepository}/actions/runs/`;
 
-const CI_WORKFLOW = "ci.yml";
-const SERVICE_WORKFLOW = "service-lifecycle.yml";
-const CI_WAIT_TIMEOUT_MS = 20 * 60 * 1000;
-const CI_POLL_MS = 10 * 1000;
-
-async function runQuiet(command: string[]): Promise<CommandResult> {
-  // Windows exposes npm and gh as `.cmd` shims. A shell-less spawn of a bare
-  // `npm` skips PATHEXT entirely and refuses `.cmd` targets outright, so this
-  // preflight — the first thing a release does — aborted before invoking a
-  // single command, and the release-helper tests saw exit 1 with an empty call
-  // log. `commandInvocation` is the module the CLI already uses for exactly
-  // this, escaping included; do not hand-roll a second resolver here.
-  const [bin, ...rest] = command;
-  const invocation = commandInvocation(bin ?? "", rest);
-  const proc = Bun.spawn([invocation.file, ...invocation.args], {
-    stdout: "pipe",
-    stderr: "pipe",
-    // Load-bearing on the `cmd.exe /d /s /c` path: the invocation is already a
-    // fully escaped command LINE, so re-quoting it would corrupt the arguments.
-    ...(invocation.options.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-  });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  return { exitCode, stdout: stdout.trim(), stderr: stderr.trim() };
-}
-
-/**
- * Capture stdout from a command, failing loudly on a non-zero exit.
- *
- * Everything in this script goes through `commandInvocation` rather than
- * `Bun.$`. The shell form looked equivalent but is not on Windows: a test that
- * puts shims on PATH writes an extension-less launcher (shebang), a `.js`, and a
- * `.cmd`. Unix honours the shebang launcher; Windows cannot execute it and the
- * built-in shell does not retry as `.cmd`, so `$` walked past the shim straight
- * to the real `git` — the branch guard then saw `dev` instead of the faked
- * `main` and aborted before a single command was logged. That is what made four
- * release-helper tests fail on windows-latest only, with an empty call log.
- */
-async function capture(command: string[]): Promise<string> {
-  const result = await runQuiet(command);
-  if (result.exitCode !== 0) {
-    console.error(`✗ ${command.join(" ")} failed (exit ${result.exitCode})`);
-    if (result.stderr) console.error(result.stderr);
-    process.exit(1);
+function runIdFromDispatch(output: string): number {
+  const urls = output.split(/\s+/).filter(part => part.startsWith("https://"));
+  if (urls.length !== 1 || !urls[0]!.startsWith(runUrlPrefix)) {
+    throw new Error("Dispatch did not return one identifiable release run URL; inspect Actions manually before retrying");
   }
-  return result.stdout;
-}
-
-/** Run a command with its output attached to this terminal; abort on failure. */
-async function runLoud(command: string[], env?: Record<string, string>): Promise<void> {
-  const [bin, ...rest] = command;
-  const invocation = commandInvocation(bin ?? "", rest);
-  const proc = Bun.spawn([invocation.file, ...invocation.args], {
-    stdout: "inherit",
-    stderr: "inherit",
-    ...(env ? { env: { ...process.env, ...env } } : {}),
-    ...(invocation.options.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-  });
-  const exitCode = await proc.exited;
-  if (exitCode !== 0) {
-    console.error(`✗ ${command.join(" ")} failed (exit ${exitCode})`);
-    process.exit(1);
+  const idText = urls[0]!.slice(runUrlPrefix.length);
+  const id = Number(idText);
+  if (!/^[1-9][0-9]*$/.test(idText) || !Number.isSafeInteger(id)) {
+    throw new Error("Dispatch returned an invalid release run ID; inspect Actions manually before retrying");
   }
+  return id;
 }
 
-/**
- * Release-key push target for a protected branch.
- *
- * `main` and `preview` are covered by branch-protection rulesets that require a pull request,
- * so the maintainer's own credential cannot push the version-bump commit even with admin rights:
- * the admin bypass is `bypass_mode: "pull_request"`, which permits merging a PR but not a direct
- * push. The v2.29.0 release died exactly there.
- *
- * The carve-out is a dedicated write deploy key registered as a `DeployKey` bypass actor on both
- * rulesets. It is deliberately NOT a runtime toggle of the ruleset itself: flipping protection off
- * around the push and back on afterwards is crash-open — a SIGKILL, a lost network, or a hung push
- * between the two calls leaves the branch unprotected with no lease to expire it, and while the
- * window is open the bypass applies to every holder of the admin role, not just this release. A
- * key fails closed instead: if the process dies, protection was never weakened, and revoking one
- * credential closes the carve-out without touching repository configuration.
- *
- * Opt-in by path: without `OCX_RELEASE_SSH_KEY` the push runs exactly as before over the configured
- * remote, so a contributor or CI clone is unaffected. The key is used for this one push and nothing
- * else; ordinary git operations keep the maintainer's normal credential.
- */
-/**
- * Quote one argument for `GIT_SSH_COMMAND`.
- *
- * Git does not exec this variable directly — it parses it with shell-style word splitting, so a
- * bare interpolation breaks on any key path containing a space (`C:\Users\Jun Kim\.ssh\key` splits
- * into two words and ssh reads `Kim...` as its next flag). Double quotes are the form both POSIX
- * shells and Git's own Windows parser accept, and unlike single quotes they do not mangle a
- * backslash path. Escape the characters that stay special inside double quotes so a path can never
- * introduce a second word or a substitution.
- */
-function quoteSshArgument(value: string): string {
-  return `"${value.replace(/(["\\`$])/g, "\\$1")}"`;
+function parseRuns(raw: string): ReleaseRun[] {
+  let result: unknown;
+  try { result = JSON.parse(raw); } catch { throw new Error("Invalid release run listing"); }
+  if (!Array.isArray(result)) throw new Error("Invalid release run listing");
+  return result as ReleaseRun[];
 }
 
-/**
- * Derive the SSH push target from the configured `origin` URL.
- *
- * Deliberately derived rather than hardcoded: a hardcoded `git@host:owner/repo.git` literal is
- * indistinguishable from an email address to `privacy:scan`, and it would also silently push a
- * fork's release to the upstream repository. `OCX_RELEASE_SSH_REPO` still wins when a maintainer
- * needs an explicit target.
- */
-function sshTargetFromOrigin(originUrl: string): string | undefined {
-  const trimmed = originUrl.trim();
-  if (!trimmed) return undefined;
-  // Reject a credential-bearing remote outright rather than transplanting it. A URL like
-  // https://user:TOKEN@host/o/r.git would otherwise fold the userinfo into the SSH target, and
-  // runLoud() prints the failing command — putting the token on the terminal and in the release
-  // log. The host capture below therefore excludes '@' as well as '/'.
-  const https = /^https?:\/\/([^/@]+)\/(.+?)(?:\.git)?\/?$/.exec(trimmed);
-  if (https) return `${SSH_USER}@${https[1]}:${https[2]}.git`;
-  if (/^https?:\/\//.test(trimmed)) {
-    console.error("✗ origin carries credentials in its URL; refusing to build a release push target from it.");
-    process.exit(1);
-  }
-  // Already an SSH remote (either scp-like or ssh://): reuse it verbatim.
-  if (isSshRemote(trimmed)) return trimmed;
-  return undefined;
+async function watchRun(id: number): Promise<void> {
+  console.log(`Watching release run ${id}: ${runUrlPrefix}${id}`);
+  // Stream gh's progress and final job states (#8330); its stderr may carry credentials and stays private.
+  await streamCommand(["gh", "run", "watch", String(id), "--repo", githubRepo, "--exit-status", "--interval", "10"], "Release run watch");
 }
 
-/**
- * `ssh://host/owner/repo` or the scp-like `user@host:owner/repo`.
- *
- * This check is also a log boundary: the accepted value is printed before the push and appears in
- * the failure command. Parse URL userinfo instead of treating any `ssh://` string as safe, and
- * reject the scp-like `user:password@host:path` lookalike before either sink can observe it.
- */
-function isSshRemote(value: string): boolean {
-  const trimmed = value.trim();
-  if (!trimmed || /[\u0000-\u001f\u007f]/.test(trimmed)) return false;
-
-  if (trimmed.startsWith("ssh://")) {
-    // WHATWG URL collapses an empty password ("git:@host" -> password ""), so the parsed fields
-    // cannot distinguish it from a credential-free principal. Reject any ':' in the raw userinfo
-    // segment instead: a colon there is always credential-shaped.
-    const authority = trimmed.slice("ssh://".length);
-    const userinfoEnd = authority.indexOf("@");
-    if (userinfoEnd !== -1 && authority.slice(0, userinfoEnd).includes(":")) return false;
-    try {
-      const parsed = new URL(trimmed);
-      let decodedUsername: string;
-      try {
-        decodedUsername = decodeURIComponent(parsed.username);
-      } catch {
-        return false;
+async function waitForReleaseWorkflowRun(workflowId: number, id: number, startedAt: number): Promise<ReleaseRun> {
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    const raw = await command(["gh", "run", "list", "--workflow", "release.yml", "--branch", "dev",
+      "--repo", githubRepo, "--event", "workflow_dispatch", "--limit", "100", "--json", "createdAt,databaseId,headSha,status,url,headBranch,event,workflowDatabaseId"], "Release run lookup");
+    const matching = parseRuns(raw).filter(run => run?.databaseId === id);
+    if (matching.length > 1) throw new Error("Release run lookup returned duplicate run IDs");
+    const run = matching[0];
+    if (run) {
+      if (typeof run.headSha !== "string" || !fullSha.test(run.headSha)
+        || run.headBranch !== "dev" || run.event !== "workflow_dispatch" || run.workflowDatabaseId !== workflowId
+        || run.url !== `${runUrlPrefix}${id}` || typeof run.createdAt !== "string"
+        || !Number.isFinite(Date.parse(run.createdAt)) || Date.parse(run.createdAt) < startedAt
+        || typeof run.status !== "string" || !run.status) {
+        throw new Error(`Release run ${id} does not match the dispatched workflow; inspect Actions manually`);
       }
-      return parsed.protocol === "ssh:"
-        && parsed.hostname.length > 0
-        && parsed.pathname.length > 1
-        && parsed.password === ""
-        // The release deploy key uses GitHub's fixed SSH principal. Treat any other userinfo as
-        // credential-shaped rather than trying to distinguish a harmless username from a token.
-        && (decodedUsername === "" || decodedUsername === SSH_USER)
-        && parsed.search === ""
-        && parsed.hash === "";
-    } catch {
-      return false;
+      return run;
     }
+    await Bun.sleep(2_000);
   }
-
-  // scp-like syntax has no parser-level query/fragment boundary. Reject those delimiters and any
-  // second '@' in the host segment rather than allowing a credential-shaped suffix to reach the
-  // target log or failed-command output.
-  return /^git@[^:@\s/?#]+:[^?#]+$/.test(trimmed);
-}
-
-/** Split out so the scp-like SSH target is assembled rather than written as an address literal. */
-const SSH_USER = "git";
-
-async function releasePushCommand(branch: string): Promise<{ command: string[]; env?: Record<string, string> }> {
-  const keyPath = process.env.OCX_RELEASE_SSH_KEY?.trim();
-  if (!keyPath) return { command: ["git", "push", "origin", branch] };
-  const configured = process.env.OCX_RELEASE_SSH_REPO?.trim();
-  // An unvalidated override outranking origin means a stale exported value from a fork session can
-  // silently retarget a production release. Check the shape, and print the resolved target either
-  // way so the destination is visible before the push rather than inferred afterwards.
-  if (configured && !isSshRemote(configured)) {
-    console.error("✗ OCX_RELEASE_SSH_REPO is not a credential-free ssh:// or git@host:owner/repo remote; refusing to push.");
-    process.exit(1);
-  }
-  const slug = configured || sshTargetFromOrigin(await capture(["git", "remote", "get-url", "origin"]));
-  if (!slug) {
-    console.error("✗ OCX_RELEASE_SSH_KEY is set but no SSH push target could be derived from origin; set OCX_RELEASE_SSH_REPO.");
-    process.exit(1);
-  }
-  console.log(`→ release push target: ${slug}`);
-  return {
-    // Push to the SSH URL explicitly rather than rewriting the `origin` remote: the remote stays
-    // HTTPS for every other command, so nothing outside this call inherits the key.
-    command: ["git", "push", slug, `HEAD:${branch}`],
-    // IdentitiesOnly stops ssh from offering the agent's other keys first, which would authenticate
-    // as the maintainer and get rejected by the ruleset again.
-    env: { GIT_SSH_COMMAND: `ssh -i ${quoteSshArgument(keyPath)} -o IdentitiesOnly=yes` },
-  };
-}
-
-async function readPackageName(): Promise<string> {
-  try {
-    const pkg = JSON.parse(await Bun.file("package.json").text()) as { name?: unknown };
-    if (typeof pkg.name !== "string" || !pkg.name) {
-      console.error("✗ package.json is missing a valid name");
-      process.exit(1);
-    }
-    return pkg.name;
-  } catch (error) {
-    console.error(`✗ failed to read package.json: ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
-  }
-}
-
-async function npmVersionExists(packageName: string, version: string): Promise<boolean> {
-  const result = await runQuiet(["npm", "view", `${packageName}@${version}`, "version"]);
-  if (result.exitCode === 0) return true;
-
-  const output = `${result.stdout}\n${result.stderr}`;
-  if (output.includes("E404") || output.includes("No match found")) return false;
-
-  console.error(`✗ failed to check npm version ${packageName}@${version}`);
-  if (result.stderr) console.error(result.stderr);
-  process.exit(1);
-}
-
-async function remoteTagSha(tagName: string): Promise<string | null> {
-  const result = await runQuiet(["git", "ls-remote", "origin", `refs/tags/${tagName}`, `refs/tags/${tagName}^{}`]);
-  if (result.exitCode !== 0) {
-    console.error(`✗ failed to check remote tag ${tagName}`);
-    if (result.stderr) console.error(result.stderr);
-    process.exit(1);
-  }
-
-  const lines = result.stdout.split("\n").filter(Boolean);
-  const peeled = lines.find(line => line.endsWith(`refs/tags/${tagName}^{}`));
-  const exact = lines.find(line => line.endsWith(`refs/tags/${tagName}`));
-  const selected = peeled ?? exact;
-  return selected ? selected.split(/\s+/)[0] ?? null : null;
-}
-
-async function githubReleaseExists(tagName: string): Promise<boolean> {
-  const result = await runQuiet(["gh", "release", "view", tagName, "--json", "tagName"]);
-  if (result.exitCode === 0) return true;
-
-  const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
-  if (output.includes("release not found") || output.includes("not found")) return false;
-
-  console.error(`✗ failed to check GitHub Release ${tagName}`);
-  if (result.stderr) console.error(result.stderr);
-  process.exit(1);
-}
-
-export { compareVersions as compareReleaseVersions } from "./version-line";
-
-async function readNpmDistTags(packageName: string): Promise<Record<string, string>> {
-  const result = await runQuiet(["npm", "view", packageName, "dist-tags", "--json"]);
-  if (result.exitCode !== 0) {
-    console.error(`✗ failed to read npm dist-tags for ${packageName}`);
-    if (result.stderr) console.error(result.stderr);
-    process.exit(1);
-  }
-  try {
-    return JSON.parse(result.stdout) as Record<string, string>;
-  } catch {
-    console.error(`✗ npm dist-tags response for ${packageName} was not JSON`);
-    process.exit(1);
-  }
-}
-
-/** The proposed version must move its npm channel FORWARD: an unused-but-obsolete
- * target (e.g. cut from a dev branch whose version line trails main) would otherwise
- * pass the unused-version check and publish a regression over the channel tip. */
-function assertChannelVersionMovesForward(version: string, channel: string, distTags: Record<string, string>): void {
-  const current = distTags[channel];
-  if (!current) return; // channel not published yet — nothing to regress
-  let forward: number;
-  try {
-    forward = compareReleaseVersions(version, current);
-  } catch (err) {
-    console.error(`✗ cannot compare release versions (candidate ${version}, channel tip ${JSON.stringify(current)}): ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(1);
-  }
-  if (forward <= 0) {
-    console.error(`✗ release version ${version} does not move the '${channel}' channel forward (current: ${current}).`);
-    console.error("Reconcile the version line first: dev's package.json may trail the latest release; pick a version strictly newer than the channel tip.");
-    process.exit(1);
-  }
-}
-
-async function assertUnusedReleaseVersion(packageName: string, version: string): Promise<void> {
-  const releaseTag = `v${version}`;
-  const [npmUsed, tagSha, releaseUsed] = await Promise.all([
-    npmVersionExists(packageName, version),
-    remoteTagSha(releaseTag),
-    githubReleaseExists(releaseTag),
-  ]);
-
-  const failures: string[] = [];
-  if (npmUsed) failures.push(`- npm already has ${packageName}@${version}`);
-  if (tagSha) failures.push(`- remote Git tag ${releaseTag} already exists at ${tagSha}`);
-  if (releaseUsed) failures.push(`- GitHub Release ${releaseTag} already exists`);
-
-  if (failures.length > 0) {
-    console.error(`✗ release version ${version} is already partially or fully used:`);
-    console.error(failures.join("\n"));
-    console.error("Choose the next unused patch version, or make an explicit human decision to repair public metadata.");
-    process.exit(1);
-  }
+  throw new Error(`Timed out locating release run ${id}; inspect Actions manually before retrying`);
 }
 
 async function watchLatest(): Promise<void> {
-  const id = await capture(["gh", "run", "list", "--workflow", "release.yml", "--limit", "1", "--json", "databaseId", "-q", ".[0].databaseId"]);
-  if (!id) { console.error("No Release runs found yet."); process.exit(1); }
-  await watchRun(id);
+  const raw = await command(["gh", "run", "list", "--workflow", "release.yml", "--branch", "dev", "--event", "workflow_dispatch",
+    "--repo", githubRepo, "--limit", "1", "--json", "createdAt,databaseId,headSha,status,url"], "Release run lookup");
+  const runs = parseRuns(raw);
+  const run = runs[0];
+  if (runs.length !== 1 || !run || !Number.isSafeInteger(run.databaseId) || run.databaseId <= 0
+    || run.url !== `${runUrlPrefix}${run.databaseId}`) throw new Error("No identifiable dev release run found");
+  await watchRun(run.databaseId);
 }
 
-async function watchRun(id: string | number): Promise<void> {
-  console.log(`→ watching Release run ${id}`);
-  await runLoud(["gh", "run", "watch", String(id), "--exit-status", "--interval", "10"]);
-}
-
-async function waitForReleaseWorkflowRun(sha: string, branch: string, createdAfterIso: string): Promise<GhRun> {
-  const deadline = Date.now() + 2 * 60 * 1000;
-  let attempt = 1;
-  while (Date.now() < deadline) {
-    const raw = await capture(["gh", "run", "list", "--workflow", "release.yml", "--branch", branch, "--commit", sha, "--limit", "20", "--json", "createdAt,databaseId,headSha,status,url"]);
-    const runs = (JSON.parse(raw) as GhRun[])
-      .filter(run => run.headSha === sha)
-      .filter(run => !run.createdAt || run.createdAt >= createdAfterIso)
-      .sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")));
-    const run = runs[0];
-    if (run) {
-      console.log(`→ Release workflow run found: ${run.url}`);
-      return run;
-    }
-    console.log(`→ waiting for dispatched Release run (${sha.slice(0, 7)}) attempt ${attempt}`);
-    attempt += 1;
-    await Bun.sleep(5_000);
+async function main(args: string[]): Promise<void> {
+  const [channel, ...options] = args;
+  if (channel === "watch" && options.length === 0) { await watchLatest(); return; }
+  if (channel !== "latest" && channel !== "preview") throw new Error(usage);
+  let requestedSha: string | undefined;
+  let publish = false;
+  for (const option of options) {
+    if (option === "--publish" && !publish) publish = true;
+    else if (fullSha.test(option) && !requestedSha) requestedSha = option;
+    else throw new Error(usage);
   }
-  console.error(`✗ timed out waiting for dispatched Release workflow run on ${sha}`);
-  process.exit(1);
-}
-
-async function listCiRuns(sha: string, workflow: string = CI_WORKFLOW): Promise<GhRun[]> {
-  const raw = await capture(["gh", "run", "list", "--workflow", workflow, "--commit", sha, "--limit", "20", "--json", "conclusion,databaseId,headSha,status,url"]);
-  const runs = JSON.parse(raw) as GhRun[];
-  return runs.filter(run => run.headSha === sha);
-}
-
-async function waitForSuccessfulCi(sha: string, workflow: string = CI_WORKFLOW, label = "Cross-platform CI"): Promise<GhRun> {
-  const deadline = Date.now() + CI_WAIT_TIMEOUT_MS;
-  let attempt = 1;
-  while (Date.now() < deadline) {
-    const runs = await listCiRuns(sha, workflow);
-    const successful = runs.find(run => run.status === "completed" && run.conclusion === "success");
-    if (successful) {
-      console.log(`→ ${label} passed: ${successful.url}`);
-      return successful;
-    }
-
-    const failed = runs.find(run => run.status === "completed" && run.conclusion && run.conclusion !== "success");
-    if (failed) {
-      console.error(`✗ ${label} failed for ${sha}: ${failed.url}`);
-      process.exit(1);
-    }
-
-    const state = runs.length > 0
-      ? runs.map(run => `${run.status}${run.conclusion ? `/${run.conclusion}` : ""}`).join(", ")
-      : "not started yet";
-    console.log(`→ waiting for ${label} (${sha.slice(0, 7)}) attempt ${attempt}: ${state}`);
-    attempt += 1;
-    await Bun.sleep(CI_POLL_MS);
+  if (process.env.GITHUB_REPOSITORY !== undefined && process.env.GITHUB_REPOSITORY !== releaseRepository) {
+    throw new Error(`GITHUB_REPOSITORY must be ${releaseRepository}`);
   }
-
-  console.error(`✗ timed out waiting for ${label} on ${sha}`);
-  process.exit(1);
-}
-
-async function _remoteMainSha(): Promise<string> {
-  const out = await capture(["git", "ls-remote", "origin", "refs/heads/main"]);
-  const [sha] = out.split(/\s+/);
-  if (!sha) {
-    console.error("✗ could not resolve origin/main");
-    process.exit(1);
+  const token = process.env.GH_TOKEN === undefined
+    ? await command(["gh", "auth", "token", "--hostname", "github.com"], "GitHub authentication")
+    : process.env.GH_TOKEN;
+  if (!token || /\s/.test(token)) throw new Error("GitHub authentication returned an invalid token");
+  const resolver = join(import.meta.dir, "..", ".github", "scripts", "release-evidence.cjs");
+  const output = await command(["node", resolver, "resolve", ...(requestedSha ? [requestedSha] : [])],
+    "Release evidence resolution", { GH_TOKEN: token, GITHUB_REPOSITORY: releaseRepository });
+  let evidence: { sourceSha?: unknown; ciRunId?: unknown };
+  try { evidence = JSON.parse(output) as typeof evidence; }
+  catch { throw new Error("Evidence resolver returned invalid JSON"); }
+  if (!evidence || typeof evidence.sourceSha !== "string" || !fullSha.test(evidence.sourceSha)
+    || !Number.isSafeInteger(evidence.ciRunId) || Number(evidence.ciRunId) <= 0
+    || (requestedSha !== undefined && evidence.sourceSha !== requestedSha)) {
+    throw new Error("Evidence resolver returned an invalid source or CI run identity");
   }
-  return sha;
+  console.log(`Selected source ${evidence.sourceSha} from CI run ${evidence.ciRunId}; ${publish ? "publication requested" : "dry run"}.`);
+  const workflowIdText = await command(["gh", "api", `repos/${releaseRepository}/actions/workflows/release.yml`, "--hostname", "github.com", "--jq", ".id"], "Release workflow identity lookup");
+  const workflowId = Number(workflowIdText);
+  if (!/^[1-9][0-9]*$/.test(workflowIdText) || !Number.isSafeInteger(workflowId)) throw new Error("Invalid release workflow identity");
+  const startedAt = Math.floor(Date.now() / 1000) * 1000;
+  const dispatched = await command(["gh", "workflow", "run", "release.yml", "--repo", githubRepo, "--ref", "dev", "-f", `tag=${channel}`,
+    "-f", `expected-sha=${evidence.sourceSha}`, "-f", `dry-run=${!publish}`], "Release workflow dispatch");
+  const id = runIdFromDispatch(dispatched);
+  const releaseRun = await waitForReleaseWorkflowRun(workflowId, id, startedAt);
+  await watchRun(releaseRun.databaseId);
 }
 
-/** Live (network) head of a remote branch — never the local remote-tracking ref. */
-async function remoteBranchHead(branch: string): Promise<string> {
-  const out = await capture(["git", "ls-remote", "origin", `refs/heads/${branch}`]);
-  const [sha] = out.split(/\s+/);
-  if (!sha) {
-    console.error(`✗ could not resolve origin/${branch}`);
-    process.exit(1);
-  }
-  return sha;
+if (import.meta.main) {
+  main(process.argv.slice(2)).catch(error => {
+    console.error(`Release: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
 }
-
-if (args[0] === "watch") {
-  await watchLatest();
-  process.exit(0);
-}
-
-const usage = "Usage: bun scripts/release.ts <version> [--tag latest|preview] [--publish]\n"
-  + "       bun scripts/release.ts --bump patch|minor|major [--tag latest|preview] [--publish]\n"
-  + "       bun scripts/release.ts watch";
-const explicitVersion = args[0] && !args[0].startsWith("--") ? args[0] : null;
-const bumpIndexes = args.flatMap((arg, index) => arg === "--bump" ? [index] : []);
-if (bumpIndexes.length > 1) {
-  console.error(`--bump may be supplied only once.\n${usage}`);
-  process.exit(1);
-}
-const bumpIndex = bumpIndexes[0];
-const rawBumpKind = bumpIndex === undefined ? null : args[bumpIndex + 1] ?? null;
-if (rawBumpKind !== null && !["patch", "minor", "major"].includes(rawBumpKind)) {
-  console.error(`--bump must be one of patch|minor|major (got ${JSON.stringify(rawBumpKind)}).`);
-  process.exit(1);
-}
-if (bumpIndex !== undefined && rawBumpKind === null) {
-  console.error("--bump requires one of patch|minor|major.");
-  process.exit(1);
-}
-if (explicitVersion !== null && bumpIndex !== undefined) {
-  console.error(`An explicit version and --bump are mutually exclusive; supply exactly one.\n${usage}`);
-  process.exit(1);
-}
-if (explicitVersion === null && bumpIndex === undefined) {
-  console.error(`Exactly one of an explicit version or --bump is required.\n${usage}`);
-  process.exit(1);
-}
-if (explicitVersion !== null && !/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(explicitVersion)) {
-  console.error(usage);
-  process.exit(1);
-}
-const bumpKind = rawBumpKind as ReleaseBumpKind | null;
-const dryRun = !args.includes("--publish");
-
-// 1. Preflight — must be on main or preview, and local verification must pass.
-const branch = await capture(["git", "rev-parse", "--abbrev-ref", "HEAD"]);
-const allowedBranches = ["main", "preview"];
-const expectedTag = branch === "preview" ? "preview" : "latest";
-const tag = args.includes("--tag") ? (args[args.indexOf("--tag") + 1] ?? expectedTag) : expectedTag;
-if (tag !== expectedTag) {
-  console.error(`Release tag mismatch: ${branch} releases must use npm dist-tag '${expectedTag}' (got '${tag}').`);
-  process.exit(1);
-}
-if (!allowedBranches.includes(branch)) { console.error(`✗ must be on ${allowedBranches.join(" or ")} (currently ${branch}).`); process.exit(1); }
-if ((await capture(["git", "status", "--porcelain"])).trim()) { console.error("✗ working tree not clean — commit or stash first."); process.exit(1); }
-const packageName = await readPackageName();
-const distTags = await readNpmDistTags(packageName);
-let version = explicitVersion;
-if (version === null) {
-  // Origin owns the release line; a local checkout may have stale or missing tags.
-  // capture fails closed before any version mutation if origin cannot be read.
-  const tags = (await capture(["git", "ls-remote", "--tags", "--refs", "origin", "refs/tags/v*"]))
-    .split(/\r?\n/)
-    .map(line => line.trim().split(/\s+/)[1] ?? "")
-    .filter(ref => ref.startsWith("refs/tags/v"))
-    .map(ref => ref.slice("refs/tags/".length));
-  const stableTags: string[] = [];
-  const previewTags: string[] = [];
-  for (const candidate of tags) {
-    const parsed = parseVersion(candidate);
-    if (!parsed) continue;
-    (parsed.prerelease === null ? stableTags : previewTags).push(candidate);
-  }
-  try {
-    version = tag === "preview"
-      ? nextPreviewRelease({
-          kind: bumpKind!,
-          stableTip: distTags.latest ?? null,
-          stableTags,
-          previewTip: distTags.preview ?? null,
-          previewTags,
-          stamp: new Date().toISOString().slice(0, 10).replaceAll("-", ""),
-        })
-      : nextStableRelease({
-          kind: bumpKind!,
-          stableTip: distTags.latest ?? null,
-          stableTags,
-          previewTags,
-        });
-  } catch (error) {
-    console.error(`✗ ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
-  }
-}
-if (branch === "preview" && !version.includes("-preview.")) {
-  console.error(`Preview releases must use a preview prerelease version (got ${version}).`);
-  process.exit(1);
-}
-if (branch === "main" && version.includes("-")) {
-  console.error(`Main releases must use a stable semver version (got ${version}).`);
-  process.exit(1);
-}
-console.log(`→ release metadata preflight (${packageName}@${version})`);
-await assertUnusedReleaseVersion(packageName, version);
-assertChannelVersionMovesForward(version, tag, distTags);
-console.log("→ dependency audit");
-await runLoud(["bun", "run", "audit:high"]);
-console.log("→ typecheck");
-await runLoud(["bun", "x", "tsc", "--noEmit"]);
-console.log("→ test suite");
-const testRunner = getTestRunnerBun();
-// Match CI's isolation policy instead of inventing a second one. `ci.yml` runs
-// the storage-policy and api-usage harnesses in DEDICATED jobs and excludes them
-// from the general shards (`scripts/ci/run-bun-test-batches.sh`
-// `is_general_test_file`), because those Worker-heavy files corrupt the isolate
-// state around them.
-//
-// This preflight used to run `bun test --isolate tests` — the whole directory in
-// one process — so it exercised a grouping CI never runs. The result was a
-// release gate that failed on `api-usage` while every CI job for the same commit
-// was green: the worst kind of gate, one that blocks a good release and teaches
-// you to distrust it. Same files and same coverage as before (915), now in the
-// same groups CI uses.
-// Test commands use the pinned runner; audit, typecheck and privacy keep the runtime.
-// The release-helper fixture mocks runner resolution to keep test calls on its shim.
-const ISOLATED_TEST_FILES = [
-  "./tests/storage/api-storage-policy-already-running.test.ts",
-  "./tests/storage/api-storage-policy-mutation-busy.test.ts",
-  "./tests/storage/api-storage-policy-put-race.test.ts",
-  "./tests/storage/api-storage-policy-run.test.ts",
-  "./tests/storage/api-storage-policy.test.ts",
-  "./tests/storage/api-storage.test.ts",
-  "./tests/server/api-usage.test.ts",
-];
-await runLoud([
-  testRunner, "test", "--isolate", "tests",
-  "--path-ignore-patterns=**/api-storage-policy*.test.ts",
-  "--path-ignore-patterns=**/api-storage.test.ts",
-  "--path-ignore-patterns=**/api-usage.test.ts",
-]);
-for (const isolated of ISOLATED_TEST_FILES) {
-  await runLoud([testRunner, "test", "--isolate", isolated]);
-}
-console.log("→ privacy scan");
-await runLoud(["bun", "run", "privacy:scan"]);
-
-// 2. Bump every version source; the workflow creates the version tag after npm publish.
-//
-// A dry run bumps and pushes exactly like a real one, because the point of the dry run is to
-// exercise the workflow against the REAL release commit. That makes the second invocation
-// re-enter with package.json already at `version`, where `npm version <same>` exits
-// "Version not changed" — so the documented "re-run with --publish" path could never
-// complete. Treat an already-correct version as satisfied rather than as an error: the
-// bump is a desired end state, not an action that must happen every time.
-const currentVersion = JSON.parse(await Bun.file("package.json").text()).version as string;
-if (currentVersion === version) {
-  console.log(`→ package.json already at ${version}; leaving it alone`);
-} else {
-  console.log(`→ bump package.json → ${version}`);
-  await runLoud(["npm", "version", version, "--no-git-tag-version"]);
-}
-// The desktop app takes its version from tauri.conf.json and Cargo.toml/Cargo.lock, not from
-// package.json, and release.yml refuses to build when they disagree with the requested version.
-// Moving package.json alone would ship an app that reports the previous version under an updater
-// manifest naming this one. The sync is idempotent, so the --publish re-run is a no-op. It runs as
-// a `bun` subprocess like every other step here, which is what keeps it inside the helper
-// suite's PATH shim instead of rewriting the checkout the suite runs in.
-console.log(`→ sync desktop version sources → ${version}`);
-await runLoud(["bun", "scripts/release-version-sources.ts", "sync", version]);
-
-// 3. Commit + push the version bump — only if it is not already committed and pushed. On the
-// --publish re-run of a dry run there is nothing to commit, and `git commit` with an empty
-// index fails, which would strand the release just as surely as the bump did.
-const pendingBump = (await capture(["git", "status", "--porcelain", "--", ...VERSION_SOURCE_PATHS])).trim() !== "";
-if (pendingBump) {
-  await runLoud(["git", "add", "--", ...VERSION_SOURCE_PATHS]);
-  await runLoud(["git", "commit", "-m", `release: v${version}`]);
-}
-const releaseSha = await capture(["git", "rev-parse", "HEAD"]);
-if (pendingBump) {
-  console.log(`→ push origin ${branch}`);
-  const push = await releasePushCommand(branch);
-  if (push.env) console.log("→ using the release deploy key for the protected push");
-  await runLoud(push.command, push.env);
-} else {
-  console.log(`→ release commit ${releaseSha.slice(0, 9)} already pushed; reusing it`);
-}
-
-// 4. Wait for the pushed release commit to pass CI, then dispatch the Release workflow.
-console.log(`→ wait for Cross-platform CI (${releaseSha})`);
-await waitForSuccessfulCi(releaseSha);
-
-// The release bump always touches package.json, which is a service-lifecycle trigger path —
-// and release.yml's service gate requires an already-successful Service lifecycle run for
-// the release SHA. Wait for it too, or the dispatch races the still-running workflow.
-console.log(`→ wait for Service lifecycle (${releaseSha})`);
-await waitForSuccessfulCi(releaseSha, SERVICE_WORKFLOW, "Service lifecycle");
-
-// Live-remote guard: re-read the actual remote head over the network immediately
-// before dispatch. The local remote-tracking ref can be minutes stale, and the
-// workflow_dispatch below resolves a mutable branch — so this is the last chance
-// to refuse publishing an unaudited newer commit.
-const liveOriginSha = await remoteBranchHead(branch);
-if (liveOriginSha !== releaseSha) {
-  console.error(`✗ origin/${branch} moved while waiting for CI (${liveOriginSha} != ${releaseSha}); aborting release dispatch.`);
-  process.exit(1);
-}
-
-console.log(`→ dispatch Release (tag=${tag}, dry-run=${dryRun})`);
-const dispatchStartedAt = new Date(Date.now() - 5_000).toISOString();
-await runLoud(["gh", "workflow", "run", "release.yml", "--ref", branch, "-f", `version=${version}`, "-f", `tag=${tag}`, "-f", `expected-sha=${releaseSha}`, "-f", `dry-run=${String(dryRun)}`]);
-
-// 5. Watch it.
-const releaseRun = await waitForReleaseWorkflowRun(releaseSha, branch, dispatchStartedAt);
-await watchRun(releaseRun.databaseId);
-console.log(dryRun
-  ? "\n✓ Dry run complete. Re-run with --publish to publish for real."
-  : "\n✓ Published. Try:  npm install -g @bitkyc08/opencodex");

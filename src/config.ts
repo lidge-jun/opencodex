@@ -350,12 +350,17 @@ export function initializePersistedConfigIfMissing(
   const before = observeInitialConfigState();
   if (before !== "missing") return before;
   let published = false;
+  let telemetry: ReturnType<typeof carryPersistedTelemetry> | undefined;
   try {
     const persisted = withConfigMutationLockSync((): OcxConfig | "exists" | "invalid" => {
       const current = observeInitialConfigState();
       if (current !== "missing") return current;
       const projected = projectCustomModelCatalogMigration(undefined, projectConfigRebaseProvenance(config));
       normalizeAccountAutoPauseRevisions(undefined, projected);
+      // Creating config.json never introduces a telemetry decision: one made before the file existed
+      // is held in telemetry-state.json, where another process may have replaced it (see
+      // carryPersistedTelemetry). Only an in-memory decline survives.
+      telemetry = carryPersistedTelemetry(projected, undefined);
       if (!validateConfigCandidate(projected).ok) throw new Error("Initial configuration is invalid.");
       if (!publishInitialConfigNoReplace(getConfigPath(), JSON.stringify(projected, null, 2) + "\n", io)) {
         return observeInitialConfigState() === "exists" ? "exists" : "invalid";
@@ -368,6 +373,7 @@ export function initializePersistedConfigIfMissing(
     });
     if (typeof persisted === "string") return persisted;
     adoptCustomModelCatalogMigration(config, persisted);
+    if (telemetry?.carried) adoptPersistedTelemetry(config, telemetry.value);
     if (persisted.configRebaseProvenance === undefined) delete config.configRebaseProvenance;
     else config.configRebaseProvenance = structuredClone(persisted.configRebaseProvenance);
     clearPendingConfigDeletions(config);

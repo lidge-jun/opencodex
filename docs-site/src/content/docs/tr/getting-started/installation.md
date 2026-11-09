@@ -20,7 +20,7 @@ duyduğunda ChatGPT oturumunuzu da kullanabilir.
 ## Kurulum
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ```
 
 :::note[npm bun postinstall betiğini engelledi mi?]
@@ -54,7 +54,7 @@ erişim sağlamaz. Önizleme kanalını yalnızca yayınlanmamış opencodex
 derlemelerini test etmek için kullanın:
 
 ```bash
-npm install -g @bitkyc08/opencodex@preview
+npm install -g --allow-scripts=bun @bitkyc08/opencodex@preview
 ocx update --tag preview
 ```
 

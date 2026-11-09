@@ -146,16 +146,24 @@ describe("CI Bun roles", () => {
   test("release, packaged runtime and sidecar jobs use the default runtime action", () => {
     const runtimeJobs: Record<string, string[]> = {
       "ci.yml": ["desktop-shell", "widget", "docker-smoke", "keyring-smoke"],
-      "release.yml": ["preflight", "package-standalone", "package-desktop", "verify-release", "publish", "attach-release"],
+      "release.yml": ["preflight", "package-standalone", "package-desktop", "package-npm", "verify-release", "attach-release"],
       "service-lifecycle.yml": ["linux-systemd", "macos-launchd", "windows-schtasks"],
       "desktop-installed-gate.yml": ["macos", "windows", "linux"],
     };
     for (const [file, names] of Object.entries(runtimeJobs)) {
       for (const name of names) {
-        const setups = workflowJobs.get(file)?.[name]?.steps?.filter(step => step.uses === "./.github/actions/setup-project-bun") ?? [];
+        const action = file === "service-lifecycle.yml" ? "./.evidence-policy/.github/actions/setup-project-bun"
+          : file === "release.yml" && ["package-standalone", "package-desktop", "package-npm"].includes(name)
+            ? "./trusted-release-policy/.github/actions/setup-project-bun" : "./.github/actions/setup-project-bun";
+        const setups = workflowJobs.get(file)?.[name]?.steps?.filter(step => step.uses === action) ?? [];
         expect(`${file}/${name}:${setups.length}`).toBe(`${file}/${name}:1`);
         expect(setups[0]?.with?.role).toBeUndefined();
       }
+    }
+    for (const name of ["verify-npm", "publish"]) {
+      const steps = workflowJobs.get("release.yml")?.[name]?.steps ?? [];
+      expect(steps.some(step => step.uses === "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6")).toBeTrue();
+      expect(steps.some(step => step.run?.includes('require("./package.json").dependencies.bun'))).toBeTrue();
     }
   });
 });
@@ -250,8 +258,8 @@ describe("the narrow checks stay narrow", () => {
     const narrow = (changes?.steps ?? []).find(step => step.id === "narrow");
     expect(changes?.outputs?.setup_action).toBe("${{ steps.narrow.outputs.setup_action }}");
     expect(changes?.outputs?.remote_helper).toBe("${{ steps.narrow.outputs.remote_helper }}");
-    expect(narrow?.env?.SETUP_ACTION).toBe("${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.setup_action }}");
-    expect(narrow?.env?.REMOTE_HELPER).toBe("${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.remote_helper }}");
+    expect(narrow?.env?.SETUP_ACTION).toBe("${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')) && 'true' || steps.filter.outputs.setup_action }}");
+    expect(narrow?.env?.REMOTE_HELPER).toBe("${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')) && 'true' || steps.filter.outputs.remote_helper }}");
     expect(narrow?.run).toContain("exit 1");
   });
 });

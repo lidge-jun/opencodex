@@ -1836,7 +1836,8 @@ describe("GUI update execution decisions", () => {
 describe("immutable update target (WP160)", () => {
   test("a resolved version pins the install target instead of the movable tag", () => {
     expect(updateCommand("bun", "latest", "2.7.24").args).toEqual(["add", "-g", "@bitkyc08/opencodex@2.7.24"]);
-    expect(updateCommand("npm", "latest", "2.7.24").args).toEqual(["install", "-g", "@bitkyc08/opencodex@2.7.24"]);
+    // npm 12 blocks dependency lifecycle scripts by default; see update-npm-allow-scripts.test.ts.
+    expect(updateCommand("npm", "latest", "2.7.24").args).toEqual(["install", "-g", "--allow-scripts=bun", "@bitkyc08/opencodex@2.7.24"]);
     expect(updateCommandStr("bun", "latest", "2.7.24")).toContain("@bitkyc08/opencodex@2.7.24");
     // Unknown version falls back to the tag (best-effort lane).
     expect(updateCommand("bun", "latest").args).toEqual(["add", "-g", "@bitkyc08/opencodex@latest"]);
