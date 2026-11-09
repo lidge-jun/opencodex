@@ -779,7 +779,7 @@ On upgrade, startup adds Pro to a saved model list only when it exactly matches 
 
 ## 3. API-key catalog
 
-opencodex ships 107 built-in presets: 86 key-based, 17 OAuth, three local, and one default
+opencodex ships 108 built-in presets: 87 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -873,6 +873,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Modelflare | `https://modelflare.dev/v1` |
 | AI Stupid Level | `https://aistupidlevel.info/v1` |
 | cheapaimodel | `https://api.cheapaimodel.ai/v1` |
+| Standard Compute | `https://api.stdcmpt.com/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -1004,6 +1005,23 @@ preset sends every request through Chat Completions, the one interface every cat
 it does not use the gateway's Responses or Anthropic Messages endpoints. cheapaimodel's
 [terms](https://cheapaimodel.ai/terms) and [privacy policy](https://cheapaimodel.ai/privacy) apply to
 requests sent to this service.
+
+**Standard Compute** is an OpenAI-compatible API with a router: the `StandardCompute` model sends
+each request to the cheapest enabled model that can handle it, with automatic fallback, so two
+requests in one session can be answered by different models. A `vendor/model` id from the live list,
+such as `deepseek/deepseek-v4-pro`, pins one model when you need repeatable behavior. Create an
+[API key](https://standardcompute.com/dashboard), then select **Standard Compute** in `ocx init` or
+the dashboard's **Add provider** picker, or run `ocx provider add standardcompute`, and give it the
+key directly or as the reference `${STANDARDCOMPUTE_API_KEY}`. The preset uses Chat Completions for
+every client and discovers models from the public
+[`GET /v1/models`](https://docs.standardcompute.com/models). Because that list is public, a
+successful model list does not prove the key is valid, so login reports the key as unverified. The
+same key works on the EU (`https://eu.stdcmpt.com/v1`) and US (`https://us.stdcmpt.com/v1`) hosts;
+where requests run is set per key in the dashboard, as described in
+[Regions and privacy](https://docs.standardcompute.com/regions-and-privacy). Standard Compute's
+[terms](https://standardcompute.com/terms) and [privacy policy](https://standardcompute.com/privacy)
+apply to requests sent to this service.
+
 
 The provider editor also accepts an optional `inputModalities` fallback: a nonempty array containing
 `text`, `image`, `audio`, or `video`. Exact per-model declarations take precedence. Invalid values
