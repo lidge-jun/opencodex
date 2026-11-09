@@ -1285,3 +1285,173 @@ describe("service outcome reporting after a failed operation (#4914)", () => {
     expect(silent.exitCode).toBe(1);
   });
 });
+
+/**
+ * #8362. `launchctl bootout` is asynchronous, and so is a manual one an operator runs a
+ * moment before the command. Once the label is unregistered, `launchctl print` answers 113
+ * for the whole time the previous process is still exiting — which is why the job reads
+ * `not loaded` — so the settle loop cannot see it: that loop waits for a REGISTRATION to
+ * disappear and there is none left. `bootstrap` still fails with "Bootstrap failed: 5:
+ * Input/output error" until the previous process is gone, and the old single retry landed
+ * inside that same window. The reported symptom was exactly that: the first
+ * `ocx service restart` or `repair` printed `installed, not loaded ... no proxy is
+ * answering`, and a second run succeeded.
+ *
+ * Every case drives the injected seam; no real launchctl is reached.
+ */
+describe("a manual bootout still tearing down is waited out (#8362)", () => {
+  const diag: ServiceDiagnostic = {
+    supported: true,
+    installed: true,
+    enabled: true,
+    running: false,
+    viable: false,
+    startable: true,
+    stale: false,
+    conflict: false,
+    backend: "launchd",
+    summary: "installed, not loaded (launchd; gui/501)",
+  };
+
+  /**
+   * launchd after a HAND-run `launchctl bootout`: the label is unregistered (`print` 113)
+   * while the process is still exiting, `bootout` therefore finds nothing (exit 3, never
+   * settled), and the next `failures` bootstraps answer 5/EIO. The (failures + 1)-th
+   * succeeds and the job is loaded from then on.
+   */
+  function manualBootoutStillTearingDown(
+    failures: number,
+    shape: [status: number, stderr: string] = [5, "Bootstrap failed: 5: Input/output error"],
+  ) {
+    const argv: string[][] = [];
+    let attempts = 0;
+    let loaded = false;
+    const launchctl = ((args: string[]): LaunchctlResult => {
+      argv.push([...args]);
+      switch (args[0]) {
+        case "print": return loaded ? ok() : fail(113, "Could not find service");
+        case "bootout": return fail(3, "Boot-out failed: 3: No such process");
+        case "bootstrap": {
+          attempts += 1;
+          if (attempts <= failures) return fail(...shape);
+          loaded = true;
+          return ok();
+        }
+        default: return ok();
+      }
+    }) as typeof runLaunchctl;
+    const probe = ((): LaunchdLoadProbe => (loaded
+      ? { state: "loaded-current", domain: "gui/501" }
+      : { state: "not-loaded" })) as typeof probeLaunchdLoadState;
+    return { argv, launchctl, probe, attempts: () => attempts };
+  }
+
+  function darwinDeps(
+    verb: ServiceRepairVerb,
+    plistPath: string,
+    launchctl: typeof runLaunchctl,
+    probe: typeof probeLaunchdLoadState,
+    sleeps: number[],
+    restarts: string[],
+    /** When given, each wait is logged here as `["sleep"]`, in order with the launchctl calls. */
+    log?: string[][],
+  ) {
+    return {
+      platform: "darwin" as const,
+      verb,
+      diagnose: () => diag,
+      assertEnv: () => {},
+      assertAuth: () => {},
+      repairLaunchd: () => installLaunchd({
+        launchctl,
+        plistPath,
+        probe,
+        sleepSync: ms => { sleeps.push(ms); log?.push(["sleep"]); },
+      }),
+      restartLaunchd: () => { restarts.push("restart"); },
+    };
+  }
+
+  test("restart brings the proxy back on the first call", async () => {
+    const plistPath = fixturePlist();
+    // Three failed bootstraps, not one: a teardown that outlives the old back-to-back retry
+    // is the reported race.
+    const { argv, launchctl, probe, attempts } = manualBootoutStillTearingDown(3);
+    const sleeps: number[] = [];
+    const restarts: string[] = [];
+
+    await repairService(darwinDeps("restart", plistPath, launchctl, probe, sleeps, restarts));
+
+    expect(attempts()).toBe(4);
+    // Waited between attempts instead of bursting them into the same teardown window.
+    expect(sleeps).toEqual([500, 500]);
+    expect(verbs(argv).filter(v => v === "bootstrap")).toHaveLength(4);
+    // A bootstrap that took after the wait is a fresh process: no kickstart, no restart.
+    expect(verbs(argv)).not.toContain("kickstart");
+    expect(restarts).toEqual([]);
+  });
+
+  test("repair brings the proxy back on the first call", async () => {
+    const plistPath = fixturePlist();
+    const { argv, launchctl, probe, attempts } = manualBootoutStillTearingDown(3);
+    const sleeps: number[] = [];
+    const restarts: string[] = [];
+
+    await repairService(darwinDeps("repair", plistPath, launchctl, probe, sleeps, restarts));
+
+    expect(attempts()).toBe(4);
+    expect(sleeps).toEqual([500, 500]);
+    expect(verbs(argv).filter(v => v === "bootstrap")).toHaveLength(4);
+    expect(verbs(argv)).not.toContain("kickstart");
+    expect(restarts).toEqual([]);
+  });
+
+  // Only the teardown shapes wait. Exit 37 and the legacy "Load failed" are the same race;
+  // EPERM is not, and waiting would only delay the real error.
+  for (const shape of [
+    [37, "Bootstrap failed: 37: Operation already in progress"],
+    // The exit status alone is the evidence when launchctl prints nothing recognisable.
+    [37, ""],
+    [5, ""],
+    [1, "Load failed: 5: Input/output error"],
+  ] as Array<[number, string]>) {
+    test(`the teardown shape ${shape[0]} "${shape[1]}" is waited out`, async () => {
+      const { argv, launchctl, probe, attempts } = manualBootoutStillTearingDown(3, shape);
+      const sleeps: number[] = [];
+      await repairService(darwinDeps("repair", fixturePlist(), launchctl, probe, sleeps, []));
+      expect(attempts()).toBe(4);
+      expect(sleeps).toEqual([500, 500]);
+      expect(verbs(argv).filter(v => v === "bootstrap")).toHaveLength(4);
+    });
+  }
+
+  test("a refused bootstrap (EPERM) is reported at once, never retried", async () => {
+    const { argv, launchctl, probe, attempts } = manualBootoutStillTearingDown(
+      Number.POSITIVE_INFINITY, [1, "Bootstrap failed: 1: Operation not permitted"],
+    );
+    const sleeps: number[] = [];
+    await expect(repairService(darwinDeps("repair", fixturePlist(), launchctl, probe, sleeps, [])))
+      .rejects.toThrow(/could not bootstrap/);
+    expect(attempts()).toBe(1);
+    expect(sleeps).toEqual([]);
+    expect(verbs(argv).filter(v => v === "bootstrap")).toHaveLength(1);
+  });
+
+  // The wait must be BOUNDED: a genuinely wedged domain reaches the diagnosable throw rather
+  // than hanging the command. Pin the exact budget: the first bootstrap, then the recovery
+  // round's 50 attempts with a 500 ms wait between each of them.
+  test("a teardown that never finishes still throws, within the bound", async () => {
+    const plistPath = fixturePlist();
+    const { argv, launchctl, probe, attempts } = manualBootoutStillTearingDown(Number.POSITIVE_INFINITY);
+    const sleeps: number[] = [];
+
+    await expect(repairService(darwinDeps("repair", plistPath, launchctl, probe, sleeps, [], argv)))
+      .rejects.toThrow(/could not bootstrap/);
+
+    expect(attempts()).toBe(1 + 50);
+    expect(sleeps).toEqual(Array.from({ length: 49 }, () => 500));
+    // Each wait sits between two bootstraps: the retries are spaced out, never burst.
+    const recovery = verbs(argv).filter(v => v === "bootstrap" || v === "sleep").slice(1);
+    expect(recovery).toEqual(Array.from({ length: 99 }, (_, i) => (i % 2 === 0 ? "bootstrap" : "sleep")));
+  });
+});

@@ -33,6 +33,7 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | 在可用时启用 | Web 搜索侧车选项。 |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | 在可用时启用 | 图像描述侧车选项。 |
 | `images?` | `OcxImagesConfig` | 自动选择 OpenAI | 用于 Codex `image_gen` 的独立 Images 转发选项。 |
+| `telemetry?` | `OcxTelemetryConfig` | 人工知悉提示后默认开启 | 匿名每日使用遥测的同意状态（`decision`、`decidedAt`、`noticeShownAt`）。在人工看到提示或主动同意之前不会发送任何数据。可被 `OCX_TELEMETRY=0` 或 `DO_NOT_TRACK=1` 覆盖。参见[遥测 (`telemetry`)](#遥测-telemetry)与[遥测与隐私](/zh-cn/guides/telemetry/)。 |
 
 如果较旧的开发版本在尚未提供备份支持之前修改过了 resume-history 元数据，请运行
 `ocx recover-history --legacy-openai --yes` 强制使用原生提供方恢复。
@@ -99,6 +100,35 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 :::caution[转发的回环地址未认证]
 普通 `ssh -L` 会监听在你本地的回环地址上，适用于默认的未认证绑定。不要使用 `ssh -g -L`、宽泛的容器端口发布，或会把客户端侧暴露到 `0.0.0.0` 的转发模式。在不确定时，请显式绑定为 `ssh -L 127.0.0.1:20100:localhost:10100`。
 :::
+
+## 遥测 (`telemetry`)
+
+匿名每日使用遥测仅在用户看到告知提示（通过 GUI 弹窗或交互式终端提示）后才默认开启。`config.json` 中的 `telemetry` 块记录该同意状态：
+
+```json
+{
+  "telemetry": {
+    "decision": "accepted",
+    "decidedAt": "2026-11-07T09:00:00.000Z",
+    "noticeShownAt": "2026-11-07T09:00:00.000Z"
+  }
+}
+```
+
+| 键 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `telemetry.decision?` | `"accepted" \| "declined"` | 未设置（未决定） | 用户的明确选择。`"declined"` 会禁用遥测并立即删除 `<OPENCODEX_HOME>/telemetry-id.json`；`"accepted"` 会启用每日报告。 |
+| `telemetry.decidedAt?` | `string` (ISO 8601) | 未设置 | 记录 `decision` 的 UTC 时间戳。仅发送严格晚于 `decidedAt ?? noticeShownAt` 所在 UTC 日期的已完成 UTC 日历日（`day > formatUtcDay(decidedAt ?? noticeShownAt)`）；同意当天及更早的日期绝不会补发。 |
+| `telemetry.noticeShownAt?` | `string` (ISO 8601) | 未设置 | 人类用户在网页控制台或交互式终端中看到告知提示的 UTC 时间戳。当 `decision` 未设置时，仅在已设置 `noticeShownAt` 时才会发送遥测（`default-on`）；否则代理保持在 `awaiting-notice` 状态。 |
+
+收集器端点（`https://telemetry.opencodex.me/v1/events`）是代码常量，无法在 `config.json` 中配置。
+
+两个环境变量会覆盖 `config.json` 并立即禁用遥测，且不会修改已保存的 `config.json`（在代理启动或调度器周期检测到任一变量时，还会在 `<OPENCODEX_HOME>/telemetry-state.json` 中记录当日 UTC 日期为 `ineligibleThroughDay` 并删除 `<OPENCODEX_HOME>/telemetry-id.json`，因此移除变量后不会补发这些日期，并会生成新的安装 ID）：
+
+- `OCX_TELEMETRY=0`（不区分大小写，也接受 `false`、`off` 或 `no`）
+- `DO_NOT_TRACK=1`（不区分大小写，也接受 `true` 或 `yes`）
+
+`ocx config set telemetry` 和 `ocx config unset telemetry` 会被拒绝，且 `ocx config import` 对所有调用方都会忽略导入的 `telemetry` 块并保留已持久化的同意状态；请改用 `ocx telemetry enable`（需要交互式终端并确认告知提示，否则以 `agent_consent_required` / `tty_required` 退出）、`ocx telemetry disable`、`ocx telemetry status [--json]` 或控制台 **Proxy details** 中的开关。完整载荷结构与保留策略请参见[遥测与隐私](/zh-cn/guides/telemetry/)。
 
 ## 存储清理
 

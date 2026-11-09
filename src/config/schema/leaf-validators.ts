@@ -371,6 +371,7 @@ export const providerConfigSchema = z.object({
   preserveResponsesMessageMetadata: z.boolean().optional(),
   projectResponsesLiteHostedSearchHistory: z.boolean().optional(),
   dropResponsesReasoningItems: z.boolean().optional(),
+  arkKimiResponsesModels: z.array(z.string().min(1)).optional(),
   modelReasoningEffortsAuthoritative: z.boolean().optional(),
   decodesNativeCompactionBlobs: z.boolean().optional(),
   supportsNativeCompactionTrigger: z.boolean().optional(),
@@ -1193,4 +1194,15 @@ export const spendSchema = z.object({
  */
 export const skillsConfigSchema = z.object({
   catalog_refresh: z.enum(["per_session", "per_turn"]).optional(),
+}).strict();
+
+/**
+ * Anonymous telemetry consent state.
+ *
+ * No endpoint is accepted here: the collector URL is a constant in src/telemetry/sender.ts.
+ */
+export const telemetryConfigSchema = z.object({
+  decision: z.enum(["accepted", "declined"]).optional(),
+  decidedAt: clientTimestampSchema.optional(),
+  noticeShownAt: clientTimestampSchema.optional(),
 }).strict();

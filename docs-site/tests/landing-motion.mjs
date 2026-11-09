@@ -76,6 +76,42 @@ const assertScrubMoves = async (page) => {
   await page.waitForFunction(previous => document.querySelector('.lp-scrub-canvas').toDataURL() !== previous, first, { timeout: 5000 });
 };
 try {
+  // The desktop header must contain its controls even when translations are wide.
+  // Cover both the landing and docs headers at the nav breakpoint and wide rail cap.
+  for (const locale of ['', 'fr/', 'ko/', 'zh-cn/', 'zh-tw/', 'ru/', 'ja/', 'tr/']) {
+    for (const path of ['', 'guides/providers/']) {
+      for (const width of [1152, 1180, 1280, 1920, 2560]) {
+        const navPage = await browser.newPage({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
+        await navPage.route('https://api.github.com/**', route => route.abort());
+        const navUrl = new URL(`${locale}${path}`, url).href;
+        await navPage.route(navUrl, async route => {
+          const response = await route.fetch();
+          const html = await response.text();
+          const body = html.replace(/<a class="github-link[\s\S]*?<\/a>/, link => {
+            const withoutCount = link.replace(/<span class="gh-count[^>]*data-gh-stars="\d+"[^>]*>[^<]*<\/span>/, '');
+            return withoutCount.replace('</a>', '<span class="gh-count" data-gh-stars="18300" aria-hidden="true">18.3k</span></a>');
+          });
+          await route.fulfill({ response, body });
+        });
+        await navPage.goto(navUrl, { waitUntil: 'load' });
+        await navPage.evaluate(() => document.fonts.ready);
+        const bounds = await navPage.evaluate(() => {
+          const bar = document.querySelector('header.header > .header');
+          const barRect = bar.getBoundingClientRect();
+          return [...bar.children].filter(el => getComputedStyle(el).display !== 'none').map(el => {
+            const rect = el.getBoundingClientRect();
+            return { name: el.className, left: rect.left - barRect.left, right: rect.right - barRect.right };
+          });
+        });
+        for (const item of bounds) {
+          assert.ok(item.left >= -1 && item.right <= 1,
+            `${locale || 'en/'}${path} ${width}px: ${item.name} escapes header: ${JSON.stringify(item)}`);
+        }
+        await navPage.close();
+      }
+    }
+  }
+
   const switches = await browser.newPage({ viewport: { width: 1280, height: 800 }, reducedMotion: 'reduce' });
   await open(switches);
   await assertStillPoster(switches);

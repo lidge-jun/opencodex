@@ -42,6 +42,31 @@ const childScript = (dir: string, rel: string, gate?: { ready: string; go: strin
 ].join("\n");
 const spawnChild = (dir: string, rel: string, gate?: { ready: string; go: string }) =>
   Bun.spawn([process.execPath, "-e", childScript(dir, rel, gate)], { stderr: "inherit" });
+
+/** Complete the owner's JSON at the first creation poll, without relying on process scheduling. */
+function observeOwnerPublication(dir: string, completedOwner: string | null, cacheUnowned = false): string {
+  const script = [
+    "import { writeFileSync } from \"node:fs\";",
+    "import { initializeConfigOwnership, registerOwnedConfigPath } from " + JSON.stringify(modulePath) + ";",
+    cacheUnowned ? "if (initializeConfigOwnership(" + JSON.stringify(dir) + ")) throw new Error(\"fixture unexpectedly owned before publication\");" : "",
+    // The spent publication wait is remembered per unchanged metadata pair; only a changed owner
+    // marker re-arms it, so the cached-unowned publication case needs a new incomplete marker to
+    // wait on. The unfinished variants keep theirs: unchanged files must not re-enter the wait.
+    cacheUnowned && completedOwner !== null ? "writeFileSync(" + JSON.stringify(join(dir, ".opencodex-owner.json")) + ", \"still-incomplete\");" : "",
+    "const completedOwner = " + JSON.stringify(completedOwner) + ";",
+    "const realNow = Date.now; let reads = 0;",
+    "Date.now = () => {",
+    "  reads++;",
+    "  if (completedOwner !== null && reads === 2) writeFileSync(" + JSON.stringify(join(dir, ".opencodex-owner.json")) + ", completedOwner);",
+    // An abandoned publication reaches the existing deadline without a wall-clock sleep.
+    "  return completedOwner === null ? reads * 20_000 : realNow();",
+    "};",
+    "console.log(JSON.stringify(registerOwnedConfigPath(" + JSON.stringify(dir) + ", " + JSON.stringify(join(dir, "after-publication")) + ")));",
+  ].join("\n");
+  const child = Bun.spawnSync([process.execPath, "-e", script]);
+  expect(child.exitCode, child.stderr.toString()).toBe(0);
+  return JSON.parse(child.stdout.toString()) as string;
+}
 const manifest = (dir: string) =>
   JSON.parse(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8")) as { paths: string[]; uninstallStartedAt?: number };
 
@@ -801,6 +826,34 @@ describe("ownership edge cases from review (#8093)", () => {
     expect(manifest(dir).paths).toContain("later");
   }));
 
+  for (const cached of [false, true]) for (const state of ["empty", "mismatched"] as const) {
+    const context = cached ? "cached-unowned" : "uncached";
+    test(`${context} registration waits for ${state} owner publication`, withHome(dir => {
+      expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+      const ownerPath = join(dir, ".opencodex-owner.json");
+      const owner = readFileSync(ownerPath, "utf8");
+      // Exclusive create exposes the file name before writeFileSync finishes its bytes.
+      const incomplete = state === "empty" ? "" : JSON.stringify({ ...JSON.parse(owner), ownerId: "00000000-0000-4000-8000-000000000000" });
+      writeFileSync(ownerPath, incomplete);
+      expect(observeOwnerPublication(dir, owner, cached)).toBe("recorded");
+      expect(readFileSync(ownerPath, "utf8")).toBe(owner);
+      expect(manifest(dir).paths).toContain("after-publication");
+    }));
+
+    test(`${context} unfinished ${state} owner publication stays unowned and unchanged`, withHome(dir => {
+      expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+      const ownerPath = join(dir, ".opencodex-owner.json");
+      const owner = JSON.parse(readFileSync(ownerPath, "utf8"));
+      const invalid = state === "empty" ? "" : JSON.stringify({ ...owner, ownerId: "00000000-0000-4000-8000-000000000000" });
+      writeFileSync(ownerPath, invalid);
+      const before = readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8");
+      expect(observeOwnerPublication(dir, null, cached)).toBe("unowned");
+      expect(readFileSync(ownerPath, "utf8")).toBe(invalid);
+      expect(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8")).toBe(before);
+      expect(existsSync(join(dir, "after-publication"))).toBe(false);
+    }));
+  }
+
   test("a first registration waits for a home another process is still creating", withHome(dir => {
     expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
     removeTreeWithRetry(join(dir, ".opencodex-owner.json"));
@@ -813,5 +866,33 @@ describe("ownership edge cases from review (#8093)", () => {
     const result = JSON.parse(Bun.spawnSync([process.execPath, "-e", script]).stdout.toString()) as { recorded: boolean; waited: number };
     expect(result.recorded).toBe(false);
     expect(result.waited).toBeGreaterThanOrEqual(90);
+  }));
+
+  test("an unchanged ownerless manifest spends the publication wait once, not per registration", withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    const ownerPath = join(dir, ".opencodex-owner.json");
+    const owner = JSON.parse(readFileSync(ownerPath, "utf8"));
+    // A creation stopped after the manifest, or a corrupt marker: the pair never validates.
+    writeFileSync(ownerPath, JSON.stringify({ ...owner, ownerId: "00000000-0000-4000-8000-000000000000" }));
+    // The locked reload drops the stale cache entry; the next registration pays the one wait.
+    expect(recordOwnedConfigPath(dir, join(dir, "observer"))).toBe(false);
+    let sleeps = 0;
+    const realSleep = Bun.sleepSync;
+    Bun.sleepSync = (ms: number) => { sleeps += 1; realSleep(ms); };
+    let waitedMs = 0;
+    try {
+      const first = performance.now();
+      expect(recordOwnedConfigPath(dir, join(dir, "first"))).toBe(false);
+      waitedMs = performance.now() - first;
+      const firstSleeps = sleeps;
+      expect(firstSleeps).toBeGreaterThan(0);
+      const repeats = performance.now();
+      for (let i = 0; i < 20; i += 1) expect(recordOwnedConfigPath(dir, join(dir, `repeat-${i}`))).toBe(false);
+      // Twenty repeats stay under the single wait the first registration already paid: with the
+      // wait wrongly spent per call this would take twenty times as long.
+      expect(performance.now() - repeats).toBeLessThan(waitedMs);
+      expect(sleeps - firstSleeps).toBe(0);
+    } finally { Bun.sleepSync = realSleep; }
+    expect(waitedMs).toBeGreaterThanOrEqual(90);
   }));
 });

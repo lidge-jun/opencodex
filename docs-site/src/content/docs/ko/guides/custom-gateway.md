@@ -9,6 +9,9 @@ description: 모델 목록 조회부터 제한된 응답 생성까지 사용자 
 허가된 URL과 키를 입력하고 저장하세요. 키를 명령이나 공유 예시에 넣지 마세요. 저장 성공만으로 모델 목록 조회나
 추론 성공이 증명되지는 않습니다.
 
+[Remote Link](/ko/guides/remote-link/) Child에서는 provider를 Home에서 가져옵니다. Child 대시보드는 provider 변경을
+거부하고, 요청은 Home의 provider가 처리합니다. 게이트웨이 등록과 검증은 Home에서 하세요.
+
 각 단계를 따로 확인하세요. 기본 포트가 아니면 설정한 로컬 포트를 사용합니다.
 
 ```sh

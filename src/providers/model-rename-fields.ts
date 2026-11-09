@@ -121,6 +121,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   noTemperatureModels: "list",
   noTopPModels: "list",
   noStopModels: "list",
+  arkKimiResponsesModels: "list",
   noPenaltyModels: "list",
   noStructuredOutputModels: "list",
   noJsonSchemaModels: "list",
