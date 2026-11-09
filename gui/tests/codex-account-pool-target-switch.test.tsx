@@ -25,6 +25,7 @@ let host: HTMLElement;
 let root: Root | null = null;
 let originalFetch: typeof globalThis.fetch;
 let seen: CodexAccountPoolController | null = null;
+let childReads: unknown[] = [];
 
 function row(id: string) {
   return { id, email: `${id}@example.test`, isMain: false, paused: false, priority: 0, hasCredential: true, quota: null };
@@ -42,13 +43,13 @@ function relay(apiBase: string, origin: string) {
 }
 
 /** One held-open read per plan entry; both /accounts and /active settle together. */
-function serve(plan: { id: string; accounts: string[] }[]) {
+function serve(plan: { id: string; accounts: string[]; threshold?: number }[]) {
   const releases = plan.map(() => () => {});
   const gates = plan.map((_, index) => new Promise<void>(resolve => { releases[index] = resolve; }));
   let reads = 0;
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
-    value: async (input: RequestInfo | URL) => {
+    value: async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes("/api/codex-auth/accounts")) {
         const index = reads++;
@@ -58,10 +59,18 @@ function serve(plan: { id: string; accounts: string[] }[]) {
         return Response.json({ accounts: payload.accounts.map(row), activeCodexAccountId: payload.id });
       }
       if (url.includes("/api/codex-auth/active")) {
+        if ((init?.method ?? "GET").toUpperCase() === "PUT") {
+          const body = JSON.parse(String(init?.body ?? "{}")) as { accountId?: string | null };
+          return Response.json({ activeCodexAccountId: body.accountId ?? null });
+        }
         const payload = plan[Math.max(0, reads - 1)];
         if (!payload) return Response.json({ activeCodexAccountId: null });
         await gates[Math.max(0, reads - 1)];
-        return Response.json({ activeCodexAccountId: payload.id, pinnedAccountId: null });
+        return Response.json({
+          activeCodexAccountId: payload.id,
+          pinnedAccountId: null,
+          ...(payload.threshold === undefined ? {} : { autoSwitchThreshold: payload.threshold }),
+        });
       }
       if (url.includes("/api/usage")) return Response.json({ providers: [], models: [] });
       return Response.json({});
@@ -83,6 +92,12 @@ function Probe({ targetKey, onSwitch }: { targetKey: string; onSwitch?: () => vo
     onSwitch?.();
   });
   useLayoutEffect(() => { seen = controller; });
+  return <ChildProbe read={controller.readLastActive} />;
+}
+
+/** A descendant reads before the pool's own layout effect runs on the new target's commit. */
+function ChildProbe({ read }: { read: () => unknown }) {
+  useLayoutEffect(() => { childReads.push(read()); });
   return null;
 }
 
@@ -125,6 +140,7 @@ beforeEach(() => {
   win.document.body.appendChild(host as never);
   originalFetch = globalThis.fetch;
   seen = null;
+  childReads = [];
 });
 
 afterEach(async () => {
@@ -257,4 +273,54 @@ test("a superseded read on the same target still releases its own in-flight coun
   await act(async () => { server.release(2); await second; });
   expect(seen!.refreshing).toBe(false);
   expect(ids()).toEqual(["c5-second"]);
+});
+
+test("a pending switch on the old target cannot suppress the new target's active id", async () => {
+  const server = serve([
+    { id: "a6", accounts: ["a1", "a2"], threshold: 42 },
+    { id: "a2", accounts: ["a1", "a2"], threshold: 42 },
+    { id: "b6", accounts: ["b6"], threshold: 55 },
+  ]);
+  configureApiTargets(relay("/same", "hub-a6"));
+  await mount("hub-a6");
+  await act(async () => { server.release(0); await new Promise(resolve => setTimeout(resolve, 10)); });
+  expect(seen!.activeId).toBe("a6");
+
+  // The switch is accepted on A; its reconcile /active read stays in flight.
+  await act(async () => { await seen!.switchAccount("a2"); });
+  expect(seen!.activeId).toBe("a2");
+  expect(server.reads()).toBe(2);
+
+  // B commits while that reconcile is still held. The pending marker exists to hold an
+  // accepted switch across one read; on B it would spend that allowance on b6 and leave the
+  // active id empty until the next poll.
+  await switchTarget("hub-b6", () => {});
+  await act(async () => { server.release(2); await new Promise(resolve => setTimeout(resolve, 10)); });
+  expect(ids()).toEqual(["b6"]);
+  expect(seen!.activeId).toBe("b6");
+});
+
+test("the previous target's last /active payload does not seed the new one", async () => {
+  const server = serve([
+    { id: "a7", accounts: ["a7"], threshold: 42 },
+    { id: "a7", accounts: ["a7"], threshold: 42 },
+    { id: "b7", accounts: ["b7"], threshold: 55 },
+  ]);
+  configureApiTargets(relay("/same", "hub-a7"));
+  await mount("hub-a7");
+  await act(async () => { server.release(0); await new Promise(resolve => setTimeout(resolve, 10)); });
+  expect(seen!.readLastThreshold()).toBe(42);
+
+  // A held reconcile keeps the pool busy across the switch, the way a slow /active would.
+  await act(async () => { await seen!.switchAccount("a7"); });
+  await switchTarget("hub-b7", () => {});
+
+  // Neither the public reads nor a descendant that reads before the pool's own layout effect
+  // may see A's payload under B.
+  expect(seen!.readLastActive()).toBeUndefined();
+  expect(seen!.readLastThreshold()).toBeUndefined();
+  expect(childReads.at(-1)).toBeUndefined();
+
+  await act(async () => { server.release(2); await new Promise(resolve => setTimeout(resolve, 10)); });
+  expect(seen!.readLastThreshold()).toBe(55);
 });

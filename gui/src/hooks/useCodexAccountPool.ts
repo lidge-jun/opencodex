@@ -264,7 +264,8 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
   if (observersRef.current === null) observersRef.current = new Set();
   // Last /active payload an actual read returned. Surfaces that mount after a
   // load already finished read it to seed their UI instead of waiting a poll interval.
-  const lastActiveRef = useRef<{ value: unknown } | null>(null);
+  // Keyed by the target that answered: a payload from another target seeds nothing.
+  const lastActiveRef = useRef<{ key: string; value: unknown } | null>(null);
   const switchingRef = useRef<string | null>(null);
   const hasAccountsRef = useRef(Boolean(seed?.accounts.length));
   // Distinct from hasAccountsRef: empty successful loads still count as loaded so soft
@@ -300,6 +301,11 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
   useLayoutEffect(() => {
     seedKeyRef.current = seedKey;
     targetEpochRef.current = targetEpoch;
+    // Both belong to the target that produced them. A pending switch left behind would
+    // spend its one reconciliation on the new target's first /active read, and the last
+    // payload would seed the new target's threshold and strategy with the old one's.
+    pendingActiveIdRef.current = null;
+    lastActiveRef.current = null;
   }, [seedKey, targetEpoch]);
   useEffect(() => {
     if (previousSeedKeyRef.current === seedKey) return;
@@ -335,12 +341,17 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
 
   /** Last threshold an actual read returned, or undefined when none has succeeded yet. */
   const readLastThreshold = useCallback(
-    () => extractAutoSwitchThresholdPayload(lastActiveRef.current?.value),
-    [],
+    () => (lastActiveRef.current?.key === seedKey
+      ? extractAutoSwitchThresholdPayload(lastActiveRef.current.value)
+      : undefined),
+    [seedKey],
   );
 
   /** Full last /active payload, or undefined when none has succeeded yet. */
-  const readLastActive = useCallback(() => lastActiveRef.current?.value, []);
+  const readLastActive = useCallback(
+    () => (lastActiveRef.current?.key === seedKey ? lastActiveRef.current.value : undefined),
+    [seedKey],
+  );
 
   const load = useCallback(async (refreshQuota = false, options: { validatePending?: boolean } = {}): Promise<boolean> => {
     const capture = renderCapture;
@@ -447,7 +458,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
               nextActiveId = serverActiveId;
               setActiveId(serverActiveId);
             }
-            lastActiveRef.current = { value: active };
+            lastActiveRef.current = { key: targetSeedKey, value: active };
             setActivePinnedId(typeof active.pinnedAccountId === "string" ? active.pinnedAccountId : null);
             for (const observer of observers) {
               observer.acceptActiveRead(active, revisions.get(observer)!);
