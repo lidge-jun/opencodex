@@ -258,6 +258,9 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       const raw = action === "set" ? args.shift() : undefined;
       if (!path || (action === "set" && raw === undefined)) throw new CliUsageError(action === "unset" ? "config path is required" : "config path and value are required", USAGE);
       rejectArgs(args, USAGE);
+      if (pathSegments(path)[0] === "telemetry") {
+        throw new CliUsageError("telemetry cannot be modified via ocx config; use `ocx telemetry enable` or `ocx telemetry disable`", USAGE);
+      }
       // #1835/#1838: the read used to happen OUTSIDE the mutation lock, so a concurrent
       // edit landing between it and the save was reverted by this whole-snapshot write.
       // `mutatePersistedConfig` reruns this callback against the latest validated disk
@@ -331,13 +334,24 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       if (!yes) throw new CliUsageError("import requires --yes", USAGE);
       rejectArgs(args, USAGE);
       await withConfigDirHardeningSettled(getConfigDir(), () => {
-        readCliConfigForMutation();
-        const imported = validate(loadInput(path));
+        const current = readCliConfigForMutation();
+        const rawInput = loadInput(path);
+        if (rawInput && typeof rawInput === "object" && !Array.isArray(rawInput) && Object.hasOwn(rawInput, "telemetry")) {
+          delete (rawInput as Record<string, unknown>).telemetry;
+          console.warn("Note: ignored telemetry block during config import; use `ocx telemetry` to manage telemetry consent.");
+        }
+        const imported = validate(rawInput);
         withConfigMutationLockSync(() => {
           const client = readClientConnectionState();
           if (client.kind === "connected" && (imported.runtimeRole !== "client"
             || JSON.stringify(imported.client) !== JSON.stringify(client.value))) {
             throw new Error("config import refused: disconnect the active client before replacing its connection");
+          }
+          const persistedTelemetry = readConfigDiagnostics({ passive: true }).config.telemetry ?? current.telemetry;
+          if (persistedTelemetry !== undefined) {
+            imported.telemetry = structuredClone(persistedTelemetry);
+          } else {
+            delete imported.telemetry;
           }
           saveConfig(imported);
         });

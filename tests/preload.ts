@@ -76,6 +76,7 @@ process.env.OCX_TEST_HOME_GUARD = "1";
 // Lets a test assert one preload per process rather than assuming Bun's scheduling.
 process.env.OCX_TEST_PRELOAD_PID = String(process.pid);
 process.env.OCX_DISABLE_UPDATE_CHECK = "1";
+process.env.OCX_TELEMETRY = "0";
 process.env.OPENCODEX_KIRO_MODEL_DISCOVERY = "0";
 
 if (!isTestHomeGuardArmed() || !protectedHomeForTests()) {

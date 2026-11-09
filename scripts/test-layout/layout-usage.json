@@ -1,5 +1,6 @@
 {
   "usage-client-attribution.test.ts": "usage",
+  "usage-filter-index.test.ts": "usage",
   "request-log.test.ts": "usage",
   "request-log-normalization.test.ts": "usage",
   "request-log-error-detail.test.ts": "usage",
@@ -10,5 +11,12 @@
   "request-log-identity-bounds.test.ts": "usage",
   "safe-response-headers.test.ts": "server",
   "turn-state-handles.test.ts": "server",
-  "turn-state-handles-e2e.test.ts": "server"
+  "turn-state-handles-e2e.test.ts": "server",
+  "usage-telemetry-client.test.ts": "usage",
+  "usage-telemetry-core-boundary.test.ts": "usage",
+  "usage-telemetry-collector-worker.test.ts": "usage",
+  "usage-telemetry-collector-typecheck.test.ts": "usage",
+  "usage-telemetry-collector-privacy.test.ts": "usage",
+  "server-telemetry-routes.test.ts": "server",
+  "cli-telemetry.test.ts": "cli"
 }

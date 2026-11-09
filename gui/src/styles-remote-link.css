@@ -7,7 +7,7 @@
 /* the knob: bridge.css sizes and colours it, the drawing itself lives here */
 .remote-link-switch { cursor: pointer; }
 .remote-link-switch::after { display: block; content: ""; border-radius: 50%; transition: transform 0.15s ease; }
-.remote-link-sheet input[type="checkbox"] { accent-color: var(--ocx-fg); width: 15px; height: 15px; margin: 0; }
+.remote-link-sheet input[type="checkbox"], .remote-link-confirm-dialog input[type="checkbox"] { accent-color: var(--ocx-fg); width: 15px; height: 15px; margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   .remote-link-page *, .remote-link-page *::before, .remote-link-page *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
 }

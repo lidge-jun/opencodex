@@ -451,6 +451,9 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/system/memory", module: "server/management/system-routes", mutates: false },
   { method: "GET", path: "/api/system/windows-replace-retries", module: "server/management/system-routes", mutates: false },
   { method: "POST", path: "/api/system/restart", module: "server/management/system-routes", mutates: true },
+  // server/management/telemetry-routes
+  { method: "GET", path: "/api/telemetry", module: "server/management/telemetry-routes", mutates: false },
+  { method: "PUT", path: "/api/telemetry", module: "server/management/telemetry-routes", mutates: true, exempt: { reason: "session-only", why: "User-consent boundary in AGENTS_INSTALL.md: changing telemetry consent over HTTP requires a human dashboard session; CLI callers use ocx telemetry enable/disable." } },
   // --- Further routes an equality scan of their own file cannot see. ---
   // Each carries `mechanism`; the reconciliation test counts these separately.
   { method: "GET", path: "/api/storage", module: "server/management/storage-log-guard-routes", mutates: false, mechanism: "negated-guard" },

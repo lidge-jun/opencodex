@@ -10,6 +10,7 @@ import {
   MAX_WS_FRAME_BYTES,
   WEBSOCKET_IDLE_TIMEOUT_SECONDS,
   attachLiveSidebandUpstream,
+  beginAudioFinalization,
   clientCloseForUpstream,
   closeLiveSideband,
   closeLiveSidebandBeforeUpgrade,
@@ -157,6 +158,7 @@ export function createWebsocketHandler(
             closeLiveSideband(ws, 1008, "invalid audio event");
             return;
           }
+          beginAudioFinalization(ws, raw);
           const rawBytes = webSocketFrameBytes(raw);
           if (exceedsLiveSidebandFrameByteLimit(rawBytes)) {
             closeLiveSideband(ws, 1009, "message too large");

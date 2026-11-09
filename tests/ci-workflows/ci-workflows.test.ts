@@ -293,8 +293,8 @@ describe("GitHub Actions hardening", () => {
     expect(macosTestStep?.run).not.toContain("for attempt in");
     expect(macosTestStep?.run).not.toContain("while true");
     expect((ci.jobs?.["platform-macos"] as { needs?: string; if?: string })?.needs).toBe("changes");
-    // Pull requests never run macOS shards; they run after merge, on push to
-    // dev/main/preview. ci-scope-reduction.test.ts evaluates this condition
+    // Pull requests never run macOS shards; they run only on a manual full
+    // dispatch from `dev`. ci-scope-reduction.test.ts evaluates this condition
     // against the events that select the job.
     expect((ci.jobs?.["platform-macos"] as { if?: string })?.if).toBe("github.event_name != 'pull_request'");
 
@@ -465,10 +465,10 @@ describe("GitHub Actions hardening", () => {
       steps?: { with?: Record<string, string> }[];
     })?.steps?.find(step => step.with?.filters);
 
-    // `base` is not cosmetic. Unset, paths-filter diffs a `dev` push against the
-    // repository default branch (`main`), so everything changed since the last
-    // promotion still reads as changed and the scoped jobs run anyway — the
-    // filter would look correct, stay green, and save nothing.
+    // `base` is not cosmetic. Unset, paths-filter diffs against the repository
+    // default branch (`dev`), so everything changed since the branch point still
+    // reads as changed and the scoped jobs run anyway — the filter would look
+    // correct, stay green, and save nothing.
     expect(filterStep?.with?.base).toBe("${{ github.ref }}");
 
     // paths-filter cannot read a PR's file list without this, and a filter that
@@ -946,7 +946,6 @@ describe("GitHub Actions hardening", () => {
       "issues.listComments",
       "repos.getCollaboratorPermissionLevel",
       "repos.compareCommitsWithBasehead",
-      "repos.compareCommitsWithBasehead",
       "pulls.get",
       "pulls.listFiles",
       "pulls.get",
@@ -957,7 +956,7 @@ describe("GitHub Actions hardening", () => {
     ];
   }
 
-  /** Reads for a PR whose base is outside the allow-list (no ancestry compares). */
+  /** Reads for a PR whose base is outside the allow-list (no base compare). */
   function readsWrongBase(tail: string[] = []): string[] {
     return [
       ...SCRIPT_LOAD,
@@ -981,7 +980,6 @@ describe("GitHub Actions hardening", () => {
       "issues.listComments",
       "issues.listComments",
       "repos.getCollaboratorPermissionLevel",
-      "repos.compareCommitsWithBasehead",
       "repos.compareCommitsWithBasehead",
       // The harness walks every paginate call across the same page count, so
       // listFiles appears once per comment page even when the file list is empty.
@@ -1089,9 +1087,9 @@ describe("GitHub Actions hardening", () => {
     // And the trigger is exactly a `types:` list — nothing else.
     //
     // Every other level here is pinned by exact key-set equality; this one was
-    // not, and a review round walked straight through the hole. `branches: [main]`
-    // narrows the gate to PRs against `main`, so one opened against `preview`
-    // sails past unenforced. `paths:` is worse: the gate then fires only when
+    // not, and a review round walked straight through the hole. A `branches:`
+    // filter narrows the gate to PRs against the listed bases, so one opened
+    // against any other base sails past unenforced. `paths:` is worse: the gate then fires only when
     // particular files change, which on a docs-only PR means never. Both are
     // additive, both look like ordinary scoping in a diff, and neither failed a
     // single assertion.
@@ -1186,16 +1184,14 @@ describe("GitHub Actions hardening", () => {
       "sparse-checkout",
     ]);
     expect(checkout.with).toEqual({
-      // The trusted ref comes from a fixed set of integration branches, never
-      // from the pull request: a stacked child's base is another open PR's
-      // head, so an unpromoted commit must not select the code that runs with
-      // this workflow's write-capable token. A `status` event has no
-      // pull_request payload and loads scripts from the default-branch trust
-      // boundary that owns the event; a `main`-targeting PR loads from `main`
-      // so the scripts match the workflow definition `pull_request_target`
-      // itself loaded; everything else resolves to `dev`.
-      ref:
-        "${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || 'dev') }}",
+      // The trusted ref is never the pull request: a stacked child's base is
+      // another open PR's head, so an unpromoted commit must not select the
+      // code that runs with this workflow's write-capable token. `dev` is the
+      // only integration line now, so a `pull_request_target` run always reads
+      // scripts from `dev`. A `status` event has no pull_request payload and
+      // loads scripts from the default-branch trust boundary that owns the
+      // event, spelled as the repository default rather than a literal.
+      ref: "${{ github.event_name == 'status' && github.event.repository.default_branch || 'dev' }}",
       "persist-credentials": false,
       // MAINTAINERS.md rides along so the completion ping reads the canonical
       // maintainer list from the same trusted base revision as the scripts.
@@ -1263,7 +1259,7 @@ describe("GitHub Actions hardening", () => {
     expect(workflow.on?.pull_request_review).toBeUndefined();
     expect(workflow.on?.pull_request_review_comment).toBeUndefined();
 
-    // The verdict is a live PR read plus ancestry/description checks.
+    // The verdict is a live PR read plus base-compare/description checks.
     expect(script).toContain("github.rest.pulls.get");
     expect(script).toContain("collectPrQualityFailures");
     expect(script).toContain("collectDeterministicHygieneFailures");
@@ -2779,44 +2775,28 @@ describe("GitHub Actions hardening", () => {
       ).toBe(true);
     });
 
-    const HEAD_SHA = "3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b";
-    const ANCESTRY_FAIL_COMPARES = {
-      [`main...${HEAD_SHA}`]: { ahead_by: 1, behind_by: 0 },
-      [`dev...${HEAD_SHA}`]: { ahead_by: 0, behind_by: 44 },
-    } as const;
-
-    test("wrong ancestry on dev fails without title prefix (#644)", async () => {
+    test("a contributor head far behind dev is reported through readiness, not wrong ancestry", async () => {
+      // The deleted `main` tip used to back a second `main...head` comparison
+      // and a `wrong_ancestry` failure. `dev` is the only integration branch
+      // now, so a stale head is a readiness-claim concern, not a wrong-target
+      // one: exactly one compare runs and no ancestry failure is raised.
       const result = await run({
         pr: { base: { ref: "dev" } },
         authorPermission: "read",
-        compareByBasehead: ANCESTRY_FAIL_COMPARES,
+        compareByBasehead: {
+          "dev...3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b": { ahead_by: 0, behind_by: 44 },
+        },
       });
 
-      // No wrong base, so no title write — the checklist injection is the only
-      // `pulls.update`, and the contributor flow writes the ownership
-      // checkpoint comment before the draft conversion.
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "pulls.update",
         "issues.createComment",
         "graphql",
       ]));
       const commentBody = lastEnforcerCommentBody(result);
-      expect(commentBody).toContain("wrong branch ancestry");
+      expect(commentBody).not.toContain("wrong branch ancestry");
       expect(commentBody).not.toContain("wrong target branch");
-      expect(commentBody).toContain("## Review readiness checklist");
-      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
-      expect(result.warnings.some((w) => w.includes("wrong ancestry"))).toBe(true);
-    });
-
-    test("maintainers skip ancestry enforcement with the same compares", async () => {
-      const result = await run({
-        pr: { base: { ref: "dev" } },
-        authorPermission: "write",
-        compareByBasehead: ANCESTRY_FAIL_COMPARES,
-      });
-
-      expect(methodsOf(result)).toEqual(readsAllowedBase());
-      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(false);
+      expect(result.warnings.some((w) => w.includes("wrong ancestry"))).toBe(false);
     });
 
     test("empty PR description fails and drafts", async () => {
@@ -5177,15 +5157,17 @@ describe("GitHub Actions hardening", () => {
 
   test("React Doctor workflow is SHA-pinned, engine-pinned, gating, and read-only", async () => {
     const workflow = await readText(".github/workflows/react-doctor.yml");
-    // Pull requests scan only when gui/ (the scanned directory) or this workflow changes;
-    // the main push trend scan stays unfiltered.
+    // Pull requests scan only when gui/ (the scanned directory) or this workflow changes.
     const triggers = (Bun.YAML.parse(workflow) as {
       on?: { pull_request?: { types?: string[]; paths?: string[] }; push?: { branches?: string[]; paths?: string[] } };
     }).on;
     expect(triggers?.pull_request?.types).toEqual(["opened", "synchronize", "reopened", "ready_for_review"]);
     expect(triggers?.pull_request?.paths).toEqual(["gui/**", ".github/workflows/react-doctor.yml"]);
     expect(workflow).toContain("directory: gui");
-    expect(triggers?.push).toEqual({ branches: ["main"] });
+    // The health-score push trend ran only on the deleted `main` branch. A
+    // `dev` push trigger is forbidden by the CI policy, so only PR coverage
+    // remains.
+    expect(triggers?.push).toBeUndefined();
 
     expect(workflow).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8");
     expect(workflow).toContain("millionco/react-doctor@01820bb4fd4d0a4aebcd8df2b2a143a098649cb2");

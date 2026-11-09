@@ -523,6 +523,14 @@ healthy one.
 `ocx service start`, both still work and the error path names the first one as a fallback. Neither is
 the recommended route any more.
 
+Either verb also recovers a job you booted out by hand. `launchctl bootout` returns before the
+process exits, and while the old process drains `launchctl print` already reports the job absent —
+so an immediate re-bootstrap can still fail with `Bootstrap failed: 5`. The recovery round waits
+between a bounded number of attempts instead of retrying once, so
+`launchctl bootout gui/$(id -u)/com.opencodex.proxy` followed by a single `ocx service restart` or
+`ocx service repair` serves on the first call. A teardown that never finishes still reaches the
+diagnostic error rather than hanging.
+
 Linux and Windows never had this gap: `ocx service restart` there ends in `systemctl --user restart`
 and a stop-then-start of the scheduled task respectively, whichever verb asked.
 
@@ -560,8 +568,8 @@ input checks.
 ## Docker Compose
 
 opencodex does not publish an official container image. The repository does maintain a source-build
-[`Dockerfile`](https://github.com/lidge-jun/opencodex/blob/main/Dockerfile),
-[`compose.yaml`](https://github.com/lidge-jun/opencodex/blob/main/compose.yaml), and a narrow
+[`Dockerfile`](https://github.com/lidge-jun/opencodex/blob/dev/Dockerfile),
+[`compose.yaml`](https://github.com/lidge-jun/opencodex/blob/dev/compose.yaml), and a narrow
 `.dockerignore`. The build pins the multi-platform Bun 1.4.4 image index by digest, runs the proxy as
 the non-root `bun` user, keeps the root filesystem read-only, drops Linux capabilities, and publishes
 only the data listener on the host's `127.0.0.1:10100` by default. The foreground process uses
@@ -651,7 +659,7 @@ services:
   hub:
     pull_policy: build
     build:
-      context: https://github.com/lidge-jun/opencodex.git#main
+      context: https://github.com/lidge-jun/opencodex.git#dev
       dockerfile: Dockerfile
       target: runtime
       args:

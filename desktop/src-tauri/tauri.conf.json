@@ -52,7 +52,13 @@
         "type": "downloadBootstrapper"
       },
       "wix": {
-        "language": "en-US"
+        "language": "en-US",
+        "fragmentPaths": [
+          "wix/telemetry-choice.wxs"
+        ],
+        "componentGroupRefs": [
+          "OcxTelemetryInstallerChoice"
+        ]
       }
     },
     "linux": {
