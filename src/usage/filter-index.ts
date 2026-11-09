@@ -92,6 +92,9 @@ const RETAINED_WAL_LIMIT_BYTES = 4 * 1024 * 1024;
 const BATCH_BUSY_RETRIES = 3;
 const BATCH_BUSY_RETRY_MS = 5;
 const BUSY_RETRY_DELAYS_MS = [10, 25, 50, 100, 200, 400, 800, 1_600, 3_200] as const;
+// A rebuild-required error resolves as soon as the competing publish settles, so it retries on
+// the original short schedule instead of parking behind the long busy backoff.
+const REBUILD_RETRY_DELAYS_MS = [10, 25, 50] as const;
 
 const SCHEMA_DDL = `
 CREATE TABLE IF NOT EXISTS ${META_TABLE} (
@@ -235,7 +238,10 @@ export interface UsageFilterCandidateRead {
   candidateRows: number;
   /** Returns the next bounded page of ascending row-start offsets. */
   nextPage(): number[];
-  /** Releases the read snapshot held while pages are consumed. */
+  /**
+   * Closes the database handle. Pages are not read from one long snapshot: each `nextPage()`
+   * re-checks schema and generation inside its own short transaction.
+   */
   close(): void;
 }
 
@@ -1284,6 +1290,7 @@ function rowAccessIndexWithoutClient(query: UsageFilterIndexQuery): string | nul
 
 const CANDIDATE_PAGE_SIZE = 2_000;
 
+/** Keyset pager over the candidate select: bounded pages, each validated in its own transaction. */
 function candidatePager(
   db: Database,
   snapshot: UsageFilterIndexSnapshot,
@@ -1315,6 +1322,8 @@ function candidatePager(
         // A generation change keeps the rebuild retry; every other index-side failure means
         // this projection cannot serve the page, so the caller streams the ledger instead.
         if (error instanceof UsageLedgerRebuildRequiredError) throw error;
+        // Paging cannot repair a damaged projection; ask the next active refresh to rebuild it.
+        if (isCorruptError(error)) requestUsageFilterIndexRebuild();
         throw new UsageFilterIndexPageError(error);
       }
     },
@@ -1400,7 +1409,7 @@ export async function readUsageFilterCandidates(
         return null;
       }
       if (error instanceof UsageLedgerRebuildRequiredError) {
-        const delay = BUSY_RETRY_DELAYS_MS[attempt];
+        const delay = REBUILD_RETRY_DELAYS_MS[attempt];
         if (delay === undefined) return null;
         await new Promise<void>(resolve => setTimeout(resolve, delay));
         continue;
