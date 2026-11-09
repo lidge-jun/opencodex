@@ -867,6 +867,42 @@ describe("bare upstream rate-limit/overload EOF diagnostics (#6740)", () => {
 
 describe("untyped upstream error envelopes", () => {
   for (const mode of ["tee", "eager"] as const) {
+    test(`${mode} defers copy-only policy to a genuine completed terminal`, async () => {
+      const src = sourceStream([
+        'data: {"error":{"message":"blocked for high-risk cybersecurity activity"}}\n\n',
+        'event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+      ]);
+      const text = await drain(mode === "tee" ? relaySseWithFailedTail(src, new AbortController())
+        : relaySseEagerBounded(src, new AbortController(), parityHooks));
+      expect(terminalEvents(text)).toEqual(["response.completed"]);
+    });
+
+    test.each([["rate_limit_exceeded", 429], ["overloaded_error", 503]] as const)(
+      `${mode} retains untyped %s on a subsequent reset`, async (code, status) => {
+        const src = sourceStream([`data: ${JSON.stringify({ error: { code } })}\n\n`], { failAfter: true });
+        const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+        const outcomes: Array<[string, number]> = [];
+        const onTerminal = (kind: string, value?: number) => outcomes.push([kind, value ?? log.terminalHttpStatus ?? 502]);
+        let done: Promise<void> = Promise.resolve();
+        let relayed: ReadableStream<Uint8Array>;
+        if (mode === "tee") {
+          const [client, inspection] = src.tee();
+          done = new Promise(resolve => consumeForInspection(inspection, onTerminal, undefined, resolve, log));
+          relayed = relaySseWithFailedTail(client, new AbortController());
+        } else {
+          const inspector = createSseInspector({ logCtx: log, onTerminal });
+          relayed = relaySseEagerBounded(src, new AbortController(), { ...parityHooks,
+            inspectChunk: chunk => inspector.feed(chunk), finishInspection: () => inspector.finish(),
+            sawTerminal: () => inspector.reported(), onSynthetic: (kind, reason) => onTerminal(kind, reason === "upstream_error" ? log.terminalHttpStatus : 502),
+          });
+        }
+        const text = await drain(relayed);
+        await done;
+        expect(terminalEvents(text)).toEqual(["response.failed"]);
+        expect(text).toContain(`"code":"${code}"`);
+        expect(outcomes).toEqual([["failed", status]]);
+      },
+    );
     test(`${mode} keeps a code-only quota failure in the client and account outcome`, async () => {
       const src = sourceStream(['data: {"error":{"code":"rate_limit_exceeded"}}\n\n']);
       const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
@@ -953,6 +989,13 @@ describe("untyped upstream error envelopes", () => {
     const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
     inspectResponseLogJson(log, '{"error":{"code":"rate_limit_exceeded"}}');
     expect(log.terminalHttpStatus).toBeUndefined();
+  });
+
+  test("untyped evidence cannot replace an earlier typed provisional status", () => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    inspectResponseLogSsePayload(log, '{"type":"error","code":"rate_limit_exceeded"}');
+    inspectResponseLogSsePayload(log, '{"error":{"code":"server_error"}}');
+    expect(log.terminalHttpStatus).toBe(429);
   });
 
   test("later bare error evidence updates the provisional account status", () => {

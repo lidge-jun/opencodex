@@ -41,6 +41,7 @@ export interface UpstreamErrorPayload {
 
 // Bare error evidence is provisional: only a genuine terminal owns account-health status.
 const provisionalStatuses = new WeakMap<TerminalStatusContext, number>();
+const untypedProvisionalStatuses = new WeakSet<TerminalStatusContext>();
 const genuineTerminals = new WeakSet<TerminalStatusContext>();
 
 const UPSTREAM_DIAGNOSTIC_TOKEN = /^[A-Za-z0-9_.:-]{1,128}$/;
@@ -118,15 +119,17 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
   if (bare) {
     if (!genuineTerminals.has(logCtx)) {
       const previous = provisionalStatuses.get(logCtx);
-      if (previous !== undefined && logCtx.terminalHttpStatus === previous) {
+      if (untypedProvisionalStatuses.has(logCtx) && previous !== undefined && logCtx.terminalHttpStatus === previous) {
         delete logCtx.terminalHttpStatus;
         delete logCtx.terminalErrorCode;
+        provisionalStatuses.delete(logCtx);
+        untypedProvisionalStatuses.delete(logCtx);
       }
-      provisionalStatuses.delete(logCtx);
       const status = bare.httpStatus ?? 502;
       if (logCtx.terminalHttpStatus === undefined) {
         logCtx.terminalHttpStatus = status;
         provisionalStatuses.set(logCtx, status);
+        untypedProvisionalStatuses.add(logCtx);
         if (bare.refusalCode === CYBER_POLICY_ERROR_CODE) logCtx.terminalErrorCode = CYBER_POLICY_ERROR_CODE;
       }
     }
@@ -181,6 +184,7 @@ function captureTerminalHttpStatus(
   if (terminal && provisionalStatuses.has(logCtx)) {
     const provisional = provisionalStatuses.get(logCtx);
     provisionalStatuses.delete(logCtx);
+    untypedProvisionalStatuses.delete(logCtx);
     if (logCtx.terminalHttpStatus === provisional) {
       delete logCtx.terminalHttpStatus;
       delete logCtx.terminalErrorCode;

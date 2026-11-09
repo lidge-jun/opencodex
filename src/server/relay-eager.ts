@@ -138,11 +138,11 @@ export function relaySseEagerBounded(
   const encodeTerminalTail = (error: unknown): Uint8Array | null => {
     const refusalCode = terminalBoundary.upstreamRefusalCode();
     const refusalMessage = terminalBoundary.upstreamError();
-    if (refusalCode === undefined || refusalMessage === undefined) {
+    if ((refusalCode === undefined && !terminalBoundary.recognizedUntypedError()) || refusalMessage === undefined) {
       return encodeFailedTail(error);
     }
     try {
-      return refusalFailedTailFrame(terminalEncoder, refusalMessage, refusalCode, opts?.maskCredential);
+      return refusalFailedTailFrame(terminalEncoder, refusalMessage, refusalCode, opts?.maskCredential, terminalBoundary.upstreamErrorType(), terminalBoundary.upstreamErrorCode());
     } catch {
       return null;
     }
@@ -474,7 +474,7 @@ export function relaySseEagerBounded(
           // to the client. Only accounting remains tied to the inspected result.
           if (!hooks.sawTerminal()) {
             syntheticKind = "failed";
-            if (terminalBoundary.upstreamRefusalCode() !== undefined) syntheticReason = "upstream_error";
+            if (terminalBoundary.upstreamRefusalCode() !== undefined || terminalBoundary.recognizedUntypedError()) syntheticReason = "upstream_error";
           }
           deliveryFallbackSent = true;
           queuedBytes += tail.byteLength;

@@ -215,10 +215,12 @@ function upstreamErrorFailedPayload(message: string, refusalCode?: string, maskC
 export function refusalFailedTailFrame(
   encoder: TextEncoder,
   message: string,
-  refusalCode: string,
+  refusalCode: string | undefined,
   maskCredential?: (text: string) => string,
+  errorType?: string,
+  errorCode?: string,
 ): Uint8Array {
-  const payload = upstreamErrorFailedPayload(message, refusalCode, maskCredential);
+  const payload = upstreamErrorFailedPayload(message, refusalCode, maskCredential, errorType, errorCode);
   return encoder.encode(
     `\n\nevent: response.failed\ndata: ${payload}\n\n${DONE_SSE_FRAME_TEXT}`,
   );
@@ -233,6 +235,7 @@ export type SseTerminalOutputBoundary = {
   upstreamRefusalCode(): string | undefined;
   upstreamErrorType(): string | undefined;
   upstreamErrorCode(): string | undefined;
+  recognizedUntypedError(): boolean;
   dispose(): void;
 };
 
@@ -289,6 +292,7 @@ export function createSseTerminalOutputBoundary(
   let upstreamRefusalCode: string | undefined;
   let upstreamErrorType: string | undefined;
   let upstreamErrorCode: string | undefined;
+  let recognizedUntypedError = false;
   let inputBytes = 0;
   let outputBytes = 0;
   let framesSeen = 0;
@@ -325,6 +329,7 @@ export function createSseTerminalOutputBoundary(
         upstreamRefusalCode = bare.refusalCode;
         upstreamErrorType = bare.errorType;
         upstreamErrorCode = bare.errorCode;
+        recognizedUntypedError = isUntypedBareUpstreamError(parsed) && bare.httpStatus !== undefined;
       }
       const safetyBuffering = dropSafetyBuffering && parsed !== undefined
         ? codexSafetyBufferingBlockAction(parsed) : "keep";
@@ -414,6 +419,7 @@ export function createSseTerminalOutputBoundary(
     upstreamRefusalCode: () => upstreamRefusalCode,
     upstreamErrorType: () => upstreamErrorType,
     upstreamErrorCode: () => upstreamErrorCode,
+    recognizedUntypedError: () => recognizedUntypedError,
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -523,8 +529,8 @@ export function relaySseWithFailedTail(
             // Leading blank line terminates a partial SSE block so the failed frame parses cleanly.
             const refusalCode = terminalBoundary.upstreamRefusalCode();
             const refusalMessage = terminalBoundary.upstreamError();
-            controller.enqueue(refusalCode !== undefined && refusalMessage !== undefined
-              ? refusalFailedTailFrame(encoder, refusalMessage, refusalCode, opts?.maskCredential)
+            controller.enqueue((refusalCode !== undefined || terminalBoundary.recognizedUntypedError()) && refusalMessage !== undefined
+              ? refusalFailedTailFrame(encoder, refusalMessage, refusalCode, opts?.maskCredential, terminalBoundary.upstreamErrorType(), terminalBoundary.upstreamErrorCode())
               : failedTailFrame(encoder, err, opts?.maskCredential));
           }
           controller.close();
@@ -607,7 +613,7 @@ function parseSsePayload(payload: string): unknown | undefined {
 function isPolicyRewriteType(parsed: unknown): boolean {
   const type = asJsonRecord(parsed)?.type;
   return type === "response.failed" || type === "response.incomplete" || type === "error"
-    || (isUntypedBareUpstreamError(parsed) && bareUpstreamError(parsed)?.refusalCode === CYBER_POLICY_ERROR_CODE);
+    || (isUntypedBareUpstreamError(parsed) && isCyberPolicyCode(bareUpstreamError(parsed)?.errorCode));
 }
 
 /**
@@ -739,7 +745,7 @@ function createFirstOutputReporter(onFirstOutput?: () => void): {
 
 export function terminalStatusFromParsed(parsed: unknown): ResponsesTerminalStatus | null {
   const type = asJsonRecord(parsed)?.type;
-  if (isUntypedBareUpstreamError(parsed) && bareUpstreamError(parsed)?.refusalCode === CYBER_POLICY_ERROR_CODE) return "failed";
+  if (isUntypedBareUpstreamError(parsed) && isCyberPolicyCode(bareUpstreamError(parsed)?.errorCode)) return "failed";
   switch (type) {
     case "response.completed":
       return "completed";
@@ -1651,13 +1657,17 @@ export function consumeForInspection(
 ): void {
   const reader = body.getReader();
   let bareError: ReturnType<typeof bareUpstreamError>;
+  let recognizedUntypedError = false;
   const inspector = (options?.inspectorFactory ?? createSseInspector)({
     onTerminal,
     logCtx,
     onCompletedResponse,
     onParsedPayload: payload => {
       const bare = bareUpstreamError(payload);
-      if (bare !== undefined) bareError = bare;
+      if (bare !== undefined) {
+        bareError = bare;
+        recognizedUntypedError = isUntypedBareUpstreamError(payload) && bare.httpStatus !== undefined;
+      }
       options?.onParsedPayload?.(payload);
     },
     onFirstOutput,
@@ -1691,9 +1701,9 @@ export function consumeForInspection(
           // A truncated 200 body must not meter as a success the client never
           // received; the router's equivalent turn carries 502 + streamAborted
           // (codex-router #139).
-          if (logCtx.activeAttempt && !bareError?.refusalCode) logCtx.activeAttempt.streamAborted = true;
+          if (logCtx.activeAttempt && !bareError?.refusalCode && !recognizedUntypedError) logCtx.activeAttempt.streamAborted = true;
         }
-        onTerminal("failed", bareError?.refusalCode ? (bareError.httpStatus ?? 400) : 502);
+        onTerminal("failed", bareError?.refusalCode || recognizedUntypedError ? (logCtx?.terminalHttpStatus ?? bareError?.httpStatus ?? 400) : 502);
       }
     },
   });
