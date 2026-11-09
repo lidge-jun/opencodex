@@ -221,10 +221,13 @@ describe("meta-muse plan refusal: client message", () => {
     expect(response.statusText).toBe("Forbidden");
     expect(response.headers.get("x-request-id")).toBe("req_123");
     expect(response.headers.get("retry-after")).toBeNull();
+    expect(response.headers.get("content-length")).toBeNull();
     expect(response.headers.get("content-type")).toContain("application/json");
     const body = await response.json() as { error?: { message?: string; code?: string } };
     expect(body.error?.code).toBe("subscription_required");
     expect(body.error?.message).toBe(META_MUSE_PLAN_REFUSAL_MESSAGE);
+    // A later pass that re-parses this envelope keeps the subscription class.
+    expect(classifyError(403, "upstream_error", JSON.stringify(body)).code).toBe("subscription_required");
   });
 
   test("an unrelated 403 keeps its own body", async () => {

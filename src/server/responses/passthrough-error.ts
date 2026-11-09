@@ -98,7 +98,11 @@ export function formatPassthroughUpstreamError(
   // reads as a rejected credential. The shared classifier keeps the subscription class.
   if (isMetaMusePlanFailure(status, trimmed)) {
     const refusal = formatErrorResponse(status, "permission_error", META_MUSE_PLAN_REFUSAL_MESSAGE);
-    if (!options?.headers) return refusal;
+    if (!options?.headers) {
+      return options?.statusText
+        ? new Response(refusal.body, { status: refusal.status, statusText: options.statusText, headers: refusal.headers })
+        : refusal;
+    }
     // The body is this proxy's own, but the relayed headers the caller already sanitized (the
     // upstream request id among them) stay; a plan restriction names no wait.
     const headers = new Headers(options.headers);

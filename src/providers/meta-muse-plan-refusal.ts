@@ -63,7 +63,11 @@ export function isMetaMusePlanFailure(status: number, message: string): boolean 
   if (text.startsWith(prefix)) text = text.slice(prefix.length).trim();
   if (text === META_MUSE_PLAN_REFUSAL_MESSAGE) return true;
   try {
-    if (isMetaMusePlanRefusal(status, JSON.parse(text))) return true;
+    const payload: unknown = JSON.parse(text);
+    if (isMetaMusePlanRefusal(status, payload)) return true;
+    // The proxy's own error envelope carrying its own sentence: a later pass that re-parses the
+    // rewritten body keeps the class.
+    if (record(payload) && record(payload.error) && payload.error.message === META_MUSE_PLAN_REFUSAL_MESSAGE) return true;
   } catch {
     // A non-JSON body falls through to the whole-sentence test below.
   }
