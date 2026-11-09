@@ -118,7 +118,8 @@ test("pacing merges different models and subfields independently", () => {
 
 test("JSON merge keeps prototype-named keys as own data and labels drop composite identity", () => {
   const latest = JSON.parse('{"__proto__":{"polluted":true},"provider":{"note":"saved"}}');
-  const merged = threeWayMergeJson({}, latest, latest);
+  const draft = JSON.parse('{"provider":{"note":"user"}}');
+  const merged = threeWayMergeJson({}, latest, draft);
   expect(Object.hasOwn(merged.value as object, "__proto__")).toBe(true);
   expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   expect(providerDraftTargetLabel("https://hub.example\u0000key-material")).toBe("https://hub.example");
