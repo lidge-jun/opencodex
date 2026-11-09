@@ -1112,9 +1112,10 @@ produce about a 99.9% cache hit rate.
 `metadata.user_id` when present, falling back to a system-content hash) and `session_id` header
 for cache affinity. Remote Claude Code adds a per-turn attribution token (`tk`) to that metadata
 object; when the object has other keys, `tk` is dropped before hashing, so every turn of one session
-keeps one cache key and one conversation id (which also keeps pooled-account affinity). Any other
-`user_id` (non-JSON, an array, or an object holding only `tk`) is hashed unchanged. The `user` field
-is still derived from the raw value. The cache key includes model and full tool schemas.
+keeps one cache key and one conversation id (the key `/v1/messages` prefers for
+pooled-account affinity). Any other `user_id` (non-JSON, an array, or an object holding only
+`tk`) is hashed unchanged. The `user` field is still derived from the raw value. Without
+`metadata.user_id`, the fallback key covers the resolved model, system prompt and full tool schemas.
 
 **Token math:** Anthropic output subtracts `cached_tokens` and `cache_write_tokens` from
 `input_tokens`, exposing them as `cache_read_input_tokens` and `cache_creation_input_tokens`.
