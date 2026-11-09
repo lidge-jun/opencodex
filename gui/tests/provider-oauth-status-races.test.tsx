@@ -348,3 +348,67 @@ test("a logout failure settling after a target change does not notify the new ta
   await act(async () => { releaseLogout(new Response(null, { status: 503 })); await logout; });
   expect(notices).toEqual([]);
 });
+
+test("key remove, add and alias completions after a target change do not toast or reload on the new target", async () => {
+  const { spyOn } = await import("bun:test");
+  const dialogs = await import("../src/action-dialogs");
+  const { useProviderAccountPools } = await import("../src/hooks/useProviderAccountPools");
+  const consent = spyOn(dialogs, "confirmAction").mockResolvedValue(true);
+  const typed = spyOn(dialogs, "requestTextValue").mockResolvedValue("alias");
+  let pools!: ReturnType<typeof useProviderAccountPools>;
+  const notices: string[] = [];
+  const reloads: string[] = [];
+  let deferred!: Promise<Response>;
+  let release!: (response: Response) => void;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "DELETE" || init?.method === "POST" || init?.method === "PUT") return deferred;
+    return Response.json({});
+  } });
+  function Harness({ base }: { base: string }) {
+    const aliveRef = useRef(true);
+    pools = useProviderAccountPools({ apiBase: base, config: null, aliveRef, t: key => key, oauthStatus: {},
+      notify: (message: string) => { notices.push(message); }, fetchConfig: async () => { reloads.push("config"); },
+      fetchOauth: async () => { reloads.push("oauth"); }, fetchProviderQuotas: async () => { reloads.push("quotas"); },
+      codexActiveNeedsReauth: false });
+    return null;
+  }
+  const run = async (start: () => Promise<unknown>, base: string, next: string) => {
+    deferred = new Promise<Response>(resolve => { release = resolve; });
+    let pending!: Promise<unknown>;
+    await act(async () => { pending = start(); await Promise.resolve(); });
+    await render(<Harness base={base} />);
+    await render(<Harness base={next} />);
+    await act(async () => { release(Response.json({ success: true })); await pending; });
+  };
+  try {
+    await render(<Harness base="/a" />);
+    await run(() => pools.removeApiKey("p", { id: "k1", masked: "sk-…1", active: false }), "/a", "/b");
+    await run(() => pools.addApiKeyValue("p", "sk-new"), "/b", "/a");
+    await run(() => pools.editCredentialAlias("p", "api-key", "k1"), "/a", "/b");
+    expect(notices).toEqual([]);
+    expect(reloads).toEqual([]);
+  } finally {
+    consent.mockRestore();
+    typed.mockRestore();
+  }
+});
+
+test("an add-key form typed on one target does not survive the target change", async () => {
+  const { useProviderAccountPools } = await import("../src/hooks/useProviderAccountPools");
+  let pools!: ReturnType<typeof useProviderAccountPools>;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async () => Response.json({}) });
+  function Harness({ base }: { base: string }) {
+    const aliveRef = useRef(true);
+    pools = useProviderAccountPools({ apiBase: base, config: null, aliveRef, t: key => key, oauthStatus: {},
+      notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchProviderQuotas: async () => {},
+      codexActiveNeedsReauth: false });
+    return null;
+  }
+  await render(<Harness base="/a" />);
+  await act(async () => { pools.setAddingKeyFor("p"); pools.setNewKeyValue("sk-typed-on-a"); });
+  expect(pools.newKeyValue).toBe("sk-typed-on-a");
+  await render(<Harness base="/b" />);
+  // The credential typed on A is not submittable on B.
+  expect(pools.addingKeyFor).toBeNull();
+  expect(pools.newKeyValue).toBe("");
+});

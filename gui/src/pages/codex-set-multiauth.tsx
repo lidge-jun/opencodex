@@ -117,14 +117,14 @@ type CachedMode = {
  * cache to gain nothing, and the backend namespace /api/codex-auth/* does not
  * move either (devlog 004 §C: a dozen test files bind to it).
  */
-export default function CodexSetMultiauth({ apiBase }: { apiBase: string }) {
+export default function CodexSetMultiauth({ apiBase, targetKey }: { apiBase: string; targetKey?: string }) {
   // The controller, not just the setting, owns proxy-specific state and callbacks.
-  return <CodexSetMultiauthForProxy key={apiBase} apiBase={apiBase} />;
+  return <CodexSetMultiauthForProxy key={apiBase} apiBase={apiBase} targetKey={targetKey} />;
 }
 
-function CodexSetMultiauthForProxy({ apiBase }: { apiBase: string }) {
+function CodexSetMultiauthForProxy({ apiBase, targetKey }: { apiBase: string; targetKey?: string }) {
   const t = useT();
-  const poolController = useCodexAccountPool(apiBase);
+  const poolController = useCodexAccountPool(apiBase, true, targetKey);
   const { load: loadAccounts } = poolController;
   const ownerMountedRef = useRef(false);
   useLayoutEffect(() => {

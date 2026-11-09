@@ -26,7 +26,7 @@ import {
   addProviderModalReducer,
   createInitialAddProviderState,
 } from "./add-provider-modal-reducer";
-import { captureApiTarget, targetFetch, type ApiTargetCapture } from "../api";
+import { captureApiTarget, isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
 
 export type ProviderConfig = ProviderPayload;
 
@@ -226,6 +226,12 @@ export default function AddProviderModal({
             ? t("prov.targetChanged")
             : (d.error || t("modal.failedStatus", { status: res.status })),
         });
+        return;
+      }
+      // The POST belongs to the target that opened this modal. A completion after a
+      // switch must not select the provider or show its notice on the new target.
+      if (!isApiTargetCaptureCurrent(renderCapture)) {
+        dispatch({ type: "set-error", error: t("prov.targetChanged") });
         return;
       }
       onAdded(postBody.name);

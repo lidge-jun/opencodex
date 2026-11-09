@@ -2,7 +2,7 @@ import { parseQuotaFailureCode } from "../../../src/providers/quota-types";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import type { AccountLoadState, AccountQuotaReading } from "../components/provider-workspace/types";
 import { createBoundedFetch } from "../bounded-fetch";
-import { captureApiTarget, targetFetch } from "../api";
+import { captureApiTarget, isApiTargetCaptureCurrent, targetFetch } from "../api";
 import { confirmAction, requestTextValue } from "../action-dialogs";
 import { credentialAliasRejection, CREDENTIAL_ALIAS_MAX_LENGTH } from "../credential-alias";
 import { accountNeedsReauth } from "../oauth-health-display";
@@ -151,6 +151,14 @@ export function useProviderAccountPools(deps: {
   const [keyPools, setKeyPools] = useState<Record<string, ApiKeyEntry[]>>({});
   const [addingKeyFor, setAddingKeyFor] = useState<string | null>(null);
   const [newKeyValue, setNewKeyValue] = useState("");
+  // A key typed on one target must not be submittable on another. Clear the add-key form
+  // when the logical target changes; it is not persisted anywhere.
+  const [keyInputIdentity, setKeyInputIdentity] = useState(serverIdentity);
+  if (keyInputIdentity !== serverIdentity) {
+    setKeyInputIdentity(serverIdentity);
+    setAddingKeyFor(null);
+    setNewKeyValue("");
+  }
   const accountRequestGenerationRef = useRef<Record<string, number>>({});
   const rosterGenerationRef = useRef<Record<string, number>>({});
   const quotaGenerationRef = useRef<Record<string, number>>({});
@@ -747,13 +755,16 @@ export function useProviderAccountPools(deps: {
 
   const removeApiKey = async (provider: string, entry: ApiKeyEntry) => {
     const capture = captureApiTarget("shared", apiBase);
+    const currentMutation = () => aliveRef.current && mountedRef.current
+      && serverRef.current === serverIdentity && isApiTargetCaptureCurrent(capture);
     const consented = await confirmAction({
       message: t("prov.keyRemoveConfirm", { key: entry.label ?? entry.masked }),
       confirmLabel: t("common.remove"),
       tone: "danger",
     });
-    if (!consented) return;
+    if (!consented || !currentMutation()) return;
     const res = await targetFetch(capture, `${apiBase}/api/providers/keys?name=${encodeURIComponent(provider)}&id=${encodeURIComponent(entry.id)}`, { method: "DELETE" });
+    if (!currentMutation()) return;
     if (res.ok) {
       notify(t("prov.keyRemoved", { key: entry.label ?? entry.masked }), true);
       void fetchKeyPools(Object.keys(keyPools));
@@ -764,10 +775,13 @@ export function useProviderAccountPools(deps: {
 
   const addApiKeyValue = async (provider: string, rawKey: string): Promise<boolean> => {
     const capture = captureApiTarget("shared", apiBase);
+    const currentMutation = () => aliveRef.current && mountedRef.current
+      && serverRef.current === serverIdentity && isApiTargetCaptureCurrent(capture);
     const key = rawKey.trim();
     if (!key) return false;
     try {
       const res = await targetFetch(capture, `${apiBase}/api/providers/keys`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, key }) });
+      if (!currentMutation()) return false;
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
         notify(data.error || t("prov.keyAddFail"), false);
@@ -793,6 +807,8 @@ export function useProviderAccountPools(deps: {
 
   const editCredentialAlias = async (provider: string, type: "oauth" | "api-key", id: string, current?: string) => {
     const capture = captureApiTarget("shared", apiBase);
+    const currentMutation = () => aliveRef.current && mountedRef.current
+      && serverRef.current === serverIdentity && isApiTargetCaptureCurrent(capture);
     const entered = await requestTextValue({
       message: t("prov.aliasPrompt"),
       initialValue: current ?? "",
@@ -805,6 +821,7 @@ export function useProviderAccountPools(deps: {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(type === "oauth" ? { provider, accountId: id, alias } : { name: provider, id, alias }),
     });
+    if (!currentMutation()) return;
     if (!response.ok) {
       const data = await response.json().catch(() => ({})) as { error?: string };
       notify(data.error || t("prov.aliasSaveFailed"), false);

@@ -253,6 +253,14 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
   const [workspaceSelected, setWorkspaceSelected] = useState<string | null>(null);
   const [addIntent, setAddIntent] = useState<AddProviderIntent | null>(null);
   const [removeConfirmName, setRemoveConfirmName] = useState<string | null>(null);
+  // A destructive confirmation belongs to the target that opened it. Close it when the
+  // logical target changes so the next confirm cannot delete a same-named provider on
+  // the new server.
+  const [removeConfirmIdentity, setRemoveConfirmIdentity] = useState(draftTargetKey);
+  if (removeConfirmIdentity !== draftTargetKey) {
+    setRemoveConfirmIdentity(draftTargetKey);
+    setRemoveConfirmName(null);
+  }
   /** ChatGPT/Codex login from Add Provider → Accounts (uses /api/codex-auth, not /api/oauth). */
   const [codexLoginOpen, setCodexLoginOpen] = useState(false);
   const [modelsRefreshToken, setModelsRefreshToken] = useState(0);
@@ -526,7 +534,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
   }), [apiBase]);
 
   const { removeProvider, confirmRemoveProvider, setProviderDisabled, setDefaultProvider, updateProvider } = useProvidersCrud({
-    apiBase, t, removeBusyRef, workspaceSelected, setWorkspaceSelected, setRemoveConfirmName,
+    apiBase, targetKey: draftTargetKey, t, removeBusyRef, workspaceSelected, setWorkspaceSelected, setRemoveConfirmName,
     notify, fetchConfig, fetchOauth, fetchProviderQuotas,
     onProviderRemoved: name => draftStore.clear(draftTargetKey, name),
     // Mode PATCHes clear quota caches and thread affinity; the shared controller

@@ -23,8 +23,9 @@ import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool
 import ProviderSettings from "./ProviderSettings";
 import { UnsavedLeaveDialog } from "./ProviderDialogs";
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
-import type { AccountLoadState, ProviderModelUsageRow, ProviderUsageTotals, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers, ProviderUpdatePatch, ProviderUpdateResult } from "./types";
+import type { AccountLoadState, ProviderModelUsageRow, ProviderUsageTotals, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers, ProviderUpdatePatch, ProviderUpdateResult, ProviderUpdateCallback } from "./types";
 import { createProviderDraftStore, providerDraftTargetLabel, type ProviderDraftStore } from "../../provider-workspace/target-drafts";
+import { useRenderTargetCapture } from "../../use-render-target-capture";
 
 type Tab = "overview" | "models" | "usage" | "accounts" | "settings";
 
@@ -116,7 +117,7 @@ export default function ProviderDetails({
   onCodexActiveNeedsReauthChange?: (needs: boolean) => void;
   /** Shared Codex account state owned by Providers (WP3). */
   codexController?: CodexAccountPoolController;
-  onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<ProviderUpdateResult>;
+  onUpdateProvider?: ProviderUpdateCallback;
   /** Dashboard server identity; provider names are only unique within one target. */
   targetKey?: string;
   /** Nonsecret logical target label; never the machine key id. */
@@ -191,16 +192,19 @@ export default function ProviderDetails({
   if (tab !== "overview" && probeController.completionProbe?.status === "testing") {
     probeController.clearIfTesting();
   }
+  // The detail pane's render owns the target for every child update. A module-level
+  // target change that has not re-rendered this pane cannot retarget a stale form.
+  const updateCapture = useRenderTargetCapture(apiBase, targetKey);
   const handleUpdateProvider = useMemo(
     () => onUpdateProvider
       ? async (name: string, patch: ProviderUpdatePatch): Promise<ProviderUpdateResult> => {
-          const result = await onUpdateProvider(name, patch);
+          const result = await onUpdateProvider(name, patch, updateCapture);
           const affectsConnection = Object.keys(patch).some(key => key !== "note" && key !== "setDefault");
           if (result.ok && affectsConnection) setMutationRevision(revision => revision + 1);
           return result;
         }
       : undefined,
-    [onUpdateProvider],
+    [onUpdateProvider, updateCapture],
   );
   const wrappedAuthHandlers = useMemo<ProviderAuthHandlers | undefined>(() => {
     if (!authHandlers) return undefined;

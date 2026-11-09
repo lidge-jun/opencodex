@@ -53,7 +53,9 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
 
   const handoff = useCallback((session: Session) => {
     const view = session.view;
-    if (view && !session.terminal) void finalizeKiroDeviceFlow(apiBase, view.flowId, view.expiresAt, session.inFlight);
+    if (view && !session.terminal) {
+      void finalizeKiroDeviceFlow(apiBase, view.flowId, view.expiresAt, session.inFlight, session.capture);
+    }
   }, [apiBase]);
 
   const close = useCallback(async () => {
@@ -132,7 +134,7 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
         break;
       }
       const flowId = view.flowId;
-      const request = readKiroDeviceStatus(apiBase, flowId);
+      const request = readKiroDeviceStatus(apiBase, flowId, undefined, session.capture);
       session.inFlight = request;
       const status = await unlessClosed(session, request.result);
       if (status === CLOSED || session.terminal) break;

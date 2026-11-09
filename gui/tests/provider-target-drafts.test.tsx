@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act, useEffect, useState } from "react";
 import type { Root } from "react-dom/client";
@@ -13,6 +13,11 @@ import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 import { createProviderDraftStore } from "../src/provider-workspace/target-drafts";
 import { captureApiTarget, configureApiTargets, TARGET_PREFLIGHT_LEGACY_EVENT } from "../src/api";
 import { standaloneApiTargets } from "../src/api-targets";
+import type { ApiTargetCapture } from "../src/api";
+import * as dialogs from "../src/action-dialogs";
+import { chooseOption, selectTrigger } from "./helpers/custom-select";
+import { useProvidersCrud } from "../src/pages/use-providers-crud";
+import AddProviderModal from "../src/components/AddProviderModal";
 
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "HTMLElement", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previous: Record<string, unknown>;
@@ -694,5 +699,182 @@ describe("Provider drafts follow the logical dashboard target", () => {
       window.dispatchEvent(new win.CustomEvent(TARGET_PREFLIGHT_LEGACY_EVENT, { detail: { targetKey: "hub-a" } }));
     });
     expect(document.body.textContent).toContain("This proxy checks the save target before sending");
+  });
+});
+
+describe("a render gap cannot retarget a provider mutation", () => {
+  function relayConfig() {
+    return { port: 0, defaultProvider: "provider-a", providers: {
+      "provider-a": { adapter: "openai-chat", baseUrl: "https://a.example.test/v1", hasApiKey: true },
+    } };
+  }
+
+  function relayOnlyFetch(onMutation: (expected: string | null) => Response) {
+    let currentHub = "hub-a";
+    return {
+      setHub(hub: string) { currentHub = hub; },
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = new URL(String(input), "http://localhost").pathname;
+        if (path === "/same/api/config") return Response.json(relayConfig());
+        if (path === "/same/api/providers" && init?.method === "PATCH") {
+          return onMutation(new Headers(init.headers).get("x-opencodex-expected-target"));
+        }
+        if (path.endsWith("/api/oauth/providers") || path.endsWith("/api/provider-presets")) return Response.json({ providers: [] });
+        if (path.endsWith("/api/selected-models")) return Response.json({ selected: {}, available: {}, liveModelCounts: {} });
+        if (path.endsWith("/api/models")) return Response.json([]);
+        if (path.endsWith("/api/provider-quotas")) return Response.json({ reports: [] });
+        if (path.endsWith("/api/usage")) return Response.json({ providers: [], models: [] });
+        if (path.endsWith("/api/codex-auth/accounts")) return Response.json({ accounts: [] });
+        return Response.json({});
+      }) as typeof fetch,
+      current: () => currentHub,
+    };
+  }
+
+  test("a Settings note save from a stale render is refused by the relay, not written to the new hub", async () => {
+    const attempts: Array<string | null> = [];
+    const hubWrites: string[] = [];
+    const relay = relayOnlyFetch(expected => {
+      attempts.push(expected);
+      // The relay compares the forwarded snapshot, exactly as the real handler does.
+      if (expected !== relay.current()) return Response.json({ error: "target_changed" }, { status: 409 });
+      hubWrites.push(relay.current());
+      return Response.json({ success: true });
+    });
+    globalThis.fetch = relay.fetch;
+    configureApiTargets(relayTargets("/same", "hub-a"));
+    await render(<Providers apiBase="/same" targetKey="hub-a" />);
+    await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('[role="option"]')!.click(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>("#pws-tab-settings")!.click(); });
+    await typeNote("draft A note");
+    // The module target moves before React re-renders the page.
+    configureApiTargets(relayTargets("/same", "hub-b"));
+    relay.setHub("hub-b");
+    await act(async () => { saveButton().click(); await new Promise(resolve => win.setTimeout(resolve, 20)); });
+    // The attempt carries the form's target; the relay refuses it and writes nothing.
+    expect(attempts).toEqual(["hub-a"]);
+    expect(hubWrites).toEqual([]);
+  });
+
+  test("an account-mode change captures the form target before the confirmation", async () => {
+    const calls: Array<{ patch: ProviderUpdatePatch; capture?: ApiTargetCapture }> = [];
+    const confirm = spyOn(dialogs, "confirmAction").mockResolvedValue(true);
+    try {
+      configureApiTargets(relayTargets("/same", "hub-a"));
+      await render(
+        <ProviderSettings
+          item={{
+            name: "openai",
+            adapter: "openai-responses",
+            authMode: "forward",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            hasApiKey: true,
+            codexAccountMode: "pool",
+          } as WorkspaceItem}
+          apiBase="/same"
+          targetKey="hub-a"
+          onUpdateProvider={async (_name, patch, capture) => { calls.push({ patch, capture }); return { ok: true }; }}
+        />,
+      );
+      // The module target moves before React re-renders the form.
+      configureApiTargets(relayTargets("/same", "hub-b"));
+      await chooseOption(selectTrigger(host, '[role="combobox"][aria-label="OpenAI account mode"]'), "direct");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.patch).toEqual({ codexAccountMode: "direct" });
+      // The capture was taken before the dialog, so it still names the form's target.
+      expect(calls[0]!.capture?.origin).toBe("hub-a");
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  test("a stale CRUD closure updates the target it rendered under", async () => {
+    const expected: Array<string | null> = [];
+    let crud!: ReturnType<typeof useProvidersCrud>;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === "/same/api/providers" && init?.method === "PATCH") {
+        expected.push(new Headers(init.headers).get("x-opencodex-expected-target"));
+        return Response.json({ success: true });
+      }
+      return Response.json({});
+    }) as typeof fetch;
+    function Harness() {
+      crud = useProvidersCrud({
+        apiBase: "/same", targetKey: "hub-a", t: key => key,
+        removeBusyRef: { current: false } as React.MutableRefObject<boolean>,
+        workspaceSelected: null, setWorkspaceSelected: () => {}, setRemoveConfirmName: () => {},
+        notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchProviderQuotas: async () => {},
+      });
+      return null;
+    }
+    configureApiTargets(relayTargets("/same", "hub-a"));
+    await render(<Harness />);
+    configureApiTargets(relayTargets("/same", "hub-b"));
+    await act(async () => { await crud.updateProvider("provider-a", { note: "x" }); });
+    expect(expected).toEqual(["hub-a"]);
+  });
+
+  test("a remove confirmation opened on one target cannot delete on another, including A-B-A", async () => {
+    const deletes: string[] = [];
+    let crud!: ReturnType<typeof useProvidersCrud>;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (init?.method === "DELETE") {
+        deletes.push(path);
+        return Response.json({ success: true });
+      }
+      return Response.json({});
+    }) as typeof fetch;
+    function Harness() {
+      crud = useProvidersCrud({
+        apiBase: "/same", targetKey: "hub-a", t: key => key,
+        removeBusyRef: { current: false } as React.MutableRefObject<boolean>,
+        workspaceSelected: null, setWorkspaceSelected: () => {}, setRemoveConfirmName: () => {},
+        notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchProviderQuotas: async () => {},
+      });
+      return null;
+    }
+    configureApiTargets(relayTargets("/same", "hub-a"));
+    await render(<Harness />);
+    await act(async () => { await crud.removeProvider("provider-a"); });
+    // B, then back to A: the confirmation is older than the current generation.
+    configureApiTargets(relayTargets("/same", "hub-b"));
+    await act(async () => { await crud.confirmRemoveProvider("provider-a"); });
+    configureApiTargets(relayTargets("/same", "hub-a"));
+    await act(async () => { await crud.confirmRemoveProvider("provider-a"); });
+    expect(deletes).toEqual([]);
+  });
+
+  test("an Add Provider POST accepted on the old target does not select on the new target", async () => {
+    let release!: (response: Response) => void;
+    const added: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === "/same/api/providers" && init?.method === "POST") {
+        return new Promise<Response>(resolve => { release = resolve; });
+      }
+      if (path.endsWith("/api/oauth/providers") || path.endsWith("/api/provider-presets")) return Response.json({ providers: [] });
+      if (path.endsWith("/api/usage")) return Response.json({ providers: [] });
+      return Response.json({});
+    }) as typeof fetch;
+    configureApiTargets(relayTargets("/same", "hub-a"));
+    await render(
+      <AddProviderModal apiBase="/same" targetKey="hub-a" existingNames={[]} initialCustom
+        onClose={() => {}} onAdded={name => added.push(name)} />,
+    );
+    await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 30)); });
+    const inputs = host.querySelectorAll<HTMLInputElement>(".modal-card input");
+    const setValue = (input: HTMLInputElement, value: string) => {
+      Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new win.Event("input", { bubbles: true }));
+    };
+    await act(async () => { setValue(inputs[0]!, "added-on-a"); setValue(inputs[1]!, "https://a.example.test/v1"); });
+    await act(async () => { host.querySelector<HTMLButtonElement>(".modal-card .btn-primary")!.click(); await Promise.resolve(); });
+    // The module target moves before the modal re-renders.
+    configureApiTargets(relayTargets("/same", "hub-b"));
+    await act(async () => { release(Response.json({ ok: true })); await new Promise(resolve => win.setTimeout(resolve, 20)); });
+    expect(added).toEqual([]);
   });
 });

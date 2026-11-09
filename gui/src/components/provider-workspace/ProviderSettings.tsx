@@ -27,7 +27,7 @@ import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import { authModeLabel } from "./ProviderRail";
 import { ProviderProtocolPanel } from "./ProviderProtocolPanel";
 import { ProviderKeyPacing, type KeyPacingDraft, type KeyPacingStatus } from "./ProviderKeyPacing";
-import type { WorkspaceItem, ProviderUpdatePatch, ProviderUpdateResult } from "./types";
+import type { WorkspaceItem, ProviderUpdateCallback } from "./types";
 import {
   createProviderDraftStore,
   draftRequestPacing,
@@ -45,6 +45,7 @@ import {
   type ProviderDraftStore,
   type ProviderSettingsDraft,
 } from "../../provider-workspace/target-drafts";
+import { useRenderTargetCapture } from "../../use-render-target-capture";
 
 const ADAPTERS = ["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"] as const;
 const EMPTY_MODELS: string[] = [];
@@ -65,7 +66,7 @@ type ProviderSettingsProps = {
   targetLabel?: string;
   /** Page-owned in-memory store so drafts survive a target switch. */
   draftStore?: ProviderDraftStore;
-  onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<ProviderUpdateResult>;
+  onUpdateProvider?: ProviderUpdateCallback;
   onDirtyChange?: (dirty: boolean) => void;
   /** Lets parent dialogs trigger the same save path as the sticky bar. */
   onRegisterSave?: (save: (() => Promise<boolean>) | null) => void;
@@ -118,6 +119,10 @@ function ProviderSettingsForm({
   const [cursorHttpVersion, setCursorHttpVersion] = useState<CursorHttpVersion>(initial.draft.cursorHttpVersion);
   const [baseline, setBaseline] = useState<ProviderSettingsDraft>(initial.baseline);
   const [saving, setSaving] = useState(false);
+  // This form's render owns the target for every save it starts, including a mode change
+  // confirmed after a dialog. A module target change that has not re-rendered the form
+  // cannot retarget the save.
+  const formCapture = useRenderTargetCapture(apiBase ?? "", targetKey);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [accountMode, setAccountMode] = useState<"pool" | "direct">(item.codexAccountMode ?? "pool");
   const [modeSaving, setModeSaving] = useState(false);
@@ -340,7 +345,7 @@ function ProviderSettingsForm({
         setMsg({ ok: true, text: t("pws.settingsSaved") });
         return true;
       }
-      const res = await onUpdateProvider(item.name, patch);
+      const res = await onUpdateProvider(item.name, patch, formCapture);
       if (authorityRef.current !== saveAuthority) return res.ok;
       // The save belongs to the target that started it. If the dashboard moved while the
       // request was in flight, its result must not be announced or applied on the new target.
@@ -381,14 +386,14 @@ function ProviderSettingsForm({
     return () => onRegisterSave(null);
   }, [onRegisterSave]);
 
-  const applyAccountMode = async (next: "pool" | "direct") => {
+  const applyAccountMode = async (next: "pool" | "direct", capture = formCapture) => {
     if (modeSaving || saving || next === accountMode) return;
     if (!onUpdateProvider) { setModeMsg({ ok: false, text: t("pws.updatesUnavailable") }); return; }
     const modeTarget = targetKey;
     setModeSaving(true);
     setModeMsg(null);
     try {
-      const res = await onUpdateProvider("openai", { codexAccountMode: next });
+      const res = await onUpdateProvider("openai", { codexAccountMode: next }, capture);
       if (targetKeyRef.current !== modeTarget) return;
       if (res.ok) {
         setAccountMode(next);
@@ -412,7 +417,9 @@ function ProviderSettingsForm({
   const requestAccountMode = async (next: "pool" | "direct") => {
     // A refusal leaves `accountMode` unchanged, and the Select only ever shows that state,
     // so the declined option never appears chosen.
-    if (await confirmAction({ message: t("pws.accountModeConfirm") })) await applyAccountMode(next);
+    // Capture before the dialog: the confirmation belongs to the target that opened it.
+    const capture = formCapture;
+    if (await confirmAction({ message: t("pws.accountModeConfirm") })) await applyAccountMode(next, capture);
   };
 
   const discard = () => {

@@ -21,6 +21,12 @@ export interface ApiTargetCapture {
    * or shared plane; after that the live target wins and the capture is stale.
    */
   standalone?: true;
+  /**
+   * The capture belongs to a rendered form. It may still be sent to its own base after a
+   * module target change that has not re-rendered that form; the relay refuses the stale
+   * expected target, and a completion is still fenced by `isApiTargetCaptureCurrent`.
+   */
+  renderOwned?: true;
 }
 
 /** Non-secret generation fencing every Usage report and inventory. */
@@ -301,7 +307,10 @@ export async function targetFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
-  if (!targetCaptureMatches(capture)) return targetChangedResponse();
+  // A render-owned capture is the form's own target. It is allowed to reach that target
+  // (the relay refuses it when the live target moved); an action-time capture is refused
+  // before send. Completions stay fenced either way.
+  if (!targetCaptureMatches(capture) && !capture.renderOwned) return targetChangedResponse();
   let requestUrl: URL;
   try {
     requestUrl = new URL(input instanceof Request ? input.url : String(input), window.location.href);

@@ -1,8 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import type { TFn } from "../i18n/shared";
 import type { ProviderUpdatePatch, ProviderUpdateResult } from "../components/provider-workspace/types";
 import { apiErrorMessage } from "../api-error";
-import { captureApiTarget, isApiTargetCaptureCurrent, targetFetch } from "../api";
+import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
+import { useRenderTargetCapture } from "../use-render-target-capture";
 
 type ProviderError = { code?: unknown; combos?: unknown; error?: unknown };
 type ShadowDependency = { model: string; enabled: boolean };
@@ -29,6 +30,7 @@ function providerErrorMessage(data: ProviderError, t: TFn, fallback: string): st
 
 export function useProvidersCrud({
   apiBase,
+  targetKey,
   t,
   removeBusyRef,
   workspaceSelected,
@@ -42,6 +44,8 @@ export function useProvidersCrud({
   onProviderRemoved,
 }: {
   apiBase: string;
+  /** Logical dashboard target; a relay apiBase is shared across a re-pair. */
+  targetKey?: string;
   t: TFn;
   removeBusyRef: React.MutableRefObject<boolean>;
   workspaceSelected: string | null;
@@ -57,14 +61,30 @@ export function useProvidersCrud({
   /** Confirmed removal only: drop this target's parked draft for the provider. */
   onProviderRemoved?: (name: string) => void;
 }) {
+  // This page's render owns the target for its own actions. A module-level target change
+  // that has not re-rendered the page cannot retarget a stale closure.
+  const renderCapture = useRenderTargetCapture(apiBase, targetKey);
+  // The confirmation belongs to the target that opened it, not to the target live when
+  // the user finally confirms.
+  const pendingRemoveRef = useRef<{ name: string; capture: ApiTargetCapture } | null>(null);
   const removeProvider = useCallback(async (name: string) => {
+    pendingRemoveRef.current = { name, capture: renderCapture };
     setRemoveConfirmName(name);
-  }, [setRemoveConfirmName]);
+  }, [renderCapture, setRemoveConfirmName]);
 
   const confirmRemoveProvider = useCallback(async (removeConfirmName: string | null) => {
     const name = removeConfirmName;
     if (!name || removeBusyRef.current) return;
-    const capture = captureApiTarget("shared", apiBase);
+    const pending = pendingRemoveRef.current;
+    pendingRemoveRef.current = null;
+    const capture = pending?.name === name ? pending.capture : renderCapture;
+    // The dashboard moved while the confirmation was open: refuse rather than delete the
+    // same-named provider on the new target.
+    if (!isApiTargetCaptureCurrent(capture)) {
+      setRemoveConfirmName(null);
+      notify(t("prov.targetChanged"), false);
+      return;
+    }
     removeBusyRef.current = true;
     setRemoveConfirmName(null);
     const fallback = t("prov.removeFail", { name });
@@ -93,10 +113,10 @@ export function useProvidersCrud({
     } finally {
       removeBusyRef.current = false;
     }
-  }, [apiBase, fetchConfig, fetchOauth, fetchProviderQuotas, notify, onProviderRemoved, removeBusyRef, setRemoveConfirmName, setWorkspaceSelected, t, workspaceSelected]);
+  }, [apiBase, fetchConfig, fetchOauth, fetchProviderQuotas, notify, onProviderRemoved, removeBusyRef, renderCapture, setRemoveConfirmName, setWorkspaceSelected, t, workspaceSelected]);
 
   const setProviderDisabled = useCallback(async (name: string, disabled: boolean) => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     const res = await targetFetch(capture, `${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -118,10 +138,16 @@ export function useProvidersCrud({
     fetchConfig();
     fetchOauth();
     fetchProviderQuotas(true);
-  }, [apiBase, fetchConfig, fetchOauth, fetchProviderQuotas, notify, t]);
+  }, [apiBase, fetchConfig, fetchOauth, fetchProviderQuotas, notify, renderCapture, t]);
 
-  const updateProvider = useCallback(async (name: string, patch: ProviderUpdatePatch): Promise<ProviderUpdateResult> => {
-    const capture = captureApiTarget("shared", apiBase);
+  const updateProvider = useCallback(async (
+    name: string,
+    patch: ProviderUpdatePatch,
+    captureOverride?: ApiTargetCapture,
+  ): Promise<ProviderUpdateResult> => {
+    // A caller that owns the form passes its render capture. Never replace it with a live
+    // capture: that is exactly how a stale form used to write to the new hub.
+    const capture = captureOverride ?? renderCapture;
     try {
       const res = await targetFetch(capture, `${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
         method: "PATCH",
@@ -152,10 +178,10 @@ export function useProvidersCrud({
     } catch {
       return { ok: false, error: t("prov.networkError") };
     }
-  }, [apiBase, fetchConfig, fetchProviderQuotas, refreshCodexAccount, t]);
+  }, [apiBase, fetchConfig, fetchProviderQuotas, refreshCodexAccount, renderCapture, t]);
 
   const setDefaultProvider = useCallback(async (name: string): Promise<boolean> => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     try {
       const res = await targetFetch(capture, `${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
         method: "PATCH",
@@ -175,7 +201,7 @@ export function useProvidersCrud({
       notify(t("prov.setDefaultFail", { name }), false);
       return false;
     }
-  }, [apiBase, fetchConfig, notify, t]);
+  }, [apiBase, fetchConfig, notify, renderCapture, t]);
 
   return { removeProvider, confirmRemoveProvider, setProviderDisabled, setDefaultProvider, updateProvider };
 }

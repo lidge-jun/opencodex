@@ -40,8 +40,7 @@ import type {
   ApiKeyRow,
   LoginHint,
   ProviderAuthHandlers,
-  ProviderUpdatePatch,
-  ProviderUpdateResult,
+  ProviderUpdateCallback,
 } from "./types";
 
 const COCKPIT_IMPORT_MAX_BYTES = 256 * 1024;
@@ -62,7 +61,7 @@ function XaiChatOptInControl({
   onUpdateProvider,
 }: {
   initialState: NonNullable<WorkspaceItem["xaiResponsesOptInState"]>;
-  onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<ProviderUpdateResult>;
+  onUpdateProvider?: ProviderUpdateCallback;
 }) {
   const t = useT();
   const [state, setState] = useState(initialState);
@@ -200,7 +199,7 @@ export default function ProviderAuthPanel({
   loginCapture?: ApiTargetCapture;
   authHandlers?: ProviderAuthHandlers;
   onCodexActiveNeedsReauthChange?: (needs: boolean) => void;
-  onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<ProviderUpdateResult>;
+  onUpdateProvider?: ProviderUpdateCallback;
   /** Shared Codex account state owned by Providers (WP3). */
   codexController?: CodexAccountPoolController;
 }) {
