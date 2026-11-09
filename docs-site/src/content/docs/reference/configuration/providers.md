@@ -736,8 +736,11 @@ restores the original native name only when the row's display name still matches
 override. A newer external display name is preserved subject to existing native metadata normalization;
 for example, Astra (`gpt-6-astra`) still replaces a non-pinned name with its pinned native name.
 The label overlay leaves model IDs, metadata (including capabilities), ordering,
-routed combo aliases, and account-qualified rows unchanged. This local catalog override does
-not relabel the HTTP model listings or virtual `*-pro` rows.
+routed combo aliases, and account-qualified rows unchanged. `GET /api/models` also exposes these
+labels for bare native rows, so client exports and the `ocx opencode` launcher use them.
+OpenCode keeps its existing suffix, for example `sol (native)`. Relaunch `ocx opencode` or
+refresh the managed integration to update its generated configuration. Without an override,
+existing export labels stay unchanged. `/v1/models` and virtual `*-pro` rows are unchanged.
 
 The effective label order is operator `modelDisplayNames`, then provider catalog metadata, then the
 normal `provider/model` fallback. The routed selector remains `xai/grok-4.6`, while the upstream
@@ -1988,3 +1991,5 @@ log line without account identifiers or upstream error text.
 the reason and time. Use `ocx account resume <provider> <account-id-or-alias>` to clear the
 reason and allow selection again. On an API-key row, clicking Resume also activates the key.
 This policy never resumes an account automatically.
+
+For a custom Ark Kimi Responses provider, set `arkKimiResponsesModels` to an array of exact upstream model or endpoint IDs that reject encrypted-output includes and orphan reasoning replay. It is unset by default; use the upstream ID, not the display alias.

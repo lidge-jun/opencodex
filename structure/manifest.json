@@ -618,8 +618,8 @@
       "path": "providers/meta-muse.md",
       "tier": 4,
       "title": "Meta Muse Login",
-      "scope": "CLI credential import, approval lifecycle, explicit recovery and account-free login diagnostics.",
-      "documents": ["src/oauth/meta-muse.ts", "src/oauth/meta-muse-keychain.ts", "src/oauth/meta-muse-errors.ts", "src/oauth/login-cli.ts"]
+      "scope": "CLI credential import, approval lifecycle, explicit recovery, account-free login diagnostics and the runtime plan-refusal classification.",
+      "documents": ["src/oauth/meta-muse.ts", "src/oauth/meta-muse-keychain.ts", "src/oauth/meta-muse-errors.ts", "src/oauth/login-cli.ts", "src/providers/meta-muse-plan-refusal.ts"]
     },
     {
       "path": "providers/oauth-reconciliation.md",

@@ -779,7 +779,7 @@ On upgrade, startup adds Pro to a saved model list only when it exactly matches 
 
 ## 3. API-key catalog
 
-opencodex ships 106 built-in presets: 85 key-based, 17 OAuth, three local, and one default
+opencodex ships 107 built-in presets: 86 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -872,6 +872,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | TokenLab | `https://api.tokenlab.sh/v1` |
 | Modelflare | `https://modelflare.dev/v1` |
 | AI Stupid Level | `https://aistupidlevel.info/v1` |
+| cheapaimodel | `https://api.cheapaimodel.ai/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -915,7 +916,9 @@ Exhausted output budgets produce `incomplete` with `max_output_tokens`; the prox
 the requested budget. A replay-safe empty completion with budget remaining may retry once, within
 the existing send limit. Explicit `emptyCompletionRetry: false` or `OCX_EMPTY_COMPLETION_RETRY=0`
 disables that retry. Text, refusals, tool activity, and unknown stream events prevent replay and
-retain the original stream. The protection does not change other providers or their retry defaults.
+retain the original stream, as does a response snapshot that already carries aggregate `output_text`
+(an absent, `null` or empty `output_text` still allows the retry).
+The protection does not change other providers or their retry defaults.
 Replay requires explicit `store: false`, complete input, and client-executed tools only; a hosted
 tool such as `web_search` prevents automatic replay even if no tool event was observed.
 
@@ -986,6 +989,21 @@ response header names the model that answered. Routing modes declare a 262,144-t
 output tokens, which hold for any model the router picks. The router accepts text only, so for a
 routing mode or pinned model at the preset destination the proxy hands images to the vision sidecar instead of sending them. Its Anthropic
 Messages endpoint is a passthrough to Anthropic without routing, so the preset does not use it.
+
+**cheapaimodel** is a pay-per-token API gateway for open-weight models (DeepSeek, GLM, Kimi) and
+Grok, operated by LINKOVA PTE. LTD. Create an [API key](https://console.cheapaimodel.ai/keys) on a
+prepaid USD balance, then select **cheapaimodel** in `ocx init` or the dashboard's **Add provider**
+picker, or run `ocx provider add cheapaimodel`, and give it the key directly or as the reference
+`${CHEAPAIMODEL_API_KEY}`. The preset uses [Chat Completions](https://cheapaimodel.ai/docs/api/create-chat-completion)
+for every client and discovers models from the authenticated
+[`GET /v1/models`](https://cheapaimodel.ai/docs/api/list-models), which answers 401 without a valid
+key. The seeded models are `deepseek-v4-1-flash` (the default), `glm-5.3`, `glm-5.3-flash`, `kimi-k3`
+and `grok-4.7`; `glm-5.3` is text only, so images for it go to the vision sidecar. `kimi-k3` accepts
+only its own sampling values, so the preset does not forward `temperature` or `top_p` to it. The
+preset sends every request through Chat Completions, the one interface every catalog model supports;
+it does not use the gateway's Responses or Anthropic Messages endpoints. cheapaimodel's
+[terms](https://cheapaimodel.ai/terms) and [privacy policy](https://cheapaimodel.ai/privacy) apply to
+requests sent to this service.
 
 The provider editor also accepts an optional `inputModalities` fallback: a nonempty array containing
 `text`, `image`, `audio`, or `video`. Exact per-model declarations take precedence. Invalid values
@@ -1294,7 +1312,14 @@ prove your Muse Code plan covers Muse Wonder.
 **Read this before enabling it.** Meta scopes that credential to the Muse Code CLI, so
 using it here is an *unsupported* path. Meta does not authorize subscription coverage
 outside its own client, how these calls settle is not observable from the API, and you
-should treat every call as billable against your account. The key, imported or pasted, is copied into
+should treat every call as billable against your account. Meta can also refuse the request
+outright with HTTP 403 and *"This API key is billed to a Muse Code subscription. Muse Code
+subscriptions cover requests from the Muse Code client only. Use it in Muse Code, or use a
+pay-as-you-go API key for other clients."* OpenCodex reports that as a
+plan restriction on a valid credential, not a rejected or expired one, because no re-login
+can lift it: a Muse Code subscription key cannot serve any request outside the Muse Code
+client, and a pay-as-you-go Meta API key with the `meta-model` provider is the supported
+path. The key, imported or pasted, is copied into
 OpenCodex's auth store (`~/.opencodex/auth.json`, mode 0600) like every other OAuth
 credential. The dashboard shows a Terms-of-Service warning before the first login and
 before any reauthentication — the same treatment Anthropic and Google Antigravity get.

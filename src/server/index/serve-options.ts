@@ -1866,6 +1866,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
               liveUpstreamProtocols: audio?.protocols,
               liveValidateFrame: audio?.validateFrame,
               liveMaxSessionMs: audio?.maxSessionMs,
+              liveFinalizationMs: audio?.finalizationMs,
               liveFinish: finish,
               liveAbortSignal: audioController?.signal,
               livePending: [],
