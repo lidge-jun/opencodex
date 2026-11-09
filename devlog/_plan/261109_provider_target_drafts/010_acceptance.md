@@ -126,6 +126,10 @@ selected architecture.
   including A-B-A. Key remove/add/alias guard every completion. The add-key form and the
   Add Provider completion do not survive a switch. Kiro polls with the session capture
   and ends when it is stale. CodexSet threads the logical target.
-- A render-owned capture may still be sent to its own base; the relay refuses the stale
-  expected target, and a completion is still fenced by the strict current check.
+- The render-owned capture changes only where the capture is created. Every stale
+  capture is still refused before authentication or fetch; there is no send exception.
+  After the identity check, the relay capability is read from the live target, so a
+  same-identity downgrade uses the fresh legacy preflight and a downgrade with a target
+  change refuses before fetch. This corrects an implementation drift from plan
+  revision 4; the architecture itself is unchanged.
 
