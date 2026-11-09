@@ -87,10 +87,10 @@ describe("combo partial update and decision selector CLI", () => {
 
   test("strategy change removes all carried JEV settings", async () => {
     quiet();
-    const r = runtime({ ...original, decisionModel: "a/m1" });
+    const r = runtime({ ...original, decisionModel: "a/m1", jevEffortMode: "client" });
     expect(await handleComboCommand(["set", "auto", "--strategy", "failover"], r.deps)).toBe(0);
     expect(r.body()?.combo.strategy).toBe("failover");
-    for (const field of ["decisionProvider", "decisionModel", "decisionTimeoutMs"]) expect(r.body()?.combo).not.toHaveProperty(field);
+    for (const field of ["decisionProvider", "decisionModel", "decisionTimeoutMs", "jevEffortMode"]) expect(r.body()?.combo).not.toHaveProperty(field);
     expect(r.body()?.combo.targets).toEqual(original.targets);
   });
 

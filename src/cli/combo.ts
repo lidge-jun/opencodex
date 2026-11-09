@@ -229,6 +229,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
     delete combo.decisionQuotaSignals;
     delete combo.decisionQuotaTiers;
     delete combo.sessionPin;
+    delete combo.jevEffortMode;
   }
   if (effortMode === undefined && existing?.defaultEffortMode === "force") {
     combo.defaultEffortMode = effort === "-" ? "fallback" : "force";
