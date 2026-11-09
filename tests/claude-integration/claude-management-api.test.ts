@@ -17,6 +17,7 @@ import { MANAGEMENT_JSON_BODY_MAX_BYTES } from "../../src/server/management/body
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { desktopFirstPartyTarget } from "../../src/claude/desktop-first-party";
 import { isolateClientLifecycleLock } from "../helpers/client-lifecycle-lock";
+import { repoPath } from "../helpers/repo-root";
 
 // Full-suite Windows load: startServer + multi-PUT management flows often exceed bun's
 // default 5s per-test budget (same flake class as 810fa115 / kiro-oauth).
@@ -99,6 +100,102 @@ test("GET /api/claude-code returns defaults + available + aliases", async () => 
     expect(typeof d.port).toBe("number");
   } finally {
     await server.stop(true);
+  }
+});
+
+test.each(["absent", "unavailable"] as const)("GET /healthz responds while Claude Keychain metadata is pending (%s)", async outcome => {
+  // A separate server process lets this client observe a blocked serving event loop.
+  // No native Keychain access, fixed sleeps, or host-specific executables are involved.
+  const script = `
+    import { EventEmitter } from "node:events";
+    import { startServer } from ${JSON.stringify(repoPath("src/server/index.ts"))};
+    import { claudeKeychain, createClaudeKeychainService } from ${JSON.stringify(repoPath("src/lib/claude-keychain.ts"))};
+    const send = message => console.log("keychain-healthz:" + JSON.stringify(message));
+    const child = Object.assign(new EventEmitter(), {
+      stdin: null, stdout: null, stderr: null, signals: 0,
+      unref() {}, kill() { this.signals++; },
+    });
+    let expire;
+    let invocation;
+    const service = createClaudeKeychainService({ platform: "darwin",
+      setTimer(callback) { expire = callback; return 0; }, clearTimer() {},
+      spawn(args, capture) { invocation = { args, capture }; return child; },
+    });
+    claudeKeychain.probe = () => {
+      send({ event: "probing" });
+      return service.probe();
+    };
+    const server = startServer(0);
+    send({ event: "listening", url: server.url.href });
+    process.stdin.on("data", () => {
+      if (${JSON.stringify(outcome)} === "unavailable") expire();
+      else child.emit("exit", 44, null);
+      send({ event: "released", invocation, signals: child.signals });
+    });
+    process.stdin.on("end", async () => {
+      child.emit("exit", 44, null);
+      await server.stop(true);
+      process.exit(0);
+    });
+    process.stdin.resume();
+  `;
+  const fixture = Bun.spawn([process.execPath, "--no-env-file", "-e", script], {
+    env: process.env, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  });
+  const listening = Promise.withResolvers<string>();
+  const probing = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<{ invocation: { args: string[]; capture: boolean }; signals: number }>();
+  const output = (async () => {
+    const decoder = new TextDecoder();
+    let buffered = "";
+    for await (const chunk of fixture.stdout) {
+      buffered += decoder.decode(chunk, { stream: true });
+      let end: number;
+      while ((end = buffered.indexOf("\n")) >= 0) {
+        const line = buffered.slice(0, end).trim();
+        buffered = buffered.slice(end + 1);
+        if (!line.startsWith("keychain-healthz:")) continue;
+        const message = JSON.parse(line.slice("keychain-healthz:".length));
+        if (message.event === "listening") listening.resolve(message.url);
+        if (message.event === "probing") probing.resolve();
+        if (message.event === "released") released.resolve(message);
+      }
+    }
+  })();
+  const errors = new Response(fixture.stderr).text();
+  const exited = fixture.exited.then(async code => {
+    throw new Error(`Keychain HTTP fixture exited early (${code}): ${await errors}`);
+  });
+  // Attach immediately; the exit is intentionally awaited separately during cleanup.
+  void exited.catch(() => {});
+  let settings: Promise<Response> | undefined;
+  try {
+    const base = await Promise.race([listening.promise, exited]);
+    let settingsFinished = false;
+    settings = fetch(new URL("/api/claude-code", base), { signal: AbortSignal.timeout(10_000) })
+      .then(response => { settingsFinished = true; return response; });
+    await Promise.race([probing.promise, settings.then(() => { throw new Error("Claude settings skipped the Keychain observation"); }), exited]);
+    const health = await fetch(new URL("/healthz", base), { signal: AbortSignal.timeout(5_000) });
+    expect(health.status).toBe(200);
+    expect(await health.json()).toMatchObject({ service: "opencodex", status: "ok" });
+    expect(settingsFinished).toBe(false);
+
+    fixture.stdin.write("release\n");
+    await fixture.stdin.flush();
+    const observation = await Promise.race([released.promise, exited]);
+    expect(observation).toEqual({ event: "released", invocation: {
+      args: ["find-generic-password", "-s", "Claude Code-credentials"], capture: false,
+    }, signals: 0 });
+    const response = await settings;
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ authDetectionUnknown: outcome === "unavailable" });
+  } finally {
+    // Terminate only our synthetic HTTP fixture, never a real security process.
+    fixture.kill();
+    await fixture.exited;
+    await settings?.catch(() => {});
+    await output;
+    await errors;
   }
 });
 
