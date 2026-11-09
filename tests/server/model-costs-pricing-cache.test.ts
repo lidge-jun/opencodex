@@ -175,6 +175,8 @@ test("policy-only API writes refresh warm estimate, summary and aggregate caches
             refreshed: refreshedAggregate.revision?.ctimeMs ?? null, afterFiltered: ctimeAfterFiltered } });
         expect(process.platform, moved).toBe("win32");
         expect(settled.update, moved).toBe("rebuild");
+        expect(settled.revision && refreshedAggregate.revision, moved).toBeTruthy();
+        expect(settled.revision?.ctimeMs, moved).not.toBe(refreshedAggregate.revision?.ctimeMs);
         expect(withoutCtime(settled.revision), moved).toEqual(withoutCtime(refreshedAggregate.revision));
         expect(settled.overlayVersion, moved).toBe(refreshedAggregate.overlayVersion);
         expect(settled.timeZone, moved).toBe(refreshedAggregate.timeZone);
