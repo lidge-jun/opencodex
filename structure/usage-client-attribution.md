@@ -39,7 +39,10 @@ match. `src/usage/ledger-scanner.ts` supplies both halves: `scanUsageLedgerCoope
 row offset during ingest, and `readUsageLedgerRowsAtOffsets` re-reads only the selected rows under the
 same identity, row-ceiling and torn-suffix rules. The first filtered query after the index is missing
 or invalid pays one cooperative full ingest; appends ingest only new bytes, and every later filter
-reuses the projection. A replaced, truncated or same-size rewritten ledger rebuilds it, a write
+reuses the projection. Candidate offsets are selected and consumed in bounded keyset pages, with a
+timer yield between pages; each page rechecks the published generation before it is read, so broad
+filters neither retain the complete offset set nor monopolize the event loop. A replaced, truncated
+or same-size rewritten ledger rebuilds it, a write
 observed during a row read re-verifies the selected bytes before publishing them, and a recorded
 offset that no longer frames a complete row drops the projection instead of serving a partial
 answer. `usage.jsonl` stays authoritative and is never truncated or rewritten.

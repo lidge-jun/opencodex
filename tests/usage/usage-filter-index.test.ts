@@ -210,6 +210,33 @@ describe("filtered usage candidate index", () => {
     expect(summary(result).summary.requests).toBe(inside);
   });
 
+  test("a broad filter consumes bounded candidate pages with timer yields", async () => {
+    writeRows(Array.from({ length: SYNTHETIC_ROWS }, (_, index) => syntheticRow(index)));
+    await getFilteredUsageAggregate({ provider: "kimi" });
+    resetUsageAggregateCacheForTests();
+
+    const originalRead = ledgerScannerModule.readUsageLedgerRowsAtOffsets;
+    const pageSizes: number[] = [];
+    let yieldedBetweenPages = false;
+    let timerFired = false;
+    const readSpy = spyOn(ledgerScannerModule, "readUsageLedgerRowsAtOffsets")
+      .mockImplementation(async options => {
+        if (pageSizes.length > 0) yieldedBetweenPages ||= timerFired;
+        pageSizes.push(options.offsets.length);
+        const result = await originalRead(options);
+        if (pageSizes.length === 1) setTimeout(() => { timerFired = true; }, 0);
+        return result;
+      });
+    try {
+      const result = await getFilteredUsageAggregate({});
+      expect(result.filterIndex?.candidateRows).toBe(SYNTHETIC_ROWS);
+      expect(pageSizes).toEqual([2_000, 2_000]);
+      expect(yieldedBetweenPages).toBe(true);
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
   test("an append ingests only new bytes and a retained filter folds only new matches", async () => {
     const rows = Array.from({ length: SYNTHETIC_ROWS }, (_, index) => syntheticRow(index));
     writeRows(rows);
