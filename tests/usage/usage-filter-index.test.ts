@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   statSync,
@@ -1087,6 +1088,25 @@ describe("filtered usage index availability", () => {
     } finally {
       chmodSync(testDir, 0o755);
     }
+  });
+
+  test("filtered queries after the first leave the config directory's entries unchanged", async () => {
+    // On Windows a changed config directory re-runs its ACL harden, which moves usage.jsonl's
+    // ChangeTime and forces whole-ledger rebuilds; SQLite deleting its WAL sidecars on every
+    // close changed the directory on each filtered query.
+    writeRows(Array.from({ length: 20 }, (_, index) => syntheticRow(index)));
+    const first = await getFilteredUsageAggregate({ provider: "openai" });
+    const observeHome = () => {
+      const stat = statSync(testDir);
+      return { entries: readdirSync(testDir).sort(), mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs };
+    };
+    const before = observeHome();
+    const other = await getFilteredUsageAggregate({ provider: "kimi" });
+    // An append makes the refresh open the index for writing again.
+    appendRows([{ ...syntheticRow(99), requestId: "late" }]);
+    const appended = await getFilteredUsageAggregate({ provider: "openai" });
+    expect(observeHome()).toEqual(before);
+    for (const result of [first, other, appended]) expect(result.filterIndex).toBeDefined();
   });
 
   test("a passive read never creates or writes index files", async () => {

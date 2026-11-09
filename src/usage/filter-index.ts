@@ -48,7 +48,7 @@
  * `device=all`) still has to normalize every row in its window; the index makes the
  * selection exact, not sublinear.
  */
-import { Database } from "bun:sqlite";
+import { constants as sqliteConstants, Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync } from "node:fs";
 import { getConfigDir } from "../config";
@@ -461,11 +461,27 @@ function ensureSchema(db: Database, classification: "fresh" | "ours"): void {
   recreateSchema(db);
 }
 
+/**
+ * Keep the WAL and shared-memory sidecars after the last connection closes.
+ *
+ * SQLite's default deletes both on the final close, so every filtered query created and removed two
+ * entries in the config directory. On Windows that churn is not free: the config directory's ACL
+ * memo is keyed on its change time, so the next config load re-ran icacls over the directory, the
+ * inherited-ACE rewrite moved usage.jsonl's ChangeTime, and both the usage aggregate and this
+ * index then rebuilt from the whole ledger. macOS's system SQLite already persists WAL; this makes
+ * every platform behave that way. Read-only connections never delete the sidecars, so only the
+ * connections that can write set it.
+ */
+function keepWalSidecars(db: Database): void {
+  db.fileControl(sqliteConstants.SQLITE_FCNTL_PERSIST_WAL, 1);
+}
+
 function openIndexForWrite(dir: string, path: string): Database {
   const existed = existsSync(path);
   preparePrivateSqliteDatabase(path);
   const db = new Database(path, { create: true });
   try {
+    keepWalSidecars(db);
     const classification = classifyDatabase(db);
     if (classification === "foreign") throw new UsageFilterIndexForeignError();
     if (!existed) {
@@ -510,6 +526,7 @@ function openIndexForRead(path: string): Database {
     if (!existsSync(path)) throw error;
     const db = new Database(path, { create: false });
     try {
+      keepWalSidecars(db);
       if (classifyDatabase(db) !== "ours") throw new UsageFilterIndexForeignError();
       return db;
     } catch (inner) {

@@ -44,6 +44,14 @@ observed during a row read re-verifies the selected bytes before publishing them
 offset that no longer frames a complete row drops the projection instead of serving a partial
 answer. `usage.jsonl` stays authoritative and is never truncated or rewritten.
 
+The index keeps its `-wal` and `-shm` sidecars after the last connection closes
+(`SQLITE_FCNTL_PERSIST_WAL` on every connection that can write). SQLite's default deletes them on
+the final close, which changed the config directory on every filtered query. On Windows a changed
+config directory re-runs its ACL harden, whose inherited-ACE rewrite moves `usage.jsonl`'s
+ChangeTime, and both the usage aggregate and this index then rebuild from the whole ledger.
+`tests/usage/usage-filter-index.test.ts` asserts that filtered queries after the first leave the
+directory's entries and times unchanged.
+
 The reader also receives the snapshot's revision, boundary offset and trailing digest. When the
 revision moved since the snapshot it re-verifies that boundary before trusting any offset, so a
 rewrite between the index refresh and the row read becomes a rebuild rather than a silently
