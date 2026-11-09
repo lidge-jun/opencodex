@@ -30,9 +30,17 @@ export const KIRO_NATIVE_EFFORT_FIELDS: Record<string, "reasoning" | "output_con
   "gpt-6.1-sol": "reasoning",
   // 261027 preemptive: GPT-6.1 Terra (mirrors GPT-6.1 Sol; see kiro-models.ts).
   "gpt-6.1-terra": "reasoning",
+  // Claude models whose output_config.effort was accepted by a live probe on 2026-11-07, at every
+  // rung except xhigh on the 4.6 pair. Haiku 4.5, Opus 4.5 and Sonnet 4.5 reject the field (HTTP 400).
   "claude-opus-5": "output_config",
-  // 260923 preemptive (see kiro-models.ts): same Claude-specific field as Opus 5.
   "claude-opus-5.5": "output_config",
+  "claude-opus-4.8": "output_config",
+  "claude-opus-4.7": "output_config",
+  "claude-opus-4.6": "output_config",
+  "claude-sonnet-5.5": "output_config",
+  "claude-sonnet-5": "output_config",
+  "claude-sonnet-4.6": "output_config",
+  "claude-haiku-5.5": "output_config",
 };
 
 export const KIRO_NATIVE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
@@ -40,6 +48,8 @@ export const KIRO_NATIVE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 // The newly enabled models have evidence for these rungs only. Keep the previous
 // emulation for xhigh, and never widen their native wire when the shared ladder grows.
 const KIRO_LUNA_TERRA_NATIVE_EFFORTS = new Set(["low", "medium", "high", "max"]);
+// Kiro rejects a native xhigh for these two (HTTP 400, live probe 2026-11-07); it stays emulated.
+const KIRO_NO_XHIGH_NATIVE_MODELS = new Set(["claude-opus-4.6", "claude-sonnet-4.6"]);
 
 export function kiroNativeEffortField(
   modelId: string,
@@ -48,6 +58,7 @@ export function kiroNativeEffortField(
   const model = normalizeKiroModelId(modelId);
   if ((model === "gpt-5.6-luna" || model === "gpt-5.6-terra")
     && effort !== undefined && !KIRO_LUNA_TERRA_NATIVE_EFFORTS.has(effort)) return undefined;
+  if (KIRO_NO_XHIGH_NATIVE_MODELS.has(model) && effort === "xhigh") return undefined;
   return KIRO_NATIVE_EFFORT_FIELDS[model];
 }
 
