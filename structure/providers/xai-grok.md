@@ -127,9 +127,9 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
 - **Device login:** `loginXaiDevice` (`src/oauth/xai.ts`) runs the RFC 8628 device grant against
   the discovered `device_authorization_endpoint`, for hosts whose browser cannot reach the
   127.0.0.1:56121 callback. It shows the `accounts.x.ai` verification URL and user code, polls
-  the token endpoint at the provider interval (`slow_down` adds 5s), keeps polling through
-  `authorization_pending` and network failures until `expires_in`, and ends on denial, expiry or
-  cancellation. It never imports the local Grok CLI token. `ocx login xai --headless`,
+  the token endpoint once per provider interval (`slow_down` adds 5s, uncapped), keeps polling
+  through `authorization_pending`, timeouts, network failures, 429 and 5xx, cuts every poll off at
+  `expires_in`, and ends on denial, expiry or cancellation. It never imports the local Grok CLI token. `ocx login xai --headless`,
   `ocx account login xai --device` and `POST /api/oauth/login` with `device: true` select it
   (`supportsDeviceLoginMode` in `src/oauth/index.ts`).
 - **Two-lock refresh transaction:** per-provider+account intent lock held across the IdP

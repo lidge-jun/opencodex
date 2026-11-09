@@ -660,7 +660,7 @@ describe("OAuth code-display login", () => {
       const response = await login({ provider: "xai", device: true, openBrowser: true });
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ url: "https://accounts.x.ai/oauth2/device", deviceCode: "ABCD-EFGH", browserLaunch: "skipped" });
-      await waitForLoginSettled("xai");
+      expect(await waitForLoginSettled("xai", 2_000)).toBe(true);
       expect(getLoginStatus("xai").loggedIn).not.toBe(true);
     } finally {
       globalThis.fetch = originalFetch;

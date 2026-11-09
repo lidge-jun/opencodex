@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { loginXaiDevice, XaiTokenRequestError } from "../../../src/oauth/xai";
 
 const DISCOVERY = "https://auth.x.ai/.well-known/openid-configuration";
@@ -55,6 +55,58 @@ describe("xAI device login", () => {
     const cancel = new AbortController();
     await expect(loginXaiDevice({ signal: cancel.signal }, { sleep: async () => { cancel.abort(); } })).rejects.toBeDefined();
     expect(calls.filter(c => c.url === TOKEN).length).toBeLessThanOrEqual(1);
+  });
+
+  test("slow_down always adds five seconds, past any cap", async () => {
+    mockXai({ device_code: "d", user_code: "u", verification_uri: "https://accounts.x.ai/oauth2/device", interval: 60 },
+      [Response.json({ error: "slow_down" }, { status: 400 }), granted()]);
+    const waits: number[] = [];
+    await loginXaiDevice({}, { sleep: async ms => { waits.push(ms); } });
+    expect(waits).toEqual([60000, 65000]);
+  });
+
+  test("a timed-out, refused-by-server or unreachable poll is retried once per interval", async () => {
+    const calls = mockXai({ device_code: "d", user_code: "u", verification_uri: "https://accounts.x.ai/oauth2/device" }, []);
+    const replies: Array<() => Response> = [
+      () => { throw new DOMException("timed out", "TimeoutError"); },
+      () => new Response("", { status: 503 }),
+      () => { throw new TypeError("network"); },
+      granted,
+    ];
+    const mocked = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) !== TOKEN) return mocked(input, init);
+      calls.push({ url: TOKEN, body: {} });
+      return replies.shift()!();
+    }) as typeof fetch;
+    const waits: number[] = [];
+    expect(await loginXaiDevice({}, { sleep: async ms => { waits.push(ms); } })).toMatchObject({ access: "access" });
+    // No hidden retry burst: four polls, one per five-second interval.
+    expect(calls.filter(c => c.url === TOKEN)).toHaveLength(4);
+    expect(waits).toEqual([5000, 5000, 5000, 5000]);
+  });
+
+  test("no poll starts at or after the grant deadline", async () => {
+    let now = 1_000_000;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const calls = mockXai({ device_code: "d", user_code: "u", verification_uri: "https://accounts.x.ai/oauth2/device", expires_in: 10, interval: 5 }, []);
+      const error = await loginXaiDevice({}, { sleep: async ms => { now += ms; } }).catch(e => e);
+      expect(error.oauthError).toBe("expired_token");
+      expect(calls.filter(c => c.url === TOKEN)).toHaveLength(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("a stalled poll is cut off at the grant deadline", async () => {
+    mockXai({ device_code: "d", user_code: "u", verification_uri: "https://accounts.x.ai/oauth2/device", expires_in: 0.2, interval: 0.01 }, []);
+    const mocked = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => String(input) !== TOKEN ? mocked(input, init)
+      : await new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason)))) as typeof fetch;
+    const started = Date.now();
+    expect((await loginXaiDevice({}).catch(e => e)).oauthError).toBe("expired_token");
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 
   test("an unapproved code expires at the provider's deadline", async () => {

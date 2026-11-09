@@ -349,14 +349,15 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
     printData({ ...start, modelSelection: modelSelectionNextSteps(provider, true) }, wantsJson, modelSelectionGuidance(provider, true));
     return;
   }
-  // A device grant waits on a person at another machine; match the codex device window.
-  for (let attempt = 0; attempt < (device ? 480 : 100); attempt++) {
+  // A device grant waits on a person at another machine: outlast xAI's 30-minute code.
+  for (let attempt = 0; attempt < (device ? 930 : 100); attempt++) {
     await Bun.sleep(2_000);
     const raw = await runtimeRequest<Record<string, unknown>>(`/api/oauth/status?provider=${encodeURIComponent(provider)}`, { redirect: "error" }, pinned);
     if (loginObject(raw).error) throw new Error("Provider login failed");
     const state = publicLoginStatus(raw);
     if (state.done === true && state.loggedIn !== true) throw new Error("Provider login ended without authentication");
-    if (state.loggedIn === true) {
+    // A device login adds an account, so an already signed-in provider is not done until its flow is.
+    if (state.loggedIn === true && (!device || state.done === true)) {
       printData({ ...state, modelSelection: modelSelectionNextSteps(provider) }, wantsJson, [`Logged in to ${provider}.`, ...modelSelectionGuidance(provider)]);
       return;
     }

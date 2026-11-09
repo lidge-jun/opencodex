@@ -114,7 +114,7 @@ function getTokenIdentity(accessToken: string, idToken: string | undefined): { a
 }
 
 export class XaiTokenRequestError extends Error { constructor(public readonly status?:number,public readonly oauthError?:string,message="xAI token request failed",options?:{cause?:unknown}){super(message,options);this.name="XaiTokenRequestError";} }
-export interface XaiTokenRetryDeps { sleep?:(ms:number)=>Promise<void>; random?:()=>number }
+export interface XaiTokenRetryDeps { sleep?:(ms:number)=>Promise<void>; random?:()=>number; /** Default 3; the device poll sends one request per interval. */ maxAttempts?:number }
 const IMF_FIXDATE_RE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\d{2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$/i;
 const RFC850_DATE_RE = /^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (\d{2})-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-(\d{2}) (\d{2}):(\d{2}):(\d{2}) GMT$/i;
 const ASCTIME_DATE_RE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ( \d|\d{2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/i;
@@ -243,8 +243,8 @@ export async function postXaiToken(
   body: Record<string, string>,
   signal?: AbortSignal, deps:XaiTokenRetryDeps={},
 ): Promise<XaiTokenPayload> {
- const sleep=deps.sleep??((ms:number)=>sleepWithAbort(ms,signal)),random=deps.random??Math.random;let last:unknown;
- for(let attempt=1;attempt<=3;attempt++){let response:Response;try{response=await fetch(tokenEndpoint, {
+ const sleep=deps.sleep??((ms:number)=>sleepWithAbort(ms,signal)),random=deps.random??Math.random,max=deps.maxAttempts??3;let last:unknown;
+ for(let attempt=1;attempt<=max;attempt++){let response:Response;try{response=await fetch(tokenEndpoint, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -257,10 +257,10 @@ export async function postXaiToken(
   const name=(error as {name?:string}|undefined)?.name;
   if(name==="AbortError"||name==="TimeoutError")throw error;
   last=error;
-  if(attempt===3)throw new XaiTokenRequestError(undefined,undefined,"xAI token request failed: network error",{cause:error});
+  if(attempt===max)throw new XaiTokenRequestError(undefined,undefined,"xAI token request failed: network error",{cause:error});
   await sleepAbortable(jitterDelay(attempt,random),sleep,signal);
   continue;
-  }if(response.ok)return await response.json() as XaiTokenPayload;const error=await readTokenError(response);last=error;if(!(response.status===429||response.status>=500)||attempt===3)throw error;if(signal?.aborted)throw error;const delay=retryDelay(attempt,response.headers.get("retry-after"),random);if(delay===undefined)throw error;await sleepAbortable(delay,sleep,signal);}throw last;
+  }if(response.ok)return await response.json() as XaiTokenPayload;const error=await readTokenError(response);last=error;if(!(response.status===429||response.status>=500)||attempt===max)throw error;if(signal?.aborted)throw error;const delay=retryDelay(attempt,response.headers.get("retry-after"),random);if(delay===undefined)throw error;await sleepAbortable(delay,sleep,signal);}throw last;
 }
 
 function credentialsFromTokenPayload(payload: XaiTokenPayload, refreshFallback = ""): OAuthCredentials {
@@ -345,7 +345,6 @@ export class XaiOAuthFlow extends OAuthCallbackFlow {
 const XAI_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 const XAI_DEVICE_DEFAULT_TTL_S = 900;
 const XAI_DEVICE_DEFAULT_INTERVAL_S = 5;
-const XAI_DEVICE_MAX_INTERVAL_MS = 60_000;
 
 interface XaiDeviceAuthorization {
   device_code?: unknown;
@@ -402,21 +401,33 @@ export async function loginXaiDevice(
   let waitMs = (positiveSeconds(device.interval) ?? XAI_DEVICE_DEFAULT_INTERVAL_S) * 1000;
   for (let remaining = deadline - Date.now(); remaining > 0; remaining = deadline - Date.now()) {
     await sleep(Math.min(waitMs, remaining));
+    const left = deadline - Date.now();
+    if (left <= 0) break;
+    // One request per interval, cut off at the grant deadline; the loop owns every retry.
+    const pollSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(left)]) : AbortSignal.timeout(left);
     try {
       const payload = await postXaiToken(
         discovery.tokenEndpoint,
         { grant_type: XAI_DEVICE_GRANT, client_id: XAI_OAUTH_CLIENT_ID, device_code: device.device_code },
-        signal,
+        pollSignal,
+        { maxAttempts: 1 },
       );
       return credentialsFromTokenPayload(payload);
     } catch (error) {
-      if (!(error instanceof XaiTokenRequestError) || signal?.aborted) throw error;
-      // Still waiting for approval, or a network failure the poll can outlast: keep polling.
-      if (error.oauthError === "authorization_pending" || error.status === undefined) continue;
-      if (error.oauthError === "slow_down") {
-        waitMs = Math.min(XAI_DEVICE_MAX_INTERVAL_MS, waitMs + 5_000);
-        continue;
+      if (signal?.aborted) throw error;
+      if (error instanceof XaiTokenRequestError) {
+        if (error.oauthError === "slow_down") {
+          waitMs += 5_000;
+          continue;
+        }
+        // Still waiting for approval, or a network or server failure the grant can outlast.
+        const status = error.status;
+        if (error.oauthError === "authorization_pending" || status === undefined || status === 429 || status >= 500) continue;
+        throw error;
       }
+      // A timed-out poll (Bun reports it as TimeoutError or AbortError) is retried; the deadline still holds.
+      const name = (error as { name?: string } | undefined)?.name;
+      if (name === "TimeoutError" || name === "AbortError") continue;
       throw error;
     }
   }

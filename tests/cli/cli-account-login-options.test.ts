@@ -144,6 +144,11 @@ describe("login flow-specific options", () => {
     expect(await handleAccountAuthCommand("login", ["xai", "--device", "--no-wait", "--json"], f.deps)).toBe(0);
     expect(f.calls[0]?.body).toEqual({ provider: "xai", addAccount: true, device: true });
     expect(output().deviceCode).toBe("ABCD");
+    // An already signed-in xAI provider reports loggedIn while the new device approval is pending.
+    const waiting = fixture([{ url: "https://accounts.x.ai/oauth2/device", deviceCode: "ABCD" },
+      { loggedIn: true, done: false, status: "pending" }, { loggedIn: true, done: true, status: "done" }]);
+    expect(await handleAccountAuthCommand("login", ["xai", "--device", "--json"], waiting.deps)).toBe(0);
+    expect(waiting.calls).toHaveLength(3);
     const refused = fixture();
     expect(await handleAccountAuthCommand("login", ["anthropic", "--device", "--no-wait"], refused.deps)).toBe(2);
     expect(refused.calls).toHaveLength(0);
