@@ -166,7 +166,7 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
     setState({ phase: "selecting", view });
     let next: KiroDeviceView | null = null;
     try {
-      const response = await fetch(`${apiBase}/api/oauth/login`, {
+      const response = await targetFetch(session.capture, `${apiBase}/api/oauth/login`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider: "kiro", flowId: view.flowId, profileArn }),
       });

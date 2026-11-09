@@ -193,7 +193,8 @@ export function useAddProviderOAuth({
     setManualCodeBusy(true);
     setManualCodeMsg("");
     try {
-      const res = await fetch(`${apiBase}/api/oauth/login/code`, {
+      const capture = activeCapturesRef.current.get(providerId) ?? captureApiTarget("shared");
+      const res = await targetFetch(capture, `${apiBase}/api/oauth/login/code`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider: providerId, input }),
