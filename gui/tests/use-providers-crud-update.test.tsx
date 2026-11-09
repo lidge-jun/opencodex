@@ -3,6 +3,8 @@ import { act, useEffect, useRef, useState } from "react";
 import type { Root } from "react-dom/client";
 import { Window } from "happy-dom";
 import { useProvidersCrud } from "../src/pages/use-providers-crud";
+import { configureApiTargets } from "../src/api";
+import { standaloneApiTargets } from "../src/api-targets";
 import type { ProviderUpdatePatch, ProviderUpdateResult } from "../src/components/provider-workspace/types";
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -82,6 +84,7 @@ async function mountCrud(overrides: {
   refreshCodexAccount?: () => Promise<unknown>;
   onProviderRemoved?: (name: string) => void;
 } = {}) {
+  configureApiTargets(standaloneApiTargets("http://localhost:10100"));
   const container = document.createElement("div");
   document.body.append(container);
   const { createRoot } = await import("react-dom/client");
