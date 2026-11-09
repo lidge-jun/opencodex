@@ -12,7 +12,8 @@ import { inspectWindowsInstallationFiles as inspectFiles, type WindowsInstallati
 const inspectWindowsInstallationFiles: typeof inspectFiles = (requests, finalize) =>
   inspectFiles(requests.map(request => ({ ...request, requireCanonicalPath: true })), finalize);
 
-async function withCanonicalExclusionRoots<R>(roots: readonly string[], run: () => Promise<R>): Promise<R | null> {
+async function withCanonicalExclusionRoots<R>(roots: readonly string[], run: () => Promise<R>,
+  onRefusal?: (reason: Extract<WindowsInstallationFilesResult, { kind: "refused" }>["reason"]) => void): Promise<R | null> {
   if (!roots.length) return run();
   let result: R | null = null;
   // Keep every exclusion open across the observation/query; validate each batch
@@ -20,8 +21,9 @@ async function withCanonicalExclusionRoots<R>(roots: readonly string[], run: () 
   const observed = await inspectWindowsInstallationFiles(roots.slice(0, 12).map(path => ({
     path: win32.normalize(path), maxBytes: 0, metadataOnly: true, directory: true,
   })), async () => {
-    result = await withCanonicalExclusionRoots(roots.slice(12), run); return result !== null;
+    result = await withCanonicalExclusionRoots(roots.slice(12), run, onRefusal); return result !== null;
   });
+  if (observed.kind === "refused") onRefusal?.(observed.reason);
   return observed.kind === "observed" ? result : null;
 }
 
@@ -34,6 +36,16 @@ interface WindowsPlanEvidence { readonly node: string; readonly npmCli: string; 
   readonly nodeEvidence: string; readonly npmEvidence: string; readonly exclusionRoots: readonly string[] }
 const evidence = new WeakMap<CodexCliInstallReport, WindowsPlanEvidence>();
 const toolchainDigests = new WeakMap<CodexCliInstallReport, string>();
+type WindowsPlanRefusalGate = "selection" | "exclusion-roots" | "local-node" | "derivation"
+  | "launcher-arch" | "excluded-layout" | "initial-observation" | "initial-content"
+  | "backing-selection" | "final-observation" | "shim-content" | "manifest-identity"
+  | "node-identity" | "backing-content" | "exception";
+type WindowsPlanRefusalReason = Extract<WindowsInstallationFilesResult, { kind: "refused" }>["reason"]
+  | Extract<Awaited<ReturnType<typeof deriveCodexCliInstallationInput>>, { kind: "unavailable" }>["reason"];
+interface WindowsPlanRefusal { readonly gate: WindowsPlanRefusalGate; readonly reason?: WindowsPlanRefusalReason }
+const refusals = new WeakMap<CodexCliInstallReport, WindowsPlanRefusal>();
+/** Test diagnostics only: fixed codes, never paths, exception messages or public report fields. */
+export const windowsCodexCliPlanRefusalForTests = (report: CodexCliInstallReport): WindowsPlanRefusal | null => refusals.get(report) ?? null;
 export const windowsCodexCliToolchainDigest = (report: CodexCliInstallReport): string | undefined => toolchainDigests.get(report);
 export const windowsCodexCliPlanEvidence = (report: CodexCliInstallReport): WindowsPlanEvidence | null => evidence.get(report) ?? null;
 const hash = (value: string): string => createHash("sha256").update(value).digest("hex");
@@ -129,20 +141,25 @@ export async function inspectWindowsCodexCliPlanInstall(
   deps: CodexCliInstallProvenanceDeps, fallback: CodexCliInstallReport, excluded: (path: string) => boolean,
   exclusionRoots: readonly string[] = [],
 ): Promise<CodexCliInstallReport> {
+  const refuse = (gate: WindowsPlanRefusalGate, reason?: WindowsPlanRefusalReason): CodexCliInstallReport => {
+    refusals.set(fallback, Object.freeze(reason === undefined ? { gate } : { gate, reason }));
+    return fallback;
+  };
   const env = deps.env ?? {};
   const candidate = env.CODEX_CLI_PATH?.trim();
   if (!deps.selectionAttested || !candidate || !/^[a-z]:[\\/]/i.test(candidate)
     || win32.basename(candidate) !== "codex.cmd"
-    || (deps.selectedCommand != null && deps.selectedCommand !== candidate)) return fallback;
+    || (deps.selectedCommand != null && deps.selectedCommand !== candidate)) return refuse("selection");
   if (exclusionRoots.length) {
     const roots = Object.freeze([...exclusionRoots]);
+    let reason: WindowsPlanRefusalReason | undefined;
     const report = await withCanonicalExclusionRoots(roots,
-      () => inspectWindowsCodexCliPlanInstall(deps, fallback, excluded));
+      () => inspectWindowsCodexCliPlanInstall(deps, fallback, excluded), value => { reason ??= value; });
     if (report) {
       const toolchain = evidence.get(report);
       if (toolchain) evidence.set(report, Object.freeze({ ...toolchain, exclusionRoots: roots }));
     }
-    return report ?? fallback;
+    return report ?? refuse("exclusion-roots", reason);
   }
   // The bounded content read is opt-in: a bare ownership check holds the same
   // reparse-refusing handles; only bounded ownership/header reads remain.
@@ -150,14 +167,14 @@ export async function inspectWindowsCodexCliPlanInstall(
   const prefix = win32.dirname(candidate);
   const localNodePath = win32.join(prefix, "node.exe");
   const localNode = await inspectWindowsInstallationFiles([{ path: localNodePath, maxBytes: 0, metadataOnly: true }]);
-  if (localNode.kind === "refused" && localNode.reason !== "not-found") return fallback;
+  if (localNode.kind === "refused" && localNode.reason !== "not-found") return refuse("local-node", localNode.reason);
   const selectedPath = env.PATH;
   const selectedPathExt = env.PATHEXT;
   const derivation = await deriveCodexCliInstallationInput({
     codexCliPath: candidate, path: selectedPath ?? null, pathExt: selectedPathExt ?? null,
   }, { platform: "win32" });
   if (derivation.kind !== "derived" || derivation.input.candidate !== candidate
-    || derivation.input.npmPrefix !== prefix) return fallback;
+    || derivation.input.npmPrefix !== prefix) return refuse("derivation", derivation.kind === "unavailable" ? derivation.reason : undefined);
   const node = derivation.input.node;
   const npmCli = derivation.input.npmCli;
   const npmRoot = win32.dirname(win32.dirname(npmCli));
@@ -166,13 +183,13 @@ export async function inspectWindowsCodexCliPlanInstall(
   // separate toolchain is bound as the updater's metadata vehicle only. Without the
   // launcher arch the toolchain's arch cannot be tied to the selection at all, so a
   // separate toolchain stays refused rather than claim an unanchored backing lane.
-  if (pathNode && !deps.arch) return fallback;
+  if (pathNode && !deps.arch) return refuse("launcher-arch");
   const root = win32.join(prefix, "node_modules", "@openai", "codex");
   const manifest = win32.join(root, "package.json");
   const npmManifest = win32.join(npmRoot, "package.json");
   const bin = win32.join(root, "bin", "codex.js");
   const paths = [candidate, node, npmCli, root];
-  if (prefix === win32.parse(prefix).root || paths.some(excluded)) return fallback;
+  if (prefix === win32.parse(prefix).root || paths.some(excluded)) return refuse("excluded-layout");
   // Only already handle-observed files can pass the real resolver's existence
   // predicate. The explicit override wins before saved-state/shim/PATH candidates.
   const selected = () => selectedWindowsOverride(candidate, env, deps.configDir);
@@ -181,30 +198,31 @@ export async function inspectWindowsCodexCliPlanInstall(
       { path: manifest, maxBytes: 256 * 1024 }, { path: npmManifest, maxBytes: 256 * 1024 },
       { path: node, maxBytes: 4096, prefixOnly: true },
     ]);
-    if (first.kind !== "observed") return fallback;
+    if (first.kind !== "observed") return refuse("initial-observation", first.reason);
     const initial = new Map(first.files.map(file => [file.path, file]));
     const main = json(initial.get(manifest)!); const npm = json(initial.get(npmManifest)!);
     const arch = peArch(initial.get(node)!.bytes);
     if (!main || main.name !== "@openai/codex" || typeof main.version !== "string" || !parseStrictSemver(main.version)
       || entry(main, "codex") !== "bin/codex.js" || !npm || npm.name !== "npm"
       || typeof npm.version !== "string" || !parseStrictSemver(npm.version) || entry(npm, "npm") !== "bin/npm-cli.js"
-      || !arch || (deps.arch && deps.arch !== arch)) return fallback;
+      || !arch || (deps.arch && deps.arch !== arch)) return refuse("initial-content");
     const pkg = `@openai/codex-win32-${arch}`;
     const triple = arch === "x64" ? "x86_64-pc-windows-msvc" : "aarch64-pc-windows-msvc";
     // Node's nearest-first package lookup, bounded to this independent prefix.
     const lanes = [win32.join(root, "bin", "node_modules"), win32.join(root, "node_modules"),
       win32.join(prefix, "node_modules", "@openai", "node_modules"), win32.join(prefix, "node_modules")];
+    let backingRefusal: WindowsPlanRefusalReason | undefined;
     const backingSelection = async (): Promise<string | null> => {
       for (const lane of lanes) {
         const path = win32.join(lane, pkg, "package.json");
         const probe = await inspectWindowsInstallationFiles([{ path, maxBytes: 0, metadataOnly: true }]);
         if (probe.kind === "observed") return path;
-        if (probe.reason !== "not-found") return null;
+        if (probe.reason !== "not-found") { backingRefusal = probe.reason; return null; }
       }
       return null; // No global module lookup or vendor fallback adoption.
     };
     const backingManifest = await backingSelection();
-    if (!backingManifest) return fallback;
+    if (!backingManifest) return refuse("backing-selection", backingRefusal ?? "not-found");
     const native = win32.join(win32.dirname(backingManifest), "vendor", triple, "bin", "codex.exe");
     // Ownership requires the manifests, shim and backing manifest bytes plus the
     // bounded Node header read above; entrypoint, npm CLI, Node and native
@@ -225,14 +243,14 @@ export async function inspectWindowsCodexCliPlanInstall(
         .then(current => current.kind === "derived" && current.input.candidate === candidate
           && current.input.npmPrefix === prefix && current.input.node === node && current.input.npmCli === npmCli)
       && await backingSelection() === backingManifest);
-    if (final.kind !== "observed") return fallback;
+    if (final.kind !== "observed") return refuse("final-observation", backingRefusal ?? final.reason);
     const files = new Map(final.files.map(file => [file.path, file]));
-    if (!npmCodexCommandShim(files.get(candidate)!.bytes)) return fallback;
-    for (const path of [manifest, npmManifest]) if (id(initial.get(path)!) !== id(files.get(path)!)) return fallback;
-    if (JSON.stringify(initial.get(node)!.identity) !== JSON.stringify(files.get(node)!.identity)) return fallback;
+    if (!npmCodexCommandShim(files.get(candidate)!.bytes)) return refuse("shim-content");
+    for (const path of [manifest, npmManifest]) if (id(initial.get(path)!) !== id(files.get(path)!)) return refuse("manifest-identity");
+    if (JSON.stringify(initial.get(node)!.identity) !== JSON.stringify(files.get(node)!.identity)) return refuse("node-identity");
     const backing = json(files.get(backingManifest)!);
     if (!backing || "exports" in backing || ![pkg, "@openai/codex"].includes(String(backing.name))
-      || ![main.version, `${main.version}-win32-${arch}`].includes(String(backing.version))) return fallback;
+      || ![main.version, `${main.version}-win32-${arch}`].includes(String(backing.version))) return refuse("backing-content");
     const content = observe ? hash(JSON.stringify(["windows-npm-read-only-plan-v3", arch, prefix, candidate, node, npmCli,
       ...final.files.map(file => [file.path, file.identity, file.digest])])) : null;
     const report: CodexCliInstallReport = Object.freeze({ ...fallback, managed: true, selectionAttested: true,
@@ -246,5 +264,5 @@ export async function inspectWindowsCodexCliPlanInstall(
       envPath: selectedPath, envPathExt: selectedPathExt,
       backingRoot: win32.dirname(backingManifest), nodeEvidence: id(files.get(node)!), npmEvidence: id(files.get(npmCli)!), exclusionRoots: Object.freeze([]) }));
     return report;
-  } catch { return fallback; }
+  } catch { return refuse("exception"); }
 }

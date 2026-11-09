@@ -2,7 +2,8 @@
 
 Every read of Desktop library configuration — selected-profile inspection, `_meta.json` parsing,
 foreign-key preservation during writes, backup creation and rollback, refresh mode re-resolution, the refresh fingerprint hash,
-the picker profile's inspection and apply snapshots, and the connection-owned store's metadata and
+the picker profile's inspection and apply snapshots, the status route's applied model list
+(`readAppliedDesktopModels`, names and labels only), and the connection-owned store's metadata and
 profile reads — goes through the shared verified regular-file reader in
 `src/claude/desktop-3p-library.ts` (`readDesktopLibraryBytes`/`readDesktopLibraryText`). The path
 `lstat` must already name a regular file; on POSIX the open is nonblocking and no-follow, so a path

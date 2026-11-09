@@ -1,0 +1,13 @@
+/* Claude usage-reset grant rows inside the shared credit-list dialog
+   (gui/src/components/provider-workspace/AnthropicResetGrants.tsx). */
+.anthropic-grant-count { margin-left: auto; padding: 1px 6px; font-family: var(--font-code); white-space: nowrap; flex-shrink: 0; }
+.anthropic-grant-windows { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.anthropic-grant-window {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-code);
+  font-size: var(--text-caption);
+  color: var(--muted);
+}
+.anthropic-grant-note { margin-top: 4px; }

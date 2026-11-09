@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import {
   closeSync, constants, fchmodSync, fstatSync, linkSync, lstatSync, mkdirSync,
-  openSync, readSync, unlinkSync, writeFileSync, type Stats,
+  openSync, readSync, unlinkSync, writeFileSync, type BigIntStats,
 } from "node:fs";
 import { join } from "node:path";
 import { forgetEphemeralSecretPath, hardenSecretDir, hardenSecretPath } from "../../lib/windows-secret-acl";
@@ -20,15 +20,15 @@ function invalidCredential(): Error {
   return new Error("Claude intercept credential is not a safe, valid owner-controlled file");
 }
 
-function assertOwnedNode(stat: Stats, directory = false): void {
+function assertOwnedNode(stat: BigIntStats, directory = false): void {
   if (stat.isSymbolicLink() || !(directory ? stat.isDirectory() : stat.isFile())) throw invalidCredential();
-  if (process.platform !== "win32" && typeof process.geteuid === "function" && stat.uid !== process.geteuid()) {
+  if (process.platform !== "win32" && typeof process.geteuid === "function" && stat.uid !== BigInt(process.geteuid())) {
     throw invalidCredential();
   }
 }
 
-function assertSameNode(path: string, expected: Stats, directory = false): void {
-  const current = lstatSync(path);
+function assertSameNode(path: string, expected: BigIntStats, directory = false): void {
+  const current = lstatSync(path, { bigint: true });
   assertOwnedNode(current, directory);
   if (current.dev !== expected.dev || current.ino !== expected.ino) throw invalidCredential();
 }
@@ -36,17 +36,17 @@ function assertSameNode(path: string, expected: Stats, directory = false): void 
 /** Read only through the validated descriptor, with a fixed maximum allocation and no links. */
 function readPinnedToken(configDir: string, harden: boolean): string {
   const dir = join(configDir, "claude-intercept");
-  const directory = lstatSync(dir);
+  const directory = lstatSync(dir, { bigint: true });
   assertOwnedNode(directory, true);
-  if (process.platform !== "win32" && (directory.mode & 0o077) !== 0) throw invalidCredential();
+  if (process.platform !== "win32" && (directory.mode & 0o077n) !== 0n) throw invalidCredential();
   const path = claudeInterceptProxyTokenPath(configDir);
-  const entry = lstatSync(path);
+  const entry = lstatSync(path, { bigint: true });
   assertOwnedNode(entry);
   if (entry.size < TOKEN_LENGTH || entry.size > TOKEN_MAX_BYTES) throw invalidCredential();
   // NONBLOCK prevents a raced-in FIFO from blocking before fstat can reject it.
   const fd = openSync(path, constants.O_RDONLY | NOFOLLOW | NONBLOCK);
   try {
-    const opened = fstatSync(fd);
+    const opened = fstatSync(fd, { bigint: true });
     assertOwnedNode(opened);
     if (opened.dev !== entry.dev || opened.ino !== entry.ino
       || opened.size < TOKEN_LENGTH || opened.size > TOKEN_MAX_BYTES) throw invalidCredential();
@@ -62,8 +62,8 @@ function readPinnedToken(configDir: string, harden: boolean): string {
     const ending = contents.slice(TOKEN_LENGTH);
     if (token.length !== TOKEN_LENGTH || !/^[A-Za-z0-9_-]+$/.test(token)
       || !["", "\n", "\r\n"].includes(ending)) throw invalidCredential();
-    const afterRead = fstatSync(fd);
-    if (length !== afterRead.size || afterRead.mtimeMs !== opened.mtimeMs) throw invalidCredential();
+    const afterRead = fstatSync(fd, { bigint: true });
+    if (BigInt(length) !== afterRead.size || afterRead.mtimeNs !== opened.mtimeNs) throw invalidCredential();
     assertSameNode(path, opened);
     assertSameNode(dir, directory, true);
     if (harden) {
@@ -71,7 +71,7 @@ function readPinnedToken(configDir: string, harden: boolean): string {
       else fchmodSync(fd, 0o600); // Never chmod a followed/replaced pathname.
       assertSameNode(path, opened);
       assertSameNode(dir, directory, true);
-    } else if (process.platform !== "win32" && (afterRead.mode & 0o077) !== 0) {
+    } else if (process.platform !== "win32" && (afterRead.mode & 0o077n) !== 0n) {
       throw invalidCredential();
     }
     return token;
@@ -89,7 +89,7 @@ export function readClaudeInterceptProxyToken(configDir: string): string | null 
   }
 }
 
-function ensurePrivateDirectory(configDir: string): Stats {
+function ensurePrivateDirectory(configDir: string): BigIntStats {
   const dir = join(configDir, "claude-intercept");
   mkdirSync(configDir, { recursive: true, mode: 0o700 });
   try {
@@ -97,14 +97,14 @@ function ensurePrivateDirectory(configDir: string): Stats {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
-  const entry = lstatSync(dir);
+  const entry = lstatSync(dir, { bigint: true });
   assertOwnedNode(entry, true);
   if (process.platform === "win32") {
     hardenSecretDir(dir, { required: true });
   } else {
     const fd = openSync(dir, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | NOFOLLOW);
     try {
-      const opened = fstatSync(fd);
+      const opened = fstatSync(fd, { bigint: true });
       assertOwnedNode(opened, true);
       if (entry.dev !== opened.dev || entry.ino !== opened.ino) throw invalidCredential();
       fchmodSync(fd, 0o700);
@@ -130,7 +130,7 @@ export function ensureClaudeInterceptProxyToken(configDir: string): string {
   const token = randomBytes(32).toString("base64url");
   const temp = join(dir, `.${TOKEN_FILE}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`);
   const fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o600);
-  const created = fstatSync(fd);
+  const created = fstatSync(fd, { bigint: true });
   try {
     writeFileSync(fd, `${token}\n`, { encoding: "utf8" });
     if (process.platform !== "win32") fchmodSync(fd, 0o600);

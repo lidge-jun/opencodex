@@ -17,6 +17,76 @@ const empty = { type: "thinking", thinking: "", signature: "SyntheticReasoningSi
 const redacted = { type: "redacted_thinking", data: "synthetic-opaque" };
 const tool = { type: "tool_use", id: "toolu_lookup", name: "lookup", input: { q: "x" } };
 
+for (const authMode of ["key", "oauth"] as const) {
+  for (const summary of ["concise", "detailed"] as const) {
+    for (const effort of [undefined, "high", "none"]) {
+      test(`${authMode}: explicit ${summary} summary with effort ${effort ?? "omitted"} opts out of updates`, async () => {
+        const adapter = createAnthropicAdapter({ ...provider, authMode });
+        const request = await adapter.buildRequest(parseRequest({ model, input: "question", reasoning: { effort, summary } }));
+        const body = JSON.parse(request.body as string);
+        expect(body.thinking).toEqual({ type: "adaptive", display: "summarized" });
+        expect(body.output_config?.effort).toBe(effort === "high" ? "high" : undefined);
+        const beta = new Headers(request.headers).get("anthropic-beta") ?? "";
+        expect(beta).not.toContain("thinking-display-updates-2026-08-18");
+        if (authMode === "oauth") expect(beta).toContain("oauth-2025-04-20");
+      });
+    }
+  }
+  for (const reasoning of [undefined, {}, { effort: "high" }, { summary: "auto" }, { effort: "high", summary: "auto" }, { summary: "none" }, { effort: "none", summary: "none" }]) {
+    test(`${authMode}: absent summary opt-in preserves updates for ${JSON.stringify(reasoning)}`, async () => {
+      const adapter = createAnthropicAdapter({ ...provider, authMode });
+      const request = await adapter.buildRequest(parseRequest({ model, input: "question", reasoning }));
+      expect(JSON.parse(request.body as string).thinking).toEqual({ type: "adaptive", display: "updates" });
+      expect(new Headers(request.headers).get("anthropic-beta")).toContain("thinking-display-updates-2026-08-18");
+    });
+  }
+  test(`${authMode}: reused adapter follows each request's display and preserves local summary hiding`, async () => {
+    const adapter = withTestTranslatorBudget(createAnthropicAdapter({ ...provider, authMode }, "none"));
+    for (const summary of [undefined, "detailed", undefined, "auto", "none", "concise"]) {
+      const parsed = parseRequest({ model, input: "question", reasoning: { effort: "high", summary } });
+      // A local presentation preference alone must not opt into summarized upstream display.
+      parsed.options.hideThinkingSummary = true;
+      const request = await adapter.buildRequest(parsed);
+      const updates = summary === undefined || summary === "none" || summary === "auto";
+      expect(JSON.parse(request.body as string).thinking).toEqual({ type: "adaptive", display: updates ? "updates" : "summarized" });
+      expect((new Headers(request.headers).get("anthropic-beta") ?? "").includes("thinking-display-updates-2026-08-18")).toBe(updates);
+      const events = await adapter.parseResponse!(new Response(JSON.stringify({ content: [update], stop_reason: "end_turn" })));
+      expect(events.some(event => event.type === "text_delta")).toBe(updates);
+      const response = buildResponseJSON(events, model, { hideThinkingSummary: parsed.options.hideThinkingSummary });
+      if (!updates) expect((response.output as { summary: unknown[] }[])[0]!.summary).toEqual([]);
+      // Cross-protocol presentation masks locally hidden summaries; native replay retains them.
+      expect(responsesJsonToAnthropicMessage(response, model).content).toEqual([{ ...update, thinking: updates ? update.thinking : "" }]);
+      const replay = await adapter.buildRequest(parseRequest({ model, input: response.output }));
+      expect(JSON.parse(replay.body as string).messages[0].content).toEqual([update]);
+    }
+  });
+}
+
+for (const streaming of [false, true]) {
+  test(`${streaming ? "SSE" : "JSON"}: explicit summary retains signed thinking as reasoning`, async () => {
+    const adapter = withTestTranslatorBudget(createAnthropicAdapter(provider, "none"));
+    await adapter.buildRequest(parseRequest({ model, input: "question", reasoning: { summary: "detailed", effort: "high" } }));
+    const events: AdapterEvent[] = [];
+    if (streaming) {
+      const wire = frame("message_start", { message: { content: [] } })
+        + frame("content_block_start", { index: 0, content_block: { type: "thinking", thinking: "" } })
+        + frame("content_block_delta", { index: 0, delta: { type: "thinking_delta", thinking: update.thinking } })
+        + frame("content_block_delta", { index: 0, delta: { type: "signature_delta", signature: update.signature } })
+        + frame("content_block_stop", { index: 0 })
+        + frame("message_delta", { delta: { stop_reason: "end_turn" } }) + frame("message_stop");
+      for await (const event of adapter.parseStream(new Response(wire))) events.push(event);
+    } else {
+      events.push(...await adapter.parseResponse!(new Response(JSON.stringify({ content: [update], stop_reason: "end_turn" }))));
+    }
+    expect(events).toContainEqual({ type: "thinking_delta", thinking: update.thinking });
+    expect(events).toContainEqual({ type: "thinking_signature", signature: update.signature });
+    expect(events.some(event => event.type === "text_delta")).toBe(false);
+    const response = buildResponseJSON(events, model);
+    expect((response.output as { type: string }[]).every(item => item.type === "reasoning")).toBe(true);
+    expect(responsesJsonToAnthropicMessage(response, model).content).toEqual([update]);
+  });
+}
+
 function frame(type: string, data: object = {}) {
   return `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
 }

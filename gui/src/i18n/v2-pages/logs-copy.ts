@@ -1,0 +1,75 @@
+import { copyTable, type Row } from "./copy-table";
+
+/*
+ * Copy for the v2 Logs & Debug, Storage page. Columns: en, ko, de, fr, zh, zh-TW, ru, ja, tr, vi, pt.
+ * Keys render as `logsV2.<key>`.
+ */
+const rows = {
+  client: ["Client", "클라이언트", "Client", "Application cliente", "客户端", "用戶端", "Клиент", "クライアント", "İstemci", "Ứng dụng", "Cliente"],
+  clientUnknown: ["Unknown", "알 수 없음", "Unbekannt", "Inconnu", "未知", "未知", "Неизвестно", "不明", "Bilinmiyor", "Không xác định", "Desconhecido"],
+  clientOther: ["Other", "기타", "Andere", "Autre", "其他", "其他", "Другое", "その他", "Diğer", "Khác", "Outro"],
+  requests: ["Requests", "요청", "Anfragen", "Requêtes", "请求", "請求", "Запросы", "リクエスト", "İstekler", "Yêu cầu", "Requisições"],
+  live: ["Live", "실시간", "Live", "En direct", "实时", "即時", "В эфире", "ライブ", "Canlı", "Trực tiếp", "Ao vivo"],
+  paused: ["Paused", "일시 정지됨", "Pausiert", "En pause", "已暂停", "已暫停", "Пауза", "一時停止中", "Duraklatıldı", "Đã tạm dừng", "Pausado"],
+  liveHint: [
+    "New requests appear every 2 seconds",
+    "2초마다 새 요청을 불러옵니다",
+    "Neue Anfragen erscheinen alle 2 Sekunden",
+    "Les nouvelles requêtes apparaissent toutes les 2 secondes",
+    "每 2 秒显示新请求",
+    "每 2 秒顯示新請求",
+    "Новые запросы появляются каждые 2 секунды",
+    "2 秒ごとに新しいリクエストを表示します",
+    "Yeni istekler 2 saniyede bir görünür",
+    "Yêu cầu mới hiện sau mỗi 2 giây",
+    "Novas requisições aparecem a cada 2 segundos",
+  ],
+  filters: ["Filters", "필터", "Filter", "Filtres", "筛选", "篩選", "Фильтры", "フィルター", "Filtreler", "Bộ lọc", "Filtros"],
+  columns: ["Columns", "열", "Spalten", "Colonnes", "列", "欄位", "Столбцы", "列", "Sütunlar", "Cột", "Colunas"],
+  columnsMenu: [
+    "Show or hide columns",
+    "표시할 열 고르기",
+    "Spalten ein- oder ausblenden",
+    "Afficher ou masquer des colonnes",
+    "显示或隐藏列",
+    "顯示或隱藏欄位",
+    "Показать или скрыть столбцы",
+    "列の表示と非表示",
+    "Sütunları göster veya gizle",
+    "Hiện hoặc ẩn cột",
+    "Mostrar ou ocultar colunas",
+  ],
+  removeFilter: [
+    "Remove filter: {name}",
+    "필터 해제: {name}",
+    "Filter entfernen: {name}",
+    "Retirer le filtre : {name}",
+    "移除筛选：{name}",
+    "移除篩選：{name}",
+    "Убрать фильтр: {name}",
+    "フィルターを解除: {name}",
+    "Filtreyi kaldır: {name}",
+    "Bỏ bộ lọc: {name}",
+    "Remover filtro: {name}",
+  ],
+  countLine: [
+    "{shown} of {total} requests",
+    "요청 {total}개 중 {shown}개",
+    "{shown} von {total} Anfragen",
+    "{shown} sur {total} requêtes",
+    "{total} 个请求中的 {shown} 个",
+    "{total} 個請求中的 {shown} 個",
+    "{shown} из {total} запросов",
+    "{total} 件中 {shown} 件",
+    "{total} istekten {shown} tanesi",
+    "{shown} / {total} yêu cầu",
+    "{shown} de {total} requisições",
+  ],
+  failedCount: ["{count} failed", "실패 {count}건", "{count} fehlgeschlagen", "{count} en échec", "{count} 个失败", "{count} 個失敗", "Ошибок: {count}", "失敗 {count} 件", "{count} başarısız", "{count} lỗi", "{count} com falha"],
+  debugLogging: ["Debug logging", "디버그 로깅", "Debug-Protokollierung", "Journalisation de débogage", "调试日志", "除錯日誌", "Отладочный журнал", "デバッグログ", "Hata ayıklama günlüğü", "Ghi log gỡ lỗi", "Registro de depuração"],
+  debugTail: ["Live tail", "실시간 로그", "Live-Protokoll", "Flux en direct", "实时日志", "即時日誌", "Журнал в реальном времени", "ライブログ", "Canlı akış", "Log trực tiếp", "Log ao vivo"],
+  debugLines: ["{count} lines", "{count}줄", "{count} Zeilen", "{count} lignes", "{count} 行", "{count} 行", "Строк: {count}", "{count} 行", "{count} satır", "{count} dòng", "{count} linhas"],
+  debugStream: ["Stream", "스트림", "Stream", "Flux", "数据流", "資料流", "Поток", "ストリーム", "Akış", "Luồng", "Fluxo"],
+} satisfies Record<string, Row>;
+
+export const logsV2Copy = copyTable("logsV2", rows);

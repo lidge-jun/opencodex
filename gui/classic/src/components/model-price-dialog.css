@@ -1,0 +1,58 @@
+/* Keep the dialog's title and actions reachable while its long form scrolls. */
+.model-price-dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 16vh);
+}
+.model-price-dialog > .modal-head,
+.model-price-dialog > .modal-actions { flex: none; }
+.model-price-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px;
+}
+.model-price-body .input { margin-bottom: 6px; }
+.model-price-body > .small { text-wrap: balance; }
+.model-price-rates-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-1-5) var(--space-3);
+}
+.model-price-rate-field { min-width: 0; }
+.model-price-rate-field .field-label { margin-bottom: var(--space-1); }
+.model-price-rate-field .input { margin-bottom: 0; }
+.model-price-mode {
+  min-width: 0;
+  margin: 12px 0 0;
+  padding: 0;
+  border: 0;
+}
+.model-price-mode > legend { padding: 0; margin-bottom: 5px; }
+.model-price-mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 0;
+  cursor: pointer;
+}
+.model-price-mode-option input { margin-top: 3px; accent-color: var(--accent); }
+.model-price-mode-option > span { display: grid; gap: 2px; min-width: 0; }
+.model-price-band {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.model-price-band-title { font-weight: var(--weight-medium); margin-bottom: 2px; }
+.model-price-custom-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-2); }
+.model-price-custom-controls .field-label { min-height: 2.5em; }
+.model-price-dialog .model-display-name-error { margin-top: 8px; }
+@media (max-width: 760px) {
+  .model-price-mode-option { min-height: 44px; }
+}
+@media (max-width: 560px) {
+  .model-price-rates-grid { grid-template-columns: 1fr; }
+  .model-price-custom-controls { grid-template-columns: 1fr; gap: 4px; }
+  .model-price-custom-controls .field-label { min-height: 0; }
+}

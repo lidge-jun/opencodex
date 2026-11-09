@@ -12,6 +12,8 @@ import {
 } from "./log";
 
 export const USAGE_LEDGER_READ_CHUNK_BYTES = 1024 * 1024;
+/** First window tried when reading one indexed row; most rows fit many times over. */
+export const USAGE_LEDGER_ROW_READ_WINDOW_BYTES = 64 * 1024;
 // Normalized writer rows carry a <=16 KiB route trace and <=500-character captured
 // upstream error, so 1 MiB leaves wide headroom even for an extreme multi-attempt row.
 // Hand-edited rows can still exceed it; those are reported separately instead of making
@@ -21,7 +23,11 @@ export const USAGE_LEDGER_BOUNDARY_DIGEST_BYTES = 64 * 1024;
 
 export interface ScanUsageLedgerOptions {
   signal?: AbortSignal;
-  onEntry: (entry: PersistedUsageEntry) => void;
+  /**
+   * Receives each complete row and the absolute byte offset it starts at, so a derived
+   * index can address the same row later without re-reading the whole ledger.
+   */
+  onEntry: (entry: PersistedUsageEntry, rowStartBytes: number) => void;
   /** Absolute LF boundary returned by a previous scan. Defaults to byte zero. */
   startAtBytes?: number;
   /** Stable path/dev/ino/birthtime identity; required when startAtBytes is nonzero. */
@@ -207,6 +213,19 @@ async function digestRangeCooperatively(
   return hash.digest("hex");
 }
 
+/** Synchronous digest of a short range; used to re-validate a 64 KiB boundary. */
+function digestRangeSync(fd: number, from: number, to: number, buffer: Buffer): string {
+  const hash = createHash("sha256");
+  for (let position = from; position < to;) {
+    const requested = Math.min(buffer.byteLength, to - position);
+    const read = readSync(fd, buffer, 0, requested, position);
+    if (read === 0) throw rebuildRequired("shrink");
+    hash.update(buffer.subarray(0, read));
+    position += read;
+  }
+  return hash.digest("hex");
+}
+
 /**
  * Cooperatively scans a full ledger or validated append suffix with bounded memory.
  *
@@ -304,7 +323,7 @@ export async function scanUsageLedgerCooperatively(
       }
     }
 
-    const publishLine = (): void => {
+    const publishLine = (rowStartBytes: number): void => {
       if (lineLength === 0 || isJsonWhitespace(line, lineLength)) return;
       let entry: PersistedUsageEntry | undefined;
       try {
@@ -318,7 +337,7 @@ export async function scanUsageLedgerCooperatively(
         invalidRows += 1;
         return;
       }
-      options.onEntry(entry);
+      options.onEntry(entry, rowStartBytes);
       parsedRows += 1;
     };
 
@@ -360,6 +379,7 @@ export async function scanUsageLedgerCooperatively(
 
         if (newline < 0 || newline >= read) break;
         linesSinceYield += 1;
+        const rowStartBytes = processedThroughBytes;
         processedThroughBytes = chunkStart + newline + 1;
         if (pendingLineBytes + 1 >= USAGE_LEDGER_BOUNDARY_DIGEST_BYTES) {
           committedTail.reset();
@@ -371,7 +391,7 @@ export async function scanUsageLedgerCooperatively(
         if (droppingOversizedLine) {
           droppingOversizedLine = false;
         } else {
-          publishLine();
+          publishLine(rowStartBytes);
         }
         lineLength = 0;
         cursor = newline + 1;
@@ -443,6 +463,227 @@ export async function scanUsageLedgerCooperatively(
       processedThroughBytes,
       processedThroughDigest,
     };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export interface ReadUsageLedgerRowsOptions {
+  /** Ascending, distinct row-start offsets reported by an earlier scan of the same file. */
+  offsets: readonly number[];
+  /** Identity those offsets were captured under; a replaced file invalidates all of them. */
+  expectedIdentityKey: string;
+  /** Revision the offsets were captured under. Any movement re-validates the boundary. */
+  expectedRevisionKey?: string;
+  /** Snapshot boundary the offsets belong to; every offset must fall before it. */
+  expectedProcessedThroughBytes?: number;
+  /** Trailing digest at that boundary, verified when the revision moved. */
+  expectedProcessedThroughDigest?: string;
+  /**
+   * Physical file size when the snapshot was published. A torn suffix makes this larger than
+   * the processed boundary, so growth is measured against it rather than the boundary.
+   */
+  expectedFileSize?: number;
+  signal?: AbortSignal;
+}
+
+export interface UsageLedgerRowRead {
+  entries: PersistedUsageEntry[];
+  /** Offsets that no longer frame a complete, normalizable row. */
+  unreadableOffsets: number[];
+}
+
+/**
+ * Re-reads only the rows a derived index selected, addressed by their recorded byte offsets.
+ *
+ * This is the read half of the offset index: the caller already knows which rows match, so a
+ * filtered query pays to decode and normalize its candidates instead of the whole ledger. Every
+ * bound still belongs to this scanner -- the 1 MiB row ceiling, the opened-file identity, and the
+ * refusal to publish a torn final row -- because an offset reader with its own limits would be a
+ * second storage policy.
+ *
+ * A row that no longer parses at its recorded offset means the index and the ledger disagree;
+ * the caller is expected to drop the index and rebuild rather than serve a partial answer.
+ */
+export async function readUsageLedgerRowsAtOffsets(
+  options: ReadUsageLedgerRowsOptions,
+): Promise<UsageLedgerRowRead> {
+  throwIfAborted(options.signal);
+  const path = usageLogPath();
+  let fd: number;
+  try {
+    fd = openSync(path, "r");
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      // An empty selection against a missing ledger is an empty installation. A non-empty
+      // selection against one means the projection outlived its source.
+      if (options.offsets.length === 0
+        && options.expectedIdentityKey === usageLogIdentityKey(null)) {
+        return { entries: [], unreadableOffsets: [] };
+      }
+      throw rebuildRequired("identity_mismatch");
+    }
+    throw error;
+  }
+
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const window = Buffer.allocUnsafe(USAGE_LEDGER_ROW_READ_WINDOW_BYTES);
+  // One byte past the ceiling: a row of exactly USAGE_LEDGER_MAX_LINE_BYTES is accepted by the
+  // scanner, so its terminating LF has to fit too.
+  const row = Buffer.allocUnsafe(USAGE_LEDGER_MAX_LINE_BYTES + 1);
+  let windowStart = -1;
+  let windowLength = 0;
+
+  try {
+    const openedRevision = revisionFromStat(path, fd, fstatSync(fd));
+    if (usageLogIdentityKey(openedRevision) !== options.expectedIdentityKey) {
+      throw rebuildRequired("identity_mismatch");
+    }
+    const size = openedRevision.size;
+    const boundary = options.expectedProcessedThroughBytes;
+    if (boundary !== undefined) {
+      if (size < boundary) throw rebuildRequired("shrink");
+      for (const offset of options.offsets) {
+        // An offset at or past the boundary belongs to a different snapshot than the one the
+        // caller validated.
+        if (offset < 0 || offset >= boundary) throw rebuildRequired("content_changed");
+      }
+    }
+    // The revision moved since the index snapshot: verify the boundary the offsets were
+    // captured at before trusting any of them. A same-size rewrite of that tail is caught
+    // here; an append past the boundary leaves it unchanged.
+    const revisionMoved = options.expectedRevisionKey !== undefined
+      && usageLogRevisionKey(openedRevision) !== options.expectedRevisionKey;
+    const physical = options.expectedFileSize ?? boundary;
+    if (revisionMoved) {
+      if (boundary === undefined || options.expectedProcessedThroughDigest === undefined) {
+        throw rebuildRequired("content_changed");
+      }
+      // Growth is measured against the snapshot's physical size, not the processed boundary: a
+      // torn suffix leaves the file larger than the boundary without being new content. A file
+      // that did not grow cannot be an append, so a moved revision is an in-place rewrite and
+      // the trailing digest cannot see one earlier than its 64 KiB window.
+      if (physical === undefined || size <= physical) throw rebuildRequired("content_changed");
+      const digest = digestRangeSync(
+        fd,
+        Math.max(0, boundary - USAGE_LEDGER_BOUNDARY_DIGEST_BYTES),
+        boundary,
+        row,
+      );
+      if (digest !== options.expectedProcessedThroughDigest) {
+        throw rebuildRequired("content_changed");
+      }
+    }
+
+    const lineAt = (offset: number): Buffer | null => {
+      if (offset >= windowStart && offset < windowStart + windowLength) {
+        const from = offset - windowStart;
+        // Search only the bytes actually read: the rest of the buffer is uninitialized.
+        const newline = window.subarray(from, windowLength).indexOf(0x0a);
+        if (newline >= 0) return window.subarray(from, from + newline);
+        // The cached window ends without a newline; a torn suffix has no complete row.
+        if (windowStart + windowLength >= size) return null;
+      }
+      const requested = Math.min(window.byteLength, size - offset);
+      if (requested <= 0) return null;
+      const read = readSync(fd, window, 0, requested, offset);
+      if (read <= 0) return null;
+      windowStart = offset;
+      windowLength = read;
+      const newline = window.subarray(0, read).indexOf(0x0a);
+      if (newline >= 0) return window.subarray(0, newline);
+      // The row spans more than one window: copy the prefix and grow up to the row ceiling.
+      window.copy(row, 0, 0, read);
+      let length = read;
+      while (length <= USAGE_LEDGER_MAX_LINE_BYTES) {
+        const want = Math.min(row.byteLength - length, size - offset - length);
+        if (want <= 0) return null;
+        const more = readSync(fd, row, length, want, offset + length);
+        if (more <= 0) return null;
+        const found = row.subarray(length, length + more).indexOf(0x0a);
+        if (found >= 0) {
+          windowStart = -1;
+          windowLength = 0;
+          return row.subarray(0, length + found);
+        }
+        length += more;
+      }
+      return null;
+    };
+
+    const walk = (visit: (bytes: Buffer, offset: number) => boolean): number[] => {
+      const unreadableOffsets: number[] = [];
+      for (const offset of options.offsets) {
+        throwIfAborted(options.signal);
+        if (!Number.isSafeInteger(offset) || offset < 0 || offset >= size) {
+          unreadableOffsets.push(offset);
+          continue;
+        }
+        const bytes = lineAt(offset);
+        if (!bytes) {
+          unreadableOffsets.push(offset);
+          continue;
+        }
+        if (!visit(bytes, offset)) unreadableOffsets.push(offset);
+      }
+      return unreadableOffsets;
+    };
+
+    const entries: PersistedUsageEntry[] = [];
+    const captured = createHash("sha256");
+    const unreadableOffsets = walk((bytes, offset) => {
+      captured.update(bytes);
+      captured.update("\0");
+      captured.update(String(offset));
+      let entry: PersistedUsageEntry | undefined;
+      try {
+        entry = normalizePersistedUsageRow(JSON.parse(decoder.decode(bytes)));
+      } catch {
+        entry = undefined;
+      }
+      // The index only holds rows the scanner normalized. A candidate that no longer parses or
+      // normalizes means the ledger moved under the projection, so it is unreadable rather than
+      // silently dropped: the caller rebuilds instead of reporting a smaller complete result.
+      if (!entry) return false;
+      entries.push(entry);
+      return true;
+    });
+    const capturedDigest = captured.digest("hex");
+
+    throwIfAborted(options.signal);
+    const endingRevision = revisionFromStat(path, fd, fstatSync(fd));
+    if (usageLogIdentityKey(endingRevision) !== options.expectedIdentityKey) {
+      throw rebuildRequired("identity_mismatch");
+    }
+    if (endingRevision.size < size) throw rebuildRequired("shrink");
+    const pathRevision = currentUsageLogRevision();
+    if (!pathRevision || usageLogIdentityKey(pathRevision) !== options.expectedIdentityKey) {
+      throw rebuildRequired("identity_mismatch");
+    }
+    // Any write during the read can be an in-place rewrite, not just an append. Re-read the
+    // same offsets and compare, so a rewrite that lands between two batches cannot publish a
+    // mixture of old and new rows. A pure append leaves every selected row unchanged.
+    const mutated = usageLogRevisionKey(endingRevision) !== usageLogRevisionKey(openedRevision)
+      || usageLogRevisionKey(pathRevision) !== usageLogRevisionKey(openedRevision);
+    if (mutated) {
+      // A write that did not grow the file is an in-place rewrite. Re-reading the selected rows
+      // cannot see a rewrite that turns a non-candidate into a match, so this must rebuild.
+      if (physical !== undefined && endingRevision.size <= physical) {
+        throw rebuildRequired("content_changed");
+      }
+      const verified = createHash("sha256");
+      const recheck = walk((bytes, offset) => {
+        verified.update(bytes);
+        verified.update("\0");
+        verified.update(String(offset));
+        return true;
+      });
+      if (recheck.length !== unreadableOffsets.length
+        || verified.digest("hex") !== capturedDigest) {
+        throw rebuildRequired("content_changed");
+      }
+    }
+    return { entries, unreadableOffsets };
   } finally {
     closeSync(fd);
   }

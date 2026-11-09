@@ -1,4 +1,4 @@
-import type { UpstreamHttpVersion, ReasoningSummaryDelivery, CodexAccountMode } from "./wire";
+import type { UpstreamHttpVersion, ReasoningSummaryDelivery, CodexAccountMode, ThinkingDisplayPolicy } from "./wire";
 import type { AccountAutoPausePolicy, AccountPauseDetails } from "./account-auto-pause";
 import type { AnthropicAccountPoolConfig } from "./anthropic-account-pool";
 
@@ -294,6 +294,8 @@ export interface ModelCapabilities extends ReasoningCapabilities {
   video?: { processing?: "static" | "agentic" };
   /** Opt in exact first-party DeepSeek models to one-hour image file persistence. */
   deepseekImageFiles?: boolean;
+  /** Images a first-party Mistral Chat request may carry for this model; older ones are pruned. */
+  mistralMaxImages?: number;
 }
 
 /**
@@ -435,6 +437,14 @@ export interface OcxProviderConfig {
   /** Exact upstream model ids that override the provider-level service-tier capability. */
   modelSupportsServiceTier?: Record<string, boolean>;
   /**
+   * Whether to promote Codex Desktop's `additional_tools` input items into top-level `tools`
+   * and strip the wrapper from `input`. Enabled automatically for OpenCode Go and xAI
+   * (`api.x.ai` and `cli-chat-proxy.grok.com`) except on forward-auth routes, which need an
+   * explicit `true`; other strict gateways that return HTTP 422 for unknown item types in
+   * `input` can opt in here.
+   */
+  promoteAdditionalTools?: boolean;
+  /**
    * Responses upstream whose native contract accepts plaintext reasoning replay
    * (DeepSeek documents reasoning items with plaintext content). When set, the
    * passthrough serializer keeps `reasoning_text` content on replayed reasoning
@@ -480,6 +490,8 @@ export interface OcxProviderConfig {
    * reasoning output items when they are sent back on a continuation.
    */
   dropResponsesReasoningItems?: boolean;
+  /** Exact Ark Kimi endpoint IDs requiring the narrow stateless Responses replay projection. */
+  arkKimiResponsesModels?: string[];
   /**
    * Explicit opt-in for a relay that genuinely fronts OpenAI and can decode native
    * compaction blobs. Absent or false degrades foreign blobs to an opaque note.
@@ -832,6 +844,14 @@ export interface OcxProviderConfig {
    */
   modelReasoningSummaryDelivery?: Record<string, ReasoningSummaryDelivery>;
   /**
+   * Anthropic adaptive `thinking.display` policy for this provider (#8363). `auto` and omission
+   * keep the built-in selection: native Opus 5.5 progress updates, summarized thinking elsewhere.
+   * `updates` is only sendable to native Opus 5.5 and degrades to `auto` for other models.
+   */
+  thinkingDisplay?: ThinkingDisplayPolicy;
+  /** Per-model override of `thinkingDisplay`, keyed by the exact upstream model id. */
+  modelThinkingDisplay?: Record<string, ThinkingDisplayPolicy>;
+  /**
    * Exact-model hosted tools that win collisions with Codex client tool declarations.
    * Use for non-forward Responses gateways that reserve a hosted tool namespace server-side.
    */
@@ -1011,6 +1031,8 @@ export interface OcxProviderConfig {
    * keeps its slot in the conversation.
    */
   foldDeveloperRoleToSystem?: boolean;
+  /** Merge text-only Chat instruction messages into one leading system message. LM Studio seeds true. */
+  singleLeadingSystemMessage?: boolean;
   /**
    * Opt-in: forward `prompt_cache_key` to the upstream `/chat/completions` body.
    * OpenAI-specific extension; strict backends (Groq, Cerebras, etc.) reject unknown

@@ -43,6 +43,7 @@ GUI에서 등록이나 OAuth 로그인을 마치면 Models 페이지로 이동�
 | `providers` | `Record<string, OcxProviderConfig>` | — | 공급자 이름을 공급자 설정에 매핑합니다. |
 | `openaiProviderTierVersion?` | `2` | 마이그레이션으로 설정됨 | 옵션을 인식하는 단일 OpenAI 투영이 완료되었음을 표시합니다. |
 | `disabledModels?` | `string[]` | — | Codex catalog와 `/v1/models`에서는 숨기지만 직접 proxy 호출은 차단하지 않습니다. routed id는 목록에서 제거됩니다. account-qualified native id는 해당 selector row만 숨기고, bare native GPT id는 bare row와 그 model의 모든 account-selector row를 숨깁니다. Models 페이지에는 bare native 행과 routed 행만 표시됩니다. selector-qualified 행 하나만 숨기려면 이 설정 필드에 직접 추가하세요. |
+| `omitDisabledNativeModels?` | `boolean` | `false` | 기본값은 `false`입니다. `config.json`에 `"omitDisabledNativeModels": true`를 설정하고 `ocx sync`를 실행하면 비활성화한 native 행을 catalog와 cache, Codex 형식의 HTTP 모델 목록에서 제외합니다. 제외 전 검증한 상속 템플릿을 보존하므로 routed 행의 메타데이터는 유지되며 직접 요청의 라우팅은 바뀌지 않습니다. |
 | `providerContextCaps?` | `Record<string, number>` | `{}` | 공급자별 활성 컨텍스트 상한입니다. 일반 윈도는 줄어들며, 장문 윈도를 지원하는 네이티브 모델은 해당 모델의 지원 상한까지만 확장할 수 있습니다. |
 | `providerContextCapValues?` | `Record<string, number>` | `{}` | 공급자별로 마지막에 선택한 상한입니다. 꺼도 선택값이 남으며, 저장된 값만으로는 상한이 활성화되지 않습니다. 활성 값이 저장된 선택값보다 우선합니다. |
 | `contextCapValue?` | `number` | `350000` | 처음 켤 때 쓰는 기본값입니다. 다시 켜면 공급자별 선택값을 복원합니다. `setAll: true`와 함께 전역 값을 바꾸면 활성 상한만 갱신합니다. 값 없이 `setAll: true`를 보내면 설정된 모든 공급자의 상한을 현재 전역 값으로 켭니다. |
@@ -52,9 +53,9 @@ GUI에서 등록이나 OAuth 로그인을 마치면 Models 페이지로 이동�
 | `codexAccountPickerEnabled?` | `boolean` | map이 비어 있으면 꺼짐 | 유효한 `codexAccountNamespaces` 매핑에서 account-qualified Codex 선택기 행을 생성할지 제어합니다. `true`는 매핑된 행의 표시를 허용합니다. 비어 있지 않은 map에서 생략하면 이전 버전과의 호환성을 위해 활성화된 것으로 취급되며, map이 비어 있으면 꺼집니다. `false`는 매핑을 삭제하거나 명시적 `<selector>/<native-openai-model>` 라우팅을 비활성화하지 않은 채 생성 행을 숨기고 선택기에 bare native 행을 복원합니다. |
 | `activeCodexAccountId?` | `string` | — | 다음 요청에 수동으로 선택한 Pool 계정입니다. 선택하면 thread 결속이 해제되며, 진행 중인 요청은 캡처한 자격 증명을 유지합니다. |
 | `codexAccountPriorities?` | `Record<string,number>` | — | Codex pool의 계정별 선택 순서. 계정 ID → `-100`부터 `100`까지의 정수이며 **값이 클수록 먼저** 쓰이고, 항목이 없으면 `0`입니다. 이는 eligibility 경계가 아니라 순서 경계입니다. 선택은 이미 적격한 계정들을 quota 여유가 남은 최상위 tier로 좁히고, 그 tier 안에서 `accountPoolStrategy`가 계정을 고릅니다. tier를 건너뛰는 경우는 그 구성원 전부가 자신의 0이 아닌 유효 임계값(계정별 재정의 또는 전역 기본값) 이상, cooldown, soft-avoid, 일시 중지 또는 재인증 대기일 때뿐이며, usage를 알 수 없다고 해서 tier가 소진되지는 않습니다. 순서는 부적격 계정을 선택 가능하게 만들지 않고, 이미 계정에 묶인 thread를 다시 bind하지도 않습니다. 메인 `__main__` 계정도 동일한 조건으로 참여하므로 Codex Desktop 로그인을 마지막에 쓰도록 둘 수 있습니다. 항목이 하나도 없으면 동작은 이전과 같습니다. map이 잘못된 경우 경고를 출력하고 순서 지정을 끕니다(config 복구는 하지 않습니다). `ocx account priority`와 Codex Auth 페이지에서 관리합니다. |
-| `autoSwitchThreshold?` | `number` | `80` | 사용량 기반 선제 전환 임계값입니다. `quota`는 바인딩 없는 작업의 다음 요청을 재평가할 수 있습니다. 바인딩된 작업은 기본값(`pool.cacheAffinity`)에서 이 임계값을 넘어도 계정을 유지하며, 해당 계정이 소진되었거나 더 이상 처리할 수 없을 때에만 떠나고, 그때도 실제 quota 여유가 있고 usage가 더 낮은 계정으로만 옮깁니다. `pool.cacheAffinity: false`로 두면 임계값에서 바인딩된 작업도 재평가합니다. `fill-first`는 바인딩 없는 작업 배정의 소진 기준으로만 사용하며, 기본 `round-robin` 선택은 이 값을 사용하지 않습니다. 알려진 5시간, 주간, 30일 quota window 중 가장 높은 점수를 씁니다. `0`은 사용량 기반 전환만 끄며 바인딩 없는 작업 배정이나 실패 복구는 끄지 않습니다. |
+| `autoSwitchThreshold?` | `number` | `80` | 사용량 기반 선제 전환 임계값입니다. `quota`는 바인딩 없는 작업의 다음 요청을 재평가할 수 있습니다. 바인딩된 작업은 기본값(`pool.cacheAffinity`)에서 이 임계값을 넘어도 계정을 유지하며, 해당 계정이 소진되었거나 더 이상 처리할 수 없을 때에만 떠나고, 그때도 실제 quota 여유가 있고 usage가 더 낮은 계정으로만 옮깁니다. `pool.cacheAffinity: false`로 두면 임계값에서 바인딩된 작업도 재평가합니다. `fill-first`는 바인딩 없는 작업 배정의 소진 기준으로만 사용하며, `round-robin`은 새/바인딩 없는 작업 배정에만 사용하며 임계값 미만인 적격 계정이 남아 있는 동안 유효 임계값 이상인 계정을 건너뛰고 이 때문에 바인딩된 작업을 옮기지 않습니다. 알려진 5시간, 주간, 30일 quota window 중 가장 높은 점수를 씁니다. `0`은 사용량 기반 전환만 끄며 바인딩 없는 작업 배정이나 실패 복구는 끄지 않습니다. |
 | `codexAccountAutoSwitchThresholds?` | `Record<string,number>` | — | 계정별 `autoSwitchThreshold` 재정의입니다(계정 ID → `0`~`100` 정수). 항목이 없으면 전역 값을 상속하고, `0`은 해당 계정에서 시작하는 사용량 기반 전환만 끕니다. 메인 `__main__` 계정도 지원합니다. Codex Auth의 계정 카드에서 관리합니다. 재정의를 켜면 현재 전역 임계값을 고정된 계정별 값으로 복사합니다. `0`을 포함한 재정의 값은 이후 전역 값이 바뀌어도 우선합니다. 끄면 `threshold: null`을 보내 항목을 삭제하고 현재 전역 임계값과 향후 변경 사항을 상속하는 상태로 돌아갑니다. |
-| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-first"` | `"quota"` | 새 작업/바인딩 없는 Codex 요청의 계정 배정 전략입니다. `(parent thread id, quota scope)`의 live affinity가 없으면 바인딩 없는 요청이며, 프록시 재시작이나 affinity 초기화 뒤에는 기존에 보이던 작업도 바인딩이 없어질 수 있습니다. `quota`는 활성 계정이 없을 때 알려진 usage가 가장 낮은 적격 계정을 선택하고, 적격 활성 계정이 `autoSwitchThreshold` 미만이면 유지합니다. 임계값 도달 뒤에는 바인딩 없는 요청을 옮길 수 있습니다. 바인딩된 작업은 기본값에서 계정이 소진되었거나(알려진 usage 100%) 더 이상 처리할 수 없을 때까지 유지되며, 떠날 때는 실제 quota 여유가 있고 usage가 더 낮은 계정으로만 옮깁니다. 플래그를 끄면 임계값에서 바인딩된 작업의 다음 요청도 실제 quota 여유가 있고 usage가 더 낮은 적격 계정으로 옮길 수 있습니다. `round-robin`은 바인딩 없는 요청을 균등 분배하고, `fill-first`는 cooldown, 사용 불가 또는 drain threshold까지 활성 계정에 배정합니다.  `reset-first`: 사용량 임계값 미만인 계정 중 다음 5시간·주간 초기화가 가장 가까운 계정을 고릅니다. 연결된 작업은 설정된 어피니티 정책을 따릅니다. 독립 모델 한도에는 사용량 순서를 적용합니다. 월간 초기화는 이 순서에 사용하지 않습니다. |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-first"` | `"quota"` | 새 작업/바인딩 없는 Codex 요청의 계정 배정 전략입니다. `(parent thread id, quota scope)`의 live affinity가 없으면 바인딩 없는 요청입니다. 세션 ID가 있는 요청(일반적인 Codex CLI 및 App 턴과 서브에이전트 포함)이나 바로 위 부모에 연결된 세션 없는 요청의 바인딩은 종료 시 마지막 affinity 저장이 성공하면 프록시를 정상적으로 재시작해도 최대 24시간의 유휴 기간 동안 유지될 수 있습니다. 더 깊은 세션 없는 체인과 Codex App의 주 로그인에 대한 바인딩은 메모리에만 남으며 재시작 후 다시 배정됩니다. eviction, 계정 삭제, 재로그인, 충돌 또는 affinity 초기화로 작업이 바인딩 없는 상태가 될 수 있습니다. `quota`는 활성 계정이 없을 때 알려진 usage가 가장 낮은 적격 계정을 선택하고, 적격 활성 계정이 `autoSwitchThreshold` 미만이면 유지합니다. 임계값 도달 뒤에는 바인딩 없는 요청을 옮길 수 있습니다. 바인딩된 작업은 기본값에서 계정이 소진되었거나(알려진 usage 100%) 더 이상 처리할 수 없을 때까지 유지되며, 떠날 때는 실제 quota 여유가 있고 usage가 더 낮은 계정으로만 옮깁니다. 플래그를 끄면 임계값에서 바인딩된 작업의 다음 요청도 실제 quota 여유가 있고 usage가 더 낮은 적격 계정으로 옮길 수 있습니다. `round-robin`은 유효 `autoSwitchThreshold` 미만인 적격 계정에 바인딩 없는 요청을 균등 분배하고 모두 임계값 이상이면 모든 적격 계정에 분배하며, `fill-first`는 cooldown, 사용 불가 또는 drain threshold까지 활성 계정에 배정합니다.  `reset-first`: 사용량 임계값 미만인 계정 중 다음 5시간·주간 초기화가 가장 가까운 계정을 고릅니다. 연결된 작업은 설정된 어피니티 정책을 따릅니다. 독립 모델 한도에는 사용량 순서를 적용합니다. 월간 초기화는 이 순서에 사용하지 않습니다. |
 | `pool.cacheAffinity?` | `boolean` | `true` | 바인딩된 Codex 스레드의 cache-affinity 순서입니다. `pool.kernel`과는 별개이며 기본값은 켜짐입니다. 잘못된 값은 켜진 것으로 읽습니다. live 바인딩이 quota 여유보다 우선하므로 `quota`는 사용량이 `autoSwitchThreshold`를 넘었다는 이유만으로 스레드를 옮기지 않습니다. 해당 계정이 일시 중지되었거나 사용할 수 없거나 실제로 소진된 경우(알려진 usage 100%)에는 떠나되, 실제 quota 여유가 있고 usage가 더 낮은 계정으로만 옮깁니다. `false`로 두면 임계값 재바인딩이 복원됩니다. affinity는 고정이 아니라 재정렬입니다. |
 | `accountPoolStickyLimit?` | `number` | `1` | 한 round-robin 선택이 다음으로 넘어가기 전에 유지하는 새 작업/바인딩 없는 작업 배정 수입니다. 카운터는 업스트림 성공 뒤가 아니라 작업을 바인딩할 때 증가합니다. 범위 1–100이며 `accountPoolStrategy`가 `round-robin`일 때만 적용됩니다. |
 | `upstreamFailoverThreshold?` | `number` | `3` | 연속된 일시적 실패가 이 횟수에 도달하면 이후 새 세션은 failover됩니다. `0`으로 두면 비활성화됩니다. 일반 Responses와 네이티브 compact 전송에서 입증된 연결 전 DNS/TCP 도달 불가 실패는 provider-host 범위로 기록되며 계정 상태, 계정 쿨다운, 스레드/세션 선호도, 활성 계정 선택 또는 Pool 라우팅에 영향을 주지 않고 이 임계값에도 집계되지 않습니다. |
@@ -117,7 +118,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `models?` | `string[]` | 초기/폴백 모델 목록입니다. `liveModels: false`에서 `models`가 비어 있지 않으면 `models`, `retainModels` 순으로 구성합니다. `models`가 비어 있거나 생략되면 설정된 `defaultModel`, `retainModels` 순으로 구성하고, 중복 ID는 처음 나온 항목만 남깁니다. |
 | `liveModels?` | `boolean` | 시작 또는 동기화 시 라이브 카탈로그를 가져옵니다. 기본값은 `true`입니다. 사용자 지정 공급자는 `${baseUrl}/models`를 사용하고, 내장은 레지스트리 URL을 사용한 뒤 필터링할 수 있습니다. |
 | `selectedModels?` | `string[]` | 발견 후 카탈로그 허용 목록입니다. 값이 비어 있지 않으면 그 id만 노출하고, 비어 있거나 생략하면 발견된 모델을 모두 노출합니다. |
-| `modelDisplayNames?` | `Record<string, string>` | 이 공급자의 정확한 네이티브 모델 id를 키로 쓰는 영구 표시 전용 이름입니다. 키는 대소문자를 구분합니다. 이름은 공급자 카탈로그 메타데이터보다 우선하며 인증, 어댑터, 라우팅, 청구 또는 업스트림 요청을 바꾸지 않습니다. 맵은 발견 한도와 같은 최대 2,000개 항목을 가질 수 있습니다. |
+| `modelDisplayNames?` | `Record<string, string>` | 이 공급자의 정확한 네이티브 모델 id를 키로 쓰는 영구 표시 전용 이름입니다. 키는 대소문자를 구분합니다. 이름은 공급자 카탈로그 메타데이터보다 우선하며 인증, 어댑터, 라우팅, 청구 또는 업스트림 요청을 바꾸지 않습니다. 단, 직접 `provider/model` 선택자가 알려진 id, 별칭, `retainModels` 어디에도 맞지 않으면(예: 라이브 목록을 아직 받지 못한 동안) 인코딩 형태가 같은 키를 네이티브 id로 보냅니다. 맵은 발견 한도와 같은 최대 2,000개 항목을 가질 수 있습니다. |
 | `contextWindow?` | `number` | 업스트림 메타데이터가 없을 때 쓰이는 공급자 전반의 컨텍스트 값입니다. 메타데이터가 있으면 상한으로 동작해 더 작은 라이브 값을 그대로 둡니다. Models 대시보드에서 `providerContextCaps`와 별도로 설정합니다. |
 | `modelContextWindows?` | `Record<string, number>` | 모델별 컨텍스트 값이자 상한입니다. `contextWindow`보다 우선하며, 창 크기를 알 수 없으면 설정값을 쓰고 더 작은 라이브 메타데이터가 있으면 그쪽을 따릅니다. |
 | `inferContextWindow?` | `boolean` | 사용자 지정 공급자 전용이며 기본값은 꺼짐입니다. `true`이면 빠진 창을 번들 모델 메타데이터로 채웁니다. 추정값이며 중계의 실제 용량을 검증하지 않습니다. |
@@ -153,7 +154,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `noPenaltyModels?` | `string[]` | presence/frequency penalty를 허용하지 않는 모델입니다. 기본 `xai` 프리셋은 xAI 문서가 이 값을 거부한다고 밝힌 추론 모델(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)을 여기에 넣습니다. 추론이 없는 모델은 호출자가 보낸 penalty를 그대로 받습니다. |
 | `noStructuredOutputModels?` | `string[]` | `openai-chat` 엔드포인트가 `response_format`을 거부하는 정확한 모델 ID입니다. 요청 모델이 항목과 정확히 일치할 때만 필드를 생략하며, 그 외 `openai-chat` 모델에서는 structured-output 변환을 유지합니다. |
 | `noJsonSchemaModels?` | `string[]` | `openai-chat` 엔드포인트가 `json_schema` 형식은 거부하지만 `json_object`는 받는 정확한 모델 ID입니다. 이런 요청은 필드를 지우는 대신 `json_object`로 낮춰 보내므로, JSON을 요청한 클라이언트가 산문 대신 JSON을 받습니다. 한 모델이 두 목록에 모두 있으면 `noStructuredOutputModels`가 우선합니다. `opencode go`, `opencode zen` 프리셋이 DeepSeek 경로에 기본으로 싣습니다. |
-| `foldDeveloperRoleToSystem?` | `boolean` | `openai-chat` 목적지가 `developer` 역할을 받는지 기록합니다. `foldDeveloperRoleToSystem`이 없으면 `system`, `true`이면 `system`, `false`이면 `developer`로 보냅니다. 값이 없다는 것은 이 목적지에 대해 기록된 것이 없다는 뜻이고, `true`는 상위 서비스가 역할을 거부한다는 기록, `false`는 받아들인다는 기록입니다. 어느 경우에도 메시지는 대화 안의 원래 위치를 유지하며 역할만 바뀝니다. 역할을 거부하는 목적지는 `400 role 'developer' is not allowed`로 응답해 턴이 시작조차 못 하므로, 기록이 없는 상태의 기본값을 접는 쪽으로 둡니다. |
+| `foldDeveloperRoleToSystem?` | `boolean` | `openai-chat` 목적지가 `developer` 역할을 받는지 기록합니다. `foldDeveloperRoleToSystem`이 없으면 `system`, `true`이면 `system`, `false`이면 `developer`로 보냅니다. 값이 없다는 것은 이 목적지에 대해 기록된 것이 없다는 뜻이고, `true`는 상위 서비스가 역할을 거부한다는 기록, `false`는 받아들인다는 기록입니다. `singleLeadingSystemMessage`가 활성화되지 않은 경우 메시지는 대화 안의 원래 위치를 유지하며 역할만 바뀝니다. 역할을 거부하는 목적지는 `400 role 'developer' is not allowed`로 응답해 턴이 시작조차 못 하므로, 기록이 없는 상태의 기본값을 접는 쪽으로 둡니다. |
 | `parallelToolCalls?` | `boolean` | 병렬 도구 호출을 켜거나 끕니다. OpenAI Chat은 기본으로 켜져 있고, 비-chat 어댑터는 명시적으로 `true`일 때만 이를 노출합니다. |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` | 기본값이 꺼진 downstream SSE 복구입니다. 정확한 자리표시자 id, 누락된 종료 id, 그리고(`repairInvalidIds`) 정규 `msg_`/`rs_` 접두사가 없는 message/reasoning id를 복구합니다. function-call id는 다시 쓰지 않습니다. 내장 DeepSeek은 마지막 두 가지를 기본으로 켭니다. |
 | `responsesSnapshotRepair?` | `boolean` | 기본값이 꺼진 클라이언트용 복구입니다. SSE와 JSON의 Responses 수명 주기에서 누락된 status, output, 도구 메타데이터를 채우며 raw 검사와 영속화는 변경하지 않습니다. |
@@ -179,23 +180,26 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 레거시 불리언입니다. 더 새로운 필드가 설정되지 않았을 때만 `nativeLocalExec: "on"`과 같습니다. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 로컬 실행 정책입니다. 기본값은 `off`입니다. `codex-sandbox`는 현재 `off`처럼 실패를 닫습니다. |
 
+LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
+
+
 공급자 등록·교체(`POST /api/providers`)는 `responsesPath`와 `chatCompletionsPath`를 검증한 뒤 메모리와 파일의 설정을 변경합니다. `PATCH /api/providers?name=<provider>`는 요청 본문을 저장된 공급자에 병합합니다. `disabled` 외의 필드를 변경하는 업데이트(`requestPacing`만 변경하는 업데이트 제외)는 저장 전에 병합된 공급자의 경로를 같은 방식으로 검증하며, 유지된 경로가 유효하지 않으면 `400`을 반환하고 설정을 변경하지 않습니다. 설정 파일을 읽을 때도 같은 경로 규칙을 적용합니다.
 
 API 키 공급자는 리터럴 키나 환경 참조를 둘 수 있습니다. OAuth 공급자는 `ocx login`으로 채워지는 자격 증명 저장소를 사용합니다. 구독 기반 Claude Code 실행 동작은 [`claudeCode.authMode`](/ko/reference/configuration/server/#claude-code-claudecode)에서 설정합니다.
 
 ### 프로바이더 저장이 유지하는 것
 
-기존 프로바이더 이름으로 `POST /api/providers`를 보내면 저장된 행이 요청으로 만든 행으로 바뀝니다. 대시보드의 추가/편집 폼은 모든 필드를 보낼 수 없으므로, 요청이 빠뜨린 저장 필드 일부는 저장할 때 이어서 유지됩니다. 그중 여덟 가지는 특정 업스트림의 동작을 기록한 설정입니다: `preserveReasoningContentModels`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`.
+기존 프로바이더 이름으로 `POST /api/providers`를 보내면 저장된 행이 요청으로 만든 행으로 바뀝니다. 대시보드의 추가/편집 폼은 모든 필드를 보낼 수 없으므로, 요청이 빠뜨린 저장 필드 일부는 저장할 때 이어서 유지됩니다. 그중 열한 가지는 특정 업스트림의 동작을 기록한 설정입니다: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`.
 
-| 저장 | 여덟 가지 설정 | 저장된 `apiKeyPool` |
+| 저장 | 열한 가지 설정 | 저장된 `apiKeyPool` |
 | --- | --- | --- |
 | 같은 목적지, 필드 생략 | 저장된 값 유지(명시적인 `[]`나 `false` 포함) | 유지 |
 | 새 목적지, 필드 생략 | 유지하지 않음. 새 목적지의 레지스트리 기본값이 적용될 수 있음 | 유지하지 않음 |
 | 요청에 필드를 보냄 | 요청의 값 | 요청의 값 |
 
-목적지는 어댑터, 기본 URL(스킴과 호스트는 대소문자를 구분하지 않고, 끝의 슬래시는 무시), 그리고 요청이 지정한 경우 인증 모드입니다. 프로바이더를 다른 목적지로 옮기면 이전 업스트림을 설명하는 여덟 가지 설정과, 그 업스트림용으로 발급된 키 풀을 가져가지 않습니다. 저장은 이전 행의 나머지를 새 행에 병합하지 않습니다.
+목적지는 어댑터, 기본 URL(스킴과 호스트는 대소문자를 구분하지 않고, 끝의 슬래시는 무시), 그리고 요청이 지정한 경우 인증 모드입니다. 프로바이더를 다른 목적지로 옮기면 이전 업스트림을 설명하는 열 가지 설정과, 그 업스트림용으로 발급된 키 풀을 가져가지 않습니다. 저장은 이전 행의 나머지를 새 행에 병합하지 않습니다.
 
-`PATCH /api/providers?name=<provider>`는 지정한 필드만 바꾸고, 목적지와 상관없이 나머지 저장 필드는 모두 유지합니다. 여덟 가지 설정을 모두 받고, `null`로 지웁니다. 두 추론 목록에서 빈 배열은 삭제되지 않고 명시적인 옵트아웃으로 저장됩니다.
+`PATCH /api/providers?name=<provider>`는 지정한 필드만 바꾸고, 목적지와 상관없이 나머지 저장 필드는 모두 유지합니다. 열 가지 설정을 모두 받고, `null`로 지웁니다. 두 추론 목록에서 빈 배열은 삭제되지 않고 명시적인 옵트아웃으로 저장됩니다.
 
 ## 공급자 진단용 외부 요청 안전성
 
@@ -217,8 +221,7 @@ pool 계정 추가와 quota 갱신은 대시보드의 **Codex Auth** 페이지�
 구분됩니다. 바인딩된 작업은 보통 affinity를 유지합니다. 기본값(`pool.cacheAffinity`)에서는 바인딩된 계정이 소진되었거나
 더 이상 처리할 수 없을 때까지 재바인딩을 미루고, 떠날 때는 실제 quota 여유가 있고 usage가 더 낮은
 계정으로만 옮깁니다. 플래그를 끄면 `quota`가 사용량 임계값을 넘은 뒤 다음 요청에서 재바인딩할 수 있습니다. 일시 중지, cooldown, 재인증, 실패 처리도
-독립적으로 라우팅을 지우거나 바꿀 수 있습니다. 바인딩 없는 요청은 live 계정 바인딩이 없는 요청이며, 프록시 재시작이나
-affinity 초기화 뒤의 기존 작업도 포함될 수 있습니다. 출력 전 **429/402**는 사용량 기반 선제
+독립적으로 라우팅을 지우거나 바꿀 수 있습니다. 바인딩 없는 요청에는 live 계정 바인딩이 없습니다. 세션 ID가 있는 요청(일반적인 Codex CLI 및 App 턴과 서브에이전트 포함)이나 바로 위 부모에 연결된 세션 없는 요청의 바인딩은 종료 시 마지막 affinity 저장이 성공하면 프록시를 정상적으로 재시작해도 최대 24시간의 유휴 기간 동안 유지될 수 있습니다. 더 깊은 세션 없는 체인과 Codex App의 주 로그인에 대한 바인딩은 메모리에만 남으며 재시작 후 다시 배정됩니다. eviction, 계정 삭제, 재로그인, 충돌 또는 affinity 초기화로 작업이 바인딩 없는 상태가 될 수 있습니다. 출력 전 **429/402**는 사용량 기반 선제
 전환이 꺼져 있어도 같은 요청에서 적격 대체 계정으로 한 번 재시도할 수 있습니다. 계정이 바뀌어도
 대화 문맥은 보존·재생되지만 계정 간 프로바이더 측 prompt cache 재사용은 보장되지 않아 다시
 예열해야 할 수 있습니다.
@@ -233,7 +236,7 @@ affinity 초기화 뒤의 기존 작업도 포함될 수 있습니다. 출력 �
 
 **배정 및 선제 전환 전략:** `quota`(기본)는 활성 계정이 없을 때 최저 usage의 적격 계정을 선택하고,
 적격 활성 계정이 `autoSwitchThreshold` 미만이면 유지합니다. 임계값 도달 뒤에는 바인딩 없는 요청을 옮길 수 있습니다. 기본값에서 cache affinity가 quota 여유보다 우선하며, 바인딩된 작업은 계정이 소진되었거나(알려진 usage 100%) 처리할 수 없을 때까지 유지되고, 떠날 때는 실제 quota 여유가 있고 usage가 더 낮은 계정으로만 옮깁니다. usage를 모르는 계정은 바인딩된 작업의 목적지가 되지 않으며, 모든 계정이 임계값 위이면 그대로 둡니다. 플래그를 끄면 바인딩된 작업의 다음 요청도 임계값에서 옮길 수 있지만, 그때도 실제 quota 여유가 있고 usage가 더 낮은 계정으로만 갑니다.
-`round-robin`은 바인딩 없는 요청을 균등 분배하며 임계값은 기본 순환에 영향을 주지 않습니다.
+`round-robin`은 카운터 기반으로 순환합니다. 새 배정은 유효 `autoSwitchThreshold`(계정별 재정의 또는 전역 기본값, `quota`와 같은 점수) 미만인 적격 계정이 있으면 임계값 이상인 계정을 건너뜁니다. 사용량을 모르거나 임계값이 `0`이면 미만으로 취급하고 모든 적격 계정이 임계값 이상이면 모두 순환합니다. 바인딩된 작업은 임계값을 넘어도 계정을 유지하며 처리할 수 없는 경우(cooldown, quota 거부, failover, pause)에만 이동합니다. live 대화의 자식은 부모가 사용하는 계정에서 시작합니다. 공통 우선순위 계층 필터도 같은 방식으로 여유를 평가합니다. 운영자의 수동 선택은 사용량과 관계없이 각 quota 범위의 다음 배정을 가져가며, 해당 범위에서 그 계정의 요청이 성공하면 선택이 소진되어 이후 배정에는 다시 임계값이 적용됩니다.
 `accountPoolStickyLimit`(기본 `1`, 1–100)은 성공 응답이 아니라 배정/바인딩 횟수를 셉니다.
 `fill-first`는 바인딩 없는 요청을 cooldown, 재인증 또는 해당 계정의 유효 drain threshold(계정별 재정의 또는 전역 기본값)까지 활성 계정에 배정하고,
 정상적인 바인딩 작업은 affinity를 유지합니다. 이 전략들은 provider enforcement를 우회하지 않으며
@@ -246,9 +249,9 @@ affinity 초기화 뒤의 기존 작업도 포함될 수 있습니다. 출력 �
 | 키 | 타입 | 기본값 | 설명 |
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | sticky 세션 결속과 사용량 기반 새 세션 선택을 켭니다. **429 failover는 여기서 제어되지 않습니다**: 쓸 수 있는 계정이 둘 이상이면 다른 다중 자격 증명 제공자와 똑같이 자동으로 켜지며, 끌 수 없습니다. |
-| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | 새 세션에서는 활성 계정이 이 임계값에 도달하면 설정된 창의 알려진 캐시 사용량이 가장 낮은 계정을 고릅니다. `0`이면 quota 선택을 끕니다. |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 새 세션 전략입니다. `quota`는 `quotaWindow`로 지정한 창(기본값은 5시간 막대)으로 계정 순위를 매기고, `fill-first`도 같은 창에서 소진 임계값을 판정합니다. |
-| `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | 사용량 기반 계정 선택에 사용하는, 공급자가 보고한 캐시 사용률 막대입니다. `five-hour`는 기존 동작을 유지합니다. `weekly`는 주간 막대를 사용하며 다른 사용 가능한 계정이 남아 있을 때만 5시간 막대가 소진된 계정을 건너뛰고, 아무 계정도 남지 않으면 해당 계정으로 폴백합니다. `max-utilization`은 알려진 값 중 가장 높은 값을 사용하므로 주간 사용량을 알기 전에도 5시간 사용량을 쓸 수 있고, 둘 다 모르면 unknown 순서를 따릅니다. 알려진 사용량은 unknown보다 앞서지만, 사용 가능한 계정이 모두 unknown이어도 사용 가능한 순서의 계정을 선택합니다. 앞서 설명한 5시간 사용량 동점 판정 뒤에도 완전히 같으면 사용 가능한 순서를 유지합니다. 정상 affinity 세션을 선제적으로 재배치하지 않습니다. 새 세션 배정과 가능한 429 대체 이후 라우팅 복구에서 `quota`는 이 창으로 사용 가능한 후보의 순위를 직접 매기고, `fill-first`는 이 창의 임계값과 소진 규칙에 따라 안정 순서로 이동하며, `round-robin`은 이 설정을 무시합니다. 쿨다운, failover 한도, 재인증 가능 여부는 별도의 로컬 상태로 유지됩니다. 계정별 주간 막대는 대시보드의 프로바이더 페이지에서 조회한 뒤에만 알 수 있습니다. |
+| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | 새 세션에서 활성 계정이 이 임계값에 도달하면 설정된 창의 알려진 캐시 사용량이 가장 낮은 계정을 선택하며, 자체 임계값 미만인 계정을 우선합니다. 선택된 계정 자체가 임계값 이상일 필요는 없습니다. `0`은 사용량 기반 선제 전환만 끄며 새 세션 선택과 적격 429 이후 복구는 여전히 `quotaWindow`를 참조합니다. |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 새 세션 전략입니다. `quota`는 `quotaWindow` 사용량이 유효 `autoSwitchThreshold`(기본 80)에 도달하거나 처리할 수 없을 때까지 활성 계정을 유지한 뒤 자체 임계값 미만 계정을 우선하여 사용량이 가장 적은 계정으로 이동합니다. 사용량을 모르면 활성 계정을 유지합니다. `round-robin`은 사용량 임계값을 읽지 않고 새 세션을 순환합니다. `fill-first`는 `quotaWindow`에서 소진 임계값을 평가합니다. |
+| `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | 사용량 기반 계정 선택에 사용하는, 공급자가 보고한 캐시 사용률 막대입니다. `five-hour`는 기존 동작을 유지합니다. `weekly`는 주간 막대를 사용하며 다른 사용 가능한 계정이 남아 있을 때만 5시간 막대가 소진된 계정을 건너뛰고, 아무 계정도 남지 않으면 해당 계정으로 폴백합니다. `max-utilization`은 알려진 값 중 가장 높은 값을 사용하므로 주간 사용량을 알기 전에도 5시간 사용량을 쓸 수 있고, 둘 다 모르면 unknown 순서를 따릅니다. 알려진 사용량은 unknown보다 앞서지만, 사용 가능한 계정이 모두 unknown이어도 사용 가능한 순서의 계정을 선택합니다. 앞서 설명한 5시간 사용량 동점 판정 뒤에도 완전히 같으면 사용 가능한 순서를 유지합니다. 정상 affinity 세션을 선제적으로 재배치하지 않습니다. `quota`가 대체 계정을 고를 때(활성 계정이 임계값에 도달했거나 처리할 수 없는 새 세션 또는 적격 429 이후 복구) 자체 임계값 미만 후보를 우선하고 이 창으로 순위를 매기며, `fill-first`는 이 창의 임계값과 소진 규칙에 따라 안정 순서로 이동하며, `round-robin`은 이 설정을 무시합니다. 쿨다운, failover 한도, 재인증 가능 여부는 별도의 로컬 상태로 유지됩니다. 계정별 주간 막대는 사용량 프로브나 관측된 응답 헤더에서 얻습니다. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | 성공한 새 세션 결속이 한 번의 라운드로빈 선택에 유지되는 횟수입니다. 범위는 1–100입니다. |
 
 공유 5시간/주간 할당량의 거부가 확인된 429만 계정 쿨다운과 전환을 유발합니다. 일시적인 속도 제한은 affinity를 유지하며 해당 계정의 전송만 잠시 중지합니다. 요청마다 짧은 동일 계정 재시도 한 번과 적격한 다른 계정 전환 한 번까지만 허용됩니다. 근거 헤더가 없는 429는 동일 계정에서 한 번만 짧게 재시도하며 계정 상태를 냉각하지 않고 Retry-After를 만들어 붙이지 않습니다. 기본 단일 계정 동작은 유지됩니다. Fable 전용 거부는 Sonnet을 제한하지 않습니다. 수동 선택과 affinity도 요청 모델의 공유/계열 할당량을 확인합니다. 수동 조회가 아닌 응답 헤더의 계열 근거는 30분 또는 알려진 리셋 시각에 만료되며 요청 하나로 재확인합니다. 사용량 임계값은 소프트 선호이고 모든 후보가 소진되면 기존 폴백을 유지합니다. 사용량 또는 결제 하드 캡이 아닙니다. 결속은 프로세스 로컬이며 크기가 제한됩니다. 토큰 갱신 실패는 기존 재인증 규칙을 따릅니다. 확인된 구독 또는 계정 결제 403은 출력 전에 다른 계정으로 전환하며 `Retry-After` 또는 기본 10분 동안 냉각합니다. 일반 권한 거부는 전환하지 않습니다. 적격한 계정이 모두 쿨다운 중이면, 클라이언트는 인증 오류가 아니라 알려진 경우 `Retry-After`가 포함된 429를 받습니다.
@@ -516,7 +519,9 @@ Vercel AI Gateway는 하나의 모델을 여러 기반 추론 공급자에 걸�
 적용된 재정의와 여전히 일치할 때만 원래 네이티브 이름을 복원합니다. 외부에서 변경된 표시 이름도 기존 네이티브 메타데이터 정규화 규칙을 따릅니다.
 예를 들어 Astra (`gpt-6-astra`)는 고정된 네이티브 이름과 다른 이름을 여전히 그 고정 이름으로 교체합니다.
 표시 이름 재정의는 모델 ID, 기능을 포함한 메타데이터, 정렬 순서, 라우팅된 콤보 별칭 및 계정 선택자가 붙은 항목을 바꾸지 않습니다.
-이 로컬 카탈로그 재정의는 HTTP 모델 목록이나 가상 `*-pro` 항목의 이름을 바꾸지 않습니다.
+`GET /api/models`도 접두사 없는 네이티브 행에 비어 있지 않은 재정의 이름을 반환하므로 클라이언트 내보내기와 `ocx opencode`가 이 이름을 사용합니다.
+OpenCode는 `sol (native)`처럼 기존 접미사를 유지합니다. `ocx opencode`를 다시 실행하거나 관리형 통합을 새로 고치면 생성된 설정에 반영됩니다.
+재정의가 없을 때의 이름, `/v1/models`, 가상 `*-pro` 항목은 바뀌지 않습니다.
 
 프리뷰 GPT-5.6 폴백 항목도 같은 메커니즘을 사용합니다. OpenAI API 키 프리셋은 base와 Pro id에 컨텍스트 `1050000`, 최대 입력 `922000`을 채웁니다. OpenRouter는 `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`에 컨텍스트 `1050000`을 채웁니다. 네이티브 Pool/Direct 창은 [예약된 OpenAI 공급자 정책](/reference/configuration/providers/#reserved-openai-providers)을 따릅니다. 동기화된 카탈로그는 `xhigh`를 구분한 채 `max`를 노출합니다.
 

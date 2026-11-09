@@ -32,6 +32,7 @@ description: 提供方配置、凭据、配额，以及模型目录命令。
 | `quota` | `--refresh`, `--json` | 读取提供方配额报告。 |
 | `presets` | `--json` | 列出仪表盘提供方预设。 |
 | `account-mode` | `pool`, `direct`, `--json` | 选择 Codex 账号的池化或直连路由。 |
+| `import-cc-switch` | `--source <FILE>`, `--provider <id>`, `--apply`, `--restore`, `--allow-private-network`, `--json` | 从 CC-Switch SQLite（`cc-switch.db`）或旧版 JSON 文件预览、选择性应用或恢复无密钥提供商条目。 |
 
 默认的 `add`、`remove` 和 `set-default` 修改本地配置。修改运行中的代理需加 `--live`，在线删除还需 `--yes`。`--sync --json` 同样会在保存后尝试同步；失败时保留保存结果，以非零状态退出，并返回 `needsSync: true`。`--live` 不能与 `--sync` 同用。pacing 和 snapshot/apply 操作见[英文指南](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline)。
 
@@ -61,6 +62,27 @@ ocx models live --provider ark --json
 
 任何机密内容请使用 `--api-key` 或 OAuth 登录。
 :::
+
+### 无密钥导入 CC-Switch 提供商
+
+```bash
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db
+ocx stop
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db --provider my-provider --apply
+# 在另一个终端启动代理（或运行 ocx ensure），再添加密钥：
+ocx start
+printf '%s\n' "$API_KEY" | ocx account add-key my-provider
+
+# 独立的回滚路径（先停止代理；仅移除未修改的无密钥条目）：
+ocx stop
+ocx provider import-cc-switch --restore
+```
+
+`ocx provider import-cc-switch` 仅从普通本地 CC-Switch SQLite 数据库或旧版 JSON 文件中投射显式白名单内的非机密元数据字段（提供商 ID、应用类型、base URL、协议适配器与默认模型）。为扫描输入会临时读取源文件与内嵌配置字节，但密钥/凭据字段、自由文本显示名称与 TOML 注释会在字节层跳过，绝不解码为字符串、写入磁盘或记录日志，且临时字节缓冲区会在 `finally` 中清零。窄化 base URL 路径规则（`http(s)://host[:port]` 配空路径或 1–4 个小写 `[a-z0-9._-]` API 路径段，如 `/v1`、`/api/v1` 或 `/compatible-mode/v1`）与标识符/模型语法校验仅作为纵深防御并拒绝不合规值（不回显原值）。源文件通过 `O_NOFOLLOW | O_NONBLOCK` 描述符校验单次打开，SQLite 在内存中只读反序列化且不写入临时文件；具有多个硬链接（`nlink > 1`）的 SQLite 文件会被拒绝以防通过别名路径绕过伴随文件检查，若同级 `-wal` 或 `-journal` 文件非空则会拒绝导入并提示先关闭 CC-Switch（或执行数据库 checkpoint）再重试。请仅从受信任的本地 CC-Switch 源文件导入，并在添加凭据前核对输出的每个 ID、模型与 `baseUrl`：
+
+- **预览（默认）：** 需要 `--source <FILE>`，不写入任何内容，报告发现、可用、冲突与无效条目数量。
+- **应用（`--apply`）：** 需要 `--source <FILE>` 且代理已停止（`ocx stop`），在 Remote Link Child 上会被拒绝。重复指定 `--provider <id>` 可仅导入所选条目，传入 `--allow-private-network` 可允许环回或私有网络 base URL。即使未事先预览，`--apply` 也会在写入无密钥提供商条目及回滚日志 `$OPENCODEX_HOME/cc-switch-provider-import-journal.json` 之前输出每个导入提供商的 ID、默认模型与目标 URL（文本模式输出到 `stdout`，`--json` 模式输出到 `stderr`）；存在活动回滚日志时再次运行 `--apply` 会被拒绝。核对输出条目后启动代理（在另一终端运行 `ocx start` 或运行 `ocx ensure`），再通过 `printf '%s\n' "$API_KEY" | ocx account add-key <provider>`（管道标准输入）或 `ocx login <provider>` 添加凭据。
+- **恢复（`--restore`）：** 独立的回滚路径（而非添加凭据的后续步骤），要求代理已停止（`ocx stop`），在 Remote Link Child 上会被拒绝，且不接受 `--source`、`--provider` 或 `--allow-private-network`。它会以只读字节方式检查 `auth.json`（不可读或格式损坏时安全保留），仅从活动日志中移除仍保持导入时无密钥状态、未被选为 `defaultProvider`，且未被路由、组合（combos）、回退策略（fallback policy）、OAuth 账户或 API 密钥引用的提供商。
 
 ## 认证
 
@@ -93,7 +115,7 @@ ocx login anthropic
 通过正在运行的代理列出并切换提供方账号和 API 密钥池。随附的帮助输出如下：
 
 ```text
-Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
+Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|reset-affinity|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
@@ -107,6 +129,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
 strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
@@ -123,7 +146,7 @@ Codex pool selection applies to the next request after clearing existing affinit
 
 除 `import-orca` 外，子命令都要求代理正在运行，CLI 会自动解析其记录的运行时端口；`import-orca` 的预览完全在本地进行，而 `import-orca --apply` 要求代理已停止。成功操作的
 退出码为 0。无效用法、未知的提供方或账号/密钥 id、无法访问的代理，或 API 失败
-都会以 1 退出。凭据字段会严格按管理 API 返回的样子显示（包括其屏蔽格式）；
+通常以 1 退出。但 `reset-affinity` 遇到 HTTP 404 时退出码为 4，遇到 HTTP 409 时为 5；其他 API 失败或未确认的结果退出码为 1。凭据字段会严格按管理 API 返回的样子显示（包括其屏蔽格式）；
 原始 API 密钥和 OAuth token 永远不会返回。显示上的便利字段都像仪表盘一样在
 客户端侧合成：`main` 是 `openai` 账号池中 Codex App 登录的 CLI 别名，没有邮箱的
 OAuth 账号会显示为 `Account N`，而 plan/label 列会在 plan、屏蔽后的邮箱、label 和
@@ -178,7 +201,7 @@ OAuth 账号会显示为 `Account N`，而 plan/label 列会在 plan、屏蔽后
 `auto` 会清除手动选择，让 Pool 重新按自身策略分配工作 — 但如果某个 Codex 账号的 id 恰为 `auto`，则精确 id 匹配优先；`ocx account clear <provider>` 始终恢复自动选择。Codex 账号可以用 `ocx account alias` 设置的别名代替 id 来指定；`priority`、`pause`、`resume`、`clear-cooldown`、`remove` 和 `alias` 同样如此。对于 Codex 账号，`auto`、`main` 和 `__main__` 为保留字（不区分大小写），不能设为别名。OAuth 账号和 API 密钥的显示名称仍遵循原有规则。
 
 选择已有的 Codex 账号、OAuth 账号或 API key。对 `openai` 而言，`main` 选择 Codex App 登录。
-Codex Pool 选择会清除进程本地 affinity，并从下一次请求开始生效，包括已有可见任务的请求；代理重启或 affinity eviction 后，任务也可能变为未绑定，但进行中的请求保留已捕获账号。此选择只控制 Pool routing；Direct mode 继续使用 caller-owned/native main credential。基于用量的主动切换、401/403 重新认证、429/retry-after cooldown、排除，以及输出前 429/402 故障恢复之后仍可能选择其他合格 Pool 账号。这些恢复路径在关闭基于用量的切换时仍然有效。账号变化后 OpenCodex 会重放对话上下文，但 provider prompt cache 可能需要重新预热。未知 provider 或 id 返回退出码 1。`--json` 返回：
+Codex Pool 选择会清除 affinity，并从下一次请求开始生效，包括已有可见任务的请求；带会话 ID 的请求（包括常规 Codex CLI 和 App 轮次及子代理），或锚定到直接父任务的无会话请求，其绑定在关闭时最后一次 affinity 保存成功的情况下，代理正常重启后可保留，空闲时间最长为 24 小时。更深层的无会话链和 Codex App 主登录的绑定仅保存在内存中，重启后会重新分配；驱逐、账号删除、重新登录、崩溃或 affinity 重置仍可能使任务变为未绑定，但进行中的请求保留已捕获账号。此选择只控制 Pool routing；Direct mode 继续使用 caller-owned/native main credential。基于用量的主动切换、401/403 重新认证、429/retry-after cooldown、排除，以及输出前 429/402 故障恢复之后仍可能选择其他合格 Pool 账号。这些恢复路径在关闭基于用量的切换时仍然有效。账号变化后 OpenCodex 会重放对话上下文，但 provider prompt cache 可能需要重新预热。未知 provider 或 id 返回退出码 1。`--json` 返回：
 遇到 **401/403** 时，App 登录会清除该账户的进程内 affinity 并要求重新认证。
 遇到 **429** 时，它会遵循 `Retry-After`、启动账户 cooldown、清除 affinity，
 并可将请求切换到另一个符合条件的 Pool 账户。即使 `autoSwitchThreshold: 0`，
@@ -349,17 +372,21 @@ v1 恢复矩阵覆盖的是事务文件通过重命名发布后 OpenCodex 进程
 
 ### `ocx models [subcommand]` · `ocx model <subcommand>`
 
-`ocx model` 是 `ocx models` 的别名。没有子命令时，列出已配置提供方中静态预置的模型。
+`ocx model` 是 `ocx models` 的别名。没有子命令时，列出已保存及路由器已知的模型 ID，
+包括注册表预置、自定义模型和当前 CLI 进程的发现缓存。新 CLI 进程的缓存可能为空，
+这不是运行中代理的目录。部分旧版密钥预设即使更改接入地址也可能保留注册表预置。
 `--provider` 可过滤单个已配置提供方，而 `--json` 会返回模型元数据。`live` 读取运行中
 的目录；`add`、`edit`、`remove` 和 `list-custom` 管理手动目录条目；`enable`、
 `disable` 和 `provider` 控制可见性；`selected` 控制提供方允许列表；`context` 控制提供方
 上下文上限；`shadow` 管理后台 shadow-call 拦截。
 
+`reasoningEfforts` 列表仅在使用 `--json` 时显示。`null` 表示列表未知或未查询，包括查询需要打开系统钥匙串的情况。空数组 `[]` 表示明确设置了空列表，或该模型的推理强度已被禁用，例如通过 `noReasoningModels` 禁用。使用 `ocx models live` 查看运行中代理的目录。
+
 `add` 和 `remove` 默认保存到本地；`--live` 修改运行中的代理。本地 `--json` 保存时若无代理，返回 `sync.status: "not-attempted"`、`needsSync: true`，退出码为 0。实际尝试的同步失败时保留保存结果，以非零码退出。`list-custom` 是本地列表。`display-name` 使用原始上游 ID，`order` 使用 picker 的 public ID。完整排列、featured 前缀与 native 顺序重置限制见[英文步骤](/reference/cli/providers-accounts/#display-names-and-picker-identities)。
 
 | 子命令 | 支持的标志 | 操作 |
 | --- | --- | --- |
-| `list` (默认) | `--provider <name>`, `--json` | 列出已配置提供方中预置的模型。 |
+| `list` (默认) | `--provider <name>`, `--json` | 列出本地已保存及路由器已知的模型。 |
 | `live` | `--provider <name>`, `--json` | 读取运行中的目录，包括运行时发现的模型。各行会标记为 `native`/`routed`、`custom`，以及 `enabled`/`disabled`。 |
 | `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | 在本地注册自定义模型，或使用 `--live` 在运行中的代理上注册。 |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | 编辑自定义模型。`-` 会清空字段；`0` 会清空上下文窗口。 |

@@ -4,7 +4,8 @@ import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repoPath, repoRoot } from "../helpers/repo-root";
-import { rotateServiceLog } from "../../src/service/logging";
+import { rotateServiceLog, startServiceLogging, SERVICE_LOG_MAX_BYTES } from "../../src/service/logging";
+import { CONFIG_UNINSTALL_MANIFEST, ConfigUninstallInProgressError, initializeConfigOwnership, recordOwnedConfigPath } from "../../src/lib/config-ownership";
 
 const roots: string[] = [];
 function sandbox(): string {
@@ -30,6 +31,26 @@ async function cli(service: boolean, args = ["start", "--port", "invalid"]) {
 }
 
 describe("managed service log", () => {
+  test("an interrupted uninstall bounds the active log without registering archives", () => {
+    const root = sandbox();
+    expect(initializeConfigOwnership(root)).toBe(true);
+    const path = join(root, "service.log");
+    writeFileSync(path, "");
+    const manifestPath = join(root, CONFIG_UNINSTALL_MANIFEST);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    writeFileSync(manifestPath, JSON.stringify({ ...manifest, uninstallStartedAt: Date.now() }));
+    fs.truncateSync(path, SERVICE_LOG_MAX_BYTES + 1);
+    const fd = openSync(path, "a");
+    const stop = startServiceLogging(path, { OCX_SERVICE: "1" });
+    try {
+      expect(statSync(path).size).toBe(0);
+      writeSync(fd, "continued");
+      expect(readFileSync(path, "utf8")).toBe("continued");
+      expect(existsSync(`${path}.1`)).toBe(false);
+      expect(existsSync(`${path}.2`)).toBe(false);
+      expect(() => recordOwnedConfigPath(root, join(root, "new-file"))).toThrow(ConfigUninstallInProgressError);
+    } finally { stop(); closeSync(fd); }
+  });
   test("CLI start errors receive an ISO timestamp only under OCX_SERVICE", async () => {
     const managed = await cli(true);
     const interactive = await cli(false);
@@ -119,6 +140,7 @@ describe("managed service log", () => {
       }
       const before = ["", ".1", ".2"].map(leaf => readFileSync(`${path}${leaf}`, "utf8"));
       expect(rotateServiceLog(path, 4)).toBe(false);
+      if (suffix === "") expect(rotateServiceLog(path, 4, false)).toBe(false);
       expect(["", ".1", ".2"].map(leaf => readFileSync(`${path}${leaf}`, "utf8"))).toEqual(before);
       expect(readFileSync(target, "utf8")).toBe("unrelated contents");
     });
@@ -131,6 +153,7 @@ describe("managed service log", () => {
       if (suffix) writeFileSync(path, "active contents");
       symlinkSync(target, `${path}${suffix}`);
       expect(rotateServiceLog(path, 4)).toBe(false);
+      if (suffix === "") expect(rotateServiceLog(path, 4, false)).toBe(false);
       expect(readFileSync(target, "utf8")).toBe("unrelated contents");
       if (suffix) expect(readFileSync(path, "utf8")).toBe("active contents");
     });

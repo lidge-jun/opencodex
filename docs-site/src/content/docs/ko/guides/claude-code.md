@@ -397,9 +397,7 @@ Claude Code는 알 수 없는 모델의 컨텍스트를 200k 토큰으로 계산
 **연결 → Claude**에서 압축 값을 조절할 수 있어요. **경고:** 모델의 실제 컨텍스트 창보다 크게 올리면
 요약을 시작하기 전에 채팅 오류가 발생해요.
 
-컨텍스트 초과 오류를 정규화할 때는 제공자 오류 메시지의 첫 65,536 UTF-16 코드 단위만 사용해요.
-뒤쪽 진단 내용이나 토큰 수는 별도 잘림 표시 없이 빠질 수 있어요.
-자세한 제한과 토큰 수 처리 조건은 [영문 가이드](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)를 참고하세요.
+Messages 오류 응답 정규화에서는 제공자 문구나 토큰 수 대신 고정 문구를 사용해요. 인식된 컨텍스트 초과는 `prompt is too long: The request exceeds the model's context window.`로 전달해요. 스트림의 첫 필드가 오류 이벤트인 블록에는 1 MiB 한도가 적용돼요. 한도를 넘으면 압축 문구 없는 고정 오류를 보내요. 자세한 범위와 두 예외는 [영문 가이드](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)를 참고하세요.
 
 1M 미만인 네이티브 Anthropic 모델에는 자동으로 표식을 붙이지 않아요. 직접 내보낸 압축 값은 실행 슬롯 표식에서 항상
 우선하며, 프록시는 **사용자가 지정한** 값을 기준으로 어떤 모델에 안전하게 표식을 붙일지 결정해요.
@@ -577,7 +575,7 @@ Messages → Responses로 변환되는 요청에서는 Claude Code의 `/effort` 
 | 사용자 `tool_result` | `function_call_output`(`is_error` → `[tool error]` 접두사) |
 | 도구 결과의 `tool_reference` | 기본적으로 짝지어진 결과에 `Tool loaded: <tool_name>` 텍스트를 보존합니다. [append-only 옵션](/guides/claude-code/#preserve-cache-prefixes-when-client-tools-load)을 켠 적격 최종 Responses 경로에서는 성공한 클라이언트 검색 결과 위치에 현재 선언된 지연 함수의 정의를 배치할 수 있습니다. 참조만으로 도구 권한이나 서버 측 검색 기능을 추가하지는 않습니다. |
 | `thinking` / `redacted_thinking` 재생 | 서명과 비공개 페이로드를 제한된 `ocxr1` 봉투에 담은 `reasoning` 항목 |
-| Function 도구 | `{type: "function"}`(`web_search*` → `{type: "web_search"}`). `api.anthropic.com`으로 번역하여 보내는 경로에서는 타입이 지정된 `web_search_*`와 `web_fetch_*` 선언도 Anthropic에 전달되어 서버에서 실행됩니다. 웹 검색 사이드카가 `web_search`를 제공하면 사이드카가 우선합니다. 검색과 가져오기 결과는 `server_tool_use` 및 대응하는 `web_search_tool_result` / `web_fetch_tool_result` 블록으로 클라이언트에 반환됩니다 |
+| Function 도구 | `{type: "function"}`(`web_search*` → `{type: "web_search"}`). `api.anthropic.com`으로 번역하여 보내는 경로에서는 타입이 지정된 `web_search_*`와 `web_fetch_*` 선언도 Anthropic에 전달되어 서버에서 실행됩니다. 웹 검색 사이드카가 `web_search`를 제공하면 사이드카가 우선합니다. 검색과 가져오기 결과는 `server_tool_use` 및 대응하는 `web_search_tool_result` / `web_fetch_tool_result` 블록으로 클라이언트에 반환됩니다 `allowed_domains`, `blocked_domains`, `user_location`이 있으면 번역된 Responses/Chat 경로에서 호스팅 검색을 제외하며, 제외된 검색을 강제하면 400을 반환합니다. 유효한 `defer_loading` 함수 정의는 일반 함수로 호출할 수 있습니다. [번역 제한](/guides/claude-code/#search-restrictions-and-deferred-tools-on-translated-routes)을 참고하세요. |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, 이름 지정 함수→`{type:"function",name}`, 호스팅 WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
@@ -636,7 +634,7 @@ role, `tool_use_id` 없는 `tool_result`, id/name 없는 `tool_use`, name 없는
 **오류 분류:** 400 `invalid_request_error`, 401 `authentication_error`,
 402 `billing_error`, 403 `permission_error`, 404 `not_found_error`, 409 `conflict_error`,
 413 `request_too_large`, 429 `rate_limit_error`, 504 `timeout_error`, 529 `overloaded_error`,
-그 밖의 5xx는 `api_error`예요. `Retry-After`는 그대로 유지해요.
+그 밖의 5xx는 `api_error`예요. `Retry-After`는 정수 초로 보내며(HTTP 날짜는 남은 초로 바꿔요) 최대 8일로 제한해요.
 
 ## 프롬프트 캐싱과 토큰 사용량
 
@@ -644,9 +642,9 @@ role, `tool_use_id` 없는 `tool_result`, id/name 없는 `tool_use`, name 없는
 분기점과 최상위 자동 `cache_control`을 관리해요. 안정적인 대화에서는 보통 캐시 적중률이 약
 99.9%예요.
 
-**네이티브 OpenAI/ChatGPT 라우팅:** 세션 범위 `prompt_cache_key`(`metadata.user_id`가 있으면
-사용하고, 없으면 시스템 내용 해시 사용)와 캐시 선호도를 위한 `session_id` 헤더를 만들어요.
-캐시 키에는 모델과 전체 도구 스키마가 들어가요.
+**네이티브 OpenAI/ChatGPT 라우팅:** `prompt_cache_key`(`metadata.user_id`가 문자열이면
+사용하고, 없으면 시스템 내용 해시 사용)와, 세션 식별자가 있을 때만 캐시 선호도를 위한 `session_id` 헤더를 만들어요(공유 대체 키로는 만들지 않아요).
+시스템 내용 해시로 만드는 대체 키(시스템 내용이 있을 때만 사용)에는 모델과 전체 도구 스키마도 들어가요.
 
 **토큰 계산:** Anthropic 출력은 `input_tokens`에서 `cached_tokens`와 `cache_write_tokens`를 빼고,
 각각 `cache_read_input_tokens`와 `cache_creation_input_tokens`로 노출해요. 요청 로그는 이를 다시

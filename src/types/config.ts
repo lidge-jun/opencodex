@@ -3,6 +3,7 @@ import type { CodexAccount } from "./accounts";
 import type { AnthropicAccountPoolConfig, OcxAccountPoolRotationStrategy } from "./anthropic-account-pool";
 import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import type { OcxFallbackConfig } from "./fallback";
+import type { OcxTelemetryConfig } from "./telemetry";
 export type { AnthropicAccountPoolConfig, AnthropicModelRoute, OcxAccountPoolRotationStrategy, OcxAccountPoolQuotaWindow } from "./anthropic-account-pool";
 export type { OcxFallbackConfig, OcxFallbackDeviceConfig, OcxFallbackKind, OcxFallbackSwitches } from "./fallback";
 
@@ -264,6 +265,18 @@ export interface OcxClaudeCodeConfig {
    * Routing-sidecar alias decoding is unchanged — only the Desktop model list writer.
    */
   desktopNativeModels?: boolean;
+  /**
+   * Which models the Claude Desktop 3P list carries (src/claude/desktop-model-visibility.ts).
+   * Unset lists every available model. Independent of desktopProfile tiers and of
+   * provider-wide disabledModels; other clients are unaffected.
+   */
+  desktopModelVisibility?: OcxClaudeDesktopModelVisibility;
+}
+
+/** `include`: only `routes` (new models hidden). `exclude`: all but `routes` (new models listed). */
+export interface OcxClaudeDesktopModelVisibility {
+  mode: "include" | "exclude";
+  routes: string[];
 }
 
 export type OcxClaudeDesktopFamily = "opus" | "fable" | "sonnet" | "haiku";
@@ -562,6 +575,7 @@ export interface OcxConfig {
   skills?: OcxSkillsConfig;
   /** Opt-in process-local aggregate request metrics on the authenticated management plane. */
   metricsExport?: { enabled?: boolean };
+  telemetry?: OcxTelemetryConfig;
   /**
    * Opt-in recovery of a managed service proxy that stays alive but stops answering /healthz:
    * a separate sentinel process terminates it so its supervisor restarts it (#6671).
@@ -571,6 +585,8 @@ export interface OcxConfig {
   emptyCompletionRetry?: boolean;
   /** Suppress allowlisted client-facing Codex transport hints; provider enforcement is unchanged. */
   dropCodexSafetyBuffering?: boolean;
+  /** Opt in to completing truncated plain-text translated Responses turns; default off. */
+  completeOnMaxOutputTokens?: boolean;
   /**
    * Whether a login may open a browser on the machine running the proxy.
    *
@@ -702,6 +718,8 @@ export interface OcxConfig {
    * See {@link OcxOpencodeClientExportConfig}.
    */
   opencodeClientExport?: OcxOpencodeClientExportConfig;
+  /** Opt-in dialect for the managed Pi-based omo block; omitted keeps `openai-completions` (#7431). */
+  omoClientExport?: { api?: "openai-completions" | "openai-responses" };
   /** Aside account-backed profile synchronization; individual overrides survive bulk refresh. */
   asideProfileSync?: {
     allProfiles?: boolean;
@@ -754,6 +772,11 @@ export interface OcxConfig {
    * classification. Models no list names and no price covers are never proposed.
    */
   codexRoleTiers?: { fast?: string[]; standard?: string[]; frontier?: string[] };
+  /**
+   * Measured-capability source for Codex role auto-assign. With an Artificial Analysis API key
+   * (a literal, ${ENV} or keychain reference) its indexes inform measured tiers.
+   */
+  codexRoleCapability?: { artificialAnalysis?: { apiKey?: string } };
   /**
    * TTL (ms) for cached sub-agent model availability probes. Default 60_000.
    */
@@ -859,6 +882,8 @@ export interface OcxConfig {
   reasoningRetention?: { enabled?: boolean; maxContextPercent?: number; maxTokens?: number };
   /** Canonical ChatGPT reasoning replay allowances; both default off. */
   nativeReasoningRetention?: { modelSwitch?: boolean; accountSwitch?: boolean };
+  /** Per-root fan-out ceilings (src/lib/workflow-budget.ts); omitted fields keep 8 / 256 / 64. */
+  workflowBudget?: { maxConcurrentChildren?: number; maxPhysicalSends?: number; maxDistinctChildren?: number };
   /** Explicit opt-in; resumes Observe only using an existing trusted certificate and endpoints. */
   desktopCompatibility?: { startOnProxyStart: boolean };
   /**
@@ -889,6 +914,8 @@ export interface OcxConfig {
    * the bare row plus every generated selector row and omit that model family from raw discovery.
    */
   disabledModels?: string[];
+  /** Omit explicitly disabled native catalog rows, retaining their validated inheritance template. Default: false; direct routing is unchanged. */
+  omitDisabledNativeModels?: boolean;
   /** 사용자가 대시보드에서 직접 추가한 커스텀 모델 목록. */
   customModels?: OcxCustomModel[];
   /**
@@ -1513,6 +1540,7 @@ export interface OcxComboConfig {
    * explicitly empty target ladder suppresses the whole combo's effort control.
    */
   reasoningEffortMode?: OcxComboReasoningEffortMode;
+  jevEffortMode?: import("./combo-jev-effort-mode").OcxComboJevEffortMode; // wire-effort owner on a `jev` combo; omitted = "decide"
   /**
    * Disable image input even when every target supports it.
    * Omitted / `"auto"` keeps automatic capability derivation (default: enabled when
@@ -1826,6 +1854,8 @@ export interface OcxWebSearchSidecarConfig {
 export interface OcxCodexPoolConfig {
   /** Start idle Codex windows when the pool is initialized. */
   startIdleWindows?: boolean;
+  /** Enable process-local affinity for caller-owned credentials; defaults off. */
+  requestOwnedAffinity?: boolean;
   /**
    * Plan keys ordinary rotation skips, matched case-insensitively against the plan stored on each
    * account. Absent or empty means no policy.

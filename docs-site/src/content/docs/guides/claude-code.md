@@ -64,10 +64,24 @@ actual model served. This is especially useful for external classifiers requesti
 
 ## Claude OAuth account pool (experimental)
 
-Native Anthropic subscription passthrough retains the upstream `anthropic-ratelimit-*`
-response headers on streaming, JSON and upstream-error responses, so compatible Claude Code
-statusLine consumers can read the provider's quota observations. Missing observations are
-not filled with invented values. This relay does not change account selection or retry behavior.
+Native Anthropic subscription passthrough retains recognized, valid `anthropic-ratelimit-*`
+observations with normalized values on streaming, JSON and upstream-error responses.
+Unrecognized names and invalid values are omitted; missing observations are not filled in.
+Tests check the forwarded-header contract used by Claude Code statusLine consumers, including
+fractional utilization and reset times. Account selection and retry behavior are unchanged.
+
+Usage reads support Ultra (formerly Max 20x). Pro, Max 5x and Team retain their measured
+five-hour and weekly meters whichever one is currently binding. An Ultra null five-hour limit
+leaves that meter absent unless Anthropic marks a finite session meter active. Current `limits`
+counters take precedence over legacy duplicates; shared usage can affect routing even when
+inactive, while only active model-specific weekly limits affect that model family.
+The dashboard shows Pro, Max 5x, or Ultra beside Claude account quotas, using subscription
+metadata from the authenticated profile. Both `ultra` and `claude_max_20x` display as Ultra
+(the existing `ultra` and `max_20x` tier aliases are retained). Unfamiliar validated tiers retain their original name without
+failing the usage read. Claude account rows prefer your alias, then a masked email, and
+fall back to a numbered label when no safe identity is available. The provider Overview shows the
+same label as a separate current-account field when its account list is verified. Set
+`privacy.maskEmails` to `false` to show the full email in these rows instead.
 
 You can log in multiple Claude accounts via the Providers dashboard (`ocx login anthropic` /
 add-account). By default every request uses the **active** account only.
@@ -78,9 +92,9 @@ session affinity and usage-aware new-session selection across those OAuth accoun
 to another account whether the pool is on or off, and the toggle does not switch that off; pause
 an account to keep it out of failover. For **new**
 sessions,
-`anthropicAccountPool.strategy` selects among eligible accounts: `quota` (default) picks the
-lowest known usage in the window set by `quotaWindow` (`five-hour` by default, or `weekly` /
-`max-utilization`) when above `autoSwitchThreshold`; `round-robin` spreads evenly
+`anthropicAccountPool.strategy` selects among eligible accounts: `quota` (default) keeps the active account until its usage in the window set by `quotaWindow`
+(`five-hour` by default, or `weekly` / `max-utilization`) reaches `autoSwitchThreshold`
+(default 80), then moves to the least-used account, preferring accounts still under their own threshold; `round-robin` spreads evenly
 (`stickyLimit`, default `1`); `fill-first` drains the active account until cooldown,
 reauthentication, or threshold, then advances. It is **off by default** and experimental.
 
@@ -144,6 +158,7 @@ thinking fallback. Adaptive thinking without an explicit effort stays blank. The
 request controls; they do not confirm what effort the upstream applied or change the wire body.
 
 An enabled Anthropic account pool prefers native Messages for eligible direct Anthropic routes
+and canonical Anthropic children of strict failover combos without a default effort
 when neither native rollout flag explicitly disables that path. In Providers → Anthropic →
 Account pooling → **How account selection works**, **Preserve native Claude requests** stores
 `anthropicAccountPool.nativeMessages` (default true). Turning it off selects the legacy bridge
@@ -285,6 +300,32 @@ reports "profile rollback skipped". Apply rechecks the profile before
 backup and replacement; if it detects a concurrent edit, it refuses with `desktop_profile_changed`.
 Review the edit and reapply. If restoring the profile also fails after a metadata error, the
 reported reason includes both failures; reconcile the profile and metadata before retrying.
+
+#### Choose which models Claude Desktop lists
+
+**Connect → Claude Desktop → Desktop model list** has a checkbox for each model. Search by name or
+filter by provider, then use **Select all matching** or **Clear all matching** to change every match,
+including rows behind **Show more**. Click
+**Save & apply** to write the list to Desktop. Only Claude Desktop's list changes: provider model
+settings, Claude Code, Codex and other clients keep every model.
+
+**Newly discovered models** sets what happens when a provider later adds a model. **List
+automatically** adds it to Desktop. **Keep hidden until selected** leaves it out until you check it.
+The selection is saved in `claudeCode.desktopModelVisibility` and survives catalog refreshes and
+reapplies. Tier families under **Advanced** stay optional and do not affect which models are shown.
+A hidden model keeps its Desktop id, so a conversation that is already using it keeps working.
+
+The card shows the selected, available and applied counts separately. A selected model that is no
+longer available is counted on its own and is not written. If the selection leaves no available
+models, the writer falls back to every available model, including normally hidden routes. Update
+the selection and apply again to narrow it. Before you apply, the card previews the model IDs the
+selected profile file will gain and lose. Its applied count reads that file; it does not verify
+which models the Desktop process has loaded. The status bar shows **Saved — apply to update Desktop**
+until the saved list reaches the profile. Restart Desktop to load profile changes.
+Applying replaces the model list in OpenCodex's Desktop profile,
+including a list edited there by hand. Discovery-only mode (`--discovery-only`) writes no list, so
+it does not use this selection. The dashboard will not save a selection that hides every
+available model.
 
 ### First-party (opt-in)
 
@@ -755,20 +796,18 @@ upstream input limit. A classified input-limit rejection reaches Claude Code as
 compacts the conversation and retries on its own; a non-streaming response uses HTTP 400 instead
 of a retryable 502. Providers on the native Messages lane get the same wording.
 
-Overflow normalization uses only the first **65,536 UTF-16 code units** of the provider's error
-message, including messages that already use Anthropic's wording. This is a string-length limit,
-not a byte or token limit. Text beyond it is discarded without an ellipsis or truncation marker,
-so diagnostic details and token counts near the end may be absent from the error Claude Code
-receives. The added `prompt is too long:` prefix, followed by a space, can make the final message
-longer than this retained portion.
+Messages error-response normalization uses fixed proxy-written wording. A recognized context
+rejection uses `prompt is too long: The request exceeds the model's context window.` instead of
+provider prose or token counts. Throughput errors keep a separate fixed rate-limit sentence.
 
-Within that portion, recognized Anthropic wording is kept; otherwise OpenCodex emits
-`prompt is too long: <requested> tokens > <limit> maximum` only when it finds
-`maximum context length is <limit> tokens` followed by `resulted in <requested> tokens` or
-`you requested <requested> tokens`. It uses the first stated limit and the first matching request
-count after it. If that pair is missing, reversed, or cut off, it prefixes the retained text with
-`prompt is too long:` followed by a space, without inventing counts. A throughput limit that only mentions tokens
-(for example "too many tokens per minute") keeps its text and is not treated as an overflow.
+On native and caller-forward Messages streams, only blocks whose first non-comment field is
+exactly `event:error` or `event: error` have their error data normalized. The full diagnostic within
+the 1 MiB error hold determines recovery wording. Above that bound, the stream emits
+`The provider stream reported an error.` without a compaction phrase (OVERSIZE-1M), preserving its
+issued HTTP status. Separately, native non-stream folds of collected error events return 502 where
+an untyped proxy-built error envelope previously returned 200 (FOLD-502). See the
+[Messages format contract](/reference/proxy-formats/#post-v1messages-and-count_tokens) for field
+ordering, rename replay and the scope of these two exceptions.
 
 If compaction itself still exceeds the limit, preserve the original
 history and try compacting a fork with fewer enabled tool or MCP schemas, if your client supports
@@ -830,6 +869,11 @@ Proxy startup/ensure, `ocx claude`, and relevant dashboard saves sync your featu
   overwritten or pruned; your own agents are never touched.
 - Files are atomically synced per file (write + rename).
 - `enabled: false` or `injectAgents: false` prunes all verified-owned definitions.
+- Turning Claude Code off with the dashboard's integration toggle also prunes them right away
+  (best effort), so a native `claude` session started afterwards stops seeing proxy-only agents.
+  A file that cannot be deleted stays, and while a sibling OpenCodex instance owns
+  `~/.claude/agents` nothing is touched; turning it off again retries and also removes
+  definitions an older version left behind.
 - Successful CLI first-party saves and persisted Desktop first-party setup also attempt best-effort
   roster sync, including repeated setup to repair missing definitions. Refused setup and rollback
   do not sync agents. Turning first-party off alone does not disable agent registration.
@@ -974,7 +1018,7 @@ The proxy translates every Anthropic Messages API request into the Codex Respons
 | User `tool_result` | `function_call_output` (`is_error` → `[tool error]` prefix) |
 | `tool_reference` in a tool result | Text `Tool loaded: <tool_name>` in the paired result by default. The [append-only opt-in](#preserve-cache-prefixes-when-client-tools-load) may place a currently declared deferred function at its successful client discovery result on an eligible final Responses route; a reference alone never grants a tool or enables server-side search |
 | `thinking` / `redacted_thinking` replay | `reasoning` items with bounded `ocxr1` envelopes for signatures and redacted payloads |
-| Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`). On a route to `api.anthropic.com`, the typed `web_search_*` and `web_fetch_*` declarations are also sent to Anthropic as declared and run server-side, unless the web-search sidecar supplies `web_search` itself. A search or fetch with a matching call and complete input comes back to the client as its `server_tool_use` block and its `web_search_tool_result` or `web_fetch_tool_result`, verbatim. Orphan results are dropped without synthesizing a call, while the surrounding text is preserved. When the client sends a complete pair back in its history, the next `api.anthropic.com` request carries it in place only if the following block uniquely identifies its original turn. Repeated anchors, unmatched or duplicate call/result ids, malformed call input, or a result appearing before its call drop the exchange. Call input must be an object with a nonempty search query or fetch URL string; other destinations never see the exchange |
+| Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`). On a route to `api.anthropic.com`, the typed `web_search_*` and `web_fetch_*` declarations are also sent to Anthropic as declared and run server-side, unless the web-search sidecar supplies `web_search` itself. A search or fetch with a matching call and complete input comes back to the client as its `server_tool_use` block and its `web_search_tool_result` or `web_fetch_tool_result`, verbatim. Orphan results are dropped without synthesizing a call, while the surrounding text is preserved. When the client sends a complete pair back in its history, the next `api.anthropic.com` request carries it in place only if the following block uniquely identifies its original turn. Repeated anchors, unmatched or duplicate call/result ids, malformed call input, or a result appearing before its call drop the exchange. Call input must be an object with a nonempty search query or fetch URL string; other destinations never see the exchange Hosted search with `allowed_domains`, `blocked_domains` or `user_location` is omitted on translated Responses/Chat routes; forcing omitted search returns 400. Valid `defer_loading` function definitions remain callable as ordinary functions. See [translation limits](#search-restrictions-and-deferred-tools-on-translated-routes). |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, named function→`{type:"function",name}`, hosted WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
@@ -986,6 +1030,23 @@ Replay preserves non-hidden signed blocks (including empty thinking) and opaque 
 **Error cases (400):** malformed JSON; missing/empty `model`; missing/empty `messages`; unsupported
 role; `tool_result` without `tool_use_id`; `tool_use` without id/name; named `tool_choice` without
 name.
+
+### Search restrictions and deferred tools on translated routes
+
+When a `web_search*` tool supplies `allowed_domains`, `blocked_domains` or `user_location`,
+OpenCodex omits hosted search from the translated Responses/Chat catalog, including combo
+fallbacks and search sidecars. Those destinations cannot uniformly preserve the constraints;
+search is never silently widened. Duplicate search declarations cannot bypass this rule.
+A forced hosted-search choice with no surviving declaration returns HTTP 400.
+First-party Anthropic destinations still receive the original typed declarations through the
+existing server-tool lane when translation proceeds; native passthrough preserves them directly.
+Unrestricted translated search remains available under the existing sidecar and admission rules.
+
+Valid function definitions with `defer_loading: true` remain callable as ordinary functions on
+translated combo routes. This eager-loading degradation does not itself cause compatibility
+rejection. Enforce mode still rejects unsupported top-level deferral, schema-less deferred tools,
+server-executed discovery and unsupported discovery history. Eligible direct Responses routes
+can use the [append-only opt-in](#preserve-cache-prefixes-when-client-tools-load).
 
 ### Unicode-property patterns in tool schemas
 
@@ -1039,7 +1100,7 @@ on the schema to reject a malformed argument.
 **Error taxonomy:** 400 `invalid_request_error`, 401 `authentication_error`,
 402 `billing_error`, 403 `permission_error`, 404 `not_found_error`, 409 `conflict_error`,
 413 `request_too_large`, 429 `rate_limit_error`, 504 `timeout_error`, 529 `overloaded_error`,
-other 5xx `api_error`. `Retry-After` is preserved.
+other 5xx `api_error`. `Retry-After` is sent as whole seconds (an HTTP date becomes the remaining seconds), capped at eight days.
 
 ## Prompt caching and token usage
 
@@ -1047,9 +1108,16 @@ other 5xx `api_error`. `Retry-After` is preserved.
 and the penultimate user message, plus top-level automatic `cache_control`. Stable turns normally
 produce about a 99.9% cache hit rate.
 
-**Native OpenAI/ChatGPT routing:** derives a session-scoped `prompt_cache_key` (from
-`metadata.user_id` when present, falling back to a system-content hash) and `session_id` header
-for cache affinity. The cache key includes model and full tool schemas.
+**Native OpenAI/ChatGPT routing:** derives a `prompt_cache_key` for cache affinity, and a
+`session_id` header only from a session identity, never from the shared fallback key. When
+`metadata.user_id` is a string, the key is session-scoped. Remote Claude Code puts a JSON object in
+that string and adds a per-turn attribution token (`tk`) to it; when the object has other keys,
+`tk` is dropped before hashing, so every turn of one session keeps one cache key and one
+conversation id. Any other string (not JSON, a JSON array, or a JSON object holding only `tk`) is
+hashed unchanged, and the `user` field is still derived from the raw string. Without a string
+`metadata.user_id`, and when system content is present, the key falls back to a hash of the
+resolved model, system prompt and full tool schemas: a cohort key shared by requests with the same
+values, not a session key.
 
 **Token math:** Anthropic output subtracts `cached_tokens` and `cache_write_tokens` from
 `input_tokens`, exposing them as `cache_read_input_tokens` and `cache_creation_input_tokens`.

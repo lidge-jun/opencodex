@@ -36,6 +36,7 @@ both `--adapter` and `--base-url`.
 | `resets` | `--limit <n>`, `--json` | List recently detected quota-window resets. |
 | `presets` | `--json` | List dashboard provider presets. |
 | `account-mode` | `pool`, `direct`, `--json` | Select pooled or direct Codex account routing. |
+| `import-cc-switch` | `--source <FILE>`, `--provider <id>`, `--apply`, `--restore`, `--allow-private-network`, `--json` | Preview, selectively apply, or restore keyless provider entries from a CC-Switch SQLite database (`cc-switch.db`) or legacy JSON file. |
 
 ```bash
 ocx provider list --json
@@ -110,7 +111,10 @@ ocx provider snapshot --json
 
 Live add uses the target's presets and refuses an observed existing provider
 without `--force`. The check and server upsert are not atomic: concurrent changes
-can race. Custom providers still need `--adapter` and `--base-url`. `--live`
+can race. Custom providers still need `--adapter` and `--base-url`; a name the
+target does not offer as a preset, given without both, exits 2 with a message
+naming it, and so does canonical `openai` when the target lacks its preset.
+Nothing is written in either case. `--live`
 never falls back to a local save; combining it with `--sync` is invalid.
 Credentials belong in the supported human login or stdin flow, not CLI examples.
 
@@ -219,6 +223,27 @@ be stdin. Each input has a 4 MiB limit and a 30-second read deadline. The combin
 serialized `{baseline,next}` request must also fit 4 MiB. Interactive stdin,
 special files, conflicting flags, invalid fields and unconfirmed removals are
 refused before mutation with exit 2. Input errors never echo the submitted values.
+
+### Keyless CC-Switch provider import
+
+```bash
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db
+ocx stop
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db --provider my-provider --apply
+# Start the proxy in another terminal (or run ocx ensure), then add credentials:
+ocx start
+printf '%s\n' "$API_KEY" | ocx account add-key my-provider
+
+# Separate rollback path (stop the proxy first; removes unedited keyless entries only):
+ocx stop
+ocx provider import-cc-switch --restore
+```
+
+`ocx provider import-cc-switch` projects values **only** from an explicit allowlist of non-secret metadata fields (provider IDs, app types, base URLs, wire dialects, and default models) from a plain regular CC-Switch SQLite database or legacy JSON file. Source and embedded-config bytes are read transiently to scan the input, while secret fields, free-text display names, and TOML comments are skipped at the byte level, never decoded into strings, written, or logged, and transient byte buffers are zeroed in `finally`. Narrow base-URL path rules (`http(s)://host[:port]` with an empty path or 1–4 lowercase `[a-z0-9._-]` API path segments such as `/v1`, `/api/v1`, or `/compatible-mode/v1`) and identifier/model syntax checks act as defense in depth and reject non-conforming values without echoing them. Source files are opened once with `O_NOFOLLOW | O_NONBLOCK` descriptor verification and deserialized read-only in memory for SQLite without temporary files; SQLite files with multiple hard links (`nlink > 1`) are refused so sidecar checks cannot be bypassed via an alias path, and if a sibling `-wal` or `-journal` file is non-empty, import refuses and asks you to close CC-Switch (or checkpoint the database) and retry. Only import from a trusted local CC-Switch source, and verify every printed ID, model, and `baseUrl` before adding credentials:
+
+- **Preview (default):** requires `--source <FILE>`, writes nothing, and reports discovered, eligible, conflicting, and invalid entries.
+- **Apply (`--apply`):** requires `--source <FILE>` and a stopped proxy (`ocx stop`), and is refused on a Remote Link Child. Repeat `--provider <id>` to import only selected entries, or pass `--allow-private-network` to permit loopback or private-network base URLs. Even without a prior preview, `--apply` prints every imported provider ID, default model, and destination URL before writing keyless provider entries and recording a rollback journal at `$OPENCODEX_HOME/cc-switch-provider-import-journal.json` (`stdout` in text mode, `stderr` in `--json` mode); a second apply is refused while an active journal exists. Verify the printed entries, start the proxy (`ocx start` in another terminal or `ocx ensure`), and add credentials with `printf '%s\n' "$API_KEY" | ocx account add-key <provider>` (piped stdin) or `ocx login <provider>`.
+- **Restore (`--restore`):** separate rollback path (not a continuation of adding credentials) that requires a stopped proxy (`ocx stop`), is refused on a Remote Link Child, and takes no `--source`, `--provider`, or `--allow-private-network`. It inspects `auth.json` read-only at the byte level (failing closed if unreadable or malformed) and removes only providers from the active journal that still match their imported keyless state and are not selected as `defaultProvider` or referenced by routing, combos, fallback policy, OAuth accounts, or API keys.
 
 ## Authentication
 
@@ -567,7 +592,7 @@ List and switch provider accounts and API-key pools through the running proxy. T
 surface is:
 
 ```text
-Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
+Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|reset-affinity|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
@@ -581,6 +606,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
 strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Pool placement strategy; least-loaded is Kiro-only.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
@@ -599,7 +625,7 @@ A selection-order change applies from the next unbound request and never moves a
 Account subcommands require the proxy to be running and auto-resolve its recorded runtime port,
 except `import-orca`: preview is local-only, and `import-orca --apply` requires the proxy to be stopped.
 Successful operations exit 0. Invalid usage, an unknown provider or account/key id, an unreachable
-proxy, or an API failure exits 1. Credential fields are displayed exactly as the management API
+proxy, or an API failure normally exits 1. For `reset-affinity`, HTTP 404 exits 4 and HTTP 409 exits 5; other API failures and unconfirmed results exit 1. Credential fields are displayed exactly as the management API
 returns them (including its masking); raw API keys and OAuth tokens are never returned. Display
 conveniences are synthesized client-side, same as the dashboard: `main` is the CLI alias for the
 Codex App login in the `openai` account pool, OAuth accounts without an email appear as `Account N`,
@@ -823,9 +849,8 @@ that state and still exits 0. `--json` returns:
 `auto` clears the manual selection so the pool places work by its own strategy again — unless a Codex account literally carries the id `auto`, which wins by exact-id precedence; `ocx account clear <provider>` always restores automatic selection. Any Codex account can be named by the alias set with `ocx account alias` instead of its id; that holds for `priority`, `pause`, `resume`, `clear-cooldown`, `remove` and `alias` too. For Codex accounts, `auto`, `main` and `__main__` are reserved regardless of case and cannot be assigned as aliases. OAuth and API-key display names keep their existing rules.
 
 Selects an existing Codex account, OAuth account, or API key. For `openai`, `main` selects the Codex
-App login. A Codex Pool selection clears process-local affinity and applies to the next request,
-including one from an existing visible task; proxy restart or affinity eviction can also leave a task
-unbound, while in-flight requests keep their captured account. This controls Pool routing only;
+App login. A Codex Pool selection clears affinity and applies to the next request,
+including one from an existing visible task. Bindings for requests with a session ID (including normal Codex CLI and App turns and subagents), or session-less requests anchored on their immediate parent, can survive a graceful proxy restart, for up to 24 hours idle, when the final affinity save at shutdown succeeds. Deeper session-less chains and bindings to the Codex App main login stay in memory only and are assigned again after restart; eviction, account removal, re-login, a crash, or an affinity reset can leave a task unbound, while in-flight requests keep their captured account. This controls Pool routing only;
 Direct mode keeps using the caller-owned/native main credential. Usage-based proactive switching,
 401/403 reauthentication, 429/retry-after cooldowns, exclusion, and pre-output 429/402 failure
 recovery may later select another eligible Pool account. Those recovery paths remain active when
@@ -1179,12 +1204,20 @@ moved because its encrypted AAD and operating-system keyring identity are intent
 
 ### `ocx models [subcommand]` · `ocx model <subcommand>`
 
-`ocx model` is an alias of `ocx models`. With no subcommand, list the models statically seeded in
-configured providers. `--provider` filters one configured provider and `--json` returns model
+`ocx model` is an alias of `ocx models`. With no subcommand, list saved and router-known model IDs
+for configured providers, including registry seeds, custom models and this process's discovery
+cache. A fresh CLI process may have an empty cache; this is not the running proxy catalog. Legacy
+key presets may retain registry seeds when their configured destination changes. `--provider` filters one configured provider and `--json` returns model
 metadata. `live` reads the running catalog; `add`, `edit`, `remove`, and `list-custom` manage manual
 catalog entries; `enable`, `disable`, and `provider` control visibility; `selected` controls a
 provider allowlist; `context` controls provider context caps; and `shadow` manages background
 shadow-call interception.
+
+The `reasoningEfforts` ladder appears only with `--json`. A `null` value means the ladder is
+unknown or was not looked up, including when credential-scoped learned refusals would require
+opening the OS keychain. An empty array `[]` means an explicitly empty ladder or that reasoning
+effort is disabled for the model, such as by `noReasoningModels`. Use `ocx models live` to inspect
+the running proxy's catalog.
 
 Model prices are estimates in USD per million tokens. `ocx models --json` includes a
 `price` object with `cost4` rates and their source; `ocx models price --json` keeps
@@ -1210,7 +1243,7 @@ from custom-model `edit`.
 
 | Subcommand | Supported flags | Action |
 | --- | --- | --- |
-| `list` (default) | `--provider <name>`, `--json` | List models seeded in configured providers, with estimated input/output prices. |
+| `list` (default) | `--provider <name>`, `--json` | List local saved and router-known models, with estimated input/output prices. |
 | `live` | `--provider <name>`, `--json` | Read the running catalog, including models discovered at runtime. Rows are flagged `native`/`routed`, `custom`, and `enabled`/`disabled`. |
 | `price <provider/model>` | `--json` | Read the saved manual override and effective price, including automatic catalog defaults. |
 | `set-price <provider/model>` | `--input <rate>`, `--output <rate>`, `--cache-read <rate>`, `--cache-write <rate>`, `--auto`, `--json` | Set display prices in USD per 1M tokens. Input/output are required when setting; omitted cache rates become zero. `--auto` removes only this model's override. |

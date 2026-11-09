@@ -19,8 +19,8 @@ name: Dev version bump
 #
 # A branch-selected dispatch executes that branch's workflow body with write permission.
 # The in-job guard therefore rejects accidental non-default-ref dispatches. It is an early
-# warning, not a security boundary: a writer could remove it on their branch. Protected
-# release branches and the required review on `dev` remain the enforcement boundaries.
+# warning, not a security boundary: a writer could remove it on their branch. The protected
+# `dev` branch and its required review remain the enforcement boundaries.
 on:
   workflow_dispatch:
     inputs:

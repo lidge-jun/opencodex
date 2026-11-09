@@ -22,15 +22,15 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
 
 Write-Host "Using Node v$nodeVersion"
 
-# Install opencodex globally
-# If npm reports "install scripts blocked" for bun, rerun as:
-#   npm install -g --allow-scripts=bun @bitkyc08/opencodex
+# Install opencodex globally. npm 12 blocks dependency lifecycle scripts by default, and
+# bun's postinstall is what unpacks the bundled runtime; without this approval the install
+# succeeds but `ocx` cannot start (#8361). npm 8 through 11 accept the flag on global installs.
 # (use an elevated PowerShell if the original install was elevated)
 $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
 if (-not $npm) {
     $npm = Get-Command npm -ErrorAction Stop
 }
-& $npm.Source install -g @bitkyc08/opencodex
+& $npm.Source install -g --allow-scripts=bun @bitkyc08/opencodex
 if ($LASTEXITCODE -ne 0) {
     Write-Error "npm install failed with exit code $LASTEXITCODE"
     exit $LASTEXITCODE

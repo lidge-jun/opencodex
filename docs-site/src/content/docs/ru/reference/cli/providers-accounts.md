@@ -26,6 +26,7 @@ pool'ами и контролируют каталог моделей, кото�
 | `quota` | `--refresh`, `--json` | Прочитать отчёты по quota провайдеров. |
 | `presets` | `--json` | Показать provider preset'ы дашборда. |
 | `account-mode` | `pool`, `direct`, `--json` | Выбрать pooled или direct routing для аккаунтов Codex. |
+| `import-cc-switch` | `--source <FILE>`, `--provider <id>`, `--apply`, `--restore`, `--allow-private-network`, `--json` | Предпросмотр, выборочное применение или откат провайдеров без ключей из базы SQLite (`cc-switch.db`) или JSON-файла CC-Switch. |
 
 По умолчанию `add`, `remove` и `set-default` меняют локальную конфигурацию. Для работающего прокси добавьте `--live`, а для удаления — также `--yes`. `--sync --json` тоже пытается синхронизировать после сохранения; при сбое сохранение остаётся, код выхода ненулевой и `needsSync: true`. Флаги `--live` и `--sync` несовместимы. Pacing и snapshot/apply описаны в [английской инструкции](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline).
 
@@ -60,6 +61,27 @@ ocx models live --provider ark --json
 
 Для всего секретного используйте `--api-key` или вход через OAuth.
 :::
+
+### Импорт провайдеров CC-Switch без ключей
+
+```bash
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db
+ocx stop
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db --provider my-provider --apply
+# Запустите прокси в другом терминале (или выполните ocx ensure), затем добавьте ключи:
+ocx start
+printf '%s\n' "$API_KEY" | ocx account add-key my-provider
+
+# Отдельный сценарий отката (сначала остановите прокси; удаляет только неизменённые записи без ключей):
+ocx stop
+ocx provider import-cc-switch --restore
+```
+
+`ocx provider import-cc-switch` проецирует значения **только** из явного разрешённого списка несекретных полей метаданных (ID провайдеров, типы приложений, базовые URL, адаптеры и модели по умолчанию) из обычной базы SQLite или устаревшего JSON-файла CC-Switch. Байты источника и встроенной конфигурации временно считываются для сканирования входа, при этом секретные поля, произвольные отображаемые имена и комментарии TOML пропускаются на уровне байтов, никогда не декодируются в строки, не записываются и не логируются, а временные байтовые буферы обнуляются в `finally`. Узкие правила пути базового URL (`http(s)://host[:port]` с пустым путём или 1–4 сегментами API-пути в нижнем регистре `[a-z0-9._-]`, например `/v1`, `/api/v1` или `/compatible-mode/v1`) и проверки синтаксиса идентификаторов/моделей служат эшелонированной защитой и отклоняют неподходящие значения без их вывода. Исходные файлы открываются один раз с проверкой дескриптора `O_NOFOLLOW | O_NONBLOCK` и для SQLite десериализуются только для чтения в памяти без временных файлов; файлы SQLite с несколькими жёсткими ссылками (`nlink > 1`) отклоняются, чтобы проверки sidecar-файлов нельзя было обойти через альтернативный путь, а если соседний файл `-wal` или `-journal` не пуст, импорт завершается отказом и просит закрыть CC-Switch (или выполнить checkpoint базы) и повторить попытку. Импортируйте только из доверенного локального источника CC-Switch и проверяйте все выведенные ID, модели и `baseUrl` перед добавлением учётных данных:
+
+- **Предпросмотр (по умолчанию):** требует `--source <FILE>`, ничего не записывает и сообщает число найденных, подходящих, конфликтующих и некорректных записей.
+- **Применение (`--apply`):** требует `--source <FILE>` и остановленного прокси (`ocx stop`) и отклоняется на Remote Link Child. Повторите `--provider <id>` для выбора отдельных записей или укажите `--allow-private-network` для loopback и частных сетей. Даже без предварительного предпросмотра `--apply` выводит каждый импортируемый ID провайдера, модель по умолчанию и целевой URL до записи провайдеров без ключей и журнала отката `$OPENCODEX_HOME/cc-switch-provider-import-journal.json` (в `stdout` в текстовом режиме, в `stderr` при `--json`); повторный `--apply` отклоняется, пока существует активный журнал. Проверьте выведенные записи, запустите прокси (`ocx start` в другом терминале или `ocx ensure`) и добавьте ключи через `printf '%s\n' "$API_KEY" | ocx account add-key <provider>` (конвейерный stdin) или `ocx login <provider>`.
+- **Откат (`--restore`):** отдельный сценарий отката (не продолжение добавления ключей), который требует остановленного прокси (`ocx stop`), отклоняется на Remote Link Child и не принимает `--source`, `--provider` или `--allow-private-network`. Команда проверяет `auth.json` только для чтения на уровне байтов (с безопасным отказом, если файл нечитаем или повреждён) и удаляет из активного журнала только те провайдеры, которые по-прежнему совпадают со своим импортированным состоянием без ключей, не выбраны как `defaultProvider` и не используются в маршрутизации, комбо (combos), политике резервирования (fallback policy), аккаунтах OAuth или API-ключах.
 
 ## Аутентификация
 
@@ -96,7 +118,7 @@ ocx login anthropic
 Поставляемая help-surface выглядит так:
 
 ```text
-Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
+Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|reset-affinity|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
@@ -110,6 +132,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
 strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
@@ -126,7 +149,7 @@ Codex pool selection applies to the next request after clearing existing affinit
 
 Подкоманды требуют запущенного прокси и сами определяют записанный runtime-port, кроме `import-orca`: предпросмотр работает только локально, а `import-orca --apply` требует остановленного прокси. Успешные
 операции завершаются с кодом 0. Некорректное использование, неизвестный провайдер, account/key id,
-недостижимый прокси или ошибка API приводят к коду 1. Поля credential'ов выводятся ровно в том
+недостижимый прокси или ошибка API обычно приводят к коду 1. Для `reset-affinity` HTTP 404 означает код выхода 4, HTTP 409 — код 5; остальные ошибки API и неподтверждённые результаты дают код 1. Поля credential'ов выводятся ровно в том
 виде, как их возвращает management API (включая его masking); сырые API-key'и и OAuth-token'ы
 никогда не возвращаются. Display convenience синтезируется на стороне клиента, как и в дашборде:
 `main` — это alias CLI для логина Codex App внутри пула `openai`, OAuth-аккаунты без email
@@ -189,7 +212,7 @@ credential'а, это состояние тоже печатается, но к�
 `auto` снимает ручной выбор, и пул снова распределяет работу по своей стратегии — если только аккаунт Codex буквально не имеет id `auto`: точное совпадение id выигрывает, а `ocx account clear <provider>` всегда восстанавливает автоматический выбор. Аккаунт Codex можно указать по псевдониму, заданному через `ocx account alias`, вместо id; это относится и к `priority`, `pause`, `resume`, `clear-cooldown`, `remove` и `alias`. Для аккаунтов Codex значения `auto`, `main` и `__main__` зарезервированы независимо от регистра и не могут назначаться как псевдонимы. Для отображаемых имён аккаунтов OAuth и API-ключей действуют прежние правила.
 
 Выбирает существующий аккаунт Codex, OAuth-аккаунт или API-ключ. Для `openai` значение `main`
-выбирает вход Codex App. Выбор Codex Pool очищает process-local affinity и применяется к следующему запросу, включая запрос существующей видимой задачи; после перезапуска прокси или affinity eviction задача также может стать непривязанной, а выполняющиеся запросы сохраняют захваченный аккаунт. Это управляет только Pool routing; Direct mode продолжает использовать caller-owned/native main credential. Проактивное переключение по использованию, повторная аутентификация 401/403, cooldown 429/retry-after, исключение и восстановление после отказа 429/402 до вывода могут позже выбрать другой подходящий Pool-аккаунт. Эти пути восстановления остаются активными, когда переключение по использованию выключено. После смены аккаунта OpenCodex воспроизводит контекст разговора, но prompt cache провайдера может потребовать прогрева. Неизвестные провайдеры
+выбирает вход Codex App. Выбор Codex Pool очищает affinity и применяется к следующему запросу, включая запрос существующей видимой задачи. Привязки запросов с идентификатором сессии (включая обычные ходы Codex CLI и App и субагентов) или запросов без сессии, опирающихся на непосредственного родителя, могут сохраниться после штатного перезапуска прокси при простое до 24 часов, если финальное сохранение affinity при завершении работы прошло успешно. Более глубокие цепочки без сессии и привязки к основному входу Codex App остаются только в памяти и назначаются заново после перезапуска; вытеснение, удаление аккаунта, повторный вход, сбой или сброс affinity могут оставить задачу без привязки, а выполняющиеся запросы сохраняют захваченный аккаунт. Это управляет только Pool routing; Direct mode продолжает использовать caller-owned/native main credential. Проактивное переключение по использованию, повторная аутентификация 401/403, cooldown 429/retry-after, исключение и восстановление после отказа 429/402 до вывода могут позже выбрать другой подходящий Pool-аккаунт. Эти пути восстановления остаются активными, когда переключение по использованию выключено. После смены аккаунта OpenCodex воспроизводит контекст разговора, но prompt cache провайдера может потребовать прогрева. Неизвестные провайдеры
 или id завершаются с кодом 1. `--json` возвращает:
 При **401/403** локальная для процесса привязка к аккаунту сбрасывается и требуется повторная аутентификация.
 При **429** учитывается `Retry-After`, для аккаунта запускается cooldown, привязка сбрасывается,
@@ -375,18 +398,19 @@ ocx account main recover [--rollback --yes] [--json]
 
 ### `ocx models [subcommand]` · `ocx model <subcommand>`
 
-`ocx model` — alias команды `ocx models`. Без подкоманды команда показывает модели, статически
-засеянные в настроенных провайдерах. `--provider` фильтрует один провайдер, а `--json` возвращает
+`ocx model` — alias команды `ocx models`. Без подкоманды команда показывает сохранённые и известные маршрутизатору ID моделей, включая записи реестра, пользовательские модели и кэш обнаружения этого процесса CLI. Кэш нового процесса может быть пустым и не является каталогом работающего прокси. Некоторые старые пресеты с ключом сохраняют записи реестра после смены адреса. `--provider` фильтрует один провайдер, а `--json` возвращает
 метаданные моделей. `live` читает работающий каталог; `add`, `edit`, `remove` и `list-custom`
 управляют ручными записями каталога; `enable`, `disable` и `provider` управляют видимостью;
 `selected` управляет allowlist'ом провайдера; `context` — provider context cap'ами; `shadow`
 управляет intercept'ом background shadow-call'ов.
 
+Поле `reasoningEfforts` отображается только с `--json`. Значение `null` означает, что список неизвестен или не запрашивался, в том числе когда для проверки пришлось бы открыть системное хранилище ключей. Пустой массив `[]` означает явно пустой список либо отключённый для модели уровень рассуждения, например через `noReasoningModels`. Каталог работающего прокси доступен через `ocx models live`.
+
 `add` и `remove` по умолчанию сохраняют локально; `--live` меняет работающий прокси. Без прокси локальное сохранение с `--json` возвращает `sync.status: "not-attempted"`, `needsSync: true` и код 0. Неудачная попытка синхронизации сохраняет запись и возвращает ненулевой код. `list-custom` читает локальный список. `display-name` использует исходный upstream ID, а `order` — публичные ID picker. Полная перестановка, префикс featured и сброс native-порядка описаны в [английской инструкции](/reference/cli/providers-accounts/#display-names-and-picker-identities).
 
 | Подкоманда | Поддерживаемые флаги | Действие |
 | --- | --- | --- |
-| `list` (default) | `--provider <name>`, `--json` | Показать модели, засеянные в настроенных провайдерах. |
+| `list` (default) | `--provider <name>`, `--json` | Показать локально сохранённые и известные маршрутизатору модели. |
 | `live` | `--provider <name>`, `--json` | Прочитать работающий каталог, включая модели, обнаруженные во время выполнения. Строки помечаются как `native`/`routed`, `custom` и `enabled`/`disabled`. |
 | `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | Регистрирует custom-модель локально или на работающем прокси с `--live`. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Изменить custom-модель. `-` очищает поле; `0` очищает context window. |

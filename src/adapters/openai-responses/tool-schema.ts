@@ -8,13 +8,19 @@ import {
   XaiToolSchemaCompatibilityError,
 } from "../xai-tool-schema";
 import { isPlainObject } from "./internal";
+import { hasItemProvenance, isHistoricalItem } from "../../responses/item-provenance";
 
-function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean): unknown | undefined {
+function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean, chatDefaults: boolean): unknown | undefined {
   if (!isPlainObject(tool) || tool.type !== "function") return tool;
   // Runs for every Responses destination, forward auth included: the ChatGPT backend is where
   // the `\p{…}` rejection was observed, and it reaches this function through the same seam.
   const compatible = stripUnicodePropertyPatterns(tool);
-  const source = isPlainObject(compatible) ? compatible : tool;
+  const compatibleTool = isPlainObject(compatible) ? compatible : tool;
+  // Chat defaults to non-strict; OpenAI Responses otherwise normalizes an omitted flag to
+  // strict, making optional alternatives (such as pointer index vs coordinates) required.
+  const source = chatDefaults && compatibleTool.strict === undefined
+    ? { ...compatibleTool, strict: false }
+    : compatibleTool;
   if (xaiTarget) {
     const parameters = normalizeXaiToolParameters(isPlainObject(source.parameters) ? source.parameters : {});
     return parameters === undefined ? undefined : { ...source, parameters };
@@ -72,7 +78,7 @@ function reconcileToolChoiceForOmittedTools(
   return body;
 }
 
-export function normalizeToolSchemas(body: unknown, xaiTarget: boolean): unknown {
+export function normalizeToolSchemas(body: unknown, xaiTarget: boolean, chatDefaults = false): unknown {
   if (!isPlainObject(body)) return body;
 
   const omittedFunctionNames = new Set<string>();
@@ -80,7 +86,7 @@ export function normalizeToolSchemas(body: unknown, xaiTarget: boolean): unknown
     let changed = false;
     const normalized: unknown[] = [];
     for (const tool of tools) {
-      const fixed = normalizeFunctionToolSchema(tool, xaiTarget);
+      const fixed = normalizeFunctionToolSchema(tool, xaiTarget, chatDefaults);
       if (fixed === undefined) {
         changed = true;
         if (isPlainObject(tool) && typeof tool.name === "string") omittedFunctionNames.add(tool.name);
@@ -195,11 +201,19 @@ function mergeLoadedTools(declaredTools: unknown[], loadedTools: unknown[]): unk
  * serializing the raw request, so activate those returned definitions for upstreams that do not
  * implement the native deferred-loading handshake themselves.
  */
-export function promoteClientLoadedTools(body: unknown): unknown {
+export function promoteClientLoadedTools(body: unknown, replayPrefixLength?: number): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
 
-  const loadedTools = body.input.flatMap(item =>
-    isPlainObject(item) && item.type === "tool_search_output" && Array.isArray(item.tools)
+  const currentTurnStart = Number.isFinite(replayPrefixLength)
+    ? Math.max(0, Math.trunc(replayPrefixLength!))
+    : 0;
+  const hasProvenance = body.input.some(hasItemProvenance);
+  const isCurrentItem = (item: unknown, index: number): boolean =>
+    hasProvenance ? !isHistoricalItem(item) : index >= currentTurnStart;
+
+  // Filter the source before declarations lose their item's provenance in a live catalog.
+  const loadedTools = body.input.flatMap((item, index) =>
+    isCurrentItem(item, index) && isPlainObject(item) && item.type === "tool_search_output" && Array.isArray(item.tools)
       ? item.tools
       : []
   );
@@ -210,17 +224,20 @@ export function promoteClientLoadedTools(body: unknown): unknown {
     return tools === body.tools ? body : { ...body, tools };
   }
 
-  const additionalToolsIndex = body.input.findIndex(item =>
-    isPlainObject(item) && item.type === "additional_tools" && Array.isArray(item.tools)
+  const currentAdditionalToolsIndex = body.input.findIndex((item, index) =>
+    isCurrentItem(item, index) && isPlainObject(item) && item.type === "additional_tools" && Array.isArray(item.tools)
   );
-  if (additionalToolsIndex < 0) return { ...body, tools: mergeLoadedTools([], loadedTools) };
 
-  const additionalTools = body.input[additionalToolsIndex];
+  if (currentAdditionalToolsIndex < 0) {
+    return { ...body, tools: mergeLoadedTools([], loadedTools) };
+  }
+
+  const additionalTools = body.input[currentAdditionalToolsIndex];
   if (!isPlainObject(additionalTools) || !Array.isArray(additionalTools.tools)) return body;
   const tools = mergeLoadedTools(additionalTools.tools, loadedTools);
   if (tools === additionalTools.tools) return body;
   const input = [...body.input];
-  input[additionalToolsIndex] = { ...additionalTools, tools };
+  input[currentAdditionalToolsIndex] = { ...additionalTools, tools };
   return { ...body, input };
 }
 

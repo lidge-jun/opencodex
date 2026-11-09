@@ -118,15 +118,14 @@ export function configuredNativeAliasSlugs(
 }
 
 /**
- * Bare native rows that must be absent, rather than merely hidden, while Desktop native-alias
- * compatibility is active. Codex Desktop's remote allowlist can ignore `visibility: "hide"`;
- * omitting disabled native rows is therefore part of the explicit native-alias opt-in.
+ * Bare native rows omitted by native-alias compatibility or explicit native-omission opt-in.
+ * Codex Desktop's remote allowlist can ignore `visibility: "hide"`.
  */
 export function desktopAllowlistSuppressedNativeSlugs(
-  config: Pick<OcxConfig, "combos" | "disabledModels">,
+  config: Pick<OcxConfig, "combos" | "disabledModels" | "omitDisabledNativeModels">,
 ): Set<string> {
   const suppressed = configuredNativeAliasSlugs(config);
-  if (suppressed.size === 0) return suppressed;
+  if (suppressed.size === 0 && config.omitDisabledNativeModels !== true) return suppressed;
   const disabled = disabledNativeSlugs(config);
   for (const slug of NATIVE_OPENAI_MODELS) {
     if (disabled.has(slug)) suppressed.add(slug);

@@ -147,6 +147,7 @@ export async function applyFinalRouteRequestNormalization(args: {
   droidDefaultEffort?: HandleResponsesOptions["droidDefaultEffort"];
 }): Promise<void> {
   const { parsed, route, config, req, logCtx, inboundWire, inboundTransport } = args;
+  parsed._chatCompletionsInput = inboundWire === "chat";
   const effortSelector = prepareEffortNormalization(parsed, route);
   if (applyDroidResponsesReasoningDefault(
     parsed._rawBody,
@@ -156,6 +157,7 @@ export async function applyFinalRouteRequestNormalization(args: {
 
   // Only Anthropic message routes retain the Codex-facing selector. Other providers must keep
   // their existing response.model contract even when their public and wire model ids differ.
+  // Request preparation assigns the original client label separately for synthetic turns.
   const responseModelId = parsed.modelId;
   const preserveAnthropicResponseModel = route.providerName === "anthropic"
     || route.provider.adapter === "anthropic";
@@ -346,10 +348,16 @@ export async function applyFinalRouteRequestNormalization(args: {
     // Native passthrough keeps its snapshot-owned effort contract, including saved exclusions.
     if (!shouldApplyNativeEffortClamp(route.providerName, route.provider, finalSelectedModelId)) {
       const previousEffort = parsed.options.reasoning;
+      const previousThinkingEnabled = parsed.options.thinkingEnabled;
       normalizeThinkingOptions(route.provider, route.modelId, parsed.options);
+      const raw = parsed._rawBody as { reasoning?: unknown } | undefined;
       if (previousEffort !== undefined && parsed.options.reasoning === undefined) {
-        const raw = parsed._rawBody as { reasoning?: unknown } | undefined;
         if (raw) raw.reasoning = stripEmptyLadderEffort(raw.reasoning, []);
+      }
+      if (previousThinkingEnabled !== undefined && parsed.options.thinkingEnabled === undefined
+        && raw?.reasoning && typeof raw.reasoning === "object" && !Array.isArray(raw.reasoning)) {
+        delete (raw.reasoning as { enabled?: boolean }).enabled;
+        if (Object.keys(raw.reasoning).length === 0) delete raw.reasoning;
       }
     }
     const { applyEffortCap, effortCapAppliesTo, supportedLadderFor } = await import("../effort-policy");

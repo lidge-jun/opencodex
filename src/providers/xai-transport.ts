@@ -7,14 +7,14 @@ import { resolveMistralTransport } from "./mistral-transport";
 
 export const XAI_GROK_CLI_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 
-/** The two hosts that serve xAI's Responses API: the public API and the Grok CLI proxy. */
-const XAI_RESPONSES_HOSTS = new Set(["api.x.ai", "cli-chat-proxy.grok.com"]);
+/** Exact xAI Responses hosts: global and US public APIs, and the Grok CLI proxy. */
+const XAI_RESPONSES_HOSTS = new Set(["api.x.ai", "us.api.x.ai", "cli-chat-proxy.grok.com"]);
 
 /**
  * True when this provider's Responses traffic terminates at xAI itself.
  *
- * Probed 2026-08-22 one field per request: the two hosts accept and refuse exactly the same
- * web_search fields, so they are one dialect rather than two. Matching is exact-host over
+ * The global API and CLI proxy were probed 2026-08-22; the US regional API documents
+ * the same request parameters. Matching is exact-host over
  * https, which keeps lookalikes (`api.x.ai.evil.test`) and nonstandard ports out.
  */
 export function isXaiResponsesDestination(provider: Pick<OcxProviderConfig, "baseUrl">): boolean {

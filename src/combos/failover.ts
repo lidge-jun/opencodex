@@ -5,6 +5,10 @@ import { isAnthropicBillingFailure } from "../providers/anthropic-billing-refusa
 import { isKiroAccountProfileRefusal } from "../adapters/kiro-refusal";
 import type { OcxComboTarget } from "../types";
 import { targetKey } from "./types";
+import { isDefiniteContextOverflow } from "../lib/context-overflow-verdict";
+
+// The verdict lives in a dependency-free leaf so the presentation classifier can share it.
+export { isDefiniteContextOverflow };
 import {
   captureConfigGeneration,
   sweepExpiredOnWrite,
@@ -433,6 +437,7 @@ function isProviderScopedQuotaCap(
   message: string,
   code?: string | null,
 ): boolean {
+  if (status === 400 || status === 422) return false; // Validation prose may reflect the caller's input.
   const normalizedCode = normalizedFailureCode(code);
   const text = message.toLowerCase();
   if (
@@ -463,7 +468,7 @@ function isRequestLocalFreePromptCap(
   message: string,
   code?: string | null,
 ): boolean {
-  if (status !== 400) return false;
+  if (status !== 400 && status !== 422) return false;
   const text = message.toLowerCase();
   if (normalizedFailureCode(code) === "free_rate_limited") return true;
   if (text.includes("err_free_prompt_cap")) return true;
@@ -704,75 +709,6 @@ function isProviderTargetContextOverflow(
     && /\bprompt\s+\d+\s*>\s*\d+\s+maximum context length\b/i.test(message);
 }
 
-/** A status can carry a verdict about the REQUEST; 401/403/429 speak about the credential. */
-const CONTEXT_VERDICT_STATUSES: ReadonlySet<number> = new Set([400, 413, 422]);
-
-/**
- * Phrases a provider emits when the INPUT does not fit this model's context window. Matched
- * against the innermost provider message only, so an unrelated refusal that merely quotes one
- * of these tokens in a code field cannot authorize a replay.
- */
-const DEFINITE_CONTEXT_OVERFLOW_PHRASES = [
-  "exceeds the context window",
-  "exceed the context window",
-  "context window exceeded",
-  "context length exceeded",
-  "maximum context length",
-  "maximum context window",
-  "too many tokens",
-];
-
-/** Wrapper envelopes unwrapped before the leaf message is read. */
-const MAX_CONTEXT_OVERFLOW_ENVELOPES = 4;
-
-function isDefiniteContextOverflowMessage(text: string): boolean {
-  const normalized = text.toLowerCase();
-  return normalized === "context_length_exceeded"
-    || DEFINITE_CONTEXT_OVERFLOW_PHRASES.some(phrase => normalized.includes(phrase));
-}
-
-/**
- * Confirm a context overflow from the provider MESSAGE rather than from a code token that
- * merely appears somewhere in the envelope. An upstream controls both fields and can emit a
- * contradictory pair -- `context_length_exceeded` beside `Unsupported parameter: user` -- and
- * that is not evidence the turn is too large for this model. `classifyError` reads the whole
- * blob, which is exactly the looseness this must not inherit.
- *
- * A JSON-shaped body that fails to parse is truncated or corrupt, not prose: `classificationText`
- * is capped at 500 characters by `normalizeUpstreamErrorText` before it reaches this function, so
- * a long envelope arrives here as a JSON prefix. Reading that prefix as plain text would let an
- * arbitrary field that happens to sit in the first 500 bytes authorize a hop, so it fails closed.
- *
- * Only the exact proxy wrapper is unwrapped, within a fixed envelope budget and 16,384 characters.
- * Exported for the sidecar loops, which classify their own provider failures with the same rule.
- */
-export function isDefiniteContextOverflow(status: number, message: string): boolean {
-  if (!CONTEXT_VERDICT_STATUSES.has(status) && status < 500) return false;
-  if (message.length > 16_384) return false;
-  let text = message.trim();
-  // One pass per unwrapped envelope, plus one for the leaf the last envelope yields.
-  for (let unwrapped = 0; unwrapped <= MAX_CONTEXT_OVERFLOW_ENVELOPES; unwrapped += 1) {
-    const providerPrefix = /^Provider error \d{3}:\s*/.exec(text);
-    if (providerPrefix) text = text.slice(providerPrefix[0].length).trim();
-    if (!text.startsWith("{")) return isDefiniteContextOverflowMessage(text);
-    if (unwrapped === MAX_CONTEXT_OVERFLOW_ENVELOPES) return false;
-    let payload: unknown;
-    try { payload = JSON.parse(text); } catch { return false; }
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
-    const record = payload as Record<string, unknown>;
-    const response = record.response && typeof record.response === "object" && !Array.isArray(record.response)
-      ? record.response as Record<string, unknown>
-      : undefined;
-    const source = [record.error, response?.error, response?.last_error, record.last_error, record]
-      .find((candidate): candidate is Record<string, unknown> =>
-        !!candidate && typeof candidate === "object" && !Array.isArray(candidate)
-        && typeof (candidate as Record<string, unknown>).message === "string");
-    if (!source) return false;
-    text = (source.message as string).trim();
-  }
-  return false;
-}
-
 const CODEX_ACCOUNT_MODEL_REFUSAL = /^The '[^']{1,256}' model is not supported when using Codex with a ChatGPT account\.$/;
 
 export type CodexAccountModelRefusal = "other" | "refusal" | "ambiguous";
@@ -902,8 +838,8 @@ export function comboFailureDecision(
   //
   // This MUST be tested before the generic stop list below. Our own refusal message says
   // "context window" -- that is what it refuses on -- and the classifier remaps that phrase,
-  // so checking the stop list first swallowed the signal and ended the chain. An UPSTREAM
-  // `context_length_exceeded` carries no admission code and still falls through to stop.
+  // so checking the stop list first swallowed the signal and ended the chain. Confirmed
+  // upstream context refusals already took the bounded message-classification hop above.
   //
   // Matched on the STRUCTURED code only, which classifyError now preserves for our own
   // refusal. A raw substring test would additionally let any upstream override a terminal

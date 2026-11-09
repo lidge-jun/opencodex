@@ -24,7 +24,7 @@ export function kiroDeviceFixture() {
   let current = 1_000_000;
   setKiroDeviceClockForTests(() => current);
   return {
-    setPost(post: (url: string, body: Record<string, unknown>) => Promise<Response>) { setKiroDevicePostForTests(post); },
+    setPost(post: (url: string, body: Record<string, unknown>, headers?: Record<string, string>) => Promise<Response>) { setKiroDevicePostForTests(post); },
     advance(ms: number) { current += ms; },
     async close() {
       clearKiroDeviceFlowsForTests();

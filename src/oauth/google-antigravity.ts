@@ -14,6 +14,7 @@ import { generatePKCE } from "./pkce";
 import { normalizeOAuthPlan } from "./plan";
 import type { OAuthController, OAuthCredentials } from "./types";
 import { antigravityUserAgent, ANTIGRAVITY_IDE_VERSION } from "../adapters/client-fingerprint";
+import { AntigravityProjectDiscoveryError } from "./antigravity-discovery-diagnostics";
 
 const CLIENT_ID = process.env.GOOGLE_ANTIGRAVITY_CLIENT_ID
   || "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
@@ -101,15 +102,19 @@ function extractProjectId(data: Record<string, unknown> | undefined): string | u
   return undefined;
 }
 
-async function loadCodeAssistProject(accessToken: string, signal?: AbortSignal): Promise<{ projectId?: string; plan: string | null; defaultTierId?: string } | undefined> {
+async function loadCodeAssistProject(accessToken: string, signal?: AbortSignal, diagnostics?: AntigravityProjectDiscoveryError): Promise<{ projectId?: string; plan: string | null; defaultTierId?: string } | undefined> {
   const response = await fetch(`${PROD_API}/${API_VERSION}:loadCodeAssist`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, Accept: "*/*", "Content-Type": "application/json", "User-Agent": antigravityUserAgent() },
     body: JSON.stringify({ metadata: { ideType: "ANTIGRAVITY" } }),
     signal: requestSignal(signal),
   });
-  if (!response.ok) return undefined;
+  if (!response.ok) {
+    diagnostics?.observe("loadCodeAssist", response.status, undefined);
+    return undefined;
+  }
   const data: unknown = await response.json().catch(() => undefined);
+  diagnostics?.observe("loadCodeAssist", response.status, data);
   if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
   const payload = data as Record<string, unknown>;
   const tier = (value: unknown) => value && typeof value === "object" && "id" in value
@@ -133,7 +138,7 @@ async function loadCodeAssistProject(accessToken: string, signal?: AbortSignal):
   };
 }
 
-async function onboardProject(accessToken: string, signal?: AbortSignal, tierId = "free-tier"): Promise<string | undefined> {
+async function onboardProject(accessToken: string, signal?: AbortSignal, tierId = "free-tier", diagnostics?: AntigravityProjectDiscoveryError): Promise<string | undefined> {
   for (let attempt = 0; attempt < ONBOARD_ATTEMPTS; attempt++) {
     if (signal?.aborted) throw signal.reason ?? new Error("Antigravity onboarding aborted");
     const response = await fetch(`${DAILY_API}/${API_VERSION}:onboardUser`, {
@@ -148,6 +153,7 @@ async function onboardProject(accessToken: string, signal?: AbortSignal, tierId 
       signal: requestSignal(signal),
     });
     if (!response.ok) {
+      diagnostics?.observe("onboardUser", response.status, undefined);
       // Transient (429/5xx): keep polling within the attempt budget. Hard 4xx: give up now.
       if (response.status === 429 || response.status >= 500) {
         await new Promise(resolve => setTimeout(resolve, ONBOARD_POLL_MS));
@@ -155,7 +161,13 @@ async function onboardProject(accessToken: string, signal?: AbortSignal, tierId 
       }
       return undefined;
     }
-    const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    let unparseable = false;
+    const data = (await response.json().catch(() => { unparseable = true; return {}; })) as Record<string, unknown>;
+    // Keep only the last poll, and only sanitized text. Parsing/admission below is unchanged.
+    diagnostics?.observe("onboardUser", response.status, unparseable ? undefined : data);
+    // A JSON `null` used to end polling with a TypeError on `data.done`; end it explicitly instead,
+    // keeping the one-poll budget, so the caller still raises the recorded discovery error.
+    if (data === null) return undefined;
     if (data.done === true) {
       return extractProjectId(data.response as Record<string, unknown> | undefined);
     }
@@ -169,13 +181,13 @@ export async function discoverAntigravityProject(accessToken: string, signal?: A
   return (await discoverAntigravityAccount(accessToken, signal)).projectId;
 }
 
-async function discoverAntigravityAccount(accessToken: string, signal?: AbortSignal): Promise<{ projectId?: string; plan?: string | null }> {
-  const account = await loadCodeAssistProject(accessToken, signal);
+async function discoverAntigravityAccount(accessToken: string, signal?: AbortSignal, diagnostics?: AntigravityProjectDiscoveryError): Promise<{ projectId?: string; plan?: string | null }> {
+  const account = await loadCodeAssistProject(accessToken, signal, diagnostics);
   // Once loadCodeAssist answered, an onboarding failure must not discard its tier observation;
   // a missing project still fails login, and cancellation still propagates.
   const projectId = account?.projectId ?? await (account
-    ? onboardProject(accessToken, signal, account.defaultTierId).catch(error => { if (signal?.aborted) throw error; return undefined; })
-    : onboardProject(accessToken, signal));
+    ? onboardProject(accessToken, signal, account.defaultTierId, diagnostics).catch(error => { if (signal?.aborted) throw error; return undefined; })
+    : onboardProject(accessToken, signal, undefined, diagnostics));
   // An unanswered loadCodeAssist observed nothing; only a parsed body may clear a stored label.
   return { projectId, ...(account ? { plan: account.plan } : {}) };
 }
@@ -248,11 +260,12 @@ class AntigravityOAuthFlow extends OAuthCallbackFlow {
     }, this.ctrl.signal);
     const creds = credentialsFromPayload(payload);
     this.ctrl.onProgress?.("Discovering Cloud Code Assist project");
-    const { projectId, plan } = await discoverAntigravityAccount(creds.access, this.ctrl.signal);
+    const diagnostics = new AntigravityProjectDiscoveryError();
+    const { projectId, plan } = await discoverAntigravityAccount(creds.access, this.ctrl.signal, diagnostics);
     if (!projectId) {
       // Fail the login rather than persisting a credential that every request would reject for a
       // missing CCA project — otherwise status shows "logged in" while all calls fail closed.
-      throw new Error("Antigravity login could not discover a Cloud Code Assist project for this account. Ensure the account has Antigravity/Cloud Code Assist access and try again.");
+      throw diagnostics;
     }
     return { ...creds, projectId, plan };
   }

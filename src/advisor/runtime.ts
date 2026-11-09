@@ -55,6 +55,7 @@ export interface AdvisorRuntimeDeps {
   workerIdentity: string;
   workerModelId: string;
   admissionScope?: AdmissionModelScope;
+  admissionPolicy?: import("../types/admission-policy").CapturedAdmissionPolicy;
   abortSignal?: AbortSignal;
   /** Test seam; production always self-fetches the resolved local destination. */
   baseUrlOverride?: string;
@@ -139,7 +140,11 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
     reason: AdvisorTrigger,
     question: string | undefined,
     evidence?: AdvisorRepairEvidence,
+    abortSignal?: AbortSignal,
   ): Promise<AdvisorConsultOutcome> => {
+    const consultationSignal = abortSignal && deps.abortSignal
+      ? AbortSignal.any([deps.abortSignal, abortSignal])
+      : abortSignal ?? deps.abortSignal;
     const current = liveSettings();
     if (!current.enabled || current.model.trim() === "") {
       return {
@@ -187,7 +192,7 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
         content: formatAdvisorUnavailable(reason === "manual" ? "manual" : "preflight", result.error),
       };
     }
-    if (deps.abortSignal?.aborted) return { ok: false, isError: true, cancelled: true, content: "" };
+    if (consultationSignal?.aborted) return { ok: false, isError: true, cancelled: true, content: "" };
     const budgetKey = identify(parsed).budget;
     const requestCapped = consultations >= MAX_ADVISOR_CONSULTATIONS_PER_REQUEST;
     if (requestCapped
@@ -216,9 +221,10 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
         deps.config,
         current.effort,
         current.timeoutMs,
-        deps.abortSignal,
+        consultationSignal,
         deps.baseUrlOverride,
-      deps.admissionScope,
+        deps.admissionScope,
+        deps.admissionPolicy,
       );
     } catch (error) {
       activities.finish(activityId, { status: "failed", durationMs: Math.max(0, now() - startedAt) });
@@ -334,7 +340,7 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
   };
 
   const plan: AdvisorPlan = {
-    consult: (parsed, reason, question) => runConsultation(parsed, reason, question),
+    consult: (parsed, reason, question, abortSignal) => runConsultation(parsed, reason, question, undefined, abortSignal),
     // The guard's own failure/limit text goes through the same runtime-owned, marker-neutralized
     // formatter so no guard path can emit text that looks like a genuine advice wrapper.
     formatUnavailable: (kind, error) => formatAdvisorUnavailable(kind, error),

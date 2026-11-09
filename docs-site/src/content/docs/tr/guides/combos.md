@@ -229,7 +229,8 @@ ikiye ayrılır.
 | --- | --- |
 | HTTP 401, 403, 404, 408, 429 veya herhangi bir 5xx | Hedefi soğutun ve bir sonraki uygun hedefe atlayın. |
 | Sınıflandırılmış kimlik doğrulama, abonelik, kota, hız sınırı, aşırı yük veya yukarı akış sunucu hatası | Yalnızca durum yeterli olmadığında bile hedefi soğutun ve atlayın. |
-| İstemci iptali (499), `origin_rejected`, siber politika reddi, bağlam taşması veya diğer geçersiz istek | Durun ve hatayı döndürün; başka bir hedef isteği geçerli kılmaz. |
+| İstemci iptali (499), `origin_rejected`, siber politika reddi veya diğer geçersiz istek | Durun ve hatayı döndürün; başka bir hedef isteği geçerli kılmaz. |
+| Çıktıdan önce doğrulanan bağlam aşımı (HTTP 400 dahil) | Soğutma olmadan denenmemiş uygun hedefe geçer; hedefler tükenirse ilk doğrulanan HTTP 400 bağlam hatasını döndürür (başka durum koduyla gelen bağlam reddi de sonraki hedefe geçirir ama saklanmaz). |
 | `user` alanını açıkça reddeden, `reasoning.effort`/`reasoning_effort` için desteklenmeyen değer bildiren, modele özgü görüntü girdisini reddeden (`param: input`) veya rotanın okuyamadığı girdi medyasını reddeden (`unsupported_input_modality`) yapılandırılmış HTTP 400 | Çıktı başlamadan önce bekleme süresi kaydetmeden sonraki uygun hedefe atlar; aşağıdaki isteğe bağlı parametre uyumluluğuna bakın. |
 | Süreç içi bir bağdaştırıcının (`runTurn`) yürüttüğü Responses turunda, geçerli isteğin bildirmediği ilk araç çağrısı (herhangi bir çıktıdan ve yeniden oynatılamaz yan etkiden önce) | Hedefi bekleme süresine alır ve aynı araç kataloğuyla sonraki hedefe atlar. Görünür çıktıdan veya yeniden oynatılamaz bir yan etkiden sonra ret kesindir. Chat Completions ve Anthropic Messages istekleri değişmez. |
 | Diğer sınıflandırılmamış hatalar | Durun ve hatayı döndürün. |
@@ -240,8 +241,13 @@ yerine onu kullanır; Codex sıfırlama başlıkları ve yapılandırılmış `c
 açık `Retry-After` gecikmesi en fazla 24 saat, sıfırlama kaynaklı, yapılandırılmış ve varsayılan soğuma süreleri en fazla 10 dakika ile sınırlandırılır.
 
 Geçerli istek denenen aynı hedefi asla yeniden denemez. Daha sonraki istekler
-soğuma süresi dolana kadar onu atlar. Uygun hiçbir hedef kalmazsa proxy
+soğuma süresi dolana kadar onu atlar. Henüz hiçbir hedef denenmemişse ve uygun hedef yoksa proxy
 `error.code = "combo_unavailable"` ile HTTP 503 döndürür.
+
+Doğrulanmış bir HTTP 400 bağlam reddinden sonra hedefler veya gönderim bütçesi tükenirse ilk ret
+`context_length_exceeded` olarak döner; kota hataları dahil sonraki yeniden denenebilir hatalardan önceliklidir.
+Kalan hedeflerin akıl yürütmeyi yeniden oynatamaması veya ücretli kullanım onayının bulunmaması da buna dahildir.
+İptal, sonraki ölümcül ret ve açık geri dönüş politikası reddi hemen durdurur; onaysız ücretli hedefe istek gönderilmez.
 
 :::note
 Yük devretme kasıtlı olarak sınırlandırılmıştır. Hedefe özgü kullanılabilirlik,
@@ -405,7 +411,7 @@ tam doğrulama mesajını görüntüler.
 ### Yük devretme ilk hatadan sonra neden durdu?
 
 Hata hedefe özgü olmaktan ziyade uç (terminal) bir hataydı. Geçersiz girdiyi
-düzeltin, aşırı büyük bir bağlamı azaltın, bir politika reddini işleyin veya
+düzeltin, bir politika reddini işleyin veya
 reddedilen istek kaynağını düzeltin. Kombolar bu durumlar için atlama yapmaz.
 
 

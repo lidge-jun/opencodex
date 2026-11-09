@@ -51,14 +51,22 @@ const RETRY_POLICY_VALIDATORS = {
 export const PROVIDER_COMPAT_CARRY_FIELDS = [
   "preserveReasoningContentModels",
   "preserveResponsesReasoningContent",
+  "promoteAdditionalTools",
   "requiresReasoningPlaceholderModels",
   "foldDeveloperRoleToSystem",
+  "singleLeadingSystemMessage",
   "reasoningWireFormat",
   "omitReasoningEffortWithToolsModels",
   ...RETRY_POLICY_FIELDS,
 ] as const satisfies readonly (keyof OcxProviderConfig)[];
 
-export const PROVIDER_DISPLAY_CARRY_FIELDS = ["hideRawReasoning"] as const satisfies readonly (keyof OcxProviderConfig)[];
+export const PROVIDER_DISPLAY_CARRY_FIELDS = [
+  "hideRawReasoning",
+  // The Anthropic thinking display policy (#8363) is operator configuration the dashboard form
+  // cannot send either, so an unrelated save must not silently return the model to the default.
+  "thinkingDisplay",
+  "modelThinkingDisplay",
+] as const satisfies readonly (keyof OcxProviderConfig)[];
 
 export type ProviderCompatCarryField = typeof PROVIDER_COMPAT_CARRY_FIELDS[number];
 type ProviderDisplayCarryField = typeof PROVIDER_DISPLAY_CARRY_FIELDS[number];
@@ -129,7 +137,8 @@ export function carryProviderCompatFields(
   for (const field of PROVIDER_DISPLAY_CARRY_FIELDS) {
     if (sample.submitted.has(field)) continue;
     const stored = live[field];
-    if (stored !== undefined) target[field] = stored;
+    // Copy maps rather than alias them, like the compatibility settings below.
+    if (stored !== undefined) target[field] = stored !== null && typeof stored === "object" ? structuredClone(stored) : stored;
   }
   if (!providerOverwriteKeepsDestination(candidate, live, sample)) return;
   for (const field of PROVIDER_COMPAT_CARRY_FIELDS) {
@@ -159,10 +168,15 @@ export function providerCompatFieldConfigError(provider: Record<string, unknown>
   }
   const fold = provider.foldDeveloperRoleToSystem;
   if (fold !== undefined && typeof fold !== "boolean") return "foldDeveloperRoleToSystem must be a boolean";
+  if (provider.singleLeadingSystemMessage !== undefined && typeof provider.singleLeadingSystemMessage !== "boolean") {
+    return "singleLeadingSystemMessage must be a boolean";
+  }
   const hideRawReasoning = provider.hideRawReasoning;
   if (hideRawReasoning !== undefined && typeof hideRawReasoning !== "boolean") return "hideRawReasoning must be a boolean";
   const preserveResponses = provider.preserveResponsesReasoningContent;
   if (preserveResponses !== undefined && typeof preserveResponses !== "boolean") return "preserveResponsesReasoningContent must be a boolean";
+  const promoteAdditionalTools = provider.promoteAdditionalTools;
+  if (promoteAdditionalTools !== undefined && typeof promoteAdditionalTools !== "boolean") return "promoteAdditionalTools must be a boolean";
   const wire = provider.reasoningWireFormat;
   if (wire !== undefined && !PROVIDER_REASONING_WIRE_FORMATS.includes(wire as never)) {
     return `reasoningWireFormat must be one of: ${PROVIDER_REASONING_WIRE_FORMATS.join(", ")}`;
@@ -200,6 +214,13 @@ export function applyProviderCompatPatchFields(
     else return { error: "foldDeveloperRoleToSystem must be a boolean" };
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "singleLeadingSystemMessage")) {
+    const value = rawBody.singleLeadingSystemMessage;
+    if (value === null) delete next.singleLeadingSystemMessage;
+    else if (typeof value === "boolean") next.singleLeadingSystemMessage = value;
+    else return { error: "singleLeadingSystemMessage must be a boolean" };
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "hideRawReasoning")) {
     const value = rawBody.hideRawReasoning;
     if (value === null) delete next.hideRawReasoning;
@@ -212,6 +233,13 @@ export function applyProviderCompatPatchFields(
     if (value === null) delete next.preserveResponsesReasoningContent;
     else if (typeof value === "boolean") next.preserveResponsesReasoningContent = value;
     else return { error: "preserveResponsesReasoningContent must be a boolean" };
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "promoteAdditionalTools")) {
+    const value = rawBody.promoteAdditionalTools;
+    if (value === null) delete next.promoteAdditionalTools;
+    else if (typeof value === "boolean") next.promoteAdditionalTools = value;
+    else return { error: "promoteAdditionalTools must be a boolean" };
     touched = true;
   }
   if (Object.hasOwn(rawBody, "inferContextWindow")) {

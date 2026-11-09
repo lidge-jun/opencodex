@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { handleHubUsage } from "../../src/server/hub-usage";
+import { parseHubUsage } from "../../src/remote/hub-usage";
 import * as aggregates from "../../src/server/management/usage-aggregate-cache";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -57,6 +58,14 @@ test("loopback hub reads only the explicitly authenticated key and strips accoun
     const body = await response.json();
     expect(body).toMatchObject({ source: "hub", scope: "client", summary: { requests: 1, totalTokens: 3 } });
     expect(body.models.map((row: { model: string }) => row.model)).toEqual([`model-${i}`]);
+    expect(body.apps).toMatchObject([{ client: "unclassified", requests: 1, totalTokens: 3 }]);
+    const old = { ...body }; delete old.apps;
+    expect(parseHubUsage(old)).not.toBeNull();
+    const nested = { ...body, apps: [{ ...body.apps[0], privateField: "private-marker" }] };
+    expect(JSON.stringify(parseHubUsage(nested))).not.toContain("private-marker");
+    expect(parseHubUsage({ ...body, apps: [{ ...body.apps[0], client: "private-marker" }] })).toBeNull();
+    expect(parseHubUsage({ ...body, apps: Array.from({ length: 10 }, () => body.apps[0]) })).toBeNull();
+    expect(parseHubUsage({ ...body, apps: [body.apps[0], body.apps[0]] })).toBeNull();
     expect(JSON.stringify(body)).not.toContain("oabcdef");
     expect(body).not.toHaveProperty("accounts");
     expect(body.filter).not.toHaveProperty("apiKeyId");
@@ -70,6 +79,22 @@ test("absent, environment, admin and unknown credentials cannot obtain usage on 
     const response = await fetch(new URL("/v1/usage", server.url), { headers: { "x-opencodex-api-key": key } });
     expect(response.status).toBe(401);
     await response.body?.cancel();
+  }
+});
+
+test("client-filtered hub usage retains the authenticated key and safe echo", async () => {
+  server = startServer(0);
+  const response = await fetch(new URL("/v1/usage?range=all&surface=all&client=codex", server.url), {
+    headers: { "x-opencodex-api-key": KEYS[0]! },
+  });
+  expect(response.status).toBe(200);
+  const body = await response.json();
+  expect(body).toMatchObject({ summary: { requests: 1 }, legacyUnclassifiedRequests: 1,
+    sourceFilter: { client: "codex", scope: "authenticated-key" } });
+  expect(JSON.stringify(body.sourceFilter)).not.toContain("client-0");
+  for (const query of ["client=codex&device=all", "client=codex&apiKeyId=client-1", "client=codex&surface=claude", "client=codex&client=all"]) {
+    const rejected = await fetch(new URL(`/v1/usage?${query}`, server.url), { headers: { "x-opencodex-api-key": KEYS[0]! } });
+    expect(rejected.status).toBe(400);
   }
 });
 

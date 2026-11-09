@@ -62,6 +62,11 @@ export function resetAtToMs(resetAt: number): number {
   return resetAt < RESET_AT_SECONDS_MAX ? resetAt * 1000 : resetAt;
 }
 
+/** Only a valid reset at or before now proves a short-window reading has elapsed. */
+export function hasElapsedShortWindow(resetAt: number | undefined, now: number): boolean {
+  return typeof resetAt === "number" && Number.isFinite(resetAt) && resetAt > 0 && resetAtToMs(resetAt) <= now;
+}
+
 /**
  * A short-only reading that proves the account is blocked NOW.
  *

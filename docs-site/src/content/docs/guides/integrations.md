@@ -69,6 +69,24 @@ This integration retains Pi’s loopback-only export policy and stores no real A
 [omo (Codex / LazyCodex) role models](#omo-codex--lazycodex-role-models). OpenCode-based omo
 (oh-my-opencode) keeps its own config under OpenCode; opencodex does not read or write it.
 
+The managed Pi-based omo block uses the Chat dialect (`api: "openai-completions"`) by default. Chat
+drops the previous step's reasoning across tool calls, which long omo tool loops notice. To have
+enable and every refresh write the Responses dialect instead, set this config-file-only key in
+your opencodex config:
+
+```json
+{ "omoClientExport": { "api": "openai-responses" } }
+```
+
+Restart the proxy to load the edited config (`ocx service restart` for a service install, or `ocx stop`, then `ocx start`), then refresh the omo integration from **Connect → omo** in the dashboard.
+Refreshing alone uses the running proxy's config and does not reload the config file.
+
+The setting applies only to omo; Pi, Gentle Shell and the other Pi-format clients keep
+`openai-completions`. To return to Chat, remove the key, restart the proxy in the same way, then
+refresh **Connect → omo**. An unknown value is ignored.
+opencodex still owns only `providers.opencodex` in `~/.omo/agent/models.json`, so other providers
+in that file are left as they are.
+
 ### Qoder CN and WorkBuddy editions
 
 In **Connect**, enable **Qoder CN**, **WorkBuddy (CN)** or **WorkBuddy AI**, then choose
@@ -155,7 +173,7 @@ runs your own `claude` binary with `ANTHROPIC_BASE_URL` set to the proxy, the no
 `opencodex-proxy` marker as `ANTHROPIC_AUTH_TOKEN`, an explicitly empty `ANTHROPIC_API_KEY`, and
 `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1` so a `settings.json` env block in your Claude config cannot
 re-point it. Each routed model is a custom model keyed by its opencodex selector
-(`provider/model`), which T3 Code sends verbatim. It appears in T3 Code's model picker under
+(`provider/model`), which T3 Code sends verbatim. A model with an effort ladder declares it, so T3 Code offers its effort control and can start a subagent on it at a chosen effort. It appears in T3 Code's model picker under
 **opencodex**. T3 Code reloads the file on its own, so no restart is needed; catalog changes and
 `ocx sync` refresh the instance.
 
@@ -461,11 +479,15 @@ though the managed document does not change.
 
 If the file changes after you review it, the write is refused as stale. The dialog replaces the
 old plan with the updated one and asks you to confirm again; it never retries the write
-automatically. If a preview is temporarily unavailable, reload the page normally and start the
-action again.
+automatically. When a preview reports that no model catalog is loaded yet, the dialog stays open and
+offers **Load catalog and retry**: it reads the integration list again — the ordinary load that
+retains the catalog, never a preview that gathers models — and then asks for the plan once more.
 
-Aside uses the same preview and confirmation flow for one selected profile at a time. **Sync all
-profiles** remains a separate bulk action and is not bound to one combined preview.
+Aside uses the same preview and confirmation flow for one selected profile at a time, and a plan
+describes exactly that profile's file. Because one plan cannot describe several independently
+changing files, the Overview card for a conflicted Aside integration opens **Connect → Aside** with
+**Choose profile** rather than a Replace action; replace the block on the profile's own page. **Sync
+all profiles** remains a separate bulk action and is not bound to one combined preview.
 
 ## What to expect, honestly
 
@@ -969,15 +991,43 @@ exists only while LazyCodex is detected. Without it the dashboard shows neither,
 
 Auto-assign proposes a model for every role at once. opencodex asks your
 default Codex model (the root `model` in Codex `config.toml`) one question: for each role, given its
-description and the start of its instructions, which capability tier (fast, standard or frontier)
-and how much reasoning (glance, measured, thorough or exhaustive) does it need? That model never
-picks a model. opencodex then picks the cheapest model from your picker list that reaches the tier:
+description and the start of its instructions, which capability tier (fast, standard or frontier),
+how much reasoning (glance, measured, thorough or exhaustive) and which task domain (coding, agentic,
+reasoning, writing, knowledge or general) does it need? That model never picks a model. opencodex
+then picks the cheapest model from your picker list that reaches the tier:
 
 - Models listed under `codexRoleTiers` in the opencodex config (`{ "fast": [...], "standard": [...], "frontier": [...] }`)
   have that tier.
+- When two or more of the other models have a published score in the role's domain, those models are
+  tiered by distinct score values, without requiring a price; equal scores share a tier, and unscored models are left out. Scores come from
+  [Artificial Analysis](https://artificialanalysis.ai) when you add your own API key
+  (below). Artificial Analysis no longer publishes a Coding or Agentic Index, so every domain is scored by
+  its Intelligence Index. The response's `capability` block names the source it used.
 - Other models with a known price are ranked by price and split evenly across the three tiers. With only
   one or two priced models, the dearest is frontier and the other, if any, is standard.
-- Models with no price and no listed tier are never proposed. List them to include them.
+- When tiering falls back to price, models with no price and no listed tier are not proposed. List them to include them.
+
+To use Artificial Analysis, create a free API key at [artificialanalysis.ai](https://artificialanalysis.ai/data-api/docs)
+and set it as a literal, an `${ENV}` reference or a keychain reference:
+
+```json
+{
+  "codexRoleCapability": {
+    "artificialAnalysis": { "apiKey": "${ARTIFICIAL_ANALYSIS_API_KEY}" }
+  }
+}
+```
+
+opencodex reads the free language model list (`/api/v2/language/models/free`) once per day, one request
+per page, which stays inside the free tier's daily request limit. Its terms allow
+using the data for your own decisions and forbid passing it on, so auto-assign keeps the scores
+internal: the response carries the tier each model got and the attribution, without the scores. If the
+key is absent or the read fails, auto-assign uses configured tiers and prices; `capability.error` reports
+why and the source attribution fields are null. A retired `huggingFace` setting is ignored.
+
+Artificial Analysis refuses HTTP redirects, reads at most ten pages and 16 MiB in total, and gives each
+request a 30-second timeout; a longer list counts as a failed read. Credentials are sent only to its
+fixed API endpoint.
 
 Each proposal shows the model, the tier, the reasoning effort, a one-line reason, and what would move
 it up or down. A role the model could not size clearly is shown as not sized, with the reason, and
@@ -992,6 +1042,11 @@ Apply omits `effort` and leaves any existing effort pin as it was. A null propos
 ocx agent roles suggest
 ocx agent roles suggest --model xai/grok-4.5 --apply
 ```
+
+The CLI's `--apply` accepts up to 50 changed roles in one history batch. A larger operation is
+refused before any role update; preview it and apply individual choices with `ocx agent roles set`.
+An interrupted operation reports confirmed writes and the unconfirmed request, and leaves earlier
+writes applied. See the [CLI apply and recovery contract](/reference/cli/agents/) before retrying.
 
 Under the table, **Change history** lists the newest changes a save, an auto-assign apply or `ocx agent roles set` wrote, newest first, in whole batches and never more than 50, so an Apply all is listed with every role it wrote or not at all, with each role's model and effort before and after. One Apply all is one entry. **Restore** writes the earlier values back through the same save, so a restore is listed too. A save never removes a model pin, so a role that had none keeps its current model and gets only its effort back. The history lives in `integrations/codex-agent-roles.jsonl` under the opencodex config directory, which retains at most 256 KiB and 1000 rows by dropping its oldest whole batches. Compaction targets 128 KiB and preserves a Restore together with its complete source batch when they fit both limits, making room by dropping unrelated older batches; history can still expire as later writes arrive. The writer captures the bounded history before appending so a Restore does not evict its own source at the retention boundary; the omo card's Restore center above tracks only `~/.omo/agent/models.json`. Each change records the Codex home it was made in, and only the current home's changes are listed or restored, so after pointing `CODEX_HOME` elsewhere the list starts empty and a Restore from another home's history is refused. If the history file cannot be read, the section says so in place of the list, and the role table keeps working.
 
