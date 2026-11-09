@@ -135,7 +135,10 @@ export async function resolveCopilotAuto(provider: OcxProviderConfig, requestedM
     // control-plane send. That is not a client abort: fall back to the requested model
     // so the dispatch path revalidates the selection and rebuilds on the new account.
     if (error instanceof ProviderOutboundSendCancelledError) {
-      return { provider: transport, modelId: requestedModel, auto: false };
+      // expiresAt 0: this selection was never negotiated. request-transport fences the physical
+      // send on it, so dispatch always renegotiates instead of sending the bare requested model
+      // if the selection becomes current again before the send.
+      return { provider: transport, modelId: requestedModel, auto: false, expiresAt: 0 };
     }
     // Permission discovery is additive for legacy paid configurations. A temporary
     // discovery outage must not turn a previously usable named route into a refusal.
@@ -148,7 +151,7 @@ export async function resolveCopilotAuto(provider: OcxProviderConfig, requestedM
   // new account instead of failing the whole negotiation. A client abort still rejects.
   const fallBackOnSwitch = (error: unknown) => {
     if (!signal?.aborted && error instanceof ProviderOutboundSendCancelledError)
-      return { provider: transport, modelId: requestedModel, auto: false } as const;
+      return { provider: transport, modelId: requestedModel, auto: false, expiresAt: 0 } as const;
     throw error;
   };
   let session: Awaited<ReturnType<typeof requestJson>>;

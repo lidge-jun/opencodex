@@ -196,7 +196,9 @@ describe("Copilot Auto permissions and negotiation", () => {
       calls++; throw new Error("network unavailable");
     }) as typeof fetch } as OcxProviderConfig;
     expect((await resolveCopilotAuto(provider, "named", parsed)).modelId).toBe("named");
-    expect(calls).toBe(1);
+    // An outage fallback is a usable named route, not a lapsed negotiation: no forced rebuild.
+    expect((await resolveCopilotAuto(provider, "named", parsed)).expiresAt).toBeUndefined();
+    expect(calls).toBe(2);
   });
   for (const cancelAt of ["/models/session", "/models/session/intent"] as const) {
     test(`an authority change during ${cancelAt} also falls back instead of failing negotiation`, async () => {
@@ -214,8 +216,11 @@ describe("Copilot Auto permissions and negotiation", () => {
         if (seen.length === (cancelAt === "/models/session" ? 1 : 2)) allowed = false;
         return allowed;
       };
-      await expect(resolveCopilotAuto(provider, "auto", parsed, undefined, beforeSend))
-        .resolves.toMatchObject({ modelId: "auto", auto: false });
+      const selected = await resolveCopilotAuto(provider, "auto", parsed, undefined, beforeSend);
+      expect(selected).toMatchObject({ modelId: "auto", auto: false });
+      // The fallback was never negotiated. request-transport fences dispatch on expiresAt, so an
+      // already-lapsed value makes dispatch renegotiate even if the selection becomes current again.
+      expect(selected.expiresAt).toBeLessThanOrEqual(Date.now());
       expect(seen.some(path => path.endsWith(cancelAt))).toBe(false);
     });
   }
@@ -227,8 +232,9 @@ describe("Copilot Auto permissions and negotiation", () => {
     await expect(resolveCopilotAuto(provider, "auto", parsed, AbortSignal.abort())).rejects.toThrow();
     // A manual account switch cancels the queued control-plane send. That is not a client
     // abort: the caller revalidates the selection and rebuilds before dispatch.
-    await expect(resolveCopilotAuto(provider, "auto", parsed, undefined, () => false))
-      .resolves.toMatchObject({ modelId: "auto", auto: false });
+    const selected = await resolveCopilotAuto(provider, "auto", parsed, undefined, () => false);
+    expect(selected).toMatchObject({ modelId: "auto", auto: false });
+    expect(selected.expiresAt).toBeLessThanOrEqual(Date.now());
     expect(sends).toBe(0);
   });
 });
