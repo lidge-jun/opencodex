@@ -51,6 +51,7 @@ const RETRY_POLICY_VALIDATORS = {
 export const PROVIDER_COMPAT_CARRY_FIELDS = [
   "preserveReasoningContentModels",
   "preserveResponsesReasoningContent",
+  "museProjectDeveloperPrompt",
   "promoteAdditionalTools",
   "requiresReasoningPlaceholderModels",
   "foldDeveloperRoleToSystem",
@@ -175,6 +176,7 @@ export function providerCompatFieldConfigError(provider: Record<string, unknown>
   if (hideRawReasoning !== undefined && typeof hideRawReasoning !== "boolean") return "hideRawReasoning must be a boolean";
   const preserveResponses = provider.preserveResponsesReasoningContent;
   if (preserveResponses !== undefined && typeof preserveResponses !== "boolean") return "preserveResponsesReasoningContent must be a boolean";
+  if (provider.museProjectDeveloperPrompt !== undefined && typeof provider.museProjectDeveloperPrompt !== "boolean") return "museProjectDeveloperPrompt must be a boolean";
   const promoteAdditionalTools = provider.promoteAdditionalTools;
   if (promoteAdditionalTools !== undefined && typeof promoteAdditionalTools !== "boolean") return "promoteAdditionalTools must be a boolean";
   const wire = provider.reasoningWireFormat;
@@ -233,6 +235,13 @@ export function applyProviderCompatPatchFields(
     if (value === null) delete next.preserveResponsesReasoningContent;
     else if (typeof value === "boolean") next.preserveResponsesReasoningContent = value;
     else return { error: "preserveResponsesReasoningContent must be a boolean" };
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "museProjectDeveloperPrompt")) {
+    const value = rawBody.museProjectDeveloperPrompt;
+    if (value === null) delete next.museProjectDeveloperPrompt;
+    else if (typeof value === "boolean") next.museProjectDeveloperPrompt = value;
+    else return { error: "museProjectDeveloperPrompt must be a boolean" };
     touched = true;
   }
   if (Object.hasOwn(rawBody, "promoteAdditionalTools")) {

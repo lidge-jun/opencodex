@@ -14,6 +14,7 @@ import { selectValue } from "./helpers/custom-select";
  */
 
 const PRESETS = [
+  { id: "muse-code", label: "Muse Code", adapter: "muse-msp", baseUrl: "https://muse.meta.com", auth: "key", keyOptional: true, defaultModel: "muse-spark-1.3" },
   { id: "claude-cli", label: "Claude Code CLI (subscription)", adapter: "claude-cli", baseUrl: "https://api.anthropic.com", auth: "key", keyOptional: true, defaultModel: "claude-sonnet-5", note: "Runs Claude subscription traffic through the official CLI." },
   { id: "keyless", label: "Keyless Free", adapter: "openai-chat", baseUrl: "https://api.example.com/v1", auth: "key", keyOptional: true },
   { id: "google-vertex", label: "Google Vertex AI", adapter: "google", baseUrl: "https://aiplatform.googleapis.com", auth: "key", defaultModel: "gemini-3-pro" },
@@ -98,6 +99,25 @@ function rowsText(): string {
 function warning() {
   return win.document.querySelector("[data-subscription-cli-warning]");
 }
+
+test("Muse CLI uses its account, is not presented as free, and can be added", async () => {
+  await mount("free");
+  expect(rowsText()).not.toContain("Muse Code");
+  await mount("paid");
+  expect(rowsText()).toContain("Muse CLI account");
+  const row = [...win.document.querySelectorAll(".provider-catalog-row-wrap > button")]
+    .find(el => (el.textContent ?? "").includes("Muse Code")) as unknown as HTMLButtonElement;
+  await act(async () => { row.click(); });
+  const note = win.document.querySelector("[data-muse-cli-warning]");
+  expect(note?.textContent).toContain("Muse CLI");
+  expect(note?.textContent).toContain("OpenCodex API key");
+  expect(win.document.body.textContent).not.toContain("Free tier");
+  expect(win.document.querySelector('input[type="password"]')).toBeNull();
+  const add = [...win.document.querySelectorAll("button.btn-primary")]
+    .find(el => el.textContent === "Add provider") as unknown as HTMLButtonElement;
+  await act(async () => { add.click(); await new Promise(r => setTimeout(r, 20)); });
+  expect((posted[0]?.provider as { adapter?: string } | undefined)?.adapter).toBe("muse-msp");
+});
 
 test("claude-cli is listed under Paid, not Free", async () => {
   await mount("free");

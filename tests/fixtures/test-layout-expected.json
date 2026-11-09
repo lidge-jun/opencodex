@@ -477,7 +477,7 @@
   "claude-auth-mode.test.ts": "claude-integration", "claude-authmode-migration.test.ts": "claude-integration",
   "claude-cli-adapter.test.ts": "providers", "claude-cli.test.ts": "claude-integration",
   "claude-cli-client-http.test.ts": "providers", "claude-cli-efficiency.test.ts": "providers",
-  "claude-cli-tool-capture.test.ts": "providers", "claude-cli-usage-admission.test.ts": "providers",
+  "claude-cli-tool-capture.test.ts": "providers", "claude-cli-usage-admission.test.ts": "providers", "muse-msp-connection.test.ts": "providers", "server-muse-runtime-lifecycle.test.ts": "server",
   "claude-config-first-party.test.ts": "cli", "claude-code-thought-signature-scope.test.ts": "claude-integration",
   "claude-compatibility.test.ts": "claude-integration", "claude-context-windows.test.ts": "claude-integration",
   "claude-desktop-1m.test.ts": "claude-integration", "claude-desktop-cli.test.ts": "claude-integration", "claude-desktop-model-visibility.test.ts": "claude-integration",

@@ -20,3 +20,8 @@ export const SUBSCRIPTION_CLI_API_KEY_ALTERNATIVE = "anthropic-apikey";
 export function isSubscriptionCliProvider(provider: { adapter?: string | null }): boolean {
   return SUBSCRIPTION_CLI_ADAPTERS.has((provider.adapter ?? "").trim());
 }
+
+/** Muse uses the signed-in CLI account; keyOptional does not imply free pricing. */
+export function isMuseNativeCliProvider(provider: { adapter?: string | null }): boolean {
+  return (provider.adapter ?? "").trim() === "muse-msp";
+}

@@ -20,6 +20,7 @@ import { isCatalogProviderId } from "../../provider-icons";
 import { openAiAccountProviderState } from "../../provider-payload";
 import { canConfigureResponsesReasoningReplay } from "../../responses-reasoning-replay";
 import { ResponsesReasoningReplayControl } from "../responses-reasoning-replay-control";
+import { MuseDeveloperPromptControl } from "../muse-developer-prompt-control";
 import { providerSupportsLiveModelDiscovery } from "../../provider-workspace/catalog";
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import { authModeLabel } from "./ProviderRail";
@@ -90,6 +91,7 @@ export default function ProviderSettings({
   const [note, setNote] = useState(item.note ?? "");
   const [allowPrivateNetwork, setAllowPrivateNetwork] = useState(item.allowPrivateNetwork ?? false);
   const [preserveReasoningReplay, setPreserveReasoningReplay] = useState(item.preserveResponsesReasoningContent === true);
+  const [museDeveloperPrompt, setMuseDeveloperPrompt] = useState(item.museProjectDeveloperPrompt === true);
   const [liveModels, setLiveModels] = useState(savedLiveModels);
   const [cursorHttpVersion, setCursorHttpVersion] = useState<CursorHttpVersion>(savedCursorHttpVersion);
   const [saving, setSaving] = useState(false);
@@ -121,6 +123,7 @@ export default function ProviderSettings({
     setNote(item.note ?? "");
     setAllowPrivateNetwork(item.allowPrivateNetwork ?? false);
     setPreserveReasoningReplay(item.preserveResponsesReasoningContent === true);
+    setMuseDeveloperPrompt(item.museProjectDeveloperPrompt === true);
     setLiveModels(savedLiveModels);
     setCursorHttpVersion(savedCursorHttpVersion);
     setPacingEnabled(item.requestPacing?.enabled === true);
@@ -132,7 +135,7 @@ export default function ProviderSettings({
     setMsg(null);
     setModeMsg(null);
     queueMicrotask(() => setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl)));
-  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, item.preserveResponsesReasoningContent, savedLiveModels, savedCursorHttpVersion, item.requestPacing, baseUrlChoices]);
+  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, item.preserveResponsesReasoningContent, item.museProjectDeveloperPrompt, savedLiveModels, savedCursorHttpVersion, item.requestPacing, baseUrlChoices]);
 
   // Account mode syncs on its own: a mode PATCH refresh must not reset an in-progress
   // draft, so it is deliberately kept out of the form-reset effect above.
@@ -201,7 +204,8 @@ export default function ProviderSettings({
   const supportsReasoningReplay = !isCatalogProviderId(item.name)
     && canConfigureResponsesReasoningReplay({ adapter, baseUrl, authMode });
   const reasoningReplayDirty = supportsReasoningReplay && preserveReasoningReplay !== (item.preserveResponsesReasoningContent === true);
-  const dirty = reasoningReplayDirty || adapter.trim() !== item.adapter
+  const musePromptDirty = adapter.trim() === "muse-msp" && museDeveloperPrompt !== (item.museProjectDeveloperPrompt === true);
+  const dirty = musePromptDirty || reasoningReplayDirty || adapter.trim() !== item.adapter
     || baseUrl.trim() !== item.baseUrl
     || defaultModel.trim() !== (item.defaultModel ?? "")
     || authMode !== String(item.authMode ?? (item.keyOptional ? "local" : "key"))
@@ -277,6 +281,7 @@ export default function ProviderSettings({
         // Otherwise an unrelated settings save manufactures `liveModels: true` provenance.
         if (liveModelDiscoverySupported && liveModels !== (item.liveModels !== false)) patch.liveModels = liveModels;
         if (reasoningReplayDirty) patch.preserveResponsesReasoningContent = preserveReasoningReplay;
+        if (musePromptDirty) patch.museProjectDeveloperPrompt = museDeveloperPrompt;
         if (adapter.trim() === "cursor" && cursorHttpVersion !== savedCursorHttpVersion) {
           patch.upstreamHttpVersion = cursorHttpVersion === "http1.1" ? "http1.1" : null;
         }
@@ -344,6 +349,7 @@ export default function ProviderSettings({
     setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
     setNote(item.note ?? ""); setAllowPrivateNetwork(item.allowPrivateNetwork ?? false); setLiveModels(savedLiveModels);
     setPreserveReasoningReplay(item.preserveResponsesReasoningContent === true);
+    setMuseDeveloperPrompt(item.museProjectDeveloperPrompt === true);
     setCursorHttpVersion(savedCursorHttpVersion); setMsg(null);
     setPacingEnabled(item.requestPacing?.enabled === true); setPacingRpm(numberDraft(item.requestPacing?.requestsPerMinute));
     setKeyPacing({ keySelection: item.requestPacing?.keySelection, keys: item.requestPacing?.keys });
@@ -520,6 +526,7 @@ export default function ProviderSettings({
         <span className="pwi-settings-label">{t("pws.allowPrivateNetwork")}</span>
       </label>
       {supportsReasoningReplay && <ResponsesReasoningReplayControl checked={preserveReasoningReplay} onChange={setPreserveReasoningReplay} />}
+      {adapter.trim() === "muse-msp" && <MuseDeveloperPromptControl checked={museDeveloperPrompt} onChange={setMuseDeveloperPrompt} />}
       <label className="pwi-settings-field" style={{ flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
         <input
           type="checkbox"

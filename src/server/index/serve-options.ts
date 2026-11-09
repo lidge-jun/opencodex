@@ -214,6 +214,7 @@ import { readyProtocolMetadata } from "../../remote/protocol";
 import { homeInstanceId, stampServedBy } from "../../remote/served-by";
 import { modelCapabilityFields } from "../models-capabilities";
 import { createWebsocketHandler } from "./websocket-handler";
+import { withMuseNativeRuntimePool } from "../../adapters/muse-msp/runtime-scope";
 import { reasoningArchiveErrorResponse } from "../responses/reasoning-archive-error";
 import { withGrokSessionIdentity } from "../../grok/session-identity";
 import { withCallerSessionIdentity } from "../caller-session-identity";
@@ -237,6 +238,7 @@ export function claudeInterceptRouteAllowed(url: URL, req: Request): boolean {
 }
 
 export interface ServeOptionsContext {
+  museNativeRuntimePool?: import("../../adapters/muse-msp/runtime-pool").MuseNativeRuntimePool;
   readonly server: Server<WsData>;
   readonly boundPort: number | null;
   readonly remoteWorkspaceStopping: boolean;
@@ -1992,6 +1994,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
   const routeFetch = serveOptions.fetch;
   // x-opencodex-served-by on GET /v1/models, whichever branch answered (src/remote/served-by.ts).
   // Each request runs with its own caller slot, which admission fills for turn-state handle binding.
-  return { ...serveOptions, fetch: (req: Request, requestServer: Server<WsData>): Promise<Response> => runTurnStateCallerScope(async () =>
-    stampServedBy(req.method, codexCompatibleUrl(req.url).pathname, await routeFetch(req, requestServer))) } as const;
+  return { ...serveOptions, fetch: (req: Request, requestServer: Server<WsData>): Promise<Response> => {
+    const run = () => runTurnStateCallerScope(async () =>
+      stampServedBy(req.method, codexCompatibleUrl(req.url).pathname, await routeFetch(req, requestServer)));
+    return ctx.museNativeRuntimePool ? withMuseNativeRuntimePool(ctx.museNativeRuntimePool, run) : run();
+  } } as const;
 }

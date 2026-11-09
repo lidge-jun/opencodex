@@ -4,6 +4,7 @@ import { createDshAccountAdapter } from "./dsh-account";
 import { createAzureAdapter } from "./azure";
 import type { ProviderAdapter } from "./base";
 import { createClaudeCliAdapter } from "./claude-cli/adapter";
+import { createMuseNativeProviderAdapter } from "./muse-msp/provider-adapter";
 import { withClinePassDeepSeekV4ToolReplayCompatibility } from "./cline-pass-deepseek-v4-tool-replay";
 import { withUniqueToolCallIds } from "./unique-tool-call-ids";
 import { createCodeBuddyAdapter } from "./codebuddy/adapter";
@@ -159,6 +160,12 @@ export const ADAPTER_REGISTRY = {
     // and the CLI owns the credential: the adapter stores and injects none.
     contractParent: "codebuddy",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createClaudeCliAdapter(provider),
+  },
+  "muse-msp": {
+    contractParent: "openai-responses",
+    create: (provider: OcxProviderConfig, context: AdapterFactoryContext) => createMuseNativeProviderAdapter(context.providerId ?? "muse-code", {
+      requireNativeRoute: true, ...(provider.museProjectDeveloperPrompt === true ? { projectDeveloperPrompt: true } : {}),
+    }),
   },
   "dsh-account": {
     contractParent: "anthropic",

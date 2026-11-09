@@ -112,6 +112,10 @@ interface CarryCase {
 }
 
 const CASES: Record<ProviderCompatCarryField, CarryCase> = {
+  museProjectDeveloperPrompt: {
+    seed: { museProjectDeveloperPrompt: true },
+    probe: provider => provider.museProjectDeveloperPrompt,
+  },
   singleLeadingSystemMessage: {
     seed: { singleLeadingSystemMessage: true },
     probe: provider => nativeBody(provider, {

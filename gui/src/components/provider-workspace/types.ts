@@ -139,6 +139,7 @@ export type ProviderUpdatePatch = {
   disabled?: boolean;
   allowPrivateNetwork?: boolean;
   preserveResponsesReasoningContent?: boolean;
+  museProjectDeveloperPrompt?: boolean;
   liveModels?: boolean;
   upstreamHttpVersion?: "auto" | "http1.1" | "h1" | "http2" | "h2" | null;
   requestPacing?: WorkspaceItem["requestPacing"] | null;

@@ -342,6 +342,7 @@ export const providerConfigSchema = z.object({
     modelCount: z.number().int().nonnegative().optional(),
   }).optional().catch(undefined),
   requestPacing: requestPacingSchema.optional().catch(undefined),
+  museProjectDeveloperPrompt: z.boolean().optional(),
   mcpMaxTools: z.number().int().positive().optional(),
   mcpMaxSchemaBytes: z.number().int().positive().optional(),
   mcpMaxResultBytes: z.number().int().positive().optional(),

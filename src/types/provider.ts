@@ -318,6 +318,8 @@ export interface OcxProviderConfig {
   /** Override the global built-in model-alias switch for this provider. */
   defaultAliases?: boolean;
   adapter: string;
+  /** Explicitly allow experimental Muse MSP developer-prompt projection. */
+  museProjectDeveloperPrompt?: boolean;
   /**
    * Codex tool calling mode for routed models.
    * "code_mode_only" (default) sets entry.tool_mode = "code_mode_only" (unified exec helper tool).

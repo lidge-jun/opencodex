@@ -81,6 +81,7 @@ const RUNTURN_WS_ROUTE_STATE_KEYS = [
   "_nativeReasoningRetainedAcrossRoute",
   "_dropForeignReasoningItemIds",
   "_reasoningReplayScope",
+  "_museNativeRoute",
 ] as const;
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
@@ -950,6 +951,9 @@ export async function executeResponsesRunTurn(
                 },
               );
             }
+            if (!runTurnAbort.signal.aborted && transportState.runTurnAdapter.onResponseRendered) {
+              try { transportState.runTurnAdapter.onResponseRendered(parsed, structuredClone(response)); } catch { /* the response remains independently deliverable */ }
+            }
             notifyResponseComplete(response);
           },
         },
@@ -1115,6 +1119,9 @@ export async function executeResponsesRunTurn(
       await awaitThoughtSignatureDurability();
       if (adapterResponseReachedServingTerminal(events, json)) {
         commitReasoningReplayServingRoute();
+      }
+      if (!runTurnAbort.signal.aborted && transportState.runTurnAdapter.onResponseRendered) {
+        try { transportState.runTurnAdapter.onResponseRendered(parsed, structuredClone(json)); } catch { /* the response remains independently deliverable */ }
       }
       notifyResponseComplete(json);
       return new Response(JSON.stringify(json), {

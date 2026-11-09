@@ -121,6 +121,15 @@ export function bindRouteReasoningReplayScope(args: {
   forwardHeaders?: Headers;
 }): void {
   const { parsed, providerName, provider, adapterName } = args;
+  // The official Muse process owns its credential; never fabricate a generic
+  // reasoning-replay credential identity for it. This separate route binding
+  // is used only for the process-local Muse session owner.
+  const museDestination = adapterName === "muse-msp" && provider.authMode === "key" && !nonEmptyProviderApiKey(provider)
+    ? reasoningReplayDestinationIdentity(provider.baseUrl) : undefined;
+  if (museDestination && providerName && parsed.modelId) parsed._museNativeRoute = {
+    providerName, providerDestinationIdentity: museDestination, adapterName: "muse-msp", modelId: parsed.modelId, credentialIdentity: "native-muse-host",
+  };
+  else delete parsed._museNativeRoute;
   const replayIdentity = routeReasoningReplayIdentity({
     ...args,
     modelId: parsed.modelId,

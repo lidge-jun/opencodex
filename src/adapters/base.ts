@@ -128,6 +128,9 @@ export interface ProviderAdapter {
     emit: (event: AdapterEvent) => void,
   ): Promise<void>;
 
+  /** Optional in-process notification of the normalized Responses object produced for this run. */
+  onResponseRendered?(parsed: OcxParsedRequest, response: Record<string, unknown>): void;
+
   /** Exact no-field observation for runTurn adapters, which expose no AdapterRequest object. */
   tierLogForRunTurn?(parsed: OcxParsedRequest): AdapterTierMetadata | undefined;
 }

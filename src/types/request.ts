@@ -123,6 +123,8 @@ export interface OcxParsedRequest {
   _cursorClientThreadId?: string;
   /** Conversation/provider/account/model-bound namespace for reasoning replay state. */
   _reasoningReplayScope?: OcxReasoningReplayScopeRef;
+  /** Trusted, process-local Muse session route; not a reasoning or account identity. */
+  _museNativeRoute?: Readonly<{ providerName: string; providerDestinationIdentity: string; adapterName: "muse-msp"; modelId: string; credentialIdentity: "native-muse-host" }>;
   /** Trusted configuration snapshot; never read from the client's request body. */
   _nativeReasoningRetention?: Readonly<{ modelSwitch: boolean; accountSwitch: boolean }>;
   /**

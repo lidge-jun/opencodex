@@ -920,6 +920,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       hasHeaders: !!p.headers && Object.keys(p.headers).length > 0,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
       preserveResponsesReasoningContent: p.preserveResponsesReasoningContent,
+      museProjectDeveloperPrompt: p.museProjectDeveloperPrompt,
       promoteAdditionalTools: p.promoteAdditionalTools,
       liveModels: p.liveModels !== false,
       requestPacing: p.requestPacing,

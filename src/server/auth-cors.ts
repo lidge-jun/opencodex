@@ -1081,6 +1081,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   defaultAliases: "editor",
   adapter: "editor",
   codexToolMode: "editor",
+  museProjectDeveloperPrompt: "editor",
   projectContext: "editor",
   requestPacing: "editor",
   mcpMaxTools: "editor",

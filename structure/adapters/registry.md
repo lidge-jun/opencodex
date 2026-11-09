@@ -17,6 +17,42 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 Runtime adapter construction has one authority: `src/adapters/registry.ts`.
 
+The experimental `muse-msp` adapter backs the separate `muse-code` provider via the official
+Muse CLI and MSP stdio; it does not forward a Muse credential through OpenCodex or fall back to a
+Meta Model API key. File-based Muse login and an OpenCodex API key identifying the client are
+currently required. `museProjectDeveloperPrompt: true` explicitly opts into merging developer
+instructions with Muse's own instructions; otherwise requests requiring that projection fail.
+Text input and supported client-owned tools are handled; unsupported modalities and wire shapes
+fail rather than being silently flattened. Meta's authorization of third-party subscription use
+has not been established.
+
+`muse-msp/provider-adapter.ts` resolves the native executable, creates a temporary workspace and
+settings, links the Muse-owned file credential without reading it, and requires the MSP account
+lane to be `accountLogin`. `runtime-pool.ts`, `route-key.ts` and `runtime-scope.ts` bind bounded
+shared runners to the serving server and route generation; shutdown and failed-start rollback
+close the owned runners. `owner.ts` binds continuations to an authenticated OpenCodex principal,
+conversation and trusted native route. The process-local Muse route is not an account identity
+and is never used to authorize generic reasoning replay or persistent quota attribution.
+
+`connection.ts`, `handshake.ts`, `session.ts` and `host.ts` own bounded JSON-RPC framing,
+capability negotiation and child lifetime. Host invalidation retires pending work; observed
+account, model, retry or view failures fail closed. `catalog.ts`, `capture-server.ts`,
+`capture-channel.ts`, `capture-rendezvous.ts`, `approval.ts` and `responses-handoff.ts`
+advertise client tools to Muse, capture intent without executing tools, and correlate a single
+client result with the authenticated owner and validated history. The compiled CLI exposes the
+private `__muse-mcp` entrypoint for its capture-only child.
+
+`segment.ts`, `turn-registry.ts` and `runner.ts` preserve bounded session and tool continuations,
+streaming text, observed token usage and cancellation. A `usage/read` observation can be mapped
+to subscription windows without exposing the tier; it is scoped to the current host, not persisted
+as an identified account. `native-adapter.ts` follows the existing CLI accounting convention:
+one budget reservation per opaque dispatched segment. Muse may make multiple physical model
+requests inside a segment, so that reservation is not a physical-send limit. The implementation
+requires maintainer review before being considered production-ready.
+
+`tests/providers/muse-msp-connection.test.ts` and `tests/server/server-muse-runtime-lifecycle.test.ts`
+cover framing, ownership, tool continuation, quota projection, subprocess lifecycle and shutdown.
+
 [Chronological instruction ordering](../providers/chat-compat.md#chronological-in-conversation-instructions)
 is now uniform across destinations, so the Chat adapter no longer consults the provider registry's
 destination identity for it; it adds no adapter factory.

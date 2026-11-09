@@ -24,7 +24,7 @@
  * over free.
  */
 
-import { isSubscriptionCliProvider } from "./subscription-cli";
+import { isMuseNativeCliProvider, isSubscriptionCliProvider } from "./subscription-cli";
 import type { ProviderDiscoverySummary } from "../models-groups";
 
 /**
@@ -57,6 +57,7 @@ export interface WorkspaceProvider {
   note?: string;
   allowPrivateNetwork?: boolean;
   preserveResponsesReasoningContent?: boolean;
+  museProjectDeveloperPrompt?: boolean;
   requestPacing?: {
     enabled?: boolean;
     requestsPerMinute?: number;
@@ -157,6 +158,7 @@ function isConfigurationReady(p: WorkspaceProvider): boolean {
   // that adapter still never reads a key.
   return p.keyOptional === true ||
     isSubscriptionCliProvider(p) ||
+    isMuseNativeCliProvider(p) ||
     p.authMode === "oauth" ||
     p.authMode === "forward" ||
     p.authMode === "local" ||
@@ -203,7 +205,7 @@ export function isAccountProvider(name: string, p: WorkspaceProvider): boolean {
  * imply ready-without-key — use `binProviderStatus` for readiness.
  */
 export function isFreeProvider(p: WorkspaceProvider): boolean {
-  if (isSubscriptionCliProvider(p)) return false;
+  if (isSubscriptionCliProvider(p) || isMuseNativeCliProvider(p)) return false;
   return p.freeTier === true
     || p.keyOptional === true
     || p.authMode === "local"

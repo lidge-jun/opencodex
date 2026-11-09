@@ -53,6 +53,20 @@ function provider(preserveResponsesReasoningContent?: boolean): OcxProviderConfi
 }
 
 describe("preserveResponsesReasoningContent management saves", () => {
+  test("Muse developer projection is editable, reported, and type-checked", async () => {
+    await withServer({ adapter: "muse-msp", baseUrl: "https://api.meta.ai/v1", authMode: "key", keyOptional: true }, async url => {
+      const set = await send(url, "/api/providers?name=relay", "PATCH", { museProjectDeveloperPrompt: true });
+      expect(set.status).toBe(200);
+      expect(loadConfig().providers.relay?.museProjectDeveloperPrompt).toBe(true);
+      const rows = await (await fetch(new URL("/api/providers", url))).json() as Array<Record<string, unknown>>;
+      expect(rows.find(row => row.name === "relay")?.museProjectDeveloperPrompt).toBe(true);
+      const invalid = await send(url, "/api/providers?name=relay", "PATCH", { museProjectDeveloperPrompt: "true" });
+      expect(invalid.status).toBe(400);
+      const disable = await send(url, "/api/providers?name=relay", "PATCH", { museProjectDeveloperPrompt: false });
+      expect(disable.status).toBe(200);
+      expect(loadConfig().providers.relay?.museProjectDeveloperPrompt).toBe(false);
+    });
+  });
   test("same-destination POST keeps an omitted true on disk", async () => {
     await withServer(provider(true), async url => {
       const response = await send(url, "/api/providers", "POST", {

@@ -8,7 +8,7 @@ import { AddProviderField } from "./add-provider-modal-field";
 import { baseUrlForChoice } from "../base-url-choice";
 import { canConfigureResponsesReasoningReplay } from "../responses-reasoning-replay";
 import { ResponsesReasoningReplayControl } from "./responses-reasoning-replay-control";
-import { isSubscriptionCliProvider, SUBSCRIPTION_CLI_API_KEY_ALTERNATIVE } from "../provider-workspace/subscription-cli";
+import { isMuseNativeCliProvider, isSubscriptionCliProvider, SUBSCRIPTION_CLI_API_KEY_ALTERNATIVE } from "../provider-workspace/subscription-cli";
 
 const FORM_ADAPTERS = ["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"];
 
@@ -52,6 +52,7 @@ export function AddProviderFormPane({
 }) {
   const t = useT();
   const subscriptionCli = isSubscriptionCliProvider(form);
+  const museCli = isMuseNativeCliProvider(form);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -143,6 +144,11 @@ export function AddProviderFormPane({
       ) : form.authMode === "local" ? (
         <div className="text-label leading-relaxed" style={{ color: "var(--amber)", background: "var(--amber-soft)", border: "1px solid var(--amber)", borderRadius: "var(--radius-sm)", padding: "8px 10px" }}>
           {t("modal.localHint")}
+        </div>
+      ) : museCli ? (
+        <div role="note" data-muse-cli-warning="" className="text-label leading-relaxed" style={{ color: "var(--amber)", background: "var(--amber-soft)", border: "1px solid var(--amber)", borderRadius: "var(--radius-sm)", padding: "10px 12px" }}>
+          <strong>{t("modal.museCliTitle")}</strong>
+          <div style={{ marginTop: 4 }}>{t("modal.museCliWarning")}</div>
         </div>
       ) : subscriptionCli ? (
         // Replaces both the key field and the green free box: this row bills a subscription
