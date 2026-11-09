@@ -4,6 +4,7 @@ import {
   appendFileSync,
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   renameSync,
@@ -1104,6 +1105,64 @@ describe("filtered usage index availability", () => {
     expect(result.filterIndex).toBeUndefined();
     expect(readFileSync(indexPath, "utf8")).toBe(foreign);
     expect(existsSync(`${indexPath}-wal`)).toBe(false);
+  });
+
+  test("a transient foreign classification recovers on the open retry", async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    const expected = rows.filter(row => row.provider === "openai").length;
+    const indexPath = usageFilterIndexPath(testDir);
+    const foreign = "this is not a sqlite database\n";
+    writeFileSync(indexPath, foreign);
+
+    const request = getFilteredUsageAggregate({ provider: "openai" });
+    // Early attempts still see the foreign file; clear it inside the short re-check window so
+    // a later attempt builds the projection instead of degrading to the streaming read.
+    const clear = setTimeout(() => rmSync(indexPath, { force: true }), 60);
+    try {
+      const result = await request;
+      expect(summary(result).summary.requests).toBe(expected);
+      expect(result.filterIndex?.totalRows).toBe(rows.length);
+      expect(result.filterIndex?.candidateRows).toBe(expected);
+    } finally {
+      clearTimeout(clear);
+    }
+  });
+
+  test("a transient unsafe sidecar recovers on the open retry", async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    const expected = rows.filter(row => row.provider === "openai").length;
+    const indexPath = usageFilterIndexPath(testDir);
+    const sidecar = `${indexPath}-wal`;
+    // A directory at a sidecar path is not a private regular file, so the open refuses it.
+    mkdirSync(sidecar);
+
+    const request = getFilteredUsageAggregate({ provider: "openai" });
+    const clear = setTimeout(() => rmSync(sidecar, { recursive: true, force: true }), 60);
+    try {
+      const result = await request;
+      expect(summary(result).summary.requests).toBe(expected);
+      expect(result.filterIndex?.totalRows).toBe(rows.length);
+      expect(result.filterIndex?.candidateRows).toBe(expected);
+    } finally {
+      clearTimeout(clear);
+    }
+  });
+
+  test("a permanently unsafe sidecar still falls back without being modified", async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    const expected = rows.filter(row => row.provider === "openai").length;
+    const indexPath = usageFilterIndexPath(testDir);
+    const sidecar = `${indexPath}-wal`;
+    mkdirSync(sidecar);
+
+    const result = await getFilteredUsageAggregate({ provider: "openai" });
+    expect(summary(result).summary.requests).toBe(expected);
+    expect(result.filterIndex).toBeUndefined();
+    expect(statSync(sidecar).isDirectory()).toBe(true);
+    expect(existsSync(indexPath)).toBe(false);
   });
 
   test("an unwritable home degrades to the streaming read", async () => {
