@@ -10,8 +10,9 @@ on:
     # reasonably conclude the gate was broken.
     types: [opened, reopened, synchronize, edited, labeled, unlabeled]
 
-# Trusted scripts from the PR base revision only. Patches are read through the
-# GitHub API; PR-head code is never checked out or executed.
+# Trusted scripts from the fixed `dev` ref only, never from the PR base or head.
+# Patches are read through the GitHub API; PR-head code is never checked out or
+# executed.
 # Least privilege: no default permissions; the hygiene job grants only what it needs.
 permissions: {}
 
