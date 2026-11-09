@@ -1,7 +1,11 @@
 import { messagesUnknownEndpointMessage } from "../../lib/messages-error-body";
 import type { Server, ServerWebSocket } from "bun";
+import {
+  claudeInterceptRouteAllowed,
+  trustedLoopbackForIngress,
+  type ServeOptionsContext,
+} from "./serve-contract";
 import { modelAliasIdPromoter } from "./model-alias-id";
-import type { StartServerDeps } from "./startup-warnings";
 import { isLinkManagementPath } from "../../link/management-routes";
 import {
   GUI_PAIRING_EXCHANGE_BODY_LIMIT,
@@ -28,7 +32,6 @@ import {
 } from "./startup-warnings";
 
 import { remoteWorkspaceEnabled } from "../../remote-control/workspace-activation";
-import { isClaudeInterceptedPath } from "../../claude/intercept/listener";
 import { markActivity } from "../../lib/sidecar-tracker";
 import { knownModelIdsForProvider } from "../../router";
 import {
@@ -98,7 +101,6 @@ import {
   isAllowedRequestOrigin,
   isAllowedManagementOrigin,
   isApiAuthRequired,
-  isLoopbackHostname,
   markTrustedHubManagementRequest,
   jsonResponse,
   admissionFields,
@@ -149,7 +151,6 @@ import {
 } from "../audio-live";
 import {
   EXTERNAL_CALL_PREFIX,
-  type LiveCallBindings,
 } from "../live-call-bindings";
 import { clearableDeadline } from "../../lib/abort";
 import { handleSearch } from "../search";
@@ -169,8 +170,6 @@ import {
   issueGuiSession,
   managementPrincipal,
   requireManagementAuth,
-  type ManagementAuthState,
-  type ManagementSessionControl,
 } from "../management-auth";
 import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
@@ -201,12 +200,7 @@ import {
   catalogFastRowEligible,
   expandFastRow,
 } from "../fast-row";
-import type { OcxConfig } from "../../types";
 import { classifyUsageClient } from "../../usage/client";
-import type { PackageTreeIntegrityGuard } from "../../lib/package-tree-integrity";
-import type { ReadinessGate } from "../readiness";
-import type { WorkflowRefusalLog } from "../workflow-refusal";
-import type { AdmittedHttpTurnOptions } from "../admitted-http-turn";
 import { isOllamaNativePath } from "../ollama-native-paths";
 import { ollamaError } from "../ollama-inbound";
 import { dispatchOllamaRoute } from "./ollama-routes";
@@ -221,70 +215,12 @@ import { withCallerSessionIdentity } from "../caller-session-identity";
 import { agentAssertionUnsupportedResponse, hasAgentAssertionAuthorization } from "../../lib/authorization-scheme";
 import { runTurnStateCallerScope } from "../turn-state-handles";
 
-export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management" | "claude-intercept" | "hub-link" | "local-control";
-
-export function trustedLoopbackForIngress(ingress: ServerIngress, hostname: string): boolean {
-  return ingress === "unauthenticated-loopback" || ingress === "local-control"
-    || (ingress === "public" && isLoopbackHostname(hostname));
-}
-
-/**
- * Routes the Claude intercept TLS listener may reach. Everything else on that socket is relayed
- * to the real upstream by the listener itself, so a request that lands here with another path
- * is a bug, not a client — refuse it.
- */
-export function claudeInterceptRouteAllowed(url: URL, req: Request): boolean {
-  return isClaudeInterceptedPath(url.pathname, req.method);
-}
-
-export interface ServeOptionsContext {
-  readonly server: Server<WsData>;
-  readonly boundPort: number | null;
-  readonly remoteWorkspaceStopping: boolean;
-
-  drainingResponse: (req: Request, policy: RequestPolicyView) => Response;
-  ingressForServer: (requestServer: Server<WsData>) => ServerIngress;
-  loopbackRouteAllowed: (url: URL, req: Request) => boolean;
-  managementIngressRouteAllowed: (url: URL, req: Request) => boolean;
-  linkRouteAllowed: (url: URL, req: Request) => boolean;
-  onAuthenticatedCatalog: (apiKeyId: string) => void;
-  linkPolicy: () => RequestPolicyView;
-  packageTreeChangedResponse: (
-    req: Request,
-    policy: RequestPolicyView,
-    message: string,
-  ) => Response;
-  serverBusyResponse: (
-    req: Request,
-    resource: string,
-    policy: RequestPolicyView,
-  ) => Response;
-  runAdmittedHttpTurn: (
-    req: Request,
-    policy: RequestPolicyView,
-    work: (lease: ActiveTurnLease) => Promise<Response>,
-    refusalLog?: WorkflowRefusalLog,
-    options?: AdmittedHttpTurnOptions,
-  ) => Promise<Response>;
-
-  config: OcxConfig;
-  inboundBodyLimitBytes: number;
-  listenPort: number;
-  liveCallBindings: LiveCallBindings;
-  loadRemoteWorkspaceRuntime: () => Promise<
-    typeof import("../../remote-control/workspace-runtime")
-  >;
-  localAttestationSecret: string;
-  loopbackPolicy: () => RequestPolicyView;
-  managementApiDeps: ManagementApiDeps;
-  managementAuth: ManagementAuthState;
-  managementSessionControl: ManagementSessionControl;
-  packageTreeIntegrity: PackageTreeIntegrityGuard;
-  readinessGate: ReadinessGate;
-
-  deps: StartServerDeps;
-  port: number | undefined;
-}
+export {
+  claudeInterceptRouteAllowed,
+  trustedLoopbackForIngress,
+  type ServerIngress,
+  type ServeOptionsContext,
+} from "./serve-contract";
 
 export function createServeOptions(ctx: ServeOptionsContext) {
   const {
