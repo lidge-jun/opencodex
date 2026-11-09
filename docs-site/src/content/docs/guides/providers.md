@@ -1835,6 +1835,8 @@ references are preserved. Flattening is lossy: branch constraints
 disappear and later property definitions win, so tools must validate arguments. Existing Zen and
 Azure schema compatibility rules remain in effect.
 
+See [Verify a custom remote gateway](/guides/custom-gateway/) for the setup and validation checklist.
+
 ## Approval reviewer per provider
 
 Codex asks a second model to review approval requests, and takes that reviewer from
