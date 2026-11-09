@@ -108,6 +108,30 @@ const THE_NONE_FIELD_REFUSAL = JSON.stringify({
     message: "Invalid reasoning effort. The none field is invalid.",
   },
 });
+const UNQUOTED_PARAM_MAX_REFUSAL = JSON.stringify({
+  error: {
+    type: "invalid_request_error",
+    message: "parameter max cannot be negative; reasoning effort high is unsupported",
+  },
+});
+const ULTRA_EFFORT_REFUSAL = JSON.stringify({
+  error: {
+    type: "invalid_request_error",
+    message: "Reasoning effort ultra is invalid",
+  },
+});
+const THE_ULTRA_FIELD_REFUSAL = JSON.stringify({
+  error: {
+    type: "invalid_request_error",
+    message: "Invalid reasoning effort. The ultra field is invalid.",
+  },
+});
+const INVALID_FIELD_ULTRA_COLON_REFUSAL = JSON.stringify({
+  error: {
+    type: "invalid_request_error",
+    message: "Invalid reasoning effort. Invalid field: ultra.",
+  },
+});
 const VENDOR_EFFORT_REFUSAL = JSON.stringify({ code: "invalid-argument", error: "Invalid reasoning effort." });
 const UNRELATED = JSON.stringify({ error: { type: "invalid_request_error", message: "Invalid upload request." } });
 
@@ -931,7 +955,8 @@ describe("rejected reasoning rungs", () => {
   test.each([
     ["standard error envelope", SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
     ["vendor string error", VENDOR_SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
-  ])("classifies named effort value in separate sentence as valid effort rejection (%s)", (_label, refusal) => {
+    ["ultra descriptor", ULTRA_EFFORT_REFUSAL],
+  ])("classifies named effort value or descriptor as valid effort rejection (%s)", (_label, refusal) => {
     expect(hasConflictingReasoningEffortCode(refusal)).toBe(false);
     expect(isReasoningEffortRejection(refusal)).toBe(true);
   });
@@ -939,10 +964,12 @@ describe("rejected reasoning rungs", () => {
   test.each([
     ["openai-chat", "standard error", SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
     ["openai-chat", "vendor error", VENDOR_SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
+    ["openai-chat", "ultra descriptor", ULTRA_EFFORT_REFUSAL],
     ["openai-responses", "standard error", SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
     ["openai-responses", "vendor error", VENDOR_SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
+    ["openai-responses", "ultra descriptor", ULTRA_EFFORT_REFUSAL],
   ] as const)(
-    "replays and downgrades from max to high when effort value is in separate sentence (%s, %s)",
+    "replays and downgrades from max to high when effort value is in separate sentence or ultra descriptor (%s, %s)",
     async (adapter, _kind, refusal) => {
       writeSnapshot(["low", "high", "max"]);
       const attempts: Array<{ host: string; effort: unknown }> = [];
@@ -973,8 +1000,10 @@ describe("rejected reasoning rungs", () => {
   test.each([
     ["openai-chat", "standard error", SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
     ["openai-chat", "vendor error", VENDOR_SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
+    ["openai-chat", "ultra descriptor", ULTRA_EFFORT_REFUSAL],
     ["openai-responses", "standard error", SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
     ["openai-responses", "vendor error", VENDOR_SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL],
+    ["openai-responses", "ultra descriptor", ULTRA_EFFORT_REFUSAL],
   ] as const)(
     "combo probe downgrades effort and succeeds on lower rung when effort value is in separate sentence (%s, %s)",
     async (adapter, _kind, refusal) => {
@@ -1019,6 +1048,9 @@ describe("rejected reasoning rungs", () => {
     ["The max field is invalid", EXPLICIT_FIELD_EFFORT_WORD_REFUSAL],
     ["Invalid field: max", INVALID_FIELD_COLON_REFUSAL],
     ["The none field is invalid", THE_NONE_FIELD_REFUSAL],
+    ["parameter max cannot be negative", UNQUOTED_PARAM_MAX_REFUSAL],
+    ["The ultra field is invalid", THE_ULTRA_FIELD_REFUSAL],
+    ["Invalid field: ultra", INVALID_FIELD_ULTRA_COLON_REFUSAL],
   ])("classifies explicit invalid field (%s) as conflicting diagnostic subject", (_desc, refusal) => {
     expect(hasConflictingReasoningEffortCode(refusal)).toBe(true);
     expect(isReasoningEffortRejection(refusal)).toBe(false);
@@ -1028,9 +1060,15 @@ describe("rejected reasoning rungs", () => {
     ["openai-chat", "The max field is invalid", EXPLICIT_FIELD_EFFORT_WORD_REFUSAL, "max field is invalid"],
     ["openai-chat", "Invalid field: max", INVALID_FIELD_COLON_REFUSAL, "Invalid field: max"],
     ["openai-chat", "The none field is invalid", THE_NONE_FIELD_REFUSAL, "none field is invalid"],
+    ["openai-chat", "parameter max cannot be negative", UNQUOTED_PARAM_MAX_REFUSAL, "parameter max cannot be negative"],
+    ["openai-chat", "The ultra field is invalid", THE_ULTRA_FIELD_REFUSAL, "ultra field is invalid"],
+    ["openai-chat", "Invalid field: ultra", INVALID_FIELD_ULTRA_COLON_REFUSAL, "Invalid field: ultra"],
     ["openai-responses", "The max field is invalid", EXPLICIT_FIELD_EFFORT_WORD_REFUSAL, "max field is invalid"],
     ["openai-responses", "Invalid field: max", INVALID_FIELD_COLON_REFUSAL, "Invalid field: max"],
     ["openai-responses", "The none field is invalid", THE_NONE_FIELD_REFUSAL, "none field is invalid"],
+    ["openai-responses", "parameter max cannot be negative", UNQUOTED_PARAM_MAX_REFUSAL, "parameter max cannot be negative"],
+    ["openai-responses", "The ultra field is invalid", THE_ULTRA_FIELD_REFUSAL, "ultra field is invalid"],
+    ["openai-responses", "Invalid field: ultra", INVALID_FIELD_ULTRA_COLON_REFUSAL, "Invalid field: ultra"],
   ] as const)(
     "stops after one send without effort replay or learned rejection when effort word is an explicit invalid field (%s, %s)",
     async (adapter, _desc, refusal, expectedSubstring) => {
@@ -1059,9 +1097,15 @@ describe("rejected reasoning rungs", () => {
     ["openai-chat", "The max field is invalid", EXPLICIT_FIELD_EFFORT_WORD_REFUSAL, "max field is invalid"],
     ["openai-chat", "Invalid field: max", INVALID_FIELD_COLON_REFUSAL, "Invalid field: max"],
     ["openai-chat", "The none field is invalid", THE_NONE_FIELD_REFUSAL, "none field is invalid"],
+    ["openai-chat", "parameter max cannot be negative", UNQUOTED_PARAM_MAX_REFUSAL, "parameter max cannot be negative"],
+    ["openai-chat", "The ultra field is invalid", THE_ULTRA_FIELD_REFUSAL, "ultra field is invalid"],
+    ["openai-chat", "Invalid field: ultra", INVALID_FIELD_ULTRA_COLON_REFUSAL, "Invalid field: ultra"],
     ["openai-responses", "The max field is invalid", EXPLICIT_FIELD_EFFORT_WORD_REFUSAL, "max field is invalid"],
     ["openai-responses", "Invalid field: max", INVALID_FIELD_COLON_REFUSAL, "Invalid field: max"],
     ["openai-responses", "The none field is invalid", THE_NONE_FIELD_REFUSAL, "none field is invalid"],
+    ["openai-responses", "parameter max cannot be negative", UNQUOTED_PARAM_MAX_REFUSAL, "parameter max cannot be negative"],
+    ["openai-responses", "The ultra field is invalid", THE_ULTRA_FIELD_REFUSAL, "ultra field is invalid"],
+    ["openai-responses", "Invalid field: ultra", INVALID_FIELD_ULTRA_COLON_REFUSAL, "Invalid field: ultra"],
   ] as const)(
     "combo stops after one send without walking ladder when effort word is an explicit invalid field (%s, %s)",
     async (adapter, _desc, refusal, expectedSubstring) => {

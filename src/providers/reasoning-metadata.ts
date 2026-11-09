@@ -692,6 +692,7 @@ const EFFORT_RUNGS = new Set([
   "high",
   "max",
   "xhigh",
+  "ultra",
   "minimal",
   "standard",
   "default",
@@ -744,7 +745,7 @@ function diagnosticTextNamesOtherParameter(text: string): boolean {
   if (!text) return false;
   const s = text.replace(GENERIC_ERROR_TYPE, " ");
 
-  const paramPattern = /\b(?:parameter|param|argument|arg|field|property)\s*(?:[:=]\s*['"`]?|['"`])([a-zA-Z0-9_\-\.]+)['"`]?/gi;
+  const paramPattern = /\b(?:parameter|param|argument|arg|field|property)\s*(?:[:=]\s*['"`]?|['"`]|\s+)['"`]?([a-zA-Z0-9_\-\.]+)['"`]?/gi;
   for (let m = paramPattern.exec(s); m; m = paramPattern.exec(s)) {
     const tokenIndex = tokenStartIndex(m, m[1], false);
     if (isCompetingParameterToken(s, tokenIndex, m[1])) return true;
