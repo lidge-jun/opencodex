@@ -858,6 +858,82 @@ describe("provider moderation refusal", () => {
     expect(comboFailureDecision(400, unrelatedField)).toBe("stop");
   });
 
+  test("direct moderation verdict after validation prefix hops", () => {
+    const directValidation = "Validation error: the prompt was blocked by moderation";
+    expect(isProviderModerationRefusal(400, directValidation)).toBe(true);
+    expect(comboFailureDecision(400, directValidation)).toBe("hop");
+    expect(comboFailureCooldownScope(400, directValidation)).toBe("none");
+
+    const body = JSON.stringify({ error: { message: directValidation } });
+    expect(isProviderModerationRefusal(400, body)).toBe(true);
+    expect(comboFailureDecision(400, body)).toBe("hop");
+  });
+
+  test("accepts indexed content parameter paths in moderation refusals", () => {
+    for (const param of ["input[0].content", "messages[0].content", "messages[1].content[0].text", "input.prompt"]) {
+      const body = JSON.stringify({
+        error: {
+          message: "The input was refused by moderation. Categories: harassment.",
+          param,
+        },
+      });
+      expect(isProviderModerationRefusal(400, body)).toBe(true);
+      expect(comboFailureDecision(400, body)).toBe("hop");
+    }
+  });
+
+  test("multi-event SSE body with unparsed diagnostic note stays terminal", () => {
+    const multiEventSse = 'data: {"event":"start"}\ndata: {"note":"blocked by moderation"}\ndata: {"error":"bad_request"}';
+    expect(isProviderModerationRefusal(400, multiEventSse)).toBe(false);
+    expect(comboFailureDecision(400, multiEventSse)).toBe("stop");
+  });
+
+  test("mixed-code hard stops outrank competing wrappers and nested moderation evidence", () => {
+    // 422 JSON and single-line SSE with a root upstream_no_response code and nested moderation evidence
+    const rootUpstreamNoResponse = JSON.stringify({
+      code: "upstream_no_response",
+      error: {
+        message: "The input was refused by moderation. Categories: harassment.",
+      },
+    });
+    expect(isProviderModerationRefusal(422, rootUpstreamNoResponse)).toBe(false);
+    expect(comboFailureDecision(422, rootUpstreamNoResponse)).toBe("stop");
+
+    const sseRootUpstreamNoResponse = `data: ${rootUpstreamNoResponse}`;
+    expect(isProviderModerationRefusal(422, sseRootUpstreamNoResponse)).toBe(false);
+    expect(comboFailureDecision(422, sseRootUpstreamNoResponse)).toBe("stop");
+
+    // Moderation-coded wrapper around an inner hard code
+    const moderationWrapperHardCode = JSON.stringify({
+      error: {
+        code: "moderation_refusal",
+        type: "upstream_error",
+        message: JSON.stringify({
+          error: {
+            code: "cyber_policy",
+            message: "Blocked by cyber policy",
+          },
+        }),
+      },
+    });
+    expect(isProviderModerationRefusal(400, moderationWrapperHardCode)).toBe(false);
+    expect(comboFailureDecision(400, moderationWrapperHardCode)).toBe("stop");
+  });
+
+  test("truncated JSON envelope over 500 characters with intact moderation message hops", () => {
+    const padding = "x".repeat(600);
+    const raw = JSON.stringify({
+      error: {
+        message: "The input was refused by moderation. Categories: harassment.",
+        padding,
+      },
+    });
+    // Truncate after the message field (at 200 characters)
+    const truncated = raw.slice(0, 200);
+    expect(isProviderModerationRefusal(400, truncated)).toBe(true);
+    expect(comboFailureDecision(400, truncated)).toBe("hop");
+  });
+
   test("generic 400 errors without moderation phrasing stay terminal", () => {
     for (const message of [
       "Invalid JSON in request body",

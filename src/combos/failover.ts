@@ -1,5 +1,5 @@
 import { parseResetCooldownMs } from "../codex/routing";
-import { classifyError, isCyberPolicyCode } from "../lib/errors";
+import { classifyError, isCyberPolicyCode, isCyberPolicyMessage } from "../lib/errors";
 import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
 import { isAnthropicBillingFailure } from "../providers/anthropic-billing-refusal";
 import { isKiroAccountProfileRefusal } from "../adapters/kiro-refusal";
@@ -644,17 +644,29 @@ function isResponseFormatCapabilityRefusal(
   return false;
 }
 
+function isAllowedModerationParam(param: string): boolean {
+  const p = param.trim().toLowerCase();
+  return (
+    p === "prompt"
+    || p === "input"
+    || p === "messages"
+    || p.startsWith("input[")
+    || p.startsWith("input.")
+    || p.startsWith("messages[")
+    || p.startsWith("messages.")
+  );
+}
+
 function isReflectedValidationText(text: string): boolean {
   const lower = text.toLowerCase();
   return (
-    lower.includes("invalid parameter")
-    || lower.includes("invalid value")
-    || lower.includes("validation error")
-    || lower.includes("cannot contain")
+    lower.includes("cannot contain")
     || lower.includes("quotes '")
     || lower.includes("quotes \"")
     || /quotes\s+['"]/i.test(text)
+    || /text cannot contain/i.test(text)
     || /is not supported for (?:field|parameter)\b/i.test(text)
+    || /invalid (?:parameter|value) '.*?'/i.test(text)
   );
 }
 
@@ -690,13 +702,15 @@ export function isProviderModerationRefusal(
   ) {
     return false;
   }
-  if (normalizedCode === "moderation_refusal" || normalizedCode === "content_filter") {
-    return true;
+  if (!message) {
+    return normalizedCode === "moderation_refusal" || normalizedCode === "content_filter";
   }
-  if (!message || message.length > 32_768) return false;
+  if (message.length > 32_768) return false;
 
   let text = message.trim();
   let wasParsed = false;
+  let moderationCodeSeen = normalizedCode === "moderation_refusal" || normalizedCode === "content_filter";
+
   for (let depth = 0; depth < 3; depth += 1) {
     if (text.startsWith("Provider error 400: ") || text.startsWith("Provider error 422: ")) {
       text = text.slice(text.indexOf(": ") + 2).trim();
@@ -710,6 +724,22 @@ export function isProviderModerationRefusal(
       wasParsed = true;
     } catch {
       if (text.startsWith("{") || text.startsWith("[") || wasParsed) {
+        const match = /"message"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/.exec(text);
+        if (match) {
+          try {
+            const extractedMsg = JSON.parse(`"${match[1]}"`) as string;
+            if (
+              !isCyberPolicyMessage(text)
+              && !isNonReplayableUpstreamCode(normalizedCode)
+              && normalizedCode !== "origin_rejected"
+              && namesModerationRefusal(extractedMsg)
+            ) {
+              return true;
+            }
+          } catch {
+            return false;
+          }
+        }
         return false;
       }
       break;
@@ -720,24 +750,34 @@ export function isProviderModerationRefusal(
     if (!error || typeof error !== "object" || Array.isArray(error)) return false;
     const e = error as Record<string, unknown>;
 
-    const errCode = normalizedFailureCode(typeof e.code === "string" ? e.code : typeof rec.code === "string" ? rec.code : undefined);
-    if (
-      isCyberPolicyCode(errCode)
-      || isNonReplayableUpstreamCode(errCode)
-      || errCode === "origin_rejected"
-    ) {
+    const rootCode = normalizedFailureCode(typeof rec.code === "string" ? rec.code : undefined);
+    const errCode = normalizedFailureCode(typeof e.code === "string" ? e.code : undefined);
+    for (const c of [rootCode, errCode]) {
+      if (
+        isCyberPolicyCode(c)
+        || isNonReplayableUpstreamCode(c)
+        || c === "origin_rejected"
+      ) {
+        return false;
+      }
+      if (c === "moderation_refusal" || c === "content_filter") {
+        moderationCodeSeen = true;
+      }
+    }
+
+    if (typeof e.message === "string") {
+      const msgTrimmed = e.message.trim();
+      if (msgTrimmed.startsWith("Provider error 400: ") || msgTrimmed.startsWith("Provider error 422: ") || msgTrimmed.startsWith("{")) {
+        text = msgTrimmed;
+        continue;
+      }
+    }
+
+    if (typeof e.param === "string" && e.param && !isAllowedModerationParam(e.param)) {
       return false;
     }
-    if (errCode === "moderation_refusal" || errCode === "content_filter") return true;
 
-    if (typeof e.message === "string" && (e.message.startsWith("Provider error 400: ") || e.message.startsWith("Provider error 422: "))) {
-      text = e.message;
-      continue;
-    }
-
-    if (typeof e.param === "string" && e.param && !["prompt", "input", "messages"].includes(e.param.trim().toLowerCase())) {
-      return false;
-    }
+    if (moderationCodeSeen) return true;
 
     const candidateTexts: string[] = [];
     if (typeof e.message === "string") candidateTexts.push(e.message);
@@ -755,7 +795,8 @@ export function isProviderModerationRefusal(
     return false;
   }
 
-  if (wasParsed || text.startsWith("{") || text.startsWith("[")) return false;
+  if (moderationCodeSeen) return true;
+  if (wasParsed || text.startsWith("{") || text.startsWith("[") || text.startsWith("data:")) return false;
   return namesModerationRefusal(text);
 }
 
