@@ -30,6 +30,7 @@ const USAGE = `Usage:
       [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->]
       [--description <text|->]
       [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>]
+      [--jev-effort-mode <decide|client>]
       [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->]
       [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->]
       [--session-pin <duration|->] (e.g. 20m; keeps a session on JEV's target while active)
@@ -175,6 +176,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
     if (quotaSignals !== undefined && quotaSignals !== "-" || quotaTiers !== undefined && quotaTiers !== "-") throw new CliUsageError("quota settings apply only to jev", USAGE);
     if (sessionPinMs !== undefined) throw new CliUsageError("--session-pin applies only to the jev strategy", USAGE);
     if (decisionTimeoutMs != null) throw new CliUsageError("--decision-timeout applies only to the jev strategy", USAGE);
+    if (additional.jevEffortMode === "client") throw new CliUsageError("--jev-effort-mode client applies only to the jev strategy", USAGE);
   };
   if (strategyRaw !== undefined) requireStrategyFlags(strategyRaw);
   deps = { ...deps, baseUrl: await runtimeBaseUrl(deps) };
@@ -210,6 +212,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   if (additional.allowMeteredTargets !== undefined) combo.allowMeteredTargets = additional.allowMeteredTargets;
   if (additional.imageInput !== undefined) combo.imageInput = additional.imageInput;
   if (additional.reasoningEffortMode !== undefined) combo.reasoningEffortMode = additional.reasoningEffortMode;
+  if (additional.jevEffortMode !== undefined) combo.jevEffortMode = additional.jevEffortMode;
   if (displayName !== undefined) combo.displayName = displayName === "-" ? "" : displayName;
   if (description !== undefined) combo.description = description === "-" ? "" : description;
   if (decisionProvider !== undefined) combo.decisionProvider = decisionProvider === "-" ? null : decisionProvider;
@@ -227,6 +230,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
     delete combo.decisionQuotaSignals;
     delete combo.decisionQuotaTiers;
     delete combo.sessionPin;
+    delete combo.jevEffortMode;
   }
   if (effortMode === undefined && existing?.defaultEffortMode === "force") {
     combo.defaultEffortMode = effort === "-" ? "fallback" : "force";

@@ -31,19 +31,7 @@ imzalanmasını yasaklar.
 
 ### Gizlilik
 
-OpenCodex, yalnızca programı kuran veya çalıştıran kişi bildirimi (kontrol paneli açılır
-penceresi veya etkileşimli CLI istemi) gördükten ve reddetmedikten sonra
-`telemetry.opencodex.me` adresine günde bir anonim kullanım özeti (her gün değişen bir kurulum
-karması, sürüm, sürüm kanalı, platform, kurulum kanalı, sağlayıcı türü, kaba model ailesi, etkin
-dakikalar ve istek, jeton ve hata sayımları; istemler, çıktılar, anahtarlar, hesaplar, ana
-bilgisayar adları veya dosya yolları asla dahil edilmez) gönderir; bu bildirimde, Windows
-yükleyicisinde (varsayılan olarak işaretli "Send anonymous usage statistics" onay kutusu) ve
-istediğiniz zaman `ocx telemetry disable`, `OCX_TELEMETRY=0`, `DO_NOT_TRACK=1` veya Proxy
-details üzerinden kapatılabilir; proje genelindeki toplamlar herkese açıktır; bunun dışında
-veriler yalnızca kullanıcının yapılandırdığı yerlere gider. Uygulamada OpenCodex, istekleri
-yapılandırdığınız sağlayıcılara iletir. Yeni sürümler için GitHub ve npm kayıt deposundan yayın
-meta verilerini de okur; bu güncelleme kontrolleri istemlerinizi, kimlik bilgilerinizi veya
-kullanım verilerinizi taşımaz.
+opencodex, yalnızca kuran veya çalıştıran kişi kontrol panelinde ya da etkileşimli bir CLI isteminde bildirimi gördükten ve reddetmedikten sonra `telemetry.opencodex.me` adresine günde bir kez anonim kullanım özeti (her gün değişen bir kurulum karması, sürüm, sürüm kanalı, platform, kurulum kanalı, sağlayıcı türü, kaba model ailesi, etkin dakikalar ve istek, jeton ve hata sayaçları; istemler, model çıktıları, anahtarlar, hesaplar, ana bilgisayar adları veya dosya yolları asla gönderilmez) gönderir. Bu özellik bu bildirimde, Windows yükleyicisinde (varsayılan olarak işaretli "Send anonymous usage statistics" onay kutusu), Proxy ayrıntılarında veya `ocx telemetry disable`, `OCX_TELEMETRY=0` ya da `DO_NOT_TRACK=1` ile kapatılabilir. Bu anonim verilerin yalnızca proje genelindeki toplamları herkese açıktır. Ayrı bir herkese açık sıralama profili, siz kendiniz bağlamadıkça (pano Ana ekranı veya ocx telemetry profile connect) kapalıdır; yalnızca seçtiğiniz kullanıcı adını, görünen adı ve rengi ile günlük istek, jeton ve model ailesi toplamlarınızı paylaşır, anonim telemetri kimliğinizi asla paylaşmaz ve bağlantıyı kesmek profili siler. Bunun dışındaki tüm veriler yalnızca yapılandırdığınız sağlayıcılara ve hizmetlere gider. Yeni sürümleri kontrol etmek için GitHub ve npm kayıt deposundan yayın meta verilerini de okur; bu sürüm kontrolleri istemlerinizi veya kimlik bilgilerinizi taşımaz. Bkz. [Telemetri ve Gizlilik](/tr/guides/telemetry/).
 
 ## İndirmeyi doğrulama
 

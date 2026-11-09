@@ -4,6 +4,13 @@
   "request-log.test.ts": "usage",
   "request-log-normalization.test.ts": "usage",
   "request-log-error-detail.test.ts": "usage",
+  "usage-telemetry-profile-contract.test.ts": "usage",
+  "usage-telemetry-profile-sync.test.ts": "usage",
+  "usage-telemetry-profile-collector.test.ts": "usage",
+  "usage-telemetry-profile-lifecycle.test.ts": "usage",
+  "docs-telemetry-leaderboard.test.ts": "ci-workflows",
+  "server-telemetry-profile-routes.test.ts": "server",
+  "cli-telemetry-profile.test.ts": "cli",
   "upstream-condition.test.ts": "lib",
   "client-retry-after.test.ts": "lib",
   "client-retry-after-sites.test.ts": "server",
@@ -14,6 +21,10 @@
   "turn-state-handles-e2e.test.ts": "server",
   "usage-telemetry-client.test.ts": "usage",
   "usage-telemetry-core-boundary.test.ts": "usage",
+  "usage-telemetry-collector-worker.test.ts": "usage",
+  "usage-telemetry-collector-typecheck.test.ts": "usage",
+  "usage-telemetry-collector-privacy.test.ts": "usage",
   "server-telemetry-routes.test.ts": "server",
-  "cli-telemetry.test.ts": "cli"
+  "cli-telemetry.test.ts": "cli",
+  "docs-telemetry-dashboard.test.ts": "ci-workflows"
 }

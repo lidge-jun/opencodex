@@ -260,6 +260,8 @@ export interface UsageFilterIndexTestHooks {
   betweenReclaimCheckAndLock?: (info: { dbPath: string; candidates: string[] }) => void;
   /** Runs after a refresh, before the candidate select reads the projection. */
   afterRefresh?: (info: { dbPath: string }) => void;
+  /** Runs when a read met another writer's lock, before its back-off and retry. */
+  beforeBusyRetry?: (info: { dbPath: string; attempt: number }) => void;
 }
 
 interface IndexMeta {
@@ -396,12 +398,17 @@ function tableNames(db: Database): string[] {
   return rows.map(row => row.name);
 }
 
-/** `fresh` is an empty database, `ours` carries this projection's meta table, anything else is foreign. */
+/**
+ * `fresh` is an empty database, `ours` carries this projection's meta table, anything else is
+ * foreign. Contention is not an answer: a lock held by another writer rethrows, so the caller
+ * retries instead of classifying a projection it simply could not read yet as someone else's.
+ */
 function classifyDatabase(db: Database): "fresh" | "ours" | "foreign" {
   let names: string[];
   try {
     names = tableNames(db);
-  } catch {
+  } catch (error) {
+    if (isBusyError(error)) throw error;
     return "foreign";
   }
   if (names.length === 0) return "fresh";
@@ -412,21 +419,48 @@ function classifyDatabase(db: Database): "fresh" | "ours" | "foreign" {
   return ours ? "ours" : "foreign";
 }
 
+/**
+ * Create the schema in one transaction, deciding under the write lock.
+ *
+ * Two processes can both see the empty file. Created table by table, the second could observe the
+ * meta table without the data tables and classify a half-built projection as foreign, giving up
+ * the index for that request. One transaction makes the schema appear whole, and re-reading the
+ * table list under the lock adopts a schema another process finished first.
+ */
 function createSchema(db: Database): void {
-  db.exec(SCHEMA_DDL);
-  const generation = randomUUID();
-  writeMetaStatements(db, emptyMeta(generation));
-  db.query("INSERT OR REPLACE INTO usage_filter_index_generations (generation, created_at) VALUES (?, ?)")
-    .run(generation, Date.now());
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const classification = classifyDatabase(db);
+    if (classification === "foreign") throw new UsageFilterIndexForeignError();
+    if (classification === "fresh") {
+      db.exec(SCHEMA_DDL);
+      const generation = randomUUID();
+      writeMetaStatements(db, emptyMeta(generation));
+      db.query("INSERT OR REPLACE INTO usage_filter_index_generations (generation, created_at) VALUES (?, ?)")
+        .run(generation, Date.now());
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch { /* the close releases the lock */ }
+    throw error;
+  }
 }
 
 /**
  * Recreate the projection's own tables. Only called for a database already classified as
  * ours, so a file this module did not create is never dropped.
+ *
+ * `onlyIfStale` re-reads the schema under the write lock first: two processes that both saw an
+ * outdated schema must not have the second drop the tables (and any staged rows) the first just
+ * recreated.
  */
-function recreateSchema(db: Database): void {
+function recreateSchema(db: Database, options: { onlyIfStale?: boolean } = {}): void {
   db.exec("BEGIN IMMEDIATE");
   try {
+    if (options.onlyIfStale && schemaIsCurrent(db)) {
+      db.exec("COMMIT");
+      return;
+    }
     db.exec("DROP TABLE IF EXISTS usage_rows");
     db.exec("DROP TABLE IF EXISTS usage_attributions");
     db.exec("DROP TABLE IF EXISTS usage_filter_index_writers");
@@ -444,21 +478,24 @@ function recreateSchema(db: Database): void {
   }
 }
 
-function ensureSchema(db: Database, classification: "fresh" | "ours"): void {
-  if (classification === "fresh") {
-    createSchema(db);
-    return;
-  }
+function schemaIsCurrent(db: Database): boolean {
   const tables = new Set(tableNames(db));
-  const current = metaNumber(db, META_KEYS.schemaVersion) === USAGE_FILTER_INDEX_SCHEMA_VERSION
+  return metaNumber(db, META_KEYS.schemaVersion) === USAGE_FILTER_INDEX_SCHEMA_VERSION
     && tables.has("usage_rows")
     && tables.has("usage_attributions")
     && tables.has("usage_filter_index_writers")
     && tables.has("usage_filter_index_generations");
-  if (current) return;
+}
+
+function ensureSchema(db: Database, classification: "fresh" | "ours"): void {
+  if (classification === "fresh") {
+    createSchema(db);
+    // Another process may have created the schema first; verify it like any existing one.
+  }
+  if (schemaIsCurrent(db)) return;
   // A schema change can alter column shape, so the derived tables are recreated rather than
   // migrated. The ledger is untouched and the next refresh rebuilds from it.
-  recreateSchema(db);
+  recreateSchema(db, { onlyIfStale: true });
 }
 
 function openIndexForWrite(dir: string, path: string): Database {
@@ -466,6 +503,9 @@ function openIndexForWrite(dir: string, path: string): Database {
   preparePrivateSqliteDatabase(path);
   const db = new Database(path, { create: true });
   try {
+    // Before the first read: another process creating or writing the projection holds its lock
+    // for a moment, and that must wait (then retry), never read as a foreign file.
+    db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
     const classification = classifyDatabase(db);
     if (classification === "foreign") throw new UsageFilterIndexForeignError();
     if (!existed) {
@@ -482,7 +522,6 @@ function openIndexForWrite(dir: string, path: string): Database {
       hardenSecretPath(path, { required: false });
     }
     db.exec("PRAGMA journal_mode = WAL");
-    db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
     ensureSchema(db, classification);
     return db;
   } catch (error) {
@@ -1259,8 +1298,13 @@ export async function readUsageFilterCandidates(
         continue;
       }
       if (isBusyError(error)) {
+        // Contention, including a peer still creating the projection, is waited out rather than
+        // read as a foreign file. The bound is four busy timeouts (the fourth attempt has no
+        // back-off) plus these delays, about 1.1 s, before the request falls back to the
+        // streaming read.
         const delay = BUSY_RETRY_DELAYS_MS[attempt];
         if (delay === undefined) return null;
+        testHooks?.beforeBusyRetry?.({ dbPath: path, attempt });
         await new Promise<void>(resolve => setTimeout(resolve, delay));
         continue;
       }

@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { windowsOcxArgv, windowsNativeArgv, windowsChildHttpArgv, windowsPinnedSyncArgv, packedPowerShellArgv, powershellArgv, windowsScriptData, windowsScriptHelperSource, OCX_JOB_SOURCE, WINDOWS_CONTAINMENT_EXIT } from "../../src/link/remote-windows";
 import { quoteRemote, REMOTE_OCX_SCRIPT, remoteOcxArgv } from "../../src/link/ssh-argv";
+import { recordServingRuntime } from "../../src/config/serving-runtimes";
+import { remoteInspectRuntimeArgv } from "../../src/link/remote-plant";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { spawnTestChild } from "../helpers/spawn-test-child";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
@@ -104,6 +106,78 @@ test.skipIf(process.platform === "win32").each(["Windows_NT", "MSYS_NT-10.0-2263
     expect(result.exitCode).toBe(125);
     expect(result.stdout).toBe("");
     expect(result.stderr).toBe("");
+}, SPAWN_BUDGET_MS);
+
+/**
+ * #8359: the install that last started serving this home wins over a stale Desktop or PATH copy.
+ * The census is written by the real recorder, so a format change on that side breaks these cases.
+ */
+function servedFixture() {
+  const f = fixture();
+  for (const tool of ["awk", "wc"]) symlinkSync(Bun.which(tool)!, join(f.home, "remote-bin", tool));
+  f.install(0); // a runnable Desktop copy that must lose to the served install
+  const census = (command: string[]) => recordServingRuntime(
+    { command, version: "2.99.0", servedAt: "2026-11-09T00:00:00.000Z" },
+    join(f.home, ".opencodex"),
+  );
+  return { ...f, census };
+}
+
+test.skipIf(process.platform === "win32")("remote sh runs the served package install as bun plus its CLI entry (#8359)", async () => {
+  const f = servedFixture();
+  const bun = join(f.home, "npm prefix/lib/node_modules/opencodex/node_modules/bun/bin/bun");
+  const cli = join(f.home, "npm prefix/lib/node_modules/opencodex/src/cli/index.ts");
+  executable(bun, "if [ \"$2\" = --version ]; then printf 'opencodex 2.99.0\\n'; exit 0; fi\nprintf 'served\\n'\nprintf '%s\\0' \"$@\"");
+  mkdirSync(dirname(cli), { recursive: true });
+  writeFileSync(cli, "// entry\n");
+  f.census([bun, cli]);
+  const args = ["link", "probe", "it's x", "x;$(echo no)", "--json"];
+  const result = await f.run(args);
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toBe(`served\n${[cli, ...args].join("\0")}\0`);
+}, SPAWN_BUDGET_MS);
+
+test.skipIf(process.platform === "win32")("remote sh runs a served compiled binary before the Desktop copy (#8359)", async () => {
+  const f = servedFixture();
+  const served = join(f.home, "standalone/ocx");
+  executable(served, "if [ \"$1\" = --version ]; then printf 'opencodex 2.99.0\\n'; exit 0; fi\nprintf 'standalone\\n'");
+  f.census([served]);
+  const result = await f.run();
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toBe("standalone\n");
+}, SPAWN_BUDGET_MS);
+
+test.skipIf(process.platform === "win32")("a served install that is gone or cannot report a version falls through (#8359)", async () => {
+  const missing = servedFixture();
+  missing.census([join(missing.home, "uninstalled/ocx")]);
+  expect((await missing.run()).stdout).toBe("0\nlink\0port\0");
+  const broken = servedFixture();
+  const served = join(broken.home, "broken/ocx");
+  executable(served, "printf 'broken served ran\\n'; exit 1");
+  broken.census([served]);
+  const result = await broken.run();
+  expect(result.stdout).toBe("0\nlink\0port\0");
+  expect(result.stderr).toBe("");
+  // A package install whose CLI entry vanished is not run as a bare bun.
+  const entryless = servedFixture();
+  const bun = join(entryless.home, "pkg/bun");
+  executable(bun, "printf 'bare bun ran\\n'");
+  entryless.census([bun, join(entryless.home, "pkg/missing-index.ts")]);
+  expect((await entryless.run()).stdout).toBe("0\nlink\0port\0");
+}, SPAWN_BUDGET_MS);
+
+test.skipIf(process.platform === "win32").each([
+  ["a relative path", '{\n  "runtimes": [\n    {\n      "command": [\n        "relative/ocx"\n      ]\n    }\n  ]\n}\n'],
+  ["a quoted path", '{\n  "runtimes": [\n    {\n      "command": [\n        "/tmp/a\\"b/ocx"\n      ]\n    }\n  ]\n}\n'],
+  ["three entries", '{\n  "runtimes": [\n    {\n      "command": [\n        "/a",\n        "/b",\n        "/c"\n      ]\n    }\n  ]\n}\n'],
+  ["a truncated file", '{\n  "runtimes": [\n    {\n      "command": [\n        "/a"\n'],
+] as const)("a census with %s is ignored (#8359)", async (_label, body) => {
+  const f = servedFixture();
+  mkdirSync(join(f.home, ".opencodex"), { recursive: true });
+  writeFileSync(join(f.home, ".opencodex/serving-runtimes.json"), body);
+  const result = await f.run();
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toBe("0\nlink\0port\0");
 }, SPAWN_BUDGET_MS);
 
 test.skipIf(process.platform !== "win32")("Windows native execution preserves spaces quotes Unicode empty arguments and stdin bytes", async () => {
@@ -304,3 +378,20 @@ test("the Windows command carries the containment helper source intact", () => {
   expect(OCX_JOB_SOURCE).toContain("0x2000D");
   expect(OCX_JOB_SOURCE).not.toContain("ResumeThread");
 });
+
+test.skipIf(process.platform === "win32")("runtime inspection reports the served install's version over a stale Desktop copy (#8359)", () => {
+  const home = mkdtempSync(join(tmpdir(), "ocx-inspect served-")); roots.push(home);
+  executable(join(home, ".opencodex-desktop/bin/ocx"), "printf 'opencodex 2.77.0\\n'");
+  const bun = join(home, "homebrew prefix/opencodex/bun"), cli = join(home, "homebrew prefix/opencodex/index.ts");
+  executable(bun, "if [ \"$2\" = --version ]; then printf 'opencodex 2.99.0\\n'; exit 0; fi; exit 1");
+  writeFileSync(cli, "// entry\n");
+  recordServingRuntime({ command: [bun, cli], version: "2.99.0", servedAt: "2026-11-09T00:00:00.000Z" }, join(home, ".opencodex"));
+  const bin = join(home, "tools"); mkdirSync(bin);
+  for (const tool of ["sh", "uname", "awk", "wc"]) symlinkSync(Bun.which(tool)!, join(bin, tool));
+  const result = Bun.spawnSync(remoteInspectRuntimeArgv("posix"), { env: { HOME: home, PATH: bin }, stdout: "pipe", stderr: "pipe" });
+  const lines = result.stdout.toString().split("\n");
+  expect(result.exitCode).toBe(0);
+  expect(lines).toContain("ocx-inspect:kind:full");
+  expect(lines).toContain("ocx-inspect:version:opencodex 2.99.0");
+});
+

@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 import type { TKey } from "./en";
 
 /**
@@ -139,6 +140,7 @@ export const ru: Record<TKey, string> = {
   ...connectV2Copy("ru"),
   ...startupV2Copy("ru"),
   ...proxyV2Copy("ru"),
+  ...telemetryProfileCopy("ru"),
   "claude.tierDefaults.unset": "Не задано (сохранить настройку Claude)",
   "claude.tierDefaults.recovery": "Применение остановлено, автоматическое восстановление не удалось. Проверьте резервную копию ниже перед повтором.",
   "claude.tierDefaults.title": "Модели CLI по умолчанию",
@@ -818,6 +820,8 @@ export const ru: Record<TKey, string> = {
   "prov.port": "Порт",
   "prov.default": "По умолчанию",
   "prov.loadingConfig": "Загрузка…",
+  "prov.targetChanged": "Цель панели изменилась. Откройте эту форму заново на текущем сервере.",
+  "prov.legacyTargetPreflight": "Этот прокси проверяет цель сохранения перед отправкой, но не может проверить её атомарно. Обновите прокси для сохранений, привязанных к цели.",
   "prov.saved": "Сохранено! Перезапустите прокси, чтобы применить изменения.",
   "prov.loadConfigFail": "Не удалось загрузить конфигурацию",
   "prov.invalidJson": "Некорректный JSON",
@@ -2056,12 +2060,19 @@ export const ru: Record<TKey, string> = {
   "pws.pacingRemoveModel": "Удалить интервал запросов для {model}",
   "pws.pacingRuleRequired": "Сначала задайте лимит провайдера или правило модели.",
   "pws.pacingCapInvalid": "Максимальное количество одновременных запросов должно быть целым числом не меньше 1.",
+  "pws.pacingValueInvalid": "Введите допустимое значение ограничения: RPM 1/60–60 000, задержка 1–3 600 000 мс, параллелизм 1 или больше.",
   "pws.saving": "Сохранение…",
   "pws.settingsSaved": "Настройки сохранены.",
   "pws.accountModeSaved": "Режим аккаунта сохранён.",
   "pws.accountModeFailed": "Не удалось переключить режим аккаунта.",
   "pws.accountModeConfirm": "Переключить режим аккаунта OpenAI? Текущие беседы будут перенаправлены на другой набор аккаунтов, а использование квоты будет учитываться в новом режиме.",
   "pws.settingsUnsavedBar": "Есть несохранённые изменения.",
+  "pws.draftTarget": "Редактирование: {target}",
+  "pws.draftConflict": "Сохранённые настройки на этом сервере изменились во время редактирования. Черновик сохранён; выберите, какие значения оставить.",
+  "pws.draftConflictFields": "Эти поля изменены с обеих сторон. Отредактируйте черновик или используйте сохранённые значения:",
+  "pws.draftConflictUseSaved": "Использовать сохранённые значения",
+  "pws.draftConflictKeepDraft": "Оставить мой черновик",
+  "pws.draftConflictResolveFirst": "Перед сохранением выберите, какие значения оставить.",
   "pws.unsavedLeaveBody": "Есть несохранённые изменения. Сохранить их перед переходом?",
   "pws.unsavedLeaveTitle": "Несохранённые изменения",
   "pws.attentionRequired": "Требуется внимание",

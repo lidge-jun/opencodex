@@ -130,12 +130,20 @@ export class WsSendDroppedError extends Error {
   }
 }
 
+/** Capture inbound WS auth and metadata for reconstructed turns; provider egress filters again. */
 export function selectForwardHeaders(
   headers: Headers,
   codexOverride?: { accessToken: string; chatgptAccountId: string; kind?: "pool" | "main-pool" },
 ): Headers {
   const selected = new Headers();
   for (const name of FORWARD_HEADERS) {
+    const value = headers.get(name);
+    if (value !== null) selected.set(name, value);
+  }
+  // WS turns rebuild an HTTP request from this snapshot. Keep original client
+  // identity available for the same per-provider policy used by HTTP requests.
+  // These are not credentials and do not extend the outbound provider allowlist.
+  for (const name of ["user-agent", "x-codex-app-version"]) {
     const value = headers.get(name);
     if (value !== null) selected.set(name, value);
   }

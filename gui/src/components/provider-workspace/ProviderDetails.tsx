@@ -23,7 +23,9 @@ import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool
 import ProviderSettings from "./ProviderSettings";
 import { UnsavedLeaveDialog } from "./ProviderDialogs";
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
-import type { AccountLoadState, ProviderModelUsageRow, ProviderUsageTotals, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers, ProviderUpdatePatch, ProviderUpdateResult } from "./types";
+import type { AccountLoadState, ProviderModelUsageRow, ProviderUsageTotals, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers, ProviderUpdatePatch, ProviderUpdateResult, ProviderUpdateCallback } from "./types";
+import { createProviderDraftStore, providerDraftTargetLabel, type ProviderDraftStore } from "../../provider-workspace/target-drafts";
+import { useRenderTargetCapture } from "../../use-render-target-capture";
 
 type Tab = "overview" | "models" | "usage" | "accounts" | "settings";
 
@@ -60,10 +62,14 @@ export default function ProviderDetails({
   keys,
   busyProvider,
   loginHint,
+  loginCapture,
   authHandlers,
   onCodexActiveNeedsReauthChange,
   codexController,
   onUpdateProvider,
+  targetKey,
+  targetLabel,
+  draftStore,
   isDefault,
   onRemoveProvider,
   onSetDisabled,
@@ -106,11 +112,18 @@ export default function ProviderDetails({
   keys?: ApiKeyRow[];
   busyProvider?: string | null;
   loginHint?: LoginHint | null;
+  loginCapture?: import("../../api").ApiTargetCapture;
   authHandlers?: ProviderAuthHandlers;
   onCodexActiveNeedsReauthChange?: (needs: boolean) => void;
   /** Shared Codex account state owned by Providers (WP3). */
   codexController?: CodexAccountPoolController;
-  onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<ProviderUpdateResult>;
+  onUpdateProvider?: ProviderUpdateCallback;
+  /** Dashboard server identity; provider names are only unique within one target. */
+  targetKey?: string;
+  /** Nonsecret logical target label; never the machine key id. */
+  targetLabel?: string;
+  /** Page-owned in-memory drafts, scoped by target and provider. */
+  draftStore?: ProviderDraftStore;
   isDefault?: boolean;
   onRemoveProvider?: (name: string) => void;
   onSetDisabled?: (name: string, disabled: boolean) => void;
@@ -119,11 +132,25 @@ export default function ProviderDetails({
   onRefreshQuota?: () => Promise<boolean>;
 }) {
   const t = useT();
+  const settingsTargetKey = targetKey ?? "";
+  const settingsTargetLabel = targetLabel ?? providerDraftTargetLabel(settingsTargetKey);
+  const localDraftStore = useMemo(() => draftStore ?? createProviderDraftStore(), [draftStore]);
   const [tab, setTab] = useState<Tab>("overview");
   const [settingsDirty, setSettingsDirty] = useState(false);
-  const [pendingLeave, setPendingLeave] = useState<Tab | "deselect" | null>(null);
+  const [pendingLeave, setPendingLeave] = useState<{ next: Tab | "deselect"; targetKey: string } | null>(null);
   const [leaveSaving, setLeaveSaving] = useState(false);
   const settingsSaveRef = useRef<(() => Promise<boolean>) | null>(null);
+  const settingsDiscardRef = useRef<(() => void) | null>(null);
+  const registerSettingsDiscard = useCallback((discard: (() => void) | null) => {
+    settingsDiscardRef.current = discard;
+  }, []);
+  // A leave confirmation belongs to the target that opened it. Close it when the
+  // logical target changes so its Discard/Save cannot act on the new target.
+  const [leaveTarget, setLeaveTarget] = useState(settingsTargetKey);
+  if (leaveTarget !== settingsTargetKey) {
+    setLeaveTarget(settingsTargetKey);
+    setPendingLeave(null);
+  }
   // Seed 0 so a mount-time token from revealProviderAccounts stays pending until
   // authSurface exists; seeding with the prop would treat it as already seen.
   const [seenAccountsFocusToken, setSeenAccountsFocusToken] = useState(0);
@@ -176,16 +203,21 @@ export default function ProviderDetails({
   if (tab !== "overview" && probeController.completionProbe?.status === "testing") {
     probeController.clearIfTesting();
   }
+  // The detail pane's render owns the target for every child update. A module-level
+  // target change that has not re-rendered this pane cannot retarget a stale form.
+  const updateCapture = useRenderTargetCapture(apiBase, targetKey);
   const handleUpdateProvider = useMemo(
     () => onUpdateProvider
-      ? async (name: string, patch: ProviderUpdatePatch): Promise<ProviderUpdateResult> => {
-          const result = await onUpdateProvider(name, patch);
+      ? async (name: string, patch: ProviderUpdatePatch, capture?: import("../../api").ApiTargetCapture): Promise<ProviderUpdateResult> => {
+          // A form that owns its capture keeps it; this pane only supplies one when the
+          // caller did not. Replacing a form capture here would reintroduce the gap.
+          const result = await onUpdateProvider(name, patch, capture ?? updateCapture);
           const affectsConnection = Object.keys(patch).some(key => key !== "note" && key !== "setDefault");
           if (result.ok && affectsConnection) setMutationRevision(revision => revision + 1);
           return result;
         }
       : undefined,
-    [onUpdateProvider],
+    [onUpdateProvider, updateCapture],
   );
   const wrappedAuthHandlers = useMemo<ProviderAuthHandlers | undefined>(() => {
     if (!authHandlers) return undefined;
@@ -221,11 +253,11 @@ export default function ProviderDetails({
 
   const switchTab = useCallback((next: Tab) => {
     if (settingsDirty && tab === "settings" && next !== "settings") {
-      setPendingLeave(next);
+      setPendingLeave({ next, targetKey: settingsTargetKey });
       return;
     }
     setTab(next);
-  }, [tab, settingsDirty]);
+  }, [tab, settingsDirty, settingsTargetKey]);
 
   // Adjust related state when accountsFocusToken changes during render (not in an
   // effect) so the Accounts tab is selected without a one-frame stale paint.
@@ -236,7 +268,7 @@ export default function ProviderDetails({
     setSeenAccountsFocusToken(scopedAccountsFocusToken);
     if (scopedAccountsFocusToken && authSurface) {
       if (settingsDirty && tab === "settings") {
-        setPendingLeave("accounts");
+        setPendingLeave({ next: "accounts", targetKey: settingsTargetKey });
       } else {
         setTab("accounts");
       }
@@ -253,11 +285,11 @@ export default function ProviderDetails({
 
   const requestDeselect = useCallback(() => {
     if (settingsDirty && tab === "settings") {
-      setPendingLeave("deselect");
+      setPendingLeave({ next: "deselect", targetKey: settingsTargetKey });
       return;
     }
     onDeselect();
-  }, [settingsDirty, tab, onDeselect]);
+  }, [settingsDirty, tab, onDeselect, settingsTargetKey]);
 
   const onTabKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
     let next: number;
@@ -436,6 +468,7 @@ export default function ProviderDetails({
           <ProviderAuthPanel
             item={item}
             apiBase={apiBase}
+            targetKey={targetKey}
             oauth={oauth}
             accounts={accounts}
             keys={keys}
@@ -444,6 +477,7 @@ export default function ProviderDetails({
             pausingAccountId={pausingAccountId}
             busy={busyProvider === item.name}
             loginHint={loginHint}
+            loginCapture={loginCapture}
             authHandlers={wrappedAuthHandlers}
             onUpdateProvider={handleUpdateProvider}
             onCodexActiveNeedsReauthChange={onCodexActiveNeedsReauthChange}
@@ -452,13 +486,17 @@ export default function ProviderDetails({
         )}
         {tab === "settings" && (
           <ProviderSettings
-            key={item.name}
+            key={`${settingsTargetKey}\u0000${item.name}`}
             item={item}
             apiBase={apiBase}
+            targetKey={settingsTargetKey}
+            targetLabel={settingsTargetLabel}
+            draftStore={localDraftStore}
             availableModels={availableModels}
             onUpdateProvider={handleUpdateProvider}
             onDirtyChange={setSettingsDirty}
             onRegisterSave={registerSettingsSave}
+            onRegisterDiscard={registerSettingsDiscard}
           />
         )}
       </div>
@@ -468,24 +506,34 @@ export default function ProviderDetails({
           onCancel={() => { if (!leaveSaving) setPendingLeave(null); }}
           onDiscard={() => {
             if (leaveSaving) return;
-            const next = pendingLeave;
+            const pending = pendingLeave;
             setPendingLeave(null);
             setSettingsDirty(false);
-            if (next === "deselect") onDeselect();
-            else setTab(next);
+            // The confirmation belongs to the target that opened it. A stale confirmation
+            // must not clear the new target's draft or navigate under it.
+            if (!pending || pending.targetKey !== settingsTargetKey) return;
+            // Discard means the parked draft must not come back when Settings is reopened.
+            if (settingsDiscardRef.current) settingsDiscardRef.current();
+            else localDraftStore.clear(pending.targetKey, item.name);
+            if (pending.next === "deselect") onDeselect();
+            else setTab(pending.next);
           }}
           onSave={() => {
             void (async () => {
               if (leaveSaving) return;
+              const pending = pendingLeave;
+              if (!pending || pending.targetKey !== settingsTargetKey) {
+                setPendingLeave(null);
+                return;
+              }
               setLeaveSaving(true);
               try {
                 const ok = await settingsSaveRef.current?.() ?? false;
                 if (!ok) return;
-                const next = pendingLeave;
                 setPendingLeave(null);
                 setSettingsDirty(false);
-                if (next === "deselect") onDeselect();
-                else if (next) setTab(next);
+                if (pending.next === "deselect") onDeselect();
+                else setTab(pending.next);
               } finally {
                 setLeaveSaving(false);
               }
