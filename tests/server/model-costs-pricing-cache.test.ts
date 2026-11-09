@@ -4,12 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { flushConfigDirHardeningAndReaps } from "../../src/config/paths";
+import { forgetHardenedSecretPath, hardenSecretPath } from "../../src/lib/windows-secret-acl";
 import { startServer } from "../../src/server";
 import { getFilteredUsageAggregate, getUsageAggregate, resetUsageAggregateCacheForTests } from "../../src/server/management/usage-aggregate-cache";
 import { getUsageSummaryCacheEntry, resetUsageSummaryCacheForTests } from "../../src/server/management/usage-summary-cache";
 import type { OcxConfig, PromptLengthPricing } from "../../src/types";
 import { estimateRequestCost } from "../../src/usage/cost";
-import { resetUsageReadCacheForTests, type PersistedUsageEntry } from "../../src/usage/log";
+import { currentUsageLogRevision, resetUsageReadCacheForTests, type PersistedUsageEntry } from "../../src/usage/log";
 import { refreshUserCostOverlays, resetPreservedDiskOnlyProvidersForTests } from "../../src/usage/user-cost-overlays";
 import { stopUserCostOverlayReconciler } from "../../src/usage/user-cost-overlay-reconciler";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -50,6 +51,7 @@ afterEach(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   removeTreeWithRetry(home);
+  forgetHardenedSecretPath(join(home, "usage.jsonl"));
 });
 
 test("policy-only API writes refresh warm estimate, summary and aggregate caches; reset restores catalog", async () => {
@@ -59,12 +61,15 @@ test("policy-only API writes refresh warm estimate, summary and aggregate caches
   const ledgerPath = join(home, "usage.jsonl");
   const ledger = `${JSON.stringify(entry)}\n`;
   writeFileSync(ledgerPath, ledger);
+  // Later startup config loads can re-harden the home after the initial flush.
+  // Protect this fixture from inherited-ACE rewrites that move NTFS ChangeTime.
+  hardenSecretPath(ledgerPath, { required: true });
   const server = startServer(0);
   try {
-    // On Windows startServer's loadConfig starts an unawaited directory ACL harden whose
-    // inherited-ACE rewrite moves usage.jsonl's ChangeTime; the aggregate cache then rightly
-    // rebuilds. Settle it before asserting warm-cache reuse.
+    // Drain the current startup ACL work before warming any caches.
     await flushConfigDirHardeningAndReaps(home);
+    const ledgerRevision = currentUsageLogRevision();
+    expect(ledgerRevision).not.toBeNull();
     const summaryUrl = new URL("/api/usage?range=all", server.url);
     const priceUrl = new URL("/api/providers/openai/model-costs", server.url);
     const summarize = async () => {
@@ -140,6 +145,7 @@ test("policy-only API writes refresh warm estimate, summary and aggregate caches
       expect(refreshedFiltered.accumulator).not.toBe(filtered.accumulator);
       expect(refreshedFiltered.accumulator.summarize("all", now).summary.estimatedCostUsd).toBeCloseTo(total, 12);
       expect(readFileSync(ledgerPath, "utf8")).toBe(ledger);
+      expect(currentUsageLogRevision()).toEqual(ledgerRevision);
       previousTotal = total;
     }
     const reset = estimateRequestCost(INPUT)!;

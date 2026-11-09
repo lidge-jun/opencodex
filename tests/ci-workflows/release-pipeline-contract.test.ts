@@ -714,13 +714,18 @@ describe("release pipeline contract", () => {
     shellTest("Bash can run Node on a temporary checker file", () => {
       const cwd = mkdtempSync(join(tmpdir(), "ocx-bash-checker-"));
       try {
-        const result = Bun.spawnSync([bash!, "--noprofile", "--norc", "-e", "-c",
-          `cat > "$RUNNER_TEMP/check.cjs" <<'NODE'\nprocess.stdout.write('checker-ran');\nNODE\nnode "$RUNNER_TEMP/check.cjs"`], {
+        const checker = String.raw`const invalid = /[\x00-\x1f\x7f/\\]/;
+if (invalid.test('app.zip') || !invalid.test('dir\\app.zip') || !invalid.test('\0')) throw Error('checker source changed');
+process.stdout.write('checker-ran');`;
+        writeFileSync(join(cwd, "check.sh"),
+          `cat > "$RUNNER_TEMP/check.cjs" <<'NODE'\n${checker}\nNODE\nnode "$RUNNER_TEMP/check.cjs"`);
+        const result = Bun.spawnSync([bash!, "--noprofile", "--norc", "-e", "./check.sh"], {
           cwd, env: releaseTestEnv({ PATH: releaseShellPath(dirname(Bun.which("node")!), bash!, process.platform === "win32"), RUNNER_TEMP: "." }),
           timeout: 3_000, maxBuffer: 16_384,
         });
         expect(result.exitCode, result.stderr.toString()).toBe(0);
         expect(result.stdout.toString()).toBe("checker-ran");
+        expect(readFileSync(join(cwd, "check.cjs"), "utf8")).toBe(`${checker}\n`);
       } finally { removeTreeWithRetry(cwd); }
     });
 
@@ -735,7 +740,8 @@ describe("release pipeline contract", () => {
         writeFileSync(join(cwd, "dist/release/app.zip"), "archive");
         const digest = createHash("sha256").update("archive").digest("hex");
         writeFileSync(join(cwd, "verification/receipt.json"), JSON.stringify({ assets: { "app.zip": digest } }));
-        const result = Bun.spawnSync([bash!, "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", `
+        // A script file preserves heredoc backslashes across Windows process argument parsing.
+        writeFileSync(join(cwd, "attach.sh"), `
           gh() {
             printf 'gh:%s\\n' "$*" >&2
             case "$1:$2" in
@@ -754,7 +760,9 @@ describe("release pipeline contract", () => {
           }
           ${run}
           printf 'attach-completed\\n'
-        `], { cwd, env: releaseTestEnv({ PATH: releaseShellPath(dirname(Bun.which("node")!), bash!, process.platform === "win32"), RUNNER_TEMP: ".", RELEASE_VERSION: "2.65.0", DRAFT_STATE: "true",
+        `);
+        const result = Bun.spawnSync([bash!, "--noprofile", "--norc", "-e", "-o", "pipefail", "./attach.sh"],
+          { cwd, env: releaseTestEnv({ PATH: releaseShellPath(dirname(Bun.which("node")!), bash!, process.platform === "win32"), RUNNER_TEMP: ".", RELEASE_VERSION: "2.65.0", DRAFT_STATE: "true",
           RELEASE_INFO: '{"isDraft":true,"assets":[]}', INITIAL_STATUS: "0",
           FINAL_INFO: JSON.stringify({ isDraft: true, assets: [{ name: "app.zip", state: "uploaded", digest: `sha256:${digest}` }] }),
           UPLOAD_STATUS: "0", VIEW_STATUS: "0", EDIT_STATUS: "0", ...env }),

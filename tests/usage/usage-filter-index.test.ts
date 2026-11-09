@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import * as fs from "node:fs";
 import {
   appendFileSync,
-  chmodSync,
   existsSync,
   mkdtempSync,
   readFileSync,
@@ -589,37 +589,147 @@ describe("filtered usage index crash and multi-writer safety", () => {
     expect(indexGenerations()).toHaveLength(1);
   });
 
-  test("two processes rebuilding the same ledger both report every row", async () => {
+  test.each(["indexed", "streaming"])("two processes rebuilding the same ledger both report every row (%s)", async mode => {
+    const failSecondPublish = mode === "streaming";
     const rows = Array.from({ length: 30_000 }, (_, index) => syntheticRow(index));
     writeRows(rows);
     const expected = rows.filter(row => row.provider === "openai").length;
     const scriptPath = join(testDir, "child.ts");
     writeFileSync(scriptPath, `
 import { getFilteredUsageAggregate } from ${JSON.stringify(repoPath("src/server/management/usage-aggregate-cache.ts"))};
-const result = await getFilteredUsageAggregate({ provider: "openai" });
-const summary = result.accumulator.summarize("all", Date.now());
-console.log(JSON.stringify({ requests: summary.summary.requests, candidates: result.filterIndex?.candidateRows ?? null }));
-`);
-    const children = [0, 1].map(() => Bun.spawn([process.execPath, scriptPath], {
-      env: { ...process.env, OPENCODEX_HOME: testDir },
-      stdout: "pipe",
-      stderr: "pipe",
-    }));
-    const outputs = await Promise.all(children.map(async child => {
-      const code = await child.exited;
-      const out = await new Response(child.stdout).text();
-      const err = await new Response(child.stderr).text();
-      return { code, out, err };
-    }));
-    for (const output of outputs) {
-      expect(output.err).toBe("");
-      expect(output.code).toBe(0);
-      const line = output.out.trim().split("\n").at(-1) ?? "";
-      expect(JSON.parse(line)).toEqual({ requests: expected, candidates: expected });
-    }
-    expect(indexGenerations()).toHaveLength(1);
-    expect(indexRowCount(publishedGeneration())).toBe(rows.length);
+import { setUsageFilterIndexTestHooksForTests } from ${JSON.stringify(repoPath("src/usage/filter-index.ts"))};
+let registrations = 0;
+let publishes = 0;
+let faults = 0;
+function boundary(phase: string, generation: string, command: string) {
+  return new Promise<void>((resolve, reject) => {
+    process.once("message", message => message === command
+      ? resolve() : reject(new Error("unexpected command: " + message)));
+    process.send!({ phase, generation });
   });
+}
+setUsageFilterIndexTestHooksForTests({
+  afterStagingRegistered: async ({ generation }) => {
+    registrations += 1;
+    await boundary("registered", generation, "ingest");
+  },
+  beforePublish: async ({ stagedGeneration }) => {
+    publishes += 1;
+    await boundary("staged", stagedGeneration, "publish");
+    if (process.argv[2] === "fault") {
+      faults += 1;
+      throw new Error("injected index failure before publish");
+    }
+  },
+});
+try {
+  const result = await getFilteredUsageAggregate({ provider: "openai" });
+  const summary = result.accumulator.summarize("all", Date.now());
+  console.log(JSON.stringify({
+    requests: summary.summary.requests,
+    candidates: result.filterIndex?.candidateRows ?? null,
+    totalRows: result.filterIndex?.totalRows ?? null,
+    registrations, publishes, faults,
+  }));
+} finally {
+  setUsageFilterIndexTestHooksForTests(null);
+  process.disconnect!();
+}
+`);
+    function startWriter(fault: boolean) {
+      const boundaries = {
+        registered: Promise.withResolvers<string>(),
+        staged: Promise.withResolvers<string>(),
+      };
+      const child = Bun.spawn([process.execPath, scriptPath, fault ? "fault" : "indexed"], {
+        env: { ...process.env, OPENCODEX_HOME: testDir },
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 10_000,
+        ipc(message: { phase: keyof typeof boundaries; generation: string }) {
+          boundaries[message.phase].resolve(message.generation);
+        },
+      });
+      const output = Promise.all([
+        child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+      ]);
+      return {
+        child,
+        output,
+        waitFor: (phase: keyof typeof boundaries) => Promise.race([
+          boundaries[phase].promise,
+          output.then(([code, out, err]) => {
+            throw new Error(`writer exited before ${phase}: ${code}\n${out}\n${err}`);
+          }),
+        ]),
+      };
+    }
+    const first = startWriter(false);
+    let second: ReturnType<typeof startWriter> | undefined;
+    try {
+      const firstGeneration = await first.waitFor("registered");
+      // Start the competitor after schema creation, while the first owns a live lease.
+      second = startWriter(failSecondPublish);
+      const secondGeneration = await second.waitFor("registered");
+      expect(secondGeneration).not.toBe(firstGeneration);
+      first.child.send("ingest");
+      expect(await first.waitFor("staged")).toBe(firstGeneration);
+      second.child.send("ingest");
+      expect(await second.waitFor("staged")).toBe(secondGeneration);
+      expect(indexRowCount(firstGeneration)).toBe(rows.length);
+      expect(indexRowCount(secondGeneration)).toBe(rows.length);
+
+      first.child.send("publish");
+      const firstOutput = await first.output;
+      expect(firstOutput[0]).toBe(0);
+      expect(firstOutput[2]).toBe("");
+      expect(JSON.parse(firstOutput[1].trim())).toEqual({
+        requests: expected, candidates: expected, totalRows: rows.length,
+        registrations: 1, publishes: 1, faults: 0,
+      });
+      // Publishing must preserve the competitor's complete staging and live lease.
+      expect(publishedGeneration()).toBe(firstGeneration);
+      expect(indexRowCount(secondGeneration)).toBe(rows.length);
+      const probe = indexDatabase();
+      try {
+        expect(probe.query("SELECT generation, pid FROM usage_filter_index_writers").all())
+          .toEqual([{ generation: secondGeneration, pid: second.child.pid }]);
+      } finally {
+        probe.close();
+      }
+
+      // The loser either reads the winner after the fence, or streams after the explicit
+      // index-side fault. Neither outcome may undercount the authoritative ledger.
+      second.child.send("publish");
+      const secondOutput = await second.output;
+      expect(secondOutput[0]).toBe(0);
+      expect(secondOutput[2]).toBe("");
+      expect(JSON.parse(secondOutput[1].trim())).toEqual({
+        requests: expected,
+        candidates: failSecondPublish ? null : expected,
+        totalRows: failSecondPublish ? null : rows.length,
+        registrations: 1, publishes: 1, faults: failSecondPublish ? 1 : 0,
+      });
+      expect(publishedGeneration()).toBe(firstGeneration);
+      expect(indexGenerations()).toEqual([firstGeneration]);
+      expect(indexRowCount(firstGeneration)).toBe(rows.length);
+      expect(publishedOffset()).toBe(statSync(ledgerPath()).size);
+      const settled = indexDatabase();
+      try {
+        expect(settled.query("SELECT generation FROM usage_filter_index_generations").all())
+          .toEqual([{ generation: firstGeneration }]);
+        expect(settled.query("SELECT generation FROM usage_filter_index_writers").all()).toEqual([]);
+      } finally {
+        settled.close();
+      }
+    } finally {
+      for (const writer of [first, second]) {
+        if (!writer) continue;
+        if (writer.child.exitCode === null) writer.child.kill();
+        await writer.output;
+      }
+    }
+  }, 15_000);
 
   test("crashed and abandoned staging never accumulates", async () => {
     const rows = Array.from({ length: 3000 }, (_, index) => syntheticRow(index));
@@ -1079,13 +1189,28 @@ describe("filtered usage index availability", () => {
     const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
     writeRows(rows);
     const expected = rows.filter(row => row.provider === "openai").length;
-    chmodSync(testDir, 0o555);
+    const indexPath = usageFilterIndexPath(testDir);
+    const originalOpen = fs.openSync;
+    let deniedCreates = 0;
+    // Windows directory chmod does not deny creation. Fail the actual index-file
+    // create boundary while leaving the authoritative ledger readable on every OS.
+    const openSpy = spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+      if (path === indexPath && flags === "wx") {
+        deniedCreates += 1;
+        throw Object.assign(new Error("index creation denied"), { code: "EACCES" });
+      }
+      return originalOpen(path, flags, mode);
+    });
     try {
       const result = await getFilteredUsageAggregate({ provider: "openai" });
       expect(summary(result).summary.requests).toBe(expected);
       expect(result.filterIndex).toBeUndefined();
+      expect(deniedCreates).toBe(1);
+      for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+        expect(existsSync(`${indexPath}${suffix}`)).toBe(false);
+      }
     } finally {
-      chmodSync(testDir, 0o755);
+      openSpy.mockRestore();
     }
   });
 
@@ -1134,8 +1259,16 @@ describe("filtered usage index availability", () => {
     const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
     writeRows(rows);
     const indexPath = usageFilterIndexPath(testDir);
+    let removed = false;
     setUsageFilterIndexTestHooksForTests({
-      afterPublish: ({ dbPath }) => { rmSync(dbPath, { force: true }); },
+      // afterPublish still holds the writer open, so Windows can refuse deletion.
+      // afterRefresh runs after it closes and before the reader opens the index.
+      afterRefresh: ({ dbPath }) => {
+        expect(dbPath).toBe(indexPath);
+        expect(existsSync(dbPath)).toBe(true);
+        rmSync(dbPath, { force: true });
+        removed = true;
+      },
     });
     try {
       const result = await getFilteredUsageAggregate({ provider: "openai" });
@@ -1145,6 +1278,7 @@ describe("filtered usage index availability", () => {
     } finally {
       setUsageFilterIndexTestHooksForTests(null);
     }
+    expect(removed).toBe(true);
     expect(existsSync(indexPath)).toBe(false);
   });
 
