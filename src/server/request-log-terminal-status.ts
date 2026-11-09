@@ -9,8 +9,7 @@ import {
 import { redactSecretString } from "../lib/redact";
 import { outboundCredentials, type OutboundCredentialRegistry } from "../lib/outbound-credential-registry";
 import { configuredCredentials, type ConfiguredCredentials } from "./configured-credentials";
-import { codexWsWrapperStatus } from "./responses/codex-ws-wire";
-import { bareUpstreamError, isUntypedBareUpstreamError } from "./bare-upstream-error";
+import { reduceBareUpstreamEvidence, wrappedServerErrorStatus, type BareUpstreamEvidence } from "./bare-upstream-error";
 
 /** First bounded upstream diagnostics shared by request contexts and final rows. */
 export interface UpstreamErrorDiagnostics {
@@ -22,6 +21,7 @@ export interface UpstreamErrorDiagnostics {
 interface TerminalStatusContext extends UpstreamErrorDiagnostics {
   terminalHttpStatus?: number;
   terminalErrorCode?: typeof CYBER_POLICY_ERROR_CODE;
+  upstreamError?: string;
 }
 
 export interface UpstreamErrorPayload {
@@ -43,6 +43,9 @@ export interface UpstreamErrorPayload {
 const provisionalStatuses = new WeakMap<TerminalStatusContext, number>();
 const untypedProvisionalStatuses = new WeakSet<TerminalStatusContext>();
 const genuineTerminals = new WeakSet<TerminalStatusContext>();
+// The winning bare verdict owns the row's status, refusal identity and diagnostic copy together,
+// so a later losing frame cannot leave the status from one frame beside the copy of another.
+const bareEvidence = new WeakMap<TerminalStatusContext, BareUpstreamEvidence>();
 
 const UPSTREAM_DIAGNOSTIC_TOKEN = /^[A-Za-z0-9_.:-]{1,128}$/;
 
@@ -114,32 +117,76 @@ export function noteUpstreamRequestId(logCtx: TerminalStatusContext, headers: He
 }
 
 export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext, json: UpstreamErrorPayload, untypedSse = false): void {
-  const untyped = untypedSse && isUntypedBareUpstreamError(json);
-  const bare = untyped ? bareUpstreamError(json) : undefined;
-  if (bare) {
-    if (!genuineTerminals.has(logCtx)) {
-      const previous = provisionalStatuses.get(logCtx);
-      if (untypedProvisionalStatuses.has(logCtx) && previous !== undefined && logCtx.terminalHttpStatus === previous) {
-        delete logCtx.terminalHttpStatus;
-        delete logCtx.terminalErrorCode;
-        provisionalStatuses.delete(logCtx);
-        untypedProvisionalStatuses.delete(logCtx);
-      }
-      const status = bare.httpStatus ?? 502;
-      if (logCtx.terminalHttpStatus === undefined) {
-        logCtx.terminalHttpStatus = status;
-        provisionalStatuses.set(logCtx, status);
-        untypedProvisionalStatuses.add(logCtx);
-        if (bare.refusalCode === CYBER_POLICY_ERROR_CODE) logCtx.terminalErrorCode = CYBER_POLICY_ERROR_CODE;
-      }
+  const type = json.type;
+  const terminal = type === "response.completed" || type === "response.failed" || type === "response.incomplete";
+  if (terminal) {
+    // A genuine terminal supersedes every provisional bare verdict: it retires the evidence
+    // first so a later bare frame starts fresh, then owns the row through the terminal
+    // classifier. Without this split the reducer's "no new evidence" result would be read as
+    // "keep the previous bare verdict" and the terminal would never claim the row.
+    bareEvidence.delete(logCtx);
+    genuineTerminals.add(logCtx);
+    // The classifier retires the provisional status it owns; clearing the map first would
+    // hide that ownership from it and leave the stale status on the row.
+    captureTerminalHttpStatus(logCtx, json);
+    noteBoundedDiagnostic(logCtx, "upstreamErrorCode",
+      json.error?.code ?? json.last_error?.code ?? json.response?.error?.code
+        // A bare top-level code (new in 2.83.0) has no envelope contract, so only a known class is kept.
+        ?? (typeof json.code === "string" && KNOWN_BARE_ERROR_CODES.has(json.code) ? json.code : undefined));
+    noteBoundedDiagnostic(logCtx, "upstreamErrorType",
+      json.error?.type ?? json.last_error?.type ?? json.response?.error?.type);
+    return;
+  }
+  // A buffered JSON body is not a stream in which a later frame could supersede an earlier one,
+  // so it keeps the single-frame classifier. Only an SSE frame enters the reducer.
+  if (!untypedSse) {
+    captureTerminalHttpStatus(logCtx, json);
+    noteBoundedDiagnostic(logCtx, "upstreamErrorCode",
+      json.error?.code ?? json.last_error?.code ?? json.response?.error?.code
+        // A bare top-level code (new in 2.83.0) has no envelope contract, so only a known class is kept.
+        ?? (typeof json.code === "string" && KNOWN_BARE_ERROR_CODES.has(json.code) ? json.code : undefined));
+    noteBoundedDiagnostic(logCtx, "upstreamErrorType",
+      json.error?.type ?? json.last_error?.type ?? json.response?.error?.type);
+    return;
+  }
+  const previousEvidence = bareEvidence.get(logCtx);
+  const evidence = reduceBareUpstreamEvidence(previousEvidence, json);
+  if (evidence === undefined || evidence === previousEvidence) return;
+  bareEvidence.set(logCtx, evidence);
+  const previous = provisionalStatuses.get(logCtx);
+  // A status set by the caller or another path is not this reducer's to overwrite; only a
+  // provisional status this reducer owns is replaceable.
+  const replaceable = logCtx.terminalHttpStatus === undefined
+    || (provisionalStatuses.has(logCtx) && previous !== undefined && logCtx.terminalHttpStatus === previous);
+  if (replaceable) {
+    if (logCtx.terminalHttpStatus !== undefined) {
+      delete logCtx.terminalHttpStatus;
+      delete logCtx.terminalErrorCode;
     }
-  } else captureTerminalHttpStatus(logCtx, json);
-  noteBoundedDiagnostic(logCtx, "upstreamErrorCode",
-    json.error?.code ?? json.last_error?.code ?? json.response?.error?.code
-      // A bare top-level code (new in 2.83.0) has no envelope contract, so only a known class is kept.
-      ?? (typeof json.code === "string" && KNOWN_BARE_ERROR_CODES.has(json.code) ? json.code : undefined));
-  noteBoundedDiagnostic(logCtx, "upstreamErrorType",
-    json.error?.type ?? json.last_error?.type ?? json.response?.error?.type);
+    // The verdict carries the status every reader uses: a recognized class its own status, an
+    // explicit refusal 400, an unrecognized class the wrapper status the upstream stated, and
+    // otherwise the synthetic 502. The row never re-derives a different one from the frame.
+    const status = evidence.verdict.httpStatus;
+    logCtx.terminalHttpStatus = status;
+    provisionalStatuses.set(logCtx, status);
+    if (evidence.typed) untypedProvisionalStatuses.delete(logCtx);
+    else untypedProvisionalStatuses.add(logCtx);
+    if (evidence.verdict.refusalCode === CYBER_POLICY_ERROR_CODE) logCtx.terminalErrorCode = CYBER_POLICY_ERROR_CODE;
+    else delete logCtx.terminalErrorCode;
+  }
+  // The winning verdict owns the bounded diagnostics and the copy together. A losing frame may
+  // not leave a code/type from one verdict beside the status and copy of another.
+  delete logCtx.upstreamErrorCode;
+  delete logCtx.upstreamErrorType;
+  // The winning verdict's identity is the one the client tail carries, so a refusal recognized
+  // from copy is recorded as that refusal rather than as the wrapper's unrelated code.
+  noteBoundedDiagnostic(logCtx, "upstreamErrorCode", evidence.verdict.refusalCode ?? evidence.verdict.errorCode);
+  noteBoundedDiagnostic(logCtx, "upstreamErrorType", evidence.verdict.errorType);
+  if (!evidence.typed && !diagnosticValueAllowed(evidence.verdict.message)) {
+    logCtx.upstreamError = "[REDACTED]";
+  } else {
+    logCtx.upstreamError = evidence.verdict.message;
+  }
 }
 
 export function upstreamDiagnosticLogFields(logCtx: UpstreamErrorDiagnostics): UpstreamErrorDiagnostics {
@@ -161,17 +208,6 @@ export function upstreamDiagnosticLogFields(logCtx: UpstreamErrorDiagnostics): U
     ...(type ? { upstreamErrorType: type } : {}),
     ...(requestId ? { upstreamRequestId: requestId } : {}),
   };
-}
-
-/**
- * The server status a Codex WebSocket `error` frame states on its wrapper ({@link codexWsWrapperStatus}),
- * or undefined. Only 5xx is returned. Every 5xx is the same transient class for account health, so
- * this changes what a row says, not where the next turn goes; a wrapper 4xx would move quota and
- * credential routing and is left to its own review (#6740).
- */
-export function wrappedServerErrorStatus(json: UpstreamErrorPayload): number | undefined {
-  const status = codexWsWrapperStatus(json as Record<string, unknown>);
-  return status !== undefined && status >= 500 ? status : undefined;
 }
 
 function captureTerminalHttpStatus(

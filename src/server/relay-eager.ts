@@ -131,18 +131,22 @@ export function relaySseEagerBounded(
     }
   };
   /**
-   * Same tail, except that a refusal the boundary already captured outranks the
-   * read failure that followed it — the upstream ended the turn before the
-   * socket did (#5176).
+   * Same tail, except that a bare verdict the boundary already captured outranks the
+   * read failure that followed it — the upstream stated the turn's outcome before the
+   * socket did. A refusal and a recognized class keep their identity; an ordinary
+   * error frame is the provider's own terminal and keeps the transport failure after
+   * it, so a mid-stream reset still reads as `upstream_reset`.
    */
   const encodeTerminalTail = (error: unknown): Uint8Array | null => {
-    const refusalCode = terminalBoundary.upstreamRefusalCode();
-    const refusalMessage = terminalBoundary.upstreamError();
-    if ((refusalCode === undefined && !terminalBoundary.recognizedUntypedError()) || refusalMessage === undefined) {
+    const verdict = terminalBoundary.upstreamVerdict();
+    const message = terminalBoundary.upstreamError();
+    if (verdict === undefined || message === undefined
+      || (verdict.refusalCode === undefined && !terminalBoundary.recognizedBareError())) {
       return encodeFailedTail(error);
     }
     try {
-      return refusalFailedTailFrame(terminalEncoder, refusalMessage, refusalCode, opts?.maskCredential, terminalBoundary.upstreamErrorType(), terminalBoundary.upstreamErrorCode());
+      return refusalFailedTailFrame(terminalEncoder, message, verdict.refusalCode,
+        opts?.maskCredential, verdict.errorType, verdict.errorCode, verdict);
     } catch {
       return null;
     }
@@ -331,6 +335,8 @@ export function relaySseEagerBounded(
             // A clean 200 EOF without a Responses terminal must be visible to
             // Codex as one incomplete turn, followed by the normal sentinel.
             const upstreamError = terminalBoundary.upstreamError() ?? opts?.upstreamError;
+            // A clean EOF is not a read failure: the winning verdict states the turn's outcome,
+            // so the tail carries it exactly as the request row and account inspector do.
             const upstreamErrorFrame = upstreamError === undefined
               ? adapterEofFrame
               : upstreamErrorTailFrame(
@@ -340,6 +346,7 @@ export function relaySseEagerBounded(
                 opts?.maskCredential,
                 terminalBoundary.upstreamErrorType(),
                 terminalBoundary.upstreamErrorCode(),
+                terminalBoundary.upstreamVerdict(),
               );
             queuedBytes += upstreamErrorFrame.byteLength + terminalSentinel.byteLength;
             try {
@@ -474,7 +481,7 @@ export function relaySseEagerBounded(
           // to the client. Only accounting remains tied to the inspected result.
           if (!hooks.sawTerminal()) {
             syntheticKind = "failed";
-            if (terminalBoundary.upstreamRefusalCode() !== undefined || terminalBoundary.recognizedUntypedError()) syntheticReason = "upstream_error";
+            if (terminalBoundary.upstreamVerdict() !== undefined) syntheticReason = "upstream_error";
           }
           deliveryFallbackSent = true;
           queuedBytes += tail.byteLength;

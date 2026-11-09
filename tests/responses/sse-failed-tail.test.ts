@@ -3,6 +3,7 @@ import { inspectResponseLogJson, inspectResponseLogSsePayload, type RequestLogCo
 import { relaySseWithFailedTail, relayWithAbort } from "../../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
 import { consumeForInspection, createSseInspector, MAX_TAIL_ERROR_MESSAGE_CHARS, upstreamErrorTailFrame } from "../../src/server/relay";
+import { teeWithBoundedInspection } from "../../src/server/inspection-tee";
 import { classifyCodexUpstreamOutcome } from "../../src/codex/routing/cooldown-math";
 import { codexWsUpstreamFetch, streamingInit } from "../helpers/ws-upstream-fixtures";
 import { readCodexWsStage } from "../../src/server/responses/codex-ws-wire";
@@ -31,6 +32,21 @@ function sourceStream(chunks: readonly string[], opts: { failAfter?: boolean; er
       controller.close();
     },
   });
+}
+
+function controlledSource() {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const cancelReasons: unknown[] = [];
+  return {
+    body: new ReadableStream<Uint8Array>({
+      start(value) { controller = value; },
+      cancel(reason) { cancelReasons.push(reason); },
+    }, { highWaterMark: 0 }),
+    push(bytes: Uint8Array) { controller.enqueue(bytes); },
+    close() { controller.close(); },
+    error(reason: unknown) { controller.error(reason); },
+    cancelReasons,
+  };
 }
 
 async function drain(stream: ReadableStream<Uint8Array>): Promise<string> {
@@ -1244,5 +1260,283 @@ describe("Codex WebSocket terminal kind covers every plain-exchange ending (#674
     expect(stage?.requestBytes).not.toBeNull();
     expect(stage?.terminalEvent).toBe("error");
     expect(stage?.terminalErrorStatus).toBe(503);
+  });
+});
+
+describe("one bare-error precedence rule across client, account and row", () => {
+  type ClassName = "quota" | "overload" | "unknown" | "refusal";
+  // A typed frame states its class on the envelope; an untyped one carries it inside `error`.
+  const typed = (name: ClassName): Record<string, unknown> => ({
+    quota: { code: "rate_limit_exceeded", message: "typed quota" },
+    overload: { code: "server_is_overloaded", message: "typed overload" },
+    unknown: { code: "gateway_broken", message: "typed unknown" },
+    refusal: { code: "invalid_prompt", message: "typed refusal" },
+  })[name];
+  const untyped = (name: ClassName): Record<string, unknown> => ({
+    quota: { code: "rate_limit_exceeded", message: "untyped quota" },
+    overload: { code: "server_is_overloaded", message: "untyped overload" },
+    unknown: { code: "mystery_code", message: "untyped unknown" },
+    refusal: { code: "invalid_prompt", message: "untyped refusal" },
+  })[name];
+  const status = (name: ClassName): number => ({ quota: 429, overload: 503, unknown: 502, refusal: 400 })[name];
+  const frame = (payload: Record<string, unknown>, kind: "typed" | "untyped"): string => `event: error\ndata: ${
+    JSON.stringify(kind === "typed" ? { type: "error", ...payload } : { error: payload })}\n\n`;
+
+  // Both modes see the same mixed frames. Precedence is a question about which verdict wins, so
+  // the matrix ends on a clean EOF; reset and cancellation are asserted separately below.
+  async function relayMixed(mode: "tee" | "eager", frames: readonly string[], log: RequestLogContext,
+    opts: { failAfter?: boolean } = {}) {
+    const outcomes: number[] = [];
+    const onTerminal = () => outcomes.push(log.terminalHttpStatus ?? 502);
+    const src = sourceStream(frames, { failAfter: opts.failAfter });
+    let relayed: ReadableStream<Uint8Array>;
+    let inspectionDone: Promise<void> = Promise.resolve();
+    let inspector: ReturnType<typeof createSseInspector> | undefined;
+    if (mode === "tee") {
+      const [client, inspection] = src.tee();
+      inspectionDone = new Promise(resolve => consumeForInspection(inspection, onTerminal, undefined, resolve, log));
+      relayed = relaySseWithFailedTail(client, new AbortController());
+    } else {
+      inspector = createSseInspector({ logCtx: log, onTerminal });
+      relayed = relaySseEagerBounded(src, new AbortController(), { ...parityHooks,
+        // Eager mode reports its synthetic reset through the hook, not the inspector.
+        onSynthetic: () => outcomes.push(log.terminalHttpStatus ?? 502),
+        inspectChunk: chunk => inspector.feed(chunk), finishInspection: () => inspector.finish(),
+        sawTerminal: () => inspector.reported(),
+      });
+    }
+    const text = await drain(relayed);
+    if (mode === "eager") inspector?.finish();
+    await inspectionDone;
+    return { text, outcomes };
+  }
+
+  for (const mode of ["tee", "eager"] as const) {
+    for (const order of ["typed→untyped", "untyped→typed"] as const) {
+      for (const first of ["quota", "overload", "unknown", "refusal"] as const) {
+        for (const second of ["quota", "overload", "unknown", "refusal"] as const) {
+          const winner = order === "typed→untyped" ? first : second;
+          test(`${mode} ${order} ${first}/${second} keeps the typed ${winner} verdict`, async () => {
+            const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+            const { text, outcomes } = await relayMixed(mode, order === "typed→untyped"
+              ? [frame(typed(first), "typed"), frame(untyped(second), "untyped")]
+              : [frame(untyped(first), "untyped"), frame(typed(second), "typed")], log);
+            expect(outcomes).toEqual([status(winner)]);
+            expect(log.terminalHttpStatus).toBe(status(winner));
+            expect(classifyCodexUpstreamOutcome(outcomes[0]!)).toBe(
+              winner === "quota" ? "quota" : winner === "refusal" ? "caller" : "transient");
+            const failed = text.split("event: response.failed\ndata: ")[1]?.split("\n")[0];
+            const error = (JSON.parse(failed!) as { response: { error: { code: string }; retryable?: boolean } }).response;
+            if (winner === "refusal") {
+              expect(error.error.code).toBe("invalid_prompt");
+              expect(error.retryable).toBe(false);
+            } else if (winner === "quota") {
+              expect(error.error.code).toBe("rate_limit_exceeded");
+            } else if (winner === "overload") {
+              expect(error.error.code).toBe("server_is_overloaded");
+            } else {
+              expect(error.error.code).toBe("upstream_server_error");
+            }
+          });
+        }
+      }
+    }
+  }
+
+  test.each(["tee", "eager"] as const)("%s keeps the typed verdict after an untyped frame on the row", async mode => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    await relayMixed(mode, [frame(typed("quota"), "typed"), frame(untyped("unknown"), "untyped")], log);
+    expect(log.terminalHttpStatus).toBe(429);
+    expect(log.upstreamErrorCode).toBe("rate_limit_exceeded");
+  });
+
+  test.each(["tee", "eager"] as const)("%s lets a genuine failed terminal replace the bare verdict", async mode => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    const { text, outcomes } = await relayMixed(mode, [
+      frame(typed("quota"), "typed"),
+      frame(untyped("unknown"), "untyped"),
+      `event: response.failed\ndata: ${JSON.stringify({ type: "response.failed", response: { status: "failed", error: { type: "server_error", code: "server_is_overloaded", message: "genuine terminal" } } })}\n\n`,
+    ], log);
+    expect(outcomes).toEqual([503]);
+    expect(log.terminalHttpStatus).toBe(503);
+    expect(terminalEvents(text)).toEqual(["response.failed"]);
+  });
+
+  test.each(["tee", "eager"] as const)("%s retires the bare verdict on a genuine completed terminal", async mode => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    const { text, outcomes } = await relayMixed(mode, [
+      frame(typed("quota"), "typed"),
+      frame(untyped("overload"), "untyped"),
+      `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { status: "completed" } })}\n\n`,
+    ], log);
+    // The inspector reports the terminal before the row classifier retires the provisional bare
+    // status; the row itself must end without one.
+    expect(outcomes).toEqual([502]);
+    expect(log.terminalHttpStatus).toBeUndefined();
+    expect(terminalEvents(text)).toEqual(["response.completed"]);
+  });
+
+  test.each(["tee", "eager"] as const)("%s keeps reset handling after a typed verdict", async mode => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    const { text } = await relayMixed(mode, [frame(typed("overload"), "typed")], log);
+    expect(terminalEvents(text)).toEqual(["response.failed"]);
+    expect(log.terminalHttpStatus).toBe(503);
+    expect(log.upstreamErrorCode).toBe("server_is_overloaded");
+  });
+
+  test.each(["tee", "eager"] as const)("%s ignores a bare frame after a genuine terminal", async mode => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    const { text } = await relayMixed(mode, [
+      `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { status: "completed" } })}\n\n`,
+      frame(typed("quota"), "typed"),
+    ], log);
+    expect(log.terminalHttpStatus).toBeUndefined();
+    expect(terminalEvents(text)).toEqual(["response.completed"]);
+  });
+
+  test.each(["tee", "eager"] as const)("%s recognizes an explicit refusal the typed log classifier did not", async mode => {
+    for (const kind of ["typed", "untyped"] as const) {
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      const refusal = { code: "gateway_broken", message: "This request was blocked by our safety systems." };
+      const { text, outcomes } = await relayMixed(mode, [frame(refusal, kind)], log);
+      expect(outcomes).toEqual([400]);
+      expect(log.terminalHttpStatus).toBe(400);
+      expect(log.upstreamErrorCode).toBe("invalid_prompt");
+      expect(classifyCodexUpstreamOutcome(outcomes[0]!)).toBe("caller");
+      const failed = text.split("event: response.failed\ndata: ")[1]?.split("\n")[0];
+      const error = (JSON.parse(failed!) as { response: { error: { code: string }; retryable?: boolean } }).response;
+      expect(error.error.code).toBe("invalid_prompt");
+      expect(error.retryable).toBe(false);
+    }
+  });
+
+  test.each(["tee", "eager"] as const)("%s keeps a reset after an ordinary untyped error as the transport failure", async mode => {
+    // No recognized class and no refusal: the untyped envelope has no transport status, so the
+    // socket reset that follows is still what the client is told went wrong, and the row stays
+    // the synthetic 502 a reset already records.
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    const { text } = await relayMixed(mode, [frame(untyped("unknown"), "untyped")], log, { failAfter: true });
+    // The client's own error event echoes the provider's copy; the synthesized terminal is what
+    // must not adopt the unrecognized code as its verdict.
+    expect(text).toContain('event: response.failed');
+    expect(text).toContain('"code":"upstream_server_error"');
+    expect(text).not.toContain('"code":"upstream_reset"');
+    expect(log.terminalHttpStatus).toBe(502);
+  });
+
+  test.each(["tee", "eager"] as const)("%s records a client cancellation after a typed verdict as a cancel", async mode => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    const cancels: string[] = [];
+    const terminals: string[] = [];
+    const source = controlledSource();
+    let relayed: ReadableStream<Uint8Array>;
+    let inspectionDone: Promise<void> = Promise.resolve();
+    if (mode === "tee") {
+      const clientGone = new AbortController();
+      const [client, inspection] = teeWithBoundedInspection(source.body, {
+        clientGoneSignal: clientGone.signal, maxReadAheadBytes: 64,
+      });
+      inspectionDone = new Promise(resolve => consumeForInspection(inspection,
+        kind => terminals.push(kind), undefined, resolve, log, () => cancels.push("cancel"), undefined, undefined,
+        { clientGoneSignal: clientGone.signal, drainBounds: { ms: 100, bytes: 4_096 } }));
+      relayed = relaySseWithFailedTail(client, new AbortController(), reason => clientGone.abort(reason));
+    } else {
+      const inspector = createSseInspector({ logCtx: log, onTerminal: kind => terminals.push(kind) });
+      relayed = relaySseEagerBounded(source.body, new AbortController(), { ...parityHooks,
+        inspectChunk: chunk => inspector.feed(chunk), finishInspection: () => inspector.finish(),
+        sawTerminal: () => inspector.reported(), onClientCancel: () => cancels.push("cancel"),
+        onSynthetic: kind => terminals.push(kind),
+      }, { postCancelDrainMs: 100 });
+    }
+    source.push(encoder.encode(frame(typed("quota"), "typed")));
+    const reader = relayed.getReader();
+    await reader.read();
+    await reader.cancel("client closed");
+    await inspectionDone;
+    // Eager mode keeps draining a silent upstream until its post-cancel bound expires.
+    if (mode === "eager") await Bun.sleep(150);
+    // Cancellation is not a failure the upstream stated: the client left, so no synthetic
+    // terminal is invented and the row keeps only the provisional verdict it observed.
+    expect(cancels).toEqual(["cancel"]);
+    expect(terminals).toEqual([]);
+    expect(log.terminalHttpStatus).toBe(429);
+  });
+});
+
+describe("Codex WebSocket frames share the bare-error precedence rule", () => {
+  const typedFrame = (code: string, message: string): string =>
+    JSON.stringify({ type: "error", code, message });
+  const untypedFrame = (code: string, message: string): string =>
+    JSON.stringify({ error: { code, message } });
+
+  test("a later untyped frame cannot replace a typed quota verdict on the WS row", () => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    inspectResponseLogSsePayload(log, typedFrame("rate_limit_exceeded", "typed quota"));
+    inspectResponseLogSsePayload(log, untypedFrame("mystery_code", "untyped unknown"));
+    expect(log.terminalHttpStatus).toBe(429);
+    expect(log.upstreamErrorCode).toBe("rate_limit_exceeded");
+    expect(log.upstreamError).toBe("typed quota");
+  });
+
+  test("a later typed refusal replaces an untyped quota verdict on the WS row", () => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    inspectResponseLogSsePayload(log, untypedFrame("rate_limit_exceeded", "untyped quota"));
+    inspectResponseLogSsePayload(log, typedFrame("invalid_prompt", "typed refusal"));
+    expect(log.terminalHttpStatus).toBe(400);
+    expect(log.upstreamErrorCode).toBe("invalid_prompt");
+    expect(log.upstreamError).toBe("typed refusal");
+  });
+
+  test("an explicit refusal message is recognized when the typed log classifier did not classify it", () => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    // A typed frame whose class is not a refusal, but whose copy is the verified refusal phrase:
+    // the terminal classifier has no structured refusal to key on, so the shared reducer must.
+    inspectResponseLogSsePayload(log, JSON.stringify({ type: "error", code: "mystery_code",
+      message: "This request was blocked by our safety systems." }));
+    expect(log.terminalHttpStatus).toBe(400);
+    expect(log.upstreamErrorCode).toBe("invalid_prompt");
+  });
+
+  test.each(["tee", "eager"] as const)("%s WS client receives the typed verdict after an untyped frame", async mode => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    const src = sourceStream([
+      `event: error\ndata: ${JSON.stringify({ type: "error", code: "rate_limit_exceeded", message: "typed quota" })}\n\n`,
+      `event: error\ndata: ${JSON.stringify({ error: { code: "mystery_code", message: "untyped unknown" } })}\n\n`,
+    ]);
+    const relayed = mode === "tee"
+      ? relaySseWithFailedTail(src, new AbortController())
+      : relaySseEagerBounded(src, new AbortController(), parityHooks);
+    const sent: string[] = [];
+    const terminals: string[] = [];
+    const ws = {
+      readyState: 1,
+      data: {},
+      send(message: string) { sent.push(message); return 1; },
+    } as unknown as ServerWebSocket<WsData>;
+    // `untilEof` is the live Responses path: the first error frame is provisional, so the relay
+    // must reach its synthesized terminal instead of stopping at the bare frame.
+    await pumpResponsesSseToWebSocket(ws, relayed, { untilEof: true,
+      onSsePayload: payload => inspectResponseLogSsePayload(log, payload),
+      onTerminal: status => { terminals.push(status); } });
+    const failed = sent.map(frame => JSON.parse(frame) as { type?: string; response?: { error?: { code?: string } } })
+      .find(frame => frame.type === "response.failed");
+    expect(failed?.response?.error?.code).toBe("rate_limit_exceeded");
+    expect(terminals).toEqual(["failed"]);
+    expect(log.terminalHttpStatus).toBe(429);
+    expect(log.upstreamErrorCode).toBe("rate_limit_exceeded");
+    expect(classifyCodexUpstreamOutcome(log.terminalHttpStatus!)).toBe("quota");
+  });
+
+  test("an untyped credential echo stays redacted on the winning WS row", () => {
+    const credential = "fixture-bare-echo-CANARY9live";
+    const registry = new OutboundCredentialRegistry();
+    registry.remember({ authorization: `Bearer ${credential}` });
+    const restore = setOutboundCredentialRegistryForTests(registry);
+    try {
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      inspectResponseLogSsePayload(log, JSON.stringify({ error: { code: "server_is_overloaded", message: `echo ${credential}` } }));
+      expect(log.terminalHttpStatus).toBe(503);
+      expect(log.upstreamError).not.toContain(credential);
+    } finally { restore(); }
   });
 });
