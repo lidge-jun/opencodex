@@ -60,33 +60,20 @@ Le site de documentation que vous lisez se trouve dans `docs-site/` (Astro + Sta
 cd docs-site && bun install && bun dev
 ```
 
-## Publication de la documentation
+## CI / Release / Pages
 
-La documentation publique est publiée sur GitHub Pages à l’adresse <https://opencodex.me/>. Le workflow
-`.github/workflows/deploy-docs.yml` s’exécute lors des push sur `main` qui modifient `docs-site/**` ou le
-workflow lui-même. Il construit `docs-site` et déploie le site généré. Avant de pousser une modification,
-exécutez :
+Consultez la [version anglaise canonique](/contributing/) pour la publication, la CI, les versions et les branches.
 
-```bash
-cd docs-site
-bun install --frozen-lockfile
-bun run build
-```
 
-## CI et versions
+La branche `dev2-go`, qui portait l’ancien runtime natif Go, a été retirée, tout comme la politique à deux
+lignes d’exécution. Son historique est publié en lecture seule sur
+[lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive).
+Le TypeScript natif pour Bun sur `dev` est désormais l’unique ligne d’exécution.
 
-Les workflows GitHub Actions restent volontairement limités :
+Les pull requests de rebase sont les bienvenues. Rebaser une branche ancienne sur la tête actuelle constitue
+une contribution normale ; indiquez les commits sources dans la description.
 
-- **CI multiplateforme** (`.github/workflows/ci.yml`) s’exécute sur toutes les pull requests et sur les push vers
-  `dev`, `preview` et `main`. Un filtre interne limite les tâches coûteuses aux changements qui touchent le runtime,
-  les tests, les paquets, les scripts, TypeScript ou les workflows, tout en produisant un contrôle agrégé explicite
-  pour les PR documentaires. La suite principale est répartie sur Linux et exécutée intégralement sur macOS ; sa
-  voie Windows, actuellement non bloquante, ne s’exécute que sur lancement manuel avec `workflow_dispatch`. Des
-  tests ciblés du trousseau système et, lorsque le paquet change, de l’installation npm globale couvrent néanmoins
-  les trois systèmes. Cette dernière voie vérifie l’installation sans Bun préinstallé grâce au runtime fourni.
-- **Version** (`.github/workflows/release.yml`) est un workflow manuel. Il ne remplace pas une seconde CI complète :
-  avant une simulation ou une publication, il exige qu’une CI multiplateforme ait déjà réussi pour le commit
-  exact de la version (`GITHUB_SHA`).
+
 - **Expiration des demandes d’informations** (`.github/workflows/stale-needs-info.yml`) s’exécute chaque jour
   sur la branche par défaut. Une issue ouverte portant `needs-info` sans activité depuis 14 jours reçoit un
   avertissement, puis est fermée après 7 jours supplémentaires d’inactivité. Toute mise à jour efface
@@ -101,49 +88,11 @@ Les workflows GitHub Actions restent volontairement limités :
   `documentation`. Après promotion du workflow vers la branche par défaut, les responsables peuvent réappliquer
   les zones à toutes les issues ouvertes avec le workflow_dispatch `backfill_open_areas`.
 
-Utilisez l'assistant pour les versions :
-
-
-Avant d’exécuter le helper, choisissez la version prévue et lancez
-`.github/workflows/dev-version-bump.yml` depuis la branche par défaut avec
-`intended-version=<version>` et `mode=pre-move`. Relisez et fusionnez la PR créée
-vers `dev`, puis promouvez vers `main` ou `preview` avant de lancer le helper.
-Si `dev` dépasse déjà la version prévue, le workflow renvoie `changed=false` et
-aucune PR de version n’est nécessaire. La publication exige toujours une CI
-réussie sur le commit exact de la release.
-
-```bash
-bun run release <version>           # commits/pushes the bump; publish workflow is dry-run by default
-bun run release --bump minor        # calcule la prochaine version patch, minor ou major depuis les tags et canaux npm
-bun run release <version> --publish # publish after the CI-gated dry run is understood
-bun run release:watch               # watch the newest Release workflow run
-```
-
-`--bump patch|minor|major` remplace une version explicite. Dès qu’un tag de préversion ouvre un
-core supérieur, `--bump patch` refuse de prolonger l’ancienne ligne stable ; publiez plutôt le
-correctif dans le core de préversion ouvert.
-
-## Branches
-
-- `dev` — l’unique branche d’intégration. Ciblez-la avec votre pull request.
-- `main` — réservée aux versions. Elle avance par promotion de `dev`, sous le contrôle des responsables ;
-  n’y ouvrez aucune pull request de fonctionnalité.
-- `preview` — la branche des préversions.
-
-La branche `dev2-go`, qui portait l’ancien runtime natif Go, a été retirée, tout comme la politique à deux
-lignes d’exécution. Son historique est publié en lecture seule sur
-[lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive).
-Le TypeScript natif pour Bun sur `dev` est désormais l’unique ligne d’exécution.
-
-Les pull requests de rebase sont les bienvenues. Rebaser une branche ancienne sur la tête actuelle constitue
-une contribution normale ; indiquez les commits sources dans la description.
-
 ## Demandes d'extraction
 
-- Ciblez **`dev`**. N’ouvrez aucune pull request de fonctionnalité ou de correctif contre **`main`**.
-- Partez de la tête actuelle de **`dev`**, pas de **`main`**. Le contrôle obligatoire **`enforce-target`**
-  rejette les branches dont la base de fusion se trouve sur la tête de **`main`** alors qu’elles sont très en
-  retard sur la branche cible, le mode d’échec observé dans #644.
+- Ciblez **`dev`**, qui est aussi la branche par défaut du dépôt. **`main`** et **`preview`** ont été
+  supprimées une fois le modèle à branche unique en place. Le contrôle obligatoire **`enforce-target`**
+  rejette les pull requests dont la base n’est pas **`dev`** (les PR enfants empilées font exception).
 - Rédigez une vraie description : un **Résumé** de la modification et de sa raison, ainsi qu’un **Plan de test**
   ou un contenu équivalent. Les corps vides, les textes composés seulement d’espaces réservés et les descriptions
   contenant des `\n` échappés au lieu de véritables sauts de ligne échouent au contrôle.
@@ -158,7 +107,7 @@ une contribution normale ; indiquez les commits sources dans la description.
 ## Responsables du projet
 
 Les responsables actuels, leurs attributions et les règles de revue et de fusion sont décrits dans
-[`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/main/MAINTAINERS.md). La propriété GitHub
+[`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/dev/MAINTAINERS.md). La propriété GitHub
 du dépôt et des chemins sensibles du point de vue de la sécurité est déclarée dans `.github/CODEOWNERS`.
 
 ## Conventions

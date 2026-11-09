@@ -67,6 +67,8 @@ export async function sendTelemetryPayload(
         "content-type": "application/json",
       },
       body: JSON.stringify(validated.payload),
+      // The collector URL is a constant; a redirect would send the report to another host.
+      redirect: "error",
       signal: deadline.signal,
     });
     if (!response.ok) {

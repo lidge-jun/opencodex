@@ -171,7 +171,9 @@ export async function handlePutTelemetryRoute(ctx: ManagementContext): Promise<R
   } else {
     clearPendingTelemetryDecision();
   }
-  adoptPersistedTelemetry(ctx.config, committed);
+  // A decision held before config.json exists stays out of the running config: a later write that
+  // creates config.json from it must not carry a decision another process may since have replaced.
+  adoptPersistedTelemetry(ctx.config, outcome.status === "unavailable" ? undefined : committed);
   if (decision === "declined") {
     deleteTelemetryInstallId();
   }

@@ -328,8 +328,72 @@ const LAUNCHCTL_NO_SUCH_DOMAIN = 112;
 /** `launchctl bootstrap`: something is already bootstrapped under that label. */
 const LAUNCHCTL_BOOTSTRAP_BUSY = 5;
 
+/** `launchctl bootstrap`: the domain is busy with another operation. */
+const LAUNCHCTL_BOOTSTRAP_IN_PROGRESS = 37;
+
 /** `launchctl bootout`: nothing was loaded under that label, i.e. already stopped. */
 const LAUNCHCTL_BOOTOUT_NO_SUCH_PROCESS = 3;
+
+/**
+ * Whether a failed `bootstrap` is the still-tearing-down race rather than a definition that
+ * launchd will never accept.
+ *
+ * Exit 5, and the transient 37 ("Operation already in progress"), are both measured answers
+ * while a booted-out process is still exiting (#8362). A malformed plist (1) or EPERM is NOT
+ * retried: waiting cannot fix it, and the operator needs the real stderr instead of a delayed
+ * copy of it.
+ */
+function launchctlBootstrapRacedTeardown(result: {
+  status: number | null;
+  stderr: string;
+}): boolean {
+  if (result.status === LAUNCHCTL_BOOTSTRAP_BUSY || result.status === LAUNCHCTL_BOOTSTRAP_IN_PROGRESS) {
+    return true;
+  }
+  // The legacy "Load failed" shape keeps the retry it had. A `bootstrap`-prefixed message has
+  // to name a transient NUMBER: "Bootstrap failed: 1: Operation not permitted" and a malformed
+  // plist share the prefix but are not races, and retrying them only delays the real report.
+  return /\b(?:Bootstrap failed: (?:5|37)|Load failed)\b/i.test(result.stderr);
+}
+
+/**
+ * Up to 50 attempts with 49 waits of 500 ms between them (24.5 s), past launchd's 20 s
+ * `ExitTimeOut`, so an unregistered-but-draining job gets the patience the eviction settle
+ * loop gives a registered one.
+ */
+const LAUNCHD_BOOTSTRAP_TEARDOWN_ATTEMPTS = 50;
+
+const LAUNCHD_BOOTSTRAP_TEARDOWN_DELAY_MS = 500;
+
+/**
+ * Bootstrap, waiting out a teardown `launchctl print` cannot see (#8362).
+ *
+ * `bootout` is asynchronous, and a job booted out BY HAND an instant before this command is
+ * in the same window: the label is already UNREGISTERED, so `launchctl print` answers 113
+ * and the eviction settle loop returns at once — yet `bootstrap` keeps failing 5/EIO until
+ * the previous process is gone. The old recovery retried ONCE, back-to-back, which landed
+ * inside that very window: the first `ocx service restart`/`repair` printed
+ * `installed, not loaded ... no proxy is answering`, and the second run found the domain
+ * quiet and succeeded.
+ *
+ * This waits between attempts instead, and is BOUNDED so a genuinely wedged domain still
+ * reaches the diagnosable throw instead of hanging. `sleepSync` is the same seam the
+ * eviction settle loop uses.
+ */
+function bootstrapWaitingOutTeardown(
+  run: typeof runLaunchctl,
+  domain: string,
+  plist: string,
+  sleepSync: (ms: number) => void,
+): ReturnType<typeof runLaunchctl> {
+  let result = run(["bootstrap", domain, plist]);
+  for (let attempt = 1; attempt < LAUNCHD_BOOTSTRAP_TEARDOWN_ATTEMPTS; attempt += 1) {
+    if (!launchctlBootstrapRacedTeardown(result)) return result;
+    sleepSync(LAUNCHD_BOOTSTRAP_TEARDOWN_DELAY_MS);
+    result = run(["bootstrap", domain, plist]);
+  }
+  return result;
+}
 
 /**
  * Every domain target an eviction has to cover.
@@ -648,15 +712,25 @@ export function installLaunchd(deps: {
     evictEveryDomain();
     return run(["bootstrap", guiDomain, p]);
   };
+  // The recovery round is where a teardown that `launchctl print` cannot see has to be
+  // waited out: a job booted out BY HAND a moment ago is already unregistered, so the
+  // settle loop above returned at once while `bootstrap` keeps failing 5/EIO until the old
+  // process exits (#8362). The FIRST attempt stays a single call so its stderr reaches the
+  // operator unchanged; only the recovery path spends the bounded wait.
+  const evictThenBootstrapSettling = () => {
+    evictEveryDomain();
+    return bootstrapWaitingOutTeardown(run, guiDomain, p, sleepSync);
+  };
 
   let loaded = evictThenBootstrap();
   verdict = probeLive();
   // `unknown` is excluded on purpose: a retry means another eviction, and a probe that
   // could not answer is not a reason to take the job down again.
   if (verdict.state === "not-loaded" || verdict.state === "loaded-stale") {
-    // ONE retry. A bounded retry recovers the race; a loop would turn a wedged domain
+    // ONE more eviction round, which waits out a teardown between bounded bootstrap
+    // attempts (see `bootstrapWaitingOutTeardown`). Unbounded would turn a wedged domain
     // into a hang instead of the diagnosable throw below.
-    if (loaded.status === LAUNCHCTL_BOOTSTRAP_BUSY || launchctlLoadFailed(loaded.stderr)) {
+    if (launchctlBootstrapRacedTeardown(loaded)) {
       // "Bootstrap failed: 5: Input/output error" has TWO causes, measured on macOS 27.0
       // with a throwaway label, and they need opposite remedies:
       //
@@ -679,7 +753,7 @@ export function installLaunchd(deps: {
       if (kicked?.ok) verdict = probeLive();
       if (verdict.state !== "loaded-current") {
         run(["enable", guiTarget]);
-        loaded = evictThenBootstrap();
+        loaded = evictThenBootstrapSettling();
         verdict = probeLive();
       }
     } else if (loaded.ok) {
@@ -687,7 +761,7 @@ export function installLaunchd(deps: {
       // again. A load that failed for any OTHER reason — a malformed plist, EPERM — is not
       // fixed by evicting a job, so it falls straight through to the throw and the
       // operator sees the real stderr instead of a delayed copy of it.
-      loaded = evictThenBootstrap();
+      loaded = evictThenBootstrapSettling();
       verdict = probeLive();
     }
   }

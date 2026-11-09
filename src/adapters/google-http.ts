@@ -87,6 +87,9 @@ export async function fetchGoogleWithRetry(
   let recovery: AttemptRecoveryKind | undefined;
   for (let attempt = 0; attempt < TRANSIENT_RETRY_MAX_ATTEMPTS; attempt++) {
     if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
+    // A credential rebuild mutates the original request while a repaired replay owns its body.
+    // Refresh its destination and headers without discarding the already-repaired payload.
+    if (activeRequest !== request) activeRequest = { ...activeRequest, url: request.url, method: request.method, headers: request.headers };
     try {
       const res = await send({ url: activeRequest.url, sendClass, recovery,
         beforeDispatch: async () => {

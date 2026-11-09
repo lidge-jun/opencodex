@@ -40,7 +40,7 @@ import { OAuthMutationBusyError, removeCredential } from "../../oauth/store";
 import { cancelKiroDeviceLogin, kiroDeviceConfigBaseline, selectKiroDeviceProfile, startKiroDeviceLogin, statusKiroDeviceLogin, type KiroDeviceMethod } from "../../oauth/kiro-device-login";
 import { parseKiroIamOptions } from "../../oauth/kiro-iam-identity-center";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
-import { emailMaskingEnabled, maskedAccountLabel } from "../../lib/privacy";
+import { accountDisplayLabel, emailMaskingEnabled, maskedAccountLabel } from "../../lib/privacy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
@@ -497,7 +497,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   }
 
   // Multiauth account management: list a provider's logged-in accounts, switch the active
-  // one, or remove one. Emails are masked; tokens never leave the store.
+  // one, or remove one. Emails and accountLabel follow privacy.maskEmails, maskedLabel is always
+  // masked, and tokens never leave the store.
   if (url.pathname === "/api/oauth/accounts" && req.method === "GET") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
@@ -516,7 +517,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     } = await import("../../oauth/health");
     const projectAccounts = () => {
       const set = getAccountSet(provider);
-      const current = getLoginStatus(provider, emailMaskingEnabled(config));
+      const maskEmails = emailMaskingEnabled(config);
+      const current = getLoginStatus(provider, maskEmails);
       return {
         ...(provider === "anthropic2" ? { provider } : {}), activeAccountId: current.activeAccountId ?? null,
         accounts: (current.accounts ?? []).map(summary => {
@@ -528,7 +530,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
               reauthReason: summary.needsReauth === true ? "refresh_failed" : undefined,
             });
           const maskedLabel = maskedAccountLabel(full?.credential.email);
-          return { ...summary, ...(maskedLabel ? { maskedLabel } : {}), ...oauthAccountHealthFields(provider, summary.id, health), quotaMode,
+          // `maskedLabel` stays masked for tray surfaces; `accountLabel` follows privacy.maskEmails.
+          const accountLabel = accountDisplayLabel(full?.credential.email, maskEmails);
+          return { ...summary, ...(maskedLabel ? { maskedLabel } : {}), ...(accountLabel ? { accountLabel } : {}),
+            ...oauthAccountHealthFields(provider, summary.id, health), quotaMode,
             ...(supportsPause ? { paused: full?.paused === true, ...(full?.pauseDetails ? { pauseDetails: full.pauseDetails } : {}) } : {}),
             ...(isAnthropicOAuthInstance(provider) && supportsPause ? { autoSwitchThresholdOverride: full?.autoSwitchThresholdOverride ?? null,
               effectiveAutoSwitchThreshold: effectiveAnthropicAccountThresholdForInstance(provider as AnthropicInstanceId, config, full),

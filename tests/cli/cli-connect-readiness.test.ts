@@ -831,3 +831,28 @@ describe("#4451 the connected-sync refresh shares the connect terminal boundary"
     expect(thrown.name).toBe("ClientCatalogIncompatibleError");
   });
 });
+
+/**
+ * #8360 follow-up: readiness may borrow the ChatGPT.app catalog only for an unresolved selection,
+ * which the bundled loader can tell only if connect forwards the selection with its command.
+ */
+describe("connect readiness forwards the selected runtime to the catalog probe", () => {
+  test.each([
+    { command: "codex", version: null, source: "fallback" },
+    { command: "codex", version: "0.140.0", source: "fallback" },
+    { command: "/usr/local/bin/codex", version: "0.150.0", source: "path" },
+  ] as const)("selection %o", async selected => {
+    const effort = await import("../../src/codex/catalog/effort");
+    const { catalogObserver } = await import("../../src/cli/connect");
+    const seen: { candidates?: string[]; selectedRuntime?: unknown }[] = [];
+    const spy = spyOn(effort, "codexSupportedReasoningEfforts").mockImplementation(deps => {
+      seen.push({ candidates: deps?.commandCandidates?.(), selectedRuntime: deps?.selectedRuntime });
+      return new Set(OLD_CLI);
+    });
+    try {
+      expect(catalogObserver({ selectedCodexRuntime: selected }).supportedEfforts?.()).toEqual(new Set(OLD_CLI));
+    } finally { spy.mockRestore(); }
+    expect(seen).toEqual([{ candidates: [selected.command], selectedRuntime: selected }]);
+  });
+});
+

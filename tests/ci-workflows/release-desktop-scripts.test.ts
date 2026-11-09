@@ -503,7 +503,7 @@ describe("widget extension signing", () => {
     expect(sidecars?.run).toContain("lipo desktop/src-tauri/binaries/ocx-universal-apple-darwin -verify_arch arm64 x86_64");
     const prepare = steps.find(step => step.name === "Prepare Windows installer version");
     expect(prepare?.if).toBe("runner.os == 'Windows'");
-    expect(prepare?.env?.RELEASE_VERSION).toBe("${{ inputs.version }}");
+    expect(prepare?.env?.RELEASE_VERSION).toBe("${{ needs.validate-dispatch.outputs.version }}");
     expect(prepare?.run).toContain('windows-installer-config.ts "$RELEASE_VERSION" "$RUNNER_TEMP/opencodex-msi.json"');
     const build = steps.find(step => step.name === "Build desktop bundles");
     expect(build?.run).toContain("--config");

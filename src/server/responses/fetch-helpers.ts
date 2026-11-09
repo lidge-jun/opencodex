@@ -54,6 +54,7 @@ const PHYSICAL_DISPATCH = Symbol.for("opencodex.physical-dispatch");
 // Final destination and headers after plugin rewrites and queued rebuilds, for observers that
 // must attribute a response to the credential that actually reached the wire.
 const PHYSICAL_SEND_OBSERVER = Symbol.for("opencodex.physical-send-observer");
+const PHYSICAL_SEND_GUARD = Symbol.for("opencodex.physical-send-guard");
 export type AccountAutoPauseObserver = ((response: Response) => Promise<Response>) & {
   physical?: (sameDestination: boolean, headers: Headers) => void;
 };
@@ -65,6 +66,9 @@ export function physicalSendObserverInit(observer: AccountAutoPauseObserver | un
     if (onPhysicalSend && !noted) { onPhysicalSend(); noted = true; }
     physical?.(destination === target, headers);
   } } : {};
+}
+export function physicalSendGuardInit(guard: (destination: string, headers: Headers) => void): Record<symbol, unknown> {
+  return { [PHYSICAL_SEND_GUARD]: guard };
 }
 // One WS attempt and its HTTP fallback are one logical physical-send receipt.
 const WS_FALLBACK_RECEIPT = Symbol.for("opencodex.ws-fallback-receipt");
@@ -234,6 +238,7 @@ export function sendWithConnectionPolicy(
   const largeCodexBody = !compressed && typeof body === "string"
     && isCanonicalCodexResponsesUrl(target)
     && Buffer.byteLength(body, "utf8") >= 1024 * 1024;
+  (init as Record<symbol, ((destination: string, headers: Headers) => void) | undefined> | undefined)?.[PHYSICAL_SEND_GUARD]?.(target, headers);
   (init as Record<symbol, (() => void) | undefined> | undefined)?.[PHYSICAL_DISPATCH]?.();
   (init as Record<symbol, ((destination: string, headers: Headers) => void) | undefined> | undefined)?.[PHYSICAL_SEND_OBSERVER]?.(target, headers);
   // Final headers, after plugin rewrites: an upstream can only echo what it received here, so the

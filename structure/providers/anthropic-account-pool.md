@@ -48,10 +48,13 @@ a missed read leaves the stored label in place.
 An account replacement cannot inherit another account's label. `src/providers/anthropic-subscription.ts`
 projects optional management `planLabel`: Pro, Max 5x, Ultra (both `ultra` and `max_20x`),
 or the original unfamiliar validated tier. Dashboard OAuth rows prefer a user alias, then the
-management roster's independently masked identity label, then a localized ordinal. The same
+management roster's `accountLabel`, then its always-masked `maskedLabel`, then a localized
+ordinal. `accountLabel` follows `privacy.maskEmails` (#8286): the validated masked identity by
+default, the trimmed stored email when the operator sets the flag to `false`. The same
 policy in `gui/src/provider-workspace/auth.ts` covers reset-grant dialogs and account mutation
 confirmations/notifications through `gui/src/hooks/useProviderAccountPools.ts`. The roster label
-never follows the configurable unmasked email projection; malformed identities are omitted.
+`maskedLabel`, which tray surfaces read, never follows the unmasked email projection; malformed
+identities are omitted from both labels in masked mode.
 `gui/src/pages/providers-page-utils.ts` also strips
 Claude email metadata from the catalog/Add Provider account-status projection without mutating
 the source OAuth status; generic/custom account-status labels remain intact. The current quota section keeps
@@ -337,6 +340,21 @@ slots. If profile evidence is unavailable, import remains identityless with the 
 recovery limitation. These rules do not authenticate the local host owner who can edit the store.
 
 Regression coverage: `tests/oauth/oauth-anthropic-identity.test.ts`, `tests/oauth/oauth-refresh.test.ts`.
+
+On macOS the local Claude Code credential is read from the Keychain with `security -w`, and
+`src/oauth/claude-keychain-read.ts` never signals that child: killing `security` while an unlock
+prompt is pending can crash `securityd` and re-lock the keychain (#8161). The async reader resolves
+null after five seconds and leaves the child to exit on its own, keeps one child per process,
+and backs off for sixty seconds after a timeout; a child that never exits keeps that slot, so the
+process stays on the credentials file rather than raising a second prompt. The synchronous reader does not spawn while a
+child is running or the backoff is active; its own timeout, which does kill, starts the backoff.
+Only the child's own close frees the slot once it has a process: an error event after spawn does
+not prove it ended. The metadata probe in `src/claude/auth-detect.ts` (`probeClaudeKeychain`, no
+`-w`) runs under the same admission: it answers `unknown` without spawning while a read is blocked
+or backing off, and its own timeout starts the backoff. The synchronous reader and the probe still
+signal their child on timeout, at most once per window; moving them onto the async reader is the
+remaining part of #8161. Every null falls back to the credentials file.
+`tests/oauth/local-token-detect.test.ts` and `tests/claude-integration/claude-auth-detect.test.ts` cover this.
 
 ## Model routes
 

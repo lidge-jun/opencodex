@@ -1109,6 +1109,18 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       const summary = (parsed._rawBody as { reasoning?: { summary?: unknown } } | undefined)?.reasoning?.summary;
       // Codex sends "auto" by default, so only an explicit concise/detailed request opts out of updates (#7728).
       const summaryRequested = summary === "concise" || summary === "detailed";
+      // Operator policy for the adaptive `thinking.display` field (#8363). Unset and "auto" keep
+      // the built-in selection. Any model entry wins over the provider-wide value, including an
+      // explicit "auto" that opts one model back out. "updates" is only sendable where this
+      // adapter already sent it (native Opus 5.5), so anywhere else it is treated as auto rather
+      // than inventing a display value the model never received.
+      const modelThinkingDisplay = modelRecordValue(provider.modelThinkingDisplay, parsed.modelId);
+      const configuredThinkingDisplay = modelThinkingDisplay !== undefined
+        ? modelThinkingDisplay
+        : provider.thinkingDisplay;
+      const thinkingDisplayPolicy = configuredThinkingDisplay === "updates" && !nativeOpus55
+        ? "auto"
+        : configuredThinkingDisplay ?? "auto";
       const thinkingToggleWire = declaresThinkingToggleWire(provider, parsed.modelId);
       const reasoningControlsUnsupported = reasoningControlsAreUnsupported(provider, parsed.modelId);
       const capabilities = resolveReasoningCapabilities(provider, parsed.modelId);
@@ -1145,7 +1157,16 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           // thinking blocks, so a Chat client sees minutes of heartbeats and no reasoning delta
           // during a long think (#5824). Native Opus 5.5 selects its display below;
           // other models request summarized thinking unless the caller hides it.
-          body.thinking = parsed.options.hideThinkingSummary
+          // Under the default policy this stays the pre-existing selection, including its local
+          // hideThinkingSummary behavior; a configured "summarized" overrides that hiding.
+          // An explicit request summary forces summarized on every adaptive model (#7881), so it
+          // also outranks a configured "omitted". "updates" already degraded to auto above
+          // because only native Opus 5.5 can send it.
+          // Local hideThinkingSummary only speaks for the built-in policy, where it keeps its
+          // pre-existing meaning; an operator choice replaces that local preference.
+          const hiddenThinkingDisplay = (thinkingDisplayPolicy === "omitted" && !summaryRequested)
+            || (thinkingDisplayPolicy === "auto" && parsed.options.hideThinkingSummary);
+          body.thinking = hiddenThinkingDisplay
             ? { type: "adaptive" }
             : { type: "adaptive", display: "summarized" };
           const effort = adaptiveEffort(effectiveReasoning);
@@ -1193,7 +1214,12 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       }
 
       if (nativeOpus55 && !reasoningControlsUnsupported && thinkingEnabled !== false) {
-        body.thinking = { type: "adaptive", display: summaryRequested ? "summarized" : "updates" };
+        // An explicit per-request summary (concise/detailed) still forces summarized (#7881).
+        body.thinking = summaryRequested || thinkingDisplayPolicy === "summarized"
+          ? { type: "adaptive", display: "summarized" }
+          : thinkingDisplayPolicy === "omitted"
+            ? { type: "adaptive" }
+            : { type: "adaptive", display: "updates" };
       }
       // One discriminator governs the display beta and response classification, including reuse.
       progressUpdates = (body.thinking as { display?: string } | undefined)?.display === "updates";

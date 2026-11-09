@@ -1,3 +1,4 @@
+import { useTargetOAuthState } from "./use-target-oauth-state";
 import { readUsageResponseJson, usageSummary30dResourceKey } from "../usage-summary-resource";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ProviderWorkspaceShell, { type AddProviderIntent } from "../components/provider-workspace/ProviderWorkspaceShell";
@@ -225,8 +226,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [statusTone, setStatusTone] = useState<NoticeTone>("err");
   /** Bumped on every notify so repeated identical success toasts restart the dismiss timer. */
   const [statusRevision, setStatusRevision] = useState(0);
-  const [oauthProviders, setOauthProviders] = useState<string[]>([]);
-  const [oauthStatus, setOauthStatus] = useState<Record<string, import("./providers-shared").OAuthStatus>>({});
+  const { oauthProviders, setOauthProviders, oauthStatus, setOauthStatus } = useTargetOAuthState(apiBase);
   const [busy, setBusy] = useState<string | null>(null);
   const [loginInfo, setLoginInfo] = useState<{ provider: string; url?: string; instructions?: string; deviceCode?: string; browserLaunch?: BrowserLaunch } | null>(null);
   const [workspaceSelected, setWorkspaceSelected] = useState<string | null>(null);
@@ -338,7 +338,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
    * is silent while every real mutation path still forces a re-read.
    */
   const { quotaRefresh, invalidateProviderQuotas, settleQuotaRefresh, beginQuotaRefresh } = useQuotaRefreshCoordinator(apiBase);
-  const { fetchConfig: refreshConfigResult, fetchOauth, fetchProviderQuotas } = useProvidersFetch({
+  const { fetchConfig: refreshConfigResult, fetchOauth, fetchProviderQuotas, invalidateOauthStatusReads, captureOauthStatusRead } = useProvidersFetch({
     apiBase, t, setConfig, setOauthProviders, setOauthStatus, notify,
     invalidateProviderQuotas,
     configCacheKey,
@@ -384,10 +384,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     apiBase, t: t as unknown as Parameters<typeof useProviderAccountPools>[0]["t"],
     config, oauthStatus: oauthStatusWithCodex, aliveRef,
     notify,
-    fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth,
+    fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth, invalidateOauthStatusReads, setOauthStatus,
   });
   const {
-    accountSets, setAccountSets, accountLoadStates, switchingAccounts, pausingAccounts, keyPools, fetchAccountSets, fetchKeyPools,
+    accountSets, setAccountSets, accountLoadStates, switchingAccounts, pausingAccounts, keyPools, fetchAccountSets, fetchKeyPools, beginAccountLogout,
     refreshAccountRosters, oauthCardProviders, keyCardProviders,
     switchAccount, pauseAccount, setAccountPoolThreshold, setAccountThreshold, switchApiKey, removeApiKey, addApiKeyValue, editCredentialAlias,
     removeAccount, activeAccountNeedsReauth,
@@ -479,7 +479,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
 
   const { cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled } = useProvidersOAuth({
     apiBase, t, aliveRef, accountSets, setAccountSets,
-    setBusy, setStatus, setLoginInfo, setOauthStatus, notify,
+    setBusy, setStatus, setLoginInfo, setOauthStatus, invalidateOauthStatusReads, captureOauthStatusRead, beginAccountLogout, notify,
     fetchConfig, fetchOauth, fetchAccountSets, fetchProviderQuotas, bumpModelsRefresh,
     onLoginSettled: onProviderLoginSettled,
   });

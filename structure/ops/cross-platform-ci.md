@@ -1,40 +1,25 @@
 # Cross-platform CI
 
-`.github/workflows/catalog-async-contracts.yml` runs the Rust-owned Bun-module catalog contracts on Linux, macOS and Windows for affected pushes to `dev`/`main`/`preview`, pull requests or manual dispatch. The portable fixture uses synthetic homes and cleared child environments. This read-only workflow has no secrets, publication step or release-eligibility effect.
+`.github/workflows/catalog-async-contracts.yml` runs the Rust-owned Bun-module catalog contracts on Linux, macOS and Windows for affected pull requests or manual dispatch. The portable fixture uses synthetic homes and cleared child environments. This read-only workflow has no secrets, publication step or release-eligibility effect.
 
 The [desktop membership contract](../runtime.md#codex-desktop-process-membership) has adapter regression coverage on every host and real PowerShell prefilter regression coverage with synthetic CIM rows on Windows in `tests/clients/desktop-app-restart.test.ts`. A skipped Windows lane does not exercise that native filter; uid-dependent POSIX cases in `tests/clients/desktop-app-restart-posix.test.ts` are skipped on Windows.
 
-`.github/workflows/ci.yml` is the ordinary quality gate for runtime/package changes. A pull
-request verifies Linux and TypeScript: the fast lane runs `test changed`, and the full lane runs
-the Linux suite in five shards. A separate `gates` job runs alongside the scoped docs, structure,
-packaging, keyring, and npm-global jobs. The
-`platform-macos` macOS suite, the `widget` macOS widget + Tauri app-bundle build, and the
-`desktop-shell` Rust toolchain build are native-gated: they run on the promotion pushes to
-`main` and `preview` and on explicit `workflow_dispatch`, and on a pull request only when the
-`changes` job's native path filter selects the change. `dev` pushes start nothing — dev
-integration is covered by the pull-request run — while `main` and `preview` must remain push
-triggers because `release.yml` requires a successful push-event run for the exact release SHA
-and does not accept a pull-request run. Windows runs the full suite in nine shards on a
-Windows-sensitive pull request, on the nightly schedule, and on `workflow_dispatch` with
-`lane=all` (or an empty lane); it never joins the push run `release.yml` gates on. A pull request
-is Windows-sensitive when the `changes` job's `windows` path filter matches or an added
-`src/`/`tests/` line names a Windows marker; `scripts/ci/windows-sensitive-diff.sh` makes that call,
-treating the diff as data and selecting Windows when it cannot read the base parent. Wherever they run, `ci` requires them. The daily
-`schedule` runs main's workflow (GitHub schedules only the default branch) against one dev SHA the
-`changes` job resolves and every checkout reads, and requests the macOS control as well. An
-aggregate green `ci` check legitimately includes deliberate skips for every job the event did not
-request.
+`.github/workflows/ci.yml` runs scoped Ubuntu checks for pull requests and has no push or
+schedule trigger. By default PRs run `gates` and `test changed`; a full Linux suite is selected
+for `ci:full` or CI, harness, toolchain and dependency changes. macOS and Windows jobs run on
+manual dispatch from `dev`, not on PRs. A full `lane=all` dispatch provides evidence for its exact
+source SHA; a PR green or a narrower dispatch is not full-platform evidence. After a batch of
+merges, maintainers run one full dispatch on `dev` rather than one per PR.
 
-This scoping accepts a real coverage loss: a green pull request no longer proves the macOS suite,
-the Rust toolchain, or the app bundle. Those regressions are caught at the promotion push to
-`preview` or `main`, before publication, and on demand by explicit dispatch — a pull request
-that is green is not full-platform proof.
+The manual `windows-native-claim` lane runs the instrumented native-main quota
+provenance test on one hosted Windows runner, without starting the full matrix.
+It is diagnostic evidence only: it cannot mark a commit green for release.
 
 Two paths sit outside the `ci` filter on purpose and get narrow jobs instead of the full matrix.
-A change under `.github/actions/` runs `setup-action` on Linux, Windows and macOS: it runs the
+A change under `.github/actions/` runs `setup-action` on Linux for PRs and on Linux, Windows and macOS for full dispatch: it runs the
 composite Bun setup and requires the installed runtime to equal the version `package.json`
 declares. A change under `native/remote-workspace-helper/` runs `remote-helper` on the same three
-runners: `cargo fmt` on Linux, then `cargo clippy -D warnings` and `cargo test` everywhere, where
+runners on full dispatch and Linux for PRs: `cargo fmt` on Linux, then `cargo clippy -D warnings` and `cargo test` everywhere, where
 the live confinement tests compile only on macOS and Windows. Both filters also list `ci.yml`,
 both stay pull-request scope like `docs` and `structure`, their outputs are validated before any
 job reads them, and the aggregate gate expects each job exactly when its filter output is `true`.
@@ -141,24 +126,13 @@ npm install -g ./bitkyc08-opencodex-*.tgz
 ocx help
 ```
 
-The CI intentionally does not build docs, run coverage, or perform remote Ubuntu/RDP smoke tests.
+The scoped docs job builds the site. CI does not run coverage or perform remote Ubuntu/RDP smoke tests.
 Those stay outside the default gate until a concrete regression justifies the extra runtime.
 
-The Release workflow remains manual and publish-focused. Its `preflight` job runs right after
-dispatch validation and before either packaging job: `scripts/ci/release-preflight.sh` checks the
-channel and dist-tag, every version source, the tag, the GitHub release, npm, the fresh global
-tag ordering and the `dev` pre-move, so a release that can never publish fails in its first minute
-instead of after the packaging matrix. The workflow-level `release` concurrency group is one
-constant slot shared by every ref, which serialises stable and preview runs; the preflight
-therefore sees whatever the previous release run published. The publish job repeats every one of
-those checks immediately before publishing, because tags, releases and registry state can still
-move while a run packages, and additionally requires a successful push-event Cross-platform CI run
-for the exact release commit (`GITHUB_SHA`) — a pull-request run does not qualify.
-After publication the registry smoke records the npm version read-back and the dist-tag as
-separate outputs, and the `release-outcomes` job, which runs after `publish` and `attach-release`
-whatever their result, reports the public GitHub release, the npm version and the npm dist-tag as
-separate summary rows. A row that is not confirmed warns without changing the run's result.
-This keeps release runs short and makes release a deployment of a verified commit after the required
-`dev` pre-move rather than a second CI pipeline.
+The manual Release workflow selects a source with qualifying full `dev` dispatch evidence and
+uses a separately identified trusted workflow revision. Publication remains held. History
+reconciliation and the attested resume follow the [release workflow](docs-and-release.md#release-workflow).
+Review of the legacy history mapping, security review, actual dry-run evidence and cutover settings
+remain open; a CI run alone does not authorize publication.
 
 The shared Responses path follows the [bounded multipart recovery contract](../subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
