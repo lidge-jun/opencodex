@@ -243,6 +243,18 @@ describe("client machine listener", () => {
     expect(syncCalls).toBe(0);
   });
 
+  test("hub relay status advertises expected-target-v1", async () => {
+    const server = startMachineListener(0, {
+      state: connection("relay"),
+      managementAuthState: authState(),
+    });
+    servers.push(server);
+    const status = await fetch(new URL("/api/machine/status", server.url), { headers: await guiHeaders(server) });
+    expect(status.status).toBe(200);
+    const body = await status.json() as { relayTargetCheck?: string };
+    expect(body.relayTargetCheck).toBe("expected-target-v1");
+  });
+
   test("does not let a bootstrapped GUI session disconnect or recycle the machine", async () => {
     let disconnected = false;
     let recycled = false;
@@ -568,7 +580,8 @@ describe("client machine listener in link mode", () => {
     // #6957: the dashboard's shared plane is this listener's relay base, read-only, to the Home.
     expect(body.sharedBase).toBe(`${body.machineBase}/api/machine/hub-relay`);
     expect(body.managementTransport).toBe("relay");
-    expect(body.relayTargetCheck).toBe("expected-target-v1");
+    // Link mode is read-only; it does not advertise a mutation target check.
+    expect(body).not.toHaveProperty("relayTargetCheck");
     expect(body.link).toEqual({ linkId: `lnk_${"b".repeat(16)}`, home: "home-mac", readOnly: true });
     expect(body.sharedServerOrigin).toBe(body.machineBase);
     expect(body.machineBase).toBe(`http://127.0.0.1:${server.port}`);

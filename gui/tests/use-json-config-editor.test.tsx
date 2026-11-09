@@ -3,6 +3,8 @@ import { Window } from "happy-dom";
 import { act, useEffect } from "react";
 import type { Root } from "react-dom/client";
 import { useJsonConfigEditor, type Config } from "../src/hooks/useJsonConfigEditor";
+import { configureApiTargets } from "../src/api";
+import { standaloneApiTargets } from "../src/api-targets";
 
 const originalFetch = globalThis.fetch;
 const originalDocument = globalThis.document;
@@ -80,6 +82,7 @@ beforeEach(() => {
     navigator: { configurable: true, value: testWindow.navigator },
     IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
   });
+  configureApiTargets(standaloneApiTargets("/editor"));
   host = testWindow.document.createElement("div") as unknown as HTMLElement;
   testWindow.document.body.appendChild(host as never);
   root = null;

@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { deepEqualJson, threeWayMergeJson } from "../provider-workspace/provider-draft-merge";
+import { captureApiTarget, targetFetch } from "../api";
 
 export interface Config {
   port: number;
@@ -98,6 +99,11 @@ export function useJsonConfigEditor(deps: {
   const saveConfig = useCallback(async (): Promise<boolean> => {
     const saveTargetKey = targetKey;
     const saveApiBase = apiBase;
+    const saveCapture = captureApiTarget("shared");
+    if (saveCapture.apiBase !== saveApiBase || (targetKey !== apiBase && saveCapture.targetKey !== targetKey)) {
+      notify(t("prov.targetChanged"), false);
+      return false;
+    }
     const current = states.get(saveTargetKey) ?? EMPTY_EDITOR;
     // Every entry point, including the leave dialog's Save, must honor the conflict gate.
     if (hasJsonConflict(current, savedBaseline) || current.conflicts.length > 0) {
@@ -123,7 +129,7 @@ export function useJsonConfigEditor(deps: {
         if (apiBaseRef.current === saveApiBase && targetKeyRef.current === saveTargetKey) notify(t("prov.saved"), true);
         return true;
       }
-      const res = await fetch(`${saveApiBase}/api/providers`, {
+      const res = await targetFetch(saveCapture, `${saveApiBase}/api/providers`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ baseline, next: parsed }),

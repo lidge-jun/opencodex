@@ -806,6 +806,7 @@ export const de: Record<TKey, string> = {
   "prov.port": "Port",
   "prov.default": "Standard",
   "prov.loadingConfig": "Lädt…",
+  "prov.targetChanged": "Das Dashboard-Ziel hat sich geändert. Öffnen Sie dieses Formular auf dem aktuellen Server erneut.",
   "prov.legacyTargetPreflight": "Dieser Proxy prüft das Speicherziel vor dem Senden, kann es aber nicht atomar verifizieren. Aktualisieren Sie den Proxy für zielgebundene Speicherungen.",
   "prov.saved": "Gespeichert! Proxy neu starten, um anzuwenden.",
   "prov.loadConfigFail": "Konfiguration konnte nicht geladen werden",

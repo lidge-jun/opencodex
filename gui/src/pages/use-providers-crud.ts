@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import type { TFn } from "../i18n/shared";
 import type { ProviderUpdatePatch, ProviderUpdateResult } from "../components/provider-workspace/types";
 import { apiErrorMessage } from "../api-error";
-import { captureApiTarget, targetFetch } from "../api";
+import { captureApiTarget, isApiTargetCaptureCurrent, targetFetch } from "../api";
 
 type ProviderError = { code?: unknown; combos?: unknown; error?: unknown };
 type ShadowDependency = { model: string; enabled: boolean };
@@ -74,12 +74,13 @@ export function useProvidersCrud({
         const data = await res.json().catch(() => ({})) as { defaultProvider?: unknown; dependentShadowIntercept?: unknown };
         const defaultProvider = typeof data.defaultProvider === "string" ? data.defaultProvider : null;
         const shadow = activeShadowDependency(data);
+        onProviderRemoved?.(name);
+        if (!isApiTargetCaptureCurrent(capture)) return;
         if (shadow) notify(t("prov.removedShadowTarget", { name, model: shadow.model }), false, "warn");
         else notify(defaultProvider
           ? t("prov.removedDefault", { name, defaultProvider })
           : t("prov.removed", { name }), true);
         if (workspaceSelected === name) setWorkspaceSelected(null);
-        onProviderRemoved?.(name);
         fetchConfig();
         fetchOauth();
         fetchProviderQuotas(true);
@@ -106,6 +107,7 @@ export function useProvidersCrud({
       return;
     }
     const data = await res.json().catch(() => ({})) as { dependentShadowIntercept?: unknown };
+    if (!isApiTargetCaptureCurrent(capture)) return;
     const shadow = activeShadowDependency(data);
     if (shadow) notify(t("prov.disabledShadowTarget", { name, model: shadow.model }), false, "warn");
     else notify(disabled ? t("prov.disabled", { name }) : t("prov.enabled", { name }), true);
@@ -161,6 +163,7 @@ export function useProvidersCrud({
         notify(providerErrorMessage(data, t, t("prov.setDefaultFail", { name })), false);
         return false;
       }
+      if (!isApiTargetCaptureCurrent(capture)) return false;
       notify(t("prov.setDefaultSuccess", { name }), true);
       await fetchConfig();
       return true;

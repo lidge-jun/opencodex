@@ -812,6 +812,7 @@ export const zh: Record<TKey, string> = {
   "prov.port": "端口",
   "prov.default": "默认",
   "prov.loadingConfig": "加载中…",
+  "prov.targetChanged": "仪表板目标已更改。请在当前服务器上重新打开此表单。",
   "prov.legacyTargetPreflight": "此代理会在发送前检查保存目标，但无法以原子方式验证。要使用目标绑定的保存，请更新代理。",
   "prov.saved": "已保存！重启代理以生效。",
   "prov.loadConfigFail": "加载配置失败",

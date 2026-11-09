@@ -236,6 +236,11 @@ function targetCaptureMatches(capture: ApiTargetCapture): boolean {
     && state.target.transport === capture.transport;
 }
 
+/** A completion may apply only while the action's captured target is still current. */
+export function isApiTargetCaptureCurrent(capture: ApiTargetCapture): boolean {
+  return targetCaptureMatches(capture);
+}
+
 async function legacyRelayPreflight(capture: ApiTargetCapture): Promise<Response | null> {
   try {
     const machineBase = runtime("machine").target.baseUrl;

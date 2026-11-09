@@ -61,6 +61,7 @@ export default function ProviderDetails({
   keys,
   busyProvider,
   loginHint,
+  loginCapture,
   authHandlers,
   onCodexActiveNeedsReauthChange,
   codexController,
@@ -110,6 +111,7 @@ export default function ProviderDetails({
   keys?: ApiKeyRow[];
   busyProvider?: string | null;
   loginHint?: LoginHint | null;
+  loginCapture?: import("../../api").ApiTargetCapture;
   authHandlers?: ProviderAuthHandlers;
   onCodexActiveNeedsReauthChange?: (needs: boolean) => void;
   /** Shared Codex account state owned by Providers (WP3). */
@@ -457,6 +459,7 @@ export default function ProviderDetails({
             pausingAccountId={pausingAccountId}
             busy={busyProvider === item.name}
             loginHint={loginHint}
+            loginCapture={loginCapture}
             authHandlers={wrappedAuthHandlers}
             onUpdateProvider={handleUpdateProvider}
             onCodexActiveNeedsReauthChange={onCodexActiveNeedsReauthChange}

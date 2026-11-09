@@ -816,6 +816,7 @@ export const vi: Record<TKey, string> = {
   "prov.port": "Cổng (Port)",
   "prov.default": "Mặc định",
   "prov.loadingConfig": "Đang tải…",
+  "prov.targetChanged": "Máy chủ bảng điều khiển đã thay đổi. Hãy mở lại biểu mẫu này trên máy chủ hiện tại.",
   "prov.legacyTargetPreflight": "Proxy này kiểm tra đích lưu trước khi gửi nhưng không thể xác minh nguyên tử. Hãy cập nhật proxy để lưu gắn với đích.",
   "prov.saved": "Đã lưu! Hãy khởi động lại proxy để áp dụng.",
   "prov.loadConfigFail": "Không thể tải cấu hình",

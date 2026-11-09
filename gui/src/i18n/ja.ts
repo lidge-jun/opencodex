@@ -811,6 +811,7 @@ export const ja: Record<TKey, string> = {
   "prov.port": "ポート",
   "prov.default": "デフォルト",
   "prov.loadingConfig": "読み込み中…",
+  "prov.targetChanged": "ダッシュボードの対象が変更されました。現在のサーバーでこのフォームを開き直してください。",
   "prov.legacyTargetPreflight": "このプロキシは送信前に保存先を確認しますが、アトミックには検証できません。保存先に固定した保存にはプロキシを更新してください。",
   "prov.saved": "保存しました! 適用にはプロキシを再起動してください。",
   "prov.loadConfigFail": "設定の読み込みに失敗しました",

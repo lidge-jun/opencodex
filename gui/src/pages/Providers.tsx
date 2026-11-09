@@ -510,7 +510,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
 
   const bumpModelsRefresh = () => setModelsRefreshToken(n => n + 1);
 
-  const { cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled } = useProvidersOAuth({
+  const { cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled, loginCapture } = useProvidersOAuth({
     apiBase, targetKey: draftTargetKey, t, aliveRef, accountSets, setAccountSets,
     setBusy, setStatus, setLoginInfo, setOauthStatus, invalidateOauthStatusReads, captureOauthStatusRead, beginAccountLogout, notify,
     fetchConfig, fetchOauth, fetchAccountSets, fetchProviderQuotas, bumpModelsRefresh,
@@ -649,6 +649,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
         <ToastNotice tone={statusTone} onDismiss={clearStatus} dismissLabel={t("common.close")}>{status}</ToastNotice>
       )}
       <ProviderWorkspaceShell
+        key={draftTargetKey}
         onRemoveProvider={removeProvider}
         providers={config.providers as Record<string, WorkspaceProvider>}
         apiBase={apiBase}
@@ -720,6 +721,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
             pausingAccountId={pausingAccounts[item.name]?.accountId ?? null}
             busyProvider={busy}
             loginHint={loginInfo}
+            loginCapture={loginCapture(item.name)}
             authHandlers={authHandlers}
             onRefreshQuota={() => refreshProviderQuota(item.name)}
             isDefault={item.name === config.defaultProvider}

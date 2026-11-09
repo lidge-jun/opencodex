@@ -163,8 +163,9 @@ export default function ProviderWorkspaceShell({
   } | null>(null);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsLoadFailed, setModelsLoadFailed] = useState(false);
-  const quotasCacheKey = `ocx.providers.quotas.v1:${apiBase}`;
-  const usageCacheKey = `ocx.providers.usage.v2:${apiBase}`;
+  const cacheTarget = targetKey ?? apiBase;
+  const quotasCacheKey = `ocx.providers.quotas.v1:${cacheTarget}`;
+  const usageCacheKey = `ocx.providers.usage.v2:${cacheTarget}`;
   const [usageMetadata, setUsageMetadata] = useState<UsageReadMetadata>(() => (
     readUsageMetadata(readSessionListCache(usageCacheKey))
   ));
@@ -183,7 +184,7 @@ export default function ProviderWorkspaceShell({
     return !cached || Object.keys(cached).length === 0;
   });
   const [modelsLoadEpoch, setModelsLoadEpoch] = useState(0);
-  const modelRevision = JSON.stringify([apiBase, modelsRefreshToken, modelsLoadEpoch]);
+  const modelRevision = JSON.stringify([apiBase, cacheTarget, modelsRefreshToken, modelsLoadEpoch]);
   const modelRowsReady = modelSnapshot?.revision === modelRevision && !modelsLoading && !modelsLoadFailed;
   const modelCounts = useMemo(() => countModelInventory(modelSnapshot?.rows ?? []), [modelSnapshot]);
   const modelsSettled = useRef(onModelsSettled);

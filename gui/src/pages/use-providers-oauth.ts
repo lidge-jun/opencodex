@@ -62,6 +62,14 @@ export function useProvidersOAuth({
   useLayoutEffect(() => { targetKeyRef.current = targetKey ?? apiBase; }, [apiBase, targetKey]);
   const activeLoginGenerationsRef = useRef(new Map<string, number>());
   const activeLoginCapturesRef = useRef(new Map<string, ApiTargetCapture>());
+  useEffect(() => {
+    // The old target's busy state and device URL must not survive under the new label.
+    activeLoginGenerationsRef.current.clear();
+    activeLoginCapturesRef.current.clear();
+    setBusy(null);
+    setLoginInfo(null);
+    setStatus("");
+  }, [setBusy, setLoginInfo, setStatus, targetKey]);
 
   const bumpLoginGeneration = useCallback((provider: string) => {
     const gen = (oauthLoginGenerationRef.current!.get(provider) ?? 0) + 1;
@@ -123,10 +131,11 @@ export function useProvidersOAuth({
     const gen = bumpLoginGeneration(provider);
     const cancelTarget = targetKey ?? apiBase;
     activeLoginGenerationsRef.current.delete(provider);
-    await cancelServerLogin(provider);
-    if (targetKeyRef.current !== cancelTarget || !aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== gen) return;
+    // Clear the local UI at the click, even if the captured target has already changed.
     setBusy(current => current === provider ? null : current);
     setLoginInfo(current => current?.provider === provider ? null : current);
+    await cancelServerLogin(provider);
+    if (targetKeyRef.current !== cancelTarget || !aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== gen) return;
     notify(t("prov.loginCancelled", { provider: oauthLabel(provider) }), false);
   }, [aliveRef, apiBase, bumpLoginGeneration, cancelServerLogin, notify, setBusy, setLoginInfo, t, targetKey]);
 
@@ -332,5 +341,8 @@ export function useProvidersOAuth({
     }
   };
 
-  return { cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled };
+  return {
+    cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled,
+    loginCapture: (provider: string) => activeLoginCapturesRef.current.get(provider),
+  };
 }

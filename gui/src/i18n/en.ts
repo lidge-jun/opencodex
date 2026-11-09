@@ -829,6 +829,7 @@ export const en = {
   "prov.port": "Port",
   "prov.default": "Default",
   "prov.loadingConfig": "Loading…",
+  "prov.targetChanged": "The dashboard target changed. Reopen this form on the current server.",
   "prov.legacyTargetPreflight": "This proxy checks the save target before sending, but cannot verify it atomically. Update the proxy for target-bound saves.",
   "prov.saved": "Saved! Restart proxy to apply.",
   "prov.loadConfigFail": "Failed to load config",

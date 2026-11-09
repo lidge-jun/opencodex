@@ -11,7 +11,8 @@ import { LanguageProvider } from "../src/i18n/provider";
 import { useJsonConfigEditor, type Config } from "../src/hooks/useJsonConfigEditor";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 import { createProviderDraftStore } from "../src/provider-workspace/target-drafts";
-import { TARGET_PREFLIGHT_LEGACY_EVENT } from "../src/api";
+import { captureApiTarget, configureApiTargets, TARGET_PREFLIGHT_LEGACY_EVENT } from "../src/api";
+import { standaloneApiTargets } from "../src/api-targets";
 
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "HTMLElement", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previous: Record<string, unknown>;
@@ -64,6 +65,17 @@ function item(target: "a" | "b", note: string): WorkspaceItem {
     authMode: "key",
     note,
   } as WorkspaceItem;
+}
+
+function relayTargets(apiBase: string, origin: string) {
+  const base = standaloneApiTargets(apiBase);
+  return {
+    ...base,
+    connected: true,
+    shared: { ...base.shared, baseUrl: apiBase, serverOrigin: origin, transport: "relay" as const },
+    apiKeyId: "fixture-key",
+    relayTargetCheck: "expected-target-v1" as const,
+  };
 }
 
 function noteField(): HTMLTextAreaElement {
@@ -305,13 +317,16 @@ function config(target: "a" | "b", note: string): Config {
   } as Config;
 }
 
-function EditorHarness({ apiBase, value, notifications }: {
+function EditorHarness({ apiBase, targetKey, value, notifications }: {
   apiBase: string;
+  targetKey?: string;
   value: Config;
   notifications: Array<{ message: string; ok?: boolean }>;
 }) {
+  useEffect(() => { configureApiTargets(standaloneApiTargets(apiBase)); }, [apiBase]);
   const editor = useJsonConfigEditor({
     apiBase,
+    targetKey,
     config: value,
     notify: (message, ok) => { notifications.push({ message, ok }); },
     fetchConfig: async () => {},
@@ -440,6 +455,7 @@ describe("Provider JSON drafts are scoped to their dashboard target", () => {
         />
       );
     }
+    configureApiTargets(standaloneApiTargets("/a"));
     await render(<StatefulHarness />);
     await act(async () => { latestEditor!.openJsonEditor(); });
     const first = JSON.parse(latestEditor!.draft);
@@ -548,6 +564,36 @@ describe("Provider JSON drafts are scoped to their dashboard target", () => {
     expect(puts).toBe(0);
     expect(notifications.at(-1)).toEqual({ message: "pws.draftConflictResolveFirst", ok: false });
   });
+
+  test("a fixed relay remap cannot save the old editor baseline to the new hub", async () => {
+    const notifications: Array<{ message: string; ok?: boolean }> = [];
+    let puts = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") puts += 1;
+      return Response.json({ success: true });
+    }) as typeof fetch;
+    configureApiTargets(standaloneApiTargets("/same"));
+    const targetA = captureApiTarget("shared").targetKey;
+    await render(<EditorHarness apiBase="/same" targetKey={targetA} value={config("a", "saved A")} notifications={notifications} />);
+    await act(async () => { latestEditor!.openJsonEditor(); });
+    const draft = JSON.parse(latestEditor!.draft);
+    draft.providers["shared-provider"].note = "A draft";
+    await act(async () => { latestEditor!.setDraft(JSON.stringify(draft, null, 2)); });
+
+    const base = standaloneApiTargets("/same");
+    configureApiTargets({
+      ...base,
+      connected: true,
+      shared: { ...base.shared, baseUrl: "/same", serverOrigin: "https://hub-b.example", transport: "relay" },
+      apiKeyId: "fixture-key",
+      relayTargetCheck: "expected-target-v1",
+    });
+    let saved = true;
+    await act(async () => { saved = await latestEditor!.saveConfig(); });
+    expect(saved).toBe(false);
+    expect(puts).toBe(0);
+    expect(notifications.at(-1)?.message).toBe("prov.targetChanged");
+  });
 });
 
 describe("Provider drafts follow the logical dashboard target", () => {
@@ -571,9 +617,11 @@ describe("Provider drafts follow the logical dashboard target", () => {
       return Response.json({});
     }) as typeof fetch;
 
+    configureApiTargets(relayTargets("/same", "hub-a"));
     await render(<Providers apiBase="/same" targetKey="hub-a" />);
     await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
     expect(host.textContent).toContain("Provider A");
+    configureApiTargets(relayTargets("/same", "hub-b"));
     await render(<Providers apiBase="/same" targetKey="hub-b" />);
     await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
     expect(host.textContent).toContain("Provider B");
@@ -605,6 +653,7 @@ describe("Provider drafts follow the logical dashboard target", () => {
       return Response.json({});
     }) as typeof fetch;
 
+    configureApiTargets(relayTargets("/a", "hub-a"));
     await render(<Providers apiBase="/a" targetKey="hub-a" />);
     await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
     await act(async () => { host.querySelector<HTMLButtonElement>('[role="option"]')!.click(); });
@@ -612,6 +661,7 @@ describe("Provider drafts follow the logical dashboard target", () => {
     await typeNote("draft A note");
     await act(async () => { saveButton().click(); await Promise.resolve(); });
 
+    configureApiTargets(relayTargets("/b", "hub-b"));
     await render(<Providers apiBase="/b" targetKey="hub-b" />);
     await act(async () => { await Promise.resolve(); });
     await act(async () => { finishPatch(Response.json({ success: true })); await Promise.resolve(); });
@@ -637,6 +687,7 @@ describe("Provider drafts follow the logical dashboard target", () => {
       return Response.json({});
     }) as typeof fetch;
 
+    configureApiTargets(relayTargets("/same", "hub-a"));
     await render(<Providers apiBase="/same" targetKey="hub-a" />);
     await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
     await act(async () => {

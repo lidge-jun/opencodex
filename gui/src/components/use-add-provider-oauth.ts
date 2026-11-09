@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type { TFn } from "../i18n/shared";
 import { readJsonIfOk } from "../fetch-json";
 import { openBrowserRequestField } from "../oauth-open-browser-pref";
@@ -22,11 +22,13 @@ type OAuthLoginSetters = {
 
 export function useAddProviderOAuth({
   apiBase,
+  targetKey,
   t,
   aliveRef,
   onAdded,
 }: {
   apiBase: string;
+  targetKey?: string;
   t: TFn;
   aliveRef: React.MutableRefObject<boolean>;
   onAdded: (name: string) => void;
@@ -34,6 +36,13 @@ export function useAddProviderOAuth({
   const loginGenerationRef = useRef(new Map<string, number>());
   const activeProvidersRef = useRef(new Map<string, OAuthLoginSetters>());
   const activeCapturesRef = useRef(new Map<string, ApiTargetCapture>());
+  const targetKeyRef = useRef(targetKey);
+  useLayoutEffect(() => { targetKeyRef.current = targetKey; }, [targetKey]);
+  useEffect(() => {
+    activeProvidersRef.current.clear();
+    activeCapturesRef.current.clear();
+    loginGenerationRef.current.clear();
+  }, [targetKey]);
 
   const bumpLoginGeneration = useCallback((providerId: string) => {
     const generation = (loginGenerationRef.current.get(providerId) ?? 0) + 1;
@@ -89,7 +98,8 @@ export function useAddProviderOAuth({
     activeCapturesRef.current.set(providerId, capture);
     const { setOauthBusy, setOauthMsg, setOauthMsgTone, setOauthUrl, setManualCode, setManualCodeMsg, setManualCodeOk } = setters;
     const generation = bumpLoginGeneration(providerId);
-    const isCurrent = () => loginGenerationRef.current.get(providerId) === generation;
+    const isCurrent = () => loginGenerationRef.current.get(providerId) === generation
+      && (targetKey === undefined || targetKeyRef.current === targetKey);
     activeProvidersRef.current.set(providerId, setters);
     setOauthBusy(true);
     setOauthMsg("");
@@ -131,7 +141,7 @@ export function useAddProviderOAuth({
       for (let i = 0; i < loginPollAttempts(deviceFlow, OAUTH_LOGIN_POLL_INTERVAL_MS, 100); i++) {
         await new Promise(r => setTimeout(r, OAUTH_LOGIN_POLL_INTERVAL_MS));
         if (!aliveRef.current || !isCurrent()) return;
-        const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${providerId}`).catch(() => null);
+        const sRes = await targetFetch(capture, `${apiBase}/api/oauth/status?provider=${providerId}`).catch(() => null);
         const s = sRes ? await readJsonIfOk<{ loggedIn?: boolean; error?: string; hint?: LoginHintData }>(sRes) : null;
         if (!aliveRef.current || !isCurrent()) return;
         if (s?.error) {
@@ -174,7 +184,7 @@ export function useAddProviderOAuth({
         setOauthUrl("", providerId);
       }
     }
-  }, [aliveRef, apiBase, bumpLoginGeneration, cancelServerLogin, onAdded, t]);
+  }, [aliveRef, apiBase, bumpLoginGeneration, cancelServerLogin, onAdded, t, targetKey]);
 
   const submitManualCode = useCallback(async (
     providerId: string,

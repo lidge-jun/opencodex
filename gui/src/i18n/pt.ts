@@ -830,6 +830,7 @@ export const pt: Record<TKey, string> = {
   "prov.port": "Porta",
   "prov.default": "Padrão",
   "prov.loadingConfig": "Carregando…",
+  "prov.targetChanged": "O destino do painel mudou. Reabra este formulário no servidor atual.",
   "prov.legacyTargetPreflight": "Este proxy verifica o destino de salvamento antes de enviar, mas não consegue verificá-lo atomicamente. Atualize o proxy para salvamentos vinculados ao destino.",
   "prov.saved": "Salvo! Reinicie o proxy para aplicar.",
   "prov.loadConfigFail": "Falha ao carregar a configuração",

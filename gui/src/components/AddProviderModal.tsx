@@ -26,6 +26,7 @@ import {
   addProviderModalReducer,
   createInitialAddProviderState,
 } from "./add-provider-modal-reducer";
+import { captureApiTarget, targetFetch, type ApiTargetCapture } from "../api";
 
 export type ProviderConfig = ProviderPayload;
 
@@ -63,6 +64,8 @@ export default function AddProviderModal({
     initialCustom,
     (custom) => createInitialAddProviderState(custom, t("modal.customProvider")),
   );
+  const [renderCapture] = useState<ApiTargetCapture>(() => captureApiTarget("shared"));
+  const renderedTargetKey = targetKey ?? renderCapture.targetKey;
   const aliveRef = useRef(true);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -183,6 +186,10 @@ export default function AddProviderModal({
 
   const submit = async () => {
     if (!form) return;
+    if (renderedTargetKey !== renderCapture.targetKey) {
+      dispatch({ type: "set-error", error: t("prov.targetChanged") });
+      return;
+    }
     const reserved = preset ? isReservedCodexForwardPreset(preset) : false;
     const resolvedBaseUrl = preset?.baseUrlChoices?.length
       ? resolvedBaseUrlForChoice(preset.baseUrlChoices, endpointChoice, form.baseUrl)
@@ -202,7 +209,7 @@ export default function AddProviderModal({
     dispatch({ type: "set-saving", saving: true });
     dispatch({ type: "set-error", error: "" });
     try {
-      const res = await fetch(`${apiBase}/api/providers`, {
+      const res = await targetFetch(renderCapture, `${apiBase}/api/providers`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(postBody),
@@ -224,7 +231,7 @@ export default function AddProviderModal({
     cancelLoginOAuth,
     loginOAuth,
     submitManualCode: submitManualCodeApi,
-  } = useAddProviderOAuth({ apiBase, t, aliveRef, onAdded });
+  } = useAddProviderOAuth({ apiBase, targetKey, t, aliveRef, onAdded });
 
   const oauthSetters = {
     setOauthBusy: (busy: boolean) => dispatch({ type: "set-oauth-busy", busy }),

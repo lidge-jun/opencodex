@@ -820,6 +820,7 @@ export const tr: Record<TKey, string> = {
   "prov.port": "Port",
   "prov.default": "Varsayılan",
   "prov.loadingConfig": "Yükleniyor…",
+  "prov.targetChanged": "Pano hedefi değişti. Bu formu geçerli sunucuda yeniden açın.",
   "prov.legacyTargetPreflight": "Bu proxy göndermeden önce kayıt hedefini kontrol eder ancak bunu atomik olarak doğrulayamaz. Hedefe bağlı kayıtlar için proxy’yi güncelleyin.",
   "prov.saved": "Kaydedildi! Uygulamak için proxy'yi yeniden başlatın.",
   "prov.loadConfigFail": "Konfigürasyon yüklenemedi",

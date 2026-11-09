@@ -815,6 +815,7 @@ export const ko: Record<TKey, string> = {
   "prov.port": "포트",
   "prov.default": "기본값",
   "prov.loadingConfig": "불러오는 중…",
+  "prov.targetChanged": "대시보드 대상이 바뀌었습니다. 현재 서버에서 이 양식을 다시 여세요.",
   "prov.legacyTargetPreflight": "이 프록시는 전송 전에 저장 대상을 확인하지만 원자적으로 검증할 수는 없습니다. 대상에 고정된 저장을 사용하려면 프록시를 업데이트하세요.",
   "prov.saved": "저장됨! 적용하려면 프록시를 재시작하세요.",
   "prov.loadConfigFail": "설정을 불러오지 못했습니다",

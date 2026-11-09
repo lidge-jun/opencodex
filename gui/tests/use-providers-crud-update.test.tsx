@@ -83,6 +83,7 @@ async function mountCrud(overrides: {
   fetchProviderQuotas?: (refresh?: boolean) => Promise<void>;
   refreshCodexAccount?: () => Promise<unknown>;
   onProviderRemoved?: (name: string) => void;
+  notify?: (msg: string, ok: boolean) => void;
 } = {}) {
   configureApiTargets(standaloneApiTargets("http://localhost:10100"));
   const container = document.createElement("div");
@@ -101,7 +102,7 @@ async function mountCrud(overrides: {
       workspaceSelected: null,
       setWorkspaceSelected: () => {},
       setRemoveConfirmName: () => {},
-      notify: () => {},
+      notify: overrides.notify ?? (() => {}),
       fetchConfig: overrides.fetchConfig ?? (async () => {}),
       fetchOauth: async () => {},
       fetchProviderQuotas: overrides.fetchProviderQuotas ?? (async () => {}),
@@ -212,5 +213,22 @@ test("a failed provider removal keeps the parked draft", async () => {
   await act(async () => { await confirmRemoveProvider("shared-provider"); });
 
   expect(removed).toEqual([]);
+  await act(async () => { root.unmount(); });
+});
+
+test("a removal completion after a target change does not toast on the new target", async () => {
+  const notices: Array<{ msg: string; ok: boolean }> = [];
+  let finish!: (response: Response) => void;
+  globalThis.fetch = (async () => await new Promise<Response>(resolve => { finish = resolve; })) as typeof fetch;
+  const { root, confirmRemoveProvider } = await mountCrud({ notify: (msg, ok) => notices.push({ msg, ok }) });
+
+  const pending = confirmRemoveProvider("shared-provider");
+  configureApiTargets(standaloneApiTargets("http://localhost:10101"));
+  await act(async () => {
+    finish(Response.json({ defaultProvider: "other" }));
+    await pending;
+  });
+
+  expect(notices).toEqual([]);
   await act(async () => { root.unmount(); });
 });

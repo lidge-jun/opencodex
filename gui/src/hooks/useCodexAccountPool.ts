@@ -261,6 +261,23 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
   // Distinct from hasAccountsRef: empty successful loads still count as loaded so soft
   // polls do not flip the UI back to the cold skeleton.
   const hasLoadedRef = useRef(seed != null);
+  // A logical target change must not leave the previous target's rows looking ready.
+  const previousSeedKeyRef = useRef(seedKey);
+  useEffect(() => {
+    if (previousSeedKeyRef.current === seedKey) return;
+    previousSeedKeyRef.current = seedKey;
+    loadGenerationRef.current += 1;
+    setAccounts([]);
+    setActiveId(null);
+    setLoadState("loading");
+    setRefreshFailed(false);
+    setActivePinnedId(null);
+    setFirstAttemptSettled(false);
+    setInflightCount(0);
+    hasAccountsRef.current = false;
+    hasLoadedRef.current = false;
+    initialLoadKeyRef.current = null;
+  }, [seedKey]);
   const pauseMutationRef = useRef<"bulk" | { accountId: string } | null>(null);
   // Its own gate, deliberately not the pause one: re-ordering one account and pausing
   // another are independent writes, and a shared ref would make either reject the other.
@@ -481,6 +498,11 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
 
   const switchAccount = useCallback(async (id: string | null, options?: { expectedPinnedAccountId: string }) => {
     const capture = captureApiTarget("shared");
+    if (options?.expectedPinnedAccountId
+      && !accounts.some(account => account.id === options.expectedPinnedAccountId
+        || (options.expectedPinnedAccountId === "__main__" && account.isMain))) {
+      return { ok: false, reason: "pin_changed" } as const;
+    }
     // Cross-gated with the order write, not just with itself: both PUTs move the pin,
     // and in opposite directions, so letting them overlap lets the client settle on
     // the inverse of the server's final pin until a reload happens to correct it.
@@ -527,7 +549,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
       switchingRef.current = null;
       setSwitchingId(null);
     }
-  }, [apiBase, load]);
+  }, [accounts, apiBase, load]);
 
   const saveAlias = useCallback(async (id: string, alias: string) => {
     const capture = captureApiTarget("shared");

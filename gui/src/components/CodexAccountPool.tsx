@@ -89,6 +89,11 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   // The pinned card whose badge was selected again: the release goes through the same
   // /active write as a switch, just with a null id, which the server reads as unpin.
   const [unpinFor, setUnpinFor] = useState<CodexAccountEntry | null>(null);
+  // A confirmation whose row left the current target is not rendered or actionable.
+  const present = (entry: CodexAccountEntry) => accounts.some(account =>
+    account.id === entry.id || (entry.isMain && account.isMain));
+  const activeConfirm = confirm && present(confirm) ? confirm : null;
+  const activeUnpinFor = unpinFor && present(unpinFor) ? unpinFor : null;
   const [showAdd, setShowAdd] = useState(false);
   const [modelsNotice, setModelsNotice] = useState<{ catalogRefreshPending: boolean } | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -257,8 +262,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   };
 
   const unpinAccount = async () => {
-    if (!unpinFor) return;
-    const result = await controller.switchAccount(null, { expectedPinnedAccountId: unpinFor.id });
+    if (!activeUnpinFor) return;
+    const result = await controller.switchAccount(null, { expectedPinnedAccountId: activeUnpinFor.id });
     if (!result.ok) {
       if (result.reason === "busy") return;
       // The confirmation described an old pin, or the saved result is uncertain.
@@ -695,23 +700,23 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         {advancedExtras}
       </CodexAuthAdvancedSettings>
 
-      {confirm && (
+      {activeConfirm && (
         <CodexAccountSwitchModal
-          confirm={confirm}
+          confirm={activeConfirm}
           mainEmail={main?.email}
           accountModeState={accountModeState}
           switchingId={switchingId}
           orderBusy={priorityUpdatingId !== null}
           threshold={poolStrategy && poolStrategy !== "round-robin" ? autoSwitchThreshold : undefined}
           onCancel={() => setConfirm(null)}
-          onConfirm={() => { void setActive(confirm.id === "__main__" ? "__main__" : confirm.id); }}
+          onConfirm={() => { void setActive(activeConfirm.id === "__main__" ? "__main__" : activeConfirm.id); }}
         />
       )}
 
-      {unpinFor && (
+      {activeUnpinFor && (
         <CodexAccountSwitchModal
           unpin
-          confirm={unpinFor}
+          confirm={activeUnpinFor}
           mainEmail={main?.email}
           accountModeState={accountModeState}
           switchingId={switchingId}
