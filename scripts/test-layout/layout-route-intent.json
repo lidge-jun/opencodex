@@ -19,6 +19,7 @@
   "route-intent-codex-connect-disabled.test.ts": "clients",
   "route-intent-codex-transitions.test.ts": "clients",
   "route-intent-connect-recovery.test.ts": "clients",
+  "route-intent-connected-capabilities.test.ts": "clients",
   "route-intent-connected-review.test.ts": "clients",
   "route-intent-connected.test.ts": "clients",
   "route-intent-desktop.test.ts": "clients",

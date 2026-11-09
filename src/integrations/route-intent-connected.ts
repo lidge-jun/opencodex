@@ -15,6 +15,77 @@ import { effectiveRouteIntent, readLocalRouteIntentOff, readRouteIntentReceipt, 
 import { resolveInitialRouteIntent, initialRouteOutcomeMetadata } from "./route-intent-initial";
 import { LINK_ROUTE_CATALOG_PATH } from "../link/management-routes";
 import { MAX_ROUTE_CATALOG_BYTES, parseRouteCatalogFacts } from "./route-intent-catalog";
+import { canonicalizeReasoningEfforts, isDeclaredReasoningEffort } from "../reasoning-effort";
+
+/** Modalities the exporters serialize; anything else a served row declares is dropped. */
+const SERVED_INPUT_MODALITIES: ReadonlySet<string> = new Set(["text", "image", "video", "audio"]);
+const MAX_SERVED_EFFORTS = 16;
+
+/**
+ * The capability fields a Home's `/v1/models` row carries (see `modelCapabilityFields` in
+ * `src/server/models-capabilities.ts`), read strictly from the served document.
+ *
+ * The row is remote input, so every value is type- and range-checked here and a malformed
+ * field is dropped rather than forwarded: one bad modality or a non-numeric window would
+ * either empty a Pi config or make a client offer a control the Home cannot honour. Nothing
+ * is synthesized — a field the row omits stays absent, exactly as `toExportModel` projects
+ * the local `/api/models` rows.
+ */
+function servedCapabilities(row: object): Partial<ExportModel> {
+  const capabilities = "capabilities" in row && row.capabilities && typeof row.capabilities === "object"
+    && !Array.isArray(row.capabilities) ? row.capabilities as Record<string, unknown> : {};
+  const top = row as Record<string, unknown>;
+  const limit = (value: unknown): number | undefined => typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? value : undefined;
+  const flag = (value: unknown): boolean | undefined => typeof value === "boolean" ? value : undefined;
+  const modalities = (value: unknown): string[] | undefined => {
+    if (!Array.isArray(value)) return undefined;
+    const kept: string[] = [];
+    for (const entry of value) {
+      if (typeof entry !== "string" || !SERVED_INPUT_MODALITIES.has(entry) || kept.includes(entry)) continue;
+      kept.push(entry);
+    }
+    return kept.length > 0 ? kept : undefined;
+  };
+  const efforts = (value: unknown): string[] | undefined => {
+    if (!Array.isArray(value)) return undefined;
+    const kept: string[] = [];
+    for (const entry of value) {
+      const effort = typeof entry === "string" ? entry
+        : entry && typeof entry === "object" && "value" in entry && typeof entry.value === "string" ? entry.value : undefined;
+      if (effort === undefined || !isDeclaredReasoningEffort(effort) || kept.includes(effort)) continue;
+      kept.push(effort);
+      if (kept.length >= MAX_SERVED_EFFORTS) break;
+    }
+    return kept.length > 0 ? canonicalizeReasoningEfforts(kept) : undefined;
+  };
+  const contextWindow = limit(top.context_window) ?? limit(top.context_length) ?? limit(capabilities.context_length);
+  const maxTokens = limit(top.max_output_tokens) ?? limit(capabilities.max_output_tokens);
+  const inputModalities = modalities(capabilities.input_modalities);
+  const reasoningEfforts = efforts(top.reasoning_efforts) ?? efforts(capabilities.reasoning_effort);
+  const supportsReasoning = flag(capabilities.supports_reasoning);
+  const supportsThinkingToggle = flag(capabilities.supports_thinking_toggle);
+  const supportsReasoningEffort = flag(capabilities.supports_reasoning_effort);
+  const defaultThinkingEnabled = flag(capabilities.default_thinking_enabled);
+  const declaredDefault = typeof top.reasoning_effort === "string" && isDeclaredReasoningEffort(top.reasoning_effort)
+    ? top.reasoning_effort
+    : Array.isArray(top.reasoning_efforts)
+      ? top.reasoning_efforts.find(option => option && typeof option === "object" && "default" in option && option.default === true
+        && "value" in option && typeof option.value === "string")?.value
+      : undefined;
+  const defaultReasoningEffort = declaredDefault !== undefined && reasoningEfforts?.includes(declaredDefault) ? declaredDefault : undefined;
+  return {
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+    ...(inputModalities ? { inputModalities } : {}),
+    ...(reasoningEfforts ? { reasoningEfforts } : {}),
+    ...(supportsReasoning !== undefined ? { supportsReasoning } : {}),
+    ...(supportsThinkingToggle !== undefined ? { supportsThinkingToggle } : {}),
+    ...(supportsReasoningEffort !== undefined ? { supportsReasoningEffort } : {}),
+    ...(defaultThinkingEnabled !== undefined ? { defaultThinkingEnabled } : {}),
+    ...(defaultReasoningEffort !== undefined ? { defaultReasoningEffort } : {}),
+  };
+}
 
 export interface PreparedConnectedRouteIntent { document: HomeRouteIntentDocument; fetchedAt: string; stale: boolean; localOnly?: true }
 
@@ -86,7 +157,7 @@ export async function loadConnectedRouteModels(connection: LinkHomeConnection, t
     if ("is_combo" in row && row.is_combo === true) {
       const id = comboIdentity.get(row.id);
       if (!id) throw new Error("The served combo has no verified route identity");
-      return { namespaced: row.id, provider: COMBO_NAMESPACE, id };
+      return { namespaced: row.id, provider: COMBO_NAMESPACE, id, ...servedCapabilities(row) };
     }
     const canonical = "native_id" in row ? row.native_id : row.id;
     if (typeof canonical !== "string" || !canonical || canonical !== canonical.trim() || canonical.length > 4096 || /[\x00-\x1f\x7f]/.test(canonical)) {
@@ -97,7 +168,7 @@ export async function loadConnectedRouteModels(connection: LinkHomeConnection, t
     if (slash < 0 && !native) throw new Error("The served alias has no verified canonical route identity");
     if (!native && (slash === 0 || slash === canonical.length - 1)) throw new Error("Invalid canonical routed model identity");
     return { namespaced: row.id, provider: native ? "openai" : canonical.slice(0, slash),
-      id: native ? canonical : canonical.slice(slash + 1), ...(native ? { native: true } : {}) };
+      id: native ? canonical : canonical.slice(slash + 1), ...(native ? { native: true } : {}), ...servedCapabilities(row) };
   });
 }
 
