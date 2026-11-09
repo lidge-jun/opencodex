@@ -15,7 +15,7 @@ import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
 import { fail, exactBody, port, isRecord, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, putKnownHost, issueKey, compensateNewLink, type LinkRouteState } from "./link-route-state";
-import { CHILD_CONFIG_TOO_LARGE_HINT, CHILD_CONFIG_TOO_LARGE_MESSAGE, CHILD_CONFIG_VALIDATE_MAX_OUTPUT_BYTES, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES, childConfigFailureReason } from "./link-child-preflight";
+import { CHILD_CONFIG_TOO_LARGE_HINT, CHILD_CONFIG_TOO_LARGE_MESSAGE, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES } from "./link-child-preflight";
 
 const PROBE_TTL_MS = 5 * 60_000;
 const MIN_REMOTE_OCX = [2, 66, 0] as const;
@@ -290,10 +290,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       const configured = await run(ocx(["config", "show", "--json"]), budget, CHILD_PREFLIGHT_MAX_OUTPUT_BYTES);
       let childConfig: unknown = null;
       try { if (configured.code === 0) childConfig = JSON.parse(configured.stdout); } catch { /* fail closed */ }
-      if (!isRecord(childConfig) || !port(childConfig.port)) {
-        const hint = await childConfigFailureReason(configured, () => run(ocx(["config", "validate", "--json"]), budget, CHILD_CONFIG_VALIDATE_MAX_OUTPUT_BYTES));
-        return await failed(fail("child_preflight_failed", "The Child effective configuration could not be read.", 502, hint));
-      }
+      if (!isRecord(childConfig) || !port(childConfig.port)) return await failed(fail("child_preflight_failed", "The Child effective configuration could not be read.", 502));
       if ((childConfig.runtimeRole ?? "standalone") !== "standalone") return await failed(fail("child_restart_unsupported", "The Child must run standalone OpenCodex; an existing Hub or Child cannot be converted by Add Child.", 409));
       const childPort = childConfig.port;
       if (remotePlatform === "posix" && (await run(REMOTE_CURL_PREFLIGHT)).code !== 0) return await failed(fail("child_curl_missing", "Install curl on the Child before connecting a Remote Link.", 409));
