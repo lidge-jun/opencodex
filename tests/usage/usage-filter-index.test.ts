@@ -648,7 +648,9 @@ console.log(JSON.stringify({ requests: summary.summary.requests, candidates: res
     }
     expect(indexGenerations()).toHaveLength(1);
     expect(indexRowCount(publishedGeneration())).toBe(rows.length);
-  });
+    // Two processes contend on one 30k-row rebuild; the loser's busy-retry backoff plus the
+    // double scan legitimately exceeds the default 5s timeout.
+  }, 30_000);
 
   test("crashed and abandoned staging never accumulates", async () => {
     const rows = Array.from({ length: 3000 }, (_, index) => syntheticRow(index));
