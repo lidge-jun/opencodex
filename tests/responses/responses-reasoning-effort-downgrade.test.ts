@@ -62,6 +62,12 @@ const CONFLICTING_CODE_REFUSAL = JSON.stringify({
     message: "Invalid reasoning effort.",
   },
 });
+const UNLISTED_PARAM_DIAGNOSTIC_REFUSAL = JSON.stringify({
+  error: {
+    type: "invalid_request_error",
+    message: "custom_field must be a string; reasoning_effort is high.",
+  },
+});
 const VENDOR_EFFORT_REFUSAL = JSON.stringify({ code: "invalid-argument", error: "Invalid reasoning effort." });
 const UNRELATED = JSON.stringify({ error: { type: "invalid_request_error", message: "Invalid upload request." } });
 
@@ -658,5 +664,89 @@ describe("rejected reasoning rungs", () => {
     expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
     expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
   });
+
+  test("classifies unlisted parameter predicate as conflicting diagnostic subject", () => {
+    expect(hasConflictingReasoningEffortCode(UNLISTED_PARAM_DIAGNOSTIC_REFUSAL)).toBe(true);
+    expect(isReasoningEffortRejection(UNLISTED_PARAM_DIAGNOSTIC_REFUSAL)).toBe(false);
+  });
+
+  test("does not replay effort or learn rejection when unlisted field is diagnostic subject (openai-chat)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(UNLISTED_PARAM_DIAGNOSTIC_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = config();
+    const response = await handleResponses(request(), cfg, logCtx);
+    const text = await response.text();
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(text).toContain("custom_field must be a string");
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("does not replay effort or learn rejection when unlisted field is diagnostic subject (openai-responses)", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(UNLISTED_PARAM_DIAGNOSTIC_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const cfg = passthroughConfig();
+    const response = await handleResponses(request(), cfg, logCtx);
+    const text = await response.text();
+
+    expect(outbound).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(text).toContain("custom_field must be a string");
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test.each(["openai-chat", "openai-responses"] as const)(
+    "combo stops immediately without walking ladder when unlisted field is diagnostic subject (%s)",
+    async (adapter) => {
+      writeSnapshot(["low", "high", "max"]);
+      const attempts: Array<{ host: string; effort: unknown }> = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        attempts.push({ host: url.host, effort: effortOf(body) });
+        return new Response(UNLISTED_PARAM_DIAGNOSTIC_REFUSAL, { status: 400, headers: { "content-type": "application/json" } });
+      }) as typeof fetch;
+      const comboConfig = {
+        providers: {
+          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
+        },
+        combos: {
+          effort: {
+            strategy: "failover",
+            targets: [{ provider: "first", model: MODEL }, { provider: "fallback", model: MODEL }],
+          },
+        },
+      } as OcxConfig;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+
+      const response = await handleResponses(request(false, "combo/effort"), comboConfig, logCtx);
+      const result = await response.text();
+
+      expect(response.status).toBe(400);
+      expect(result).toContain("custom_field must be a string");
+      expect(attempts).toEqual([
+        { host: "opencode.ai", effort: "max" },
+      ]);
+      expect(isReasoningEffortLearnedUnsupported(comboConfig.providers.first, MODEL, "max")).toBe(false);
+    }
+  );
 
 });

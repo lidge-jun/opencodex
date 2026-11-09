@@ -657,6 +657,31 @@ const GENERIC_PARAM_WORDS = new Set([
   "unrecognized",
   "unexpected",
   "unallowed",
+  "it",
+  "this",
+  "that",
+  "these",
+  "those",
+  "which",
+  "what",
+  "all",
+  "each",
+  "every",
+  "both",
+  "either",
+  "neither",
+  "one",
+  "they",
+  "there",
+  "here",
+  "string",
+  "number",
+  "boolean",
+  "integer",
+  "array",
+  "object",
+  "null",
+  "none",
 ]);
 
 function diagnosticTextNamesOtherParameter(text: string): boolean {
@@ -671,6 +696,33 @@ function diagnosticTextNamesOtherParameter(text: string): boolean {
 
   const prefixParamPattern = /\b['"`]?([a-zA-Z0-9_\-\.]+)['"`]?\s+(?:parameter|param|argument|arg|field|property)\b/gi;
   for (let m = prefixParamPattern.exec(s); m; m = prefixParamPattern.exec(s)) {
+    const p = cleanParam(m[1]);
+    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p)) return true;
+  }
+
+  const subjectMustBe = /\b['"`]?([a-zA-Z0-9_\-\.]+)['"`]?\s+must\s+be\b/gi;
+  for (let m = subjectMustBe.exec(s); m; m = subjectMustBe.exec(s)) {
+    const p = cleanParam(m[1]);
+    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p)) return true;
+  }
+
+  const subjectIsRejection =
+    /\b['"`]?([a-zA-Z0-9_\-\.]+)['"`]?\s+(?:is|are)\s+(?:invalid|unsupported|unrecognized|unknown|not\s+allowed|not\s+permitted|not\s+supported|required|missing)\b/gi;
+  for (let m = subjectIsRejection.exec(s); m; m = subjectIsRejection.exec(s)) {
+    const p = cleanParam(m[1]);
+    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p)) return true;
+  }
+
+  const subjectColon =
+    /\b['"`]?([a-zA-Z0-9_\-\.]+)['"`]?\s*:\s*(?:must\s+be|invalid|unsupported|unrecognized|unknown|expected|required|missing|not\s+allowed)\b/gi;
+  for (let m = subjectColon.exec(s); m; m = subjectColon.exec(s)) {
+    const p = cleanParam(m[1]);
+    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p)) return true;
+  }
+
+  const rejectionExtra =
+    /\b(?:unexpected|missing|cannot\s+(?:specify|use|set|pass|provide))\s+(?:field|param|parameter|argument|property)?\s*['"`]?([a-zA-Z0-9_\-\.]+)['"`]?/gi;
+  for (let m = rejectionExtra.exec(s); m; m = rejectionExtra.exec(s)) {
     const p = cleanParam(m[1]);
     if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p)) return true;
   }
@@ -885,13 +937,31 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
 }
 
 function diagnosticTextBlamesReasoningEffort(text: string): boolean {
+  if (diagnosticTextNamesOtherParameter(text)) return false;
   if (/unsupported.{0,24}effort/i.test(text)) return true;
   const scanned = text.replace(GENERIC_ERROR_TYPE, " ");
   const term = /reasoning\.effort|reasoning_effort|reasoning effort|thinking budget|reasoning_parameters/gi;
   for (let match = term.exec(scanned); match; match = term.exec(scanned)) {
-    const from = Math.max(0, match.index - REJECTION_WINDOW);
-    const to = Math.min(scanned.length, match.index + match[0].length + REJECTION_WINDOW);
-    if (REJECTION_LANGUAGE.test(scanned.slice(from, to))) return true;
+    const preText = scanned.slice(0, match.index);
+    const postText = scanned.slice(match.index + match[0].length);
+    const lastBoundary = Math.max(
+      preText.lastIndexOf(";"),
+      preText.lastIndexOf("\n"),
+      preText.lastIndexOf("|"),
+      preText.search(/\.(?:\s+|$)(?=[^.]*$)/)
+    );
+    const clauseStart = lastBoundary !== -1 ? lastBoundary + 1 : 0;
+    const nextBoundary = postText.search(/[;\n|]|\.(?:\s+|$)/);
+    const clauseEnd = nextBoundary !== -1 ? match.index + match[0].length + nextBoundary : scanned.length;
+
+    const from = Math.max(clauseStart, match.index - REJECTION_WINDOW);
+    const to = Math.min(clauseEnd, match.index + match[0].length + REJECTION_WINDOW);
+    const windowText = scanned.slice(from, to);
+    if (REJECTION_LANGUAGE.test(windowText)) {
+      if (!diagnosticTextNamesOtherParameter(windowText)) {
+        return true;
+      }
+    }
   }
   return false;
 }
