@@ -706,7 +706,16 @@ const STRUCTURAL_EFFORT_WORDS = new Set([
 
 const REASONING_EFFORT_CONTEXT_REGEX = /\b(?:reasoning[._\s]+effort|reasoning[._\s]+parameters|reasoning|effort)\b/i;
 
+function isExplicitFieldOrParameter(text: string, matchIndex: number, param: string): boolean {
+  const pre = text.slice(Math.max(0, matchIndex - 32), matchIndex);
+  if (/\b(?:parameter|param|argument|arg|field|property)\s*(?:[:=]\s*['"`]?|['"`]|\s+)\s*$/i.test(pre)) return true;
+  const post = text.slice(matchIndex + param.length, Math.min(text.length, matchIndex + param.length + 32));
+  if (/^\s*['"`]?\s+(?:parameter|param|argument|arg|field|property)\b/i.test(post)) return true;
+  return false;
+}
+
 function isEffortDescriptorInContext(text: string, matchIndex: number, param: string): boolean {
+  if (isExplicitFieldOrParameter(text, matchIndex, param)) return false;
   if (EFFORT_RUNGS.has(param)) {
     return REASONING_EFFORT_CONTEXT_REGEX.test(text);
   }

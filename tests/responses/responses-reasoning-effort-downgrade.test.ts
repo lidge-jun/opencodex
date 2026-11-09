@@ -90,6 +90,12 @@ const VENDOR_SEPARATE_SENTENCE_EFFORT_VALUE_REFUSAL = JSON.stringify({
   code: "invalid-argument",
   error: "Invalid reasoning effort. Max is not supported for this model.",
 });
+const EXPLICIT_FIELD_EFFORT_WORD_REFUSAL = JSON.stringify({
+  error: {
+    type: "invalid_request_error",
+    message: "Invalid reasoning effort. The max field is invalid.",
+  },
+});
 const VENDOR_EFFORT_REFUSAL = JSON.stringify({ code: "invalid-argument", error: "Invalid reasoning effort." });
 const UNRELATED = JSON.stringify({ error: { type: "invalid_request_error", message: "Invalid upload request." } });
 
@@ -994,6 +1000,78 @@ describe("rejected reasoning rungs", () => {
         { host: "opencode.ai", effort: "high" },
       ]);
       expect(isReasoningEffortLearnedUnsupported(comboConfig.providers.first, MODEL, "max")).toBe(true);
+    },
+  );
+
+  test("classifies explicit invalid field naming effort word as conflicting diagnostic subject", () => {
+    expect(hasConflictingReasoningEffortCode(EXPLICIT_FIELD_EFFORT_WORD_REFUSAL)).toBe(true);
+    expect(isReasoningEffortRejection(EXPLICIT_FIELD_EFFORT_WORD_REFUSAL)).toBe(false);
+  });
+
+  test.each([
+    ["openai-chat", EXPLICIT_FIELD_EFFORT_WORD_REFUSAL],
+    ["openai-responses", EXPLICIT_FIELD_EFFORT_WORD_REFUSAL],
+  ] as const)(
+    "stops after one send without effort replay or learned rejection when effort word is an explicit invalid field (%s)",
+    async (adapter, refusal) => {
+      writeSnapshot(["low", "high", "max"]);
+      const outbound: Array<Record<string, unknown>> = [];
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(refusal, { status: 400, headers: { "content-type": "application/json" } });
+      }) as typeof fetch;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+
+      const cfg = adapter === "openai-chat" ? config() : passthroughConfig();
+      const response = await handleResponses(request(), cfg, logCtx);
+      const text = await response.text();
+
+      expect(outbound).toHaveLength(1);
+      expect(effortOf(outbound[0])).toBe("max");
+      expect(response.status).toBe(400);
+      expect(text).toContain("max field is invalid");
+      expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+      expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+    },
+  );
+
+  test.each([
+    ["openai-chat", EXPLICIT_FIELD_EFFORT_WORD_REFUSAL],
+    ["openai-responses", EXPLICIT_FIELD_EFFORT_WORD_REFUSAL],
+  ] as const)(
+    "combo stops after one send without walking ladder when effort word is an explicit invalid field (%s)",
+    async (adapter, refusal) => {
+      writeSnapshot(["low", "high", "max"]);
+      const attempts: Array<{ host: string; effort: unknown }> = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        attempts.push({ host: url.host, effort: effortOf(body) });
+        return new Response(refusal, { status: 400, headers: { "content-type": "application/json" } });
+      }) as typeof fetch;
+      const comboConfig = {
+        providers: {
+          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
+        },
+        combos: {
+          effort: {
+            strategy: "failover",
+            targets: [{ provider: "first", model: MODEL }, { provider: "fallback", model: MODEL }],
+          },
+        },
+      } as OcxConfig;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+
+      const response = await handleResponses(request(false, "combo/effort"), comboConfig, logCtx);
+      const result = await response.text();
+
+      expect(response.status).toBe(400);
+      expect(result).toContain("max field is invalid");
+      expect(attempts).toEqual([
+        { host: "opencode.ai", effort: "max" },
+      ]);
+      expect(isReasoningEffortLearnedUnsupported(comboConfig.providers.first, MODEL, "max")).toBe(false);
     },
   );
 });
