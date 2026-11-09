@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 // German — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -140,6 +141,7 @@ export const de: Record<TKey, string> = {
   ...connectV2Copy("de"),
   ...startupV2Copy("de"),
   ...proxyV2Copy("de"),
+  ...telemetryProfileCopy("de"),
   "claude.tierDefaults.unset": "Nicht festgelegt (Claude-Einstellung beibehalten)",
   "claude.tierDefaults.recovery": "Anwendung gestoppt; automatische Wiederherstellung fehlgeschlagen. Prüfen Sie vor einem erneuten Versuch die Sicherung unten.",
   "claude.tierDefaults.title": "CLI-Standardmodelle",
@@ -426,6 +428,7 @@ export const de: Record<TKey, string> = {
   "auth.adminTokenHelp": "Dies ist der Admin-Token der OpenCodex-Verwaltungs-API, kein Anbieter-API-Schlüssel. Beim ersten Start schreibt der Proxy ihn nach ~/.opencodex/admin-api-token (oder $OPENCODEX_HOME/admin-api-token); OPENCODEX_ADMIN_AUTH_TOKEN hat Vorrang.",
   "auth.rememberDevice": "Dieses Gerät merken",
   "auth.rememberDeviceHint": "Eine widerrufbare HttpOnly-Dashboard-Sitzung 30 Tage behalten, nicht das Admin-Token. Erfordert ein direktes HTTPS-Dashboard mit derselben Origin wie die API (oder lokalen Loopback).",
+  "auth.rememberUnsupported": "OpenCodex kann dieses Gerät unter dieser Adresse nicht merken. Merken erfordert ein direktes HTTPS-Dashboard (oder lokalen Loopback); hinter einem Reverse Proxy melden Sie sich ohne diese Option an.",
   "connection.forgetDevice": "Dieses Gerät vergessen",
   "connection.forgetDeviceFailed": "Dieses Gerät konnte nicht vergessen werden. Die Sitzung wurde beibehalten.",
   "auth.adminTokenDocsLink": "So finden Sie ihn",
@@ -1987,6 +1990,10 @@ export const de: Record<TKey, string> = {
   "integrations.preview.loading": "Der genaue Änderungsplan wird geladen…",
   "integrations.preview.failed": "Der Änderungsplan konnte nicht geladen werden. Es wurde nichts geändert.",
   "integrations.preview.stale": "Die Integration wurde während der Bestätigung geändert. Prüfe den aktualisierten Plan und bestätige erneut.",
+  "integrations.preview.catalogUnavailable": "Der Modellkatalog ist noch nicht geladen, daher kann diese Änderung nicht geplant werden. Lade ihn, um fortzufahren.",
+  "integrations.preview.loadCatalogRetry": "Katalog laden und erneut versuchen",
+  "integrations.preview.recovering": "Katalog wird geladen…",
+  "integrations.action.chooseProfile": "Profil wählen",
   "integrations.dialog.apply.title": "Diese Integration anwenden?",
   "integrations.dialog.apply.changes": "opencodex fügt der Client-Konfiguration seine verwalteten Anbieter-Einstellungen hinzu.",
   "integrations.dialog.apply.breakage": "Der Client verwendet die Modelle, die diese opencodex-Instanz derzeit bereitstellt.",

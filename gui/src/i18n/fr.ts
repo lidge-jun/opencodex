@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 import type { TKey } from "./en";
 
 /**
@@ -139,6 +140,7 @@ export const fr: Record<TKey, string> = {
   ...connectV2Copy("fr"),
   ...startupV2Copy("fr"),
   ...proxyV2Copy("fr"),
+  ...telemetryProfileCopy("fr"),
   "claude.tierDefaults.unset": "Non défini (conserver le réglage Claude)",
   "claude.tierDefaults.recovery": "Application arrêtée et restauration automatique échouée. Vérifiez la sauvegarde ci-dessous avant de réessayer.",
   "claude.tierDefaults.title": "Modèles par défaut du CLI",
@@ -358,6 +360,7 @@ export const fr: Record<TKey, string> = {
   "auth.adminTokenHelp": "Il s’agit du jeton d’administration de l’API de gestion OpenCodex, pas d’une clé API de fournisseur. Au premier démarrage, le proxy l’écrit dans ~/.opencodex/admin-api-token (ou $OPENCODEX_HOME/admin-api-token), et OPENCODEX_ADMIN_AUTH_TOKEN a la priorité.",
   "auth.rememberDevice": "Mémoriser cet appareil",
   "auth.rememberDeviceHint": "Conserve une session HttpOnly révocable pendant 30 jours, pas le jeton administrateur. Nécessite un tableau de bord HTTPS direct de même origine que l'API (ou une boucle locale).",
+  "auth.rememberUnsupported": "OpenCodex ne peut pas mémoriser cet appareil à cette adresse. La mémorisation exige un tableau de bord HTTPS direct (ou une boucle locale) ; derrière un proxy inverse, connectez-vous sans cette option.",
   "connection.forgetDevice": "Oublier cet appareil",
   "connection.forgetDeviceFailed": "Impossible d’oublier cet appareil. La session a été conservée.",
   "auth.adminTokenDocsLink": "Où le trouver",
@@ -2559,6 +2562,10 @@ export const fr: Record<TKey, string> = {
   "integrations.preview.loading": "Chargement du plan de modification exact…",
   "integrations.preview.failed": "Le plan de modification n’a pas pu être chargé. Rien n’a été modifié.",
   "integrations.preview.stale": "L’intégration a changé pendant la confirmation. Vérifiez le plan mis à jour et confirmez à nouveau.",
+  "integrations.preview.catalogUnavailable": "Le catalogue de modèles n’est pas encore chargé, cette modification ne peut donc pas être planifiée. Chargez-le pour continuer.",
+  "integrations.preview.loadCatalogRetry": "Charger le catalogue et réessayer",
+  "integrations.preview.recovering": "Chargement du catalogue…",
+  "integrations.action.chooseProfile": "Choisir un profil",
   "integrations.dialog.apply.title": "Appliquer cette intégration ?",
   "integrations.dialog.apply.changes": "opencodex ajoutera ses paramètres de fournisseur gérés à la configuration du client.",
   "integrations.dialog.apply.breakage": "Le client utilisera les modèles actuellement exposés par cette instance opencodex.",

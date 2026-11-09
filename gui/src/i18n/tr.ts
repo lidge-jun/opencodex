@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 // Turkish — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -140,6 +141,7 @@ export const tr: Record<TKey, string> = {
   ...connectV2Copy("tr"),
   ...startupV2Copy("tr"),
   ...proxyV2Copy("tr"),
+  ...telemetryProfileCopy("tr"),
   "claude.tierDefaults.unset": "Belirtilmedi (mevcut Claude ayarını koru)",
   "claude.tierDefaults.recovery": "Uygulama durdu ve otomatik geri yükleme başarısız oldu. Yeniden denemeden önce aşağıdaki yedeği kontrol edin.",
   "claude.tierDefaults.title": "CLI varsayılan modelleri",
@@ -360,6 +362,7 @@ export const tr: Record<TKey, string> = {
   "auth.adminTokenHelp": "Bu, sağlayıcı API anahtarı değil, OpenCodex yönetim API’sinin yönetici jetonudur. Proxy ilk açılışta bunu ~/.opencodex/admin-api-token (veya $OPENCODEX_HOME/admin-api-token) dosyasına yazar; OPENCODEX_ADMIN_AUTH_TOKEN bu değeri geçersiz kılar.",
   "auth.rememberDevice": "Bu cihazı hatırla",
   "auth.rememberDeviceHint": "Yönetici belirteci yerine iptal edilebilir HttpOnly oturumunu 30 gün tutar. API ile aynı origin'de doğrudan bir HTTPS paneli (veya yerel loopback) gerekir.",
+  "auth.rememberUnsupported": "OpenCodex bu adreste bu cihazı hatırlayamıyor. Hatırlama, doğrudan bir HTTPS paneli (veya yerel loopback) gerektirir; ters proxy arkasında bu seçenek olmadan oturum açın.",
   "connection.forgetDevice": "Bu cihazı unut",
   "connection.forgetDeviceFailed": "Bu cihaz unutulamadı. Oturum korundu.",
   "auth.adminTokenDocsLink": "Nasıl bulunur",
@@ -2572,6 +2575,10 @@ export const tr: Record<TKey, string> = {
   "integrations.preview.loading": "Kesin değişiklik planı yükleniyor…",
   "integrations.preview.failed": "Değişiklik planı yüklenemedi. Hiçbir şey değiştirilmedi.",
   "integrations.preview.stale": "Onay sırasında entegrasyon değişti. Güncellenen planı inceleyip yeniden onaylayın.",
+  "integrations.preview.catalogUnavailable": "Model kataloğu henüz yüklenmediği için bu değişiklik planlanamıyor. Devam etmek için kataloğu yükleyin.",
+  "integrations.preview.loadCatalogRetry": "Kataloğu yükle ve yeniden dene",
+  "integrations.preview.recovering": "Katalog yükleniyor…",
+  "integrations.action.chooseProfile": "Profil seç",
   "integrations.dialog.apply.title": "Bu entegrasyon uygulansın mı?",
   "integrations.dialog.apply.changes": "opencodex, yönettiği sağlayıcı ayarlarını istemci yapılandırmasına ekleyecek.",
   "integrations.dialog.apply.breakage": "İstemci, bu opencodex örneğinin sunduğu modelleri kullanacak.",

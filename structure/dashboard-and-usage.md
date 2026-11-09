@@ -395,15 +395,15 @@ once it exceeds 200) with the upstream content-type, body kind (`sse / json / ot
 body sample, and the extracted usage. Off by default; the hot path is guarded so production stays
 untouched.
 
-For diagnosing cache-read instability without capturing content, set `OPENCODEX_CACHE_DEBUG=1`
-before start. `src/usage/cache-diagnostic.ts` then writes one record per finalized request to
-`~/.opencodex/cache-debug.jsonl` (same `0o600` file, same 200-to-100 rolling bound) holding only
-presence booleans, counts, closed enums, the raw upstream cache counter before defaulting, and
-process-local HMAC equality tags for the prompt-cache key, allowlisted session headers, the account
-log label, and ordered instruction/tool/message blocks (capped at 128 per section, first divergent
-section/index only). The signing key is created at process start and never persisted, so tags
-compare values within one proxy process and never become a durable correlation key; no prompt
-text, tool name, raw identifier, or header value is recorded. Off by default.
+For content-free cache-read diagnostics, `OPENCODEX_CACHE_DEBUG=1` enables `src/usage/cache-diagnostic.ts`; otherwise hooks return before body/header inspection, hashing or file access. Its live `enabled()` hook remains registered. Every observed on/off transition (the gate is evaluated on each diagnostic call, so an idle process keeps its history until the next call) starts a new retention epoch: continuation history and pending drafts are cleared, and a draft from an earlier epoch is neither compared nor written (`tests/usage/cache-diagnostic.test.ts`).
+It writes one finalized request to `~/.opencodex/cache-debug.jsonl` (mode `0o600`, 200-to-100 rolling lines), preserving raw cache-counter evidence.
+Process-local HMAC tags cover prompt keys, explicit account labels and ordered instructions/tools/messages; no prompt, tool name or raw identifier is retained, and keys never persist.
+Session-header tags cover `session_id`, `session-id`, `thread-id` and `x-session-id`, sharing a value domain but not merging header identities; an unobserved side is omitted. `accountAffinity` uses read-only `codexConversationIdentity` and states `derived-key-not-binding`; neither a key nor a route label proves a binding.
+`prefix.comparison` compares observed sides; `continuation` compares their previous finalization under the complete nonempty inbound session-header set, authenticated admission principal, protocol, model and config directory. `src/server/responses/request-prepare.ts` carries the admission identity through the request-log hook; only its private diagnostic HMAC is retained, never serialized or reconstructed from bridge headers.
+Provider changes preserve correlation; prompt-key and explicit account-label changes are separate. Synthesized outbound headers and prompt keys never replace missing inbound identity.
+Comparisons distinguish first/equal/message-tail append/different/truncated/uncomparable; instructions and tools grow before messages, while system/developer input rows retain wire order.
+Missing or unsupported observations are uncomparable. Missing admission identity, including unauthenticated loopback, disables cross-request history while preserving per-request comparisons. Sections retain 128 tags and never claim equality across hidden tails; history evicts beyond 512 entries.
+These are parsed hook projections in completion order, not exact network bytes or proof of cache reuse; `tests/usage/cache-diagnostic.test.ts`, `tests/usage/cache-diagnostic-hook-compat.test.ts` and `tests/usage/cache-diagnostic-caller-isolation.test.ts` pin the contract.
 
 ## Z.ai quota destination ownership
 
@@ -497,7 +497,7 @@ The existing dashboard file-client maps include Cline CLI and reuse its committe
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates. The account history response can include a [low-confidence effective capacity estimate](providers/openai-accounts.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples. Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; an initial JEV null choice separately strips caller effort.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; in the default `decide` mode an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 Dashboard overview polling observes authorization failures independently of stalled or rejected peer requests, cancels remaining child requests after a decisive result, and exposes resource-level deadline failures without rewriting them as authentication failures.

@@ -94,7 +94,7 @@ import { CatalogGatherBusyError } from "../codex/catalog/provider-fetch";
 import type { CatalogDisposition, ConvergeCodex } from "../codex/convergence-types";
 import { normalizeCatalogDisposition } from "../codex/catalog-refresh-status";
 import { managementBodyTooLargeResponse } from "./management/body";
-import { handleSessionRoutes } from "./management/session-routes";
+import { handleSessionRoutes, SESSION_REMEMBER_PATH } from "./management/session-routes";
 import { siblingRefusesManagementRequest } from "./management/sibling-guard";
 import { siblingOfLivePort, siblingSkipMessage } from "../codex/sibling-start";
 import { packageVersion } from "../lib/package-version";
@@ -238,6 +238,12 @@ async function handleLinkRoutesOnDemand(ctx: ManagementContext): Promise<Respons
   return handleLinkRoutes(ctx);
 }
 
+async function handleTelemetryRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/telemetry")) return null;
+  const { handleTelemetryRoutes } = await import("./management/telemetry-routes");
+  return handleTelemetryRoutes(ctx);
+}
+
 export async function handleManagementAPI(
   req: Request,
   url: URL,
@@ -248,7 +254,9 @@ export async function handleManagementAPI(
   requestIngress: ManagementRequestIngress = { trustedLoopback: false },
 ): Promise<Response | null> {
   if (!isAllowedManagementOrigin(req, config)) {
-    return jsonResponse({ error: "cross-origin request blocked" }, 403, req, config);
+    // A proxied dashboard reaches Remember through this gate first; name the reason (#8338).
+    const remember = url.pathname === SESSION_REMEMBER_PATH ? { code: "remember_requires_direct_origin" } : {};
+    return jsonResponse({ error: "cross-origin request blocked", ...remember }, 403, req, config);
   }
   if (principal === "local-account-switch-capability") {
     if (req.method !== "PUT" || !isLocalAccountSwitchPath(url.pathname) || url.search !== "") {
@@ -393,6 +401,7 @@ export async function handleManagementAPI(
     ??     (await handleComboRoutes(ctx))
     ??     (await handleSystemRoutes(ctx))
     ??     (await handleLabRoutesOnDemand(ctx))
+      ?? (await handleTelemetryRoutesOnDemand(ctx))
       ?? (await handleUsageTimelineRoutes(ctx))
       ?? (await handleCompanionRoutes(ctx))
       ?? (await handleSidebarRoutes(ctx));

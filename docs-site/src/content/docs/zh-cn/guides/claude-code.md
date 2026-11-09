@@ -536,9 +536,9 @@ role；`tool_result` 缺少 `tool_use_id`；`tool_use` 缺少 id/name；指定�
 **Anthropic 路由请求：**适配器会管理工具、系统内容和倒数第二条用户消息的缓存断点，以及顶层
 自动 `cache_control`。稳定轮次通常能达到约 99.9% 的缓存命中率。
 
-**原生 OpenAI/ChatGPT 路由：**派生会话范围的 `prompt_cache_key`（存在时取自
-`metadata.user_id`，否则回退到系统内容哈希）和用于缓存亲和性的 `session_id` 请求头。
-缓存键包含模型和完整的工具 schema。
+**原生 OpenAI/ChatGPT 路由：**派生 `prompt_cache_key`（`metadata.user_id` 为字符串时取自该值，
+否则回退到系统内容哈希），并仅在存在会话标识时派生用于缓存亲和性的 `session_id` 请求头（不会从共享回退键派生）。
+由系统内容哈希派生的回退键（仅在存在系统内容时使用）还包含模型和完整的工具 schema。
 
 **Token 计算：**Anthropic 输出会从 `input_tokens` 中减去 `cached_tokens` 和
 `cache_write_tokens`，并将它们分别公开为 `cache_read_input_tokens` 和

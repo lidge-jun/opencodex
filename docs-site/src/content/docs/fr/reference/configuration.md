@@ -66,4 +66,6 @@ opencodex écrit les fichiers gérés `config.toml` et `opencodex-catalog.json` 
 puis le renomme (`atomicWriteFile`).
 Cela évite les fichiers partiels lorsque plusieurs processus d'écriture, comme `ocx stop` et le gestionnaire d'arrêt du proxy,
 restaurent Codex simultanément.
+Sous Windows, si `opencodex-catalog.json` porte l'attribut lecture seule et bloque le renommage, opencodex efface
+l'attribut et réessaie une fois ; un échec persistant signale `Codex catalog is read-only: <path>` au lieu d'un `EPERM` brut.
 :::

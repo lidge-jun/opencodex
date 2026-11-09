@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 import type { TKey } from "./en";
 
 /**
@@ -139,6 +140,7 @@ export const zh: Record<TKey, string> = {
   ...connectV2Copy("zh"),
   ...startupV2Copy("zh"),
   ...proxyV2Copy("zh"),
+  ...telemetryProfileCopy("zh"),
   "claude.tierDefaults.unset": "未设置（保留现有 Claude 设置）",
   "claude.tierDefaults.recovery": "应用已停止，自动恢复失败。重试前请检查下方备份。",
   "claude.tierDefaults.title": "CLI 层级默认模型",
@@ -426,6 +428,7 @@ export const zh: Record<TKey, string> = {
   "auth.adminTokenHelp": "这是 OpenCodex 管理 API 的管理员令牌，不是服务商 API 密钥。代理首次启动时会写入 ~/.opencodex/admin-api-token（或 $OPENCODEX_HOME/admin-api-token），设置 OPENCODEX_ADMIN_AUTH_TOKEN 可覆盖该值。",
   "auth.rememberDevice": "记住此设备",
   "auth.rememberDeviceHint": "保留可撤销的 HttpOnly 会话30天，不保存管理员令牌。需要直接访问与 API 同源的 HTTPS 仪表板（或本地回环）。",
+  "auth.rememberUnsupported": "OpenCodex 无法在此地址记住此设备。记住设备需要直接访问 HTTPS 仪表板（或本地回环）；在反向代理后面，请不勾选此项登录。",
   "connection.forgetDevice": "忘记此设备",
   "connection.forgetDeviceFailed": "无法忘记此设备。会话已保留。",
   "auth.adminTokenDocsLink": "如何查找",
@@ -2004,6 +2007,10 @@ export const zh: Record<TKey, string> = {
   "integrations.preview.loading": "正在加载准确的更改计划…",
   "integrations.preview.failed": "无法加载更改计划。未进行任何更改。",
   "integrations.preview.stale": "确认期间集成状态已变化。请查看更新后的计划并再次确认。",
+  "integrations.preview.catalogUnavailable": "模型目录尚未加载，无法规划此更改。请加载后继续。",
+  "integrations.preview.loadCatalogRetry": "加载目录并重试",
+  "integrations.preview.recovering": "正在加载目录…",
+  "integrations.action.chooseProfile": "选择配置文件",
   "integrations.dialog.apply.title": "应用此集成？",
   "integrations.dialog.apply.changes": "opencodex 会将其管理的提供商设置添加到客户端配置。",
   "integrations.dialog.apply.breakage": "客户端将使用此 opencodex 实例当前提供的模型。",

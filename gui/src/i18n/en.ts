@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 // English — source of truth. Its keys define the TKey type; de/fr/ko/zh/zh-TW/ru/ja/tr must match (compile-checked).
 // Strings with {cmd} render a <code> chip via <Trans>; {var} are plain interpolations.
 /**
@@ -141,6 +142,7 @@ export const en = {
   ...connectV2Copy("en"),
   ...startupV2Copy("en"),
   ...proxyV2Copy("en"),
+  ...telemetryProfileCopy("en"),
   "claude.tierDefaults.unset": "Unset (keep existing Claude setting)",
   "claude.tierDefaults.recovery": "Apply stopped and automatic restore failed. Check the backup below before retrying.",
   "claude.tierDefaults.title": "CLI tier defaults",
@@ -361,6 +363,7 @@ export const en = {
   "auth.adminTokenHelp": "This is the OpenCodex management admin token, not a provider API key. The proxy writes it to ~/.opencodex/admin-api-token (or $OPENCODEX_HOME/admin-api-token) on first start, and OPENCODEX_ADMIN_AUTH_TOKEN overrides it.",
   "auth.rememberDevice": "Remember this device",
   "auth.rememberDeviceHint": "Keep a revocable HttpOnly dashboard session for 30 days, not the admin token. Requires a direct HTTPS dashboard that is same-origin with the API (or local loopback).",
+  "auth.rememberUnsupported": "OpenCodex cannot remember this device at this address. Remember needs a direct HTTPS dashboard (or local loopback); behind a reverse proxy, sign in without it.",
   "connection.forgetDevice": "Forget this device",
   "connection.forgetDeviceFailed": "Could not forget this device. The session was kept.",
   "auth.adminTokenDocsLink": "How to find it",
@@ -2632,6 +2635,10 @@ export const en = {
   "integrations.preview.loading": "Loading the exact change plan…",
   "integrations.preview.failed": "The change plan could not be loaded. Nothing was changed.",
   "integrations.preview.stale": "The integration changed while you were confirming. Review the updated plan and confirm again.",
+  "integrations.preview.catalogUnavailable": "The model catalog is not loaded yet, so this change cannot be planned. Load it to continue.",
+  "integrations.preview.loadCatalogRetry": "Load catalog and retry",
+  "integrations.preview.recovering": "Loading catalog…",
+  "integrations.action.chooseProfile": "Choose profile",
   "integrations.dialog.apply.title": "Apply this integration?",
   "integrations.dialog.apply.changes": "opencodex will add its managed provider settings to the client configuration.",
   "integrations.dialog.apply.breakage": "The client will use the models currently exposed by this opencodex instance.",
