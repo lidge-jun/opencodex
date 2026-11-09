@@ -35,10 +35,17 @@ const views = new WeakMap<OcxConfig, OcxConfig>();
 /**
  * Record that `view` is a request-scoped copy of `live`. A view resolves the live config's
  * factory at lookup time, so a later disable or re-activation of the live config still applies.
- * Nothing is stored on the config object itself: it stays cloneable (#7974).
+ * The view's `advisor` reads through to the live config: management writes replace that object
+ * (`config.advisor = ...`), so a copied reference would keep a revoked consent alive for the
+ * plan. Every other request-scoped override on the view is kept. Nothing is stored on the live
+ * config, and an accessor is still cloneable (#7974).
  */
 export function linkAdvisorPlanConfig<T extends OcxConfig>(live: OcxConfig, view: T): T {
-  views.set(view, views.get(live) ?? live);
+  const root = views.get(live) ?? live;
+  views.set(view, root);
+  if (view !== root) {
+    Object.defineProperty(view, "advisor", { get: () => root.advisor, enumerable: true, configurable: true });
+  }
   return view;
 }
 
