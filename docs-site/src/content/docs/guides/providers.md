@@ -1296,7 +1296,8 @@ using it here is an *unsupported* path. Meta does not authorize subscription cov
 outside its own client, how these calls settle is not observable from the API, and you
 should treat every call as billable against your account. Meta can also refuse the request
 outright with HTTP 403 and *"This API key is billed to a Muse Code subscription. Muse Code
-subscriptions cover requests from the Muse Code client only."* OpenCodex reports that as a
+subscriptions cover requests from the Muse Code client only. Use it in Muse Code, or use a
+pay-as-you-go API key for other clients."* OpenCodex reports that as a
 plan restriction on a valid credential, not a rejected or expired one, because no re-login
 can lift it: a Muse Code subscription key cannot serve any request outside the Muse Code
 client, and a pay-as-you-go Meta API key with the `meta-model` provider is the supported

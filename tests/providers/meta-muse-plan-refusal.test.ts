@@ -17,6 +17,9 @@ import { formatPassthroughUpstreamError } from "../../src/server/responses/passt
 import { formatErrorResponse } from "../../src/bridge";
 import { formatAdapterUpstreamFailure } from "../../src/server/responses/adapter-failure-message";
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
+import { deliverPassthroughResponse } from "../../src/server/responses/passthrough-delivery";
+import type { ConsumedComboFailure } from "../../src/server/responses/core-options";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { deriveRequestFailureAttribution } from "../../src/lib/request-failure-attribution";
 import { resendPermission } from "../../src/lib/request-failure-model";
 import { classifyPermanentAccountRefusal } from "../../src/oauth/account-auto-pause-policy";
@@ -82,6 +85,48 @@ describe("meta-muse plan refusal: integration paths", () => {
     expect(error.code).toBe("subscription_required");
     // A plan restriction cannot be retried successfully, so no waiting hint is invented.
     expect(failure.response.headers.get("retry-after")).toBeNull();
+  });
+
+  test("a passthrough combo leg stamps the plan cause on its own row", async () => {
+    const logCtx: { model: string; provider: string; causeHint?: RequestFailureCause; failureDetail?: unknown } = {
+      model: "",
+      provider: "",
+    };
+    let consumed: ConsumedComboFailure | undefined;
+    const request = new Request("http://127.0.0.1/v1/responses", { method: "POST" });
+    const response = await deliverPassthroughResponse(
+      { req: request, config: { providers: {} }, logCtx,
+        options: { admission: { kind: "loopback", source: "loopback" }, inboundWire: "responses",
+          comboAttempt: true, onConsumedComboFailure: (value: ConsumedComboFailure) => { consumed = value; } },
+      } as unknown as Parameters<typeof deliverPassthroughResponse>[0],
+      { authCtx: { kind: "none" } } as Parameters<typeof deliverPassthroughResponse>[1],
+      { parsed: { stream: true, modelId: "m1", _rawBody: {} }, clientRequestedStream: false,
+        translatorBudget: createTestTranslatorBudget(), route: {
+          provider: { adapter: "openai-responses", authMode: "key", baseUrl: "https://api.meta.example/v1" },
+          providerName: "meta-muse", modelId: "m1", staticPolicy: { model: {} },
+        } } as unknown as Parameters<typeof deliverPassthroughResponse>[2],
+      { requestBindings: new Map() } as Parameters<typeof deliverPassthroughResponse>[3],
+      {} as Parameters<typeof deliverPassthroughResponse>[4],
+      { plaintextV2AgentMessageToolNames: new Set(), plaintextV2AgentMessageAliasedToolNames: new Set(),
+        routedMuseToolNameAliases: new Map(), routedNamespaceToolAliases: new Map(),
+        commitReasoningReplayServingRoute() {}, recordTerminalOutcomes: false,
+      } as unknown as Parameters<typeof deliverPassthroughResponse>[5],
+      { upstreamResponse: new Response(REFUSAL_BODY, { status: 403, headers: { "content-type": "application/json" } }),
+        upstream: new AbortController(), request, connectMs: 0, imageGenCallAliases: new Map(),
+        selfNamedNamespaceScrubAuthorization: new Set(), authorizedBareNamespaceToolAliases: new Map(),
+        routedCustomToolNames: new Set(), routedCustomToolRepairNames: new Set(), declaredWireToolNames: new Set(),
+        routedToolSearchNames: new Set(), functionRepairSchemas: new Map(), declaredNamelessClientCallTypes: new Set(),
+        providerExecutedCallTypes: new Set(), declaredBareWireToolNames: new Set(),
+        recoverableBareCustomWireToolNames: new Set(), undeclaredToolGuardActive: true,
+        rememberPassthroughResponse: false, rememberPassthroughResponseChecked() {}, noteInspectedPayload() {},
+        normalizeFunctionCompletionJson: (value: string) => value, outboundRequestBody: "{}",
+      } as unknown as Parameters<typeof deliverPassthroughResponse>[6],
+    );
+    expect(consumed?.response).toBe(response);
+    expect(logCtx.causeHint).toBe("quota-exhausted");
+    // Only the cause crosses over: this path has never recorded a validation detail on the row.
+    expect(logCtx.failureDetail).toBeUndefined();
+    expect((await bodyOf(response)).code).toBe("subscription_required");
   });
 });
 

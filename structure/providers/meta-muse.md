@@ -32,7 +32,10 @@ covers public projection, shape refusals, cancellation and explicit paste recove
 
 `src/providers/meta-muse-plan-refusal.ts` recognizes Meta's runtime refusal (#8352): a 403
 whose OpenAI-compatible `error.message` is the whole "This API key is billed to a Muse Code
-subscription" sentence, bounded to 8 KiB with an allowlisted `type` and `code`. The match is
+subscription" sentence, at most 8,192 characters, where `type` and `code` may be absent or
+`null` and any other value must be on an allowlist. After HTTP error formatting the same verdict
+also accepts the `Provider error 403: ` framing of that envelope, the bare sentence, and the
+proxy's own replacement message, so a later formatting pass keeps the class. The match is
 deliberately narrow, in the shape of `src/providers/anthropic-billing-refusal.ts` — a missed
 match relays Meta's own text, while a loose one would relabel an unrelated permission denial.
 `classifyError` in `src/lib/errors.ts` answers `subscription_required` with one fixed sentence
