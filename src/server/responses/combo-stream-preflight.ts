@@ -338,6 +338,25 @@ export type ComboStreamPreflightResult =
    */
   | { kind: "read-error"; response: Response; error: unknown; stage: RequestFailureStage };
 
+/**
+ * The one non-streaming answer a combo inspects: an incomplete response that hit
+ * `max_output_tokens` before producing any output. Every other JSON body is accepted as it always
+ * was, so non-streaming combos keep their existing failover and pass-through behavior.
+ */
+function zeroOutputTokenLimitJson(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const record = payload as Record<string, unknown>;
+  const target = record.response && typeof record.response === "object" && !Array.isArray(record.response)
+    ? record.response as Record<string, unknown>
+    : record;
+  const incomplete = record.type === "response.incomplete" || record.status === "incomplete" || target.status === "incomplete";
+  const details = target.incomplete_details;
+  const reason = details && typeof details === "object" && !Array.isArray(details)
+    ? (details as { reason?: unknown }).reason
+    : undefined;
+  return incomplete && reason === "max_output_tokens" && retryableZeroOutputTerminal(payload);
+}
+
 async function preflightComboJsonResponse(
   response: Response,
   logCtx: RequestLogContext,
@@ -433,7 +452,7 @@ export async function preflightComboStreamResponse(
   }
   if (!isEventStream) {
     if (options?.inspectJsonResponse && (hasResponseMediaType(response.headers, "application/json") || !contentType)) {
-      return await preflightComboJsonResponse(response, logCtx, retryableTerminal, options);
+      return await preflightComboJsonResponse(response, logCtx, zeroOutputTokenLimitJson, options);
     }
     return { kind: "accepted", response };
   }

@@ -936,7 +936,9 @@ describe("combo stream preflight", () => {
     }
   });
 
-  test("inspectJsonResponse converts zero-output failed JSON into a retryable failure", async () => {
+  test("inspectJsonResponse leaves a zero-output failed JSON to the client as before", async () => {
+    // Only the empty max_output_tokens limit is inspected; any other JSON body keeps the answer a
+    // non-streaming combo has always returned.
     const jsonPayload = {
       id: "r1",
       status: "failed",
@@ -950,8 +952,8 @@ describe("combo stream preflight", () => {
     const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" }, undefined, {
       inspectJsonResponse: true,
     });
-    expect(result.kind).toBe("failed");
-    expect(result.response.status).toBe(502);
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.json()).toEqual(jsonPayload);
   });
 
   test("inspectJsonResponse enforces chunk cap before reaching byte limit", async () => {

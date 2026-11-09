@@ -130,7 +130,8 @@ reader and buffers only until one of these boundaries:
 SSE selection uses the [exact internal media-type match](inventory.md#internal-response-media-types).
 Explicit non-SSE types pass through unread by default, including parameters or longer subtypes containing the
 event-stream token. A caller can opt into inspecting direct non-streaming JSON responses via `inspectJsonResponse: true`
-(e.g., to fail over on a zero-output token limit before committing the response) or a response without a content type.
+or a response without a content type. That inspection fails over on exactly one shape, an `incomplete` response with
+`max_output_tokens` and no output; every other JSON body, including a zero-output `failed` one, is accepted unchanged as before.
 
 Native post-header reset recovery shares that boundary, because it is asking the same question about
 the same bytes. With `replayReadErrors`, a read error that arrives while the preflight is still
