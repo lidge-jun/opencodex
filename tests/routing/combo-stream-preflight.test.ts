@@ -61,6 +61,11 @@ describe("combo stream preflight", () => {
     expect((await preflightComboStreamResponse(failed(held, false), { model: "m1", provider: "a" })).kind).toBe("accepted");
     const call = [{ type: "function_call", call_id: "c1", name: "f", arguments: "{}" }];
     expect((await preflightComboStreamResponse(failed(call), { model: "m1", provider: "a" })).kind).toBe("accepted");
+    // A tool call on the event's own output counts too, even beside an empty snapshot output.
+    const topLevel = sse({ type: "response.failed", output: call, response: {
+      id: "r1", status: "failed", output: [], error: { code: "required_tool_contract_unsatisfied", message: "no tool call" },
+    } });
+    expect((await preflightComboStreamResponse(topLevel, { model: "m1", provider: "a" })).kind).toBe("accepted");
   });
 
   test("keeps only lifecycle preamble replayable and treats unknown output conservatively", () => {
