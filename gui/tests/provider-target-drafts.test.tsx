@@ -309,6 +309,51 @@ describe("Provider Settings drafts are scoped to their dashboard target", () => 
     expect(noteField().value).toBe("saved A");
     expect(store.read("/a", "shared-provider")?.draft.note).toBe("saved A");
   });
+
+  test("a clean saved refresh settles in one pass and shows the new saved values", async () => {
+    const store = createProviderDraftStore();
+    const update = async () => ({ ok: true });
+    await render(<ProviderSettings item={item("a", "saved A")} targetKey="/a" draftStore={store} onUpdateProvider={update} />);
+    expect(noteField().value).toBe("saved A");
+
+    // A clean form follows the saved item in the commit that delivers it. A reset that
+    // re-adopts on its own render would hit React's update-depth guard right here.
+    await render(<ProviderSettings item={item("a", "saved A2")} targetKey="/a" draftStore={store} onUpdateProvider={update} />);
+    expect(noteField().value).toBe("saved A2");
+    expect(host.textContent).not.toContain("unsaved changes");
+
+    // An equal refresh (new object, same saved values) leaves the form alone.
+    await render(<ProviderSettings item={item("a", "saved A2")} targetKey="/a" draftStore={store} onUpdateProvider={update} />);
+    expect(noteField().value).toBe("saved A2");
+    expect(host.textContent).not.toContain("unsaved changes");
+    expect(host.textContent).not.toContain("saved settings changed");
+  });
+
+  test("a dirty draft survives the preset endpoint choices arriving", async () => {
+    const store = createProviderDraftStore();
+    let finishPresets!: (response: Response) => void;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === "/a/api/provider-presets") return await new Promise<Response>(resolve => { finishPresets = resolve; });
+      if (path === "/a/api/provider-request-pacing") return Response.json({ enabled: false, queued: 0, nextSlotInMs: 0 });
+      return Response.json({});
+    }) as typeof fetch;
+    const update = async () => ({ ok: true });
+    await render(<ProviderSettings item={item("a", "saved A")} targetKey="/a" draftStore={store} apiBase="/a" onUpdateProvider={update} />);
+    await typeNote("typed before presets");
+
+    await act(async () => {
+      finishPresets(Response.json({ providers: [{ id: "shared-provider", baseUrlChoices: [
+        { id: "a", label: "A", baseUrl: "https://a.example.test/v1" },
+        { id: "b", label: "B", baseUrl: "https://b.example.test/v1" },
+      ] }] }));
+      await Promise.resolve();
+    });
+
+    expect(noteField().value).toBe("typed before presets");
+    expect(host.textContent).toContain("unsaved changes");
+    expect(store.read("/a", "shared-provider")?.draft.note).toBe("typed before presets");
+  });
 });
 
 type Editor = ReturnType<typeof useJsonConfigEditor>;

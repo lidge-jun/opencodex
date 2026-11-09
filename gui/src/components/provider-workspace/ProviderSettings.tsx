@@ -55,6 +55,11 @@ type PacingRule = { requestsPerMinute?: number; minIntervalMs?: number; maxConcu
 type PacingStatus = { enabled: boolean; queued: number; nextSlotInMs: number; lastStartedAt?: number; lastModelId?: string; keys?: KeyPacingStatus[] };
 type CursorHttpVersion = "http2" | "http1.1";
 
+/** One mounted form's token in the draft store; referential identity is the whole point. */
+function createProviderDraftOwner(): symbol {
+  return Symbol("provider-draft-owner");
+}
+
 type ProviderSettingsProps = {
   item: WorkspaceItem;
   availableModels?: string[];
@@ -96,11 +101,13 @@ function ProviderSettingsForm({
   item, availableModels = EMPTY_MODELS, apiBase, targetKey, targetLabel, draftStore, onUpdateProvider, onDirtyChange, onRegisterSave, onRegisterDiscard,
 }: ProviderSettingsProps & { targetKey: string; draftStore: ProviderDraftStore }) {
   const t = useT();
-  const ownerRef = useRef(Symbol("provider-draft-owner"));
+  // This mount's identity in the draft store. Created once per mount, so a newer
+  // mount for the same target supersedes an older one.
+  const [draftOwner] = useState(createProviderDraftOwner);
   const authorityRef = useRef(0);
   const [initial] = useState(() => {
     const base = providerSettingsDraftFromItem(item);
-    const restored = draftStore.claim(targetKey, item.name, ownerRef.current, { draft: base, baseline: base });
+    const restored = draftStore.claim(targetKey, item.name, draftOwner, { draft: base, baseline: base });
     return {
       draft: restored.draft,
       baseline: restored.baseline,
@@ -188,44 +195,45 @@ function ProviderSettingsForm({
   const conflict = (edited && baselineChanged) || pacingConflictPaths.length > 0;
   const targetKeyRef = useRef(targetKey);
   const baseUrlRef = useRef(baseUrl);
-  const editedRef = useRef(edited);
   const draftRef = useRef(draft);
   useLayoutEffect(() => {
     targetKeyRef.current = targetKey;
     baseUrlRef.current = baseUrl;
-    editedRef.current = edited;
     draftRef.current = draft;
   });
 
-  /* eslint-disable react-hooks/set-state-in-effect -- adopt saved values only when there is no draft */
-  useEffect(() => {
-    // A refresh must never overwrite what the user is typing. When the form is clean it
-    // follows the saved values, which is also how a completed save settles.
-    if (editedRef.current) return;
-    const next = providerSettingsDraftFromItem(item);
-    applyDraft(next);
-    setBaseline(next);
-    setEndpointChoice(matchChoiceId(baseUrlChoices, next.baseUrl));
-    setMsg(null);
-    setModeMsg(null);
-    // oxlint-disable-next-line react/react-compiler -- saved-field signature is the reset trigger
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- applyDraft is a render-local helper
-  }, [providerSettingsDraftSignature(providerSettingsDraftFromItem(item))]);
-  /* eslint-enable react-hooks/set-state-in-effect */
+  // Adopt saved values while rendering: the React pattern for a prop-driven reset.
+  // A clean form follows the saved item in the same commit, and a dirty draft keeps
+  // what the user typed, so the conflict banner can ask which side wins.
+  const savedDraft = providerSettingsDraftFromItem(item);
+  const savedSignature = providerSettingsDraftSignature(savedDraft);
+  const [syncedSignature, setSyncedSignature] = useState(savedSignature);
+  if (syncedSignature !== savedSignature) {
+    setSyncedSignature(savedSignature);
+    if (!edited) {
+      applyDraft(savedDraft);
+      setBaseline(savedDraft);
+      setEndpointChoice(matchChoiceId(baseUrlChoices, savedDraft.baseUrl));
+      setMsg(null);
+      setModeMsg(null);
+    }
+  }
 
   // Park this target's draft (or clear it once it matches the saved values). Memory only:
   // credentials must never be persisted by the dashboard without an explicit request.
   useEffect(() => {
-    draftStore.writeOwned(targetKey, item.name, ownerRef.current, { draft, baseline });
-  }, [baseline, draft, draftStore, edited, item.name, targetKey]);
+    draftStore.writeOwned(targetKey, item.name, draftOwner, { draft, baseline });
+  }, [baseline, draft, draftOwner, draftStore, edited, item.name, targetKey]);
 
-  // Account mode syncs on its own: a mode PATCH refresh must not reset an in-progress
-  // draft, so it is deliberately kept out of the form-reset effect above.
-  /* eslint-disable react-hooks/set-state-in-effect -- intentional split from the form reset */
-  useEffect(() => {
-    setAccountMode(item.codexAccountMode ?? "pool");
-  }, [item.codexAccountMode]);
-  /* eslint-enable react-hooks/set-state-in-effect */
+  // Account mode is adopted separately from the settings fields above: a mode PATCH
+  // refresh must not reset an in-progress draft, and the same render-phase pattern
+  // keeps the select on the saved value without a second render.
+  const savedAccountMode = item.codexAccountMode ?? "pool";
+  const [syncedAccountMode, setSyncedAccountMode] = useState(savedAccountMode);
+  if (syncedAccountMode !== savedAccountMode) {
+    setSyncedAccountMode(savedAccountMode);
+    setAccountMode(savedAccountMode);
+  }
 
   useEffect(() => {
     if (apiBase === undefined) return;
@@ -253,8 +261,6 @@ function ProviderSettingsForm({
       });
     return () => { cancelled = true; };
     // Remount per target/provider; the current draft base URL picks the endpoint choice.
-    // oxlint-disable-next-line react/react-compiler -- existing exhaustive-deps exception is intentional
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- a saved-field refresh must not re-run the preset read
   }, [apiBase, item.name]);
 
   useEffect(() => {
@@ -355,9 +361,9 @@ function ProviderSettingsForm({
         if (res.ok) {
           const stored = draftStore.read(saveTarget, saveProvider);
           if (stored && providerSettingsDraftSignature(stored.draft) !== submittedSignature) {
-            draftStore.writeOwned(saveTarget, saveProvider, ownerRef.current, { draft: stored.draft, baseline: draft });
+            draftStore.writeOwned(saveTarget, saveProvider, draftOwner, { draft: stored.draft, baseline: draft });
           } else {
-            draftStore.writeOwned(saveTarget, saveProvider, ownerRef.current, { draft, baseline: draft });
+            draftStore.writeOwned(saveTarget, saveProvider, draftOwner, { draft, baseline: draft });
           }
         }
         return res.ok;
@@ -367,9 +373,9 @@ function ProviderSettingsForm({
         const currentDraft = draftRef.current;
         setBaseline(draft);
         if (providerSettingsDraftSignature(currentDraft) === submittedSignature) {
-          draftStore.writeOwned(saveTarget, saveProvider, ownerRef.current, { draft, baseline: draft });
+          draftStore.writeOwned(saveTarget, saveProvider, draftOwner, { draft, baseline: draft });
         } else {
-          draftStore.writeOwned(saveTarget, saveProvider, ownerRef.current, { draft: currentDraft, baseline: draft });
+          draftStore.writeOwned(saveTarget, saveProvider, draftOwner, { draft: currentDraft, baseline: draft });
         }
       }
       return res.ok;
@@ -430,8 +436,8 @@ function ProviderSettingsForm({
     setBaseline(next);
     setMsg(null);
     authorityRef.current += 1;
-    draftStore.clearOwned(targetKey, item.name, ownerRef.current);
-    draftStore.claim(targetKey, item.name, ownerRef.current, { draft: next, baseline: next });
+    draftStore.clearOwned(targetKey, item.name, draftOwner);
+    draftStore.claim(targetKey, item.name, draftOwner, { draft: next, baseline: next });
     setEndpointChoice(matchChoiceId(baseUrlChoices, next.baseUrl));
   };
 
