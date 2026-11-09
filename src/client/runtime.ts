@@ -34,15 +34,11 @@ import { clientRestartRollbackAction, clientRestartSupervisor, createClientResta
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
 import { restoreLinkClientRouting } from "./stop-routing";
 import { markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } from "./sync-runtime";
-import { startRouteIntentTick, type RouteIntentTick } from "../integrations/route-intent-tick";
-import { startRouteIntentWatch, type RouteIntentRuntimeWatch } from "./route-intent-watch";
 
 let activeServer: Server<unknown> | null = null;
 let activePort: number | null = null;
 let activeSupervisor: ClientLinkSupervisor | null = null;
 let activeReporter: LinkParityReporter | null = null;
-let activeRouteWatch: RouteIntentRuntimeWatch | null = null;
-let activeRouteSync: RouteIntentTick | null = null;
 let recycleScheduled = false;
 let recycleTimer: ReturnType<typeof setTimeout> | undefined;
 let recycleFlight: Promise<void> | null = null;
@@ -171,9 +167,6 @@ export async function recycleStandalone(
   const replacementEnv = port && process.env.OCX_SERVICE !== "1"
     ? withSiblingMarker(standaloneRecycleEnv(process.env, disconnectedTokenFingerprint), issueSiblingHandoff)
     : null;
-  activeReporter?.stop(); activeReporter = null;
-  activeRouteWatch?.stop(); activeRouteWatch = null;
-  activeRouteSync?.stop(); activeRouteSync = null;
   try {
     await activeSupervisor?.stop();
   } catch (error) {
@@ -384,9 +377,6 @@ export async function startClientRuntime(
       if (linkMode && state.value.link && linkKey) {
         activeReporter = createLinkParityReporter({ connection: state.value, linkKey, runtimeStartedAt: CLIENT_RUNTIME_STARTED_AT });
         activeReporter.start();
-        const scheduler = startRouteIntentTick(state.value, { onApplied: () => activeReporter?.requestReport() });
-        activeRouteSync = scheduler;
-        activeRouteWatch = startRouteIntentWatch(state.value, linkKey, { requestSync: () => scheduler.requestSync() });
       }
     };
     if (!rollback) {
@@ -418,8 +408,6 @@ export async function startClientRuntime(
     credentialObservation = null;
     activeReporter?.stop();
     activeReporter = null;
-    activeRouteWatch?.stop(); activeRouteWatch = null;
-    activeRouteSync?.stop(); activeRouteSync = null;
     try {
       await activeSupervisor?.stop();
     } catch (error) {
@@ -499,8 +487,6 @@ export async function startClientRuntime(
       credentialObservation = null;
       activeReporter?.stop();
       activeReporter = null;
-      activeRouteWatch?.stop(); activeRouteWatch = null;
-      activeRouteSync?.stop(); activeRouteSync = null;
       try {
         await activeSupervisor?.stop();
       } catch (error) {

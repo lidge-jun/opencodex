@@ -1835,8 +1835,6 @@ references are preserved. Flattening is lossy: branch constraints
 disappear and later property definitions win, so tools must validate arguments. Existing Zen and
 Azure schema compatibility rules remain in effect.
 
-See [Verify a custom remote gateway](/guides/custom-gateway/) for the setup and validation checklist.
-
 ## Approval reviewer per provider
 
 Codex asks a second model to review approval requests, and takes that reviewer from
@@ -1902,9 +1900,7 @@ Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code, and any a6api-
 or Abliteration custom provider.
 
 **Kimi Coding Plan quota.** Account login and API-key providers on the canonical
-`https://api.kimi.com/coding/v1` endpoint read `/usages`. API-key providers on the regional
-`https://api.kimi.ai/coding/v1` endpoint read `/usages` from that same origin; account login
-stays on `api.kimi.com`. Plans that report
+`https://api.kimi.com/coding/v1` endpoint read `/usages`. Plans that report
 `usages.limit_month_total` (or `monthTotal`) show a monthly utilization bar, with
 `limit_month_code` (or `monthCode`) as the fallback when total usage is unavailable.
 The `used_ratio` / `usedRatio` fraction must be in `[0, 1]` before conversion to a consumed

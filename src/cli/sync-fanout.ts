@@ -2,7 +2,6 @@ import { compareStrictSemver, parseStrictSemver } from "../lib/strict-semver";
 import type { LinkRecord, LinkStore } from "../link/store";
 import type { LinkStatusDto } from "../link/status-projection";
 import { LinkStatusError } from "./sync-link-status";
-import { ROUTE_OVERWRITE_MIN_CHILD_VERSION } from "../link/remote-windows";
 
 export const REMOTE_LINK_SYNC_MESSAGE = "Remote Link Home catalog synchronized.";
 export const STALE_REMOTE_CATALOG_MESSAGE = "Home unavailable; retained and applied the last-known-good remote catalog (stale).";
@@ -51,9 +50,6 @@ export function classifySyncResult(result: { code: number; stdout: string; stder
   if (code === 121) {
     if (last === "ocx-fanout:child-ocx-lacks-expect-link") return skipped("child-ocx-lacks-expect-link");
     if (last === "ocx-fanout:child-ocx-version-unknown") return skipped("child-ocx-version-unknown");
-    // --overwrite-conflict was refused before any sync: an older ocx would ignore it.
-    if (last === "ocx-fanout:child-ocx-lacks-overwrite") return skipped("child-ocx-lacks-overwrite");
-    if (last === "ocx-fanout:child-ephemeral-no-overwrite") return skipped("child-ephemeral-no-overwrite");
     return failure("child-sync-failed");
   }
   const markers = lines.map(line => /^ocx-fanout:selected:(.+)$/.exec(line)).filter(match => match !== null);
@@ -91,8 +87,6 @@ export type FanoutDocument = { schema: "ocx.sync.fanout/1"; home: HomeResult; fa
 
 function childSkipHint(reason: string | null, alias: string): string {
   if (reason === "child-ocx-lacks-expect-link") return `Update OpenCodex on ${alias} to >= 2.93.0 using the installer that owns its selected ocx. For Desktop on headless Windows, use Check for Updates in the signed-in Desktop tray.`;
-  if (reason === "child-ocx-lacks-overwrite") return `Update OpenCodex on ${alias} to >= ${ROUTE_OVERWRITE_MIN_CHILD_VERSION} to sync with --overwrite-conflict, or sync without it.`;
-  if (reason === "child-ephemeral-no-overwrite") return `${alias} runs the ephemeral ocx-child, which has no route intent to overwrite; sync without --overwrite-conflict.`;
   if (reason === "child-updating") return "Wait for the Child update to finish, then retry sync.";
   if (reason === "child-link-mismatch:pending_operation" || reason === "child-link-mismatch:disconnect_pending") return "Wait for the Child's link operation to finish, then check its link and retry sync.";
   if (reason === "child-link-mismatch:disconnected" || reason === "child-link-mismatch:other_link") return "Please re-link this Child to this Home, then retry sync.";

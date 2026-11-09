@@ -1,4 +1,3 @@
-import type { RouteClientId } from "./route-intent";
 import { Buffer } from "node:buffer";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 
@@ -211,27 +210,16 @@ Get-ChildItem -LiteralPath $dir -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{
 `);
 }
 
-/**
- * The first OpenCodex release whose `ocx sync` understands --overwrite-conflict and
- * --overwrite-client; an earlier one ignores both and reports a plain sync as success. The
- * lightweight ocx-child supports neither and never reads route intent.
- */
-export const ROUTE_OVERWRITE_MIN_CHILD_VERSION = "2.100.0";
-
-export function windowsPinnedSyncArgv(linkId: string, overwriteConflict = false, overwriteClient?: RouteClientId): string[] {
-  // Overwrite needs a Child that honours it: refuse ocx-child and older ocx before syncing.
-  const minimum = overwriteConflict ? ROUTE_OVERWRITE_MIN_CHILD_VERSION.split(".").map(part => `'${part}'`).join(",") : "'2','93','0'";
-  const lacks = overwriteConflict ? "ocx-fanout:child-ocx-lacks-overwrite" : "ocx-fanout:child-ocx-lacks-expect-link";
-  const ephemeral = overwriteConflict ? String.raw`if(([IO.Path]::GetFileName($x)).ToLowerInvariant().StartsWith('ocx-child')){[Console]::Error.WriteLine('ocx-fanout:child-ephemeral-no-overwrite');exit 121};` : "";
-  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: ["sync", "--expect-link", linkId, "--json", ...(overwriteConflict ? ["--overwrite-conflict"] : []), ...(overwriteClient ? ["--overwrite-client", overwriteClient] : [])] }) + OCX_CANDIDATES + String.raw`
+export function windowsPinnedSyncArgv(linkId: string): string[] {
+  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: ["sync", "--expect-link", linkId, "--json"] }) + OCX_CANDIDATES + String.raw`
 foreach($x in ($c|select -Unique)){
- if(![IO.File]::Exists($x)){continue};` + ephemeral + String.raw`$v=[OcxJob]::V($x);if($null -eq $v){continue};$v=$v.Trim();if($v.StartsWith('opencodex ')){$v=$v.Substring(10)}
+ if(![IO.File]::Exists($x)){continue};$v=[OcxJob]::V($x);if($null -eq $v){continue};$v=$v.Trim();if($v.StartsWith('opencodex ')){$v=$v.Substring(10)}
  $m=[regex]::Match($v,'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$')
  $bad=(!$m.Success -or $v.Length -gt 128);if(!$bad -and $m.Groups[4].Success){foreach($p in $m.Groups[4].Value.Split('.')){if(!$p -or ($p -match '^\d+$' -and $p.Length -gt 1 -and $p[0] -eq '0')){$bad=$true}}}
  if($bad){[Console]::Error.WriteLine('ocx-fanout:child-ocx-version-unknown');exit 121}
- $a=@($m.Groups[1].Value,$m.Groups[2].Value,$m.Groups[3].Value);$b=@(` + minimum + String.raw`);$cmp=0
+ $a=@($m.Groups[1].Value,$m.Groups[2].Value,$m.Groups[3].Value);$b=@('2','93','0');$cmp=0
  for($i=0;$i -lt 3;$i++){if($a[$i].Length -ne $b[$i].Length){$cmp=$a[$i].Length-$b[$i].Length;break};$cmp=[string]::CompareOrdinal($a[$i],$b[$i]);if($cmp -ne 0){break}}
- if($cmp -lt 0 -or ($cmp -eq 0 -and $m.Groups[4].Success)){[Console]::Error.WriteLine('` + lacks + String.raw`');exit 121}
+ if($cmp -lt 0 -or ($cmp -eq 0 -and $m.Groups[4].Success)){[Console]::Error.WriteLine('ocx-fanout:child-ocx-lacks-expect-link');exit 121}
  [Console]::Error.WriteLine('ocx-fanout:selected:'+$v);[Console]::Out.WriteLine('ocx-fanout:stdout-begin');Invoke-Native $x @($d.args)
 };exit 127
 `);
