@@ -108,3 +108,20 @@ D20 Dashboard: GitHub release download totals follow pagination (per_page=100, f
   gets one budget per /64; requests without cf-connecting-ip all share one budget.
 - Installs without an installer (the standalone `ocx.exe`, npm) meet SignPath's install-time conditions
   only through the first-run notice (CLI prompt or dashboard popup); D21 accepts that reading.
+
+## Delivery (round 1)
+
+| Layer | Fix commit | Merged upward as |
+| --- | --- | --- |
+| 1 plan | `3e4597d1ba` | — |
+| 2 client core | `9e0284d392` | `64ac26aa7d` (layer 1 merged in) |
+| 3 GUI | `5b6092ca14` | `ea8175f2b7` |
+| 4 collector | `057c57e8be` | `54019606ff` |
+| 5 docs | `d8fc29c2c1` | `4ebb3c1499` |
+| 6 dashboard | `ea78acfa0f` | `bed30cf2b7` |
+
+The layer 5 merge conflicted where layers 2 and 5 both rewrote the privacy statement (README, seven
+translations, `readme/i18n-manifest.json`, `code-signing.md`, Turkish `code-signing.md`) and
+`structure/telemetry.md`. Layer 5's text was kept: it carries the same D12 statement plus the guide link,
+and its structure doc is a superset of layer 2's. Layer 2's README test passes against it. Branches move by
+merge commits, never by force-push.

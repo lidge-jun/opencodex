@@ -9,7 +9,7 @@ practice and where request failures occur. Project-wide daily aggregates (active
 counts, a 365-day active-install heatmap, active minutes, request outcomes, five-bucket token
 totals, daily and range provider-kind and model-family shares, top-50 version counts, OS/CPU
 platform and install-channel counts, and error-cause counts) are served publicly by the
-collector's read-only `GET /v1/stats` endpoint for the public project dashboard; per-day install
+collector's read-only `GET /v1/stats` endpoint for the [public project dashboard](/dashboard/); per-day install
 hashes (`installDayHash`) and rate-limit hashes (`ip_hash`) are never returned by `/v1/stats`.
 
 Telemetry is **on by default**, and **nothing is sent until a person has seen the notice**.
