@@ -25,7 +25,7 @@ const DEFINITE_CONTEXT_OVERFLOW_PHRASES = [
 /** Provider wording that says the conversation has reached/passed its model's context capacity. */
 const CONTEXT_WINDOW_POSITION_VERDICTS: readonly RegExp[] = [
   /\b(?:history|conversation|input|prompt|request|turn|messages?)\b[^;!?\n.]{0,120}\b(?:at\s+or\s+past|at\s+(?:the\s+)?limit|past|over|beyond|exceed(?:s|ed|ing)?|reached)\b[^;!?\n.]{0,60}\b(?:(?:the|this|selected|its)\s+)?(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\b/i,
-  /\b(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\s+(?:(?:is|are|was|were|has\s+been|have\s+been)\s+)?(?:full(?!\s+of\b)|exceed(?:s|ed|ing)?|exhausted)\b/i,
+  /\b(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\s+(?:(?:is|are|was|were|has\s+been|have\s+been)\s+)?(?:(?:now|currently|already|completely|fully|entirely|still)\s+)?(?:full(?![-\w]|\s+(?:of|size)\b)|exceed(?:s|ed|ing)?|exhausted|at\s+its\s+limit)\b/i,
 ];
 
 /** Explicit provider wording that an input is too long for a model's context capacity. */
@@ -79,7 +79,7 @@ const MODAL_PROHIBITION = /\b(?:must|should|shall|may)\s+(?:not|never)\b|\b(?:mu
 const OVERFLOW_COUNT_EVIDENCE = /\b\d+\s*(?:tokens?)?\s*(?:>|exceeds?|past)\s*\d+\b|\b(?:exceeded|exceeds|past|over)\s+(?:the\s+)?(?:limit|maximum|context\s+(?:window|length|limit))\s+by\s+\d+\b/i;
 
 const OVERFLOW_PREDICATE = /\b(?:at\s+or\s+past|at\s+(?:the\s+)?limit|past|over|beyond|exceed(?:s|ed|ing)?|reached|too\s+long|full|exhausted)\b/i;
-const CLAUSE_BOUNDARY = /[:;!?.\n]|\b(?:and|but|because|although|though|while|whereas|since)\b/gi;
+const CLAUSE_BOUNDARY = /[,():;!?.\n]|\b(?:and|but|because|although|though|while|whereas|since)\b/gi;
 
 /** Negation must describe the matched verdict, not a separate statement earlier in its clause. */
 function isNegatedAt(text: string, start: number, end: number): boolean {
