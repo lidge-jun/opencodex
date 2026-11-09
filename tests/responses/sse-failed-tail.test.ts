@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { inspectResponseLogJson, type RequestLogContext } from "../../src/server/request-log";
+import { inspectResponseLogJson, inspectResponseLogSsePayload, type RequestLogContext } from "../../src/server/request-log";
 import { relaySseWithFailedTail, relayWithAbort } from "../../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
 import { consumeForInspection, createSseInspector, MAX_TAIL_ERROR_MESSAGE_CHARS, upstreamErrorTailFrame } from "../../src/server/relay";
@@ -8,7 +8,7 @@ import { codexWsUpstreamFetch, streamingInit } from "../helpers/ws-upstream-fixt
 import { readCodexWsStage } from "../../src/server/responses/codex-ws-wire";
 import { TERMINAL_REFUSAL_FALLBACK_MESSAGE } from "../../src/lib/errors";
 import { TranslatorBudgetExceededError } from "../../src/lib/translator-budget";
-import { createOutboundCredentialMask } from "../../src/server/responses/terminal-error-redaction";
+import { createOutboundCredentialMask, createTerminalErrorRedactionBlockRewrite } from "../../src/server/responses/terminal-error-redaction";
 import { pumpResponsesSseToWebSocket, type WsData } from "../../src/server/ws-bridge";
 import type { ServerWebSocket } from "bun";
 
@@ -449,117 +449,6 @@ describe("relaySseWithFailedTail", () => {
     expect(doneEvents(out)).toHaveLength(1);
     expect(out).not.toContain("event: response.failed");
   });
-
-  /** Client relay output plus the terminal the tee inspection branch or eager hooks reported. */
-  async function relayAndInspect(mode: "tee" | "eager", raw: string): Promise<{ out: string; reported: string[] }> {
-    const reported: string[] = [];
-    const src = sourceStream([raw]);
-    if (mode === "eager") {
-      const hooks = { ...parityHooks, onSynthetic: (kind: string) => { reported.push(kind); } };
-      return { out: await drain(relaySseEagerBounded(src, new AbortController(), hooks)), reported };
-    }
-    const [client, inspection] = src.tee();
-    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
-    const inspected = new Promise<void>(resolve => consumeForInspection(inspection, status => { reported.push(status); }, undefined, resolve, log));
-    const out = await drain(relaySseWithFailedTail(client, new AbortController()));
-    await inspected;
-    return { out, reported };
-  }
-
-  test.each(["tee", "eager"] as const)("%s untyped error envelope ends in response.failed, not adapter_eof (#8216)", async (mode) => {
-    // Captured gateway shape: heartbeat, an `error` object with no root `type`, DONE, EOF.
-    const raw = ": PING\n\n"
-      + 'data: {"error":{"message":"openai_error","type":"bad_response_status_code","param":"","code":"bad_response_status_code"}}\n\n'
-      + "data: [DONE]\n\n";
-    const { out, reported } = await relayAndInspect(mode, raw);
-
-    expect(failedMessage(out)).toBe("openai_error");
-    expect(out).toContain('"code":"upstream_server_error"');
-    expect(terminalEvents(out)).toEqual(["response.failed"]);
-    expect(doneEvents(out)).toHaveLength(1);
-    expect(out).not.toContain("adapter_eof");
-    expect(reported).toEqual(["failed"]);
-  });
-
-  test.each(["tee", "eager"] as const)("%s typed event carrying an error field is not a bare error (#8216)", async (mode) => {
-    const raw = 'data: {"type":"response.in_progress","response":{"status":"in_progress"},'
-      + '"error":{"message":"not a failure","code":"server_error"}}\n\n';
-    const { out, reported } = await relayAndInspect(mode, raw);
-
-    expect(terminalEvents(out)).toEqual(["response.incomplete"]);
-    expect(out).toContain('"reason":"adapter_eof"');
-    expect(out).not.toContain("event: response.failed");
-    expect(doneEvents(out)).toHaveLength(1);
-    expect(reported).toEqual(["incomplete"]);
-  });
-
-  test.each(["tee", "eager"] as const)("%s untyped refusal code without a message reports failed on both readers (#8216)", async (mode) => {
-    // The client tail already carried the refusal; tee inspection used to read only the message and
-    // reported `incomplete`, which account health counts as a non-failure.
-    const raw = 'data: {"error":{"code":"invalid_prompt"}}\n\n';
-    const { out, reported } = await relayAndInspect(mode, raw);
-
-    expect(terminalEvents(out)).toEqual(["response.failed"]);
-    expect(out).toContain('"code":"invalid_prompt"');
-    expect(failedMessage(out)).toBe(TERMINAL_REFUSAL_FALLBACK_MESSAGE);
-    expect(reported).toEqual(["failed"]);
-  });
-
-  test.each([
-    ["tee", "untyped"], ["eager", "untyped"], ["tee", "typed"], ["eager", "typed"],
-  ] as const)("%s %s error with a code but no message still ends in response.failed", async (mode, shape) => {
-    const raw = shape === "untyped"
-      ? 'data: {"error":{"code":"bad_response_status_code"}}\n\n'
-      : 'data: {"type":"error","code":"bad_response_status_code"}\n\n';
-    const { out, reported } = await relayAndInspect(mode, raw);
-
-    expect(terminalEvents(out)).toEqual(["response.failed"]);
-    expect(out).not.toContain("adapter_eof");
-    expect(out).toContain('"code":"upstream_server_error"');
-    // The upstream's own code is the only diagnostic it sent; keep it in the message.
-    expect(failedMessage(out)).toContain("bad_response_status_code");
-    expect(doneEvents(out)).toHaveLength(1);
-    expect(reported).toEqual(["failed"]);
-  });
-
-  test.each(["tee", "eager"] as const)("%s untyped cyber_policy error is rewritten as the policy terminal (#8216)", async (mode) => {
-    const raw = 'data: {"error":{"type":"invalid_request_error","code":"cyber_policy","message":"blocked by policy"}}\n\n'
-      + 'data: {"type":"response.output_text.delta","delta":"late"}\n\n';
-    const { out, reported } = await relayAndInspect(mode, raw);
-
-    expect(terminalEvents(out)).toEqual(["response.failed"]);
-    expect(out).not.toContain('data: {"error":');
-    expect(out).not.toContain("late");
-    expect(failedMessage(out)).toBe("blocked by policy");
-    expect(out).toContain('"code":"cyber_policy"');
-    expect(out).toContain('"retryable":false');
-    expect(doneEvents(out)).toHaveLength(1);
-    // The rewritten frame is a real terminal: tee inspection reports it, and eager synthesizes none.
-    expect(reported).toEqual(mode === "tee" ? ["failed"] : []);
-  });
-
-  test.each(["tee", "eager"] as const)("%s untyped error envelope reaches a WebSocket client as response.failed (#8216)", async (mode) => {
-    const raw = 'data: {"type":"response.created","response":{"id":"r1","status":"in_progress"}}\n\n'
-      + 'data: {"error":{"message":"openai_error","code":"bad_response_status_code"}}\n\n'
-      + "data: [DONE]\n\n";
-    const src = sourceStream([raw]);
-    const relayed = mode === "tee"
-      ? relaySseWithFailedTail(src, new AbortController())
-      : relaySseEagerBounded(src, new AbortController(), parityHooks);
-    const sent: string[] = [];
-    const terminals: string[] = [];
-    const ws = {
-      readyState: 1,
-      data: {} as WsData,
-      send(message: string) { sent.push(message); return 1; },
-    } as unknown as ServerWebSocket<WsData>;
-    await pumpResponsesSseToWebSocket(ws, relayed, { onTerminal: status => { terminals.push(status); } });
-
-    const types = sent.map(frame => (JSON.parse(frame) as { type?: unknown }).type);
-    expect(types).toEqual(["response.created", "response.failed"]);
-    expect((JSON.parse(sent[1]!) as { response: { error: { message: string } } }).response.error.message).toBe("openai_error");
-    expect(terminals).toEqual(["failed"]);
-  });
 });
 
 
@@ -828,6 +717,116 @@ describe("upstream refusal terminal mapping (#5176)", () => {
       expect(out).not.toContain('"code":"upstream_reset"');
     },
   );
+  /** Client relay output plus the terminal the tee inspection branch or eager hooks reported. */
+  async function relayAndInspect(mode: "tee" | "eager", raw: string): Promise<{ out: string; reported: string[] }> {
+    const reported: string[] = [];
+    const src = sourceStream([raw]);
+    if (mode === "eager") {
+      const hooks = { ...parityHooks, onSynthetic: (kind: string) => { reported.push(kind); } };
+      return { out: await drain(relaySseEagerBounded(src, new AbortController(), hooks)), reported };
+    }
+    const [client, inspection] = src.tee();
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    const inspected = new Promise<void>(resolve => consumeForInspection(inspection, status => { reported.push(status); }, undefined, resolve, log));
+    const out = await drain(relaySseWithFailedTail(client, new AbortController()));
+    await inspected;
+    return { out, reported };
+  }
+
+  test.each(["tee", "eager"] as const)("%s untyped error envelope ends in response.failed, not adapter_eof (#8216)", async (mode) => {
+    // Captured gateway shape: heartbeat, an `error` object with no root `type`, DONE, EOF.
+    const raw = ": PING\n\n"
+      + 'data: {"error":{"message":"openai_error","type":"bad_response_status_code","param":"","code":"bad_response_status_code"}}\n\n'
+      + "data: [DONE]\n\n";
+    const { out, reported } = await relayAndInspect(mode, raw);
+
+    expect(failedMessage(out)).toBe("openai_error");
+    expect(out).toContain('"code":"upstream_server_error"');
+    expect(terminalEvents(out)).toEqual(["response.failed"]);
+    expect(doneEvents(out)).toHaveLength(1);
+    expect(out).not.toContain("adapter_eof");
+    expect(reported).toEqual(["failed"]);
+  });
+
+  test.each(["tee", "eager"] as const)("%s typed event carrying an error field is not a bare error (#8216)", async (mode) => {
+    const raw = 'data: {"type":"response.in_progress","response":{"status":"in_progress"},'
+      + '"error":{"message":"not a failure","code":"server_error"}}\n\n';
+    const { out, reported } = await relayAndInspect(mode, raw);
+
+    expect(terminalEvents(out)).toEqual(["response.incomplete"]);
+    expect(out).toContain('"reason":"adapter_eof"');
+    expect(out).not.toContain("event: response.failed");
+    expect(doneEvents(out)).toHaveLength(1);
+    expect(reported).toEqual(["incomplete"]);
+  });
+
+  test.each(["tee", "eager"] as const)("%s untyped refusal code without a message reports failed on both readers (#8216)", async (mode) => {
+    // The client tail already carried the refusal; tee inspection used to read only the message and
+    // reported `incomplete`, which account health counts as a non-failure.
+    const raw = 'data: {"error":{"code":"invalid_prompt"}}\n\n';
+    const { out, reported } = await relayAndInspect(mode, raw);
+
+    expect(terminalEvents(out)).toEqual(["response.failed"]);
+    expect(out).toContain('"code":"invalid_prompt"');
+    expect(failedMessage(out)).toBe(TERMINAL_REFUSAL_FALLBACK_MESSAGE);
+    expect(reported).toEqual(["failed"]);
+  });
+
+  test.each([
+    ["tee", "untyped"], ["eager", "untyped"], ["tee", "typed"], ["eager", "typed"],
+  ] as const)("%s %s error with a code but no message still ends in response.failed", async (mode, shape) => {
+    const raw = shape === "untyped"
+      ? 'data: {"error":{"code":"bad_response_status_code"}}\n\n'
+      : 'data: {"type":"error","code":"bad_response_status_code"}\n\n';
+    const { out, reported } = await relayAndInspect(mode, raw);
+
+    expect(terminalEvents(out)).toEqual(["response.failed"]);
+    expect(out).not.toContain("adapter_eof");
+    expect(out).toContain('"code":"upstream_server_error"');
+    // The upstream's own code is the only diagnostic it sent; keep it in the message.
+    expect(failedMessage(out)).toContain("bad_response_status_code");
+    expect(doneEvents(out)).toHaveLength(1);
+    expect(reported).toEqual(["failed"]);
+  });
+
+  test.each(["tee", "eager"] as const)("%s untyped cyber_policy error is rewritten as the policy terminal (#8216)", async (mode) => {
+    const raw = 'data: {"error":{"type":"invalid_request_error","code":"cyber_policy","message":"blocked by policy"}}\n\n'
+      + 'data: {"type":"response.output_text.delta","delta":"late"}\n\n';
+    const { out, reported } = await relayAndInspect(mode, raw);
+
+    expect(terminalEvents(out)).toEqual(["response.failed"]);
+    expect(out).not.toContain('data: {"error":');
+    expect(out).not.toContain("late");
+    expect(failedMessage(out)).toBe("blocked by policy");
+    expect(out).toContain('"code":"cyber_policy"');
+    expect(out).toContain('"retryable":false');
+    expect(doneEvents(out)).toHaveLength(1);
+    // The rewritten frame is a real terminal: tee inspection reports it, and eager synthesizes none.
+    expect(reported).toEqual(mode === "tee" ? ["failed"] : []);
+  });
+
+  test.each(["tee", "eager"] as const)("%s untyped error envelope reaches a WebSocket client as response.failed (#8216)", async (mode) => {
+    const raw = 'data: {"type":"response.created","response":{"id":"r1","status":"in_progress"}}\n\n'
+      + 'data: {"error":{"message":"openai_error","code":"bad_response_status_code"}}\n\n'
+      + "data: [DONE]\n\n";
+    const src = sourceStream([raw]);
+    const relayed = mode === "tee"
+      ? relaySseWithFailedTail(src, new AbortController())
+      : relaySseEagerBounded(src, new AbortController(), parityHooks);
+    const sent: string[] = [];
+    const terminals: string[] = [];
+    const ws = {
+      readyState: 1,
+      data: {} as WsData,
+      send(message: string) { sent.push(message); return 1; },
+    } as unknown as ServerWebSocket<WsData>;
+    await pumpResponsesSseToWebSocket(ws, relayed, { onTerminal: status => { terminals.push(status); } });
+
+    const types = sent.map(frame => (JSON.parse(frame) as { type?: unknown }).type);
+    expect(types).toEqual(["response.created", "response.failed"]);
+    expect((JSON.parse(sent[1]!) as { response: { error: { message: string } } }).response.error.message).toBe("openai_error");
+    expect(terminals).toEqual(["failed"]);
+  });
 });
 
 
@@ -863,6 +862,132 @@ describe("bare upstream rate-limit/overload EOF diagnostics (#6740)", () => {
       expect(log.terminalHttpStatus).toBe(status);
     });
   }
+});
+
+describe("untyped upstream error envelopes", () => {
+  for (const mode of ["tee", "eager"] as const) {
+    test(`${mode} keeps a code-only quota failure in the client and account outcome`, async () => {
+      const src = sourceStream(['data: {"error":{"code":"rate_limit_exceeded"}}\n\n']);
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      const outcomes: Array<[string, number]> = [];
+      const onTerminal = (kind: string, status?: number) => outcomes.push([kind, status ?? log.terminalHttpStatus ?? 502]);
+      let done: Promise<void> = Promise.resolve();
+      let relayed: ReadableStream<Uint8Array>;
+      if (mode === "tee") {
+        const [client, inspection] = src.tee();
+        done = new Promise(resolve => consumeForInspection(inspection, onTerminal, undefined, resolve, log));
+        relayed = relaySseWithFailedTail(client, new AbortController());
+      } else {
+        const inspector = createSseInspector({ logCtx: log, onTerminal });
+        relayed = relaySseEagerBounded(src, new AbortController(), { ...parityHooks,
+          inspectChunk: chunk => inspector.feed(chunk), finishInspection: () => inspector.finish(),
+          sawTerminal: () => inspector.reported(), onSynthetic: (kind, reason) => onTerminal(kind, reason === "upstream_error" ? log.terminalHttpStatus : 502),
+        });
+      }
+      const text = await drain(relayed);
+      await done;
+      expect(terminalEvents(text)).toEqual(["response.failed"]);
+      expect(text).toContain('"code":"rate_limit_exceeded"');
+      expect(outcomes).toEqual([["failed", 429]]);
+      expect(classifyCodexUpstreamOutcome(outcomes[0]![1])).toBe("quota");
+    });
+
+    test(`${mode} keeps a later genuine terminal authoritative over untyped error copy`, async () => {
+      const src = sourceStream([
+        'data: {"error":{"code":"rate_limit_exceeded","message":"cyber policy blocked"}}\n\n',
+        'event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+      ]);
+      const out = await drain(mode === "tee" ? relaySseWithFailedTail(src, new AbortController())
+        : relaySseEagerBounded(src, new AbortController(), parityHooks));
+      expect(terminalEvents(out)).toEqual(["response.completed"]);
+      expect(out).not.toContain('"code":"cyber_policy"');
+    });
+
+    test(`${mode} records a refusal rather than the reset that follows it`, async () => {
+      const src = sourceStream(['data: {"error":{"message":"blocked by our safety systems"}}\n\n'], { failAfter: true });
+      const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+      const outcomes: Array<[string, number]> = [];
+      const onTerminal = (kind: string, status?: number) => outcomes.push([kind, status ?? log.terminalHttpStatus ?? 502]);
+      let done: Promise<void> = Promise.resolve();
+      let relayed: ReadableStream<Uint8Array>;
+      if (mode === "tee") {
+        const [client, inspection] = src.tee();
+        done = new Promise(resolve => consumeForInspection(inspection, onTerminal, undefined, resolve, log));
+        relayed = relaySseWithFailedTail(client, new AbortController());
+      } else {
+        const inspector = createSseInspector({ logCtx: log, onTerminal });
+        relayed = relaySseEagerBounded(src, new AbortController(), { ...parityHooks,
+          inspectChunk: chunk => inspector.feed(chunk), finishInspection: () => inspector.finish(),
+          sawTerminal: () => inspector.reported(), onSynthetic: (kind, reason) => onTerminal(kind, reason === "upstream_error" ? log.terminalHttpStatus : 502),
+        });
+      }
+      const text = await drain(relayed);
+      await done;
+      expect(terminalEvents(text)).toEqual(["response.failed"]);
+      expect(text).toContain('"code":"invalid_prompt"');
+      expect(outcomes).toEqual([["failed", 400]]);
+      expect(classifyCodexUpstreamOutcome(outcomes[0]![1])).toBe("caller");
+    });
+
+    test(`${mode} does not infer policy from copy when an explicit quota code is present`, async () => {
+      const src = sourceStream(['data: {"error":{"code":"rate_limit_exceeded","message":"blocked by our safety systems"}}\n\n']);
+      const text = await drain(mode === "tee" ? relaySseWithFailedTail(src, new AbortController())
+        : relaySseEagerBounded(src, new AbortController(), parityHooks));
+      expect(terminalEvents(text)).toEqual(["response.failed"]);
+      const terminal = JSON.parse(text.split("event: response.failed\ndata: ")[1]!.split("\n")[0]!).response;
+      expect(terminal.error.code).toBe("rate_limit_exceeded");
+      expect(terminal.retryable).toBeUndefined();
+    });
+
+    test(`${mode} does not treat a typed non-error event with an error field as a bare error`, async () => {
+      const src = sourceStream(['data: {"type":"response.in_progress","error":{"message":"fixture"}}\n\n']);
+      const text = await drain(mode === "tee" ? relaySseWithFailedTail(src, new AbortController())
+        : relaySseEagerBounded(src, new AbortController(), parityHooks));
+      expect(terminalEvents(text)).toEqual(["response.incomplete"]);
+      expect(text).toContain('"reason":"adapter_eof"');
+    });
+  }
+
+  test("untyped buffered JSON does not set provisional SSE account status", () => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    inspectResponseLogJson(log, '{"error":{"code":"rate_limit_exceeded"}}');
+    expect(log.terminalHttpStatus).toBeUndefined();
+  });
+
+  test("later bare error evidence updates the provisional account status", () => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    inspectResponseLogSsePayload(log, '{"error":{"code":"rate_limit_exceeded"}}');
+    expect(log.terminalHttpStatus).toBe(429);
+    inspectResponseLogSsePayload(log, '{"error":{"code":"invalid_prompt"}}');
+    expect(log.terminalHttpStatus).toBe(400);
+    inspectResponseLogSsePayload(log, '{"type":"response.completed","response":{"status":"completed"}}');
+    expect(log.terminalHttpStatus).toBeUndefined();
+  });
+
+  test.each([
+    [{ type: "invalid_request_error", message: "fixture" }, 400],
+    [{ type: "authentication_error", message: "fixture" }, 401],
+    [{ type: "permission_error", message: "fixture" }, 403],
+    [{ type: "not_found_error", message: "fixture" }, 404],
+    [{ code: "rate_limit_exceeded" }, 429],
+    [{ code: "server_is_overloaded" }, 503],
+    [{ code: "invalid_prompt" }, 400],
+  ] as const)("records provisional status for an untyped error and retires it on a real terminal", (error, status) => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    inspectResponseLogSsePayload(log, JSON.stringify({ error }));
+    expect(log.terminalHttpStatus).toBe(status);
+    inspectResponseLogSsePayload(log, '{"type":"response.completed","response":{"status":"completed"}}');
+    expect(log.terminalHttpStatus).toBeUndefined();
+  });
+
+  test("redacts the selected credential in an untyped error before client delivery", () => {
+    const secret = 'fixture"chosen\\credential';
+    const rewrite = createTerminalErrorRedactionBlockRewrite({ authorization: `Bearer ${secret}` });
+    const block = `data: ${JSON.stringify({ error: { code: "cyber_policy", message: `blocked ${secret}` } })}`;
+    const result = rewrite(block).join("\n");
+    expect(result).not.toContain(secret);
+    expect(JSON.parse(result.slice("data: ".length)).error.message).toContain("[REDACTED]");
+  });
 });
 
 

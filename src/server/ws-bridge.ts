@@ -1,4 +1,5 @@
 import { isolateCodexPoolAccountHeaders } from "../codex/forward-transport-headers";
+import { isUntypedBareUpstreamError } from "./bare-upstream-error";
 import type { NativeResponseControl } from "./responses/native-response-control";
 import type { ServerWebSocket } from "bun";
 import { responsesJsonEventSequence } from "./responses-json-events";
@@ -210,23 +211,6 @@ function payloadType(payload: string): string | null {
   }
 }
 
-/**
- * An untyped `{"error":{...}}` envelope (#8216): not a Responses event, but not a malformed frame
- * either. The SSE relay boundary keeps the error and reports it as `response.failed` at EOF unless a
- * real terminal arrives first, so the pump skips the frame and lets that terminal reach the client.
- * Mirrors the untyped half of `isBareUpstreamErrorEvent` in `relay.ts`.
- */
-function isUntypedErrorEnvelope(payload: string): boolean {
-  try {
-    const json = JSON.parse(payload) as unknown;
-    if (!json || typeof json !== "object" || Array.isArray(json)) return false;
-    const root = json as { type?: unknown; error?: unknown };
-    return root.type === undefined && !!root.error && typeof root.error === "object" && !Array.isArray(root.error);
-  } catch {
-    return false;
-  }
-}
-
 function terminalStatusFromType(type: string): ResponsesTerminalStatus | null {
   switch (type) {
     case "response.completed":
@@ -307,7 +291,9 @@ export async function pumpResponsesSseToWebSocket(
       /* payload observation must not affect WebSocket delivery */
     }
     const type = payloadType(payload);
-    if (!type && isUntypedErrorEnvelope(payload)) return false;
+    if (!type) {
+      try { if (isUntypedBareUpstreamError(JSON.parse(payload))) return false; } catch { /* protocol error below */ }
+    }
     if (!type) {
       reportTerminal("incomplete");
       sendProtocolError(ws, 502, "Invalid JSON payload in upstream SSE frame");

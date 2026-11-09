@@ -10,6 +10,7 @@ import { redactSecretString } from "../lib/redact";
 import { outboundCredentials, type OutboundCredentialRegistry } from "../lib/outbound-credential-registry";
 import { configuredCredentials, type ConfiguredCredentials } from "./configured-credentials";
 import { codexWsWrapperStatus } from "./responses/codex-ws-wire";
+import { bareUpstreamError, isUntypedBareUpstreamError } from "./bare-upstream-error";
 
 /** First bounded upstream diagnostics shared by request contexts and final rows. */
 export interface UpstreamErrorDiagnostics {
@@ -111,8 +112,25 @@ export function noteUpstreamRequestId(logCtx: TerminalStatusContext, headers: He
   noteBoundedDiagnostic(logCtx, "upstreamRequestId", headers.get("openai-request-id") ?? headers.get("x-request-id"));
 }
 
-export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext, json: UpstreamErrorPayload): void {
-  captureTerminalHttpStatus(logCtx, json);
+export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext, json: UpstreamErrorPayload, untypedSse = false): void {
+  const untyped = untypedSse && isUntypedBareUpstreamError(json);
+  const bare = untyped ? bareUpstreamError(json) : undefined;
+  if (bare) {
+    if (!genuineTerminals.has(logCtx)) {
+      const previous = provisionalStatuses.get(logCtx);
+      if (previous !== undefined && logCtx.terminalHttpStatus === previous) {
+        delete logCtx.terminalHttpStatus;
+        delete logCtx.terminalErrorCode;
+      }
+      provisionalStatuses.delete(logCtx);
+      const status = bare.httpStatus ?? 502;
+      if (logCtx.terminalHttpStatus === undefined) {
+        logCtx.terminalHttpStatus = status;
+        provisionalStatuses.set(logCtx, status);
+        if (bare.refusalCode === CYBER_POLICY_ERROR_CODE) logCtx.terminalErrorCode = CYBER_POLICY_ERROR_CODE;
+      }
+    }
+  } else captureTerminalHttpStatus(logCtx, json);
   noteBoundedDiagnostic(logCtx, "upstreamErrorCode",
     json.error?.code ?? json.last_error?.code ?? json.response?.error?.code
       // A bare top-level code (new in 2.83.0) has no envelope contract, so only a known class is kept.

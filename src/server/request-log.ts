@@ -1127,7 +1127,7 @@ export function inspectResponseLogSsePayloadParsed(
   if (parsed !== undefined) recordGenerationEvent(logCtx, (parsed as { type?: unknown } | null)?.type);
   if (parsed !== undefined) applyResponseLogMetadata(logCtx, parsed);
   else logCtx.activeTierMetadata?.markResponseUnparseable();
-  captureUpstreamErrorParsed(logCtx, payload, parsed);
+  captureUpstreamErrorParsed(logCtx, payload, parsed, true);
   if (debugEnabled) {
     if (!sseAlreadyMarked) {
       logCtx.usageDebugBodyKind = "sse";
@@ -1162,10 +1162,11 @@ function captureUpstreamErrorParsed(
   logCtx: RequestLogContext,
   text: string,
   parsed: unknown | undefined,
+  untypedSse = false,
 ): void {
   if (parsed !== undefined && parsed !== null) {
     const json = parsed as UpstreamErrorPayload;
-    captureUpstreamTerminalDiagnostics(logCtx, json);
+    captureUpstreamTerminalDiagnostics(logCtx, json, untypedSse);
     const reason = json?.response?.incomplete_details?.reason;
     if (json.type === "response.incomplete"
       && logCtx.terminalIncompleteReason === undefined

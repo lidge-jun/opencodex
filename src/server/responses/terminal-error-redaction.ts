@@ -1,5 +1,6 @@
 import { REDACTED_SECRET, SENSITIVE_KEY_PATTERN, redactSecrets } from "../../lib/redact";
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "../sse-payload-rewrite";
+import { isUntypedBareUpstreamError } from "../bare-upstream-error";
 
 /** Mask the selected outbound credential even when upstream echoes only its raw value. */
 export function createOutboundCredentialMask(outboundHeaders: Record<string, string>): (text: string) => string {
@@ -42,7 +43,7 @@ export function createTerminalErrorRedactionBlockRewrite(
     } catch {
       return [terminalFrame ? maskCredential(block) : block];
     }
-    if (event?.type !== "response.failed" && event?.type !== "response.incomplete") {
+    if (event?.type !== "response.failed" && event?.type !== "response.incomplete" && !isUntypedBareUpstreamError(event)) {
       return [terminalFrame ? maskCredential(block) : block];
     }
     const safeEvent = redactDiagnostic(event);

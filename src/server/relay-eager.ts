@@ -472,7 +472,10 @@ export function relaySseEagerBounded(
           // inspection resynchronized after an oversized frame and observed a
           // later real terminal, it still must not suppress a terminal delivery
           // to the client. Only accounting remains tied to the inspected result.
-          if (!hooks.sawTerminal()) syntheticKind = "failed";
+          if (!hooks.sawTerminal()) {
+            syntheticKind = "failed";
+            if (terminalBoundary.upstreamRefusalCode() !== undefined) syntheticReason = "upstream_error";
+          }
           deliveryFallbackSent = true;
           queuedBytes += tail.byteLength;
           try { controllerRef?.enqueue(tail); } catch { /* client already torn down */ }

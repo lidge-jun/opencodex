@@ -17,6 +17,11 @@ import {
 } from "../../src/server/index/live-sideband";
 import { RESPONSE_TTL_MS } from "../../src/responses/state";
 import type { ServerWebSocket } from "bun";
+import { relaySseWithFailedTail } from "../../src/server/relay";
+import { relaySseEagerBounded } from "../../src/server/relay-eager";
+import { relaySseWithBlockRewrite } from "../../src/server/sse-payload-rewrite";
+import { createOutboundCredentialMask, createTerminalErrorRedactionBlockRewrite } from "../../src/server/responses/terminal-error-redaction";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
 
 function mockWs(sendResult = 1): { ws: ServerWebSocket<WsData>; sent: string[] } {
   const sent: string[] = [];
@@ -42,6 +47,25 @@ function sseStream(frames: string[], onCancel?: () => void): ReadableStream<Uint
 }
 
 describe("WS endpoint re-framer (120/132)", () => {
+  test.each(["tee", "eager"] as const)("%s delivers an untyped refusal without echoing the selected credential", async mode => {
+    const secret = 'fixture"chosen\\credential';
+    const headers = { authorization: `Bearer ${secret}` };
+    const maskCredential = createOutboundCredentialMask(headers);
+    const rewrite = createTerminalErrorRedactionBlockRewrite(headers, maskCredential);
+    const source = sseStream([`data: ${JSON.stringify({ error: { code: "cyber_policy", message: `blocked ${secret}` } })}\n\n`]);
+    const body = mode === "tee"
+      ? relaySseWithFailedTail(relaySseWithBlockRewrite(source, rewrite, createTranslatorBudget()), new AbortController(), undefined, { maskCredential })
+      : relaySseEagerBounded(source, new AbortController(), {
+        inspectChunk() {}, finishInspection() {}, sawTerminal: () => false, onSynthetic() {}, onClientCancel() {}, onDone() {}, rewriteBlocks: rewrite,
+      }, { maskCredential });
+    const { ws, sent } = mockWs();
+    await pumpResponsesSseToWebSocket(ws, body);
+    const messages = sent.map(frame => JSON.parse(frame));
+    expect(messages.map(frame => frame.type)).toEqual(["response.failed"]);
+    expect(messages[0].response.error.code).toBe("cyber_policy");
+    expect(messages[0].response.error.message).toContain("[REDACTED]");
+    expect(messages[0].response.error.message).not.toContain(secret);
+  });
   test("server config declares explicit websocket idle timeout policy", () => {
     // src/server/index.ts is a facade now. The idle-timeout constant moved to the
     // live-sideband leaf, the handler body to the websocket-handler leaf, and the wiring
