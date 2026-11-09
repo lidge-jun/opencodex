@@ -55,9 +55,12 @@ keeps them; any other model uses 8. Declare a model's own cap with
 1000). The declaration outranks the registry row, and PATCH `null` on the axis removes it.
 Only `image_url` parts with a nonempty string in `image_url` or `image_url.url` count toward
 the cap; this check does not validate URL syntax or reachability. Parts with missing, empty,
-or non-string image references are replaced with `[image omitted: missing or malformed image URL]`
-in the outbound copy without consuming the image cap, even when the valid-image count is below
-the cap.
+or non-string image references that reach the limiter are replaced with
+`[image omitted: missing or malformed image URL]` in the outbound copy without consuming the
+image cap, even when the valid-image count is below the cap. For translated Responses requests,
+the parser drops `input_image` blocks with no usable image URL or file ID before the limiter
+runs, and a usable file ID becomes an `[image: <file id>]` text marker instead of an image
+reference.
 
 Pruning adds no separate upload or persistence. Images retained within the cap
 are sent to Mistral in the outbound request. Other destinations are unchanged.
