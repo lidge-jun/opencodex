@@ -260,6 +260,9 @@ and the tool description documents that no send slot is reserved.
 One wait attempts at most three snapshots, with a cancellable two-second pause
 between them and at most nine sequential owned helpers. It adds no RPC method,
 persistent state, background poll, lifecycle control or automatic delivery.
+The wait composes stored reads independently of resume capability. Execution of
+an unloaded recipient belongs to its native client/owner; no resume grant is
+needed to read already stored replies or call this bounded wait.
 
 Existing final text returns immediately, ambiguity returns without text, and a
 required next page returns to the caller. Other snapshots refresh the matched

@@ -29,6 +29,7 @@ import {
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
   pinnedWireAdapter,
   PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS,
+  THINKING_DISPLAY_VALUES,
   UPSTREAM_HTTP_VERSION_VALUES,
   type OcxProviderConfig,
   type OcxConfig,
@@ -360,12 +361,17 @@ export const providerConfigSchema = z.object({
   inferContextWindow: z.boolean().optional(),
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
   modelSuppressSyntheticMax: z.record(z.string().min(1), z.boolean()).optional(),
+  // Validated against a closed vocabulary here as well as at the write boundaries, so a
+  // hand-edited typo cannot load silently and leave the operator with the built-in display (#8363).
+  thinkingDisplay: z.enum(THINKING_DISPLAY_VALUES).optional(),
+  modelThinkingDisplay: z.record(z.string().min(1), z.enum(THINKING_DISPLAY_VALUES)).optional(),
   promoteAdditionalTools: z.boolean().optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),
   preserveResponsesInputItemIds: z.boolean().optional(),
   preserveResponsesMessageMetadata: z.boolean().optional(),
   projectResponsesLiteHostedSearchHistory: z.boolean().optional(),
   dropResponsesReasoningItems: z.boolean().optional(),
+  arkKimiResponsesModels: z.array(z.string().min(1)).optional(),
   modelReasoningEffortsAuthoritative: z.boolean().optional(),
   decodesNativeCompactionBlobs: z.boolean().optional(),
   supportsNativeCompactionTrigger: z.boolean().optional(),
@@ -1188,4 +1194,15 @@ export const spendSchema = z.object({
  */
 export const skillsConfigSchema = z.object({
   catalog_refresh: z.enum(["per_session", "per_turn"]).optional(),
+}).strict();
+
+/**
+ * Anonymous telemetry consent state.
+ *
+ * No endpoint is accepted here: the collector URL is a constant in src/telemetry/sender.ts.
+ */
+export const telemetryConfigSchema = z.object({
+  decision: z.enum(["accepted", "declined"]).optional(),
+  decidedAt: clientTimestampSchema.optional(),
+  noticeShownAt: clientTimestampSchema.optional(),
 }).strict();

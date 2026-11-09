@@ -52,6 +52,7 @@ import {
   transientRetryOn5xxPolicySchema,
   runtimeRoleSchema,
   spendSchema,
+  telemetryConfigSchema,
   chatgptDesktopConfigIssue,
 } from "./schema/leaf-validators";
 import { hasWarnedInheritedFastWireConflict, markWarnedInheritedFastWireConflict } from "./warn-memo";
@@ -152,6 +153,7 @@ export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxCon
   warnDegradedStreamMode(rawParsed, validated);
   warnDegradedCompactionRouting(rawParsed, validated);
   warnDegradedMemoryModels(rawParsed, validated);
+  warnDegradedTelemetry(rawParsed);
   // The schema replaces a malformed policy with { allProfiles: false }, which silently turns every Aside profile off (#6757).
   const asidePolicy = rawParsed && typeof rawParsed === "object" ? (rawParsed as Record<string, unknown>).asideProfileSync : undefined;
   if (asidePolicy !== undefined && !asideProfileSyncSchema.safeParse(asidePolicy).success) {
@@ -848,6 +850,20 @@ export function malformedCodexPoolWarning(rawParsed: unknown): string | null {
   if (result.success) return null;
   const field = result.error.issues[0]?.path.join(".");
   return `codexPool${field ? `.${field}` : ""} ignored: invalid Codex pool selection policy`;
+}
+
+export function malformedTelemetryWarning(rawParsed: unknown): string | null {
+  const raw = rawConfigRecord(rawParsed);
+  if (!raw || !Object.hasOwn(raw, "telemetry") || raw.telemetry === undefined) return null;
+  const result = telemetryConfigSchema.safeParse(raw.telemetry);
+  if (result.success) return null;
+  const field = result.error.issues[0]?.path.join(".");
+  return `telemetry${field ? `.${field}` : ""} ignored: invalid telemetry consent configuration`;
+}
+
+export function warnDegradedTelemetry(rawParsed: unknown): void {
+  const warning = malformedTelemetryWarning(rawParsed);
+  if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
 }
 
 /**

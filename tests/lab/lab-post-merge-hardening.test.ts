@@ -1,4 +1,5 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +28,26 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const HOMES: string[] = [];
 const previousHome = process.env.OPENCODEX_HOME;
+
+test("artifact directory rejects an adjacent NTFS-sized identity", () => {
+  const path = join(tempHome(), "artifacts");
+  const original = fs.fstatSync;
+  let observedFd: number | undefined, observations = 0;
+  const spy = spyOn(fs, "fstatSync").mockImplementation(((fd, options) => {
+    const stats = options?.bigint ? original(fd, { bigint: true }) : original(fd);
+    if (observedFd === undefined) observedFd = fd;
+    if (fd !== observedFd) return stats;
+    const ino = 9_007_199_254_740_992n + BigInt(Math.min(observations++, 1));
+    return Object.assign(Object.create(Object.getPrototypeOf(stats)), stats,
+      { ino: options?.bigint ? ino : Number(ino) });
+  }) as typeof fs.fstatSync);
+  let dir: ReturnType<typeof openTrustedArtifactDir> | undefined;
+  try {
+    dir = openTrustedArtifactDir(path);
+    expect(() => putNamedDigestBytes(dir!, "a".repeat(64), Buffer.from("test"), () => "a".repeat(64)))
+      .toThrow("artifacts directory identity changed");
+  } finally { if (dir) closeTrustedArtifactDir(dir); spy.mockRestore(); }
+});
 
 function tempHome(): string {
   const dir = join(tmpdir(), `ocx-lab-hardening-${process.pid}-${Math.random().toString(16).slice(2)}`);

@@ -2,6 +2,7 @@ import { probe, confirmHost, apply } from "./link-enrollment";
 import { fail, pairedSession, auth, port, isRecord, exactBody, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, issueKey, revokeKeyIdempotent, compensateNewLink, type LinkRouteState } from "./link-route-state";
 export type { LinkRouteState, PendingLinkHost, ConfirmedLinkHost, LinkRouteListener } from "./link-route-state";
 import { requireRemotePlatform } from "../../link/remote-platform";
+import { purgeDisconnectRemote } from "../../link/remote-plant";
 import { assertSshAlias, buildExecArgv, remoteOcxArgv } from "../../link/ssh-argv";
 import { clearCompensationFailed, compensationPath, readCompensation } from "../../link/compensation";
 import { loadHostCandidates } from "../../link/ssh-config";
@@ -9,6 +10,7 @@ import { newLinkId, type LinkStore } from "../../link/store";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
 import { attachLinkPeers, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
 import { homeLinkChildParity } from "../../link/child-parity";
+import { codexSettingsDigest, projectHomeCodexSettings } from "../../link/codex-settings";
 import { localLinkPeer } from "../../link/compatibility";
 import { packageVersion } from "../../lib/package-version";
 import { buildPeerFeatures } from "../../remote/features";
@@ -161,7 +163,7 @@ async function handleJoin(ctx: ManagementContext, state: LinkRouteState): Promis
       runner: runnerFor(ctx),
       knownHostsFile: knownHostsFile(ctx),
       scheduleRestart: () => { acceptSystemRestart(); },
-      ...(confirmed ? { confirmedHost: confirmed } : {}),
+      ...(confirmed && confirmed.runtimeKind !== "missing" && confirmed.ocxVersion !== null ? { confirmedHost: confirmed } : {}),
     };
     const result = await (overrides.joinHome ?? joinHome)(deps, { alias: body.alias });
     return Response.json({ linkId: result.linkId, alias: body.alias, restarting: true }, { status: 202 });
@@ -202,8 +204,16 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
   const record = current.links.find(link => link.id === id);
   if (!record) return fail("link_not_found", "The link was not found.", 404);
   const body = await readManagementJsonBodyOr(ctx.req, {});
-  if (!isRecord(body) || Object.keys(body).some(key => key !== "force") || (body.force !== undefined && typeof body.force !== "boolean")) return fail("invalid_body", "force must be a boolean.", 400);
-  const force = body.force === true;
+  const payload = body === null ? {} : body;
+  if (!isRecord(payload)
+    || Object.keys(payload).some(key => key !== "force" && key !== "purge")
+    || (payload.force !== undefined && typeof payload.force !== "boolean")
+    || (payload.purge !== undefined && typeof payload.purge !== "boolean")
+    || (payload.force === true && payload.purge === true)) {
+    return fail("invalid_body", "force and purge must be booleans and cannot both be true.", 400);
+  }
+  const force = payload.force === true;
+  const purge = payload.purge === true;
   const release = state.supervisor.holdLink?.(id);
   try {
     await state.supervisor.stopLink(id);
@@ -220,10 +230,18 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
       try {
         const runner = runnerFor(ctx);
         const platform = record.remotePlatform ?? await requireRemotePlatform(runner, record.alias, knownHostsFile(ctx));
-        const result = await runner.run(buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(["disconnect"], platform), knownHostsFile: knownHostsFile(ctx) }), { timeoutMs: 30_000 });
-        if (result.code !== 0) {
-          await restartTunnel();
-          return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshFailureHint(result.stderr));
+        if (purge) {
+          const purged = await purgeDisconnectRemote(runner, record.alias, knownHostsFile(ctx), platform, record.childKind);
+          if (!purged.ok) {
+            await restartTunnel();
+            return fail(purged.code, purged.message, purged.status, purged.hint);
+          }
+        } else {
+          const result = await runner.run(buildExecArgv({ alias: record.alias, argv: remoteOcxArgv(["disconnect"], platform), knownHostsFile: knownHostsFile(ctx) }), { timeoutMs: 30_000 });
+          if (result.code !== 0) {
+            await restartTunnel();
+            return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshFailureHint(result.stderr));
+          }
         }
       } catch (error) {
         await restartTunnel();
@@ -297,8 +315,8 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     // A dashboard session also learns why it cannot join as a Child. The admin-token answer stays
     // the exact K16 document that `ocx link status` validates key by key.
     const denial = ctx.principal === "gui-session" ? joinDenied(ctx) : null;
-    const body: LinkStatusDto & { joinAvailable?: boolean; joinDenied?: LinkJoinDenied | null } = ctx.principal === "gui-session"
-      ? { ...dto, joinAvailable: denial === null, joinDenied: denial } : dto;
+    const body: LinkStatusDto & { joinAvailable?: boolean; joinDenied?: LinkJoinDenied | null; homeCodexSettingsDigest?: string } = ctx.principal === "gui-session"
+      ? { ...dto, joinAvailable: denial === null, joinDenied: denial, homeCodexSettingsDigest: codexSettingsDigest(projectHomeCodexSettings(ctx.config, packageVersion("0.0.0")).settings) } : dto;
     return Response.json(body, { headers: { "cache-control": "no-store" } });
   }
   if (url.pathname === "/api/link/candidates" && req.method === "GET") {

@@ -165,14 +165,14 @@ const providers: { label: string; path?: string }[] = [
 ];
 
 const quickstartMini = [
-	{ cmd: 'npm install -g @bitkyc08/opencodex', note: t('Install', '설치', '安装', 'Установка', 'インストール', '安裝', 'Kurulum') },
+	{ cmd: 'npm install -g --allow-scripts=bun @bitkyc08/opencodex', note: t('Install', '설치', '安装', 'Установка', 'インストール', '安裝', 'Kurulum') },
 	{ cmd: 'ocx init', note: t('Add a provider and connect Codex', '프로바이더 추가 후 Codex 연결', '添加提供商并连接 Codex', 'Добавьте провайдера и подключите Codex', 'プロバイダーを追加して Codex を接続', '新增供應商並連接 Codex', 'Sağlayıcı ekleyip Codex’i bağlayın') },
 	{ cmd: 'ocx start', note: t('Start the proxy', '프록시 시작', '启动代理', 'Запуск прокси', 'プロキシを起動', '啟動代理', "Proxy'yi başlatın") },
 	{ cmd: 'ocx claude', note: t('In another terminal: launch Claude Code through ocx', '다른 터미널에서: ocx를 거쳐 Claude Code 실행', '在另一个终端中：通过 ocx 启动 Claude Code', 'В другом терминале: запуск Claude Code через ocx', '別のターミナルで: ocx 経由で Claude Code を起動', '在另一個終端機中：透過 ocx 啟動 Claude Code', 'Başka bir terminalde: Claude Code’u ocx üzerinden başlatın') },
 ];
 
 const quickstart = [
-	{ cmd: 'npm install -g @bitkyc08/opencodex', note: t('Install', '설치', '安装', 'Установка', 'インストール', '安裝', 'Kurulum') },
+	{ cmd: 'npm install -g --allow-scripts=bun @bitkyc08/opencodex', note: t('Install', '설치', '安装', 'Установка', 'インストール', '安裝', 'Kurulum') },
 	{ cmd: 'ocx init', note: t('Add a provider and connect Codex', '프로바이더 추가 후 Codex 연결', '添加提供商并连接 Codex', 'Добавьте провайдера и подключите Codex', 'プロバイダーを追加して Codex を接続', '新增供應商並連接 Codex', 'Sağlayıcı ekleyip Codex’i bağlayın') },
 	{ cmd: 'ocx start', note: t('Start the proxy', '프록시 시작', '启动代理', 'Запуск прокси', 'プロキシを起動', '啟動代理', "Proxy'yi başlatın") },
 	{ cmd: 'codex "Write a hello world in Rust"', note: t('Codex now routes through ocx', 'Codex가 ocx를 경유', 'Codex 现在经由 ocx 路由', 'Codex теперь работает через ocx', 'Codex は ocx 経由に', 'Codex 現在經由 ocx 路由', 'Codex artık ocx üzerinden yönlendirilir') },
@@ -344,7 +344,7 @@ const docsMap = [
 		</details>
 		<p class="lp-dl-foot">
 			{t('Prefer the terminal?', '터미널이 더 편하다면', '更喜欢终端？', 'Предпочитаете терминал?', 'ターミナル派ですか？', '偏好終端機？', 'Terminali mi tercih edersiniz?')}
-			<code>npm install -g @bitkyc08/opencodex</code>
+			<code>npm install -g --allow-scripts=bun @bitkyc08/opencodex</code>
 			<a href={`${prefix}getting-started/installation/`}>{t('Installation guide', '설치 가이드', '安装指南', 'Руководство по установке', 'インストールガイド', '安裝指南', 'Kurulum kılavuzu')}</a>
 			<a href="https://github.com/lidge-jun/opencodex/releases/latest">{t('All releases and checksums', '전체 릴리스와 체크섬', '所有版本与校验和', 'Все релизы и контрольные суммы', 'すべてのリリースとチェックサム', '所有版本與校驗碼', 'Tüm sürümler ve sağlama toplamları')}</a>
 			<a href={`${prefix}guides/desktop-app/`}>{t('Desktop app guide', '데스크톱 앱 가이드', '桌面应用指南', 'Руководство по приложению', 'デスクトップアプリガイド', '桌面應用程式指南', 'Masaüstü uygulaması kılavuzu')}</a>

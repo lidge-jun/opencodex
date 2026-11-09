@@ -12,9 +12,6 @@ const { READINESS_LATEST_DEV_BEHIND_MAX } = require(
   path.join(__dirname, "pr-quality-state.cjs")
 );
 
-const ANCESTRY_BEHIND_THRESHOLD = 20;
-/** Cap on ahead_by vs main so stale `dev` forks (many commits ahead of main) are not flagged. */
-const ANCESTRY_AHEAD_MAIN_MAX = 5;
 const MIN_SECTION_LEN = 40;
 const MIN_RICH_SECTIONS = 2;
 const UNSTRUCTURED_MIN_LEN = 120;
@@ -105,20 +102,6 @@ const MARKDOWN_REFERENCE_IMAGE_RE = /!\[([^\]]*)\]\[([^\]]*)\]/g;
 const MARKDOWN_REFERENCE_DEF_RE = /^\s*\[([^\]]+)\]:\s*\S+/gm;
 /** Embedded HTML image with a renderable `src` (`<img ... src="...">`). */
 const HTML_IMAGE_RE = /<img\b[^>]*\bsrc\s*=\s*(?:"[^"]+"|'[^']+'|[^\s>"']+)[^>]*>/i;
-
-function isWrongAncestry({
-  behindMain,
-  behindBase,
-  aheadMain = 0,
-  threshold = ANCESTRY_BEHIND_THRESHOLD,
-  aheadMainMax = ANCESTRY_AHEAD_MAIN_MAX,
-}) {
-  return (
-    behindMain === 0 &&
-    behindBase >= threshold &&
-    aheadMain <= aheadMainMax
-  );
-}
 
 function authorHasPushPermission(permission) {
   return permission === "admin" || permission === "maintain" || permission === "write";
@@ -528,12 +511,6 @@ function collectPrQualityFailures({
   allowedBases,
   title = "",
   body,
-  behindMain,
-  behindBase,
-  aheadMain = 0,
-  authorPermission,
-  permissionLookupFailed = false,
-  ancestryLookupFailed = false,
   /** True when baseRef is another open PR's head (stacked child). */
   stackedBase = false,
   /** Issue comments; a maintainer comment waives the GUI-screenshot gate. */
@@ -550,21 +527,6 @@ function collectPrQualityFailures({
   const wrongBase = !allowedBases.includes(baseRef) && !stackedBase;
   if (wrongBase) {
     failures.push({ code: "wrong_base" });
-  } else {
-    // Permission lookup fails closed (still evaluate ancestry). Compare API
-    // failures skip ancestry — zeros would falsely pass the #644 heuristic.
-    // Stacked children skip ancestry against the integration base; their parent
-    // PR is the temporary target.
-    const skipAncestry =
-      stackedBase ||
-      ancestryLookupFailed ||
-      (!permissionLookupFailed && authorHasPushPermission(authorPermission));
-    if (
-      !skipAncestry &&
-      isWrongAncestry({ behindMain, behindBase, aheadMain })
-    ) {
-      failures.push({ code: "wrong_ancestry" });
-    }
   }
 
   const desc = assessPrDescription(body);
@@ -587,12 +549,9 @@ function collectPrQualityFailures({
 }
 
 module.exports = {
-  ANCESTRY_BEHIND_THRESHOLD,
-  ANCESTRY_AHEAD_MAIN_MAX,
   REVIEW_READINESS_ITEMS,
   REVIEW_READINESS_START,
   REVIEW_READINESS_END,
-  isWrongAncestry,
   authorHasPushPermission,
   assessPrDescription,
   guiPathsChanged,

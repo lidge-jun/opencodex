@@ -10,7 +10,7 @@ import type { BrowserLaunch } from "../../oauth-browser-launch";
 export type { ProviderSortMode, WorkspaceItem };
 
 /** Rail status facets (all on by default). */
-export type StatusFilter = { ready: boolean; needsSetup: boolean; disabled: boolean };
+export type StatusFilter = { ready: boolean; needsSetup: boolean; unverified: boolean; disabled: boolean };
 
 /** Rail pricing facets. */
 export type PricingFilter = { free: boolean; paid: boolean };
@@ -59,6 +59,7 @@ export type OAuthAccountRow = AccountQuotaReading & {
   id: string;
   alias?: string;
   email?: string;
+  accountLabel?: string;
   maskedLabel?: string;
   active: boolean;
   expiresAt?: number;
@@ -129,6 +130,8 @@ export type ProviderUpdatePatch = {
   adapter?: string;
   baseUrl?: string;
   defaultModel?: string;
+  project?: string;
+  location?: string;
   apiKey?: string;
   apiKeyTransport?: "x-api-key" | "bearer" | "";
   authMode?: string;

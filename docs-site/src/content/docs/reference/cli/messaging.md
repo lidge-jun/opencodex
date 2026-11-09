@@ -148,6 +148,10 @@ time to terminate its helper. Four concurrent
 waits can make sends and metadata calls return busy; excess calls are rejected,
 not queued. Use fewer parallel waits when send capacity must remain available.
 
+Waiting only reads stored data; it does not resume an unloaded recipient. When
+work must continue, the user opens/resumes the selected conversation through the
+native Codex client. Message submission and reply waiting remain separate calls.
+
 An eligible final text returns immediately with `waitOutcome: reply_observed`,
 even if that text already existed. This is not a new-message subscription or
 exclusive reply ownership. An ambiguous input returns `ambiguous`. A non-null

@@ -181,11 +181,14 @@ bir Aside profilinde onaylama, yönetilen belge değişmese bile profilin eşitl
 
 Dosya siz inceledikten sonra değişirse yazma işlemi eski plan nedeniyle reddedilir. İletişim kutusu
 eski planı güncel planla değiştirir ve yeniden açıkça onaylamanızı ister; yazma işlemini hiçbir zaman
-otomatik olarak yeniden denemez. Önizleme geçici olarak kullanılamıyorsa sayfayı normal şekilde
-yenileyin ve işlemi yeniden başlatın.
+otomatik olarak yeniden denemez. Önizleme henüz model kataloğu yüklenmediğini bildirirse
+iletişim kutusu açık kalır ve **Kataloğu yükle ve yeniden dene** seçeneğini sunar: entegrasyon listesini
+yeniden okur ve planı tekrar ister.
 
 Aside, aynı önizleme ve onay akışını bir defada seçili tek bir profil için kullanır. **Tüm profilleri
-eşitle** ayrı bir toplu işlem olarak kalır ve tek bir birleşik önizlemeye bağlı değildir.
+eşitle** ayrı bir toplu işlem olarak kalır ve tek bir birleşik önizlemeye bağlı değildir. Bir plan yalnızca bir profilin dosyasını
+anlatır; bu yüzden çakışmadaki Aside genel bakış kartı **Profil seç** sunar ve blok o profilin
+sayfasında değiştirilir.
 
 ## Dürüstçe ne beklenmeli?
 
