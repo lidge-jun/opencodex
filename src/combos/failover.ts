@@ -644,7 +644,22 @@ function isResponseFormatCapabilityRefusal(
   return false;
 }
 
+function isReflectedValidationText(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("invalid parameter")
+    || lower.includes("invalid value")
+    || lower.includes("validation error")
+    || lower.includes("cannot contain")
+    || lower.includes("quotes '")
+    || lower.includes("quotes \"")
+    || /quotes\s+['"]/i.test(text)
+    || /is not supported for (?:field|parameter)\b/i.test(text)
+  );
+}
+
 function namesModerationRefusal(text: string): boolean {
+  if (isReflectedValidationText(text)) return false;
   const lower = text.toLowerCase();
   return (
     lower.includes("refused by moderation")
@@ -667,11 +682,10 @@ export function isProviderModerationRefusal(
   code?: string | null,
 ): boolean {
   if (status !== 400 && status !== 422) return false;
-  if (!message || message.length > 32_768) return false;
   const normalizedCode = normalizedFailureCode(code);
   if (
-    isCyberPolicyCode(code)
-    || isNonReplayableUpstreamCode(code)
+    isCyberPolicyCode(normalizedCode)
+    || isNonReplayableUpstreamCode(normalizedCode)
     || normalizedCode === "origin_rejected"
   ) {
     return false;
@@ -679,8 +693,10 @@ export function isProviderModerationRefusal(
   if (normalizedCode === "moderation_refusal" || normalizedCode === "content_filter") {
     return true;
   }
+  if (!message || message.length > 32_768) return false;
 
   let text = message.trim();
+  let wasParsed = false;
   for (let depth = 0; depth < 3; depth += 1) {
     if (text.startsWith("Provider error 400: ") || text.startsWith("Provider error 422: ")) {
       text = text.slice(text.indexOf(": ") + 2).trim();
@@ -691,18 +707,36 @@ export function isProviderModerationRefusal(
     let payload: unknown;
     try {
       payload = JSON.parse(text);
+      wasParsed = true;
     } catch {
+      if (text.startsWith("{") || text.startsWith("[") || wasParsed) {
+        return false;
+      }
       break;
     }
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) break;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
     const rec = payload as Record<string, unknown>;
     const error = rec.error ?? rec;
-    if (!error || typeof error !== "object" || Array.isArray(error)) break;
+    if (!error || typeof error !== "object" || Array.isArray(error)) return false;
     const e = error as Record<string, unknown>;
+
+    const errCode = normalizedFailureCode(typeof e.code === "string" ? e.code : typeof rec.code === "string" ? rec.code : undefined);
+    if (
+      isCyberPolicyCode(errCode)
+      || isNonReplayableUpstreamCode(errCode)
+      || errCode === "origin_rejected"
+    ) {
+      return false;
+    }
+    if (errCode === "moderation_refusal" || errCode === "content_filter") return true;
 
     if (typeof e.message === "string" && (e.message.startsWith("Provider error 400: ") || e.message.startsWith("Provider error 422: "))) {
       text = e.message;
       continue;
+    }
+
+    if (typeof e.param === "string" && e.param && !["prompt", "input", "messages"].includes(e.param.trim().toLowerCase())) {
+      return false;
     }
 
     const candidateTexts: string[] = [];
@@ -715,15 +749,13 @@ export function isProviderModerationRefusal(
       if (typeof p.error === "string") candidateTexts.push(p.error);
     }
 
-    const errCode = normalizedFailureCode(typeof e.code === "string" ? e.code : undefined);
-    if (errCode === "moderation_refusal" || errCode === "content_filter") return true;
-
     for (const msg of candidateTexts) {
       if (namesModerationRefusal(msg)) return true;
     }
     return false;
   }
 
+  if (wasParsed || text.startsWith("{") || text.startsWith("[")) return false;
   return namesModerationRefusal(text);
 }
 
@@ -883,14 +915,15 @@ export function comboFailureDecision(
   // Structured form of the same hard refusal. The prose test above misses it when the origin
   // reports the code out of band, and every hop rule below -- including the context-overflow
   // one -- must stay subordinate to it.
-  if (normalizedFailureCode(options?.code) === "origin_rejected") return "stop";
+  const normalizedCode = normalizedFailureCode(options?.code);
+  if (normalizedCode === "origin_rejected") return "stop";
   // The origin may already be executing this turn (the Codex WebSocket relay sent the create
   // frame and never saw a response event). Hopping would send the same request to a second
   // target while the first may still be generating; the honest status goes to the client.
-  if (isNonReplayableUpstreamCode(options?.code)) return "stop";
+  if (isNonReplayableUpstreamCode(normalizedCode)) return "stop";
   // Cyber policy is a hard non-retryable refusal — honor structured code even when
   // classificationText was truncated before the JSON code field.
-  if (isCyberPolicyCode(options?.code)) return "stop";
+  if (isCyberPolicyCode(normalizedCode)) return "stop";
   // HTTP consumers retain hard codes before truncation; SSE metadata owns its selected carrier.
   if (options?.codexModelRefusal === undefined && codexAccountModelRefusalHardStopCode(status, message)) return "stop";
   const modelRefusal = status === 400

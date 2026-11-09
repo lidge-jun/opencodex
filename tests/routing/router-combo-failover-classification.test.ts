@@ -774,18 +774,88 @@ describe("provider moderation refusal", () => {
       expect(isProviderModerationRefusal(400, body, code)).toBe(true);
       expect(comboFailureDecision(400, body, { code })).toBe("hop");
       expect(comboFailureCooldownScope(400, body, { code })).toBe("none");
+      for (const message of [body, `data: ${body}`]) {
+        expect(isProviderModerationRefusal(400, message)).toBe(true);
+        expect(comboFailureDecision(400, message)).toBe("hop");
+        expect(comboFailureCooldownScope(400, message)).toBe("none");
+      }
     }
   });
 
-  test("hard stops like cyber_policy outrank moderation wording", () => {
-    const body = JSON.stringify({
+  test("recognizes explicit moderation codes with empty or absent message", () => {
+    for (const code of ["content_filter", "moderation_refusal"]) {
+      expect(isProviderModerationRefusal(400, "", code)).toBe(true);
+      expect(comboFailureDecision(400, "", { code })).toBe("hop");
+      expect(comboFailureCooldownScope(400, "", { code })).toBe("none");
+
+      const body = JSON.stringify({ error: { code } });
+      expect(isProviderModerationRefusal(400, body)).toBe(true);
+      expect(comboFailureDecision(400, body)).toBe("hop");
+    }
+  });
+
+  test("hard stops like cyber_policy and upstream_no_response outrank moderation wording", () => {
+    for (const code of ["cyber_policy", "CYBER_POLICY", "upstream_no_response", "UPSTREAM_NO_RESPONSE", "origin_rejected"]) {
+      const body = JSON.stringify({
+        error: {
+          code,
+          message: "The input was refused by moderation.",
+        },
+      });
+      expect(isProviderModerationRefusal(400, body, code)).toBe(false);
+      expect(comboFailureDecision(400, body, { code })).toBe("stop");
+
+      for (const message of [body, `data: ${body}`]) {
+        expect(isProviderModerationRefusal(400, message)).toBe(false);
+        expect(comboFailureDecision(400, message)).toBe("stop");
+      }
+    }
+  });
+
+  test("truncated 422 with uppercase CYBER_POLICY code stays terminal", () => {
+    const raw = JSON.stringify({
       error: {
-        code: "cyber_policy",
-        message: "The input was refused by moderation.",
+        message: "The input was refused by moderation. Categories: harassment.",
+        code: "CYBER_POLICY",
       },
     });
-    expect(isProviderModerationRefusal(400, body, "cyber_policy")).toBe(false);
-    expect(comboFailureDecision(400, body, { code: "cyber_policy" })).toBe("stop");
+    // Truncated at 500 characters
+    const truncated = `Provider error 422: ${raw.slice(0, 80)}`;
+    expect(comboFailureDecision(422, truncated, { code: "CYBER_POLICY" })).toBe("stop");
+    expect(isProviderModerationRefusal(422, truncated, "CYBER_POLICY")).toBe(false);
+  });
+
+  test("reflected validation text quoting moderation phrases stays terminal", () => {
+    const reflected = [
+      "Invalid parameter 'prompt': text cannot contain 'blocked by moderation'",
+      "Validation error: argument quotes 'refused by moderation'",
+      "Invalid parameter: value quotes 'blocked by moderation'",
+      "The value 'blocked by moderation' is not supported for field 'prompt'",
+    ];
+    for (const message of reflected) {
+      expect(isProviderModerationRefusal(400, message)).toBe(false);
+      expect(comboFailureDecision(400, message)).toBe("stop");
+
+      const body = JSON.stringify({ error: { message } });
+      expect(isProviderModerationRefusal(400, body)).toBe(false);
+      expect(comboFailureDecision(400, body)).toBe("stop");
+    }
+  });
+
+  test("truncated or malformed JSON with moderation wording in unrelated fields fails closed", () => {
+    const malformed = '{"error":{"message":"Invalid input","note":"blocked by moderation"';
+    expect(isProviderModerationRefusal(400, malformed)).toBe(false);
+    expect(comboFailureDecision(400, malformed)).toBe("stop");
+
+    const unrelatedField = JSON.stringify({
+      error: {
+        message: "Invalid JSON input syntax",
+        param: "notes",
+        unrelated_note: "blocked by moderation",
+      },
+    });
+    expect(isProviderModerationRefusal(400, unrelatedField)).toBe(false);
+    expect(comboFailureDecision(400, unrelatedField)).toBe("stop");
   });
 
   test("generic 400 errors without moderation phrasing stay terminal", () => {
