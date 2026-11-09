@@ -1402,8 +1402,8 @@ describe("a manual bootout still tearing down is waited out (#8362)", () => {
   });
 
   // The wait must be BOUNDED: a genuinely wedged domain reaches the diagnosable throw rather
-  // than hanging the command. The exact attempt count is the loop's own budget, so assert a
-  // ceiling and the observable evidence that every retry waited.
+  // than hanging the command. Pin the exact budget: the first bootstrap, then the recovery
+  // round's 50 attempts with a 500 ms wait between each of them.
   test("a teardown that never finishes still throws, within the bound", async () => {
     const plistPath = fixturePlist();
     const { launchctl, probe, attempts } = manualBootoutStillTearingDown(Number.POSITIVE_INFINITY);
@@ -1412,10 +1412,7 @@ describe("a manual bootout still tearing down is waited out (#8362)", () => {
     await expect(repairService(darwinDeps("repair", plistPath, launchctl, probe, sleeps, [])))
       .rejects.toThrow(/could not bootstrap/);
 
-    expect(attempts()).toBeLessThanOrEqual(60);
-    expect(sleeps.length).toBeGreaterThan(0);
-    expect(sleeps.length).toBeLessThanOrEqual(60);
-    // Every wait is the same fixed interval, so the budget is time-bounded, not attempt-only.
-    expect(new Set(sleeps)).toEqual(new Set([500]));
+    expect(attempts()).toBe(1 + 50);
+    expect(sleeps).toEqual(Array.from({ length: 49 }, () => 500));
   });
 });
