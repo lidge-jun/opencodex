@@ -8,6 +8,7 @@ import {
   stainlessOsName,
 } from "../../src/adapters/client-fingerprint";
 import { createAnthropicAdapter } from "../../src/adapters/anthropic";
+import { buildAnthropicMessagesPassthroughRequest } from "../../src/adapters/anthropic/passthrough";
 import {
   CLAUDE_CLI_RUNTIME_VERSION,
   CLAUDE_CLI_SDK_PACKAGE_VERSION,
@@ -122,6 +123,23 @@ describe("client fingerprint — anthropic OAuth headers", () => {
   const oauthProvider = { adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com", apiKey: "oauth-tok-123" } as unknown as OcxProviderConfig;
   const apiKeyProvider = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-ant-123" } as unknown as OcxProviderConfig;
 
+  test.each([false, true])("generated OAuth identity meets Fable 5.2's minimum CLI version (stream=%s)", async (stream) => {
+    // #8461: the upstream rejects claude-cli versions below 2.1.290 before inference.
+    // Check the provider's floor independently of the exported identity constant.
+    const modelId = "claude-fable-5-2";
+    const translated = await createAnthropicAdapter(oauthProvider).buildRequest(parsed({ modelId, stream }));
+    const native = buildAnthropicMessagesPassthroughRequest(oauthProvider, modelId, {
+      messages: [{ role: "user", content: "fixture" }], max_tokens: 64, stream,
+    });
+    for (const { headers, body } of [translated, native]) {
+      const version = /^claude-cli\/(\d+\.\d+\.\d+) \(external, cli\)$/.exec(headers["User-Agent"] ?? "")?.[1];
+      expect(version).toBeDefined();
+      expect(Bun.semver.satisfies(version ?? "0.0.0", ">=2.1.290")).toBe(true);
+      expect(JSON.parse(body).model).toBe(modelId);
+      expect(headers["Accept"]).toBe(stream ? "text/event-stream" : "application/json");
+    }
+  });
+
   test("OAuth request carries the full Claude Code header set", async () => {
     const { headers } = await createAnthropicAdapter(oauthProvider).buildRequest(parsed());
     expect(headers["X-App"]).toBe("cli");
@@ -130,8 +148,8 @@ describe("client fingerprint — anthropic OAuth headers", () => {
     expect(headers["X-Stainless-Lang"]).toBe("js");
     expect(headers["X-Stainless-Retry-Count"]).toBe("0");
     expect(headers["X-Stainless-Timeout"]).toBe("600");
-    expect(headers["X-Stainless-Package-Version"]).toBe("0.112.1");
-    expect(headers["X-Stainless-Runtime-Version"]).toBe("v26.3.0");
+    expect(headers["X-Stainless-Package-Version"]).toBe("0.128.0");
+    expect(headers["X-Stainless-Runtime-Version"]).toBe("v26.12.1");
     expect(headers["anthropic-beta"]).toBeDefined();
     expect(headers["X-Claude-Code-Session-Id"]).toMatch(/^[0-9a-f]{8}-/);
     expect(headers["x-client-request-id"]).toMatch(/^[0-9a-f]{8}-/);

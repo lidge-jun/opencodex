@@ -42,6 +42,17 @@ shipped v1 config는 marker 2의 단일 옵션 행으로 자동 이관됩니다.
 `~/.opencodex/config.json.pre-openai-tiers-v2.bak`에 한 번 보존되며 다음 명령으로 복원합니다:
 `cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`.
 
+## Claude OAuth 클라이언트 버전 오류
+
+Claude OAuth 요청에서 `claude_code_version_too_old`가 반환되면 사용하는 프로바이더를 확인하세요.
+Codex에서 `anthropic` 어댑터로 연결할 때는 OpenCodex 자체의 Claude Code 호환 프로필을 사용하므로,
+별도로 설치된 `claude` 실행 파일을 업데이트해도 이 프로필은 바뀌지 않습니다.
+프로필은 Claude Code `2.1.321`이며, `claude-fable-5-2` 오류에 명시된 최소 버전 `2.1.290` 이상입니다.
+이 프로필이 포함된 OpenCodex 릴리스로 업데이트하고 프록시를 재시작하세요.
+`claude-cli` 프로바이더나 Claude Code를 직접 사용한다면 해당 CLI를 업데이트하세요.
+실제 Claude 클라이언트의 식별 정보를 전달받은 네이티브 Messages 요청은 그 클라이언트의 버전을 유지합니다.
+프로필 갱신은 모델 이용 권한이나 구독 한도를 변경하지 않습니다.
+
 ## 인증 모드
 
 프로바이더 설정에서 쓸 수 있는 `authMode`는 세 가지이며, 기본값은 `key`입니다. 빌트인 레지스트리는
