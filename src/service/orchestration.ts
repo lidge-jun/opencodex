@@ -191,7 +191,7 @@ export async function proxyStillLiveAfterStop(deps: {
   }
 }
 
-async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult> {
+export async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult> {
   let stopped = false;
   const pid = readPid();
   const trackedKillPid = verifiedKillTarget(pid);

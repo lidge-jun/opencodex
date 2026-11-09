@@ -41,6 +41,8 @@ export interface RepairServiceDeps extends RuntimePreflightDeps {
   killServiceWrappers?: () => void;
   /** Bounded post-stop respawn verification; null proves no proxy answered. */
   schedulerProxyStillLive?: () => Promise<{ port: number } | null>;
+  /** Stops the home-verified tracked proxy, as `ocx service stop` does; failures propagate. */
+  stopTrackedProxy?: () => Promise<unknown>;
   startScheduler?: () => void;
   writeSchedulerState?: (runtime: DurableBunRuntime) => void;
   writeNativeState?: (runtime: DurableBunRuntime) => void;
@@ -313,6 +315,15 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
       assertRestartOwnership();
       verifyRegistrationBeforeStop();
       stopSchedulerForRestart(() => { assertRestartOwnership(); verifyRegistrationBeforeStop(); });
+      // `schtasks /end` and the wrapper cleanup do not reach the wrapper's child, so a Home or a
+      // connected Child proxy survives them. Stop that home-verified tracked proxy the way
+      // `ocx service stop` does before proving nothing answers on the port.
+      assertRestartOwnership();
+      verifyRegistrationBeforeStop();
+      await (deps.stopTrackedProxy ?? (async () => {
+        const { stopTrackedProxyIfRunning } = await import("./orchestration");
+        return stopTrackedProxyIfRunning();
+      }))();
       const live = await (deps.schedulerProxyStillLive ?? (async () => {
         const { proxyStillLiveAfterStop } = await import("./orchestration");
         return proxyStillLiveAfterStop({ canRespawn: true });

@@ -24,6 +24,7 @@ async function scenario(run: (deps: RepairServiceDeps, effects: string[]) => Pro
     readSchedulerXml: () => healthy, resolveExpectedUserId: () => sid, schedulerLauncher: launcher,
     prepareDisconnectedClientRestart: async () => {},
     stopScheduler: () => { effects.push("stop"); }, killServiceWrappers: () => { effects.push("wrappers"); },
+    stopTrackedProxy: async () => { effects.push("tracked"); },
     schedulerProxyStillLive: async () => { effects.push("verify-stopped"); return null; },
     writeSchedulerAssets: () => { effects.push("assets"); }, startScheduler: () => { effects.push("start"); },
     writeSchedulerState: () => { effects.push("state"); },
@@ -35,7 +36,17 @@ async function scenario(run: (deps: RepairServiceDeps, effects: string[]) => Pro
 test("scheduler restart without a disconnected client cleans and verifies wrappers before replacement", async () => {
   await scenario(async (deps, effects) => {
     await repairService(deps);
-    expect(effects).toEqual(["stop", "wrappers", "verify-stopped", "assets", "start", "state"]);
+    expect(effects).toEqual(["stop", "wrappers", "tracked", "verify-stopped", "assets", "start", "state"]);
+  });
+});
+
+test("a Home or connected Child proxy that survives schtasks /end is stopped by its tracked pid, and restart completes", async () => {
+  await scenario(async (deps, effects) => {
+    let trackedStopped = false;
+    deps.stopTrackedProxy = async () => { effects.push("tracked"); trackedStopped = true; };
+    deps.schedulerProxyStillLive = async () => { effects.push("verify-stopped"); return trackedStopped ? null : { port: 10100 }; };
+    await repairService(deps);
+    expect(effects).toEqual(["stop", "wrappers", "tracked", "verify-stopped", "assets", "start", "state"]);
   });
 });
 
@@ -48,7 +59,7 @@ test("disconnected scheduler callback shares one guarded wrapper cleanup with or
     });
     try {
       await repairService(deps);
-      expect(effects).toEqual(["stop", "wrappers", "client-exited", "verify-stopped", "assets", "start", "state"]);
+      expect(effects).toEqual(["stop", "wrappers", "client-exited", "tracked", "verify-stopped", "assets", "start", "state"]);
     } finally { cleanup.mockRestore(); }
   });
 });
@@ -57,7 +68,7 @@ test("surviving scheduler proxy refuses replacement after owned wrapper cleanup"
   await scenario(async (deps, effects) => {
     deps.schedulerProxyStillLive = async () => ({ port: 10100 });
     await expect(repairService(deps)).rejects.toThrow("still running");
-    expect(effects).toEqual(["stop", "wrappers"]);
+    expect(effects).toEqual(["stop", "wrappers", "tracked"]);
   });
 });
 
@@ -94,6 +105,6 @@ test("ownership changing during awaited stop verification refuses replacement", 
     deps.readOwnership = () => ({ kind: "none", revision });
     deps.schedulerProxyStillLive = async () => { revision++; return null; };
     await expect(repairService(deps)).rejects.toThrow("ownership changed");
-    expect(effects).toEqual(["stop", "wrappers"]);
+    expect(effects).toEqual(["stop", "wrappers", "tracked"]);
   });
 });
