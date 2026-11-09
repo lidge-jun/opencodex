@@ -10,6 +10,7 @@ import {
   formatClientRetryAfter,
   resolveClientRetryAfter,
 } from "../../lib/retry-after";
+import { isMetaMusePlanFailure, META_MUSE_PLAN_REFUSAL_MESSAGE } from "../../providers/meta-muse-plan-refusal";
 
 function isCyberPolicyBody(body: string): boolean {
   if (isCyberPolicyMessage(body)) return true;
@@ -92,6 +93,27 @@ export function formatPassthroughUpstreamError(
 ): Response {
   const trimmed = bodyText.trim();
   const now = options?.now ?? Date.now();
+  // Meta's Muse Code subscription refusal is relayed as this proxy's own explanation (#8352):
+  // the upstream body names the restriction but not the supported path, and a verbatim relay
+  // reads as a rejected credential. The shared classifier keeps the subscription class.
+  if (isMetaMusePlanFailure(status, trimmed)) {
+    const refusal = formatErrorResponse(status, "permission_error", META_MUSE_PLAN_REFUSAL_MESSAGE);
+    if (!options?.headers) {
+      return options?.statusText
+        ? new Response(refusal.body, { status: refusal.status, statusText: options.statusText, headers: refusal.headers })
+        : refusal;
+    }
+    // The body is this proxy's own, but the relayed headers the caller already sanitized (the
+    // upstream request id among them) stay; a plan restriction names no wait.
+    const headers = new Headers(options.headers);
+    for (const name of ["content-length", "content-encoding", "retry-after"]) headers.delete(name);
+    refusal.headers.forEach((value, name) => headers.set(name, value));
+    return new Response(refusal.body, {
+      status: refusal.status,
+      ...(options.statusText ? { statusText: options.statusText } : {}),
+      headers,
+    });
+  }
   const upstreamRetryAfter = options?.headers?.get("retry-after")?.trim() || undefined;
   const cyberPolicyFailure = isCyberPolicyBody(trimmed);
   const replayRefusal = options?.replayRefusal === true || isReplayRefusalBody(trimmed);
