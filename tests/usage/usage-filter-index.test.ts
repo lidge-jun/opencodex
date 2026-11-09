@@ -1107,6 +1107,8 @@ describe("filtered usage index availability", () => {
     const appended = await getFilteredUsageAggregate({ provider: "openai" });
     expect(observeHome()).toEqual(before);
     for (const result of [first, other, appended]) expect(result.filterIndex).toBeDefined();
+    // The append really went through a writable refresh, not a retained answer.
+    expect(appended.filterIndex?.totalRows).toBe(21);
   });
 
   test("a passive read never creates or writes index files", async () => {

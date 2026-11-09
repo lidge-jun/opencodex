@@ -45,7 +45,9 @@ offset that no longer frames a complete row drops the projection instead of serv
 answer. `usage.jsonl` stays authoritative and is never truncated or rewritten.
 
 The index keeps its `-wal` and `-shm` sidecars after the last connection closes
-(`SQLITE_FCNTL_PERSIST_WAL` on every connection that can write). SQLite's default deletes them on
+(`SQLITE_FCNTL_PERSIST_WAL` on every connection that can write, set only once the file classified
+as this projection; a `journal_size_limit` truncates the kept WAL to empty on that close). SQLite's
+default deletes them on
 the final close, which changed the config directory on every filtered query. On Windows a changed
 config directory re-runs its ACL harden, whose inherited-ACE rewrite moves `usage.jsonl`'s
 ChangeTime, and both the usage aggregate and this index then rebuild from the whole ledger.

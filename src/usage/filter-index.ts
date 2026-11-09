@@ -87,6 +87,8 @@ const MAX_REFRESH_ATTEMPTS = 3;
 // asynchronously instead of parking the event loop behind another writer. A single ingest batch
 // or publish holds the write lock for a few milliseconds.
 const SQLITE_BUSY_TIMEOUT_MS = 250;
+/** Bound on the WAL kept between checkpoints; it is truncated to empty on the last close. */
+const RETAINED_WAL_LIMIT_BYTES = 4 * 1024 * 1024;
 const BATCH_BUSY_RETRIES = 3;
 const BATCH_BUSY_RETRY_MS = 5;
 const BUSY_RETRY_DELAYS_MS = [10, 25, 50] as const;
@@ -470,10 +472,15 @@ function ensureSchema(db: Database, classification: "fresh" | "ours"): void {
  * inherited-ACE rewrite moved usage.jsonl's ChangeTime, and both the usage aggregate and this
  * index then rebuilt from the whole ledger. macOS's system SQLite already persists WAL; this makes
  * every platform behave that way. Read-only connections never delete the sidecars, so only the
- * connections that can write set it.
+ * connections that can write set it, and only after the file classified as this projection: a
+ * foreign WAL database keeps SQLite's default and leaves nothing behind.
+ *
+ * A size limit makes the retained WAL truncate to empty when the last connection closes, so a
+ * large rebuild does not leave its WAL on disk; the file stays, the bytes do not.
  */
 function keepWalSidecars(db: Database): void {
   db.fileControl(sqliteConstants.SQLITE_FCNTL_PERSIST_WAL, 1);
+  db.exec(`PRAGMA journal_size_limit = ${RETAINED_WAL_LIMIT_BYTES}`);
 }
 
 function openIndexForWrite(dir: string, path: string): Database {
@@ -481,9 +488,9 @@ function openIndexForWrite(dir: string, path: string): Database {
   preparePrivateSqliteDatabase(path);
   const db = new Database(path, { create: true });
   try {
-    keepWalSidecars(db);
     const classification = classifyDatabase(db);
     if (classification === "foreign") throw new UsageFilterIndexForeignError();
+    keepWalSidecars(db);
     if (!existed) {
       // Register only names this module is about to create; an existing sidecar may belong to
       // something else and is never adopted.
@@ -526,8 +533,8 @@ function openIndexForRead(path: string): Database {
     if (!existsSync(path)) throw error;
     const db = new Database(path, { create: false });
     try {
-      keepWalSidecars(db);
       if (classifyDatabase(db) !== "ours") throw new UsageFilterIndexForeignError();
+      keepWalSidecars(db);
       return db;
     } catch (inner) {
       try { db.close(); } catch { /* already closed */ }
