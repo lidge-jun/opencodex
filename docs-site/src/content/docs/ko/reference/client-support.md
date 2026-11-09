@@ -18,34 +18,34 @@ opencodex는 AI 코딩 도구와 모델을 잇는 하나의 로컬 게이트웨�
 
 | 클라이언트 | 네이티브 | 설정 내보내기 | 관리형 파일 연동 | 수신 프로토콜 | 지원 수준 | 실행 검증 | 참고 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Codex (CLI, app, SDK) | 예 | — | — | Responses (검토됨) | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/codex-integration/codex-inject-missing-config.test.ts)) | — | opencodex가 직접 설정하며 내보내는 설정 파일은 없습니다. [가이드](/ko/guides/codex-integration/) |
-| Claude Code | 예 | — | — | Anthropic Messages (검토됨) | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/claude-integration/claude-cli.test.ts)) | — | opencodex가 직접 설정하며 내보내는 설정 파일은 없습니다. [가이드](/ko/guides/claude-code/) |
+| Codex (CLI, app, SDK) | 예 | — | — | Responses (검토됨) | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/codex-integration/codex-inject-missing-config.test.ts)) | — | opencodex가 직접 설정하며 내보내는 설정 파일은 없습니다. [가이드](/ko/guides/codex-integration/) |
+| Claude Code | 예 | — | — | Anthropic Messages (검토됨) | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/claude-integration/claude-cli.test.ts)) | — | opencodex가 직접 설정하며 내보내는 설정 파일은 없습니다. [가이드](/ko/guides/claude-code/) |
 | Claude Desktop | 예 | — | — | Anthropic Messages (검토됨) | implemented | — | opencodex가 직접 설정하며 내보내는 설정 파일은 없습니다. |
-| Grok Build | 예 | — | — | Responses (검토됨) | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/providers/xai/grok-config-inject.test.ts)) | — | opencodex가 직접 설정하며 내보내는 설정 파일은 없습니다. [가이드](/ko/guides/grok-build/) |
-| Qoder | — | JSON | 예 | OpenAI 호환(엔드포인트는 클라이언트가 선택) | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/qoder-client.test.ts)) | — | 로컬 리스너 전용. |
+| Grok Build | 예 | — | — | Responses (검토됨) | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/providers/xai/grok-config-inject.test.ts)) | — | opencodex가 직접 설정하며 내보내는 설정 파일은 없습니다. [가이드](/ko/guides/grok-build/) |
+| Qoder | — | JSON | 예 | OpenAI 호환(엔드포인트는 클라이언트가 선택) | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/qoder-client.test.ts)) | — | 로컬 리스너 전용. |
 | Qoder CN | — | JSON | 예 | OpenAI 호환(엔드포인트는 클라이언트가 선택) | implemented | — | 로컬 리스너 전용. |
-| WorkBuddy | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/agent-clients.test.ts)) | — | 로컬 리스너 전용. 적용 전에 클라이언트별 검사를 실행하며 거부할 수 있습니다. |
+| WorkBuddy | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/agent-clients.test.ts)) | — | 로컬 리스너 전용. 적용 전에 클라이언트별 검사를 실행하며 거부할 수 있습니다. |
 | WorkBuddy AI | — | JSON | 예 | Chat Completions | implemented | — | 로컬 리스너 전용. 적용 전에 클라이언트별 검사를 실행하며 거부할 수 있습니다. |
-| OpenCode | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export.test.ts)) | — | 원격 리스너도 지원합니다(API 키 헤더를 추가). [가이드](/ko/guides/opencode/) |
-| Pi | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export.test.ts)) | — | 로컬 리스너 전용. [가이드](/ko/guides/pi/) |
-| Oh My Pi (omp) | — | YAML | 예 | Chat Completions; Responses (네이티브 OpenAI 모델만) | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export.test.ts)) | — | 로컬 리스너 전용. 자기 YAML 블록만 수정합니다. |
-| Hermes | — | YAML | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/hermes-catalog-refresh.test.ts)) | — | 원격 리스너도 지원합니다(API 키 헤더를 추가). 자기 YAML 블록만 수정합니다. |
-| OpenClaw | — | JSON5 | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/gui/integrations-invariants.test.ts)) | — | 원격 리스너도 지원합니다(API 키 헤더를 추가). |
-| Kimi CLI | — | TOML | 예 | OpenAI 호환(엔드포인트는 클라이언트가 선택) | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export-new-clients.test.ts)) | — | 로컬 리스너 전용. |
-| Gajae | — | YAML | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/client-export-modality-enum.test.ts)) | — | 로컬 리스너 전용. |
-| DSH | — | YAML | 예 | Responses | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export.test.ts)) | — | 로컬 리스너 전용. 클라이언트의 현재 provider 저장소에 씁니다. 자기 YAML 블록만 수정합니다. 설정 파일 옆 잠금 파일로 쓰기를 조율합니다. |
+| OpenCode | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | 원격 리스너도 지원합니다(API 키 헤더를 추가). [가이드](/ko/guides/opencode/) |
+| Pi | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | 로컬 리스너 전용. [가이드](/ko/guides/pi/) |
+| Oh My Pi (omp) | — | YAML | 예 | Chat Completions; Responses (네이티브 OpenAI 모델만) | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | 로컬 리스너 전용. 자기 YAML 블록만 수정합니다. |
+| Hermes | — | YAML | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/hermes-catalog-refresh.test.ts)) | — | 원격 리스너도 지원합니다(API 키 헤더를 추가). 자기 YAML 블록만 수정합니다. |
+| OpenClaw | — | JSON5 | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/gui/integrations-invariants.test.ts)) | — | 원격 리스너도 지원합니다(API 키 헤더를 추가). |
+| Kimi CLI | — | TOML | 예 | OpenAI 호환(엔드포인트는 클라이언트가 선택) | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export-new-clients.test.ts)) | — | 로컬 리스너 전용. |
+| Gajae | — | YAML | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/client-export-modality-enum.test.ts)) | — | 로컬 리스너 전용. |
+| DSH | — | YAML | 예 | Responses | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | 로컬 리스너 전용. 클라이언트의 현재 provider 저장소에 씁니다. 자기 YAML 블록만 수정합니다. 설정 파일 옆 잠금 파일로 쓰기를 조율합니다. |
 | MCode | — | YAML | 예 | Anthropic Messages | implemented | — | 로컬 리스너 전용. 설정 파일 옆 잠금 파일로 쓰기를 조율합니다. |
-| ZCode | — | JSON | 예 | Responses (검토됨) | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/integrations-current-store.test.ts)) | — | 로컬 리스너 전용. 클라이언트의 현재 provider 저장소에 씁니다. 클라이언트가 이 설정값으로 엔드포인트를 고릅니다(클라이언트 문서 동작 기준으로 리뷰함). |
-| Command Code | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/command-code-client.test.ts)) | — | 로컬 리스너 전용. 설정 파일 옆 잠금 파일로 쓰기를 조율합니다. |
-| Prime | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/prime-client.test.ts)) | — | 로컬 리스너 전용. |
-| Aside | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/aside-profiles-catalog-refresh.test.ts)) | — | 로컬 리스너 전용. |
-| Raycast | — | YAML | 예 | Chat Completions (검토됨) | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/raycast-client.test.ts)) | — | 로컬 리스너 전용. 클라이언트가 이 설정값으로 엔드포인트를 고릅니다(클라이언트 문서 동작 기준으로 리뷰함). |
-| omo | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/omo-client.test.ts)) | — | 로컬 리스너 전용. |
-| Cline | — | JSON | 예 | Responses | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/cline-client.test.ts)) | — | 로컬 리스너 전용. 설정 파일 옆 잠금 파일로 쓰기를 조율합니다. |
-| Kilo Code | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/client-export-reasoning-controls.test.ts)) | — | 원격 리스너도 지원합니다(API 키 헤더를 추가). |
-| Factory Droid | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/droid-client.test.ts)) | — | 로컬 리스너 전용. [가이드](/ko/guides/factory-droid/) |
-| Gentle Shell | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/gentle-shell-client.test.ts)) | — | 로컬 리스너 전용. |
-| T3 Code | — | JSON | 예 | Anthropic Messages | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/t3code-client.test.ts)) | — | 로컬 리스너 전용. 적용 전에 클라이언트별 검사를 실행하며 거부할 수 있습니다. |
+| ZCode | — | JSON | 예 | Responses (검토됨) | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/integrations-current-store.test.ts)) | — | 로컬 리스너 전용. 클라이언트의 현재 provider 저장소에 씁니다. 클라이언트가 이 설정값으로 엔드포인트를 고릅니다(클라이언트 문서 동작 기준으로 리뷰함). |
+| Command Code | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/command-code-client.test.ts)) | — | 로컬 리스너 전용. 설정 파일 옆 잠금 파일로 쓰기를 조율합니다. |
+| Prime | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/prime-client.test.ts)) | — | 로컬 리스너 전용. |
+| Aside | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/aside-profiles-catalog-refresh.test.ts)) | — | 로컬 리스너 전용. |
+| Raycast | — | YAML | 예 | Chat Completions (검토됨) | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/raycast-client.test.ts)) | — | 로컬 리스너 전용. 클라이언트가 이 설정값으로 엔드포인트를 고릅니다(클라이언트 문서 동작 기준으로 리뷰함). |
+| omo | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/omo-client.test.ts)) | — | 로컬 리스너 전용. |
+| Cline | — | JSON | 예 | Responses | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/cline-client.test.ts)) | — | 로컬 리스너 전용. 설정 파일 옆 잠금 파일로 쓰기를 조율합니다. |
+| Kilo Code | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/client-export-reasoning-controls.test.ts)) | — | 원격 리스너도 지원합니다(API 키 헤더를 추가). |
+| Factory Droid | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/droid-client.test.ts)) | — | 로컬 리스너 전용. [가이드](/ko/guides/factory-droid/) |
+| Gentle Shell | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/gentle-shell-client.test.ts)) | — | 로컬 리스너 전용. |
+| T3 Code | — | JSON | 예 | Anthropic Messages | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/t3code-client.test.ts)) | — | 로컬 리스너 전용. 적용 전에 클라이언트별 검사를 실행하며 거부할 수 있습니다. |
 
 ## 수신 엔드포인트
 

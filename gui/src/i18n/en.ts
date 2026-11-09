@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 // English — source of truth. Its keys define the TKey type; de/fr/ko/zh/zh-TW/ru/ja/tr must match (compile-checked).
 // Strings with {cmd} render a <code> chip via <Trans>; {var} are plain interpolations.
 /**
@@ -141,6 +142,7 @@ export const en = {
   ...connectV2Copy("en"),
   ...startupV2Copy("en"),
   ...proxyV2Copy("en"),
+  ...telemetryProfileCopy("en"),
   "claude.tierDefaults.unset": "Unset (keep existing Claude setting)",
   "claude.tierDefaults.recovery": "Apply stopped and automatic restore failed. Check the backup below before retrying.",
   "claude.tierDefaults.title": "CLI tier defaults",
@@ -361,6 +363,7 @@ export const en = {
   "auth.adminTokenHelp": "This is the OpenCodex management admin token, not a provider API key. The proxy writes it to ~/.opencodex/admin-api-token (or $OPENCODEX_HOME/admin-api-token) on first start, and OPENCODEX_ADMIN_AUTH_TOKEN overrides it.",
   "auth.rememberDevice": "Remember this device",
   "auth.rememberDeviceHint": "Keep a revocable HttpOnly dashboard session for 30 days, not the admin token. Requires a direct HTTPS dashboard that is same-origin with the API (or local loopback).",
+  "auth.rememberUnsupported": "OpenCodex cannot remember this device at this address. Remember needs a direct HTTPS dashboard (or local loopback); behind a reverse proxy, sign in without it.",
   "connection.forgetDevice": "Forget this device",
   "connection.forgetDeviceFailed": "Could not forget this device. The session was kept.",
   "auth.adminTokenDocsLink": "How to find it",
@@ -829,6 +832,8 @@ export const en = {
   "prov.port": "Port",
   "prov.default": "Default",
   "prov.loadingConfig": "Loading…",
+  "prov.targetChanged": "The dashboard target changed. Reopen this form on the current server.",
+  "prov.legacyTargetPreflight": "This proxy checks the save target before sending, but cannot verify it atomically. Update the proxy for target-bound saves.",
   "prov.saved": "Saved! Restart proxy to apply.",
   "prov.loadConfigFail": "Failed to load config",
   "prov.invalidJson": "Invalid JSON",
@@ -2096,12 +2101,19 @@ export const en = {
   "pws.pacingRemoveModel": "Remove request pacing override for {model}",
   "pws.pacingRuleRequired": "Enable request pacing only after setting a provider limit or a model override.",
   "pws.pacingCapInvalid": "Max concurrent requests must be a whole number of 1 or more.",
+  "pws.pacingValueInvalid": "Enter a valid pacing value: RPM 1/60–60,000, delay 1–3,600,000 ms, concurrency 1 or more.",
   "pws.saving": "Saving…",
   "pws.settingsSaved": "Settings saved.",
   "pws.accountModeSaved": "Account mode saved.",
   "pws.accountModeFailed": "Could not switch the account mode.",
   "pws.accountModeConfirm": "Switch the OpenAI account mode? Running conversations will be reassigned to the other mode's account set, and quota usage will be tracked against the new mode.",
   "pws.settingsUnsavedBar": "You have unsaved changes.",
+  "pws.draftTarget": "Editing {target}",
+  "pws.draftConflict": "The saved settings changed on this server while you were editing. Your draft is kept; choose which values to keep.",
+  "pws.draftConflictFields": "These fields changed on both sides. Edit the draft or use the saved values:",
+  "pws.draftConflictUseSaved": "Use saved values",
+  "pws.draftConflictKeepDraft": "Keep my draft",
+  "pws.draftConflictResolveFirst": "Choose which values to keep before saving.",
   "pws.unsavedLeaveBody": "You have unsaved changes. Save them before leaving?",
   "pws.unsavedLeaveTitle": "Unsaved changes",
   "pws.attentionRequired": "Attention required",
@@ -2623,6 +2635,10 @@ export const en = {
   "integrations.preview.loading": "Loading the exact change plan…",
   "integrations.preview.failed": "The change plan could not be loaded. Nothing was changed.",
   "integrations.preview.stale": "The integration changed while you were confirming. Review the updated plan and confirm again.",
+  "integrations.preview.catalogUnavailable": "The model catalog is not loaded yet, so this change cannot be planned. Load it to continue.",
+  "integrations.preview.loadCatalogRetry": "Load catalog and retry",
+  "integrations.preview.recovering": "Loading catalog…",
+  "integrations.action.chooseProfile": "Choose profile",
   "integrations.dialog.apply.title": "Apply this integration?",
   "integrations.dialog.apply.changes": "opencodex will add its managed provider settings to the client configuration.",
   "integrations.dialog.apply.breakage": "The client will use the models currently exposed by this opencodex instance.",

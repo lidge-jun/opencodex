@@ -26,7 +26,7 @@ bun run dev:gui
 
 远程仪表盘会显示标准密码表单，浏览器密码管理器可以提示保存并自动填充 token。仪表盘本身只在内存中保存 token，不会写入 `localStorage` 或 `sessionStorage`；是否持久保存完全由浏览器或密码管理器决定。
 
-**记住此设备** 默认关闭。直接 HTTPS 仪表板（或本地回环）会将管理员令牌交换为服务器签发的 HttpOnly、SameSite=Strict 设备 Cookie，以及单独存入本站 localStorage 的设备证明。HTTPS 下 Cookie 启用 Secure 且仅限本主机。Cookie 和证明都不是管理员令牌，且都不能单独使用。同一主机名的不同端口共享 Cookie；按来源隔离的证明将记住的设备绑定到本仪表板来源。仍建议使用专用主机名。管理员令牌不存入 localStorage 或 sessionStorage。浏览器存储不可用或无法保存证明时，记住设备会报告不可用。
+**记住此设备** 默认关闭。直接 HTTPS 仪表板（或本地回环）会将管理员令牌交换为服务器签发的 HttpOnly、SameSite=Strict 设备 Cookie，以及单独存入本站 localStorage 的设备证明。HTTPS 下 Cookie 启用 Secure 且仅限本主机。Cookie 和证明都不是管理员令牌，且都不能单独使用。同一主机名的不同端口共享 Cookie；按来源隔离的证明将记住的设备绑定到本仪表板来源。仍建议使用专用主机名。管理员令牌不存入 localStorage 或 sessionStorage。浏览器存储不可用或无法保存证明时，记住设备会报告不可用。对于位于终止 TLS 的反向代理之后的独立仪表板，OpenCodex 看到的是普通 HTTP 请求，因此会拒绝为该地址记住设备；登录对话框会说明原因并关闭该选项，不勾选记住设备仍可正常登录。受信任的 Hub 管理监听器例外，仍可记住设备。
 
 私有 dashboard-sessions.json 保存 Cookie、证明、管理员凭据和浏览器标识的哈希、服务器来源及固定30天有效期。重新打开 Safari 主屏幕应用时，有效设备记录可恢复短期会话。记住的会话不能批准需要同意的操作：GitHub 星标、重置额度消费、提示词层编辑、Meta Muse 登录、桌面兼容性更改或配额验证。这些操作请使用新的本地会话或已配对会话。中继、跨来源和远程明文 HTTP 不支持记住设备。过期、浏览器标识改变，或更换管理员令牌并重启服务器后需重新登录。
 
@@ -57,6 +57,7 @@ bun run dev:gui
 | **启动安全** | 显示注入的 Codex 路由能否在重启后继续工作，并分别显示服务、launcher shim 状态和准确的修复命令。 |
 | **Windows 托盘** | 安装用户登录托盘，一键控制代理启动、停止、重启、面板和状态。托盘不是代理重启服务。 |
 | **Codex 自动启动** | 允许已安装的 Codex launcher shim 运行 `ocx ensure`。此开关不会安装 shim 或后台服务。 |
+| **遥测** | 在 **Proxy details**（`#proxy-telemetry`）下切换**共享匿名使用统计**并查看**预览 JSON**。首次运行或更新后的同意弹窗仅在点击**继续**时保存选择（`PUT /api/telemetry`），关闭弹窗不会记录任何内容。参见[遥测与隐私](/zh-cn/guides/telemetry/)。 |
 | **Providers** | 添加、编辑、设为默认（仅已启用）、启用/禁用、删除 provider，并在支持时管理 OAuth 账号池和 API key 池。删除当前默认时，会切换到剩余的第一个已启用 provider（若存在）；否则拒绝删除并保留当前默认。Claude（Anthropic）OAuth 池中，每个已登录账号显示各自的 5 小时与周限额条（用量按凭证计）；探测失败时保留上次已知数值并标记为暂时不可用。 未选中任何 provider 时显示的 Providers 概览带有**刷新全部额度**按钮，会在服务端一次性重新读取所有已配置的 provider；上游探测失败的 provider 会保留上次已知数值，因此状态文案只表示检查已完成，而不声称每个数值都是最新的，各行自身的检查时间仍是该 provider 的新鲜度信号。 |
 | **Add provider** | 标签页上方的单个搜索框可同时搜索账号、免费、本地、付费四个标签页。搜索时选中的标签页不会跳转，结果按标签页分组并显示数量。本地运行时（Ollama、vLLM、LM Studio、LiteLLM）拥有独立标签页，过长的说明会截断为两行，点击即可查看全文。 |
 | **Codex Auth** | 添加 ChatGPT/Codex 池账号，选择下一 session 的账号，刷新 5h / 每周 / 30d 配额，启用或停用配额自动切换，设置其 1–100% 阈值和临时故障 failover。 |

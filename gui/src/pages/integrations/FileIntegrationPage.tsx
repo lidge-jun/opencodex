@@ -12,6 +12,7 @@ import RaycastPlanNotice from "./RaycastPlanNotice";
 import DroidReasoningDefaultsPanel from "./DroidReasoningDefaultsPanel";
 import { RollbackHistory } from "./RollbackHistory";
 import { describeRefusal } from "./refusal-copy";
+import { previewRecoveryFor, type PreviewRecovery } from "./preview-recovery";
 import {
   loadIntegrationJournal,
   loadIntegrationState,
@@ -21,7 +22,6 @@ import {
   bindingFor,
   IntegrationApiError,
   deleteJournalEntry,
-  isIntegrationPreviewUnavailable,
   isMissingJournalEntry,
   type FileIntegrationClientId,
   type IntegrationJournalRow,
@@ -165,6 +165,7 @@ function FileIntegrationControls({
     plan: IntegrationMutationPlan | null;
     loading: boolean;
     failure: string | null;
+    recovery: PreviewRecovery | null;
     droidReasoningDefaults?: Record<string, string>;
   } | null>(null);
   const previewAbortRef = useRef<AbortController | null>(null);
@@ -229,30 +230,65 @@ function FileIntegrationControls({
         ? droidReasoningDraft.values
         : undefined)
       : undefined,
+    /** Recovery replaces the failed plan it is retrying; the first request never does. */
+    replacing = false,
   ) => {
-    if (!status || pending || plannedMutation) return;
+    if (!status || pending || (plannedMutation && !replacing)) return;
     const defaultsSnapshot = reasoningDefaults === undefined ? undefined : { ...reasoningDefaults };
     const controller = new AbortController();
     const generation = previewGenerationRef.current + 1;
     previewGenerationRef.current = generation;
     previewAbortRef.current?.abort();
     previewAbortRef.current = controller;
-    setPlannedMutation({ operation, plan: null, loading: true, failure: null });
+    setPlannedMutation({ operation, plan: null, loading: true, failure: null, recovery: null });
     try {
       const plan = await previewIntegrationMutation(apiBase, client, operation, controller.signal, profileId, defaultsSnapshot, hermesProfile);
       if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
       previewAbortRef.current = null;
-      setPlannedMutation({ operation, plan, loading: false, failure: null, droidReasoningDefaults: defaultsSnapshot });
+      setPlannedMutation({ operation, plan, loading: false, failure: null, recovery: null, droidReasoningDefaults: defaultsSnapshot });
     } catch (error) {
       if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
       previewAbortRef.current = null;
-      if (isIntegrationPreviewUnavailable(error)) {
-        setPlannedMutation(null);
-        refresh();
-        return;
-      }
-      setPlannedMutation({ operation, plan: null, loading: false, failure: t("integrations.preview.failed") });
+      // A missing retained roster is recoverable from this dialog. Closing it,
+      // as this used to, left the user with a button that appeared to do
+      // nothing at all; the preview itself never gathers models.
+      const recovery = previewRecoveryFor(error);
+      setPlannedMutation({
+        operation, plan: null, loading: false, recovery,
+        failure: recovery === null ? t("integrations.preview.failed") : null,
+      });
     }
+  };
+
+  /*
+   * Re-read this surface's own data, then ask for the plan again.
+   *
+   * The state resource refreshes through the ordinary profile/client read, and the
+   * server's integration reads are the loads that retain an export roster. No new
+   * endpoint and no write: the preview stays a read, and the retry only repeats
+   * the question now that an answer exists.
+   */
+  const recoverPlannedMutation = async () => {
+    const pendingOperation = plannedMutation;
+    if (!pendingOperation) return;
+    // Close and any newer preview move the generation; a stale recovery must not revive it.
+    const generation = previewGenerationRef.current;
+    const defaults = pendingOperation.droidReasoningDefaults;
+    /*
+     * This read IS the recovery: the server retains its export roster from an
+     * ordinary integration load, so waiting for this one is what makes the
+     * next preview answerable. The resource refresh below only repaints the
+     * surface with the same data; it cannot be awaited for the answer.
+     */
+    try {
+      await loadIntegrationState(apiBase, client, undefined, profileId, hermesProfile);
+    } catch {
+      // A failed read is not a plan; fall through and let the preview say so
+      // again rather than reporting a second, unrelated error.
+    }
+    if (generation !== previewGenerationRef.current) return;
+    refresh();
+    await requestMutation(pendingOperation.operation, defaults, true);
   };
 
   const closePlannedMutation = () => {
@@ -503,6 +539,8 @@ function FileIntegrationControls({
           plan={plannedMutation.plan}
           planLoading={plannedMutation.loading}
           planFailure={plannedMutation.failure}
+          previewRecovery={plannedMutation.recovery}
+          onPreviewRecovery={recoverPlannedMutation}
           missingStorePath={status.supersededReason === "missing-store" ? status.supersededBy : undefined}
           onClose={closePlannedMutation}
           onConfirm={async plan => { if (plan) await mutate(plan); }}

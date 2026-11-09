@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 import type { TKey } from "./en";
 
 /**
@@ -139,6 +140,7 @@ export const zh: Record<TKey, string> = {
   ...connectV2Copy("zh"),
   ...startupV2Copy("zh"),
   ...proxyV2Copy("zh"),
+  ...telemetryProfileCopy("zh"),
   "claude.tierDefaults.unset": "未设置（保留现有 Claude 设置）",
   "claude.tierDefaults.recovery": "应用已停止，自动恢复失败。重试前请检查下方备份。",
   "claude.tierDefaults.title": "CLI 层级默认模型",
@@ -426,6 +428,7 @@ export const zh: Record<TKey, string> = {
   "auth.adminTokenHelp": "这是 OpenCodex 管理 API 的管理员令牌，不是服务商 API 密钥。代理首次启动时会写入 ~/.opencodex/admin-api-token（或 $OPENCODEX_HOME/admin-api-token），设置 OPENCODEX_ADMIN_AUTH_TOKEN 可覆盖该值。",
   "auth.rememberDevice": "记住此设备",
   "auth.rememberDeviceHint": "保留可撤销的 HttpOnly 会话30天，不保存管理员令牌。需要直接访问与 API 同源的 HTTPS 仪表板（或本地回环）。",
+  "auth.rememberUnsupported": "OpenCodex 无法在此地址记住此设备。记住设备需要直接访问 HTTPS 仪表板（或本地回环）；在反向代理后面，请不勾选此项登录。",
   "connection.forgetDevice": "忘记此设备",
   "connection.forgetDeviceFailed": "无法忘记此设备。会话已保留。",
   "auth.adminTokenDocsLink": "如何查找",
@@ -812,6 +815,8 @@ export const zh: Record<TKey, string> = {
   "prov.port": "端口",
   "prov.default": "默认",
   "prov.loadingConfig": "加载中…",
+  "prov.targetChanged": "仪表板目标已更改。请在当前服务器上重新打开此表单。",
+  "prov.legacyTargetPreflight": "此代理会在发送前检查保存目标，但无法以原子方式验证。要使用目标绑定的保存，请更新代理。",
   "prov.saved": "已保存！重启代理以生效。",
   "prov.loadConfigFail": "加载配置失败",
   "prov.invalidJson": "无效的 JSON",
@@ -2002,6 +2007,10 @@ export const zh: Record<TKey, string> = {
   "integrations.preview.loading": "正在加载准确的更改计划…",
   "integrations.preview.failed": "无法加载更改计划。未进行任何更改。",
   "integrations.preview.stale": "确认期间集成状态已变化。请查看更新后的计划并再次确认。",
+  "integrations.preview.catalogUnavailable": "模型目录尚未加载，无法规划此更改。请加载后继续。",
+  "integrations.preview.loadCatalogRetry": "加载目录并重试",
+  "integrations.preview.recovering": "正在加载目录…",
+  "integrations.action.chooseProfile": "选择配置文件",
   "integrations.dialog.apply.title": "应用此集成？",
   "integrations.dialog.apply.changes": "opencodex 会将其管理的提供商设置添加到客户端配置。",
   "integrations.dialog.apply.breakage": "客户端将使用此 opencodex 实例当前提供的模型。",
@@ -3261,12 +3270,19 @@ export const zh: Record<TKey, string> = {
   "pws.pacingRemoveModel": "移除 {model} 的请求节流规则",
   "pws.pacingRuleRequired": "请先设置提供商限制或模型规则，再启用请求节流。",
   "pws.pacingCapInvalid": "最大并发请求数必须是大于或等于 1 的整数。",
+  "pws.pacingValueInvalid": "请输入有效的限速值：RPM 1/60–60,000，延迟 1–3,600,000 毫秒，并发数 1 或以上。",
   "pws.saving": "保存中…",
   "pws.settingsSaved": "设置已保存。",
   "pws.accountModeSaved": "账户模式已保存。",
   "pws.accountModeFailed": "无法切换账户模式。",
   "pws.accountModeConfirm": "切换 OpenAI 账户模式？正在进行的对话将重新分配到另一种模式的账户集合，配额用量将按新模式计入。",
   "pws.settingsUnsavedBar": "有未保存的更改。",
+  "pws.draftTarget": "正在编辑：{target}",
+  "pws.draftConflict": "编辑期间此服务器上已保存的设置发生了变化。草稿已保留，请选择要保留的值。",
+  "pws.draftConflictFields": "这些字段在两边都发生了变化。请编辑草稿或使用已保存的值：",
+  "pws.draftConflictUseSaved": "使用已保存的值",
+  "pws.draftConflictKeepDraft": "保留我的草稿",
+  "pws.draftConflictResolveFirst": "保存前请选择要保留的值。",
   "pws.unsavedLeaveBody": "有未保存的更改。离开前保存吗？",
   "pws.unsavedLeaveTitle": "未保存的更改",
   "pws.attentionRequired": "需要关注",

@@ -351,10 +351,8 @@ than nudged.
   they were deleted; `tests/ci-workflows/repo-hygiene.test.ts` now rejects
   those folders. When the PR resolves an issue, add
   `Closes #<number>` to link it. GitHub auto-closes the linked issue only
-  when the PR merges into the default branch (`main`); PRs here target
-  `dev`, so close the issue manually once the change is on `dev` while `main`
-  remains the default branch. After the maintainer switches the default to `dev`,
-  GitHub can close it automatically when the linked pull request merges.
+  when the PR merges into the default branch, which is `dev`, so a linked issue
+  closes when its pull request merges.
 - **Landing another author's work:** reimplementing, superseding, carrying, or
   rebasing someone else's pull request requires a `Co-authored-by` trailer
   naming that author, in the description or in a branch commit so it survives
@@ -396,12 +394,14 @@ than nudged.
 
 ## Branch policy
 
-- `dev` — the single development and integration branch and the target for every
-  ordinary pull request. Preview and stable releases are built from eligible
-  commits on this line, with versions stamped in build checkouts.
-- `main` and `preview` — protected historical branches retained for migration and
-  recovery. They are not integration or release promotion targets. Switching the
-  repository default branch to `dev` is a separate maintainer-controlled setting.
+- `dev` — the single development and integration branch, the repository default
+  branch, and the target for every ordinary pull request. Preview and stable
+  releases are built from eligible commits on this line, with versions stamped in
+  build checkouts.
+- `main` and `preview` were deleted once the single-branch model was in place.
+  Their released history remains reachable through tags; they are not
+  integration, promotion, or review targets, and no workflow may trigger on or
+  check out either branch.
 
 Bun-native TypeScript on `dev` is the only runtime line. If native code
 returns, the expectation is an incremental module (for example Rust via N-API)
@@ -416,9 +416,9 @@ Rebase pull requests are welcome. Bringing a stale branch onto the current head
 is ordinary maintenance — open it as a normal pull request and name the source
 commits in the description.
 
-The **`enforce-target`** CI check rejects pull requests whose head
-ancestry sits on the **`main`** tip while far behind **`dev`**, and rejects
-empty, thin, or malformed descriptions. If changed paths include files under
+The **`enforce-target`** CI check rejects pull requests whose base is not
+**`dev`** (stacked children excepted), and rejects empty, thin, or malformed
+descriptions. If changed paths include files under
 `gui/`, include a screenshot of the UI change in the description; the check
 re-runs on description edits until the screenshot is present. Drag the image
 into the description editor rather than committing it, or, when uploading from
@@ -440,16 +440,15 @@ local-validation box is an author attestation only — fork contributors cannot 
 repository CI; a maintainer has to — so the gate never disproves it; a new
 push still resets every box. A disproved claim unticks the matching box and
 keeps the PR a draft.
-Authors with repository push permission skip the ancestry heuristic only. As with approval requirements in
-[`MAINTAINERS.md`](./MAINTAINERS.md), the ancestry heuristic is a CI check
-rather than a branch rule. The branches themselves are protected: `dev`,
-`main`, and `preview` each require a pull request and block force-pushes and deletion.
+As with approval requirements in [`MAINTAINERS.md`](./MAINTAINERS.md), the
+wrong-base rule is a CI check rather than a branch rule. The branch itself is
+protected: `dev` requires a pull request and blocks force-pushes and deletion.
 For `dev` only, a current maintainer with GitHub `maintain` or `admin` access may
 explicitly integrate through a PR without another maintainer approval, including
 their own PR, under the policy in `MAINTAINERS.md`. Record the decision and exact-head
 CI evidence; keep outstanding maintainer objections and security review separate.
 The bypass is PR-only, so a direct push to `dev` remains rejected regardless of
-local hook settings. Contributor review and `main`/`preview` rules remain unchanged.
+local hook settings. Contributor review rules remain unchanged.
 
 [`MAINTAINERS.md`](./MAINTAINERS.md) is authoritative for review and merge
 policy (approvals, CI requirements, security review, promotion). This file
