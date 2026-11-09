@@ -369,6 +369,21 @@ describe("accountPoolStrategy new-session routing", () => {
     expect(parseCodexAccountPoolStrategy("invalid")).toBeNull();
   });
 
+  test("reset-near-weighted is accepted by Codex and Anthropic parsers", () => {
+    expect(parseCodexAccountPoolStrategy("reset-near-weighted")).toBe("reset-near-weighted");
+    expect(parseAccountPoolStrategy("reset-near-weighted")).toBe("reset-near-weighted");
+  });
+
+  test("reset-near-weighted prefers the account whose weekly reset is nearest", () => {
+    const config = makeThreeAccountConfig({ accountPoolStrategy: "reset-near-weighted" });
+    const now = Date.now();
+    const seconds = now / 1000;
+    setAccountQuotaFromParsed("a", { weeklyPercent: 30, weeklyResetAt: seconds + 3600, shortPercent: 30, shortResetAt: seconds + 3600 });
+    setAccountQuotaFromParsed("b", { weeklyPercent: 30, weeklyResetAt: seconds + 72 * 3600, shortPercent: 30, shortResetAt: seconds + 72 * 3600 });
+    setAccountQuotaFromParsed("c", { weeklyPercent: 30, weeklyResetAt: seconds + 96 * 3600, shortPercent: 30, shortResetAt: seconds + 96 * 3600 });
+    expect(resolveCodexAccountForThread(null, config, now)).toBe("a");
+  });
+
   test("reset-first compares both windows, previews without writes, and uses the same failover order", () => {
     const config = makeThreeAccountConfig({ accountPoolStrategy: "reset-first" });
     const now = Date.now();

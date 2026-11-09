@@ -90,9 +90,12 @@ async function pool(args: string[], json: boolean, deps: RuntimeApiDeps): Promis
   if (limit !== undefined) patch.autoSwitchThreshold = integer(limit, 0);
   if (sticky !== undefined) patch.stickyLimit = integer(sticky, 1);
   if (strategy !== undefined) {
-    // reset-first is a Codex and generic-pool strategy; the Anthropic pool does not run it.
-    if (!["quota", "round-robin", "fill-first", ...(isAnthropicInstanceId(provider) ? [] : ["reset-first"]),
-      ...(provider === "kiro" ? ["least-loaded"] : [])].includes(strategy)) usage();
+    // reset-first is a Codex and generic-pool strategy; reset-near-weighted is Codex and Anthropic.
+    const strategies = ["quota", "round-robin", "fill-first"];
+    if (!isAnthropicInstanceId(provider)) strategies.push("reset-first");
+    if (provider === "openai" || isAnthropicInstanceId(provider)) strategies.push("reset-near-weighted");
+    if (provider === "kiro") strategies.push("least-loaded");
+    if (!strategies.includes(strategy)) usage();
     patch.strategy = strategy;
   }
   if (window !== undefined) {
