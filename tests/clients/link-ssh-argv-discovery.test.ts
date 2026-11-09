@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { windowsOcxArgv, windowsNativeArgv, windowsChildHttpArgv, windowsPinnedSyncArgv, packedPowerShellArgv, powershellArgv, windowsScriptData, windowsScriptHelperSource, OCX_JOB_SOURCE, WINDOWS_CONTAINMENT_EXIT } from "../../src/link/remote-windows";
@@ -394,4 +394,27 @@ test.skipIf(process.platform === "win32")("runtime inspection reports the served
   expect(lines).toContain("ocx-inspect:kind:full");
   expect(lines).toContain("ocx-inspect:version:opencodex 2.99.0");
 });
+
+
+test.skipIf(process.platform === "win32")("an unreadable census falls through without stderr noise (#8359)", async () => {
+  const f = servedFixture();
+  f.census([join(f.home, "standalone/ocx")]);
+  chmodSync(join(f.home, ".opencodex/serving-runtimes.json"), 0o000);
+  const result = await f.run();
+  expect(result.stdout).toBe("0\nlink\0port\0");
+  expect(result.stderr).toBe("");
+}, SPAWN_BUDGET_MS);
+
+test.skipIf(process.platform === "win32")("only the first record's command counts; a later record is never run (#8359)", async () => {
+  const f = servedFixture();
+  const older = join(f.home, "older/ocx");
+  executable(older, "if [ \"$1\" = --version ]; then printf 'opencodex 2.80.0\\n'; exit 0; fi\nprintf 'older ran\\n'");
+  mkdirSync(join(f.home, ".opencodex"), { recursive: true });
+  writeFileSync(join(f.home, ".opencodex/serving-runtimes.json"), JSON.stringify({ runtimes: [
+    { version: "2.99.0", servedAt: "2026-11-09T00:00:00.000Z" },
+    { command: [older], version: "2.80.0", servedAt: "2026-11-08T00:00:00.000Z" },
+  ] }, null, 2) + "\n");
+  const result = await f.run();
+  expect(result.stdout).toBe("0\nlink\0port\0");
+}, SPAWN_BUDGET_MS);
 

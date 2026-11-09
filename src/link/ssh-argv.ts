@@ -141,26 +141,20 @@ export const REMOTE_COMMAND_NOT_FOUND = 127;
 export const REMOTE_PLATFORM_UNSUPPORTED = 125;
 
 /**
- * The remote sh script for every ocx call. `quoteRemote` single-quotes it, so the login shell
- * passes it through untouched and `$HOME`/`$PATH` expand in the remote `sh`; the arguments reach
- * ocx as `"$@"` without another round of parsing. After an ephemeral ocx-child, the install that
- * last started serving this home comes first (#8359): every `ocx start` that binds records its own
- * relaunch argv at the front of `serving-runtimes.json` (src/config/serving-runtimes.ts), `[ocx]`
- * for a compiled binary or `[bun, cli/index.ts]` for a package install. Only the first entry's
- * `command`, one or two absolute paths without quotes or backslashes, is read; any other shape
- * falls through. Desktop binaries then precede PATH candidates; each candidate must run --version
- * successfully. A missing runnable ocx exits 127.
- */
-/**
  * Reads the first \`command\` of \`serving-runtimes.json\` (#8359): one or two absolute paths without
  * quotes or backslashes, printed one per line, from a file of at most 64 KiB. Any other shape fails.
  * Shared by the ocx discovery, pinned sync and runtime inspection scripts.
  */
 export const REMOTE_SERVED_RUNTIME = `served_runtime() {
   [ -f "$1" ] || return 1
-  [ "$(wc -c < "$1" 2>/dev/null)" -le 65536 ] 2>/dev/null || return 1
+  served_size=$( { wc -c < "$1"; } 2>/dev/null ) || return 1
+  [ "$served_size" -le 65536 ] 2>/dev/null || return 1
   awk '
-    !open { if ($0 ~ /"command": \\[$/) open = 1; next }
+    !open {
+      if ($0 ~ /^ *"command": \\[$/) open = 1
+      else if ($0 ~ /^ *},?$/) exit
+      next
+    }
     $0 ~ /^ *\\],?$/ { closed = 1; exit }
     {
       line = $0; sub(/^ +/, "", line); sub(/,$/, "", line)
@@ -168,7 +162,7 @@ export const REMOTE_SERVED_RUNTIME = `served_runtime() {
       print substr(line, 2, length(line) - 2)
     }
     END { if (bad || !closed || !count) exit 1 }
-  ' "$1"
+  ' "$1" 2>/dev/null
 }
 `;
 
@@ -192,6 +186,17 @@ OCX_SERVED
 fi`;
 }
 
+/**
+ * The remote sh script for every ocx call. `quoteRemote` single-quotes it, so the login shell
+ * passes it through untouched and `$HOME`/`$PATH` expand in the remote `sh`; the arguments reach
+ * ocx as `"$@"` without another round of parsing. After an ephemeral ocx-child, the install that
+ * last started serving this home comes first, whatever its version (#8359): every `ocx start` that binds records its own
+ * relaunch argv at the front of `serving-runtimes.json` (src/config/serving-runtimes.ts), `[ocx]`
+ * for a compiled binary or `[bun, cli/index.ts]` for a package install. Only the first entry's
+ * `command`, one or two absolute paths without quotes or backslashes, is read; any other shape
+ * falls through. Desktop binaries then precede PATH candidates; each candidate must run --version
+ * successfully. A missing runnable ocx exits 127.
+ */
 const REMOTE_OCX_CANDIDATES = `ocx_entry=
 ${REMOTE_SERVED_RUNTIME}run_ocx_child() {
   for candidate in "$HOME/.local/bin/ocx-child" "$HOME/.cache/opencodex/bin/ocx-child"; do
