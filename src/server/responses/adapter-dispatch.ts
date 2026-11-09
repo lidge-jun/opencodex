@@ -35,7 +35,7 @@ import {
   sealRequestAttemptIdentity,
   recordAttemptCredentialSource,
 } from "../request-log";
-import { anthropicPoolCooldownResponse, clientCancelledResponse, readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-errors";
+import { anthropicPoolCooldownResponse, clientCancelledResponse, readDisplaySafeErrorText } from "./core-errors";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { redactSecretString } from "../../lib/redact";
 import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
@@ -101,19 +101,15 @@ import {
 } from "./core-opaque-recovery";
 import { createAnthropicThinkingRecovery } from "./anthropic-thinking-recovery";
 import { shouldAttemptImageTierRetry } from "../image-retry";
-import {
-  isTransientConsoleGoUploadRejection,
-  enrichOpenCodeZenUpstreamMessage,
-} from "../../providers/opencode-zen-rate-limit";
+import { isTransientConsoleGoUploadRejection } from "../../providers/opencode-zen-rate-limit";
 import { planReasoningEffortDowngrade } from "../../providers/reasoning-metadata";
+import { formatAdapterUpstreamFailure } from "./adapter-failure-message";
 import { consumeComboFailure } from "./core-combo-failure";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse, lateAttributionLimitResponse } from "./context-overflow";
 import { OllamaLateAttributionBudgetError } from "../../adapters/ollama-native";
 import { isFixedCodexAccount } from "./core-codex-account";
 import { recordSubagentQuotaFailureForThreadSpawn } from "../../codex/subagent-model-fallback";
 import {
-  isCyberPolicyCode,
-  CYBER_POLICY_FALLBACK_MESSAGE,
   CYBER_POLICY_ERROR_CODE,
   SEND_BUDGET_EXHAUSTED_CODE,
 } from "../../lib/errors";
@@ -1927,32 +1923,19 @@ export async function prepareAdapterExchange(
       // Upstreams occasionally echo request details in error bodies — scrub token-shaped
       // material before it reaches the client-facing error surface.
       const upstreamRetryAfter = upstreamResponse.headers.get("retry-after");
-      const normalized = normalizeUpstreamErrorText(errorText, "unknown error");
+      const { normalized, message } = formatAdapterUpstreamFailure({
+        status: upstreamResponse.status,
+        errorText,
+        route,
+        upstreamRetryAfter,
+        denialMessage: fallback => antigravityDenial.message(route.modelId, fallback),
+        logCtx,
+      });
       options.onCompactionRecoveryAdapterEvent?.({
         type: "error", status: upstreamResponse.status,
         errorType: normalized.type, code: normalized.code,
         message: "Structured upstream failure observed before client formatting",
       });
-      const message = antigravityDenial.message(route.modelId, normalized.cyberPolicy
-        ? normalized.message
-          ?? (isCyberPolicyCode(normalized.code) ? CYBER_POLICY_FALLBACK_MESSAGE : normalized.safeText)
-        : enrichOpenCodeZenUpstreamMessage(
-          `Provider error ${upstreamResponse.status}: ${normalized.safeText}`,
-          {
-            status: upstreamResponse.status,
-            providerName: route.providerName,
-            baseUrl: route.provider.baseUrl,
-            adapter: route.provider.adapter,
-            authMode: route.provider.authMode,
-            hasApiKey: Boolean(route.provider.apiKey?.trim()),
-            upstreamRetryAfter,
-            upstreamErrorType: normalized.type,
-            upstreamErrorCode: normalized.code,
-            // This recovery path is the HTTP Responses wire; custom runTurn transports
-            // never reach enrichOpenCodeZenUpstreamMessage here.
-            supportsHttpSameKeyRetry: true,
-          },
-        ));
       const retryAfter = normalized.cyberPolicy
         ? undefined
         : resolveClientRetryAfter({

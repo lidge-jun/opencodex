@@ -99,6 +99,7 @@
   "desktop-runtime-identity.test.ts": "clients",
   "desktop-start-at-login-default.test.ts": "clients",
   "desktop-startup-surface.test.ts": "clients",
+  "desktop-telemetry-installer.test.ts": "clients",
   "desktop-update-surface.test.ts": "clients",
   "desktop-tray-availability.test.ts": "clients",
   "desktop-widget-entry.test.ts": "clients",
@@ -173,5 +174,10 @@
   "hermes-profile-routes.test.ts": "clients",
   "cli-sync-expect-link.test.ts": "cli",
   "link-connection-generation.test.ts": "clients",
-  "ci-pr-hygiene-approvals.test.ts": "ci-workflows"
+  "ci-pr-hygiene-approvals.test.ts": "ci-workflows",
+  "link-ocx-child-conformance.test.ts": "clients",
+  "link-ephemeral-child-discovery.test.ts": "clients",
+  "link-enrollment-ephemeral-child.test.ts": "server",
+  "link-ocx-child-e2e.test.ts": "clients",
+  "link-child-plant-foundations.test.ts": "clients"
 }

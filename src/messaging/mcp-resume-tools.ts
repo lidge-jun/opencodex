@@ -8,7 +8,7 @@ import type { QueueMcpOptions } from "./mcp-queue-rpc";
 
 export const resumeThreadInput = { threadId: z.string().refine(isThreadId, "Use an exact thread UUID") };
 
-/** Explicit execution access connects only to an existing trusted local Unix server; it creates nothing. */
+/** Explicit resume preflight connects only to an existing trusted local Unix server; it creates nothing. */
 export async function queueMcpResume(options: QueueMcpOptions, raw: { threadId: string }, signal?: AbortSignal) {
   const failure = (code: string) => ({ status: "not_resumed" as const, executionVerified: false, error: { code } });
   if (!options.allowResume || !options.resumeSocket || !isResumeProfile(options.resumePermissions)) return failure("resume_disabled");

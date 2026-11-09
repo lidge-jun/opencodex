@@ -31,7 +31,7 @@ and sends initialized before metadata requests. Its explicit request whitelist
 contains initialize, loaded-session pagination, metadata-only thread reads and
 one text-only `thread/queue/add`. Default local/send and remote-peer connections
 cannot resume a session, start/steer a turn or grant permission. A separate explicit
-MCP factory grants only thread/resume as described below. A thread read returns only ID, name and status,
+MCP factory grants resume preflight only as described below; it cannot send thread/resume. A thread read returns only ID, name and status,
 excluding history, preview and working directory.
 
 Responses must match the requested ID and bounded shape. RPC errors are sanitized.
@@ -291,8 +291,9 @@ unimplemented future native API is invented here.
 
 The tool's current observations do not prove processing/completion;
 executionVerified remains false. No new session, message, turn/start, steer, model,
-approval or permission-change request is sent. The host retains same-thread overlap
-refusal and shared four-operation admission. A 20-second budget covers connection
+approval or permission-change request is sent. The host refuses same-thread overlap before charging shared four-operation admission;
+duplicate refusals consume no slot. Closing checks still apply, and every reserved
+thread key is released when its call settles, including admission refusal. A 20-second budget covers connection
 and preflight, with ten-second RPC / 1 MiB frame limits. Cancellation closes only
 the owned connection, never the shared server or target turn. Approval requests
 are not answered. The tool stays read-only while execution is blocked.

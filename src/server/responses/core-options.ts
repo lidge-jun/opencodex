@@ -293,6 +293,12 @@ export interface HandleResponsesOptions {
   clientEncoder?: ClientEncoderOption;
   /** Chat ingress raw-channel delivery preference; never an upstream generation option. */
   chatRawReasoningVisible?: boolean;
+  /** Value-free fact retained before Chat instruction content is projected to text. */
+  chatInstructionImage?: boolean;
+  /** Original Responses instruction image, retained across preprocessing and combo replay. */
+  responsesInstructionImage?: boolean;
+  /** File-backed Responses image retained before parsing and replay. */
+  responsesFileImage?: boolean;
   /** Set only by the Chat or Messages ingress on an eligible Antigravity route; see {@link DirectRequestOption}. */
   directRequest?: DirectRequestOption;
 }

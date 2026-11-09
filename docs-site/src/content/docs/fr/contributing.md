@@ -90,10 +90,9 @@ une contribution normale ; indiquez les commits sources dans la description.
 
 ## Demandes d'extraction
 
-- Ciblez **`dev`**. N’ouvrez aucune pull request de fonctionnalité ou de correctif contre **`main`**.
-- Partez de la tête actuelle de **`dev`**, pas de **`main`**. Le contrôle obligatoire **`enforce-target`**
-  rejette les branches dont la base de fusion se trouve sur la tête de **`main`** alors qu’elles sont très en
-  retard sur la branche cible, le mode d’échec observé dans #644.
+- Ciblez **`dev`**, qui est aussi la branche par défaut du dépôt. **`main`** et **`preview`** ont été
+  supprimées une fois le modèle à branche unique en place. Le contrôle obligatoire **`enforce-target`**
+  rejette les pull requests dont la base n’est pas **`dev`** (les PR enfants empilées font exception).
 - Rédigez une vraie description : un **Résumé** de la modification et de sa raison, ainsi qu’un **Plan de test**
   ou un contenu équivalent. Les corps vides, les textes composés seulement d’espaces réservés et les descriptions
   contenant des `\n` échappés au lieu de véritables sauts de ligne échouent au contrôle.
@@ -108,7 +107,7 @@ une contribution normale ; indiquez les commits sources dans la description.
 ## Responsables du projet
 
 Les responsables actuels, leurs attributions et les règles de revue et de fusion sont décrits dans
-[`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/main/MAINTAINERS.md). La propriété GitHub
+[`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/dev/MAINTAINERS.md). La propriété GitHub
 du dépôt et des chemins sensibles du point de vue de la sécurité est déclarée dans `.github/CODEOWNERS`.
 
 ## Conventions

@@ -19,6 +19,7 @@ export interface OAuthAccount extends AccountQuotaReading {
   id: string;
   alias?: string;
   email?: string;
+  accountLabel?: string;
   maskedLabel?: string;
   active: boolean;
   needsReauth?: boolean;

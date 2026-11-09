@@ -62,6 +62,12 @@ describe.skipIf(process.platform === "win32")("resume MCP CLI",()=>{
       for(let i=3;i<=5;i++) pending.push(client.callTool({name:"codex_resume_thread",arguments:{threadId:`00000000-0000-4000-8000-00000000000${i}`}}).catch(e=>e));
       const end=performance.now()+5000;while(f.calls.filter(c=>c.method === "configRequirements/read").length<4&&performance.now()<end)await Bun.sleep(10);
       expect(f.calls.filter(c=>c.method === "configRequirements/read")).toHaveLength(4);
+      const overlaps=await Promise.all(Array.from({length:8},()=>client.callTool({name:"codex_resume_thread",arguments:{threadId:LOCAL_TARGET}})));
+      for(const overlap of overlaps){
+        expect(overlap.isError).not.toBe(true);
+        expect(result(overlap)).toMatchObject({status:"not_resumed",error:{code:"resume_busy"}});
+      }
+      expect(f.calls.filter(c=>c.method === "configRequirements/read")).toHaveLength(4);
       expect((await client.callTool({name:"codex_threads",arguments:{}})).isError).toBe(true);
       await client.close();await Promise.allSettled(pending);await Bun.sleep(50);
       expect(f.activeConnections).toBe(0);expect(q.calls()).toEqual([]);
