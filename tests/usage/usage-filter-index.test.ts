@@ -1153,9 +1153,8 @@ describe("filtered usage index availability", () => {
     expect(statSync(`${usageFilterIndexPath(testDir)}-wal`).size).toBe(0);
   });
 
-  test("sidecars of a projection built before WAL persistence are registered for uninstall", async () => {
-    // A projection from a build that deleted its WAL sidecars on every close has no sidecars on
-    // disk and none in the uninstall manifest. Once they persist they must be owned, or uninstall
+  test("a projection whose sidecars are not in the uninstall manifest is repaired on the next write", async () => {
+    // Sidecars now persist, so any that exist beside this projection must be owned, or uninstall
     // leaves them behind.
     expect(initializeConfigOwnership(testDir)).toBe(true);
     writeRows(Array.from({ length: 20 }, (_, index) => syntheticRow(index)));
@@ -1174,6 +1173,25 @@ describe("filtered usage index availability", () => {
     appendRows([{ ...syntheticRow(99), requestId: "after-upgrade" }]);
     expect((await getFilteredUsageAggregate({ provider: "openai" })).filterIndex).toBeDefined();
     expect(owned().filter(path => sidecars.includes(path)).sort()).toEqual([...sidecars].sort());
+  });
+
+  test("sidecars beside a 0-byte projection left by a crash are registered once they appear", async () => {
+    // A crash between the private create and the first open leaves an empty file, so the next open
+    // sees an existing projection and skips creation-time registration. The sidecars only appear
+    // once SQLite uses the WAL, after this open checked, so a later open in the same process must
+    // still register them.
+    expect(initializeConfigOwnership(testDir)).toBe(true);
+    writeRows(Array.from({ length: 20 }, (_, index) => syntheticRow(index)));
+    const indexPath = usageFilterIndexPath(testDir);
+    writeFileSync(indexPath, "", { mode: 0o600 });
+    const manifestPath = join(testDir, ".opencodex-uninstall.json");
+    const sidecars = ["usage-filter-index.sqlite-wal", "usage-filter-index.sqlite-shm"];
+    const ownedSidecars = () => (JSON.parse(readFileSync(manifestPath, "utf8")) as { paths: string[] }).paths
+      .filter(path => sidecars.includes(path)).sort();
+    expect((await getFilteredUsageAggregate({ provider: "openai" })).filterIndex).toBeDefined();
+    appendRows([{ ...syntheticRow(99), requestId: "after-crash" }]);
+    expect((await getFilteredUsageAggregate({ provider: "openai" })).filterIndex).toBeDefined();
+    expect(ownedSidecars()).toEqual([...sidecars].sort());
   });
 
   test("a passive read never creates or writes index files", async () => {

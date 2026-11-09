@@ -527,18 +527,23 @@ function keepWalSidecars(db: Database): void {
 /**
  * Register the WAL sidecars that now persist beside this projection.
  *
- * A projection built before persistence deleted them on every close, so it was opened as an
- * existing file with nothing on disk to register, and the sidecars it keeps from here on would
- * otherwise survive uninstall. Called only after the file classified as this projection and WAL
- * mode is on, so every sidecar present is this database's own.
+ * Creation registers the sidecar names up front, but an existing file skips that: a 0-byte
+ * projection left by a crash between the private create and the first open, or one whose names
+ * were never recorded. Its sidecars now persist and would otherwise survive uninstall. Called only
+ * after the file classified as this projection and WAL mode is on, so every sidecar present is
+ * this database's own. Sidecars appear only once SQLite has used the WAL, so the path is
+ * remembered only when both exist and were offered for registration; until then each open checks.
  */
 function registerKeptSidecars(dir: string, path: string): void {
   if (sidecarOwnershipChecked.has(path)) return;
+  let present = 0;
   for (const suffix of ["-wal", "-shm"] as const) {
     const sidecar = `${path}${suffix}`;
-    if (existsSync(sidecar)) recordOwnedConfigPath(dir, sidecar);
+    if (!existsSync(sidecar)) continue;
+    recordOwnedConfigPath(dir, sidecar);
+    present += 1;
   }
-  sidecarOwnershipChecked.add(path);
+  if (present === 2) sidecarOwnershipChecked.add(path);
 }
 
 function openIndexForWrite(dir: string, path: string): Database {

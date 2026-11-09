@@ -48,9 +48,10 @@ The index keeps its `-wal` and `-shm` sidecars after the last connection closes
 (`SQLITE_FCNTL_PERSIST_WAL` on every connection that can write, set only once the file classified
 as this projection). The writer runs `PRAGMA wal_checkpoint(TRUNCATE)` before it closes and a
 `journal_size_limit` is set, so a clean close leaves the kept WAL empty; while a reader in another
-process pins it, the WAL keeps its frames until a later writer's checkpoint. The sidecars are
-registered for uninstall once they exist, including beside a projection built before they were
-kept. SQLite's default deletes them on the final close, which changed the config directory on
+process pins it, the WAL keeps its frames until a later writer's checkpoint. Creation registers the
+sidecar names up front; an existing projection whose names were never recorded (a 0-byte file left
+by a crash before the first open) registers them on the first open after they exist. SQLite's
+default deletes them on the final close, which changed the config directory on
 every filtered query. On Windows a changed
 config directory re-runs its ACL harden, whose inherited-ACE rewrite moves `usage.jsonl`'s
 ChangeTime, and both the usage aggregate and this index then rebuild from the whole ledger.
