@@ -25,7 +25,9 @@ const DEFINITE_CONTEXT_OVERFLOW_PHRASES = [
 /** Provider wording that says the conversation has reached/passed its model's context capacity. */
 const CONTEXT_WINDOW_POSITION_VERDICTS: readonly RegExp[] = [
   /\b(?:history|conversation|input|prompt|request|turn|messages?)\b[^;!?\n.]{0,120}\b(?:at\s+or\s+past|at\s+(?:the\s+)?limit|past|over|beyond|exceed(?:s|ed|ing)?|reached)\b[^;!?\n.]{0,60}\b(?:(?:the|this|selected|its)\s+)?(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\b/i,
-  /\b(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\s+(?:(?:is|are|was|were|has\s+been|have\s+been)\s+)?(?:(?:now|currently|already|completely|fully|entirely|still)\s+)?(?:full(?![-\w]|\s+(?:of|size)\b)|exceed(?:s|ed|ing)?|exhausted|at\s+its\s+limit)\b/i,
+  // "full" only as the clause's last word: "full of cached tokens", "full size" and "full capacity
+  // reached" describe something else.
+  /\b(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\s+(?:(?:is|are|was|were)\s+|(?:has|have)\s+(?:(?:now|already|still)\s+)?been\s+)?(?:(?:now|currently|already|completely|fully|entirely|still)\s+){0,2}(?:full(?=\s*(?:$|[.!?;:,)\n]))|exceed(?:s|ed|ing)?\b|exhausted\b|at\s+its\s+limit\b)/i,
 ];
 
 /** Explicit provider wording that an input is too long for a model's context capacity. */
@@ -80,6 +82,15 @@ const OVERFLOW_COUNT_EVIDENCE = /\b\d+\s*(?:tokens?)?\s*(?:>|exceeds?|past)\s*\d
 
 const OVERFLOW_PREDICATE = /\b(?:at\s+or\s+past|at\s+(?:the\s+)?limit|past|over|beyond|exceed(?:s|ed|ing)?|reached|too\s+long|full|exhausted)\b/i;
 const CLAUSE_BOUNDARY = /[,():;!?.\n]|\b(?:and|but|because|although|though|while|whereas|since)\b/gi;
+/**
+ * A parenthetical inserted between a negator and its predicate ("is not (per the tokenizer) past",
+ * "never, as far as we can tell, exceeded") does not end the clause: complete parenthesised and
+ * comma-paired insertions before the predicate are removed before boundaries are read. A single comma
+ * still separates independent clauses ("could not respond, maximum context length exceeded").
+ */
+function withoutInsertions(text: string): string {
+  return text.replace(/\([^()]*\)/g, " ").replace(/,[^,;:!?.\n()]{0,60},/g, " ");
+}
 
 /** Negation must describe the matched verdict, not a separate statement earlier in its clause. */
 function isNegatedAt(text: string, start: number, end: number): boolean {
@@ -90,7 +101,7 @@ function isNegatedAt(text: string, start: number, end: number): boolean {
   const predAbsoluteStart = start + predOffset;
 
   // Check the clause immediately preceding the predicate across clause boundaries.
-  const before = text.slice(Math.max(0, predAbsoluteStart - 120), predAbsoluteStart);
+  const before = withoutInsertions(text.slice(Math.max(0, predAbsoluteStart - 120), predAbsoluteStart));
   const boundaryMatches = Array.from(before.matchAll(CLAUSE_BOUNDARY));
   const lastClauseBoundary = boundaryMatches.length > 0
     ? (boundaryMatches[boundaryMatches.length - 1].index ?? -1) + boundaryMatches[boundaryMatches.length - 1][0].length
@@ -104,7 +115,7 @@ function isNegatedAt(text: string, start: number, end: number): boolean {
     return !OVERFLOW_COUNT_EVIDENCE.test(text);
   }
   if (NEGATED_CONTEXT_VERDICT.test(clauseBefore)
-    || /\b(?:in\s+no\s+way|by\s+no\s+means)\b/i.test(clauseBefore)) {
+    || /\b(?:in\s+no\s+way|by\s+no\s+means|let\s+alone)\b/i.test(clauseBefore)) {
     return true;
   }
 
