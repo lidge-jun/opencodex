@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { AccountLoadState, AccountQuotaReading } from "../components/provider-workspace/types";
 import { createBoundedFetch } from "../bounded-fetch";
 import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
+import { errorMessageFrom } from "../api-error";
 import { useRenderTargetCapture } from "../use-render-target-capture";
 import { confirmAction, requestTextValue } from "../action-dialogs";
 import { credentialAliasRejection, CREDENTIAL_ALIAS_MAX_LENGTH } from "../credential-alias";
@@ -753,7 +754,11 @@ export function useProviderAccountPools(deps: {
       if (!currentMutation()) return;
       if (!res.ok) {
         const failure = await res.json().catch(() => ({})) as { error?: string };
-        if (currentMutation()) notify(resumed ? t("prov.keyResumedSwitchFailed") : failure.error || t("prov.keySwitchFail"), false);
+        if (currentMutation()) {
+          notify(resumed
+            ? t("prov.keyResumedSwitchFailed")
+            : errorMessageFrom(failure, t("prov.keySwitchFail"), t("prov.targetChanged")), false);
+        }
         return;
       }
       const data = await res.json().catch(() => ({})) as { activeId?: string | null };
@@ -805,7 +810,7 @@ export function useProviderAccountPools(deps: {
       if (!currentMutation()) return false;
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
-        notify(data.error || t("prov.keyAddFail"), false);
+        notify(errorMessageFrom(data, t("prov.keyAddFail"), t("prov.targetChanged")), false);
         return false;
       }
       notify(t("prov.keyAdded", { name: provider }), true);
@@ -845,7 +850,7 @@ export function useProviderAccountPools(deps: {
     if (!currentMutation()) return;
     if (!response.ok) {
       const data = await response.json().catch(() => ({})) as { error?: string };
-      notify(data.error || t("prov.aliasSaveFailed"), false);
+      notify(errorMessageFrom(data, t("prov.aliasSaveFailed"), t("prov.targetChanged")), false);
       return;
     }
     if (type === "oauth") await fetchAccountSets([provider]);

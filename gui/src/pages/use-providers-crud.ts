@@ -1,7 +1,7 @@
 import { useCallback, useRef } from "react";
 import type { TFn } from "../i18n/shared";
 import type { ProviderUpdatePatch, ProviderUpdateResult } from "../components/provider-workspace/types";
-import { apiErrorMessage } from "../api-error";
+import { apiErrorMessage, errorMessageFrom } from "../api-error";
 import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
 import { useRenderTargetCapture } from "../use-render-target-capture";
 
@@ -24,7 +24,7 @@ function providerErrorMessage(data: ProviderError, t: TFn, fallback: string): st
     }
     case "default_provider_disabled": return t("prov.defaultDisabled");
     default:
-      return typeof data.error === "string" && data.error.trim() ? data.error.trim() : fallback;
+      return errorMessageFrom(data, fallback, t("prov.targetChanged"));
   }
 }
 

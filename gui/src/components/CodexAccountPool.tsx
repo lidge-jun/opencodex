@@ -314,6 +314,9 @@ export default function CodexAccountPool({ apiBase, targetKey, accountModeState 
     });
     if (entered === null) return;
     const result = await controller.saveAlias(account.id, entered);
+    // The alias write belongs to the target that started it; a stale or busy refusal is
+    // silent here, the same as the pause, order, threshold and credits actions above.
+    if (!result.ok && (result.reason === "busy" || result.reason === "stale")) return;
     showActionFeedback(t(result.ok ? "prov.aliasSaved" : "prov.aliasSaveFailed"), result.ok ? "ok" : "err");
   };
 
@@ -382,6 +385,7 @@ export default function CodexAccountPool({ apiBase, targetKey, accountModeState 
     const label = accounts.find(account => account.id === id)?.email ?? t("pws.accountOrdinal", { count: "1" });
     if (!(await confirmAction({ message: t("codexAuth.removeConfirm", { id: label }), confirmLabel: t("common.remove"), tone: "danger" }))) return;
     const result = await controller.removeAccount(id);
+    if (!result.ok && (result.reason === "busy" || result.reason === "stale")) return;
     if (!result.ok) {
       showActionFeedback(t("codexAuth.removeFailed"), "err");
     } else if (result.catalogRefreshPending) {

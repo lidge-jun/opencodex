@@ -8,6 +8,7 @@ import { loginPollAttempts } from "../oauth-login-budget";
 import type { OAuthAccount, OAuthStatus } from "./providers-shared";
 import { oauthLabel } from "./providers-shared";
 import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
+import { errorMessageFrom } from "../api-error";
 import { useRenderTargetCapture } from "../use-render-target-capture";
 
 type AccountSet = { activeAccountId: string | null; accounts: OAuthAccount[] };
@@ -191,7 +192,11 @@ export function useProvidersOAuth({
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
         if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
-        notify(data.error || t("prov.loginFailStart", { provider: oauthLabel(provider) }), false);
+        notify(errorMessageFrom(
+          data,
+          t("prov.loginFailStart", { provider: oauthLabel(provider) }),
+          t("prov.targetChanged"),
+        ), false);
         return;
       }
       const data = await res.json() as { url?: string; instructions?: string; deviceCode?: string; browserLaunch?: unknown };
