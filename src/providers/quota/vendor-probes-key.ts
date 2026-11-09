@@ -24,7 +24,13 @@ async function quotaFetch(providerName: string, config: OcxProviderConfig, url: 
 }
 
 const KIMI_CODE_BASE_URL = "https://api.kimi.com/coding/v1";
-const KIMI_CODE_USAGE_URL = `${KIMI_CODE_BASE_URL}/usages`;
+/**
+ * Kimi's regional (kimi.ai) Coding API. Its `/usages` answers a Coding Plan API key the same way
+ * the kimi.com origin does (#8332). Only key auth may use it: the probe then calls the origin that
+ * already receives this key for inference, so it adds no credential destination. OAuth tokens
+ * stay on the kimi.com origin they were issued for.
+ */
+const KIMI_CODE_REGIONAL_BASE_URL = "https://api.kimi.ai/coding/v1";
 const COMMAND_CODE_BASE_URL = "https://api.commandcode.ai";
 const COMMAND_CODE_WHOAMI_URL = `${COMMAND_CODE_BASE_URL}/alpha/whoami`;
 const COMMAND_CODE_CREDITS_URL = `${COMMAND_CODE_BASE_URL}/alpha/billing/credits`;
@@ -1119,6 +1125,18 @@ export function isCanonicalKimiCodeBaseUrl(baseUrl: string): boolean {
   return normalizedBaseUrl(baseUrl) === KIMI_CODE_BASE_URL;
 }
 
+/**
+ * The Kimi Coding origin whose `/usages` a quota probe may call with this provider's bearer, or
+ * null. It is always the configured inference origin, matched exactly against Kimi's own origins,
+ * so a user-edited or lookalike host never receives the credential.
+ */
+function kimiCodeQuotaBaseUrl(config: Pick<OcxProviderConfig, "baseUrl" | "authMode">): string | null {
+  const normalized = normalizedBaseUrl(config.baseUrl);
+  if (normalized === KIMI_CODE_BASE_URL) return normalized;
+  if (normalized === KIMI_CODE_REGIONAL_BASE_URL && (config.authMode ?? "key") === "key") return normalized;
+  return null;
+}
+
 export function isCanonicalCommandCodeBaseUrl(baseUrl: string): boolean {
   const normalized = normalizedBaseUrl(baseUrl);
   // OAuth preset points at the API root; the Provider-API preset at /provider/v1.
@@ -1270,9 +1288,10 @@ async function resolveKimiQuotaBearer(config: OcxProviderConfig, accountId?: str
 
 export async function fetchKimiQuota(provider: string, config: OcxProviderConfig, accessToken: string): Promise<ProviderQuotaReport | null> {
   // Never release credentials to a user-edited or lookalike provider host.
-  if (!isCanonicalKimiCodeBaseUrl(config.baseUrl)) return null;
+  const baseUrl = kimiCodeQuotaBaseUrl(config);
+  if (!baseUrl) return null;
   if (!accessToken) return null;
-  const response = await quotaFetch(provider, config, KIMI_CODE_USAGE_URL, {
+  const response = await quotaFetch(provider, config, `${baseUrl}/usages`, {
     headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` },
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -1435,7 +1454,7 @@ type KeyQuotaReader = (name: string, provider: OcxProviderConfig) => Promise<Pro
 /** Same selector drives cheap capabilities and uncached reads; never resolves credentials. */
 export function keyQuotaReaderForProvider(name: string, provider: OcxProviderConfig): KeyQuotaReader | null {
   if (provider.disabled === true || (provider.authMode ?? "key") !== "key") return null;
-  if (isCanonicalKimiCodeBaseUrl(provider.baseUrl)) {
+  if (kimiCodeQuotaBaseUrl(provider)) {
     return async (id, config) => {
       const bearer = await resolveKimiQuotaBearer(config);
       return bearer ? fetchKimiQuota(id, config, bearer) : null;

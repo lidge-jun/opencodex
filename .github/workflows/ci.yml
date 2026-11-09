@@ -2,11 +2,12 @@
 # CI POLICY (maintainer decision — do not change in a contributor PR)
 #  * Pull requests run ONLY the fast Ubuntu subset (default: gates + `test changed`).
 #  * Full cross-platform (macOS/Windows) CI runs ONLY via manual
-#    workflow_dispatch and on push to main/preview (release lines).
-#  * NEVER add a dev push trigger or pull_request runs for macOS/Windows jobs.
+#    workflow_dispatch on dev.
+#  * NEVER add a push trigger or pull_request runs for macOS/Windows jobs.
 #  PRs that change this policy will be closed. See AGENTS.md "CI policy".
 # ============================================================================
 name: Cross-platform CI
+run-name: ocx-ci-v1 lane=${{ github.event.inputs.lane || 'all' }} sha=${{ github.sha }}
 
 on:
   # Always create the aggregate `ci` check for pull requests. Expensive jobs
@@ -14,7 +15,7 @@ on:
   # docs-only PR receives explicit positive evidence instead of no check at all.
   pull_request: {}
     # No base-branch filter on purpose. GitHub matches `branches:` against the
-    # BASE ref, so `[main, dev]` silently excluded stacked child PRs — whose
+    # BASE ref, so even `[dev]` would silently exclude stacked child PRs — whose
     # base is another open PR's head branch, an intentional review workflow per
     # AGENTS.md that `enforce-target` already exempts from the wrong-base gate.
     # The #951-#955 stack merged with `enforce-target`, `label`, and
@@ -24,76 +25,25 @@ on:
     # An allowlist cannot express "base is another PR's head" — stacked bases
     # carry contributor prefixes (`fix/`, `feat/`, `agent/`) as readily as
     # `codex/`, and contributor stacks need CI most. The `changes` job below is
-    # the real scope gate, using the same allowlist as the push trigger. Safe to
+    # the real scope gate for expensive jobs. Safe to
     # widen here because this workflow is `pull_request` (not `pull_request_target`),
     # declares `contents: read`, and reads no secrets.
     #
-    # Pull requests run only the fast Ubuntu subset. Every macOS and Windows
-    # job (and the macOS/Windows legs of the keyring, npm-global, setup-action
-    # and remote-helper matrices) is skipped on `pull_request` and runs after
-    # merge instead, via workflow_dispatch, the main/preview `push:` below and
-    # the nightly schedule.
-    #
-    # `push:` is pinned to the release lines. dev is deliberately absent:
-    # cross-platform evidence for dev is run by hand via workflow_dispatch.
-    # main and preview MUST stay: release.yml requires a successful push-event
-    # Cross-platform CI run for the exact release SHA and states that a
-    # pull-request run does not qualify, so removing either branch breaks
-    # publication.
-  push:
-    branches: [main, preview]
-    paths:
-      - "Dockerfile"
-      - "compose.yaml"
-      - ".dockerignore"
-      - "docker/**"
-      - "src/**"
-      - "bin/**"
-      - "tests/**"
-      - "scripts/**"
-      - "app/**"
-      - "desktop/**"
-      - "gui/**"
-      - "assets/**"
-      - ".github/scripts/**"
-      - ".github/workflows/**"
-      - ".gitattributes"
-      - ".npmignore"
-      - "package.json"
-      - "bun.lock"
-      - "tsconfig.json"
-      - "README.md"
-      - "readme/**"
-      - "skills/**"
-      - ".github/ISSUE_TEMPLATE/**"
-      - "LICENSE"
+    # Pull requests run only the fast Ubuntu subset. Cross-platform jobs run
+    # after merge by a manual workflow_dispatch on dev.
   workflow_dispatch:
     inputs:
       lane:
-        description: "all (default), release-gates, or macos-control"
+        description: "all (default), release-gates, macos-control, or windows-native-claim"
         type: choice
         default: all
-        options: [all, release-gates, macos-control]
-  # Nightly safety net. The Windows shards run on a pull request only when the
-  # changes job judges it Windows-sensitive, so anything that slips past that
-  # filter must still be caught within a day: a scheduled run requests the full
-  # lane=all matrix (eleven Windows shards and the macOS control included).
-  #
-  # GitHub runs schedules from the DEFAULT branch, which is main, so this
-  # trigger activates only once this file reaches main by promotion, and the
-  # workflow definition is main's. Every test checkout reads
-  # needs.changes.outputs.checkout_ref, which the changes job resolves to ONE
-  # dev commit on a schedule, so the run tests dev and every job tests the same
-  # SHA. Its check runs attach to main's head commit; release.yml accepts only a
-  # push-event run, so a scheduled run can never qualify a release.
-  schedule:
-    - cron: "17 18 * * *"
+        options: [all, release-gates, macos-control, windows-native-claim]
 
 permissions:
   contents: read
 
 concurrency:
-  # `push` and `pull_request` want supersession: a newer head on the same ref
+  # Pull requests want supersession: a newer head on the same ref
   # makes the older one irrelevant, and cancelling it saves an hour of runners
   # for an answer nobody will read.
   #
@@ -113,9 +63,8 @@ concurrency:
   # cancels nothing and nothing cancels it, including a second dispatch of the
   # same ref.
   #
-  # A scheduled run is keyed the same way. Keyed on the ref it would share
-  # refs/heads/main with a promotion push and, with cancel-in-progress, cancel
-  # the very run release.yml waits for.
+  # The schedule branch of this expression is retained for selector compatibility;
+  # this workflow no longer declares a schedule trigger.
   group: cross-platform-ci-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'schedule' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' }}
 
@@ -144,12 +93,8 @@ jobs:
   # honest pull requests on GitHub-hosted runners and lets trusted branch runs
   # avoid the hosted-Windows Bun crashes. It is not the security boundary.
   #
-  # `push` on main/preview requires the push permission, and
-  # `workflow_dispatch` requires write access, so both carry a trusted author.
-  # A schedule runs main's workflow against a dev commit that already merged
-  # through review, the same trust as a push.
-  # A trusted author is not audited code: merging a contributor PR into `dev`
-  # fires `push`, and its dependencies and postinstall hooks then run here.
+  # `workflow_dispatch` requires write access, but a trusted author does not
+  # make candidate dependencies or postinstall hooks independently audited.
   select-windows-runner:
     name: select windows runner
     runs-on: ubuntu-latest
@@ -158,6 +103,17 @@ jobs:
       runner: ${{ steps.pick.outputs.runner }}
       label: ${{ steps.pick.outputs.label }}
     steps:
+      # This job also runs when the diagnostic lane skips changes.
+      - name: Validate dispatch source
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$REF" != refs/heads/dev ]; then
+            echo '::error::manual cross-platform CI must run from dev'
+            exit 1
+          fi
       - name: Pick runner
         id: pick
         env:
@@ -188,7 +144,7 @@ jobs:
             echo 'label=windows-latest' >> "$GITHUB_OUTPUT"
           fi
 
-  # Which areas this push actually touches.
+  # Which areas the pull request actually touches.
   #
   # Deliberately a job-level filter rather than a wider workflow-level `paths:`
   # one. A workflow skipped by path filtering leaves its checks Pending forever,
@@ -197,6 +153,7 @@ jobs:
   # in the `on:` block above.
   changes:
     name: changes
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.lane != 'windows-native-claim'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # The workflow grants only `contents: read`, and specifying any permission
@@ -219,20 +176,18 @@ jobs:
       # shape-checked by the same validation step as `native`.
       keyring_matrix: ${{ steps.matrices.outputs.keyring_matrix }}
       npm_global_matrix: ${{ steps.matrices.outputs.npm_global_matrix }}
-      # A scheduled run starts from main, so its path filter diffs main and would
-      # scope jobs by the wrong commit. The nightly safety net selects every scope
-      # instead, here and in the validation steps below, so it is the full matrix.
-      gui: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.gui }}
-      packaging: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.packaging }}
-      docs: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.docs }}
-      structure: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.structure }}
+      # A full manual dispatch selects every scope regardless of path filters.
+      gui: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')) && 'true' || steps.filter.outputs.gui }}
+      packaging: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')) && 'true' || steps.filter.outputs.packaging }}
+      docs: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')) && 'true' || steps.filter.outputs.docs }}
+      structure: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')) && 'true' || steps.filter.outputs.structure }}
       # Narrow scopes for two paths the ci filter leaves out on purpose. Both are re-emitted by the
       # validation step below, so a malformed filter output fails this job instead of silently
       # skipping the check it selects.
       setup_action: ${{ steps.narrow.outputs.setup_action }}
       remote_helper: ${{ steps.narrow.outputs.remote_helper }}
       # Pull-request scope for the two smoke jobs that used to ride the whole ci filter.
-      # Push, dispatch and schedule run both regardless; see the docker/keyring filters.
+      # Manual dispatch runs both regardless; see the docker/keyring filters.
       docker: ${{ steps.narrow.outputs.docker }}
       keyring: ${{ steps.narrow.outputs.keyring }}
       # Whether this pull request needs the Windows shards: the windows path
@@ -244,6 +199,16 @@ jobs:
       # except on a schedule, where it is the one dev SHA resolved below.
       checkout_ref: ${{ steps.nightly.outputs.checkout_ref }}
     steps:
+      - name: Validate dispatch source
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$REF" != refs/heads/dev ]; then
+            echo '::error::manual cross-platform CI must run from dev'
+            exit 1
+          fi
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -260,17 +225,18 @@ jobs:
         uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
         with:
           # Without this the action compares against the repository's DEFAULT
-          # branch, which is `main`. A push to `dev` would then be diffed against
-          # `main`, so every area touched since the last promotion keeps reading
-          # as "changed" — the scoped jobs would run on nearly every dev push and
-          # the saving would silently not happen while CI stayed green.
+          # branch, which is `dev`. For a non-PR event that diff starts at
+          # `dev` itself, so every area touched since the branch point keeps
+          # reading as "changed" — the scoped jobs would run on nearly every
+          # such event and the saving would silently not happen while CI stayed
+          # green.
           #
           # On `pull_request` the action ignores this and uses the PR's own file
-          # list. On a branch push it means "compare against the previous commit
-          # on this branch", which is the intent.
+          # list. Otherwise `github.ref` keeps the diff scoped to this ref, which
+          # is the intent.
           base: ${{ github.ref }}
           filters: |
-            # Mirrors the push trigger's path allowlist. Pull requests always
+            # Pull requests always
             # start the workflow so the aggregate check exists, while these
             # paths decide whether the expensive test jobs need to run.
             ci:
@@ -325,8 +291,7 @@ jobs:
             # assembled or launched: the shell itself, the standalone sidecar build
             # and its runtime locator, the native keyring staging, and the dependency
             # set. Ordinary src/** and gui/** changes no longer select it on a pull
-            # request; they are still covered on every promotion push to main and
-            # preview and by workflow_dispatch, which always request this job.
+            # request; a full manual dispatch requests this job after merge.
             # The workflow names itself so edits to this lane cannot skip their own E2E.
             desktop:
               - 'desktop/**'
@@ -341,11 +306,11 @@ jobs:
               - '.github/workflows/ci.yml'
             # The docs site is built by nothing else on a pull request. `ci` above
             # deliberately omits `docs-site/**` -- a prose edit has no business
-            # starting the cross-platform suite -- and `deploy-docs.yml` triggers
-            # only on `push` to `main`. That left the Astro toolchain with no
-            # pull-request build gate at all, so a dependency bump under
-            # `docs-site/` could only be proven by an author's local run and would
-            # otherwise surface at promotion.
+            # starting the cross-platform suite -- and `deploy-docs.yml` is
+            # dispatch-only. That left the Astro toolchain with no pull-request
+            # build gate at all, so a dependency bump under `docs-site/` could
+            # only be proven by an author's local run and would otherwise surface
+            # at release time.
             #
             # `.github/workflows/ci.yml` is here so an edit to the job below
             # verifies itself. Without it this filter's own pull request would
@@ -369,11 +334,8 @@ jobs:
             # `.github/workflows/ci.yml` is listed for the same reason `docs`
             # lists it: without it this filter's own pull request would skip the
             # job it adds.
-            # This list stays PULL-REQUEST scope only, like `docs` above: the
-            # push trigger's `paths:` is pinned to mirror `ci` exactly, and
-            # `dev`, `main` and `preview` are all protected to require a pull
-            # request, so every `structure/` change is read at the pull request
-            # before it can reach an integration line.
+            # This list keeps pull-request scope narrow; full manual dispatches
+            # also select the structure gate.
             structure:
               - 'structure/**'
               - '.github/workflows/ci.yml'
@@ -394,8 +356,7 @@ jobs:
             # ci filter matched, which is nearly all of them, while each proves something narrow:
             # the image builds, starts and survives recreation with its volume; the OS keyring
             # binding creates, reads and deletes a secret. A pull request now runs each only when
-            # its own inputs move. Push to main/preview, workflow_dispatch and the nightly still
-            # request both unconditionally, so the release gate's push run always carries them.
+            # its own inputs move. Manual dispatch requests both unconditionally.
             # ci.yml is listed so an edit to either job verifies itself. The setup action is left to
             # its own setup-action job, as the docs and structure filters leave it.
             docker:
@@ -479,8 +440,8 @@ jobs:
         id: scope
         shell: bash
         env:
-          CI_SCOPE: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.ci }}
-          DESKTOP_SCOPE: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.desktop }}
+          CI_SCOPE: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')) && 'true' || steps.filter.outputs.ci }}
+          DESKTOP_SCOPE: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')) && 'true' || steps.filter.outputs.desktop }}
         run: |
           set -euo pipefail
           case "$CI_SCOPE" in
@@ -506,7 +467,7 @@ jobs:
         id: matrices
         shell: bash
         env:
-          NATIVE_SELECTED: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.native }}
+          NATIVE_SELECTED: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')) && 'true' || steps.filter.outputs.native }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
@@ -570,8 +531,8 @@ jobs:
         id: narrow
         shell: bash
         env:
-          SETUP_ACTION: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.setup_action }}
-          REMOTE_HELPER: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.remote_helper }}
+          SETUP_ACTION: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')) && 'true' || steps.filter.outputs.setup_action }}
+          REMOTE_HELPER: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')) && 'true' || steps.filter.outputs.remote_helper }}
           DOCKER_SCOPE: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.docker }}
           KEYRING_SCOPE: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.keyring }}
         run: |
@@ -605,9 +566,10 @@ jobs:
           PATH_SELECTED: ${{ steps.filter.outputs.windows }}
         run: bash scripts/ci/windows-sensitive-diff.sh
 
-      # A scheduled run starts from main's head. Resolve dev ONCE so the nine
-      # Windows shards, the macOS control and every other job test one commit,
-      # however long the queue between them. contents: read already covers it.
+      # A scheduled run starts from the default branch's head, which is `dev`.
+      # Resolve dev ONCE so the nine Windows shards, the macOS control and every
+      # other job test one commit, however long the queue between them.
+      # contents: read already covers it.
       - name: Resolve the commit a scheduled run tests
         id: nightly
         shell: bash
@@ -651,11 +613,17 @@ jobs:
   # Only the suite lives here. Typecheck, lint, build, and the scans run once in
   # `gates` rather than five times — they are fixed cost, and paying it per shard
   # would eat what the sharding saves.
+  # The heavy Linux jobs (test shards, test-changed, gates) take the lidge self-hosted pool on
+  # trusted runs while the repository variable LIDGE_RUNNERS is on: pushes, manual runs, branches of
+  # this repository, and pull requests by owners, members or collaborators. Everything else, and every
+  # run while the variable is off, stays on ubuntu-latest, so the hosted runners keep carrying the light
+  # jobs. As with the Windows box above, this routing is operational; the fork-PR approval policy and
+  # the box's scaler, which only creates runners for trusted runs, are the security boundary.
   test:
     name: test ${{ matrix.shard }}/5
     needs: changes
     if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.fast != 'true')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LIDGE_RUNNERS == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-latest' }}
     # A fifth of the suite. A shard that needs longer than this is wedged, not
     # slow — the old 30-minute ceiling was margin for the Windows leg, which no
     # longer runs here (see platform-windows).
@@ -719,7 +687,7 @@ jobs:
     name: test changed
     needs: changes
     if: github.event_name == 'pull_request' && needs.changes.outputs.fast == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LIDGE_RUNNERS == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-latest' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -813,7 +781,7 @@ jobs:
     name: gates
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LIDGE_RUNNERS == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -824,6 +792,8 @@ jobs:
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
           ref: ${{ needs.changes.outputs.checkout_ref }}
+          # Release history tests verify old tag and dev-baseline trees.
+          fetch-depth: 0
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
@@ -857,6 +827,9 @@ jobs:
       - name: Check the generated ocx skill surface is current
         run: bun run skill:surface:check
 
+      - name: Test release evidence, history and docs deployment
+        run: node --test .github/scripts/release-dispatch-guard.test.cjs .github/scripts/release-evidence.test.cjs .github/scripts/release-history.test.cjs .github/scripts/release-resume.test.cjs .github/workflows/deploy-docs.test.cjs
+
       - name: Check release helper syntax
         run: bun build scripts/release.ts --target=bun --outdir=.tmp/ci-release-script-check
 
@@ -887,8 +860,7 @@ jobs:
   platform-macos:
     name: macos ${{ matrix.shard }}/4
     needs: changes
-    # Never on pull requests: macOS legs run after merge, on push to
-    # main/preview, and on dispatch and the schedule.
+    # Never on pull requests: macOS legs run through manual dispatch.
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
     # Four shards. Three replaced two after run 38214884055 hit this cap with
@@ -970,7 +942,6 @@ jobs:
     needs: changes
     # Diagnostic-only lanes stay off the ordinary release gates: list every lane
     # that should run this job, so a new lane defaults to skipping the diagnostic.
-    # The nightly schedule is the full lane=all matrix, so it runs this job too.
     if: >-
       github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')
     runs-on: macos-latest
@@ -1036,34 +1007,41 @@ jobs:
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
 
-  # Windows runs on a Windows-sensitive pull request, on the nightly schedule,
-  # and on a lane=all (or default) dispatch. It is never part of the push run
-  # release.yml gates on.
-  #
-  # It left the PR lane first (16m23s against a 6-minute Linux critical path;
-  # the ceiling was raised twice rather than the gap closed — #711 vs #653,
-  # issue #717, then #827's 20-minute kill), then left the shipping boundary
-  # when the sharded promotion run surfaced ~207 Windows-only test failures
-  # that had been invisible while dev skipped the leg. Those are real defects,
-  # tracked as issue #1059, but they are pre-existing on every released
-  # version — gating the release on them blocks shipping fixes to the platforms
-  # that pass, for a platform that has never shipped green.
-  #
-  # The leg stays in the workflow, sharded and dispatchable, so the failure
-  # list can be burned down without losing the ability to measure progress.
-  # release.yml gates on a successful push-event run of this workflow, which
-  # now means Linux + macOS + the gates; Windows re-enters the gate when the
-  # tracked failures are fixed, not before.
-  #
-  # Pull requests never run these shards (AGENTS.md "CI policy", a maintainer
-  # decision): Windows runs on the nightly schedule and on a lane=all dispatch.
-  # The changes job still computes windows=true for a Windows-sensitive pull
-  # request (a Windows path, or an added src/tests line naming a Windows marker;
-  # see scripts/ci/windows-sensitive-diff.sh). That verdict does not schedule
-  # these jobs; it posts a non-blocking notice, and a maintainer dispatches
-  # lane=all on the branch before merging. #6639, #6556, #6605, #6606 and #7468
-  # each landed with green pull-request CI while breaking Windows, which is why
-  # that dispatch is part of merging a Windows-sensitive pull request.
+  # A diagnostic run deliberately bypasses changes and the full CI graph. Its
+  # title identifies it as a partial run, never release evidence.
+  windows-native-claim:
+    name: windows native-main claim diagnostic
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev' && github.event.inputs.lane == 'windows-native-claim'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout workflow commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Isolate homes
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "ocx-claim-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $ocxHome = Join-Path $root 'opencodex'
+          $codexHome = Join-Path $root 'codex'
+          New-Item -ItemType Directory -Path $ocxHome, $codexHome -ErrorAction Stop | Out-Null
+          "OPENCODEX_HOME=$ocxHome" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CODEX_HOME=$codexHome" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Run native-main claim diagnostics
+        env:
+          OCX_TEST_WINDOWS_NATIVE_CLAIM_DIAGNOSTIC: '1'
+        run: bun test tests/codex-integration/main-quota-provenance.test.ts --timeout 60000
+
+  # Windows shards run only on a full manual dispatch. Pull requests retain
+  # fast Ubuntu checks, including when the Windows-sensitive filter is set.
   platform-windows:
     name: windows ${{ matrix.shard }}/11
     needs: [changes, select-windows-runner]
@@ -1283,7 +1261,7 @@ jobs:
         run: bun scripts/ci/docker-smoke.ts
 
   # Proves the Astro toolchain still builds the site, on the only event that can
-  # prove it before promotion.
+  # prove it before release.
   #
   # Linux only, and one leg. The site is static output from a Node/Bun toolchain
   # with no OS-specific behaviour to promise, so a Windows or macOS leg would buy
@@ -1556,7 +1534,7 @@ jobs:
     name: macos widget + bundle
     needs: [changes, gates]
     # Never on pull requests, like platform-macos: the widget extension and
-    # app bundle are rebuilt after merge, on push, dispatch and the schedule.
+    # app bundle are rebuilt through manual dispatch.
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 30
@@ -1758,7 +1736,7 @@ jobs:
 
   ci:
     name: ci
-    if: always()
+    if: always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.lane != 'windows-native-claim')
     # Every producer, including the ones that only feed other jobs. `needs` holds
     # direct dependencies only, so a failing `select-windows-runner` would
     # otherwise reach this gate as nothing at all while its dependents report

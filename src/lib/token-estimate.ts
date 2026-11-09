@@ -94,17 +94,28 @@ export function charsPerToken(modelId?: string): number {
  */
 const CJK_CHARS_PER_TOKEN = 1.5;
 
+// Reuse a sticky Unicode matcher so astral Han needs no substring or per-character regex.
+const SUPPLEMENTARY_HAN = /\p{Script=Han}/uy;
+
 /**
  * Count CJK characters exactly, in one pass, with no allocation and no regex object per char.
  *
- * Ranges: Hangul syllables and jamo, CJK unified ideographs and extension A, hiragana/katakana.
+ * Ranges: Hangul syllables and jamo, BMP CJK ideographs, hiragana/katakana, and astral Han.
  * Surrogate pairs (rare CJK extensions beyond the BMP) are counted as their two code units,
  * which slightly over-counts them — again the safe direction.
  */
-function countCjk(text: string): number {
+export function countCjk(text: string): number {
   let cjk = 0;
   for (let i = 0; i < text.length; i++) {
     const c = text.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      SUPPLEMENTARY_HAN.lastIndex = i;
+      if (SUPPLEMENTARY_HAN.test(text)) {
+        cjk += 2;
+        i++;
+        continue;
+      }
+    }
     if (
       (c >= 0xac00 && c <= 0xd7a3)
       || (c >= 0x1100 && c <= 0x11ff)

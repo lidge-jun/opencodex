@@ -22,17 +22,18 @@ export interface TelemetryConsentStatus {
 const OCX_TELEMETRY_OFF_VALUES = new Set(["0", "false", "off", "no"]);
 const DO_NOT_TRACK_ON_VALUES = new Set(["1", "true", "yes"]);
 
+/**
+ * Consent lives only in the config's `telemetry` block. A whole config is never read as a block, so
+ * a top-level key such as `noticeShownAt` (which `ocx config set` can write) is not consent.
+ */
 function extractTelemetryConfig(
-  input: OcxTelemetryConfig | { telemetry?: OcxTelemetryConfig } | null | undefined,
+  input: { telemetry?: OcxTelemetryConfig | null } | null | undefined,
 ): OcxTelemetryConfig | undefined {
   if (!input || typeof input !== "object") return undefined;
-  if ("telemetry" in input) {
-    const nested = (input as { telemetry?: unknown }).telemetry;
-    return nested && typeof nested === "object" && !Array.isArray(nested)
-      ? (nested as OcxTelemetryConfig)
-      : undefined;
-  }
-  return input as OcxTelemetryConfig;
+  const nested = (input as { telemetry?: unknown }).telemetry;
+  return nested && typeof nested === "object" && !Array.isArray(nested)
+    ? (nested as OcxTelemetryConfig)
+    : undefined;
 }
 
 function validIsoString(value: unknown): string | null {
@@ -55,7 +56,7 @@ export function isTelemetryEnvOptOut(env: Record<string, string | undefined> = p
 }
 
 export function resolveTelemetryStatus(
-  config: OcxTelemetryConfig | { telemetry?: OcxTelemetryConfig } | null | undefined,
+  config: { telemetry?: OcxTelemetryConfig | null } | null | undefined,
   env: Record<string, string | undefined> = process.env,
 ): TelemetryConsentStatus {
   const telemetry = extractTelemetryConfig(config);

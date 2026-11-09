@@ -209,6 +209,9 @@ function QuotaSummaryItem({ row, t, locale }: { row: QuotaSummaryRow; t: TFn; lo
         onClick={onClick}
       >
         <span className="quota-summary-name">{row.label}</span>
+        {headline.labelKey === "quotaSummary.creditsUnavailable" && (
+          <span className="quota-summary-name">{t("quotaSummary.creditsUnavailable")}</span>
+        )}
         <span className="quota-summary-pct">{formatQuotaPercent(headline.percent)}</span>
         {row.provider === "meta-muse" && headline.resetAt !== undefined && (
           <span className="quota-summary-name" title={formatResetFuture(headline.resetAt, t, locale)}>

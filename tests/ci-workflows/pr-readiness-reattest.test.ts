@@ -18,7 +18,7 @@ const T5 = "2026-09-22T00:00:10Z";
 const workflow = Bun.YAML.parse(readFileSync(repoPath(".github/workflows/enforce-pr-target.yml"), "utf8")) as {
   jobs: Record<string, { steps: Array<{ name?: string; with?: { script?: string } }> }>;
 };
-const script = workflow.jobs["enforce-target"]!.steps.find(step => step.name === "Enforce PR target, ancestry, and description")!.with!.script!;
+const script = workflow.jobs["enforce-target"]!.steps.find(step => step.name === "Enforce PR target and description")!.with!.script!;
 
 function body(label = CURRENT, checks = 4): string {
   return ["## Summary", "", "Update managed validation wording while preserving the author's text and explicitly requiring a fresh attestation.", "",

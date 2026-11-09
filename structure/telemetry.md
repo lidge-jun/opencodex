@@ -26,7 +26,9 @@ via `adoptPersistedTelemetry` in `src/config/live-reconcile.ts`.
 `src/telemetry/consent.ts` (`resolveTelemetryStatus`) evaluates precedence in order:
 `OCX_TELEMETRY` (`0`, `false`, `off`, `no`), `DO_NOT_TRACK` (`1`, `true`, `yes`),
 `decision === "declined"`, `decision === "accepted"`, undecided with `noticeShownAt`
-(`default-on`), and undecided without notice (`awaiting-notice`).
+(`default-on`), and undecided without notice (`awaiting-notice`). It reads only the config's
+`telemetry` block: a whole config is never treated as a block, so a top-level `noticeShownAt` or
+`decision` (which `ocx config set` can write) is not consent.
 
 Casual-path consent guards require human interaction before transitioning an undecided install to active sending:
 
@@ -82,7 +84,9 @@ Casual-path consent guards require human interaction before transitioning an und
   never introduces a decision: before the file exists the decision is held in
   `telemetry-state.json`, where another process may have replaced it, and a file that cannot be read
   may hold a decline the snapshot never saw. Only a snapshot decline survives; any other block is
-  dropped, and the held decision or the notice applies.
+  dropped, and the held decision or the notice applies. The same rule covers
+  `initializePersistedConfigIfMissing`, which creates `config.json` from the running config, and the
+  consent route never copies a decision it only held as pending into the running config.
 
 ## Identity, aggregation, and scheduling
 
@@ -101,32 +105,31 @@ sum matches `usageDisplayTotalTokens` in `src/usage/totals.ts`.
 
 `src/telemetry/payload.ts` resolves the install channel and validates the built payload with
 `validateTelemetryPayloadV1`. `src/telemetry/sender.ts` posts to the constant collector URL
-with a 10-second `signalWithTimeout`. `src/telemetry/scheduler.ts` runs an unref'd background
-timer started lazily from `src/server/background-lifecycle.ts` with startup and periodic jitter.
-Whenever `OCX_TELEMETRY` or `DO_NOT_TRACK` opt-out is observed (at startup in
-`src/server/background-lifecycle.ts` even though the scheduler is not started, and on every tick),
-`ineligibleThroughDay` (today's UTC day) is persisted in `<OPENCODEX_HOME>/telemetry-state.json`
-(atomic no-follow write) together with the `envOptOutActiveSince` marker, or, for a proxy started
-under the opt-out, its pid in `envOptOutOwners`, and `telemetry-id.json` is deleted. Such a proxy
-reads the env once and runs no ticks, so the marker or owner stands for the whole period: while
-either is set no day is eligible. `endTelemetryEnvOptOut` closes the period (ineligible through the
-closing day) on that proxy's clean stop, which always covers its stop day, or on the first tick
-without the opt-out, which ends it only once no recorded owner pid is still alive and otherwise
-extends it to today. A `telemetry-state.json` that exists but cannot be read (symlink, oversized,
-malformed) stops sending (`state-unreadable`) rather than being read as empty: the tick checks it
-before choosing a day and again just before sending, the bookkeeping writes after a send or a
-`Retry-After` leave such a file alone, other writers (including every recorded decision, so
-sending does not stay paused) rebuild it as ineligible through the UTC day six hours from now, and
-the status snapshot reports `stateUnreadable`. A rebuild forgets `envOptOutOwners`, so an
-opted-out proxy records itself again every 6 hours (`TELEMETRY_ENV_OPT_OUT_REFRESH_MS`), within
-that window. The state code lives in `src/telemetry/state.ts`, which `background-lifecycle.ts` imports statically; the scheduler, its
-aggregation and sender stay behind the dynamic import. Each tick carries an `AbortSignal`
-cancelled by shutdown or consent changes (`nudgeTelemetryScheduler`), sends at most one completed
-UTC day strictly after the consent/disclosure UTC day (`day > formatUtcDay(decidedAt ?? noticeShownAt)`)
-and strictly after `ineligibleThroughDay` (`day > ineligibleThroughDay`), re-reads persisted consent
-and environment variables immediately before transmission, and honors HTTP `429` / `503`
-`Retry-After` responses by persisting `retryAfterUntil` in `telemetry-state.json` and skipping ticks
-until then.
+with a 10-second `signalWithTimeout` and parses `Retry-After` on HTTP 429/503 responses.
+`src/telemetry/scheduler.ts` runs an unref'd background timer with startup and interval jitter
+started from `src/server/background-lifecycle.ts`. Whenever an `OCX_TELEMETRY` or `DO_NOT_TRACK`
+opt-out is observed (at startup in `src/server/background-lifecycle.ts` or on a tick),
+`recordTelemetryEnvOptOut` persists `ineligibleThroughDay` (today's UTC day) and the
+`envOptOutActiveSince` marker in `telemetry-state.json` and deletes `telemetry-id.json`; a proxy
+started under the opt-out records its pid in `envOptOutOwners` instead. Such a proxy reads the env
+once and runs no ticks, so the marker or owner stands for the whole period: while either is set no
+day is eligible. `endTelemetryEnvOptOut` closes the period (ineligible through the closing day) on
+that proxy's clean stop, which always covers its stop day, or on the first tick without the opt-out,
+which ends it only once no recorded owner pid is still alive and otherwise extends it to today. A
+`telemetry-state.json` that exists but cannot be read (symlink, oversized, malformed, or with an
+opt-out field or held decision that is present but invalid) stops sending
+(`state-unreadable`) rather than being read as empty: the tick checks it before choosing a day and
+again just before sending, the bookkeeping writes after a send or a `Retry-After` leave such a file
+alone, other writers (including every recorded decision, so sending does not stay paused) rebuild
+it as ineligible through the UTC day six hours from now, and the status snapshot reports
+`stateUnreadable`. A rebuild forgets `envOptOutOwners`, so an opted-out proxy records itself again
+every 6 hours (`TELEMETRY_ENV_OPT_OUT_REFRESH_MS`), within that window. A held decline whose
+timestamp is damaged still applies. The state code lives in
+`src/telemetry/state.ts`, which `background-lifecycle.ts` imports statically; the scheduler, its
+aggregation and sender stay behind the dynamic import. Each tick sends at most one completed UTC
+day strictly after the UTC day of `decidedAt ?? noticeShownAt` and strictly after
+`ineligibleThroughDay`, honors `retryAfterUntil` backoffs, re-reads persisted consent and env
+immediately before transmission, and carries an `AbortSignal` cancelled on stop or consent changes.
 
 ## Collector and public documentation
 
