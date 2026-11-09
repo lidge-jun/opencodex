@@ -91,7 +91,7 @@ const SQLITE_BUSY_TIMEOUT_MS = 250;
 const RETAINED_WAL_LIMIT_BYTES = 4 * 1024 * 1024;
 const BATCH_BUSY_RETRIES = 3;
 const BATCH_BUSY_RETRY_MS = 5;
-const BUSY_RETRY_DELAYS_MS = [10, 25, 50] as const;
+const BUSY_RETRY_DELAYS_MS = [10, 25, 50, 100, 200, 400, 800, 1_600, 3_200] as const;
 
 const SCHEMA_DDL = `
 CREATE TABLE IF NOT EXISTS ${META_TABLE} (
@@ -220,8 +220,12 @@ export interface UsageFilterIndexQuery {
 
 export interface UsageFilterCandidateRead {
   snapshot: UsageFilterIndexSnapshot;
-  /** Ascending row-start offsets selected by the index. */
-  offsets: number[];
+  /** Number of candidates returned by pages consumed so far. */
+  candidateRows: number;
+  /** Returns the next bounded page of ascending row-start offsets. */
+  nextPage(): number[];
+  /** Releases the read snapshot held while pages are consumed. */
+  close(): void;
 }
 
 /**
@@ -1267,14 +1271,41 @@ function rowAccessIndexWithoutClient(query: UsageFilterIndexQuery): string | nul
   return null;
 }
 
-function selectCandidates(
+const CANDIDATE_PAGE_SIZE = 2_000;
+
+function candidatePager(
   db: Database,
   snapshot: UsageFilterIndexSnapshot,
   query: UsageFilterIndexQuery,
-): number[] {
+): Pick<UsageFilterCandidateRead, "candidateRows" | "nextPage"> {
   const { sql, values } = buildCandidateSelect(query, snapshot);
-  const rows = db.query(sql).all(...values) as Array<{ byteOffset: number }>;
-  return rows.map(row => row.byteOffset);
+  const statement = db.query(
+    `SELECT byteOffset FROM (${sql}) WHERE byteOffset > ? ORDER BY byteOffset LIMIT ?`,
+  );
+  let cursor = -1;
+  const pager = {
+    candidateRows: 0,
+    nextPage(): number[] {
+      db.exec("BEGIN");
+      try {
+        const meta = readMeta(db);
+        if (meta.schemaVersion !== USAGE_FILTER_INDEX_SCHEMA_VERSION
+          || meta.generation !== snapshot.generation) {
+          throw new UsageLedgerRebuildRequiredError("content_changed");
+        }
+        const rows = statement.all(...values, cursor, CANDIDATE_PAGE_SIZE) as Array<{ byteOffset: number }>;
+        const offsets = rows.map(row => row.byteOffset);
+        db.exec("COMMIT");
+        if (offsets.length > 0) cursor = offsets[offsets.length - 1]!;
+        pager.candidateRows += offsets.length;
+        return offsets;
+      } catch (error) {
+        try { db.exec("ROLLBACK"); } catch { /* nothing to roll back */ }
+        throw error;
+      }
+    },
+  };
+  return pager;
 }
 
 /** A published generation with a nonzero row count must actually hold rows. */
@@ -1304,22 +1335,28 @@ async function readActive(
         ingestedRows: refreshed.ingestedRows,
         ingestPasses: refreshed.ingestPasses,
       };
-      const offsets = selectCandidates(db, snapshot, query);
-      if (offsets.length === 0 && meta.indexedRows > 0 && !hasPublishedRows(db, meta.generation)) {
+      if (meta.indexedRows > 0 && !hasPublishedRows(db, meta.generation)) {
         // The published generation claims rows it no longer has. Never serve that as a
         // complete zero; drop the projection and rebuild. The refresh alone cannot see this
         // (the cursor and identity still match), so the rebuild must be requested explicitly.
         requestUsageFilterIndexRebuild();
         throw new UsageLedgerRebuildRequiredError("content_changed");
       }
+      const pager = candidatePager(db, snapshot, query);
       db.exec("COMMIT");
-      return { snapshot, offsets };
+      return {
+        snapshot,
+        get candidateRows() { return pager.candidateRows; },
+        nextPage: () => pager.nextPage(),
+        close: () => db.close(),
+      };
     } catch (error) {
       try { db.exec("ROLLBACK"); } catch { /* nothing to roll back */ }
       throw error;
     }
-  } finally {
+  } catch (error) {
     db.close();
+    throw error;
   }
 }
 
@@ -1396,16 +1433,21 @@ export async function readUsageFilterCandidatesPassive(
       || !tables.has("usage_rows")
       || !tables.has("usage_attributions")
       || !tables.has("usage_filter_index_writers")) {
-      return null;
+      throw new UsageFilterIndexForeignError();
     }
     db.exec("BEGIN");
     try {
       const meta = readMeta(db);
       const revision = currentUsageLogRevision();
-      if (meta.schemaVersion !== USAGE_FILTER_INDEX_SCHEMA_VERSION || !meta.generation) return null;
-      if (usageLogIdentityKey(meta.revision) !== usageLogIdentityKey(revision)) return null;
-      if (!revision || meta.indexedOffset !== revision.size) return null;
-      if (usageLogRevisionKey(meta.revision) !== usageLogRevisionKey(revision)) return null;
+      if (meta.schemaVersion !== USAGE_FILTER_INDEX_SCHEMA_VERSION || !meta.generation) {
+        throw new UsageLedgerRebuildRequiredError("content_changed");
+      }
+      if (usageLogIdentityKey(meta.revision) !== usageLogIdentityKey(revision)
+        || !revision
+        || meta.indexedOffset !== revision.size
+        || usageLogRevisionKey(meta.revision) !== usageLogRevisionKey(revision)) {
+        throw new UsageLedgerRebuildRequiredError("content_changed");
+      }
       const snapshot = snapshotFrom(meta, 0, 0);
       // The exact revision match above already proves the ledger is the one indexed; the
       // empty read keeps the passive path on the same validation as the active one.
@@ -1417,20 +1459,27 @@ export async function readUsageFilterCandidatesPassive(
         expectedProcessedThroughDigest: snapshot.processedThroughDigest,
         expectedFileSize: snapshot.revision?.size,
       });
-      const offsets = selectCandidates(db, snapshot, query);
-      if (offsets.length === 0 && meta.indexedRows > 0 && !hasPublishedRows(db, meta.generation)) {
+      if (meta.indexedRows > 0 && !hasPublishedRows(db, meta.generation)) {
         // Same guard as the active read: a published generation that lost its rows must not
         // be reported as a complete zero.
-        return null;
+        throw new UsageLedgerRebuildRequiredError("content_changed");
       }
-      return { snapshot, offsets };
-    } finally {
-      try { db.exec("COMMIT"); } catch { /* read-only transaction */ }
+      const pager = candidatePager(db, snapshot, query);
+      db.exec("COMMIT");
+      return {
+        snapshot,
+        get candidateRows() { return pager.candidateRows; },
+        nextPage: () => pager.nextPage(),
+        close: () => db.close(),
+      };
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch { /* read-only transaction */ }
+      throw error;
     }
   } catch {
-    return null;
-  } finally {
+    try { db.exec("ROLLBACK"); } catch { /* transaction may not have started */ }
     db.close();
+    return null;
   }
 }
 

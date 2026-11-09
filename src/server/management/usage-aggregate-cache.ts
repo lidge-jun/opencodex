@@ -110,7 +110,6 @@ const MAX_REBUILD_ATTEMPTS = 2;
 const MAX_FILTER_INDEX_ATTEMPTS = 3;
 // Selected rows are folded in bounded batches, so a filter that matches most of a large ledger
 // costs the same peak memory as the streaming scan it replaces.
-const FILTER_ROW_READ_BATCH = 2_000;
 const MAX_RETAINED_FILTERED_AGGREGATES = 4;
 
 let retainedAggregate: RetainedUsageAggregate | null = null;
@@ -396,7 +395,7 @@ function filterStats(
 ): UsageFilterQueryStats {
   return {
     totalRows: read.snapshot.indexedRows,
-    candidateRows: read.offsets.length,
+    candidateRows: read.candidateRows,
     scope: update,
     ingestedRows: read.snapshot.ingestedRows,
     ingestPasses: read.snapshot.ingestPasses,
@@ -470,28 +469,36 @@ async function accumulateCandidates(
   read: UsageFilterCandidateRead,
   filter: NormalizedUsageFilter,
 ): Promise<void> {
-  // Always read at least once, even with no candidates: the reader validates the snapshot
-  // against the ledger, and an empty selection must not skip that check.
-  const batchCount = Math.max(1, Math.ceil(read.offsets.length / FILTER_ROW_READ_BATCH));
-  for (let batch = 0; batch < batchCount; batch += 1) {
-    const start = batch * FILTER_ROW_READ_BATCH;
-    const rows = await readUsageLedgerRowsAtOffsets({
-      offsets: read.offsets.slice(start, start + FILTER_ROW_READ_BATCH),
-      expectedIdentityKey: read.snapshot.identityKey,
-      // The offsets belong to this index snapshot. If the ledger moved since the snapshot,
-      // the reader re-validates the boundary before trusting any of them, and a rewrite of
-      // the indexed tail becomes a rebuild instead of a silently different row set.
-      expectedRevisionKey: usageLogRevisionKey(read.snapshot.revision),
-      expectedProcessedThroughBytes: read.snapshot.indexedOffset,
-      expectedProcessedThroughDigest: read.snapshot.processedThroughDigest,
-      // The physical size at publish time; a torn suffix makes it larger than the boundary.
-      expectedFileSize: read.snapshot.revision?.size,
-    });
-    if (rows.unreadableOffsets.length > 0) {
-      // Serving only the rows that happened to parse would silently under-report the filter.
-      throw new UsageFilterIndexCorruptError();
+  try {
+    let first = true;
+    for (;;) {
+      // Candidate selection and row decoding are synchronous bounded chunks. A timer yield
+      // between them prevents a broad authenticated query from monopolizing the event loop.
+      if (!first) await new Promise<void>(resolve => setTimeout(resolve, 0));
+      const offsets = read.nextPage();
+      if (!first && offsets.length === 0) break;
+      first = false;
+      const rows = await readUsageLedgerRowsAtOffsets({
+        offsets,
+        expectedIdentityKey: read.snapshot.identityKey,
+        // The offsets belong to this index snapshot. If the ledger moved since the snapshot,
+        // the reader re-validates the boundary before trusting any of them, and a rewrite of
+        // the indexed tail becomes a rebuild instead of a silently different row set.
+        expectedRevisionKey: usageLogRevisionKey(read.snapshot.revision),
+        expectedProcessedThroughBytes: read.snapshot.indexedOffset,
+        expectedProcessedThroughDigest: read.snapshot.processedThroughDigest,
+        // The physical size at publish time; a torn suffix makes it larger than the boundary.
+        expectedFileSize: read.snapshot.revision?.size,
+      });
+      if (rows.unreadableOffsets.length > 0) {
+        // Serving only the rows that happened to parse would silently under-report the filter.
+        throw new UsageFilterIndexCorruptError();
+      }
+      for (const entry of rows.entries) accumulator.add(entry);
+      if (offsets.length === 0) break;
     }
-    for (const entry of rows.entries) accumulator.add(entry);
+  } finally {
+    read.close();
   }
   // Without a source filter the reported span covers the whole ledger, including rows this
   // filter never selected. A source filter derives its span from the rows that match it, so
