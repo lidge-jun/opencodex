@@ -271,6 +271,18 @@ test("native: jevEffortMode client keeps a nested-only caller effort as the wire
   expect(f.inference.bodies[0]!.reasoning_effort).toBe("high");
 }, 30_000);
 
+// An explicit null is no effort to the Chat parser, which then reads the nested value. Both lanes
+// must send that nested "high", never the null.
+for (const lane of ["native", "responses"] as const) {
+  test(`${lane}: jevEffortMode client reads the nested effort past an explicit null`, async () => {
+    const f = fixture(lane, "typesafe", "low");
+    Object.assign(f.config.combos!.auto!, { jevEffortMode: "client" });
+    const { response } = await send(lane, f.config, { reasoning_effort: null, reasoning: { effort: "high" } });
+    expect(response.status).toBe(200);
+    expect(f.inference.bodies[0]!.reasoning_effort).toBe("high");
+  }, 30_000);
+}
+
 for (const lane of ["native", "responses"] as const) {
   test(`${lane}: jevEffortMode client still lets a forced combo default override the caller`, async () => {
     const f = fixture(lane, "typesafe", "low");

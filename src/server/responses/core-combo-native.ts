@@ -262,14 +262,17 @@ function applyComboEffort(
 ): void {
   const combo = getCombo(config, comboId);
   if (!combo) return;
-  // Same precedence as the Chat inbound parser: `reasoning_effort` first, nested `reasoning.effort` second.
+  // Same precedence as the Chat inbound parser (`resolveReasoningEffort`): a string
+  // `reasoning_effort` first, a string nested `reasoning.effort` second. A non-string top-level
+  // value (an explicit null) is no caller effort, so the nested one still decides.
   const nested = body.reasoning && typeof body.reasoning === "object" && !Array.isArray(body.reasoning)
     ? (body.reasoning as Rec).effort
     : undefined;
   const hadEffort = Object.hasOwn(body, "reasoning_effort");
-  const callerEffort = hadEffort ? body.reasoning_effort : nested;
+  const callerEffort = typeof body.reasoning_effort === "string" ? body.reasoning_effort
+    : typeof nested === "string" ? nested : undefined;
   const shaped = concreteComboRequestBody(
-    hadEffort || nested !== undefined ? { reasoning: { effort: callerEffort } } : {},
+    callerEffort !== undefined ? { reasoning: { effort: callerEffort } } : {},
     target,
     comboDefaultEffort(config, comboId),
     supportedLadderFor({ provider: targetRoute.provider, modelId: targetRoute.modelId }),
