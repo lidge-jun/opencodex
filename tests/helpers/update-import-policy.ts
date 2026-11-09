@@ -2,6 +2,7 @@
 // security boundary or completeness proof. Runtime mutation guards enforce authority.
 import { orchestratedChildReview } from "./update-review-orchestrated-child";
 import { orchestratedEntryReview } from "./update-review-orchestrated-entry";
+import { signedSupplyReview } from "./update-review-signed-supply";
 import { mergeStaticImports } from "./update-review-table";
 
 const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
@@ -366,7 +367,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { dirname, isAbsolute } from \"node:path\";"
   ]
 };
-export const updateStaticImports = mergeStaticImports(baseStaticImports, orchestratedEntryReview.staticImports, orchestratedChildReview.staticImports);
+export const updateStaticImports = mergeStaticImports(baseStaticImports, orchestratedEntryReview.staticImports, orchestratedChildReview.staticImports, signedSupplyReview.staticImports);
 const baseDeferredImports: readonly string[] = [
   // Read-only identity verification before the child enters mutation.
   'src/update/index.ts:runUpdate:session = createOrchestratedChildSession({ home: getConfigDir(), resultPath: child.resultPath, resultCapability: child.resultCapability, expect, notAfter: child.notAfter, verifyIdentity: async () => (await import("./orchestrated-entry")).verifyOrchestratedChildIdentity(expect, child.version) })',
@@ -386,7 +387,7 @@ const baseDeferredImports: readonly string[] = [
   "src/update/job-update-tray.ts:defaultWorkerTrayHandoff:{ getWindowsTrayStatus, guardedStartWindowsTray, guardedStopWindowsTray } = await import(\"./guarded-tray-ops\")",
   "src/update/job.ts:restartAfterUpdate:{ serviceReinstallArgs } = await import(\"../service\")"
 ];
-export const updateDeferredImports: readonly string[] = [...baseDeferredImports, ...orchestratedEntryReview.deferredImports, ...orchestratedChildReview.deferredImports];
+export const updateDeferredImports: readonly string[] = [...baseDeferredImports, ...orchestratedEntryReview.deferredImports, ...orchestratedChildReview.deferredImports, ...signedSupplyReview.deferredImports];
 // Existing trusted wrapper internals: each complete expression is reviewed.
 // Import permission does not grant a wrapper arbitrary loader/global access.
 export const updateBoundaryRootSites = new Map([
