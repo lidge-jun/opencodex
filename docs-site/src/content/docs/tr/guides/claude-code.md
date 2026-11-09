@@ -778,7 +778,7 @@ otomatik `cache_control` yönetimini sağlar. Kararlı turlar normalde yaklaşı
 %99,9 önbellek isabet oranı üretir.
 
 **Yerel OpenAI/ChatGPT yönlendirmesi:** önbellek bağlılığı için
-bir `prompt_cache_key` (varsa `metadata.user_id`'den türetilir, bir sistem
+bir `prompt_cache_key` (dize olarak varsa `metadata.user_id`'den türetilir, bir sistem
 içeriği karmasına geri döner) ve yalnızca bir oturum kimliğinden (paylaşılan yedek anahtardan asla) `session_id` başlığı türetir. Sistem içeriği
 karmasından türetilen yedek anahtar (yalnızca sistem içeriği varsa kullanılır) ayrıca modeli ve tam araç şemalarını içerir.
 
