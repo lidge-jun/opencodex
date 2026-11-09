@@ -122,6 +122,13 @@ selected architecture.
   render capture; `ProviderDetails` injects its own for Overview notes and the xAI
   toggle; `useProvidersCrud.updateProvider` uses the passed capture and never replaces
   it with a live one. Account mode captures before its confirmation dialog.
+- Every mutation and read owner creates its capture at render: the account pool,
+  OAuth, Add Provider OAuth, Kiro, Codex pool, auto-switch and Anthropic pool hooks.
+  The logical target is threaded through ProviderAuthPanel, the Kiro dialog, the
+  Anthropic pool card and CodexAccountPool. A parameterized render-gap suite
+  exercises every owner.
+- The Settings leave dialog captures its target when it opens, closes on a target
+  change, and uses the form owner-checked discard.
 - A remove confirmation captures when it opens and refuses after a target change,
   including A-B-A. Key remove/add/alias guard every completion. The add-key form and the
   Add Provider completion do not survive a switch. Kiro polls with the session capture

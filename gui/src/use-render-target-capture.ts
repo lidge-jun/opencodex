@@ -12,7 +12,10 @@ import { captureApiTarget, type ApiTargetCapture } from "./api";
 export function useRenderTargetCapture(apiBase: string, targetKey?: string): ApiTargetCapture {
   // An empty targetKey is "not supplied", not an identity shared by every embedded base.
   const identity = targetKey ? targetKey : apiBase;
-  const make = (): ApiTargetCapture => captureApiTarget("shared", apiBase);
+  const make = (): ApiTargetCapture => typeof window === "undefined"
+    // Server rendering has no location or session; the capture is never used there.
+    ? { apiBase, targetKey: identity, origin: "", requestGeneration: 0, transport: "same-origin" }
+    : captureApiTarget("shared", apiBase);
   const [state, setState] = useState<{ identity: string; capture: ApiTargetCapture }>(() => ({ identity, capture: make() }));
   if (state.identity !== identity) {
     setState({ identity, capture: make() });
