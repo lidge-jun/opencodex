@@ -644,7 +644,7 @@ role, `tool_use_id` 없는 `tool_result`, id/name 없는 `tool_use`, name 없는
 
 **네이티브 OpenAI/ChatGPT 라우팅:** 세션 범위 `prompt_cache_key`(`metadata.user_id`가 있으면
 사용하고, 없으면 시스템 내용 해시 사용)와 캐시 선호도를 위한 `session_id` 헤더를 만들어요.
-캐시 키에는 모델과 전체 도구 스키마가 들어가요.
+시스템 내용 해시로 만드는 대체 키에는 모델과 전체 도구 스키마도 들어가요.
 
 **토큰 계산:** Anthropic 출력은 `input_tokens`에서 `cached_tokens`와 `cache_write_tokens`를 빼고,
 각각 `cache_read_input_tokens`와 `cache_creation_input_tokens`로 노출해요. 요청 로그는 이를 다시

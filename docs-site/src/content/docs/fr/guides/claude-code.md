@@ -703,7 +703,7 @@ atteignent généralement un taux d'accès au cache d'environ 99.9 %.
 
 **Routage OpenAI/ChatGPT natif :** produit une valeur `prompt_cache_key` propre à la session, à partir de
 `metadata.user_id` lorsqu'il est présent ou, à défaut, d'un hachage du contenu système, ainsi qu'un en-tête `session_id`
-pour l'affinité du cache. La clé de cache inclut le modèle et l'intégralité des schémas d'outils.
+pour l'affinité du cache. La clé de repli dérivée du contenu système inclut aussi le modèle et l'intégralité des schémas d'outils.
 
 **Calcul des jetons d'entrée :** Anthropic soustrait `cached_tokens` et `cache_write_tokens` de
 `input_tokens`, les exposant comme `cache_read_input_tokens` et `cache_creation_input_tokens`.

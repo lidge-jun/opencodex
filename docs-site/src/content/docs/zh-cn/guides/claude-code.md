@@ -538,7 +538,7 @@ role；`tool_result` 缺少 `tool_use_id`；`tool_use` 缺少 id/name；指定�
 
 **原生 OpenAI/ChatGPT 路由：**派生会话范围的 `prompt_cache_key`（存在时取自
 `metadata.user_id`，否则回退到系统内容哈希）和用于缓存亲和性的 `session_id` 请求头。
-缓存键包含模型和完整的工具 schema。
+由系统内容哈希派生的回退键还包含模型和完整的工具 schema。
 
 **Token 计算：**Anthropic 输出会从 `input_tokens` 中减去 `cached_tokens` 和
 `cache_write_tokens`，并将它们分别公开为 `cache_read_input_tokens` 和

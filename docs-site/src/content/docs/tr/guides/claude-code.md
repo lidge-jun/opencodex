@@ -779,8 +779,8 @@ otomatik `cache_control` yönetimini sağlar. Kararlı turlar normalde yaklaşı
 
 **Yerel OpenAI/ChatGPT yönlendirmesi:** önbellek bağlılığı için oturum kapsamlı
 bir `prompt_cache_key` (varsa `metadata.user_id`'den türetilir, bir sistem
-içeriği karmasına geri döner) ve `session_id` başlığı türetir. Önbellek anahtarı
-modeli ve tam araç şemalarını içerir.
+içeriği karmasına geri döner) ve `session_id` başlığı türetir. Sistem içeriği
+karmasından türetilen yedek anahtar ayrıca modeli ve tam araç şemalarını içerir.
 
 **Token matematiği:** Anthropic çıktısı `cached_tokens` ve `cache_write_tokens`
 değerlerini `input_tokens`'tan çıkararak bunları `cache_read_input_tokens` ve
