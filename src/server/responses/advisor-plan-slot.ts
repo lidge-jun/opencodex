@@ -29,6 +29,20 @@ export function setAdvisorPlanFactory(config: OcxConfig, factory: AdvisorPlanFac
   else factories.delete(config);
 }
 
+/** Request-scoped config views (e.g. the Claude replay config) -> the live config they were built from. */
+const views = new WeakMap<OcxConfig, OcxConfig>();
+
+/**
+ * Record that `view` is a request-scoped copy of `live`. A view resolves the live config's
+ * factory at lookup time, so a later disable or re-activation of the live config still applies.
+ * Nothing is stored on the config object itself: it stays cloneable (#7974).
+ */
+export function linkAdvisorPlanConfig<T extends OcxConfig>(live: OcxConfig, view: T): T {
+  views.set(view, views.get(live) ?? live);
+  return view;
+}
+
 export function createRegisteredAdvisorPlan(input: AdvisorPlanInput): Promise<RegisteredAdvisorPlan | null> | null {
-  return factories.get(input.config)?.(input) ?? null;
+  const live = views.get(input.config);
+  return (factories.get(input.config) ?? (live && factories.get(live)))?.(input) ?? null;
 }
