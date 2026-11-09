@@ -574,6 +574,122 @@ const EFFORT_PARAM_NAMES = new Set([
   "reasoning_parameters",
 ]);
 
+function cleanParam(str: string): string {
+  return str.trim().toLowerCase().replaceAll("-", "_").replace(/[^a-z0-9_]+$/gi, "").replace(/^[^a-z0-9_]+/gi, "");
+}
+
+const KNOWN_NON_EFFORT_PARAMS = new Set([
+  "temperature",
+  "top_p",
+  "top_k",
+  "max_tokens",
+  "max_completion_tokens",
+  "max_output_tokens",
+  "min_tokens",
+  "stop",
+  "stop_sequences",
+  "presence_penalty",
+  "frequency_penalty",
+  "repetition_penalty",
+  "logit_bias",
+  "logprobs",
+  "top_logprobs",
+  "seed",
+  "tools",
+  "tool_choice",
+  "functions",
+  "function_call",
+  "response_format",
+  "stream",
+  "stream_options",
+  "user",
+  "service_tier",
+  "modalities",
+  "prediction",
+  "parallel_tool_calls",
+  "messages",
+  "prompt",
+  "n",
+  "best_of",
+]);
+
+const GENERIC_PARAM_WORDS = new Set([
+  "request",
+  "requests",
+  "argument",
+  "arguments",
+  "parameter",
+  "parameters",
+  "param",
+  "params",
+  "payload",
+  "body",
+  "input",
+  "inputs",
+  "json",
+  "format",
+  "data",
+  "content",
+  "value",
+  "values",
+  "field",
+  "fields",
+  "call",
+  "type",
+  "error",
+  "message",
+  "model",
+  "url",
+  "header",
+  "headers",
+  "auth",
+  "api",
+  "key",
+  "token",
+  "status",
+  "code",
+  "response",
+  "gateway",
+  "provider",
+  "invalid",
+  "unsupported",
+  "unknown",
+  "unrecognized",
+  "unexpected",
+  "unallowed",
+]);
+
+function diagnosticTextNamesOtherParameter(text: string): boolean {
+  if (!text) return false;
+  const s = text.replace(GENERIC_ERROR_TYPE, " ");
+
+  const paramPattern = /\b(?:parameter|param|argument|arg|field|property)\s*(?:[:=]\s*['"`]?|['"`])([a-zA-Z0-9_\-\.]+)['"`]?/gi;
+  for (let m = paramPattern.exec(s); m; m = paramPattern.exec(s)) {
+    const p = cleanParam(m[1]);
+    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p)) return true;
+  }
+
+  const prefixParamPattern = /\b['"`]?([a-zA-Z0-9_\-\.]+)['"`]?\s+(?:parameter|param|argument|arg|field|property)\b/gi;
+  for (let m = prefixParamPattern.exec(s); m; m = prefixParamPattern.exec(s)) {
+    const p = cleanParam(m[1]);
+    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p)) return true;
+  }
+
+  const nonEffortTerm = /\b(?:temperature|top_p|top_k|max_tokens|max_completion_tokens|max_output_tokens|min_tokens|stop|stop_sequences|presence_penalty|frequency_penalty|repetition_penalty|logit_bias|logprobs|top_logprobs|seed|tools|tool_choice|functions|function_call|response_format|stream|stream_options|user|service_tier|modalities|prediction|parallel_tool_calls|messages|prompt)\b/gi;
+  for (let m = nonEffortTerm.exec(s); m; m = nonEffortTerm.exec(s)) {
+    const from = Math.max(0, m.index - REJECTION_WINDOW);
+    const to = Math.min(s.length, m.index + m[0].length + REJECTION_WINDOW);
+    if (REJECTION_LANGUAGE.test(s.slice(from, to))) return true;
+  }
+
+  const rejectionDirect = /\b(?:invalid|unsupported|unrecognized|unknown)\s+['"`]?([a-zA-Z0-9_\-\.]+)['"`]?/gi;
+  for (let m = rejectionDirect.exec(s); m; m = rejectionDirect.exec(s)) {
+    const p = cleanParam(m[1]);
+    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p)) return true;
+  }
+  return false;
+}
+
 function isConflictingDiagnosticProse(str: string | undefined): boolean {
   if (!str) return false;
   const s = str.trim();
@@ -592,6 +708,9 @@ function isConflictingDiagnosticProse(str: string | undefined): boolean {
   if (typeMatch && typeMatch[1]) {
     const type = typeMatch[1].trim().toLowerCase().replaceAll("-", "_");
     if (!EFFORT_COMPATIBLE_TYPES.has(type)) return true;
+  }
+  if (diagnosticTextNamesOtherParameter(s)) {
+    return true;
   }
   return false;
 }

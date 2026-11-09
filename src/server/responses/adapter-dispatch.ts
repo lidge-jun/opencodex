@@ -660,18 +660,6 @@ export async function prepareAdapterExchange(
         } catch (err) {
           const authRefusal = options.abortSignal?.aborted ? undefined : codexAdapterBuildRefusal(err, admissionState.authCtx, route.codexAccountNamespace, () => { cleanupUpstreamAbort(); upstream.abort(); });
           if (authRefusal) return { failed: authRefusal };
-          if (err instanceof OllamaLateAttributionBudgetError) {
-            cleanupUpstreamAbort();
-            upstream.abort();
-            return { failed: lateAttributionLimitResponse() };
-          }
-          if (isTranslatorBudgetExceededError(err)) {
-            cleanupUpstreamAbort();
-            upstream.abort();
-            return { failed: formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
-              code: "translation_buffer_limit",
-            }) };
-          }
           // A rotated credential that cannot be shaped keeps the refusal it was meant to
           // replace. The image-tier and reasoning-effort rebuilds are different: the request itself
           // failed to shape, and their established build-error contracts stay authoritative.
@@ -683,6 +671,14 @@ export async function prepareAdapterExchange(
           cleanupUpstreamAbort();
           upstream.abort();
           if (options.abortSignal?.aborted) return { failed: clientCancelledResponse() };
+          if (err instanceof OllamaLateAttributionBudgetError) {
+            return { failed: lateAttributionLimitResponse() };
+          }
+          if (isTranslatorBudgetExceededError(err)) {
+            return { failed: formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
+              code: "translation_buffer_limit",
+            }) };
+          }
           const msg = err instanceof Error ? err.message : String(err);
           return { failed: formatErrorResponse(400, "invalid_request_error", redactSecretString(msg)) };
         }
