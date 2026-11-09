@@ -36,6 +36,7 @@ import {
   sanitizeRetryOn429ForLoad,
   sanitizeCapabilityDeclarationsForLoad,
   sanitizeModelCostsForLoad,
+  sanitizeCreditPriceForLoad,
   sanitizeAutoReviewForLoad,
   degradedListenerWarnings,
   degradedReasoningRetentionWarning,
@@ -867,6 +868,7 @@ function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Ui
     sanitizeRetryOn429ForLoad(parsed, warn);
     sanitizeAgyAcpForLoad(parsed, reportAgyRepair);
     sanitizeModelCostsForLoad(parsed, warn);
+    sanitizeCreditPriceForLoad(parsed, warn);
     sanitizeCapabilityDeclarationsForLoad(parsed, warn);
     const result = configSchema.safeParse(parsed);
     if (result.success) {

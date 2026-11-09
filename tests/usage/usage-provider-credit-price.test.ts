@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { estimateAttemptCost, estimateRequestCost } from "../../src/usage/cost";
 import { activeCreditPrices, refreshUserCostOverlays, userCostOverlayVersion } from "../../src/usage/user-cost-overlays";
+import { sanitizeCreditPriceForLoad } from "../../src/config/load-degrade";
 import type { OcxConfig } from "../../src/types";
 
 // Kiro bills credits and caches repeated context on its side, but reports no cache tokens. Pricing
@@ -71,6 +72,26 @@ describe("provider credit price", () => {
     expect(estimate?.cost.total).toBeGreaterThan(1);
   });
 
+  test("an account-suffixed Kiro row uses the provider's credit price", () => {
+    refreshUserCostOverlays(kiroConfig(0.04));
+    const estimate = estimateRequestCost({ provider: "kiro-p9d8524", model: "claude-opus-5.5", usage: longTurn, usageStatus: "estimated" });
+
+    expect(estimate?.cost.total).toBeCloseTo(1.95 * 0.04, 9);
+  });
+
+  test("a configured provider whose name extends another keeps its own price", () => {
+    refreshUserCostOverlays({
+      port: 0,
+      providers: {
+        kiro: { adapter: "kiro", baseUrl: "https://runtime.us-east-1.kiro.dev", authMode: "oauth", creditPriceUsd: 0.04 },
+        "kiro-team": { adapter: "kiro", baseUrl: "https://runtime.us-east-1.kiro.dev", authMode: "oauth" },
+      },
+    } as unknown as OcxConfig);
+    const estimate = estimateRequestCost({ provider: "kiro-team", model: "claude-opus-5.5", usage: longTurn, usageStatus: "estimated" });
+
+    expect(estimate?.cost.total).not.toBeCloseTo(1.95 * 0.04, 9);
+  });
+
   test("changing the credit price bumps the overlay version so cached summaries refresh", () => {
     refreshUserCostOverlays(kiroConfig(0.04));
     const before = userCostOverlayVersion();
@@ -100,6 +121,20 @@ describe("providers.<name>.creditPriceUsd config", () => {
       const result = configSchema.safeParse(withPrice(bad));
       expect(result.success).toBe(false);
       expect(result.error?.issues.some(issue => issue.path.join(".") === "providers.kiro.creditPriceUsd")).toBe(true);
+    }
+  });
+});
+
+describe("providers.<name>.creditPriceUsd at load time", () => {
+  test("an invalid hand-edited price is dropped with a warning and the provider is kept", () => {
+    for (const bad of ["0.02", -0.01, Number.NaN]) {
+      const parsed = { providers: { kiro: { adapter: "kiro", creditPriceUsd: bad }, other: { adapter: "openai-chat", creditPriceUsd: 0.02 } } };
+      const warnings: string[] = [];
+      sanitizeCreditPriceForLoad(parsed, message => warnings.push(message));
+
+      expect(parsed.providers.kiro).toEqual({ adapter: "kiro" });
+      expect(parsed.providers.other.creditPriceUsd).toBe(0.02);
+      expect(warnings).toEqual(['⚠️  config.json providers."kiro".creditPriceUsd is invalid — ignoring the credit price']);
     }
   });
 });
