@@ -35,10 +35,11 @@ version, release channel, platform, install channel, provider kind, coarse model
 minutes and request, token and error counts; never prompts, outputs, keys, accounts, hosts or
 paths) to `telemetry.opencodex.me` only after the person installing or operating it has seen the
 notice (dashboard popup or interactive CLI prompt) and has not declined; it can be turned off in
-that notice and anytime with `ocx telemetry disable`, `OCX_TELEMETRY=0`, `DO_NOT_TRACK=1` or
-Proxy details; project-wide aggregates are public; otherwise data goes only where the user
-configures. In practice, OpenCodex forwards requests to the providers you configure. To look for
-new versions it also reads release metadata from GitHub and the npm registry, and those update
+that notice, in the Windows installer (a "Send anonymous usage statistics" checkbox, checked by
+default) and anytime with `ocx telemetry disable`, `OCX_TELEMETRY=0`, `DO_NOT_TRACK=1` or Proxy
+details; project-wide aggregates are public; otherwise data goes only where the user configures.
+In practice, OpenCodex forwards requests to the providers you configure. To look for new
+versions it also reads release metadata from GitHub and the npm registry, and those update
 checks carry none of your prompts, credentials or usage data.
 
 ## Verifying a download
