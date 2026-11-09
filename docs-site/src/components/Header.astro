@@ -75,6 +75,7 @@ const fr = {
 	'Proxy API Formats': 'Formats de l’API proxy',
 	'Management API': 'API de gestion',
 	'Contributing': 'Contribuer',
+	'Explore guides': 'Explorer les guides',
 	'Main': 'Navigation principale',
 	'Select language': 'Choisir la langue',
 	'Menu': 'Menu',
@@ -173,13 +174,15 @@ const groups: NavGroup[] = [
 ];
 
 // Eleven guides made the Guides panel read like a sitemap. The panel keeps
-// the six people reach for first and ends in a link to the full docs map on
-// the landing page (the sidebar still lists every guide on docs pages).
+// the six people reach for first and ends in a row that jumps to the curated
+// docs map on the landing page. That band is a selection of guide pages, not
+// an index of them, and the docs sidebar is a subset too, so the row invites
+// exploration instead of claiming it lists every guide.
 const GUIDE_PICKS = ['providers', 'model-routing', 'codex-integration', 'claude-code', 'sidecars', 'web-dashboard'];
 const guides = groups[1];
 guides.links = guides.links.filter((link) => GUIDE_PICKS.some((slug) => link.href.endsWith(`guides/${slug}/`)));
 guides.more = {
-	label: t('All guides', '가이드 전체 보기', '全部指南', 'Все руководства', 'すべてのガイド', '全部指南', 'Tüm kılavuzlar'),
+	label: t('Explore guides', '가이드 둘러보기', '浏览指南', 'Обзор руководств', 'ガイドを探る', '瀏覽指南', 'Kılavuzlara göz atın'),
 	href: `${prefix}#docs-map`,
 };
 
