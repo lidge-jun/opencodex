@@ -87,6 +87,13 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void, ta
   const abortRef = useRef<AbortController | null>(null);
   const unmountedRef = useRef(false);
   const identityRef = useRef(identity);
+  // Adjust the visible state at the prop boundary so A's code never paints under B.
+  // The effect below still owns retiring A's flow on its own capture.
+  const [frameIdentity, setFrameIdentity] = useState(identity);
+  if (frameIdentity !== identity) {
+    setFrameIdentity(identity);
+    setState({ phase: "idle" });
+  }
 
   const stopPolling = useCallback(() => {
     abortRef.current?.abort();
@@ -106,7 +113,6 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void, ta
     cancellationRequestedFlowRef.current = null;
     lastCancellableStateRef.current = null;
     stopPolling();
-    setState({ phase: "idle" });
     if (flowId && capture) {
       void targetFetch(capture, `${capture.apiBase}/api/codex-auth/main/reauth-device?flowId=${encodeURIComponent(flowId)}`, { method: "DELETE" })
         .catch(() => {});

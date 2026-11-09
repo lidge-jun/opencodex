@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useLayoutEffect } from "react";
 import type { Root } from "react-dom/client";
 import { configureApiTargets } from "../src/api";
 import { standaloneApiTargets } from "../src/api-targets";
@@ -130,7 +130,8 @@ afterEach(async () => {
 });
 
 function Probe({ targetKey }: { targetKey: string }) {
-  hook = useMainDeviceReauth("/same", () => { completed += 1; }, targetKey);
+  const value = useMainDeviceReauth("/same", () => { completed += 1; }, targetKey);
+  useLayoutEffect(() => { hook = value; });
   return null;
 }
 

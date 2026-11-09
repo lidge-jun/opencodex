@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, useEffect, useReducer } from "react";
+import { act, useEffect, useLayoutEffect, useReducer } from "react";
 import type { Dispatch } from "react";
 import type { Root } from "react-dom/client";
 import { configureApiTargets } from "../src/api";
@@ -62,12 +62,15 @@ function Probe({ apiBase, targetKey, reauthAccountId }: { apiBase: string; targe
     dispatch,
     t: ((key: string) => key) as never,
   });
+  const { bindCallbacks } = oauth;
   useEffect(() => {
-    oauth.bindCallbacks(completion => { completions.push(completion); }, () => { closes += 1; });
-  }, [oauth.bindCallbacks]);
-  hook = oauth;
-  uiState = ui;
-  dispatchUi = dispatch;
+    bindCallbacks(completion => { completions.push(completion); }, () => { closes += 1; });
+  }, [bindCallbacks]);
+  useLayoutEffect(() => {
+    hook = oauth;
+    uiState = ui;
+    dispatchUi = dispatch;
+  }, [oauth, ui, dispatch]);
   return null;
 }
 
