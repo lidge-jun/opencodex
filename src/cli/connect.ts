@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { DEFAULT_CATALOG_PATH } from "../codex/paths";
 import { codexSupportedReasoningEfforts } from "../codex/catalog/effort";
-import { resolveCodexRuntime } from "../codex/runtime";
+import { resolveCodexRuntime, type ResolvedCodexRuntime } from "../codex/runtime";
 import {
   inspectClientCatalogReadiness,
   type CatalogCompatibilityDeps,
@@ -61,14 +61,14 @@ export interface ClientCatalogProbeDeps extends CatalogCompatibilityDeps {
   /** Injected in tests; defaults to reading the materialized client catalog off disk. */
   readCatalogBody?: () => string | null;
   /**
-   * A Codex command the caller already resolved, handed over so readiness skips resolving it
+   * The Codex runtime the caller already resolved, handed over so readiness skips resolving it
    * again. General `ocx status` resolves the full runtime for its diagnostics block; the resolver
    * memo is keyed by discovery scope and holds one entry, so a priority-only readiness resolve
    * and the full one miss each other and re-probe the same command with `--version` — up to eight
-   * seconds apiece. Passing the command across adds no cache state, and it cannot disagree with
+   * seconds apiece. Passing the selection across adds no cache state, and it cannot disagree with
    * what status prints because it is the selection status is printing.
    */
-  selectedCodexCommand?: string;
+  selectedCodexRuntime?: ResolvedCodexRuntime;
 }
 
 export const CONNECT_USAGE = `Usage:
@@ -139,12 +139,14 @@ function readInstalledCatalogBody(): string | null {
  * to the catalog probe: readiness does not consume alternative-runtime diagnostics. The resolver
  * keeps this priority-only cache separate from the full discovery used by `ocx status`.
  *
- * A caller that has already resolved passes its selection in through `selectedCodexCommand` rather
+ * A caller that has already resolved passes its selection in through `selectedCodexRuntime` rather
  * than paying for a second `--version` probe of the command it just resolved.
  */
-function observeLocalCodexEffortLadder(selected?: string): ReadonlySet<string> | null {
-  const command = selected ?? resolveCodexRuntime({ discoverAlternatives: false }).runtime.command;
-  return codexSupportedReasoningEfforts({ commandCandidates: () => [command] });
+function observeLocalCodexEffortLadder(selected?: ResolvedCodexRuntime): ReadonlySet<string> | null {
+  const runtime = selected ?? resolveCodexRuntime({ discoverAlternatives: false }).runtime;
+  // The selection travels with its command so the probe can tell an unresolved sentinel, which may
+  // fall back to the ChatGPT.app CLI on macOS (#8360), from a bare command that actually ran.
+  return codexSupportedReasoningEfforts({ commandCandidates: () => [runtime.command], selectedRuntime: runtime });
 }
 
 /**
@@ -154,8 +156,8 @@ function observeLocalCodexEffortLadder(selected?: string): ReadonlySet<string> |
  * would run its own probe, which is how the two checks could disagree about the ladder within
  * a single `ocx connect`.
  */
-function catalogObserver(deps: ClientCatalogProbeDeps | undefined): CatalogCompatibilityDeps {
-  const selected = deps?.selectedCodexCommand;
+export function catalogObserver(deps: ClientCatalogProbeDeps | undefined): CatalogCompatibilityDeps {
+  const selected = deps?.selectedCodexRuntime;
   return { supportedEfforts: deps?.supportedEfforts ?? (() => observeLocalCodexEffortLadder(selected)) };
 }
 
