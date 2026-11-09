@@ -12,8 +12,8 @@ export function createMuseMspAdapter(runner: Pick<MuseMspRunner, "run"> & Partia
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000) throw new MuseMspError("invalid_timeout");
   return {
     name: "muse-msp",
-    // A supplied gate owns and reports every physical send; the outer handler
-    // must not log an attempt before that gate has admitted it.
+    // The supplied gate reports opaque segment dispatches. It cannot observe the
+    // number of physical model requests that Muse sends within each segment.
     ...(experimentalGate ? { reportsPhysicalSends: true } : {}),
     ...(runner.onResponseRendered ? { onResponseRendered: (parsed, response) => runner.onResponseRendered!(parsed, response) } : {}),
     buildRequest() { throw new MuseMspError("unsupported_transport"); },
@@ -35,9 +35,11 @@ export function createMuseMspAdapter(runner: Pick<MuseMspRunner, "run"> & Partia
         // Do not surface CLI diagnostics, prompts, process environment or exception text.
         const code = error instanceof MuseMspError ? error.code : "host_error";
         const invalid = code.startsWith("unsupported_") || code.startsWith("invalid_");
-        emit({ type: "error", message: invalid ? "Muse request is not supported by this experimental adapter." : "Muse session could not be completed.",
+        const strictSpend = code === "unsupported_enforced_spend_budget";
+        emit({ type: "error", message: strictSpend ? "Muse cannot enforce this request's configured spend limit."
+          : invalid ? "Muse request is not supported by this experimental adapter." : "Muse session could not be completed.",
           status: invalid ? 400 : 502, errorType: invalid ? "invalid_request_error" : "upstream_error",
-          code: invalid ? "muse_request_unsupported" : "muse_session_failed", retryable: false,
+          code: strictSpend ? "muse_spend_limit_unsupported" : invalid ? "muse_request_unsupported" : "muse_session_failed", retryable: false,
           ...(error instanceof MuseSegmentError ? { usage: error.usage } : {}) });
       }
     },

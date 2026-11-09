@@ -641,6 +641,41 @@ describe("Muse MSP owned child", () => {
     } finally { await runner.close(); }
   });
 
+  test("native adapter refuses an enforced spend limit before dispatch, including a policy change during startup", async () => {
+    let enforced = true, calls = 0, sends = 0, changeAtDispatch = false;
+    const adapter = createMuseNativeAdapter({
+      async run(_parsed, options) {
+        calls++;
+        if (changeAtDispatch) enforced = true;
+        options.beforeDispatch?.();
+        sends++;
+        return [{ type: "done" }];
+      },
+      onResponseRendered() {},
+    }, "muse|spend-test");
+    const translatorBudget = createTranslatorBudget();
+    const budget = createRequestExecutionBudget(undefined, "strict-spend", {
+      get enforced() { return enforced; }, charge: () => true, refund: () => {},
+    });
+    const parsed = parseRequest({ model: "test", input: [{ role: "user", content: "hello" }] });
+    const invoke = async () => {
+      const events: import("../../src/types").AdapterEvent[] = [];
+      await adapter.runTurn!(parsed, { headers: new Headers(), translatorBudget, sendBudget: budget }, event => events.push(event));
+      return events;
+    };
+    try {
+      expect(await invoke()).toContainEqual(expect.objectContaining({ type: "error", code: "muse_spend_limit_unsupported" }));
+      expect(calls).toBe(0);
+      enforced = false; changeAtDispatch = true;
+      expect(await invoke()).toContainEqual(expect.objectContaining({ type: "error", code: "muse_spend_limit_unsupported" }));
+      expect(sends).toBe(0);
+      expect(budget.used).toBe(0);
+      enforced = false; changeAtDispatch = false;
+      expect(await invoke()).toContainEqual({ type: "done" });
+      expect(sends).toBe(1);
+    } finally { translatorBudget.dispose(); }
+  });
+
   test("native adapter admits each dispatched tool segment and not rejected input", async () => {
     const runner = new MuseMspRunner({ hostExecutable: process.execPath, hostArgs: [join(import.meta.dir, "../fixtures/muse-msp-fake-mcp-host.ts")],
       hostEnv: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot }, cwd: process.cwd(),

@@ -6,7 +6,7 @@ import { createMuseMspAdapter } from "./adapter";
 import type { MuseMspRunner } from "./runner";
 
 /**
- * Unregistered native-MSP composition. As for existing coding-agent CLIs, each
+ * Native-MSP composition. As for existing coding-agent CLIs, each
  * dispatched segment is one opaque admission, not a physical request counter.
  * The caller owns the runner and must close it when the route is retired.
  */
@@ -17,11 +17,18 @@ export function createMuseNativeAdapter(runner: Pick<MuseMspRunner, "run" | "onR
     async run<T>(incoming: IncomingMeta, execute: (hooks?: { beforeDispatch?: () => void;
       beforeResultCommit?: (result: Readonly<MuseToolResult>) => void; beforeUserDispatch?: (text: string) => void }) => Promise<T>,
       context: { continuation: boolean; userContinuation: boolean }): Promise<T> {
+      if (incoming.sendBudget?.spendEnforced) throw new MuseMspError("unsupported_enforced_spend_budget");
       const slot = new MuseBudgetSlot();
       try {
         return await withMuseBudgetLease(slot, incoming, targetKey, async lease => {
           let finish: (() => void) | undefined;
-          const admit = () => { if (finish) throw new MuseMspError("duplicate_segment_dispatch"); finish = lease.beginSend(); };
+          const admit = () => {
+            if (finish) throw new MuseMspError("duplicate_segment_dispatch");
+            // Muse can send multiple model requests per segment. An enforced spend
+            // limit cannot safely be admitted using one estimated reservation.
+            if (incoming.sendBudget?.spendEnforced) throw new MuseMspError("unsupported_enforced_spend_budget");
+            finish = lease.beginSend();
+          };
           const hooks = context.continuation ? { beforeResultCommit: admit } : context.userContinuation ? { beforeUserDispatch: admit } : { beforeDispatch: admit };
           try {
             const result = await execute(hooks);

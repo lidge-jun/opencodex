@@ -1265,6 +1265,8 @@ default. Codex requests that include developer instructions require this explici
 Muse merges them with its own instructions, so their behavior may differ from the original.
 Only supported text and client-owned tools are handled. The CLI may send multiple model
 requests within one admitted segment, so the segment counter is not a physical-request cap.
+Requests with an enforced token spend limit are rejected before Muse is started, because the
+CLI does not expose a per-send admission hook for this route.
 Meta's permission for third-party integrations to use a Muse Code subscription is not established;
 consult [Meta's subscription documentation](https://dev.meta.ai/docs/muse-code/subscriptions).
 

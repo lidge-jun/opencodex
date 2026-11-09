@@ -30,7 +30,7 @@ export function museProjectedText(content: unknown, project: boolean): string | 
   return content.map(part => part.text).join("") || undefined;
 }
 
-/** Experimental, unregistered orchestration. The caller owns trusted executable and isolated env. */
+/** Experimental orchestration. The caller owns the trusted executable and isolated env. */
 export class MuseMspRunner {
   private readonly turns = new MuseTurnRegistry();
   private readonly conversations = new MuseConversationRegistry();

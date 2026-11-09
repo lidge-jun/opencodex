@@ -852,7 +852,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     models: ["muse-spark-1.3"],
     liveModels: false,
     noVisionModels: ["muse-spark-1.3"],
-    note: "Experimental Muse Code CLI/MSP route. Install and sign in to the official Muse CLI; this route requires an OpenCodex API key for client session ownership and currently supports file-based Muse login only. It never falls back to a Meta API key. Developer prompt projection is disabled by default: setting museProjectDeveloperPrompt to true explicitly allows Muse to merge those instructions with its own. Tool execution remains with the client. Each CLI segment is accounted as one opaque invocation, not a guaranteed single model request. Meta's authorization of subscription use by third-party integrations is not established.",
+    note: "Experimental Muse Code CLI/MSP route. Install and sign in to the official Muse CLI; this route requires an OpenCodex API key for client session ownership and currently supports file-based Muse login only. It never falls back to a Meta API key. Developer prompt projection is disabled by default: setting museProjectDeveloperPrompt to true explicitly allows Muse to merge those instructions with its own. Tool execution remains with the client. Each CLI segment is accounted as one opaque invocation, not a guaranteed single model request. Requests with an enforced token spend limit are refused because the CLI cannot enforce it per model request. Meta's authorization of subscription use by third-party integrations is not established.",
   },
   {
     id: "umans",

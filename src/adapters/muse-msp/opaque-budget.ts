@@ -5,8 +5,7 @@ import { MuseMspError } from "./connection";
 
 /**
  * Experimental opaque-segment accounting, NOT physical model-send enforcement.
- * This is not enabled by the registered request path: long-lived producer and
- * cross-request spend settlement must be established before use there.
+ * Used for native CLI segment accounting; this does not enforce a physical-send cap.
  */
 export function createMuseOpaqueBudgetFence(incoming: IncomingMeta, targetKey: string, ordinal = 1): { admit: () => void; close: () => void } {
   if (!targetKey || Buffer.byteLength(targetKey) > 4096 || !Number.isSafeInteger(ordinal) || ordinal < 1) throw new MuseMspError("invalid_budget_target");

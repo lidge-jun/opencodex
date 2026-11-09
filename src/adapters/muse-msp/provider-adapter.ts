@@ -15,7 +15,7 @@ const CHILD_ENV = ["PATH", "SystemRoot", "HOME", "USERPROFILE", "APPDATA", "LOCA
 const HOST_ARGS = ["serve", "--provider", "meta", "--preset", "empty", "--disable-shell", "--disable-write", "--no-session-log", "-c", "provider_retry.max_attempts=1"];
 
 /**
- * Experimental provider factory. It remains unregistered; developer prompt
+ * Experimental registered provider factory; developer prompt
  * projection is explicit because Muse merges it with its own instructions.
  */
 export function createMuseNativeProviderAdapter(providerId: string, options: { projectDeveloperPrompt?: true; requireNativeRoute?: true }): ProviderAdapter {
