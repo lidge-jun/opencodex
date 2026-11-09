@@ -73,6 +73,11 @@ const SCHEMA_LITERAL_KEYS = new Set(["const", "enum", "default", "examples"]);
 
 const NO_SCHEMA_KEYS: ReadonlySet<string> = new Set();
 
+/** Schema keywords Kiro rejects for `modelId`: none for Claude models, the measured set otherwise. */
+export function kiroRejectedSchemaKeys(modelId: string): ReadonlySet<string> {
+  return normalizeKiroModelId(modelId).startsWith("claude-") ? NO_SCHEMA_KEYS : KIRO_REJECTED_SCHEMA_KEYS;
+}
+
 function sanitizeSchemaMap(value: unknown, rejected: ReadonlySet<string> = KIRO_REJECTED_SCHEMA_KEYS): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return sanitizeKiroSchema(value, rejected);
   // fromEntries defines own properties: a property named "__proto__" stays a property instead of
@@ -205,7 +210,7 @@ export function convertKiroToolContext(
 ): { tools: unknown[]; systemAdditions: string[]; nameMap: Map<string, string>; registry: KiroToolNameRegistry } {
   const tools = parsed.context.tools ?? [];
   const descriptionLimit = toolDescriptionLimit(parsed.modelId);
-  const rejectedSchemaKeys = normalizeKiroModelId(parsed.modelId).startsWith("claude-") ? NO_SCHEMA_KEYS : KIRO_REJECTED_SCHEMA_KEYS;
+  const rejectedSchemaKeys = kiroRejectedSchemaKeys(parsed.modelId);
   // Validate every listed name even when tool_choice:none emulates a tool-free turn.
   for (const tool of tools) registry.alias(namespacedToolName(tool.namespace, tool.name));
   const effectiveTools = parsed.options.toolChoice === "none" ? [] : tools;

@@ -1720,11 +1720,23 @@ describe("kiro adapter — native and emulated reasoning effort", () => {
   });
 
   test("native-effort models reject efforts Kiro does not accept", async () => {
-    for (const modelId of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-sol", "gpt-6-luna", "claude-opus-5", "claude-opus-5.5", "claude-sonnet-5.5", "claude-opus-4.6", "claude-haiku-5.5"]) {
+    for (const modelId of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-sol", "gpt-6-luna", "claude-opus-5", "claude-opus-5.5"]) {
       await expect(createKiroAdapter(provider).buildRequest({
         ...parsedWith([{ role: "user", content: "solve" }], undefined, modelId),
         options: { reasoning: "minimal" },
       })).rejects.toThrow(`Kiro ${modelId} does not support reasoning effort "minimal"`);
+    }
+  });
+
+  test("Claude models newly given native effort keep the emulated block for minimal", async () => {
+    for (const modelId of ["claude-opus-4.8", "claude-opus-4.7", "claude-opus-4.6", "claude-sonnet-5.5", "claude-sonnet-5", "claude-sonnet-4.6", "claude-haiku-5.5"]) {
+      const body = JSON.parse((await createKiroAdapter(provider).buildRequest({
+        ...parsedWith([{ role: "user", content: "solve" }], undefined, modelId),
+        options: { reasoning: "minimal", maxOutputTokens: 1000 },
+      })).body);
+
+      expect(body.additionalModelRequestFields).toBeUndefined();
+      expect(body.conversationState.currentMessage.userInputMessage.content).toContain("<max_thinking_length>100</max_thinking_length>");
     }
   });
 });

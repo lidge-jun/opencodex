@@ -577,6 +577,15 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
 - Accepts Responses `text` controls that are not structured output — `text.verbosity` and
   `text.format: {"type":"text"}` — without forwarding them. Kiro has no wire field for either, so
   they are ignored rather than rejected.
+- Sends at most 48 client tools and 96 KB of converted tool JSON per request, and cuts each tool
+  description to 1,024 characters (9,216 for `gpt-5.6-sol`). Tools loaded through tool search and the Codex code-mode
+  execution tool are admitted first; the model is told which tools were omitted. Set
+  `OCX_KIRO_TOOL_BUDGET=off` in the proxy's environment to send the whole client catalog, and
+  `OCX_KIRO_TOOL_DESCRIPTION_LIMIT=off` to send full descriptions. Both are read when a request is
+  converted, apply to every Kiro model, and leave other limits unchanged.
+- Strips the JSON Schema keywords Kiro's validator rejects (`pattern`, `minLength`, `maximum`,
+  `additionalProperties` and others) from tool and structured-output schemas, except for Claude
+  models, which accept them and keep the constraints.
 - Emulates structured output (Responses `text.format` of type `json_schema` or `json_object`, and
   Messages `output_config.format`). The Kiro wire cannot constrain the response shape, so the
   adapter advertises a private output tool whose input schema is the requested schema and returns
