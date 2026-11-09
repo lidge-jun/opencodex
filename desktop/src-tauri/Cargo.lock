@@ -2633,7 +2633,7 @@ dependencies = [
 
 [[package]]
 name = "opencodex-desktop"
-version = "2.99.0"
+version = "2.100.0"
 dependencies = [
  "base64 0.22.1",
  "dbus",

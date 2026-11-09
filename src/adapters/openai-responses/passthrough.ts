@@ -40,7 +40,7 @@ import {
   emittedFastWire,
 } from "../../providers/fastwire";
 import { dropResponsesReasoningInputItems, mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripInternalReasoningEnabled, stripNoneReasoningSummary, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
-import { repairUrlCitationAnnotations, scrubOcxCompactionItems, stripUnsupportedOutputInclude, stripCanonicalOnlyInputItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripProviderInputItemMetadata, stripRejectedSamplingParams } from "./request-strips";
+import { repairUrlCitationAnnotations, scrubOcxCompactionItems, stripUnsupportedOutputInclude, stripArkKimiOrphanCipher, stripCanonicalOnlyInputItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripProviderInputItemMetadata, stripRejectedSamplingParams } from "./request-strips";
 import { notePlaintextReasoningDropped } from "./plaintext-reasoning-notice";
 import { stripCanonicalForwardPromptCacheOptions, stripDeprecatedPromptCacheRetention } from "./prompt-cache";
 import { isPlainObject } from "./internal";
@@ -363,8 +363,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // Azure also rejects this exact include entry, including on plain Responses routes.
         const isAzureResponses = provider.adapter === "azure" || provider.adapter === "azure-openai"
           || new URL(url).hostname.toLowerCase().endsWith(".openai.azure.com");
+        const arkKimi = !forward && provider.arkKimiResponsesModels?.includes(parsed.modelId);
+        if (arkKimi) outBody = stripArkKimiOrphanCipher(outBody);
         if (isXaiResponsesDestination(provider) || isMetaAiResponsesDestination(url) || isAzureResponses
-          || isKimiCodingResponsesHttpsUrl(url)) {
+          || isKimiCodingResponsesHttpsUrl(url) || arkKimi) {
           outBody = stripUnsupportedOutputInclude(outBody);
         }
         // xAI and explicitly classified compatible gateways reject these OpenAI web_search
@@ -449,6 +451,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           provider.preserveResponsesInputItemIds === true,
         ),
         isXaiSchemaTarget(provider),
+        parsed._chatCompletionsInput === true && isOpenAiOperatedResponsesDestination(provider),
       );
       const unnormalizedBody = stripDisabledVerbosity(
         stripDisabledReasoningSummaries(

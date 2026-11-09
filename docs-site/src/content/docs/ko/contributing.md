@@ -57,59 +57,10 @@ subsystem의 기존 테스트 근처에 집중된 회귀 테스트를 추가하�
 cd docs-site && bun install && bun dev
 ```
 
-## 문서 배포
+## CI / Release / Pages
 
-공개 문서는 GitHub Pages의 <https://opencodex.me/ko/>에 게시됩니다.
-`.github/workflows/deploy-docs.yml`은 `main` push에서 `docs-site/**`나 워크플로 자체가 바뀌면
-실행됩니다. `docs-site`를 빌드한 뒤 생성된 사이트를 배포합니다. 문서 변경을 push하기 전에 다음을
-실행하세요.
+문서 배포, CI, 릴리스 및 브랜치 정책은 [영어 원문](/contributing/)을 참고하세요.
 
-```bash
-cd docs-site
-bun install --frozen-lockfile
-bun run build
-```
-
-## CI와 릴리즈
-
-GitHub Actions는 필요한 작업만 수행합니다.
-
-- **Cross-platform CI**(`.github/workflows/ci.yml`)는 런타임, 테스트, 패키지, 스크립트,
-  TypeScript, 워크플로 파일이 바뀐 pull request와 `main` push에서 실행됩니다. Bun matrix는 Linux,
-  Windows, macOS에서 install, typecheck, tests, privacy scan, release helper build smoke, GUI build,
-  `ocx help`를 검사합니다. 별도의 3개 OS lane은 번들 런타임을 사용해 Bun을 따로 설치하지 않아도
-  npm global install이 동작하는지 확인합니다.
-- **Release**(`.github/workflows/release.yml`)는 수동으로 실행합니다. 두 번째 전체 CI 파이프라인이
-  아니며, dry-run이나 publish 전에 정확한 릴리즈 커밋(`GITHUB_SHA`)에서 Cross-platform CI가
-  성공했는지 확인합니다.
-
-릴리즈에는 helper를 사용하세요.
-
-
-helper 실행 전에 릴리즈할 버전을 정하고, 기본 브랜치에서
-`.github/workflows/dev-version-bump.yml`을 `intended-version=<version>`,
-`mode=pre-move`로 실행하세요. 생성된 PR을 검토해 `dev`에 머지한 뒤
-`main` 또는 `preview`로 승격하고 helper를 실행하세요. `dev` 버전이 이미 더
-높으면 워크플로가 `changed=false`를 반환하므로 버전 이동 PR은 필요 없습니다.
-배포에는 정확한 릴리즈 커밋의 CI 통과가 여전히 필요합니다.
-
-```bash
-bun run release <version>           # 버전 bump를 commit/push, publish workflow는 기본 dry-run
-bun run release --bump minor        # tag와 npm channel에서 다음 patch, minor, major 버전을 계산
-bun run release <version> --publish # CI-gated dry-run을 확인한 뒤 실제 publish
-bun run release:watch               # 가장 최근 Release workflow run 감시
-```
-
-명시적 버전 대신 `--bump patch|minor|major`를 사용할 수 있습니다. 더 높은 core의 preview tag가
-열린 뒤에는 `--bump patch`가 이전 stable patch 라인의 계속을 거부합니다. 해당 수정은 열린 preview
-core에 포함해 릴리즈하세요.
-
-## 브랜치
-
-- `dev` — 유일한 통합 대상. 모든 PR을 여기로 올립니다.
-- `main` — 릴리즈 전용. `dev`에서 메인테이너가 승격시킬 때만 움직이며, 기능 PR을 직접
-  올리지 않습니다.
-- `preview` — 프리릴리즈 트레인.
 
 Go 네이티브 포트를 담당했던 `dev2-go`는 정리했고, 두 라인을 동시에 유지하던 정책도
 함께 끝났습니다. 히스토리는

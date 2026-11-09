@@ -88,7 +88,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 | [`config-ownership.md`](config-ownership.md) | Owner marker, uninstall manifest, its cross-process lock, and the uninstall tombstone. |
 | [`providers/anthropic-progress.md`](providers/anthropic-progress.md) | Opus 5.5 progress display, visible commentary, and exact signed-block replay. |
 | [`providers/anthropic-account-thresholds.md`](providers/anthropic-account-thresholds.md) | Account-owned usage thresholds, inheritance, routing boundaries and durable policy changes. |
-| [`providers/meta-muse.md`](providers/meta-muse.md) | CLI credential import, approval lifecycle, explicit recovery and account-free login diagnostics. |
+| [`providers/meta-muse.md`](providers/meta-muse.md) | CLI credential import, approval lifecycle, explicit recovery, account-free login diagnostics and the runtime plan-refusal classification. |
 | [`providers/oauth-reconciliation.md`](providers/oauth-reconciliation.md) | Operator limits and per-model declarations across startup reconciliation and OAuth upsert. |
 | [`providers/antigravity-account-import.md`](providers/antigravity-account-import.md) | Cockpit Tools import schema, identity check, probe-gated project_id fallback and no-write failure paths. |
 | [`providers/claude-cli-replay.md`](providers/claude-cli-replay.md) | Claude CLI stable replay, canonical tool schemas, capture-only client tool ownership and subscription usage admission. |
@@ -206,6 +206,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `gui/src/account-pause-display.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `gui/src/components/ModelPriceDialog.tsx` | [`pricing.md`](pricing.md) |
 | `gui/src/hooks/useProviderAccountPools.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
+| `native/ocx-child/` | [`remote-link.md`](remote-link.md) |
 | `scripts/` | [`overview.md`](overview.md)<br>[`clients/client-support-matrix.md`](clients/client-support-matrix.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `scripts/generate-ocx-skill-surface.ts` | [`cli-management.md`](cli-management.md) |
 | `scripts/test-run-lock-gate.ts` | [`ops/test-sandbox-cleanup.md`](ops/test-sandbox-cleanup.md) |
@@ -254,6 +255,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/cli/desktop-runtime-guidance.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/cli/ensure-desktop-cold-start.ts` | [`desktop-recovery.md`](desktop-recovery.md) |
 | `src/cli/link-apply-restart.ts` | [`remote-link.md`](remote-link.md) |
+| `src/cli/link-local-control.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/models-runtime.ts` | [`pricing.md`](pricing.md) |
 | `src/cli/status-codex-settings.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/status-link.ts` | [`remote-link.md`](remote-link.md) |
@@ -335,6 +337,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/config/schema/account-auto-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/config/schema/config-schema.ts` | [`transports/max-output-completion.md`](transports/max-output-completion.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
 | `src/config/schema/leaf-validators.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`pricing.md`](pricing.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
+| `src/config/telemetry-carry.ts` | [`telemetry.md`](telemetry.md) |
 | `src/generated/` | [`runtime.md`](runtime.md) |
 | `src/github/` | [`runtime.md`](runtime.md) |
 | `src/grok/` | [`runtime.md`](runtime.md) |
@@ -355,6 +358,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/lib/error-destination.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/lib/failure-detail.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/lib/gui-pair-intent.ts` | [`remote-link.md`](remote-link.md) |
+| `src/lib/local-control-socket.ts` | [`remote-link.md`](remote-link.md) |
 | `src/lib/local-upstream.ts` | [`transports/timeouts.md`](transports/timeouts.md) |
 | `src/lib/messages-error-body.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/lib/messages-sse-error-presentation.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
@@ -396,6 +400,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/providers/cc-switch-import.ts` | [`cli-management.md`](cli-management.md) |
 | `src/providers/codex-capacity.ts` | [`providers/openai-tiers.md`](providers/openai-tiers.md) |
 | `src/providers/dsh-account-destination.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
+| `src/providers/meta-muse-plan-refusal.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
 | `src/providers/quota-decision-antigravity.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
 | `src/providers/quota-decision-publication.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
 | `src/providers/quota-decision-snapshot.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
@@ -426,6 +431,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/audio-dictation.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/audio-live.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/auth-cors.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`providers/lm-studio-chat.md`](providers/lm-studio-chat.md) |
+| `src/server/background-lifecycle.ts` | [`telemetry.md`](telemetry.md) |
 | `src/server/capture-admission-policy.ts` | [`advisor.md`](advisor.md) |
 | `src/server/claude-messages.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md)<br>[`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/context-history.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
@@ -436,6 +442,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/index/` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/index/link-management.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index/live-sideband.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/server/index/local-control-listener.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index/ollama-routes.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
 | `src/server/index/serve-options.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/index/startup-warnings.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
@@ -446,6 +453,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/management/anthropic-pool-settings.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
 | `src/server/management/codex-cli-update-routes.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/server/management/companion-routes.ts` | [`desktop-shell.md`](desktop-shell.md) |
+| `src/server/management/consent-session.ts` | [`telemetry.md`](telemetry.md) |
+| `src/server/management/link-enrollment.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/management/link-routes.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/management/logs-usage-routes.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/management/model-routes.ts` | [`pricing.md`](pricing.md) |

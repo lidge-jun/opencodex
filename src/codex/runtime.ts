@@ -55,6 +55,18 @@ export interface EffortClampDiagnostic {
   readonly affectedModels: readonly string[];
 }
 
+/**
+ * True for the selection the resolver returns when no candidate ran: the bare `codex` fallback
+ * with no version. A probed candidate always carries the version it parsed, so a bare command
+ * that actually ran (a bare CODEX_CLI_PATH or shim, or the bare fallback itself) is not this
+ * sentinel. Deferred resolution (`probeVersion: false`) gives every candidate a null version and
+ * so cannot be told apart here; the bundled-catalog probe, `ocx connect` and `ocx status` all
+ * resolve with probing.
+ */
+export function codexRuntimeIsUnresolved(runtime: Pick<ResolvedCodexRuntime, "source" | "version">): boolean {
+  return runtime.source === "fallback" && runtime.version === null;
+}
+
 export interface ResolveCodexRuntimeResult {
   readonly runtime: ResolvedCodexRuntime;
   readonly failures: readonly RuntimeProbeFailure[];

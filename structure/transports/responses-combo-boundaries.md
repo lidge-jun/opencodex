@@ -131,14 +131,19 @@ SSE selection uses the [exact internal media-type match](inventory.md#internal-r
 Explicit non-SSE types pass through unread, including parameters or longer subtypes containing the
 event-stream token. A caller can still opt into inspecting a response without a content type.
 
-Native post-header reset recovery shares that boundary, because it is asking the same question
-about the same bytes. With `replayReadErrors`, the preflight reports the stage it observed —
-`headers-only` before any parsed event, `protocol-prelude` after `response.created`,
-`semantic-output` once anything else arrives, including a payload it could not parse — and the
-resend gate decides. A `response.created` whose snapshot already carries output items is not a
-prelude.
+Native post-header reset recovery shares that boundary, because it is asking the same question about
+the same bytes. With `replayReadErrors`, a read error that arrives while the preflight is still
+inspecting returns the buffered prefix with the stage it observed — `headers-only` until
+`response.created`, `protocol-prelude` after it — and the resend gate decides. Control frames
+(`response.in_progress`, `response.queued`, `response.heartbeat`, the Codex metadata frames below, a
+held mandatory-tool reasoning prelude) do not advance the stage. Once output or a payload the
+preflight could not parse commits the stream, or a terminal ends inspection, the preflight returns
+`accepted` (`failed` for a retryable zero-output terminal); a later read error belongs to the relay
+and never reaches the resend gate. A `response.created` whose snapshot already carries output items
+is not a prelude: it commits.
 
-- a non-control Responses event (apart from the held mandatory-tool reasoning prelude above) begins client-visible output or a tool/action item, after which the
+- a non-control Responses event (apart from the held mandatory-tool reasoning prelude above and the
+  Codex metadata frames) begins client-visible output or a tool/action item, after which the
   target is committed and cross-target replay is forbidden;
 - a `response.failed` terminal arrives first, in which case the terminal is converted back through
   the ordinary bounded combo-failure classifier and may advance to the next declared target;
@@ -148,6 +153,14 @@ prelude.
   may advance while errors explicitly classified as non-retryable 4xx remain committed;
 - another completed/incomplete terminal or the aggregate preflight byte or retained-chunk cap is reached,
   in which case the current target is committed conservatively.
+
+The Codex WebSocket metadata channel writes `codex.rate_limits` and `codex.response.metadata` into
+the same body, usually before `response.created`. These frames are rebuilt from quota and header
+metadata, so the preflight treats them like the lifecycle preamble: they neither commit the child
+nor end inspection. Any other unknown event type still commits. A zero-output
+`server_is_overloaded` refusal that follows a rate-limit frame while the preflight is still
+inspecting (below its byte and chunk caps) therefore advances to the next target;
+`tests/responses/combo-codex-ws-overload-failover.test.ts` covers that hop (#8107).
 
 The buffered bytes are replayed unchanged before the reader continues. Native passthrough and eager
 relay identity markers are restored on the wrapped response so Windows/Bun stream paths and deferred
@@ -167,6 +180,19 @@ Hop warnings in `src/server/responses/core-combo.ts` name the status and the clo
 messages and bodies stay out. `tests/responses/responses-combo-exhausted-error.test.ts` pins that log boundary.
 
 A `runTurn` adapter has the equivalent boundary in `preflightAdapterEvents` (`src/adapters/run-turn-queue.ts`), streaming and non-streaming alike: when its first meaningful event is a tool call the current request did not declare, and no earlier replay-unsafe heartbeat recorded a side effect, `src/server/responses/run-turn-execution.ts` projects the fail-closed undeclared-tool refusal as a pre-commit 502 so the combo can hop with the unchanged catalog. After any output or a replay-unsafe heartbeat the refusal stays with that child. Chat Completions and Anthropic Messages inbound requests do not use this classification. The same heartbeat also decides an ordinary pre-output adapter error or an empty end: after a replay-unsafe heartbeat the child's 502 is marked non-replayable, so the combo stops on it instead of sending the turn to the next target.
+
+A native Messages child uses `src/server/messages-native-preflight.ts` after the native log tap,
+so the tap retains byte-stall/size/cancellation ownership. SSE media types are matched case-insensitively. Its bounded prelude accepts only an
+empty-content `message_start` and `ping` as replayable. As in the native tap, the last untrimmed SSE event name must match the payload type (or be absent); a mismatch commits conservatively. A structured retryable `error` before
+any other event returns to the ordinary combo failure classifier unless a later frame read with it commits; any content block (including
+a tool start), unknown/malformed payload (a named event without data included; comment-only blocks are skipped), terminal or byte/chunk cap commits conservatively.
+Buffered bytes replay unchanged. A collected failure after that commitment is non-replayable, while first output waits for a content frame the tap has seen.
+For combo children, a bounded observer before frame transforms preserves the original read boundary for the replay decision. Complete harmless pings may follow a refusal; an unfinished following frame or a named empty frame commits conservatively. The observer stops after that decision or semantic output, and leaves ordinary standalone streaming and log ownership unchanged.
+Preflight retention is charged to the translator budget and released on delivery/cancellation.
+The Messages ingress offers its parsed body as that source by reference, with no ingress copy, and
+only when no effort override rewrites it.
+Native plans enforce the captured caller model scope, including internal calls with broad host admission. The same native executor binds the accepted stream to the parent's held lease, carries observed
+usage on cancellation, and reports terminal errors without treating them as successful rows.
 
 HTTP 410 remains terminal by default. It advances and cools only the exact combo target when the
 structured code or message explicitly identifies a model lifecycle event (end-of-life, retired,

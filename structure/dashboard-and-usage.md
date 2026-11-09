@@ -100,7 +100,7 @@ Accounts tab through `revealProviderAccounts` instead; following the same link a
 the entry when its filter is edited, and both targets re-read the hash on `hashchange`/`popstate`,
 so Back and Forward restore the prefilter. Tests live in `gui/tests/provider-protocol-panel.test.tsx`,
 `gui/tests/compatibility-protocol-filter.test.tsx`, `gui/tests/protocol-deep-links.test.ts`, `gui/tests/providers-deep-link.test.tsx`,
-`gui/tests/quota-summary-bar.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`; `gui/tests/quota-summary-hover-browser.ts` checks real pointer travel across the quota popover gap with production CSS. `gui/src/quota-summary.ts` selects fixed windows by semantic label and promotes critical credits over a noncritical preferred window; a critical preferred window retains priority. `gui/tests/quota-summary.test.ts` covers precedence and provider-label collisions.
+`gui/tests/quota-summary-bar.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`; `gui/tests/quota-summary-hover-browser.ts` checks real pointer travel across the quota popover gap with production CSS. `gui/src/quota-summary.ts` selects fixed windows by semantic label and promotes critical credits over a noncritical preferred window; a critical preferred window retains priority. For a positive WorkBuddy credit total it derives the unavailable share from remaining credits, including frozen amounts, with neutral severity, nearest-whole-percent display and no partial expiry presented as a balance reset. `gui/tests/quota-summary.test.ts` covers this projection, precedence and provider-label collisions.
 
 The API workspace gives `gui/src/components/section-tabs.tsx` its mobile reading
 line so scroll-spy and the top-bar offset agree; other consumers keep their
@@ -165,7 +165,7 @@ keeps the saved state and renders fixed `ocx sync` guidance without server/accou
 `OcxUsage.providerCredits` preserves provider-reported credit spend in request and attempt rows
 through `src/usage/log.ts` normalization and ledger reloads. Missing readings stay absent, and zero
 is a measured value. Separate attempts add credits when usage is merged. The field is independent
-of token estimation (`estimated` describes tokens) and is never treated as USD or token usage. The human log projection in `src/cli/observe.ts` includes the persisted request ID as `id=...` for direct use with `ocx logs get` and `ocx logs explain`. Rows without an ID or with control characters in their ID omit it rather than rewriting the lookup key; JSON and JSONL keep the API payload. `ocx logs history` pages the same derived index the dashboard uses (`GET /api/request-history`) with a resumable `nextCursor`. Client labels follow the [attribution contract](usage-client-attribution.md).
+of token estimation (`estimated` describes tokens) and is never treated as USD or token usage. The shared heuristic in `src/lib/token-estimate.ts` counts supplementary Han surrogate pairs as two CJK code units alongside its existing BMP buckets; model ratios and context-window caps stay unchanged. The human log projection in `src/cli/observe.ts` includes the persisted request ID as `id=...` for direct use with `ocx logs get` and `ocx logs explain`. Rows without an ID or with control characters in their ID omit it rather than rewriting the lookup key; JSON and JSONL keep the API payload. `ocx logs history` pages the same derived index the dashboard uses (`GET /api/request-history`) with a resumable `nextCursor`. Client labels follow the [attribution contract](usage-client-attribution.md).
 
 ### Upstream key account attribution
 
@@ -192,7 +192,7 @@ observations separate from token or API-equivalent cost totals.
 
 Custom usage windows are immutable bounds on the streaming accumulator, applied before attribution and daily
 aggregation. The filtered cache includes both inclusive millisecond bounds in its identity and retains the existing ledger revision, overlay-version and timezone checks.
-At most four distinct filtered scans may run concurrently; identical requests share one scan and excess distinct
+At most four distinct filtered reads may run concurrently; identical requests share one flight and excess distinct
 work fails closed. Preset warming never consumes custom summaries.
 The response retains its preset range discriminator for compatibility and explicitly marks
 `customWindow`, `since`, and `until`; the chart uses the window's local calendar days with
@@ -353,7 +353,7 @@ An oversized row is skipped inside the scanner bound without shortening identiti
 64 KiB checkpoint followed by file growth is intentionally outside the incremental detector's
 contract: validating arbitrary historical rewrites on every refresh would require rereading the
 whole prefix. Replace or truncate the file, or restart the proxy, after manually changing historical
-rows so the next request performs a cold rebuild.
+rows so the next request performs a cold rebuild. The candidate index shares that contract and is stricter about it: any same-size metadata movement rebuilds it.
 
 The wire fields `historyTruncated`, `truncatedPrefixBytes`, `entriesTruncated`, and `entriesDropped`
 remain in the response for compatibility with older GUI and CLI clients. A successful whole-ledger
@@ -395,15 +395,15 @@ once it exceeds 200) with the upstream content-type, body kind (`sse / json / ot
 body sample, and the extracted usage. Off by default; the hot path is guarded so production stays
 untouched.
 
-For diagnosing cache-read instability without capturing content, set `OPENCODEX_CACHE_DEBUG=1`
-before start. `src/usage/cache-diagnostic.ts` then writes one record per finalized request to
-`~/.opencodex/cache-debug.jsonl` (same `0o600` file, same 200-to-100 rolling bound) holding only
-presence booleans, counts, closed enums, the raw upstream cache counter before defaulting, and
-process-local HMAC equality tags for the prompt-cache key, allowlisted session headers, the account
-log label, and ordered instruction/tool/message blocks (capped at 128 per section, first divergent
-section/index only). The signing key is created at process start and never persisted, so tags
-compare values within one proxy process and never become a durable correlation key; no prompt
-text, tool name, raw identifier, or header value is recorded. Off by default.
+For content-free cache-read diagnostics, `OPENCODEX_CACHE_DEBUG=1` enables `src/usage/cache-diagnostic.ts`; otherwise hooks return before body/header inspection, hashing or file access. Its live `enabled()` hook remains registered. Every observed on/off transition (the gate is evaluated on each diagnostic call, so an idle process keeps its history until the next call) starts a new retention epoch: continuation history and pending drafts are cleared, and a draft from an earlier epoch is neither compared nor written (`tests/usage/cache-diagnostic.test.ts`).
+It writes one finalized request to `~/.opencodex/cache-debug.jsonl` (mode `0o600`, 200-to-100 rolling lines), preserving raw cache-counter evidence.
+Process-local HMAC tags cover prompt keys, explicit account labels and ordered instructions/tools/messages; no prompt, tool name or raw identifier is retained, and keys never persist.
+Session-header tags cover `session_id`, `session-id`, `thread-id` and `x-session-id`, sharing a value domain but not merging header identities; an unobserved side is omitted. `accountAffinity` uses read-only `codexConversationIdentity` and states `derived-key-not-binding`; neither a key nor a route label proves a binding.
+`prefix.comparison` compares observed sides; `continuation` compares their previous finalization under the complete nonempty inbound session-header set, authenticated admission principal, protocol, model and config directory. `src/server/responses/request-prepare.ts` carries the admission identity through the request-log hook; only its private diagnostic HMAC is retained, never serialized or reconstructed from bridge headers.
+Provider changes preserve correlation; prompt-key and explicit account-label changes are separate. Synthesized outbound headers and prompt keys never replace missing inbound identity.
+Comparisons distinguish first/equal/message-tail append/different/truncated/uncomparable; instructions and tools grow before messages, while system/developer input rows retain wire order.
+Missing or unsupported observations are uncomparable. Missing admission identity, including unauthenticated loopback, disables cross-request history while preserving per-request comparisons. Sections retain 128 tags and never claim equality across hidden tails; history evicts beyond 512 entries.
+These are parsed hook projections in completion order, not exact network bytes or proof of cache reuse; `tests/usage/cache-diagnostic.test.ts`, `tests/usage/cache-diagnostic-hook-compat.test.ts` and `tests/usage/cache-diagnostic-caller-isolation.test.ts` pin the contract.
 
 ## Z.ai quota destination ownership
 

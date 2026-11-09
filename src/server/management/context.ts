@@ -167,6 +167,7 @@ export interface ManagementApiDeps {
   issueApiKey?: (config: OcxConfig, name: string) => IssuedApiKey;
   revokeApiKey?: (config: OcxConfig, id: string) => boolean;
   loadLinkCandidates?: () => Array<{ alias: string; source: "ssh_config" | "tailscale" }>;
+  resolveChildBinarySource?: typeof import("../../link/child-binary-source").resolveChildBinarySource;
   /** Bound public inference port, not the ingress receiving this management request. */
   liveListenPort?: () => number | undefined;
   now?: () => number;

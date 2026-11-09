@@ -463,13 +463,18 @@ use `ssh -g -L`, broad container publishing, or forwarding modes that expose the
 
 ## Account email masking (`privacy`)
 
-Stored account emails are masked everywhere they leave the proxy — the dashboard account lists,
+Stored account emails are masked by default wherever they leave the proxy — the dashboard account lists,
 `GET /api/codex-auth/accounts`, `GET /api/oauth/status`, and the `ocx status` logins section all
 show `p***n@example.com` rather than the address on file.
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `privacy.maskEmails?` | `boolean` | `true` | Set to `false` to show stored account emails in full. Absent, `true`, and any malformed value all keep masking, so only a deliberate `false` reveals an address. |
+| `privacy.maskEmails?` | `boolean` | `true` | Set to `false` to reveal stored account emails in projected email fields. Absent, `true`, and any malformed value keep masking, so only a deliberate `false` reveals an address. |
+
+Dashboard labels for OAuth accounts (Claude, Grok, Kiro, and the other OAuth providers) follow this
+flag: masked by default, the stored email when it is `false`. An account alias takes precedence over
+the email label. The active account uses the same label in Overview, the reset and coupon dialogs,
+and the remove confirmation. The desktop tray surfaces keep showing the masked form either way.
 
 Turn it off when you run many accounts on a machine you control and cannot tell them apart from
 masked forms. Read the flag as a disclosure decision rather than a display preference: management
@@ -677,7 +682,7 @@ modes, the preview, and the per-request trace.
 | --- | --- | --- | --- |
 | `protocols.unrepresentable?` | `"legacy" \| "reject"` | `"legacy"` | `legacy` sends a request whose path drops a feature and records the loss in the trace. `reject` refuses it with HTTP 400 before any send, naming only the feature keys. |
 | `protocols.rollout.nativeChatCombos?` | `boolean` | `false` | Send an eligible Chat candidate inside a combo natively from its own copy of the client body. |
-| `protocols.rollout.managedMessagesNative?` | `boolean` | `false` | Send Messages natively to a direct, key-authenticated Anthropic provider instead of through the internal Responses bridge. |
+| `protocols.rollout.managedMessagesNative?` | `boolean` | `false` | Send Messages natively to an eligible direct Anthropic provider or canonical Anthropic child in a strict failover combo without a default effort. Other combo strategies, policy routes and bridge-only rewrites retain the bridge. |
 | `protocols.rollout.managedMessagesNativeOAuth?` | `boolean` | `false` | Native Messages for the `anthropic` OAuth provider on `api.anthropic.com`, including stored account pools. Requires `managedMessagesNative`. For the settled `anthropic` provider, an enabled pool supplies true for absent native flags when `anthropicAccountPool.nativeMessages` is absent or true. Explicit false/malformed flags and a false/malformed pool preference remain off. Other providers and pool-off keep explicit rollout behavior. Eligible pooled requests retain shared selection, affinity and bounded pre-output recovery. Recognized JSON-string `metadata.user_id` account UUIDs are aligned with the serving OAuth credential; device and session fields are preserved. |
 | `protocols.rollout.directEncoders?` | `boolean` | `false` | Encode Chat and Messages answers from a non-Responses upstream directly from adapter events. |
 | `protocols.rollout.antigravityDirect?` | `boolean` | `true` | Send a Chat or Messages request to a single Google Antigravity route without the internal Responses body in either direction. Request settings still pass through the usual policies, and a request the lane cannot carry uses the bridge. Set `false` to turn it off. |
