@@ -42,15 +42,43 @@ function relay(apiBase: string, origin: string) {
   };
 }
 
-/** One held-open read per plan entry; both /accounts and /active settle together. */
-function serve(plan: { id: string; accounts: string[]; threshold?: number }[]) {
+/**
+ * One held-open read per plan entry; both /accounts and /active settle together.
+ * Paths in heldPuts hold their first two PUTs so a test can park one per target.
+ */
+function serve(plan: { id: string; accounts: string[]; threshold?: number }[], heldPuts: string[] = []) {
   const releases = plan.map(() => () => {});
   const gates = plan.map((_, index) => new Promise<void>(resolve => { releases[index] = resolve; }));
+  const putGates = new Map<string, Promise<void>[]>();
+  const putReleases = new Map<string, (() => void)[]>();
+  for (const path of heldPuts) {
+    const pathGates: Promise<void>[] = [];
+    const pathReleases: (() => void)[] = [];
+    for (let index = 0; index < 2; index += 1) {
+      pathGates.push(new Promise<void>(resolve => { pathReleases.push(resolve); }));
+    }
+    putGates.set(path, pathGates);
+    putReleases.set(path, pathReleases);
+  }
+  const putCalls = new Map<string, number>();
   let reads = 0;
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      const path = new URL(url, "http://localhost").pathname;
+      if (method === "PUT") {
+        const index = putCalls.get(path) ?? 0;
+        putCalls.set(path, index + 1);
+        const gate = putGates.get(path)?.[index];
+        if (gate) await gate;
+        if (path.endsWith("/api/codex-auth/active")) {
+          const body = JSON.parse(String(init?.body ?? "{}")) as { accountId?: string | null };
+          return Response.json({ activeCodexAccountId: body.accountId ?? null });
+        }
+        return Response.json({});
+      }
       if (url.includes("/api/codex-auth/accounts")) {
         const index = reads++;
         const payload = plan[index];
@@ -59,10 +87,6 @@ function serve(plan: { id: string; accounts: string[]; threshold?: number }[]) {
         return Response.json({ accounts: payload.accounts.map(row), activeCodexAccountId: payload.id });
       }
       if (url.includes("/api/codex-auth/active")) {
-        if ((init?.method ?? "GET").toUpperCase() === "PUT") {
-          const body = JSON.parse(String(init?.body ?? "{}")) as { accountId?: string | null };
-          return Response.json({ activeCodexAccountId: body.accountId ?? null });
-        }
         const payload = plan[Math.max(0, reads - 1)];
         if (!payload) return Response.json({ activeCodexAccountId: null });
         await gates[Math.max(0, reads - 1)];
@@ -76,7 +100,11 @@ function serve(plan: { id: string; accounts: string[]; threshold?: number }[]) {
       return Response.json({});
     },
   });
-  return { release: (index: number) => { releases[index]?.(); }, reads: () => reads };
+  return {
+    release: (index: number) => { releases[index]?.(); },
+    releasePut: (path: string, index: number) => { putReleases.get(path)?.[index]?.(); },
+    reads: () => reads,
+  };
 }
 
 function actEnvironment(value: boolean) {
@@ -324,3 +352,117 @@ test("the previous target's last /active payload does not seed the new one", asy
   await act(async () => { server.release(2); await new Promise(resolve => setTimeout(resolve, 10)); });
   expect(seen!.readLastThreshold()).toBe(55);
 });
+
+/**
+ * Every gate the pool keeps. The A and B values are deliberately identical: the account id
+ * cannot tell the two leases apart, so only the lease identity can release the right one.
+ */
+const mutationGates = [
+  {
+    name: "switch",
+    path: "/same/api/codex-auth/active",
+    busy: "switchingId",
+    start: (controller: CodexAccountPoolController, id: string) => controller.switchAccount(id),
+    a: "x9",
+    b: "x9",
+    idle: null,
+  },
+  {
+    name: "pause",
+    path: "/same/api/codex-auth/accounts/pause",
+    busy: "pauseUpdatingId",
+    start: (controller: CodexAccountPoolController, id: string) => controller.setAccountPaused(id, true),
+    a: "x9",
+    b: "x9",
+    idle: null,
+  },
+  {
+    name: "priority",
+    path: "/same/api/codex-auth/accounts/priority",
+    busy: "priorityUpdatingId",
+    start: (controller: CodexAccountPoolController, id: string) => controller.setAccountPriority(id, 3),
+    a: "x9",
+    b: "x9",
+    idle: null,
+  },
+  {
+    name: "auto-switch",
+    path: "/same/api/codex-auth/auto-switch",
+    busy: "autoSwitchUpdatingId",
+    start: (controller: CodexAccountPoolController, id: string) => controller.setAccountAutoSwitchThreshold(id, 50),
+    a: "x9",
+    b: "x9",
+    idle: null,
+  },
+  {
+    name: "credits (account)",
+    path: "/same/api/codex-auth/accounts/credits",
+    busy: "creditsAfterLimitUpdatingId",
+    start: (controller: CodexAccountPoolController, id: string) => controller.setAccountCreditsAfterLimit(id, true),
+    a: "x9",
+    b: "x9",
+    idle: null,
+  },
+  {
+    name: "credits (all)",
+    path: "/same/api/codex-auth/accounts/credits",
+    busy: "creditsAfterLimitUpdatingId",
+    start: (controller: CodexAccountPoolController) => controller.setAllCreditsAfterLimit(true),
+    a: "*",
+    b: "*",
+    idle: null,
+  },
+  {
+    name: "pause-exhausted",
+    path: "/same/api/codex-auth/accounts/pause-exhausted",
+    busy: "pausingExhausted",
+    start: (controller: CodexAccountPoolController) => controller.pauseExhaustedAccounts(),
+    a: true,
+    b: true,
+    idle: false,
+  },
+] as const;
+
+for (const mutation of mutationGates) {
+  test(`a held ${mutation.name} on the old target neither blocks nor paints on the new one`, async () => {
+    const server = serve([
+      { id: "a8", accounts: ["a8", "x9"] },
+      { id: "b8", accounts: ["b8", "x9"] },
+    ], [mutation.path]);
+    configureApiTargets(relay("/same", "hub-a8"));
+    await mount("hub-a8");
+    await act(async () => { server.release(0); await new Promise(resolve => setTimeout(resolve, 10)); });
+
+    let first!: Promise<unknown>;
+    await act(async () => {
+      first = mutation.start(seen!, "x9");
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    expect(seen![mutation.busy]).toBe(mutation.a);
+
+    // Same target: the gate still serializes, so the refactor did not open it up.
+    await act(async () => {
+      expect(await mutation.start(seen!, "x9")).toEqual({ ok: false, reason: "busy" });
+    });
+
+    // The target moves while A's write is still held. B paints no A busy state.
+    await switchTarget("hub-b8", () => {});
+    await act(async () => { server.release(1); await new Promise(resolve => setTimeout(resolve, 10)); });
+    expect(seen![mutation.busy]).toBe(mutation.idle);
+
+    // B's own write starts: A's lease is from another epoch and must not answer "busy".
+    let second!: Promise<unknown>;
+    await act(async () => {
+      second = mutation.start(seen!, "x9");
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    expect(seen![mutation.busy]).toBe(mutation.b);
+
+    // A's completion releases only A's lease, so B's gate and busy state survive it.
+    await act(async () => { server.releasePut(mutation.path, 0); await first; });
+    expect(seen![mutation.busy]).toBe(mutation.b);
+
+    await act(async () => { server.releasePut(mutation.path, 1); await second; });
+    expect(seen![mutation.busy]).toBe(mutation.idle);
+  });
+}

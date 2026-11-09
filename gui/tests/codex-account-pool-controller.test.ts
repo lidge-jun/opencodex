@@ -97,7 +97,7 @@ test("both cards expose the selection-order control, and pin writes cannot overl
   expect(priorityStart).toBeGreaterThanOrEqual(0);
   expect(priorityEnd).toBeGreaterThan(priorityStart);
   const priorityMutation = hook.slice(priorityStart, priorityEnd);
-  expect(priorityMutation).toMatch(/if \(priorityMutationRef\.current \|\| switchingRef\.current\) return/);
+  expect(priorityMutation).toMatch(/if \(leaseHeld\(priorityMutationRef\.current, epoch\) \|\| leaseHeld\(switchingRef\.current, epoch\)\)/);
   expect(priorityMutation).not.toContain("pauseMutationRef");
 
   const switchStart = hook.indexOf("const switchAccount");
@@ -105,7 +105,7 @@ test("both cards expose the selection-order control, and pin writes cannot overl
   expect(switchStart).toBeGreaterThanOrEqual(0);
   expect(switchEnd).toBeGreaterThan(switchStart);
   const switchMutation = hook.slice(switchStart, switchEnd);
-  expect(switchMutation).toMatch(/if \(switchingRef\.current \|\| priorityMutationRef\.current\) return/);
+  expect(switchMutation).toMatch(/if \(leaseHeld\(switchingRef\.current, epoch\) \|\| leaseHeld\(priorityMutationRef\.current, epoch\)\)/);
 
   // A refused mutation returns "busy", which both call sites drop without a toast, so
   // each control must be unavailable while the other is in flight rather than silently
