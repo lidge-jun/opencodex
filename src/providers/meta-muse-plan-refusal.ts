@@ -61,6 +61,7 @@ export function isMetaMusePlanFailure(status: number, message: string): boolean 
   if (text === META_MUSE_PLAN_REFUSAL_MESSAGE) return true;
   const prefix = `Provider error ${status}: `;
   if (text.startsWith(prefix)) text = text.slice(prefix.length).trim();
+  if (text === META_MUSE_PLAN_REFUSAL_MESSAGE) return true;
   try {
     if (isMetaMusePlanRefusal(status, JSON.parse(text))) return true;
   } catch {

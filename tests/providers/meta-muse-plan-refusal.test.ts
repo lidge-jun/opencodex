@@ -40,7 +40,6 @@ const REFUSAL_BODY = JSON.stringify({
   error: { message: REFUSAL_SENTENCE, type: "permission_error", code: "permission_denied" },
 });
 
-+
 describe("meta-muse plan refusal: integration paths", () => {
   test("the adapter response composer answers with the proxy sentence and keeps the plan cause", async () => {
     const logCtx: { causeHint?: RequestFailureCause } = {};
@@ -208,6 +207,24 @@ describe("meta-muse plan refusal: client message", () => {
     // The message travels through the Chat and Anthropic formatters, which classify their own
     // proxy-authored copy again; drifting to permission_denied there would undo the fix.
     expect(classifyError(403, "permission_error", META_MUSE_PLAN_REFUSAL_MESSAGE).code).toBe("subscription_required");
+    // Framed by a later HTTP error pass, the proxy's own copy keeps the class too.
+    expect(classifyError(403, "upstream_error", `Provider error 403: ${META_MUSE_PLAN_REFUSAL_MESSAGE}`).code)
+      .toBe("subscription_required");
+  });
+
+  test("the rewritten passthrough body keeps the relayed request id and status text", async () => {
+    const response = formatPassthroughUpstreamError(403, REFUSAL_BODY, {
+      statusText: "Forbidden",
+      headers: new Headers({ "x-request-id": "req_123", "content-type": "application/json", "content-length": "999", "retry-after": "5" }),
+    });
+    expect(response.status).toBe(403);
+    expect(response.statusText).toBe("Forbidden");
+    expect(response.headers.get("x-request-id")).toBe("req_123");
+    expect(response.headers.get("retry-after")).toBeNull();
+    expect(response.headers.get("content-type")).toContain("application/json");
+    const body = await response.json() as { error?: { message?: string; code?: string } };
+    expect(body.error?.code).toBe("subscription_required");
+    expect(body.error?.message).toBe(META_MUSE_PLAN_REFUSAL_MESSAGE);
   });
 
   test("an unrelated 403 keeps its own body", async () => {
