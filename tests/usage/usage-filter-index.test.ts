@@ -35,6 +35,7 @@ import {
 } from "../../src/usage/source-filter";
 import {
   setUsageFilterIndexTestHooksForTests,
+  USAGE_FILTER_INDEX_INSERT_BATCH,
   usageFilterCandidatePlan,
   usageFilterIndexPath,
 } from "../../src/usage/filter-index";
@@ -590,7 +591,11 @@ describe("filtered usage index crash and multi-writer safety", () => {
   });
 
   test("two processes rebuilding the same ledger both report every row", async () => {
-    const rows = Array.from({ length: 30_000 }, (_, index) => syntheticRow(index));
+    // Sixteen insert batches each: enough for the two ingests to interleave under the write lock
+    // without making two cold Bun processes spend seconds of a loaded runner on ingest.
+    // Coverage, not a reproducible regression: whether the first opens collide is up to the
+    // scheduler. The deterministic regression is the still-creating case below.
+    const rows = Array.from({ length: 16 * USAGE_FILTER_INDEX_INSERT_BATCH }, (_, index) => syntheticRow(index));
     writeRows(rows);
     const expected = rows.filter(row => row.provider === "openai").length;
     const scriptPath = join(testDir, "child.ts");
@@ -619,6 +624,34 @@ console.log(JSON.stringify({ requests: summary.summary.requests, candidates: res
     }
     expect(indexGenerations()).toHaveLength(1);
     expect(indexRowCount(publishedGeneration())).toBe(rows.length);
+  });
+
+  test("a projection another process is still creating is waited for, not taken as foreign", async () => {
+    const rows = Array.from({ length: 20 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    // The empty file a concurrent first open leaves, held under that process's write lock.
+    const creator = new Database(usageFilterIndexPath(testDir), { create: true });
+    creator.exec("BEGIN EXCLUSIVE");
+    // Released from the reader's own busy back-off, so the case cannot pass without the reader
+    // meeting the lock. Classifying the busy file as foreign used to give up the index at once,
+    // and never reached this back-off.
+    const busyAttempts: number[] = [];
+    setUsageFilterIndexTestHooksForTests({
+      beforeBusyRetry: ({ attempt }) => {
+        busyAttempts.push(attempt);
+        if (creator.inTransaction) creator.exec("ROLLBACK");
+      },
+    });
+    try {
+      const result = await getFilteredUsageAggregate({ provider: "openai" });
+      expect(summary(result).summary.requests).toBe(rows.filter(row => row.provider === "openai").length);
+      expect(busyAttempts).toEqual([0]);
+      expect(result.filterIndex?.totalRows).toBe(rows.length);
+    } finally {
+      setUsageFilterIndexTestHooksForTests(null);
+      if (creator.inTransaction) creator.exec("ROLLBACK");
+      creator.close();
+    }
   });
 
   test("crashed and abandoned staging never accumulates", async () => {
@@ -1075,7 +1108,11 @@ describe("filtered usage index availability", () => {
     expect(existsSync(`${indexPath}-wal`)).toBe(false);
   });
 
-  test("an unwritable home degrades to the streaming read", async () => {
+  // chmod cannot make a Windows directory unwritable, so there this would build the index and
+  // assert nothing about permissions. The degrade itself is the platform-neutral catch-all in
+  // readUsageFilterCandidates, which the vanishing-after-refresh case below reaches on every
+  // platform; contention and the foreign file cover the busy and explicit fallbacks.
+  test.skipIf(process.platform === "win32")("an unwritable home degrades to the streaming read", async () => {
     const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
     writeRows(rows);
     const expected = rows.filter(row => row.provider === "openai").length;
@@ -1130,13 +1167,25 @@ describe("filtered usage index availability", () => {
     }
   });
 
-  test("a projection that vanishes before the read is not recreated", async () => {
+  /** Delete the projection at one point of a filtered query and expect a streaming answer. */
+  async function expectVanishedProjectionNotRecreated(hooks: (remove: (dbPath: string) => void) =>
+    Parameters<typeof setUsageFilterIndexTestHooksForTests>[0]): Promise<void> {
     const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
     writeRows(rows);
     const indexPath = usageFilterIndexPath(testDir);
-    setUsageFilterIndexTestHooksForTests({
-      afterPublish: ({ dbPath }) => { rmSync(dbPath, { force: true }); },
-    });
+    let removed = false;
+    setUsageFilterIndexTestHooksForTests(hooks(dbPath => {
+      const existed = existsSync(dbPath);
+      // A scanner can hold a just-closed file on Windows for a moment; that is not the subject.
+      for (let attempt = 0; ; attempt += 1) {
+        try { rmSync(dbPath, { force: true }); break; } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (attempt >= 4 || (code !== "EBUSY" && code !== "EPERM")) throw error;
+          Bun.sleepSync(25);
+        }
+      }
+      removed = existed && !existsSync(dbPath);
+    }));
     try {
       const result = await getFilteredUsageAggregate({ provider: "openai" });
       expect(summary(result).summary.requests)
@@ -1145,7 +1194,19 @@ describe("filtered usage index availability", () => {
     } finally {
       setUsageFilterIndexTestHooksForTests(null);
     }
+    // Without this the streaming fallback would satisfy every assertion even if the hook never ran.
+    expect(removed).toBe(true);
     expect(existsSync(indexPath)).toBe(false);
+  }
+
+  // Windows refuses to delete a file SQLite holds open: there the projection can only vanish once
+  // the refresh has closed it, which the next case covers on every platform.
+  test.skipIf(process.platform === "win32")("a projection that vanishes before the read is not recreated", async () => {
+    await expectVanishedProjectionNotRecreated(remove => ({ afterPublish: ({ dbPath }) => remove(dbPath) }));
+  });
+
+  test("a projection that vanishes after the refresh closed it is not recreated by the read", async () => {
+    await expectVanishedProjectionNotRecreated(remove => ({ afterRefresh: ({ dbPath }) => remove(dbPath) }));
   });
 
   test("a home change during a refresh never mixes installations", async () => {

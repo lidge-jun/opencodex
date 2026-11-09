@@ -4,6 +4,7 @@
 type Contract = readonly [file: string, context: string, call: string, count: number, contract: string];
 import { orchestratedChildReview } from "./update-review-orchestrated-child";
 import { orchestratedEntryReview } from "./update-review-orchestrated-entry";
+import { signedSupplyReview } from "./update-review-signed-supply";
 
 const baseHelperControlContracts: readonly Contract[] = [
   ["src/lib/desktop-cli-handoff.mjs","runDesktopCliHandoff","launch.onSpawn(child.pid)",1,"pre-mutation: publish the sync lease delegate for the launched child"],
@@ -123,4 +124,4 @@ const baseHelperControlContracts: readonly Contract[] = [
   ["src/update/mutation-guard.mjs","guardedRun","operation(...data)",1,"materialized data then authorizer then direct primitive dispatch"],
   ["src/update/mutation-guard.mjs","ownedArtifactRm","native(...data)",1,"bounded private transaction artifact cleanup"]
 ];
-export const helperControlContracts: readonly Contract[] = [...baseHelperControlContracts, ...orchestratedEntryReview.contracts, ...orchestratedChildReview.contracts];
+export const helperControlContracts: readonly Contract[] = [...baseHelperControlContracts, ...orchestratedEntryReview.contracts, ...orchestratedChildReview.contracts, ...signedSupplyReview.contracts];

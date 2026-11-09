@@ -1,6 +1,27 @@
 import { promptForAdminToken, type AdminTokenVerifier } from "./admin-token-dialog";
 import { createBoundedFetch, withFetchDeadline } from "./bounded-fetch";
-import { adminTokenPromptAllowed, standaloneApiTargets, type ApiPlane, type ApiTarget, type ApiTargets } from "./api-targets";
+import { adminTokenPromptAllowed, apiTargetIdentity, standaloneApiTargets, type ApiPlane, type ApiTarget, type ApiTargets } from "./api-targets";
+
+const EXPECTED_TARGET_HEADER = "x-opencodex-expected-target";
+export const TARGET_CHANGED_EVENT = "opencodex:target-changed";
+export const TARGET_PREFLIGHT_LEGACY_EVENT = "opencodex:target-preflight-legacy";
+let apiTargetGeneration = 0;
+let lastTargetIdentity: string | null = null;
+
+export interface ApiTargetCapture {
+  apiBase: string;
+  targetKey: string;
+  origin: string;
+  requestGeneration: number;
+  transport: ApiTarget["transport"];
+  relayTargetCheck?: "expected-target-v1";
+  /**
+   * An embedded component supplied its own base while this dashboard had no discovered
+   * topology. Such a capture is authoritative only until discovery configures a machine
+   * or shared plane; after that the live target wins and the capture is stale.
+   */
+  standalone?: true;
+}
 
 /** Non-secret generation fencing every Usage report and inventory. */
 export const USAGE_SESSION_CHANGED = "opencodex:usage-session-changed";
@@ -166,6 +187,11 @@ function sameTarget(left: ApiTarget, right: ApiTarget): boolean {
 }
 
 export function configureApiTargets(targets: ApiTargets): void {
+  const identity = apiTargetIdentity(targets);
+  if (lastTargetIdentity !== identity.key) {
+    lastTargetIdentity = identity.key;
+    apiTargetGeneration += 1;
+  }
   configuredTargets = targets;
   for (const plane of ["machine", "shared"] as const) {
     const current = runtimes.get(plane);
@@ -186,6 +212,135 @@ export function configureApiTargets(targets: ApiTargets): void {
 function runtime(plane: ApiPlane): TargetRuntime {
   ensureTargets();
   return runtimes.get(plane)!;
+}
+
+/**
+ * Capture the logical target at the user action boundary, before any await.
+ *
+ * A component may be mounted with its own `apiBase` (the dashboard's public embedding
+ * contract). While this page has no discovered topology that base is the target: the
+ * dashboard is standalone and the prop names the server the component manages. Once
+ * discovery configures a machine/shared plane the live target is authoritative, so a
+ * caller cannot retarget a configured dashboard by passing a different base.
+ */
+export function captureApiTarget(plane: ApiPlane = "shared", explicitBase?: string): ApiTargetCapture {
+  const targets = ensureTargets();
+  const state = runtime(plane);
+  const supplied = typeof explicitBase === "string" ? explicitBase.replace(/\/+$/, "") : "";
+  if (!targets.connected && supplied !== "") {
+    const resolved = new URL(supplied || "/", window.location.href);
+    return {
+      apiBase: supplied,
+      targetKey: resolved.origin,
+      origin: resolved.origin,
+      requestGeneration: apiTargetGeneration,
+      transport: "same-origin",
+      standalone: true,
+    };
+  }
+  return {
+    apiBase: state.target.baseUrl,
+    targetKey: apiTargetIdentity(targets).key,
+    origin: plane === "shared" ? targets.shared.serverOrigin : state.target.serverOrigin,
+    requestGeneration: apiTargetGeneration,
+    transport: state.target.transport,
+    ...(targets.relayTargetCheck === "expected-target-v1" ? { relayTargetCheck: "expected-target-v1" as const } : {}),
+  };
+}
+
+function targetChangedResponse(): Response {
+  return Response.json({ error: "target_changed" }, { status: 409, headers: { "Cache-Control": "no-store" } });
+}
+
+function targetCaptureMatches(capture: ApiTargetCapture): boolean {
+  const targets = ensureTargets();
+  if (capture.standalone) {
+    // Discovery invalidates an embedded base: the connected plane, not the prop, owns
+    // the target from then on.
+    return !targets.connected && apiTargetGeneration === capture.requestGeneration;
+  }
+  const state = runtime("shared");
+  return apiTargetGeneration === capture.requestGeneration
+    && apiTargetIdentity(targets).key === capture.targetKey
+    && state.target.baseUrl === capture.apiBase
+    && targets.shared.serverOrigin === capture.origin
+    && state.target.transport === capture.transport;
+}
+
+/** A completion may apply only while the action's captured target is still current. */
+export function isApiTargetCaptureCurrent(capture: ApiTargetCapture): boolean {
+  return targetCaptureMatches(capture);
+}
+
+async function legacyRelayPreflight(capture: ApiTargetCapture): Promise<Response | null> {
+  try {
+    const machineBase = runtime("machine").target.baseUrl;
+    const response = await globalThis.fetch(`${machineBase}/api/machine/status`, { cache: "no-store" });
+    if (!response.ok) return Response.json({ error: "target_check_unavailable" }, { status: 503 });
+    const status = await response.json().catch(() => null) as { sharedServerOrigin?: unknown } | null;
+    if (typeof status?.sharedServerOrigin !== "string" || status.sharedServerOrigin !== capture.origin) {
+      try { window.dispatchEvent(new window.Event(TARGET_CHANGED_EVENT)); } catch { /* non-browser */ }
+      return targetChangedResponse();
+    }
+    try {
+      window.dispatchEvent(new window.CustomEvent(TARGET_PREFLIGHT_LEGACY_EVENT, { detail: { targetKey: capture.targetKey } }));
+    } catch { /* non-browser */ }
+    return null;
+  } catch {
+    return Response.json({ error: "target_check_unavailable" }, { status: 503 });
+  }
+}
+
+/**
+ * Send a mutation through the target captured when the user acted. Authentication is read
+ * only after the captured target is verified. The expected-target header carries the
+ * capture's origin; whether that header is negotiated comes from the live target, so a
+ * same-identity downgrade uses the fresh legacy preflight.
+ */
+export async function targetFetch(
+  capture: ApiTargetCapture,
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  // Every stale capture is refused before authentication or fetch, regardless of who
+  // created it. A render-owned capture changes only the capture point, not the fence.
+  if (!targetCaptureMatches(capture)) return targetChangedResponse();
+  let requestUrl: URL;
+  try {
+    requestUrl = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+  } catch {
+    return targetChangedResponse();
+  }
+  const capturedBase = new URL(capture.apiBase || "/", window.location.href);
+  const capturedPath = capturedBase.pathname.replace(/\/$/, "");
+  if (requestUrl.origin !== capturedBase.origin
+    || (capturedPath !== "" && requestUrl.pathname !== capturedPath && !requestUrl.pathname.startsWith(`${capturedPath}/`))) {
+    return targetChangedResponse();
+  }
+  const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+  const mutation = method !== "GET" && method !== "HEAD";
+  const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+  if (capture.transport === "relay") {
+    // The capture names the target; the live target names the negotiated capability. A
+    // relay that downgraded on the same identity must not be trusted to check a header
+    // it no longer advertises: fall back to the fresh legacy preflight.
+    const negotiated = ensureTargets().relayTargetCheck;
+    if (negotiated === "expected-target-v1") {
+      headers.set(EXPECTED_TARGET_HEADER, capture.origin);
+    } else if (mutation) {
+      const refusal = await legacyRelayPreflight(capture);
+      if (refusal) return refusal;
+      if (!targetCaptureMatches(capture)) return targetChangedResponse();
+    }
+  }
+  const response = await globalThis.fetch(input, { ...init, headers });
+  if (capture.transport === "relay" && response.status === 409) {
+    const body = await response.clone().json().catch(() => null) as { error?: unknown } | null;
+    if (body?.error === "target_changed") {
+      try { window.dispatchEvent(new window.Event(TARGET_CHANGED_EVENT)); } catch { /* non-browser */ }
+    }
+  }
+  return response;
 }
 
 function clearSessionIfCurrent(plane: ApiPlane, expected: string | null): void {

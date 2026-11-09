@@ -9,9 +9,10 @@ import { KiroIamLoginForm, KiroIamProfilePicker } from "./KiroIamLoginForm";
 import type { KiroFinalOutcome } from "../kiro-device-login-finalizer";
 import "../styles/kiro-device-login.css";
 
-export default function KiroDeviceLoginDialog({ apiBase, triggerRef, addAccount, busy, onCli, onClose, onSettled,
+export default function KiroDeviceLoginDialog({ apiBase, targetKey, triggerRef, addAccount, busy, onCli, onClose, onSettled,
   pollDelay }: {
   apiBase: string;
+  targetKey?: string;
   triggerRef: RefObject<HTMLButtonElement | null>;
   addAccount: boolean;
   busy: boolean;
@@ -23,7 +24,7 @@ export default function KiroDeviceLoginDialog({ apiBase, triggerRef, addAccount,
   const t = useT();
   const titleId = useId();
   const dialogRef = useModalDialog(true, triggerRef);
-  const login = useKiroDeviceLogin(apiBase, onSettled, pollDelay);
+  const login = useKiroDeviceLogin(apiBase, onSettled, pollDelay, targetKey);
   const [iamSetup, setIamSetup] = useState(false);
   const copy = useCopyFeedback<string>();
   const { state } = login;

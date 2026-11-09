@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 // German — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -140,6 +141,7 @@ export const de: Record<TKey, string> = {
   ...connectV2Copy("de"),
   ...startupV2Copy("de"),
   ...proxyV2Copy("de"),
+  ...telemetryProfileCopy("de"),
   "claude.tierDefaults.unset": "Nicht festgelegt (Claude-Einstellung beibehalten)",
   "claude.tierDefaults.recovery": "Anwendung gestoppt; automatische Wiederherstellung fehlgeschlagen. Prüfen Sie vor einem erneuten Versuch die Sicherung unten.",
   "claude.tierDefaults.title": "CLI-Standardmodelle",
@@ -807,6 +809,8 @@ export const de: Record<TKey, string> = {
   "prov.port": "Port",
   "prov.default": "Standard",
   "prov.loadingConfig": "Lädt…",
+  "prov.targetChanged": "Das Dashboard-Ziel hat sich geändert. Öffnen Sie dieses Formular auf dem aktuellen Server erneut.",
+  "prov.legacyTargetPreflight": "Dieser Proxy prüft das Speicherziel vor dem Senden, kann es aber nicht atomar verifizieren. Aktualisieren Sie den Proxy für zielgebundene Speicherungen.",
   "prov.saved": "Gespeichert! Proxy neu starten, um anzuwenden.",
   "prov.loadConfigFail": "Konfiguration konnte nicht geladen werden",
   "prov.invalidJson": "Ungültiges JSON",
@@ -3246,12 +3250,19 @@ export const de: Record<TKey, string> = {
   "pws.pacingRemoveModel": "Anfragetaktung für {model} entfernen",
   "pws.pacingRuleRequired": "Legen Sie zuerst ein Anbieterlimit oder eine Modellregel fest.",
   "pws.pacingCapInvalid": "Die maximale Anzahl gleichzeitiger Anfragen muss eine ganze Zahl größer oder gleich 1 sein.",
+  "pws.pacingValueInvalid": "Geben Sie einen gültigen Pacing-Wert ein: RPM 1/60–60.000, Verzögerung 1–3.600.000 ms, Parallelität 1 oder mehr.",
   "pws.saving": "Wird gespeichert…",
   "pws.settingsSaved": "Einstellungen gespeichert.",
   "pws.accountModeSaved": "Kontomodus gespeichert.",
   "pws.accountModeFailed": "Kontomodus konnte nicht gewechselt werden.",
   "pws.accountModeConfirm": "OpenAI-Kontomodus wechseln? Laufende Unterhaltungen werden dem anderen Kontosatz zugeordnet und die Quotennutzung wird unter dem neuen Modus erfasst.",
   "pws.settingsUnsavedBar": "Es gibt ungespeicherte Änderungen.",
+  "pws.draftTarget": "Bearbeitung: {target}",
+  "pws.draftConflict": "Die gespeicherten Einstellungen auf diesem Server haben sich während der Bearbeitung geändert. Ihr Entwurf bleibt erhalten; wählen Sie, welche Werte gelten sollen.",
+  "pws.draftConflictFields": "Diese Felder wurden auf beiden Seiten geändert. Bearbeiten Sie den Entwurf oder verwenden Sie die gespeicherten Werte:",
+  "pws.draftConflictUseSaved": "Gespeicherte Werte verwenden",
+  "pws.draftConflictKeepDraft": "Meinen Entwurf behalten",
+  "pws.draftConflictResolveFirst": "Wählen Sie vor dem Speichern, welche Werte gelten sollen.",
   "pws.unsavedLeaveBody": "Es gibt ungespeicherte Änderungen. Vor dem Verlassen speichern?",
   "pws.unsavedLeaveTitle": "Ungespeicherte Änderungen",
   "pws.attentionRequired": "Aufmerksamkeit erforderlich",

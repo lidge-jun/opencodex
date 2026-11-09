@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 // English — source of truth. Its keys define the TKey type; de/fr/ko/zh/zh-TW/ru/ja/tr must match (compile-checked).
 // Strings with {cmd} render a <code> chip via <Trans>; {var} are plain interpolations.
 /**
@@ -141,6 +142,7 @@ export const en = {
   ...connectV2Copy("en"),
   ...startupV2Copy("en"),
   ...proxyV2Copy("en"),
+  ...telemetryProfileCopy("en"),
   "claude.tierDefaults.unset": "Unset (keep existing Claude setting)",
   "claude.tierDefaults.recovery": "Apply stopped and automatic restore failed. Check the backup below before retrying.",
   "claude.tierDefaults.title": "CLI tier defaults",
@@ -830,6 +832,8 @@ export const en = {
   "prov.port": "Port",
   "prov.default": "Default",
   "prov.loadingConfig": "Loading…",
+  "prov.targetChanged": "The dashboard target changed. Reopen this form on the current server.",
+  "prov.legacyTargetPreflight": "This proxy checks the save target before sending, but cannot verify it atomically. Update the proxy for target-bound saves.",
   "prov.saved": "Saved! Restart proxy to apply.",
   "prov.loadConfigFail": "Failed to load config",
   "prov.invalidJson": "Invalid JSON",
@@ -2097,12 +2101,19 @@ export const en = {
   "pws.pacingRemoveModel": "Remove request pacing override for {model}",
   "pws.pacingRuleRequired": "Enable request pacing only after setting a provider limit or a model override.",
   "pws.pacingCapInvalid": "Max concurrent requests must be a whole number of 1 or more.",
+  "pws.pacingValueInvalid": "Enter a valid pacing value: RPM 1/60–60,000, delay 1–3,600,000 ms, concurrency 1 or more.",
   "pws.saving": "Saving…",
   "pws.settingsSaved": "Settings saved.",
   "pws.accountModeSaved": "Account mode saved.",
   "pws.accountModeFailed": "Could not switch the account mode.",
   "pws.accountModeConfirm": "Switch the OpenAI account mode? Running conversations will be reassigned to the other mode's account set, and quota usage will be tracked against the new mode.",
   "pws.settingsUnsavedBar": "You have unsaved changes.",
+  "pws.draftTarget": "Editing {target}",
+  "pws.draftConflict": "The saved settings changed on this server while you were editing. Your draft is kept; choose which values to keep.",
+  "pws.draftConflictFields": "These fields changed on both sides. Edit the draft or use the saved values:",
+  "pws.draftConflictUseSaved": "Use saved values",
+  "pws.draftConflictKeepDraft": "Keep my draft",
+  "pws.draftConflictResolveFirst": "Choose which values to keep before saving.",
   "pws.unsavedLeaveBody": "You have unsaved changes. Save them before leaving?",
   "pws.unsavedLeaveTitle": "Unsaved changes",
   "pws.attentionRequired": "Attention required",

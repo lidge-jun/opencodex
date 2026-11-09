@@ -63,6 +63,13 @@ terminal with `tty_required`), and `ocx config set`/`unset telemetry` refuse eve
 caller. Opting out (`ocx telemetry disable`, `OCX_TELEMETRY=0` or `DO_NOT_TRACK=1`)
 is always permitted.
 
+A public leaderboard profile is a separate user-consent action: it publishes a handle and
+daily usage totals under the user's chosen name. An agent must never connect one or answer
+its prompt. `POST /api/telemetry/profile` requires a human dashboard session, and
+`ocx telemetry profile connect` refuses agent-driven callers with `agent_consent_required`
+and non-interactive terminals with `tty_required`. Disconnecting
+(`ocx telemetry profile disconnect`), which deletes the profile, is always permitted.
+
 ## Where things are installed
 
 An agent asked to install, inspect, repair, or remove opencodex needs to know what is written
