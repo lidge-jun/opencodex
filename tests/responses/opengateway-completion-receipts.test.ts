@@ -75,6 +75,17 @@ describe("OpenGateway completion exact-head receipts", () => {
     }
   });
 
+  test("an upstream failed terminal carrying output_text is delivered as upstream sent it (#8333)", async () => {
+    // Text was produced, so nothing is replayed, and the guard does not restate upstream's verdict.
+    const failed = { ...snapshot(), status: "failed", output_text: "partial answer",
+      error: { type: "server_error", code: "upstream_failed", message: "upstream failed" } };
+    const frame = { type: "response.completed", response: failed };
+    const stream = await run(sse([frame]));
+    expect(stream.retries).toBe(0);
+    expect(stream.result.status).toBe(200);
+    expect(await stream.result.text()).toBe(new TextDecoder().decode(encode(frame)));
+  });
+
   test("null or empty output_text is no evidence, so an empty completion still retries (#8333)", async () => {
     for (const outputText of [null, ""]) {
       const created = { type: "response.created", response: { id: "resp_1", object: "response", status: "in_progress", output: [], output_text: outputText } };
