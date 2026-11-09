@@ -94,7 +94,7 @@ import { CatalogGatherBusyError } from "../codex/catalog/provider-fetch";
 import type { CatalogDisposition, ConvergeCodex } from "../codex/convergence-types";
 import { normalizeCatalogDisposition } from "../codex/catalog-refresh-status";
 import { managementBodyTooLargeResponse } from "./management/body";
-import { handleSessionRoutes } from "./management/session-routes";
+import { handleSessionRoutes, SESSION_REMEMBER_PATH } from "./management/session-routes";
 import { siblingRefusesManagementRequest } from "./management/sibling-guard";
 import { siblingOfLivePort, siblingSkipMessage } from "../codex/sibling-start";
 import { packageVersion } from "../lib/package-version";
@@ -176,6 +176,12 @@ async function handleFallbackRoutesOnDemand(ctx: ManagementContext): Promise<Res
   return handleFallbackRoutes(ctx);
 }
 
+async function handleRouteToRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/route-to")) return null;
+  const { handleRouteToRoutes } = await import("./management/route-to-routes");
+  return handleRouteToRoutes(ctx);
+}
+
 /**
  * Lazy like the Lab and routing-profile handlers, and for the same recorded reason: this file is
  * mounted for every dashboard request, so a static import would put the workflow-budget ledger
@@ -254,7 +260,9 @@ export async function handleManagementAPI(
   requestIngress: ManagementRequestIngress = { trustedLoopback: false },
 ): Promise<Response | null> {
   if (!isAllowedManagementOrigin(req, config)) {
-    return jsonResponse({ error: "cross-origin request blocked" }, 403, req, config);
+    // A proxied dashboard reaches Remember through this gate first; name the reason (#8338).
+    const remember = url.pathname === SESSION_REMEMBER_PATH ? { code: "remember_requires_direct_origin" } : {};
+    return jsonResponse({ error: "cross-origin request blocked", ...remember }, 403, req, config);
   }
   if (principal === "local-account-switch-capability") {
     if (req.method !== "PUT" || !isLocalAccountSwitchPath(url.pathname) || url.search !== "") {
@@ -374,6 +382,7 @@ export async function handleManagementAPI(
     ??     (await handleLowQuotaRoutesOnDemand(ctx))
     ??     (await handleQuotaPoolRoutesOnDemand(ctx))
     ??     (await handleFallbackRoutesOnDemand(ctx))
+    ??     (await handleRouteToRoutesOnDemand(ctx))
     ??     (await handleWorkflowBudgetRoutesOnDemand(ctx))
     ??     (await handleCodexAgentRoleRoutesOnDemand(ctx))
     ??     (await handleProtocolRoutesOnDemand(ctx))

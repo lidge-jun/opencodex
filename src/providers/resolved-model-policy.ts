@@ -43,6 +43,7 @@ export type StaticProviderPolicyField =
   | "reasoningDetailsModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "showThinkingSummary"
   | "escapeBuiltinToolNames" | "googleMode" | "project" | "location" | "modelCapabilities"
   | "modelAutoCompactTokenLimits" | "modelSuppressSyntheticMax" | "modelReasoningSummaryDelivery"
+  | "thinkingDisplay" | "modelThinkingDisplay"
   | "codexToolMode" | "modelAdapters";
 type StaticProviderPolicyShape = Pick<OcxProviderConfig, StaticProviderPolicyField>;
 export type ResolvedProviderStaticPolicy = Readonly<Partial<StaticProviderPolicyShape>> & Readonly<{
@@ -182,6 +183,8 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
     "supportsVerbosity", "responsesItemIdRepair",
     "showThinkingSummary", "escapeBuiltinToolNames", "googleMode", "project", "location",
   ] as const) putScalar(key, entry?.[key] as StaticProviderPolicyShape[typeof key] | undefined);
+  // Operator-only display policy; no registry entry declares it (#8363).
+  put("thinkingDisplay", provider.thinkingDisplay, provider.thinkingDisplay !== undefined ? "operator" : "unknown");
   const legacyClinePassLadder = entry !== undefined && input.providerName === "cline-pass"
     && provider.reasoningWireFormat === "gateway-object"
     && sameStringArray(provider.reasoningEfforts, ["low"]);
@@ -218,6 +221,7 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   for (const key of [
     "modelAutoCompactTokenLimits", "modelSuppressSyntheticMax",
     "modelReasoningSummaryDelivery", "codexToolMode", "modelAdapters",
+    "modelThinkingDisplay",
   ] as const) putScalar(key, undefined);
   put("modelCapabilities", mergeReasoningModelCapabilities(entry?.modelCapabilities, provider.modelCapabilities),
     provider.modelCapabilities !== undefined ? "operator-capability" : entry?.modelCapabilities !== undefined ? "registry" : "unknown");

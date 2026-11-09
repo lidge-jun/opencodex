@@ -11,6 +11,7 @@ import { linkStorePath } from "../../link/paths";
 import { linkRouteAllowed } from "../../link/routes";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import { registerFallbackLinkResolver } from "../../routing/fallback-policy";
+import { captureChildRouteDefaults } from "../../routing/home-route-intent";
 
 export const LINK_INGRESS_HOSTNAME = "opencodex-link.invalid";
 
@@ -36,6 +37,10 @@ export interface LinkListenerDeps {
   writeStore?: (path: string, store: LinkStore) => void;
   serve?: (options: Parameters<typeof Bun.serve>[0]) => Server<unknown>;
   warn?: (message: string) => void;
+  /** Freezes every default Children inherit (native switches and file ownership) before this listener can serve route intent. */
+  captureRouteDefaults?: () => void;
+  /** Delay before retry `attempt` (0-based) of a failed capture; tests shorten it. */
+  captureRetryDelayMs?: (attempt: number) => number;
 }
 
 export type LinkListenerStatus = {
@@ -100,6 +105,32 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   const releaseFallbackLinkResolver = registerFallbackLinkResolver(keyId =>
     readStoreForAdmission().links.find(link => link.apiKeyId === keyId)?.id);
 
+  // Children read route intent through this listener, and that read is pure: it never captures.
+  // So a failed capture (a busy config lock, a damaged route-intent.json, unresolved Aside
+  // ownership) is owed and retried with backoff until it succeeds, the listener closes or stops,
+  // and again on every ensureStarted. Meanwhile every Home-only writer still captures first.
+  let routeDefaultsOwed = false;
+  let captureAttempt = 0;
+  let captureRetry: ReturnType<typeof setTimeout> | undefined;
+  const retryDelay = deps.captureRetryDelayMs ?? (attempt => Math.min(1_000 * 2 ** attempt, 300_000));
+  const captureRouteDefaults = (): void => {
+    if (captureRetry) { clearTimeout(captureRetry); captureRetry = undefined; }
+    try {
+      (deps.captureRouteDefaults ?? captureChildRouteDefaults)();
+      routeDefaultsOwed = false;
+      captureAttempt = 0;
+    } catch (error) {
+      if (!routeDefaultsOwed) warn(`⚠ Child route defaults were not captured; retrying: ${error instanceof Error ? error.message : String(error)}`);
+      routeDefaultsOwed = true;
+      if (stopped) return;
+      captureRetry = setTimeout(() => {
+        captureRetry = undefined;
+        if (!stopped && routeDefaultsOwed) captureRouteDefaults();
+      }, retryDelay(captureAttempt++));
+      (captureRetry as { unref?: () => void }).unref?.();
+    }
+  };
+
   const bindIfNeeded = (): void => {
     if (stopped || listener || !startContext) return;
     let store: LinkStore;
@@ -113,6 +144,10 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       setStatus("off", null, null);
       return;
     }
+    // Capture the Children's defaults from the Home's switches and integrations as they stand at
+    // startup, before any Home-only command can move one. A failure leaves the listener up and is
+    // retried (see above).
+    captureRouteDefaults();
     const requestedPort = store.listenerPort ?? 0;
     const sessions = createLinkRelaySessions({ peers, connectionGeneration: linkId => startContext?.connectionGeneration?.(linkId), fingerprints: (keyId, linkId) => {
       if (!readStoreForAdmission().links.some(link => link.id === linkId && link.apiKeyId === keyId)) return [];
@@ -176,6 +211,8 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     const flight = (async () => {
       if (closeFlight) await closeFlight;
       if (stopped) return;
+      // An unbound listener captures in bindIfNeeded; a bound one retries an owed capture here.
+      if (routeDefaultsOwed && listener) captureRouteDefaults();
       bindIfNeeded();
     })();
     ensureFlight = flight.finally(() => {
@@ -187,6 +224,9 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
 
   const close = (): Promise<void> => {
     if (closeFlight) return closeFlight;
+    // No link is left to protect: an owed capture is retried at the next bind, not on a timer.
+    if (captureRetry) { clearTimeout(captureRetry); captureRetry = undefined; }
+    captureAttempt = 0;
     const flight = (async () => {
       if (ensureFlight) await ensureFlight;
       const current = listener;
@@ -231,6 +271,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     close,
     async stop() {
       stopped = true;
+      if (captureRetry) { clearTimeout(captureRetry); captureRetry = undefined; }
       releaseFallbackLinkResolver();
       // Process shutdown is deliberately forceful, unlike last-link removal. Every
       // authenticated socket is closed, and the client transport cannot reconnect it.

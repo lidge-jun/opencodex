@@ -15,7 +15,7 @@
 </p>
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx start
 ```
 
@@ -88,7 +88,7 @@ opencodex 是连接编程工具与模型提供商的轻量级本地网关。它�
 ### 个人安装（CLI）
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+；Bun 运行时会自动捆绑
+npm install -g --allow-scripts=bun @bitkyc08/opencodex   # Node 18+；Bun 运行时会自动捆绑
 ocx start                         # 代理 + 仪表板：localhost:10100
 ```
 
@@ -241,7 +241,7 @@ bun run src/cli/index.ts start
 <summary>面向 agent</summary>
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx start     # 或 `ocx service`
 ocx init      # 交互式设置：写入 ~/.opencodex/config.json 并接入 Codex
 ```

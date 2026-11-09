@@ -1,3 +1,4 @@
+import { isRouteClientId, type RouteClientId } from "./route-intent";
 /**
  * Argument vectors for the system OpenSSH client used by machine links.
  *
@@ -19,7 +20,7 @@
  */
 
 import { isAbsolute } from "node:path";
-import { POWERSHELL_ENCODED_MAX, windowsOcxArgv, windowsPinnedSyncArgv } from "./remote-windows";
+import { POWERSHELL_ENCODED_MAX, ROUTE_OVERWRITE_MIN_CHILD_VERSION, windowsOcxArgv, windowsPinnedSyncArgv } from "./remote-windows";
 
 export type TunnelDirection = "R" | "L";
 
@@ -303,6 +304,26 @@ try_ocx() {
 ${REMOTE_OCX_CANDIDATES}
 exit ${REMOTE_COMMAND_NOT_FOUND}`;
 
-export function remotePinnedSyncArgv(linkId: string, platform: "posix" | "windows" = "posix"): string[] {
-  return platform === "windows" ? windowsPinnedSyncArgv(linkId) : ["sh", "-c", REMOTE_PINNED_SYNC_SCRIPT, "ocx", linkId];
+export { ROUTE_OVERWRITE_MIN_CHILD_VERSION };
+
+function replaceOnce(script: string, from: string, to: string): string {
+  if (!script.includes(from)) throw new Error(`pinned sync script lost its anchor: ${from}`);
+  return script.replace(from, () => to);
+}
+
+/** Overwrite needs a Child that honours it: refuse ocx-child and older ocx before syncing. */
+function overwritePinnedSyncScript(overwriteClient?: RouteClientId): string {
+  const [major, minor, patch] = ROUTE_OVERWRITE_MIN_CHILD_VERSION.split(".");
+  let script = replaceOnce(REMOTE_PINNED_SYNC_SCRIPT, 'c=cmp(a[1],"2"); if(!c)c=cmp(a[2],"93"); if(!c)c=cmp(a[3],"0");',
+    `c=cmp(a[1],"${major}"); if(!c)c=cmp(a[2],"${minor}"); if(!c)c=cmp(a[3],"${patch}");`);
+  script = replaceOnce(script, "'ocx-fanout:child-ocx-lacks-expect-link'", "'ocx-fanout:child-ocx-lacks-overwrite'");
+  script = replaceOnce(script, '  [ -x "$c" ] || return\n',
+    '  [ -x "$c" ] || return\n  case "$c" in */ocx-child) printf \'%s\\n\' \'ocx-fanout:child-ephemeral-no-overwrite\' >&2; exit 121;; esac\n');
+  return replaceOnce(script, 'sync --expect-link "$1" --json', 'sync --expect-link "$1" --json --overwrite-conflict' + (overwriteClient ? ` --overwrite-client ${overwriteClient}` : ''));
+}
+
+export function remotePinnedSyncArgv(linkId: string, platform: "posix" | "windows" = "posix", overwriteConflict = false, overwriteClient?: RouteClientId): string[] {
+  if (overwriteClient !== undefined && (!overwriteConflict || !isRouteClientId(overwriteClient))) throw new LinkSshArgumentError("invalid overwrite client");
+  const script = overwriteConflict ? overwritePinnedSyncScript(overwriteClient) : REMOTE_PINNED_SYNC_SCRIPT;
+  return platform === "windows" ? windowsPinnedSyncArgv(linkId, overwriteConflict, overwriteClient) : ["sh", "-c", script, "ocx", linkId];
 }

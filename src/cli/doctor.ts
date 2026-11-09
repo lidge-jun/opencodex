@@ -8,6 +8,7 @@
  * networking. See devlog/_plan/260630_wsl-account-autoswitch/30_*.
  */
 import { cliCommandDoctorChecks, collectCliPathDiagnostics } from "./cli-path-diagnostics";
+import { collectBundledBunDiagnostic, formatBundledBunDiagnosticLines } from "./bundled-bun-diagnostic";
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -1605,6 +1606,16 @@ export async function runDoctor(args: string[] = []): Promise<void> {
       const report = await fetchServiceMemory(live);
       for (const line of formatServiceMemoryLines(report)) console.log(line);
     }
+  }
+
+  // The bundled dependency is the install's own runtime, distinct from whatever Bun is running
+  // doctor or serving the proxy. A skipped postinstall (#8361) is invisible here otherwise.
+  // A source checkout or standalone binary has no bundled `bun` dependency, so the
+  // section has nothing to say there and prints no heading.
+  const bundledBunLines = formatBundledBunDiagnosticLines(collectBundledBunDiagnostic());
+  if (bundledBunLines.length > 0) {
+    console.log("\nBundled Bun runtime");
+    for (const line of bundledBunLines) console.log(line);
   }
 
   console.log("\nWHAM reachability");

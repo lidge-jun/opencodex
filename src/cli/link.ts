@@ -7,10 +7,12 @@ import {
 import { TUNNEL_CAUSES } from "../link/tunnel-history";
 import { isEpochMs, type LinkChildParity } from "../link/child-parity";
 import { CODEX_SETTINGS_DIGEST_PATTERN } from "../link/codex-settings";
+import { isRouteClientId, parseRouteClientOutcomes, ROUTE_INTENT_DIGEST_PATTERN, routeClientOutcomesForPeer } from "../link/route-intent";
 import type { LinkLocalPeer, LinkPeerStatus } from "../link/compatibility";
 import { runLinkEnrollment } from "./link-enrollment";
 import { runLinkCleanup, type LinkCleanupDeps } from "./link-cleanup";
 import { assertSshAlias } from "../link/ssh-argv";
+import { boundHint } from "../link/ssh-runner";
 import { linkStorePath } from "../link/paths";
 import { isLinkPort } from "../link/ports";
 import { readLinkStore, type LinkDirection, type LinkStore } from "../link/store";
@@ -36,7 +38,7 @@ export const LINK_USAGE = `Usage:
   ocx link probe <alias> [--json]
   ocx link add <alias> [--plant] [--expect-fingerprint SHA256:…] [--json]
   ocx link port [--json]
-  ocx link issue --alias <alias> --tunnel-port <port> [--json]
+  ocx link issue --alias <alias> --tunnel-port <port> [--clients <id,...>] [--json]
   ocx link status [--json]
   ocx link revoke --link-id <id> [--purge] [--force --yes] [--json]
   ocx link reconnect --link-id <id> [--json]
@@ -246,17 +248,22 @@ async function linkRequest<T>(path: string, init: RequestInit, deps: LinkCliDeps
   } catch (error) {
     if (error instanceof RuntimeApiError) {
       // Never echo an API error body: issue responses contain a one-time data key. Only the error
-      // code survives, because callers branch on it and a code is never secret.
+      // code, the server's already-bounded hint and the residual flag survive (errorCodeBody).
       throw new RuntimeApiError(`Link management request failed (${error.status})`, error.status, errorCodeBody(error.body));
     }
     throw error;
   }
 }
 
-function errorCodeBody(body: unknown): { error: { code: string }; residual?: true } | null {
+function errorCodeBody(body: unknown): { error: { code: string; hint?: string }; residual?: true } | null {
   if (!isRecord(body) || !isRecord(body.error)) return null;
   const code = body.error.code;
-  return typeof code === "string" && /^[a-z_]{1,64}$/.test(code) ? { error: { code }, ...(body.residual === true ? { residual: true as const } : {}) } : null;
+  if (typeof code !== "string" || !/^[a-z_]{1,64}$/.test(code)) return null;
+  // The hint is the only other field kept (#8357): the server builds it from a Child's last stderr
+  // line, already bounded and redacted, and it is bounded and redacted again here. The rest of
+  // the body is still never echoed.
+  const hint = typeof body.error.hint === "string" ? boundHint(body.error.hint) : undefined;
+  return { error: { code, ...(hint ? { hint } : {}) }, ...(body.residual === true ? { residual: true as const } : {}) };
 }
 
 async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {
@@ -270,6 +277,9 @@ async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {
 async function runIssue(args: string[], deps: LinkCliDeps): Promise<void> {
   takeJsonFlag(args);
   const alias = takeOption(args, "--alias");
+  const rawClients = takeOption(args, "--clients");
+  const selectedClients = rawClients?.split(",");
+  if (selectedClients && (!selectedClients.length || !selectedClients.every(isRouteClientId) || new Set(selectedClients).size !== selectedClients.length)) throw new CliUsageError("--clients needs unique supported client IDs", LINK_USAGE);
   const tunnelPort = takeIntegerOption(args, "--tunnel-port", { min: 1024 });
   if (!alias || tunnelPort === undefined || !isLinkPort(tunnelPort)) {
     throw new CliUsageError("issue requires --alias and --tunnel-port", LINK_USAGE);
@@ -280,7 +290,7 @@ async function runIssue(args: string[], deps: LinkCliDeps): Promise<void> {
   const result = validateIssue(await linkRequest<unknown>("/api/link/issue", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ alias, tunnelPort }),
+    body: JSON.stringify({ alias, tunnelPort, ...(selectedClients ? { selectedClients } : {}) }),
   }, deps));
   console.log(JSON.stringify(result));
 }
@@ -391,7 +401,7 @@ export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}):
   });
 }
 
-const PARITY_KEYS = ["lastApplyAt", "runtimeStartedAt", "appliedCodexSettingsDigest", "reportedAt"] as const;
+const PARITY_KEYS = ["lastApplyAt", "runtimeStartedAt", "appliedCodexSettingsDigest", "reportedAt", "appliedRouteIntentDigest", "routeClientOutcomes"] as const;
 const WIRE_STATES = new Set(["connecting", "connected", "reconnecting", "failed", "idle"]);
 const CAUSES = new Set<string>(TUNNEL_CAUSES);
 
@@ -431,10 +441,20 @@ function validateParity(candidate: Record<string, unknown>, index: number): Link
   if (digest !== undefined && digest !== null && (typeof digest !== "string" || !CODEX_SETTINGS_DIGEST_PATTERN.test(digest))) {
     throw new Error(`invalid link API response: link ${index} appliedCodexSettingsDigest`);
   }
+  let route: Pick<LinkChildParity, "appliedRouteIntentDigest" | "routeClientOutcomes"> = {};
+  if (candidate.appliedRouteIntentDigest !== undefined || candidate.routeClientOutcomes !== undefined) {
+    const routeDigest = candidate.appliedRouteIntentDigest;
+    const outcomes = parseRouteClientOutcomes(candidate.routeClientOutcomes);
+    if ((routeDigest !== null && (typeof routeDigest !== "string" || !ROUTE_INTENT_DIGEST_PATTERN.test(routeDigest))) || !outcomes) {
+      throw new Error(`invalid link API response: link ${index} route intent`);
+    }
+    route = { appliedRouteIntentDigest: routeDigest, routeClientOutcomes: routeClientOutcomesForPeer(outcomes) };
+  }
   return {
     lastApplyAt: time("lastApplyAt"),
     runtimeStartedAt: time("runtimeStartedAt"),
     appliedCodexSettingsDigest: typeof digest === "string" ? digest : null,
     reportedAt: time("reportedAt"),
+    ...route,
   };
 }
