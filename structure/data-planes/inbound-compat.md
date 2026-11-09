@@ -175,7 +175,7 @@ keepalives. They preserve connection liveness without adding a Chat completion c
 usage, or claiming semantic progress; see the
 [heartbeat contract](../transports/streaming-health.md#heartbeat-and-stall-deadline).
 Chat-to-Responses traffic that lands on `api.meta.ai` inherits the same 64-character tool-name
-aliasing as native Responses; see [`responses.md`](../transports/responses.md).
+aliasing as native Responses; see [`responses.md`](../transports/responses.md). At the final OpenAI-operated Responses serializer only, trusted Chat ingress sets omitted function `strict` to `false` (including legacy `functions`); explicit booleans and parameter schemas survive. The bridge, shared IR, native Responses, hosted tools, Chat destinations, and third-party Responses keep their defaults. Regression: `tests/responses/chat-inbound-tool-strict-defaults.test.ts`.
 
 On that bridge, `src/chat/inbound.ts` decides where a `system` or `developer` message lands by
 where the caller wrote it. A leading block, before any conversational item exists, becomes
