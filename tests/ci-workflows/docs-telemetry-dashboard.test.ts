@@ -1030,13 +1030,13 @@ describe("telemetry dashboard formatting and bucketing helpers", () => {
             headers: { "content-type": "application/json" },
           });
         }
-        if (url.includes("api.npmjs.org")) {
+        if (new URL(url).hostname === "api.npmjs.org") {
           return new Response(JSON.stringify({ downloads: 1_000 }), {
             status: 200,
             headers: { "content-type": "application/json" },
           });
         }
-        if (url.includes("api.github.com")) {
+        if (new URL(url).hostname === "api.github.com") {
           const parsed = new URL(url);
           const page = Number(parsed.searchParams.get("page") ?? "1");
           const nextPage = page + 1;
@@ -1070,7 +1070,7 @@ describe("telemetry dashboard formatting and bucketing helpers", () => {
       expect(peakEl.hidden).toBe(false);
 
       // Downloads followed pagination up to 10 pages (10 * 100 = 1,000) and marked partial
-      const ghReleaseFetches = fetchedUrls.filter((u) => u.includes("api.github.com"));
+      const ghReleaseFetches = fetchedUrls.filter((u) => new URL(u).hostname === "api.github.com");
       expect(ghReleaseFetches.length).toBe(10);
       expect(ghTotalEl.dataset.partial).toBe("true");
       expect(ghTotalEl.textContent).toContain("partial");
