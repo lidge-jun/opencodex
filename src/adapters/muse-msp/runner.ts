@@ -146,7 +146,7 @@ export class MuseMspRunner {
       if (effectiveOptions.signal.aborted) throw new MuseMspError("cancelled");
       options.beforeDispatch?.();
       options.beforeUserDispatch?.(user);
-      const turnId = await session.startTurn(user, parsed.options.reasoning, effectiveOptions);
+      const turnId = await session.startTurn(user, parsed.options.reasoning, effectiveOptions, projected.images);
       const handoff = new MuseResponsesHandoff(registry);
       const segments = new MuseTurnSegments({ session, turnId, capture: session.captureForTurn(turnId, catalog.approvalTools),
         inbox: host.inbox, connection: host.connection, handoff, rendezvous });

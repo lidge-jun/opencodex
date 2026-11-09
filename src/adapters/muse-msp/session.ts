@@ -79,7 +79,7 @@ export class MuseMspSession {
     return capture;
   }
 
-  async startTurn(input: string, reasoningEffort: string | undefined, options: CommandOptions & { allowQueued?: true }): Promise<string> {
+  async startTurn(input: string, reasoningEffort: string | undefined, options: CommandOptions & { allowQueued?: true }, images: import("./initial-history").MuseHistoryImage[] = []): Promise<string> {
     if (!bounded(input, 4 * 1024 * 1024) || (reasoningEffort !== undefined && !EFFORTS.has(reasoningEffort))) {
       throw new MuseMspError("invalid_turn_input");
     }
@@ -89,7 +89,7 @@ export class MuseMspSession {
     try {
       const commandId = this.commandId();
       const result = await this.connection.request("turn/start", {
-        commandId, sessionId: this.sessionId, input: [{ type: "text", text: input }],
+        commandId, sessionId: this.sessionId, input: [{ type: "text", text: input }, ...images],
         ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
       }, options);
       if (!record(result) || result.commandId !== commandId || result.status !== "accepted" ||
