@@ -130,15 +130,32 @@ export async function resolveCopilotAuto(provider: OcxProviderConfig, requestedM
   let models: CopilotModel[];
   try { models = await fetchCopilotAutoModels(transport, signal, beforeSend, 60_000, concurrency); }
   catch (error) {
-    if (signal?.aborted || error instanceof ProviderOutboundSendCancelledError) throw error;
+    if (signal?.aborted) throw error;
+    // A manual account switch makes `beforeSend` return false, which cancels this
+    // control-plane send. That is not a client abort: fall back to the requested model
+    // so the dispatch path revalidates the selection and rebuilds on the new account.
+    if (error instanceof ProviderOutboundSendCancelledError) {
+      return { provider: transport, modelId: requestedModel, auto: false };
+    }
     // Permission discovery is additive for legacy paid configurations. A temporary
     // discovery outage must not turn a previously usable named route into a refusal.
     return { provider: transport, modelId: requestedModel, auto: false };
   }
   if (!copilotRequiresAuto(provider, models))
     return { provider: transport, modelId: requestedModel, auto: false };
-  const session = await requestJson(transport, "/models/session", signal,
-    { auto_mode: { model_hints: ["auto"] } }, undefined, beforeSend, concurrency);
+  // The same authority fence guards the later control-plane sends: a manual switch that
+  // lands during the session or intent step falls back too, so dispatch rebuilds on the
+  // new account instead of failing the whole negotiation. A client abort still rejects.
+  const fallBackOnSwitch = (error: unknown) => {
+    if (!signal?.aborted && error instanceof ProviderOutboundSendCancelledError)
+      return { provider: transport, modelId: requestedModel, auto: false } as const;
+    throw error;
+  };
+  let session: Awaited<ReturnType<typeof requestJson>>;
+  try {
+    session = await requestJson(transport, "/models/session", signal,
+      { auto_mode: { model_hints: ["auto"] } }, undefined, beforeSend, concurrency);
+  } catch (error) { return fallBackOnSwitch(error); }
   const pool = strings(session.available_models);
   if (typeof session.session_token !== "string" || !session.session_token || session.session_token.length > 32_768 || !/^[\x21-\x7e]+$/.test(session.session_token) || !pool.length)
     throw new Error("GitHub Copilot Auto session omitted its routing credentials");
@@ -153,8 +170,11 @@ export async function resolveCopilotAuto(provider: OcxProviderConfig, requestedM
     ? typeof lastUser.content === "string" ? lastUser.content : lastUser.content.flatMap(/** Extract text parts for intent negotiation without forwarding image or other multimodal payloads. */
       part => part.type === "text" ? [part.text] : []).join("\n")
     : "";
-  const intent = await requestJson(transport, "/models/session/intent", signal,
-    { prompt: prompt.slice(0, 32_768), available_models: pool }, session.session_token, beforeSend, concurrency);
+  let intent: Awaited<ReturnType<typeof requestJson>>;
+  try {
+    intent = await requestJson(transport, "/models/session/intent", signal,
+      { prompt: prompt.slice(0, 32_768), available_models: pool }, session.session_token, beforeSend, concurrency);
+  } catch (error) { return fallBackOnSwitch(error); }
   const modelId = strings(intent.candidate_models).find(/** Choose the first server-ranked candidate that belongs to this credential-bound session pool. */
     candidate => pool.includes(candidate));
   if (!modelId) throw new Error("GitHub Copilot Auto intent returned no eligible model");

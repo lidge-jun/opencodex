@@ -10,7 +10,7 @@ description: ユーザー同意の境界を越えずに、エージェント主�
 公開されたパッケージをインストールし、`ocx` が `PATH` 上にあることを確認します。
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
 ```
 

@@ -4,7 +4,7 @@ contact_links:
     url: https://github.com/lidge-jun/opencodex/security/advisories/new
     about: Report undisclosed vulnerabilities privately to the maintainers. Do not open a public issue.
   - name: Security policy
-    url: https://github.com/lidge-jun/opencodex/blob/main/SECURITY.md
+    url: https://github.com/lidge-jun/opencodex/blob/dev/SECURITY.md
     about: Read the supported-version and reporting guidance before sharing security-sensitive details.
   - name: Contributing guide
     url: https://opencodex.me/contributing/

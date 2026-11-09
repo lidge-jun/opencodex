@@ -331,7 +331,7 @@ async function runPackageManagerSelfUpdate(manager, child) {
   const latestInvocation = managerInvocation(["view", `${PKG}@${selector}`, "version"]);
   const installArgs = manager === "pnpm"
     ? ["add", "-g", "--allow-build=bun", `${PKG}@${selector}`]
-    : ["install", "-g", `${PKG}@${selector}`];
+    : ["install", "-g", "--allow-scripts=bun", `${PKG}@${selector}`];
   const installInvocation = managerInvocation(installArgs);
   if (!latestInvocation || !installInvocation) {
     console.error(`opencodex: could not resolve ${manager} from a trusted absolute PATH entry; aborting before stopping the proxy.`);

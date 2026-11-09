@@ -1,4 +1,5 @@
 {
+  "local-control-socket.test.ts": "server",
   "config-concurrent-inbound-body.test.ts": "config",
   "inbound-body-admission.test.ts": "server",
   "inbound-body-budget.test.ts": "server",

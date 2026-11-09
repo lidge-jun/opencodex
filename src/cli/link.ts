@@ -11,11 +11,13 @@ import type { LinkLocalPeer, LinkPeerStatus } from "../link/compatibility";
 import { runLinkEnrollment } from "./link-enrollment";
 import { runLinkCleanup, type LinkCleanupDeps } from "./link-cleanup";
 import { assertSshAlias } from "../link/ssh-argv";
+import { boundHint } from "../link/ssh-runner";
 import { linkStorePath } from "../link/paths";
 import { isLinkPort } from "../link/ports";
 import { readLinkStore, type LinkDirection, type LinkStore } from "../link/store";
 import type { LinkChildKind } from "../link/store";
 import { findAvailablePort } from "../server/ports";
+import { viaLocalControlSocket, type LocalControlDeps } from "./link-local-control";
 import {
   CliUsageError,
   RuntimeApiError,
@@ -57,7 +59,7 @@ export interface LinkIssuePayload {
   listenerPort: number;
 }
 
-export interface LinkCliDeps extends RuntimeApiDeps, Omit<LinkCleanupDeps, "readStore"> {
+export interface LinkCliDeps extends RuntimeApiDeps, LocalControlDeps, Omit<LinkCleanupDeps, "readStore"> {
   /** Test seam can shorten, never extend, the whole enrollment deadline. */
   enrollmentTimeoutMs?: number;
   choosePort?: () => Promise<number>;
@@ -245,17 +247,22 @@ async function linkRequest<T>(path: string, init: RequestInit, deps: LinkCliDeps
   } catch (error) {
     if (error instanceof RuntimeApiError) {
       // Never echo an API error body: issue responses contain a one-time data key. Only the error
-      // code survives, because callers branch on it and a code is never secret.
+      // code, the server's already-bounded hint and the residual flag survive (errorCodeBody).
       throw new RuntimeApiError(`Link management request failed (${error.status})`, error.status, errorCodeBody(error.body));
     }
     throw error;
   }
 }
 
-function errorCodeBody(body: unknown): { error: { code: string }; residual?: true } | null {
+function errorCodeBody(body: unknown): { error: { code: string; hint?: string }; residual?: true } | null {
   if (!isRecord(body) || !isRecord(body.error)) return null;
   const code = body.error.code;
-  return typeof code === "string" && /^[a-z_]{1,64}$/.test(code) ? { error: { code }, ...(body.residual === true ? { residual: true as const } : {}) } : null;
+  if (typeof code !== "string" || !/^[a-z_]{1,64}$/.test(code)) return null;
+  // The hint is the only other field kept (#8357): the server builds it from a Child's last stderr
+  // line, already bounded and redacted, and it is bounded and redacted again here. The rest of
+  // the body is still never echoed.
+  const hint = typeof body.error.hint === "string" ? boundHint(body.error.hint) : undefined;
+  return { error: { code, ...(hint ? { hint } : {}) }, ...(body.residual === true ? { residual: true as const } : {}) };
 }
 
 async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {
@@ -300,7 +307,8 @@ async function runStatus(args: string[], deps: LinkCliDeps): Promise<void> {
   }
   // A proxy older than the compatibility report or the tunnel diagnostics ignores the query and
   // answers without those fields.
-  const result = validateStatus(await linkRequest<unknown>("/api/link/status?compatibility=1&diagnostics=1", {}, { ...deps, baseUrl }));
+  const result = validateStatus(await viaLocalControlSocket(baseUrl, deps,
+    statusDeps => linkRequest<unknown>("/api/link/status?compatibility=1&diagnostics=1", {}, statusDeps)));
   console.log(JSON.stringify(result));
 }
 

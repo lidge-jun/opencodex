@@ -104,12 +104,10 @@ commit'leri belirtin.
 
 ## Çekme istekleri
 
-- Hedef **`dev`** dalıdır. **`main`** dalına karşı özellik veya düzeltme çekme
-  istekleri açmayın.
-- **`main`** yerine geçerli **`dev`** ucundan dallanın. Gerekli
-  **`enforce-target`** denetimi, çekme isteği tabanının çok gerisinde kalırken
-  birleştirme tabanı **`main`** ucunda oturan head'leri reddeder (#644'te
-  görülen hata modu).
+- Hedef **`dev`** dalıdır ve aynı zamanda deponun varsayılan dalıdır.
+  **`main`** ve **`preview`**, tek dal modeli yürürlüğe girdiğinde silindi.
+  Gerekli **`enforce-target`** denetimi, tabanı **`dev`** dışında olan çekme
+  isteklerini reddeder (yığılmış alt PR'ler hariç).
 - Gerçek bir açıklama yazın: Neyin neden değiştiğine dair bir **Özet** (Summary)
   ve bir **Test planı** (veya eşdeğer içerik). Boş gövdeler, yalnızca yer tutucu
   metinler ve gerçek satır sonları yerine kaçışlı `\n` kullanan açıklamalar
@@ -127,7 +125,7 @@ commit'leri belirtin.
 ## Proje bakımcıları
 
 Mevcut bakımcılar, sorumlulukları ve inceleme ile birleştirme politikası
-[`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/main/MAINTAINERS.md)
+[`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/dev/MAINTAINERS.md)
 dosyasında belgelenmiştir. Depo ve güvenliğe duyarlı yollar için GitHub inceleme
 sahipliği `.github/CODEOWNERS` dosyasında bildirilmiştir.
 

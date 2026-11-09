@@ -519,7 +519,9 @@ Vercel AI Gateway는 하나의 모델을 여러 기반 추론 공급자에 걸�
 적용된 재정의와 여전히 일치할 때만 원래 네이티브 이름을 복원합니다. 외부에서 변경된 표시 이름도 기존 네이티브 메타데이터 정규화 규칙을 따릅니다.
 예를 들어 Astra (`gpt-6-astra`)는 고정된 네이티브 이름과 다른 이름을 여전히 그 고정 이름으로 교체합니다.
 표시 이름 재정의는 모델 ID, 기능을 포함한 메타데이터, 정렬 순서, 라우팅된 콤보 별칭 및 계정 선택자가 붙은 항목을 바꾸지 않습니다.
-이 로컬 카탈로그 재정의는 HTTP 모델 목록이나 가상 `*-pro` 항목의 이름을 바꾸지 않습니다.
+`GET /api/models`도 접두사 없는 네이티브 행에 비어 있지 않은 재정의 이름을 반환하므로 클라이언트 내보내기와 `ocx opencode`가 이 이름을 사용합니다.
+OpenCode는 `sol (native)`처럼 기존 접미사를 유지합니다. `ocx opencode`를 다시 실행하거나 관리형 통합을 새로 고치면 생성된 설정에 반영됩니다.
+재정의가 없을 때의 이름, `/v1/models`, 가상 `*-pro` 항목은 바뀌지 않습니다.
 
 프리뷰 GPT-5.6 폴백 항목도 같은 메커니즘을 사용합니다. OpenAI API 키 프리셋은 base와 Pro id에 컨텍스트 `1050000`, 최대 입력 `922000`을 채웁니다. OpenRouter는 `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`에 컨텍스트 `1050000`을 채웁니다. 네이티브 Pool/Direct 창은 [예약된 OpenAI 공급자 정책](/reference/configuration/providers/#reserved-openai-providers)을 따릅니다. 동기화된 카탈로그는 `xhigh`를 구분한 채 `max`를 노출합니다.
 

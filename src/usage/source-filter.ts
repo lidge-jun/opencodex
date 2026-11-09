@@ -4,6 +4,13 @@ export const USAGE_SOURCE_CLIENTS = [
   "all", "codex", "claude_code", "claude_desktop", "grok", "opencode", "aside", "other", "unknown",
 ] as const;
 export type UsageSourceClient = (typeof USAGE_SOURCE_CLIENTS)[number];
+/**
+ * The client labels a `codex` source filter includes, beyond legacy Codex-surface rows.
+ *
+ * The SQL candidate index derives its `IN (...)` list from this roster, so adding a Codex
+ * client here cannot silently narrow a filtered usage query.
+ */
+export const USAGE_CODEX_CLIENT_LABELS = ["codex_cli", "codex_desktop", "codex_ide"] as const;
 export type UsageDeviceFilter = { kind: "all" | "no-key" | "unconfigured" } | { kind: "key"; id: string };
 export interface UsageSourceFilter { client: UsageSourceClient; device: UsageDeviceFilter }
 
@@ -33,8 +40,9 @@ export function matchesUsageSource(entry: PersistedUsageEntry, filter: UsageSour
     || !entry.apiKeyId || configuredIds.has(entry.apiKeyId))) return false;
   if (filter.client === "all") return true;
   if (filter.client === "codex") {
-    return isLegacyCodexUsage(entry) || entry.client === "codex_cli"
-      || entry.client === "codex_desktop" || entry.client === "codex_ide";
+    return isLegacyCodexUsage(entry)
+      || (entry.client !== undefined
+        && (USAGE_CODEX_CLIENT_LABELS as readonly string[]).includes(entry.client));
   }
   if (filter.client === "unknown") return entry.client === "unknown" || (entry.client === undefined && !isLegacyCodexUsage(entry));
   return entry.client === filter.client;

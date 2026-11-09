@@ -14,12 +14,12 @@ import type { WorkspaceItem } from "../src/provider-workspace/catalog";
  */
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
-const WINDOW_EVENT_STUB: { event: undefined } = { event: undefined };
-let previous: Record<(typeof globals)[number], unknown>;
+let previous: Record<(typeof globals)[number], PropertyDescriptor | undefined>;
 let win: Window;
 let host: HTMLElement;
 let root: Root | null = null;
-let originalFetch: typeof globalThis.fetch;
+let originalFetch: PropertyDescriptor | undefined;
+let domIsSetup = false;
 
 const POOL_A = { name: "anthropic", adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" } as unknown as WorkspaceItem;
 const POOL_B = { ...POOL_A, name: "anthropic2", anthropicOAuthInstance: "anthropic2" } as unknown as WorkspaceItem;
@@ -33,9 +33,17 @@ function rows(pool: string, active: Partial<OAuthAccountRow>): OAuthAccountRow[]
   ] as OAuthAccountRow[];
 }
 
-beforeEach(() => {
-  previous = Object.fromEntries(globals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previous;
-  originalFetch = globalThis.fetch;
+const originalDescriptors = new Map<string, PropertyDescriptor | undefined>(
+  [...globals, "fetch"].map((k) => [k, Object.getOwnPropertyDescriptor(globalThis, k)]),
+);
+
+beforeEach(setupDom);
+
+function setupDom(): void {
+  previous = Object.fromEntries(globals.map((k) => [k, Object.getOwnPropertyDescriptor(globalThis, k)])) as typeof previous;
+  originalFetch = Object.getOwnPropertyDescriptor(globalThis, "fetch");
+  // Armed before the first mutation, so a setup failure still restores what it changed.
+  domIsSetup = true;
   win = new Window({ url: "http://localhost/" });
   Object.defineProperty(win.navigator, "language", { configurable: true, value: "en-US" });
   Object.defineProperty(win, "event", { configurable: true, writable: true, value: undefined });
@@ -52,9 +60,13 @@ beforeEach(() => {
   });
   host = win.document.createElement("div") as unknown as HTMLElement;
   win.document.body.appendChild(host as never);
-});
+}
 
-afterEach(async () => {
+afterEach(teardownDom);
+
+async function teardownDom(): Promise<void> {
+  if (!domIsSetup) return;
+  domIsSetup = false;
   if (root) {
     const current = root;
     await act(async () => { current.unmount(); });
@@ -66,23 +78,15 @@ afterEach(async () => {
       await Promise.resolve();
     }
   });
-  for (const key of globals) {
-    let value = previous[key];
-    if (key === "window") {
-      if (value == null || typeof value !== "object") {
-        value = WINDOW_EVENT_STUB;
-      } else if (!Object.prototype.hasOwnProperty.call(value, "event")) {
-        try {
-          Object.defineProperty(value, "event", { configurable: true, writable: true, value: undefined });
-        } catch {
-          value = WINDOW_EVENT_STUB;
-        }
-      }
-    }
-    Object.defineProperty(globalThis, key, { configurable: true, value });
-  }
-  Object.defineProperty(globalThis, "fetch", { configurable: true, value: originalFetch });
-});
+  // Restore the exact descriptors; a global that was absent is deleted, never stubbed (#8344).
+  for (const key of globals) restoreOwnProperty(globalThis, key, previous[key]);
+  restoreOwnProperty(globalThis, "fetch", originalFetch);
+}
+
+function restoreOwnProperty(target: object, key: PropertyKey, descriptor: PropertyDescriptor | undefined): void {
+  if (descriptor) Object.defineProperty(target, key, descriptor);
+  else Reflect.deleteProperty(target, key);
+}
 
 /** Mounts ProviderDetails on its default Overview tab and returns the rendered text. */
 async function overviewText(
@@ -194,4 +198,28 @@ test("other OAuth providers keep the login identity in the Overview", async () =
   const text = await overviewText(OTHER, rows("xai", { alias: "Work" }), "s***d@xai.test");
   expect(text).toContain("Logged in as s***d@xai.test");
   expect(currentAccount()).toBeUndefined();
+});
+
+/** #8344: teardown must leave every global exactly as it found it, absent ones included. */
+test("teardown restores the original global property descriptors exactly", async () => {
+  const keys = [...globals, "fetch"] as const;
+  const expected = new Map(keys.map((k) => [k, originalDescriptors.get(k)]));
+  await teardownDom();
+  for (const k of keys) expect(Object.getOwnPropertyDescriptor(globalThis, k)).toEqual(expected.get(k));
+});
+
+/** #8344: a window that already existed comes back as the same object, without an added `event`. */
+test("teardown leaves a pre-existing window object untouched", async () => {
+  await teardownDom();
+  const priorWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const existing = { marker: "pre-existing" };
+  Object.defineProperty(globalThis, "window", { configurable: true, writable: true, value: existing });
+  try {
+    setupDom();
+    await teardownDom();
+    expect((globalThis as { window?: unknown }).window).toBe(existing);
+    expect(Object.getOwnPropertyNames(existing)).toEqual(["marker"]);
+  } finally {
+    restoreOwnProperty(globalThis, "window", priorWindow);
+  }
 });

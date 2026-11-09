@@ -127,6 +127,15 @@ formatting is the only allowlisted work between that authorizer and process crea
 `tests/update/update-home-launcher.test.ts` and `tests/update/update-home-recovery.test.ts`
 exercise refusal when preparation changes the home observation, plus stable-home starts.
 
+The npm install argv that `updateCommand()` (and the Node launcher's own npm self-update) builds
+always carries `--allow-scripts=bun`: npm 12 blocks dependency lifecycle scripts by default, and
+bun's postinstall is what unpacks the bundled runtime, so a bare global install would leave the
+next `ocx` unable to start (#8361). npm 8 through 11 accept the flag on global installs, so it is
+not version-gated. The npm package replacement stages beside the live tree and stops the proxy
+before the swap, which is also what releases `node_modules/bun/bin` on Windows; a manual
+`npm install -g` under a live proxy still fails with `EBUSY`, so doctor prints the stop, install
+and restart sequence for npm-owned installs instead of attempting it.
+
 The bypass ledger classifies these guards as **early warning**, not enforcement:
 
 | Guard | Surface / tier | Known limit and residual risk | Pass-through assertion |
