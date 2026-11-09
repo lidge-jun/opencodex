@@ -822,6 +822,9 @@ On macOS, launchd instead uses the package-local Bun and CLI paths selected duri
 repair. This prevents a mutable PATH shim from receiving the service API token and configured proxy
 environment on a later restart. After upgrading a version-manager installation, run
 `ocx service repair` to refresh those paths before restarting the service.
+The macOS agent uses launchd's `Interactive` resource policy because Codex and dashboard requests
+depend on its responsiveness. This avoids the default daemon CPU and I/O throttling under load.
+After upgrading an existing installation, `ocx service repair` applies this policy as well.
 Launchd restarts the proxy after a crash or failed restart handoff, but leaves it stopped when
 the service deliberately exits cleanly because the desktop app owns the runtime. Run
 `ocx service repair` once to apply this behavior to a service installed by an older version.

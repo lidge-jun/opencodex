@@ -173,6 +173,24 @@ describe("installLaunchd: repair must not be an outage (#4236 defect 1)", () => 
     expect(existsSync(`${plistPath}.prev`)).toBe(false);
   });
 
+  test("repair upgrades the launchd resource policy once and preserves it on later repairs", () => {
+    const current = renderedPlist();
+    const policy = /\s*<key>ProcessType<\/key><string>Interactive<\/string>/;
+    expect(current).toMatch(policy);
+    const legacy = current.replace(policy, "");
+    const plistPath = fixturePlist();
+    writeFileSync(plistPath, legacy);
+    const first = recordingLaunchctl({ bootstrap: [ok()] });
+    expect(installLaunchd({ launchctl: first.launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} }).reloaded).toBe(true);
+    expect(verbs(first.argv)).toContain("bootout");
+    expect(verbs(first.argv)).toContain("bootstrap");
+    expect(readFileSync(plistPath, "utf8")).toBe(current);
+    const again = recordingLaunchctl({});
+    installLaunchd({ launchctl: again.launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} });
+    expect(again.argv).toEqual([]);
+    expect(readFileSync(plistPath, "utf8")).toBe(current);
+  });
+
   /**
    * Review finding 2. `buildPlist` bakes `process.env.PATH`, so the byte comparison above
    * only holds for a repair run from the same shell that installed the service. From a tray

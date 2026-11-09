@@ -50,8 +50,21 @@ export function withCredentialPublicationFence<T>(home: string, fn: () => T, wai
   try { return fn(); } finally { release(); }
 }
 
+/** Await a peer without using SQLite's blocking busy handler on the serving thread. */
 export async function withCredentialPublicationFenceAsync<T>(home: string, fn: () => Promise<T>): Promise<T> {
-  const release = acquire(home, CREDENTIAL_FENCE_WRITER_WAIT_MS);
+  const deadline = performance.now() + CREDENTIAL_FENCE_WRITER_WAIT_MS;
+  let release: () => void;
+  for (;;) {
+    try { release = acquire(home, 0); break; }
+    catch (error) {
+      const remaining = deadline - performance.now();
+      if (!String((error as { code?: unknown })?.code ?? "").startsWith("SQLITE_BUSY") || remaining <= 0) throw error;
+      // A native SQLite busy wait blocks every HTTP request in this process.
+      // Keep the same total budget while letting the serving event loop run.
+      await new Promise<void>(resolve => setTimeout(resolve, Math.min(25, remaining)));
+      if (performance.now() >= deadline) throw error;
+    }
+  }
   try { return await fn(); } finally { release(); }
 }
 

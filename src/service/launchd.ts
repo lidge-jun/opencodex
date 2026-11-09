@@ -55,6 +55,8 @@ export function buildPlist(
       `    <key>${name}</key><string>${plistString(value, name)}</string>`),
   ].filter((line): line is string => Boolean(line)).join("\n");
   const command = launchdServiceCommand(runtime, resolveServiceListenPort(), homes);
+  // This agent serves interactive Codex/GUI requests. launchd's default class
+  // throttles CPU and I/O under load; Adaptive requires XPC transactions we do not use.
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -67,6 +69,7 @@ export function buildPlist(
     <string>${plistString(command, "the service command")}</string>
   </array>
   <key>RunAtLoad</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>EnvironmentVariables</key>
   <dict>

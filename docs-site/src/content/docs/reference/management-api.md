@@ -721,6 +721,12 @@ API page. The CLI drives these routes with `ocx api protocols`, `ocx api explain
 [API surfaces](/reference/configuration/server/#api-surfaces-apisurfaces) for how the Messages
 setting interacts with `claudeCode.enabled` across upgrades and downgrades.
 
+### Health during local credential updates
+
+When an asynchronous native-profile update waits for another local process to release the
+credential-publication lock, `/healthz` can still answer. The update keeps its existing 10-second
+lock-acquisition deadline and starts writing only after it owns the lock.
+
 ### Home identity and the served-by header
 
 `GET /healthz` includes `instanceId`, this install's opaque Home id: `home_` followed by 32 hex
