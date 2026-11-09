@@ -144,6 +144,12 @@ test("policy-only API writes refresh warm estimate, summary and aggregate caches
       expect(changed.summary.estimatedCostUsd).toBeCloseTo(total, 12);
       expect(changed.models[0].estimatedCostUsd).toBeCloseTo(total, 12);
       expect(getUsageSummaryCacheEntry("all:all")).not.toBe(summaryCache);
+      // The policy write saved config.json, which changed the config directory, so the next
+      // config load started another Windows directory ACL harden. Its inherited-ACE rewrite moves
+      // only usage.jsonl's ChangeTime (batch 42694893702, stage 2: ctimeMs alone moved between
+      // stages), and the aggregate rightly rebuilds when it lands. Settle it before recording
+      // the base the next stage's warm read compares against, as after startServer above.
+      await flushConfigDirHardeningAndReaps(home);
       const refreshedAggregate = await getUsageAggregate({ now });
       expect(refreshedAggregate.accumulator).not.toBe(aggregate.accumulator);
       expect(refreshedAggregate.accumulator.summarize("all", now).summary.estimatedCostUsd).toBeCloseTo(total, 12);
