@@ -7,7 +7,7 @@ import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch"
 import { loginPollAttempts } from "../oauth-login-budget";
 import type { OAuthAccount, OAuthStatus } from "./providers-shared";
 import { oauthLabel } from "./providers-shared";
-import { captureApiTarget, targetFetch } from "../api";
+import { captureApiTarget, targetFetch, type ApiTargetCapture } from "../api";
 
 type AccountSet = { activeAccountId: string | null; accounts: OAuthAccount[] };
 
@@ -61,6 +61,7 @@ export function useProvidersOAuth({
   const targetKeyRef = useRef(targetKey ?? apiBase);
   useLayoutEffect(() => { targetKeyRef.current = targetKey ?? apiBase; }, [apiBase, targetKey]);
   const activeLoginGenerationsRef = useRef(new Map<string, number>());
+  const activeLoginCapturesRef = useRef(new Map<string, ApiTargetCapture>());
 
   const bumpLoginGeneration = useCallback((provider: string) => {
     const gen = (oauthLoginGenerationRef.current!.get(provider) ?? 0) + 1;
@@ -69,7 +70,7 @@ export function useProvidersOAuth({
   }, []);
 
   const cancelServerLogin = useCallback((provider: string) =>
-    cancelOAuthLogin(apiBase, provider), [apiBase]);
+    cancelOAuthLogin(activeLoginCapturesRef.current.get(provider) ?? captureApiTarget("shared"), provider), []);
 
   const reloadAccountsAfterLogin = useCallback(async (provider: string) => {
     const knownProviders = Object.keys(accountSets);
@@ -131,6 +132,7 @@ export function useProvidersOAuth({
 
   const loginOAuth = async (provider: string, addAccount = false, accountId?: string) => {
     const capture = captureApiTarget("shared");
+    activeLoginCapturesRef.current.set(provider, capture);
     const generation = bumpLoginGeneration(provider);
     const targetId = targetKey ?? apiBase;
     const targetCurrent = () => aliveRef.current && targetKeyRef.current === targetId;
@@ -140,7 +142,7 @@ export function useProvidersOAuth({
     setStatus("");
     setLoginInfo(null);
     try {
-      const res = await afterOAuthCancellation(apiBase, provider, () => {
+      const res = await afterOAuthCancellation(capture, provider, () => {
         if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
         return targetFetch(capture, `${apiBase}/api/oauth/login`, {
           method: "POST",
@@ -270,6 +272,7 @@ export function useProvidersOAuth({
     } finally {
       if (activeLoginGenerationsRef.current.get(provider) === generation) {
         activeLoginGenerationsRef.current.delete(provider);
+        activeLoginCapturesRef.current.delete(provider);
       }
       if (targetCurrent() && oauthLoginGenerationRef.current!.get(provider) === generation) setBusy(current => current === provider ? null : current);
     }

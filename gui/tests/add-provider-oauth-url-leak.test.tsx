@@ -8,6 +8,8 @@ import AddProviderModal from "../src/components/AddProviderModal";
 import { OAUTH_LOGIN_POLL_INTERVAL_MS } from "../src/components/use-add-provider-oauth";
 import { useProvidersOAuth } from "../src/pages/use-providers-oauth";
 import type { OAuthAccount, OAuthStatus } from "../src/pages/providers-shared";
+import { configureApiTargets } from "../src/api";
+import { standaloneApiTargets } from "../src/api-targets";
 
 /**
  * The add-provider OAuth pane renders the authorization URL so a user whose
@@ -163,6 +165,7 @@ function ProvidersOAuthHarness({ provider = "orcarouter-oauth", apiBase = "", on
 }
 
 async function mountProvidersOAuthHarness(props: Parameters<typeof ProvidersOAuthHarness>[0] = {}) {
+  configureApiTargets(standaloneApiTargets(props.apiBase ?? ""));
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     root = createRoot(host);

@@ -6,6 +6,7 @@ import { afterOAuthCancellation, cancelOAuthLogin } from "../oauth-cancellation-
 import type { LoginHintData } from "./login-url-block";
 import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch";
 import { loginPollAttempts } from "../oauth-login-budget";
+import { captureApiTarget, targetFetch, type ApiTargetCapture } from "../api";
 
 export const OAUTH_LOGIN_POLL_INTERVAL_MS = 2_000;
 
@@ -32,6 +33,7 @@ export function useAddProviderOAuth({
 }) {
   const loginGenerationRef = useRef(new Map<string, number>());
   const activeProvidersRef = useRef(new Map<string, OAuthLoginSetters>());
+  const activeCapturesRef = useRef(new Map<string, ApiTargetCapture>());
 
   const bumpLoginGeneration = useCallback((providerId: string) => {
     const generation = (loginGenerationRef.current.get(providerId) ?? 0) + 1;
@@ -40,7 +42,7 @@ export function useAddProviderOAuth({
   }, []);
 
   const cancelServerLogin = useCallback((providerId: string) =>
-    cancelOAuthLogin(apiBase, providerId), [apiBase]);
+    cancelOAuthLogin(activeCapturesRef.current.get(providerId) ?? captureApiTarget("shared"), providerId), []);
 
   useEffect(() => {
     const cancelActiveLogins = (clearUi: boolean) => {
@@ -83,6 +85,8 @@ export function useAddProviderOAuth({
     providerId: string,
     setters: OAuthLoginSetters,
   ) => {
+    const capture = captureApiTarget("shared");
+    activeCapturesRef.current.set(providerId, capture);
     const { setOauthBusy, setOauthMsg, setOauthMsgTone, setOauthUrl, setManualCode, setManualCodeMsg, setManualCodeOk } = setters;
     const generation = bumpLoginGeneration(providerId);
     const isCurrent = () => loginGenerationRef.current.get(providerId) === generation;
@@ -95,9 +99,9 @@ export function useAddProviderOAuth({
     setManualCodeMsg("");
     setManualCodeOk(true);
     try {
-      const res = await afterOAuthCancellation(apiBase, providerId, () => {
+      const res = await afterOAuthCancellation(capture, providerId, () => {
         if (!aliveRef.current || !isCurrent()) return;
-        return fetch(`${apiBase}/api/oauth/login`, {
+        return targetFetch(capture, `${apiBase}/api/oauth/login`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ provider: providerId, ...openBrowserRequestField() }),
@@ -164,6 +168,7 @@ export function useAddProviderOAuth({
         setOauthMsg(t("modal.networkError"));
       }
     } finally {
+      activeCapturesRef.current.delete(providerId);
       if (aliveRef.current && isCurrent()) {
         setOauthBusy(false);
         setOauthUrl("", providerId);

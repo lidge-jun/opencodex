@@ -11,7 +11,7 @@ import { chooseOption, selectTrigger } from "./helpers/custom-select";
 async function renderSettings(
   item: WorkspaceItem,
   onUpdateProvider: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean }>,
-): Promise<HTMLDivElement & { unmount: () => void }> {
+): Promise<HTMLDivElement & { unmount: () => void; rerender: (next: WorkspaceItem) => Promise<void> }> {
   const container = document.createElement("div");
   document.body.append(container);
   const { createRoot } = await import("react-dom/client");
@@ -24,7 +24,18 @@ async function renderSettings(
       onUpdateProvider={onUpdateProvider}
     /></LanguageProvider>);
   });
-  return Object.assign(container, { unmount: () => root.unmount() });
+  return Object.assign(container, {
+    unmount: () => root.unmount(),
+    rerender: async (next: WorkspaceItem) => {
+      await act(async () => {
+        root.render(<LanguageProvider><ProviderSettings
+          item={next}
+          availableModels={["deepseek-ai/deepseek-v4-flash-0731"]}
+          onUpdateProvider={onUpdateProvider}
+        /></LanguageProvider>);
+      });
+    },
+  });
 }
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -279,4 +290,21 @@ test("nonempty invalid RPM, delay and model values are rejected instead of silen
   await act(async () => { container.querySelector<HTMLButtonElement>(".pwi-pacing-grid--model button")!.click(); });
   expect(container.textContent).toContain("Enter a valid pacing value");
   expect(container.querySelector(".pwi-pacing-overrides")).toBeNull();
+});
+
+test("a same-field pacing conflict lists its path and Keep resolves it", async () => {
+  const patches: ProviderUpdatePatch[] = [];
+  const item: WorkspaceItem = { name: "fixture", adapter: "openai-chat", baseUrl: "https://example.test", authMode: "key",
+    requestPacing: { enabled: true, requestsPerMinute: 30 } };
+  const container = await renderSettings(item, async (_name, patch) => { patches.push(patch); return { ok: true }; });
+  const numbers = container.querySelectorAll<HTMLInputElement>('.pwi-pacing-grid:not(.pwi-pacing-grid--model) input[type="number"]');
+  await setInput(numbers[0]!, "31");
+  await container.rerender({ ...item, requestPacing: { enabled: true, requestsPerMinute: 32 } });
+  expect(container.textContent).toContain("pacing.requestsPerMinute");
+  const keep = [...container.querySelectorAll<HTMLButtonElement>("button")].find(candidate => candidate.textContent === "Keep my draft")!;
+  await act(async () => { keep.click(); });
+  expect(container.textContent).not.toContain("pacing.requestsPerMinute");
+  const save = container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!;
+  await act(async () => { save.click(); await Promise.resolve(); });
+  expect(patches[0]?.requestPacing?.requestsPerMinute).toBe(31);
 });

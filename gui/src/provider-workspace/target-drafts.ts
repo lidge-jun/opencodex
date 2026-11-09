@@ -249,6 +249,39 @@ export function mergeProviderPacing(
   return merged;
 }
 
+/** Paths where the user and the latest saved pacing both changed the same value. */
+export function providerPacingConflicts(
+  baseline: ProviderSettingsDraft,
+  draft: ProviderSettingsDraft,
+  latest: WorkspaceItem["requestPacing"],
+): string[] {
+  const base = draftRequestPacing(baseline);
+  const next = draftRequestPacing(draft);
+  const saved = latest ?? { enabled: false };
+  const conflicts: string[] = [];
+  const changed = (a: unknown, b: unknown) => providerSettingsValueSignature(a) !== providerSettingsValueSignature(b);
+  for (const field of ["enabled", "requestsPerMinute", "minIntervalMs", "maxConcurrentRequests", "keySelection"] as const) {
+    if (changed(next[field], base[field]) && changed(saved[field], base[field]) && changed(next[field], saved[field])) {
+      conflicts.push(`pacing.${field}`);
+    }
+  }
+  for (const field of ["requestsPerMinute", "minIntervalMs", "maxConcurrentRequests"] as const) {
+    if (changed(next.keys?.[field], base.keys?.[field]) && changed(saved.keys?.[field], base.keys?.[field])
+      && changed(next.keys?.[field], saved.keys?.[field])) conflicts.push(`pacing.keys.${field}`);
+  }
+  const models = new Set([...Object.keys(base.models ?? {}), ...Object.keys(next.models ?? {}), ...Object.keys(saved.models ?? {})]);
+  for (const model of models) {
+    for (const field of ["requestsPerMinute", "minIntervalMs", "maxConcurrentRequests"] as const) {
+      if (changed(next.models?.[model]?.[field], base.models?.[model]?.[field])
+        && changed(saved.models?.[model]?.[field], base.models?.[model]?.[field])
+        && changed(next.models?.[model]?.[field], saved.models?.[model]?.[field])) {
+        conflicts.push(`pacing.models.${model}.${field}`);
+      }
+    }
+  }
+  return conflicts;
+}
+
 /**
  * Does this draft differ from the saved provider in a field the Settings tab can write?
  *

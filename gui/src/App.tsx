@@ -29,6 +29,7 @@ import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } fro
 import { Notice, Select, ToastNotice, type NoticeTone } from "./ui";
 import { bootstrapApiSession, configureApiTargets, DEVICE_PROOF_CHANGED_EVENT, hasApiSession, hasRememberedDashboardDevice, installApiAuthFetch, logoutApiSession, SESSION_CHANGED_EVENT, SESSION_UNAVAILABLE_EVENT, TARGET_CHANGED_EVENT } from "./api";
 import { apiBaseForPlane, apiTargetIdentity, ClientStateChangedError, discoverApiTargets, isConnectedRuntime, runtimeRoleFromDocument, standaloneApiTargets, type ApiTargets } from "./api-targets";
+import { createTargetDiscovery } from "./api-target-lifecycle";
 import { ConnectPairingForm } from "./connect-pairing";
 import { validateRemoteLinkSession } from "./connect-pairing-transport";
 import { type Page } from "./app-routing";
@@ -197,48 +198,21 @@ export default function App() {
     return () => { window.removeEventListener(SESSION_UNAVAILABLE_EVENT, unavailable); window.removeEventListener(SESSION_CHANGED_EVENT, changed); window.removeEventListener(DEVICE_PROOF_CHANGED_EVENT, proofChanged); };
   }, []);
 
-  const discoveryInFlightRef = useRef<Promise<void> | null>(null);
-  const discoveryPendingRef = useRef(false);
-  const refreshTargetsRef = useRef<() => Promise<void>>(() => Promise.resolve());
-  const refreshTargets = useCallback((): Promise<void> => {
-    if (discoveryInFlightRef.current) {
-      discoveryPendingRef.current = true;
-      return discoveryInFlightRef.current;
-    }
-    const run = async () => {
-      const controller = new AbortController();
-      try {
-        const next = await discoverApiTargets(API_BASE, controller.signal);
-        if (controller.signal.aborted) return;
-        configureApiTargets(next);
-        setTargets(next);
-        if (next.connected && !hasApiSession("shared")) {
-          await bootstrapApiSession("shared", controller.signal);
-        }
-        if (controller.signal.aborted) return;
-        setSharedSessionReady(hasApiSession("shared"));
-        setTargetError(null);
-        setTargetsSettled(true);
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        setTargetError(error instanceof ClientStateChangedError ? "client-state-changed" : "unavailable");
-        setTargetsSettled(true);
-      }
-    };
-    const inFlight = run().finally(() => {
-      discoveryInFlightRef.current = null;
-      if (discoveryPendingRef.current) {
-        discoveryPendingRef.current = false;
-        void refreshTargetsRef.current();
-      }
-    });
-    discoveryInFlightRef.current = inFlight;
-    return inFlight;
-  }, []);
-  useEffect(() => { refreshTargetsRef.current = refreshTargets; }, [refreshTargets]);
-  useEffect(() => { void refreshTargets(); }, [refreshTargets]);
   useEffect(() => {
-    const refresh = () => { void refreshTargets(); };
+    const discovery = createTargetDiscovery({
+      initialBase: API_BASE,
+      discover: discoverApiTargets,
+      configure: configureApiTargets,
+      bootstrap: bootstrapApiSession,
+      hasSession: hasApiSession,
+      onTargets: setTargets,
+      onSessionReady: setSharedSessionReady,
+      onError: setTargetError,
+      onSettled: setTargetsSettled,
+      isClientStateChanged: error => error instanceof ClientStateChangedError,
+    });
+    void discovery.refresh();
+    const refresh = () => { void discovery.refresh(); };
     const visibility = () => { if (document.visibilityState === "visible") refresh(); };
     for (const event of [SESSION_CHANGED_EVENT, DEVICE_PROOF_CHANGED_EVENT, TARGET_CHANGED_EVENT]) {
       window.addEventListener(event, refresh);
@@ -246,13 +220,14 @@ export default function App() {
     window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", visibility);
     return () => {
+      discovery.dispose();
       for (const event of [SESSION_CHANGED_EVENT, DEVICE_PROOF_CHANGED_EVENT, TARGET_CHANGED_EVENT]) {
         window.removeEventListener(event, refresh);
       }
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", visibility);
     };
-  }, [refreshTargets]);
+  }, []);
   const machineBase = apiBaseForPlane("machine", targets);
   const sharedBase = apiBaseForPlane("shared", targets);
   const sharedTarget = apiTargetIdentity(targets);

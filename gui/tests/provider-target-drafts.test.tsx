@@ -11,6 +11,7 @@ import { LanguageProvider } from "../src/i18n/provider";
 import { useJsonConfigEditor, type Config } from "../src/hooks/useJsonConfigEditor";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 import { createProviderDraftStore } from "../src/provider-workspace/target-drafts";
+import { TARGET_PREFLIGHT_LEGACY_EVENT } from "../src/api";
 
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "HTMLElement", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previous: Record<string, unknown>;
@@ -619,5 +620,28 @@ describe("Provider drafts follow the logical dashboard target", () => {
 
     expect(host.textContent).toContain("Provider B");
     expect(host.textContent).not.toContain("Loading…");
+  });
+
+  test("the legacy preflight notice is shown on the current logical target", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === "/same/api/config") return Response.json({ port: 0, defaultProvider: "provider-a", providers: {
+        "provider-a": { adapter: "openai-chat", baseUrl: "https://a.example.test/v1", hasApiKey: true },
+      } });
+      if (path.endsWith("/api/oauth/providers") || path.endsWith("/api/provider-presets")) return Response.json({ providers: [] });
+      if (path.endsWith("/api/selected-models")) return Response.json({ selected: {}, available: {}, liveModelCounts: {} });
+      if (path.endsWith("/api/models")) return Response.json([]);
+      if (path.endsWith("/api/provider-quotas")) return Response.json({ reports: [] });
+      if (path.endsWith("/api/usage")) return Response.json({ providers: [], models: [] });
+      if (path.endsWith("/api/codex-auth/accounts")) return Response.json({ accounts: [] });
+      return Response.json({});
+    }) as typeof fetch;
+
+    await render(<Providers apiBase="/same" targetKey="hub-a" />);
+    await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
+    await act(async () => {
+      window.dispatchEvent(new win.CustomEvent(TARGET_PREFLIGHT_LEGACY_EVENT, { detail: { targetKey: "hub-a" } }));
+    });
+    expect(document.body.textContent).toContain("This proxy checks the save target before sending");
   });
 });

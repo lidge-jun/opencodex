@@ -40,6 +40,7 @@ import {
   providerSettingsPacingDirty,
   providerSettingsDraftSignature,
   providerSettingsDeltaPatch,
+  providerPacingConflicts,
   rebaseProviderSettingsDraft,
   type ProviderDraftStore,
   type ProviderSettingsDraft,
@@ -175,8 +176,9 @@ function ProviderSettingsForm({
   /** The bar follows the saved item until its refresh lands, even after a confirmed save. */
   const dirty = edited || fieldsDirty || pacingDirty;
   const baselineChanged = providerSettingsDirty(baseline, item);
+  const pacingConflictPaths = providerPacingConflicts(baseline, draft, item.requestPacing);
   /** Saved values moved under a dirty draft; the user must choose a side. */
-  const conflict = edited && baselineChanged;
+  const conflict = (edited && baselineChanged) || pacingConflictPaths.length > 0;
   const targetKeyRef = useRef(targetKey);
   const baseUrlRef = useRef(baseUrl);
   const editedRef = useRef(edited);
@@ -658,6 +660,12 @@ function ProviderSettingsForm({
       {conflict && (
         <div className="pwi-settings-conflict" role="alert">
           <p>{t("pws.draftConflict")}</p>
+          {pacingConflictPaths.length > 0 && (
+            <div className="pwi-settings-conflict-fields">
+              <p>{t("pws.draftConflictFields")}</p>
+              <ul>{pacingConflictPaths.map(path => <li key={path}><code>{path}</code></li>)}</ul>
+            </div>
+          )}
           <div className="pwi-settings-sticky-bar-actions">
             <button type="button" className="btn btn-ghost btn-sm" onClick={useSavedValues} disabled={saving}>{t("pws.draftConflictUseSaved")}</button>
             <button type="button" className="btn btn-primary btn-sm" onClick={keepDraft} disabled={saving}>{t("pws.draftConflictKeepDraft")}</button>
