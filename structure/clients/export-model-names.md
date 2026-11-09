@@ -10,9 +10,20 @@ The public builders in `src/clients/config-export.ts` apply the policy;
 serializers consume the resulting rows without performing alias lookups.
 Other exporters reject alias mode and retain routed output. Combos retain their
 existing public key in either mode. `preferModelAliasIds` has no effect here.
-Pi exports the raw nested upstream model ID when the routed row uses its encoded
-Codex selector; explicit aliases, native rows and synthetic Fast selectors remain
-unchanged. Other Pi-format clients keep their existing selector spelling.
+Pi exports the raw nested upstream selector (`provider/org/model`) in place of a
+row's encoded key (`provider/org-model`) only where the serving proxy proved it
+(#8172). `src/clients/config-export/nested-selectors.ts` runs in
+`loadExportModels` against the admitted configuration and the router inventory
+of that load, with the same proof as an alias: the raw selector and, for a Fast
+row, its `--fast` form must reach the encoded key's concrete provider, model and
+account, and no other row of the full roster may claim it. A cold inventory, a
+self-namespaced model that owns the raw spelling, a policy/combo result or a
+collision keeps the encoded key. `ocx export --client pi` therefore fetches its
+document from `/api/client-config`; the CLI's saved configuration never proves
+a selector. A managed Pi Apply or overwrite re-proves captured selectors against
+the live configuration in `src/integrations/model-name-guard.ts` and refuses
+with conflict when one changed. Explicit aliases and native rows keep their keys,
+and other Pi-format clients keep the encoded spelling.
 
 ## Selector proof
 

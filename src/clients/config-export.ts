@@ -29,7 +29,7 @@ import { shouldInjectApiAuthHeader, standaloneCodexRoutingTarget } from "../code
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
 import { fileIO } from "../integrations/config-io";
 import { canonicalizeReasoningEfforts } from "../reasoning-effort";
-import { routedSlug } from "../providers/slug-codec";
+import { selectNestedSelectors } from "./config-export/nested-selectors";
 import { expandFastExportModels } from "./config-export/fast-models";
 import { namedExportContext } from "./config-export/alias-selectors";
 import { probeHostname } from "../server/proxy-liveness";
@@ -897,7 +897,10 @@ export interface PiProviderCompat {
 
 interface PiExportOptions {
   sendSessionAffinityHeaders?: boolean;
-  /** Preserve upstream nested model IDs in Pi's routed selectors. */
+  /**
+   * Use the raw nested upstream selector the serving proxy proved for a row (#8172). A row
+   * without that proof keeps its canonical key.
+   */
   rawNestedModelIds?: boolean;
   /**
    * Tell Pi to send its system prompt as `system` rather than `developer` (#5664).
@@ -1070,7 +1073,8 @@ export interface GajaeGeneratedConfig {
  */
 function buildPiClientConfig(ctx: ExportContext, options: PiExportOptions = {}): PiGeneratedConfig {
   const models: PiModelEntry[] = [];
-  for (const model of normalizeExportModels(ctx.models)) {
+  const roster = options.rawNestedModelIds ? selectNestedSelectors(ctx.models) : ctx.models;
+  for (const model of normalizeExportModels(roster)) {
     // Text is the one modality every routed model supports; anything richer must come
     // from the catalog rather than an assumption — and must still be inside the enum
     // Pi accepts, because one rejected value empties the whole config.
@@ -1079,11 +1083,7 @@ function buildPiClientConfig(ctx: ExportContext, options: PiExportOptions = {}):
     // would fail at call time instead, so the row is dropped.
     if (input === null) continue;
     const entry: PiModelEntry = {
-      id: options.rawNestedModelIds && !model.native && typeof model.provider === "string"
-        && model.provider.length > 0 && model.provider !== "combo"
-        && typeof model.id === "string" && model.id.includes("/")
-        && model.namespaced === routedSlug(model.provider, model.id)
-        ? `${model.provider}/${model.id}` : model.namespaced,
+      id: model.namespaced,
       name: exportModelLabel(model),
       input,
     };
