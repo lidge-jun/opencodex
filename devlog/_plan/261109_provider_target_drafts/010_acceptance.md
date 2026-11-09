@@ -107,3 +107,25 @@ Browser fixture remap: run an isolated client machine listener on one fixed loop
 - Fixed-port browser fixture restart creates fresh machine management auth state; the real App must re-bootstrap its machine session and reconcile shared readiness. No retained test token is injected to hide session recovery.
 
 Audit receipt: same independent reviewer task 8325-audit-plan-r4 concluded VERDICT: PASS, four earlier blockers closed. Seven nonblocking clarifications above are folded without changing the selected architecture. Final code reviews and actual E2E/CI remain outstanding.
+
+## Revision 5: capture ownership at the data owner and dialog boundary
+
+The e207 review found that the transport was fenced but the capture was created one
+level too late. This revision records the corrected ownership, without changing the
+selected architecture.
+
+- A rendered surface owns its capture. `useRenderTargetCapture(apiBase, targetKey)`
+  creates it on the render that last saw that target identity and replaces it only when
+  the identity changes. A module target change that has not re-rendered the surface
+  cannot retarget its next action.
+- `onUpdateProvider(name, patch, capture?)` is the typed callback. The form passes its
+  render capture; `ProviderDetails` injects its own for Overview notes and the xAI
+  toggle; `useProvidersCrud.updateProvider` uses the passed capture and never replaces
+  it with a live one. Account mode captures before its confirmation dialog.
+- A remove confirmation captures when it opens and refuses after a target change,
+  including A-B-A. Key remove/add/alias guard every completion. The add-key form and the
+  Add Provider completion do not survive a switch. Kiro polls with the session capture
+  and ends when it is stale. CodexSet threads the logical target.
+- A render-owned capture may still be sent to its own base; the relay refuses the stale
+  expected target, and a completion is still fenced by the strict current check.
+
