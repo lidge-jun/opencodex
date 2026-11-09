@@ -66,13 +66,12 @@ describe("OpenGateway completion exact-head receipts", () => {
       expect(json.retries).toBe(0);
       expect(json.result.status).toBe(200);
       expect(await json.result.json()).toEqual(terminal);
-      const stream = await run(sse([{ type: "response.completed", response: terminal }]), { max_output_tokens: 64 });
+      const completed = { type: "response.completed", response: terminal };
+      const stream = await run(sse([completed]), { max_output_tokens: 64 });
       expect(stream.retries).toBe(0);
       expect(stream.result.status).toBe(200);
-      const text = await stream.result.text();
-      expect(text).toContain('"type":"response.completed"');
-      expect(text).not.toContain("response.failed");
-      expect(text).toContain("already produced");
+      // The whole frame, byte for byte: usage and every other snapshot field stay as sent.
+      expect(await stream.result.text()).toBe(new TextDecoder().decode(encode(completed)));
     }
   });
 

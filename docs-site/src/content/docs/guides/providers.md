@@ -915,7 +915,8 @@ Exhausted output budgets produce `incomplete` with `max_output_tokens`; the prox
 the requested budget. A replay-safe empty completion with budget remaining may retry once, within
 the existing send limit. Explicit `emptyCompletionRetry: false` or `OCX_EMPTY_COMPLETION_RETRY=0`
 disables that retry. Text, refusals, tool activity, and unknown stream events prevent replay and
-retain the original stream. The protection does not change other providers or their retry defaults.
+retain the original stream, as does a response snapshot that already carries aggregate `output_text`.
+The protection does not change other providers or their retry defaults.
 Replay requires explicit `store: false`, complete input, and client-executed tools only; a hosted
 tool such as `web_search` prevents automatic replay even if no tool event was observed.
 
