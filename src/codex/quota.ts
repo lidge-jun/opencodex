@@ -286,30 +286,65 @@ function weeklyResetDeadlineAdvanced(
 }
 
 /**
+ * Whether the account's reset tickets went DOWN, which means one was just redeemed.
+ *
+ * A manual reset zeroes the current window's usage without ending it: the deadline moves further
+ * out, but the account keeps spending in what is effectively a fresh window. The percentage we
+ * cached before the redemption measures the window that was thrown away, so it must not be
+ * carried into the reset one — the user has, by definition, just bought themselves an empty
+ * window, and reporting the old 98% keeps them locked out of the quota they paid to recover.
+ *
+ * Only a DECREASE counts. Upstream periodically grants new tickets (`available_count` rising),
+ * which says nothing about current usage and must never invalidate a reading.
+ *
+ * This is the one signal that catches a redemption made outside this process — in the ChatGPT web
+ * UI, or on another machine. The header stream carries no reset-ticket field at all, so it can
+ * only ever be learned from the `/wham/usage` payload, and the hard lock delays that probe by
+ * minutes-to-an-hour. Keeping the judgement data-driven and here means the moment any observation
+ * does carry the new count, the stale percentage is retired instead of replayed.
+ */
+function resetTicketWasRedeemed(
+  incoming: Omit<StoredAccountQuota, "updatedAt">,
+  existing: StoredAccountQuota | undefined,
+): boolean {
+  const previousCount = existing?.resetCredits;
+  const nextCount = incoming.resetCredits;
+  if (typeof previousCount !== "number" || !Number.isFinite(previousCount)) return false;
+  if (typeof nextCount !== "number" || !Number.isFinite(nextCount)) return false;
+  return nextCount < previousCount;
+}
+
+/**
  * Whether the stored weekly reading belongs to a window that is demonstrably over.
  *
  * This is the weekly counterpart of `shortResetHasElapsed`. The short (5h) branch has always
  * expired a carried tuple whose reset had passed; the weekly branch never did, so a stale
  * weekly percentage could outlive its own deadline indefinitely as long as observations omitted
- * the weekly header. Either piece of evidence retires the reading:
+ * the weekly header. Any of these retires the reading:
  *
  * 1. Upstream advanced the deadline (`weeklyResetDeadlineAdvanced`) — positive proof.
  * 2. The stored deadline has already elapsed. Usage only accumulates inside an open window, so a
  *    percentage pinned to a closed one is history, not current state. This is exactly the rule
  *    `shortResetHasElapsed` applies to the 5h tuple and it is what lets a stuck account re-measure.
+ * 3. A reset ticket was redeemed (`resetTicketWasRedeemed`) — the window's usage was zeroed on
+ *    purpose, so the pre-redemption percentage describes a window nobody is spending in any more.
  *
  * Why this matters beyond a cosmetic bar: the main-account hard lock reads the *policy* snapshot
  * and gates quota auto-refresh admission. A percentage that can never expire therefore cannot be
  * replaced by a fresh measurement either — the account reports "usage limit reached" indefinitely
  * while upstream shows a nearly-empty window, with no automatic path back to the truth.
  *
- * Policy callers must NOT use either signal. The hard lock's contract is that only an explicit
+ * Policy callers must NOT use these signals. The hard lock's contract is that only an explicit
  * observation that replaces a blocking reading may release it — "a predicted reset is not
- * recovery evidence". There, a clock elapsing and even an advanced deadline are both non-events.
+ * recovery evidence". There, a clock elapsing, an advanced deadline, and a redeemed ticket are
+ * all non-events; the arriving low percentage is what releases it.
  *
- * Observed live: upstream had already rolled the window over while every subsequent response
- * carried only credits headers. The old 98% was carried forward for ~20h against a true 4%, and
- * because the hard lock blocked auto-refresh, nothing could correct it without manual cache surgery.
+ * Observed live, twice:
+ * - Upstream had rolled the window over while every response carried only credits headers, so the
+ *   old 98% was replayed for ~20h against a true 4%.
+ * - The user then redeemed a reset ticket in the web UI. Upstream reported 0% used with a deadline
+ *   4.84 days further out, but the cache still said 98%, so the hard lock kept refusing to send.
+ * Both times only manual cache surgery recovered the account.
  */
 function weeklyWindowRolledOver(
   incoming: Omit<StoredAccountQuota, "updatedAt">,
@@ -317,6 +352,7 @@ function weeklyWindowRolledOver(
   now: number,
 ): boolean {
   if (weeklyResetDeadlineAdvanced(incoming, existing)) return true;
+  if (resetTicketWasRedeemed(incoming, existing)) return true;
   const previousReset = existing?.weeklyResetAt;
   if (typeof previousReset !== "number" || !Number.isFinite(previousReset) || previousReset <= 0) return false;
   return resetAtToMs(previousReset) <= now;

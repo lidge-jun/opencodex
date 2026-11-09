@@ -150,6 +150,52 @@ describe("weekly window rollover", () => {
 });
 
 /**
+ * A manual reset ticket zeroes the window's usage without ending the window: the deadline moves
+ * further out, so the "expired" and "deadline advanced" checks can both stay silent while the
+ * pre-redemption percentage is already meaningless. The ticket count is the only signal that
+ * survives in that shape, and it is also the only one that catches a redemption performed in the
+ * ChatGPT web UI or on another machine.
+ */
+describe("redeemed reset ticket", () => {
+  test("a redeemed ticket retires the pre-redemption percentage", () => {
+    // One ticket available, window still live, 98% used.
+    setAccountQuotaFromParsed(ACCOUNT, { weeklyPercent: 98, weeklyResetAt: secondsFromNow(7200), resetCredits: 1 });
+
+    // The user redeems it elsewhere. The next observation may carry only credits plus the new
+    // ticket count — no weekly value at all.
+    setAccountQuotaFromParsed(ACCOUNT, { ...creditsOnly, resetCredits: 0 });
+
+    expect(getAccountQuota(ACCOUNT)?.weeklyPercent).toBeUndefined();
+    expect(getAccountQuota(ACCOUNT)?.weeklyResetAt).toBeUndefined();
+    expect(getAccountQuota(ACCOUNT)?.resetCredits).toBe(0);
+  });
+
+  test("a granted ticket says nothing about usage and keeps the reading", () => {
+    // Upstream periodically tops tickets up. That is not evidence the window emptied.
+    setAccountQuotaFromParsed(ACCOUNT, { weeklyPercent: 98, weeklyResetAt: secondsFromNow(7200), resetCredits: 0 });
+
+    setAccountQuotaFromParsed(ACCOUNT, { ...creditsOnly, resetCredits: 1 });
+
+    expect(getAccountQuota(ACCOUNT)?.weeklyPercent).toBe(98);
+  });
+
+  test("an unchanged ticket count keeps the reading", () => {
+    setAccountQuotaFromParsed(ACCOUNT, { weeklyPercent: 98, weeklyResetAt: secondsFromNow(7200), resetCredits: 2 });
+    setAccountQuotaFromParsed(ACCOUNT, { ...creditsOnly, resetCredits: 2 });
+
+    expect(getAccountQuota(ACCOUNT)?.weeklyPercent).toBe(98);
+  });
+
+  test("a missing ticket count is not a redemption", () => {
+    // Absent evidence must never be read as "spent" — that would erase live readings.
+    setAccountQuotaFromParsed(ACCOUNT, { weeklyPercent: 98, weeklyResetAt: secondsFromNow(7200), resetCredits: 1 });
+    setAccountQuotaFromParsed(ACCOUNT, { weeklyPercent: 97, weeklyResetAt: secondsFromNow(7200) });
+
+    expect(getAccountQuota(ACCOUNT)?.weeklyPercent).toBe(97);
+  });
+});
+
+/**
  * The WHAM (`/backend-api/wham/usage`) write path pre-seeds from the existing snapshot and only
  * overwrites when the caller supplies a value. It has the same hazard as the header path, and had
  * the same missing guard, so an expired weekly reading could survive there even after the merge
