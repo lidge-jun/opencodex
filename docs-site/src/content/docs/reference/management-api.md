@@ -473,6 +473,9 @@ an earlier file prefix from 7-day, 30-day, or all-history totals. `managementUsa
 accepted for compatibility with bounded legacy readers, but changing it no longer expands or reduces
 the history summarized by this endpoint.
 
+Cold ledger scans yield between records so health checks and other local requests can continue
+while a large usage report is calculated. A single record is processed atomically.
+
 Pass both `since` and `until` to select an inclusive custom interval. Each accepts integer Unix
 epoch **milliseconds**, or a full ISO datetime with an explicit timezone. Invalid dates, negative
 or out-of-range values, reversed bounds, and a single bound are rejected. Custom bounds override
