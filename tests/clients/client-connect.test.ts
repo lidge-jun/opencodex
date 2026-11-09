@@ -1342,6 +1342,10 @@ function runDesktopLifecycleScenario(mode: string) {
 }
 
 describe("Desktop copy coherence across client lifecycle", () => {
+  // Each case runs its scenario in a real `bun test` child, bounded by spawnSync at INTERNAL_DEADLINE_MS.
+  // Under Bun's 5 s default the case gave up first: a loaded `test changed` run timed out
+  // `status-receipt` at 5010 ms while its child was still inside its own 15 s deadline (#8041).
+  const LIFECYCLE_CASE_BUDGET_MS = SPAWN_BUDGET_MS;
   // The first generated lifecycle fixture pays the full client lifecycle module graph load.
   // Warm the same relative require prologue before the fixture's 15-second child deadline.
   beforeAll(async () => {
@@ -1356,7 +1360,7 @@ describe("Desktop copy coherence across client lifecycle", () => {
     expect(r.pending || r.backupPresent || r.persistedOutcome).toBe(false);
     expect(r.foreignPreserved && r.baselineUnchanged && r.credentialZeroed).toBe(true);
     if (r.commits > 0) expect(r.desktopBeforeCommit).toBe(true);
-  });
+  }, LIFECYCLE_CASE_BUDGET_MS);
   test.each(["recover-backup", "same-old"])("%s returns rolled_back without a false commit", mode => {
     const r = runDesktopLifecycleScenario(mode);
     expect(r.error).toBeNull();
@@ -1366,28 +1370,28 @@ describe("Desktop copy coherence across client lifecycle", () => {
     expect(r.tokenIsOld && r.desktopIsOld).toBe(true);
     expect(r.pending || r.backupPresent || r.persistedOutcome).toBe(false);
     expect(r.baselineUnchanged && r.credentialZeroed).toBe(true);
-  });
+  }, LIFECYCLE_CASE_BUDGET_MS);
   test("normal failed candidate rolls both local copies back before returning failure", () => {
     const r = runDesktopLifecycleScenario("rollback");
     expect(r.error).not.toBeNull();
     expect(r.commits).toBe(0);
     expect(r.tokenIsOld && r.desktopIsOld).toBe(true);
     expect(r.pending || r.backupPresent).toBe(false);
-  });
+  }, LIFECYCLE_CASE_BUDGET_MS);
   test.each(["same-old-abort-failure", "recover-neither", "recover-probe-error"])("%s preserves recovery evidence", mode => {
     const r = runDesktopLifecycleScenario(mode);
     expect(r.result).toBeNull();
     expect(r.error).not.toBeNull();
     expect(r.commits).toBe(0);
     expect(r.pending && r.backupPresent && r.credentialZeroed).toBe(true);
-  });
+  }, LIFECYCLE_CASE_BUDGET_MS);
   test("CLI reports a recovered rollback honestly", () => {
     const r = runDesktopLifecycleScenario("recover-backup-cli");
     expect(r.cliRotation.exitCode).toBe(0);
     expect(r.cliRotation.value.rotation).toBe("rolled_back");
     expect(r.cliRotation.revokedClaim).toBe(false);
     expect(r.desktopIsOld && r.tokenIsOld).toBe(true);
-  });
+  }, LIFECYCLE_CASE_BUDGET_MS);
   test.each(["disconnect", "disconnect-foreign", "disconnect-resume", "disconnect-after-clear"])("%s restores projection and retries idempotently", mode => {
     const r = runDesktopLifecycleScenario(mode);
     expect(r.error).toBeNull();
@@ -1396,26 +1400,26 @@ describe("Desktop copy coherence across client lifecycle", () => {
     expect(r.receiptPhase).toBe("complete");
     expect(r.second.tokenRemoved).toBe(false);
     if (mode === "disconnect-foreign") expect(r.userAddedPreserved).toBe(true);
-  });
+  }, LIFECYCLE_CASE_BUDGET_MS);
   test("legacy current-hub profile disconnects via labeled standard fallback", () => {
     const r = runDesktopLifecycleScenario("disconnect-legacy");
     expect(r.error).toBeNull();
     expect(r.result.desktopRestoration).toBe("standard_fallback");
     expect(r.desktopHasKey).toBe(false);
     expect(r.tokenAbsent && r.foreignPreserved).toBe(true);
-  });
+  }, LIFECYCLE_CASE_BUDGET_MS);
   test("protected Desktop edits block destructive disconnect", () => {
     const r = runDesktopLifecycleScenario("disconnect-protected");
     expect(r.error).not.toBeNull();
     expect(r.tokenIsOld && r.desktopIsOld).toBe(true);
     expect(r.stateKind).toBe("connected");
-  });
+  }, LIFECYCLE_CASE_BUDGET_MS);
   test("post-await sync cannot overwrite a prepared disconnect", () => {
     const r = runDesktopLifecycleScenario("sync-claim");
     expect(r.error).toBe("client_disconnect_pending");
     expect(r.catalogUnchanged).toBe(true);
     expect(r.receiptPhase).toBe("prepared");
-  });
+  }, LIFECYCLE_CASE_BUDGET_MS);
   test("disconnect expectedOwner refuses a newly connected owner before claiming or deleting state", () => {
     const r = runDesktopLifecycleScenario("disconnect-expected-owner");
     expect(r.result).toBeNull();
@@ -1423,30 +1427,30 @@ describe("Desktop copy coherence across client lifecycle", () => {
     expect(r.stateKind).toBe("connected");
     expect(r.tokenIsNew && r.catalogUnchanged).toBe(true);
     expect(r.receiptPhase).toBe("absent");
-  });
+  }, LIFECYCLE_CASE_BUDGET_MS);
   test("disconnect claims its receipt before Codex-only restoration outside L", () => {
     const r = runDesktopLifecycleScenario("disconnect-order");
     expect(r.error).toBeNull();
     expect(r.codexSawPrepared && r.codexOutsideL).toBe(true);
     expect(r.receiptPhase).toBe("complete");
-  });
+  }, LIFECYCLE_CASE_BUDGET_MS);
   test("sync CAS preserves a newer token generation and leaves catalog bytes unchanged", () => {
     const r = runDesktopLifecycleScenario("sync-generation-change");
     expect(r.error).toBe("client_connection_changed");
     expect(r.tokenIsNew && r.catalogUnchanged).toBe(true);
-  });
+  }, LIFECYCLE_CASE_BUDGET_MS);
   test("full-owner clear cannot delete a newer connection with the same key id", () => {
     const r = runDesktopLifecycleScenario("clear-owner-change");
     expect(r.result).toBe("conflict");
     expect(r.stateKind).toBe("connected");
     expect(r.tokenIsOld).toBe(true);
-  });
+  }, LIFECYCLE_CASE_BUDGET_MS);
   test("sync supplies the read-only guard at the actual injection seam", () => {
     const r = runDesktopLifecycleScenario("sync-queued-guard");
     expect(r.guardSeen).toBe(true);
     expect(r.writesAfterGuard).toBe(0);
     expect(r.error).toBe("client_disconnect_pending");
-  });
+  }, LIFECYCLE_CASE_BUDGET_MS);
   test.each(["status-lock", "status-receipt"])("%s cannot discard another operation's backup", mode => {
     const r = runDesktopLifecycleScenario(mode);
     expect(r.error).toBeNull();
@@ -1454,7 +1458,7 @@ describe("Desktop copy coherence across client lifecycle", () => {
     expect(r.statusInside.backupPresent).toBe(true);
     expect(r.statusOutside.kind).toBe(mode === "status-lock" ? "orphan-cleaned" : "recovery-required");
     expect(r.backupPresent).toBe(mode === "status-receipt");
-  });
+  }, LIFECYCLE_CASE_BUDGET_MS);
 });
 
 describe("a sibling instance never connects, syncs or disconnects the shared Codex home", () => {
