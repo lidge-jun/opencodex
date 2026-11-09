@@ -43,11 +43,16 @@ export function createPhysicalReplayGuard(providerExecuted: () => boolean) {
     authorize: () => { pending = true; },
     record: (request: AdapterRequest, body: BodyInit | null | undefined, next?: () => void) => {
       const physical = snapshot(request, body);
-      if (pending && !safe(physical)) throw new UnsafePhysicalReplacement("The rebuilt request cannot be safely replayed");
-      next?.();
+      // The authorization covers this one send, whether it leaves or fails to: a refused rebuild or
+      // an exhausted send budget must not leave the next ordinary send judged as a replacement.
+      try {
+        if (pending && !safe(physical)) throw new UnsafePhysicalReplacement("The rebuilt request cannot be safely replayed");
+        next?.();
+      } finally {
+        pending = false;
+      }
       last = physical;
       lastSafe = undefined;
-      pending = false;
     },
   };
 }

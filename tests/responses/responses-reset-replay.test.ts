@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, jest, test } from "bun:test";
 import {
   ambiguousResendAllowanceFor,
+  createPhysicalReplayGuard,
   selfContainedChatBody,
   selfContainedResponsesBody,
+  UnsafePhysicalReplacement,
 } from "../../src/server/responses/reset-replay";
 import { authorizeResendForRecovery } from "../../src/lib/request-resend-gate";
+import type { AdapterRequest } from "../../src/adapters/base";
 import { deferProtocolSafeResetRecovery, selectProtocolSafeResetResponse, type ResetSelectionOwner } from "../../src/server/responses/combo-stream-preflight";
 
 const prelude = 'event: response.created\ndata: {"type":"response.created","response":{"id":"first","output":[]}}\n\n';
@@ -389,6 +392,40 @@ const clientTurn = {
   ],
   tools: [{ type: "function", name: "read" }],
 };
+
+describe("createPhysicalReplayGuard", () => {
+  const safeBody = JSON.stringify({ store: false, input: "plain prompt" });
+  const unsafeBody = JSON.stringify({ store: true, input: "plain prompt" });
+  const request = (body: string, hosted = false) =>
+    ({ body, ...(hosted ? { hostedToolSubstitutions: [{}] } : {}) }) as unknown as AdapterRequest;
+
+  test("judges the body that physically left, including fresh hosted and provider-executed flags", () => {
+    let providerExecuted = false;
+    const guard = createPhysicalReplayGuard(() => providerExecuted);
+    guard.record(request(safeBody), safeBody);
+    expect(guard.isSelfContained(request(safeBody))).toBe(true);
+    expect(guard.isSelfContained(request(safeBody, true))).toBe(false);
+    providerExecuted = true;
+    expect(guard.isSelfContained(request(safeBody))).toBe(false);
+  });
+
+  test("an authorized replacement that is not self-contained is refused at physical dispatch", () => {
+    const guard = createPhysicalReplayGuard(() => false);
+    guard.record(request(safeBody), safeBody);
+    guard.authorize();
+    expect(() => guard.record(request(unsafeBody), unsafeBody)).toThrow(UnsafePhysicalReplacement);
+    // The refusal consumed the authorization; the next ordinary send is not a replacement.
+    expect(() => guard.record(request(unsafeBody), unsafeBody)).not.toThrow();
+  });
+
+  test("a send that fails before leaving releases the authorization", () => {
+    const guard = createPhysicalReplayGuard(() => false);
+    guard.authorize();
+    expect(() => guard.record(request(safeBody), safeBody, () => { throw new Error("send budget exhausted"); }))
+      .toThrow("send budget exhausted");
+    expect(() => guard.record(request(unsafeBody), unsafeBody)).not.toThrow();
+  });
+});
 
 describe("selfContainedResponsesBody", () => {
   test("accepts a turn whose second send can only repeat the inference", () => {
