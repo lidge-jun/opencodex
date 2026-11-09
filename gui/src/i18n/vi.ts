@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 // Vietnamese — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -141,6 +142,7 @@ export const vi: Record<TKey, string> = {
   ...connectV2Copy("vi"),
   ...startupV2Copy("vi"),
   ...proxyV2Copy("vi"),
+  ...telemetryProfileCopy("vi"),
   "claude.tierDefaults.unset": "Chưa đặt (giữ cài đặt Claude hiện có)",
   "claude.tierDefaults.recovery": "Đã dừng áp dụng và khôi phục tự động thất bại. Kiểm tra bản sao lưu bên dưới trước khi thử lại.",
   "claude.tierDefaults.title": "Mô hình mặc định CLI",
@@ -358,6 +360,7 @@ export const vi: Record<TKey, string> = {
   "auth.adminTokenHelp": "Đây là token quản trị quản lý OpenCodex, không phải là API key của provider. Proxy ghi nó vào ~/.opencodex/admin-api-token (hoặc $OPENCODEX_HOME/admin-api-token) trong lần khởi động đầu tiên và OPENCODEX_ADMIN_AUTH_TOKEN sẽ ghi đè nó.",
   "auth.rememberDevice": "Ghi nhớ thiết bị này",
   "auth.rememberDeviceHint": "Giữ phiên HttpOnly có thể thu hồi trong 30 ngày, không lưu mã quản trị. Yêu cầu bảng điều khiển HTTPS trực tiếp cùng nguồn gốc với API (hoặc loopback cục bộ).",
+  "auth.rememberUnsupported": "OpenCodex không thể ghi nhớ thiết bị này tại địa chỉ này. Ghi nhớ yêu cầu bảng điều khiển HTTPS trực tiếp (hoặc loopback cục bộ); phía sau reverse proxy, hãy đăng nhập mà không chọn tùy chọn này.",
   "connection.forgetDevice": "Quên thiết bị này",
   "connection.forgetDeviceFailed": "Không thể quên thiết bị này. Phiên vẫn được giữ.",
   "auth.adminTokenDocsLink": "Cách tìm nó",
@@ -816,6 +819,8 @@ export const vi: Record<TKey, string> = {
   "prov.port": "Cổng (Port)",
   "prov.default": "Mặc định",
   "prov.loadingConfig": "Đang tải…",
+  "prov.targetChanged": "Máy chủ bảng điều khiển đã thay đổi. Hãy mở lại biểu mẫu này trên máy chủ hiện tại.",
+  "prov.legacyTargetPreflight": "Proxy này kiểm tra đích lưu trước khi gửi nhưng không thể xác minh nguyên tử. Hãy cập nhật proxy để lưu gắn với đích.",
   "prov.saved": "Đã lưu! Hãy khởi động lại proxy để áp dụng.",
   "prov.loadConfigFail": "Không thể tải cấu hình",
   "prov.invalidJson": "JSON không hợp lệ",
@@ -2066,12 +2071,19 @@ export const vi: Record<TKey, string> = {
   "pws.pacingRemoveModel": "Xoá ghi đè pacing yêu cầu cho {model}",
   "pws.pacingRuleRequired": "Chỉ bật pacing yêu cầu sau khi đã thiết lập giới hạn provider hoặc một ghi đè model.",
   "pws.pacingCapInvalid": "Số yêu cầu đồng thời tối đa phải là số nguyên lớn hơn hoặc bằng 1.",
+  "pws.pacingValueInvalid": "Nhập giá trị giới hạn hợp lệ: RPM 1/60–60.000, độ trễ 1–3.600.000 ms, đồng thời 1 trở lên.",
   "pws.saving": "Đang lưu…",
   "pws.settingsSaved": "Đã lưu cài đặt.",
   "pws.accountModeSaved": "Đã lưu chế độ tài khoản.",
   "pws.accountModeFailed": "Không thể chuyển chế độ tài khoản.",
   "pws.accountModeConfirm": "Chuyển chế độ tài khoản OpenAI? Các cuộc hội thoại đang chạy sẽ được gán lại cho bộ tài khoản của chế độ khác, và mức sử dụng hạn mức sẽ được theo dõi trên chế độ mới.",
   "pws.settingsUnsavedBar": "Bạn có các thay đổi chưa lưu.",
+  "pws.draftTarget": "Đang chỉnh sửa: {target}",
+  "pws.draftConflict": "Cài đặt đã lưu trên máy chủ này đã thay đổi trong khi bạn chỉnh sửa. Bản nháp của bạn được giữ lại; hãy chọn giá trị cần giữ.",
+  "pws.draftConflictFields": "Các trường này đã thay đổi ở cả hai bên. Hãy sửa bản nháp hoặc dùng giá trị đã lưu:",
+  "pws.draftConflictUseSaved": "Dùng giá trị đã lưu",
+  "pws.draftConflictKeepDraft": "Giữ bản nháp của tôi",
+  "pws.draftConflictResolveFirst": "Chọn giá trị cần giữ trước khi lưu.",
   "pws.unsavedLeaveBody": "Bạn có các thay đổi chưa lưu. Lưu chúng lại trước khi rời đi?",
   "pws.unsavedLeaveTitle": "Thay đổi chưa lưu",
   "pws.attentionRequired": "Cần sự chú ý",
@@ -2571,6 +2583,10 @@ export const vi: Record<TKey, string> = {
   "integrations.preview.loading": "Đang tải kế hoạch thay đổi chính xác…",
   "integrations.preview.failed": "Không thể tải kế hoạch thay đổi. Không có gì bị thay đổi.",
   "integrations.preview.stale": "Tích hợp đã thay đổi trong lúc xác nhận. Hãy xem kế hoạch mới và xác nhận lại.",
+  "integrations.preview.catalogUnavailable": "Danh mục mô hình chưa được tải nên không thể lập kế hoạch cho thay đổi này. Hãy tải danh mục để tiếp tục.",
+  "integrations.preview.loadCatalogRetry": "Tải danh mục và thử lại",
+  "integrations.preview.recovering": "Đang tải danh mục…",
+  "integrations.action.chooseProfile": "Chọn hồ sơ",
   "integrations.dialog.apply.title": "Áp dụng tích hợp này?",
   "integrations.dialog.apply.changes": "opencodex sẽ thêm các cài đặt nhà cung cấp do nó quản lý vào cấu hình máy khách.",
   "integrations.dialog.apply.breakage": "Máy khách sẽ dùng các mô hình hiện được phiên bản opencodex này cung cấp.",

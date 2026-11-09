@@ -167,6 +167,33 @@ describe("CLI Remote Link enrollment", () => {
     }
   });
 
+  test("a phase failure prints the server's bounded cause, not only the phase name (#8357)", async () => {
+    let step = 0;
+    const h = harness();
+    try {
+      const hint = "Error: defaultProvider must exist in providers";
+      h.deps.fetchImpl = async () => ++step < 3 ? Response.json(step === 1 ? probe : confirm) : Response.json({ error: { code: "child_preflight_failed", message: "The Child effective configuration could not be read.", hint } }, { status: 502 });
+      expect(await runLinkCommand(["add", "child-a", "--expect-fingerprint", fingerprint], h.deps)).not.toBe(0);
+      const message = h.err.join("\n");
+      expect(message).toContain("Remote Link failed during Child preflight");
+      expect(message).toContain(hint);
+    } finally { h.restore(); }
+  });
+
+  test("only the bounded, redacted hint survives from an error body (#8357)", async () => {
+    let step = 0;
+    const h = harness();
+    try {
+      const secret = "ocx_data_" + "a".repeat(40);
+      h.deps.fetchImpl = async () => ++step < 3 ? Response.json(step === 1 ? probe : confirm)
+        : Response.json({ error: { code: "remote_connect_failed", message: "leak " + secret, hint: "connect said " + secret }, key: secret }, { status: 502 });
+      expect(await runLinkCommand(["add", "child-a", "--expect-fingerprint", fingerprint], h.deps)).not.toBe(0);
+      const message = h.err.join("\n");
+      expect(message).toContain("Remote Link failed during Child enrollment: connect said ocx_");
+      expect(message).not.toContain(secret);
+    } finally { h.restore(); }
+  });
+
   test("a bare host without a local ocx-child build names where Home looks for one", async () => {
     const missing = { alias: "bare-b", fingerprint, keyType: "ED25519", ocxVersion: null, runtimeKind: "missing", targetTriple: "linux-arm64", plantable: false, plantUnavailableReason: "artifact_not_found" };
     const h = harness([missing]);

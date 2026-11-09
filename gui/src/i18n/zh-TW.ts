@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 import type { TKey } from "./en";
 
 /** Traditional Chinese (Taiwan) UI strings — keys must match `en.ts` 1:1. */
@@ -137,6 +138,7 @@ export const zhTW: Record<TKey, string> = {
   ...connectV2Copy("zh-TW"),
   ...startupV2Copy("zh-TW"),
   ...proxyV2Copy("zh-TW"),
+  ...telemetryProfileCopy("zh-TW"),
   "claude.tierDefaults.unset": "未設定（保留現有 Claude 設定）",
   "claude.tierDefaults.recovery": "套用已停止，自動還原失敗。重試前請檢查下方備份。",
   "claude.tierDefaults.title": "CLI 層級預設模型",
@@ -685,6 +687,8 @@ export const zhTW: Record<TKey, string> = {
   "prov.port": "連接埠",
   "prov.default": "預設",
   "prov.loadingConfig": "載入中…",
+  "prov.targetChanged": "儀表板目標已變更。請在目前伺服器上重新開啟此表單。",
+  "prov.legacyTargetPreflight": "此代理會在傳送前檢查儲存目標，但無法以原子方式驗證。若要使用目標綁定的儲存，請更新代理。",
   "prov.saved": "已儲存！重新啟動代理以生效。",
   "prov.loadConfigFail": "載入配置失敗",
   "prov.invalidJson": "無效的 JSON",
@@ -1753,9 +1757,16 @@ export const zhTW: Record<TKey, string> = {
   "pws.pacingRemoveModel": "移除 {model} 的請求節流規則",
   "pws.pacingRuleRequired": "請先設定供應商限制或模型規則，再啟用請求節流。",
   "pws.pacingCapInvalid": "最大同時請求數必須是 1 以上的整數。",
+  "pws.pacingValueInvalid": "請輸入有效的限速值：RPM 1/60–60,000，延遲 1–3,600,000 毫秒，並行數 1 或以上。",
   "pws.saving": "儲存中…",
   "pws.settingsSaved": "設定已儲存。",
   "pws.settingsUnsavedBar": "有未儲存的更改。",
+  "pws.draftTarget": "正在編輯：{target}",
+  "pws.draftConflict": "編輯期間此伺服器上已儲存的設定已變更。草稿已保留，請選擇要保留的值。",
+  "pws.draftConflictFields": "這些欄位在兩邊都發生了變更。請編輯草稿或使用已儲存的值：",
+  "pws.draftConflictUseSaved": "使用已儲存的值",
+  "pws.draftConflictKeepDraft": "保留我的草稿",
+  "pws.draftConflictResolveFirst": "儲存前請選擇要保留的值。",
   "pws.unsavedLeaveBody": "有未儲存的更改。離開前儲存嗎？",
   "pws.unsavedLeaveTitle": "未儲存的更改",
   "pws.attentionRequired": "需要關注",
@@ -3088,6 +3099,7 @@ export const zhTW: Record<TKey, string> = {
   "auth.adminTokenHelp": "這是 OpenCodex 管理 API 的管理員金鑰，不是服務商 API 金鑰。代理首次啟動時會寫入 ~/.opencodex/admin-api-token（或 $OPENCODEX_HOME/admin-api-token），設定 OPENCODEX_ADMIN_AUTH_TOKEN 可覆寫該值。",
   "auth.rememberDevice": "記住此裝置",
   "auth.rememberDeviceHint": "保留可撤銷的 HttpOnly 工作階段30天，不儲存管理員權杖。需要直接存取與 API 同源的 HTTPS 儀表板（或本機回環）。",
+  "auth.rememberUnsupported": "OpenCodex 無法在此位址記住此裝置。記住裝置需要直接存取 HTTPS 儀表板（或本機回環）；在反向代理後方，請不勾選此項登入。",
   "connection.forgetDevice": "忘記此裝置",
   "connection.forgetDeviceFailed": "無法忘記此裝置。工作階段已保留。",
   "auth.adminTokenDocsLink": "如何尋找",
@@ -3505,6 +3517,10 @@ export const zhTW: Record<TKey, string> = {
   "integrations.preview.loading": "正在載入精確的變更計畫…",
   "integrations.preview.failed": "無法載入變更計畫。未進行任何變更。",
   "integrations.preview.stale": "確認期間整合狀態已變更。請檢視更新後的計畫並再次確認。",
+  "integrations.preview.catalogUnavailable": "模型目錄尚未載入，無法規劃此變更。請載入後繼續。",
+  "integrations.preview.loadCatalogRetry": "載入目錄並重試",
+  "integrations.preview.recovering": "正在載入目錄…",
+  "integrations.action.chooseProfile": "選擇設定檔",
   "integrations.dialog.apply.title": "套用此整合？",
   "integrations.dialog.apply.changes": "opencodex 會將其管理的供應商設定加入用戶端設定。",
   "integrations.dialog.apply.breakage": "用戶端將使用此 opencodex 執行個體目前提供的模型。",

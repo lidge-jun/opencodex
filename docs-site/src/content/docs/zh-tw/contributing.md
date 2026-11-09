@@ -66,10 +66,9 @@ cd docs-site && bun install && bun dev
 
 ## Pull request
 
-- 目標為 **`dev`**。請勿對 **`main`** 開啟功能或修復 pull request。
-- 從目前 **`dev`** tip 建立分支，而不是從 **`main`**。必填的 **`enforce-target`** 檢查會拒絕
-  head merge base 位於 **`main`** tip 且分支遠落後於 pull request base 的請求（#644 中出現的
-  失敗模式）。
+- 目標為 **`dev`**，它也是 repository 的預設分支。**`main`** 與 **`preview`** 已隨單一分支
+  模型上線而刪除。必填的 **`enforce-target`** 檢查會拒絕以 **`dev`** 以外分支為 base 的請求
+  （stacked 子 PR 除外）。
 - 撰寫真實的描述：說明變更內容與原因的 **Summary**，加上 **Test plan**（或同等實質內容）。空的
   內文、只有佔位符的文字，以及使用跳脫 `\n` 而非真實換行的描述都會無法通過檢查。
 - 若 pull request 變更 `gui/` 下的檔案，請在描述中附上 UI 變更的螢幕截圖；`enforce-target` 會在
@@ -82,7 +81,7 @@ cd docs-site && bun install && bun dev
 ## 專案維護者
 
 目前維護者、其職責，以及 review 與 merge 政策記錄在
-[`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/main/MAINTAINERS.md)。repository 與
+[`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/dev/MAINTAINERS.md)。repository 與
 安全敏感路徑的 GitHub review 所有權宣告在 `.github/CODEOWNERS`。
 
 ## 約定

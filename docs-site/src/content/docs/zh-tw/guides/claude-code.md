@@ -593,9 +593,9 @@ role；`tool_result` 缺少 `tool_use_id`；`tool_use` 缺少 id/name；指定�
 **Anthropic 路由請求：**適配器會管理工具、系統內容和倒數第二條使用者訊息的快取斷點，以及頂層
 自動 `cache_control`。穩定輪次通常能達到約 99.9% 的快取命中率。
 
-**原生 OpenAI/ChatGPT 路由：**派生會話範圍的 `prompt_cache_key`（存在時取自
-`metadata.user_id`，否則回退到系統內容雜湊）和用於快取親和性的 `session_id` 標頭。
-快取鍵包含模型和完整的工具 schema。
+**原生 OpenAI/ChatGPT 路由：**派生 `prompt_cache_key`（`metadata.user_id` 為字串時取自該值，
+否則回退到系統內容雜湊），並僅在存在會話識別時派生用於快取親和性的 `session_id` 標頭（不會從共享回退鍵派生）。
+由系統內容雜湊派生的回退鍵（僅在存在系統內容時使用）還包含模型和完整的工具 schema。
 
 **Token 計算：**Anthropic 輸出會從 `input_tokens` 中減去 `cached_tokens` 和
 `cache_write_tokens`，並將它們分別公開為 `cache_read_input_tokens` 和

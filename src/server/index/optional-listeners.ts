@@ -20,6 +20,7 @@ import { linkChildParityRouteAllowed } from "../../link/child-parity";
 import { saveConfigPreservingClaudeCode } from "../../config/live-reconcile";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { startJevQuotaActivation } from "../../combos/jev-quota-activation";
+import { createLocalControlListener } from "./local-control-listener";
 export { LINK_INGRESS_HOSTNAME } from "./link-listener";
 import type { ServerIngress } from "./serve-options";
 
@@ -45,6 +46,12 @@ export interface OptionalListenerSet<T> {
   linkStatus(): LinkListenerStatus;
   linkSupervisor(): LinkSupervisor;
   start(ctx: OptionalListenerStartContext<T>): void;
+  /**
+   * Synchronous rollback for a startup that failed after `start`. The local control socket holds a
+   * live lease, and `startServer` cannot await a teardown, so that lease is released here instead of
+   * being left for a successor to mistake for a running runtime.
+   */
+  abortStart(): void;
   ensureStarted(): Promise<void>;
   close(): Promise<void>;
   registerSupervisorStop(stop: () => Promise<void>): () => void;
@@ -54,6 +61,7 @@ export interface OptionalListenerSet<T> {
 export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): OptionalListenerSet<T> {
   const claudeIntercept: ClaudeInterceptLifecycle<T> = createClaudeInterceptLifecycle<T>();
   const linkListener: LinkListenerLifecycle<T> = createLinkListenerLifecycle<T>(linkDeps);
+  const localControl = createLocalControlListener<T>();
   let activeConfig: OcxConfig | undefined;
   let stopJevQuotaActivation: (() => void) | undefined;
   const supervisor = createLinkSupervisor({
@@ -85,6 +93,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
     ingressOf(server) {
       if (linkListener.ownsListener(server)) return "hub-link";
       if (claudeIntercept.ownsListener(server)) return "claude-intercept";
+      if (localControl.ownsListener(server)) return "local-control";
       return undefined;
     },
     // The Home's link listener admits the data plane plus the read-only management relay
@@ -102,6 +111,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
     linkSupervisor: () => supervisor,
     start(ctx) {
       activeConfig = ctx.config;
+      localControl.start({ config: ctx.config, publicPort: ctx.publicPort, dispatch: ctx.dispatch });
       linkListener.start({ dispatch: ctx.dispatch, maxRequestBodySize: ctx.maxRequestBodySize,
         connectionGeneration: linkId => supervisor.connectionGeneration?.(linkId),
         keyFingerprints: apiKeyId => {
@@ -129,6 +139,9 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
       // Last, after every listener started: JEV advisory quota follows the live config while serving.
       stopJevQuotaActivation = startJevQuotaActivation(ctx.config);
     },
+    abortStart() {
+      try { localControl.abort(); } catch { /* the startup error is the one worth reporting */ }
+    },
     ensureStarted: () => linkListener.ensureStarted(),
     close: () => linkListener.close(),
     registerSupervisorStop(stop) {
@@ -139,8 +152,15 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
     },
     async stop() {
       let failure: unknown;
+      // First, before any other await. The local control socket's ownership record is released
+      // synchronously inside this call, and the shutdown that follows can take a long time: a
+      // supervisor stop over SSH, a link drain, the intercept pair. The public listener is already
+      // closed by then, so an independent `ocx start` sees a free port and no runtime record; if
+      // the lease were still held by this live pid it would read as a live owner and that
+      // successor would refuse the port for good.
+      try { await localControl.stop(); } catch (error) { failure = error; }
       if (supervisorStop) {
-        try { await supervisorStop(); } catch (error) { failure = error; }
+        try { await supervisorStop(); } catch (error) { failure ??= error; }
       }
       try { await linkListener.stop(); } catch (error) { failure ??= error; }
       try { await claudeIntercept.stop(); } catch (error) { failure ??= error; }

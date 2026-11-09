@@ -122,7 +122,7 @@ The sidebar exposes eight rows (`gui/src/nav-groups.ts` `NAV_GROUPS`), in order:
 
 | Surface | Shape |
 | --- | --- |
-| Providers | Rail of configured providers plus a detail pane whose tabs are Overview, Models, Usage, then Accounts or API Keys when the provider has an auth surface, then Settings (`gui/src/components/provider-workspace/ProviderDetails.tsx`). |
+| Providers | Rail of configured providers plus a detail pane whose tabs are Overview, Models, Usage, then Accounts or API Keys when the provider has an auth surface, then Settings (`gui/src/components/provider-workspace/ProviderDetails.tsx`). Settings and the raw JSON editor keep unsaved drafts in memory per logical dashboard target (`gui/src/provider-workspace/target-drafts.ts`, keyed by hub origin plus link id in link mode because a relay apiBase is shared across re-pairs; API-key rotation is not a target change and labels show only the origin): switching targets parks the draft and shows the new target's saved values, a save only ever writes to the target that started it (the form owns the capture and passes it through the typed update callback; a remove or mode confirmation keeps the capture from when it opened), and a changed saved baseline requires an explicit keep-draft or use-saved choice. JSON keep-draft merges only the user delta into the latest config and reports same-field, deletion and rename conflicts; Settings patches only changed fields. App discovery coalesces session/focus/mismatch refreshes into one in-flight read, so a relay re-pair updates identity and session readiness without remounting the draft owner. An embedded surface that supplies its own `apiBase` uses that base only while no topology has been discovered; a configured relay always wins, and a relay capability string this dashboard does not recognize reads as legacy. Nothing is persisted to browser storage. |
 | API keys | Key table plus per-key detail (`gui/src/components/apikeys-workspace/`). The list payload carries masked prefixes only; each row deletes in place behind a two-step confirm, and clicking a key fetches the full value from `POST /api/keys/reveal`, which requires a current pairing or trusted Tailscale-identity session and answers `no-store`; automatic loopback sessions and raw admin tokens cannot reveal stored values, and a refusal there answers with the pairing surface — on the same-origin standalone transport the local pairing form, elsewhere the explanation alone — and requires a fresh reveal click after pairing. Displayed secrets and copy feedback are cleared on shared-session loss, pairing, inactive/hidden views, or a target change; stale asynchronous completions cannot restore them. |
 | Storage | Rail plus cleanup and trash detail (`gui/src/components/storage-workspace/`). |
 | Subagents | Featured-roster selection workspace (`gui/src/components/subagents-workspace/`). |
@@ -192,7 +192,7 @@ observations separate from token or API-equivalent cost totals.
 
 Custom usage windows are immutable bounds on the streaming accumulator, applied before attribution and daily
 aggregation. The filtered cache includes both inclusive millisecond bounds in its identity and retains the existing ledger revision, overlay-version and timezone checks.
-At most four distinct filtered scans may run concurrently; identical requests share one scan and excess distinct
+At most four distinct filtered reads may run concurrently; identical requests share one flight and excess distinct
 work fails closed. Preset warming never consumes custom summaries.
 The response retains its preset range discriminator for compatibility and explicitly marks
 `customWindow`, `since`, and `until`; the chart uses the window's local calendar days with
@@ -353,7 +353,7 @@ An oversized row is skipped inside the scanner bound without shortening identiti
 64 KiB checkpoint followed by file growth is intentionally outside the incremental detector's
 contract: validating arbitrary historical rewrites on every refresh would require rereading the
 whole prefix. Replace or truncate the file, or restart the proxy, after manually changing historical
-rows so the next request performs a cold rebuild.
+rows so the next request performs a cold rebuild. The candidate index shares that contract and is stricter about it: any same-size metadata movement rebuilds it.
 
 The wire fields `historyTruncated`, `truncatedPrefixBytes`, `entriesTruncated`, and `entriesDropped`
 remain in the response for compatibility with older GUI and CLI clients. A successful whole-ledger
@@ -395,15 +395,15 @@ once it exceeds 200) with the upstream content-type, body kind (`sse / json / ot
 body sample, and the extracted usage. Off by default; the hot path is guarded so production stays
 untouched.
 
-For diagnosing cache-read instability without capturing content, set `OPENCODEX_CACHE_DEBUG=1`
-before start. `src/usage/cache-diagnostic.ts` then writes one record per finalized request to
-`~/.opencodex/cache-debug.jsonl` (same `0o600` file, same 200-to-100 rolling bound) holding only
-presence booleans, counts, closed enums, the raw upstream cache counter before defaulting, and
-process-local HMAC equality tags for the prompt-cache key, allowlisted session headers, the account
-log label, and ordered instruction/tool/message blocks (capped at 128 per section, first divergent
-section/index only). The signing key is created at process start and never persisted, so tags
-compare values within one proxy process and never become a durable correlation key; no prompt
-text, tool name, raw identifier, or header value is recorded. Off by default.
+For content-free cache-read diagnostics, `OPENCODEX_CACHE_DEBUG=1` enables `src/usage/cache-diagnostic.ts`; otherwise hooks return before body/header inspection, hashing or file access. Its live `enabled()` hook remains registered. Every observed on/off transition (the gate is evaluated on each diagnostic call, so an idle process keeps its history until the next call) starts a new retention epoch: continuation history and pending drafts are cleared, and a draft from an earlier epoch is neither compared nor written (`tests/usage/cache-diagnostic.test.ts`).
+It writes one finalized request to `~/.opencodex/cache-debug.jsonl` (mode `0o600`, 200-to-100 rolling lines), preserving raw cache-counter evidence.
+Process-local HMAC tags cover prompt keys, explicit account labels and ordered instructions/tools/messages; no prompt, tool name or raw identifier is retained, and keys never persist.
+Session-header tags cover `session_id`, `session-id`, `thread-id` and `x-session-id`, sharing a value domain but not merging header identities; an unobserved side is omitted. `accountAffinity` uses read-only `codexConversationIdentity` and states `derived-key-not-binding`; neither a key nor a route label proves a binding.
+`prefix.comparison` compares observed sides; `continuation` compares their previous finalization under the complete nonempty inbound session-header set, authenticated admission principal, protocol, model and config directory. `src/server/responses/request-prepare.ts` carries the admission identity through the request-log hook; only its private diagnostic HMAC is retained, never serialized or reconstructed from bridge headers.
+Provider changes preserve correlation; prompt-key and explicit account-label changes are separate. Synthesized outbound headers and prompt keys never replace missing inbound identity.
+Comparisons distinguish first/equal/message-tail append/different/truncated/uncomparable; instructions and tools grow before messages, while system/developer input rows retain wire order.
+Missing or unsupported observations are uncomparable. Missing admission identity, including unauthenticated loopback, disables cross-request history while preserving per-request comparisons. Sections retain 128 tags and never claim equality across hidden tails; history evicts beyond 512 entries.
+These are parsed hook projections in completion order, not exact network bytes or proof of cache reuse; `tests/usage/cache-diagnostic.test.ts`, `tests/usage/cache-diagnostic-hook-compat.test.ts` and `tests/usage/cache-diagnostic-caller-isolation.test.ts` pin the contract.
 
 ## Z.ai quota destination ownership
 
@@ -497,7 +497,7 @@ The existing dashboard file-client maps include Cline CLI and reuse its committe
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates. The account history response can include a [low-confidence effective capacity estimate](providers/openai-accounts.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples. Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; an initial JEV null choice separately strips caller effort.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; in the default `decide` mode an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 Dashboard overview polling observes authorization failures independently of stalled or rejected peer requests, cancels remaining child requests after a decisive result, and exposes resource-level deadline failures without rewriting them as authentication failures.

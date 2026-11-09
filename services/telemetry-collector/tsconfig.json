@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": [],
+    "rootDir": "../..",
+    "noEmit": true,
+    "declaration": false
+  },
+  "include": [
+    "src/**/*.ts",
+    "../../src/telemetry/contract.ts"
+  ]
+}

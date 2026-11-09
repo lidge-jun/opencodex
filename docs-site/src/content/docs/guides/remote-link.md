@@ -146,6 +146,8 @@ ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
 ```
 
+`ocx link status` needs the local admin token on a listener that only this machine can reach. When the public listener is bound to a non-loopback address, for example a Hub on `0.0.0.0`, no TCP listener qualifies: the hub management listener is reached through Tailscale Serve, so it refuses the raw admin token for link routes. On macOS and Linux the proxy therefore also opens a private Unix socket, `<OPENCODEX_HOME>/run/control-<port>.sock`, in a directory only your user can enter, and `ocx link status` uses it automatically. The socket answers only `GET /api/link/status` and still requires the admin token. Windows and runtimes older than this change keep the TCP path, where the read returns `403` on such a Hub.
+
 ## Related guides
 
 - [Remote Hub Deployment](/guides/remote-hub/)
@@ -193,7 +195,7 @@ The check covers the intent folder and record. It does not protect against repla
 
 On the Home, run `ocx link probe child-a --json` to inspect the offered SSH fingerprint, key type and OpenCodex version. Verify the fingerprint through a trusted source. Then run `ocx link add child-a --expect-fingerprint SHA256:… --json`. The command probes again and refuses a mismatch before storing trust or issuing a key. Without the fingerprint flag, it requires an interactive terminal and an explicit `yes` after showing the fingerprint. It never prints the link key.
 
-Home-initiated connections now restart the Child after saving its connection, including capable older Child installations. The Child must already serve standalone OpenCodex on its configured port and expose bound restart support. POSIX Children need curl; Windows uses a bounded loopback HTTP request through .NET. Update or disconnect a Child that fails this preflight. Desktop and system OpenCodex installations take precedence over generic PATH shims; broken candidates are skipped. Windows x64 Children use encoded PowerShell commands without consuming key stdin.
+Home-initiated connections now restart the Child after saving its connection, including capable older Child installations. The Child must already serve standalone OpenCodex on its configured port and expose bound restart support. POSIX Children need curl; Windows uses a bounded loopback HTTP request through .NET. Update or disconnect a Child that fails this preflight. On macOS and Linux Children, Home first runs the OpenCodex installation that most recently started serving the Child, including an npm install under a custom prefix, so an older desktop app or PATH copy no longer answers for it. If that installation is gone or cannot report its version, Desktop and system OpenCodex installations take precedence over generic PATH shims; broken candidates are skipped. Windows x64 Children use encoded PowerShell commands without consuming key stdin. The preflight reads `ocx config show --json` under the runner's 4 MiB capture limit, so a Child with a large saved configuration still accepts a link; output past that limit answers `child_preflight_output_limit` and names the command to trim. When a phase fails, `ocx link add` prints the phase together with the Child's own reason, for example an invalid saved configuration or the failing command's last error line. That reason is shortened and has OpenCodex keys and URL query strings removed.
 
 ### Ephemeral Child machines (`ocx-child`)
 

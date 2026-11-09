@@ -1,6 +1,7 @@
 import { observeAccountAutoPauseRevisions, snapshotAutoPauseFingerprints } from "./account-auto-pause-revisions";
 import type { OcxConfig, OcxProviderConfig, ProviderCostOverlay } from "../types";
 import { configReasoningPinsConfigError } from "./provider-validation";
+import { carryPersistedTelemetry } from "./telemetry-carry";
 import { adoptCustomModelCatalogMigration, projectCustomModelCatalogMigration } from "../codex/custom-model-catalog-migration";
 import { refreshPreservedProviderOwner } from "../usage/user-cost-overlays";
 import { refreshConfigDerivedRegistries } from "./derived-registries";
@@ -117,6 +118,19 @@ export function adoptPersistedAdvisor(config: OcxConfig, persisted: OcxConfig["a
   if (baseline) baseline.advisor = structuredClone(persisted);
   clearConfigTopLevelDeletionIntent(config, ["advisor"]);
   if (baseline) clearConfigTopLevelDeletionIntent(baseline, ["advisor"]);
+}
+
+/** Adopt the committed telemetry consent subtree without advancing unrelated pending live intent. */
+export function adoptPersistedTelemetry(config: OcxConfig, persisted: OcxConfig["telemetry"]): void {
+  if (persisted === undefined) delete config.telemetry;
+  else config.telemetry = structuredClone(persisted);
+  const baseline = liveConfigBaseline.get(config);
+  if (baseline) {
+    if (persisted === undefined) delete baseline.telemetry;
+    else baseline.telemetry = structuredClone(persisted);
+  }
+  clearConfigTopLevelDeletionIntent(config, ["telemetry"]);
+  if (baseline) clearConfigTopLevelDeletionIntent(baseline, ["telemetry"]);
 }
 /**
  * The live config retains the address of the socket Bun actually opened, while
@@ -623,6 +637,9 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
     );
     if (provenanceProjection.configRebaseProvenance === undefined) delete projectedConfig.configRebaseProvenance;
     else projectedConfig.configRebaseProvenance = provenanceProjection.configRebaseProvenance;
+    // Telemetry consent is owned by the file (see carryPersistedTelemetry).
+    const telemetry = carryPersistedTelemetry(projectedConfig, onDisk as Record<string, unknown> | undefined);
+    if (telemetry.carried) adoptPersistedTelemetry(config, telemetry.value);
     const persistedBinding = (bindingBaseline || diskDeletedKeys.has("hostname")) && onDisk
       ? readPersistedServerBinding(onDisk, bindingBaseline ?? { port: config.port, hostname: config.hostname })
       : bindingBaseline;

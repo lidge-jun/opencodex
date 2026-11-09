@@ -7,12 +7,13 @@ import { cn } from "@/lib/utils";
 import { recentFailures, type HomeLogRow } from "./home-failures";
 import { startupChecklistDone } from "../startup-health-ui";
 import { useStartupChecklist } from "../hooks/useStartupChecklist";
+import { TelemetryProfileCard } from "../components/telemetry-profile-card";
 
 /*
  * Design system v2 landing page. It answers the two questions people open the dashboard
  * with — "is everything working?" and "what do I do next?" — and nothing else: settings
- * live in their own tier. Every figure comes from an endpoint another page already reads;
- * Home adds no API.
+ * live in their own tier. Every figure comes from an endpoint another page already reads; the one
+ * exception is the opt-in public profile card, which reads /api/telemetry/profile.
  */
 
 interface HomeProps {
@@ -109,6 +110,8 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
         <Stat label={t("shellV2.tileRequests")} value={number.format(requests7d)} />
         <Stat label={t("shellV2.tileTokens")} value={compact.format(tokens7d)} />
       </section>
+
+      <TelemetryProfileCard apiBase={apiBase} />
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
         <section className="flex flex-col gap-4 rounded-card bg-surface p-5">

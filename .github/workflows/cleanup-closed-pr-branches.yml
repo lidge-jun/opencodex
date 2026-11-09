@@ -5,9 +5,8 @@ name: Clean branches from closed pull requests
 # merging leaves its head branch behind forever, which is how this repository
 # accumulated dozens of dead `codex/*` and `ingw/*` branches.
 #
-# Scheduled workflows only run from the repository DEFAULT branch (currently
-# `main`), not from `dev`. Landing this on `dev` alone does not start the
-# cleanup until the change is also promoted to that default branch.
+# Scheduled workflows only run from the repository DEFAULT branch, which is
+# `dev`. A change lands on the live cleanup as soon as it is on `dev`.
 on:
   schedule:
     # Daily at 06:30 UTC (offset from the hour to reduce Action load spikes).

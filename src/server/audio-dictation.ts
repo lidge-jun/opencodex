@@ -7,12 +7,16 @@ import { resolveAudioUpstream, TRANSCRIPTION_MODEL, type AudioUpstream } from ".
 import type { RequestLogContext } from "./request-log";
 import { authorizationCredential } from "../lib/authorization-scheme";
 
-export const DICTATION_SESSION_MAX_MS = 300_000;
+export const DICTATION_SESSION_MAX_MS = 600_000;
+export const DICTATION_FINALIZATION_MAX_MS = 60_000;
 const DICTATION_FRAME_MAX_BYTES = 64 * 1024;
 type JsonObject = Record<string, unknown>;
 function object(value: unknown): value is JsonObject { return !!value && typeof value === "object" && !Array.isArray(value); }
 function integer(value: unknown, min: number, max: number): boolean {
   return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max;
+}
+function boundedString(value: unknown, max: number): boolean {
+  return typeof value === "string" && value.trim().length > 0 && Buffer.byteLength(value) <= max && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
 export function createDictationFrameValidator(): (frame: string | Buffer) => boolean {
@@ -25,21 +29,29 @@ export function createDictationFrameValidator(): (frame: string | Buffer) => boo
     if (!object(event)) return false;
     if (event.type === "session.start" && !started) {
       const config = event.config;
-      if (!object(config) || Object.keys(event).some(key => key !== "type" && key !== "config")) return false;
-      const fields = new Set(["input_audio_format", "sample_rate_hz", "num_channels", "max_buffer_size_bytes", "max_utterance_duration_ms", "session_ttl_ms", "provider_mode", "transcript_delivery_mode", "vad"]);
+      if (!object(config) || Object.keys(event).some(key => !["type", "config", "dictation_session_id", "attempt_id", "client_capabilities"].includes(key))) return false;
+      for (const key of ["dictation_session_id", "attempt_id"]) if (key in event && !boundedString(event[key], 128)) return false;
+      if ("client_capabilities" in event && (!Array.isArray(event.client_capabilities) || event.client_capabilities.length > 1
+        || event.client_capabilities.some(value => value !== "server_stop_requested"))) return false;
+      const fields = new Set(["input_audio_format", "sample_rate_hz", "num_channels", "max_buffer_size_bytes", "max_utterance_duration_ms", "session_ttl_ms", "provider_mode", "transcript_delivery_mode", "session_asset_mode", "language", "vad"]);
+      if ("session_asset_mode" in config && config.session_asset_mode !== "none") return false;
+      if ("language" in config && !boundedString(config.language, 64)) return false;
       if (Object.keys(config).some(key => !fields.has(key)) || config.input_audio_format !== "pcm16" || config.num_channels !== 1
         || !integer(config.sample_rate_hz, 8000, 192000) || !integer(config.max_buffer_size_bytes, 1, 4 * 1024 * 1024)
         || !integer(config.max_utterance_duration_ms, 1, 30000) || !integer(config.session_ttl_ms, 1, DICTATION_SESSION_MAX_MS)
-        || !["buffered", "streaming_sse"].includes(String(config.provider_mode))
-        || !["final_only", "segment", "delta"].includes(String(config.transcript_delivery_mode))) return false;
+        || typeof config.provider_mode !== "string" || !["buffered", "streaming_sse"].includes(config.provider_mode)
+        || typeof config.transcript_delivery_mode !== "string" || !["final_only", "segment", "delta"].includes(config.transcript_delivery_mode)) return false;
       const vad = config.vad;
       if (!object(vad) || Object.keys(vad).some(key => !["type", "threshold", "prefix_padding_ms", "silence_duration_ms"].includes(key))
-        || vad.type !== "server_vad" || typeof vad.threshold !== "number" || !Number.isFinite(vad.threshold) || vad.threshold < 0 || vad.threshold > 1
-        || !integer(vad.prefix_padding_ms, 0, 1000) || !integer(vad.silence_duration_ms, 0, 5000)) return false;
+        || vad.type !== "server_vad"
+        || ("threshold" in vad && (typeof vad.threshold !== "number" || !Number.isFinite(vad.threshold) || vad.threshold < 0 || vad.threshold > 1))
+        || ("prefix_padding_ms" in vad && !integer(vad.prefix_padding_ms, 0, 1000))
+        || ("silence_duration_ms" in vad && !integer(vad.silence_duration_ms, 0, 5000))) return false;
       started = true;
       return true;
     }
     if (!started) return false;
+    if (event.type === "audio.flush" && Object.keys(event).length === 1) return true;
     if (event.type === "session.close" && Object.keys(event).length === 1) { closed = true; return true; }
     if (event.type !== "audio.append" || Object.keys(event).some(key => key !== "type" && key !== "audio") || typeof event.audio !== "string" || !event.audio) return false;
     const bytes = Buffer.from(event.audio, "base64");
@@ -54,6 +66,7 @@ export interface AudioSocketTarget {
   protocols?: string[];
   validateFrame?: (frame: string | Buffer) => boolean;
   maxSessionMs: number;
+  finalizationMs?: number;
   finish: (outcome?: number | "timeout" | "connect_error") => void;
 }
 
@@ -90,6 +103,7 @@ export async function resolveDictationSocket(
     protocols: ["chatgpt-dictation", `openai-bearer.${token}`, "codex-desktop"],
     validateFrame: createDictationFrameValidator(),
     maxSessionMs: DICTATION_SESSION_MAX_MS,
+    finalizationMs: DICTATION_FINALIZATION_MAX_MS,
     finish: finishAudioUpstream(relay),
   };
 }

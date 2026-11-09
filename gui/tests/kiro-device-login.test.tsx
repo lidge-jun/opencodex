@@ -15,6 +15,8 @@ import { useProvidersOAuth } from "../src/pages/use-providers-oauth";
 import {
   finalizeKiroDeviceFlow, readKiroDeviceStatus, subscribeKiroDeviceFinal,
 } from "../src/kiro-device-login-finalizer";
+import { captureApiTarget, configureApiTargets } from "../src/api";
+import { standaloneApiTargets } from "../src/api-targets";
 
 const globals = ["document", "window", "navigator", "localStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previous: Record<(typeof globals)[number], unknown>;
@@ -510,6 +512,30 @@ test("an already-expired finalizer cancels its inherited read without polling", 
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(bodyCancelled).toBe(1);
   expect(requests.filter(r => r.url.includes("/api/oauth/status?"))).toHaveLength(1);
+});
+
+test("a stale Kiro capture ends the poll without requesting the new target", async () => {
+  const relay = (origin: string) => {
+    const base = standaloneApiTargets("");
+    return {
+      ...base,
+      connected: true,
+      shared: { ...base.shared, baseUrl: "/api/machine/hub-relay", serverOrigin: origin, transport: "relay" as const },
+      apiKeyId: "fixture-key",
+      relayTargetCheck: "expected-target-v1" as const,
+    };
+  };
+  configureApiTargets(relay("hub-a"));
+  const capture = captureApiTarget("shared");
+  configureApiTargets(relay("hub-b"));
+  try {
+    const outcome = await finalizeKiroDeviceFlow("/api/machine/hub-relay", flowId, Date.now() + 10_000, undefined, capture);
+    expect(outcome).toBe("ended");
+    // The old flow is not forwarded to the new hub.
+    expect(requests).toEqual([]);
+  } finally {
+    configureApiTargets(standaloneApiTargets(""));
+  }
 });
 
 test("closing aborts the pending timer and never dispatches a hook status fetch", async () => {

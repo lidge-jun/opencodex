@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import AddProviderModal from "../components/AddProviderModal";
 import ProviderModelsNotice, { type ProviderModelsNoticeProps } from "../components/ProviderModelsNotice";
 import AddCodexAccountModal from "../components/AddCodexAccountModal";
@@ -12,6 +13,7 @@ import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
 
 export function ProvidersPageModals({
   apiBase,
+  targetKey,
   config,
   adding,
   modelsNotice,
@@ -44,6 +46,7 @@ export function ProvidersPageModals({
   onContinueOauthTos,
 }: {
   apiBase: string;
+  targetKey?: string;
   config: ProvidersConfig;
   adding: boolean;
   modelsNotice?: ProviderModelsNoticeProps | null;
@@ -75,12 +78,23 @@ export function ProvidersPageModals({
   onCancelOauthTos: () => void;
   onContinueOauthTos: () => void;
 }) {
+  // The Codex login modal belongs to the logical target that opened it. A relay keeps
+  // the same apiBase across a re-pair, so close it on a target change instead of leaving
+  // A's flow on screen under B.
+  const codexIdentity = targetKey ?? apiBase;
+  const codexFrameIdentityRef = useRef(codexIdentity);
+  useEffect(() => {
+    if (codexFrameIdentityRef.current === codexIdentity) return;
+    codexFrameIdentityRef.current = codexIdentity;
+    onCloseCodexLogin();
+  }, [codexIdentity, onCloseCodexLogin]);
   return (
     <>
       {modelsNotice && <ProviderModelsNotice {...modelsNotice} />}
       {adding && (
         <AddProviderModal
           apiBase={apiBase}
+          targetKey={targetKey}
           existingNames={Object.keys(config.providers)}
           initialTier={addIntent?.tier}
           initialCustom={addIntent?.custom}
@@ -100,6 +114,7 @@ export function ProvidersPageModals({
       {codexLoginOpen && (
         <AddCodexAccountModal
           apiBase={apiBase}
+          targetKey={targetKey}
           onClose={onCloseCodexLogin}
           onAdded={onCodexAdded}
         />
