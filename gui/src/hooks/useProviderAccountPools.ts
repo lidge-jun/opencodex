@@ -2,6 +2,7 @@ import { parseQuotaFailureCode } from "../../../src/providers/quota-types";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import type { AccountLoadState, AccountQuotaReading } from "../components/provider-workspace/types";
 import { createBoundedFetch } from "../bounded-fetch";
+import { captureApiTarget, targetFetch } from "../api";
 import { confirmAction, requestTextValue } from "../action-dialogs";
 import { credentialAliasRejection, CREDENTIAL_ALIAS_MAX_LENGTH } from "../credential-alias";
 import { accountNeedsReauth } from "../oauth-health-display";
@@ -443,6 +444,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const switchAccount = async (provider: string, account: OAuthAccount, retryPending = false) => {
+    const capture = captureApiTarget("shared");
     if (account.active && !retryPending || account.needsReauth || account.paused || switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider) || selectionMutationsRef.current.has(`oauth:${provider}`)) return;
     const target = { provider, accountId: account.id };
     switchingAccountRef.current.set(provider, target);
@@ -454,7 +456,7 @@ export function useProviderAccountPools(deps: {
     const label = accountLabel(provider, account);
     const receipt = beginAffinityResetOperation(serverIdentity, provider);
     try {
-      const res = await fetch(`${apiBase}/api/oauth/accounts/active`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, accountId: account.id }) });
+      const res = await targetFetch(capture, `${apiBase}/api/oauth/accounts/active`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, accountId: account.id }) });
       if (!res.ok) {
         const failure = await res.json().catch(() => ({})) as { activeAccountId?: string | null;
           code?: string; retryable?: boolean; selectionCommitted?: boolean };
@@ -499,6 +501,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const setAccountThreshold = async (provider: string, account: OAuthAccount, threshold: number | null): Promise<boolean> => {
+    const capture = captureApiTarget("shared");
     const key = `oauth:${provider}`;
     if (switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider) || selectionMutationsRef.current.has(key)) return false;
     const mutationKey = invalidateSelectionReads(provider, "oauth");
@@ -512,7 +515,7 @@ export function useProviderAccountPools(deps: {
       requestsRef.current.add(bounded.controller);
       let result: Pick<OAuthAccount, "autoSwitchThresholdOverride" | "autoSwitchThreshold" | "effectiveAutoSwitchThreshold">;
       try {
-        const res = await fetch(`${apiBase}/api/oauth/accounts/auto-switch`, {
+        const res = await targetFetch(capture, `${apiBase}/api/oauth/accounts/auto-switch`, {
           method: "PUT", headers: { "Content-Type": "application/json" }, signal: bounded.signal,
           body: JSON.stringify({ provider, accountId: account.id, threshold }),
         });
@@ -549,6 +552,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const pauseAccount = async (provider: string, account: OAuthAccount, paused: boolean, retryAffinityReset = false) => {
+    const capture = captureApiTarget("shared");
     if (switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider) || selectionMutationsRef.current.has(`oauth:${provider}`)) return;
     const target = { provider, accountId: account.id };
     pausingAccountRef.current.set(provider, target);
@@ -563,7 +567,7 @@ export function useProviderAccountPools(deps: {
     let result: { activeAccountId?: string | null; activeAccountChanged?: boolean;
       code?: string; retryable?: boolean; pauseCommitted?: boolean };
     try {
-      const res = await fetch(`${apiBase}/api/oauth/accounts/pause`, {
+      const res = await targetFetch(capture, `${apiBase}/api/oauth/accounts/pause`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider, accountId: account.id, paused, ...(retryAffinityReset ? { retryAffinityReset: true } : {}) }),
@@ -628,10 +632,11 @@ export function useProviderAccountPools(deps: {
   };
 
   const retryAffinityResetOnly = async (provider: string, accountId: string) => {
+    const capture = captureApiTarget("shared");
     const key = `oauth:${provider}`;
     if (selectionMutationsRef.current.has(key) || switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider)) return;
     const retry = { kind: "reset" as const, accountId };
-    rememberAffinityResetRetry(apiBase, provider, retry);
+    rememberAffinityResetRetry(serverIdentity, provider, retry);
     const rememberedRetry = affinityResetRetries(serverIdentity)[provider];
     const target = { provider, accountId };
     const mutation = Symbol();
@@ -643,7 +648,7 @@ export function useProviderAccountPools(deps: {
       && selectionMutationsRef.current.get(key) === mutation && affinityResetRetries(serverIdentity)[provider] === rememberedRetry;
     const receipt = beginAffinityResetOperation(serverIdentity, provider);
     try {
-      const res = await fetch(`${apiBase}/api/oauth/accounts/affinity-reset`, { method: "PUT",
+      const res = await targetFetch(capture, `${apiBase}/api/oauth/accounts/affinity-reset`, { method: "PUT",
         headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider }) });
       if (!res.ok) {
         const failure = (await res.json().catch(() => ({})) ?? {}) as { code?: string; retryable?: boolean };
@@ -701,6 +706,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const switchApiKey = async (provider: string, entry: ApiKeyEntry) => {
+    const capture = captureApiTarget("shared");
     if (entry.active && !entry.disabled || selectionMutationsRef.current.has(`key:${provider}`)) return;
     const key = invalidateSelectionReads(provider, "api-key");
     const mutation = Symbol();
@@ -709,12 +715,12 @@ export function useProviderAccountPools(deps: {
     let resumed = false;
     try {
       if (entry.disabled) {
-        const resumeResponse = await fetch(`${apiBase}/api/providers/keys/pause`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, id: entry.id, paused: false }) });
+        const resumeResponse = await targetFetch(capture, `${apiBase}/api/providers/keys/pause`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, id: entry.id, paused: false }) });
         if (!currentMutation()) return;
         if (!resumeResponse.ok) { notify(t("prov.keySwitchFail"), false); return; }
         resumed = true;
       }
-      const res = await fetch(`${apiBase}/api/providers/keys/active`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, id: entry.id }) });
+      const res = await targetFetch(capture, `${apiBase}/api/providers/keys/active`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, id: entry.id }) });
       if (!currentMutation()) return;
       if (!res.ok) {
         const failure = await res.json().catch(() => ({})) as { error?: string };
@@ -740,13 +746,14 @@ export function useProviderAccountPools(deps: {
   };
 
   const removeApiKey = async (provider: string, entry: ApiKeyEntry) => {
+    const capture = captureApiTarget("shared");
     const consented = await confirmAction({
       message: t("prov.keyRemoveConfirm", { key: entry.label ?? entry.masked }),
       confirmLabel: t("common.remove"),
       tone: "danger",
     });
     if (!consented) return;
-    const res = await fetch(`${apiBase}/api/providers/keys?name=${encodeURIComponent(provider)}&id=${encodeURIComponent(entry.id)}`, { method: "DELETE" });
+    const res = await targetFetch(capture, `${apiBase}/api/providers/keys?name=${encodeURIComponent(provider)}&id=${encodeURIComponent(entry.id)}`, { method: "DELETE" });
     if (res.ok) {
       notify(t("prov.keyRemoved", { key: entry.label ?? entry.masked }), true);
       void fetchKeyPools(Object.keys(keyPools));
@@ -756,10 +763,11 @@ export function useProviderAccountPools(deps: {
   };
 
   const addApiKeyValue = async (provider: string, rawKey: string): Promise<boolean> => {
+    const capture = captureApiTarget("shared");
     const key = rawKey.trim();
     if (!key) return false;
     try {
-      const res = await fetch(`${apiBase}/api/providers/keys`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, key }) });
+      const res = await targetFetch(capture, `${apiBase}/api/providers/keys`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, key }) });
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
         notify(data.error || t("prov.keyAddFail"), false);
@@ -784,6 +792,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const editCredentialAlias = async (provider: string, type: "oauth" | "api-key", id: string, current?: string) => {
+    const capture = captureApiTarget("shared");
     const entered = await requestTextValue({
       message: t("prov.aliasPrompt"),
       initialValue: current ?? "",
@@ -792,7 +801,7 @@ export function useProviderAccountPools(deps: {
     });
     if (entered === null) return;
     const alias = entered.trim();
-    const response = await fetch(type === "oauth" ? `${apiBase}/api/oauth/accounts/alias` : `${apiBase}/api/providers/keys/alias`, {
+    const response = await targetFetch(capture, type === "oauth" ? `${apiBase}/api/oauth/accounts/alias` : `${apiBase}/api/providers/keys/alias`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(type === "oauth" ? { provider, accountId: id, alias } : { name: provider, id, alias }),
     });
@@ -811,6 +820,7 @@ export function useProviderAccountPools(deps: {
   );
 
   const removeAccount = async (provider: string, account: OAuthAccount) => {
+    const capture = captureApiTarget("shared");
     const label = accountLabel(provider, account);
     const consented = await confirmAction({
       message: t("prov.accountRemoveConfirm", { email: label }),
@@ -846,7 +856,7 @@ export function useProviderAccountPools(deps: {
     let committed = false;
     const receipt = beginAffinityResetOperation(serverIdentity, provider);
     try {
-      const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}&id=${encodeURIComponent(account.id)}${pending ? "&retryAffinityReset=true" : ""}`, { method: "DELETE" });
+      const res = await targetFetch(capture, `${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}&id=${encodeURIComponent(account.id)}${pending ? "&retryAffinityReset=true" : ""}`, { method: "DELETE" });
       let result: { code?: string; retryable?: boolean; deletionCommitted?: boolean; affinityResetConfirmed?: boolean };
       let partial = false;
       if (res.ok) result = (await res.json().catch(() => ({})) ?? {}) as typeof result;
@@ -904,11 +914,11 @@ export function useProviderAccountPools(deps: {
     // guaranteeing the request goes out.
     // Keyed on the provider list because this effect re-runs whenever that memo changes, and
     // StrictMode double-invokes it on mount; an uncancellable microtask would otherwise duplicate.
-    const key = `${apiBase}:${oauthCardProviders.join(",")}`;
+    const key = `${serverIdentity}:${apiBase}:${oauthCardProviders.join(",")}`;
     if (accountSetsKeyRef.current === key) return;
     accountSetsKeyRef.current = key;
     void Promise.resolve().then(() => { void fetchAccountSets(oauthCardProviders); });
-  }, [apiBase, fetchAccountSets, oauthCardProviders]);
+  }, [apiBase, fetchAccountSets, oauthCardProviders, serverIdentity]);
 
   const keyCardProviders = useMemo(
     () => config ? Object.entries(config.providers).filter(([, p]) => p.hasApiKey && p.authMode !== "oauth" && p.authMode !== "forward").map(([n]) => n) : [],
@@ -916,11 +926,11 @@ export function useProviderAccountPools(deps: {
   );
   useEffect(() => {
     if (keyCardProviders.length === 0) return;
-    const key = `${apiBase}:${keyCardProviders.join(",")}`;
+    const key = `${serverIdentity}:${apiBase}:${keyCardProviders.join(",")}`;
     if (keyPoolsKeyRef.current === key) return;
     keyPoolsKeyRef.current = key;
     void Promise.resolve().then(() => { void fetchKeyPools(keyCardProviders); });
-  }, [apiBase, fetchKeyPools, keyCardProviders]);
+  }, [apiBase, fetchKeyPools, keyCardProviders, serverIdentity]);
 
   const activeAccountNeedsReauth = useMemo(
     () => buildActiveAccountNeedsReauthMap(accountSets, codexActiveNeedsReauth),

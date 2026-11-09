@@ -4,6 +4,7 @@ import { createBoundedFetch } from "../bounded-fetch";
 import { startVisibilityPoll } from "../visibility-poll";
 import { normalizeAccountPriority } from "../account-priority";
 import { useKeyedClientResource } from "../client-resource";
+import { captureApiTarget, targetFetch } from "../api";
 import { extractAutoSwitchThresholdPayload } from "../codex-auto-switch";
 import { quotaAutoRefreshAvailability, type AccountQuota } from "../codex-quota-utils";
 import { accountNeedsReauth } from "../oauth-health-display";
@@ -201,12 +202,13 @@ function normalizeAccountAutoSwitchThreshold(value: unknown): number | null {
     : null;
 }
 
-export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccountPoolController {
-  const seed = lastGoodByBase.get(apiBase);
+export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?: string): CodexAccountPoolController {
+  const seedKey = targetKey ?? apiBase;
+  const seed = lastGoodByBase.get(seedKey);
   const [accounts, setAccounts] = useState<CodexAccountEntry[]>(() => seed?.accounts ?? []);
   const usage30d = useKeyedClientResource<CodexAccountUsageSummary>(
-    usageSummary30dResourceKey(apiBase, "codex"),
-    [apiBase],
+    usageSummary30dResourceKey(apiBase, "codex", seedKey),
+    [apiBase, seedKey],
     async (signal) => {
       const response = await fetch(`${apiBase}/api/usage?range=30d&surface=codex`, { signal });
       return readUsageResponseJson<CodexAccountUsageSummary>(response, "account usage load failed");
@@ -291,7 +293,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     // Validation can include token recovery, WHAM and two 30s model attempts.
     // Budget per known row (conservatively ignoring server parallelism), plus
     // native-main lookup time. Ordinary reads retain their short polling deadline.
-    const knownAccounts = lastGoodByBase.get(apiBase)?.accounts.length ?? 0;
+    const knownAccounts = lastGoodByBase.get(seedKey)?.accounts.length ?? 0;
     const bounded = createBoundedFetch(validatePending ? 30_000 + 120_000 * Math.max(1, knownAccounts) : 20_000);
     // A periodic read must not supersede this longer-running explicit operation.
     const validationLease = validatePending ? {} as PauseToken : null;
@@ -395,8 +397,8 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
       if (accountsOk) {
         setLoadState("ready");
         hasLoadedRef.current = true;
-        const prior = lastGoodByBase.get(apiBase);
-        lastGoodByBase.set(apiBase, {
+        const prior = lastGoodByBase.get(seedKey);
+        lastGoodByBase.set(seedKey, {
           accounts: nextAccounts ?? prior?.accounts ?? [],
           activeId: nextActiveId !== undefined ? nextActiveId : (prior?.activeId ?? null),
         });
@@ -418,7 +420,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
       setFirstAttemptSettled(true);
     }
   // oxlint-disable-next-line react/react-compiler -- preserve existing callback dependency semantics during Oxlint migration
-  }, [apiBase]);
+  }, [apiBase, seedKey]);
 
   // Initial load plus background refresh. Owned here so mounting or unmounting a surface
   // never changes the request count.
@@ -438,10 +440,10 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     //
     // Guarded per identity because StrictMode runs this effect twice on mount: without the guard
     // the uncancellable microtask fires two identical loads, doubling /accounts and /active.
-    if (initialLoadKeyRef.current === apiBase) return;
-    initialLoadKeyRef.current = apiBase;
+    if (initialLoadKeyRef.current === seedKey) return;
+    initialLoadKeyRef.current = seedKey;
     void Promise.resolve().then(() => { void load(); });
-  }, [apiBase, enabled, load]);
+  }, [apiBase, seedKey, enabled, load]);
 
   // Soft /accounts returns before background WHAM finishes. Re-poll cheaply until
   // credentialed rows have quota (or the user navigates away). Keyed on the boolean so
@@ -477,6 +479,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   }, []);
 
   const switchAccount = useCallback(async (id: string | null, options?: { expectedPinnedAccountId: string }) => {
+    const capture = captureApiTarget("shared");
     // Cross-gated with the order write, not just with itself: both PUTs move the pin,
     // and in opposite directions, so letting them overlap lets the client settle on
     // the inverse of the server's final pin until a reload happens to correct it.
@@ -485,7 +488,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     setSwitchingId(id ?? "__main__");
     let failure: "request" | "pin_changed" = "request";
     try {
-      const response = await fetch(`${apiBase}/api/codex-auth/active`, {
+      const response = await targetFetch(capture, `${apiBase}/api/codex-auth/active`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accountId: id, ...(options ? { expectedPinnedAccountId: options.expectedPinnedAccountId } : {}) }),
@@ -742,8 +745,9 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   }, [apiBase, load]);
 
   const removeAccount = useCallback(async (id: string) => {
+    const capture = captureApiTarget("shared");
     try {
-      const response = await fetch(
+      const response = await targetFetch(capture,
         `${apiBase}/api/codex-auth/accounts?id=${encodeURIComponent(id)}`,
         { method: "DELETE" },
       );

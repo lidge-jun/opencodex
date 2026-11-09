@@ -159,7 +159,7 @@ describe("Provider Settings drafts are scoped to their dashboard target", () => 
     expect(calls).toEqual(["a"]);
     expect(noteField().value).toBe("saved B");
     expect(host.textContent).not.toContain("Settings saved.");
-    expect(store.read("/a", "shared-provider")).toBeUndefined();
+    expect(store.read("/a", "shared-provider")?.draft.note).toBe("draft for A");
   });
 
   test("typing while a save is in flight keeps the newer draft", async () => {
@@ -241,7 +241,7 @@ describe("Provider Settings drafts are scoped to their dashboard target", () => 
     await act(async () => { host.querySelector<HTMLButtonElement>("#pws-tab-settings")!.click(); });
 
     expect(noteField().value).toBe("saved A");
-    expect(store.read("/a", "shared-provider")).toBeUndefined();
+    expect(store.read("/a", "shared-provider")?.draft.note).toBe("saved A");
   });
 
   test("deselecting through the leave dialog also clears the parked draft", async () => {
@@ -276,7 +276,7 @@ describe("Provider Settings drafts are scoped to their dashboard target", () => 
     await act(async () => { host.querySelector<HTMLButtonElement>("#pws-tab-settings")!.click(); });
 
     expect(noteField().value).toBe("saved A");
-    expect(store.read("/a", "shared-provider")).toBeUndefined();
+    expect(store.read("/a", "shared-provider")?.draft.note).toBe("saved A");
   });
 });
 
@@ -488,9 +488,12 @@ describe("Provider JSON drafts are scoped to their dashboard target", () => {
     expect(latestEditor!.jsonConflicts).toEqual(["providers.shared-provider.note"]);
     expect(JSON.parse(latestEditor!.draft).providers["shared-provider"].note).toBe("my draft");
     expect(button("Save")?.disabled).toBe(true);
-    await act(async () => { button("Use saved values")!.click(); });
-    expect(JSON.parse(latestEditor!.draft).providers["shared-provider"].note).toBe("external edit");
+    const resolved = JSON.parse(latestEditor!.draft);
+    resolved.providers["shared-provider"].note = "external edit";
+    resolved.providers["shared-provider"].baseUrl = "https://resolved.example.test/v1";
+    await act(async () => { latestEditor!.setDraft(JSON.stringify(resolved, null, 2)); });
     expect(latestEditor!.jsonConflicts).toEqual([]);
+    expect(button("Save")?.disabled).toBe(false);
   });
 
   test("Restore during a conflict restores the latest saved values", async () => {

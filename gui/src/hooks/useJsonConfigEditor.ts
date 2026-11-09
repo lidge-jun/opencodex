@@ -44,9 +44,11 @@ interface JsonEditorTargetState {
   leaveOpen: boolean;
   /** Paths both sides changed; the user must edit the draft or use saved values. */
   conflicts: string[];
+  /** The user's pre-merge baseline, retained so an edit can revalidate conflict paths. */
+  conflictBase: string;
 }
 
-const EMPTY_EDITOR: JsonEditorTargetState = { open: false, draft: "", baseline: "", saving: false, leaveOpen: false, conflicts: [] };
+const EMPTY_EDITOR: JsonEditorTargetState = { open: false, draft: "", baseline: "", saving: false, leaveOpen: false, conflicts: [], conflictBase: "" };
 
 function hasJsonConflict(state: JsonEditorTargetState, savedBaseline: string): boolean {
   return state.open && state.draft !== state.baseline && savedBaseline !== "" && state.baseline !== savedBaseline;
@@ -117,7 +119,7 @@ export function useJsonConfigEditor(deps: {
       const baseline = JSON.parse(baselineText) as unknown;
       // A formatting-only edit must not PUT an identical baseline and next pair.
       if (deepEqualJson(parsed, baseline)) {
-        update(() => ({ open: false, draft: baselineText, baseline: baselineText, saving: false, leaveOpen: false, conflicts: [] }), saveTargetKey);
+        update(() => ({ open: false, draft: baselineText, baseline: baselineText, saving: false, leaveOpen: false, conflicts: [], conflictBase: "" }), saveTargetKey);
         if (apiBaseRef.current === saveApiBase && targetKeyRef.current === saveTargetKey) notify(t("prov.saved"), true);
         return true;
       }
@@ -141,8 +143,8 @@ export function useJsonConfigEditor(deps: {
       // Edits typed while the PUT was in flight stay in the editor; only the baseline
       // moves to what the server just accepted.
       update(current => current.draft === draft
-        ? { open: false, draft: saved, baseline: saved, saving: false, leaveOpen: false, conflicts: [] }
-        : { ...current, baseline: saved, saving: false, conflicts: [] }, saveTargetKey);
+        ? { open: false, draft: saved, baseline: saved, saving: false, leaveOpen: false, conflicts: [], conflictBase: "" }
+        : { ...current, baseline: saved, saving: false, conflicts: [], conflictBase: "" }, saveTargetKey);
       // The PUT went to the target that owned this baseline. Its success belongs there;
       // announcing it on another target would claim a save the operator cannot see.
       if (apiBaseRef.current !== saveApiBase || targetKeyRef.current !== saveTargetKey) return true;
@@ -162,13 +164,13 @@ export function useJsonConfigEditor(deps: {
 
   const openJsonEditor = useCallback(() => {
     const baseline = savedBaseline || state.draft;
-    update(() => ({ open: true, draft: baseline, baseline, saving: false, leaveOpen: false, conflicts: [] }));
+    update(() => ({ open: true, draft: baseline, baseline, saving: false, leaveOpen: false, conflicts: [], conflictBase: "" }));
   }, [savedBaseline, state.draft, update]);
 
   const discardJsonEditor = useCallback(() => {
     update(current => {
       const baseline = savedBaseline || current.baseline;
-      return { open: false, draft: baseline, baseline, saving: false, leaveOpen: false, conflicts: [] };
+      return { open: false, draft: baseline, baseline, saving: false, leaveOpen: false, conflicts: [], conflictBase: "" };
     });
   }, [savedBaseline, update]);
 
@@ -182,23 +184,31 @@ export function useJsonConfigEditor(deps: {
 
   const restoreJsonEditor = useCallback(() => {
     const baseline = savedBaseline || state.baseline;
-    update(() => ({ open: true, draft: baseline, baseline, saving: false, leaveOpen: false, conflicts: [] }));
+    update(() => ({ open: true, draft: baseline, baseline, saving: false, leaveOpen: false, conflicts: [], conflictBase: "" }));
   }, [savedBaseline, state.baseline, update]);
 
   const setDraft = useCallback((value: string) => {
-    update(current => ({ ...current, draft: value }));
-  }, [update]);
+    update(current => {
+      if (savedBaseline === "") return { ...current, draft: value };
+      try {
+        const merged = threeWayMergeJson(JSON.parse(current.conflictBase || current.baseline), JSON.parse(savedBaseline), JSON.parse(value));
+        return { ...current, draft: value, conflicts: merged.conflicts, ...(merged.conflicts.length === 0 ? { conflictBase: "" } : {}) };
+      } catch {
+        return { ...current, draft: value };
+      }
+    });
+  }, [savedBaseline, update]);
 
   const setJsonLeaveOpen = useCallback((value: boolean) => {
     update(current => ({ ...current, leaveOpen: value }));
   }, [update]);
 
   /** Saved values moved under an open draft; the user must choose explicitly. */
-  const jsonConflict = hasJsonConflict(state, savedBaseline);
+  const jsonConflict = hasJsonConflict(state, savedBaseline) || state.conflicts.length > 0;
 
   const useSavedJsonValues = useCallback(() => {
     const baseline = savedBaseline || state.baseline;
-    update(() => ({ open: true, draft: baseline, baseline, saving: false, leaveOpen: false, conflicts: [] }));
+    update(() => ({ open: true, draft: baseline, baseline, saving: false, leaveOpen: false, conflicts: [], conflictBase: "" }));
   }, [savedBaseline, state.baseline, update]);
 
   const keepJsonDraft = useCallback(() => {
@@ -214,16 +224,15 @@ export function useJsonConfigEditor(deps: {
       return;
     }
     const merged = threeWayMergeJson(baseValue, latestValue, draftValue);
-    if (!merged.ok) {
-      update(current => ({ ...current, conflicts: merged.conflicts }));
-      return;
-    }
     if (deepEqualJson(merged.value, latestValue)) {
-      update(() => ({ open: false, draft: latestBaseline, baseline: latestBaseline, saving: false, leaveOpen: false, conflicts: [] }));
+      update(() => ({ open: false, draft: latestBaseline, baseline: latestBaseline, saving: false, leaveOpen: false, conflicts: [], conflictBase: "" }));
       return;
     }
     const draft = JSON.stringify(merged.value, null, 2);
-    update(current => ({ ...current, draft, baseline: latestBaseline, conflicts: [] }));
+    update(current => ({
+      ...current, draft, baseline: latestBaseline, conflicts: merged.conflicts,
+      conflictBase: merged.conflicts.length > 0 ? state.baseline : "",
+    }));
   }, [savedBaseline, state.baseline, state.draft, update]);
 
   return {

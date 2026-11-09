@@ -7,6 +7,7 @@ import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch"
 import { loginPollAttempts } from "../oauth-login-budget";
 import type { OAuthAccount, OAuthStatus } from "./providers-shared";
 import { oauthLabel } from "./providers-shared";
+import { captureApiTarget, targetFetch } from "../api";
 
 type AccountSet = { activeAccountId: string | null; accounts: OAuthAccount[] };
 
@@ -129,6 +130,7 @@ export function useProvidersOAuth({
   }, [aliveRef, apiBase, bumpLoginGeneration, cancelServerLogin, notify, setBusy, setLoginInfo, t, targetKey]);
 
   const loginOAuth = async (provider: string, addAccount = false, accountId?: string) => {
+    const capture = captureApiTarget("shared");
     const generation = bumpLoginGeneration(provider);
     const targetId = targetKey ?? apiBase;
     const targetCurrent = () => aliveRef.current && targetKeyRef.current === targetId;
@@ -140,7 +142,7 @@ export function useProvidersOAuth({
     try {
       const res = await afterOAuthCancellation(apiBase, provider, () => {
         if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
-        return fetch(`${apiBase}/api/oauth/login`, {
+        return targetFetch(capture, `${apiBase}/api/oauth/login`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -176,7 +178,7 @@ export function useProvidersOAuth({
         await new Promise(r => setTimeout(r, 2000));
         if (oauthLoginGenerationRef.current!.get(provider) !== generation || !targetCurrent()) return;
         const isCurrentStatusRead = captureOauthStatusRead?.(provider);
-        const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${provider}`).catch(() => null);
+        const sRes = await targetFetch(capture, `${apiBase}/api/oauth/status?provider=${provider}`).catch(() => null);
         const s: (OAuthStatus & { accounts?: OAuthAccount[]; activeAccountId?: string | null }) | null = sRes
           ? ((await readJsonIfOk<OAuthStatus & { accounts?: OAuthAccount[]; activeAccountId?: string | null }>(sRes)) ?? null)
           : null;
@@ -274,6 +276,7 @@ export function useProvidersOAuth({
   };
 
   const logoutOAuth = async (provider: string) => {
+    const capture = captureApiTarget("shared");
     const logoutTarget = targetKey ?? apiBase;
     const finishLogout = beginAccountLogout?.(provider);
     if (beginAccountLogout && !finishLogout) {
@@ -294,7 +297,7 @@ export function useProvidersOAuth({
     setLoginInfo(current => current?.provider === provider ? null : current);
     let success = false;
     try {
-      const res = await fetch(`${apiBase}/api/oauth/logout?provider=${encodeURIComponent(provider)}`, { method: "POST" });
+      const res = await targetFetch(capture, `${apiBase}/api/oauth/logout?provider=${encodeURIComponent(provider)}`, { method: "POST" });
       if (!res.ok) {
         notify(t("prov.logoutFail", { provider: oauthLabel(provider) }), false);
       } else {

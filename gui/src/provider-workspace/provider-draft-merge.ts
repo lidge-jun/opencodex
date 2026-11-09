@@ -8,9 +8,7 @@
  */
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
-export type JsonMergeResult =
-  | { ok: true; value: JsonValue }
-  | { ok: false; conflicts: string[] };
+export type JsonMergeResult = { value: JsonValue; conflicts: string[] };
 
 function isJsonObject(value: unknown): value is Record<string, JsonValue> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -36,11 +34,11 @@ function pathKey(path: string, key: string): string {
 }
 
 export function threeWayMergeJson(base: unknown, latest: unknown, draft: unknown, path = ""): JsonMergeResult {
-  if (deepEqualJson(draft, base)) return { ok: true, value: latest as JsonValue };
-  if (deepEqualJson(latest, base)) return { ok: true, value: draft as JsonValue };
-  if (deepEqualJson(draft, latest)) return { ok: true, value: draft as JsonValue };
+  if (deepEqualJson(draft, base)) return { value: latest as JsonValue, conflicts: [] };
+  if (deepEqualJson(latest, base)) return { value: draft as JsonValue, conflicts: [] };
+  if (deepEqualJson(draft, latest)) return { value: draft as JsonValue, conflicts: [] };
   if (!isJsonObject(base) || !isJsonObject(latest) || !isJsonObject(draft)) {
-    return { ok: false, conflicts: [path || "$"] };
+    return { value: draft as JsonValue, conflicts: [path || "$"] };
   }
 
   const out: Record<string, JsonValue> = {};
@@ -71,6 +69,7 @@ export function threeWayMergeJson(base: unknown, latest: unknown, draft: unknown
       if (!inLatest) { out[key] = draftValue!; continue; }
       if (deepEqualJson(latestValue, draftValue)) { out[key] = draftValue!; continue; }
       conflicts.push(pathKey(path, key));
+      out[key] = draftValue!;
       continue;
     }
 
@@ -78,12 +77,13 @@ export function threeWayMergeJson(base: unknown, latest: unknown, draft: unknown
       // The saved document removed this key.
       if (deepEqualJson(draftValue, baseValue)) continue;
       conflicts.push(pathKey(path, key));
+      out[key] = draftValue!;
       continue;
     }
 
     const merged = threeWayMergeJson(baseValue, latestValue, draftValue, pathKey(path, key));
-    if (merged.ok) out[key] = merged.value;
-    else conflicts.push(...merged.conflicts);
+    out[key] = merged.value;
+    conflicts.push(...merged.conflicts);
   }
-  return conflicts.length > 0 ? { ok: false, conflicts } : { ok: true, value: out };
+  return { value: out, conflicts };
 }

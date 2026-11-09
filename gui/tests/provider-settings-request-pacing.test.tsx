@@ -254,3 +254,29 @@ test("an invalid nonempty cap blocks replacing a model rule instead of dropping 
   expect(modelNumbers[2]!.value).toBe("0");
   await act(async () => { container.unmount(); });
 });
+
+test("nonempty invalid RPM, delay and model values are rejected instead of silently dropped", async () => {
+  const patches: ProviderUpdatePatch[] = [];
+  const item: WorkspaceItem = { name: "fixture", adapter: "openai-chat", baseUrl: "https://example.test", authMode: "key" };
+  const container = await renderSettings(item, async (_name, patch) => { patches.push(patch); return { ok: true }; });
+  await act(async () => { container.querySelector<HTMLInputElement>(".pwi-pacing-toggle input")!.click(); });
+  const providerNumbers = container.querySelectorAll<HTMLInputElement>('.pwi-pacing-grid:not(.pwi-pacing-grid--model) input[type="number"]');
+  await setInput(providerNumbers[0]!, "70000");
+  await act(async () => { container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!.click(); });
+  expect(patches).toHaveLength(0);
+  expect(container.textContent).toContain("Enter a valid pacing value");
+
+  await setInput(providerNumbers[0]!, "30");
+  await setInput(providerNumbers[1]!, "3600001");
+  await act(async () => { container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!.click(); });
+  expect(patches).toHaveLength(0);
+
+  await setInput(providerNumbers[1]!, "");
+  const modelInput = container.querySelector<HTMLInputElement>('.pwi-pacing-grid--model input[list]')!;
+  const modelNumbers = container.querySelectorAll<HTMLInputElement>('.pwi-pacing-grid--model input[type="number"]');
+  await setInput(modelInput, "model-a");
+  await setInput(modelNumbers[0]!, "0");
+  await act(async () => { container.querySelector<HTMLButtonElement>(".pwi-pacing-grid--model button")!.click(); });
+  expect(container.textContent).toContain("Enter a valid pacing value");
+  expect(container.querySelector(".pwi-pacing-overrides")).toBeNull();
+});

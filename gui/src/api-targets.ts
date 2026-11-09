@@ -80,6 +80,8 @@ export interface ApiTargets {
   machine: ApiTarget;
   shared: ApiTarget;
   apiKeyId?: string;
+  /** The machine listener advertises this when its relay can check an expected target. */
+  relayTargetCheck?: "expected-target-v1";
   catalogSyncedAt?: string;
   /** Remote Link Child: the shared plane is the Home, read-only, relayed by this machine. */
   link?: { linkId: string; home: string | null };
@@ -92,6 +94,7 @@ export interface MachineStatusV1 {
   sharedBase: string;
   sharedServerOrigin: string;
   managementTransport: "direct" | "relay";
+  relayTargetCheck?: "expected-target-v1";
   apiKeyId: string;
   protocolVersion: 1;
   connectedAt: string;
@@ -143,6 +146,7 @@ function validStatus(value: unknown): value is MachineStatusV1 {
     && typeof row.machineBase === "string" && typeof row.sharedBase === "string"
     && typeof row.sharedServerOrigin === "string" && typeof row.apiKeyId === "string"
     && row.apiKeyId.trim().length > 0 && typeof row.connectedAt === "string"
+    && (row.relayTargetCheck === undefined || row.relayTargetCheck === "expected-target-v1")
     && (row.catalogSyncedAt === undefined || typeof row.catalogSyncedAt === "string");
 }
 
@@ -193,7 +197,11 @@ export function targetsFromMachineStatus(initialBase: string, status: MachineSta
   const link = linkFromStatus(status.link);
   const usageTopology: UsageTopology = status.link !== undefined ? (link && status.managementTransport === "relay" ? "link" : "unknown")
     : status.managementTransport === "direct" || sharedOrigin !== machineOrigin ? "hub" : "unknown";
-  return { connected: true, usageTopology, machine, shared, apiKeyId: status.apiKeyId, catalogSyncedAt: status.catalogSyncedAt, ...(link ? { link } : {}) };
+  return {
+    connected: true, usageTopology, machine, shared, apiKeyId: status.apiKeyId,
+    ...(status.relayTargetCheck === "expected-target-v1" ? { relayTargetCheck: "expected-target-v1" as const } : {}),
+    catalogSyncedAt: status.catalogSyncedAt, ...(link ? { link } : {}),
+  };
 }
 
 export function apiBaseForPlane(plane: ApiPlane, targets: ApiTargets): string {
@@ -209,8 +217,9 @@ export function apiBaseForPlane(plane: ApiPlane, targets: ApiTargets): string {
  * the label never carries the key id.
  */
 export function apiTargetIdentity(targets: ApiTargets): { key: string; label: string } {
+  const linkKey = targets.link?.linkId ? `link:${targets.link.linkId}` : null;
   return {
-    key: `${targets.shared.serverOrigin}\u0000${targets.apiKeyId ?? ""}`,
+    key: linkKey ? `${targets.shared.serverOrigin}\u0000${linkKey}` : targets.shared.serverOrigin,
     label: targets.shared.serverOrigin,
   };
 }

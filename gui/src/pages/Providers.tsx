@@ -15,6 +15,7 @@ import { useProviderAccountPools, type AccountSelectionTarget } from "../hooks/u
 import { useCodexAccountPool } from "../hooks/useCodexAccountPool";
 import { useJsonConfigEditor } from "../hooks/useJsonConfigEditor";
 import { createProviderDraftStore, providerDraftTargetLabel } from "../provider-workspace/target-drafts";
+import { TARGET_PREFLIGHT_LEGACY_EVENT } from "../api";
 import { useKeyedClientResource } from "../client-resource";
 import { readSessionListCache } from "../session-list-cache";
 import type { ProvidersConfig } from "./providers-shared";
@@ -285,6 +286,18 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
     setStatusTone("err");
   }, []);
 
+  const legacyPreflightNoticesRef = useRef(new Set<string>());
+  useEffect(() => {
+    const onLegacyPreflight = (event: Event) => {
+      const detail = (event as CustomEvent<{ targetKey?: string }>).detail;
+      if (!detail?.targetKey || detail.targetKey !== draftTargetKey || legacyPreflightNoticesRef.current.has(detail.targetKey)) return;
+      legacyPreflightNoticesRef.current.add(detail.targetKey);
+      notify(t("prov.legacyTargetPreflight"), false, "warn");
+    };
+    window.addEventListener(TARGET_PREFLIGHT_LEGACY_EVENT, onLegacyPreflight);
+    return () => window.removeEventListener(TARGET_PREFLIGHT_LEGACY_EVENT, onLegacyPreflight);
+  }, [draftTargetKey, notify, t]);
+
   const notifyCodexCompletion = useCallback((completion: CodexAccountMutationCompletion) => {
     if (completion.validationPending || completion.catalogRefreshPending) {
       setStatus(t(completion.validationPending ? "pws.healthLabel.validationPending" : "codexAuth.catalogRefreshPending"));
@@ -326,8 +339,8 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
   // AddProviderModal). Prefetch usage too so the catalog does not paint alpha then
   // re-rank when the slow usage probe (~5s cold) finally returns.
   const presetResource = useKeyedClientResource(
-    `add-provider-presets:${apiBase}`,
-    [apiBase],
+    `add-provider-presets:${draftTargetKey}`,
+    [apiBase, draftTargetKey],
     async (signal) => {
       const res = await fetch(`${apiBase}/api/provider-presets`, { signal });
       if (!res.ok) throw new Error(String(res.status));
@@ -336,7 +349,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
     },
   );
   useKeyedClientResource(
-    usageSummary30dResourceKey(apiBase),
+    usageSummary30dResourceKey(apiBase, "all", draftTargetKey),
     [apiBase],
     async (signal) => {
       const res = await fetch(`${apiBase}/api/usage?range=30d`, { signal });
@@ -374,7 +387,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
   // WP3: one Codex account controller for the whole Providers page, shared by the
   // Overview tab and the Accounts tab so a mutation on either is instantly visible on
   // both. Mounting CodexAccountPool twice used to fork this state.
-  const codexPool = useCodexAccountPool(apiBase);
+  const codexPool = useCodexAccountPool(apiBase, true, draftTargetKey);
   // Single source for Codex reauth health: the controller derives it from the same
   // accounts/active pair this page used to poll on its own 30s timer.
   const codexActiveNeedsReauth = codexPool.activeNeedsReauth;
@@ -417,7 +430,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
     return refreshAccountRosters(target);
   }, [refreshAccountRosters, oauthCardProviders, keyCardProviders]);
   const recoverSelectionStream = useAccountSelectionEvents(apiBase, config !== null, refreshSelection);
-  const rosterKey = JSON.stringify([apiBase, oauthCardProviders.toSorted(), keyCardProviders.toSorted()]);
+  const rosterKey = JSON.stringify([draftTargetKey, apiBase, oauthCardProviders.toSorted(), keyCardProviders.toSorted()]);
   const rosterRecoveryKeyRef = useRef<string | null>(null);
   useKeyedClientResource(`provider-rosters:${rosterKey}`, [rosterKey], async signal => {
     // Existing bootstrap effects own the first enriched reads. This resource is recovery only.
@@ -639,6 +652,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
         onRemoveProvider={removeProvider}
         providers={config.providers as Record<string, WorkspaceProvider>}
         apiBase={apiBase}
+        targetKey={draftTargetKey}
         targetLabel={draftTargetLabel}
         defaultProvider={config.defaultProvider}
         selectedName={workspaceSelected}
@@ -723,6 +737,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
       />
       <ProvidersPageModals
         apiBase={apiBase}
+        targetKey={draftTargetKey}
         config={config}
         adding={adding}
         modelsNotice={modelsNotice.notice ? {

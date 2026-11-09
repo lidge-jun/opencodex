@@ -54,12 +54,19 @@ export interface ProviderSettingsDraftEntry {
   draft: ProviderSettingsDraft;
   /** Saved values the draft was derived from; a later saved change is a conflict. */
   baseline: ProviderSettingsDraft;
+  /** The mounted form instance that currently owns this entry. */
+  owner?: symbol;
 }
 
 export interface ProviderDraftStore {
   read(target: string, provider: string): ProviderSettingsDraftEntry | undefined;
   write(target: string, provider: string, entry: ProviderSettingsDraftEntry): void;
   clear(target: string, provider: string): void;
+  /** Claim the entry for one mounted form; a newer mount supersedes an older one. */
+  claim(target: string, provider: string, owner: symbol, initial: ProviderSettingsDraftEntry): ProviderSettingsDraftEntry;
+  /** Write only while this owner still owns the entry; stale completions return false. */
+  writeOwned(target: string, provider: string, owner: symbol, entry: ProviderSettingsDraftEntry): boolean;
+  clearOwned(target: string, provider: string, owner: symbol): boolean;
 }
 
 export function createProviderDraftStore(): ProviderDraftStore {
@@ -69,6 +76,24 @@ export function createProviderDraftStore(): ProviderDraftStore {
     read: (target, provider) => entries.get(key(target, provider)),
     write: (target, provider, entry) => { entries.set(key(target, provider), entry); },
     clear: (target, provider) => { entries.delete(key(target, provider)); },
+    claim: (target, provider, owner, initial) => {
+      const existing = entries.get(key(target, provider));
+      const next = existing ? { ...existing, owner } : { ...initial, owner };
+      entries.set(key(target, provider), next);
+      return next;
+    },
+    writeOwned: (target, provider, owner, entry) => {
+      const existing = entries.get(key(target, provider));
+      if (!existing || existing.owner !== owner) return false;
+      entries.set(key(target, provider), { ...entry, owner });
+      return true;
+    },
+    clearOwned: (target, provider, owner) => {
+      const existing = entries.get(key(target, provider));
+      if (!existing || existing.owner !== owner) return false;
+      entries.delete(key(target, provider));
+      return true;
+    },
   };
 }
 
@@ -168,6 +193,63 @@ export function providerSettingsValueSignature(value: unknown): string {
 }
 
 /**
+ * Merge pacing field-by-field. The user's changed subfields win; untouched subfields take
+ * the latest saved value. Different models and key rules merge independently.
+ */
+export function mergeProviderPacing(
+  baseline: ProviderSettingsDraft,
+  draft: ProviderSettingsDraft,
+  latest: WorkspaceItem["requestPacing"],
+): NonNullable<WorkspaceItem["requestPacing"]> {
+  const base = draftRequestPacing(baseline);
+  const next = draftRequestPacing(draft);
+  const merged = structuredClone(latest ?? { enabled: false });
+  const take = <K extends keyof NonNullable<WorkspaceItem["requestPacing"]>>(key: K) => {
+    if (providerSettingsValueSignature(next[key]) === providerSettingsValueSignature(base[key])) return;
+    if (next[key] === undefined) delete merged[key];
+    else (merged as Record<string, unknown>)[key] = next[key];
+  };
+  for (const key of ["enabled", "requestsPerMinute", "minIntervalMs", "maxConcurrentRequests", "keySelection"] as const) take(key);
+
+  const mergeRule = (
+    baseRule: ProviderSettingsPacingRule | undefined,
+    nextRule: ProviderSettingsPacingRule | undefined,
+    latestRule: ProviderSettingsPacingRule | undefined,
+  ): ProviderSettingsPacingRule | undefined => {
+    if (!nextRule && !baseRule) return latestRule;
+    if (!nextRule) return undefined;
+    const out = { ...(latestRule ?? {}) };
+    for (const field of ["requestsPerMinute", "minIntervalMs", "maxConcurrentRequests"] as const) {
+      if (nextRule[field] === baseRule?.[field]) continue;
+      if (nextRule[field] === undefined) delete out[field];
+      else out[field] = nextRule[field];
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  };
+  const keys = mergeRule(base.keys, next.keys, merged.keys);
+  if (keys) merged.keys = keys; else delete merged.keys;
+
+  const modelNames = new Set([
+    ...Object.keys(base.models ?? {}),
+    ...Object.keys(next.models ?? {}),
+    ...Object.keys(merged.models ?? {}),
+  ]);
+  const models: Record<string, ProviderSettingsPacingRule> = {};
+  for (const model of modelNames) {
+    const baseRule = base.models?.[model];
+    const nextRule = next.models?.[model];
+    const latestRule = merged.models?.[model];
+    if (!nextRule && !baseRule) { if (latestRule) models[model] = latestRule; continue; }
+    if (!nextRule) continue; // the user removed this model
+    if (!baseRule) { models[model] = nextRule; continue; } // the user added this model
+    const rule = mergeRule(baseRule, nextRule, latestRule);
+    if (rule) models[model] = rule;
+  }
+  if (Object.keys(models).length > 0) merged.models = models; else delete merged.models;
+  return merged;
+}
+
+/**
  * Does this draft differ from the saved provider in a field the Settings tab can write?
  *
  * Fields that do not apply to the current adapter/auth pair are ignored, matching what the
@@ -264,7 +346,7 @@ export function rebaseProviderSettingsDraft(
 ): ProviderSettingsDraft {
   const pick = <K extends keyof ProviderSettingsDraft>(key: K): ProviderSettingsDraft[K] =>
     providerSettingsValueSignature(draft[key]) === providerSettingsValueSignature(oldBaseline[key]) ? latest[key] : draft[key];
-  return {
+  const rebased: ProviderSettingsDraft = {
     adapter: pick("adapter"),
     baseUrl: pick("baseUrl"),
     project: pick("project"),
@@ -283,6 +365,19 @@ export function rebaseProviderSettingsDraft(
     pacingDelay: pick("pacingDelay"),
     pacingConcurrency: pick("pacingConcurrency"),
     pacingModels: pick("pacingModels"),
+  };
+  const pacing = mergeProviderPacing(oldBaseline, draft, draftRequestPacing(latest));
+  return {
+    ...rebased,
+    pacingEnabled: pacing.enabled === true,
+    keyPacing: {
+      ...(pacing.keySelection !== undefined ? { keySelection: pacing.keySelection } : {}),
+      ...(pacing.keys !== undefined ? { keys: { ...pacing.keys } } : {}),
+    },
+    pacingRpm: numberDraft(pacing.requestsPerMinute),
+    pacingDelay: numberDraft(pacing.minIntervalMs),
+    pacingConcurrency: numberDraft(pacing.maxConcurrentRequests),
+    pacingModels: Object.fromEntries(Object.entries(pacing.models ?? {}).map(([model, rule]) => [model, { ...rule }])),
   };
 }
 

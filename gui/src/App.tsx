@@ -27,7 +27,7 @@ import { SidebarNav } from "./components/sidebar-nav";
 import { SectionSwitcher } from "./components/SectionSwitcher";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Notice, Select, ToastNotice, type NoticeTone } from "./ui";
-import { bootstrapApiSession, configureApiTargets, DEVICE_PROOF_CHANGED_EVENT, hasApiSession, hasRememberedDashboardDevice, installApiAuthFetch, logoutApiSession, SESSION_CHANGED_EVENT, SESSION_UNAVAILABLE_EVENT } from "./api";
+import { bootstrapApiSession, configureApiTargets, DEVICE_PROOF_CHANGED_EVENT, hasApiSession, hasRememberedDashboardDevice, installApiAuthFetch, logoutApiSession, SESSION_CHANGED_EVENT, SESSION_UNAVAILABLE_EVENT, TARGET_CHANGED_EVENT } from "./api";
 import { apiBaseForPlane, apiTargetIdentity, ClientStateChangedError, discoverApiTargets, isConnectedRuntime, runtimeRoleFromDocument, standaloneApiTargets, type ApiTargets } from "./api-targets";
 import { ConnectPairingForm } from "./connect-pairing";
 import { validateRemoteLinkSession } from "./connect-pairing-transport";
@@ -197,25 +197,62 @@ export default function App() {
     return () => { window.removeEventListener(SESSION_UNAVAILABLE_EVENT, unavailable); window.removeEventListener(SESSION_CHANGED_EVENT, changed); window.removeEventListener(DEVICE_PROOF_CHANGED_EVENT, proofChanged); };
   }, []);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    void discoverApiTargets(API_BASE, controller.signal).then(async next => {
-      configureApiTargets(next);
-      setTargets(next);
-      if (next.connected && !hasApiSession("shared")) {
-        await bootstrapApiSession("shared", controller.signal);
+  const discoveryInFlightRef = useRef<Promise<void> | null>(null);
+  const discoveryPendingRef = useRef(false);
+  const refreshTargetsRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  const refreshTargets = useCallback((): Promise<void> => {
+    if (discoveryInFlightRef.current) {
+      discoveryPendingRef.current = true;
+      return discoveryInFlightRef.current;
+    }
+    const run = async () => {
+      const controller = new AbortController();
+      try {
+        const next = await discoverApiTargets(API_BASE, controller.signal);
+        if (controller.signal.aborted) return;
+        configureApiTargets(next);
+        setTargets(next);
+        if (next.connected && !hasApiSession("shared")) {
+          await bootstrapApiSession("shared", controller.signal);
+        }
+        if (controller.signal.aborted) return;
+        setSharedSessionReady(hasApiSession("shared"));
+        setTargetError(null);
+        setTargetsSettled(true);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setTargetError(error instanceof ClientStateChangedError ? "client-state-changed" : "unavailable");
+        setTargetsSettled(true);
       }
-      if (controller.signal.aborted) return;
-      setSharedSessionReady(hasApiSession("shared"));
-      setTargetError(null);
-      setTargetsSettled(true);
-    }).catch(error => {
-      if (controller.signal.aborted) return;
-      setTargetError(error instanceof ClientStateChangedError ? "client-state-changed" : "unavailable");
-      setTargetsSettled(true);
+    };
+    const inFlight = run().finally(() => {
+      discoveryInFlightRef.current = null;
+      if (discoveryPendingRef.current) {
+        discoveryPendingRef.current = false;
+        void refreshTargetsRef.current();
+      }
     });
-    return () => controller.abort();
+    discoveryInFlightRef.current = inFlight;
+    return inFlight;
   }, []);
+  useEffect(() => { refreshTargetsRef.current = refreshTargets; }, [refreshTargets]);
+  useEffect(() => { void refreshTargets(); }, [refreshTargets]);
+  useEffect(() => {
+    const refresh = () => { void refreshTargets(); };
+    const visibility = () => { if (document.visibilityState === "visible") refresh(); };
+    for (const event of [SESSION_CHANGED_EVENT, DEVICE_PROOF_CHANGED_EVENT, TARGET_CHANGED_EVENT]) {
+      window.addEventListener(event, refresh);
+    }
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", visibility);
+    return () => {
+      for (const event of [SESSION_CHANGED_EVENT, DEVICE_PROOF_CHANGED_EVENT, TARGET_CHANGED_EVENT]) {
+        window.removeEventListener(event, refresh);
+      }
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", visibility);
+    };
+  }, [refreshTargets]);
   const machineBase = apiBaseForPlane("machine", targets);
   const sharedBase = apiBaseForPlane("shared", targets);
   const sharedTarget = apiTargetIdentity(targets);
@@ -681,7 +718,7 @@ export default function App() {
                   onReloadCodex={() => { void handleCodexRestart(); }} reloadingCodex={codexRestarting} />}
                 {page === "setup" && <SetupHub apiBase={sharedBase} navigate={navigateToPage} />}
                 {page === "advanced" && <AdvancedHub navigate={navigateToPage} />}
-                {page === "dashboard" && <Dashboard apiBase={sharedBase} readOnly={targets.link !== undefined} connected={targets.connected}
+                {page === "dashboard" && <Dashboard apiBase={sharedBase} targetKey={sharedTarget.key} readOnly={targets.link !== undefined} connected={targets.connected}
                   authenticationPending={targets.connected && !sharedSessionReady} refreshEpoch={sharedSessionEpoch} />}
                 {page === "startup" && <Startup apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
                 {page === "providers" && <Providers apiBase={sharedBase} targetKey={sharedTarget.key} targetLabel={sharedTarget.label} />}

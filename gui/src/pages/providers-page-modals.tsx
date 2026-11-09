@@ -12,6 +12,7 @@ import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
 
 export function ProvidersPageModals({
   apiBase,
+  targetKey,
   config,
   adding,
   modelsNotice,
@@ -44,6 +45,7 @@ export function ProvidersPageModals({
   onContinueOauthTos,
 }: {
   apiBase: string;
+  targetKey?: string;
   config: ProvidersConfig;
   adding: boolean;
   modelsNotice?: ProviderModelsNoticeProps | null;
@@ -81,6 +83,7 @@ export function ProvidersPageModals({
       {adding && (
         <AddProviderModal
           apiBase={apiBase}
+          targetKey={targetKey}
           existingNames={Object.keys(config.providers)}
           initialTier={addIntent?.tier}
           initialCustom={addIntent?.custom}

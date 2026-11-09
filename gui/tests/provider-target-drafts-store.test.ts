@@ -7,6 +7,7 @@ import {
   providerSettingsDirty,
   providerSettingsFieldsDirty,
   providerSettingsPacingDirty,
+  mergeProviderPacing,
 } from "../src/provider-workspace/target-drafts";
 
 function provider(overrides: Partial<WorkspaceItem> = {}): WorkspaceItem {
@@ -73,4 +74,42 @@ test("an omitted liveModels value and an explicit true are the same saved state"
   expect(draft.liveModels).toBe(true);
   expect(providerSettingsFieldsDirty(draft, provider({ liveModels: true }))).toBe(false);
   expect(providerSettingsFieldsDirty(draft, provider({ liveModels: false }))).toBe(true);
+});
+
+test("a newer mount owns the entry and a stale completion cannot write or clear it", () => {
+  const store = createProviderDraftStore();
+  const base = providerSettingsDraftFromItem(provider());
+  const first = Symbol("first");
+  const second = Symbol("second");
+  store.claim("/a", "shared-provider", first, { draft: base, baseline: base });
+  expect(store.writeOwned("/a", "shared-provider", first, { draft: { ...base, note: "first edit" }, baseline: base })).toBe(true);
+
+  const claimed = store.claim("/a", "shared-provider", second, { draft: base, baseline: base });
+  expect(claimed.draft.note).toBe("first edit");
+  expect(store.writeOwned("/a", "shared-provider", first, { draft: base, baseline: base })).toBe(false);
+  expect(store.clearOwned("/a", "shared-provider", first)).toBe(false);
+  expect(store.read("/a", "shared-provider")?.draft.note).toBe("first edit");
+
+  expect(store.writeOwned("/a", "shared-provider", second, { draft: { ...base, note: "second edit" }, baseline: base })).toBe(true);
+  expect(store.clearOwned("/a", "shared-provider", second)).toBe(true);
+  expect(store.read("/a", "shared-provider")).toBeUndefined();
+  expect(store.writeOwned("/a", "shared-provider", second, { draft: base, baseline: base })).toBe(false);
+});
+
+test("pacing merges different models and subfields independently", () => {
+  const baseline = provider({ requestPacing: {
+    enabled: true,
+    models: { alpha: { requestsPerMinute: 10 }, beta: { requestsPerMinute: 20 } },
+  } });
+  const baselineDraft = providerSettingsDraftFromItem(baseline);
+  const draft = { ...baselineDraft, pacingModels: { alpha: { requestsPerMinute: 11 }, beta: { requestsPerMinute: 20 } } };
+  const merged = mergeProviderPacing(baselineDraft, draft, {
+    enabled: true,
+    models: { alpha: { requestsPerMinute: 10 }, beta: { requestsPerMinute: 99 }, gamma: { requestsPerMinute: 30 } },
+  });
+  expect(merged.models).toEqual({
+    alpha: { requestsPerMinute: 11 },
+    beta: { requestsPerMinute: 99 },
+    gamma: { requestsPerMinute: 30 },
+  });
 });

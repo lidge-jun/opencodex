@@ -32,11 +32,12 @@ export type ProviderConfig = ProviderPayload;
 type Preset = CatalogPreset;
 
 export default function AddProviderModal({
-  apiBase, existingNames, onClose, onAdded, initialTier, initialCustom = false,
+  apiBase, targetKey, existingNames, onClose, onAdded, initialTier, initialCustom = false,
   accountRows, accountStatus, accountBusy, accountLoginHint = null,
   onAccountLogin, onAccountCancelLogin, onAccountLogout, onAccountManage, onOpen,
 }: {
   apiBase: string;
+  targetKey?: string;
   existingNames: string[];
   onClose: () => void;
   onAdded: (name: string) => void;
@@ -74,8 +75,8 @@ export default function AddProviderModal({
   const [catalogQuery, setCatalogQuery] = useState("");
 
   const oauthPoll = useKeyedClientResource(
-    `add-provider-oauth:${apiBase}`,
-    [apiBase],
+    `add-provider-oauth:${targetKey ?? apiBase}`,
+    [apiBase, targetKey],
     async (signal) => {
       const res = await fetch(`${apiBase}/api/oauth/providers`, { signal });
       if (!res.ok) return [] as string[];
@@ -84,8 +85,8 @@ export default function AddProviderModal({
     },
   );
   const presetsPoll = useKeyedClientResource(
-    `add-provider-presets:${apiBase}`,
-    [apiBase],
+    `add-provider-presets:${targetKey ?? apiBase}`,
+    [apiBase, targetKey],
     async (signal) => {
       const res = await fetch(`${apiBase}/api/provider-presets`, { signal });
       if (!res.ok) throw new Error(String(res.status));
@@ -94,8 +95,8 @@ export default function AddProviderModal({
     },
   );
   const usagePoll = useKeyedClientResource(
-    usageSummary30dResourceKey(apiBase),
-    [apiBase],
+    usageSummary30dResourceKey(apiBase, "all", targetKey),
+    [apiBase, targetKey],
     async (signal) => {
       const res = await fetch(`${apiBase}/api/usage?range=30d`, { signal });
       return await readUsageResponseJson<UsageReadMetadata & { providers?: Array<{ provider: string; requests: number }> }>(res);

@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import type { TFn } from "../i18n/shared";
 import type { ProviderUpdatePatch, ProviderUpdateResult } from "../components/provider-workspace/types";
 import { apiErrorMessage } from "../api-error";
+import { captureApiTarget, targetFetch } from "../api";
 
 type ProviderError = { code?: unknown; combos?: unknown; error?: unknown };
 type ShadowDependency = { model: string; enabled: boolean };
@@ -63,11 +64,12 @@ export function useProvidersCrud({
   const confirmRemoveProvider = useCallback(async (removeConfirmName: string | null) => {
     const name = removeConfirmName;
     if (!name || removeBusyRef.current) return;
+    const capture = captureApiTarget("shared");
     removeBusyRef.current = true;
     setRemoveConfirmName(null);
     const fallback = t("prov.removeFail", { name });
     try {
-      const res = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(name)}`, { method: "DELETE" });
+      const res = await targetFetch(capture, `${apiBase}/api/providers?name=${encodeURIComponent(name)}`, { method: "DELETE" });
       if (res.ok) {
         const data = await res.json().catch(() => ({})) as { defaultProvider?: unknown; dependentShadowIntercept?: unknown };
         const defaultProvider = typeof data.defaultProvider === "string" ? data.defaultProvider : null;
@@ -93,7 +95,8 @@ export function useProvidersCrud({
   }, [apiBase, fetchConfig, fetchOauth, fetchProviderQuotas, notify, onProviderRemoved, removeBusyRef, setRemoveConfirmName, setWorkspaceSelected, t, workspaceSelected]);
 
   const setProviderDisabled = useCallback(async (name: string, disabled: boolean) => {
-    const res = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
+    const capture = captureApiTarget("shared");
+    const res = await targetFetch(capture, `${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ disabled }),
@@ -112,8 +115,9 @@ export function useProvidersCrud({
   }, [apiBase, fetchConfig, fetchOauth, fetchProviderQuotas, notify, t]);
 
   const updateProvider = useCallback(async (name: string, patch: ProviderUpdatePatch): Promise<ProviderUpdateResult> => {
+    const capture = captureApiTarget("shared");
     try {
-      const res = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
+      const res = await targetFetch(capture, `${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -145,8 +149,9 @@ export function useProvidersCrud({
   }, [apiBase, fetchConfig, fetchProviderQuotas, refreshCodexAccount, t]);
 
   const setDefaultProvider = useCallback(async (name: string): Promise<boolean> => {
+    const capture = captureApiTarget("shared");
     try {
-      const res = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
+      const res = await targetFetch(capture, `${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ setDefault: true }),

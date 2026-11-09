@@ -79,6 +79,7 @@ function readFreshQuotaReportCache(key: string): Record<string, ProviderQuotaRep
 export default function ProviderWorkspaceShell({
   providers,
   apiBase,
+  targetKey,
   targetLabel,
   defaultProvider,
   selectedName,
@@ -101,6 +102,8 @@ export default function ProviderWorkspaceShell({
 }: {
   providers: Record<string, WorkspaceProvider>;
   apiBase: string;
+  /** Logical target identity for target-scoped usage caches. */
+  targetKey?: string;
   /** Nonsecret logical target label for draft/save-target copy. */
   targetLabel?: string;
   defaultProvider: string;
@@ -187,7 +190,7 @@ export default function ProviderWorkspaceShell({
   useEffect(() => { modelsSettled.current = onModelsSettled; }, [onModelsSettled]);
   const filterWrapRef = useRef<HTMLDivElement>(null);
   // Shared usage-summary key: all four subscribers raise the deadline together (30d usage is ~5s cold).
-  const usageResource = useKeyedClientResource(usageSummary30dResourceKey(apiBase), [apiBase], async (signal) => {
+  const usageResource = useKeyedClientResource(usageSummary30dResourceKey(apiBase, "all", targetKey), [apiBase, targetKey], async (signal) => {
     const res = await fetch(apiBase + "/api/usage?range=30d", { signal });
     return await readUsageResponseJson(res);
   }, { deadlineMs: 60_000 });

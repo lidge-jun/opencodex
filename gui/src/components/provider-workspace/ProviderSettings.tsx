@@ -92,11 +92,14 @@ function ProviderSettingsForm({
   item, availableModels = EMPTY_MODELS, apiBase, targetKey, targetLabel, draftStore, onUpdateProvider, onDirtyChange, onRegisterSave,
 }: ProviderSettingsProps & { targetKey: string; draftStore: ProviderDraftStore }) {
   const t = useT();
+  const ownerRef = useRef(Symbol("provider-draft-owner"));
+  const authorityRef = useRef(0);
   const [initial] = useState(() => {
-    const restored = draftStore.read(targetKey, item.name);
+    const base = providerSettingsDraftFromItem(item);
+    const restored = draftStore.claim(targetKey, item.name, ownerRef.current, { draft: base, baseline: base });
     return {
-      draft: restored?.draft ?? providerSettingsDraftFromItem(item),
-      baseline: restored?.baseline ?? providerSettingsDraftFromItem(item),
+      draft: restored.draft,
+      baseline: restored.baseline,
     };
   });
   const liveModelDiscoverySupported = providerSupportsLiveModelDiscovery(item.name, item);
@@ -204,8 +207,7 @@ function ProviderSettingsForm({
   // Park this target's draft (or clear it once it matches the saved values). Memory only:
   // credentials must never be persisted by the dashboard without an explicit request.
   useEffect(() => {
-    if (edited) draftStore.write(targetKey, item.name, { draft, baseline });
-    else draftStore.clear(targetKey, item.name);
+    draftStore.writeOwned(targetKey, item.name, ownerRef.current, { draft, baseline });
   }, [baseline, draft, draftStore, edited, item.name, targetKey]);
 
   // Account mode syncs on its own: a mode PATCH refresh must not reset an in-progress
@@ -299,6 +301,7 @@ function ProviderSettingsForm({
     if (conflict) { setMsg({ ok: false, text: t("pws.draftConflictResolveFirst") }); return false; }
     const saveTarget = targetKey;
     const saveProvider = item.name;
+    const saveAuthority = authorityRef.current;
     const submittedSignature = providerSettingsDraftSignature(draft);
     const pacingDraft = draftRequestPacing(draft);
     const nextBaseUrl = hasEndpointPicker
@@ -308,8 +311,15 @@ function ProviderSettingsForm({
     setSaving(true);
     setMsg(null);
     try {
-      if (pacingConcurrency.trim() !== "" && positiveInteger(pacingConcurrency) === undefined) {
+      const rpmInvalid = pacingRpm.trim() !== "" && (positiveRpm(pacingRpm) === undefined || Number(pacingRpm) > 60_000);
+      const delayInvalid = pacingDelay.trim() !== ""
+        && (positiveInteger(pacingDelay) === undefined || Number(pacingDelay) > 3_600_000);
+      const concurrencyInvalid = pacingConcurrency.trim() !== "" && positiveInteger(pacingConcurrency) === undefined;
+      if (concurrencyInvalid) {
         setMsg({ ok: false, text: t("pws.pacingCapInvalid") }); return false;
+      }
+      if (rpmInvalid || delayInvalid) {
+        setMsg({ ok: false, text: t("pws.pacingValueInvalid") }); return false;
       }
       if (Object.entries(keyPacing.keys ?? {}).some(([field, value]) =>
         !Number.isFinite(value) || value <= 0
@@ -329,15 +339,16 @@ function ProviderSettingsForm({
         return true;
       }
       const res = await onUpdateProvider(item.name, patch);
+      if (authorityRef.current !== saveAuthority) return res.ok;
       // The save belongs to the target that started it. If the dashboard moved while the
       // request was in flight, its result must not be announced or applied on the new target.
       if (targetKeyRef.current !== saveTarget) {
         if (res.ok) {
           const stored = draftStore.read(saveTarget, saveProvider);
           if (stored && providerSettingsDraftSignature(stored.draft) !== submittedSignature) {
-            draftStore.write(saveTarget, saveProvider, { draft: stored.draft, baseline: draft });
+            draftStore.writeOwned(saveTarget, saveProvider, ownerRef.current, { draft: stored.draft, baseline: draft });
           } else {
-            draftStore.clear(saveTarget, saveProvider);
+            draftStore.writeOwned(saveTarget, saveProvider, ownerRef.current, { draft, baseline: draft });
           }
         }
         return res.ok;
@@ -347,9 +358,9 @@ function ProviderSettingsForm({
         const currentDraft = draftRef.current;
         setBaseline(draft);
         if (providerSettingsDraftSignature(currentDraft) === submittedSignature) {
-          draftStore.clear(saveTarget, saveProvider);
+          draftStore.writeOwned(saveTarget, saveProvider, ownerRef.current, { draft, baseline: draft });
         } else {
-          draftStore.write(saveTarget, saveProvider, { draft: currentDraft, baseline: draft });
+          draftStore.writeOwned(saveTarget, saveProvider, ownerRef.current, { draft: currentDraft, baseline: draft });
         }
       }
       return res.ok;
@@ -407,7 +418,9 @@ function ProviderSettingsForm({
     applyDraft(next);
     setBaseline(next);
     setMsg(null);
-    draftStore.clear(targetKey, item.name);
+    authorityRef.current += 1;
+    draftStore.clearOwned(targetKey, item.name, ownerRef.current);
+    draftStore.claim(targetKey, item.name, ownerRef.current, { draft: next, baseline: next });
     setEndpointChoice(matchChoiceId(baseUrlChoices, next.baseUrl));
   };
 
@@ -436,8 +449,10 @@ function ProviderSettingsForm({
     const rpm = positiveRpm(pacingModelRpm);
     const delay = positiveInteger(pacingModelDelay);
     const cap = positiveInteger(pacingModelConcurrency);
-    if (pacingModelConcurrency.trim() !== "" && cap === undefined) {
-      setMsg({ ok: false, text: t("pws.pacingCapInvalid") });
+    if ((pacingModelRpm.trim() !== "" && (rpm === undefined || Number(pacingModelRpm) > 60_000))
+      || (pacingModelDelay.trim() !== "" && (delay === undefined || Number(pacingModelDelay) > 3_600_000))
+      || (pacingModelConcurrency.trim() !== "" && cap === undefined)) {
+      setMsg({ ok: false, text: pacingModelConcurrency.trim() !== "" && cap === undefined ? t("pws.pacingCapInvalid") : t("pws.pacingValueInvalid") });
       return;
     }
     if (!modelId || (rpm === undefined && delay === undefined && cap === undefined)) return;
