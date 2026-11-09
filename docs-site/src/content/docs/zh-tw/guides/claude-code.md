@@ -594,7 +594,7 @@ role；`tool_result` 缺少 `tool_use_id`；`tool_use` 缺少 id/name；指定�
 自動 `cache_control`。穩定輪次通常能達到約 99.9% 的快取命中率。
 
 **原生 OpenAI/ChatGPT 路由：**派生會話範圍的 `prompt_cache_key`（存在時取自
-`metadata.user_id`，否則回退到系統內容雜湊）和用於快取親和性的 `session_id` 標頭。
+`metadata.user_id`，否則回退到系統內容雜湊），並僅在存在會話識別時派生用於快取親和性的 `session_id` 標頭（不會從共享回退鍵派生）。
 由系統內容雜湊派生的回退鍵（僅在存在系統內容時使用）還包含模型和完整的工具 schema。
 
 **Token 計算：**Anthropic 輸出會從 `input_tokens` 中減去 `cached_tokens` 和
