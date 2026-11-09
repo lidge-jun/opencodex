@@ -1518,6 +1518,37 @@ describe("filtered usage index availability", () => {
     await expectMatchesFullScan({});
   });
 
+  test("a rebuild mid-aggregate restarts paging with fresh totals", async () => {
+    const rows = Array.from({ length: 2_500 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({});
+    resetUsageAggregateCacheForTests();
+
+    const realReadRows = ledgerScannerModule.readUsageLedgerRowsAtOffsets;
+    let rebuilt = false;
+    const rowsSpy = spyOn(ledgerScannerModule, "readUsageLedgerRowsAtOffsets").mockImplementation(async options => {
+      if (!rebuilt) {
+        rebuilt = true;
+        // Publish a new generation between the first and second candidate pages.
+        filterIndexModule.requestUsageFilterIndexRebuild();
+        const fresh = await filterIndexModule.readUsageFilterCandidates({
+          provider: null, model: null, apiKeyId: null,
+        });
+        fresh?.close();
+      }
+      return realReadRows(options);
+    });
+    try {
+      const result = await getFilteredUsageAggregate({});
+      const oracle = await fullScan({});
+      expect(summary(result)).toEqual(oracle.summarize("all", NOW));
+      // The retry consumed the rebuilt generation end to end, not partial old-generation rows.
+      expect(result.filterIndex?.candidateRows).toBe(rows.length);
+    } finally {
+      rowsSpy.mockRestore();
+    }
+  });
+
   // Windows refuses to delete a file SQLite holds open: there the projection can only vanish once
   // the refresh has closed it, which the next case covers on every platform.
   test.skipIf(process.platform === "win32")("a projection that vanishes before the read is not recreated", async () => {
@@ -1525,7 +1556,8 @@ describe("filtered usage index availability", () => {
   });
 
   test("a projection that vanishes after the refresh closed it is not recreated by the read", async () => {
-    await expectVanishedProjectionNotRecreated(remove => ({ afterRefresh: ({ dbPath }) => remove(dbPath) }));  });
+    await expectVanishedProjectionNotRecreated(remove => ({ afterRefresh: ({ dbPath }) => remove(dbPath) }));
+  });
 
   test("a home change during a refresh never mixes installations", async () => {
     const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
