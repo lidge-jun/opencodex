@@ -95,6 +95,14 @@ removed with it; a live writer keeps its registry row and lease, so another writ
 its staging alone and its own publish fails the fence and retries. A lease whose generation is no
 longer registered cannot belong to a live writer and is pruned.
 
+Opening the projection is safe against a concurrent first open. The busy timeout is set before the
+first read, and a classification that meets another writer's lock rethrows the busy error into the
+caller's retry; it never reads as a foreign file. A fresh file gets its whole schema in one
+`BEGIN IMMEDIATE` transaction that re-classifies under the lock, so no process can observe the meta
+table without the data tables, and a schema another process committed first is adopted and
+verified. An outdated schema is recreated only after re-checking it under the same lock, so two
+processes that both saw it stale cannot drop each other's fresh tables.
+
 The projection is created 0600 through the shared private-SQLite path, its WAL and shared-memory
 sidecars are registered for uninstall only when this module creates them, and a file at that path
 that is not this projection is never modified. A passive management read opens an existing
