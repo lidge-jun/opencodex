@@ -28,6 +28,18 @@ test("a relay base shared by two hubs still has distinct logical target identiti
   expect(hubA.label).not.toContain("machine-key");
 });
 
+test("API-key rotation is not a logical target change, but a different link is", () => {
+  const base = standaloneApiTargets("");
+  const shared = { ...base.shared, serverOrigin: "https://hub.example" };
+  const keyA = apiTargetIdentity({ ...base, shared, apiKeyId: "key-a" });
+  const keyB = apiTargetIdentity({ ...base, shared, apiKeyId: "key-b" });
+  expect(keyA.key).toBe(keyB.key);
+  const linkA = apiTargetIdentity({ ...base, shared, link: { linkId: "link-a", home: null, readOnly: true } });
+  const linkB = apiTargetIdentity({ ...base, shared, link: { linkId: "link-b", home: null, readOnly: true } });
+  expect(linkA.key).not.toBe(linkB.key);
+  expect(linkA.label).toBe("https://hub.example");
+});
+
 let win: Window;
 let previousWindow: unknown;
 let previousDocument: unknown;
