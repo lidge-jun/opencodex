@@ -1112,8 +1112,9 @@ produce about a 99.9% cache hit rate.
 cache affinity. When `metadata.user_id` is a string, the key is session-scoped. Remote Claude Code
 puts a JSON object in that string and adds a per-turn attribution token (`tk`) to it; when the
 object has other keys, `tk` is dropped before hashing, so every turn of one session keeps one cache
-key and one conversation id (the key `/v1/messages` prefers for pooled-account affinity). Any other
-string (not JSON, a JSON array, or a JSON object holding only `tk`) is hashed unchanged. The `user`
+key and one conversation id. On `/v1/messages` that id is the preferred Anthropic account-pool
+affinity key, and the Codex pool falls back to the same metadata-derived identity
+when the caller sends no `session_id` header or thread lineage. Any other string (not JSON, a JSON array, or a JSON object holding only `tk`) is hashed unchanged. The `user`
 field is still derived from the raw string. Without a string `metadata.user_id`, and when system
 content is present, the key falls back to a hash of the resolved model, system prompt and full tool
 schemas: a cohort key shared by requests with the same values, not a session key.
