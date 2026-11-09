@@ -1353,6 +1353,8 @@ describe("a manual bootout still tearing down is waited out (#8362)", () => {
     probe: typeof probeLaunchdLoadState,
     sleeps: number[],
     restarts: string[],
+    /** When given, each wait is logged here as `["sleep"]`, in order with the launchctl calls. */
+    log?: string[][],
   ) {
     return {
       platform: "darwin" as const,
@@ -1364,7 +1366,7 @@ describe("a manual bootout still tearing down is waited out (#8362)", () => {
         launchctl,
         plistPath,
         probe,
-        sleepSync: ms => { sleeps.push(ms); },
+        sleepSync: ms => { sleeps.push(ms); log?.push(["sleep"]); },
       }),
       restartLaunchd: () => { restarts.push("restart"); },
     };
@@ -1408,9 +1410,12 @@ describe("a manual bootout still tearing down is waited out (#8362)", () => {
   // EPERM is not, and waiting would only delay the real error.
   for (const shape of [
     [37, "Bootstrap failed: 37: Operation already in progress"],
+    // The exit status alone is the evidence when launchctl prints nothing recognisable.
+    [37, ""],
+    [5, ""],
     [1, "Load failed: 5: Input/output error"],
   ] as Array<[number, string]>) {
-    test(`the teardown shape "${shape[1]}" is waited out`, async () => {
+    test(`the teardown shape ${shape[0]} "${shape[1]}" is waited out`, async () => {
       const { argv, launchctl, probe, attempts } = manualBootoutStillTearingDown(3, shape);
       const sleeps: number[] = [];
       await repairService(darwinDeps("repair", fixturePlist(), launchctl, probe, sleeps, []));
@@ -1437,13 +1442,16 @@ describe("a manual bootout still tearing down is waited out (#8362)", () => {
   // round's 50 attempts with a 500 ms wait between each of them.
   test("a teardown that never finishes still throws, within the bound", async () => {
     const plistPath = fixturePlist();
-    const { launchctl, probe, attempts } = manualBootoutStillTearingDown(Number.POSITIVE_INFINITY);
+    const { argv, launchctl, probe, attempts } = manualBootoutStillTearingDown(Number.POSITIVE_INFINITY);
     const sleeps: number[] = [];
 
-    await expect(repairService(darwinDeps("repair", plistPath, launchctl, probe, sleeps, [])))
+    await expect(repairService(darwinDeps("repair", plistPath, launchctl, probe, sleeps, [], argv)))
       .rejects.toThrow(/could not bootstrap/);
 
     expect(attempts()).toBe(1 + 50);
     expect(sleeps).toEqual(Array.from({ length: 49 }, () => 500));
+    // Each wait sits between two bootstraps: the retries are spaced out, never burst.
+    const recovery = verbs(argv).filter(v => v === "bootstrap" || v === "sleep").slice(1);
+    expect(recovery).toEqual(Array.from({ length: 99 }, (_, i) => (i % 2 === 0 ? "bootstrap" : "sleep")));
   });
 });
