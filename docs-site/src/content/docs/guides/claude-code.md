@@ -1108,8 +1108,8 @@ other 5xx `api_error`. `Retry-After` is sent as whole seconds (an HTTP date beco
 and the penultimate user message, plus top-level automatic `cache_control`. Stable turns normally
 produce about a 99.9% cache hit rate.
 
-**Native OpenAI/ChatGPT routing:** derives a `prompt_cache_key` and a `session_id` header for
-cache affinity. When `metadata.user_id` is a string, the key is session-scoped. Remote Claude Code
+**Native OpenAI/ChatGPT routing:** derives a `prompt_cache_key` for cache affinity, and a
+`session_id` header only from a session identity, never from the shared fallback key. When `metadata.user_id` is a string, the key is session-scoped. Remote Claude Code
 puts a JSON object in that string and adds a per-turn attribution token (`tk`) to it; when the
 object has other keys, `tk` is dropped before hashing, so every turn of one session keeps one cache
 key and one conversation id. On `/v1/messages` that id is the preferred Anthropic account-pool

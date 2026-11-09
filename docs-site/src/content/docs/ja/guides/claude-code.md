@@ -576,7 +576,7 @@ role、`tool_use_id` のない `tool_result`、id/name のない `tool_use`、na
 
 **ネイティブ OpenAI/ChatGPT ルーティング:** セッションスコープ `prompt_cache_key`(`metadata.user_id` があれば
 使用、なければシステム内容ハッシュ使用)とキャッシュ選好のための `session_id` ヘッダーを作ります。
-システム内容ハッシュから作るフォールバックキーには、モデルと全体ツールスキーマも含まれます。
+システム内容ハッシュから作るフォールバックキー(システム内容がある場合のみ)には、モデルと全体ツールスキーマも含まれます。
 
 **トークン計算:** Anthropic 出力は `input_tokens` から `cached_tokens` と `cache_write_tokens` を引き、
 それぞれ `cache_read_input_tokens` と `cache_creation_input_tokens` として公開します。リクエストログはこれを再び
