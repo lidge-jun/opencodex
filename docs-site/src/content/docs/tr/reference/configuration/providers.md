@@ -8,7 +8,7 @@ konuştuğunu ve isteklerin nasıl doğrulandığını söyler.
 
 ## Mistral isteği başına görüntü sayısı
 
-Mistral görüntü sınırı ve `mistralMaxImages` ayarı için [İngilizce temel başvuruya](/reference/configuration/providers/#mistral-images-per-request) bakın. Eksik, boş veya dize olmayan görüntü başvuruları, giden kopyada metinle değiştirilir ve görüntü sınırını tüketmez. Yalnızca boş olmayan dizeler sayılır; URL sözdizimi veya erişilebilirliği doğrulanmaz. Dizeler `image_url` veya `image_url.url` içinde olabilir. Diğer hedeflerin davranışı değişmez.
+Mistral görüntü sınırı ve `mistralMaxImages` ayarı için [İngilizce temel başvuruya](/reference/configuration/providers/#mistral-images-per-request) bakın. Sınırlayıcıya ulaşan `image_url` öğelerinde eksik, boş veya dize olmayan başvurular giden kopyada metinle değiştirilir ve sınırı tüketmez. Çevrilen Responses isteklerinde kullanılabilir URL veya dosya kimliği olmayan `input_image` blokları ayrıştırıcı tarafından atılır. Boş olmayan bir `file_id` bulunup boş olmayan bir `image_url` yoksa medya koruması isteği Mistral gönderiminden önce reddeder; dosya kimliği metin işareti gönderilmez. Sınırlayıcı yalnızca `image_url` veya `image_url.url` içindeki boş olmayan dizeleri sayar; URL sözdizimi veya erişilebilirliği doğrulanmaz. Diğer hedeflerin davranışı değişmez.
 
 ## Özel sağlayıcılarda bağlam penceresi
 

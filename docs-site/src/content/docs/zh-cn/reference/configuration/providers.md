@@ -7,7 +7,7 @@ description: 提供者条目、身份验证、端点、模型目录、配额、�
 
 ## Mistral 每次请求的图片数量
 
-Mistral 图片数量限制及 `mistralMaxImages` 设置见[英文规范参考](/reference/configuration/providers/#mistral-images-per-request)。缺失、为空或非字符串的图片引用会在出站副本中替换为文本，且不占用图片限额。仅统计非空字符串，不验证 URL 语法或可访问性。支持 `image_url` 或 `image_url.url` 中的字符串。其他目标的行为保持不变。
+Mistral 图片数量限制及 `mistralMaxImages` 设置见[英文规范参考](/reference/configuration/providers/#mistral-images-per-request)。对于到达限制器的 `image_url` 项，缺失、为空或非字符串的图片引用会在出站副本中替换为文本，且不占用图片限额。对于经过转换的 Responses 请求，解析器会丢弃既没有可用 URL 也没有文件 ID 的 `input_image`。若存在非空 `file_id` 而没有非空 `image_url`，媒体防护会在发送到 Mistral 前拒绝请求，不会发送包含文件 ID 的文本标记。限制器仅统计 `image_url` 或 `image_url.url` 中的非空字符串，不验证 URL 语法或可访问性。其他目标的行为保持不变。
 
 ## 自定义渠道的上下文窗口
 

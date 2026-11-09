@@ -8,7 +8,7 @@ authentifiées.
 
 ## Nombre d’images par requête Mistral
 
-La limite d’images de Mistral et le réglage `mistralMaxImages` sont décrits dans la [référence canonique en anglais](/reference/configuration/providers/#mistral-images-per-request). Les références d’image absentes, vides ou non textuelles sont remplacées par du texte dans la copie sortante et ne consomment pas cette limite. Seules les chaînes non vides sont comptées ; la syntaxe et l’accessibilité des URL ne sont pas vérifiées. Les deux formes acceptées sont `image_url` et `image_url.url`. Les autres destinations restent inchangées.
+La limite d’images de Mistral et le réglage `mistralMaxImages` sont décrits dans la [référence canonique en anglais](/reference/configuration/providers/#mistral-images-per-request). Pour les éléments `image_url` qui atteignent le limiteur, les références absentes, vides ou non textuelles sont remplacées par du texte dans la copie sortante sans consommer la limite. Lors de la traduction des requêtes Responses, le parseur omet les blocs `input_image` sans URL utilisable ni identifiant de fichier. Un `file_id` non vide sans `image_url` non vide entraîne le refus de la requête par la protection des médias avant l’envoi à Mistral ; aucun marqueur textuel contenant l’identifiant du fichier n’est envoyé. Le limiteur compte seulement les chaînes non vides dans `image_url` ou `image_url.url`, sans vérifier la syntaxe ni l’accessibilité des URL. Les autres destinations restent inchangées.
 
 ## Contexte des fournisseurs personnalisés
 

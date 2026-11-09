@@ -59,8 +59,8 @@ or non-string image references that reach the limiter are replaced with
 `[image omitted: missing or malformed image URL]` in the outbound copy without consuming the
 image cap, even when the valid-image count is below the cap. For translated Responses requests,
 the parser drops `input_image` blocks with no usable image URL or file ID before the limiter
-runs, and a usable file ID becomes an `[image: <file id>]` text marker instead of an image
-reference.
+runs. A nonempty `file_id` without a nonempty `image_url` is refused by the translated-adapter
+media guard before Mistral dispatch: it is not sent as an `[image: <file id>]` text marker.
 
 Pruning adds no separate upload or persistence. Images retained within the cap
 are sent to Mistral in the outbound request. Other destinations are unchanged.

@@ -7,7 +7,7 @@ description: 공급자 항목, 인증, 엔드포인트, 모델 카탈로그, 할
 
 ## Mistral 요청당 이미지 수
 
-Mistral 요청의 이미지 수 제한과 `mistralMaxImages` 설정은 [영문 기준 문서](/reference/configuration/providers/#mistral-images-per-request)를 참조하세요. 누락되거나 비어 있거나 문자열이 아닌 이미지 참조는 전송용 사본에서 텍스트로 대체되며 이미지 한도를 소비하지 않습니다. 비어 있지 않은 문자열만 계산하고 URL 문법이나 접근 가능성은 검증하지 않습니다. 문자열은 `image_url` 또는 `image_url.url`에 지정합니다. 다른 대상의 동작은 바뀌지 않습니다.
+Mistral 요청의 이미지 수 제한과 `mistralMaxImages` 설정은 [영문 기준 문서](/reference/configuration/providers/#mistral-images-per-request)를 참조하세요. 제한기에 도달한 `image_url` 항목의 이미지 참조가 누락되거나 비어 있거나 문자열이 아니면 전송용 사본에서 텍스트로 대체되며 이미지 한도를 소비하지 않습니다. 번역되는 Responses 요청에서 사용 가능한 URL과 파일 ID가 모두 없는 `input_image`는 파서가 제외합니다. 비어 있지 않은 `file_id`만 있고 비어 있지 않은 `image_url`이 없으면 미디어 가드가 Mistral 전송 전에 요청을 거절하며 파일 ID 텍스트 마커를 보내지 않습니다. 제한기는 `image_url` 또는 `image_url.url`의 비어 있지 않은 문자열만 계산하고 URL 문법이나 접근 가능성은 검증하지 않습니다. 다른 대상의 동작은 바뀌지 않습니다.
 
 ## 사용자 지정 공급자의 컨텍스트
 
