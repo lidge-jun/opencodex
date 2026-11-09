@@ -992,6 +992,33 @@ describe("provider moderation refusal", () => {
     expect(comboFailureDecision(400, deepConcealedHardCode)).toBe("stop");
   });
 
+  test("unrelated param preceding error envelope in truncated response does not block refusal", async () => {
+    const raw = JSON.stringify({
+      request_info: { param: "unrelated_header" },
+      error: {
+        message: "The input was refused by moderation. Categories: harassment.",
+        padding: "y".repeat(600),
+      },
+    });
+    const response = new Response(raw, { status: 400 });
+    const failure = await consumeComboFailure(response);
+    expect(comboFailureDecision(failure.response.status, failure.classificationText, { code: failure.upstreamCode })).toBe("hop");
+    expect(comboFailureCooldownScope(failure.response.status, failure.classificationText, { code: failure.upstreamCode })).toBe("none");
+  });
+
+  test("explicit content_filter code triggers failover even when param names other input field", () => {
+    const body = JSON.stringify({
+      error: {
+        code: "content_filter",
+        message: "Your input violated content safety policy.",
+        param: "instructions",
+      },
+    });
+    expect(isProviderModerationRefusal(400, body)).toBe(true);
+    expect(comboFailureDecision(400, body)).toBe("hop");
+    expect(comboFailureCooldownScope(400, body)).toBe("none");
+  });
+
   test("generic 400 errors without moderation phrasing stay terminal", () => {
     for (const message of [
       "Invalid JSON in request body",

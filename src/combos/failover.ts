@@ -732,20 +732,23 @@ export function isProviderModerationRefusal(
         ) {
           return false;
         }
-        const paramMatch = /"param"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/.exec(text);
-        if (paramMatch) {
-          try {
-            const extractedParam = JSON.parse(`"${paramMatch[1]}"`) as string;
-            if (!isAllowedModerationParam(extractedParam)) return false;
-          } catch {
-            return false;
+        // Match error/response envelope containing message and optionally param
+        const envelopeMatch = /"(?:error|response)"\s*:\s*\{([^{}]*?"message"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"[^{}]*)/.exec(text)
+          ?? /^\s*\{\s*([^{}]*?"message"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"[^{}]*)/.exec(text);
+        if (envelopeMatch) {
+          const envelopeContent = envelopeMatch[1];
+          const rawMessage = envelopeMatch[2];
+          const paramMatch = /"param"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/.exec(envelopeContent);
+          if (paramMatch) {
+            try {
+              const extractedParam = JSON.parse(`"${paramMatch[1]}"`) as string;
+              if (!isAllowedModerationParam(extractedParam)) return false;
+            } catch {
+              return false;
+            }
           }
-        }
-        const match = /"(?:error|response)"\s*:\s*\{[^{}]*?"message"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/.exec(text)
-          ?? /^\s*\{\s*"message"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/.exec(text);
-        if (match) {
           try {
-            const extractedMsg = JSON.parse(`"${match[1]}"`) as string;
+            const extractedMsg = JSON.parse(`"${rawMessage}"`) as string;
             if (namesModerationRefusal(extractedMsg)) {
               return true;
             }
@@ -765,6 +768,7 @@ export function isProviderModerationRefusal(
 
     const rootCode = normalizedFailureCode(typeof rec.code === "string" ? rec.code : undefined);
     const errCode = normalizedFailureCode(typeof e.code === "string" ? e.code : undefined);
+    let explicitErrorModerationCode = false;
     for (const c of [rootCode, errCode]) {
       if (
         isCyberPolicyCode(c)
@@ -775,11 +779,14 @@ export function isProviderModerationRefusal(
       }
       if (c === "moderation_refusal" || c === "content_filter") {
         moderationCodeSeen = true;
+        explicitErrorModerationCode = true;
       }
     }
 
-    if (typeof e.param === "string" && e.param && !isAllowedModerationParam(e.param)) {
-      return false;
+    if (typeof e.param === "string" && e.param) {
+      if (!isAllowedModerationParam(e.param) && !explicitErrorModerationCode) {
+        return false;
+      }
     }
 
     if (typeof e.message === "string") {
