@@ -701,7 +701,7 @@ autre 5xx `api_error`. `Retry-After` est envoyé en secondes entières (une date
 et l'avant-dernier message utilisateur, ainsi que le champ `cache_control` automatique de premier niveau. Les tours stables
 atteignent généralement un taux d'accès au cache d'environ 99.9 %.
 
-**Routage OpenAI/ChatGPT natif :** produit une valeur `prompt_cache_key` propre à la session, à partir de
+**Routage OpenAI/ChatGPT natif :** produit une valeur `prompt_cache_key`, à partir de
 `metadata.user_id` lorsqu'il est présent ou, à défaut, d'un hachage du contenu système, ainsi qu'un en-tête `session_id`
 pour l'affinité du cache, cet en-tête provenant uniquement d'une identité de session et jamais de la clé de repli partagée. La clé de repli dérivée du contenu système (utilisée seulement si un contenu système est présent) inclut aussi le modèle et l'intégralité des schémas d'outils.
 
