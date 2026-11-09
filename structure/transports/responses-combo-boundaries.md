@@ -137,7 +137,10 @@ Native post-header reset recovery shares that boundary, because it is asking the
 about the same bytes. With `replayReadErrors`, the preflight reports the stage it observed —
 `headers-only` before any parsed event, `protocol-prelude` after `response.created`,
 `semantic-output` once anything else arrives, including a payload it could not parse — and the
-resend gate decides. A lifecycle event with output, an error, incomplete details, a contradictory
+resend gate decides. Control frames (`response.in_progress`, `response.queued`,
+`response.heartbeat`, the Codex metadata frames below, a held mandatory-tool reasoning prelude) do
+not advance the stage. Once output commits the stream or a terminal ends inspection, a later read
+error belongs to the relay and never reaches the resend gate. A lifecycle event with output, an error, incomplete details, a contradictory
 status, a replay-unsafe mark, unknown event or snapshot fields, or unsafe nested metadata commits the original stream.
 An SSE event name that conflicts with its JSON type, an opaque frame,
 or an unfinished output/error/terminal frame on a rejected read also keeps the original bytes and
@@ -178,7 +181,8 @@ caps and the collector's whole-turn ceiling remain in force.
 Downstream cancellation or the request's abort signal ends the selection or hold at once, aborts an
 in-flight replacement, and never awaits upstream cleanup.
 
-- a non-control Responses event (apart from the held mandatory-tool reasoning prelude above) begins client-visible output or a tool/action item, after which the
+- a non-control Responses event (apart from the held mandatory-tool reasoning prelude above and the
+  Codex metadata frames) begins client-visible output or a tool/action item, after which the
   target is committed and cross-target replay is forbidden;
 - a `response.failed` terminal arrives first, in which case the terminal is converted back through
   the ordinary bounded combo-failure classifier and may advance to the next declared target;
@@ -188,6 +192,14 @@ in-flight replacement, and never awaits upstream cleanup.
   may advance while errors explicitly classified as non-retryable 4xx remain committed;
 - another completed/incomplete terminal or the aggregate preflight byte or retained-chunk cap is reached,
   in which case the current target is committed conservatively.
+
+The Codex WebSocket metadata channel writes `codex.rate_limits` and `codex.response.metadata` into
+the same body, usually before `response.created`. These frames are rebuilt from quota and header
+metadata, so the preflight treats them like the lifecycle preamble: they neither commit the child
+nor end inspection. Any other unknown event type still commits. A zero-output
+`server_is_overloaded` refusal that follows a rate-limit frame while the preflight is still
+inspecting (below its byte and chunk caps) therefore advances to the next target;
+`tests/responses/combo-codex-ws-overload-failover.test.ts` covers that hop (#8107).
 
 The buffered bytes are replayed unchanged before the reader continues. Native passthrough and eager
 relay identity markers are restored on the wrapped response so Windows/Bun stream paths and deferred

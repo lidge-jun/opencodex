@@ -22,6 +22,7 @@ import { chatSettingsBody, chatToResponsesBody } from "../protocols/codecs/chat"
 import { chatConversationToIr, chatIrRouteEvidence, withDirectChatConversation, type ChatIrConversation } from "../protocols/codecs/chat-ir";
 import { antigravityDirectDeclineReason } from "./antigravity-direct-eligibility";
 import { normalizeChatImageParts } from "../chat/image-parts";
+import { chatHasInstructionImage } from "../adapters/claude-cli/instruction-images";
 import {
   chatCompletionsErrorResponse,
   collectChatCompletion,
@@ -576,6 +577,7 @@ async function handleChatCompletionsWithBudget(
     abortSignal: req.signal,
     // Body is Responses-shaped by now, but the client spoke Chat Completions.
     inboundWire: "chat",
+    chatInstructionImage: chatHasInstructionImage(chatBody),
     chatRawReasoningVisible: rawReasoningVisible,
     // A Chat caller may send an explicit empty `tools` array — a deny-all declaration the
     // translation drops along with the whole catalog. Carried separately so the

@@ -797,7 +797,7 @@ preserves those requested tiers; any backend-specific normalization remains Clin
 available in the Cline IDE/CLI, not through the API; `minimax/minimax-m2.5` is the documented API
 free-experimentation model.
 
-**OrcaRouter** ([sponsor](https://github.com/lidge-jun/opencodex/blob/main/SPONSORS.md)) is an
+**OrcaRouter** ([sponsor](https://github.com/lidge-jun/opencodex/blob/dev/SPONSORS.md)) is an
 OpenAI-compatible gateway at `https://api.orcarouter.ai/v1` with vendor-namespaced model ids
 (`openai/gpt-5.5`, `anthropic/claude-opus-4.8`, `deepseek/deepseek-v4-flash`, ...) and an adaptive
 router, `orcarouter/auto`, that grades each prompt and picks the model. Create a key in the
@@ -919,7 +919,7 @@ retain the original stream. The protection does not change other providers or th
 Replay requires explicit `store: false`, complete input, and client-executed tools only; a hosted
 tool such as `web_search` prevents automatic replay even if no tool event was observed.
 
-**TokenLab** ([sponsor](https://github.com/lidge-jun/opencodex/blob/main/SPONSORS.md)) is an
+**TokenLab** ([sponsor](https://github.com/lidge-jun/opencodex/blob/dev/SPONSORS.md)) is an
 OpenAI-compatible API gateway at [tokenlab.sh](https://tokenlab.sh/r/OPENCODEX),
 operated by TOKENLAB AI INC.
 Create a workspace [API key](https://tokenlab.sh/dashboard/api?tab=keys), then run
@@ -1515,8 +1515,9 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
 - **Prerequisites:** `npm install -g @anthropic-ai/claude-code`, then sign in once with `claude`
   (or `claude setup-token`). The CLI uses the machine's own Claude Code sign-in (the macOS Keychain
   entry, or `~/.claude/.credentials.json` elsewhere).
-- **No credential stored:** this row holds no API key, and OpenCodex never reads, copies or forwards
-  a Claude token. The CLI owns the login and bills the account itself. A CLI that is not signed in
+- **No credential stored:** this row holds no API key. Quota preflight reads the CLI sign-in token
+  in memory and sends it only to Anthropic's usage endpoint. OpenCodex does not store that token or
+  inject it into CLI inference requests. The CLI owns the login and bills the account itself. A CLI that is not signed in
   fails the turn with a sign-in error naming the command, instead of a generic `401`.
   Classification follows the same fact: the preset is a keyless key row (`keyOptional`), so it needs
   no API key and no key field is offered for it. An API key saved on this row by other means is never
@@ -1533,11 +1534,21 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
   OpenCodex runs as, so every request routed through this row — from any client of the proxy —
   spends that one Claude account. There is no per-client account, no pooling and no multiplexing;
   giving several people their own Claude usage needs one proxy user per sign-in.
-- **Input media:** the row publishes its models as text-only for v1. The CLI accepts an image frame
-  on its stream-json input, but no headless turn has been shown to hand those bytes to the model, so
-  an image sent straight to this provider is refused (`unsupported_input_modality`) instead of
-  being silently dropped and answered blind. With the
-  vision sidecar on the request path, images are captioned into text before they reach the row.
+- **Subscription usage:** the Providers workspace shows the plan's 5-hour, weekly and model-scoped
+  windows from the last usage check OpenCodex recorded before a turn, for the account Claude Code is
+  signed in to now. Opening the page never probes or launches the CLI, and **Refresh all quotas**
+  re-reads the local sign-in and that recorded observation rather than Anthropic's endpoint. After a
+  sign-out or account switch the previous account's row disappears on **Refresh all quotas**, and
+  within a minute otherwise; a newly signed-in account shows nothing until its first Claude turn.
+- **Input media:** the row advertises text and image input. The stable replay sends native image
+  blocks directly through the official CLI, following the labelled message they belong to. This
+  includes multiple attachments, retained historical images and images returned by client tools. Text and images retain their order within each message.
+  Unsupported image references fail explicitly, including Responses image `file_id` references in messages
+  and tool results; supply a supported image URL instead. Images in system or developer instructions are refused
+  before vision preprocessing or helper calls. Omitted history also omits its images. A vision
+  sidecar is not needed. An untouched v2.94.0 text-only roster is migrated; edited lists and explicit
+  per-model capability overrides remain authoritative. Live verification used Claude Code 2.1.312
+  and Fable 5.1; other model/CLI combinations still depend on their upstream image support.
 - **Isolation:** every turn runs in a scoped child environment with no inherited `ANTHROPIC_*`
   variable (a `claude` already pointed at this proxy therefore cannot loop back into it), telemetry,
   feedback and the auto-updater disabled, and `--tools ""`, `--strict-mcp-config` plus
@@ -1824,6 +1835,8 @@ references are preserved. Flattening is lossy: branch constraints
 disappear and later property definitions win, so tools must validate arguments. Existing Zen and
 Azure schema compatibility rules remain in effect.
 
+See [Verify a custom remote gateway](/guides/custom-gateway/) for the setup and validation checklist.
+
 ## Approval reviewer per provider
 
 Codex asks a second model to review approval requests, and takes that reviewer from
@@ -1889,7 +1902,9 @@ Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code, and any a6api-
 or Abliteration custom provider.
 
 **Kimi Coding Plan quota.** Account login and API-key providers on the canonical
-`https://api.kimi.com/coding/v1` endpoint read `/usages`. Plans that report
+`https://api.kimi.com/coding/v1` endpoint read `/usages`. API-key providers on the regional
+`https://api.kimi.ai/coding/v1` endpoint read `/usages` from that same origin; account login
+stays on `api.kimi.com`. Plans that report
 `usages.limit_month_total` (or `monthTotal`) show a monthly utilization bar, with
 `limit_month_code` (or `monthCode`) as the fallback when total usage is unavailable.
 The `used_ratio` / `usedRatio` fraction must be in `[0, 1]` before conversion to a consumed

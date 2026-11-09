@@ -10,7 +10,7 @@ description: 사용자의 동의 경계를 넘지 않으면서 에이전트가 �
 배포된 패키지를 설치하고 `ocx`가 `PATH`에 들어 있는지 확인합니다:
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
 ```
 

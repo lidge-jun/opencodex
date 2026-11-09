@@ -18,7 +18,7 @@ opencodex をインストールすると同じ実行ファイルを指す `ocx` 
 ## インストール
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ```
 
 :::note[npm が bun の postinstall をブロックした?]
@@ -63,7 +63,7 @@ GPT-5.6 Sol/Terra/Luna カタログ情報がすでに含まれています。た
 ありません。まだ正式配布されていない opencodex ビルドを試す場合のみ preview チャネルを使ってください:
 
 ```bash
-npm install -g @bitkyc08/opencodex@preview
+npm install -g --allow-scripts=bun @bitkyc08/opencodex@preview
 ocx update --tag preview
 ```
 

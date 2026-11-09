@@ -395,6 +395,11 @@ MiMo model Command Code serves.
   (`reasoning.summary: "none"`) keeps the provider default. Native Opus 5.5 on `api.anthropic.com`
   defaults to `display: "updates"`; explicit `reasoning.summary: "concise"` or `"detailed"`
   selects `"summarized"` without the updates beta. See [Opus 5.5 progress updates](/guides/providers/#claude-opus-55-progress-updates).
+  The provider or exact-model `thinkingDisplay` setting overrides that default:
+  `summarized` forces `display: "summarized"`, `updates` keeps progress commentary, and
+  `omitted` drops the display field so a Chat client receives no reasoning deltas during the
+  think. An explicit request summary still wins. See
+  [provider configuration](/reference/configuration/providers/).
 - **Structured output:** Responses `text.format` and Chat Completions `response_format` requests
   with `type: "json_schema"` become Anthropic `output_config.format`. The format merges into an
   existing adaptive-thinking output configuration, preserving a compatible `output_config.effort`.
@@ -454,7 +459,11 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
 - Tool-call ids are synthesized when Gemini omits them. Vertex and Antigravity preserve and replay
   opaque `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
   The signature cache is snapshotted to the config directory, so continuations also survive proxy
-  restarts.
+  restarts. On Vertex and Antigravity, when upstream rejects a request with any HTTP 400, or with
+  `INVALID_ARGUMENT` or a signature error inside a 200 response, that conversation's in-memory
+  signature replay entry is cleared so the next turn does not replay it. A rejection whose text
+  names a signature also evicts the rejected signatures from the durable store; any other
+  rejection leaves durable entries in place. The rejected request itself is not retried.
 - Antigravity's Gemini 4 Argon requests include the selected thinking tier when thought summaries
   are enabled, allowing its thought summaries to appear in supported clients.
 - **Malformed response shapes fail closed.** A claimed candidate, its `content`, or its

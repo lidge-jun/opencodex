@@ -13,6 +13,7 @@ import {
   isWirePinnedModel,
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
   REASONING_SUMMARY_DELIVERY_VALUES,
+  THINKING_DISPLAY_VALUES,
   UPSTREAM_HTTP_VERSION_VALUES,
   type OcxProviderConfig,
   type ModelCapabilities,
@@ -29,6 +30,7 @@ const SENSITIVE_PROVIDER_HEADERS = new Set([
   "x-amz-security-token",
 ]);
 const REASONING_SUMMARY_DELIVERY_SET = new Set<string>(REASONING_SUMMARY_DELIVERY_VALUES);
+const THINKING_DISPLAY_SET = new Set<string>(THINKING_DISPLAY_VALUES);
 const DISPLAY_NAME_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 const MAX_MODEL_DISPLAY_NAME_LENGTH = 128;
 
@@ -381,6 +383,33 @@ export function reasoningSummaryDeliveryRecordConfigError(
     if (modelRecordValue(supports, key) === false) {
       return `${field}.${key} conflicts with modelSupportsReasoningSummaries=false`;
     }
+  }
+  return null;
+}
+
+/** Validate `thinkingDisplay`: one closed vocabulary shared by config and management writes. */
+export function thinkingDisplayConfigError(value: unknown, field = "thinkingDisplay"): string | null {
+  if (value === undefined) return null;
+  if (typeof value !== "string" || !THINKING_DISPLAY_SET.has(value)) {
+    return `${field} must be one of: ${THINKING_DISPLAY_VALUES.join(", ")}`;
+  }
+  return null;
+}
+
+/** Validate `modelThinkingDisplay`: a plain map of model id to the same closed vocabulary. */
+export function modelThinkingDisplayConfigError(value: unknown, field = "modelThinkingDisplay"): string | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
+  for (const [key, entry] of Object.entries(value)) {
+    const safeKey = JSON.stringify(redactSecretString(key));
+    if (!key.trim()) return `${field} keys must be nonblank model ids`;
+    if (["__proto__", "prototype", "constructor"].includes(key)) {
+      return `${field} keys must not be reserved object keys`;
+    }
+    const entryError = thinkingDisplayConfigError(entry, `${field}.${safeKey}`);
+    if (entryError) return entryError;
   }
   return null;
 }

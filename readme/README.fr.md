@@ -10,12 +10,12 @@
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="Suivre @claudeebum sur X"></a>
   <a href="https://www.npmjs.com/package/@bitkyc08/opencodex"><img src="https://img.shields.io/npm/v/@bitkyc08/opencodex?color=cb3837&label=npm&logo=npm" alt="version npm"></a>
-  <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="licence"></a>
+  <a href="https://github.com/lidge-jun/opencodex/blob/dev/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="licence"></a>
   <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="version de Node">
 </p>
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx start
 ```
 
@@ -88,7 +88,7 @@ opencodex est une passerelle locale légère entre vos outils de programmation e
 ### Installation personnelle (CLI)
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+ ; le runtime Bun est inclus automatiquement
+npm install -g --allow-scripts=bun @bitkyc08/opencodex   # Node 18+ ; le runtime Bun est inclus automatiquement
 ocx start                         # proxy + tableau de bord sur localhost:10100
 ```
 
@@ -202,7 +202,7 @@ services:
   hub:
     pull_policy: build
     build:
-      context: https://github.com/lidge-jun/opencodex.git#main
+      context: https://github.com/lidge-jun/opencodex.git#dev
       dockerfile: Dockerfile
       target: runtime
       args:
@@ -250,7 +250,7 @@ leur arrivée dans le paquet npm.
 <summary>Pour les agents</summary>
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx start     # ou `ocx service`
 ocx init      # configuration interactive : écrit ~/.opencodex/config.json et relie Codex
 ```

@@ -20,6 +20,7 @@ export interface LinkStatusDto {
     since: string;
     reason: string | null;
     tunnelPort: number;
+    childKind?: "full" | "ephemeral";
     /** Home only: what the link carried from this Child, and the compatibility verdict. */
     peer?: LinkPeerStatus;
     /** Home-initiated links on request (`?diagnostics=1`): retry progress and the last failure. */
@@ -140,6 +141,7 @@ export function projectLinkStatus(
     direction: record.direction,
     ...stateDetails(record, byId.get(record.id), compensation),
     tunnelPort: record.tunnelPort,
+    ...(record.childKind ? { childKind: record.childKind } : {}),
     ...parity(record.id),
   }));
   const childRecord = config.runtimeRole === "client"

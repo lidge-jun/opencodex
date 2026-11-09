@@ -187,6 +187,18 @@ describe("link management routes", () => {
       started(); await gate; throw new Error("fixture scan failed");
     });
     try {
+      if (kind === "report") {
+        // The candidate index ingests a non-empty ledger, which is the scan this case fails.
+        writeFileSync(join(temp, "usage.jsonl"), `${JSON.stringify({
+          requestId: "fixture",
+          timestamp: Date.now(),
+          provider: "openai",
+          model: "gpt-5.5",
+          status: 200,
+          durationMs: 1,
+          usageStatus: "reported",
+        })}\n`);
+      }
       const path = kind === "facets" ? "/api/usage/source-facets?client=all&device=all" : "/api/usage?client=all&device=unconfigured";
       const url = new URL(`http://127.0.0.1${path}`);
       const pending = handleManagementAPI(new Request(url, { headers: { host: "127.0.0.1" } }), url, h.config, h.deps, "gui-session",
@@ -220,6 +232,18 @@ describe("link management routes", () => {
       started(); await gate; return original(options);
     });
     try {
+      // A non-empty ledger makes the candidate index ingest, which is the in-flight read.
+      writeFileSync(join(temp, "usage.jsonl"), `${JSON.stringify({
+        requestId: "fixture",
+        timestamp: Date.now(),
+        provider: "openai",
+        model: "gpt-5.5",
+        status: 200,
+        durationMs: 1,
+        usageStatus: "reported",
+        apiKeyId: "former",
+        admissionKind: "configured",
+      })}\n`);
       const url = new URL("http://127.0.0.1/api/usage?client=all&device=unconfigured");
       const pending = handleManagementAPI(new Request(url, { headers: { host: "127.0.0.1" } }), url, h.config, h.deps, "gui-session",
         { isPaired: () => paired, isCurrent: () => paired, revokeCurrent: () => true },
@@ -344,8 +368,8 @@ describe("link management routes", () => {
   });
 
   test("uses the serve-options trusted-loopback derivation for every ingress", () => {
-    const ingresses: ServerIngress[] = ["public", "unauthenticated-loopback", "hub-management", "claude-intercept", "hub-link"];
-    expect(ingresses.map(ingress => trustedLoopbackForIngress(ingress, "0.0.0.0"))).toEqual([false, true, false, false, false]);
+    const ingresses: ServerIngress[] = ["public", "unauthenticated-loopback", "hub-management", "claude-intercept", "hub-link", "local-control"];
+    expect(ingresses.map(ingress => trustedLoopbackForIngress(ingress, "0.0.0.0"))).toEqual([false, true, false, false, false, true]);
     expect(trustedLoopbackForIngress("public", "127.0.0.1")).toBe(true);
     expect(trustedLoopbackForIngress("public", "::1")).toBe(true);
     // A loopback hostname never makes the hub-link, hub-management or intercept ingress trusted.

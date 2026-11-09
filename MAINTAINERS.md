@@ -30,9 +30,9 @@ when a maintainer steps down.
 
 - Pull requests target `dev`, the only development and integration line. The
   target-branch check accepts `dev` alone.
-- The **`enforce-target`** CI check rejects pull requests whose head
-  ancestry sits on the **`main`** tip while far behind **`dev`**, and rejects
-  empty, thin, or malformed descriptions; PRs that change files under `gui/`
+- The **`enforce-target`** CI check rejects pull requests whose base is not
+  **`dev`** (stacked children excepted), and rejects empty, thin, or malformed
+  descriptions; PRs that change files under `gui/`
   must include a screenshot of the UI change in the description. Drag the image
   into the description instead of committing it to the PR branch; command-line
   uploads use the `pr-assets` branch and a commit-SHA link.
@@ -57,9 +57,8 @@ when a maintainer steps down.
   never disproves it;
   a new push still resets every box. A disproved claim unticks the matching
   box and keeps the PR a draft.
-  Authors with repository push permission skip the ancestry heuristic only. As
-  with the approval requirement above, this part is enforced by convention;
-  the ruleset does not check ancestry (see the note under the change log).
+  As with the approval requirement above, the wrong-base rule is enforced by CI
+  rather than by the ruleset.
 - Pull requests require successful required CI checks before merge. Contributor pull requests
   normally require approval from at least one maintainer other than the author.
 - **Batched merges.** A pull request's own CI is the fast lane by default: `gates` plus
@@ -78,9 +77,9 @@ when a maintainer steps down.
   This is maintainer integration, not a self-approval or an independent review. Outstanding
   maintainer change requests must still be resolved or explicitly withdrawn. Technical review,
   attribution, documentation and security-review duties remain in force.
-- The maintainer-integration exception applies only to `dev`. It does not change review rules
-  for `main` or `preview`, grant contributor authors approval authority, or permit direct pushes,
-  force-pushes or branch deletion. Authors do not submit approving reviews of their own work.
+- The maintainer-integration exception applies only to `dev`. It does not grant contributor
+  authors approval authority or permit direct pushes, force-pushes or branch deletion. Authors do
+  not submit approving reviews of their own work.
 - Authentication, credential handling, GitHub Actions, release automation, dependency installation,
   and other security-boundary changes require explicit security review.
 - A new or promoted provider preset is a credential-destination change. Before merge it needs the
@@ -101,8 +100,9 @@ when a maintainer steps down.
   `dev` commit with successful full manual cross-platform CI; the workflow stamps the
   release version into build checkouts instead of committing a pre-release version bump
   or promoting a branch. Releases share one concurrency group and preserve the global
-  version ordering. `main` and `preview` remain protected historical branches during
-  migration, not release targets.
+  version ordering. The `main` and `preview` branches were deleted after the
+  single-branch model was in place; released history remains reachable through
+  tags, and neither branch is a release target.
 - Publication remains disabled until the coordinator completes the cutover checks,
   including the reviewed legacy lineage baseline, npm trusted-publisher configuration,
   default branch and rulesets, Pages settings, and a hosted dry-run. The variable
@@ -146,7 +146,7 @@ Adding or removing a maintainer requires:
 - 2026-09-06 — The owner authorized explicit maintainer integration into `dev` without a second
   maintainer approval. Both current maintainers have `admin` access. The dev-only PR bypass
   includes GitHub's `admin` and `maintain` roles; `write` access alone is insufficient. Contributor
-  review remains the default and the `main`/`preview` rules are unchanged. The optional
+  review remained the default; the former `main`/`preview` branches were later retired. The optional
   `scripts/ci/assert-mergeable-review.sh --maintainer-integration <pr-number> [repo]` path checks
   the authenticated actor against the trusted `dev` roster and live repository permissions,
   preserves outstanding maintainer objections, and binds its result to the current head and base.
@@ -195,10 +195,10 @@ Adding or removing a maintainer requires:
   this addition does not widen the review surface for them.
 
   Code-owner approval and the maintainer-approval requirement above are both
-  enforced, not conventions. `dev`, `main`, and `preview` each carry an active
-  repository ruleset — the classic `/branches/{branch}/protection` endpoint
-  returns 404 for them, which is why this file long described the repository as
-  unprotected. `Protect dev` (id 20763889) requires a pull request with one
+  enforced, not conventions. `dev` carries an active repository ruleset; the
+  classic `/branches/{branch}/protection` endpoint can return 404 for rulesets,
+  which is why this file long described the repository as unprotected.
+  `Protect dev` (id 20763889) requires a pull request with one
   approving review, code-owner review, and extra approval for unattributed
   changes, and it blocks deletion and non-fast-forward pushes. Allowed merge
   methods are merge and squash; rebase merges are off.
