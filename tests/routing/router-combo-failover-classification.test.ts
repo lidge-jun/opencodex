@@ -9,6 +9,7 @@ import {
   targetKey,
 } from "../../src/combos";
 import { codexAccountModelRefusalHardStopCode, comboFailureCooldownScope, comboFailureDecision, isProviderModerationRefusal } from "../../src/combos/failover";
+import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
 import { adapterFailureFromMessage, inferHttpStatusFromAdapterMessage } from "../../src/lib/errors";
 import type { OcxConfig } from "../../src/types";
 
@@ -920,7 +921,7 @@ describe("provider moderation refusal", () => {
     expect(comboFailureDecision(400, moderationWrapperHardCode)).toBe("stop");
   });
 
-  test("truncated JSON envelope over 500 characters with intact moderation message hops", () => {
+  test("truncated JSON envelope over 500 characters with intact moderation message hops", async () => {
     const padding = "x".repeat(600);
     const raw = JSON.stringify({
       error: {
@@ -932,6 +933,63 @@ describe("provider moderation refusal", () => {
     const truncated = raw.slice(0, 200);
     expect(isProviderModerationRefusal(400, truncated)).toBe(true);
     expect(comboFailureDecision(400, truncated)).toBe("hop");
+
+    // Pass through consumeComboFailure where production truncation occurs
+    const response = new Response(raw, { status: 400 });
+    const failure = await consumeComboFailure(response);
+    expect(comboFailureDecision(failure.response.status, failure.classificationText, { code: failure.upstreamCode })).toBe("hop");
+    expect(comboFailureCooldownScope(failure.response.status, failure.classificationText, { code: failure.upstreamCode })).toBe("none");
+  });
+
+  test("malformed JSON restricts recovery to error envelope and rejects non-error message fields", () => {
+    // moderation wording in diagnostic.message rather than error.message
+    const diagnosticMessage = '{"diagnostic":{"message":"blocked by moderation"},"error":{"message":"invalid param"}}'.slice(0, 75);
+    expect(isProviderModerationRefusal(400, diagnosticMessage)).toBe(false);
+    expect(comboFailureDecision(400, diagnosticMessage)).toBe("stop");
+
+    // malformed 422 with upstream_no_response code and moderation phrasing
+    const malformedHardStop = '{"code":"upstream_no_response","error":{"message":"The input was refused by moderation"'.slice(0, 70);
+    expect(isProviderModerationRefusal(422, malformedHardStop)).toBe(false);
+    expect(comboFailureDecision(422, malformedHardStop)).toBe("stop");
+  });
+
+  test("outer non-moderation parameter check precedes message unwrapping", () => {
+    const outerBadParam = JSON.stringify({
+      error: {
+        param: "temperature",
+        message: JSON.stringify({
+          error: {
+            message: "The input was refused by moderation. Categories: harassment.",
+          },
+        }),
+      },
+    });
+    expect(isProviderModerationRefusal(400, outerBadParam)).toBe(false);
+    expect(comboFailureDecision(400, outerBadParam)).toBe("stop");
+  });
+
+  test("wrapper limit exhaustion fails closed on unexamined structured text", () => {
+    const deepConcealedHardCode = JSON.stringify({
+      code: "moderation_refusal",
+      error: {
+        message: JSON.stringify({
+          error: {
+            message: JSON.stringify({
+              error: {
+                message: JSON.stringify({
+                  error: {
+                    code: "upstream_no_response",
+                    message: "timed out",
+                  },
+                }),
+              },
+            }),
+          },
+        }),
+      },
+    });
+    expect(isProviderModerationRefusal(400, deepConcealedHardCode)).toBe(false);
+    expect(comboFailureDecision(400, deepConcealedHardCode)).toBe("stop");
   });
 
   test("generic 400 errors without moderation phrasing stay terminal", () => {

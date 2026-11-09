@@ -724,16 +724,29 @@ export function isProviderModerationRefusal(
       wasParsed = true;
     } catch {
       if (text.startsWith("{") || text.startsWith("[") || wasParsed) {
-        const match = /"message"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/.exec(text);
+        if (
+          isCyberPolicyMessage(text)
+          || /["']?(?:upstream_no_response|upstream_closed_before_response|upstream_reset_replay_refused|cyber_policy|origin_rejected)["']?/i.test(text)
+          || isNonReplayableUpstreamCode(normalizedCode)
+          || normalizedCode === "origin_rejected"
+        ) {
+          return false;
+        }
+        const paramMatch = /"param"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/.exec(text);
+        if (paramMatch) {
+          try {
+            const extractedParam = JSON.parse(`"${paramMatch[1]}"`) as string;
+            if (!isAllowedModerationParam(extractedParam)) return false;
+          } catch {
+            return false;
+          }
+        }
+        const match = /"(?:error|response)"\s*:\s*\{[^{}]*?"message"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/.exec(text)
+          ?? /^\s*\{\s*"message"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/.exec(text);
         if (match) {
           try {
             const extractedMsg = JSON.parse(`"${match[1]}"`) as string;
-            if (
-              !isCyberPolicyMessage(text)
-              && !isNonReplayableUpstreamCode(normalizedCode)
-              && normalizedCode !== "origin_rejected"
-              && namesModerationRefusal(extractedMsg)
-            ) {
+            if (namesModerationRefusal(extractedMsg)) {
               return true;
             }
           } catch {
@@ -765,16 +778,16 @@ export function isProviderModerationRefusal(
       }
     }
 
+    if (typeof e.param === "string" && e.param && !isAllowedModerationParam(e.param)) {
+      return false;
+    }
+
     if (typeof e.message === "string") {
       const msgTrimmed = e.message.trim();
       if (msgTrimmed.startsWith("Provider error 400: ") || msgTrimmed.startsWith("Provider error 422: ") || msgTrimmed.startsWith("{")) {
         text = msgTrimmed;
         continue;
       }
-    }
-
-    if (typeof e.param === "string" && e.param && !isAllowedModerationParam(e.param)) {
-      return false;
     }
 
     if (moderationCodeSeen) return true;
@@ -795,8 +808,8 @@ export function isProviderModerationRefusal(
     return false;
   }
 
-  if (moderationCodeSeen) return true;
   if (wasParsed || text.startsWith("{") || text.startsWith("[") || text.startsWith("data:")) return false;
+  if (moderationCodeSeen) return true;
   return namesModerationRefusal(text);
 }
 
