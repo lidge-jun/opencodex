@@ -731,7 +731,7 @@ describe("a render gap cannot retarget a provider mutation", () => {
     };
   }
 
-  test("a Settings note save from a stale render is refused by the relay, not written to the new hub", async () => {
+  test("a Settings note save from a stale render is refused before fetch, not written to the new hub", async () => {
     const attempts: Array<string | null> = [];
     const hubWrites: string[] = [];
     const relay = relayOnlyFetch(expected => {
@@ -752,8 +752,9 @@ describe("a render gap cannot retarget a provider mutation", () => {
     configureApiTargets(relayTargets("/same", "hub-b"));
     relay.setHub("hub-b");
     await act(async () => { saveButton().click(); await new Promise(resolve => win.setTimeout(resolve, 20)); });
-    // The attempt carries the form's target; the relay refuses it and writes nothing.
-    expect(attempts).toEqual(["hub-a"]);
+    // The stale form capture is refused before authentication or fetch: nothing reaches
+    // the relay, and nothing is written to the new hub.
+    expect(attempts).toEqual([]);
     expect(hubWrites).toEqual([]);
   });
 
@@ -813,7 +814,40 @@ describe("a render gap cannot retarget a provider mutation", () => {
     await render(<Harness />);
     configureApiTargets(relayTargets("/same", "hub-b"));
     await act(async () => { await crud.updateProvider("provider-a", { note: "x" }); });
-    expect(expected).toEqual(["hub-a"]);
+    // The stale render capture is refused before fetch.
+    expect(expected).toEqual([]);
+  });
+
+  test("updateProvider forwards the caller's capture and refuses a stale one", async () => {
+    let calls = 0;
+    let crud!: ReturnType<typeof useProvidersCrud>;
+    globalThis.fetch = (async () => { calls += 1; return Response.json({ success: true }); }) as typeof fetch;
+    function Harness({ target }: { target: string }) {
+      crud = useProvidersCrud({
+        apiBase: "/same", targetKey: target, t: key => key,
+        removeBusyRef: { current: false } as React.MutableRefObject<boolean>,
+        workspaceSelected: null, setWorkspaceSelected: () => {}, setRemoveConfirmName: () => {},
+        notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchProviderQuotas: async () => {},
+      });
+      return null;
+    }
+    configureApiTargets(relayTargets("/same", "hub-a"));
+    const captureA = captureApiTarget("shared");
+    configureApiTargets(relayTargets("/same", "hub-b"));
+    await render(<Harness target="hub-b" />);
+    // The hook's own render capture is B; the caller's capture is the stale A. The
+    // callback must forward A and refuse, not silently substitute the live B.
+    const result = await crud.updateProvider("provider-a", { note: "x" }, captureA);
+    expect(result).toEqual({ ok: false, error: "prov.targetChanged" });
+    expect(calls).toBe(0);
+  });
+
+  test("the detail pane forwards a caller capture instead of replacing it", async () => {
+    // The wrapper must accept the third argument; replacing a form capture here was the
+    // e207 gap. The behavior is exercised through the Settings save above; this pins the
+    // forwarding contract itself.
+    const source = await Bun.file(new URL("../src/components/provider-workspace/ProviderDetails.tsx", import.meta.url)).text();
+    expect(source).toContain("capture ?? updateCapture");
   });
 
   test("a remove confirmation opened on one target cannot delete on another, including A-B-A", async () => {

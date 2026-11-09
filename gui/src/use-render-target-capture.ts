@@ -10,8 +10,9 @@ import { captureApiTarget, type ApiTargetCapture } from "./api";
  * change starts a new capture.
  */
 export function useRenderTargetCapture(apiBase: string, targetKey?: string): ApiTargetCapture {
-  const identity = targetKey ?? apiBase;
-  const make = (): ApiTargetCapture => ({ ...captureApiTarget("shared", apiBase), renderOwned: true });
+  // An empty targetKey is "not supplied", not an identity shared by every embedded base.
+  const identity = targetKey ? targetKey : apiBase;
+  const make = (): ApiTargetCapture => captureApiTarget("shared", apiBase);
   const [state, setState] = useState<{ identity: string; capture: ApiTargetCapture }>(() => ({ identity, capture: make() }));
   if (state.identity !== identity) {
     setState({ identity, capture: make() });

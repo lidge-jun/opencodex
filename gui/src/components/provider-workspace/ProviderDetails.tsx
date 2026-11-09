@@ -197,8 +197,10 @@ export default function ProviderDetails({
   const updateCapture = useRenderTargetCapture(apiBase, targetKey);
   const handleUpdateProvider = useMemo(
     () => onUpdateProvider
-      ? async (name: string, patch: ProviderUpdatePatch): Promise<ProviderUpdateResult> => {
-          const result = await onUpdateProvider(name, patch, updateCapture);
+      ? async (name: string, patch: ProviderUpdatePatch, capture?: import("../../api").ApiTargetCapture): Promise<ProviderUpdateResult> => {
+          // A form that owns its capture keeps it; this pane only supplies one when the
+          // caller did not. Replacing a form capture here would reintroduce the gap.
+          const result = await onUpdateProvider(name, patch, capture ?? updateCapture);
           const affectsConnection = Object.keys(patch).some(key => key !== "note" && key !== "setDefault");
           if (result.ok && affectsConnection) setMutationRevision(revision => revision + 1);
           return result;

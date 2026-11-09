@@ -208,3 +208,29 @@ test("a 401 retry keeps the captured expected target on both attempts", async ()
     resetApiAuthFetchForTests();
   }
 });
+
+test("a same-identity capability downgrade uses the fresh legacy preflight", async () => {
+  const seen: Array<{ url: string; expected: string | null }> = [];
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url === "/api/machine/status") return Response.json({ sharedServerOrigin: HUB_A });
+    seen.push({ url, expected: new Headers(init?.headers).get("x-opencodex-expected-target") });
+    return Response.json({ ok: true });
+  }) as typeof fetch;
+  configureApiTargets(relayTargets(HUB_A, "expected-target-v1"));
+  const capture = captureApiTarget("shared");
+  // Same identity, capability withdrawn: the old capture must not vouch for the header.
+  configureApiTargets(relayTargets(HUB_A));
+  expect((await targetFetch(capture, "/api/machine/hub-relay/api/providers?name=p", { method: "PATCH", body: "{}" })).status).toBe(200);
+  expect(seen).toEqual([{ url: "/api/machine/hub-relay/api/providers?name=p", expected: null }]);
+});
+
+test("a target change with a capability downgrade refuses before fetch", async () => {
+  let calls = 0;
+  globalThis.fetch = (async () => { calls += 1; return Response.json({ ok: true }); }) as typeof fetch;
+  configureApiTargets(relayTargets(HUB_A, "expected-target-v1"));
+  const capture = captureApiTarget("shared");
+  configureApiTargets(relayTargets(HUB_B));
+  expect((await targetFetch(capture, "/api/machine/hub-relay/api/providers?name=p", { method: "PATCH", body: "{}" })).status).toBe(409);
+  expect(calls).toBe(0);
+});

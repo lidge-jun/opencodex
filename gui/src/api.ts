@@ -21,12 +21,6 @@ export interface ApiTargetCapture {
    * or shared plane; after that the live target wins and the capture is stale.
    */
   standalone?: true;
-  /**
-   * The capture belongs to a rendered form. It may still be sent to its own base after a
-   * module target change that has not re-rendered that form; the relay refuses the stale
-   * expected target, and a completion is still fenced by `isApiTargetCaptureCurrent`.
-   */
-  renderOwned?: true;
 }
 
 /** Non-secret generation fencing every Usage report and inventory. */
@@ -299,18 +293,18 @@ async function legacyRelayPreflight(capture: ApiTargetCapture): Promise<Response
 
 /**
  * Send a mutation through the target captured when the user acted. Authentication is read
- * only after the captured target is verified; the expected-target header comes from the
- * capture, never from the live target at send time.
+ * only after the captured target is verified. The expected-target header carries the
+ * capture's origin; whether that header is negotiated comes from the live target, so a
+ * same-identity downgrade uses the fresh legacy preflight.
  */
 export async function targetFetch(
   capture: ApiTargetCapture,
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
-  // A render-owned capture is the form's own target. It is allowed to reach that target
-  // (the relay refuses it when the live target moved); an action-time capture is refused
-  // before send. Completions stay fenced either way.
-  if (!targetCaptureMatches(capture) && !capture.renderOwned) return targetChangedResponse();
+  // Every stale capture is refused before authentication or fetch, regardless of who
+  // created it. A render-owned capture changes only the capture point, not the fence.
+  if (!targetCaptureMatches(capture)) return targetChangedResponse();
   let requestUrl: URL;
   try {
     requestUrl = new URL(input instanceof Request ? input.url : String(input), window.location.href);
@@ -327,7 +321,11 @@ export async function targetFetch(
   const mutation = method !== "GET" && method !== "HEAD";
   const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
   if (capture.transport === "relay") {
-    if (capture.relayTargetCheck === "expected-target-v1") {
+    // The capture names the target; the live target names the negotiated capability. A
+    // relay that downgraded on the same identity must not be trusted to check a header
+    // it no longer advertises: fall back to the fresh legacy preflight.
+    const negotiated = ensureTargets().relayTargetCheck;
+    if (negotiated === "expected-target-v1") {
       headers.set(EXPECTED_TARGET_HEADER, capture.origin);
     } else if (mutation) {
       const refusal = await legacyRelayPreflight(capture);
