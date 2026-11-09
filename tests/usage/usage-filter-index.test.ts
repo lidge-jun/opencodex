@@ -1075,7 +1075,10 @@ describe("filtered usage index availability", () => {
     expect(existsSync(`${indexPath}-wal`)).toBe(false);
   });
 
-  test("an unwritable home degrades to the streaming read", async () => {
+  // chmod cannot make a Windows directory unwritable, so there this would build the index and
+  // assert nothing about permissions. The degrade itself is the platform-neutral catch-all in
+  // readUsageFilterCandidates, which the contention and foreign-file cases cover everywhere.
+  test.skipIf(process.platform === "win32")("an unwritable home degrades to the streaming read", async () => {
     const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
     writeRows(rows);
     const expected = rows.filter(row => row.provider === "openai").length;
@@ -1130,13 +1133,13 @@ describe("filtered usage index availability", () => {
     }
   });
 
-  test("a projection that vanishes before the read is not recreated", async () => {
+  /** Delete the projection at one point of a filtered query and expect a streaming answer. */
+  async function expectVanishedProjectionNotRecreated(hooks: (remove: (dbPath: string) => void) =>
+    Parameters<typeof setUsageFilterIndexTestHooksForTests>[0]): Promise<void> {
     const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
     writeRows(rows);
     const indexPath = usageFilterIndexPath(testDir);
-    setUsageFilterIndexTestHooksForTests({
-      afterPublish: ({ dbPath }) => { rmSync(dbPath, { force: true }); },
-    });
+    setUsageFilterIndexTestHooksForTests(hooks(dbPath => { rmSync(dbPath, { force: true }); }));
     try {
       const result = await getFilteredUsageAggregate({ provider: "openai" });
       expect(summary(result).summary.requests)
@@ -1146,6 +1149,16 @@ describe("filtered usage index availability", () => {
       setUsageFilterIndexTestHooksForTests(null);
     }
     expect(existsSync(indexPath)).toBe(false);
+  }
+
+  // Windows refuses to delete a file SQLite holds open: there the projection can only vanish once
+  // the refresh has closed it, which the next case covers on every platform.
+  test.skipIf(process.platform === "win32")("a projection that vanishes before the read is not recreated", async () => {
+    await expectVanishedProjectionNotRecreated(remove => ({ afterPublish: ({ dbPath }) => remove(dbPath) }));
+  });
+
+  test("a projection that vanishes after the refresh closed it is not recreated by the read", async () => {
+    await expectVanishedProjectionNotRecreated(remove => ({ afterRefresh: ({ dbPath }) => remove(dbPath) }));
   });
 
   test("a home change during a refresh never mixes installations", async () => {
