@@ -201,6 +201,21 @@ export function apiBaseForPlane(plane: ApiPlane, targets: ApiTargets): string {
 }
 
 /**
+ * Stable identity for the server a dashboard plane actually manages.
+ *
+ * A relay plane's base URL is always `<machine>/api/machine/hub-relay`, so re-pairing the
+ * machine to another hub keeps the same request base. The advertised hub origin and the
+ * machine key id distinguish those logical targets. The key is for in-memory scoping only;
+ * the label never carries the key id.
+ */
+export function apiTargetIdentity(targets: ApiTargets): { key: string; label: string } {
+  return {
+    key: `${targets.shared.serverOrigin}\u0000${targets.apiKeyId ?? ""}`,
+    label: targets.shared.serverOrigin,
+  };
+}
+
+/**
  * A Remote Link Child whose saved connection is missing or names another owner or link answers
  * its machine and link status with `503 { error: "client_state_changed" }` (docs: Remote Link).
  */

@@ -3269,6 +3269,7 @@ export const zh: Record<TKey, string> = {
   "pws.settingsUnsavedBar": "有未保存的更改。",
   "pws.draftTarget": "正在编辑：{target}",
   "pws.draftConflict": "编辑期间此服务器上已保存的设置发生了变化。草稿已保留，请选择要保留的值。",
+  "pws.draftConflictFields": "这些字段在两边都发生了变化。请编辑草稿或使用已保存的值：",
   "pws.draftConflictUseSaved": "使用已保存的值",
   "pws.draftConflictKeepDraft": "保留我的草稿",
   "pws.draftConflictResolveFirst": "保存前请选择要保留的值。",

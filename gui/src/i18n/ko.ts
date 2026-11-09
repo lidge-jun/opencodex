@@ -3296,6 +3296,7 @@ export const ko: Record<TKey, string> = {
   "pws.settingsUnsavedBar": "저장하지 않은 변경사항이 있습니다.",
   "pws.draftTarget": "편집 중: {target}",
   "pws.draftConflict": "편집하는 동안 이 서버에 저장된 설정이 바뀌었습니다. 초안은 그대로 보관되어 있습니다. 유지할 값을 선택하세요.",
+  "pws.draftConflictFields": "양쪽에서 바뀐 필드입니다. 초안을 수정하거나 저장된 값을 사용하세요:",
   "pws.draftConflictUseSaved": "저장된 값 사용",
   "pws.draftConflictKeepDraft": "내 초안 유지",
   "pws.draftConflictResolveFirst": "저장하기 전에 유지할 값을 선택하세요.",

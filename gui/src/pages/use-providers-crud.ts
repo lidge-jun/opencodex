@@ -38,6 +38,7 @@ export function useProvidersCrud({
   fetchOauth,
   fetchProviderQuotas,
   refreshCodexAccount,
+  onProviderRemoved,
 }: {
   apiBase: string;
   t: TFn;
@@ -52,6 +53,8 @@ export function useProvidersCrud({
   fetchProviderQuotas: (refresh?: boolean) => Promise<void>;
   /** Shared Codex account controller refresh (Providers.tsx passes codexPool.load). */
   refreshCodexAccount?: () => Promise<unknown> | unknown;
+  /** Confirmed removal only: drop this target's parked draft for the provider. */
+  onProviderRemoved?: (name: string) => void;
 }) {
   const removeProvider = useCallback(async (name: string) => {
     setRemoveConfirmName(name);
@@ -74,6 +77,7 @@ export function useProvidersCrud({
           ? t("prov.removedDefault", { name, defaultProvider })
           : t("prov.removed", { name }), true);
         if (workspaceSelected === name) setWorkspaceSelected(null);
+        onProviderRemoved?.(name);
         fetchConfig();
         fetchOauth();
         fetchProviderQuotas(true);
@@ -86,7 +90,7 @@ export function useProvidersCrud({
     } finally {
       removeBusyRef.current = false;
     }
-  }, [apiBase, fetchConfig, fetchOauth, fetchProviderQuotas, notify, removeBusyRef, setRemoveConfirmName, setWorkspaceSelected, t, workspaceSelected]);
+  }, [apiBase, fetchConfig, fetchOauth, fetchProviderQuotas, notify, onProviderRemoved, removeBusyRef, setRemoveConfirmName, setWorkspaceSelected, t, workspaceSelected]);
 
   const setProviderDisabled = useCallback(async (name: string, disabled: boolean) => {
     const res = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {

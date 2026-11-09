@@ -3249,6 +3249,7 @@ export const de: Record<TKey, string> = {
   "pws.settingsUnsavedBar": "Es gibt ungespeicherte Änderungen.",
   "pws.draftTarget": "Bearbeitung: {target}",
   "pws.draftConflict": "Die gespeicherten Einstellungen auf diesem Server haben sich während der Bearbeitung geändert. Ihr Entwurf bleibt erhalten; wählen Sie, welche Werte gelten sollen.",
+  "pws.draftConflictFields": "Diese Felder wurden auf beiden Seiten geändert. Bearbeiten Sie den Entwurf oder verwenden Sie die gespeicherten Werte:",
   "pws.draftConflictUseSaved": "Gespeicherte Werte verwenden",
   "pws.draftConflictKeepDraft": "Meinen Entwurf behalten",
   "pws.draftConflictResolveFirst": "Wählen Sie vor dem Speichern, welche Werte gelten sollen.",

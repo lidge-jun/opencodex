@@ -80,12 +80,14 @@ async function mountCrud(overrides: {
   fetchConfig?: () => Promise<void>;
   fetchProviderQuotas?: (refresh?: boolean) => Promise<void>;
   refreshCodexAccount?: () => Promise<unknown>;
+  onProviderRemoved?: (name: string) => void;
 } = {}) {
   const container = document.createElement("div");
   document.body.append(container);
   const { createRoot } = await import("react-dom/client");
   let root!: Root;
   let updateProvider!: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean; error?: string }>;
+  let confirmRemoveProvider!: (name: string | null) => Promise<void>;
 
   function Harness() {
     const removeBusyRef = useRef(false);
@@ -101,12 +103,14 @@ async function mountCrud(overrides: {
       fetchOauth: async () => {},
       fetchProviderQuotas: overrides.fetchProviderQuotas ?? (async () => {}),
       refreshCodexAccount: overrides.refreshCodexAccount,
+      onProviderRemoved: overrides.onProviderRemoved,
     });
     const [ready, setReady] = useState(false);
     useEffect(() => {
       updateProvider = crud.updateProvider;
+      confirmRemoveProvider = crud.confirmRemoveProvider;
       setReady(true);
-    }, [crud.updateProvider]);
+    }, [crud.updateProvider, crud.confirmRemoveProvider]);
     return ready ? <div data-ready="1" /> : null;
   }
 
@@ -115,7 +119,7 @@ async function mountCrud(overrides: {
     root.render(<Harness />);
   });
   expect(container.querySelector("[data-ready]")).toBeTruthy();
-  return { root, updateProvider };
+  return { root, updateProvider, confirmRemoveProvider };
 }
 
 test("a codexAccountMode patch sends the standalone body and awaits quota + Codex refreshes", async () => {
@@ -183,5 +187,27 @@ test("non-mode patches do not refresh quotas or the Codex controller", async () 
   expect(fetchProviderQuotas).not.toHaveBeenCalled();
   expect(refreshCodexAccount).not.toHaveBeenCalled();
 
+  await act(async () => { root.unmount(); });
+});
+
+test("a confirmed provider removal drops that target's parked draft", async () => {
+  const removed: string[] = [];
+  globalThis.fetch = (async () => Response.json({ defaultProvider: "other" })) as typeof fetch;
+  const { root, confirmRemoveProvider } = await mountCrud({ onProviderRemoved: name => removed.push(name) });
+
+  await act(async () => { await confirmRemoveProvider("shared-provider"); });
+
+  expect(removed).toEqual(["shared-provider"]);
+  await act(async () => { root.unmount(); });
+});
+
+test("a failed provider removal keeps the parked draft", async () => {
+  const removed: string[] = [];
+  globalThis.fetch = (async () => Response.json({ error: "refused" }, { status: 409 })) as typeof fetch;
+  const { root, confirmRemoveProvider } = await mountCrud({ onProviderRemoved: name => removed.push(name) });
+
+  await act(async () => { await confirmRemoveProvider("shared-provider"); });
+
+  expect(removed).toEqual([]);
   await act(async () => { root.unmount(); });
 });

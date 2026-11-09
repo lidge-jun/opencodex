@@ -28,7 +28,7 @@ import { SectionSwitcher } from "./components/SectionSwitcher";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Notice, Select, ToastNotice, type NoticeTone } from "./ui";
 import { bootstrapApiSession, configureApiTargets, DEVICE_PROOF_CHANGED_EVENT, hasApiSession, hasRememberedDashboardDevice, installApiAuthFetch, logoutApiSession, SESSION_CHANGED_EVENT, SESSION_UNAVAILABLE_EVENT } from "./api";
-import { apiBaseForPlane, ClientStateChangedError, discoverApiTargets, isConnectedRuntime, runtimeRoleFromDocument, standaloneApiTargets, type ApiTargets } from "./api-targets";
+import { apiBaseForPlane, apiTargetIdentity, ClientStateChangedError, discoverApiTargets, isConnectedRuntime, runtimeRoleFromDocument, standaloneApiTargets, type ApiTargets } from "./api-targets";
 import { ConnectPairingForm } from "./connect-pairing";
 import { validateRemoteLinkSession } from "./connect-pairing-transport";
 import { type Page } from "./app-routing";
@@ -218,6 +218,7 @@ export default function App() {
   }, []);
   const machineBase = apiBaseForPlane("machine", targets);
   const sharedBase = apiBaseForPlane("shared", targets);
+  const sharedTarget = apiTargetIdentity(targets);
 
   useEffect(() => {
     if (!sharedSessionReady) return;
@@ -683,7 +684,7 @@ export default function App() {
                 {page === "dashboard" && <Dashboard apiBase={sharedBase} readOnly={targets.link !== undefined} connected={targets.connected}
                   authenticationPending={targets.connected && !sharedSessionReady} refreshEpoch={sharedSessionEpoch} />}
                 {page === "startup" && <Startup apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
-                {page === "providers" && <Providers apiBase={sharedBase} />}
+                {page === "providers" && <Providers apiBase={sharedBase} targetKey={sharedTarget.key} targetLabel={sharedTarget.label} />}
                 {page === "models" && <Models key={sharedBase} apiBase={sharedBase} restartEpoch={codexRestartEpoch} connected={targets.connected} catalogSyncedAt={targets.catalogSyncedAt} reportRestart={report} />}
                 {page === "subagents" && <Subagents key={sharedBase} apiBase={sharedBase} />}
                 {page === "advisor" && <Advisor key={sharedBase} apiBase={sharedBase} />}

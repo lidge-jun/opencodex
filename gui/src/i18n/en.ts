@@ -2104,6 +2104,7 @@ export const en = {
   "pws.settingsUnsavedBar": "You have unsaved changes.",
   "pws.draftTarget": "Editing {target}",
   "pws.draftConflict": "The saved settings changed on this server while you were editing. Your draft is kept; choose which values to keep.",
+  "pws.draftConflictFields": "These fields changed on both sides. Edit the draft or use the saved values:",
   "pws.draftConflictUseSaved": "Use saved values",
   "pws.draftConflictKeepDraft": "Keep my draft",
   "pws.draftConflictResolveFirst": "Choose which values to keep before saving.",

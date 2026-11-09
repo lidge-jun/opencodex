@@ -2090,6 +2090,7 @@ export const tr: Record<TKey, string> = {
   "pws.settingsUnsavedBar": "Kaydedilmemiş değişiklikleriniz var.",
   "pws.draftTarget": "Düzenleniyor: {target}",
   "pws.draftConflict": "Siz düzenlerken bu sunucudaki kayıtlı ayarlar değişti. Taslağınız korunuyor; hangi değerlerin kalacağını seçin.",
+  "pws.draftConflictFields": "Bu alanlar iki tarafta da değişti. Taslağı düzenleyin veya kayıtlı değerleri kullanın:",
   "pws.draftConflictUseSaved": "Kayıtlı değerleri kullan",
   "pws.draftConflictKeepDraft": "Taslağımı koru",
   "pws.draftConflictResolveFirst": "Kaydetmeden önce hangi değerlerin kalacağını seçin.",

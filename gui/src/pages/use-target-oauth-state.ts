@@ -5,8 +5,8 @@ type OAuthSnapshot = { target: object; providers: string[]; status: Record<strin
 
 // Each visit gets a new identity, including A -> B -> A. Old async writers cannot
 // update the current visit, and the render that changes target sees empty state.
-export function useTargetOAuthState(apiBase: string) {
-  const target = useMemo(() => ({ apiBase }), [apiBase]);
+export function useTargetOAuthState(apiBase: string, targetKey = apiBase) {
+  const target = useMemo(() => ({ apiBase, targetKey }), [apiBase, targetKey]);
   const [snapshot, setSnapshot] = useState<OAuthSnapshot>(() => ({ target, providers: [], status: {} }));
   const current: OAuthSnapshot = snapshot.target === target ? snapshot : { target, providers: [], status: {} };
   if (snapshot !== current) setSnapshot(current);

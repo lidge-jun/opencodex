@@ -79,6 +79,7 @@ function readFreshQuotaReportCache(key: string): Record<string, ProviderQuotaRep
 export default function ProviderWorkspaceShell({
   providers,
   apiBase,
+  targetLabel,
   defaultProvider,
   selectedName,
   onSelect,
@@ -100,6 +101,8 @@ export default function ProviderWorkspaceShell({
 }: {
   providers: Record<string, WorkspaceProvider>;
   apiBase: string;
+  /** Nonsecret logical target label for draft/save-target copy. */
+  targetLabel?: string;
   defaultProvider: string;
   selectedName: string | null;
   onSelect: (name: string | null) => void;
@@ -593,7 +596,7 @@ export default function ProviderWorkspaceShell({
           <ProviderJsonEditor
             editor={jsonEditor}
             providerName={t("nav.providers")}
-            targetLabel={providerDraftTargetLabel(apiBase)}
+            targetLabel={targetLabel ?? providerDraftTargetLabel(apiBase)}
             saving={jsonSaving}
             onSave={() => { void jsonEditor.onSave(); }}
           />

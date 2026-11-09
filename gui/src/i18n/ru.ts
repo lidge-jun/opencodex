@@ -2063,6 +2063,7 @@ export const ru: Record<TKey, string> = {
   "pws.settingsUnsavedBar": "Есть несохранённые изменения.",
   "pws.draftTarget": "Редактирование: {target}",
   "pws.draftConflict": "Сохранённые настройки на этом сервере изменились во время редактирования. Черновик сохранён; выберите, какие значения оставить.",
+  "pws.draftConflictFields": "Эти поля изменены с обеих сторон. Отредактируйте черновик или используйте сохранённые значения:",
   "pws.draftConflictUseSaved": "Использовать сохранённые значения",
   "pws.draftConflictKeepDraft": "Оставить мой черновик",
   "pws.draftConflictResolveFirst": "Перед сохранением выберите, какие значения оставить.",

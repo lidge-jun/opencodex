@@ -15,6 +15,7 @@
 import { canConfigureResponsesReasoningReplay } from "../responses-reasoning-replay";
 import { isCatalogProviderId } from "../provider-icons";
 import { isVertexProvider, providerSupportsLiveModelDiscovery, type WorkspaceItem } from "./catalog";
+import type { ProviderUpdatePatch } from "../components/provider-workspace/types";
 
 export type ProviderSettingsPacingRule = {
   requestsPerMinute?: number;
@@ -162,6 +163,10 @@ export function providerSettingsDraftSignature(draft: ProviderSettingsDraft): st
   return JSON.stringify(stableValue(draft));
 }
 
+export function providerSettingsValueSignature(value: unknown): string {
+  return JSON.stringify(stableValue(value));
+}
+
 /**
  * Does this draft differ from the saved provider in a field the Settings tab can write?
  *
@@ -197,6 +202,88 @@ export function providerSettingsPacingDirty(draft: ProviderSettingsDraft, saved:
 /** Any Settings-tab change, including request pacing. */
 export function providerSettingsDirty(draft: ProviderSettingsDraft, saved: WorkspaceItem): boolean {
   return providerSettingsFieldsDirty(draft, saved) || providerSettingsPacingDirty(draft, saved);
+}
+
+/**
+ * The PATCH for the fields the user actually changed, relative to the saved values the
+ * draft started from. A field the user did not touch is omitted, so a saved change that
+ * landed while the draft was parked survives a keep-draft save.
+ */
+export function providerSettingsDeltaPatch(
+  draft: ProviderSettingsDraft,
+  baseline: ProviderSettingsDraft,
+  saved: WorkspaceItem,
+  nextBaseUrl: string,
+): { patch: ProviderUpdatePatch; fieldsDirty: boolean; pacingDirty: boolean } {
+  const patch: ProviderUpdatePatch = {};
+  const adapter = draft.adapter.trim();
+  const baselineAdapter = baseline.adapter.trim();
+  const vertexSettings = isVertexProvider(saved) && (saved.name === "google-vertex" || adapter === "google");
+  const liveModelDiscoverySupported = providerSupportsLiveModelDiscovery(saved.name, saved);
+  const supportsReasoningReplay = !isCatalogProviderId(saved.name)
+    && canConfigureResponsesReasoningReplay({ adapter, baseUrl: draft.baseUrl, authMode: draft.authMode });
+
+  if (adapter !== baselineAdapter) patch.adapter = adapter;
+  if (nextBaseUrl !== baseline.baseUrl.trim()) patch.baseUrl = nextBaseUrl;
+  if (draft.defaultModel.trim() !== baseline.defaultModel.trim()) patch.defaultModel = draft.defaultModel.trim();
+  if (draft.authMode !== baseline.authMode) patch.authMode = draft.authMode;
+  if (draft.note.trim() !== baseline.note.trim()) patch.note = draft.note.trim();
+  if (draft.allowPrivateNetwork !== baseline.allowPrivateNetwork) patch.allowPrivateNetwork = draft.allowPrivateNetwork;
+  if (vertexSettings) {
+    if (draft.project.trim() !== baseline.project.trim()) patch.project = draft.project.trim();
+    if (draft.location.trim() !== baseline.location.trim()) patch.location = draft.location.trim();
+  }
+  if (liveModelDiscoverySupported && draft.liveModels !== baseline.liveModels) patch.liveModels = draft.liveModels;
+  if (supportsReasoningReplay && draft.preserveReasoningReplay !== baseline.preserveReasoningReplay) {
+    patch.preserveResponsesReasoningContent = draft.preserveReasoningReplay;
+  }
+  if (adapter === "cursor" && draft.cursorHttpVersion !== baseline.cursorHttpVersion) {
+    patch.upstreamHttpVersion = draft.cursorHttpVersion === "http1.1" ? "http1.1" : null;
+  }
+  const wasApiKeyTransportApplicable = baselineAdapter === "anthropic" && baseline.authMode === "key";
+  if (adapter === "anthropic" && draft.authMode === "key") {
+    if (draft.apiKeyTransport !== baseline.apiKeyTransport) patch.apiKeyTransport = draft.apiKeyTransport;
+  } else if (wasApiKeyTransportApplicable && saved.apiKeyTransport !== undefined) {
+    // Leaving the Anthropic key mode is the user's change; clear the now-inapplicable value.
+    patch.apiKeyTransport = "";
+  }
+  const pacingDirty = pacingSignature(draftRequestPacing(draft)) !== pacingSignature(draftRequestPacing(baseline));
+  if (pacingDirty) patch.requestPacing = draftRequestPacing(draft);
+  const fieldsDirty = Object.keys(patch).some(key => key !== "requestPacing");
+  return { patch, fieldsDirty, pacingDirty };
+}
+
+/**
+ * Rebase a kept draft onto the latest saved values: fields the user changed keep their
+ * draft value, and fields the user did not touch adopt the saved change.
+ */
+export function rebaseProviderSettingsDraft(
+  oldBaseline: ProviderSettingsDraft,
+  draft: ProviderSettingsDraft,
+  latest: ProviderSettingsDraft,
+): ProviderSettingsDraft {
+  const pick = <K extends keyof ProviderSettingsDraft>(key: K): ProviderSettingsDraft[K] =>
+    providerSettingsValueSignature(draft[key]) === providerSettingsValueSignature(oldBaseline[key]) ? latest[key] : draft[key];
+  return {
+    adapter: pick("adapter"),
+    baseUrl: pick("baseUrl"),
+    project: pick("project"),
+    location: pick("location"),
+    defaultModel: pick("defaultModel"),
+    authMode: pick("authMode"),
+    apiKeyTransport: pick("apiKeyTransport"),
+    note: pick("note"),
+    allowPrivateNetwork: pick("allowPrivateNetwork"),
+    preserveReasoningReplay: pick("preserveReasoningReplay"),
+    liveModels: pick("liveModels"),
+    cursorHttpVersion: pick("cursorHttpVersion"),
+    pacingEnabled: pick("pacingEnabled"),
+    keyPacing: pick("keyPacing"),
+    pacingRpm: pick("pacingRpm"),
+    pacingDelay: pick("pacingDelay"),
+    pacingConcurrency: pick("pacingConcurrency"),
+    pacingModels: pick("pacingModels"),
+  };
 }
 
 /** Human-readable target label for the draft banner; never a credential. */

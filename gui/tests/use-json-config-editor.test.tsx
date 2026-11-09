@@ -179,6 +179,9 @@ test("parse failures stay distinct from server failures and failed saves do not 
   expect(notifications.at(-1)).toEqual({ message: "prov.invalidJson", ok: false });
 
   await act(async () => { editor!.restoreJsonEditor(); });
+  const changed = JSON.parse(editor!.draft);
+  changed.providers.alpha.note = "changed before the stale-baseline save";
+  await act(async () => { editor!.setDraft(JSON.stringify(changed)); });
   responseFactory = async () => Response.json({ error: "stale baseline" }, { status: 409 });
   await act(async () => { expect(await editor!.saveConfig()).toBe(false); });
 

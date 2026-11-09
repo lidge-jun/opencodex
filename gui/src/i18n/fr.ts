@@ -2077,6 +2077,7 @@ export const fr: Record<TKey, string> = {
   "pws.settingsUnsavedBar": "Vous avez des modifications non enregistrées.",
   "pws.draftTarget": "Modification : {target}",
   "pws.draftConflict": "Les paramètres enregistrés sur ce serveur ont changé pendant votre modification. Votre brouillon est conservé ; choisissez les valeurs à garder.",
+  "pws.draftConflictFields": "Ces champs ont changé des deux côtés. Modifiez le brouillon ou utilisez les valeurs enregistrées :",
   "pws.draftConflictUseSaved": "Utiliser les valeurs enregistrées",
   "pws.draftConflictKeepDraft": "Garder mon brouillon",
   "pws.draftConflictResolveFirst": "Choisissez les valeurs à garder avant d'enregistrer.",

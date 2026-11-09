@@ -24,7 +24,7 @@ import ProviderSettings from "./ProviderSettings";
 import { UnsavedLeaveDialog } from "./ProviderDialogs";
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
 import type { AccountLoadState, ProviderModelUsageRow, ProviderUsageTotals, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers, ProviderUpdatePatch, ProviderUpdateResult } from "./types";
-import { createProviderDraftStore, type ProviderDraftStore } from "../../provider-workspace/target-drafts";
+import { createProviderDraftStore, providerDraftTargetLabel, type ProviderDraftStore } from "../../provider-workspace/target-drafts";
 
 type Tab = "overview" | "models" | "usage" | "accounts" | "settings";
 
@@ -66,6 +66,7 @@ export default function ProviderDetails({
   codexController,
   onUpdateProvider,
   targetKey,
+  targetLabel,
   draftStore,
   isDefault,
   onRemoveProvider,
@@ -116,6 +117,8 @@ export default function ProviderDetails({
   onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<ProviderUpdateResult>;
   /** Dashboard server identity; provider names are only unique within one target. */
   targetKey?: string;
+  /** Nonsecret logical target label; never the machine key id. */
+  targetLabel?: string;
   /** Page-owned in-memory drafts, scoped by target and provider. */
   draftStore?: ProviderDraftStore;
   isDefault?: boolean;
@@ -127,6 +130,7 @@ export default function ProviderDetails({
 }) {
   const t = useT();
   const settingsTargetKey = targetKey ?? "";
+  const settingsTargetLabel = targetLabel ?? providerDraftTargetLabel(settingsTargetKey);
   const localDraftStore = useMemo(() => draftStore ?? createProviderDraftStore(), [draftStore]);
   const [tab, setTab] = useState<Tab>("overview");
   const [settingsDirty, setSettingsDirty] = useState(false);
@@ -465,6 +469,7 @@ export default function ProviderDetails({
             item={item}
             apiBase={apiBase}
             targetKey={settingsTargetKey}
+            targetLabel={settingsTargetLabel}
             draftStore={localDraftStore}
             availableModels={availableModels}
             onUpdateProvider={handleUpdateProvider}
@@ -482,6 +487,8 @@ export default function ProviderDetails({
             const next = pendingLeave;
             setPendingLeave(null);
             setSettingsDirty(false);
+            // Discard means the parked draft must not come back when Settings is reopened.
+            localDraftStore.clear(settingsTargetKey, item.name);
             if (next === "deselect") onDeselect();
             else setTab(next);
           }}

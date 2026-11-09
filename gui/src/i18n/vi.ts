@@ -2074,6 +2074,7 @@ export const vi: Record<TKey, string> = {
   "pws.settingsUnsavedBar": "Bạn có các thay đổi chưa lưu.",
   "pws.draftTarget": "Đang chỉnh sửa: {target}",
   "pws.draftConflict": "Cài đặt đã lưu trên máy chủ này đã thay đổi trong khi bạn chỉnh sửa. Bản nháp của bạn được giữ lại; hãy chọn giá trị cần giữ.",
+  "pws.draftConflictFields": "Các trường này đã thay đổi ở cả hai bên. Hãy sửa bản nháp hoặc dùng giá trị đã lưu:",
   "pws.draftConflictUseSaved": "Dùng giá trị đã lưu",
   "pws.draftConflictKeepDraft": "Giữ bản nháp của tôi",
   "pws.draftConflictResolveFirst": "Chọn giá trị cần giữ trước khi lưu.",

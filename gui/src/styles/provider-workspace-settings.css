@@ -142,6 +142,10 @@
 }
 .pwi-settings-conflict p { margin: 0; font-size: var(--text-label); line-height: 1.45; }
 .pwi-settings-conflict .pwi-settings-sticky-bar-actions { margin-left: 0; }
+.pwi-settings-conflict-fields ul {
+  margin: 6px 0 0; padding-left: 18px; font-size: var(--text-caption); line-height: 1.5;
+}
+.pwi-settings-conflict-fields code { overflow-wrap: anywhere; }
 
 .pwi-settings-msg {
   font-size: var(--text-label); padding: 6px 10px; border-radius: var(--radius-xs);

@@ -1,4 +1,5 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { deepEqualJson, threeWayMergeJson } from "../provider-workspace/provider-draft-merge";
 
 export interface Config {
   port: number;
@@ -41,12 +42,20 @@ interface JsonEditorTargetState {
   baseline: string;
   saving: boolean;
   leaveOpen: boolean;
+  /** Paths both sides changed; the user must edit the draft or use saved values. */
+  conflicts: string[];
 }
 
-const EMPTY_EDITOR: JsonEditorTargetState = { open: false, draft: "", baseline: "", saving: false, leaveOpen: false };
+const EMPTY_EDITOR: JsonEditorTargetState = { open: false, draft: "", baseline: "", saving: false, leaveOpen: false, conflicts: [] };
+
+function hasJsonConflict(state: JsonEditorTargetState, savedBaseline: string): boolean {
+  return state.open && state.draft !== state.baseline && savedBaseline !== "" && state.baseline !== savedBaseline;
+}
 
 export function useJsonConfigEditor(deps: {
   apiBase: string;
+  /** Stable logical dashboard target; apiBase can be the same relay URL for two servers. */
+  targetKey?: string;
   config: Config | null;
   notify: (msg: string, ok?: boolean) => void;
   fetchConfig: () => Promise<void>;
@@ -54,15 +63,17 @@ export function useJsonConfigEditor(deps: {
   onSaved: (addedProviders: string[]) => void;
   t: (key: string, values?: Record<string, string>) => string;
 }) {
-  const { apiBase, config, notify, fetchConfig, fetchProviderQuotas, onSaved, t } = deps;
+  const { apiBase, targetKey = apiBase, config, notify, fetchConfig, fetchProviderQuotas, onSaved, t } = deps;
   const apiBaseRef = useRef(apiBase);
   useLayoutEffect(() => { apiBaseRef.current = apiBase; }, [apiBase]);
+  const targetKeyRef = useRef(targetKey);
+  useLayoutEffect(() => { targetKeyRef.current = targetKey; }, [targetKey]);
   const [states, setStates] = useState<Map<string, JsonEditorTargetState>>(() => new Map());
   const savedBaseline = useMemo(
     () => config ? JSON.stringify(projectProviderEditorConfig(config), null, 2) : "",
     [config],
   );
-  const stored = states.get(apiBase);
+  const stored = states.get(targetKey);
   // A closed editor follows the saved config without an effect: the first paint after a
   // load already has the right baseline, and a refresh never needs a second render.
   const state: JsonEditorTargetState = stored?.open
@@ -73,56 +84,68 @@ export function useJsonConfigEditor(deps: {
           : stored)
       : (config ? { ...EMPTY_EDITOR, draft: savedBaseline, baseline: savedBaseline } : EMPTY_EDITOR);
 
-  const update = useCallback((updater: (current: JsonEditorTargetState) => JsonEditorTargetState, atTarget = apiBase) => {
+  const update = useCallback((updater: (current: JsonEditorTargetState) => JsonEditorTargetState, atTarget = targetKey) => {
     setStates(previous => {
       const next = updater(previous.get(atTarget) ?? EMPTY_EDITOR);
       const copy = new Map(previous);
       copy.set(atTarget, next);
       return copy;
     });
-  }, [apiBase]);
+  }, [targetKey]);
 
   const saveConfig = useCallback(async (): Promise<boolean> => {
-    const saveTarget = apiBase;
-    const current = states.get(saveTarget) ?? EMPTY_EDITOR;
+    const saveTargetKey = targetKey;
+    const saveApiBase = apiBase;
+    const current = states.get(saveTargetKey) ?? EMPTY_EDITOR;
+    // Every entry point, including the leave dialog's Save, must honor the conflict gate.
+    if (hasJsonConflict(current, savedBaseline) || current.conflicts.length > 0) {
+      notify(t("pws.draftConflictResolveFirst"), false);
+      return false;
+    }
     const draft = current.draft;
     const baselineText = current.baseline;
-    update(previous => ({ ...previous, saving: true }), saveTarget);
+    update(previous => ({ ...previous, saving: true }), saveTargetKey);
     let parsed: unknown;
     try {
       parsed = JSON.parse(draft);
     } catch {
-      if (apiBaseRef.current === saveTarget) notify(t("prov.invalidJson"), false);
-      update(previous => ({ ...previous, saving: false }), saveTarget);
+      if (apiBaseRef.current === saveApiBase && targetKeyRef.current === saveTargetKey) notify(t("prov.invalidJson"), false);
+      update(previous => ({ ...previous, saving: false }), saveTargetKey);
       return false;
     }
     try {
       const baseline = JSON.parse(baselineText) as unknown;
-      const res = await fetch(`${saveTarget}/api/providers`, {
+      // A formatting-only edit must not PUT an identical baseline and next pair.
+      if (deepEqualJson(parsed, baseline)) {
+        update(() => ({ open: false, draft: baselineText, baseline: baselineText, saving: false, leaveOpen: false, conflicts: [] }), saveTargetKey);
+        if (apiBaseRef.current === saveApiBase && targetKeyRef.current === saveTargetKey) notify(t("prov.saved"), true);
+        return true;
+      }
+      const res = await fetch(`${saveApiBase}/api/providers`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ baseline, next: parsed }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string; code?: string };
-        if (apiBaseRef.current === saveTarget) {
+        if (apiBaseRef.current === saveApiBase && targetKeyRef.current === saveTargetKey) {
           notify(data.error || t("prov.saveFailed"), false);
           // A stale baseline means the saved config moved; re-read it so the conflict
           // banner can offer an explicit choice instead of repeating the same failure.
           if (data.code === "stale_provider_editor_baseline") void fetchConfig();
         }
-        update(previous => ({ ...previous, saving: false }), saveTarget);
+        update(previous => ({ ...previous, saving: false }), saveTargetKey);
         return false;
       }
       const saved = JSON.stringify(parsed, null, 2);
       // Edits typed while the PUT was in flight stay in the editor; only the baseline
       // moves to what the server just accepted.
       update(current => current.draft === draft
-        ? { open: false, draft: saved, baseline: saved, saving: false, leaveOpen: false }
-        : { ...current, baseline: saved, saving: false }, saveTarget);
+        ? { open: false, draft: saved, baseline: saved, saving: false, leaveOpen: false, conflicts: [] }
+        : { ...current, baseline: saved, saving: false, conflicts: [] }, saveTargetKey);
       // The PUT went to the target that owned this baseline. Its success belongs there;
       // announcing it on another target would claim a save the operator cannot see.
-      if (apiBaseRef.current !== saveTarget) return true;
+      if (apiBaseRef.current !== saveApiBase || targetKeyRef.current !== saveTargetKey) return true;
       notify(t("prov.saved"), true);
       fetchConfig();
       fetchProviderQuotas(true);
@@ -131,21 +154,21 @@ export function useJsonConfigEditor(deps: {
       onSaved(addedProviders);
       return true;
     } catch {
-      if (apiBaseRef.current === saveTarget) notify(t("prov.saveFailed"), false);
-      update(previous => ({ ...previous, saving: false }), saveTarget);
+      if (apiBaseRef.current === saveApiBase && targetKeyRef.current === saveTargetKey) notify(t("prov.saveFailed"), false);
+      update(previous => ({ ...previous, saving: false }), saveTargetKey);
       return false;
     }
-  }, [apiBase, fetchConfig, fetchProviderQuotas, notify, onSaved, states, t, update]);
+  }, [apiBase, fetchConfig, fetchProviderQuotas, notify, onSaved, savedBaseline, states, t, targetKey, update]);
 
   const openJsonEditor = useCallback(() => {
     const baseline = savedBaseline || state.draft;
-    update(() => ({ open: true, draft: baseline, baseline, saving: false, leaveOpen: false }));
+    update(() => ({ open: true, draft: baseline, baseline, saving: false, leaveOpen: false, conflicts: [] }));
   }, [savedBaseline, state.draft, update]);
 
   const discardJsonEditor = useCallback(() => {
     update(current => {
       const baseline = savedBaseline || current.baseline;
-      return { open: false, draft: baseline, baseline, saving: false, leaveOpen: false };
+      return { open: false, draft: baseline, baseline, saving: false, leaveOpen: false, conflicts: [] };
     });
   }, [savedBaseline, update]);
 
@@ -158,8 +181,9 @@ export function useJsonConfigEditor(deps: {
   }, [discardJsonEditor, state.baseline, state.draft, state.open, update]);
 
   const restoreJsonEditor = useCallback(() => {
-    update(current => ({ ...current, draft: current.baseline }));
-  }, [update]);
+    const baseline = savedBaseline || state.baseline;
+    update(() => ({ open: true, draft: baseline, baseline, saving: false, leaveOpen: false, conflicts: [] }));
+  }, [savedBaseline, state.baseline, update]);
 
   const setDraft = useCallback((value: string) => {
     update(current => ({ ...current, draft: value }));
@@ -170,18 +194,37 @@ export function useJsonConfigEditor(deps: {
   }, [update]);
 
   /** Saved values moved under an open draft; the user must choose explicitly. */
-  const jsonConflict = state.open && state.draft !== state.baseline
-    && savedBaseline !== "" && state.baseline !== savedBaseline;
+  const jsonConflict = hasJsonConflict(state, savedBaseline);
 
   const useSavedJsonValues = useCallback(() => {
     const baseline = savedBaseline || state.baseline;
-    update(() => ({ open: true, draft: baseline, baseline, saving: false, leaveOpen: false }));
+    update(() => ({ open: true, draft: baseline, baseline, saving: false, leaveOpen: false, conflicts: [] }));
   }, [savedBaseline, state.baseline, update]);
 
   const keepJsonDraft = useCallback(() => {
-    const baseline = savedBaseline || state.baseline;
-    update(current => ({ ...current, baseline }));
-  }, [savedBaseline, state.baseline, update]);
+    const latestBaseline = savedBaseline || state.baseline;
+    let baseValue: unknown;
+    let latestValue: unknown;
+    let draftValue: unknown;
+    try {
+      baseValue = JSON.parse(state.baseline);
+      latestValue = JSON.parse(latestBaseline);
+      draftValue = JSON.parse(state.draft);
+    } catch {
+      return;
+    }
+    const merged = threeWayMergeJson(baseValue, latestValue, draftValue);
+    if (!merged.ok) {
+      update(current => ({ ...current, conflicts: merged.conflicts }));
+      return;
+    }
+    if (deepEqualJson(merged.value, latestValue)) {
+      update(() => ({ open: false, draft: latestBaseline, baseline: latestBaseline, saving: false, leaveOpen: false, conflicts: [] }));
+      return;
+    }
+    const draft = JSON.stringify(merged.value, null, 2);
+    update(current => ({ ...current, draft, baseline: latestBaseline, conflicts: [] }));
+  }, [savedBaseline, state.baseline, state.draft, update]);
 
   return {
     draft: state.draft,
@@ -197,6 +240,7 @@ export function useJsonConfigEditor(deps: {
     restoreJsonEditor,
     jsonIsDirty: state.open && state.draft !== state.baseline,
     jsonConflict,
+    jsonConflicts: state.conflicts,
     useSavedJsonValues,
     keepJsonDraft,
     setJsonLeaveOpen,

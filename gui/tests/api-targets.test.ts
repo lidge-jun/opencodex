@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import {
   apiBaseForPlane,
+  apiTargetIdentity,
   ClientStateChangedError,
   discoverApiTargets,
   relayUrlForPath,
@@ -9,6 +10,23 @@ import {
   targetsFromMachineStatus,
   type MachineStatusV1,
 } from "../src/api-targets";
+
+test("a relay base shared by two hubs still has distinct logical target identities", () => {
+  const base = standaloneApiTargets("");
+  const hubA = apiTargetIdentity({
+    ...base,
+    shared: { ...base.shared, serverOrigin: "https://hub-a.example" },
+    apiKeyId: "machine-key",
+  });
+  const hubB = apiTargetIdentity({
+    ...base,
+    shared: { ...base.shared, serverOrigin: "https://hub-b.example" },
+    apiKeyId: "machine-key",
+  });
+  expect(hubA.key).not.toBe(hubB.key);
+  expect(hubA.label).toBe("https://hub-a.example");
+  expect(hubA.label).not.toContain("machine-key");
+});
 
 let win: Window;
 let previousWindow: unknown;

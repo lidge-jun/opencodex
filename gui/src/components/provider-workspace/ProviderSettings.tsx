@@ -31,7 +31,6 @@ import type { WorkspaceItem, ProviderUpdatePatch, ProviderUpdateResult } from ".
 import {
   createProviderDraftStore,
   draftRequestPacing,
-  effectiveCursorHttpVersion,
   positiveInteger,
   positiveRpm,
   providerDraftTargetLabel,
@@ -40,6 +39,8 @@ import {
   providerSettingsFieldsDirty,
   providerSettingsPacingDirty,
   providerSettingsDraftSignature,
+  providerSettingsDeltaPatch,
+  rebaseProviderSettingsDraft,
   type ProviderDraftStore,
   type ProviderSettingsDraft,
 } from "../../provider-workspace/target-drafts";
@@ -59,6 +60,8 @@ type ProviderSettingsProps = {
   apiBase?: string;
   /** Identity of the dashboard server this form edits; drafts are scoped to it. */
   targetKey?: string;
+  /** Nonsecret label for the logical target; never a credential or machine key id. */
+  targetLabel?: string;
   /** Page-owned in-memory store so drafts survive a target switch. */
   draftStore?: ProviderDraftStore;
   onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<ProviderUpdateResult>;
@@ -86,7 +89,7 @@ export default function ProviderSettings(props: ProviderSettingsProps) {
 }
 
 function ProviderSettingsForm({
-  item, availableModels = EMPTY_MODELS, apiBase, targetKey, draftStore, onUpdateProvider, onDirtyChange, onRegisterSave,
+  item, availableModels = EMPTY_MODELS, apiBase, targetKey, targetLabel, draftStore, onUpdateProvider, onDirtyChange, onRegisterSave,
 }: ProviderSettingsProps & { targetKey: string; draftStore: ProviderDraftStore }) {
   const t = useT();
   const [initial] = useState(() => {
@@ -174,10 +177,12 @@ function ProviderSettingsForm({
   const targetKeyRef = useRef(targetKey);
   const baseUrlRef = useRef(baseUrl);
   const editedRef = useRef(edited);
+  const draftRef = useRef(draft);
   useLayoutEffect(() => {
     targetKeyRef.current = targetKey;
     baseUrlRef.current = baseUrl;
     editedRef.current = edited;
+    draftRef.current = draft;
   });
 
   /* eslint-disable react-hooks/set-state-in-effect -- adopt saved values only when there is no draft */
@@ -188,6 +193,7 @@ function ProviderSettingsForm({
     const next = providerSettingsDraftFromItem(item);
     applyDraft(next);
     setBaseline(next);
+    setEndpointChoice(matchChoiceId(baseUrlChoices, next.baseUrl));
     setMsg(null);
     setModeMsg(null);
     // oxlint-disable-next-line react/react-compiler -- saved-field signature is the reset trigger
@@ -293,10 +299,8 @@ function ProviderSettingsForm({
     if (conflict) { setMsg({ ok: false, text: t("pws.draftConflictResolveFirst") }); return false; }
     const saveTarget = targetKey;
     const saveProvider = item.name;
+    const submittedSignature = providerSettingsDraftSignature(draft);
     const pacingDraft = draftRequestPacing(draft);
-    const reasoningReplayDirty = supportsReasoningReplay
-      && preserveReasoningReplay !== (item.preserveResponsesReasoningContent === true);
-    const savedCursorHttpVersion = effectiveCursorHttpVersion(item.upstreamHttpVersion);
     const nextBaseUrl = hasEndpointPicker
       ? resolvedBaseUrlForChoice(baseUrlChoices, endpointChoice, baseUrl)
       : baseUrl.trim();
@@ -317,42 +321,36 @@ function ProviderSettingsForm({
       if (pacingEnabled && !pacingDraft.requestsPerMinute && !pacingDraft.minIntervalMs && !pacingDraft.maxConcurrentRequests && !pacingDraft.models && !pacingDraft.keys && pacingDraft.keySelection !== "round-robin") {
         setMsg({ ok: false, text: t("pws.pacingRuleRequired") }); return false;
       }
-      const pacingOnly = pacingDirty && !fieldsDirty;
-      const patch: ProviderUpdatePatch = pacingOnly
-        ? { requestPacing: pacingDraft }
-        : {
-            adapter: adapter.trim(),
-            baseUrl: nextBaseUrl,
-            defaultModel: defaultModel.trim(),
-            authMode,
-            note: note.trim(),
-            allowPrivateNetwork,
-            ...(pacingDirty ? { requestPacing: pacingDraft } : {}),
-          };
-      if (!pacingOnly) {
-        if (vertexSettings && project.trim() !== (item.project ?? "")) patch.project = project.trim();
-        if (vertexSettings && location.trim() !== (item.location ?? "")) patch.location = location.trim();
-        // Keep omitted legacy values omitted unless the user actually changes this toggle.
-        // Otherwise an unrelated settings save manufactures `liveModels: true` provenance.
-        if (liveModelDiscoverySupported && liveModels !== (item.liveModels !== false)) patch.liveModels = liveModels;
-        if (reasoningReplayDirty) patch.preserveResponsesReasoningContent = preserveReasoningReplay;
-        if (adapter.trim() === "cursor" && cursorHttpVersion !== savedCursorHttpVersion) {
-          patch.upstreamHttpVersion = cursorHttpVersion === "http1.1" ? "http1.1" : null;
-        }
-        if (supportsApiKeyTransport) patch.apiKeyTransport = apiKeyTransport;
-        else if (item.apiKeyTransport !== undefined) patch.apiKeyTransport = "";
+      const { patch } = providerSettingsDeltaPatch(draft, baseline, item, nextBaseUrl);
+      if (Object.keys(patch).length === 0) {
+        setBaseline(draft);
+        draftStore.clear(saveTarget, saveProvider);
+        setMsg({ ok: true, text: t("pws.settingsSaved") });
+        return true;
       }
       const res = await onUpdateProvider(item.name, patch);
       // The save belongs to the target that started it. If the dashboard moved while the
       // request was in flight, its result must not be announced or applied on the new target.
       if (targetKeyRef.current !== saveTarget) {
-        if (res.ok) draftStore.clear(saveTarget, saveProvider);
+        if (res.ok) {
+          const stored = draftStore.read(saveTarget, saveProvider);
+          if (stored && providerSettingsDraftSignature(stored.draft) !== submittedSignature) {
+            draftStore.write(saveTarget, saveProvider, { draft: stored.draft, baseline: draft });
+          } else {
+            draftStore.clear(saveTarget, saveProvider);
+          }
+        }
         return res.ok;
       }
       setMsg(res.ok ? { ok: true, text: t("pws.settingsSaved") } : { ok: false, text: res.error || t("prov.saveFailed") });
       if (res.ok) {
+        const currentDraft = draftRef.current;
         setBaseline(draft);
-        draftStore.clear(saveTarget, saveProvider);
+        if (providerSettingsDraftSignature(currentDraft) === submittedSignature) {
+          draftStore.clear(saveTarget, saveProvider);
+        } else {
+          draftStore.write(saveTarget, saveProvider, { draft: currentDraft, baseline: draft });
+        }
       }
       return res.ok;
     } finally {
@@ -416,7 +414,11 @@ function ProviderSettingsForm({
   /** Explicit conflict resolution: keep the saved values, or rebase the draft onto them. */
   const useSavedValues = () => discard();
   const keepDraft = () => {
-    setBaseline(providerSettingsDraftFromItem(item));
+    const latest = providerSettingsDraftFromItem(item);
+    const rebased = rebaseProviderSettingsDraft(baseline, draft, latest);
+    applyDraft(rebased);
+    setBaseline(latest);
+    setEndpointChoice(matchChoiceId(baseUrlChoices, rebased.baseUrl));
     setMsg(null);
   };
 
@@ -649,7 +651,7 @@ function ProviderSettingsForm({
       )}
       {dirty && (
         <div className="pwi-settings-sticky-bar">
-          <span className="muted">{t("pws.settingsUnsavedBar")} <span className="pwi-settings-target">{t("pws.draftTarget", { target: providerDraftTargetLabel(targetKey) })}</span></span>
+          <span className="muted">{t("pws.settingsUnsavedBar")} <span className="pwi-settings-target">{t("pws.draftTarget", { target: targetLabel ?? providerDraftTargetLabel(targetKey) })}</span></span>
           <div className="pwi-settings-sticky-bar-actions">
             <button type="button" className="btn btn-ghost btn-sm" onClick={discard} disabled={saving}>{t("pws.discardSettings")}</button>
             <button type="button" className="btn btn-primary btn-sm" onClick={() => void save()} disabled={saving || modeSaving || conflict}>{saving ? t("pws.saving") : t("pws.saveSettings")}</button>

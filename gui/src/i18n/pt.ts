@@ -2088,6 +2088,7 @@ export const pt: Record<TKey, string> = {
   "pws.settingsUnsavedBar": "Você tem alterações não salvas.",
   "pws.draftTarget": "Editando: {target}",
   "pws.draftConflict": "As configurações salvas neste servidor mudaram enquanto você editava. O rascunho foi mantido; escolha quais valores manter.",
+  "pws.draftConflictFields": "Estes campos mudaram dos dois lados. Edite o rascunho ou use os valores salvos:",
   "pws.draftConflictUseSaved": "Usar valores salvos",
   "pws.draftConflictKeepDraft": "Manter meu rascunho",
   "pws.draftConflictResolveFirst": "Escolha quais valores manter antes de salvar.",

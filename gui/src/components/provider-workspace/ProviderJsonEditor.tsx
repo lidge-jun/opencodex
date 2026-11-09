@@ -15,6 +15,8 @@ export interface JsonEditorState {
   onRestore?: () => void;
   /** Saved values moved under this draft; the user must choose a side before saving. */
   conflict?: boolean;
+  /** Paths both sides changed; the user must edit the draft or use saved values. */
+  conflicts?: string[];
   onUseSaved?: () => void;
   onKeepDraft?: () => void;
 }
@@ -58,6 +60,12 @@ export default function ProviderJsonEditor({
       {editor.conflict && (
         <div className="pwi-settings-conflict" role="alert">
           <p>{t("pws.draftConflict")}</p>
+          {editor.conflicts && editor.conflicts.length > 0 && (
+            <div className="pwi-settings-conflict-fields">
+              <p>{t("pws.draftConflictFields")}</p>
+              <ul>{editor.conflicts.map(path => <li key={path}><code>{path}</code></li>)}</ul>
+            </div>
+          )}
           <div className="pwi-settings-sticky-bar-actions">
             <button type="button" className="btn btn-ghost btn-sm" onClick={editor.onUseSaved} disabled={saving}>{t("pws.draftConflictUseSaved")}</button>
             <button type="button" className="btn btn-primary btn-sm" onClick={editor.onKeepDraft} disabled={saving}>{t("pws.draftConflictKeepDraft")}</button>

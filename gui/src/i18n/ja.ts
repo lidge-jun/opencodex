@@ -1972,6 +1972,7 @@ export const ja: Record<TKey, string> = {
   "pws.settingsUnsavedBar": "未保存の変更があります。",
   "pws.draftTarget": "編集中: {target}",
   "pws.draftConflict": "編集中にこのサーバーの保存済み設定が変更されました。下書きは保持されています。どちらの値を残すか選択してください。",
+  "pws.draftConflictFields": "両方で変更されたフィールドです。下書きを編集するか、保存済みの値を使用してください:",
   "pws.draftConflictUseSaved": "保存済みの値を使う",
   "pws.draftConflictKeepDraft": "下書きを残す",
   "pws.draftConflictResolveFirst": "保存する前に残す値を選択してください。",
