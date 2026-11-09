@@ -178,12 +178,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "disconnect",
-    usage: "ocx disconnect [--keep-catalog] [--json]",
+    usage: "ocx disconnect [--keep-catalog] [--recover-config --yes] [--json]",
     summary: "Restore local client state offline and clear the remote-hub connection.",
   },
   {
     name: "sync",
-    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only]",
+    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--overwrite-conflict [--overwrite-client <id>]] [--local-only] [--json] [--restart-codex] [--restart-app-server-only]",
     summary: "Fetch provider models and inject them into Codex config.",
     details: [
       "A current Home catalog fans out to linked Children; --local-only disables fan-out and --json emits the result. Partial fan-out exits 6.",
@@ -431,8 +431,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "route",
-    usage: "ocx route <combo|policy> <subcommand>",
-    summary: "Manage combo routing and routing profiles.",
+    usage: "ocx route <combo|policy|to> <subcommand>",
+    summary: "Manage combo routing, routing profiles and per-device client intent.",
   },
   {
     name: "effort",
