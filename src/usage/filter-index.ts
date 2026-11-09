@@ -183,6 +183,17 @@ export class UsageFilterIndexHomeChangedError extends Error {
 }
 
 /**
+ * A candidate page could not be read from the index after the reader was handed out. The
+ * projection cannot serve this query, so the caller streams the ledger instead of failing.
+ */
+export class UsageFilterIndexPageError extends Error {
+  constructor(readonly pageError: unknown) {
+    super("usage filter index candidate page could not be read");
+    this.name = "UsageFilterIndexPageError";
+  }
+}
+
+/**
  * A retained filtered projection read this generation. A full rebuild replaces every offset,
  * so a projection from an older generation must be discarded even when the file identity and
  * size are unchanged.
@@ -1190,8 +1201,8 @@ function candidatePager(
   const pager = {
     candidateRows: 0,
     nextPage(): number[] {
-      db.exec("BEGIN");
       try {
+        db.exec("BEGIN");
         const meta = readMeta(db);
         if (meta.schemaVersion !== USAGE_FILTER_INDEX_SCHEMA_VERSION
           || meta.generation !== snapshot.generation) {
@@ -1205,7 +1216,10 @@ function candidatePager(
         return offsets;
       } catch (error) {
         try { db.exec("ROLLBACK"); } catch { /* nothing to roll back */ }
-        throw error;
+        // A generation change keeps the rebuild retry; every other index-side failure means
+        // this projection cannot serve the page, so the caller streams the ledger instead.
+        if (error instanceof UsageLedgerRebuildRequiredError) throw error;
+        throw new UsageFilterIndexPageError(error);
       }
     },
   };

@@ -37,7 +37,9 @@ import {
   setUsageFilterIndexTestHooksForTests,
   usageFilterCandidatePlan,
   usageFilterIndexPath,
+  UsageFilterIndexPageError,
 } from "../../src/usage/filter-index";
+import * as filterIndexModule from "../../src/usage/filter-index";
 import {
   currentUsageLogRevision,
   resetUsageReadCacheForTests,
@@ -1154,6 +1156,74 @@ describe("filtered usage index availability", () => {
     } finally {
       lock.exec("ROLLBACK");
       lock.close();
+    }
+    // Sustained contention exhausts the extended busy-retry window before degrading to the
+    // streaming read, which takes several seconds by design; the default 5s timeout is too tight.
+  }, 20_000);
+
+  test("an unchanged filtered read releases its index reader", async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({ provider: "openai" });
+
+    const realRead = filterIndexModule.readUsageFilterCandidates;
+    let closeCalls = 0;
+    const spy = spyOn(filterIndexModule, "readUsageFilterCandidates").mockImplementation(async (query) => {
+      const read = await realRead(query);
+      if (read) {
+        const originalClose = read.close;
+        read.close = () => {
+          closeCalls += 1;
+          originalClose();
+        };
+      }
+      return read;
+    });
+    try {
+      // The retained projection is unchanged, so this exercises the branch that validates the
+      // ledger without paging and must still release the reader it opened.
+      const result = await getFilteredUsageAggregate({ provider: "openai" });
+      expect(result.update).toBe("unchanged");
+      expect(closeCalls).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("a candidate page failure falls back to the streaming read", async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    await getFilteredUsageAggregate({ provider: "openai" });
+    resetUsageAggregateCacheForTests();
+
+    const expected = rows.filter(row => row.provider === "openai").length;
+    const spy = spyOn(filterIndexModule, "readUsageFilterCandidates").mockImplementation(async () => ({
+      snapshot: {
+        revision: null,
+        identityKey: "",
+        generation: "",
+        indexedOffset: 0,
+        processedThroughDigest: "",
+        indexedRows: 0,
+        invalidRows: 0,
+        oversizedRows: 0,
+        minTimestamp: null,
+        maxTimestamp: null,
+        ingestPasses: 0,
+        ingestedRows: 0,
+      },
+      candidateRows: 0,
+      nextPage() {
+        throw new UsageFilterIndexPageError(new Error("SQLITE_CORRUPT"));
+      },
+      close() {},
+    }));
+    try {
+      const result = await getFilteredUsageAggregate({ provider: "openai" });
+      expect(summary(result).summary.requests).toBe(expected);
+      expect(result.filterIndex).toBeUndefined();
+    } finally {
+      spy.mockRestore();
     }
   });
 
