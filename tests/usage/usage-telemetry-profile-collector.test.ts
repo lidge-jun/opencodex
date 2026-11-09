@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { handleCollectorFetch } from "../../services/telemetry-collector/src/index";
 import { computeHourlyIpHash, formatBucketHour } from "../../services/telemetry-collector/src/ingest";
-import { clearLeaderboardCache } from "../../services/telemetry-collector/src/leaderboard";
 import { pruneCollectorTables } from "../../services/telemetry-collector/src/prune";
 import { parseProfileRankV1 } from "../../src/telemetry/profile/contract";
 import { createInMemoryD1, type InMemoryD1Harness } from "../helpers/telemetry-collector-d1";
@@ -16,7 +15,6 @@ let h: InMemoryD1Harness;
 
 beforeEach(() => {
   h = createInMemoryD1("unit-salt-secret");
-  clearLeaderboardCache();
 });
 
 afterEach(() => h.close());
@@ -175,6 +173,17 @@ describe("telemetry collector: opt-in profiles", () => {
     expect(h.sqlite.query("SELECT COUNT(*) AS n FROM profile_days").get()).toEqual({ n: 1 });
     expect((await send("/v1/profiles/me", { method: "DELETE", secret })).status).toBe(401);
     expect((await submit(secret, "2026-11-07", 1, 1)).status).toBe(401);
+  });
+
+  test("hiding a profile takes effect on the very next leaderboard read", async () => {
+    const a = await create("alpha", "192.0.2.1");
+    await submit(a, "2026-11-08", 1, 50);
+    const first = (await (await send("/v1/leaderboard?period=day")).json()) as { total: number };
+    expect(first.total).toBe(1);
+    h.sqlite.query("UPDATE profiles SET hidden = 1 WHERE handle = 'alpha'").run();
+    const res = await send("/v1/leaderboard?period=day");
+    expect(((await res.json()) as { total: number }).total).toBe(0);
+    expect(res.headers.get("cache-control")).toBe("public, max-age=60");
   });
 
   test("a cached leaderboard never outlives its UTC day window", async () => {

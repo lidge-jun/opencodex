@@ -4,6 +4,8 @@ import type { CollectorEnv } from "./types";
 /** Shared helpers for the opt-in profile endpoints. */
 
 const HOUR_MS = 3_600_000;
+/** Shared-cache lifetime of public profile reads; also the longest a maintainer's hide can take to show. */
+export const PUBLIC_PROFILE_MAX_AGE_SECONDS = 60;
 
 export const PROFILE_RESPONSE_HEADERS: Readonly<Record<string, string>> = Object.freeze({
   "content-type": "application/json; charset=utf-8",
@@ -20,7 +22,7 @@ export function profileJson(
     status,
     headers: {
       ...PROFILE_RESPONSE_HEADERS,
-      "cache-control": cache === "public" ? "public, max-age=300" : "no-store",
+      "cache-control": cache === "public" ? `public, max-age=${PUBLIC_PROFILE_MAX_AGE_SECONDS}` : "no-store",
       ...extraHeaders,
     },
   });

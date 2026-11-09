@@ -196,6 +196,7 @@ function mountOne(root: HTMLElement, fetchImpl: typeof fetch, options: MountLead
   let period = parseLeaderboardPeriod(search.get("period"));
   let metric = parseLeaderboardMetric(search.get("metric"));
   let sequence = 0;
+  let profileSequence = 0;
 
   const setPressed = () => {
     for (const button of Array.from(root.querySelectorAll<HTMLButtonElement>("[data-tl-period]"))) {
@@ -339,6 +340,7 @@ function mountOne(root: HTMLElement, fetchImpl: typeof fetch, options: MountLead
   };
 
   const showProfile = async (rawHandle: string) => {
+    const mine = ++profileSequence;
     const url = buildProfileUrl(profileEndpoint, rawHandle, metric);
     if (!url) {
       if (findError) {
@@ -350,11 +352,13 @@ function mountOne(root: HTMLElement, fetchImpl: typeof fetch, options: MountLead
     if (findError) findError.hidden = true;
     try {
       const { status: code, body: payload } = await fetchJson(url, fetchImpl);
+      // A later lookup started while this one was in flight: its answer wins.
+      if (mine !== profileSequence) return;
       renderProfile(code === 200 ? parsePublicProfile(payload) : null);
       const handle = normalizeLeaderboardHandle(rawHandle)!;
       pageHistory?.replaceState(null, "", `?profile=${encodeURIComponent(handle)}#leaderboard`);
     } catch {
-      renderProfile(null);
+      if (mine === profileSequence) renderProfile(null);
     }
   };
 

@@ -9,7 +9,7 @@ import {
   type ProfilePeriodRankV1,
   type ProfileRankV1,
 } from "../../../src/telemetry/profile/contract";
-import { clientKey, consumeProfileRateLimit, profileError, profileJson, readSalt } from "./profile-http";
+import { PUBLIC_PROFILE_MAX_AGE_SECONDS, clientKey, consumeProfileRateLimit, profileError, profileJson, readSalt } from "./profile-http";
 import { formatUtcDay, utcMidnightMs } from "./stats";
 import type { CollectorEnv, D1Database } from "./types";
 
@@ -18,7 +18,6 @@ export const LEADERBOARD_MAX_LIMIT = 100;
 export const LEADERBOARD_DEFAULT_LIMIT = 50;
 /** Public reads per client key and hour; generous because a shared NAT may serve many dashboard viewers. */
 export const PROFILE_READS_PER_HOUR = 3000;
-export const LEADERBOARD_CACHE_TTL_MS = 300_000;
 
 export interface LeaderboardEntryV1 {
   rank: number;
@@ -182,14 +181,6 @@ function parsePeriod(raw: string | null): ProfilePeriod | null {
   return (PROFILE_PERIODS as readonly string[]).includes(value) ? value as ProfilePeriod : null;
 }
 
-let leaderboardCacheDb: D1Database | null = null;
-const leaderboardCache = new Map<string, { expiresAt: number; cachedAt: number; body: string }>();
-
-export function clearLeaderboardCache(): void {
-  leaderboardCacheDb = null;
-  leaderboardCache.clear();
-}
-
 /** GET /v1/leaderboard?period=day|week|month&metric=tokens|requests&limit=1..100 */
 export async function handleLeaderboard(request: Request, env: CollectorEnv, now: number = Date.now()): Promise<Response> {
   const salt = readSalt(env);
@@ -204,24 +195,17 @@ export async function handleLeaderboard(request: Request, env: CollectorEnv, now
   }
   const limited = await consumeProfileRateLimit(env, salt, "read", clientKey(request), PROFILE_READS_PER_HOUR, now);
   if (limited) return limited;
-  if (leaderboardCacheDb !== env.DB) {
-    leaderboardCache.clear();
-    leaderboardCacheDb = env.DB;
-  }
-  // The window moves at UTC midnight; keying on it means a cached board never outlives its day.
-  const { to } = profilePeriodWindow(period, now);
-  const key = `${period}:${metric}:${limit}:${to}`;
-  for (const [cachedKey, entry] of leaderboardCache) {
-    if (now >= entry.expiresAt || !cachedKey.endsWith(`:${to}`)) leaderboardCache.delete(cachedKey);
-  }
-  const cached = leaderboardCache.get(key);
-  if (cached && now >= cached.cachedAt && now < cached.expiresAt) {
-    return new Response(cached.body, { status: 200, headers: { "content-type": "application/json; charset=utf-8", "x-robots-tag": "noindex", "cache-control": "public, max-age=300" } });
-  }
+  // No in-process cache: a maintainer's hide must show on the next read. Shared caches may keep a
+  // board for PUBLIC_PROFILE_MAX_AGE_SECONDS at most.
   const board = await readLeaderboard(env.DB, period, metric, limit, now);
-  const body = JSON.stringify(board);
-  leaderboardCache.set(key, { cachedAt: now, expiresAt: now + LEADERBOARD_CACHE_TTL_MS, body });
-  return new Response(body, { status: 200, headers: { "content-type": "application/json; charset=utf-8", "x-robots-tag": "noindex", "cache-control": "public, max-age=300" } });
+  return new Response(JSON.stringify(board), {
+    status: 200,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "x-robots-tag": "noindex",
+      "cache-control": `public, max-age=${PUBLIC_PROFILE_MAX_AGE_SECONDS}`,
+    },
+  });
 }
 
 /** GET /v1/profiles/by-handle/<handle>?metric=tokens|requests: a public profile's ranks; 404 for unknown or hidden. */
@@ -249,4 +233,3 @@ export async function handleProfileByHandle(
   const rank = await computeProfileRank(env.DB, profile, metric, now);
   return profileJson({ ok: true, ...rank }, 200, "public");
 }
-

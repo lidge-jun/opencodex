@@ -27,7 +27,8 @@ anonymous ones: no install hash, version or platform is stored, and rate-limit k
 - `DELETE /v1/profiles/me` (bearer) — deletes the profile and every row submitted for it in one batch; an unknown
   secret is `401`.
 - `GET /v1/leaderboard?period=day|week|month&metric=tokens|requests&limit=1..100` and
-  `GET /v1/profiles/by-handle/<handle>` — public, 3000 per client key per hour, `cache-control: public, max-age=300`,
+  `GET /v1/profiles/by-handle/<handle>` — public, 3000 per client key per hour, `cache-control: public, max-age=60` (no
+  in-process cache, so a hidden profile disappears on the next read at the Worker and within 60 seconds in shared caches),
   `x-robots-tag: noindex`. Entries carry only rank, handle, display name, avatar, tokens and requests. Ranking is
   `RANK()` over profiles with a positive total in the window ending on the latest completed UTC day; hidden profiles
   are excluded everywhere.

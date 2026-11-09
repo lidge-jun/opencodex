@@ -92,6 +92,16 @@ describe("ocx telemetry profile", () => {
     expect(existsSync(telemetryProfilePath(home))).toBe(false);
   });
 
+  test("connect refuses before prompting when anonymous telemetry is off", async () => {
+    let asked = false;
+    setTelemetryProfileCliDepsForTests({ isTty: () => true, interactiveConfirm: async () => { asked = true; return true; } });
+    process.env.OCX_TELEMETRY = "0";
+    expect(await handleTelemetryCommand(["profile", "connect", "--handle", "jun"], noProxy)).toBe(1);
+    expect(asked).toBe(false);
+    expect(logs.join("\n")).toContain("telemetry_off");
+    expect(logs.join("\n")).not.toContain("Public usage profile (opt-in");
+  });
+
   test("an interactive person connects; status never prints the secret", async () => {
     setTelemetryProfileCliDepsForTests({ isTty: () => true, interactiveConfirm: async () => true });
     expect(await handleTelemetryCommand(["profile", "connect", "--handle", "jun", "--name", "Jun"], noProxy)).toBe(0);

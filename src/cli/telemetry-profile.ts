@@ -159,6 +159,11 @@ export async function handleTelemetryProfileCommand(argv: string[], wantsJson: b
       rejectArgs(args, TELEMETRY_PROFILE_USAGE);
       if (!handle) throw new CliUsageError("--handle is required", TELEMETRY_PROFILE_USAGE);
       if (!isProfileAvatar(avatar)) throw new CliUsageError(`--avatar must be one of ${PROFILE_AVATARS.join(", ")}`, TELEMETRY_PROFILE_USAGE);
+      // Refuse before asking anything when the connect could not succeed.
+      const before = await buildProfileStatusSnapshot();
+      if (!before.telemetryEffective) {
+        throw new Error("telemetry_off: A public profile needs anonymous telemetry to be on: its totals come from the same daily aggregate.");
+      }
       console.log(PROFILE_CLI_DISCLOSURE_LINES.join("\n"));
       const ask = testDeps?.interactiveConfirm ?? interactiveConfirm;
       const yes = await ask({ question: "\n  Create this public profile? [y/N]", defaultYes: false });
