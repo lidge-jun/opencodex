@@ -35,6 +35,7 @@ import {
 } from "../../src/usage/source-filter";
 import {
   setUsageFilterIndexTestHooksForTests,
+  USAGE_FILTER_INDEX_INSERT_BATCH,
   usageFilterCandidatePlan,
   usageFilterIndexPath,
 } from "../../src/usage/filter-index";
@@ -590,7 +591,11 @@ describe("filtered usage index crash and multi-writer safety", () => {
   });
 
   test("two processes rebuilding the same ledger both report every row", async () => {
-    const rows = Array.from({ length: 30_000 }, (_, index) => syntheticRow(index));
+    // Sixteen insert batches each: enough for the two ingests to interleave under the write lock
+    // without making two cold Bun processes spend seconds of a loaded runner on ingest.
+    // Coverage, not a reproducible regression: whether the first opens collide is up to the
+    // scheduler. The deterministic regression is the still-creating case below.
+    const rows = Array.from({ length: 16 * USAGE_FILTER_INDEX_INSERT_BATCH }, (_, index) => syntheticRow(index));
     writeRows(rows);
     const expected = rows.filter(row => row.provider === "openai").length;
     const scriptPath = join(testDir, "child.ts");
@@ -619,6 +624,34 @@ console.log(JSON.stringify({ requests: summary.summary.requests, candidates: res
     }
     expect(indexGenerations()).toHaveLength(1);
     expect(indexRowCount(publishedGeneration())).toBe(rows.length);
+  });
+
+  test("a projection another process is still creating is waited for, not taken as foreign", async () => {
+    const rows = Array.from({ length: 20 }, (_, index) => syntheticRow(index));
+    writeRows(rows);
+    // The empty file a concurrent first open leaves, held under that process's write lock.
+    const creator = new Database(usageFilterIndexPath(testDir), { create: true });
+    creator.exec("BEGIN EXCLUSIVE");
+    // Released from the reader's own busy back-off, so the case cannot pass without the reader
+    // meeting the lock. Classifying the busy file as foreign used to give up the index at once,
+    // and never reached this back-off.
+    const busyAttempts: number[] = [];
+    setUsageFilterIndexTestHooksForTests({
+      beforeBusyRetry: ({ attempt }) => {
+        busyAttempts.push(attempt);
+        if (creator.inTransaction) creator.exec("ROLLBACK");
+      },
+    });
+    try {
+      const result = await getFilteredUsageAggregate({ provider: "openai" });
+      expect(summary(result).summary.requests).toBe(rows.filter(row => row.provider === "openai").length);
+      expect(busyAttempts).toEqual([0]);
+      expect(result.filterIndex?.totalRows).toBe(rows.length);
+    } finally {
+      setUsageFilterIndexTestHooksForTests(null);
+      if (creator.inTransaction) creator.exec("ROLLBACK");
+      creator.close();
+    }
   });
 
   test("crashed and abandoned staging never accumulates", async () => {
