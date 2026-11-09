@@ -15,6 +15,7 @@ import {
   readUsageFilterCandidatesPassive,
   requestUsageFilterIndexRebuild,
   resetUsageFilterIndexForTests,
+  UsageFilterIndexPageError,
   type UsageFilterCandidateRead,
   type UsageFilterIndexQuery,
   type UsageFilterIndexSnapshot,
@@ -638,52 +639,69 @@ async function refreshFilteredAggregate(
   filter: NormalizedUsageFilter,
   window?: UsageTimeWindow,
 ): Promise<UsageAggregateResult> {
-  return withFilterIndexRetry(async () => {
-    const overlayVersion = userCostOverlayVersion();
-    const timeZone = currentTimeZone();
-    const state = retainedFilteredAggregates.get(key);
-    if (!state
-      || state.overlayVersion !== overlayVersion
-      || state.timeZone !== timeZone
-      || state.indexGeneration === null) {
-      return rebuildFilteredAggregate(key, filter, window, overlayVersion, timeZone);
-    }
-    const read = await readCandidates({
-      ...filterQuery(filter, window),
-      afterOffset: state.processedThroughBytes,
-    });
-    if (!read) {
-      retainedFilteredAggregates.delete(key);
-      return rebuildFilteredAggregate(key, filter, window, overlayVersion, timeZone);
-    }
-    if (state.indexGeneration !== read.snapshot.generation
-      || state.identityKey !== read.snapshot.identityKey
-      || state.processedThroughBytes > read.snapshot.indexedOffset) {
-      retainedFilteredAggregates.delete(key);
-      return rebuildFilteredAggregate(key, filter, window, overlayVersion, timeZone);
-    }
-    if (state.processedThroughBytes === read.snapshot.indexedOffset) {
-      // Even an unchanged retained projection validates the ledger against the snapshot, so a
-      // rewrite in the window between the index refresh and this return is not served stale.
-      await readUsageLedgerRowsAtOffsets({
-        offsets: [],
-        expectedIdentityKey: read.snapshot.identityKey,
-        expectedRevisionKey: usageLogRevisionKey(read.snapshot.revision),
-        expectedProcessedThroughBytes: read.snapshot.indexedOffset,
-        expectedProcessedThroughDigest: read.snapshot.processedThroughDigest,
-        expectedFileSize: read.snapshot.revision?.size,
+  try {
+    return await withFilterIndexRetry(async () => {
+      const overlayVersion = userCostOverlayVersion();
+      const timeZone = currentTimeZone();
+      const state = retainedFilteredAggregates.get(key);
+      if (!state
+        || state.overlayVersion !== overlayVersion
+        || state.timeZone !== timeZone
+        || state.indexGeneration === null) {
+        return rebuildFilteredAggregate(key, filter, window, overlayVersion, timeZone);
+      }
+      const read = await readCandidates({
+        ...filterQuery(filter, window),
+        afterOffset: state.processedThroughBytes,
       });
-      state.retainedAt = Date.now();
-      // Whole-ledger diagnostics can move without the boundary moving: a torn oversized or
-      // malformed suffix is observed by every append scan and never advances the offset.
-      state.usageIncomplete = read.snapshot.oversizedRows > 0;
-      state.usageInvalidRows = read.snapshot.invalidRows > 0;
-      state.revision = read.snapshot.revision;
-      state.revisionKey = usageLogRevisionKey(read.snapshot.revision);
-      return publishFilteredAggregate(key, state, "unchanged", read);
+      if (!read) {
+        retainedFilteredAggregates.delete(key);
+        return rebuildFilteredAggregate(key, filter, window, overlayVersion, timeZone);
+      }
+      if (state.indexGeneration !== read.snapshot.generation
+        || state.identityKey !== read.snapshot.identityKey
+        || state.processedThroughBytes > read.snapshot.indexedOffset) {
+        // This branch never pages, so it owns closing the reader before the rebuild discards it.
+        read.close();
+        retainedFilteredAggregates.delete(key);
+        return rebuildFilteredAggregate(key, filter, window, overlayVersion, timeZone);
+      }
+      if (state.processedThroughBytes === read.snapshot.indexedOffset) {
+        // Even an unchanged retained projection validates the ledger against the snapshot, so a
+        // rewrite in the window between the index refresh and this return is not served stale.
+        try {
+          await readUsageLedgerRowsAtOffsets({
+            offsets: [],
+            expectedIdentityKey: read.snapshot.identityKey,
+            expectedRevisionKey: usageLogRevisionKey(read.snapshot.revision),
+            expectedProcessedThroughBytes: read.snapshot.indexedOffset,
+            expectedProcessedThroughDigest: read.snapshot.processedThroughDigest,
+            expectedFileSize: read.snapshot.revision?.size,
+          });
+        } finally {
+          // This branch never pages, so it owns closing the reader before publishing its stats.
+          read.close();
+        }
+        state.retainedAt = Date.now();
+        // Whole-ledger diagnostics can move without the boundary moving: a torn oversized or
+        // malformed suffix is observed by every append scan and never advances the offset.
+        state.usageIncomplete = read.snapshot.oversizedRows > 0;
+        state.usageInvalidRows = read.snapshot.invalidRows > 0;
+        state.revision = read.snapshot.revision;
+        state.revisionKey = usageLogRevisionKey(read.snapshot.revision);
+        return publishFilteredAggregate(key, state, "unchanged", read);
+      }
+      return appendFilteredAggregate(key, state, filter, read, overlayVersion, timeZone);
+    });
+  } catch (error) {
+    if (error instanceof UsageFilterIndexPageError) {
+      // A page failed after its reader was handed out: the index cannot serve this query,
+      // so answer from the authoritative ledger scan instead of failing the request.
+      retainedFilteredAggregates.delete(key);
+      return rebuildFilteredAggregateStreaming(key, filter, window, userCostOverlayVersion(), currentTimeZone());
     }
-    return appendFilteredAggregate(key, state, filter, read, overlayVersion, timeZone);
-  });
+    throw error;
+  }
 }
 
 function jevStatsResultFrom(
