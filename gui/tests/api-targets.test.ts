@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import {
   apiBaseForPlane,
+  apiTargetIdentity,
   ClientStateChangedError,
   discoverApiTargets,
   relayUrlForPath,
@@ -9,6 +10,35 @@ import {
   targetsFromMachineStatus,
   type MachineStatusV1,
 } from "../src/api-targets";
+
+test("a relay base shared by two hubs still has distinct logical target identities", () => {
+  const base = standaloneApiTargets("");
+  const hubA = apiTargetIdentity({
+    ...base,
+    shared: { ...base.shared, serverOrigin: "https://hub-a.example" },
+    apiKeyId: "machine-key",
+  });
+  const hubB = apiTargetIdentity({
+    ...base,
+    shared: { ...base.shared, serverOrigin: "https://hub-b.example" },
+    apiKeyId: "machine-key",
+  });
+  expect(hubA.key).not.toBe(hubB.key);
+  expect(hubA.label).toBe("https://hub-a.example");
+  expect(hubA.label).not.toContain("machine-key");
+});
+
+test("API-key rotation is not a logical target change, but a different link is", () => {
+  const base = standaloneApiTargets("");
+  const shared = { ...base.shared, serverOrigin: "https://hub.example" };
+  const keyA = apiTargetIdentity({ ...base, shared, apiKeyId: "key-a" });
+  const keyB = apiTargetIdentity({ ...base, shared, apiKeyId: "key-b" });
+  expect(keyA.key).toBe(keyB.key);
+  const linkA = apiTargetIdentity({ ...base, shared, link: { linkId: "link-a", home: null, readOnly: true } });
+  const linkB = apiTargetIdentity({ ...base, shared, link: { linkId: "link-b", home: null, readOnly: true } });
+  expect(linkA.key).not.toBe(linkB.key);
+  expect(linkA.label).toBe("https://hub.example");
+});
 
 let win: Window;
 let previousWindow: unknown;
@@ -118,6 +148,20 @@ describe("two-plane API targets", () => {
       headers: { "content-type": "application/json" },
     })) as typeof fetch;
     await expect(discoverApiTargets("")).rejects.toThrow("local machine plane returned invalid status");
+  });
+
+  test("an unknown relay capability is legacy, not an invalid status", async () => {
+    // A relay that advertises a capability this dashboard does not understand is an older
+    // or newer peer. Treating it as malformed would break discovery; it must read as
+    // legacy so the preflight path applies.
+    globalThis.fetch = (async () => new Response(JSON.stringify({ ...status("relay"), relayTargetCheck: "expected-target-v2" }), {
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+    const targets = await discoverApiTargets("");
+    expect(targets.shared.transport).toBe("relay");
+    expect(targets.relayTargetCheck).toBeUndefined();
+    expect(targetsFromMachineStatus("", { ...status("relay"), relayTargetCheck: "expected-target-v2" } as MachineStatusV1).relayTargetCheck)
+      .toBeUndefined();
   });
 
   test("standalone discovers nothing and sends no request", async () => {
