@@ -440,6 +440,17 @@ describe("combo stream preflight", () => {
     expect(result.kind).toBe("failed");
   });
 
+  test("a conflicting root hard stop keeps a retryable nested code terminal", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      code: "origin_rejected",
+      status: 429,
+      error: { message: "rate limited", code: "rate_limit_exceeded" },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("accepted");
+  });
+
   test("treats a zero-output opaque OpenRouter numeric 400 carrying root code invalid_request_error as terminal", async () => {
     const result = await preflightComboStreamResponse(sse({
       type: "error",

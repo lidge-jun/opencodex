@@ -225,20 +225,29 @@ describe("combo failure cooldown scope", () => {
   });
 
   test("a typed root keeps an opaque-looking nested 400 terminal over HTTP, as it does over SSE", async () => {
-    const body = JSON.stringify({ type: "invalid_request_error", error: {
-      message: "Provider returned error", code: 400, metadata: { raw: "ERROR", provider_name: "Stealth" },
-    } });
-    expect(isOpenRouterOpaque400Envelope(body)).toBe(false);
-    const failure = await consumeComboFailure(new Response(body, {
-      status: 400,
-      headers: { "content-type": "application/json" },
-    }));
-    expect(failure.openRouterOpaque400).toBe(false);
-    expect(comboFailureDecision(400, failure.classificationText, {
-      code: failure.upstreamCode,
-      openRouterOpaque400: failure.openRouterOpaque400,
-      malformedResponseFormat: failure.malformedResponseFormat,
-    })).toBe("stop");
+    const opaque = { message: "Provider returned error", code: 400, metadata: { raw: "ERROR", provider_name: "Stealth" } };
+    for (const root of [
+      { type: "invalid_request_error" },
+      { code: "invalid_request_error" },
+      { type: "error", code: "invalid_request_error" },
+      { type: "error", code: "content_policy_violation" },
+      { type: "error", code: "context_length_exceeded" },
+    ]) {
+      const body = JSON.stringify({ ...root, error: opaque });
+      expect(isOpenRouterOpaque400Envelope(body)).toBe(false);
+      const failure = await consumeComboFailure(new Response(body, {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      }));
+      expect(failure.openRouterOpaque400).toBe(false);
+      expect(comboFailureDecision(400, failure.classificationText, {
+        code: failure.upstreamCode,
+        openRouterOpaque400: failure.openRouterOpaque400,
+        malformedResponseFormat: failure.malformedResponseFormat,
+      })).toBe("stop");
+    }
+    // A root that repeats the numeric 400 adds no verdict of its own.
+    expect(isOpenRouterOpaque400Envelope(JSON.stringify({ code: 400, error: opaque }))).toBe(true);
   });
 
   test("preserves complete evidence across display truncation for longer envelopes and late details", async () => {

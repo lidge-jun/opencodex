@@ -448,8 +448,9 @@ export function isOpenRouterOpaque400Envelope(message: string): boolean {
 }
 
 /**
- * A typed root (`{"type":"invalid_request_error","error":{...}}`) names its own verdict even when the
- * nested record looks opaque; the SSE path already refuses that shape through the frame's own type.
+ * A typed or coded root (`{"type":"invalid_request_error","error":{...}}`,
+ * `{"code":"context_length_exceeded","error":{...}}`) names its own verdict even when the nested record
+ * looks opaque; the SSE path already refuses those shapes through the frame's own type and code.
  */
 function http400RootIsTyped(message: string): boolean {
   let text = message.trim();
@@ -458,8 +459,9 @@ function http400RootIsTyped(message: string): boolean {
   try {
     const root: unknown = JSON.parse(text);
     if (!root || typeof root !== "object" || Array.isArray(root)) return false;
-    const type = (root as Record<string, unknown>).type;
-    return type !== undefined && type !== null && type !== "error";
+    const { type, code } = root as Record<string, unknown>;
+    if (type !== undefined && type !== null && type !== "error") return true;
+    return code !== undefined && code !== null && normalizedFailureCode(code as string | number) !== "400";
   } catch {
     return false;
   }
