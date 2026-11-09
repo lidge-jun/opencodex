@@ -834,6 +834,16 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     usage: "ocx __gui-update-worker <jobId> [channel] [restart]",
     summary: "Hidden internal: run the GUI update worker.",
   },
+  {
+    name: "telemetry",
+    usage: "ocx telemetry <status|enable|disable> [--json]",
+    summary: "Inspect or change anonymous daily usage telemetry consent and preview the payload.",
+    details: [
+      "status [--json]   Show effective state, reason, install channel, last sent day, and exact preview payload.",
+      "enable [--json]   Confirm and opt in to anonymous telemetry in an interactive terminal (refused with agent_consent_required or tty_required otherwise).",
+      "disable [--json]  Opt out of anonymous telemetry and delete telemetry-id.json.",
+    ],
+  },
 ];
 
 export function findCommand(name: string): CliCommandEntry | undefined {

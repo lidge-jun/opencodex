@@ -28,6 +28,37 @@ SignPath Foundation is rolling out ([Windows Code Signing](/reference/code-signi
 release carries the signature, Windows SmartScreen may warn about an unsigned installer; choose
 **More info → Run anyway** after confirming that you downloaded it from the release page.
 
+One installer page describes the anonymous daily usage summary OpenCodex sends, links the
+[privacy statement](/reference/code-signing/#privacy), and has a **Send anonymous usage
+statistics** checkbox, checked by default. Clear it and the app saves the opt-out to your
+opencodex config the first time it starts, before any proxy runs. The choice applies to every
+account on the computer, once for each account, so it also works for a silent install run by an
+administrator or a deployment tool (Intune, SCCM). For a silent install, pass
+`OCX_TELEMETRY_CHOICE=optout`:
+
+```powershell
+msiexec /i OpenCodex-<version>-windows-x64.msi /qn OCX_TELEMETRY_CHOICE=optout
+```
+
+The installer needs administrator rights and records the choice for the whole computer.
+Only `send` keeps telemetry on; `optout`, in any letter case, and any other value (`off`, `0`) turn it off.
+Each install that passes `OCX_TELEMETRY_CHOICE` records a new decision, so a deployment that reuses
+the same command for every version applies the opt-out again after each upgrade, over any dashboard
+choice made since.
+
+Leaving the box checked does not start sending by itself: the dashboard still shows its one-time
+notice first, and a checked box never turns telemetry back on for an account that turned it off.
+In-app updates, reduced-UI installs (`/qr`) and maintenance runs of the installed version skip this
+page and keep the recorded choice. Running a newer installer by hand shows the page again, unchecked
+if you opted out before. Continuing without changing the box keeps that earlier decision as it was,
+so it is not applied again over a choice you made in the dashboard since; changing the box records a
+new decision.
+
+If you installed the background service with `ocx service install`, it can start a proxy at logon
+without the app. An opt-out recorded by a later installer reaches that service's config the next
+time the app starts; until then the service may still send its daily summary. To stop it at once,
+run `ocx telemetry disable`.
+
 ### Linux
 
 Download `OpenCodex-<version>-linux-x86_64.AppImage` or
