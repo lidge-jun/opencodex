@@ -46,6 +46,7 @@ import { nativeMessagesDeclineReason, type NativeMessagesSelector } from "../mes
 import type { NativeMessagesFinishLog } from "../messages-native";
 import { credentialDomainFor } from "../../protocols/opaque-state";
 import { chatCompletionsErrorResponse } from "../../chat/outbound";
+import { OUTPUT_CONFIG_EFFORTS } from "../../chat/inbound";
 import { anthropicErrorResponse } from "../../claude/outbound";
 import { hasAnthropicOnlyServerTool, hasNativeOnlyTool } from "../../claude/inbound-content-options";
 import { nativeMessagesInlineToolNames } from "../messages-native-tool-guard";
@@ -345,7 +346,9 @@ function applyComboEffort(
   const hadEffort = Object.hasOwn(body, "reasoning_effort");
   // With no string anywhere, a present top-level value (an explicit null) is passed on as before.
   const callerEffort = typeof body.reasoning_effort === "string" ? body.reasoning_effort
-    : typeof nested === "string" ? nested : hadEffort ? body.reasoning_effort : undefined;
+    // The parser reads a nested effort only when it is a level it knows; anything else is no effort.
+    : typeof nested === "string" && OUTPUT_CONFIG_EFFORTS.has(nested) ? nested
+    : hadEffort ? body.reasoning_effort : undefined;
   const shaped = concreteComboRequestBody(
     callerEffort !== undefined || hadEffort ? { reasoning: { effort: callerEffort } } : {},
     target,

@@ -334,6 +334,14 @@ test("native: an explicit null with no nested effort reaches the wire as before"
   expect(f.inference.bodies[0]!.reasoning_effort).toBeNull();
 }, 30_000);
 
+test("native: an unknown nested effort is no caller effort, as for the Chat parser", async () => {
+  const f = fixture("native", "typesafe", "low");
+  Object.assign(f.config.combos!.auto!, { jevEffortMode: "client" });
+  const { response } = await send("native", f.config, { reasoning_effort: undefined, reasoning: { effort: "banana" } });
+  expect(response.status).toBe(200);
+  expect(f.inference.bodies[0]!.reasoning_effort).not.toBe("banana");
+}, 30_000);
+
 test("a JEV combo whose only allowlist is unsupported names that target in its 503", async () => {
   const f = fixture("responses", "model", "high");
   f.config.providers.a!.reasoningEfforts = [];
