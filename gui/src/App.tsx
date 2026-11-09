@@ -20,6 +20,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import QuotaSummaryBar from "./components/quota-summary-bar/QuotaSummaryBar";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
 import { DesktopStarOnboarding } from "./components/desktop-star-onboarding";
+import { TelemetryConsentCard } from "./components/telemetry-consent-card";
 import { IconMenu, IconGlobe, IconPower, IconX, IconRefresh, IconHistory } from "./icons";
 import { switchDashboardEdition } from "./lib/dashboard-edition";
 import { groupForPage, visibleGroupPages } from "./nav-groups";
@@ -162,6 +163,8 @@ export default function App() {
   const [hubPairingOpen, setHubPairingOpen] = useState(false);
   const [remoteWorkspaceAvailableState, setRemoteWorkspaceAvailable] = useState(false);
   const [sessionLoggingOut, setSessionLoggingOut] = useState(false);
+  const [starOnboardingSettled, setStarOnboardingSettled] = useState(false);
+  const handleStarOnboardingSettled = useCallback(() => setStarOnboardingSettled(true), []);
   /*
    * Results from the two sidebar orbs used to be `alert()`, which the app's webview draws
    * nowhere, so a refused stop and a completed one looked identical: nothing happened.
@@ -467,7 +470,15 @@ export default function App() {
 
   return (
     <div ref={appRef} className={`app${desktopShell ? " app--desktop" : ""}${desktopMac ? " app--macos" : ""}${navCollapsed ? " app--nav-collapsed" : ""}`}>
-      <DesktopStarOnboarding apiBase={sharedBase} enabled={targetsSettled && !targets.connected} />
+      <DesktopStarOnboarding
+        apiBase={sharedBase}
+        enabled={targetsSettled && !targets.connected && !isConnectedRuntime() && !targetError}
+        onSettled={handleStarOnboardingSettled}
+      />
+      <TelemetryConsentCard
+        apiBase={sharedBase}
+        enabled={targetsSettled && !targets.connected && !isConnectedRuntime() && !targetError && sharedSessionReady && starOnboardingSettled}
+      />
       {actionFeedback && (
         <ToastNotice tone={actionFeedback.tone} onDismiss={() => setActionFeedback(null)} dismissLabel={t("common.close")}>
           {actionFeedback.text}

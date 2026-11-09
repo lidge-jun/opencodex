@@ -1,4 +1,5 @@
 import { formatRetryAfterAdvice, parseRetryAfterFromMessage } from "./retry-delay";
+import { isMetaMusePlanFailure, META_MUSE_PLAN_REFUSAL_MESSAGE } from "../providers/meta-muse-plan-refusal";
 
 export interface OcxErrorPayload {
   message: string;
@@ -544,6 +545,16 @@ export function classifyError(status: number, type: string, message: string): Oc
     isAuthenticationMessage(text)
   ) {
     return { message, type: "authentication_error", code: "invalid_api_key" };
+  }
+  // Meta scopes a Muse Code subscription key to its own client and refuses every other caller with
+  // one fixed 403 (#8352). The key is valid and no login lifts the restriction, so the verdict is a
+  // plan/entitlement class rather than a rejected credential. This sits above the generic
+  // `permission_denied` branch because the envelope carries that code as its own detail.
+  if (isMetaMusePlanFailure(status, message)) {
+    // One proxy sentence says what Meta's refusal means and what path does work; the upstream
+    // body names the restriction but not the alternative, and relaying it verbatim reads as a
+    // rejected credential.
+    return { message: META_MUSE_PLAN_REFUSAL_MESSAGE, type: "permission_error", code: "subscription_required" };
   }
   // An explicit permission enum must not acquire a more specific inferred reason.
   if (type === "PERMISSION_DENIED" || text.includes("permission_denied")) {

@@ -322,7 +322,10 @@ applies to xAI and to Kimi Code at its exact HTTPS Responses endpoint
 These request-shape fixes do not change account entitlements. Meta limits Muse Code
 subscription credentials to the Muse Code client; other clients require a separately
 billed Meta API key. A subscription key can therefore return HTTP 403 through OpenCodex
-even when the request shape is valid. See [Meta's subscription rules](https://dev.meta.ai/docs/muse-code/subscriptions).
+even when the request shape is valid. OpenCodex answers that refusal in one sentence: it is a
+plan restriction on a valid credential rather than a rejected or expired one, and the
+supported path is the `meta-model` provider with a pay-as-you-go key, not a re-login. See
+[Meta's subscription rules](https://dev.meta.ai/docs/muse-code/subscriptions).
 
 For xAI Responses, `auto` or `none` tool selection is omitted when normalization leaves no tools
 in the request, including when cached-only search is removed. Valid forced function selections

@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 99.
+Declared capabilities: 102.
 
 ### `ocx update`
 
@@ -1871,3 +1871,56 @@ State-changing: no. JSON mode: `payload`.
 
 - start/end are epoch seconds. The end must match the request-time bucket or its immediate successor after an observed rollover; stale windows are refused. Empty series still includes metadata; missingMeasurements and truncated remain visible instead of implying measured complete zero traffic.
 - Uses existing query validation and checks applied model/provider-exclusion scope. It does not change companion settings or request inference.
+
+### `ocx telemetry status`
+
+Usage: `ocx telemetry status [--json]`
+
+Inspect anonymous telemetry consent status and the daily payload preview.
+
+State-changing: no. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/telemetry` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the telemetry status and preview as JSON. |
+
+- Reads live status from the running proxy and falls back to local configuration and ledger preview when the proxy is stopped.
+- Previews the oldest eligible unsent day, or the latest completed day with previewEligible = false when no day is eligible. Never creates or transmits a telemetry install identifier.
+
+### `ocx telemetry enable`
+
+Usage: `ocx telemetry enable [--json]`
+
+Opt in to anonymous daily usage telemetry.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the updated telemetry status as JSON. |
+
+- Requires an interactive human terminal, prints the telemetry disclosure block, and asks for confirmation before recording telemetry.decision = accepted.
+- Refuses with agent_consent_required when agent-driven and with tty_required when non-interactive or running under OCX_SERVICE.
+
+### `ocx telemetry disable`
+
+Usage: `ocx telemetry disable [--json]`
+
+Opt out of anonymous daily usage telemetry and delete the local telemetry identifier.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the updated telemetry status as JSON. |
+
+- Writes telemetry.decision = declined in local config.json and removes telemetry-id.json.
+- Always permitted, including in agent-driven sessions.
