@@ -217,6 +217,8 @@ test("a held REAL config transaction refuses 409 config_busy, and release lets a
     const refusedBody = await refused!.json() as { code: string; reason: string };
     expect(refusedBody.code).toBe("native_integration_refused");
     expect(refusedBody.reason).toBe("config_busy");
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(fixtureRoot, "route-intent.json"))).toBe(false);
 
     holder.exec("ROLLBACK");
     holder.close();

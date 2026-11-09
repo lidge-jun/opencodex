@@ -30,7 +30,7 @@ for one package invocation. That bypass does not repair the Desktop record, shim
 ## Install
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ```
 
 With pnpm 10.4 or later:
@@ -70,6 +70,12 @@ npm install -g --allow-scripts=bun @bitkyc08/opencodex
 # if the original install used sudo, keep using sudo:
 sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ```
+
+On Windows a running proxy keeps `node_modules\bun\bin` open, so a manual
+`npm install -g` fails with `EBUSY`. `ocx update` stops the proxy and restarts the service itself;
+for a manual reinstall, stop it first (`ocx stop`), install, then restart through the owning service
+(`ocx service restart`) or `ocx start` when unmanaged. `ocx doctor` prints this sequence when it finds
+a package install whose bundled runtime never unpacked.
 :::
 
 Verify both command aliases are on your `PATH`:
@@ -116,7 +122,7 @@ the catalog entries do not grant access by themselves. Use the preview channel o
 unreleased opencodex builds:
 
 ```bash
-npm install -g @bitkyc08/opencodex@preview
+npm install -g --allow-scripts=bun @bitkyc08/opencodex@preview
 ocx update --tag preview
 ```
 

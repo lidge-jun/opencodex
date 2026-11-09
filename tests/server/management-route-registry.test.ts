@@ -66,6 +66,11 @@ const moduleOf = (file: string): string => file.replace(/^src\//, "").replace(/\
 const key = (method: string, path: string): string => `${method} ${path}`;
 
 describe("management route registry reconciliation", () => {
+  test("route-to exposes exactly its versioned read, intent write and explicit sync methods", () => {
+    const scanned = distinctRoutes(scanRoutes(join(repoRoot, "src/server/management/route-to-routes.ts")));
+    expect(scanned.unresolved).toEqual([]);
+    expect([...scanned.pairs].sort()).toEqual(["GET /api/route-to", "POST /api/route-to/sync", "PUT /api/route-to"]);
+  });
   test("dashboard plan uses the shared proof-bound production inspection path", async () => {
     const proof = "P".repeat(43);
     const root = process.platform === "win32" ? "C:\\fixture-only" : "/tmp/fixture-only";

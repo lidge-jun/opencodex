@@ -13,13 +13,14 @@ import type { LaunchdInstallOutcome } from "./launchd";
 import { TASK, writeServiceInstallState, serviceSourceDir, resolveServiceOwnership, serviceLauncherPathDiagnostic } from "./state";
 import type { ServiceOwnership, ServiceOwnershipResolution } from "./state";
 import { installSystemd } from "./systemd";
-import { writeWindowsSchedulerAssets, reregisterWindowsSchedulerTask, windowsSchedulerRegistrationMatchesSnapshot, restoreWindowsSchedulerTaskIfAbsent, startWindows, stopWindows, statusWindowsXml } from "./windows-ops";
+import { writeWindowsSchedulerAssets, reregisterWindowsSchedulerTask, windowsSchedulerRegistrationMatchesSnapshot, restoreWindowsSchedulerTaskIfAbsent, startWindows, stopWindows, statusWindowsXml, killWindowsServiceWrapperProcesses } from "./windows-ops";
 import { probeWindowsSchedulerTask, SCHEDULER_SETTLE_DELAYS_MS, settleDelay } from "./windows-scheduler";
 import type { WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { taskXmlSection, taskXmlWithoutCommentsAndCdata, taskXmlElementCount, taskXmlOptionalValueEquals, windowsTaskRegistrationOwnedByAttempt, windowsTaskHasSessionRecoveryTriggers, windowsTaskRegistrationHealthy, windowsTaskRegistrationRefreshableLegacy } from "./windows-taskxml";
 import type { ExpectedWindowsTaskUserId } from "./windows-taskxml";
 import { win32 } from "node:path";
 import { assertNoDesktopSupervision, createSupervisionLatch, type SupervisionInspector, type SupervisionLatch } from "./desktop-command-guard";
+import { prepareDisconnectedClientServiceRestart } from "./disconnected-client-restart";
 
 /**
  * The two CLI verbs `repairService` serves. They differ on ONE platform and ONE case: a
@@ -36,6 +37,10 @@ export interface RepairServiceDeps extends RuntimePreflightDeps {
   assertAuth?: () => void;
   writeSchedulerAssets?: (runtime: DurableBunRuntime) => void;
   stopScheduler?: () => void;
+  /** Same installation-scoped wrapper cleanup used by service stop/install. */
+  killServiceWrappers?: () => void;
+  /** Bounded post-stop respawn verification; null proves no proxy answered. */
+  schedulerProxyStillLive?: () => Promise<{ port: number } | null>;
   startScheduler?: () => void;
   writeSchedulerState?: (runtime: DurableBunRuntime) => void;
   writeNativeState?: (runtime: DurableBunRuntime) => void;
@@ -70,6 +75,7 @@ export interface RepairServiceDeps extends RuntimePreflightDeps {
   schedulerLauncher?: string;
   /** Test seam — defaults to process.platform so Linux CI cannot hit real installSystemd. */
   platform?: NodeJS.Platform;
+  prepareDisconnectedClientRestart?: () => Promise<void>;
   /** Test seam for a recorded temporary launcher. */
   launcherPathDiagnostic?: () => string | null;
 }
@@ -193,8 +199,46 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
   const temporaryLauncher = (deps.launcherPathDiagnostic ?? (() => serviceLauncherPathDiagnostic(undefined, platform, true)))();
   if (temporaryLauncher) console.warn(`⚠️ ${temporaryLauncher}`);
 
+  const assertRestartOwnership = () => {
+    assertNoDesktopSupervision(deps.inspectSupervision, latch);
+    (deps.assertEnv ?? assertServiceEnvironmentMatchesInstall)();
+    const current = (deps.readOwnership ?? resolveServiceOwnership)();
+    if (!Bun.deepEquals(current, ownership, true)) throw new Error("Service ownership changed during restart.");
+  };
+  let schedulerStopped = false;
+  const stopSchedulerForRestart = (beforeStop: () => void) => {
+    if (schedulerStopped) return;
+    beforeStop();
+    (deps.stopScheduler ?? stopWindows)();
+    beforeStop();
+    (deps.killServiceWrappers ?? killWindowsServiceWrapperProcesses)();
+    schedulerStopped = true;
+  };
+  // Defer cleanup until the selected backend's registration has been verified.
+  const prepareDisconnectedRestart = async (verifyRegistration?: () => void) => {
+    if (deps.verb !== "restart") return;
+    const beforeStop = () => { assertRestartOwnership(); verifyRegistration?.(); };
+    beforeStop();
+    await (deps.prepareDisconnectedClientRestart ?? (() => prepareDisconnectedClientServiceRestart({
+      beforeStop,
+      stopManager: async () => {
+        const { platformOps } = await import("./orchestration");
+        const ops = platformOps(diag.backend === "native" ? "native" : "scheduler", { platform });
+        if (!ops) throw new Error("Service manager is unavailable; restart stopped.");
+        // The import yields; repeat ownership and registration proof immediately before stop.
+        beforeStop();
+        if (platform === "win32" && diag.backend !== "native") {
+          stopSchedulerForRestart(beforeStop);
+          return;
+        }
+        ops.stop();
+      },
+    })))();
+  };
+
   if (platform === "win32") {
     if (diag.backend === "native") {
+      if (deps.verb === "restart") await prepareDisconnectedRestart();
       await (deps.repairNative ?? ((selected: DurableBunRuntime) => installWinswService(defaultWinswEntry(serviceSourceDir, selected))))(runtime);
       assertNoDesktopSupervision(deps.inspectSupervision, latch);
       (deps.writeNativeState ?? ((selected: DurableBunRuntime) => writeServiceInstallState("native", undefined, {}, selected)))(runtime);
@@ -256,7 +300,29 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
           : "Task Scheduler registration is not a recognized legacy OpenCodex definition; it was preserved for manual review.",
       );
     }
-    try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
+    const verifyRegistrationBeforeStop = () => {
+      let currentXml = "";
+      try { currentXml = readSchedulerXml(); } catch { /* Refuse unreadable registration below. */ }
+      if (!currentXml.trim()) throw new Error("Task Scheduler registration became unreadable before stop; it was preserved and not stopped.");
+      if (!windowsSchedulerRegistrationMatchesSnapshot(currentXml, registeredXml)) {
+        throw new Error("Task Scheduler registration changed before stop; it was preserved and not stopped.");
+      }
+    };
+    if (deps.verb === "restart") {
+      await prepareDisconnectedRestart(verifyRegistrationBeforeStop);
+      assertRestartOwnership();
+      verifyRegistrationBeforeStop();
+      stopSchedulerForRestart(() => { assertRestartOwnership(); verifyRegistrationBeforeStop(); });
+      const live = await (deps.schedulerProxyStillLive ?? (async () => {
+        const { proxyStillLiveAfterStop } = await import("./orchestration");
+        return proxyStillLiveAfterStop({ canRespawn: true });
+      }))();
+      if (live) throw new Error("The scheduler proxy is still running after wrapper cleanup; restart stopped.");
+      assertRestartOwnership();
+      verifyRegistrationBeforeStop();
+    } else {
+      try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
+    }
     (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)(runtime);
     // Rewriting the on-disk assets does not touch the definition Task Scheduler holds, so a
     // task registered by an older version keeps its old triggers forever: status reports it
@@ -379,6 +445,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     (deps.writeSchedulerState ?? ((selected: DurableBunRuntime) => writeServiceInstallState("scheduler", undefined, {}, selected)))(runtime);
     return;
   }
+  if (deps.verb === "restart") await prepareDisconnectedRestart();
   if (platform === "darwin") {
     const outcome = (deps.repairLaunchd ?? installLaunchd)();
     // `installLaunchd` is the only function that knows whether it published anything, and its

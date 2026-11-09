@@ -108,6 +108,7 @@ function presetSeed(name: string, payload: unknown): Record<string, unknown> | u
   return seed;
 }
 
+/** Live add: an unoffered preset without --adapter/--base-url is a usage error (exit 2) before any write. */
 async function add(name: string, options: ReturnType<typeof parseAdd>, wantsJson: boolean, deps: RuntimeApiDeps): Promise<number> {
   const roster = await runtimeRequest<unknown>("/api/providers", { redirect: "error" }, deps);
   if (!Array.isArray(roster) || roster.some(row => !record(row) || typeof row.name !== "string" || !isValidProviderName(row.name))) {
@@ -119,8 +120,9 @@ async function add(name: string, options: ReturnType<typeof parseAdd>, wantsJson
   }
   const presets = await runtimeRequest("/api/provider-presets", { redirect: "error" }, deps);
   const seed = presetSeed(name, presets);
-  if (!seed && (name === "openai" || !options.fields.adapter || !options.fields.baseUrl)) {
-    throw new Error("Target preset unavailable. Custom providers require --adapter and --base-url.");
+  if (!seed && name === "openai") invalid("The selected target does not offer the canonical openai preset.");
+  if (!seed && (!options.fields.adapter || !options.fields.baseUrl)) {
+    invalid(`The selected target does not offer a "${name}" preset. Custom providers require --adapter and --base-url.`);
   }
   const provider = { ...seed, ...options.fields };
   if (provider.googleToolSchemaPolicy !== undefined && provider.adapter !== "google") {

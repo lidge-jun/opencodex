@@ -35,7 +35,7 @@ afterEach(() => {
   removeTreeWithRetry(home);
 });
 
-function config(authMode: "key" | "oauth" = "key"): OcxConfig {
+function config(authMode: "key" | "oauth" = "key", baseUrl = "https://api.kimi.com/coding/v1"): OcxConfig {
   const name = authMode === "oauth" ? "kimi" : "kimi-code";
   return {
     defaultProvider: name,
@@ -43,16 +43,16 @@ function config(authMode: "key" | "oauth" = "key"): OcxConfig {
       [name]: {
         adapter: "openai-chat",
         authMode,
-        baseUrl: "https://api.kimi.com/coding/v1",
+        baseUrl,
         ...(authMode === "key" ? { apiKey: "kimi-monthly-fixture-key" } : {}),
       },
     },
   } as OcxConfig;
 }
 
-function mockUsage(payload: unknown): void {
+function mockUsage(payload: unknown, url = "https://api.kimi.com/coding/v1/usages"): void {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    expect(String(input)).toBe("https://api.kimi.com/coding/v1/usages");
+    expect(String(input)).toBe(url);
     expect(init?.redirect).toBe("error");
     return Response.json(payload);
   }) as typeof fetch;
@@ -314,5 +314,49 @@ describe("Kimi monthly quota", () => {
     expect(reports[0]?.quota.weeklyPercent).toBe(20);
     expect(reports[0]?.quota.monthlyPercent).toBeUndefined();
     expect(reports[0]?.quota.customWindows).toEqual([{ label: "Total subscription credits", percent: 60 }]);
+  });
+});
+
+describe("Kimi regional (kimi.ai) Coding Plan quota (#8332)", () => {
+  const regional = "https://api.kimi.ai/coding/v1";
+
+  test("a key-auth provider on api.kimi.ai probes its own origin's /usages", async () => {
+    // Field shape from public API-key reports against this endpoint: legacy counters beside
+    // ratio windows that can contradict them. Valid counters win over a zero ratio.
+    mockUsage({
+      usage: { limit: 100, used: 40, remaining: 60, resetTime: resetAt },
+      limits: [{ window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" }, detail: { limit: 100, used: 100, remaining: 0, resetTime: resetAt } }],
+      usages: { limit_5h: { used_ratio: 0 }, limit_7d: { used_ratio: 0 }, limit_month_total: { used_ratio: 0.1, reset_time: resetAt } },
+    }, `${regional}/usages`);
+
+    const { reports } = await fetchProviderQuotaReports(config("key", `${regional}/`), true);
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.source).toBe("kimi:usages");
+    expect(reports[0]?.quota).toMatchObject({ fiveHourPercent: 100, weeklyPercent: 40, monthlyPercent: 10 });
+  });
+
+  test.each([
+    { name: "an OAuth token on api.kimi.ai", authMode: "oauth" as const, baseUrl: regional },
+    { name: "a lookalike host", authMode: "key" as const, baseUrl: "https://api.kimi.ai.example.test/coding/v1" },
+    { name: "another path on api.kimi.ai", authMode: "key" as const, baseUrl: "https://api.kimi.ai/v1" },
+  ])("$name never receives the credential", async ({ authMode, baseUrl }) => {
+    if (authMode === "oauth") {
+      await saveCredential("kimi", {
+        access: "kimi-regional-fixture-access",
+        refresh: "kimi-regional-fixture-refresh",
+        expires: Date.now() + 3600_000,
+      });
+    }
+    const requested: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requested.push(String(input));
+      return Response.json({ usages: { limit_month_total: monthlyRow } });
+    }) as typeof fetch;
+
+    const { reports } = await fetchProviderQuotaReports(config(authMode, baseUrl), true);
+
+    expect(requested.filter(url => url.includes("/usages"))).toEqual([]);
+    expect(reports.some(report => report.source === "kimi:usages")).toBe(false);
   });
 });

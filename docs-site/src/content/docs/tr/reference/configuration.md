@@ -79,6 +79,9 @@ opencodex, yönetilen `config.toml` ve `opencodex-catalog.json` dosyalarını
 geçici bir dosya ve ardından yeniden adlandırma (`atomicWriteFile`) yoluyla
 yazar. Bu, `ocx stop` ve proxy kapatma işleyicisi gibi eşzamanlı yazıcılar
 Codex'i aynı anda geri yüklediğinde kısmi dosyaları önler.
+Windows'ta `opencodex-catalog.json` salt okunur özniteliği taşıdığı için yeniden adlandırma
+reddedilirse opencodex özniteliği kaldırıp bir kez daha dener; yine başarısız olursa ham `EPERM` yerine
+`Codex catalog is read-only: <path>` bildirir.
 :::
 
 

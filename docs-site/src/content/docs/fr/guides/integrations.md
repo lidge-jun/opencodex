@@ -150,11 +150,14 @@ synchronisation, même si le document géré ne change pas.
 
 Si le fichier change après votre examen, l'écriture est refusée car le plan est devenu obsolète. La boîte de
 dialogue remplace l'ancien plan par le nouveau et vous demande de confirmer à nouveau ; elle ne relance jamais
-l'écriture automatiquement. Si l'aperçu est temporairement indisponible, rechargez normalement la page et
-recommencez l'action.
+l'écriture automatiquement. Si l'aperçu indique qu'aucun catalogue de modèles n'est encore chargé, la boîte de
+dialogue reste ouverte et propose **Charger le catalogue et réessayer** : elle relit la liste des intégrations,
+puis redemande le plan.
 
 Aside utilise le même flux d'aperçu et de confirmation pour un seul profil sélectionné à la fois. **Synchroniser
-tous les profils** reste une action groupée distincte et n'est pas liée à un aperçu combiné unique.
+tous les profils** reste une action groupée distincte et n'est pas liée à un aperçu combiné unique. Un plan décrit le fichier d'un seul profil : la carte
+de la Vue d'ensemble d'une intégration Aside en conflit propose donc **Choisir un profil**, et le bloc se
+remplace depuis la page de ce profil.
 
 ## À quoi s'attendre, en toute transparence
 
