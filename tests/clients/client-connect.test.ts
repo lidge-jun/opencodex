@@ -1190,7 +1190,9 @@ function runDesktopLifecycleScenario(mode: string) {
     await (async () => {
       let result = null, error = null, second = null, statusInside = null, statusOutside = null, cliRotation = null;
       const credential = new TextEncoder().encode("ocx_admin_fixture");
-      const deps = { fetchImpl, lifecycleLockDeps: lockDeps };
+      // No local Codex runtime, as on CI: otherwise sync execs whatever codex CLI the host has
+      // (seconds on a workstation) to read its effort ladder, which no case here asserts on.
+      const deps = { fetchImpl, lifecycleLockDeps: lockDeps, catalogCompatibility: { supportedEfforts: () => null } };
       try {
         if (mode.startsWith("disconnect")) {
           let journalSpy;
