@@ -8,7 +8,9 @@ import {
   providerSettingsFieldsDirty,
   providerSettingsPacingDirty,
   mergeProviderPacing,
+  providerDraftTargetLabel,
 } from "../src/provider-workspace/target-drafts";
+import { threeWayMergeJson } from "../src/provider-workspace/provider-draft-merge";
 
 function provider(overrides: Partial<WorkspaceItem> = {}): WorkspaceItem {
   return {
@@ -112,4 +114,12 @@ test("pacing merges different models and subfields independently", () => {
     beta: { requestsPerMinute: 99 },
     gamma: { requestsPerMinute: 30 },
   });
+});
+
+test("JSON merge keeps prototype-named keys as own data and labels drop composite identity", () => {
+  const latest = JSON.parse('{"__proto__":{"polluted":true},"provider":{"note":"saved"}}');
+  const merged = threeWayMergeJson({}, latest, latest);
+  expect(Object.hasOwn(merged.value as object, "__proto__")).toBe(true);
+  expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+  expect(providerDraftTargetLabel("https://hub.example\u0000key-material")).toBe("https://hub.example");
 });

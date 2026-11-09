@@ -41,7 +41,8 @@ export function threeWayMergeJson(base: unknown, latest: unknown, draft: unknown
     return { value: draft as JsonValue, conflicts: [path || "$"] };
   }
 
-  const out: Record<string, JsonValue> = {};
+  // Own-key construction: a provider or model named __proto__ must stay data.
+  const out: Record<string, JsonValue> = Object.create(null);
   const conflicts: string[] = [];
   const keys = new Set([...Object.keys(base), ...Object.keys(latest), ...Object.keys(draft)]);
   for (const key of keys) {

@@ -234,7 +234,7 @@ export function mergeProviderPacing(
     ...Object.keys(next.models ?? {}),
     ...Object.keys(merged.models ?? {}),
   ]);
-  const models: Record<string, ProviderSettingsPacingRule> = {};
+  const models: Record<string, ProviderSettingsPacingRule> = Object.create(null);
   for (const model of modelNames) {
     const baseRule = base.models?.[model];
     const nextRule = next.models?.[model];
@@ -383,6 +383,8 @@ export function rebaseProviderSettingsDraft(
 
 /** Human-readable target label for the draft banner; never a credential. */
 export function providerDraftTargetLabel(target: string): string {
-  if (target) return target;
+  // A composite logical key never reaches the DOM; only its display prefix does.
+  const display = target.split("\u0000", 1)[0]!;
+  if (display) return display;
   return typeof window === "undefined" ? "same-origin" : window.location.origin;
 }
