@@ -257,8 +257,11 @@ describe("Codex CLI selection inspection boundary", () => {
       dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-9.9.9.tgz" } });
     const backingMetadata = JSON.stringify({ name: "@openai/codex", version: backingVersion,
       dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-" + backingVersion + ".tgz" } });
+    const npmTrace = join(root, "npm-view.trace");
+    writeFileSync(npmTrace, "");
     writeFileSync(join(fakeBin, "npm"), [
       "#!/bin/sh",
+      `printf '%s\\n' "$*" >> '${npmTrace.replace(/'/g, "'\\''")}'`,
       'case "$*" in',
       `  *codex@${backingVersion}*--json*) printf '%s\\n' '${backingMetadata}'; exit 0 ;;`,
       `  *--json*) printf '%s\\n' '${mainMetadata}'; exit 0 ;;`,
@@ -282,24 +285,36 @@ describe("Codex CLI selection inspection boundary", () => {
       OCX_NO_DESKTOP_HANDOFF: "1",
       OPENCODEX_BUN_PATH: bun!,
     };
-    const runPlan = (env: NodeJS.ProcessEnv = planEnv) => spawnSync(node!, [repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", "plan", "--json"], {
-      cwd: repoRoot(), encoding: "utf8", timeout: 30_000,
-      env,
-    });
+    const runPlan = (phase: string, env: NodeJS.ProcessEnv = planEnv) => {
+      writeFileSync(npmTrace, "");
+      const startedAt = performance.now();
+      const result = spawnSync(node!, [repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", "plan", "--json"], {
+        cwd: repoRoot(), encoding: "utf8", timeout: 30_000, env,
+      });
+      // Keep timeout evidence before afterEach removes the owned prefix. A
+      // completed JSON report distinguishes plan computation from exit/stdio
+      // settlement; npm calls show whether registry resolution was reached.
+      const diagnostic = JSON.stringify({ phase, elapsedMs: performance.now() - startedAt,
+        pid: result.pid, status: result.status, signal: result.signal,
+        error: result.error?.message, errorCode: (result.error as NodeJS.ErrnoException | undefined)?.code,
+        stdout: result.stdout?.slice(-4_096), stderr: result.stderr?.slice(-4_096),
+        npmCalls: readFileSync(npmTrace, "utf8").slice(-4_096) });
+      return { ...result, diagnostic };
+    };
 
     // The real process scan sees every Codex session on this host, and the plan
     // rightly refuses while one runs. That refusal still reports the content
     // digest, so the digest is the host-independent binding; plan ids are
     // compared as well whenever both runs found an idle host (as on CI).
     const bound = (result: ReturnType<typeof runPlan>) => {
-      expect(result.error).toBeUndefined();
-      expect(result.status).toBe(0);
+      expect(result.error, result.diagnostic).toBeUndefined();
+      expect(result.status, result.diagnostic).toBe(0);
       const plan = JSON.parse(result.stdout);
-      expect(plan.managed).toBe(true);
-      expect(plan.installContentDigest).toMatch(/^[0-9a-f]{64}$/);
+      expect(plan.managed, result.diagnostic).toBe(true);
+      expect(plan.installContentDigest, result.diagnostic).toMatch(/^[0-9a-f]{64}$/);
       if (!plan.applicable) {
-        expect(plan.refusal).toBe("blocked_active_session");
-        expect(plan.session.state).toBe("active");
+        expect(plan.refusal, result.diagnostic).toBe("blocked_active_session");
+        expect(plan.session.state, result.diagnostic).toBe("active");
       }
       return { digest: plan.installContentDigest as string, planId: plan.applicable ? plan.planId as string : null };
     };
@@ -311,10 +326,10 @@ describe("Codex CLI selection inspection boundary", () => {
       expect(b.digest).not.toBe(a.digest);
       if (a.planId !== null && b.planId !== null) expect(b.planId).not.toBe(a.planId);
     };
-    const first = bound(runPlan());
+    const first = bound(runPlan("baseline"));
 
     // Re-running on untouched bytes reproduces the same plan.
-    expectSame(first, bound(runPlan()));
+    expectSame(first, bound(runPlan("unchanged")));
 
     // An oversized NODE_PATH cannot overflow the serialized launch context:
     // the launcher drops the optional lookup seed instead, so the snapshot
@@ -322,7 +337,7 @@ describe("Codex CLI selection inspection boundary", () => {
     // unaffected, and the same plan is produced — only lanes that would need
     // the dropped seed become unverifiable. 80KiB stays under Linux's
     // per-string MAX_ARG_STRLEN so the spawn itself is not the refusal.
-    expectSame(first, bound(runPlan({ ...planEnv, NODE_PATH: "/d".repeat(40 * 1024) })));
+    expectSame(first, bound(runPlan("oversized-node-path", { ...planEnv, NODE_PATH: "/d".repeat(40 * 1024) })));
 
     // A same-length byte change to the entrypoint is a different install. The
     // mtime is restored too, so only content can drive the plan-id change.
@@ -337,7 +352,7 @@ describe("Codex CLI selection inspection boundary", () => {
       utimesSync(path, stat.atime, stat.mtime);
     };
     mutate(entrypoint, "synthetic fixture", "synthetic FIXTURE");
-    const entryPlan = bound(runPlan());
+    const entryPlan = bound(runPlan("entrypoint-same-length-mutation"));
     expectChanged(first, entryPlan);
 
     // A same-length change to the vendored native backing is a different plan too.
@@ -347,16 +362,17 @@ describe("Codex CLI selection inspection boundary", () => {
       "vendor", selected.triple, "bin", "codex",
     );
     mutate(installedBackingExe, "native-backing", "native-BACKING");
-    expectChanged(entryPlan, bound(runPlan()));
+    expectChanged(entryPlan, bound(runPlan("backing-same-length-mutation")));
 
     // Removing the required backing makes the plan refuse, never silently rebind.
     // This refusal precedes the session scan, so it holds on every host.
     rmSync(join(prefix, "lib", "node_modules", "@openai", backingPkgName), { recursive: true, force: true });
-    const removed = runPlan();
-    expect(removed.status).toBe(0);
+    const removed = runPlan("required-backing-removed");
+    expect(removed.error, removed.diagnostic).toBeUndefined();
+    expect(removed.status, removed.diagnostic).toBe(0);
     const removedPlan = JSON.parse(removed.stdout);
-    expect(removedPlan.applicable).toBe(false);
-    expect(removedPlan.refusal).toBe("install_content_unverified");
+    expect(removedPlan.applicable, removed.diagnostic).toBe(false);
+    expect(removedPlan.refusal, removed.diagnostic).toBe("install_content_unverified");
   }, 60_000);
 });
 
