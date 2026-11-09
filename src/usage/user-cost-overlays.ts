@@ -21,6 +21,7 @@
 import type { OcxConfig, OcxProviderConfig, ProviderCostOverlay, PromptLengthPricing } from "../types";
 import type { ExpectedPriceOverlay } from "./expected-prices";
 import { validCost4 } from "./user-cost-validation";
+import { isValidCreditPriceUsd } from "../config/schema/leaf-validators";
 export { COST4_RATE_KEYS, isValidCost4Rate, validCost4, isValidPromptLengthPricing } from "./user-cost-validation";
 import { redactSecretString } from "../lib/redact";
 import { isSelectableCodexPoolAccount, MAIN_CODEX_ACCOUNT_ID } from "../codex/account-id";
@@ -265,7 +266,7 @@ export function refreshUserCostOverlays(config: OcxConfig): void {
   if (providers) {
     for (const [providerName, provider] of Object.entries(providers)) {
       const creditPrice = provider?.creditPriceUsd;
-      if (typeof creditPrice === "number" && Number.isFinite(creditPrice) && creditPrice >= 0) creditPrices.set(providerName, creditPrice);
+      if (isValidCreditPriceUsd(creditPrice)) creditPrices.set(providerName, creditPrice);
       const costs = provider?.modelCosts;
       if (!costs || typeof costs !== "object" || Array.isArray(costs)) continue;
       for (const [modelId, cost4] of Object.entries(costs)) {

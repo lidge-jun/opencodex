@@ -610,9 +610,21 @@ function isOpenRouterPriorityLowerBound(
  * catalogs), priority/long-context tiers applied. Null when usage or price is
  * missing so combos can fail closed.
  */
+/**
+ * Credit price for a logged provider label, with the same precedence as token prices: an exact
+ * configured provider name first, then a config-owned account identity, then the base label of an
+ * account-suffixed row (`kiro-<account>`).
+ */
+function creditPriceFor(provider: string, creditPrices: ReadonlyMap<string, number>): number | undefined {
+  if (creditPrices.size === 0) return undefined;
+  if (activeConfiguredProviders().has(provider)) return creditPrices.get(provider);
+  const namespace = activeAccountPricingProviders().get(provider) ?? baseProviderLabel(provider);
+  return creditPrices.get(provider) ?? creditPrices.get(namespace);
+}
+
 /** Billed cost from provider credits, when the provider has a configured credit price. */
 function creditCost(provider: string, usage: OcxUsage, creditPrices: ReadonlyMap<string, number>): CostBreakdown | null {
-  const price = creditPrices.get(provider);
+  const price = creditPriceFor(provider, creditPrices);
   if (price === undefined) return null;
   const credits = usage.providerCredits;
   if (typeof credits === "number" && Number.isFinite(credits) && credits >= 0) {

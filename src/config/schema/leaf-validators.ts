@@ -458,6 +458,11 @@ export const providerConfigSchema = z.object({
 
 export { providerRelativeSendPathConfigError } from "../provider-relative-send-path";
 
+/** A credit price is a finite number of USD per provider credit, zero or more. */
+export function isValidCreditPriceUsd(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
 /**
  * Validate `providers.<name>.modelCosts`: a plain object keyed by exact model
  * id, each value four USD-per-1M-token rates and an optional prompt-length policy.

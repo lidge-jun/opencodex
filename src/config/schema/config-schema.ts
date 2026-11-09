@@ -47,6 +47,7 @@ import {
   modelPreferHostedToolsConfigError,
   providerModelCostsConfigError,
   providerRelativeSendPathConfigError,
+  isValidCreditPriceUsd,
 } from "./leaf-validators";
 import { isValidProviderName, hasOwnProvider } from "../provider-name";
 import {
@@ -803,7 +804,7 @@ export const configSchema = z.object({
       });
     }
     const creditPrice = (provider as { creditPriceUsd?: unknown }).creditPriceUsd;
-    if (creditPrice !== undefined && !(typeof creditPrice === "number" && Number.isFinite(creditPrice) && creditPrice >= 0)) {
+    if (creditPrice !== undefined && !isValidCreditPriceUsd(creditPrice)) {
       ctx.addIssue({
         code: "custom",
         path: ["providers", redactSecretString(name), "creditPriceUsd"],

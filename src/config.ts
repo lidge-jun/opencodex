@@ -177,6 +177,7 @@ import {
   sanitizeRetryOn429ForLoad,
   sanitizeAnthropicSidecarInstanceForLoad,
   sanitizeModelCostsForLoad,
+  sanitizeCreditPriceForLoad,
   sanitizeCapabilityDeclarationsForLoad,
   warnInheritedFastWireConflicts,
   warnDegradedTopLevelOptIns,
@@ -234,6 +235,7 @@ function loadConfigUnobserved(): OcxConfig {
     sanitizeRetryOn429ForLoad(parsed);
     sanitizeAnthropicSidecarInstanceForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
+    sanitizeCreditPriceForLoad(parsed);
     sanitizeCapabilityDeclarationsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
