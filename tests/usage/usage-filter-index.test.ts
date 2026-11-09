@@ -655,7 +655,9 @@ console.log(JSON.stringify({ requests: summary.summary.requests, candidates: res
     }
     expect(indexGenerations()).toHaveLength(1);
     expect(indexRowCount(publishedGeneration())).toBe(rows.length);
-  });
+    // Two processes contend on one 30k-row rebuild; the loser's busy-retry backoff plus the
+    // double scan legitimately exceeds the default 5s timeout.
+  }, 30_000);
 
   test("a projection another process is still creating is waited for, not taken as foreign", async () => {
     const rows = Array.from({ length: 20 }, (_, index) => syntheticRow(index));
