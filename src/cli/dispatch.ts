@@ -913,6 +913,10 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleCommandcodeCommand } = await import("./integrations");
     return await handleCommandcodeCommand(deps.args.slice(1));
   },
+  telemetry: async deps => {
+    const { handleTelemetryCommand } = await import("./telemetry");
+    return await handleTelemetryCommand(deps.args.slice(1));
+  },
   help: async () => {
     printUsage();
     return 0;

@@ -238,6 +238,12 @@ async function handleLinkRoutesOnDemand(ctx: ManagementContext): Promise<Respons
   return handleLinkRoutes(ctx);
 }
 
+async function handleTelemetryRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/telemetry")) return null;
+  const { handleTelemetryRoutes } = await import("./management/telemetry-routes");
+  return handleTelemetryRoutes(ctx);
+}
+
 export async function handleManagementAPI(
   req: Request,
   url: URL,
@@ -395,6 +401,7 @@ export async function handleManagementAPI(
     ??     (await handleComboRoutes(ctx))
     ??     (await handleSystemRoutes(ctx))
     ??     (await handleLabRoutesOnDemand(ctx))
+      ?? (await handleTelemetryRoutesOnDemand(ctx))
       ?? (await handleUsageTimelineRoutes(ctx))
       ?? (await handleCompanionRoutes(ctx))
       ?? (await handleSidebarRoutes(ctx));

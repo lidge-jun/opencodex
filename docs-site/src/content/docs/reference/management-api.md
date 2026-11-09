@@ -61,7 +61,7 @@ route-specific results rather than repeating this table.
 | --- | --- | --- |
 | 401 | `opencodex admin token required` | The admin token or GUI session is missing, invalid, expired, origin-mismatched, or missing CSRF evidence |
 | 403 | `cross-origin request blocked` | The request origin is outside the management allowlist |
-| 403 | `cross-origin request blocked` with `code: "remember_requires_direct_origin"` | `POST /api/session/remember` only: this dashboard address cannot hold a remembered device (for example a standalone dashboard behind a TLS-terminating proxy); sign in without Remember |
+| 403 | `code: "remember_requires_direct_origin"` | `POST /api/session/remember` only: this dashboard address cannot hold a remembered device (for example a standalone dashboard behind a TLS-terminating proxy); sign in without Remember. The `error` text is `cross-origin request blocked` when the origin check refuses the request, and `Remember requires a direct HTTPS dashboard (or loopback) and matching Origin` when the origin check allows the request but the route still refuses it, for example because the address is not a direct HTTPS or loopback dashboard or no matching `Origin` header was sent; match on `code` |
 | 404 | `not_found` | No management route matched the method and path |
 | 413 | `request body too large` | A POST, PUT, or PATCH body exceeds the 2 MiB management limit |
 | 503 | `management API unavailable` | Admin credential initialization or hardening is unavailable |

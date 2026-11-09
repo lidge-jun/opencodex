@@ -61,7 +61,7 @@ stays unpinned. `tests/providers/alibaba-token-plan-wire-defaults.test.ts` cover
 replay flag.
 
 Trusted custom Responses relays may opt into `preserveResponsesInputItemIds` and `preserveResponsesMessageMetadata` for launcher replay (#6220). Ordinary destinations still strip IDs when `store: false` and private `internal_chat_message_metadata_passthrough`; xAI custom-call ID repair remains active.
-Google metadata follows the [destination-scoped replay projection](../providers/google.md#google-tool-call-thought-signature-replay).
+Exact upstream IDs in a provider’s `arkKimiResponsesModels` opt in to the Ark Kimi Responses projection. Drop only `output.encrypted_content` from includes. Drop only the cipher on an unreferenced empty-summary reasoning item immediately before a user message when preceded by a user or matching function call/result pair. A developer message is also an eligible following boundary, but only after a matching function call/result pair; a preceding user alone does not qualify. Preserve meaningful or unknown fields, and leave forward auth and other models untouched. Google metadata follows the [destination-scoped replay projection](../providers/google.md#google-tool-call-thought-signature-replay).
 
 xAI keeps `openai-chat` provider-wide; Grok 4.5/4.6/4.7 subscription Responses default to native `openai-responses`, retaining namespace, hosted-search and reasoning-replay normalization. The reserved `xai` OAuth transport is name-pinned
 to the Grok CLI gateway even if its saved base URL differs; custom provider IDs do not inherit this

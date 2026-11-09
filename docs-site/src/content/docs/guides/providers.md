@@ -916,7 +916,9 @@ Exhausted output budgets produce `incomplete` with `max_output_tokens`; the prox
 the requested budget. A replay-safe empty completion with budget remaining may retry once, within
 the existing send limit. Explicit `emptyCompletionRetry: false` or `OCX_EMPTY_COMPLETION_RETRY=0`
 disables that retry. Text, refusals, tool activity, and unknown stream events prevent replay and
-retain the original stream. The protection does not change other providers or their retry defaults.
+retain the original stream, as does a response snapshot that already carries aggregate `output_text`
+(an absent, `null` or empty `output_text` still allows the retry).
+The protection does not change other providers or their retry defaults.
 Replay requires explicit `store: false`, complete input, and client-executed tools only; a hosted
 tool such as `web_search` prevents automatic replay even if no tool event was observed.
 
@@ -1310,7 +1312,14 @@ prove your Muse Code plan covers Muse Wonder.
 **Read this before enabling it.** Meta scopes that credential to the Muse Code CLI, so
 using it here is an *unsupported* path. Meta does not authorize subscription coverage
 outside its own client, how these calls settle is not observable from the API, and you
-should treat every call as billable against your account. The key, imported or pasted, is copied into
+should treat every call as billable against your account. Meta can also refuse the request
+outright with HTTP 403 and *"This API key is billed to a Muse Code subscription. Muse Code
+subscriptions cover requests from the Muse Code client only. Use it in Muse Code, or use a
+pay-as-you-go API key for other clients."* OpenCodex reports that as a
+plan restriction on a valid credential, not a rejected or expired one, because no re-login
+can lift it: a Muse Code subscription key cannot serve any request outside the Muse Code
+client, and a pay-as-you-go Meta API key with the `meta-model` provider is the supported
+path. The key, imported or pasted, is copied into
 OpenCodex's auth store (`~/.opencodex/auth.json`, mode 0600) like every other OAuth
 credential. The dashboard shows a Terms-of-Service warning before the first login and
 before any reauthentication — the same treatment Anthropic and Google Antigravity get.

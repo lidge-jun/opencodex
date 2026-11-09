@@ -1237,6 +1237,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   noTemperatureModels: "editor",
   noTopPModels: "editor",
   noStopModels: "editor",
+  arkKimiResponsesModels: "editor",
   noPenaltyModels: "editor",
   noStructuredOutputModels: "editor",
   noJsonSchemaModels: "editor",
