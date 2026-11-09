@@ -644,6 +644,89 @@ function isResponseFormatCapabilityRefusal(
   return false;
 }
 
+function namesModerationRefusal(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("refused by moderation")
+    || lower.includes("blocked by moderation")
+    || lower.includes("flagged by moderation")
+    || lower.includes("content management policy")
+    || (lower.includes("moderation") && lower.includes("categories:"))
+  );
+}
+
+/**
+ * A provider or gateway moderation filter refusal is target-local in a heterogeneous combo:
+ * this model or provider's guardrail refused the prompt, but another target may serve it.
+ *
+ * It must precede the generic invalid_request_error stop.
+ */
+export function isProviderModerationRefusal(
+  status: number,
+  message: string,
+  code?: string | null,
+): boolean {
+  if (status !== 400 && status !== 422) return false;
+  if (!message || message.length > 32_768) return false;
+  const normalizedCode = normalizedFailureCode(code);
+  if (
+    isCyberPolicyCode(code)
+    || isNonReplayableUpstreamCode(code)
+    || normalizedCode === "origin_rejected"
+  ) {
+    return false;
+  }
+  if (normalizedCode === "moderation_refusal" || normalizedCode === "content_filter") {
+    return true;
+  }
+
+  let text = message.trim();
+  for (let depth = 0; depth < 3; depth += 1) {
+    if (text.startsWith("Provider error 400: ") || text.startsWith("Provider error 422: ")) {
+      text = text.slice(text.indexOf(": ") + 2).trim();
+    }
+    if (text.startsWith("data:") && !text.includes("\n")) {
+      text = text.slice("data:".length).trim();
+    }
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      break;
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) break;
+    const rec = payload as Record<string, unknown>;
+    const error = rec.error ?? rec;
+    if (!error || typeof error !== "object" || Array.isArray(error)) break;
+    const e = error as Record<string, unknown>;
+
+    if (typeof e.message === "string" && (e.message.startsWith("Provider error 400: ") || e.message.startsWith("Provider error 422: "))) {
+      text = e.message;
+      continue;
+    }
+
+    const candidateTexts: string[] = [];
+    if (typeof e.message === "string") candidateTexts.push(e.message);
+    if (typeof e.error === "string") candidateTexts.push(e.error);
+    if (typeof rec.message === "string") candidateTexts.push(rec.message);
+    if (e.param && typeof e.param === "object" && !Array.isArray(e.param)) {
+      const p = e.param as Record<string, unknown>;
+      if (typeof p.message === "string") candidateTexts.push(p.message);
+      if (typeof p.error === "string") candidateTexts.push(p.error);
+    }
+
+    const errCode = normalizedFailureCode(typeof e.code === "string" ? e.code : undefined);
+    if (errCode === "moderation_refusal" || errCode === "content_filter") return true;
+
+    for (const msg of candidateTexts) {
+      if (namesModerationRefusal(msg)) return true;
+    }
+    return false;
+  }
+
+  return namesModerationRefusal(text);
+}
+
 export function comboFailureCooldownScope(
   status: number,
   message: string,
@@ -665,6 +748,7 @@ export function comboFailureCooldownScope(
     // A capability gap says the target is healthy and the request did not fit it, which is the
     // same reason every other entry here refuses to cool a target.
     || isResponseFormatCapabilityRefusal(status, message, options?.code)
+    || isProviderModerationRefusal(status, message, options?.code)
   ) return "none";
   if (isProviderScopedQuotaCap(status, message, options?.code)) return "provider";
   // A rejected or unpaid credential is provider-wide evidence: every target that routes
@@ -879,6 +963,7 @@ export function comboFailureDecision(
   // reaches that list and returns terminal before anything can ask whether the next target
   // could have served the request (#4903).
   if (isResponseFormatCapabilityRefusal(status, message, options?.code)) return "hop";
+  if (isProviderModerationRefusal(status, message, options?.code)) return "hop";
   if (isAnthropicBillingFailure(status, message, options?.code)) return "hop";
   // Kiro's body validator rejects the request for the identity it was routed under. The account
   // layer rotates logins first; this is the no-alternate case, so the next combo target is the

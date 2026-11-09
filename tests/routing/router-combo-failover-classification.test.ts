@@ -8,7 +8,7 @@ import {
   pickComboTarget,
   targetKey,
 } from "../../src/combos";
-import { codexAccountModelRefusalHardStopCode, comboFailureCooldownScope, comboFailureDecision } from "../../src/combos/failover";
+import { codexAccountModelRefusalHardStopCode, comboFailureCooldownScope, comboFailureDecision, isProviderModerationRefusal } from "../../src/combos/failover";
 import { adapterFailureFromMessage, inferHttpStatusFromAdapterMessage } from "../../src/lib/errors";
 import type { OcxConfig } from "../../src/types";
 
@@ -715,3 +715,89 @@ describe("HTTP hard-code evidence excludes diagnostic types", () => {
     }
   });
 });
+
+describe("provider moderation refusal", () => {
+  const moderationPayload = {
+    error: {
+      message: "The input was refused by moderation. Categories: harassment.",
+      type: "AI_APICallError",
+      param: {
+        error: "The input was refused by moderation. Categories: harassment.",
+        statusCode: 400,
+        name: "AI_APICallError",
+        message: "The input was refused by moderation. Categories: harassment.",
+        isRetryable: false,
+        type: "AI_APICallError",
+      },
+    },
+    providerMetadata: {
+      gateway: {
+        routing: {
+          originalModelId: "humansand/ampersand-v0.1",
+          resolvedProvider: "humansand",
+          fallbacksAvailable: [],
+        },
+      },
+    },
+  };
+
+  test("hops without cooling on observed gateway moderation refusal", () => {
+    const rawBody = JSON.stringify(moderationPayload);
+    expect(isProviderModerationRefusal(400, rawBody)).toBe(true);
+    for (const message of [rawBody, `Provider error 400: ${rawBody}`, `data: ${rawBody}`]) {
+      expect(comboFailureDecision(400, message)).toBe("hop");
+      expect(comboFailureCooldownScope(400, message)).toBe("none");
+    }
+  });
+
+  test("hops on various provider moderation phrases", () => {
+    const phrases = [
+      "The input was refused by moderation. Categories: harassment.",
+      "The input was refused by moderation.",
+      "The prompt was refused by moderation.",
+      "The response was refused by moderation.",
+      "Prompt was blocked by moderation.",
+      "Input was flagged by moderation.",
+      "Request was filtered due to the prompt triggering content management policy.",
+    ];
+    for (const phrase of phrases) {
+      const body = JSON.stringify({ error: { message: phrase } });
+      expect(isProviderModerationRefusal(400, body)).toBe(true);
+      expect(comboFailureDecision(400, body)).toBe("hop");
+      expect(comboFailureCooldownScope(400, body)).toBe("none");
+    }
+  });
+
+  test("hops when error code is moderation_refusal or content_filter", () => {
+    for (const code of ["moderation_refusal", "content_filter"]) {
+      const body = JSON.stringify({ error: { code, message: "filtered" } });
+      expect(isProviderModerationRefusal(400, body, code)).toBe(true);
+      expect(comboFailureDecision(400, body, { code })).toBe("hop");
+      expect(comboFailureCooldownScope(400, body, { code })).toBe("none");
+    }
+  });
+
+  test("hard stops like cyber_policy outrank moderation wording", () => {
+    const body = JSON.stringify({
+      error: {
+        code: "cyber_policy",
+        message: "The input was refused by moderation.",
+      },
+    });
+    expect(isProviderModerationRefusal(400, body, "cyber_policy")).toBe(false);
+    expect(comboFailureDecision(400, body, { code: "cyber_policy" })).toBe("stop");
+  });
+
+  test("generic 400 errors without moderation phrasing stay terminal", () => {
+    for (const message of [
+      "Invalid JSON in request body",
+      "Missing required parameter 'messages'",
+      "Unknown model 'some-model'",
+    ]) {
+      const body = JSON.stringify({ error: { message } });
+      expect(isProviderModerationRefusal(400, body)).toBe(false);
+      expect(comboFailureDecision(400, body)).toBe("stop");
+    }
+  });
+});
+
