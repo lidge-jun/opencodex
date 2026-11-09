@@ -1900,9 +1900,7 @@ Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code, and any a6api-
 or Abliteration custom provider.
 
 **Kimi Coding Plan quota.** Account login and API-key providers on the canonical
-`https://api.kimi.com/coding/v1` endpoint read `/usages`. API-key providers on the regional
-`https://api.kimi.ai/coding/v1` endpoint read `/usages` from that same origin; account login
-stays on `api.kimi.com`. Plans that report
+`https://api.kimi.com/coding/v1` endpoint read `/usages`. Plans that report
 `usages.limit_month_total` (or `monthTotal`) show a monthly utilization bar, with
 `limit_month_code` (or `monthCode`) as the fallback when total usage is unavailable.
 The `used_ratio` / `usedRatio` fraction must be in `[0, 1]` before conversion to a consumed
