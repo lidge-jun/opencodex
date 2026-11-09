@@ -1,4 +1,6 @@
 {
+  "responses-forward-client-headers-live.test.ts": "responses",
+  "pool-retry-client-metadata.test.ts": "responses",
   "chat-inbound-tool-strict-defaults.test.ts": "responses",
   "responses-direct-chat-tool-choice.test.ts": "responses",
   "responses-native-output-identity.test.ts": "responses",

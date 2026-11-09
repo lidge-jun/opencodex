@@ -75,7 +75,7 @@ import {
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-models";
 import { createBoundedSameTargetRecovery, hasWorkflowSendObserver, isRequestExecutionBudget } from "../../lib/request-execution-budget";
 import type { SingleUseDispatchPermit } from "../../lib/request-execution-budget";
-import { codexRouteCredentialOwnership, type CodexCredentialOwnershipOptions } from "./core-auth";
+import { codexRouteCredentialOwnership, restoreResponsesClientMetadata, type CodexCredentialOwnershipOptions } from "./core-auth";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import {
   conversationStateBindingFromAuth,
@@ -506,6 +506,8 @@ export interface CodexPoolAccountRetryArgs {
     sendBudget?: TransientSendBudget;
     /** Root workflow this turn belongs to, so the move is charged there as well. */
     workflowRootId?: string;
+    /** Compact recovery keeps client metadata even on adapters that do not forward by default. */
+    compactionRecoveryKind?: "compaction-v1" | "compaction-v2";
   };
   firstAuthCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
   firstResponse: Response;
@@ -893,6 +895,11 @@ export async function retryCodexPoolOnAlternateAccount(
   try {
     retryHeaders = headersForCodexAuthContext(callerAuthHeaders, retryAuthCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission);
     retryProvider = applyCodexAuthContextToProvider(stripCodexRuntimeProviderFields(route.provider), retryAuthCtx, "pool");
+    // The alternate send is a second physical send of the same turn. Its credential-listed
+    // headers were rebuilt from the caller's sanitized set, so restore the provider's permitted
+    // client metadata the same way the first send did; the copier never overwrites a header the
+    // rebuild or the provider already selected.
+    restoreResponsesClientMetadata(retryHeaders, callerAuthHeaders, retryProvider, options.compactionRecoveryKind);
   } catch (error) {
     if (!(error instanceof CodexPoolAccountCreditsOffError) && !(error instanceof CodexInstallationIdUnavailableError)) throw error;
     // Body/entitlement reads above can outlive credit consent. No alternate will send:
