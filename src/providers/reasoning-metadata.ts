@@ -683,6 +683,9 @@ const GENERIC_PARAM_WORDS = new Set([
   "object",
   "null",
   "none",
+]);
+
+const EFFORT_VALUE_WORDS = new Set([
   "low",
   "medium",
   "high",
@@ -691,12 +694,17 @@ const GENERIC_PARAM_WORDS = new Set([
   "minimal",
   "standard",
   "default",
-  "effort",
   "level",
   "mode",
   "rung",
   "rungs",
 ]);
+
+function isEffortDescriptorInContext(text: string, matchIndex: number, param: string): boolean {
+  if (!EFFORT_VALUE_WORDS.has(param)) return false;
+  const preText = text.slice(Math.max(0, matchIndex - 32), matchIndex);
+  return /(?:reasoning[._\s]+effort|reasoning|effort)\s*[:=]?\s*['"`]?$/i.test(preText);
+}
 
 function diagnosticTextNamesOtherParameter(text: string): boolean {
   if (!text) return false;
@@ -705,40 +713,40 @@ function diagnosticTextNamesOtherParameter(text: string): boolean {
   const paramPattern = /\b(?:parameter|param|argument|arg|field|property)\s*(?:[:=]\s*['"`]?|['"`])([a-zA-Z0-9_\-\.]+)['"`]?/gi;
   for (let m = paramPattern.exec(s); m; m = paramPattern.exec(s)) {
     const p = cleanParam(m[1]);
-    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p)) return true;
+    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p) && !isEffortDescriptorInContext(s, m.index, p)) return true;
   }
 
   const prefixParamPattern = /\b['"`]?([a-zA-Z0-9_\-\.]+)['"`]?\s+(?:parameter|param|argument|arg|field|property)\b/gi;
   for (let m = prefixParamPattern.exec(s); m; m = prefixParamPattern.exec(s)) {
     const p = cleanParam(m[1]);
-    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p)) return true;
+    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p) && !isEffortDescriptorInContext(s, m.index, p)) return true;
   }
 
   const subjectMustBe = /\b['"`]?([a-zA-Z0-9_\-\.]+)['"`]?\s+must\s+be\b/gi;
   for (let m = subjectMustBe.exec(s); m; m = subjectMustBe.exec(s)) {
     const p = cleanParam(m[1]);
-    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p)) return true;
+    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p) && !isEffortDescriptorInContext(s, m.index, p)) return true;
   }
 
   const subjectIsRejection =
     /\b['"`]?([a-zA-Z0-9_\-\.]+)['"`]?\s+(?:is|are)\s+(?:invalid|unsupported|unrecognized|unknown|not\s+allowed|not\s+permitted|not\s+supported|required|missing)\b/gi;
   for (let m = subjectIsRejection.exec(s); m; m = subjectIsRejection.exec(s)) {
     const p = cleanParam(m[1]);
-    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p)) return true;
+    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p) && !isEffortDescriptorInContext(s, m.index, p)) return true;
   }
 
   const subjectColon =
     /\b['"`]?([a-zA-Z0-9_\-\.]+)['"`]?\s*:\s*(?:must\s+be|invalid|unsupported|unrecognized|unknown|expected|required|missing|not\s+allowed)\b/gi;
   for (let m = subjectColon.exec(s); m; m = subjectColon.exec(s)) {
     const p = cleanParam(m[1]);
-    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p)) return true;
+    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p) && !isEffortDescriptorInContext(s, m.index, p)) return true;
   }
 
   const rejectionExtra =
     /\b(?:unexpected|missing|cannot\s+(?:specify|use|set|pass|provide))\s+(?:field|param|parameter|argument|property)?\s*['"`]?([a-zA-Z0-9_\-\.]+)['"`]?/gi;
   for (let m = rejectionExtra.exec(s); m; m = rejectionExtra.exec(s)) {
     const p = cleanParam(m[1]);
-    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p)) return true;
+    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p) && !isEffortDescriptorInContext(s, m.index, p)) return true;
   }
 
   const nonEffortTerm = /\b(?:temperature|top_p|top_k|max_tokens|max_completion_tokens|max_output_tokens|min_tokens|stop|stop_sequences|presence_penalty|frequency_penalty|repetition_penalty|logit_bias|logprobs|top_logprobs|seed|tools|tool_choice|functions|function_call|response_format|stream|stream_options|user|service_tier|modalities|prediction|parallel_tool_calls|messages|prompt)\b/gi;
@@ -751,7 +759,7 @@ function diagnosticTextNamesOtherParameter(text: string): boolean {
   const rejectionDirect = /\b(?:invalid|unsupported|unrecognized|unknown)\s+['"`]?([a-zA-Z0-9_\-\.]+)['"`]?/gi;
   for (let m = rejectionDirect.exec(s); m; m = rejectionDirect.exec(s)) {
     const p = cleanParam(m[1]);
-    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p)) return true;
+    if (p.length > 0 && !EFFORT_PARAM_NAMES.has(p) && !GENERIC_PARAM_WORDS.has(p) && !isEffortDescriptorInContext(s, m.index, p)) return true;
   }
   return false;
 }

@@ -68,6 +68,18 @@ const UNLISTED_PARAM_DIAGNOSTIC_REFUSAL = JSON.stringify({
     message: "custom_field must be a string; reasoning_effort is high.",
   },
 });
+const MODE_INVALID_REFUSAL = JSON.stringify({
+  error: {
+    type: "invalid_request_error",
+    message: "reasoning effort is unsupported; mode is invalid",
+  },
+});
+const LEVEL_INVALID_REFUSAL = JSON.stringify({
+  error: {
+    type: "invalid_request_error",
+    message: "reasoning effort is unsupported; level is invalid",
+  },
+});
 const VENDOR_EFFORT_REFUSAL = JSON.stringify({ code: "invalid-argument", error: "Invalid reasoning effort." });
 const UNRELATED = JSON.stringify({ error: { type: "invalid_request_error", message: "Invalid upload request." } });
 
@@ -809,4 +821,82 @@ describe("rejected reasoning rungs", () => {
     }
   );
 
+  test.each([
+    ["mode", MODE_INVALID_REFUSAL],
+    ["level", LEVEL_INVALID_REFUSAL],
+  ])("classifies explicitly invalid %s as conflicting diagnostic subject", (_field, refusal) => {
+    expect(hasConflictingReasoningEffortCode(refusal)).toBe(true);
+    expect(isReasoningEffortRejection(refusal)).toBe(false);
+  });
+
+  test.each([
+    ["openai-chat", "mode", MODE_INVALID_REFUSAL],
+    ["openai-chat", "level", LEVEL_INVALID_REFUSAL],
+    ["openai-responses", "mode", MODE_INVALID_REFUSAL],
+    ["openai-responses", "level", LEVEL_INVALID_REFUSAL],
+  ] as const)(
+    "stops after one send without effort replay or learned rejection when %s is invalid (%s)",
+    async (adapter, field, refusal) => {
+      writeSnapshot(["low", "high", "max"]);
+      const outbound: Array<Record<string, unknown>> = [];
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(refusal, { status: 400, headers: { "content-type": "application/json" } });
+      }) as typeof fetch;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+
+      const cfg = adapter === "openai-chat" ? config() : passthroughConfig();
+      const response = await handleResponses(request(), cfg, logCtx);
+      const text = await response.text();
+
+      expect(outbound).toHaveLength(1);
+      expect(effortOf(outbound[0])).toBe("max");
+      expect(response.status).toBe(400);
+      expect(text).toContain(`${field} is invalid`);
+      expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
+      expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+    },
+  );
+
+  test.each([
+    ["openai-chat", "mode", MODE_INVALID_REFUSAL],
+    ["openai-chat", "level", LEVEL_INVALID_REFUSAL],
+    ["openai-responses", "mode", MODE_INVALID_REFUSAL],
+    ["openai-responses", "level", LEVEL_INVALID_REFUSAL],
+  ] as const)(
+    "combo stops immediately without walking ladder when %s is invalid (%s)",
+    async (adapter, field, refusal) => {
+      writeSnapshot(["low", "high", "max"]);
+      const attempts: Array<{ host: string; effort: unknown }> = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        attempts.push({ host: url.host, effort: effortOf(body) });
+        return new Response(refusal, { status: 400, headers: { "content-type": "application/json" } });
+      }) as typeof fetch;
+      const comboConfig = {
+        providers: {
+          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
+        },
+        combos: {
+          effort: {
+            strategy: "failover",
+            targets: [{ provider: "first", model: MODEL }, { provider: "fallback", model: MODEL }],
+          },
+        },
+      } as OcxConfig;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+
+      const response = await handleResponses(request(false, "combo/effort"), comboConfig, logCtx);
+      const result = await response.text();
+
+      expect(response.status).toBe(400);
+      expect(result).toContain(`${field} is invalid`);
+      expect(attempts).toEqual([
+        { host: "opencode.ai", effort: "max" },
+      ]);
+      expect(isReasoningEffortLearnedUnsupported(comboConfig.providers.first, MODEL, "max")).toBe(false);
+    },
+  );
 });
