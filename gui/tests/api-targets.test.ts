@@ -150,6 +150,20 @@ describe("two-plane API targets", () => {
     await expect(discoverApiTargets("")).rejects.toThrow("local machine plane returned invalid status");
   });
 
+  test("an unknown relay capability is legacy, not an invalid status", async () => {
+    // A relay that advertises a capability this dashboard does not understand is an older
+    // or newer peer. Treating it as malformed would break discovery; it must read as
+    // legacy so the preflight path applies.
+    globalThis.fetch = (async () => new Response(JSON.stringify({ ...status("relay"), relayTargetCheck: "expected-target-v2" }), {
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+    const targets = await discoverApiTargets("");
+    expect(targets.shared.transport).toBe("relay");
+    expect(targets.relayTargetCheck).toBeUndefined();
+    expect(targetsFromMachineStatus("", { ...status("relay"), relayTargetCheck: "expected-target-v2" } as MachineStatusV1).relayTargetCheck)
+      .toBeUndefined();
+  });
+
   test("standalone discovers nothing and sends no request", async () => {
     // The whole point of the runtime-role meta tag: a user who never enabled remote hub
     // must not have their browser probe a remote-hub endpoint. Discovery previously ran

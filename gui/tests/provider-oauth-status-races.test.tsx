@@ -265,3 +265,64 @@ test("a login status read predating account deletion cannot restore the deleted 
     expect(statuses.anthropic?.email).toBe("new@example.test");
   } finally { consent.mockRestore(); oldStatus.resolve(Response.json({})); freshStatus.resolve(Response.json({})); }
 });
+
+test("an old target's login failure cannot cancel the new target's login", async () => {
+  let actions!: ReturnType<typeof useProvidersOAuth>;
+  const requests: Array<{ path: string; method: string }> = [];
+  const notices: string[] = [];
+  let rejectOld!: (error: Error) => void;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), "http://localhost");
+    requests.push({ path: url.pathname, method: init?.method ?? "GET" });
+    if (url.pathname === "/old/api/oauth/login") {
+      return new Promise<Response>((_, reject) => { rejectOld = reject; });
+    }
+    return Response.json({ ok: true });
+  } });
+  function Harness({ base }: { base: string }) {
+    const aliveRef = useRef(true);
+    actions = useProvidersOAuth({ apiBase: base, t: key => key, aliveRef, accountSets: {}, setAccountSets: () => {},
+      setBusy: () => {}, setStatus: () => {}, setLoginInfo: () => {}, setOauthStatus: () => {},
+      notify: message => { notices.push(message); }, fetchConfig: async () => {}, fetchOauth: async () => {},
+      fetchAccountSets: async () => {}, fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+    return null;
+  }
+  await render(<Harness base="/old" />);
+  let login!: Promise<void>;
+  await act(async () => { login = actions.loginOAuth("anthropic"); await Promise.resolve(); });
+  await render(<Harness base="/new" />);
+  // The abandoned login is cancelled on the target it started against.
+  expect(requests.filter(request => request.path === "/old/api/oauth/login/cancel")).toHaveLength(1);
+  await act(async () => { rejectOld(new Error("old request failed")); await login; });
+  // Its failure path must not send a cancel (or a notice) to the new target.
+  expect(requests.filter(request => request.path === "/new/api/oauth/login/cancel")).toHaveLength(0);
+  expect(requests.filter(request => request.path === "/old/api/oauth/login/cancel")).toHaveLength(1);
+  expect(notices).toEqual([]);
+});
+
+test("a logout failure settling after a target change does not notify the new target", async () => {
+  let actions!: ReturnType<typeof useProvidersOAuth>;
+  const notices: string[] = [];
+  let releaseLogout!: (response: Response) => void;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/old/api/oauth/logout") {
+      return new Promise<Response>(resolve => { releaseLogout = resolve; });
+    }
+    return Response.json({ ok: true });
+  } });
+  function Harness({ base }: { base: string }) {
+    const aliveRef = useRef(true);
+    actions = useProvidersOAuth({ apiBase: base, t: key => key, aliveRef, accountSets: {}, setAccountSets: () => {},
+      setBusy: () => {}, setStatus: () => {}, setLoginInfo: () => {}, setOauthStatus: () => {},
+      notify: message => { notices.push(message); }, fetchConfig: async () => {}, fetchOauth: async () => {},
+      fetchAccountSets: async () => {}, fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+    return null;
+  }
+  await render(<Harness base="/old" />);
+  let logout!: Promise<void>;
+  await act(async () => { logout = actions.logoutOAuth("anthropic"); await Promise.resolve(); });
+  await render(<Harness base="/new" />);
+  await act(async () => { releaseLogout(new Response(null, { status: 503 })); await logout; });
+  expect(notices).toEqual([]);
+});

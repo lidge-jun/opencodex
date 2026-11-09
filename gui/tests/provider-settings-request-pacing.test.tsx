@@ -202,6 +202,33 @@ test("invalid key limits block save and discard restores the stored distribution
   await act(async () => { container.unmount(); });
 });
 
+test("per-key pacing bounds match the runtime validator", async () => {
+  const patches: ProviderUpdatePatch[] = [];
+  const container = await renderSettings({ name: "fixture", adapter: "openai-chat", baseUrl: "https://example.test", authMode: "key" },
+    async (_name, patch) => { patches.push(patch); return { ok: true }; });
+  await act(async () => { container.querySelector<HTMLInputElement>(".pwi-pacing-toggle input")!.click(); });
+  const keyNumbers = container.querySelectorAll<HTMLInputElement>(".pwi-key-limits input");
+  const save = () => container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!;
+
+  // RPM above the runtime's 60_000 cap is refused, never clamped or saved.
+  await setInput(keyNumbers[0]!, "60001");
+  await act(async () => { save().click(); });
+  expect(patches).toEqual([]);
+  expect(container.textContent).toContain("Per-key limits must be positive");
+
+  // Interval above the runtime's 3_600_000 ms cap is refused too.
+  await setInput(keyNumbers[0]!, "15");
+  await setInput(keyNumbers[1]!, "3600001");
+  await act(async () => { save().click(); });
+  expect(patches).toEqual([]);
+
+  // The exact upper bounds from the runtime validator are accepted.
+  await setInput(keyNumbers[1]!, "3600000");
+  await act(async () => { save().click(); });
+  expect(patches[0]?.requestPacing).toMatchObject({ keys: { requestsPerMinute: 15, minIntervalMs: 3_600_000 } });
+  await act(async () => { container.unmount(); });
+});
+
 test("pacing grids keep every field and the add button on one row", async () => {
   const css = await Bun.file(new URL("../src/styles/provider-workspace-settings.css", import.meta.url)).text();
   // The provider grid owns three inputs (rpm, interval, concurrency) and the model

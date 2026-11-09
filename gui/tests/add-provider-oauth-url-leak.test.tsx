@@ -320,6 +320,38 @@ test("a target change clears the old login UI and an old completion cannot resto
   expect(host.querySelector('[data-testid="oauth-login-info"]')!.textContent).toBe("https://b.example/login");
 });
 
+test("a target change resets the add-provider modal's busy state and device URL", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const renderModal = async (targetKey: string) => {
+    await act(async () => {
+      root ??= createRoot(host);
+      root.render(
+        <LanguageProvider>
+          <AddProviderModal apiBase="" targetKey={targetKey} existingNames={[]} initialTier="paid" onClose={() => {}} onAdded={() => {}} />
+        </LanguageProvider>,
+      );
+    });
+  };
+  await renderModal("hub-a");
+  await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
+  clickByText("Claude");
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  clickByText("Log in with Claude");
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  await act(async () => { pendingLogins.shift()?.(A_URL); await new Promise((r) => setTimeout(r, 20)); });
+  expect(host.querySelector(".login-url-block-text")?.textContent).toBe(A_URL);
+
+  await renderModal("hub-b");
+  // The old target's spinner and device URL must not survive under the new label.
+  expect(host.querySelector(".login-url-block-text")).toBeNull();
+
+  // The new target's own login still works.
+  clickByText("Log in with Claude");
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  await act(async () => { pendingLogins.shift()?.(B_URL); await new Promise((r) => setTimeout(r, 20)); });
+  expect(host.querySelector(".login-url-block-text")?.textContent).toBe(B_URL);
+});
+
 test("pagehide clears the add-provider OAuth hint and allows another login", async () => {
   await mountModal();
   clickByText("Claude");

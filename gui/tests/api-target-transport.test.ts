@@ -126,3 +126,85 @@ test("a relay 409 target_changed requests rediscovery", async () => {
   expect(changed).toBe(1);
   win.removeEventListener(TARGET_CHANGED_EVENT, onChange);
 });
+
+test("a standalone embedded base is authoritative only before discovery", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async (input) => {
+    calls.push(String(input));
+    return Response.json({ ok: true });
+  }) as typeof fetch;
+  configureApiTargets(standaloneApiTargets(""));
+  const capture = captureApiTarget("shared", "http://embedded.example");
+  expect(capture).toMatchObject({
+    apiBase: "http://embedded.example",
+    origin: "http://embedded.example",
+    transport: "same-origin",
+    standalone: true,
+  });
+  expect((await targetFetch(capture, "http://embedded.example/api/providers", { method: "POST", body: "{}" })).status).toBe(200);
+  // The capture still bounds the destination: another origin is refused.
+  expect((await targetFetch(capture, "http://other.example/api/providers", { method: "POST", body: "{}" })).status).toBe(409);
+  // Once discovery configures a connected plane, the embedded base is no longer the target.
+  configureApiTargets(relayTargets(HUB_A, "expected-target-v1"));
+  expect((await targetFetch(capture, "http://embedded.example/api/providers", { method: "POST", body: "{}" })).status).toBe(409);
+  expect(calls).toEqual(["http://embedded.example/api/providers"]);
+});
+
+test("a configured relay ignores a caller-supplied base", async () => {
+  const seen: string[] = [];
+  globalThis.fetch = (async (input) => {
+    seen.push(String(input));
+    return Response.json({ ok: true });
+  }) as typeof fetch;
+  configureApiTargets(relayTargets(HUB_A, "expected-target-v1"));
+  const capture = captureApiTarget("shared", "https://evil.example");
+  expect(capture.apiBase).toBe("/api/machine/hub-relay");
+  expect(capture.origin).toBe(HUB_A);
+  expect(capture.standalone).toBeUndefined();
+  expect((await targetFetch(capture, "https://evil.example/api/providers", { method: "PATCH" })).status).toBe(409);
+  expect(seen).toEqual([]);
+});
+
+test("a 401 retry keeps the captured expected target on both attempts", async () => {
+  const { installApiAuthFetch, installApiSessionFromHtml, resetApiAuthFetchForTests } = await import("../src/api");
+  const sessionHtml = (token: string) => [
+    "<!doctype html><html><head>",
+    `<meta name="opencodex-session-token" content="${token}">`,
+    `<meta name="opencodex-session-csrf" content="${token}-csrf">`,
+    '<meta name="opencodex-session-origin" content="http://127.0.0.1:4800">',
+    `<meta name="opencodex-session-server-origin" content="${HUB_A}">`,
+    "</head><body></body></html>",
+  ].join("");
+  const attempts: Array<{ expected: string | null; key: string | null }> = [];
+  let minted = 0;
+  const raw = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), "http://127.0.0.1:4800/");
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    if (url.pathname.endsWith("/opencodex-session")) {
+      minted += 1;
+      return new Response(sessionHtml("ocx_session_fresh"), { status: 200, headers: { "Content-Type": "text/html" } });
+    }
+    attempts.push({ expected: headers.get("x-opencodex-expected-target"), key: headers.get("x-opencodex-api-key") });
+    if (attempts.length === 1) return new Response("unauthorized", { status: 401 });
+    return Response.json({ ok: true });
+  }) as typeof fetch;
+  Object.defineProperty(win, "fetch", { configurable: true, writable: true, value: raw });
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: raw });
+  try {
+    resetApiAuthFetchForTests();
+    configureApiTargets(relayTargets(HUB_A, "expected-target-v1"));
+    installApiAuthFetch();
+    Object.defineProperty(globalThis, "fetch", { configurable: true, value: win.fetch });
+    expect(installApiSessionFromHtml("shared", sessionHtml("ocx_session_old"))).toBe(true);
+    const capture = captureApiTarget("shared");
+    const response = await targetFetch(capture, "/api/machine/hub-relay/api/providers?name=p", { method: "PATCH", body: "{}" });
+    expect(response.status).toBe(200);
+    expect(attempts).toHaveLength(2);
+    // The retry re-reads authentication but never re-derives the expected target.
+    expect(attempts[0]).toEqual({ expected: HUB_A, key: "ocx_session_old" });
+    expect(attempts[1]).toEqual({ expected: HUB_A, key: "ocx_session_fresh" });
+    expect(minted).toBe(1);
+  } finally {
+    resetApiAuthFetchForTests();
+  }
+});
