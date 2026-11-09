@@ -9,6 +9,7 @@ import {
   putAutoSwitchThreshold,
 } from "../codex-auto-switch";
 import type { AutoSwitchFeedback } from "../components/CodexAutoSwitchSetting";
+import { captureApiTarget, isApiTargetCaptureCurrent, targetFetch } from "../api";
 
 export interface CodexAutoSwitchController {
   /** Always a number — seeded with the default so the card never waits on /active. */
@@ -154,9 +155,13 @@ export function useCodexAutoSwitch(
     clearFeedback();
     setSaving(true);
     revisionRef.current += 1;
+    const capture = captureApiTarget("shared", apiBase);
     try {
-      const ok = await putAutoSwitchThreshold(apiBase, next);
+      const ok = await putAutoSwitchThreshold(apiBase, next, (input, init) => targetFetch(capture, input, init));
       revisionRef.current += 1;
+      // The accepted write belongs to the target that started it; a switch must not
+      // apply its threshold or announce success on the new one.
+      if (!isApiTargetCaptureCurrent(capture)) return false;
       if (ok) {
         deferredServerValueRef.current = null;
         apply(next);

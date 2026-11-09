@@ -8,6 +8,7 @@ import type { AnthropicInstanceId } from "../../../../src/providers/anthropic-in
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import { getPoolSettings, putPoolSettings, PoolSettingsSaveStateUnknownError } from "../../pool-settings";
+import { captureApiTarget, isApiTargetCaptureCurrent, targetFetch } from "../../api";
 import "../../styles/anthropic-native-messages.css";
 import {
   ACCOUNT_POOL_QUOTA_WINDOWS,
@@ -171,6 +172,7 @@ export default function AnthropicAccountPoolSettings({
   }) => {
     const requestApiBase = apiBase;
     const requestProvider = provider;
+    const capture = captureApiTarget("shared", apiBase);
     saveAbortRef.current?.abort();
     const controller = new AbortController();
     saveAbortRef.current = controller;
@@ -190,8 +192,8 @@ export default function AnthropicAccountPoolSettings({
         stickyLimit: next.stickyLimit,
         quotaWindow: next.quotaWindow,
         nativeMessages: next.nativeMessages,
-      }, (input, init) => fetch(input, init), { signal: controller.signal });
-      if (!currentRequest()) return;
+      }, (input, init) => targetFetch(capture, input, init), { signal: controller.signal });
+      if (!currentRequest() || !isApiTargetCaptureCurrent(capture)) return;
       if (!json) throw new Error("save");
       const savedThreshold = typeof json.autoSwitchThreshold === "number" ? json.autoSwitchThreshold : next.threshold;
       const savedStrategy = normalizeAccountPoolStrategy(json?.strategy ?? next.strategy);
