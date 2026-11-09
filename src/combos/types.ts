@@ -288,6 +288,8 @@ export function comboConfigIssues(
       path: ["jevEffortMode"],
       message: 'jevEffortMode must be "decide" or "client"',
     });
+  } else if (body.jevEffortMode === "client" && body.strategy !== "jev") {
+    issues.push({ path: ["jevEffortMode"], message: 'jevEffortMode "client" is only valid with strategy "jev"' });
   }
   if (body.imageInput !== undefined && body.imageInput !== "auto" && body.imageInput !== "disabled") {
     issues.push({ path: ["imageInput"], message: 'imageInput must be "auto" or "disabled"' });

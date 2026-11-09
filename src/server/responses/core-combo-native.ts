@@ -269,10 +269,11 @@ function applyComboEffort(
     ? (body.reasoning as Rec).effort
     : undefined;
   const hadEffort = Object.hasOwn(body, "reasoning_effort");
+  // With no string anywhere, a present top-level value (an explicit null) is passed on as before.
   const callerEffort = typeof body.reasoning_effort === "string" ? body.reasoning_effort
-    : typeof nested === "string" ? nested : undefined;
+    : typeof nested === "string" ? nested : hadEffort ? body.reasoning_effort : undefined;
   const shaped = concreteComboRequestBody(
-    callerEffort !== undefined ? { reasoning: { effort: callerEffort } } : {},
+    callerEffort !== undefined || hadEffort ? { reasoning: { effort: callerEffort } } : {},
     target,
     comboDefaultEffort(config, comboId),
     supportedLadderFor({ provider: targetRoute.provider, modelId: targetRoute.modelId }),

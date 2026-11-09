@@ -6,7 +6,7 @@ import { handleChatCompletions } from "../../src/server/chat-completions";
 import { handleResponses } from "../../src/server/responses/core";
 import { getActiveTurnCount } from "../../src/server/lifecycle";
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
-import { clearComboSelectionState, clearComboTargetCooldowns, concreteComboRequestBody, normalizeComboConfig } from "../../src/combos";
+import { clearComboSelectionState, clearComboTargetCooldowns, comboConfigIssues, concreteComboRequestBody, normalizeComboConfig } from "../../src/combos";
 import { getRequestLogEntries, type RequestLogContext } from "../../src/server/request-log";
 import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import { clearResponseStateForTests, flushResponseState } from "../../src/responses/state";
@@ -314,6 +314,25 @@ test("jevEffortMode normalizes to decide unless the exact client literal opts in
   expect(normalizeComboConfig({ ...combo, jevEffortMode: "client" }).jevEffortMode).toBe("client");
   expect(normalizeComboConfig({ ...combo, jevEffortMode: "Client" as never }).jevEffortMode).toBe("decide");
 });
+
+test("jevEffortMode client is refused outside a JEV combo", () => {
+  const f = fixture("native", "typesafe", "low");
+  const combo = f.config.combos!.auto!;
+  const issues = (raw: unknown) => comboConfigIssues("auto", raw, f.config.providers).map(issue => issue.message);
+  expect(issues({ ...combo, jevEffortMode: "client" })).toEqual([]);
+  expect(issues({ ...combo, strategy: "failover", jevEffortMode: "client" }))
+    .toContain('jevEffortMode "client" is only valid with strategy "jev"');
+  expect(issues({ ...combo, strategy: "failover", jevEffortMode: "decide" }))
+    .not.toContain('jevEffortMode "client" is only valid with strategy "jev"');
+});
+
+test("native: an explicit null with no nested effort reaches the wire as before", async () => {
+  const f = fixture("native", "typesafe", "low");
+  Object.assign(f.config.combos!.auto!, { jevEffortMode: "client" });
+  const { response } = await send("native", f.config, { reasoning_effort: null });
+  expect(response.status).toBe(200);
+  expect(f.inference.bodies[0]!.reasoning_effort).toBeNull();
+}, 30_000);
 
 test("a JEV combo whose only allowlist is unsupported names that target in its 503", async () => {
   const f = fixture("responses", "model", "high");
