@@ -76,7 +76,6 @@ export function useProvidersCrud({
     const name = removeConfirmName;
     if (!name || removeBusyRef.current) return;
     const pending = pendingRemoveRef.current;
-    pendingRemoveRef.current = null;
     const capture = pending?.name === name ? pending.capture : renderCapture;
     // The dashboard moved while the confirmation was open: refuse rather than delete the
     // same-named provider on the new target.
@@ -91,6 +90,7 @@ export function useProvidersCrud({
     try {
       const res = await targetFetch(capture, `${apiBase}/api/providers?name=${encodeURIComponent(name)}`, { method: "DELETE" });
       if (res.ok) {
+        pendingRemoveRef.current = null;
         const data = await res.json().catch(() => ({})) as { defaultProvider?: unknown; dependentShadowIntercept?: unknown };
         const defaultProvider = typeof data.defaultProvider === "string" ? data.defaultProvider : null;
         const shadow = activeShadowDependency(data);

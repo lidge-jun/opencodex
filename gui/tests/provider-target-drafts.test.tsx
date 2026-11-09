@@ -827,9 +827,9 @@ describe("a render gap cannot retarget a provider mutation", () => {
       }
       return Response.json({});
     }) as typeof fetch;
-    function Harness() {
+    function Harness({ base = "/same", target = "hub-a" }: { base?: string; target?: string }) {
       crud = useProvidersCrud({
-        apiBase: "/same", targetKey: "hub-a", t: key => key,
+        apiBase: base, targetKey: target, t: label => label,
         removeBusyRef: { current: false } as React.MutableRefObject<boolean>,
         workspaceSelected: null, setWorkspaceSelected: () => {}, setRemoveConfirmName: () => {},
         notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchProviderQuotas: async () => {},
@@ -839,10 +839,13 @@ describe("a render gap cannot retarget a provider mutation", () => {
     configureApiTargets(relayTargets("/same", "hub-a"));
     await render(<Harness />);
     await act(async () => { await crud.removeProvider("provider-a"); });
-    // B, then back to A: the confirmation is older than the current generation.
+    // The dialog is open on A; the page re-renders on B before the user confirms.
     configureApiTargets(relayTargets("/same", "hub-b"));
+    await render(<Harness target="hub-b" />);
     await act(async () => { await crud.confirmRemoveProvider("provider-a"); });
+    // Back on A, the same confirmation is older than the current generation.
     configureApiTargets(relayTargets("/same", "hub-a"));
+    await render(<Harness target="hub-a" />);
     await act(async () => { await crud.confirmRemoveProvider("provider-a"); });
     expect(deletes).toEqual([]);
   });
