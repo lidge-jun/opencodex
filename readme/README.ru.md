@@ -15,7 +15,7 @@
 </p>
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx start
 ```
 
@@ -88,7 +88,7 @@ opencodex — лёгкий локальный шлюз между вашими �
 ### Личная установка (CLI)
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+; рантайм Bun подключается автоматически
+npm install -g --allow-scripts=bun @bitkyc08/opencodex   # Node 18+; рантайм Bun подключается автоматически
 ocx start                         # прокси + панель управления на localhost:10100
 ```
 
@@ -252,7 +252,7 @@ bun run src/cli/index.ts start
 <summary>Для агентов</summary>
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx start     # или `ocx service`
 ocx init      # интерактивная настройка: пишет ~/.opencodex/config.json и подключает Codex
 ```

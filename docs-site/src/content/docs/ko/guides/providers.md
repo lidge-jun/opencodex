@@ -561,6 +561,7 @@ opencodex를 로컬 OpenAI 호환 서버로 향하게 하세요 — 보통은 �
 (`headers`, `noReasoningModels`, `noVisionModels`, `models`, …)는
 [설정 레퍼런스](/ko/reference/configuration/)를 참고하세요.
 
+설정과 검증 단계는 [사용자 지정 원격 게이트웨이 검증](/ko/guides/custom-gateway/)을 참고하세요.
 
 ### Antigravity 쿼터 조회 실패 확인
 

@@ -14,7 +14,7 @@ description: Установите и используйте opencodex из аг�
 Установите опубликованный пакет и убедитесь, что `ocx` доступен в `PATH`:
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
 ```
 
