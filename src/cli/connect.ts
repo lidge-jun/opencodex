@@ -156,7 +156,7 @@ function observeLocalCodexEffortLadder(selected?: ResolvedCodexRuntime): Readonl
  * would run its own probe, which is how the two checks could disagree about the ladder within
  * a single `ocx connect`.
  */
-function catalogObserver(deps: ClientCatalogProbeDeps | undefined): CatalogCompatibilityDeps {
+export function catalogObserver(deps: ClientCatalogProbeDeps | undefined): CatalogCompatibilityDeps {
   const selected = deps?.selectedCodexRuntime;
   return { supportedEfforts: deps?.supportedEfforts ?? (() => observeLocalCodexEffortLadder(selected)) };
 }

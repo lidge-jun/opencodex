@@ -393,11 +393,12 @@ describe.skipIf(process.platform === "win32")("app-bundled CLI fallback for conn
     };
     expect(codexSupportedReasoningEfforts({
       ...f.deps, execFileSync: exec, commandCandidates: () => [standalone],
+      selectedRuntime: { command: standalone, version: "0.167.0", source: "installed" },
     })).toEqual(new Set(["low", "high"]));
     expect(spawned).toEqual([standalone]);
   });
 
-  test("a selected runnable bare command keeps its own answer instead of borrowing the app's ladder", () => {
+  test("a selected runnable bare command keeps its own answer instead of borrowing the app's ladder", async () => {
     const f = fixture();
     f.versions.set(f.current, "0.166.0-alpha.6");
     const spawned: string[] = [];
@@ -411,6 +412,10 @@ describe.skipIf(process.platform === "win32")("app-bundled CLI fallback for conn
     ] as const) {
       expect(codexSupportedReasoningEfforts({
         ...f.deps, execFileSync: exec, commandCandidates: () => [selectedRuntime.command], selectedRuntime,
+      })).toBeNull();
+      expect(await loadBundledCodexCatalogAsync({
+        ...f.deps, commandCandidates: () => [selectedRuntime.command], selectedRuntime,
+        execFileSync: exec as never, execFile: async (file, args) => exec(file, args),
       })).toBeNull();
     }
     expect(spawned).not.toContain(f.current);
