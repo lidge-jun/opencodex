@@ -1077,7 +1077,8 @@ describe("filtered usage index availability", () => {
 
   // chmod cannot make a Windows directory unwritable, so there this would build the index and
   // assert nothing about permissions. The degrade itself is the platform-neutral catch-all in
-  // readUsageFilterCandidates, which the contention and foreign-file cases cover everywhere.
+  // readUsageFilterCandidates, which the vanishing-after-refresh case below reaches on every
+  // platform; contention and the foreign file cover the busy and explicit fallbacks.
   test.skipIf(process.platform === "win32")("an unwritable home degrades to the streaming read", async () => {
     const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
     writeRows(rows);
@@ -1139,7 +1140,19 @@ describe("filtered usage index availability", () => {
     const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
     writeRows(rows);
     const indexPath = usageFilterIndexPath(testDir);
-    setUsageFilterIndexTestHooksForTests(hooks(dbPath => { rmSync(dbPath, { force: true }); }));
+    let removed = false;
+    setUsageFilterIndexTestHooksForTests(hooks(dbPath => {
+      const existed = existsSync(dbPath);
+      // A scanner can hold a just-closed file on Windows for a moment; that is not the subject.
+      for (let attempt = 0; ; attempt += 1) {
+        try { rmSync(dbPath, { force: true }); break; } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (attempt >= 4 || (code !== "EBUSY" && code !== "EPERM")) throw error;
+          Bun.sleepSync(25);
+        }
+      }
+      removed = existed && !existsSync(dbPath);
+    }));
     try {
       const result = await getFilteredUsageAggregate({ provider: "openai" });
       expect(summary(result).summary.requests)
@@ -1148,6 +1161,8 @@ describe("filtered usage index availability", () => {
     } finally {
       setUsageFilterIndexTestHooksForTests(null);
     }
+    // Without this the streaming fallback would satisfy every assertion even if the hook never ran.
+    expect(removed).toBe(true);
     expect(existsSync(indexPath)).toBe(false);
   }
 
