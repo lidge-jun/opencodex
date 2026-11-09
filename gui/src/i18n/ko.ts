@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 import type { TKey } from "./en";
 
 /**
@@ -139,6 +140,7 @@ export const ko: Record<TKey, string> = {
   ...connectV2Copy("ko"),
   ...startupV2Copy("ko"),
   ...proxyV2Copy("ko"),
+  ...telemetryProfileCopy("ko"),
   "claude.tierDefaults.unset": "미지정 (기존 Claude 설정 유지)",
   "claude.tierDefaults.recovery": "적용이 중단되었고 자동 복원에 실패했어요. 다시 시도하기 전에 아래 백업을 확인하세요.",
   "claude.tierDefaults.title": "CLI 티어 기본 모델",

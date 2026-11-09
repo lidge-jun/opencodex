@@ -274,6 +274,50 @@ opencodex never includes any of the following in telemetry payloads:
 - Usage from the UTC calendar day on which consent or disclosure was recorded (`formatUtcDay(decidedAt ?? noticeShownAt)`) or any earlier UTC day — only completed UTC calendar days strictly after the consent/disclosure day (`day > formatUtcDay(decidedAt ?? noticeShownAt)`) are ever sent.
 - Usage from any UTC calendar day covered by an `OCX_TELEMETRY=0` or `DO_NOT_TRACK=1` opt-out, including every day a proxy started with it kept running and the day the opt-out ended (`day <= ineligibleThroughDay`, and nothing at all while `envOptOutActiveSince` is set).
 
+## Public profile and rank (opt-in)
+
+Separately from the anonymous telemetry above, you can connect a **public profile** to appear on the
+[leaderboard](/dashboard/#leaderboard) and see where your own usage ranks over the last day, week and month. It
+is off unless you connect it yourself, and it never changes your anonymous telemetry choice; connecting
+needs anonymous telemetry to be on, because the profile's totals come from the same local daily aggregate.
+
+- **Connect** from the *Public profile & rank* card on the dashboard Home, or with
+  `ocx telemetry profile connect --handle <handle> [--name <display name>] [--avatar <colour>]` in an
+  interactive terminal (the prompt defaults to no). You choose a handle (3–24 lowercase letters, digits or
+  hyphens), a display name and an avatar colour from a fixed palette. No e-mail address or account is asked
+  for. The collector returns a secret that the proxy stores in `<OPENCODEX_HOME>/telemetry-profile.json`
+  (mode `0600`); it is never shown, printed or returned by the dashboard API, and the collector keeps only
+  its SHA-256 hash. Like the telemetry decision, connecting is refused for agents
+  (`agent_consent_required`), non-interactive terminals (`tty_required`) and remembered dashboard
+  sessions.
+- **What is public**: the handle, display name and colour, your rank, and per day the request count, the
+  five token buckets and per-model-family request and token totals (the closed `modelFamily` list).
+  The collector's profile and leaderboard responses carry `x-robots-tag: noindex`; the
+  [dashboard](/dashboard/#leaderboard) page renders them in the browser and is itself a public page.
+- **What is sent**: once per completed UTC day strictly after the day you connected, at most one day per
+  tick and no more than 7 days back, `POST /v1/profiles/me/days` with exactly those totals. Profile
+  submissions carry no install ID, install-day hash, batch ID, version, platform, install channel, provider
+  name or kind, error, prompt, output, key, account or path, and run on their own timer. Nothing is sent
+  while anonymous telemetry is off (`OCX_TELEMETRY=0`, `DO_NOT_TRACK=1`, declined or awaiting the notice);
+  the profile stays connected and resumes when telemetry is on again.
+- **See it**: `ocx telemetry profile status` shows the profile, a summary of the next day it would send, and
+  your ranks; `ocx telemetry profile status --json` includes the exact payload as `preview`. The card shows the
+  profile and ranks.
+- **Disconnect** at any time, from the card or with `ocx telemetry profile disconnect` (always allowed,
+  including for agents, with the proxy stopped and with telemetry off). It deletes the profile and every day
+  submitted for it on the collector. If the collector cannot be reached, the deletion stays pending, nothing
+  more is sent, and the proxy retries on every tick and on its next start. Disconnecting and connecting again
+  is also how to replace the secret.
+- **Ranking**: for each period the collector ranks profiles with a positive total using standard
+  competition ranking (ties share a rank). Totals are self-reported and checked for consistency and daily
+  limits, each day is accepted once, and the first submission for a day wins.
+- **Abuse controls**: reserved handles, display names of 1–32 letters, digits, spaces and `. _ ' -` that cannot
+  look like a web address, five profile
+  creations per network per hour, per-profile submission limits, profiles that never submit are removed after
+  14 days, and maintainers can hide a profile from every public view.
+- **Sign-in with GitHub** is not available yet: it needs a GitHub OAuth app that the maintainers have not
+  created.
+
 ## Storage, retention, and collector source
 
 - **Local install ID and daily hash rotation** — when telemetry sends its first report, the proxy
