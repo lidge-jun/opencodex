@@ -60,7 +60,10 @@ test.each(["connected", "standalone", "foreign", "pending"])("%s runtime is neve
       return mode !== "connected";
     },
     findLive: async () => ({ pid: 42, role: mode === "standalone" ? "standalone" : "client" }),
-    verify: () => null, alive: () => true,
+    // The connected and standalone cases must prove the early exclusions are what stop the cleanup:
+    // verification has to succeed there, or either check could be removed without failing. A
+    // foreign runtime is the case identity verification is supposed to reject.
+    verify: () => mode === "foreign" ? null : 42, alive: () => true,
     stopManager: () => { calls.push("manager"); }, stop: async () => { calls.push("kill"); },
   });
   // A proxy this home cannot prove is its own, and an interrupted disconnect, are not this

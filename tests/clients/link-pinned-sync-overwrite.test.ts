@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateRawSync } from "node:zlib";
 import { remotePinnedSyncArgv, ROUTE_OVERWRITE_MIN_CHILD_VERSION } from "../../src/link/ssh-argv";
-import { POWERSHELL_ENCODED_MAX } from "../../src/link/remote-windows";
+import { POWERSHELL_ENCODED_MAX, windowsScriptData } from "../../src/link/remote-windows";
 import { classifySyncResult } from "../../src/cli/sync-fanout";
 
 /**
@@ -76,6 +76,10 @@ test("the Windows overwrite sync carries the same gate and ocx-child refusal wit
   expect(overwrite).toContain("$b=@('2','100','0')");
   expect(overwrite).toContain("[Console]::Error.WriteLine('ocx-fanout:child-ocx-lacks-overwrite')");
   expect(overwrite).toContain("StartsWith('ocx-child')){[Console]::Error.WriteLine('ocx-fanout:child-ephemeral-no-overwrite');exit 121}");
+  // The gate passing proves nothing about the payload: assert the Child is asked for this link
+  // and both overwrite options, so a builder that drops one cannot still satisfy the gate checks.
+  expect(windowsScriptData(overwrite)?.args)
+    .toEqual(["sync", "--expect-link", linkId, "--json", "--overwrite-conflict", "--overwrite-client", "pi"]);
   const plain = windowsScript(remotePinnedSyncArgv(linkId, "windows"));
   expect(plain).toContain("$b=@('2','93','0')");
   expect(plain).toContain("ocx-fanout:child-ocx-lacks-expect-link");

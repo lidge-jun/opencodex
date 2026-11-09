@@ -29,6 +29,9 @@ function fixture(read: () => string) {
     prepareDisconnectedClientRestart: async () => { observations.push("settle-client"); effects.push("settle-client"); },
     stopScheduler: () => {effects.push("stop");}, writeSchedulerAssets: () => {effects.push("assets");},
     killServiceWrappers: () => {}, schedulerProxyStillLive: async () => null,
+    // Never reach the real home-verified proxy lookup: outside the repository Bun can skip the
+    // sandbox preload, and this fixture must not stop a developer's live tracked proxy.
+    stopTrackedProxy: async () => { observations.push("stop-tracked"); },
     startScheduler: () => {effects.push("start");}, writeSchedulerState: () => {effects.push("state");},
     reregisterScheduler: async () => {throw new Error("fixture must not reregister");}, settleSchedulerRead: () => {},
   };

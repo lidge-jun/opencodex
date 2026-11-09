@@ -30,3 +30,14 @@ test("corrupt or unknown state refuses update without replacing existing bytes",
   }
   expect(() => setRouteClientIntent("aside", { enabled: true }, "__proto__")).toThrow();
 });
+
+test("a device-id refusal happens on valid state and is the selection error, not a revision error", () => {
+  // Restore a readable file first: the malformed bodies above would make any throw pass.
+  expect(() => setRouteClientIntent("pi", { enabled: true })).not.toThrow();
+  const valid = readFileSync(routeIntentStatePath(), "utf8");
+  for (const device of ["__proto__", "constructor", "prototype", "-leading", "space id"]) {
+    expect(() => setRouteClientIntent("aside", { enabled: true }, device)).toThrow("invalid route intent selection");
+    // The guard refuses before the revision advances, so the file is byte-identical afterwards.
+    expect(readFileSync(routeIntentStatePath(), "utf8")).toBe(valid);
+  }
+});

@@ -78,6 +78,9 @@ test("legacy Aside ownership follows its recorded path after the current account
   await materializeRouteIntent(input);
   const profileStore = createIntegrationStateStore(join(input.store!.root, "aside-profiles", "7"));
   input.store!.putRecord(profileStore.readRecordsStrict().aside!);
+  // Keep only the legacy root record: a surviving per-profile ownership row could name slot 7 by
+  // itself and make this assertion pass even if the root-store recovery below stopped working.
+  profileStore.dropRecord("aside");
   // The manifest's current account is slot 0, while the durable owner still names slot 7.
   const migrated = readHomeRouteIntentState(input.config, { home: input.home, store: input.store, state: emptyRouteIntentState() });
   expect(migrated.defaults.aside).toEqual({ enabled: true, accounts: ["selected-user"] });

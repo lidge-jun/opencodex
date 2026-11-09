@@ -52,6 +52,9 @@ test("legacy dashboard toggles durably decide Home intent without changing Child
     expect(result).toMatchObject({ denied: 403, busy: 409, unchanged: true });
     expect(result.rows).toHaveLength(4);
     for (const row of result.rows) {
+      // A 500 after saving the OFF switch (for example a Grok cleanup failure) would still satisfy
+      // every desired/home/child projection below, so the success status itself has to be asserted.
+      expect(row.status).toBe(200);
       expect(row.desired).toBe(false);
       expect(row.home).toBe(false);
       // Captured once from the switches: Codex and Claude Code on; Grok and Desktop are never captured on.

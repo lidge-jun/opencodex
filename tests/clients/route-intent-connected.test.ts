@@ -75,7 +75,10 @@ function scenario(body: string, enabledIds = ["pi"], explicitClients?: string[],
     `], { cwd: repoRoot(), encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000, env: { ...process.env,
       HOME: home, USERPROFILE: home, CODEX_HOME: join(home, ".codex"), OPENCODEX_HOME: join(home, ".opencodex"),
       CLAUDE_CONFIG_DIR: join(home, ".claude"), OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(home, "desktop"),
-      XDG_CONFIG_HOME: join(home, ".config"), GROK_HOME: join(home, ".grok"), OCX_TEST_HOME_GUARD: "1" } });
+      XDG_CONFIG_HOME: join(home, ".config"), GROK_HOME: join(home, ".grok"),
+      // Pi resolves an agent dir from this variable; an inherited value would point the
+      // fixture at a real installed profile instead of the temp home it asserts against.
+      PI_CODING_AGENT_DIR: join(home, ".pi", "agent"), OCX_TEST_HOME_GUARD: "1" } });
     expect(result.stderr).not.toContain("local route intent needs reconciliation");
     expect({ status: result.status, signal: result.signal, error: result.error?.message, stderr: result.stderr }).toMatchObject({ status: 0, signal: null });
     return JSON.parse(result.stdout.trim().split("\n").at(-1)!);
@@ -383,8 +386,9 @@ test("disconnect resumes after token removal without rerunning completed generic
     setPersistedConfigMutationBeforeCommitForTests(afterTokenRemoval);
     let failed=false;try{await disconnectClient({},deps);}catch{failed=true;}
     const token=readServiceApiTokenState().kind;
-    const receiptPath=join(process.env.OPENCODEX_HOME,'desktop-remote','disconnect.json');
-    const pending=JSON.parse(readFileSync(receiptPath,'utf8'));pending.phase='token_removed';writeFileSync(receiptPath,JSON.stringify(pending));
+    // No phase editing: the retry must resume from whatever the failed run persisted. Forcing
+    // token_removed here would hide a receipt left at catalog_settled after the token is gone,
+    // which a user's real retry would fail on with client_token_changed.
     await disconnectClient({},deps);
     console.log(JSON.stringify({failed,token,state:readClientConnectionState().kind,common:readRouteIntentReceipt()}));
   `);
