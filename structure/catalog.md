@@ -96,7 +96,7 @@ Cache invalidation reports an unchanged derived cache separately from a failed r
 
 Custom rows replace discovered rows that encode to the same Codex-facing slug. For a provider whose captured discovery declares an order (`preferFirst`), `src/codex/catalog/routed-gather.ts` puts the replacement in the discovered row's slot; every other provider keeps discovered rows first and custom rows after them, as before. Coverage: `tests/codex-integration/catalog-custom-ordering.test.ts`.
 
-On the default `opencodex-catalog.json` path, sync deliberately uses two catalog sources: Codex's bundled catalog supplies a current native entry template, while the actual on-disk catalog supplies the rows being merged. `src/codex/catalog/bundled.ts` treats unsupported bundled-model commands, spawn failures and structurally invalid model rows (null, arrays or other non-objects) as unavailable in both synchronous and asynchronous loading, preserving the existing catalog fallback. This split is
+On the default `opencodex-catalog.json` path, sync deliberately uses two catalog sources: Codex's bundled catalog supplies a current native entry template, while the actual on-disk catalog supplies the rows being merged. `src/codex/catalog/bundled.ts` treats unsupported bundled-model commands, spawn failures and structurally invalid model rows (null, arrays or other non-objects) as unavailable in both synchronous and asynchronous loading, preserving the existing catalog fallback. On macOS, when discovery ends on the bare `codex` sentinel because it found no CLI, the same loader also probes the known ChatGPT.app locations from `src/codex/mac-app-bundle.ts` before reporting unavailable (#8360), so `ocx connect status` readiness can report the bundled CLI's ladder when the bundle identity gate could not classify it; the candidate list grants no trust, and an unverifiable bundle still yields null because every execution passes the exec-boundary checks. This split is
 required because empty or partial provider discovery must preserve routed entries and genuine user-native rows from the file that will be overwritten; a bundled catalog never contains those rows. Retained sync and evidence-bound convergence
 share an explicit observed-state merge policy and resolve unbanded priorities through the [native source-priority contract](subagents.md#native-source-priority), including live/published/cache parity. A configured custom catalog remains the native
 metadata/template authority even when a bundled-catalog memo is warm. Both paths may use an admitted matching bundled memo only as installed-runtime capability evidence to remove unsupported reasoning efforts; convergence never probes Codex
@@ -308,7 +308,7 @@ restores the owned name before normal native metadata upgrades. Divergent extern
 subject to those upgrades: Astra still replaces non-pinned names with its pinned native name.
 Template-derived rows discard the marker. The overlay leaves model IDs, metadata (including
 capabilities), ordering, routed combo aliases, custom rows and account-qualified rows unchanged;
-it does not relabel HTTP model listings or virtual `*-pro` rows.
+it does not relabel `/v1/models` or virtual `*-pro` rows. `src/server/management/model-rows.ts` also applies exact nonblank native overrides to bare rows with operator provenance. Client exports preserve these labels and their existing suffix rules. Absent or blank overrides keep previous fallbacks; account-qualified rows remain unchanged.
 
 ## Native passthrough
 

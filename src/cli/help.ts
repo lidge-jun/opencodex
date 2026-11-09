@@ -102,6 +102,7 @@ Usage:
   ocx config [sub]            Validated configuration show/get/set/import/export
   ocx advisor <status|on|off|set|consent>  Advisor sidecar settings and context-sharing consent
   ocx companion <show|set|reset>  Menu-bar and widget companion usage settings
+  ocx telemetry <sub>         Anonymous usage telemetry status, preview, enable, and disable
   ocx lab <sub>               Inspect Lab evidence and control local automation
   ocx codex-provider <sub>    Confirm custom Codex provider routing: status|allow|revoke
   ocx chatgpt <sub>          Experimental app-server shim: launch|restore|status (macOS)

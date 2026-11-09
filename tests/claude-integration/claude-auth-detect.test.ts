@@ -9,6 +9,7 @@ import {
   defaultAuthDetectDeps,
   ownAdmissionTokens,
   detectClaudeAuth,
+  probeClaudeKeychain,
   type AuthDetectDeps,
   type AuthPresence,
 } from "../../src/claude/auth-detect";
@@ -225,4 +226,25 @@ test("opencodex's own admission key is not counted as user auth", () => {
 test("ownAdmissionTokens reads configured admission keys", () => {
   expect(ownAdmissionTokens({ apiKeys: [{ key: "a" }, { key: "b" }] })).toEqual(["a", "b"]);
   expect(ownAdmissionTokens({})).toEqual([]);
+});
+
+test("the metadata probe shares the Keychain reader's admission and backoff (#8161)", () => {
+  let blocked = false;
+  let timeouts = 0;
+  const reader = { syncReadBlocked: () => blocked, noteSyncTimeout: () => { timeouts += 1; } };
+  let runs = 0;
+  const run = (result: { status: number | null; signal: string | null; error?: Error }) => () => { runs += 1; return result; };
+  expect(probeClaudeKeychain("linux", reader, run({ status: 0, signal: null }))).toBe("absent");
+  expect(probeClaudeKeychain("darwin", reader, run({ status: 0, signal: null }))).toBe("present");
+  expect(probeClaudeKeychain("darwin", reader, run({ status: 44, signal: null }))).toBe("absent");
+  expect(probeClaudeKeychain("darwin", reader, run({ status: 1, signal: null }))).toBe("unknown");
+  expect(runs).toBe(3);
+  // A timed-out probe is unknown, never absent, and starts the shared backoff.
+  const timedOut = Object.assign(new Error("spawnSync security ETIMEDOUT"), { code: "ETIMEDOUT" });
+  expect(probeClaudeKeychain("darwin", reader, run({ status: null, signal: "SIGTERM", error: timedOut }))).toBe("unknown");
+  expect(timeouts).toBe(1);
+  // While a read is blocked or backing off, the probe answers unknown without spawning.
+  blocked = true;
+  expect(probeClaudeKeychain("darwin", reader, run({ status: 0, signal: null }))).toBe("unknown");
+  expect(runs).toBe(4);
 });

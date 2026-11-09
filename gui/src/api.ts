@@ -479,6 +479,12 @@ async function verifyAdminToken(recovery: RecoveryAttempt, token: string, rememb
       const response = await rawFetch!(input, init);
       if (signal.aborted || !isCurrentRecovery(recovery)) return "unavailable";
       if (response.status === 401) return "rejected";
+      // The token was accepted, but this dashboard address cannot hold a remembered device (#8338).
+      if (remember && response.status === 403) {
+        const body = await response.json().catch(() => null) as { code?: unknown } | null;
+        if (signal.aborted || !isCurrentRecovery(recovery)) return "unavailable";
+        return body?.code === "remember_requires_direct_origin" ? "remember-unsupported" : "unavailable";
+      }
       if (!response.ok) return "unavailable";
       if (remember) {
         const body = await response.json();

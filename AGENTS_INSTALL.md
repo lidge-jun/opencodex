@@ -52,6 +52,17 @@ The following instructions concern **starring the repository on GitHub**.
   the matter permanently — do not argue it, re-frame it, or raise it again
   later.
 
+### Telemetry
+
+Anonymous daily usage telemetry defaults to on only after a human has seen the
+disclosure notice (in the GUI or an interactive TTY prompt). An agent must never
+enable telemetry or acknowledge the telemetry disclosure on the user's behalf:
+`PUT /api/telemetry` and `ocx telemetry enable` refuse agent-driven callers with
+`agent_consent_required` (and `ocx telemetry enable` refuses a non-interactive
+terminal with `tty_required`), and `ocx config set`/`unset telemetry` refuse every
+caller. Opting out (`ocx telemetry disable`, `OCX_TELEMETRY=0` or `DO_NOT_TRACK=1`)
+is always permitted.
+
 ## Where things are installed
 
 An agent asked to install, inspect, repair, or remove opencodex needs to know what is written
@@ -92,7 +103,7 @@ A host that has both a Task Scheduler entry and a WinSW service is in a conflict
 
 ### The CLI
 
-`npm install -g @bitkyc08/opencodex` puts `ocx` on the PATH from npm's global prefix, and the
+`npm install -g --allow-scripts=bun @bitkyc08/opencodex` puts `ocx` on the PATH from npm's global prefix, and the
 Bun runtime it needs is bundled inside that package. There is no separate runtime to install and
 no WSL layer on Windows.
 

@@ -23,9 +23,6 @@ on:
     paths:
       - "gui/**"
       - ".github/workflows/react-doctor.yml"
-  # Scans `main` on every push to track the health-score trend.
-  push:
-    branches: ["main"]
 
 permissions:
   contents: read
@@ -34,8 +31,8 @@ permissions:
   # and the CLI exits 1 on ENOENT even for fork PRs.
   pull-requests: read
 
-# Cancels any in-flight scan for the same PR (or branch, on push) the moment a
-# new commit arrives, so only the latest run remains.
+# Cancels any in-flight scan for the same PR the moment a new commit arrives,
+# so only the latest run remains.
 concurrency:
   group: react-doctor-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true

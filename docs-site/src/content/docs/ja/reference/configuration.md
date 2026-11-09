@@ -46,5 +46,5 @@ opencodex は、永続的な設定を `$OPENCODEX_HOME/config.json` (通常は `
 API キーには `${ENV_VAR}` 参照を優先します。リテラルの `apiKey`、`apiKeyPool[].key`、および `apiKeys[].key` 値は秘密です。コミットしたり、ログに貼り付けたり、共有したりしないでください。 OAuth およびフォワード プロバイダー トークンは、`config.json` ではなく別の資格情報ストアに保存されます。アカウント ID と電子メールも非公開にしておく必要があります。サポートされている場合は、パブリック セレクター エイリアスを使用します。
 
 :::note[アトミック書き込み]
-opencodex は、一時ファイルを介して管理対象の `config.toml` および `opencodex-catalog.json` ファイルを書き込み、その後名前を変更します (`atomicWriteFile`)。これにより、`ocx stop` やプロキシ シャットダウン ハンドラーなどの同時ライターが Codex を同時に復元するときに、部分的なファイルが生成されるのを防ぎます。
+opencodex は、一時ファイルを介して管理対象の `config.toml` および `opencodex-catalog.json` ファイルを書き込み、その後名前を変更します (`atomicWriteFile`)。これにより、`ocx stop` やプロキシ シャットダウン ハンドラーなどの同時ライターが Codex を同時に復元するときに、部分的なファイルが生成されるのを防ぎます。Windows では、`opencodex-catalog.json` に読み取り専用属性が付いて名前変更が拒否された場合、opencodex が属性を解除して一度だけ再試行します。それでも失敗する場合は、生の `EPERM` ではなく `Codex catalog is read-only: <path>` を報告します。
 :::

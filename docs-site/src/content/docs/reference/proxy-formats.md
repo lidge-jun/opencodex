@@ -20,6 +20,16 @@ response safety still happen at the proxy boundary. Configure the listener and a
 [Configuration](/reference/configuration/); use [Combos](/guides/combos/) when one public model id
 should select among several targets.
 
+## Function tool strictness on Chat input
+
+When Chat Completions is translated to OpenAI's Responses API or the ChatGPT backend,
+function tools keep Chat's non-strict
+default: an omitted `strict` is sent as `false`. Explicit `true` and `false` are preserved;
+legacy `functions` also stay non-strict. Optional arguments remain optional, including
+Computer Use's alternative element-index and coordinate selectors. This does not rewrite
+the caller's parameter schema or change the defaults for native Responses requests,
+Chat destinations, or third-party Responses providers.
+
 ## Required tools on buffered native combo routes
 
 A combo checks buffered native `openai-responses` JSON results when `tool_choice` is `required`
@@ -268,13 +278,44 @@ Use the actual sample rate of mono PCM16 audio. Wait for `session.started`, then
 send `{"type":"audio.append","audio":"<base64 PCM bytes>"}`. These are JSON text
 frames, not WAV files or binary WebSocket frames. The gateway accepts sample
 rates from 8,000 through 192,000 Hz; upstream support is account/service-dependent.
-Client frames are limited to 64 KiB and sessions to five minutes. Unsupported or
+Client frames are limited to 64 KiB. The proxy allows up to ten minutes
+(600,000 ms) for recording from relay attachment. A valid `session.close` before
+that deadline replaces the recording timer with a separate, bounded 60-second
+window for final transcripts. Keep the WebSocket open during finalization.
+`config.session_ttl_ms` accepts 1–600,000 and is forwarded unchanged; it does not
+set the proxy's recording timer (existing clients may still send 300,000).
+These are OpenCodex application budgets, not demonstrated official OpenAI limits.
+GPT Live and other audio transports retain their existing lifetimes. Unsupported or
 malformed event/config fields close the stream with code 1008.
 
 `transcript.segment` and `transcript.final` contain `utterance_id`, `revision`, and
 `text`. Replace prior text for the same utterance when its revision increases;
 do not concatenate revisions. Finish with `{"type":"session.close"}` and wait
 for final text and `session.updated` with `session.status="closed"`.
+
+The ScribeTray streaming client uses this additional supported start shape
+(replace the example UUIDs with client-generated identifiers):
+
+```json
+{"type":"session.start","dictation_session_id":"78d201cb-1b49-40e1-a5b5-e06a8f8489a1","attempt_id":"8b3c2e4f-d501-4a66-b123-456789abcdef","config":{"input_audio_format":"pcm16","sample_rate_hz":16000,"num_channels":1,"max_buffer_size_bytes":4194304,"max_utterance_duration_ms":30000,"session_ttl_ms":300000,"provider_mode":"streaming_sse","transcript_delivery_mode":"final_only","session_asset_mode":"none","vad":{"type":"server_vad"}},"client_capabilities":["server_stop_requested"]}
+```
+
+The identifiers are optional, nonblank strings of at most 128 UTF-8 bytes.
+`client_capabilities` is optional and accepts an empty array or just
+`"server_stop_requested"`. Optional `config.language` is a nonblank string of at
+most 64 UTF-8 bytes (for example `"it"`); these strings cannot contain control
+characters. Optional `config.session_asset_mode` accepts only `"none"`.
+VAD needs only `{"type":"server_vad"}`. If supplied, `threshold` must be finite
+and within 0–1, `prefix_padding_ms` an integer within 0–1,000, and
+`silence_duration_ms` an integer within 0–5,000.
+
+After start, `{"type":"audio.flush"}` is also accepted and forwarded unchanged.
+It does not close the session; more audio may follow until `session.close`.
+ScribeTray finishes by sending `audio.flush`, then `session.close`, then waiting
+for final results. This supports that client's sequence without asserting that
+flush is required instead of close alone. No audio or other client events are
+accepted after `session.close`. The earlier start and close-only payloads remain
+supported. Unknown fields and unsupported capability values remain rejected.
 
 ## `POST /v1/responses`
 
