@@ -799,7 +799,7 @@ console.log(JSON.stringify({ requests: summary.summary.requests, candidates: res
     expect(read.entries).toHaveLength(1);
     expect(read.unreadableOffsets).toHaveLength(49);
   });
-+
+
   test("a rewritten indexed row makes the next append rebuild instead of streaming forever", async () => {
     const rows = Array.from({ length: 200 }, (_, index) => syntheticRow(index));
     writeRows(rows);
@@ -846,7 +846,7 @@ console.log(JSON.stringify({ requests: summary.summary.requests, candidates: res
       setUsageFilterIndexTestHooksForTests(null);
     }
   });
-+
+
   test("a same-size rewrite before the trailing boundary forces a rebuild", async () => {
     // Large enough that row zero sits far outside the trailing 64 KiB digest window.
     const rows = Array.from({ length: 4000 }, (_, index) => syntheticRow(index));
@@ -932,7 +932,7 @@ console.log(JSON.stringify({ requests: summary.summary.requests, candidates: res
     for (const seen of observed) expect(seen).toBe("none/none");
     expect(totalIndexRows()).toBe(ledgerRowCount());
   });
-+
+
   test("a replaced ledger between the index refresh and the read is caught", async () => {
     const rows = Array.from({ length: 20 }, (_, index) => syntheticRow(index));
     writeRows(rows);
@@ -1019,7 +1019,7 @@ console.log(JSON.stringify({ requests: summary.summary.requests, candidates: res
       probe.close();
     }
   });
-+
+
   test("an unchanged retained projection still validates the ledger", async () => {
     const rows = Array.from({ length: 40 }, (_, index) => syntheticRow(index));
     writeRows(rows);
@@ -1043,7 +1043,7 @@ console.log(JSON.stringify({ requests: summary.summary.requests, candidates: res
       setUsageFilterIndexTestHooksForTests(null);
     }
   });
-+
+
   test("a torn suffix does not let a same-size rewrite masquerade as an append", async () => {
     const rows = Array.from({ length: 1000 }, (_, index) => (
       index === 0 ? { ...syntheticRow(index), provider: "kimi" } : syntheticRow(index)
@@ -1527,7 +1527,7 @@ describe("filtered usage index availability", () => {
     // The original home's projection was not advanced with another home's ledger.
     expect(publishedOffset()).toBe(offsetBefore);
   });
-+
+
   test("a passive read does not report a published generation that lost its rows", async () => {
     const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
     writeRows(rows);
@@ -1544,7 +1544,7 @@ describe("filtered usage index availability", () => {
     expect(summary(passive).summary.requests)
       .toBe(rows.filter(row => row.provider === "openai").length);
   });
-+
+
   test("a foreign SQLite file with a coincidental meta table is not adopted", async () => {
     const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));
     writeRows(rows);
