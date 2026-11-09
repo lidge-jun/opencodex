@@ -14,12 +14,11 @@
  */
 import { CODEX_SETTINGS_DIGEST_PATTERN } from "./codex-settings";
 import { LINK_MANAGEMENT_PREFIX } from "./management-routes";
-import { parseRouteClientOutcomes, ROUTE_INTENT_DIGEST_PATTERN, routeClientOutcomesForPeer, type RouteClientOutcome } from "./route-intent";
 
 /** The one write a Child may send its Home over the link. */
 export const LINK_CHILD_PARITY_PATH = `${LINK_MANAGEMENT_PREFIX}/child-parity`;
 /** A report is four short fields; anything larger is refused while it is still being read. */
-export const LINK_CHILD_PARITY_MAX_BYTES = 8192;
+export const LINK_CHILD_PARITY_MAX_BYTES = 1024;
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 /** 2001-09-09 .. 2286-11-20: any epoch-millisecond time a real clock reports. */
@@ -34,8 +33,6 @@ export interface LinkChildParityReport {
   runtimeStartedAt: number;
   /** `appliedCodexSettingsDigest` of the applied settings; null before any apply. */
   appliedCodexSettingsDigest: string | null;
-  appliedRouteIntentDigest?: string | null;
-  routeClientOutcomes?: RouteClientOutcome[];
   /**
    * Increases with every report this runtime process sends. With `runtimeStartedAt` it orders
    * reports, so a late POST from an older runtime or an earlier send never replaces a newer one.
@@ -48,8 +45,6 @@ export interface LinkChildParity {
   lastApplyAt: number | null;
   runtimeStartedAt: number | null;
   appliedCodexSettingsDigest: string | null;
-  appliedRouteIntentDigest?: string | null;
-  routeClientOutcomes?: RouteClientOutcome[];
   /** Epoch ms the Home received the report (the Home's clock; the other times are the Child's). */
   reportedAt: number | null;
 }
@@ -70,9 +65,7 @@ function exactKeys(value: unknown, keys: readonly string[]): value is Record<str
 
 /** Strict: an unknown field, a non-integer time or a malformed digest rejects the report. */
 export function parseLinkChildParityReport(value: unknown): LinkChildParityReport | null {
-  const base = ["linkId", "lastApplyAt", "runtimeStartedAt", "appliedCodexSettingsDigest", "sequence"];
-  const extended = [...base, "appliedRouteIntentDigest", "routeClientOutcomes"];
-  if (!exactKeys(value, base) && !exactKeys(value, extended)) return null;
+  if (!exactKeys(value, ["linkId", "lastApplyAt", "runtimeStartedAt", "appliedCodexSettingsDigest", "sequence"])) return null;
   const { linkId, lastApplyAt, runtimeStartedAt, appliedCodexSettingsDigest: digest, sequence } = value;
   if (typeof linkId !== "string" || !LINK_ID.test(linkId)) return null;
   if (lastApplyAt !== null && !isEpochMs(lastApplyAt)) return null;
@@ -81,15 +74,7 @@ export function parseLinkChildParityReport(value: unknown): LinkChildParityRepor
   // An apply has both a time and a digest; before the first apply it has neither.
   if ((lastApplyAt === null) !== (digest === null)) return null;
   if (typeof sequence !== "number" || !Number.isSafeInteger(sequence) || sequence < 0) return null;
-  let route: Pick<LinkChildParityReport, "appliedRouteIntentDigest" | "routeClientOutcomes"> = {};
-  if (Object.hasOwn(value, "appliedRouteIntentDigest")) {
-    const routeDigest = value.appliedRouteIntentDigest;
-    if (routeDigest !== null && (typeof routeDigest !== "string" || !ROUTE_INTENT_DIGEST_PATTERN.test(routeDigest))) return null;
-    const outcomes = parseRouteClientOutcomes(value.routeClientOutcomes);
-    if (!outcomes) return null;
-    route = { appliedRouteIntentDigest: routeDigest, routeClientOutcomes: routeClientOutcomesForPeer(outcomes) };
-  }
-  return { linkId, lastApplyAt, runtimeStartedAt, appliedCodexSettingsDigest: digest, sequence, ...route };
+  return { linkId, lastApplyAt, runtimeStartedAt, appliedCodexSettingsDigest: digest, sequence };
 }
 
 export interface LinkChildParityStore {
@@ -115,10 +100,6 @@ export function createLinkChildParityStore(now: () => number = Date.now): LinkCh
         lastApplyAt: report.lastApplyAt,
         runtimeStartedAt: report.runtimeStartedAt,
         appliedCodexSettingsDigest: report.appliedCodexSettingsDigest,
-        ...(report.routeClientOutcomes === undefined ? {} : {
-          appliedRouteIntentDigest: report.appliedRouteIntentDigest ?? null,
-          routeClientOutcomes: routeClientOutcomesForPeer(report.routeClientOutcomes),
-        }),
         reportedAt: now(),
         sequence: report.sequence,
       });
@@ -128,7 +109,7 @@ export function createLinkChildParityStore(now: () => number = Date.now): LinkCh
       const kept = reports.get(linkId);
       if (!kept) return { ...EMPTY_LINK_CHILD_PARITY };
       const { sequence: _sequence, ...parity } = kept;
-      return { ...parity, ...(parity.routeClientOutcomes === undefined ? {} : { routeClientOutcomes: routeClientOutcomesForPeer(parity.routeClientOutcomes) }) };
+      return parity;
     },
     clear() { reports.clear(); },
   };
