@@ -39,6 +39,7 @@ export function limitMistralChatImages(messages: unknown, provider: OcxProviderC
   if (!isMistralChatTarget(provider) || !Array.isArray(messages)) return messages;
   const maxImages = mistralMaxImages(provider, modelId);
   const note = { type: "text", text: `[image omitted: Mistral accepts at most ${maxImages} images per request for this model; older images were dropped]` };
+  const missingNote = { type: "text", text: "[image omitted: missing or malformed image URL]" };
   let imagesKept = 0;
   let out: unknown[] | undefined;
   for (let index = messages.length - 1; index >= 0; index--) {
@@ -48,10 +49,11 @@ export function limitMistralChatImages(messages: unknown, provider: OcxProviderC
     let nextContent: unknown[] | undefined;
     for (let partIndex = content.length - 1; partIndex >= 0; partIndex--) {
       const part = content[partIndex];
-      if (!isRecord(part) || !hasUsableImageUrl(part)) continue;
-      if (imagesKept++ < maxImages) continue;
+      if (!isRecord(part) || part.type !== "image_url") continue;
+      const usable = hasUsableImageUrl(part);
+      if (usable && imagesKept++ < maxImages) continue;
       nextContent ??= content.slice();
-      nextContent[partIndex] = note;
+      nextContent[partIndex] = usable ? note : missingNote;
     }
     if (!nextContent) continue;
     out ??= messages.slice();

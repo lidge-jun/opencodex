@@ -38,10 +38,12 @@ describe("Mistral image count limit", () => {
     expect(limitMistralChatImages(many, mistral({ baseUrl: "https://gateway.example/v1" }), "mistral-medium-latest")).toBe(many);
     expect(limitMistralChatImages("not messages", mistral(), "mistral-medium-latest")).toBe("not messages");
     const malformed = [null, "text", { role: "user", content: "plain" }, { role: "user", content: [null, { type: "image_url" }] }];
-    expect(limitMistralChatImages(malformed, mistral(), "mistral-medium-latest")).toBe(malformed);
+    expect((limitMistralChatImages(malformed, mistral(), "mistral-medium-latest") as typeof malformed).slice(0, 3)).toEqual(malformed.slice(0, 3));
 
     const manyMalformed = [{ role: "user", content: Array.from({ length: 10_000 }, () => ({ type: "image_url" })) }];
-    expect(limitMistralChatImages(manyMalformed, mistral(), "mistral-medium-latest")).toBe(manyMalformed);
+    const sanitized = limitMistralChatImages(manyMalformed, mistral(), "mistral-medium-latest") as typeof manyMalformed;
+    expect(sanitized[0].content.every(part => part.type === "text")).toBe(true);
+    expect(manyMalformed[0].content.every(part => part.type === "image_url")).toBe(true);
   });
 
   test("counts only usable image URLs and accepts the OpenAI string form", () => {
@@ -51,7 +53,7 @@ describe("Mistral image count limit", () => {
     ];
     const history = [{ role: "user", content }];
     const out = limitMistralChatImages(history, mistral(), "mistral-medium-latest") as typeof history;
-    expect(out[0].content.slice(0, 20)).toEqual(content.slice(0, 20));
+    expect(out[0].content.slice(0, 20).every(part => part.type === "text")).toBe(true);
     expect(out[0].content[20]).toEqual({
       type: "text", text: "[image omitted: Mistral accepts at most 8 images per request for this model; older images were dropped]",
     });
@@ -137,6 +139,20 @@ describe("Mistral image count limit", () => {
     expect(mistralMaxImages(mistral(), "mistral-medium-2604")).toBe(MISTRAL_DEFAULT_MAX_IMAGES);
     expect(mistralMaxImages(mistral({ modelCapabilities: { "deepseek-v4-1-flash-1017": { mistralMaxImages: 4 } } }), "deepseek-v4-1-flash-1017")).toBe(4);
     expect(mistralMaxImages(mistral(), "constructor")).toBe(MISTRAL_DEFAULT_MAX_IMAGES);
+  });
+
+  test("native Chat replaces missing image references without consuming the valid cap", () => {
+    const bad = [{ type: "image_url" }, { type: "image_url", image_url: "" }, { type: "image_url", image_url: { url: 42 } }];
+    const content = [...bad, ...Array.from({ length: 8 }, (_, n) => image(n)), ...bad];
+    const history = [{ role: "user", content }];
+    const before = JSON.stringify(history);
+    const request = buildOpenAIChatPassthroughRequest(mistral(), { messages: history }, "mistral-medium-latest", false);
+    const sent = JSON.parse(request.body).messages;
+    expect(sent[0].content.filter((part: { type: string }) => part.type === "image_url")).toHaveLength(8);
+    expect(kept(sent)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(JSON.stringify(history)).toBe(before);
+    const other = limitMistralChatImages(history, mistral({ baseUrl: "https://gateway.example/v1" }), "mistral-medium-latest");
+    expect(other).toBe(history);
   });
 
   test("native Chat Completions bodies are capped the same way", () => {
