@@ -9,8 +9,8 @@ import { getFilteredUsageAggregate, getUsageAggregate, resetUsageAggregateCacheF
 import { getUsageSummaryCacheEntry, resetUsageSummaryCacheForTests } from "../../src/server/management/usage-summary-cache";
 import type { OcxConfig, PromptLengthPricing } from "../../src/types";
 import { estimateRequestCost } from "../../src/usage/cost";
-import { resetUsageReadCacheForTests, type PersistedUsageEntry } from "../../src/usage/log";
-import { refreshUserCostOverlays, resetPreservedDiskOnlyProvidersForTests } from "../../src/usage/user-cost-overlays";
+import { currentUsageLogRevision, resetUsageReadCacheForTests, type PersistedUsageEntry } from "../../src/usage/log";
+import { refreshUserCostOverlays, resetPreservedDiskOnlyProvidersForTests, userCostOverlayVersion } from "../../src/usage/user-cost-overlays";
 import { stopUserCostOverlayReconciler } from "../../src/usage/user-cost-overlay-reconciler";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { managementFetch } from "../helpers/management-auth";
@@ -106,7 +106,15 @@ test("policy-only API writes refresh warm estimate, summary and aggregate caches
       { policy: null, total: catalog.cost.total },
     ];
     let previousTotal = 0.259;
-    for (const { policy, total } of stages) {
+    // Every input the warm aggregate compares, so a Windows-only "rebuild" names what moved. The
+    // comparison base is what the previous stage's refresh recorded, so that is reported too.
+    const aggregateInputs = () => ({ revision: currentUsageLogRevision(), overlayVersion: userCostOverlayVersion(),
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
+    const recorded = (result: { revision: unknown; overlayVersion: number; timeZone: string }) =>
+      ({ revision: result.revision, overlayVersion: result.overlayVersion, timeZone: result.timeZone });
+    let prevBase: unknown = null;
+    for (const [stage, { policy, total }] of stages.entries()) {
+      const inputsAtStageStart = aggregateInputs();
       const estimateBefore = estimateRequestCost(INPUT)!;
       expect(estimateBefore.cost.total).toBeCloseTo(previousTotal, 12);
       expect(estimateRequestCost(INPUT)?.price).toBe(estimateBefore.price);
@@ -115,11 +123,15 @@ test("policy-only API writes refresh warm estimate, summary and aggregate caches
       expect(before.summary.estimatedCostUsd).toBeCloseTo(previousTotal, 12);
       expect((await summarize()).summary).toEqual(before.summary);
       expect(getUsageSummaryCacheEntry("all:all")).toBe(summaryCache);
+      const inputsBefore = aggregateInputs();
       const aggregate = await getUsageAggregate({ now });
-      expect(aggregate.update).toBe("unchanged");
+      expect(aggregate.update, JSON.stringify({ stage, prevBase, stageStart: inputsAtStageStart, beforeRead: inputsBefore,
+        afterRead: aggregateInputs(), rebuiltTo: recorded(aggregate) })).toBe("unchanged");
       expect((await getUsageAggregate({ now })).accumulator).toBe(aggregate.accumulator);
       const filtered = await getFilteredUsageAggregate({ provider: INPUT.provider });
-      expect((await getFilteredUsageAggregate({ provider: INPUT.provider })).update).toBe("unchanged");
+      const filteredAgain = await getFilteredUsageAggregate({ provider: INPUT.provider });
+      expect(filteredAgain.update, JSON.stringify({ stage, filteredBase: recorded(filtered), now: aggregateInputs(),
+        rebuiltTo: recorded(filteredAgain) })).toBe("unchanged");
       expect(filtered.accumulator.summarize("all", now).summary.estimatedCostUsd).toBeCloseTo(previousTotal, 12);
 
       await writePolicy(policy);
@@ -136,10 +148,12 @@ test("policy-only API writes refresh warm estimate, summary and aggregate caches
       expect(refreshedAggregate.accumulator).not.toBe(aggregate.accumulator);
       expect(refreshedAggregate.accumulator.summarize("all", now).summary.estimatedCostUsd).toBeCloseTo(total, 12);
       const refreshedFiltered = await getFilteredUsageAggregate({ provider: INPUT.provider });
-      expect(refreshedFiltered.update).toBe("rebuild");
+      expect(refreshedFiltered.update, JSON.stringify({ stage, filteredBase: recorded(filtered), now: aggregateInputs() }))
+        .toBe("rebuild");
       expect(refreshedFiltered.accumulator).not.toBe(filtered.accumulator);
       expect(refreshedFiltered.accumulator.summarize("all", now).summary.estimatedCostUsd).toBeCloseTo(total, 12);
       expect(readFileSync(ledgerPath, "utf8")).toBe(ledger);
+      prevBase = recorded(refreshedAggregate);
       previousTotal = total;
     }
     const reset = estimateRequestCost(INPUT)!;
