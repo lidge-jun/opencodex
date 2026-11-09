@@ -286,6 +286,12 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
     setFirstAttemptSettled(false);
     setInflightCount(0);
   }
+  // The target identity this render owns, readable by an in-flight load's continuation.
+  // A layout effect is early enough: a superseded read settles in a microtask after the
+  // commit's layout phase but before its passive effects, so a passive ref write would
+  // still name the old target when the response lands.
+  const seedKeyRef = useRef(seedKey);
+  useLayoutEffect(() => { seedKeyRef.current = seedKey; }, [seedKey]);
   useEffect(() => {
     if (previousSeedKeyRef.current === seedKey) return;
     previousSeedKeyRef.current = seedKey;
@@ -329,8 +335,22 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
 
   const load = useCallback(async (refreshQuota = false, options: { validatePending?: boolean } = {}): Promise<boolean> => {
     const capture = renderCapture;
+    const targetSeedKey = seedKey;
+    // A callback captured by an earlier render can still be invoked after this surface moved
+    // (a poll timer armed for A, say). Its request belongs to the target that render owned, so
+    // it must not start here at all: the counter and the first-attempt flag it would touch are
+    // the new target's.
+    if (!captureIsCurrent(capture) || seedKeyRef.current !== targetSeedKey) return false;
     const generation = ++loadGenerationRef.current;
     const validatePending = options.validatePending === true;
+    /**
+     * May this read still write the surface? The generation alone is not enough: the render
+     * that clears the rows bumps it in a passive effect, so a response that lands between the
+     * target's commit and that flush still matches. The captured target is what moved.
+     */
+    const loadIsCurrent = () => loadGenerationRef.current === generation
+      && captureIsCurrent(capture)
+      && seedKeyRef.current === targetSeedKey;
     // Validation can include token recovery, WHAM and two 30s model attempts.
     // Budget per known row (conservatively ignoring server parallelism), plus
     // native-main lookup time. Ordinary reads retain their short polling deadline.
@@ -364,7 +384,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
           });
           if (!response.ok) throw new Error("account load failed");
           const payload = await response.json();
-          if (loadGenerationRef.current === generation) {
+          if (loadIsCurrent()) {
             // Selection order is required downstream (badge, select). Normalizing here keeps
             // a payload without it from rendering a NaN order on every card.
             nextAccounts = ((payload.accounts ?? []) as CodexAccountEntry[]).map(account => {
@@ -405,7 +425,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
           const response = await targetFetch(capture, `${apiBase}/api/codex-auth/active`, { signal: bounded.signal });
           if (!response.ok) throw new Error("active account load failed");
           const active = await response.json();
-          if (loadGenerationRef.current === generation) {
+          if (loadIsCurrent()) {
             const serverActiveId = active.activeCodexAccountId ?? null;
             const pending = pendingActiveIdRef.current;
             if (pending && pending.staleReadsRemaining > 0 && serverActiveId !== pending.id) {
@@ -425,7 +445,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
           }
           return true;
         } catch {
-          if (loadGenerationRef.current === generation) {
+          if (loadIsCurrent()) {
             for (const observer of observers) observer.rejectActiveRead();
           }
           return false;
@@ -433,8 +453,8 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
       })();
 
       const [accountsOk, activeOk] = await Promise.all([accountsTask, activeTask]);
-      // A newer load already superseded this one; leave its state in place.
-      if (loadGenerationRef.current !== generation) return false;
+      // A newer load, or a target change this read predates, owns the surface now.
+      if (!loadIsCurrent()) return false;
       if (accountsOk) {
         setLoadState("ready");
         hasLoadedRef.current = true;
@@ -457,11 +477,14 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
         pauseTokensRef.current!.delete(validationLease);
         setPauseCount(pauseTokensRef.current!.size);
       }
-      setInflightCount(count => Math.max(0, count - 1));
-      setFirstAttemptSettled(true);
+      // The counter describes the target this render owns, and the render-phase clear zeroed it
+      // when the target moved, so a read issued for the previous target must not give its
+      // increment back here. The first-attempt flag belongs to the newest read only.
+      if (seedKeyRef.current === targetSeedKey) setInflightCount(count => Math.max(0, count - 1));
+      if (loadIsCurrent()) setFirstAttemptSettled(true);
     }
   // oxlint-disable-next-line react/react-compiler -- preserve existing callback dependency semantics during Oxlint migration
-  }, [apiBase, seedKey, renderCapture]);
+  }, [apiBase, seedKey, renderCapture, captureIsCurrent]);
 
   // Initial load plus background refresh. Owned here so mounting or unmounting a surface
   // never changes the request count.
