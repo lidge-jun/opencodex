@@ -51,6 +51,18 @@ const createdPrefix = new TextEncoder().encode(`data: ${JSON.stringify({
 `);
 
 describe("combo stream preflight", () => {
+  test("a required-tool contract failure carrying a tool call is not replayed", async () => {
+    const failed = (output: unknown[], retryable?: boolean) => sse({ type: "response.failed", response: {
+      id: "r1", status: "failed", output,
+      error: { code: "required_tool_contract_unsatisfied", message: "no tool call", ...(retryable === undefined ? {} : { retryable }) },
+    } });
+    const held = [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "held" }] }];
+    expect((await preflightComboStreamResponse(failed(held), { model: "m1", provider: "a" })).kind).toBe("failed");
+    expect((await preflightComboStreamResponse(failed(held, false), { model: "m1", provider: "a" })).kind).toBe("accepted");
+    const call = [{ type: "function_call", call_id: "c1", name: "f", arguments: "{}" }];
+    expect((await preflightComboStreamResponse(failed(call), { model: "m1", provider: "a" })).kind).toBe("accepted");
+  });
+
   test("keeps only lifecycle preamble replayable and treats unknown output conservatively", () => {
     expect(comboStreamPayloadCommitsOutput({ type: "response.created" })).toBe(false);
     expect(comboStreamPayloadCommitsOutput({ type: "response.heartbeat" })).toBe(false);

@@ -130,6 +130,12 @@ function bareErrorIsRetryable(payload: unknown): boolean {
   }) === "hop";
 }
 
+/** Only text and reasoning items, which the required-tool guard holds back until it decides. */
+function heldOnlyOutput(output: unknown): boolean {
+  return Array.isArray(output) && output.every(item => item !== null && typeof item === "object"
+    && !Array.isArray(item) && ["message", "reasoning"].includes((item as { type?: unknown }).type as string));
+}
+
 function retryableZeroOutputTerminal(payload: unknown): boolean {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   const event = payload as {
@@ -157,8 +163,11 @@ function retryableZeroOutputTerminal(payload: unknown): boolean {
       ?? event.error;
     const code = error?.code;
     // The required-tool guard synthesizes this terminal over output it held back from the client,
-    // so that output is not evidence of anything sent; it keeps the retryability it carries.
-    if (code === REQUIRED_TOOL_CONTRACT_CODE) return error?.retryable !== false;
+    // so held text and reasoning are not evidence of anything sent; it keeps the retryability it
+    // carries. Any other output item (a tool call, an action) still commits it.
+    if (code === REQUIRED_TOOL_CONTRACT_CODE) {
+      return error?.retryable !== false && (emptyOutput || heldOnlyOutput(target.output));
+    }
     if (!emptyOutput) return false;
     return !(typeof code === "string" && NON_REPLAYABLE_FAILED_CODES.has(code));
   }

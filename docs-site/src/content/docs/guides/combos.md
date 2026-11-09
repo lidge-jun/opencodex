@@ -797,7 +797,7 @@ For streaming requests, the upstream HTTP status is not the final decision. Open
 bounded pre-output prefix of the selected child's Responses SSE. If the stream reports a retryable
 `response.failed` terminal before any text, tool call, or other visible output event, the child
 is recorded as failed and the combo may try its next eligible target. For run-turn combo targets,
-pre-output reasoning is buffered up to a bounded hold (`DEFAULT_MAX_REASONING_HOLD_MS`, 1s): if a
+pre-output reasoning is buffered for up to one second: if a
 zero-output `max_output_tokens` terminal arrives before any visible output and within the hold, the
 turn advances to another eligible target without cooling the healthy candidate; once the reasoning
 hold expires or visible output begins, the target commits and buffered reasoning is streamed
@@ -805,6 +805,9 @@ immediately to the client. A zero-output `response.incomplete` follows the same 
 is missing or is `adapter_eof`, `missing_terminal_event`, `upstream_stall_timeout`, or an explicit
 `max_output_tokens` limit before any output is emitted. Other explicit semantic reasons such as
 `content_filter` remain terminal, as do post-output `max_output_tokens` limits and an explicit null reason.
+When every target ends with such a zero-output `max_output_tokens` limit, the client receives the last
+attempt's HTTP 200 `incomplete` response (reason `max_output_tokens`) with that attempt's usage,
+rather than a 502 failure.
 A reasonless final snapshot that already contains output items is also kept. The rate-limit and
 response-metadata frames that a native Codex (ChatGPT account) target sends over its WebSocket are
 not output, so an overload error that follows them with no output still moves to the next target.
