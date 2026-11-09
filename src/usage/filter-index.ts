@@ -1303,6 +1303,10 @@ function candidatePager(
   let cursor = -1;
   const pager = {
     candidateRows: 0,
+    /**
+     * Returns the next bounded page of ascending offsets, re-validating schema and generation
+     * inside its own transaction; a changed generation throws `UsageLedgerRebuildRequiredError`.
+     */
     nextPage(): number[] {
       try {
         db.exec("BEGIN");
@@ -1337,6 +1341,10 @@ function hasPublishedRows(db: Database, generation: string): boolean {
     .get(generation) !== null;
 }
 
+/**
+ * Refreshes the projection, then returns a paged reader for the published generation. Throws
+ * `UsageLedgerRebuildRequiredError` when the published meta moved under the open.
+ */
 async function readActive(
   dir: string,
   path: string,

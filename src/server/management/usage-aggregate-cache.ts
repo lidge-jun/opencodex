@@ -465,6 +465,10 @@ async function readCandidates(
     : readUsageFilterCandidates(query);
 }
 
+/**
+ * Folds every candidate page into the accumulator, yielding between pages and re-reading rows
+ * against the snapshot identity; closes the reader when done.
+ */
 async function accumulateCandidates(
   accumulator: UsageSummaryAccumulator,
   read: UsageFilterCandidateRead,
@@ -634,6 +638,10 @@ async function appendFilteredAggregate(
   }
 }
 
+/**
+ * Serves the filtered report from the retained aggregate, appending new candidates or rebuilding
+ * as needed; a candidate-page failure clears the retained state and retries the streaming scan.
+ */
 async function refreshFilteredAggregate(
   key: string,
   filter: NormalizedUsageFilter,
