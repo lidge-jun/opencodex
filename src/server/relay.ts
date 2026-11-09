@@ -227,19 +227,9 @@ export function refusalFailedTailFrame(
   );
 }
 
-/**
- * A bare upstream error event: the `type: "error"` SSE event, or an untyped envelope that
- * carries only an `error` object (`{"error":{...}}`, #8216). Some OpenAI-compatible gateways
- * end a stream with the untyped form; without this it was dropped and EOF reported
- * `adapter_eof`. A typed event of any other kind is never bare, even with an `error` field.
- */
-function isBareUpstreamErrorEvent(root: JsonRecord): boolean {
-  return root.type === "error" || (root.type === undefined && asJsonRecord(root.error) !== null);
-}
-
 function boundedBareUpstreamErrorMessage(payload: unknown): string | undefined {
-  const root = asJsonRecord(payload);
-  if (!root || !isBareUpstreamErrorEvent(root)) return undefined;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)
+    || (payload as { type?: unknown }).type !== "error") return undefined;
   const message = upstreamErrorMessageFromPayload(payload);
   return message ? redactSecretString(message).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS) : undefined;
 }
@@ -266,7 +256,7 @@ function boundedBareUpstreamError(payload: unknown): {
   errorCode: string | undefined;
 } | undefined {
   const root = asJsonRecord(payload);
-  if (!root || !isBareUpstreamErrorEvent(root)) return undefined;
+  if (!root || root.type !== "error") return undefined;
   const message = boundedBareUpstreamErrorMessage(payload);
   const response = asJsonRecord(root.response);
   // Precedence is {@link upstreamErrorMessageFromPayload}'s, so the envelope
@@ -282,7 +272,7 @@ function boundedBareUpstreamError(payload: unknown): {
   ];
   const code = candidates.map(candidate => stringField(candidate, "code"))
     .find(candidate => candidate !== undefined)?.slice(0, 128);
-  // Root `type` is the SSE event discriminator (`"error"` or absent), not an error class. Only nested
+  // Root `type` is the SSE event discriminator (`"error"`), not an error class. Only nested
   // error records can authoritatively name classes such as rate_limit_error or server_error.
   const errorType = candidates.slice(0, -1).map(candidate => stringField(candidate, "type"))
     .find(candidate => candidate !== undefined)?.slice(0, 128);
@@ -290,15 +280,13 @@ function boundedBareUpstreamError(payload: unknown): {
     ? (isTerminalRefusalCode(code) ? code : undefined)
     : message === undefined ? undefined : safetyRefusalCodeFromMessage(message);
   if (message !== undefined) return { message, refusalCode, errorType, errorCode: code };
-  if (refusalCode !== undefined) {
-    return { message: terminalRefusalFallbackMessage(refusalCode), refusalCode, errorType, errorCode: code };
-  }
-  // A structured code or class with no message is still the upstream's verdict, so it must end in
-  // `response.failed` rather than `adapter_eof`. Its own bounded identifiers are the only
-  // diagnostic it sent; the tail redacts and masks them like any other message.
-  const identity = code ?? errorType;
-  if (identity === undefined) return undefined;
-  return { message: `Upstream error without a message (${identity})`, refusalCode, errorType, errorCode: code };
+  if (refusalCode === undefined) return undefined;
+  return {
+    message: terminalRefusalFallbackMessage(refusalCode),
+    refusalCode,
+    errorType,
+    errorCode: code,
+  };
 }
 
 export type SseTerminalOutputBoundary = {
@@ -682,9 +670,8 @@ function parseSsePayload(payload: string): unknown | undefined {
 }
 
 function isPolicyRewriteType(parsed: unknown): boolean {
-  const root = asJsonRecord(parsed);
-  if (!root) return false;
-  return root.type === "response.failed" || root.type === "response.incomplete" || isBareUpstreamErrorEvent(root);
+  const type = asJsonRecord(parsed)?.type;
+  return type === "response.failed" || type === "response.incomplete" || type === "error";
 }
 
 /**
@@ -815,9 +802,7 @@ function createFirstOutputReporter(onFirstOutput?: () => void): {
 }
 
 export function terminalStatusFromParsed(parsed: unknown): ResponsesTerminalStatus | null {
-  const root = asJsonRecord(parsed);
-  // An untyped bare error envelope (#8216) is classified like the `error` event it stands for.
-  const type = root && isBareUpstreamErrorEvent(root) ? "error" : root?.type;
+  const type = asJsonRecord(parsed)?.type;
   switch (type) {
     case "response.completed":
       return "completed";
@@ -1734,10 +1719,8 @@ export function consumeForInspection(
     logCtx,
     onCompletedResponse,
     onParsedPayload: payload => {
-      // Same extraction as the client boundary, so a refusal or code sent without a message is
-      // still a failure here and cannot be recorded as an incomplete (non-failed) turn.
-      const bare = boundedBareUpstreamError(payload);
-      if (bare !== undefined) bareUpstreamError = bare.message;
+      const message = boundedBareUpstreamErrorMessage(payload);
+      if (message !== undefined) bareUpstreamError = message;
       options?.onParsedPayload?.(payload);
     },
     onFirstOutput,

@@ -517,10 +517,10 @@ function runTransactionScenario(
         connected = await connectClient({
           serverUrl: "https://hub.example.test",
           credential: { kind: "admin", value: credential },
-          selectedClients: stage === "preflight" ? ["codex"] : ["claude"],
+          selectedClients: ["claude"],
           managementTransport: "direct",
           noSync: true,
-        }, { fetchImpl, catalogCompatibility: { supportedEfforts: () => new Set() }, now: () => {
+        }, { fetchImpl, now: () => {
           if (stage === "commit") setPersistedConfigMutationBeforeCommitForTests(() => {
             commitFaultTriggered = true;
             throw new Error("fixture_final_client_commit_failed");
@@ -1190,7 +1190,7 @@ function runDesktopLifecycleScenario(mode: string) {
     await (async () => {
       let result = null, error = null, second = null, statusInside = null, statusOutside = null, cliRotation = null;
       const credential = new TextEncoder().encode("ocx_admin_fixture");
-      const deps = { fetchImpl, lifecycleLockDeps: lockDeps, catalogCompatibility: { supportedEfforts: () => new Set() } };
+      const deps = { fetchImpl, lifecycleLockDeps: lockDeps };
       try {
         if (mode.startsWith("disconnect")) {
           let journalSpy;

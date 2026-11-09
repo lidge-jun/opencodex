@@ -491,7 +491,7 @@ export interface OcxRemoteGuiConfig {
   allowInsecureHttp?: boolean;
 }
 
-export type OcxConnectedClientId = "codex" | "claude" | "claude-desktop" | "grok" | import("../clients/client-ids").ExportClientId;
+export type OcxConnectedClientId = "codex" | "claude";
 
 /**
  * Redaction policy for management and CLI projections (#3859).

@@ -1,4 +1,4 @@
-import type { UpstreamHttpVersion, ReasoningSummaryDelivery, CodexAccountMode, ThinkingDisplayPolicy } from "./wire";
+import type { UpstreamHttpVersion, ReasoningSummaryDelivery, CodexAccountMode } from "./wire";
 import type { AccountAutoPausePolicy, AccountPauseDetails } from "./account-auto-pause";
 import type { AnthropicAccountPoolConfig } from "./anthropic-account-pool";
 
@@ -841,14 +841,6 @@ export interface OcxProviderConfig {
    * Presence also advertises reasoning-summary support for that routed model.
    */
   modelReasoningSummaryDelivery?: Record<string, ReasoningSummaryDelivery>;
-  /**
-   * Anthropic adaptive `thinking.display` policy for this provider (#8363). `auto` and omission
-   * keep the built-in selection: native Opus 5.5 progress updates, summarized thinking elsewhere.
-   * `updates` is only sendable to native Opus 5.5 and degrades to `auto` for other models.
-   */
-  thinkingDisplay?: ThinkingDisplayPolicy;
-  /** Per-model override of `thinkingDisplay`, keyed by the exact upstream model id. */
-  modelThinkingDisplay?: Record<string, ThinkingDisplayPolicy>;
   /**
    * Exact-model hosted tools that win collisions with Codex client tool declarations.
    * Use for non-forward Responses gateways that reserve a hosted tool namespace server-side.

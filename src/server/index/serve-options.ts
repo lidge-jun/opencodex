@@ -398,7 +398,6 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           return withCors(await handleLinkManagementRequest(
             req, requestUrl, config, requestManagementApiDeps, managementSessionControl,
             admission.kind === "configured" ? admission.keyId : undefined,
-            () => { const current = resolveApiAuth(req, linkPolicy()); return current?.kind === "configured" ? current.keyId : undefined; },
           ), req, policy);
         }
       }

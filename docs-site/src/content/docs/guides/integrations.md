@@ -33,8 +33,6 @@ file, and removes it again. Each client below has its own switch:
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | JSON | immediately via file watching | none — keyless loopback |
 | T3 Code | `$T3CODE_HOME/userdata/settings.json` (default `~/.t3/userdata/settings.json`) | JSON | immediately — T3 Code watches the file | non-secret loopback marker |
 
-From the CLI, `ocx integration client enable|disable --client <id>` changes this machine only, like the dashboard toggle. On a Remote Link Home that uses route intent, the change is recorded as the Home's own decision, so `ocx sync` keeps it, and linked Children keep their defaults. To change what Children inherit, use `ocx route to <client> on|off`. On a Remote Link Child a plain toggle is refused and prints the Home command for that device; use `ocx route to <client> off --local` there to opt that Child out. See [Remote Link](/guides/remote-link/#route-clients-per-device).
-
 ## Gentle Shell
 
 Choose **Connect → Gentle Shell**, or use the same managed-integration commands:
@@ -481,15 +479,11 @@ though the managed document does not change.
 
 If the file changes after you review it, the write is refused as stale. The dialog replaces the
 old plan with the updated one and asks you to confirm again; it never retries the write
-automatically. When a preview reports that no model catalog is loaded yet, the dialog stays open and
-offers **Load catalog and retry**: it reads the integration list again — the ordinary load that
-retains the catalog, never a preview that gathers models — and then asks for the plan once more.
+automatically. If a preview is temporarily unavailable, reload the page normally and start the
+action again.
 
-Aside uses the same preview and confirmation flow for one selected profile at a time, and a plan
-describes exactly that profile's file. Because one plan cannot describe several independently
-changing files, the Overview card for a conflicted Aside integration opens **Connect → Aside** with
-**Choose profile** rather than a Replace action; replace the block on the profile's own page. **Sync
-all profiles** remains a separate bulk action and is not bound to one combined preview.
+Aside uses the same preview and confirmation flow for one selected profile at a time. **Sync all
+profiles** remains a separate bulk action and is not bound to one combined preview.
 
 ## What to expect, honestly
 
