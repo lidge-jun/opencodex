@@ -96,6 +96,18 @@ const EXPLICIT_FIELD_EFFORT_WORD_REFUSAL = JSON.stringify({
     message: "Invalid reasoning effort. The max field is invalid.",
   },
 });
+const INVALID_FIELD_COLON_REFUSAL = JSON.stringify({
+  error: {
+    type: "invalid_request_error",
+    message: "Invalid reasoning effort. Invalid field: max.",
+  },
+});
+const THE_NONE_FIELD_REFUSAL = JSON.stringify({
+  error: {
+    type: "invalid_request_error",
+    message: "Invalid reasoning effort. The none field is invalid.",
+  },
+});
 const VENDOR_EFFORT_REFUSAL = JSON.stringify({ code: "invalid-argument", error: "Invalid reasoning effort." });
 const UNRELATED = JSON.stringify({ error: { type: "invalid_request_error", message: "Invalid upload request." } });
 
@@ -1003,17 +1015,25 @@ describe("rejected reasoning rungs", () => {
     },
   );
 
-  test("classifies explicit invalid field naming effort word as conflicting diagnostic subject", () => {
-    expect(hasConflictingReasoningEffortCode(EXPLICIT_FIELD_EFFORT_WORD_REFUSAL)).toBe(true);
-    expect(isReasoningEffortRejection(EXPLICIT_FIELD_EFFORT_WORD_REFUSAL)).toBe(false);
+  test.each([
+    ["The max field is invalid", EXPLICIT_FIELD_EFFORT_WORD_REFUSAL],
+    ["Invalid field: max", INVALID_FIELD_COLON_REFUSAL],
+    ["The none field is invalid", THE_NONE_FIELD_REFUSAL],
+  ])("classifies explicit invalid field (%s) as conflicting diagnostic subject", (_desc, refusal) => {
+    expect(hasConflictingReasoningEffortCode(refusal)).toBe(true);
+    expect(isReasoningEffortRejection(refusal)).toBe(false);
   });
 
   test.each([
-    ["openai-chat", EXPLICIT_FIELD_EFFORT_WORD_REFUSAL],
-    ["openai-responses", EXPLICIT_FIELD_EFFORT_WORD_REFUSAL],
+    ["openai-chat", "The max field is invalid", EXPLICIT_FIELD_EFFORT_WORD_REFUSAL, "max field is invalid"],
+    ["openai-chat", "Invalid field: max", INVALID_FIELD_COLON_REFUSAL, "Invalid field: max"],
+    ["openai-chat", "The none field is invalid", THE_NONE_FIELD_REFUSAL, "none field is invalid"],
+    ["openai-responses", "The max field is invalid", EXPLICIT_FIELD_EFFORT_WORD_REFUSAL, "max field is invalid"],
+    ["openai-responses", "Invalid field: max", INVALID_FIELD_COLON_REFUSAL, "Invalid field: max"],
+    ["openai-responses", "The none field is invalid", THE_NONE_FIELD_REFUSAL, "none field is invalid"],
   ] as const)(
-    "stops after one send without effort replay or learned rejection when effort word is an explicit invalid field (%s)",
-    async (adapter, refusal) => {
+    "stops after one send without effort replay or learned rejection when effort word is an explicit invalid field (%s, %s)",
+    async (adapter, _desc, refusal, expectedSubstring) => {
       writeSnapshot(["low", "high", "max"]);
       const outbound: Array<Record<string, unknown>> = [];
       globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -1029,18 +1049,22 @@ describe("rejected reasoning rungs", () => {
       expect(outbound).toHaveLength(1);
       expect(effortOf(outbound[0])).toBe("max");
       expect(response.status).toBe(400);
-      expect(text).toContain("max field is invalid");
+      expect(text).toContain(expectedSubstring);
       expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([]);
       expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
     },
   );
 
   test.each([
-    ["openai-chat", EXPLICIT_FIELD_EFFORT_WORD_REFUSAL],
-    ["openai-responses", EXPLICIT_FIELD_EFFORT_WORD_REFUSAL],
+    ["openai-chat", "The max field is invalid", EXPLICIT_FIELD_EFFORT_WORD_REFUSAL, "max field is invalid"],
+    ["openai-chat", "Invalid field: max", INVALID_FIELD_COLON_REFUSAL, "Invalid field: max"],
+    ["openai-chat", "The none field is invalid", THE_NONE_FIELD_REFUSAL, "none field is invalid"],
+    ["openai-responses", "The max field is invalid", EXPLICIT_FIELD_EFFORT_WORD_REFUSAL, "max field is invalid"],
+    ["openai-responses", "Invalid field: max", INVALID_FIELD_COLON_REFUSAL, "Invalid field: max"],
+    ["openai-responses", "The none field is invalid", THE_NONE_FIELD_REFUSAL, "none field is invalid"],
   ] as const)(
-    "combo stops after one send without walking ladder when effort word is an explicit invalid field (%s)",
-    async (adapter, refusal) => {
+    "combo stops after one send without walking ladder when effort word is an explicit invalid field (%s, %s)",
+    async (adapter, _desc, refusal, expectedSubstring) => {
       writeSnapshot(["low", "high", "max"]);
       const attempts: Array<{ host: string; effort: unknown }> = [];
       globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1067,7 +1091,7 @@ describe("rejected reasoning rungs", () => {
       const result = await response.text();
 
       expect(response.status).toBe(400);
-      expect(result).toContain("max field is invalid");
+      expect(result).toContain(expectedSubstring);
       expect(attempts).toEqual([
         { host: "opencode.ai", effort: "max" },
       ]);
