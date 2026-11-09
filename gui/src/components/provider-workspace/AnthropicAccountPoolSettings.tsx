@@ -8,7 +8,8 @@ import type { AnthropicInstanceId } from "../../../../src/providers/anthropic-in
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import { getPoolSettings, putPoolSettings, PoolSettingsSaveStateUnknownError } from "../../pool-settings";
-import { captureApiTarget, isApiTargetCaptureCurrent, targetFetch } from "../../api";
+import { isApiTargetCaptureCurrent, targetFetch } from "../../api";
+import { useRenderTargetCapture } from "../../use-render-target-capture";
 import "../../styles/anthropic-native-messages.css";
 import {
   ACCOUNT_POOL_QUOTA_WINDOWS,
@@ -71,16 +72,20 @@ function enabledStatus(
 
 export default function AnthropicAccountPoolSettings({
   apiBase,
+  targetKey,
   provider = "anthropic",
   accountCount,
   onThresholdChange,
 }: {
   apiBase: string;
+  targetKey?: string;
   provider?: AnthropicInstanceId;
   accountCount: number;
   onThresholdChange?: (threshold: number) => void;
 }) {
   const t = useT();
+  // The card's render owns the target for its save.
+  const renderCapture = useRenderTargetCapture(apiBase, targetKey);
   const [state, setState] = useState<PoolState | null>(null);
   const [draft, setDraft] = useState("80");
   const [stickyDraft, setStickyDraft] = useState(String(DEFAULT_ACCOUNT_POOL_STICKY_LIMIT));
@@ -172,7 +177,7 @@ export default function AnthropicAccountPoolSettings({
   }) => {
     const requestApiBase = apiBase;
     const requestProvider = provider;
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     saveAbortRef.current?.abort();
     const controller = new AbortController();
     saveAbortRef.current = controller;
@@ -231,7 +236,7 @@ export default function AnthropicAccountPoolSettings({
       if (ownsSave) saveAbortRef.current = null;
       if (ownsSave && mountedRef.current && apiBaseRef.current === requestApiBase && providerRef.current === requestProvider) setSaving(false);
     }
-  }, [apiBase, provider, state, t]);
+  }, [apiBase, provider, renderCapture, state, t]);
 
   const enabled = state?.enabled === true;
   const threshold = state?.threshold ?? 80;

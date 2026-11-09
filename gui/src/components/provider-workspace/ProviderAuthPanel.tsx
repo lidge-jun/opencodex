@@ -32,7 +32,8 @@ import { useGrokResetCoupons } from "../../hooks/useGrokResetCoupons";
 import { useAnthropicResetGrants } from "../../hooks/useAnthropicResetGrants";
 import { Switch } from "../../ui";
 import { kiroSkipReasonKey } from "../../kiro-device-login-helpers";
-import { captureApiTarget, isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../../api";
+import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../../api";
+import { useRenderTargetCapture } from "../../use-render-target-capture";
 import KiroDeviceLoginDialog from "../KiroDeviceLoginDialog";
 import type {
   AccountLoadState,
@@ -182,12 +183,14 @@ function safeCockpitImportResult(value: unknown): CockpitImportResult | null {
 }
 
 export default function ProviderAuthPanel({
-  item, apiBase, oauth, accounts = EMPTY_OAUTH_ACCOUNTS, keys = EMPTY_API_KEYS, accountLoadState = "ready",
+  item, apiBase, targetKey, oauth, accounts = EMPTY_OAUTH_ACCOUNTS, keys = EMPTY_API_KEYS, accountLoadState = "ready",
   switchingAccountId = null, pausingAccountId = null, busy = false, loginHint, loginCapture, authHandlers, onCodexActiveNeedsReauthChange,
   codexController, onUpdateProvider,
 }: {
   item: WorkspaceItem;
   apiBase: string;
+  /** Logical dashboard target; the panel's rows and actions belong to it. */
+  targetKey?: string;
   oauth?: { loggedIn: boolean; email?: string; error?: string };
   accounts?: OAuthAccountRow[];
   keys?: ApiKeyRow[];
@@ -204,6 +207,8 @@ export default function ProviderAuthPanel({
   codexController?: CodexAccountPoolController;
 }) {
   const t = useT();
+  // The panel's render owns the target for its own import action.
+  const renderCapture = useRenderTargetCapture(apiBase, targetKey);
   const { locale } = useI18n();
   const [addingKey, setAddingKey] = useState(false);
   const [kiroChooser, setKiroChooser] = useState<{ addAccount: boolean } | null>(null);
@@ -290,6 +295,7 @@ export default function ProviderAuthPanel({
         <div className="pwi-auth-body">
           <CodexAccountPool
             apiBase={apiBase}
+            targetKey={targetKey}
             embedded
             controller={codexController}
             onActiveNeedsReauthChange={onCodexActiveNeedsReauthChange}
@@ -369,7 +375,7 @@ export default function ProviderAuthPanel({
     setImportBusy(true);
     setImportStatus("idle");
     setImportResult(null);
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     try {
       if (!file.name.toLowerCase().endsWith(".json") || file.size > COCKPIT_IMPORT_MAX_BYTES) {
         setImportStatus("invalid");
@@ -459,6 +465,7 @@ export default function ProviderAuthPanel({
               <AnthropicAccountPoolSettings
                 key={`${apiBase}:${item.name}`}
                 apiBase={apiBase}
+                targetKey={targetKey}
                 provider={isAnthropicInstanceId(item.name) ? item.name : "anthropic"}
                 accountCount={accounts.length}
                 onThresholdChange={threshold => { void authHandlers?.onAccountPoolThreshold?.(item.name, threshold); }}
@@ -733,7 +740,7 @@ export default function ProviderAuthPanel({
           </>
         )}
         {item.name === "kiro" && kiroChooser && (
-          <KiroDeviceLoginDialog apiBase={apiBase} triggerRef={kiroChooser.addAccount ? kiroAddTriggerRef : kiroLoginTriggerRef}
+          <KiroDeviceLoginDialog apiBase={apiBase} targetKey={targetKey} triggerRef={kiroChooser.addAccount ? kiroAddTriggerRef : kiroLoginTriggerRef}
             addAccount={kiroChooser.addAccount} busy={busy} onClose={() => setKiroChooser(null)}
             onCli={addAccount => { void authHandlers.onLogin(item.name, addAccount); }}
             onSettled={authHandlers.onNativeLoginSettled} />

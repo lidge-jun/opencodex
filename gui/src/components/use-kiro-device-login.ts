@@ -5,7 +5,8 @@ import {
   type KiroFinalOutcome, type KiroStatusRead,
 } from "../kiro-device-login-finalizer";
 import { parseKiroDeviceView, type KiroDeviceMethod, type KiroDeviceView, type KiroIamOptions } from "../kiro-device-login-helpers";
-import { captureApiTarget, targetFetch, type ApiTargetCapture } from "../api";
+import { targetFetch, type ApiTargetCapture } from "../api";
+import { useRenderTargetCapture } from "../use-render-target-capture";
 
 type Phase = "idle" | "starting" | "pending" | "select-profile" | "selecting" | "done" | "expired" | "failed" | "cancelled" | "ended";
 export type KiroLoginState = { phase: Phase; view?: KiroDeviceView; error?: "start" | "network" | "invalid" | "profile" };
@@ -35,8 +36,10 @@ const unlessClosed = <T,>(session: Session, value: Promise<T>): Promise<T | type
   });
 
 export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: string, outcome: KiroFinalOutcome) => void,
-  pollDelay: (ms: number, signal: AbortSignal) => Promise<void> = wait) {
+  pollDelay: (ms: number, signal: AbortSignal) => Promise<void> = wait, targetKey?: string) {
   const [state, setState] = useState<KiroLoginState>({ phase: "idle" });
+  // The hook's render owns the target for a login started from this dialog.
+  const renderCapture = useRenderTargetCapture(apiBase, targetKey);
   const sessionRef = useRef<Session | null>(null);
   const mountedRef = useRef(true);
   const settledRef = useRef(onSettled);
@@ -83,7 +86,7 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
 
   const start = useCallback(async (method: KiroDeviceMethod, iam?: KiroIamOptions) => {
     if (sessionRef.current) return;
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     const session: Session = { closed: false, closedController: new AbortController(), capture };
     sessionRef.current = session;
     setState({ phase: "starting" });
@@ -158,7 +161,7 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
       break;
     }
     if (sessionRef.current === session) sessionRef.current = null;
-  }, [apiBase, cancelServer, handoff, pollDelay]);
+  }, [apiBase, cancelServer, handoff, pollDelay, renderCapture]);
 
   const selectProfile = useCallback(async (profileArn: string) => {
     const session = sessionRef.current;

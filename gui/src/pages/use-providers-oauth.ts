@@ -7,7 +7,8 @@ import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch"
 import { loginPollAttempts } from "../oauth-login-budget";
 import type { OAuthAccount, OAuthStatus } from "./providers-shared";
 import { oauthLabel } from "./providers-shared";
-import { captureApiTarget, isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
+import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
+import { useRenderTargetCapture } from "../use-render-target-capture";
 
 type AccountSet = { activeAccountId: string | null; accounts: OAuthAccount[] };
 
@@ -58,6 +59,8 @@ export function useProvidersOAuth({
 }) {
   const oauthLoginGenerationRef = useRef<Map<string, number> | null>(null);
   if (oauthLoginGenerationRef.current === null) oauthLoginGenerationRef.current = new Map();
+  // The hook's render owns the target for login and logout actions.
+  const renderCapture = useRenderTargetCapture(apiBase, targetKey);
   const targetKeyRef = useRef(targetKey ?? apiBase);
   useLayoutEffect(() => { targetKeyRef.current = targetKey ?? apiBase; }, [apiBase, targetKey]);
   const activeLoginGenerationsRef = useRef(new Map<string, number>());
@@ -155,7 +158,7 @@ export function useProvidersOAuth({
   }, [aliveRef, apiBase, bumpLoginGeneration, cancelServerLogin, notify, setBusy, setLoginInfo, t, targetKey]);
 
   const loginOAuth = async (provider: string, addAccount = false, accountId?: string) => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     activeLoginCapturesRef.current.set(provider, capture);
     const generation = bumpLoginGeneration(provider);
     const targetId = targetKey ?? apiBase;
@@ -306,7 +309,7 @@ export function useProvidersOAuth({
   };
 
   const logoutOAuth = async (provider: string) => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     const logoutTarget = targetKey ?? apiBase;
     const finishLogout = beginAccountLogout?.(provider);
     if (beginAccountLogout && !finishLogout) {

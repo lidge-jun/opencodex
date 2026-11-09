@@ -47,8 +47,10 @@ const DOCTOR_CMD = "ocx doctor";
  * (the Codex Auth page passes its mode banner); `embedded` (WP090) omits page
  * title chrome while retaining the shared account actions in the Providers workspace.
  */
-export default function CodexAccountPool({ apiBase, accountModeState = null, banner = null, embedded = false, onActiveNeedsReauthChange, controller: injectedController, advancedExtras = null, hasMainHardLockSetting = false }: {
+export default function CodexAccountPool({ apiBase, targetKey, accountModeState = null, banner = null, embedded = false, onActiveNeedsReauthChange, controller: injectedController, advancedExtras = null, hasMainHardLockSetting = false }: {
   apiBase: string;
+  /** Logical dashboard target; the pool and its auto-switch belong to it. */
+  targetKey?: string;
   accountModeState?: CodexAccountModeState | null;
   banner?: ReactNode;
   embedded?: boolean;
@@ -69,14 +71,14 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     updated: t("codexAuth.autoSwitchUpdated"),
     updateFailed: t("codexAuth.autoSwitchUpdateFailed"),
     invalid: t("codexAuth.autoSwitchThresholdInvalid"),
-  });
+  }, targetKey);
   const [poolStrategy, setPoolStrategy] = useState<
     typeof DEFAULT_ACCOUNT_POOL_STRATEGY | "round-robin" | "fill-first" | "reset-first" | null
   >(null);
   const { beginServerRead, acceptServerRead, rejectServerRead, hydrateServerValue } = autoSwitch;
   // A hook cannot be called conditionally, so the fallback instance is always created
   // but stays inert (no load, no polling) whenever a shared controller was injected.
-  const ownController = useCodexAccountPool(apiBase, !injectedController);
+  const ownController = useCodexAccountPool(apiBase, !injectedController, targetKey);
   const controller = injectedController ?? ownController;
   const { accounts, activeId, loadState, refreshFailed, switchingId, pauseUpdatingId, priorityUpdatingId, autoSwitchUpdatingId, pausingExhausted, activePinnedId, load } = controller;
   // #3898: the native-main device reauth drives the dedicated namespace; a

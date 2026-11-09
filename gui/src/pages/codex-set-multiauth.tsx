@@ -221,6 +221,7 @@ function CodexSetMultiauthForProxy({ apiBase, targetKey }: { apiBase: string; ta
     <>
       <CodexAccountPool
         apiBase={apiBase}
+        targetKey={targetKey}
         controller={poolController}
         hasMainHardLockSetting
         accountModeState={accountModeState}

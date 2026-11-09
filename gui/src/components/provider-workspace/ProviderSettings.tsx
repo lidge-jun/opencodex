@@ -70,6 +70,8 @@ type ProviderSettingsProps = {
   onDirtyChange?: (dirty: boolean) => void;
   /** Lets parent dialogs trigger the same save path as the sticky bar. */
   onRegisterSave?: (save: (() => Promise<boolean>) | null) => void;
+  /** Lets the leave dialog use this form's owner-checked discard. */
+  onRegisterDiscard?: (discard: (() => void) | null) => void;
 };
 
 /**
@@ -91,7 +93,7 @@ export default function ProviderSettings(props: ProviderSettingsProps) {
 }
 
 function ProviderSettingsForm({
-  item, availableModels = EMPTY_MODELS, apiBase, targetKey, targetLabel, draftStore, onUpdateProvider, onDirtyChange, onRegisterSave,
+  item, availableModels = EMPTY_MODELS, apiBase, targetKey, targetLabel, draftStore, onUpdateProvider, onDirtyChange, onRegisterSave, onRegisterDiscard,
 }: ProviderSettingsProps & { targetKey: string; draftStore: ProviderDraftStore }) {
   const t = useT();
   const ownerRef = useRef(Symbol("provider-draft-owner"));
@@ -432,6 +434,14 @@ function ProviderSettingsForm({
     draftStore.claim(targetKey, item.name, ownerRef.current, { draft: next, baseline: next });
     setEndpointChoice(matchChoiceId(baseUrlChoices, next.baseUrl));
   };
+
+  const discardRef = useRef(discard);
+  useEffect(() => { discardRef.current = discard; });
+  useEffect(() => {
+    if (!onRegisterDiscard) return;
+    onRegisterDiscard(() => discardRef.current());
+    return () => onRegisterDiscard(null);
+  }, [onRegisterDiscard]);
 
   /** Explicit conflict resolution: keep the saved values, or rebase the draft onto them. */
   const useSavedValues = () => discard();

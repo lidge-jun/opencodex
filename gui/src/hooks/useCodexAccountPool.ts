@@ -4,7 +4,8 @@ import { createBoundedFetch } from "../bounded-fetch";
 import { startVisibilityPoll } from "../visibility-poll";
 import { normalizeAccountPriority } from "../account-priority";
 import { useKeyedClientResource } from "../client-resource";
-import { captureApiTarget, isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
+import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
+import { useRenderTargetCapture } from "../use-render-target-capture";
 import { extractAutoSwitchThresholdPayload } from "../codex-auto-switch";
 import { quotaAutoRefreshAvailability, type AccountQuota } from "../codex-quota-utils";
 import { accountNeedsReauth } from "../oauth-health-display";
@@ -209,6 +210,9 @@ function normalizeAccountAutoSwitchThreshold(value: unknown): number | null {
 
 export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?: string): CodexAccountPoolController {
   const seedKey = targetKey ?? apiBase;
+  // The hook's render owns the target for its loads and actions; a module target change
+  // that has not re-rendered this hook cannot retarget a stale read or mutation.
+  const renderCapture = useRenderTargetCapture(apiBase, targetKey);
   const seed = lastGoodByBase.get(seedKey);
   const [accounts, setAccounts] = useState<CodexAccountEntry[]>(() => seed?.accounts ?? []);
   const usage30d = useKeyedClientResource<CodexAccountUsageSummary>(
@@ -317,7 +321,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
   const readLastActive = useCallback(() => lastActiveRef.current?.value, []);
 
   const load = useCallback(async (refreshQuota = false, options: { validatePending?: boolean } = {}): Promise<boolean> => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     const generation = ++loadGenerationRef.current;
     const validatePending = options.validatePending === true;
     // Validation can include token recovery, WHAM and two 30s model attempts.
@@ -450,7 +454,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
       setFirstAttemptSettled(true);
     }
   // oxlint-disable-next-line react/react-compiler -- preserve existing callback dependency semantics during Oxlint migration
-  }, [apiBase, seedKey]);
+  }, [apiBase, seedKey, renderCapture]);
 
   // Initial load plus background refresh. Owned here so mounting or unmounting a surface
   // never changes the request count.
@@ -509,7 +513,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
   }, []);
 
   const switchAccount = useCallback(async (id: string | null, options?: { expectedPinnedAccountId: string }) => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     if (options?.expectedPinnedAccountId
       && !accounts.some(account => account.id === options.expectedPinnedAccountId
         || (options.expectedPinnedAccountId === "__main__" && account.isMain))) {
@@ -568,10 +572,10 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
         setSwitchingId(null);
       }
     }
-  }, [accounts, apiBase, load]);
+  }, [accounts, apiBase, load, renderCapture]);
 
   const saveAlias = useCallback(async (id: string, alias: string) => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     try {
       const response = await targetFetch(capture, `${apiBase}/api/codex-auth/accounts/alias`, {
         method: "PUT",
@@ -585,10 +589,10 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
     } catch {
       return { ok: false, reason: "request" } as const;
     }
-  }, [apiBase, load]);
+  }, [apiBase, load, renderCapture]);
 
   const setAccountPaused = useCallback(async (id: string, paused: boolean) => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     if (pauseMutationRef.current) return { ok: false, reason: "busy" } as const;
     pauseMutationRef.current = { accountId: id };
     setPauseUpdatingId(id);
@@ -631,10 +635,10 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
         setPauseUpdatingId(null);
       }
     }
-  }, [apiBase, load]);
+  }, [apiBase, load, renderCapture]);
 
   const setAccountPriority = useCallback(async (id: string, priority: number | null) => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     // The other half of the cross-gate in switchAccount: an order write clears the
     // pin that a switch sets, so the two cannot be in flight together.
     if (priorityMutationRef.current || switchingRef.current) return { ok: false, reason: "busy" } as const;
@@ -679,13 +683,13 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
         setPriorityUpdatingId(null);
       }
     }
-  }, [apiBase, load]);
+  }, [apiBase, load, renderCapture]);
 
   const setAccountAutoSwitchThreshold = useCallback(async (
     id: string,
     threshold: number | null,
   ) => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     if (autoSwitchMutationRef.current) return { ok: false, reason: "busy" } as const;
     autoSwitchMutationRef.current = { accountId: id };
     setAutoSwitchUpdatingId(id);
@@ -719,7 +723,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
         setAutoSwitchUpdatingId(null);
       }
     }
-  }, [apiBase, load]);
+  }, [apiBase, load, renderCapture]);
 
   // One writer for the per-account and the global switch: they edit the same list, so a second
   // write while one is in flight is refused rather than raced.
@@ -728,7 +732,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
     body: { id: string; creditsAfterLimit: boolean } | { all: boolean },
     apply: (account: CodexAccountEntry) => CodexAccountEntry,
   ) => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     if (creditsAfterLimitMutationRef.current) return { ok: false, reason: "busy" } as const;
     creditsAfterLimitMutationRef.current = true;
     setCreditsAfterLimitUpdatingId(updatingId);
@@ -749,7 +753,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
       creditsAfterLimitMutationRef.current = false;
       setCreditsAfterLimitUpdatingId(null);
     }
-  }, [apiBase, load]);
+  }, [apiBase, load, renderCapture]);
 
   const setAccountCreditsAfterLimit = useCallback((id: string, enabled: boolean) => writeCreditsAfterLimit(
     id,
@@ -764,7 +768,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
   ), [writeCreditsAfterLimit]);
 
   const pauseExhaustedAccounts = useCallback(async () => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     if (pauseMutationRef.current) return { ok: false, reason: "busy" } as const;
     pauseMutationRef.current = "bulk";
     setPausingExhausted(true);
@@ -805,10 +809,10 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
         setPausingExhausted(false);
       }
     }
-  }, [apiBase, load]);
+  }, [apiBase, load, renderCapture]);
 
   const removeAccount = useCallback(async (id: string) => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     try {
       const response = await targetFetch(capture,
         `${apiBase}/api/codex-auth/accounts?id=${encodeURIComponent(id)}`,
@@ -824,7 +828,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?:
     } catch {
       return { ok: false, reason: "request" } as const;
     }
-  }, [apiBase, load]);
+  }, [apiBase, load, renderCapture]);
 
   const syncAfterAccountAdded = useCallback(async () => {
     const ok = await load();

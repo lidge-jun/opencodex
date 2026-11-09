@@ -186,7 +186,7 @@ test("a nested pool cannot start a second poll loop", async () => {
   const hook = await read("../src/hooks/useCodexAccountPool.ts");
 
   // React forbids conditional hooks, so the fallback instance is created but inert.
-  expect(pool).toContain("useCodexAccountPool(apiBase, !injectedController)");
+  expect(pool).toContain("useCodexAccountPool(apiBase, !injectedController, targetKey)");
   expect(hook).toContain("if (!enabled) return;");
 
   // The component no longer owns loading, polling, or the account list.

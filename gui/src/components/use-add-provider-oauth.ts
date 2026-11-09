@@ -6,7 +6,8 @@ import { afterOAuthCancellation, cancelOAuthLogin } from "../oauth-cancellation-
 import type { LoginHintData } from "./login-url-block";
 import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch";
 import { loginPollAttempts } from "../oauth-login-budget";
-import { captureApiTarget, isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
+import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
+import { useRenderTargetCapture } from "../use-render-target-capture";
 
 export const OAUTH_LOGIN_POLL_INTERVAL_MS = 2_000;
 
@@ -34,6 +35,8 @@ export function useAddProviderOAuth({
   onAdded: (name: string) => void;
 }) {
   const loginGenerationRef = useRef(new Map<string, number>());
+  // The hook's render owns the target for a login started from this surface.
+  const renderCapture = useRenderTargetCapture(apiBase, targetKey);
   const activeProvidersRef = useRef(new Map<string, OAuthLoginSetters>());
   const activeCapturesRef = useRef(new Map<string, ApiTargetCapture>());
   const targetKeyRef = useRef(targetKey);
@@ -114,7 +117,9 @@ export function useAddProviderOAuth({
     providerId: string,
     setters: OAuthLoginSetters,
   ) => {
-    const capture = captureApiTarget("shared", apiBase);
+    // A per-login clone keeps the render target while letting the capture map tell an
+    // older login's cleanup from its replacement.
+    const capture = { ...renderCapture };
     activeCapturesRef.current.set(providerId, capture);
     const { setOauthBusy, setOauthMsg, setOauthMsgTone, setOauthUrl, setManualCode, setManualCodeMsg, setManualCodeOk } = setters;
     const generation = bumpLoginGeneration(providerId);
@@ -214,7 +219,7 @@ export function useAddProviderOAuth({
         setOauthUrl("", providerId);
       }
     }
-  }, [aliveRef, apiBase, bumpLoginGeneration, cancelServerLogin, onAdded, t, targetKey]);
+  }, [aliveRef, apiBase, bumpLoginGeneration, cancelServerLogin, onAdded, renderCapture, t, targetKey]);
 
   const submitManualCode = useCallback(async (
     providerId: string,

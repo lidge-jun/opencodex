@@ -2,7 +2,8 @@ import { parseQuotaFailureCode } from "../../../src/providers/quota-types";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import type { AccountLoadState, AccountQuotaReading } from "../components/provider-workspace/types";
 import { createBoundedFetch } from "../bounded-fetch";
-import { captureApiTarget, isApiTargetCaptureCurrent, targetFetch } from "../api";
+import { isApiTargetCaptureCurrent, targetFetch } from "../api";
+import { useRenderTargetCapture } from "../use-render-target-capture";
 import { confirmAction, requestTextValue } from "../action-dialogs";
 import { credentialAliasRejection, CREDENTIAL_ALIAS_MAX_LENGTH } from "../credential-alias";
 import { accountNeedsReauth } from "../oauth-health-display";
@@ -136,6 +137,9 @@ export function useProviderAccountPools(deps: {
   // Keep the historical apiBase key for standalone callers; only a logical target that
   // differs from the request base needs the additional discriminator.
   const serverIdentity = targetKey === apiBase ? apiBase : `${apiBase}\u0000${targetKey}`;
+  // This hook's render owns the target for its actions. A module target change that has
+  // not re-rendered the hook cannot retarget a stale action.
+  const renderCapture = useRenderTargetCapture(apiBase, targetKey);
   const accountTarget = useMemo(() => ({ apiBase, targetKey }), [apiBase, targetKey]);
   const [accountStateTarget, setAccountStateTarget] = useState(accountTarget);
   const [accountSets, setAccountSets] = useState<Record<string, { activeAccountId: string | null; accounts: OAuthAccount[] }>>({});
@@ -212,7 +216,9 @@ export function useProviderAccountPools(deps: {
     signal?.addEventListener("abort", abort, { once: true });
     requestsRef.current.add(bounded.controller);
     try {
-      const response = await fetch(url, { signal: bounded.signal });
+      // A read belongs to this render's target too. A stale capture is refused before
+      // fetch, so a stale render cannot paint the new target's roster.
+      const response = await targetFetch(renderCapture, url, { signal: bounded.signal });
       if (!response.ok) throw new Error(String(response.status));
       const data = await response.json() as T;
       if (bounded.signal.aborted) throw new Error("Quota roster deadline exceeded");
@@ -222,7 +228,7 @@ export function useProviderAccountPools(deps: {
       signal?.removeEventListener("abort", abort);
       requestsRef.current.delete(bounded.controller);
     }
-  }, []);
+  }, [renderCapture]);
 
   const fetchAccountSets = useCallback(async (providers: string[], refresh = false): Promise<boolean> => {
     if (!aliveRef.current || !mountedRef.current || serverRef.current !== serverIdentity) return false;
@@ -452,7 +458,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const switchAccount = async (provider: string, account: OAuthAccount, retryPending = false) => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     if (account.active && !retryPending || account.needsReauth || account.paused || switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider) || selectionMutationsRef.current.has(`oauth:${provider}`)) return;
     const target = { provider, accountId: account.id };
     switchingAccountRef.current.set(provider, target);
@@ -509,7 +515,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const setAccountThreshold = async (provider: string, account: OAuthAccount, threshold: number | null): Promise<boolean> => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     const key = `oauth:${provider}`;
     if (switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider) || selectionMutationsRef.current.has(key)) return false;
     const mutationKey = invalidateSelectionReads(provider, "oauth");
@@ -560,7 +566,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const pauseAccount = async (provider: string, account: OAuthAccount, paused: boolean, retryAffinityReset = false) => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     if (switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider) || selectionMutationsRef.current.has(`oauth:${provider}`)) return;
     const target = { provider, accountId: account.id };
     pausingAccountRef.current.set(provider, target);
@@ -640,7 +646,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const retryAffinityResetOnly = async (provider: string, accountId: string) => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     const key = `oauth:${provider}`;
     if (selectionMutationsRef.current.has(key) || switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider)) return;
     const retry = { kind: "reset" as const, accountId };
@@ -714,7 +720,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const switchApiKey = async (provider: string, entry: ApiKeyEntry) => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     if (entry.active && !entry.disabled || selectionMutationsRef.current.has(`key:${provider}`)) return;
     const key = invalidateSelectionReads(provider, "api-key");
     const mutation = Symbol();
@@ -754,7 +760,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const removeApiKey = async (provider: string, entry: ApiKeyEntry) => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     const currentMutation = () => aliveRef.current && mountedRef.current
       && serverRef.current === serverIdentity && isApiTargetCaptureCurrent(capture);
     const consented = await confirmAction({
@@ -774,7 +780,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const addApiKeyValue = async (provider: string, rawKey: string): Promise<boolean> => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     const currentMutation = () => aliveRef.current && mountedRef.current
       && serverRef.current === serverIdentity && isApiTargetCaptureCurrent(capture);
     const key = rawKey.trim();
@@ -806,7 +812,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const editCredentialAlias = async (provider: string, type: "oauth" | "api-key", id: string, current?: string) => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     const currentMutation = () => aliveRef.current && mountedRef.current
       && serverRef.current === serverIdentity && isApiTargetCaptureCurrent(capture);
     const entered = await requestTextValue({
@@ -837,7 +843,7 @@ export function useProviderAccountPools(deps: {
   );
 
   const removeAccount = async (provider: string, account: OAuthAccount) => {
-    const capture = captureApiTarget("shared", apiBase);
+    const capture = renderCapture;
     const label = accountLabel(provider, account);
     const consented = await confirmAction({
       message: t("prov.accountRemoveConfirm", { email: label }),
