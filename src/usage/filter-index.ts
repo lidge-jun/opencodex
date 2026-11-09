@@ -260,6 +260,8 @@ export interface UsageFilterIndexTestHooks {
   betweenReclaimCheckAndLock?: (info: { dbPath: string; candidates: string[] }) => void;
   /** Runs after a refresh, before the candidate select reads the projection. */
   afterRefresh?: (info: { dbPath: string }) => void;
+  /** Runs when a read met another writer's lock, before its back-off and retry. */
+  beforeBusyRetry?: (info: { dbPath: string; attempt: number }) => void;
 }
 
 interface IndexMeta {
@@ -1296,8 +1298,12 @@ export async function readUsageFilterCandidates(
         continue;
       }
       if (isBusyError(error)) {
+        // Contention, including a peer still creating the projection, is waited out rather than
+        // read as a foreign file. The bound is three attempts of the busy timeout plus these
+        // delays (about 835 ms) before the request falls back to the streaming read.
         const delay = BUSY_RETRY_DELAYS_MS[attempt];
         if (delay === undefined) return null;
+        testHooks?.beforeBusyRetry?.({ dbPath: path, attempt });
         await new Promise<void>(resolve => setTimeout(resolve, delay));
         continue;
       }
