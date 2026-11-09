@@ -260,6 +260,66 @@ describe("rejected reasoning rungs", () => {
     expect(logCtx.activeAttempt?.recoveryKinds).toEqual(["reasoning-effort-downgrade"]);
   });
 
+  test.each(["openai-chat", "openai-responses"] as const)(
+    "replays once on requested reasoning effort not supported phrasing (%s)",
+    async (adapter) => {
+      writeSnapshot(["low", "high", "max"]);
+      const requestedEffortRefusal = JSON.stringify({
+        error: {
+          message: "The requested reasoning effort is not supported for this model",
+        },
+      });
+      const outbound: Array<Record<string, unknown>> = [];
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return outbound.length === 1
+          ? new Response(requestedEffortRefusal, { status: 400, headers: { "content-type": "application/json" } })
+          : success();
+      }) as typeof fetch;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+
+      const cfg = adapter === "openai-chat" ? config() : passthroughConfig();
+      const response = await handleResponses(request(true), cfg, logCtx);
+      await response.text();
+
+      expect(outbound).toHaveLength(2);
+      expect(effortOf(outbound[0])).toBe("max");
+      expect(effortOf(outbound[1])).toBe("high");
+      expect(logCtx.activeAttempt?.recoveryKinds).toEqual(["reasoning-effort-downgrade"]);
+    },
+  );
+
+  test.each(["openai-chat", "openai-responses"] as const)(
+    "replays once on translated param effort not supported phrasing (%s)",
+    async (adapter) => {
+      writeSnapshot(["low", "high", "max"]);
+      const paramEffortRefusal = JSON.stringify({
+        error: {
+          type: "invalid_request_error",
+          param: "reasoning_effort",
+          message: "reasoning_effort max is not supported for this model",
+        },
+      });
+      const outbound: Array<Record<string, unknown>> = [];
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return outbound.length === 1
+          ? new Response(paramEffortRefusal, { status: 400, headers: { "content-type": "application/json" } })
+          : success();
+      }) as typeof fetch;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+
+      const cfg = adapter === "openai-chat" ? config() : passthroughConfig();
+      const response = await handleResponses(request(true), cfg, logCtx);
+      await response.text();
+
+      expect(outbound).toHaveLength(2);
+      expect(effortOf(outbound[0])).toBe("max");
+      expect(effortOf(outbound[1])).toBe("high");
+      expect(logCtx.activeAttempt?.recoveryKinds).toEqual(["reasoning-effort-downgrade"]);
+    },
+  );
+
   // The guard used to live inside the generic `recovery:` loop, so every `continue recovery`
   // handed the turn a fresh downgrade budget and one request could walk the ladder down.
   test("downgrades at most once even when the replay is refused again", async () => {

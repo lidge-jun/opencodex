@@ -572,6 +572,7 @@ const EFFORT_PARAM_NAMES = new Set([
   "reasoning.effort",
   "reasoning",
   "reasoning_parameters",
+  "effort",
 ]);
 
 function cleanParam(str: string): string {
@@ -682,6 +683,19 @@ const GENERIC_PARAM_WORDS = new Set([
   "object",
   "null",
   "none",
+  "low",
+  "medium",
+  "high",
+  "max",
+  "xhigh",
+  "minimal",
+  "standard",
+  "default",
+  "effort",
+  "level",
+  "mode",
+  "rung",
+  "rungs",
 ]);
 
 function diagnosticTextNamesOtherParameter(text: string): boolean {
