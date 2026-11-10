@@ -69,7 +69,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (구독으로 실행할 때 설정하지 않으면 네이티브 `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`) |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | OpenCodex가 라우팅 별칭으로 설정한 티어 슬롯의 `/model` 라벨(예: `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`). launchd 시스템 환경과 셸 훅에도 같은 짝으로 기록합니다. 모델 ID는 별칭 그대로입니다. 직접 설정한 슬롯이나 라벨은 건드리지 않습니다 |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort`가 켜져 있으면 `1` (조건부) |
-| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch`가 설정된 경우 (조건부, 기본값은 꺼짐) |
+| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch`가 설정된 경우 (조건부, 기본으로는 주입하지 않으며 Claude Code 자체 기본값을 따름) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `maxContextTokens`가 설정된 경우 기존 컨텍스트 재정의 값 (조건부) |
 직접 내보낸 변수가 항상 우선해요. 추가 인자는 그대로 전달돼요: `ocx claude -p "hello"`.
 
@@ -732,7 +732,7 @@ Anthropic 백엔드를 명시하면 의도적으로 실패 후 중단해요.
 언급하면 자동으로 불러와요. 네이티브 패스스루에서는 정상이며, 라우팅 모델에서는 opencodex가
 기본적으로 스텁으로 바꿔요(`blockedSkills: ["claude-api"]`).
 
-**첫 턴부터 MCP 도구 스키마가 컨텍스트를 채움** — `claudeCode.toolSearch: true`는 클라이언트의 도구 검색을 켜는 선택 설정이며 기본값은 꺼짐입니다. 네이티브 Anthropic 경로는 서버 측 검색과 지연 도구 참조를 그대로 전달합니다. 기본 번역 경로는 같은 서버 기능을 제공하지 않으므로 모든 타사 경로에서 켜도 된다는 뜻은 아닙니다.
+**첫 턴부터 MCP 도구 스키마가 컨텍스트를 채움** — 게이트웨이 뒤에서 Claude Code가 MCP 도구를 지연 로드하는지는 버전에 따라 다릅니다. v2.1.304부터는 `ANTHROPIC_BASE_URL`이 게이트웨이를 가리켜도(모든 `ocx claude` 세션 포함) 도구 검색이 기본으로 켜집니다. 그 이전 버전은 게이트웨이 뒤에서 지연 로드를 끄고 첫 턴에 모든 도구 스키마를 넣으므로 `claudeCode.toolSearch: true`로 다시 켤 수 있습니다. `ocx claude`는 이 설정이 있을 때만 `ENABLE_TOOL_SEARCH`를 주입하고, 설정이 없으면 클라이언트 자체 기본값을 따릅니다. 번역 Chat 경로(DeepSeek, GLM 등)에서는 `ToolSearch`로 도구를 불러올 때마다 도구 목록과 시스템 메시지가 바뀌어 다음 요청이 프롬프트 캐시를 대부분 놓칩니다([#7963](https://github.com/lidge-jun/opencodex/issues/7963)). 캐시를 우선하려면 `ocx claude` 실행 전에 `ENABLE_TOOL_SEARCH=false`를 export하세요. 직접 export한 값이 항상 우선합니다. 네이티브 Anthropic 경로는 서버 측 검색과 지연 도구 참조를 그대로 전달합니다. 기본 번역 경로는 같은 서버 기능을 제공하지 않으므로 모든 타사 경로에서 켜도 된다는 뜻은 아닙니다.
 
 예외적으로, 클라이언트가 직접 실행하는 eager `ToolSearch` 함수와 구조화된 검색 결과를 제공하고 최종 Responses 목적지가 `additional_tools`를 지원한다면 `claudeCode.appendOnlyToolLoadingModels`로 그 목적지를 명시하여 사용할 수 있습니다. 이 옵션은 사용하지 않은 지연 정의를 초기 카탈로그에서 제외하고 성공한 검색 위치에 현재 정의를 배치합니다. 런처의 `toolSearch` 설정만으로 이 동작이나 서버 측 검색이 활성화되지는 않습니다. 지원되는 클라이언트와 게이트웨이 조합에서만 켜고, 그 밖의 타사 경로에서는 꺼 두세요. 기존 compatibility-enforcement 검사는 그대로 적용되므로 지원하지 않는 요청을 거절할 수 있습니다. 캐시 적중이나 네이티브 검색과의 완전한 동등성은 보장하지 않습니다. [영문 설정 안내](/guides/claude-code/#preserve-cache-prefixes-when-client-tools-load)를 참고하세요.
 
