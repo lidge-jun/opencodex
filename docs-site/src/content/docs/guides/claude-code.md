@@ -15,7 +15,7 @@ This output-order fix does not resolve Cognition's separate refusal of some gene
 text. It preserves system instructions and safety constraints.
 
 For an Anthropic route on stored OAuth or an Anthropic API key, native Fast is available on
-`claude-opus-5-5`, `claude-opus-5`, and `claude-opus-4-8`: pick the model's `--fast` row (listed
+`claude-fable-5-2`, `claude-opus-5-5`, `claude-opus-5`, and `claude-opus-4-8`: pick the model's `--fast` row (listed
 when Fast rows are enabled) or set `fastMode: true`. Claude Code's own `/fast` toggle is not
 translated on routed requests: the `speed` field it sends does not survive translation. The proxy sends Anthropic's Fast request and records the returned `usage.speed`; only
 confirmed Fast usage gets the 2x API-equivalent cost estimate. A recognized Fast-specific refusal
