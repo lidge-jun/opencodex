@@ -69,6 +69,7 @@ import {
 import {
   copyPreviousResponseReplayProvenance,
   expandPreviousResponseInput,
+  previousResponseReplayPrefixLength,
   previousResponseReplayFailure,
   markBodyNonPersistable,
   previousResponseProviderState,
@@ -183,7 +184,7 @@ import {
 } from "./account-change-state";
 
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
-import { warnEagerCodexToolCatalog } from "./codex-tool-catalog";
+import { eagerCodexToolCatalogSurface, warnEagerCodexToolCatalog } from "./codex-tool-catalog";
 
 /** Policy-routing evidence. The direct lane's settings-only body has no conversation to scan. */
 function routeEvidence(options: Pick<HandleResponsesOptions, "directRequest">, parsed: OcxParsedRequest): PolicyRequestEvidence {
@@ -324,10 +325,6 @@ export async function prepareResponsesRequest(
     && Array.isArray((body as { input?: unknown }).input)
     && ((body as { input: unknown[] }).input).some((item: unknown) =>
       typeof item === "object" && item !== null && (item as { type?: string }).type === "compaction_trigger");
-  if (inboundWire === "responses" && !concreteSelection) {
-    warnEagerCodexToolCatalog(body, req.headers,
-      options.compactionRecoveryKind === "compaction-v1" || isCompactionTrigger ? "compact" : "responses");
-  }
   // Compaction may send the last client-visible bare model after a combo switch.
   // Configured selectors take precedence; otherwise recall before combo dispatch (#3891).
   if (!concreteSelection && !options.compactionRoutingOverride && body && typeof body === "object" && !Array.isArray(body)) {
@@ -461,6 +458,15 @@ export async function prepareResponsesRequest(
       && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string");
   options.responsesInstructionImage ||= responsesHasInstructionImage(body);
   options.responsesFileImage ||= responsesHasFileImage(body);
+  // Counted after replay expansion so the catalog this request pays for is the one measured:
+  // input restored from stored continuation state is history, and the prefix removes it.
+  if (inboundWire === "responses" && !concreteSelection) {
+    warnEagerCodexToolCatalog(body, req.headers, {
+      surface: eagerCodexToolCatalogSurface(body, options.compactionRecoveryKind),
+      replayPrefixLength: previousResponseReplayPrefixLength(body),
+      logicalRequest: logCtx,
+    });
+  }
 
   // Spawn-message compatibility (both directions): agent_message task payloads ride in
   // encrypted_content slots as plaintext. Rewrite them to input_text on the RAW body BEFORE

@@ -10,13 +10,33 @@ import { codeModeRenderedToolNames } from "./code-mode-collab-surface";
  * rule, because an eager catalog stays a valid request (ADR-0022).
  */
 export const EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD = 64;
-/** Sessions already warned. Bounded so a long-lived proxy cannot grow it without limit. */
-const WARNED_SESSION_LIMIT = 1024;
-const warnedSessions = new Set<string>();
+/**
+ * Sessions already warned, least recently sent first. Bounded so a long-lived proxy cannot grow
+ * it without limit: the dedupe covers this many sessions and no more, so an operator running more
+ * sessions than that can see one repeat warning. Recency refreshes on every request a session
+ * sends, so the session being evicted is the one that has been idle longest.
+ */
+export const WARNED_SESSION_LIMIT = 1024;
+const warnedSessions = new Map<string, true>();
+/** Logical requests already warned without a session identity; weak so completed requests leave no trace. */
+const warnedAnonymousRequests = new WeakSet<object>();
 const CODEX_CLIENT_IDENTITY = /^(?:codex|codex_cli_rs|codex_app|codex_work_desktop|codexless_agent|Codex Desktop)(?:\/|$)/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Which wire surface a request is being counted for. Compaction sends its history as `input` rather
+ * than as declarations, so only its top-level `tools` are this request's catalog.
+ */
+export function eagerCodexToolCatalogSurface(
+  body: unknown,
+  compactionRecoveryKind: string | undefined,
+): "responses" | "compact" {
+  if (compactionRecoveryKind === "compaction-v1") return "compact";
+  const input = isRecord(body) && Array.isArray(body.input) ? body.input : [];
+  return input.some(item => isRecord(item) && item.type === "compaction_trigger") ? "compact" : "responses";
 }
 
 function collectEagerMcpTools(specs: unknown[], names: Set<string>, namespace?: string): void {
@@ -42,28 +62,19 @@ function collectEagerMcpTools(specs: unknown[], names: Set<string>, namespace?: 
   }
 }
 
-/** An item the model produced: assistant text, reasoning, a tool call or a compaction. */
-function isModelOutput(item: unknown): boolean {
-  if (!isRecord(item)) return false;
-  if (item.role === "assistant") return true;
-  const type = typeof item.type === "string" ? item.type : "";
-  return type.endsWith("_call") || type === "reasoning"
-    || type === "compaction" || type === "compaction_summary" || type === "context_compaction";
-}
-
 /**
- * Responses Lite `additional_tools` declared by the current turn. A resumed thread resends its
- * whole history, including earlier turns' declarations, so only items after the last model output
- * belong to this request. A first turn has none, so its catalog at the head of `input` counts even
- * behind Codex's developer and environment-context messages.
+ * Responses Lite `additional_tools` the client sent for this request.
+ *
+ * Codex does not express "current turn" by position: a window resends its base catalog at the head
+ * of `input` on every request and appends an incremental `additional_tools` update wherever the
+ * change happened, including after a replayed tool call. Both are live declarations that this
+ * request pays for, so every client-sent item counts. Only what the proxy itself replayed from
+ * stored continuation state is history, and `currentTurnWireToolCatalogBody` removes it before
+ * this runs.
  */
-function currentTurnAdditionalTools(input: unknown[]): unknown[][] {
-  let start = 0;
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    if (isModelOutput(input[index])) { start = index + 1; break; }
-  }
+function clientSentAdditionalTools(input: unknown[]): unknown[][] {
   const groups: unknown[][] = [];
-  for (const item of input.slice(start)) {
+  for (const item of input) {
     if (isRecord(item) && item.type === "additional_tools" && Array.isArray(item.tools)) groups.push(item.tools);
   }
   return groups;
@@ -71,40 +82,71 @@ function currentTurnAdditionalTools(input: unknown[]): unknown[][] {
 
 /**
  * Eager MCP definitions a canonical Codex client declared for this request, or 0 for any other
- * client. Compaction reads only top-level `tools`: its `input` is history.
+ * client. `replayPrefixLength` is the leading input the proxy restored from stored continuation
+ * state; those items are history and grant no declaration for this turn. Compaction reads only
+ * top-level `tools`: its `input` is history.
  */
-export function eagerCodexMcpToolCount(body: unknown, headers: Headers, surface: "responses" | "compact" = "responses"): number {
+export function eagerCodexMcpToolCount(
+  body: unknown,
+  headers: Headers,
+  surface: "responses" | "compact" = "responses",
+  replayPrefixLength?: number,
+): number {
   if (!headers.has("x-codex-turn-metadata")
     && !CODEX_CLIENT_IDENTITY.test(headers.get("originator") ?? "")
     && !CODEX_CLIENT_IDENTITY.test(headers.get("user-agent") ?? "")) return 0;
-  const current = currentTurnWireToolCatalogBody(body, undefined);
+  const current = currentTurnWireToolCatalogBody(body, replayPrefixLength);
   if (!isRecord(current)) return 0;
   const names = new Set<string>();
   if (Array.isArray(current.tools)) collectEagerMcpTools(current.tools, names);
   if (surface === "responses" && Array.isArray(current.input)) {
-    for (const tools of currentTurnAdditionalTools(current.input)) collectEagerMcpTools(tools, names);
+    for (const tools of clientSentAdditionalTools(current.input)) collectEagerMcpTools(tools, names);
   }
   return names.size;
 }
 
 /**
  * Warn once per session when a Codex request carries an eagerly expanded MCP catalog. Only the
- * count and the threshold are logged; tool names, bodies and session identifiers are not. A
- * request without a session identity shares one anonymous slot.
+ * count and the threshold are logged; tool names, bodies and session identifiers are not.
+ *
+ * A request without a session identity has no session to warn once per, so the
+ * `logicalRequest` scope stands in for one: each logical request warns, and a retry, combo child
+ * or compaction replay that shares the scope does not repeat it. Callers that omit the scope fall
+ * back to the session only.
  */
-export function warnEagerCodexToolCatalog(body: unknown, headers: Headers, surface: "responses" | "compact" = "responses"): void {
+export function warnEagerCodexToolCatalog(
+  body: unknown,
+  headers: Headers,
+  options: { surface?: "responses" | "compact"; replayPrefixLength?: number; logicalRequest?: object } = {},
+): void {
+  const surface = options.surface ?? "responses";
   // A diagnostic must never change the request it observes: any failure while counting a
   // malformed body skips the warning and lets the request continue exactly as before.
   let count: number;
-  try { count = eagerCodexMcpToolCount(body, headers, surface); } catch { return; }
+  try { count = eagerCodexMcpToolCount(body, headers, surface, options.replayPrefixLength); } catch { return; }
   if (count < EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD) return;
-  const session = sessionLaneIdFromRequest(headers) ?? "";
-  if (warnedSessions.has(session)) return;
-  if (warnedSessions.size >= WARNED_SESSION_LIMIT) warnedSessions.delete(warnedSessions.values().next().value!);
-  warnedSessions.add(session);
+  const session = sessionLaneIdFromRequest(headers);
+  if (session !== undefined) {
+    if (warnedSessions.has(session)) {
+      // Refresh recency: a session still sending traffic is never the one evicted next.
+      warnedSessions.delete(session);
+      warnedSessions.set(session, true);
+      return;
+    }
+    while (warnedSessions.size >= WARNED_SESSION_LIMIT) {
+      const oldest = warnedSessions.keys().next().value;
+      if (oldest === undefined) break;
+      warnedSessions.delete(oldest);
+    }
+    warnedSessions.set(session, true);
+  } else if (options.logicalRequest !== undefined) {
+    if (warnedAnonymousRequests.has(options.logicalRequest)) return;
+    warnedAnonymousRequests.add(options.logicalRequest);
+  }
   console.warn(
     `[codex-catalog] Codex sent ${count} eager MCP tool definitions (warning threshold ${EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD}) `
     + "instead of deferred tool discovery; its model metadata may be missing or stale. The request was forwarded unchanged. "
-    + "Run 'ocx sync --restart-codex' to reload the catalog. Shown once per session.",
+    + "Run 'ocx sync --restart-codex' to reload the catalog. Shown once per session, or once per request "
+    + "when the client sends no session identity.",
   );
 }

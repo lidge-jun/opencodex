@@ -3,10 +3,12 @@ import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import {
   EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD,
+  WARNED_SESSION_LIMIT,
   eagerCodexMcpToolCount,
   warnEagerCodexToolCatalog,
 } from "../../src/server/responses/codex-tool-catalog";
 import type { OcxConfig } from "../../src/types";
+import { clearResponseStateForTests, rememberResponseState } from "../../src/responses/state";
 import { createTempHome } from "../helpers/temp-home";
 import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
 
@@ -95,6 +97,7 @@ beforeEach(() => {
   saveConfig({
     port: 0, hostname: "127.0.0.1", websockets: true, defaultProvider: "fixture",
     providers: { fixture: { adapter: "openai-chat", baseUrl: new URL("/v1", upstream.url).href, apiKey: "fixture-key", liveModels: false, allowPrivateNetwork: true } },
+    combos: { catalog: { strategy: "failover", targets: [{ provider: "fixture", model: "model" }] } },
   } as OcxConfig);
   server = startServer(0, { inspectNativeCodexOwnership });
 });
@@ -103,6 +106,7 @@ afterEach(async () => {
   warn.mockRestore();
   await server?.stop(true);
   upstream?.stop(true);
+  clearResponseStateForTests();
   home.remove();
 });
 
@@ -182,30 +186,40 @@ describe("an eagerly expanded Codex MCP catalog is forwarded with a one-time dia
     expect(catalogWarnings()).toHaveLength(1);
   });
 
-  test("a resumed codex-rs thread's first-turn catalog is history", async () => {
+  test("a resumed codex-rs window's client-sent catalog is counted, not treated as history", async () => {
+    // Codex resends the window's base catalog when its input diverges, and the request pays for
+    // every definition it carries. The client's own resend is this request's catalog.
     const result = await send("/v1/responses", [], codexHeaders(), {
       input: [...liteFirstTurn(mcpTools()), message("assistant", "Earlier response"), message("user", "Current request")],
     });
     expect(result.status, result.text).toBe(200);
     expect(upstreamCalls).toBe(1);
-    expect(catalogWarnings()).toHaveLength(0);
+    expect(catalogWarnings()).toHaveLength(1);
   });
 
-  test.each([
-    ["with a small current declaration", true],
-    ["without a current declaration", false],
-  ])("a resumed thread's historical eager additional_tools are not counted (%s)", async (_label, currentDeclaration) => {
-    const result = await send("/v1/responses", [], codexHeaders(), {
-      input: [
-        { type: "additional_tools", role: "developer", tools: mcpTools() },
-        { role: "user", content: "Earlier request" },
-        { role: "assistant", content: "Earlier response" },
-        ...(currentDeclaration ? [{ type: "additional_tools", role: "developer", tools: mcpTools(false, 3) }] : []),
-        { role: "user", content: "Current request" },
-      ],
-    });
+  test("a combo-routed Codex turn is diagnosed once for the logical request", async () => {
+    const result = await send("/v1/responses", mcpTools(), codexHeaders(), { model: "combo/catalog" });
     expect(result.status, result.text).toBe(200);
     expect(upstreamCalls).toBe(1);
+    expect(catalogWarnings()).toHaveLength(1);
+  });
+
+  test("a previous_response_id continuation that replays stored history is not re-counted", async () => {
+    // Codex carries its own history on every turn. This entry's request held the eager catalog,
+    // so the continuation's replayed prefix holds it too; only genuinely new declarations count.
+    const storedInput = liteFirstTurn(mcpTools());
+    rememberResponseState(
+      { model: "fixture/model", input: storedInput },
+      { id: "resp_catalog_replay", status: "completed",
+        output: [{ type: "message", id: "msg_catalog_replay", role: "assistant", content: "Earlier response" }] },
+    );
+    const result = await send("/v1/responses", [], codexHeaders(), {
+      previous_response_id: "resp_catalog_replay",
+      input: [...storedInput,
+        { type: "message", id: "msg_catalog_replay", role: "assistant", content: "Earlier response" },
+        message("user", "Current request")],
+    });
+    expect(result.status, result.text).toBe(200);
     expect(catalogWarnings()).toHaveLength(0);
   });
 
@@ -296,12 +310,85 @@ describe("the eager catalog count stays a bounded, side-effect-free diagnostic",
       { type: "function_call", call_id: "call_1", name: "mcp__fixture__tool_0", arguments: "{}" },
       { type: "function_call_output", call_id: "call_1", output: "ok" },
     ]],
+    ["an assistant message", [message("assistant", "Earlier response")]],
     ["reasoning", [{ type: "reasoning", summary: [] }]],
     ["a compaction", [{ type: "compaction", encrypted_content: "opaque" }]],
-  ])("history whose last model output is %s keeps the earlier catalog out of the count", (_label, tail) => {
-    const input = [...liteFirstTurn(mcpTools()), ...tail];
-    expect(eagerCodexMcpToolCount({ input }, headers)).toBe(0);
-    expect(eagerCodexMcpToolCount({ input: liteFirstTurn(mcpTools()) }, headers)).toBe(EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD);
+  ])("a trailing %s neither adds nor removes declarations", (_label, tail) => {
+    // The client resends this window's catalog on every request, so the definitions it carries are
+    // this request's cost no matter what the model produced afterwards.
+    expect(eagerCodexMcpToolCount({ input: [...liteFirstTurn(mcpTools()), ...tail] }, headers))
+      .toBe(EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD);
+  });
+
+  test("a continuation's fresh additional_tools catalog ahead of replayed calls is counted", () => {
+    // A resumed Codex turn resends the window's base catalog, then its own tool calls. The catalog
+    // precedes those calls, so a scan that starts after the last model output reads only history
+    // and misses the definitions this request actually carries.
+    const input = [
+      ...liteFirstTurn(mcpTools()),
+      message("assistant", "Earlier response"),
+      { type: "function_call", call_id: "call_1", name: "wait", arguments: "{}" },
+      { type: "function_call_output", call_id: "call_1", output: "ok" },
+      message("user", "Current request"),
+    ];
+    expect(eagerCodexMcpToolCount({ input }, headers)).toBe(EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD);
+  });
+
+  test("an incremental additional_tools update after a replayed step is counted", () => {
+    const input = [
+      ...liteFirstTurn([{ type: "tool_search", execution: "client" }]),
+      { type: "reasoning", summary: [] },
+      { type: "additional_tools", role: "developer", tools: mcpTools() },
+      message("user", "Current request"),
+    ];
+    expect(eagerCodexMcpToolCount({ input }, headers)).toBe(EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD);
+  });
+
+  test("input restored from stored continuation state is history, not this request's catalog", () => {
+    const stored = liteFirstTurn(mcpTools());
+    const clientTools = [{ type: "namespace", name: "mcp__current", tools: mcpTools(false, 3)[0]!.tools }];
+    const client = [{ type: "additional_tools", role: "developer", tools: clientTools }];
+    const body = { input: [...stored, ...client] };
+    expect(eagerCodexMcpToolCount(body, headers, "responses", stored.length)).toBe(3);
+    expect(eagerCodexMcpToolCount(body, headers)).toBe(EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD + 3);
+  });
+
+  test("an active session is not evicted before an idle one", () => {
+    const capacity = WARNED_SESSION_LIMIT;
+    const session = (index: number) => new Headers({ originator: "codex_cli_rs", session_id: `catalog-lru-${index}` });
+    const eager = { input: "hello", tools: mcpTools() };
+    for (let index = 0; index < capacity; index += 1) warnEagerCodexToolCatalog(eager, session(index));
+    expect(catalogWarnings()).toHaveLength(capacity);
+    // The first session sends again, which must refresh its recency...
+    warnEagerCodexToolCatalog(eager, session(0));
+    expect(catalogWarnings()).toHaveLength(capacity);
+    // ...so filling the bound again evicts the next idlest session, not this one.
+    warnEagerCodexToolCatalog(eager, session(capacity));
+    warnEagerCodexToolCatalog(eager, session(0));
+    expect(catalogWarnings()).toHaveLength(capacity + 1);
+  });
+
+  test("each sessionless logical request is warned, and one request is warned once", () => {
+    const eager = { input: "hello", tools: mcpTools() };
+    const anonymous = new Headers({ originator: "codex_cli_rs" });
+    const first = {};
+    const second = {};
+    warnEagerCodexToolCatalog(eager, anonymous, { logicalRequest: first });
+    // A retry or compaction handoff of the same request shares its scope, so it stays silent.
+    warnEagerCodexToolCatalog(eager, anonymous, { logicalRequest: first });
+    expect(catalogWarnings()).toHaveLength(1);
+    warnEagerCodexToolCatalog(eager, anonymous, { logicalRequest: second });
+    expect(catalogWarnings()).toHaveLength(2);
+  });
+
+  test("a sessionless caller does not suppress a later anonymous caller's warning", async () => {
+    const anonymous = { "x-codex-turn-metadata": "{}" };
+    for (const _ of [0, 1]) {
+      const result = await send("/v1/responses", mcpTools(), anonymous);
+      expect(result.status, result.text).toBe(200);
+    }
+    expect(upstreamCalls).toBe(2);
+    expect(catalogWarnings()).toHaveLength(2);
   });
 
   test("a deeply nested namespace body neither throws nor counts", () => {

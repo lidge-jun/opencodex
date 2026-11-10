@@ -691,7 +691,8 @@ export async function handleResponsesCompact(
   }
   const clientModelLabel = options.clientModelLabel ?? clientFacingModelLabel(options.compactionRoutingOverride?.sourceModel ?? (body as { model?: unknown }).model);
   options = { ...options, clientModelLabel };
-  warnEagerCodexToolCatalog(body, req.headers, "compact");
+  // Compaction body `input` is forwarded history, so only the top-level catalog is counted.
+  warnEagerCodexToolCatalog(body, req.headers, { surface: "compact", logicalRequest: logCtx });
   // Compaction forwards client history upstream too; keep local artifact paths out of it.
   redactHostedImageDisplayPaths(body);
   if (!options.compactionRoutingOverride) {
