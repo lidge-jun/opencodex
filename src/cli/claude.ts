@@ -391,7 +391,8 @@ export function buildClaudeEnv(
   // deferred_tools as unsupported. On a translated Chat route each client
   // ToolSearch load also changes the tool list and the catalog nudge, so the next
   // request re-misses the provider's prompt cache (#7963);
-  // claudeCode.appendOnlyToolLoadingModels covers Responses destinations only.
+  // claudeCode.appendOnlyToolLoadingModels covers verified Responses destinations
+  // and claudeCode.chatToolDispatchModels verified direct Chat routes.
   //
   // We inject only when claudeCode.toolSearch is set, so an unset value leaves the
   // client's own version default in place, and setDefault keeps an operator's own
