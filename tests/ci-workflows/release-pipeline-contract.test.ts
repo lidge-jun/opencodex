@@ -437,7 +437,7 @@ describe("release pipeline contract", () => {
       expect(late.exitCode, late.stderr.toString()).toBe(0);
       expect(readFileSync(join(dir, "s"), "utf8").trim().split("\n")).toEqual(Array(34).fill("30"));
     } finally { removeTreeWithRetry(dir); }
-    expect(release.jobs?.publish?.["timeout-minutes"]).toBeGreaterThanOrEqual(45);
+    expect(release.jobs?.publish?.["timeout-minutes"]).toBeGreaterThanOrEqual(70);
   });
 
   test("OIDC publication uses only trusted workflow code and the verified tarball", () => {

@@ -1428,8 +1428,8 @@ jobs:
     needs: [validate-dispatch, verify-release, verify-npm]
     if: ${{ inputs.dry-run != true }}
     runs-on: ubuntu-latest
-    # The two registry waits below can each take about 20 minutes while npm processes a new version.
-    timeout-minutes: 60
+    # The two registry waits below can each take about 20 minutes (about 55 minutes worst case with read timeouts).
+    timeout-minutes: 75
     outputs:
       npm_version: ${{ steps.registry-smoke.outputs.npm_version }}
       npm_dist_tag: ${{ steps.registry-smoke.outputs.npm_dist_tag }}

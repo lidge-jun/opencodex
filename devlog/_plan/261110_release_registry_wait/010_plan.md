@@ -18,7 +18,7 @@ Both stable dev-line releases failed after a successful npm publish:
 - `.github/workflows/release.yml` publish job: both registry loops read up to
   `REGISTRY_WAIT_ATTEMPTS` (default 40) times, `REGISTRY_WAIT_SECONDS` (default 30) apart: about 20 minutes.
   Once the smoke confirms the version, the source gate passes on its first read.
-- Publish job `timeout-minutes` 15 -> 60, so both bounded waits fit inside the job.
+- Publish job `timeout-minutes` 15 -> 75, so both bounded waits fit inside the job.
 - Unchanged: npm publish still runs once and is never retried; a wrong version or gitHead still fails
   immediately; pending verification still never republishes.
 

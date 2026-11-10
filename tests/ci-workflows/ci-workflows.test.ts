@@ -725,8 +725,8 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("pull-requests: read");
     expect(workflow).toContain("id-token: write");
     expect(workflow).toContain("cancel-in-progress: false");
-    // The publish job bounds its two post-publish registry waits (about 20 minutes each).
-    expect(workflow).toContain("timeout-minutes: 60");
+    // The publish job bounds its two post-publish registry waits (about 20 minutes each, ~55 worst case).
+    expect(workflow).toContain("timeout-minutes: 75");
 
     // The exact-SHA CI gate already includes the three hosted keyring legs. The
     // release workflow must not duplicate the Linux bootstrap and drift from CI.
