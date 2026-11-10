@@ -568,3 +568,28 @@ describe("legacy main-line baseline", () => {
   });
 });
 
+
+describe("legacy range in assembled notes", () => {
+  test("generated PRs outside the reviewed range and the tag compare link stay out", () => {
+    const generated = [
+      "## What's Changed",
+      "### Bug Fixes",
+      "* fix(api): inside the range by @alice in https://github.com/lidge-jun/opencodex/pull/10",
+      "* chore(release): open dev before the legacy tag by @bot in https://github.com/lidge-jun/opencodex/pull/8313",
+    ].join("\n");
+    const devBaseline = "0627a2c255bc239d5748119f1d0bc4457a1c03e3";
+    const result = buildReleaseNotes({
+      version: "2.100.0", tags: ["v2.42.0", "v2.99.0"], npmMetadata: "", repository: "lidge-jun/opencodex",
+      generatedNotes: generated,
+      commits: [commit("a", "fix(api): inside the range (#10)")],
+      compareFrom: devBaseline,
+      rangePulls: new Set([10]),
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.body).toContain("#10");
+    expect(result.body).not.toContain("#8313");
+    expect(result.body).toContain(`compare/${devBaseline}...v2.100.0`);
+    expect(result.body).not.toContain("compare/v2.99.0");
+  });
+});
+

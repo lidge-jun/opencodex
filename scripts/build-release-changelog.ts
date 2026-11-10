@@ -286,10 +286,21 @@ export function buildReleaseNotes(input: {
   generatedNotes: string;
   commits: ReleaseCommit[];
   repository: string;
+  /** Overrides the compare link start, e.g. the reviewed dev baseline of a legacy tag. */
+  compareFrom?: string;
+  /**
+   * When set, GitHub-generated PR entries outside this set are dropped. The legacy path needs it:
+   * GitHub computes generated notes from the tag's merge-base, which can reach before the reviewed
+   * range start and would otherwise list PRs the release does not contain.
+   */
+  rangePulls?: ReadonlySet<number>;
 }): ReleaseNotesBuildResult {
   const baseline = selectReleaseBaseline(input.version, input.tags);
   const releaseTag = input.version.startsWith("v") ? input.version : `v${input.version}`;
   const generated = generatedPullChanges(input.generatedNotes);
+  if (input.rangePulls) {
+    for (const number of [...generated.keys()]) if (!input.rangePulls.has(number)) generated.delete(number);
+  }
   const fallbackPrs = new Map<number, PullChange>();
   const directCommits: CommitChange[] = [];
   const coverage = new Map<string, Coverage>();
@@ -359,7 +370,7 @@ export function buildReleaseNotes(input: {
   const body = renderReleaseNotes({
     npmMetadata: input.npmMetadata,
     entries,
-    compareFrom: baseline,
+    compareFrom: input.compareFrom ?? baseline,
     compareTo: releaseTag,
     repository: input.repository,
   });
@@ -690,6 +701,17 @@ async function main(argv: string[]): Promise<void> {
   const packageName = await readPackageName();
   const npmMetadata =
     `Published to npm as \`${packageName}@${version}\` with dist-tag \`${distTag}\`.`;
+  // A legacy baseline makes the reviewed dev commit the range start, so the compare link and the
+  // generated entries must follow it rather than the main-line tag.
+  const legacyStart = baseline && rangeStart !== baseline ? rangeStart : null;
+  const rangePulls = legacyStart ? new Set<number>() : undefined;
+  if (rangePulls) {
+    for (const commit of commits) {
+      const landing = trailingLandingPr(commit.subject);
+      if (landing !== null) rangePulls.add(landing);
+      for (const pr of commit.pulls) rangePulls.add(pr.number);
+    }
+  }
   const built = buildReleaseNotes({
     version,
     tags,
@@ -697,6 +719,7 @@ async function main(argv: string[]): Promise<void> {
     generatedNotes,
     commits,
     repository,
+    ...(legacyStart ? { compareFrom: legacyStart, rangePulls } : {}),
   });
 
   if (built.errors.length > 0) {
