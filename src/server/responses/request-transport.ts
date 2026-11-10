@@ -1,5 +1,5 @@
 import { publicOAuthErrorPresentation } from "../../oauth";
-import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { observeProviderFailureEvent, projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { markProxyError } from "../../lib/client-error-body";
 import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { SendBudgetExhaustedError, errorDestinationText, providerErrorDestinationLabel } from "../../lib/upstream-retry";
@@ -676,6 +676,7 @@ export async function prepareResponsesTransport(
     const observeEvent = (event: AdapterEvent, response: object): void => {
       delivery.noteAdapterEvent();
       observeUsage(event, response);
+      observeProviderFailureEvent(logCtx, event);
     };
     const parseStream = resolved.parseStream.bind(resolved);
     resolved.parseStream = async function* (...args) {
