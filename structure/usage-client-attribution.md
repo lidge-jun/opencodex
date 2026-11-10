@@ -47,6 +47,20 @@ observed during a row read re-verifies the selected bytes before publishing them
 offset that no longer frames a complete row drops the projection instead of serving a partial
 answer. `usage.jsonl` stays authoritative and is never truncated or rewritten.
 
+Each candidate page is one keyset statement per branch, and every branch index is ordered
+`(generation, <equality prefix>, byte_offset, ...)` so its own `ORDER BY byte_offset LIMIT` is
+served by the index walk. This is why the window filter uses `idx_usage_rows_window` rather than a
+timestamp-ordered index, why a lone provider or model pages from
+`idx_usage_attr_{provider,model}_offset`, and why the Codex roster is expanded one label per branch
+instead of `client IN (...)`: each of those alternatives would otherwise force SQLite to sort the
+whole match set on every page, which made a deep page cost seconds on a large ledger -- more than the
+streaming scan the projection exists to replace. The pager keeps one fetch cursor and one surplus
+buffer per branch, so merging the branch heads returns one ascending, de-duplicated page bounded by
+`CANDIDATE_PAGE_SIZE` while each candidate is fetched about once; a branch that fetched past what
+the merge needed carries that surplus into the next page instead of reading it again.
+`tests/usage/usage-filter-paging.test.ts` asserts that no paged branch plan carries a temp B-tree,
+and pins branch-cursor order, the page bound, and the corrupt-projection rebuild.
+
 The index keeps its `-wal` and `-shm` sidecars after the last connection closes
 (`SQLITE_FCNTL_PERSIST_WAL` on every connection that can write, set only once the file classified
 as this projection). The writer runs `PRAGMA wal_checkpoint(TRUNCATE)` before it closes and a

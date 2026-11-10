@@ -216,29 +216,37 @@ describe("filtered usage candidate index", () => {
     expect(summary(result).summary.requests).toBe(inside);
   });
 
-  test("a broad filter consumes bounded candidate pages with timer yields", async () => {
+  test("a broad filter consumes bounded candidate pages with a yield between them", async () => {
     writeRows(Array.from({ length: SYNTHETIC_ROWS }, (_, index) => syntheticRow(index)));
     await getFilteredUsageAggregate({ provider: "kimi" });
     resetUsageAggregateCacheForTests();
 
     const originalRead = ledgerScannerModule.readUsageLedgerRowsAtOffsets;
     const pageSizes: number[] = [];
-    let yieldedBetweenPages = false;
-    let timerFired = false;
+    // Deterministic yield proof. The accumulator yields between pages with a zero-delay macrotask
+    // timer; observing the scheduled timer needs no wall clock, so this cannot flake on a slow
+    // runner the way waiting for a real timer to fire between two reads does.
+    const realSetTimeout = globalThis.setTimeout;
+    const yieldsScheduled: number[] = [];
     const readSpy = spyOn(ledgerScannerModule, "readUsageLedgerRowsAtOffsets")
       .mockImplementation(async options => {
-        if (pageSizes.length > 0) yieldedBetweenPages ||= timerFired;
         pageSizes.push(options.offsets.length);
-        const result = await originalRead(options);
-        if (pageSizes.length === 1) setTimeout(() => { timerFired = true; }, 0);
-        return result;
+        return await originalRead(options);
       });
+    globalThis.setTimeout = ((handler: TimerHandler, timeout?: number) => {
+      // Only count yields requested after a page has been consumed: that is the page loop's own
+      // yield, not any timer the ingest path happens to schedule first.
+      if (pageSizes.length > 0 && (timeout ?? 0) === 0) yieldsScheduled.push(pageSizes.length);
+      return realSetTimeout(handler as () => void, timeout);
+    }) as typeof globalThis.setTimeout;
     try {
       const result = await getFilteredUsageAggregate({});
       expect(result.filterIndex?.candidateRows).toBe(SYNTHETIC_ROWS);
       expect(pageSizes).toEqual([2_000, 2_000]);
-      expect(yieldedBetweenPages).toBe(true);
+      // Exactly one macrotask yield between the two pages, requested after the first page.
+      expect(yieldsScheduled).toContain(1);
     } finally {
+      globalThis.setTimeout = realSetTimeout;
       readSpy.mockRestore();
     }
   });
@@ -1164,17 +1172,22 @@ describe("filtered usage index availability", () => {
     const foreign = "this is not a sqlite database\n";
     writeFileSync(indexPath, foreign);
 
+    // Deterministic: the retry hook clears the foreign file at a known attempt instead of a
+    // timer racing the retry schedule.
+    setUsageFilterIndexTestHooksForTests({
+      beforeRetryDelay: ({ attempt }) => {
+        if (attempt === 0) rmSync(indexPath, { force: true });
+        return true;
+      },
+    });
     const request = getFilteredUsageAggregate({ provider: "openai" });
-    // Early attempts still see the foreign file; clear it inside the short re-check window so
-    // a later attempt builds the projection instead of degrading to the streaming read.
-    const clear = setTimeout(() => rmSync(indexPath, { force: true }), 60);
     try {
       const result = await request;
       expect(summary(result).summary.requests).toBe(expected);
       expect(result.filterIndex?.totalRows).toBe(rows.length);
       expect(result.filterIndex?.candidateRows).toBe(expected);
     } finally {
-      clearTimeout(clear);
+      setUsageFilterIndexTestHooksForTests(null);
     }
   });
 
@@ -1187,15 +1200,21 @@ describe("filtered usage index availability", () => {
     // A directory at a sidecar path is not a private regular file, so the open refuses it.
     mkdirSync(sidecar);
 
+    // Deterministic: clear the unsafe sidecar at the first retry rather than on a timer.
+    setUsageFilterIndexTestHooksForTests({
+      beforeRetryDelay: ({ attempt }) => {
+        if (attempt === 0) rmSync(sidecar, { recursive: true, force: true });
+        return true;
+      },
+    });
     const request = getFilteredUsageAggregate({ provider: "openai" });
-    const clear = setTimeout(() => rmSync(sidecar, { recursive: true, force: true }), 60);
     try {
       const result = await request;
       expect(summary(result).summary.requests).toBe(expected);
       expect(result.filterIndex?.totalRows).toBe(rows.length);
       expect(result.filterIndex?.candidateRows).toBe(expected);
     } finally {
-      clearTimeout(clear);
+      setUsageFilterIndexTestHooksForTests(null);
     }
   });
 
@@ -1767,8 +1786,10 @@ describe("filtered usage index selection evidence", () => {
       sourceFilter: { client: "all", device: { kind: "unconfigured" } },
       configuredApiKeyIds: [],
     })).toContain("idx_usage_rows_admission");
+    // The window is a residual predicate on a byte-offset-ordered index. A timestamp-ordered
+    // index cannot also return ascending offsets, so it would sort the whole match set per page.
     expect(plan({ provider: null, model: null, apiKeyId: null, window: { since: NOW - 60_000, until: NOW } }))
-      .toContain("idx_usage_rows_ts");
+      .toContain("idx_usage_rows_window");
   });
 
   test("the paged candidate select seeks each branch from the page cursor", async () => {
@@ -1777,14 +1798,22 @@ describe("filtered usage index selection evidence", () => {
 
     const paged = (query: Parameters<typeof usageFilterCandidatePlan>[0]) =>
       usageFilterCandidatePlan(query, { paged: true }).join("\n");
-    // Every UNION branch carries the `byte_offset > cursor` bound and its own LIMIT, so a late
-    // page seeks from the cursor instead of re-materializing the candidates before it.
+    // Every branch carries the `byte_offset > cursor` bound and its own LIMIT, so a late page
+    // seeks from the cursor instead of re-materializing the candidates before it.
     const providerOnly = paged({ provider: "openai", model: null, apiKeyId: null });
     expect(providerOnly).toContain("idx_usage_attr_provider");
     expect(providerOnly).toContain("idx_usage_rows_unattributable");
     expect(providerOnly).toContain("byte_offset>");
+    // A lone provider has no model equality to complete the index prefix, so it pages from the
+    // offset-ordered attribution index rather than sorting its whole match set on every page.
+    expect(providerOnly).toContain("idx_usage_attr_provider_offset");
+    expect(paged({ provider: null, model: "m-0", apiKeyId: null }))
+      .toContain("idx_usage_attr_model_offset");
+    // A provider+model pair keeps both equalities in the prefix of the tight index.
+    expect(paged({ provider: "openai", model: "m-0", apiKeyId: null }))
+      .toContain("idx_usage_attr_provider (generation=? AND provider=? AND model=? AND byte_offset>");
     expect(paged({ provider: null, model: null, apiKeyId: null }))
-      .toContain("PRIMARY KEY (generation=? AND byte_offset>");
+      .toContain("idx_usage_rows_window (generation=? AND byte_offset>");
   });
 
   test("every source filter selects exactly the rows matchesUsageSource keeps", async () => {

@@ -1,6 +1,7 @@
 {
   "usage-client-attribution.test.ts": "usage",
   "usage-filter-index.test.ts": "usage",
+  "usage-filter-paging.test.ts": "usage",
   "request-log.test.ts": "usage",
   "request-log-normalization.test.ts": "usage",
   "request-log-error-detail.test.ts": "usage",

@@ -77,7 +77,13 @@ import { USAGE_CODEX_CLIENT_LABELS, type UsageSourceFilter } from "./source-filt
 import { usageAttributions } from "./summary";
 import type { UsageTimeWindow } from "./time-range";
 
-export const USAGE_FILTER_INDEX_SCHEMA_VERSION = 4;
+/**
+ * Bumped to 5 when the candidate indexes moved `byte_offset` ahead of every other ordered column.
+ * The shape of `usage_rows` is unchanged, but a version 4 projection carries indexes that cannot
+ * deliver the pager's order; the derived tables are recreated and rebuilt from the ledger rather
+ * than migrated, so no stale index survives to re-introduce the per-page sort.
+ */
+export const USAGE_FILTER_INDEX_SCHEMA_VERSION = 5;
 export const USAGE_FILTER_INDEX_DB_FILENAME = "usage-filter-index.sqlite";
 /** Rows per SQLite transaction during ingest; also the peak pending-row allocation. */
 export const USAGE_FILTER_INDEX_INSERT_BATCH = 500;
@@ -96,6 +102,18 @@ const BUSY_RETRY_DELAYS_MS = [10, 25, 50, 100, 200, 400, 800, 1_600, 3_200] as c
 // the original short schedule instead of parking behind the long busy backoff.
 const REBUILD_RETRY_DELAYS_MS = [10, 25, 50] as const;
 
+/**
+ * The candidate tables and their indexes.
+ *
+ * Every candidate branch pages in ascending `byte_offset` with `byte_offset > cursor`, so the
+ * ordered column must follow each equality prefix with nothing ordered-by-varying in between. A
+ * `(generation, timestamp, byte_offset)` index cannot satisfy that order without sorting the whole
+ * candidate range on every page, which made a deep page cost seconds instead of the streaming
+ * scan's fraction of one. The window filter is therefore a residual predicate over
+ * `idx_usage_rows_window`, whose monotonic cursor makes the scan one amortized pass. The same rule
+ * is why `idx_usage_attr_provider_offset` and `idx_usage_attr_model_offset` exist: a lone provider
+ * or model equality, like a lone client equality, still has to deliver `byte_offset` in order.
+ */
 const SCHEMA_DDL = `
 CREATE TABLE IF NOT EXISTS ${META_TABLE} (
   key TEXT PRIMARY KEY,
@@ -114,11 +132,11 @@ CREATE TABLE IF NOT EXISTS usage_rows (
   PRIMARY KEY (generation, byte_offset)
 ) WITHOUT ROWID;
 
-CREATE INDEX IF NOT EXISTS idx_usage_rows_ts ON usage_rows(generation, timestamp, byte_offset);
-CREATE INDEX IF NOT EXISTS idx_usage_rows_key ON usage_rows(generation, api_key_id, timestamp, byte_offset);
-CREATE INDEX IF NOT EXISTS idx_usage_rows_client ON usage_rows(generation, client, timestamp, byte_offset);
-CREATE INDEX IF NOT EXISTS idx_usage_rows_admission ON usage_rows(generation, admission_kind, api_key_id, byte_offset);
-CREATE INDEX IF NOT EXISTS idx_usage_rows_unattributable ON usage_rows(generation, unattributable);
+CREATE INDEX IF NOT EXISTS idx_usage_rows_window ON usage_rows(generation, byte_offset, timestamp);
+CREATE INDEX IF NOT EXISTS idx_usage_rows_key ON usage_rows(generation, api_key_id, byte_offset);
+CREATE INDEX IF NOT EXISTS idx_usage_rows_client ON usage_rows(generation, client, byte_offset, surface);
+CREATE INDEX IF NOT EXISTS idx_usage_rows_admission ON usage_rows(generation, admission_kind, byte_offset, api_key_id);
+CREATE INDEX IF NOT EXISTS idx_usage_rows_unattributable ON usage_rows(generation, unattributable, byte_offset);
 
 CREATE TABLE IF NOT EXISTS usage_attributions (
   generation  TEXT NOT NULL,
@@ -129,7 +147,8 @@ CREATE TABLE IF NOT EXISTS usage_attributions (
 ) WITHOUT ROWID;
 
 CREATE INDEX IF NOT EXISTS idx_usage_attr_provider ON usage_attributions(generation, provider, model, byte_offset);
-CREATE INDEX IF NOT EXISTS idx_usage_attr_model ON usage_attributions(generation, model, provider, byte_offset);
+CREATE INDEX IF NOT EXISTS idx_usage_attr_provider_offset ON usage_attributions(generation, provider, byte_offset, model);
+CREATE INDEX IF NOT EXISTS idx_usage_attr_model_offset ON usage_attributions(generation, model, byte_offset, provider);
 
 CREATE TABLE IF NOT EXISTS usage_filter_index_writers (
   generation   TEXT PRIMARY KEY,
@@ -285,6 +304,12 @@ export interface UsageFilterIndexTestHooks {
   afterRefresh?: (info: { dbPath: string }) => void;
   /** Runs when a read met another writer's lock, before its back-off and retry. */
   beforeBusyRetry?: (info: { dbPath: string; attempt: number }) => void;
+  /**
+   * Runs instead of the real back-off before a retry, with the delay the caller would use.
+   * Returning `true` means the hook supplied the wait; a test can then advance its own clock
+   * instead of racing a real timer. Returning nothing keeps the production delay.
+   */
+  beforeRetryDelay?: (info: { dbPath: string; attempt: number; delayMs: number }) => boolean | void;
 }
 
 interface IndexMeta {
@@ -1167,14 +1192,22 @@ async function refreshUsageFilterIndex(
 }
 
 interface CandidateBranch {
+  /** Stable branch name; used to label a page statement in diagnostics and `EXPLAIN` seams. */
+  label: string;
   sql: string;
   values: Array<string | number>;
 }
 
 /**
- * One UNION branch of the candidate select. When `paged` is set each branch ends with
- * `byte_offset > ?` so the pager can seek from its cursor instead of re-reading the candidates
- * before it; the caller appends the cursor value at the end of each branch's values.
+ * One branch of the candidate select. `paged` adds the keyset bound `byte_offset > ?`; the caller
+ * appends the cursor value at the end of each branch's values.
+ *
+ * Every branch is served by an index whose key order is `(generation, <equality prefix>,
+ * byte_offset, ...)`, so `ORDER BY byteOffset` walks the index and the `LIMIT` stops the scan.
+ * That is the whole point of the split: a compound `UNION` cannot keep that order, because
+ * SQLite sorts each compound operand, so the previous single-statement pager re-materialized and
+ * sorted the entire candidate range on every page. The branches are merged in JS by offset
+ * instead, which keeps the one ascending-order contract the accumulator and the tests rely on.
  */
 function candidateBranches(
   query: UsageFilterIndexQuery,
@@ -1214,13 +1247,15 @@ function candidateBranches(
   const client = query.sourceFilter?.client;
   // Each alternative is its own index-friendly predicate. Keeping the Codex and unknown
   // expansions as an OR inside one scan made SQLite walk the whole generation; as separate
-  // branches each one searches the client index.
+  // branches each one searches the client index. The Codex roster is expanded one label per
+  // branch for the same reason a pager needs it: `client IN (...)` matches across several key
+  // values, so SQLite cannot also deliver ascending `byte_offset` from the index and sorts the
+  // whole match set on every page. Separate equalities keep each branch a single ordered seek.
   const clientAlternatives: Array<{ clauses: string[]; values: Array<string | number> }> = [];
   if (client === "codex") {
-    clientAlternatives.push({
-      clauses: [`r.client IN (${USAGE_CODEX_CLIENT_LABELS.map(() => "?").join(", ")})`],
-      values: [...USAGE_CODEX_CLIENT_LABELS],
-    });
+    for (const label of USAGE_CODEX_CLIENT_LABELS) {
+      clientAlternatives.push({ clauses: ["r.client = ?"], values: [label] });
+    }
     // Mirrors matchesUsageSource: legacy Codex-surface rows are included too.
     clientAlternatives.push({ clauses: ["r.client IS NULL AND r.surface IS NULL"], values: [] });
   } else if (client === "unknown") {
@@ -1256,10 +1291,11 @@ function candidateBranches(
     // one API key or client matches a handful.
     const baseIndex = rowAccessIndexWithoutClient(query);
     const cursor = paged ? " AND r.byte_offset > ?" : "";
-    return clientAlternatives.map(alternative => {
+    return clientAlternatives.map((alternative, ordinal) => {
       const index = alternative.clauses.length > 0 ? "idx_usage_rows_client" : baseIndex;
       const clauses = [...rowClauses, ...alternative.clauses];
       return {
+        label: `row[${ordinal}]${index ? ` ${index}` : " primary key"}`,
         sql: `SELECT r.byte_offset AS byteOffset FROM usage_rows r${index ? ` INDEXED BY ${index}` : ""} WHERE r.generation = ? AND ${clauses.join(" AND ")}${cursor}`,
         values: [snapshot.generation, ...rowValues, ...alternative.values],
       };
@@ -1267,12 +1303,19 @@ function candidateBranches(
   }
   // Drive from the attribution index rather than scanning the row range: SQLite's default
   // estimate otherwise prefers the row primary key, which examines every row in the ledger.
-  const attrIndex = query.provider === null ? "idx_usage_attr_model" : "idx_usage_attr_provider";
+  // A provider+model equality pair uses the tight `(provider, model, byte_offset)` index; a lone
+  // provider or model still needs an offset-ordered index or the page would sort every match.
+  const attrIndex = query.provider !== null && query.model !== null
+    ? "idx_usage_attr_provider"
+    : query.provider !== null
+      ? "idx_usage_attr_provider_offset"
+      : "idx_usage_attr_model_offset";
   // Rows with no usable attribution are selected too: the accumulator is what decides, and a
   // hand-edited row with a missing model must fail a provider/model filter exactly as the
   // streaming read does rather than disappear from the result.
   return [
     {
+      label: `attribution ${attrIndex}`,
       sql: `SELECT DISTINCT a.byte_offset AS byteOffset FROM usage_attributions a INDEXED BY ${attrIndex} WHERE a.generation = ? AND ${attrClauses.join(" AND ")} AND a.byte_offset <= ? AND EXISTS (SELECT 1 FROM usage_rows r WHERE r.generation = a.generation AND r.byte_offset = a.byte_offset AND ${rowSql})${paged ? " AND a.byte_offset > ?" : ""}`,
       values: [
         snapshot.generation,
@@ -1283,6 +1326,7 @@ function candidateBranches(
       ],
     },
     {
+      label: "unattributable",
       sql: `SELECT r.byte_offset AS byteOffset FROM usage_rows r INDEXED BY idx_usage_rows_unattributable WHERE r.generation = ? AND r.unattributable = 1 AND ${rowSql}${paged ? " AND r.byte_offset > ?" : ""}`,
       values: [
         snapshot.generation,
@@ -1293,59 +1337,66 @@ function candidateBranches(
   ];
 }
 
-function buildCandidateSelect(
-  query: UsageFilterIndexQuery,
-  snapshot: UsageFilterIndexSnapshot,
-): { sql: string; values: Array<string | number> } {
-  const branches = candidateBranches(query, snapshot, false);
-  return {
-    sql: `${branches.map(branch => branch.sql).join(" UNION ")} ORDER BY byteOffset`,
-    values: branches.flatMap(branch => branch.values),
-  };
-}
-
 /** The index that answers the non-client part of a row-only filter. */
 function rowAccessIndexWithoutClient(query: UsageFilterIndexQuery): string | null {
   if (query.apiKeyId !== null) return "idx_usage_rows_key";
   const device = query.sourceFilter?.device;
   if (device?.kind === "no-key" || device?.kind === "key") return "idx_usage_rows_key";
   if (device?.kind === "unconfigured") return "idx_usage_rows_admission";
-  if (query.window) return "idx_usage_rows_ts";
+  // The window is a residual predicate over a byte-offset-ordered index rather than a seek into
+  // a timestamp-ordered one. A timestamp prefix cannot also deliver ascending `byte_offset`
+  // without sorting, so the choice is a sort of every match on every page or one monotonic pass
+  // over the generation's index entries; the latter is what a streaming scan would cost anyway.
+  if (query.window) return "idx_usage_rows_window";
   return null;
 }
 
-const CANDIDATE_PAGE_SIZE = 2_000;
+export const CANDIDATE_PAGE_SIZE = 2_000;
 
 /**
- * The page statement behind the candidate pager: each UNION branch seeks from the page cursor
- * and stops at the page size, so a late page reads at most `CANDIDATE_PAGE_SIZE` rows per branch
- * rather than re-materializing every candidate before the cursor. The cursor value is appended
- * at the end of each branch's values when the statement runs.
+ * The page statements behind the candidate pager: each branch seeks from the page cursor and
+ * stops at the page size, so a late page reads at most `CANDIDATE_PAGE_SIZE` rows per branch and
+ * never sorts. The pager merges the branch pages by offset; the cursor value is appended at the
+ * end of each branch's values, followed by the page size, when the statement runs.
  */
-function candidatePageSql(
+function candidatePageStatements(
   query: UsageFilterIndexQuery,
   snapshot: UsageFilterIndexSnapshot,
-): { sql: string; branchValues: Array<Array<string | number>> } {
-  // A compound operand cannot carry its own ORDER BY/LIMIT, so each branch is wrapped before
-  // the UNION deduplicates and the outer ORDER BY/LIMIT merges the bounded branch pages.
-  const branches = candidateBranches(query, snapshot, true);
-  const paged = branches.map(
-    branch => `SELECT * FROM (${branch.sql} ORDER BY byteOffset LIMIT ${CANDIDATE_PAGE_SIZE})`,
-  );
-  return {
-    sql: `SELECT byteOffset FROM (${paged.join(" UNION ")}) ORDER BY byteOffset LIMIT ?`,
-    branchValues: branches.map(branch => branch.values),
-  };
+): Array<{ label: string; sql: string; values: Array<string | number> }> {
+  return candidateBranches(query, snapshot, true).map(branch => ({
+    label: branch.label,
+    sql: `${branch.sql} ORDER BY byteOffset LIMIT ?`,
+    values: branch.values,
+  }));
 }
 
-/** Keyset pager over the candidate select: bounded pages, each validated in its own transaction. */
+/**
+ * Keyset pager over the candidate select: bounded pages, each validated in its own transaction.
+ *
+ * Each branch is its own statement so its index order supplies `ORDER BY byteOffset`, and each
+ * keeps its own fetch cursor plus the rows it fetched but the last page did not need. Those rows
+ * are carried into the next page instead of being fetched again: the whole read therefore touches
+ * each candidate about once, bounded by one page of surplus per branch, and never grows with the
+ * number of pages already served. Merging the branch heads yields one ascending, de-duplicated
+ * page; an offset that appears in two branches is emitted once because every head at that value is
+ * consumed together.
+ */
 function candidatePager(
   db: Database,
   snapshot: UsageFilterIndexSnapshot,
   query: UsageFilterIndexQuery,
 ): Pick<UsageFilterCandidateRead, "candidateRows" | "nextPage"> {
-  const { sql, branchValues } = candidatePageSql(query, snapshot);
-  const statement = db.query(sql);
+  const branches = candidatePageStatements(query, snapshot).map(branch => ({
+    statement: db.query(branch.sql),
+    values: branch.values,
+    /** Ascending matches fetched after `fetchCursor` but not yet returned. */
+    pending: [] as number[],
+    /** Read position in `pending`; advancing it keeps draining linear instead of shifting. */
+    head: 0,
+    /** The last offset this branch fetched; each branch bounds its own next fetch by it. */
+    fetchCursor: -1,
+    exhausted: false,
+  }));
   let cursor = -1;
   const pager = {
     candidateRows: 0,
@@ -1361,13 +1412,47 @@ function candidatePager(
           || meta.generation !== snapshot.generation) {
           throw new UsageLedgerRebuildRequiredError("content_changed");
         }
-        const rows = statement.all(
-          ...branchValues.flatMap(values => [...values, cursor]),
-          CANDIDATE_PAGE_SIZE,
-        ) as Array<{ byteOffset: number }>;
-        const offsets = rows.map(row => row.byteOffset);
+        const offsets: number[] = [];
+        while (offsets.length < CANDIDATE_PAGE_SIZE) {
+          // Refill only a branch that ran dry, so a candidate fetched once is never fetched again.
+          for (const branch of branches) {
+            if (branch.head < branch.pending.length || branch.exhausted) continue;
+            branch.pending.length = 0;
+            branch.head = 0;
+            const rows = branch.statement.all(
+              ...branch.values,
+              branch.fetchCursor,
+              CANDIDATE_PAGE_SIZE,
+            ) as Array<{ byteOffset: number }>;
+            let accepted = 0;
+            for (const row of rows) {
+              // A branch that ignored its own bound cannot re-offer an already fetched offset.
+              if (row.byteOffset <= branch.fetchCursor) continue;
+              branch.fetchCursor = row.byteOffset;
+              branch.pending.push(row.byteOffset);
+              accepted += 1;
+            }
+            // A short page is the end; so is a page that made no progress, which stops a branch
+            // that returns the same rows from spinning the merge without advancing the cursor.
+            if (rows.length < CANDIDATE_PAGE_SIZE || accepted === 0) branch.exhausted = true;
+          }
+          let lowest: number | null = null;
+          for (const branch of branches) {
+            const value = branch.pending[branch.head];
+            if (value !== undefined && (lowest === null || value < lowest)) lowest = value;
+          }
+          if (lowest === null) break;
+          // Consume every head holding that offset, which de-duplicates across branches.
+          for (const branch of branches) {
+            if (branch.pending[branch.head] === lowest) branch.head += 1;
+          }
+          // Defensive: the merge only moves forward, so a rewind is a branch contract violation.
+          if (lowest > cursor) {
+            cursor = lowest;
+            offsets.push(lowest);
+          }
+        }
         db.exec("COMMIT");
-        if (offsets.length > 0) cursor = offsets[offsets.length - 1]!;
         pager.candidateRows += offsets.length;
         return offsets;
       } catch (error) {
@@ -1473,7 +1558,9 @@ export async function readUsageFilterCandidates(
         || error instanceof UnsafeSqlitePathError) {
         const delay = REBUILD_RETRY_DELAYS_MS[attempt];
         if (delay === undefined) return null;
-        await new Promise<void>(resolve => setTimeout(resolve, delay));
+        if (testHooks?.beforeRetryDelay?.({ dbPath: path, attempt, delayMs: delay }) !== true) {
+          await new Promise<void>(resolve => setTimeout(resolve, delay));
+        }
         continue;
       }
       if (isBusyError(error)) {
@@ -1483,7 +1570,9 @@ export async function readUsageFilterCandidates(
         const delay = BUSY_RETRY_DELAYS_MS[attempt];
         if (delay === undefined) return null;
         testHooks?.beforeBusyRetry?.({ dbPath: path, attempt });
-        await new Promise<void>(resolve => setTimeout(resolve, delay));
+        if (testHooks?.beforeRetryDelay?.({ dbPath: path, attempt, delayMs: delay }) !== true) {
+          await new Promise<void>(resolve => setTimeout(resolve, delay));
+        }
         continue;
       }
       // Any other index-side failure (permissions, disk full, a corrupt file) degrades to the
@@ -1567,7 +1656,13 @@ export async function readUsageFilterCandidatesPassive(
   }
 }
 
-/** Test seam: the SQLite plan for one filter's candidate select; `paged` explains the pager statement. */
+/**
+ * Test seam: the SQLite plan for one filter's candidate statements, one labeled block per branch.
+ * `paged` explains the statement the pager actually runs, including its keyset bound and `LIMIT`;
+ * the unpaged form is the same branch without the cursor. Neither form may sort: an index-ordered
+ * branch is the contract that keeps a page proportional to its page size rather than to the
+ * candidate set.
+ */
 export function usageFilterCandidatePlan(
   query: UsageFilterIndexQuery,
   options: { paged?: boolean } = {},
@@ -1577,17 +1672,18 @@ export function usageFilterCandidatePlan(
   try {
     const meta = readMeta(db);
     const snapshot = snapshotFrom(meta, 0, 0);
-    if (options.paged) {
-      const { sql, branchValues } = candidatePageSql(query, snapshot);
-      const rows = db.query(`EXPLAIN QUERY PLAN ${sql}`).all(
-        ...branchValues.flatMap(values => [...values, 0]),
-        CANDIDATE_PAGE_SIZE,
-      ) as Array<{ detail: string }>;
-      return rows.map(row => row.detail);
-    }
-    const { sql, values } = buildCandidateSelect(query, snapshot);
-    const rows = db.query(`EXPLAIN QUERY PLAN ${sql}`).all(...values) as Array<{ detail: string }>;
-    return rows.map(row => row.detail);
+    const statements = options.paged
+      ? candidatePageStatements(query, snapshot)
+      : candidateBranches(query, snapshot, false)
+        .map(branch => ({ label: branch.label, sql: branch.sql, values: branch.values }));
+    return statements.flatMap(statement => {
+      const params = options.paged
+        ? [...statement.values, 0, CANDIDATE_PAGE_SIZE]
+        : statement.values;
+      const rows = db.query(`EXPLAIN QUERY PLAN ${statement.sql}`).all(...params) as
+        Array<{ detail: string }>;
+      return [`-- ${statement.label}`, ...rows.map(row => row.detail)];
+    });
   } finally {
     db.close();
   }
