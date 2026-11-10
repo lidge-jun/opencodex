@@ -1,7 +1,9 @@
 import { parseResetCooldownMs } from "../codex/routing";
 import { classifyError, isCyberPolicyCode } from "../lib/errors";
+import { isHardPolicyOrOriginRefusal } from "../lib/hard-refusal";
 import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
 import { isAnthropicBillingFailure } from "../providers/anthropic-billing-refusal";
+import { hasConflictingReasoningEffortCode } from "../providers/reasoning-metadata";
 import { isKiroAccountProfileRefusal } from "../adapters/kiro-refusal";
 import type { OcxComboTarget } from "../types";
 import { targetKey } from "./types";
@@ -385,6 +387,160 @@ function normalizedFailureCode(code?: string | null): string {
 }
 
 /**
+ * xAI can reject a model/account effort rung with this exact vendor envelope. It is target-local
+ * evidence for a combo: the same model may accept a lower rung, or a later target may accept the
+ * request. Keep the match exact so unrelated invalid arguments stay terminal.
+ */
+const EXACT_EFFORT_COMPATIBLE_CODES = new Set(["", "invalid_request_error", "invalid_argument"]);
+const EXACT_EFFORT_COMPATIBLE_TYPES = new Set(["", "invalid_request_error", "upstream_error"]);
+
+function hasIncompatibleDiagnosticCarrier(val: unknown, depth = 0): boolean {
+  if (val === undefined || val === null) return false;
+  if (depth > 8) return true;
+  if (Array.isArray(val)) {
+    if (val.length > 32) return true;
+    for (const item of val) {
+      if (hasIncompatibleDiagnosticCarrier(item, depth + 1)) return true;
+    }
+    return false;
+  }
+  if (typeof val === "string") {
+    try {
+      const parsed = JSON.parse(val);
+      if (parsed && typeof parsed === "object") {
+        return hasIncompatibleDiagnosticCarrier(parsed, depth + 1);
+      }
+      return true;
+    } catch {
+      return true;
+    }
+  }
+  if (typeof val === "object") {
+    const rec = val as Record<string, unknown>;
+    if (rec.param !== undefined && rec.param !== null) {
+      if (typeof rec.param !== "string") return true;
+      const param = rec.param.trim().toLowerCase();
+      if (param.length > 0 && param !== "reasoning_effort" && param !== "reasoning.effort") return true;
+    }
+    if (rec.code !== undefined && rec.code !== null) {
+      if (typeof rec.code !== "string") return true;
+      if (!EXACT_EFFORT_COMPATIBLE_CODES.has(normalizedFailureCode(rec.code))) return true;
+    }
+    if (rec.type !== undefined && rec.type !== null) {
+      if (typeof rec.type !== "string") return true;
+      if (!EXACT_EFFORT_COMPATIBLE_TYPES.has(normalizedFailureCode(rec.type))) return true;
+    }
+    if (rec.error !== undefined && rec.error !== null) {
+      if (hasIncompatibleDiagnosticCarrier(rec.error, depth + 1)) return true;
+    }
+    if (rec.response !== undefined && rec.response !== null) {
+      if (hasIncompatibleDiagnosticCarrier(rec.response, depth + 1)) return true;
+    }
+    if (rec.last_error !== undefined && rec.last_error !== null) {
+      if (hasIncompatibleDiagnosticCarrier(rec.last_error, depth + 1)) return true;
+    }
+    if (rec.details !== undefined && rec.details !== null) {
+      if (hasIncompatibleDiagnosticCarrier(rec.details, depth + 1)) return true;
+    }
+    if (rec.detail !== undefined && rec.detail !== null) {
+      if (hasIncompatibleDiagnosticCarrier(rec.detail, depth + 1)) return true;
+    }
+    if (rec.errors !== undefined && rec.errors !== null) {
+      if (hasIncompatibleDiagnosticCarrier(rec.errors, depth + 1)) return true;
+    }
+    if (rec.message !== undefined && rec.message !== null) {
+      if (typeof rec.message !== "string" || rec.message !== "Invalid reasoning effort.") return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+function isExactInvalidReasoningEffortRefusal(status: number, message: string, code?: string | null): boolean {
+  if (status !== 400 || message.length > 16_384) return false;
+  if (code !== undefined && code !== null && typeof code !== "string") return false;
+  const outerCode = normalizedFailureCode(code);
+  if (!EXACT_EFFORT_COMPATIBLE_CODES.has(outerCode)) return false;
+  if (isHardPolicyOrOriginRefusal(message) || hasConflictingReasoningEffortCode(message)) return false;
+  let text = message.trim();
+  for (let depth = 0; depth < 3; depth += 1) {
+    if (text.startsWith("Provider error 400: ")) text = text.slice("Provider error 400: ".length).trim();
+    if (text.startsWith("data:") && !text.includes("\n")) text = text.slice("data:".length).trim();
+    let payload: unknown;
+    try { payload = JSON.parse(text); } catch { return false; };
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+    const root = payload as Record<string, unknown>;
+    if (root.code !== undefined && root.code !== null && typeof root.code !== "string") return false;
+    if (root.type !== undefined && root.type !== null && typeof root.type !== "string") return false;
+    if (root.message !== undefined && root.message !== null && typeof root.message !== "string") return false;
+    if (root.param !== undefined && root.param !== null) {
+      if (typeof root.param !== "string") return false;
+      const param = root.param.trim().toLowerCase();
+      if (param !== "reasoning_effort" && param !== "reasoning.effort") return false;
+    }
+    const rootCode = normalizedFailureCode(root.code as string | undefined);
+    const rootType = normalizedFailureCode(root.type as string | undefined);
+    if (!EXACT_EFFORT_COMPATIBLE_CODES.has(rootCode)) return false;
+    if (!EXACT_EFFORT_COMPATIBLE_TYPES.has(rootType)) return false;
+    if (root.response !== undefined && root.response !== null) return false;
+    if (root.last_error !== undefined && root.last_error !== null) return false;
+    if (hasIncompatibleDiagnosticCarrier(root.details)) return false;
+    if (hasIncompatibleDiagnosticCarrier(root.detail)) return false;
+    if (hasIncompatibleDiagnosticCarrier(root.errors)) return false;
+    if (rootCode === "invalid_argument"
+      && root.error === "Invalid reasoning effort."
+      && (root.type === undefined || root.type === "invalid_request_error")
+      && (root.param === undefined || root.param === "reasoning_effort" || root.param === "reasoning.effort")) {
+      if (root.message !== undefined && root.message !== null && root.message !== "Invalid reasoning effort.") return false;
+      return true;
+    }
+    const error = root.error;
+    if (!error || typeof error !== "object" || Array.isArray(error)) return false;
+    const record = error as Record<string, unknown>;
+    if (record.code !== undefined && record.code !== null && typeof record.code !== "string") return false;
+    if (record.type !== undefined && record.type !== null && typeof record.type !== "string") return false;
+    if (record.message !== undefined && record.message !== null && typeof record.message !== "string") return false;
+    if (record.error !== undefined && record.error !== null && typeof record.error !== "string") return false;
+    if (record.param !== undefined && record.param !== null) {
+      if (typeof record.param !== "string") return false;
+      const param = record.param.trim().toLowerCase();
+      if (param !== "reasoning_effort" && param !== "reasoning.effort") return false;
+    }
+    if (root.param !== undefined && root.param !== null && record.param !== undefined && record.param !== null) {
+      if (root.param.trim().toLowerCase() !== record.param.trim().toLowerCase()) return false;
+    }
+    const errorCode = normalizedFailureCode(record.code as string | undefined);
+    const errorType = normalizedFailureCode(record.type as string | undefined);
+    if (!EXACT_EFFORT_COMPATIBLE_CODES.has(errorCode)) return false;
+    if (!EXACT_EFFORT_COMPATIBLE_TYPES.has(errorType)) return false;
+    if (record.response !== undefined && record.response !== null) return false;
+    if (record.last_error !== undefined && record.last_error !== null) return false;
+    if (hasIncompatibleDiagnosticCarrier(record.details)) return false;
+    if (hasIncompatibleDiagnosticCarrier(record.detail)) return false;
+    if (hasIncompatibleDiagnosticCarrier(record.errors)) return false;
+    if (record.type === "upstream_error" && typeof record.message === "string"
+      && record.message.startsWith("Provider error 400: ")
+      && EXACT_EFFORT_COMPATIBLE_CODES.has(errorCode)) {
+      text = record.message;
+      continue;
+    }
+    if (root.type === "upstream_error" && typeof root.message === "string"
+      && root.message.startsWith("Provider error 400: ")
+      && EXACT_EFFORT_COMPATIBLE_CODES.has(rootCode)) {
+      text = root.message;
+      continue;
+    }
+    if (root.message !== undefined && root.message !== null && root.message !== "Invalid reasoning effort.") return false;
+    if (record.error !== undefined && record.error !== null && record.error !== "Invalid reasoning effort.") return false;
+    return record.type === "invalid_request_error"
+      && record.message === "Invalid reasoning effort."
+      && EXACT_EFFORT_COMPATIBLE_CODES.has(errorCode)
+      && (record.param === undefined || record.param === "reasoning_effort" || record.param === "reasoning.effort");
+  }
+  return false;
+}
+
+/**
  * A spent account window, by structured code or upstream prose. Status is deliberately not
  * consulted: the ChatGPT Codex backend reports a depleted plan window as HTTP 502
  * `upstream_server_error` carrying `The usage limit has been reached`, never the documented 429,
@@ -514,6 +670,7 @@ const PROVIDER_SCOPED_FAILURE_CODES = new Set([
  * Image rejection requires `param: input` and an exact model-scoped prefix.
  */
 function isRequestLocalTargetIncompatibility(status: number, message: string, code?: string | null): boolean {
+  if (isExactInvalidReasoningEffortRefusal(status, message, code)) return true;
   if (status !== 400 || message.length > 16_384) return false;
   const genericCodes = new Set(["", "invalid_request_error", "unsupported_parameter", "unsupported_value"]);
   if (!genericCodes.has(normalizedFailureCode(code))) return false;
@@ -523,10 +680,20 @@ function isRequestLocalTargetIncompatibility(status: number, message: string, co
     let payload: unknown;
     try { payload = JSON.parse(text); } catch { return false; }
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
-    const error = (payload as Record<string, unknown>).error;
+    const root = payload as Record<string, unknown>;
+    if (root.code !== undefined && root.code !== null && typeof root.code !== "string") return false;
+    if (root.type !== undefined && root.type !== null && typeof root.type !== "string") return false;
+    if (root.param !== undefined && root.param !== null && typeof root.param !== "string") return false;
+    const rootCode = normalizedFailureCode(root.code as string | undefined);
+    if (!genericCodes.has(rootCode)) return false;
+    if (root.type !== undefined && root.type !== null && root.type !== "invalid_request_error" && root.type !== "upstream_error") return false;
+    const error = root.error;
     if (!error || typeof error !== "object" || Array.isArray(error)) return false;
     const e = error as Record<string, unknown>;
     if (e.code !== undefined && e.code !== null && typeof e.code !== "string") return false;
+    if (root.param !== undefined && root.param !== null && typeof e.param === "string") {
+      if (root.param.trim().toLowerCase() !== e.param.trim().toLowerCase()) return false;
+    }
     const errorCode = normalizedFailureCode(typeof e.code === "string" ? e.code : undefined);
     if (!genericCodes.has(errorCode) || typeof e.message !== "string") return false;
     if (e.type !== "invalid_request_error" && e.type !== "upstream_error") return false;

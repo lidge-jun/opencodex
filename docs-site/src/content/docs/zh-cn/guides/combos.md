@@ -155,7 +155,7 @@ combo 失败分为 **跳转** 失败和 **终止** 失败。
 | 客户端取消（499）、`origin_rejected`、cyber-policy 拒绝、或其他无效请求 | 停止并返回错误；换其他目标也无法让请求变得有效。 |
 | 输出前确认的上下文超限（包括 HTTP 400） | 不冷却该目标，尝试下一个尚未尝试的合格目标；耗尽后返回第一个确认的 HTTP 400 上下文错误（其他状态码的上下文拒绝也会切换到下一个目标，但不会被保留）。 |
 | HTTP 400 明确表示使用 ChatGPT 账户运行 Codex 时不支持该模型 | 在输出提交前尝试下一个已配置目标。完整拒绝句必须位于 `detail`、`error.message` 或纯文本中；同时包含 `detail` 与 `error` 的混合封装仍会终止请求。此原因本身不会将账户标为需要重新登录，也不会让供应商的所有模型进入冷却。 |
-| 结构化 HTTP 400，明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值、返回模型特定图像输入拒绝（`param: input`），或拒绝该路由无法读取的输入媒体（`unsupported_input_modality`） | 在输出开始前跳转到下一个符合条件的目标，且不记录冷却时间；参见下方可选参数兼容性。 |
+| 结构化 HTTP 400，明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值、返回模型特定图像输入拒绝（`param: input`），或拒绝该路由无法读取的输入媒体（`unsupported_input_modality`） | 对于 reasoning effort 拒绝，在发送预算允许的情况下先在同一目标上尝试下一个更低的已发布档位；若所有档位均未成功，在拒绝符合已识别的兼容形式时在提交输出前跳转且不记录冷却时间，否则保持终止。其他列出的不匹配直接跳转且不记录冷却时间；参见下方可选参数兼容性。 |
 | 由进程内适配器（`runTurn`）执行的 Responses 回合中，当前请求未声明的第一个工具调用（在任何输出和不可重放的副作用之前） | 让该目标进入冷却，并以相同的工具目录跳转到下一个目标。出现可见输出或不可重放的副作用之后，拒绝即为最终结果。Chat Completions 和 Anthropic Messages 请求不受影响。 |
 | 任何其他未分类错误 | 停止并返回错误。 |
 
@@ -305,7 +305,7 @@ combo id 不存在。响应是 HTTP 404，类型为 `invalid_request_error`。�
 
 ## 可选参数兼容性
 
-一般 400 错误仍会终止请求，但明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值、返回模型特定图像输入拒绝（`param: input`），或拒绝该路由无法读取的输入媒体（`unsupported_input_modality`）的结构化错误，可让 combo 在输出开始前尝试下一个符合条件的目标，而不记录冷却时间。安全策略拒绝、取消以及已经开始的输出仍不可重放。
+一般 400 错误仍会终止请求，但明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值、返回模型特定图像输入拒绝（`param: input`），或拒绝该路由无法读取的输入媒体（`unsupported_input_modality`）的结构化错误，以及完全匹配的供应商包 `{"code":"invalid-argument","error":"Invalid reasoning effort."}`，可在输出提交前跳转。当 combo 目标拒绝所请求的 reasoning effort 时，combo 首先在共享发送预算内、每次拒绝退一个档位地在该目标上重试下一个更低的已发布 effort 档位；这适用于所有识别出的 effort 拒绝。如果更低档位均未成功，符合上述形式之一的拒绝将前进到另一个目标而不冷却被拒绝的目标，在下一档位无剩余发送额度时保留该目标的原始 400；其他 effort 拒绝保持终止。以 `unsupported_input_modality` 拒绝媒体的路由以相同方式跳转。这些是针对该请求的不匹配，并非目标不健康的证据。直接请求保留其单次 effort 降级修复。兼容性恢复不会隐式将 `none` 改为其他 effort，也不会将 combo 跳转扩大到任意无效请求。安全策略拒绝、取消以及已经开始的输出仍不可重放。单目标请求仍返回未解决的上游拒绝。
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
 
