@@ -50,6 +50,7 @@ import {
 } from "../codex/auth-api";
 import { activateResetCreditAutoRedeem } from "../codex/reset-credit-auto-redeem";
 import { registerCodexQuotaAutoRefreshWorker } from "../codex/quota-auto-refresh";
+import { registerAnthropicCooldownRecoveryProbeWorker } from "../providers/quota/anthropic-cooldown-recovery-worker";
 import {
   reconcileLiveStateStores,
   setLiveStateStoreConfig,
@@ -310,6 +311,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   // this line is the only one appending to usage.jsonl and the only one that may compact it.
   setUsageLedgerRetention(config.usageLedgerMaxBytes);
   registerCodexCooldownRecoveryProbeWorker(config);
+  registerAnthropicCooldownRecoveryProbeWorker(config);
   // Issue #42 Phase 3: opt-in archived auto-cleanup (default OFF). Unref'd hourly
   // tick for daily/weekly; startup evaluation is fire-and-forget after listen.
   // Heavy work runs in a Worker via the single-flight job controller.
