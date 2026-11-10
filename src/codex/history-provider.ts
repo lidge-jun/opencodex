@@ -347,6 +347,14 @@ export const HISTORY_RELABEL_STANDS_DOWN = "history_paginated_requires_native_wr
  */
 export const HISTORY_PAGINATED_OPENAI_NEEDS_ROOT_OVERRIDE = "history_paginated_openai_requires_native_writer";
 
+/**
+ * The same paginated `openai` rows, found while the resolved Codex is 0.166 or later (#8191).
+ * Those builds resume or list a thread only under the provider it was created with, so the retained
+ * root override no longer keeps these rows reachable once the default provider changes. A hard
+ * refusal: nothing is relabeled or rewritten, and the transition does not happen.
+ */
+export const HISTORY_PAGINATED_OPENAI_PROVIDER_LOCKED = "history_paginated_openai_provider_locked";
+
 function assertLegacyHistoryRecord(line: string): void {
   let value: unknown;
   try { value = JSON.parse(line); } catch { throw new CodexHistoryIntegrityError("history_rollout_record_invalid"); }

@@ -62,6 +62,12 @@ export interface CodexInjectionPlanContext {
   readonly catalogPathOption: string | null | undefined;
   /** Journal reads stay read-only while a client guard owns the write channel. */
   readonly journalReadOnly: boolean;
+  /**
+   * The resolved Codex version from a passive read, or null when unknown. From 0.166 a paginated
+   * openai-tagged row can no longer resume under opencodex, so the table transition is refused
+   * instead of retaining the root override (#8191).
+   */
+  readonly codexVersion?: string | null;
 }
 
 /** The ok-variant of the plan: every derived artifact and reportable warning. */
@@ -375,7 +381,7 @@ export function deriveCodexInjectionPlan(
    * existing provider references resolvable. Existing provider definitions are retained
    * before the witness; no post-commit compensation may overwrite a newer native write.
    */
-  const compat = applyPaginatedOpenaiCompat(historyPreflight(), routingTarget, content, eol);
+  const compat = applyPaginatedOpenaiCompat(historyPreflight(), routingTarget, content, eol, ctx.codexVersion);
   content = compat.content;
   keepRootOverrideAlongsideTable ||= compat.retainedRootOverride;
   const observedHistoryRefusal = compat.refusal;

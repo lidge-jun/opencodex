@@ -304,7 +304,7 @@ alone and the conversation follows the destination they chose, which is the same
 injector makes everywhere else about a line it does not own. Refusing the whole transition with
 no named way forward was the 2.60.0 regression in #5321: nothing was written, the integration
 stayed disabled, and the only exits a reporter could find were deleting the affected
-conversations or downgrading.
+conversations or downgrading. On Codex 0.166+ it becomes a hard refusal ([Codex home](codex-home.md), #8191).
 
 Rows this home tagged `opencodex` resolve through a `[model_providers.opencodex]` table.
 Apply retains that existing definition before building the candidate witness, even when
