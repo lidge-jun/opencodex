@@ -651,10 +651,13 @@ target/effort, a coarse decision gate, latency, optional confidence/probability,
 Automated tests use mocked TypeSafe responses plus a no-key fail-open smoke; a live TypeSafe decision
 requires an operator-supplied key and is not run implicitly.
 
-JEV's selected effort applies to the first Responses child and to native Chat children on the opt-in
-`protocols.rollout.nativeChatCombos` path. It replaces caller effort and removes conflicting thinking
-controls and caller `service_tier`; an explicit no-effort choice removes effort even when the Combo has
-a forced default. Provider effort pins, caps and wire normalization still apply afterward.
+With `jevEffortMode: "decide"` (the default), JEV's selected effort applies to the first Responses child
+and to native Chat children on the opt-in `protocols.rollout.nativeChatCombos` path. It replaces caller
+effort and removes conflicting thinking controls and caller `service_tier`; an explicit no-effort choice
+removes effort even when the Combo has a forced default. With `"client"`, JEV keeps its selected target
+but leaves effort resolution to ordinary Combo policy: the caller and the target ladder, plus
+`defaultEffort`, so `defaultEffortMode: "force"` still overrides caller effort in client mode. Provider
+effort pins, caps and wire normalization still apply afterward.
 Request and attempt logs show a differing applied effort as `high->xhigh` or `high->low`, retaining later
 adjustments such as `high->xhigh->medium`. An unchanged effort or a no-effort choice keeps the existing
 label. Later fallback targets use ordinary Combo policy from the original request, without another JEV call.
@@ -796,15 +799,32 @@ classify the original HTTP 403 as a hop.
 For streaming requests, the upstream HTTP status is not the final decision. OpenCodex buffers a
 bounded pre-output prefix of the selected child's Responses SSE. If the stream reports a retryable
 `response.failed` terminal before any text, reasoning, tool call, or other output event, the child
-is recorded as failed and the combo may try its next eligible target. A zero-output
-`response.incomplete` follows the same path when its reason is missing or is `adapter_eof`,
-`missing_terminal_event`, or `upstream_stall_timeout`. Explicit semantic reasons such as
-`max_output_tokens` and `content_filter` remain terminal, as does an explicit null reason.
-A reasonless final snapshot that already contains output items is also kept. Once any output event begins,
-the target is committed: a later stream failure is returned to the client and is never replayed on
-another provider, which prevents duplicate text and tool execution. If the pre-output buffer reaches
-its safety cap without a terminal or output boundary, OpenCodex also commits the current target
-instead of growing memory without a bound.
+is recorded as failed and the combo may try its next eligible target. Run-turn combo targets buffer
+their pre-output reasoning for up to one second instead: if a
+zero-output `max_output_tokens` terminal arrives before any visible output and within the hold, the
+turn advances to another eligible target without cooling the healthy candidate; once the reasoning
+hold expires or visible output begins, the target commits and buffered reasoning is streamed
+immediately to the client. A zero-output `response.incomplete` follows the same path when its reason
+is missing or is `adapter_eof`, `missing_terminal_event`, `upstream_stall_timeout`, or an explicit
+`max_output_tokens` limit before any output is emitted. The `max_output_tokens` exception requires
+the turn to look finished: a snapshot that carries `end_turn: false`, or whose
+`incomplete_details.retryable` is `false`, stays on its target. An Anthropic `pause_turn` is a paused
+long-running turn the client is expected to continue; it reaches you as the same `incomplete` with
+reason `max_output_tokens` it always has, and it also stays on its target instead of moving to the
+next one. Other explicit semantic reasons such as `content_filter` remain terminal, as do post-output
+`max_output_tokens` limits and an explicit null reason.
+When every run-turn or SSE target ends with such a zero-output `max_output_tokens` limit, and no
+confirmed context refusal was seen (that one still takes precedence), the client receives the last
+attempt's HTTP 200 `incomplete` response (reason `max_output_tokens`) with that attempt's usage,
+rather than a 502 failure. Non-streaming native JSON is the exception: that body is never inspected,
+so its `incomplete` body, empty or not, is returned to you unchanged. A reasonless final snapshot
+that already contains output items is also kept. The rate-limit and
+response-metadata frames that a native Codex (ChatGPT account) target sends over its WebSocket are
+not output, so an overload error that follows them with no output still moves to the next target.
+Once any output event begins or the reasoning hold deadline is reached, the target is committed: a later stream failure is
+returned to the client and is never replayed on another provider, which prevents duplicate text and tool
+execution. If the pre-output buffer reaches its safety cap without a terminal or output boundary,
+OpenCodex also commits the current target instead of growing memory without a bound.
 
 ## Request-local target compatibility
 
@@ -1021,6 +1041,7 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; resolved against each target's advertised ladder. |
 | `defaultEffortMode` | No | `"fallback"` | `"fallback"` preserves explicit caller effort. `"force"` overrides valid caller effort, requires a valid non-null default, and can increase cost and latency. |
 | `reasoningEffortMode` | No | `"strict"` | `"strict"` intersects every known target ladder, so one target advertising no effort control empties the combo's picker. `"adaptive"` excludes those empty ladders from the published intersection. At dispatch, explicit empty or adaptive unknown ladders remove unsupported effort/thinking controls while preserving supported non-effort reasoning fields such as `reasoning.summary`; known non-empty targets keep existing effort resolution. |
+| `jevEffortMode` | No | `"decide"` | JEV combos only. `"decide"` applies the decision effort and lets it override the caller. `"client"` keeps the decision target choice but leaves effort to the caller and the target ladder, so a provider that swaps its upstream model id per tier is not re-tiered by JEV. `defaultEffortMode: "force"` still overrides caller effort in client mode. Cache reuse still needs a stable caller effort, target and prompt prefix, and depends on the provider and account. |
 | `imageInput` | No | `"auto"` | `"auto"` or `"disabled"`. `"auto"` publishes image support only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
 | `alias` | No | none | Optional trimmed public model id; use the alias rules above. An empty value is stored as no alias. |
 | `nativeAlias` | No | `false` | Explicitly permit a currently supported bare native `alias` to take routing and catalog precedence. Never inferred from the alias. |

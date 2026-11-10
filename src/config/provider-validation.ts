@@ -13,6 +13,7 @@ import {
   isWirePinnedModel,
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
   REASONING_SUMMARY_DELIVERY_VALUES,
+  THINKING_DISPLAY_VALUES,
   UPSTREAM_HTTP_VERSION_VALUES,
   type OcxProviderConfig,
   type ModelCapabilities,
@@ -29,6 +30,7 @@ const SENSITIVE_PROVIDER_HEADERS = new Set([
   "x-amz-security-token",
 ]);
 const REASONING_SUMMARY_DELIVERY_SET = new Set<string>(REASONING_SUMMARY_DELIVERY_VALUES);
+const THINKING_DISPLAY_SET = new Set<string>(THINKING_DISPLAY_VALUES);
 const DISPLAY_NAME_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 const MAX_MODEL_DISPLAY_NAME_LENGTH = 128;
 
@@ -385,6 +387,33 @@ export function reasoningSummaryDeliveryRecordConfigError(
   return null;
 }
 
+/** Validate `thinkingDisplay`: one closed vocabulary shared by config and management writes. */
+export function thinkingDisplayConfigError(value: unknown, field = "thinkingDisplay"): string | null {
+  if (value === undefined) return null;
+  if (typeof value !== "string" || !THINKING_DISPLAY_SET.has(value)) {
+    return `${field} must be one of: ${THINKING_DISPLAY_VALUES.join(", ")}`;
+  }
+  return null;
+}
+
+/** Validate `modelThinkingDisplay`: a plain map of model id to the same closed vocabulary. */
+export function modelThinkingDisplayConfigError(value: unknown, field = "modelThinkingDisplay"): string | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
+  for (const [key, entry] of Object.entries(value)) {
+    const safeKey = JSON.stringify(redactSecretString(key));
+    if (!key.trim()) return `${field} keys must be nonblank model ids`;
+    if (["__proto__", "prototype", "constructor"].includes(key)) {
+      return `${field} keys must not be reserved object keys`;
+    }
+    const entryError = thinkingDisplayConfigError(entry, `${field}.${safeKey}`);
+    if (entryError) return entryError;
+  }
+  return null;
+}
+
 /** Validate a provider's per-model wire override map against runtime routing rules. */
 export function modelAdapterRecordConfigError(
   value: unknown,
@@ -478,7 +507,7 @@ export function modelCapabilitiesConfigError(value: unknown, allowTombstones = f
     if (allowTombstones && row === null) continue;
     if (!capabilityRecord(row)) return "modelCapabilities rows must be plain objects";
     for (const [axis, declaration] of Object.entries(row)) {
-      if (!["inputModalities", "contextTier", "video", "deepseekImageFiles", "supportsReasoning", "supportsThinkingToggle", "supportsReasoningEffort", "defaultThinkingEnabled"].includes(axis)) return "modelCapabilities contains an unknown axis";
+      if (!["inputModalities", "contextTier", "video", "deepseekImageFiles", "mistralMaxImages", "supportsReasoning", "supportsThinkingToggle", "supportsReasoningEffort", "defaultThinkingEnabled"].includes(axis)) return "modelCapabilities contains an unknown axis";
       if (allowTombstones && declaration === null) continue;
       if (axis === "inputModalities") {
         if (!Array.isArray(declaration) || declaration.length === 0
@@ -487,6 +516,10 @@ export function modelCapabilitiesConfigError(value: unknown, allowTombstones = f
         }
       } else if (axis === "contextTier") {
         if (declaration !== "default" && declaration !== "long_context") return "modelCapabilities contextTier must be default or long_context";
+      } else if (axis === "mistralMaxImages") {
+        if (typeof declaration !== "number" || !Number.isSafeInteger(declaration) || declaration < 1 || declaration > 1000) {
+          return "modelCapabilities mistralMaxImages must be an integer from 1 to 1000";
+        }
       } else if (["deepseekImageFiles", "supportsReasoning", "supportsThinkingToggle", "supportsReasoningEffort", "defaultThinkingEnabled"].includes(axis)) {
         if (typeof declaration !== "boolean") return `modelCapabilities ${axis} must be a boolean`;
       } else {
@@ -521,6 +554,9 @@ export function mergeModelCapabilities(
       } else if (axis === "deepseekImageFiles") {
         if (value === null) delete row.deepseekImageFiles;
         else row.deepseekImageFiles = value as boolean;
+      } else if (axis === "mistralMaxImages") {
+        if (value === null) delete row.mistralMaxImages;
+        else row.mistralMaxImages = value as number;
       } else if (axis === "supportsReasoning" || axis === "supportsThinkingToggle" || axis === "supportsReasoningEffort" || axis === "defaultThinkingEnabled") {
         if (value === null) delete row[axis];
         else row[axis] = value as boolean;
@@ -551,7 +587,7 @@ export function sanitizeModelCapabilitiesForLoad(value: unknown): Record<string,
   for (const [id, raw] of Object.entries(value).slice(0, MODEL_DISCOVERY_MAX_MODELS)) {
     if (!capabilityRecord(raw) || !isValidModelDiscoveryModelId(id) || ["__proto__", "prototype", "constructor"].includes(id)) continue;
     const row: Record<string, unknown> = {};
-    for (const axis of ["inputModalities", "contextTier", "video", "deepseekImageFiles", "supportsReasoning", "supportsThinkingToggle", "supportsReasoningEffort", "defaultThinkingEnabled"] as const) {
+    for (const axis of ["inputModalities", "contextTier", "video", "deepseekImageFiles", "mistralMaxImages", "supportsReasoning", "supportsThinkingToggle", "supportsReasoningEffort", "defaultThinkingEnabled"] as const) {
       if (!Object.hasOwn(raw, axis)) continue;
       const declaration = raw[axis];
       if (modelCapabilitiesConfigError({ [id]: { [axis]: declaration } }) === null) row[axis] = declaration;

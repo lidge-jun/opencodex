@@ -549,9 +549,7 @@ Sıkıştırma değeri Claude sayfasında ayarlanabilir. **Uyarı:** bir modelin
 penceresinin üzerine çıkarmak o modeli bozar — sohbet özetleme tetiklenmeden
 önce hata verir.
 
-Bağlam taşması hataları normalleştirilirken sağlayıcının hata mesajının yalnızca ilk 65.536 UTF-16 kod birimi kullanılır.
-Bu sınırdan sonraki tanılama ayrıntıları veya token sayıları, kesilme işareti eklenmeden kaybolabilir.
-Kesin sınırlar ve token sayılarının aktarılma koşulları için [İngilizce kılavuza](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling) bakın.
+Messages hata yanıtı normalleştirmesi sabit metin kullanır; sağlayıcının metnini veya token sayılarını korumaz. Tanınan bağlam taşması `prompt is too long: The request exceeds the model's context window.` olarak döndürülür. Akışta ilk alanı error olayı olan bir blok en fazla 1 MiB tutulur; aşılırsa sıkıştırma ifadesi içermeyen sabit bir hata döndürülür. Kapsam ve iki istisna için [İngilizce kılavuza](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling) bakın.
 
 1M altı yerel Anthropic modelleri hiçbir zaman otomatik olarak işaretlenmez.
 Kendi dışa aktardığınız sıkıştırma penceresi, başlatma yuvası işaretlemesinde her zaman kazanır (proxy hangi modellerin
@@ -779,10 +777,10 @@ bir önceki kullanıcı mesajı için önbellek kesme noktalarını ve ayrıca �
 otomatik `cache_control` yönetimini sağlar. Kararlı turlar normalde yaklaşık
 %99,9 önbellek isabet oranı üretir.
 
-**Yerel OpenAI/ChatGPT yönlendirmesi:** önbellek bağlılığı için oturum kapsamlı
-bir `prompt_cache_key` (varsa `metadata.user_id`'den türetilir, bir sistem
-içeriği karmasına geri döner) ve `session_id` başlığı türetir. Önbellek anahtarı
-modeli ve tam araç şemalarını içerir.
+**Yerel OpenAI/ChatGPT yönlendirmesi:** önbellek bağlılığı için
+bir `prompt_cache_key` (dize olarak varsa `metadata.user_id`'den türetilir, bir sistem
+içeriği karmasına geri döner) ve yalnızca bir oturum kimliğinden (paylaşılan yedek anahtardan asla) `session_id` başlığı türetir. Sistem içeriği
+karmasından türetilen yedek anahtar (yalnızca sistem içeriği varsa kullanılır) ayrıca modeli ve tam araç şemalarını içerir.
 
 **Token matematiği:** Anthropic çıktısı `cached_tokens` ve `cache_write_tokens`
 değerlerini `input_tokens`'tan çıkararak bunları `cache_read_input_tokens` ve

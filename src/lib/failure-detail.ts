@@ -1,3 +1,4 @@
+import { boundedValidationIssues, type ValidationIssue } from "./upstream-validation-detail";
 /**
  * Failure detail a request-log row may carry: a closed code plus bounded numeric or closed parameters.
  * The dashboard renders each code as localized text; rows never hold free-form failure text.
@@ -35,6 +36,7 @@ export interface FailureDetail {
   /** Milliseconds for timeouts and stalls, bytes for an overflow. */
   value?: number;
   type?: FailureDetailProviderType;
+  validation?: ValidationIssue[];
 }
 
 const CODES: ReadonlySet<string> = new Set(FAILURE_DETAIL_CODES);
@@ -59,8 +61,9 @@ export function boundedFailureDetail(value: unknown): FailureDetail | undefined 
   const valid = typeof number === "number" && Number.isSafeInteger(number) && number >= 0 && number <= MAX_VALUE && VALUED.has(code);
   const type = code === "provider_error" && typeof record.type === "string" && TYPES.has(record.type)
     ? record.type as FailureDetailProviderType : undefined;
+  const validation = code === "provider_error" ? boundedValidationIssues(record.validation) : undefined;
   const keys = Object.keys(record);
-  const exact = keys.every(key => key === "code" || (key === "value" && valid) || (key === "type" && type !== undefined));
+  const exact = keys.every(key => key === "code" || (key === "value" && valid) || (key === "type" && type !== undefined) || (key === "validation" && validation !== undefined && validation === record.validation));
   if (exact) return record as unknown as FailureDetail;
-  return { code, ...(valid ? { value: number as number } : {}), ...(type ? { type } : {}) };
+  return { code, ...(valid ? { value: number as number } : {}), ...(type ? { type } : {}), ...(validation ? { validation } : {}) };
 }

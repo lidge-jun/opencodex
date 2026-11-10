@@ -1,4 +1,5 @@
 import { useI18n } from "../i18n/shared";
+import { card, cardHint, cardTitle } from "../components/v2-logs/classes";
 import type { ClaudeInboundEntry } from "./debug-shared";
 import { formatClaudeInboundTime } from "./debug-shared";
 
@@ -6,14 +7,16 @@ export function DebugClaudeInboundPanel({ entries }: { entries: ClaudeInboundEnt
   const { t } = useI18n();
 
   return (
-    <div className="card" style={{ marginBottom: 16, padding: "12px 14px" }}>
-      <div className="font-semibold" style={{ marginBottom: 4 }}>{t("debug.claudeInbound.title")}</div>
-      <div className="muted text-control" style={{ marginBottom: 10 }}>{t("debug.claudeInbound.sub")}</div>
+    <section className={card} aria-labelledby="debug-claude-inbound-title">
+      <div className="flex flex-col gap-1">
+        <h3 id="debug-claude-inbound-title" className={cardTitle}>{t("debug.claudeInbound.title")}</h3>
+        <p className={cardHint}>{t("debug.claudeInbound.sub")}</p>
+      </div>
       {entries.length === 0 ? (
-        <div className="muted text-control">{t("debug.claudeInbound.empty")}</div>
+        <p className="m-0 text-[13px] text-fg-subtle">{t("debug.claudeInbound.empty")}</p>
       ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table className="table text-label">
+        <div className="overflow-x-auto rounded-[8px] bg-bg ring-1 ring-inset ring-line">
+          <table className="debug-inbound-table w-full border-collapse">
             <thead>
               <tr>
                 <th>{t("debug.claudeInbound.time")}</th>
@@ -42,7 +45,7 @@ export function DebugClaudeInboundPanel({ entries }: { entries: ClaudeInboundEnt
                     {entry.thinkingBudgetTokens !== undefined && <span className="muted"> ({entry.thinkingBudgetTokens})</span>}
                   </td>
                   <td className="mono">{entry.outputConfigEffort ?? "-"}</td>
-                  <td className="mono" title={entry.anthropicBeta} style={{ maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.anthropicBeta ?? "-"}</td>
+                  <td className="mono max-w-40 truncate" title={entry.anthropicBeta}>{entry.anthropicBeta ?? "-"}</td>
                   <td className="mono" title={entry.metadataKeys?.join(", ")}>
                     {entry.hasMetadataUserId ? `user_id ${entry.userIdTag ?? ""}` : t("debug.claudeInbound.none")}
                   </td>
@@ -53,6 +56,6 @@ export function DebugClaudeInboundPanel({ entries }: { entries: ClaudeInboundEnt
           </table>
         </div>
       )}
-    </div>
+    </section>
   );
 }

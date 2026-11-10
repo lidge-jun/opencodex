@@ -6,6 +6,10 @@ description: Sağlayıcı girdileri, kimlik doğrulama, uç noktalar, model kata
 Bir sağlayıcı, opencodex'e bir modelin nerede yaşadığını, hangi hat adaptörünü
 konuştuğunu ve isteklerin nasıl doğrulandığını söyler.
 
+## Mistral isteği başına görüntü sayısı
+
+Mistral görüntü sınırı ve `mistralMaxImages` ayarı için [İngilizce temel başvuruya](/reference/configuration/providers/#mistral-images-per-request) bakın. Sınırlayıcıya ulaşan `image_url` öğelerinde eksik, boş veya dize olmayan başvurular giden kopyada metinle değiştirilir ve sınırı tüketmez. Çevrilen Responses isteklerinde kullanılabilir URL veya dosya kimliği olmayan `input_image` blokları ayrıştırıcı tarafından atılır. Bir ileti ya da araç çıktısı bloğunda boş olmayan `file_id` bulunup boş olmayan `image_url` yoksa medya koruması isteği Mistral gönderiminden önce reddeder; korumanın incelemediği yeniden oynatılmış bir `agent_message` içinde ise ayrıştırıcı bunun yerine `[image: <file id>]` metin işareti üretir ve bu işaret normal metin olarak gönderilip görüntü sınırını tüketmez. Sınırlayıcı yalnızca `image_url` veya `image_url.url` içindeki boş olmayan dizeleri sayar; URL sözdizimi veya erişilebilirliği doğrulanmaz. Diğer hedeflerin davranışı değişmez.
+
 ## Özel sağlayıcılarda bağlam penceresi
 
 Model penceresi bildirilmemiş veya yapılandırılmamışsa sırasıyla Azure meta verisi, model kimliğiyle bulunan yerleşik üretici/toplayıcı meta verisi, etkin Context cap ve 128k kullanılır. Bildirilen ve yapılandırılan değerlerin küçüğü korunur; cap üst sınır olmaya devam eder. Yerleşik sağlayıcılar değişmez. Tam kimlik önceliklidir; büyük/küçük harf ve nokta/tire varyantları yalnızca belirsiz değilse kabul edilir. Tahmin, Codex sıkıştırmasını ve Claude dahil istemci kataloglarını etkiler ancak yönlendirme için doğrulanmış kapasite sayılmaz. Aynı model adı aracının gerçek kapasitesini garanti etmez; modelContextWindows veya Context cap ile gerçek sınırı belirtin. Cap otomatik açılmaz ve modele test isteği gönderilmez. OpenAI API sınırları Codex abonelik sınırları değildir.

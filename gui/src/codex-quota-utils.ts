@@ -14,7 +14,9 @@ export interface AccountQuota {
   shortObservedAt?: number;
   shortWindowSeconds?: number;
   monthlyResetAt?: number;
-  customWindows?: { label: string; percent: number; resetAt?: number; modelId?: string }[];
+  customWindows?: { label: string; displayLabel?: string; percent: number; resetAt?: number; modelId?: string }[];
+  /** Display-only budgets whose entitlement upstream did not report; never a usage percentage. */
+  unknownBudgetWindows?: { label: string; resetAt?: number }[];
   creditsUsd?: {
     used: number;
     limit: number;

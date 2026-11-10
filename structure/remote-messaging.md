@@ -250,3 +250,9 @@ These are distinct receipts, not claims about production hosts or model complian
 Linux evidence does not attest macOS interoperability; Windows remote transport
 is unsupported. Mesh, dashboard, cached discovery, isolation, cross-harness
 messaging, managed skills, prompt policy and idle watches remain outside this slice.
+
+
+The optional local MCP reply-read surface belongs to
+[stored reply reads](local-messaging.md#explicit-stored-reply-reads). Its explicit
+CLI-home content-read permission does not widen remote-peer admission, expose a
+remote read endpoint or change this foreground ownership/return-route contract.

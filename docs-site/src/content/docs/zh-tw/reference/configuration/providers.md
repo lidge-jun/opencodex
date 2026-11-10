@@ -5,6 +5,10 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 
 供應商告訴 opencodex 模型在哪裡、它使用哪種 wire adapter，以及請求如何被認證。
 
+## Mistral 每次請求的圖片數量
+
+Mistral 圖片數量限制及 `mistralMaxImages` 設定請參閱[英文規範參考](/reference/configuration/providers/#mistral-images-per-request)。對於到達限制器的 `image_url` 項目，缺少、空字串或非字串的圖片參照會在傳出副本中替換為文字，且不占用圖片限額。對於經過轉換的 Responses 請求，剖析器會省略既沒有可用 URL 也沒有檔案 ID 的 `input_image`。在訊息或工具輸出區塊中，若有非空 `file_id` 而沒有非空 `image_url`，媒體防護會在傳送至 Mistral 前拒絕請求；在防護不檢查的重放 `agent_message` 內，剖析器會改為輸出 `[image: <file id>]` 文字標記，作為一般文字傳送且不占用圖片限額。限制器僅計算 `image_url` 或 `image_url.url` 中的非空字串，不驗證 URL 語法或可存取性。其他目的地的行為維持不變。
+
 ## 自訂供應商的上下文視窗
 
 自訂供應商未回報或設定模型視窗時，OpenCodex 依序使用 Azure 中繼資料、按模型 ID 查詢的內建廠商／聚合中繼資料、已啟用的 Context cap，最後回退至 128k。已發現值與設定值取較小者，Context cap 仍限制視窗，內建供應商行為不變。精確 ID 優先，大小寫或點號／連字號變體僅在無衝突時匹配；未知或浮動別名不猜測。推斷影響 Codex 壓縮預算及其他客戶端目錄（含 Claude 長上下文選擇），但不作為路由的實測能力。同名模型不保證中轉支援官方視窗；請用 modelContextWindows 或 Context cap 設定實際上限。不會自動啟用 cap，也不會呼叫模型探測。OpenAI API 視窗不代表 Codex 訂閱視窗。

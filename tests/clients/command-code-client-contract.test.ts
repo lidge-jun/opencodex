@@ -21,12 +21,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import {
   buildClientContribution,
   buildCommandCodeClientConfig,
+  commandCodeAuthPath,
   commandCodeConfigPath,
   commandCodeHomeDir,
   commandCodeProviderRoot,
@@ -34,7 +35,7 @@ import {
 } from "../../src/clients/config-export";
 import { setPath } from "../../src/integrations/merge";
 import { refreshOwnedCatalogIntegrations } from "../../src/integrations/catalog-refresh";
-import { OPENCODE_PROVIDER_ID } from "../../src/clients/config-export/constants";
+import { LOOPBACK_API_KEY_PLACEHOLDER, OPENCODE_PROVIDER_ID } from "../../src/clients/config-export/constants";
 import { MANAGED_PATH_TEMPLATES } from "../../src/integrations/mutation-plan";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
@@ -42,6 +43,7 @@ import { readIntegrationState } from "../../src/integrations/state";
 import {
   applyIntegration,
   disableIntegration,
+  refreshIntegration,
   restoreIntegration,
   type IntegrationWriteInput,
 } from "../../src/integrations/writer";
@@ -396,5 +398,108 @@ describe("Command Code real integration writer root-precedence and lifecycle", (
     expect(undoRes).toMatchObject({ ok: true, state: "conflict" });
     expect(readFileSync(configPath, "utf8")).toBe(editedText);
     expect(readIntegrationState(input()).state).toBe("unsafe");
+  });
+});
+
+/**
+ * The desktop shell (`Command Code Desktop`, the app this integration is used
+ * from on Windows/macOS) gates its workspace on a credential that lives OUTSIDE
+ * `providers.json`: `checkCommandAuthStatus()` in its bundled harness answers
+ * `authenticated: true` only for a `COMMAND_CODE_API_KEY` or an `apiKey` in
+ * `~/.commandcode/auth.json`. It never looks at the keyless provider block, so
+ * without a seed the app stops on a sign-in screen and asks for a subscription
+ * the BYOK user does not have.
+ *
+ * Reached by reading the shipped app (v0.1.60, `resources/app/out/main/index.js`
+ * → `readAuthStatusStrict`) — the CLI has no such gate, which is why the
+ * keyless form is correct for it and insufficient for the app.
+ */
+describe("Command Code desktop credential seed", () => {
+  let base: string;
+  let home: string;
+  let store: IntegrationStateStore;
+
+  function input(overrides: Partial<IntegrationWriteInput> = {}): IntegrationWriteInput {
+    return {
+      clientId: "commandcode",
+      models: [
+        { namespaced: "openai/gpt-5.6-sol", provider: "openai", id: "gpt-5.6-sol", contextWindow: 922_000 },
+      ],
+      config: { port: 10100, hostname: "127.0.0.1" } as unknown as IntegrationWriteInput["config"],
+      port: 10100,
+      env: {},
+      home,
+      store,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), "cc-auth-seed-"));
+    home = join(base, "home");
+    mkdirSync(join(home, ".commandcode"), { recursive: true });
+    store = createIntegrationStateStore(join(base, "store", "integrations"));
+  });
+
+  afterEach(() => removeTreeWithRetry(base));
+
+  function authPath(): string {
+    return commandCodeAuthPath({}, home);
+  }
+
+  test("enabling seeds the store the desktop gate reads", () => {
+    expect(applyIntegration(input()).ok).toBe(true);
+
+    const seeded = JSON.parse(readFileSync(authPath(), "utf8"));
+    // `checkCommandAuthStatus` returns on the first truthy `apiKey`; any string
+    // is enough, and the loopback placeholder is what the proxy admits.
+    expect(seeded.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
+  });
+
+  test("a real login is never overwritten", () => {
+    const real = `${JSON.stringify({ apiKey: "sk-real", userName: "someone" }, null, 2)}\n`;
+    writeFileSync(authPath(), real, "utf8");
+
+    expect(applyIntegration(input()).ok).toBe(true);
+    expect(readFileSync(authPath(), "utf8")).toBe(real);
+  });
+
+  test("a store without a key keeps the other providers' credentials", () => {
+    // auth.json is shared with the ChatGPT/Copilot sign-ins the app also writes.
+    writeFileSync(authPath(), JSON.stringify({ codex: { accessToken: "keep-me" } }, null, 2), "utf8");
+
+    expect(applyIntegration(input()).ok).toBe(true);
+    const seeded = JSON.parse(readFileSync(authPath(), "utf8"));
+    expect(seeded.codex).toEqual({ accessToken: "keep-me" });
+    expect(seeded.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
+  });
+
+  test("a deliberate sign-out is not re-seeded by a refresh", async () => {
+    expect(applyIntegration(input()).ok).toBe(true);
+    writeFileSync(authPath(), JSON.stringify({}, null, 2), "utf8");
+
+    // The block is still owned, but a catalog sync is not an enable.
+    const refreshed = await refreshIntegration(input());
+    expect(refreshed.ok).toBe(true);
+    expect(JSON.parse(readFileSync(authPath(), "utf8")).apiKey).toBeUndefined();
+  });
+
+  test("disabling leaves the store behind, so the app does not sign out", async () => {
+    expect(applyIntegration(input()).ok).toBe(true);
+    expect((await disableIntegration(input())).ok).toBe(true);
+    expect(JSON.parse(readFileSync(authPath(), "utf8")).apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
+  });
+
+  test("enabling a different client never touches the Command Code store", () => {
+    mkdirSync(join(home, ".pi"), { recursive: true });
+    const outcome = applyIntegration(input({ clientId: "pi" }));
+    expect(outcome.ok).toBe(true);
+    expect(existsSync(authPath())).toBe(false);
+  });
+
+  test("an unparseable store is left alone rather than rewritten", () => {
+    writeFileSync(authPath(), "{ not json", "utf8");
+    expect(applyIntegration(input()).ok).toBe(true);
+    expect(readFileSync(authPath(), "utf8")).toBe("{ not json");
   });
 });

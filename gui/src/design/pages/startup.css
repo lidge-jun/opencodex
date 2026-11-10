@@ -1,0 +1,3 @@
+/* v2 styles for the Startup protection, Remote Link and Remote Workspace pages. Imported by design/theme.css into the `bridge`
+   layer, after bridge.css: above every v1 sheet, below Tailwind utilities. Prefer
+   Tailwind classes in the components; keep this file for what utilities cannot say. */

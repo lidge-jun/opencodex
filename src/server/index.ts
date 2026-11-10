@@ -716,6 +716,9 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     userCostOverlayReconciler?.stop();
     backgroundLifecycle?.releaseAfterFailedStart();
     void nativeMainLifecycle.release();
+    // A later optional listener can still throw after the local control socket started. Its lease
+    // is live state, so it has to go synchronously before the startup error propagates.
+    optionalListeners.abortStart();
     throw error;
   }
 

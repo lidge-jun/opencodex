@@ -491,9 +491,7 @@ Trois états de configuration :
 La valeur de compactage est réglable dans **Connexion → Claude**. **Avertissement :** une valeur supérieure à la fenêtre réelle d'un modèle
 rend ce modèle inutilisable : les tours échouent avant que le résumé puisse se déclencher.
 
-La normalisation des erreurs de dépassement de contexte utilise uniquement les 65 536 premières unités de code UTF-16 du message du fournisseur.
-Les diagnostics ou nombres de jetons situés après cette limite peuvent disparaître sans marqueur de troncature.
-Consultez le [guide anglais](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling) pour les limites exactes et les conditions de reprise des nombres de jetons.
+La normalisation des réponses d'erreur Messages utilise un texte fixe, sans conserver le texte du fournisseur ni les nombres de jetons. Un dépassement de contexte reconnu renvoie `prompt is too long: The request exceeds the model's context window.`. Dans un flux, un bloc dont le premier champ est l'événement error est conservé jusqu'à 1 Mio ; au-delà, une erreur fixe sans phrase de compaction est renvoyée. Consultez le [guide anglais](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling) pour la portée et les deux exceptions.
 
 Les modèles Anthropic natifs dont le contexte est inférieur à 1M ne sont jamais marqués automatiquement. Une fenêtre de compactage que vous exportez vous-même
 reste prioritaire pour le marquage des variables de lancement ; le proxy s'appuie sur votre valeur pour déterminer les modèles qui peuvent recevoir le marqueur sans risque.
@@ -703,9 +701,9 @@ autre 5xx `api_error`. `Retry-After` est envoyé en secondes entières (une date
 et l'avant-dernier message utilisateur, ainsi que le champ `cache_control` automatique de premier niveau. Les tours stables
 atteignent généralement un taux d'accès au cache d'environ 99.9 %.
 
-**Routage OpenAI/ChatGPT natif :** produit une valeur `prompt_cache_key` propre à la session, à partir de
-`metadata.user_id` lorsqu'il est présent ou, à défaut, d'un hachage du contenu système, ainsi qu'un en-tête `session_id`
-pour l'affinité du cache. La clé de cache inclut le modèle et l'intégralité des schémas d'outils.
+**Routage OpenAI/ChatGPT natif :** produit une valeur `prompt_cache_key`, à partir de
+`metadata.user_id` lorsqu'il s'agit d'une chaîne ou, à défaut, d'un hachage du contenu système, ainsi qu'un en-tête `session_id`
+pour l'affinité du cache, cet en-tête provenant uniquement d'une identité de session et jamais de la clé de repli partagée. La clé de repli dérivée du contenu système (utilisée seulement si un contenu système est présent) inclut aussi le modèle et l'intégralité des schémas d'outils.
 
 **Calcul des jetons d'entrée :** Anthropic soustrait `cached_tokens` et `cache_write_tokens` de
 `input_tokens`, les exposant comme `cache_read_input_tokens` et `cache_creation_input_tokens`.

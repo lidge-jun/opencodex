@@ -11,7 +11,11 @@ import "../styles-fallback.css";
  * fallback; `devices` shows per-device local fallback and chains (read-only on a Child, whose
  * settings live on its Home).
  */
-export default function FallbackPanel({ apiBase, section, readOnly = false }: { apiBase: string; section: "routing" | "devices"; readOnly?: boolean }): ReactElement | null {
+export default function FallbackPanel({ apiBase, section, readOnly = false, embedded = false }: {
+  apiBase: string; section: "routing" | "devices"; readOnly?: boolean;
+  /** Inside a titled settings section (Proxy details): the section already names it, so no own heading. */
+  embedded?: boolean;
+}): ReactElement | null {
   const t = useT();
   const [state, setState] = useState<FallbackState | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -80,7 +84,7 @@ export default function FallbackPanel({ apiBase, section, readOnly = false }: { 
     if (section === "devices") return null;
     return (
       <section className="panel fallback-panel" aria-busy={!loadFailed || undefined}>
-        <h3>{t(section === "routing" ? "fallback.title" : "fallback.devices.title")}</h3>
+        {!embedded && <h3>{t(section === "routing" ? "fallback.title" : "fallback.devices.title")}</h3>}
         <p className="card-sub" role="status">{loadFailed ? t("fallback.loadFailed") : t("common.loading")}</p>
         {loadFailed && <button type="button" className="btn btn-ghost btn-sm" onClick={() => { void load(); }}>{t("common.retry")}</button>}
       </section>
@@ -135,8 +139,8 @@ export default function FallbackPanel({ apiBase, section, readOnly = false }: { 
   ];
   const last = state.last;
   return (
-    <section className="panel fallback-panel">
-      <h3>{t("fallback.title")}</h3>
+    <section className="panel fallback-panel" aria-label={embedded ? t("fallback.title") : undefined}>
+      {!embedded && <h3>{t("fallback.title")}</h3>}
       <p className="card-sub">{t(readOnly ? "fallback.devices.childNote" : "fallback.desc")}</p>
       {(["model", "provider"] as const).map(kind => (
         <div className="fallback-switch-row" key={kind}>

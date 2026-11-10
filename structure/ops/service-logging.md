@@ -25,6 +25,8 @@ moves to `service.log.2`; the newest 20 MiB of the active file are copied into
 place, preserving the service manager's existing append descriptors. Both
 archives stay bounded even when a legacy active log is already very large.
 Archive paths join the config cleanup manifest.
+If an uninstall tombstone prevents registration, the logger instead truncates an oversized active
+file in place after the same identity checks, without creating archives or registering paths.
 
 Rotation accepts only regular, singly linked active and archive leaves. The
 active descriptor must match the inspected leaf's device and inode; POSIX opens

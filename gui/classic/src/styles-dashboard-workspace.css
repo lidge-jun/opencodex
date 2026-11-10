@@ -1,0 +1,761 @@
+/* ============================================================================
+   dashboard-workspace — isolated stylesheet (mirrors providers-workspace layout DNA)
+   Namespace: dashboard-workspace-  |  widgets: dbw-
+   Uses only design tokens from styles.css. No gradients.
+   ============================================================================ */
+
+.main-inner:has(.dashboard-workspace-shell) {
+  max-width: 1200px;
+}
+
+.dashboard-workspace-shell {
+  width: 100%;
+  min-width: 0;
+}
+
+/* ── Main pane ────────────────────────────────────────── */
+
+.dashboard-workspace-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+/* List sections (Active providers, Available models): keep them compact in
+   workspace view. Rows scroll inside the pane with a pinned header instead of
+   pushing the whole page down. Classic view keeps natural page scroll. */
+.dashboard-workspace-main .tbl-wrap {
+  max-height: 520px;
+  overflow-y: auto;
+  /* Side/bottom inset only — top padding on a sticky scrollport leaks rows above thead. */
+  padding: 0 var(--space-2) var(--space-2);
+}
+
+/* Top inset without sticky-header leaks: margin on the table, not padding on the
+   scrollport. At rest the table sits below the shell border; while scrolled the
+   sticky thead stays flush at the scrollport top. */
+.dashboard-workspace-main .tbl {
+  margin-top: var(--space-3);
+}
+
+.dashboard-workspace-main .tbl thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+/* Overview stack: uniform vertical rhythm between every box (shared by
+   classic + workspace views). Gap matches the sidecar grid gap. */
+.dash-overview-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* Settings keep one reading order and one control column across the overview. */
+.dash-overview-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: stretch;
+}
+
+.dash-overview-tools > .panel {
+  min-width: 0;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+/* Sidecar settings: two panels side by side, gap matches --space-4.
+
+   The track floor is the width at which a card can still render its real layout — copy
+   on the left, controls on the right, one line. It is NOT merely the width at which the
+   select stops overflowing.
+
+   That distinction is the bug this number fixes. At 21rem the grid handed out cards of
+   309-517px of content, every one of which is below the 36rem stacking query below, so
+   a two-up card was born already stacked: copy on a full-width line, controls on a
+   second full-width line inheriting `justify-content: flex-end`. The model select then
+   floated in the middle of the card with the switch pinned right, which reads as centred
+   and was reported as such.
+
+   39rem = 624px of track, 586px of content after the 19px panel padding — clear of the
+   576px stacking threshold, so any card the grid places two-up can hold a genuine row.
+   The ko row is the widest shipped: 14rem copy floor + 16px gap + 10.5rem select + 8px +
+   the streaming label + 8px + the 34px switch. Below 39rem the grid drops to one column,
+   where a card is wide enough for the same row rather than a stacked approximation of it. */
+.dash-sidecar-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 39rem), 1fr));
+  gap: var(--space-4);
+  /* Stretch, not start: the two sidecar cards are a matched pair, and a hint that
+     wraps to a different line count in one of them should not leave the other
+     visibly short. */
+  align-items: stretch;
+}
+
+/* The effort control holds one short wire value (low…max); it must not inherit
+   the model select's reserved width. Matched by POSITION, not `:last-child`:
+   the web-search card has a single select that is simultaneously first and last,
+   and `:last-child` would shrink its model picker too. `:nth-child(2)` only ever
+   matches a real second control. */
+.dash-sidecar-row-card .dash-delegation-controls .custom-select:nth-child(2) {
+  min-width: min(100%, 6.5rem);
+  max-width: 9rem;
+}
+
+.dash-sidecar-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* The hint must wrap inside its own column, never run under the controls, so the copy
+   block needs a real basis AND a real floor.
+
+   With `flex: 1 1 0` and no floor its used width is whatever the control group leaves
+   over — which goes negative once the ko control row (168px select + 8 + ~108px label +
+   8 + 34px switch = 326px) exceeds the track. Copy then rendered 0px wide and
+   `overflow-wrap: anywhere` authorised a break after every CJK glyph: the title became a
+   one-character vertical stripe and the card grew from 157px to 618px. The 14rem floor
+   makes that state unreachable; `min()` keeps the floor from exceeding the card itself.
+   `break-word` still rescues an unbreakable token (a long model id) without shredding
+   prose. */
+.dash-sidecar-row-card .dash-sidecar-copy {
+  flex: 1 1 0;
+  min-width: min(100%, 14rem);
+  overflow-wrap: break-word;
+}
+
+/* The control group is a FIXED SHARED BAND, not an intrinsic width. The copy block is
+   the only item that yields; the narrow case is handled by stacking the whole card.
+
+   Intrinsic width was the bug. The two groups do not contain the same controls — the
+   web-search group is one select plus a label and a switch (268px at ja, 344px at fr),
+   the vision group is two selects (408px) — and both packed to the card's right edge.
+   Equal right edges plus unequal widths means unequal LEFT edges: the two model selects
+   began 225-302px apart depending on locale, which is what "start positions differ"
+   describes. Letting the groups shrink instead (`0 1 auto`) does not fix it and breaks
+   worse: `.custom-select` keeps its own min-width, so the children overflow their
+   shrunken container and slide left under the hint text.
+
+   A definite basis with `flex-shrink: 0` makes the band identical in both cards, so the
+   first control of each starts at the same x by construction rather than by coincidence
+   of text width. 26rem = 416px is the widest thing that has to fit: the vision select row
+   at full size (14rem model + 8px + 9rem effort = 408px). The widest web-search row (fr,
+   344px) fits with room left, and the band gives its streaming label enough width to stay
+   on one line instead of wrapping to three.
+
+   `min()` so the basis can never exceed the box it sits in. */
+.dash-sidecar-row-card .dash-delegation-controls {
+  flex: 0 0 min(100%, 26rem);
+  flex-wrap: nowrap;
+  /* Both cards hold the SAME two-row structure: `.dash-sidecar-select-row` for the model
+     pickers, then `.dash-sidecar-trailing-row` for the card's secondary control (the
+     streaming switch on web search, the advanced disclosure on vision). The group is
+     therefore a column in both, which is what puts the two first rows on one line and the
+     two trailing rows on another.
+
+     The web-search group used to be a single horizontal line with the streaming label
+     beside the select. Inside the 26rem band that label had to wrap: three lines at
+     ko/ja/tr, and it dragged the switch away from the card's right edge. Giving it its own
+     right-aligned row is the same treatment the advanced disclosure already had. */
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  /* Main axis is vertical here, so this packs the two ROWS toward the band's top rather
+     than distributing them down a card that the grid stretched taller. */
+  justify-content: flex-start;
+  /* The band reserves both rows in both cards, so the first select of each lands on one
+     line even when one card's trailing row is shorter than the other's. */
+  min-height: 3.6875rem;
+}
+
+/* The model select carries the long value: give it a floor wide enough to read a
+   real model id, and ellipsize inside rather than growing without bound. */
+.dash-sidecar-row-card .dash-delegation-controls .custom-select:first-child {
+  /* `min()` so the floor can never exceed the box it is a floor for. A hard 10.5rem
+     pushed the control past the panel edge once the card fell under ~11.5rem — the
+     narrow end the container queries above now reach. */
+  min-width: min(100%, 10.5rem);
+  max-width: 14rem;
+}
+
+.dash-sidecar-row-card .dash-delegation-controls .select-trigger {
+  width: 100%;
+  max-width: 100%;
+  justify-content: space-between;
+}
+
+.dash-sidecar-row-card .dash-delegation-controls .select-trigger > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Both sidecar panels are delegation-style ROWS. This class carries only the
+   grid-cell min-width; the row layout itself comes from .dash-delegation-summary. */
+.dash-sidecar-row-card {
+  min-width: 0;
+}
+
+/* BOTH cards wrap, and neither overrides the shared centre alignment.
+
+   Wrapping only the vision card put its control group on a second flex line while the
+   web-search group stayed on the first, so the two Selects sat ~16-30px apart at every
+   width. `align-items: flex-start` on one card made it worse for the same reason: the
+   two cards resolved their control groups against different rules. Symmetry is the fix —
+   both cards wrap, both keep the shared `center`, so both resolve identically and the
+   Selects share a baseline. */
+.dash-sidecar-row-card {
+  flex-wrap: wrap;
+  /* Pack the two wrapped flex LINES from the top of the card.
+
+     This is the line that makes the pair agree. The grid stretches both cards to the
+     taller one's height, and `align-content` defaults to `stretch` for a multi-line flex
+     container, so each card distributed its own leftover space across its own lines. The
+     two cards have equal outer height but different content height — the vision card's
+     control group carries the advanced disclosure — so the card with more slack pushed its
+     control line down and the two Selects sat 27.4px apart at en/1024, 27.8px at ko/1024,
+     and 7.1px at ru/1100.
+
+     `align-content`, not `align-items`: the mis-distributed thing is the LINES, which is
+     exactly what `align-content` controls. `align-items: center` stays inherited from
+     `.dash-delegation-summary` and still centres each item WITHIN its line, which is what
+     keeps the single-line horizontal layout (one-column regime) vertically centred. In
+     that regime the card has one line, where `align-content` is inert — so this rule acts
+     only where the bug exists.
+
+     Measured with a CDP viewport-override harness: worst paired offset 0.0px across
+     en/ko/ru/fr/ja at 1440/1100/1024/760, with the one-column row layout unchanged.
+
+     The file previously recorded `align-items: flex-start` on ONE card as a failed
+     attempt; that is a different property on a different box, and asymmetric. */
+  align-content: start;
+  /* The responsive axis is the CARD, not the window.
+
+     This grid is `repeat(auto-fit, ...)`, so card width is decoupled from viewport
+     width: a 336px card exists inside a 992px window. Every `@media` rule that used to
+     stack these cards was therefore measuring the wrong box — it fired at widths where
+     the card was already comfortable, and stayed silent at widths where the card was
+     cramped.
+
+     Layout containment is safe here. The hazard was never the overlays: both portal to
+     document.body (Select defaults to `portal`, VisionAdvancedPopover uses
+     `createPortal`), and the sticky table header lives on .dashboard-workspace-main,
+     outside this card. The one real conflict was with `grid-template-rows: subgrid`,
+     which cannot read its parent's rows through containment — and the shipped layout is
+     flex, not subgrid. Do NOT lift the container to the workspace shell: that WOULD trap
+     the sticky header. */
+  container-type: inline-size;
+  container-name: sidecar-card;
+}
+
+/* Both cards wrap their control group onto a second line, so that line must start at the
+   same y in both. It does not by default: each card's control line simply follows its own
+   copy, and the two hints wrap to a different number of lines in several locales.
+
+   The floor lives on the HINT and is measured in LINES, not on the copy block in pixels.
+   The previous `min-height: 3.9375rem` on the copy block was "63px = 21px title + 3px
+   margin + two 19.5px hint lines" — a pixel count derived from a two-line assumption. It
+   held wherever both hints wrapped to the same count and silently failed where they did
+   not: measured 19.5px of drift at ru and fr, whose vision hint takes a THIRD line at a
+   two-up card (82.5px of copy against 63px).
+
+   `3lh` is that same intent expressed in the unit that actually governs it: three line
+   boxes of the hint's own computed line-height. It covers the longest shipped hint, so the
+   shorter hint reserves the same three lines and both control rows start together. Because
+   it scales with font metrics rather than a hard-coded 19.5px, a font or line-height change
+   cannot invalidate it, and a longer translation only matters if it exceeds three lines.
+
+   The committed regression is source-text only (happy-dom performs no layout): it asserts
+   the floor is expressed in `lh` with at least 3 lines and that the old `rem` band is gone.
+   The three-line number itself came from rendered measurement in a real browser, which is
+   recorded in devlog/_plan/260829_gui_dashboard_slop/013, not re-derived by the test.
+
+   Verified across all eight shipped locales at every two-up width (1600-740): worst offset
+   0.0px, no hint truncated, no card collapsed. */
+.dash-sidecar-row-card .dash-sidecar-copy .setting-hint {
+  min-height: 3lh;
+}
+
+/* The copy block must resolve identically in both cards too, for the same reason the
+   control band must: copy is the item that absorbs leftover width, so a different basis
+   here moves the control band's left edge by the difference. This used to override the
+   shared `flex: 1 1 0` with `1 1 16rem`, which is why the vision band still started at a
+   different x even when both bands were the same width. Only the floor is restated, and
+   only because it is identical to the shared one — the rule is kept as the documented
+   place where a vision-specific copy override would go, if one were ever justified. */
+.dash-vision-sidecar-card .dash-sidecar-copy {
+  min-width: min(100%, 14rem);
+}
+
+/* Nothing about the control band is vision-specific any more: the column axis, the gap,
+   and the packing all moved to the shared rule once the web-search card adopted the same
+   two-row structure. Only the bounds stay, and they match the shared band. */
+.dash-vision-sidecar-card .dash-delegation-controls {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.dash-sidecar-select-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+  width: 100%;
+}
+
+.dash-sidecar-select-row .custom-select:first-child {
+  flex: 1 1 70%;
+  min-width: min(100%, 9rem);
+  max-width: 16rem;
+}
+
+.dash-sidecar-select-row .custom-select:nth-child(2) {
+  flex: 1 1 30%;
+  min-width: min(100%, 6rem);
+  max-width: 9rem;
+}
+
+.dash-sidecar-select-row .custom-select .select-trigger {
+  width: 100%;
+  max-width: 100%;
+}
+
+.dash-sidecar-trailing-row {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+}
+
+/* The web-search trailing row carries a label AND a switch, where the vision row carries a
+   single button. Both sit at the row's right edge as one cluster, so the label reads as
+   belonging to the control it labels rather than drifting to the opposite edge. */
+.dash-sidecar-trailing-row {
+  align-items: center;
+  gap: 8px;
+}
+
+/* Let the label take the width it needs at the row's left, but never so much that it
+   pushes the switch off the edge; it wraps instead. `text-align: right` keeps a wrapped
+   second line aligned with the cluster rather than ragged against the switch. */
+.dash-sidecar-toggle-label {
+  min-width: 0;
+  text-align: right;
+}
+
+.dash-vision-advanced-trigger {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: var(--text-control);
+  cursor: pointer;
+}
+.dash-vision-advanced-trigger:hover:not(:disabled) {
+  color: var(--text);
+}
+.dash-vision-advanced-trigger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.dash-vision-advanced-trigger:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-2xs);
+}
+
+.dash-vision-number {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dash-vision-number .codex-auto-switch-input-wrap {
+  width: min(11.5rem, 100%);
+}
+
+.dash-vision-number .codex-auto-switch-input {
+  min-width: 0;
+}
+
+/* Floating popover for the advanced vision settings. Portaled to body and
+   positioned via computeSelectMenuStyle (same pattern as the Select dropdown):
+   fixed position, never consumes page flow or shifts the dashboard layout. */
+.dash-vision-advanced-popover {
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 16rem;
+  max-width: min(22rem, calc(100vw - 2rem));
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 24px rgb(0 0 0 / 0.14);
+  overflow-y: auto;
+}
+.dash-vision-advanced-popover-title {
+  font-weight: var(--weight-semibold);
+}
+.dash-vision-advanced-popover .dash-vision-number .codex-auto-switch-input-wrap {
+  width: 100%;
+}
+.dash-vision-advanced-popover .dash-vision-number .codex-auto-switch-input {
+  flex: 1 1 0;
+}
+.dash-vision-advanced-popover .dash-vision-number {
+  gap: 4px;
+}
+
+/* Narrow-CARD rules. These were `@media (max-width: 36rem / 30rem / 22rem)` — viewport
+   queries on cards whose width comes from an auto-fit grid, so they fired at the wrong
+   times or never. The widths below are the same intent measured against the card.
+
+   Every selector is at least two classes deep on purpose: a bare `.dash-sidecar-copy` is
+   specificity 0,1,0 and would silently lose to the 0,2,0 base rules above, leaving a
+   query that reads as correct in review but does nothing. */
+@container sidecar-card (max-width: 36rem) {
+  /* Applied to BOTH cards, not just vision. Stacking one card's control group while the
+     other kept a different basis is the same asymmetry that broke the shared baseline in
+     the first place — it reintroduced a 1.19px offset when this query was vision-only. */
+  .dash-sidecar-row-card .dash-sidecar-copy,
+  .dash-sidecar-row-card .dash-delegation-controls {
+    flex: 0 1 auto;
+    min-width: 0;
+    flex-basis: 100%;
+  }
+
+  .dash-sidecar-row-card .dash-delegation-controls {
+    align-items: stretch;
+  }
+
+  .dash-vision-sidecar-card .dash-sidecar-select-row {
+    justify-content: flex-start;
+  }
+}
+
+/* The old `@media (max-width: 30rem)` block that widened .dash-vision-number is simply
+   gone: those inputs now render only inside the portaled popover, which already sets
+   `width: 100%` on them (see .dash-vision-advanced-popover above). It was dead code, not
+   a rule to convert. */
+
+/* Below the width where a row can hold copy + the control group, stack instead of
+   overflowing. Measured against the CARD: the row is clean down to ~22rem of card. */
+@container sidecar-card (max-width: 22rem) {
+  .dash-sidecar-row-card .dash-sidecar-copy,
+  .dash-sidecar-row-card .dash-delegation-controls {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+
+  .dash-sidecar-row-card .dash-delegation-controls {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}
+
+/* Available models: search + per-provider accordion with model chips */
+.dash-model-acc {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.dash-model-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.dash-model-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 10px 14px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  transition: background var(--motion-fast);
+}
+
+.dash-model-head:hover {
+  background: var(--hover);
+}
+
+.dash-model-head .count {
+  font-family: var(--font-code);
+  font-weight: var(--weight-medium);
+  color: var(--faint);
+  font-size: var(--text-label);
+}
+
+.dash-model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 14px 14px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 12px;
+}
+
+.dash-model-chip {
+  font-family: var(--font-code);
+  font-size: var(--text-label);
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+
+/* Overview settings share a fixed control column, then stack together when the
+   content area is too narrow. Scope this to Overview; provider/model tables keep
+   their own layout. Dropdowns and popovers already portal outside the container. */
+.dash-overview-stack {
+  --dash-controls-width: 26rem;
+
+  container: dashboard-overview / inline-size;
+}
+
+.dash-overview-head .stat-row {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.dash-overview-head .stat-row > .stat {
+  min-width: 0;
+  min-height: 126px;
+  display: grid;
+  grid-template-rows: 24px 36px 18px;
+  align-content: center;
+  justify-content: stretch;
+  gap: 4px;
+}
+
+.dash-overview-head .stat .label {
+  margin: 0;
+  min-width: 0;
+}
+
+.dash-overview-head .stat .value {
+  min-width: 0;
+  align-self: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-overview-head .dash-stat-version {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash-overview-head .dash-stat-coverage { margin: 0; }
+
+.dash-overview-stack .panel {
+  min-width: 0;
+  padding: 20px;
+}
+
+.dash-overview-stack .dash-delegation-summary,
+.dash-overview-stack .dash-sync-summary,
+.dash-overview-stack .dash-effort-panel .injection-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--dash-controls-width);
+  align-items: center;
+  gap: 24px;
+}
+
+.dash-overview-stack .dash-delegation-controls,
+.dash-effort-controls,
+.dash-shadow-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dash-overview-tools .dash-delegation-controls {
+  justify-content: flex-start;
+}
+
+.dash-overview-tools .dash-delegation-controls > .custom-select:first-child {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.dash-overview-tools .dash-delegation-controls > .btn {
+  margin-left: auto;
+}
+
+.dash-effort-panel .injection-label { order: 0; }
+.dash-effort-controls { order: 1; }
+.dash-effort-controls > .custom-select { flex: 1; min-width: 0; }
+
+.dash-overview-stack .dash-delegation-controls .select-trigger,
+.dash-effort-controls .select-trigger,
+.dash-shadow-controls .select-trigger {
+  justify-content: space-between;
+  width: 100%;
+  min-width: 0;
+}
+
+.dash-overview-stack .dash-delegation-controls .select-trigger > span,
+.dash-effort-controls .select-trigger > span,
+.dash-shadow-controls .select-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash-overview-stack .dash-sidecar-row-card .dash-sidecar-copy {
+  min-width: 0;
+}
+
+.dash-overview-stack .dash-sidecar-row-card .setting-hint { min-height: 0; }
+
+.dash-overview-stack .dash-sidecar-row-card .dash-delegation-controls {
+  width: 100%;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.dash-overview-stack .dash-sidecar-select-row .custom-select:first-child {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+}
+
+.dash-shadow-controls {
+  width: var(--dash-controls-width);
+  flex-shrink: 0;
+}
+
+.dash-shadow-controls > .custom-select { flex: 1; min-width: 0; }
+.dash-shadow-controls > .switch { order: 1; }
+
+/* Memory routing: two fixed column widths, shared by both rows. The pickers must not
+   size themselves from their own label — content-sized pills turned "Low" and "Medium"
+   into two different widths, so the Consolidation row never lined up with the Extract
+   row above it, and the effort picker alone wasted 220px on a five-letter word.
+
+   Each column gets its own width and both rows use the same two, so the columns compare
+   across the rows instead of inside one row: the model column is exactly as wide as the
+   longest common id needs (measured 220px at the trigger's 13px font, trigger padding,
+   chevron gap and chevron included), the effort column fits the longest option label
+   "Codex default" (measured 136px, rounded to 140px). A longer model id ellipsizes
+   inside its column instead of widening one row's pill, so the two rows keep matching
+   columns whatever is selected. */
+.memory-models-row { align-items: center; }
+
+.memory-models-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  flex: 0 0 min(100%, 23rem);
+  min-width: 0;
+}
+
+.memory-models-controls > .custom-select:first-child {
+  flex: 0 1 220px;
+  min-width: 0;
+}
+
+.memory-models-controls > .custom-select:last-child {
+  flex: 0 1 140px;
+  min-width: 0;
+}
+
+.memory-models-controls .select-trigger {
+  justify-content: space-between;
+  width: 100%;
+  min-width: 0;
+}
+
+.memory-models-controls .select-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash-overview-stack .setting-hint,
+.dash-overview-stack .dash-sync-hint { max-width: 60ch; }
+
+@container dashboard-overview (max-width: 64rem) {
+  .dash-overview-head .stat-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@container dashboard-overview (max-width: 46rem) {
+  .dash-overview-stack .dash-delegation-summary,
+  .dash-overview-stack .dash-sync-summary,
+  .dash-overview-stack .dash-effort-panel .injection-head {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .dash-overview-stack .dash-delegation-controls,
+  .dash-overview-stack .dash-effort-controls,
+  .dash-overview-stack .dash-shadow-controls { width: 100%; }
+
+  .dash-overview-stack .dash-shadow-controls { flex-basis: 100%; }
+  .dash-overview-stack .spread:has(.dash-shadow-controls) { flex-wrap: wrap; }
+  .dash-shadow-label { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+  .dash-shadow-label > .font-semibold { flex-shrink: 0; max-width: 100%; }
+  .dash-shadow-label > code { flex-basis: 100%; min-width: 0; overflow-wrap: anywhere; }
+  .dash-overview-stack .maintenance-actions { justify-content: flex-start; }
+}
+
+@container dashboard-overview (max-width: 30rem) {
+  .dash-overview-head .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dash-overview-stack .panel { padding: 16px; }
+  .dash-overview-stack .select-trigger,
+  .dash-overview-stack .panel .btn:not([aria-haspopup="dialog"]),
+  .dash-overview-stack .dash-vision-advanced-trigger { min-height: 44px; }
+}
+
+
+.dash-ma-option { min-width: 36px; padding: 5px 10px; }
+
+@container dashboard-overview (max-width: 22rem) {
+  .dash-overview-head .dash-ma-switch { max-width: 100%; }
+  .dash-overview-head .dash-ma-option {
+    min-width: 0;
+    flex: 1 1 auto;
+    padding: 5px 4px;
+  }
+}
+
+.source-scope-groups { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-6); margin-top: var(--space-3); max-height: 220px; overflow: auto; }
+.source-scope-group { border: 0; padding: 0; margin: 0; min-width: 12rem; }
+.source-scope-group legend { padding: 0; }
+.source-scope-group label { display: flex; align-items: center; gap: var(--space-2); color: var(--text); font-size: var(--text-label); padding: var(--space-0-5) 0; }
+/* Captioned controls: a visible label above each select keeps the summarizer model, the
+   trigger scope, the source scope, and the effort from reading as four unnamed pickers. */
+.dash-overview-stack .compaction-routing-controls { align-items: flex-end; }
+.compaction-field { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.compaction-sources-block { margin-top: var(--space-3); }
+.compaction-sources-block .compaction-sources-title { margin-bottom: var(--space-1-5); }
+.compaction-sources-block .source-scope-groups { margin-top: 0; }

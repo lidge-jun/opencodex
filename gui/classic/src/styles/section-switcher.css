@@ -1,0 +1,49 @@
+/*
+ * Section switcher: moves between the pages of one sidebar group. Pill-shaped so it
+ * never reads as one more row of the underline .page-tabs the pages carry below it.
+ * Tokens only; see gui/design-system/components.md "App shell and navigation".
+ */
+.section-switcher {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  margin: 0 0 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  max-width: 100%;
+}
+
+.section-switcher-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 5px 14px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-control);
+  white-space: nowrap;
+}
+
+.section-switcher-btn:hover { color: var(--text); }
+
+.section-switcher-btn[aria-current="page"] {
+  background: var(--raised);
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+
+.section-switcher-btn:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 1px;
+}
+
+@media (max-width: 760px) {
+  .section-switcher { display: flex; }
+  .section-switcher-btn { flex: 1 1 auto; justify-content: center; min-height: var(--control-touch); }
+}

@@ -75,4 +75,5 @@ API key 请优先使用 `${ENV_VAR}` 引用。字面量 `apiKey`、`apiKeyPool[]
 :::note[原子写入]
 opencodex 会通过临时文件再重命名（`atomicWriteFile`）的方式写入托管的 `config.toml` 和 `opencodex-catalog.json` 文件。
 这可以避免在并发写入时留下半写入文件，例如 `ocx stop` 和代理 shutdown handler 同时恢复 Codex 的情况。
+在 Windows 上，如果 `opencodex-catalog.json` 带有只读属性并导致重命名被拒绝，opencodex 会清除该属性并重试一次；仍然失败时会报告 `Codex catalog is read-only: <path>`，而不是裸的 `EPERM`。
 :::

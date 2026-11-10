@@ -2,6 +2,7 @@ import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { SHIM_MARKER, UNIX_SHIM_REVISION_MARKER, WINDOWS_SHIM_REVISION_MARKER } from "./shim-templates";
 import { readStateResult, stateFiles, statePath } from "./shim-state-file";
 import { overlayDiagnostic } from "./shim-overlay";
+import { checkLegacyShimRecord, legacyShimManualRestoreMessage } from "./shim-legacy-record";
 
 export function isShim(path: string): boolean {
   try {
@@ -59,6 +60,12 @@ export function diagnoseCodexShim(): CodexShimDiagnostic {
     };
   }
   if (state.mode === "path-overlay") return overlayDiagnostic(state);
+  if (state.platform === "win32") {
+    const legacy = checkLegacyShimRecord(state);
+    if (!legacy.ok) {
+      return { installed: true, healthy: false, runnable: false, active: null, summary: legacyShimManualRestoreMessage(legacy.reason, statePath()) };
+    }
+  }
   const files = stateFiles(state);
   const healthy = files.length > 0 && files.every(file => file.preserveOnly
     ? existsSync(file.backupPath) && !existsSync(file.originalPath)
