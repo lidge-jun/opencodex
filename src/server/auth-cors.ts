@@ -51,6 +51,7 @@ import { googleVertexLocationConfigError } from "../providers/google-vertex-loca
 import { xaiResponsesOptInState } from "../providers/xai-responses-opt-in";
 import { authorizationCredential } from "../lib/authorization-scheme";
 import { noteTurnStateCaller } from "./turn-state-handles";
+import { providerModelDiscoveryConfigError } from "../providers/model-discovery-config";
 
 let _corsOrigin = "http://localhost:10100";
 // Listener identity is process-local. Never infer this trust from forwarded headers: the
@@ -993,6 +994,8 @@ export function providerManagementConfigError(
   if (jsonSchemaOptOutError) return `provider ${name} ${jsonSchemaOptOutError}`;
   const retainModelsError = nonBlankStringArrayConfigError(raw.retainModels, "retainModels");
   if (retainModelsError) return `provider ${name} ${retainModelsError}`;
+  const modelDiscoveryError = providerModelDiscoveryConfigError(raw.modelDiscovery);
+  if (modelDiscoveryError) return `provider ${JSON.stringify(redactSecretString(name))} ${modelDiscoveryError}`;
   const toolReasoningOptOutError = nonBlankStringArrayConfigError(
     raw.omitReasoningEffortWithToolsModels,
     "omitReasoningEffortWithToolsModels",
@@ -1134,6 +1137,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   defaultModel: "editor",
   models: "editor",
   liveModels: "editor",
+  modelDiscovery: "editor",
   selectedModels: "editor",
   initialModelSelection: "runtime",
   retainModels: "editor",

@@ -617,6 +617,14 @@ export interface OcxProviderConfig {
    */
   liveModels?: boolean;
   /**
+   * Per-provider live-discovery compatibility (#7910). `skipInvalidRows: true` skips individual
+   * `/models` rows whose id is missing, non-string, empty or otherwise invalid (and non-object
+   * rows) instead of rejecting the whole listing; a listing with no surviving row stays malformed.
+   * Absent or false keeps strict discovery. Unrelated to the top-level `OcxConfig.modelDiscovery`,
+   * which is persisted discovery state rather than provider configuration.
+   */
+  modelDiscovery?: { skipInvalidRows?: boolean };
+  /**
    * Per-provider catalog allowlist. When non-empty, ONLY these model ids are emitted to Codex's
    * catalog and `/v1/models` — live discovery still runs, this just narrows what ships (so a proxy
    * exposing thousands of models, or an aggregator like OpenRouter, doesn't bloat the catalog).

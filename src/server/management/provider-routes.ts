@@ -1803,7 +1803,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
           latencyMs,
           error: extracted.reason === "too_many_models"
             ? `upstream /models exceeded the ${discovery.maxModels}-row model limit`
-            : `upstream /models returned an unexpected shape${invalidModelDiscoveryHint("diagnostic" in extracted && typeof extracted.diagnostic === "string" ? extracted.diagnostic : undefined)}`,
+            : `upstream /models returned an unexpected shape${invalidModelDiscoveryHint("diagnostic" in extracted && typeof extracted.diagnostic === "string" ? extracted.diagnostic : undefined, discovery.skipInvalidRows === true)}`,
         });
       }
       const models = ccaModels?.length ?? ("items" in extracted! ? extracted!.items.length : extracted!.rows.length);
@@ -1811,7 +1811,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         ok: true,
         latencyMs,
         models,
-        message: `Connected — ${models} model${models === 1 ? "" : "s"} available.`,
+        message: `Connected — ${models} model${models === 1 ? "" : "s"} available${extracted && "skippedInvalidRows" in extracted && extracted.skippedInvalidRows ? ` (${extracted.skippedInvalidRows} invalid row${extracted.skippedInvalidRows === 1 ? "" : "s"} skipped)` : ""}.`,
       });
     } catch (err) {
       return jsonResponse({
