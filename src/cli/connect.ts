@@ -351,6 +351,18 @@ export function connectCompletionReport(
   };
 }
 
+/**
+ * Adds the tunnel verdict (#8470) only for a connected Remote Link Child, the one case with a
+ * runtime verdict to read; a hub client or a disconnected machine is returned untouched, unprobed.
+ */
+export async function withLinkTunnelStatus(
+  status: ClientConnectionStatus,
+  probe: () => Promise<LinkTunnelStatus>,
+): Promise<ClientConnectionStatus> {
+  if (status.state !== "connected" || status.transport !== "link") return status;
+  return { ...status, linkTunnel: await probe() };
+}
+
 function linkTunnelLine(tunnel: LinkTunnelStatus): string {
   return tunnel.state === "up" ? "Link tunnel: up" : `Link tunnel: ${tunnel.state} (${tunnel.reason})`;
 }
@@ -530,10 +542,10 @@ export async function handleConnectCommand(argv: string[], deps: ClientCommandDe
       const args = argv.slice(1);
       const wantsJson = takeFlag(args, "--json");
       rejectArgs(args, CONNECT_USAGE, { redactValues: true });
-      const collected = collectClientConnectionStatus(Date.now(), deps.lifecycleLockDeps, deps.catalogProbeDeps ?? {});
-      const status: ClientConnectionStatus = collected.state === "connected" && collected.transport === "link"
-        ? { ...collected, linkTunnel: await (deps.probeLinkTunnel ?? probeLinkTunnelStatus)() }
-        : collected;
+      const status = await withLinkTunnelStatus(
+        collectClientConnectionStatus(Date.now(), deps.lifecycleLockDeps, deps.catalogProbeDeps ?? {}),
+        deps.probeLinkTunnel ?? probeLinkTunnelStatus,
+      );
       printData(status, wantsJson, clientConnectionStatusLines(status));
       return;
     }

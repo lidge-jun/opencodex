@@ -6,7 +6,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { probeLinkTunnelStatus } from "../../src/client/link-tunnel-status";
-import { clientConnectionStatusLines, type ClientConnectionStatus } from "../../src/cli/connect";
+import { clientConnectionStatusLines, withLinkTunnelStatus, type ClientConnectionStatus } from "../../src/cli/connect";
 import type { LiveProxy } from "../../src/server/proxy-liveness";
 
 const LIVE: LiveProxy = { pid: 4242, port: 10100, hostname: "127.0.0.1", source: "runtime", role: "client" };
@@ -64,6 +64,8 @@ describe("probeLinkTunnelStatus", () => {
     ];
     const delays: number[] = [];
     let calls = 0;
+    // The first read starts at t=1000 and returns link_unverified after /readyz's 500 ms wait.
+    const clock = [1_000, 1_520];
     const fetchImpl = (async () => {
       const next = bodies[Math.min(calls++, bodies.length - 1)]!;
       return readyz(next.status, next.body)("http://x");
@@ -72,9 +74,13 @@ describe("probeLinkTunnelStatus", () => {
       findLive: async () => LIVE,
       fetchImpl,
       delay: async ms => { delays.push(ms); },
+      now: () => clock.shift() ?? 1_520,
     });
     expect(calls).toBe(2);
-    expect(delays).toHaveLength(1);
+    // #8496 review: the second read must land after any running preflight can finish (start + 5 s)
+    // and inside its 5 s cached verdict (finished no earlier than start + 500 ms), so it is timed
+    // from the first read's START: 1000 + 5250 - 1520 = 4730.
+    expect(delays).toEqual([4_730]);
     expect(result).toEqual({ state: "down", reason: "home_unreachable" });
   });
 
@@ -89,6 +95,24 @@ describe("probeLinkTunnelStatus", () => {
 });
 
 describe("connect status lines", () => {
+  test("only a connected link Child asks its runtime, exactly once", async () => {
+    let probes = 0;
+    const probe = async () => { probes++; return { state: "up" } as const; };
+    const link = { state: "connected", transport: "link", catalog: "present", token: "owned", rotation: "clean" } as ClientConnectionStatus;
+    expect((await withLinkTunnelStatus(link, probe)).linkTunnel).toEqual({ state: "up" });
+    expect(probes).toBe(1);
+    for (const other of [
+      { ...link, transport: "hub" },
+      { ...link, transport: undefined },
+      { ...link, state: "disconnected" },
+    ] as ClientConnectionStatus[]) {
+      const result = await withLinkTunnelStatus(other, probe);
+      expect(result).toBe(other);
+      expect("linkTunnel" in result).toBe(false);
+    }
+    expect(probes).toBe(1);
+  });
+
   const base: ClientConnectionStatus = {
     state: "connected", serverUrl: "http://127.0.0.1:40123", managementUrl: "http://127.0.0.1:40123",
     managementTransport: "direct", transport: "link", protocolVersion: 1, apiKeyId: "k1",

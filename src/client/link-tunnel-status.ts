@@ -23,14 +23,18 @@ export interface LinkTunnelStatusDeps {
   fetchImpl?: typeof fetch;
   /** Resolves after `ms`; the wait for a relay preflight the runtime has not finished yet. */
   delay?: (ms: number) => Promise<void>;
+  now?: () => number;
 }
 
 /**
- * /readyz answers `link_unverified` when its preflight is still running after a short wait. The
- * preflight is bounded by LINK_RELAY_AUTH_TIMEOUT_MS and its verdict is cached for a few seconds,
- * so one more read after that bound returns the real answer.
+ * /readyz answers `link_unverified` when its preflight is still running after its 500 ms wait. That
+ * preflight ends within LINK_RELAY_AUTH_TIMEOUT_MS of this read's start, no earlier than 500 ms in,
+ * and its verdict is reused for LINK_READINESS_TTL_MS (5 s). One more read timed from the FIRST
+ * read's start lands after the preflight can finish and inside the cached verdict: anywhere in
+ * [start + 5000, start + 5500] works, so this aims at the middle. Timing it from the first read's
+ * return instead could miss the cache and start a second Home probe (#8496 review).
  */
-const PREFLIGHT_SETTLE_MS = LINK_RELAY_AUTH_TIMEOUT_MS + 250;
+const SECOND_READ_AFTER_START_MS = LINK_RELAY_AUTH_TIMEOUT_MS + 250;
 const READ_TIMEOUT_MS = 2_000;
 
 export async function probeLinkTunnelStatus(deps: LinkTunnelStatusDeps = {}): Promise<LinkTunnelStatus> {
@@ -59,9 +63,12 @@ export async function probeLinkTunnelStatus(deps: LinkTunnelStatusDeps = {}): Pr
       return { state: "unknown", reason: "runtime_unreadable" };
     }
   };
+  const now = deps.now ?? Date.now;
+  const startedAt = now();
   const first = await read();
   if (first.state !== "down" || first.reason !== "link_unverified") return first;
-  await (deps.delay ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms))))(PREFLIGHT_SETTLE_MS);
+  const wait = Math.max(0, startedAt + SECOND_READ_AFTER_START_MS - now());
+  await (deps.delay ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms))))(wait);
   const second = await read();
   return second.state === "down" && second.reason === "link_unverified"
     ? { state: "unknown", reason: "link_unverified" }
