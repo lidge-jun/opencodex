@@ -92,13 +92,19 @@ export async function refusedReasoningEffortDowngrade(
 
 /**
  * The passthrough rebuild serializes `_rawBody`, so a downgraded rung has to be written there as
- * well or the replay resends the refused effort. `reasoning_effort` is kept in step only when the
- * caller sent it.
+ * well or the replay resends the refused effort.
+ *
+ * Only shapes that already carry the control are rewritten. An absent `reasoning`, or one the
+ * caller sent as a string or `null`, is left exactly as it was: inventing `{ effort }` here would
+ * add a reasoning control to a body that never asked for one, and overriding a string would
+ * replace whatever that wire meant by it. `reasoning_effort` is kept in step only when present.
  */
 export function withRawBodyReasoningEffort(rawBody: unknown, effort: string): unknown {
   if (!isPlainObject(rawBody)) return rawBody;
-  const reasoning = isPlainObject(rawBody.reasoning) ? { ...rawBody.reasoning, effort } : { effort };
-  return { ...rawBody, reasoning, ...("reasoning_effort" in rawBody ? { reasoning_effort: effort } : {}) };
+  const next: Record<string, unknown> = { ...rawBody };
+  if (isPlainObject(rawBody.reasoning)) next.reasoning = { ...rawBody.reasoning, effort };
+  if ("reasoning_effort" in rawBody) next.reasoning_effort = effort;
+  return next;
 }
 
 

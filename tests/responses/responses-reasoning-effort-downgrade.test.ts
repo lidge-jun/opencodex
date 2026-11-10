@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses } from "../../src/server/responses/core";
+import { withRawBodyReasoningEffort } from "../../src/server/responses/core-opaque-recovery";
 import { clearComboSelectionState, clearComboTargetCooldowns, isComboTargetInCooldown } from "../../src/combos";
 import {
   hasConflictingReasoningEffortCode,
@@ -1153,4 +1154,183 @@ describe("rejected reasoning rungs", () => {
       expect(isReasoningEffortLearnedUnsupported(comboConfig.providers.first, MODEL, "max")).toBe(false);
     },
   );
+});
+
+/**
+ * Canonical effort refusals from real upstreams (#8173). Each one names reasoning effort through
+ * its structured param, its prose, or both, and quotes the refused rung. The classifier used to
+ * read the leading diagnostic adjective ("Unsupported parameter") or the quoted rung
+ * ("Unsupported value: 'max'") as a competing field, so every one of these was terminal even
+ * with a structured `param: reasoning_effort`.
+ */
+const CANONICAL_EFFORT_REFUSALS = [
+  [
+    "openai unsupported_value for a max rung",
+    JSON.stringify({
+      error: {
+        message: "Unsupported value: 'max' is not supported with this model. Supported values are: 'low','medium','high'.",
+        param: "reasoning_effort",
+        code: "unsupported_value",
+      },
+    }),
+  ],
+  [
+    "openai unsupported_value for an xhigh rung",
+    JSON.stringify({
+      error: {
+        message: "Unsupported value: 'xhigh' is not supported with this model. Supported values are: 'low','medium','high'.",
+        param: "reasoning_effort",
+        code: "unsupported_value",
+      },
+    }),
+  ],
+  [
+    "openai unsupported_value for a low rung",
+    JSON.stringify({
+      error: {
+        message: "Unsupported value: 'low' is not supported with this model. Supported values are: 'low','medium','high'.",
+        param: "reasoning_effort",
+        code: "unsupported_value",
+      },
+    }),
+  ],
+  [
+    "openai unsupported_value for a minimal rung",
+    JSON.stringify({
+      error: {
+        message: "Unsupported value: 'minimal' is not supported with this model. Supported values are: 'low','medium','high'.",
+        param: "reasoning_effort",
+        code: "unsupported_value",
+      },
+    }),
+  ],
+  [
+    "openai unsupported_parameter",
+    JSON.stringify({
+      error: {
+        message: "Unsupported parameter: 'reasoning_effort' is not supported with this model.",
+        param: "reasoning_effort",
+        code: "unsupported_parameter",
+      },
+    }),
+  ],
+  [
+    "anthropic thinking budget",
+    JSON.stringify({ error: { message: "thinking budget 32000 is not supported for this model" } }),
+  ],
+  [
+    "vllm enumeration prose",
+    "reasoning_effort must be one of ['low','medium','high']",
+  ],
+  [
+    "google numeric status",
+    JSON.stringify({ code: 400, error: { message: "reasoning effort max is unsupported" } }),
+  ],
+] as const;
+
+describe("canonical upstream effort refusals", () => {
+  test.each(CANONICAL_EFFORT_REFUSALS)("classifies %s as an effort rejection", (_label, refusal) => {
+    expect(hasConflictingReasoningEffortCode(refusal)).toBe(false);
+    expect(isReasoningEffortRejection(refusal)).toBe(true);
+  });
+
+  test.each(CANONICAL_EFFORT_REFUSALS.flatMap(([label, refusal]) => ([
+    ["openai-chat", label, refusal] as const,
+    ["openai-responses", label, refusal] as const,
+  ])))(
+    "repairs once from max to high on a direct request (%s, %s)",
+    async (adapter, _label, refusal) => {
+      writeSnapshot(["low", "medium", "high", "max"]);
+      const outbound: Array<Record<string, unknown>> = [];
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        if (outbound.length === 1) {
+          return new Response(refusal, { status: 400, headers: { "content-type": "application/json" } });
+        }
+        return adapter === "openai-chat"
+          ? chatSuccess("served at high effort", MODEL)
+          : Response.json({ id: "resp-ok", object: "response", status: "completed", model: MODEL, output: [] });
+      }) as typeof fetch;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+
+      const cfg = adapter === "openai-chat" ? config() : passthroughConfig();
+      const response = await handleResponses(request(), cfg, logCtx);
+      const text = await response.text();
+
+      expect(response.status).toBe(200);
+      if (adapter === "openai-chat") expect(text).toContain("served at high effort");
+      expect(outbound).toHaveLength(2);
+      expect(effortOf(outbound[0])).toBe("max");
+      expect(effortOf(outbound[1])).toBe("high");
+      expect(logCtx.activeAttempt?.recoveryKinds).toEqual(["reasoning-effort-downgrade"]);
+      expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(true);
+    },
+  );
+
+  test.each(CANONICAL_EFFORT_REFUSALS.flatMap(([label, refusal]) => ([
+    ["openai-chat", label, refusal] as const,
+    ["openai-responses", label, refusal] as const,
+  ])))(
+    "combo walks max to high on the same target (%s, %s)",
+    async (adapter, _label, refusal) => {
+      writeSnapshot(["low", "medium", "high", "max"]);
+      const attempts: Array<{ host: string; effort: unknown }> = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        attempts.push({ host: url.host, effort: effortOf(body) });
+        return attempts.length === 1
+          ? new Response(refusal, { status: 400, headers: { "content-type": "application/json" } })
+          : chatSuccess("served at high effort", MODEL);
+      }) as typeof fetch;
+      const comboConfig = {
+        providers: {
+          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
+        },
+        combos: {
+          effort: {
+            strategy: "failover",
+            targets: [{ provider: "first", model: MODEL }, { provider: "fallback", model: MODEL }],
+          },
+        },
+      } as OcxConfig;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+
+      const response = await handleResponses(request(false, "combo/effort"), comboConfig, logCtx);
+      const result = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(result).toContain("served at high effort");
+      expect(attempts).toEqual([
+        { host: "opencode.ai", effort: "max" },
+        { host: "opencode.ai", effort: "high" },
+      ]);
+      expect(isReasoningEffortLearnedUnsupported(comboConfig.providers.first, MODEL, "max")).toBe(true);
+    },
+  );
+});
+
+describe("raw body effort rewrite", () => {
+  test("writes reasoning.effort only when the incoming body carried an object reasoning", () => {
+    expect(withRawBodyReasoningEffort({ input: [], reasoning: { summary: "auto" } }, "high"))
+      .toEqual({ input: [], reasoning: { summary: "auto", effort: "high" } });
+  });
+
+  test("keeps a reasoning_effort field in step when the caller sent one", () => {
+    expect(withRawBodyReasoningEffort({ input: [], reasoning_effort: "max" }, "high"))
+      .toEqual({ input: [], reasoning_effort: "high" });
+  });
+
+  test("does not invent a reasoning object when the body carried none", () => {
+    expect(withRawBodyReasoningEffort({ input: [], model: "m" }, "high"))
+      .toEqual({ input: [], model: "m" });
+  });
+
+  test("leaves a string or null reasoning untouched", () => {
+    expect(withRawBodyReasoningEffort({ input: [], reasoning: "max" }, "high"))
+      .toEqual({ input: [], reasoning: "max" });
+    expect(withRawBodyReasoningEffort({ input: [], reasoning: null }, "high"))
+      .toEqual({ input: [], reasoning: null });
+  });
 });

@@ -560,7 +560,9 @@ function isIncompleteStructuredWrapper(text: string): boolean {
       try {
         JSON.parse(bracketSlice);
       } catch {
-        return true;
+        // "reasoning_effort must be one of ['low','medium','high']" is a value list in prose, not
+        // a truncated or reflected envelope (#8173).
+        if (!isEffortValueEnumeration(bracketSlice)) return true;
       }
     }
   }
@@ -573,6 +575,11 @@ const EFFORT_PARAM_NAMES = new Set([
   "reasoning",
   "reasoning_parameters",
   "effort",
+  // A thinking-budget field is the same subject on the Anthropic-shaped wires: a refusal that
+  // names it is about the reasoning control, not about some other parameter.
+  "thinking_budget",
+  "thinking.budget",
+  "thinking.budget_tokens",
 ]);
 
 function cleanParam(str: string): string {
@@ -698,6 +705,97 @@ const EFFORT_RUNGS = new Set([
   "default",
 ]);
 
+/**
+ * Words that describe a diagnostic, never name a request field.
+ *
+ * "Unsupported parameter: 'reasoning_effort'" puts an adjective exactly where a field name sits
+ * in "`field` parameter", and "Unsupported value: 'max'" puts the refused value under a noun.
+ * Reading either as the competing subject made genuine effort refusals terminal (#8173).
+ */
+const DIAGNOSTIC_NOISE_WORDS = new Set([
+  "unsupported",
+  "invalid",
+  "unrecognized",
+  "unknown",
+  "unexpected",
+  "bad",
+  "malformed",
+  "value",
+  "values",
+  "parameter",
+  "parameters",
+  "param",
+  "params",
+  "field",
+  "fields",
+  "argument",
+  "arguments",
+  "arg",
+  "property",
+  "request",
+  "response",
+  "payload",
+  "body",
+  "error",
+  // Determiners and participles that introduce the subject: "The following parameter is not
+  // supported: reasoning_effort" puts one where a field name would sit.
+  "following",
+  "specified",
+  "given",
+  "provided",
+  "requested",
+  "supplied",
+  "above",
+  "a",
+  "an",
+  "the",
+  "same",
+]);
+
+/**
+ * A bare number (or numeric literal) is a value in every diagnostic that names a limit, never a
+ * field name, so "thinking budget 32000 is not supported" is not a competing-parameter refusal.
+ */
+const NUMERIC_VALUE_TOKEN = /^[0-9]+(?:\.[0-9]+)?$/;
+
+/** Connectives and glue words allowed inside a published-value enumeration. */
+const EFFORT_ENUMERATION_FILLER = new Set([
+  "and",
+  "or",
+  "values",
+  "value",
+  "supported",
+  "allowed",
+  "available",
+  "one",
+  "of",
+  "are",
+  "is",
+]);
+
+/**
+ * Whether a bracket slice is just a list of effort rungs, e.g. `['low','medium','high']`.
+ *
+ * "reasoning_effort must be one of ['low','medium','high']" is prose that lists the ladder. The
+ * structured-wrapper checks treat any bracket payload with commas and quotes as a malformed or
+ * reflected envelope, which made this genuine refusal terminal (#8173). A payload composed only
+ * of rung names is a value list, not an envelope.
+ */
+function isEffortValueEnumeration(slice: string): boolean {
+  const tokens = slice.match(/[A-Za-z_][A-Za-z0-9_.\-]*|[0-9]+(?:\.[0-9]+)?/g);
+  if (!tokens || tokens.length === 0) return false;
+  return tokens.every(token => {
+    const normalized = token.toLowerCase();
+    return EFFORT_RUNGS.has(normalized) || EFFORT_ENUMERATION_FILLER.has(normalized);
+  });
+}
+
+/** True when every bracketed group in the text is an effort-value enumeration. */
+function carriesOnlyEffortEnumerations(text: string): boolean {
+  const groups = text.match(/\[[^\]]*\]/g);
+  return !!groups && groups.length > 0 && groups.every(isEffortValueEnumeration);
+}
+
 const STRUCTURAL_EFFORT_WORDS = new Set([
   "level",
   "mode",
@@ -734,8 +832,19 @@ const SUBJECT_FOLLOWING_VERBS = new Set([
 
 const REASONING_EFFORT_CONTEXT_REGEX = /\b(?:reasoning[._\s]+effort|reasoning[._\s]+parameters|reasoning|effort)\b/i;
 
+/** How far from a rung value its own clause may name effort and still describe it. */
+const EFFORT_DESCRIPTOR_WINDOW = 64;
+
 function isExplicitFieldOrParameter(text: string, matchIndex: number, param: string): boolean {
   if (SUBJECT_FOLLOWING_VERBS.has(param)) return false;
+  // "Unsupported parameter", "Invalid value", "Missing field" put a diagnostic word exactly
+  // where a field name sits. It is never the subject the sentence is about (#8173).
+  if (DIAGNOSTIC_NOISE_WORDS.has(param)) return false;
+  // A rung value is never a field name: "Invalid reasoning effort. The max field is invalid."
+  // names its subject explicitly in the sentence before, and no diagnostic says "the max field"
+  // about an unrelated field named max. Judging the value on its own words first keeps the
+  // quoted-field windows below from being applied to a ladder rung.
+  if (EFFORT_RUNGS.has(param) && !namesRungAsDeclaredField(text, matchIndex, param)) return false;
   const pre = text.slice(Math.max(0, matchIndex - 48), matchIndex);
   if (
     /\b(?:reasoning[._\s]+effort|reasoning[._\s]+parameters|reasoning|effort)\s+(?:parameter|param|argument|arg|field|property)\s*(?:[:=]\s*['"`]?|['"`]|\s+)\s*$/i.test(
@@ -750,10 +859,29 @@ function isExplicitFieldOrParameter(text: string, matchIndex: number, param: str
   return false;
 }
 
+/**
+ * Whether the rung at `matchIndex` is introduced as a field in its own right — the shapes
+ * "the max field", "Invalid field: max", "parameter max" — rather than as a value under a
+ * diagnostic noun such as "Unsupported value: 'max'".
+ */
+function namesRungAsDeclaredField(text: string, matchIndex: number, param: string): boolean {
+  const pre = text.slice(Math.max(0, matchIndex - 48), matchIndex);
+  if (/\b(?:parameter|param|argument|arg|field|property)\s*(?:[:=]\s*['"`]?|['"`]|\s+)\s*$/i.test(pre)) return true;
+  const post = text.slice(matchIndex + param.length, Math.min(text.length, matchIndex + param.length + 32));
+  return /^\s*['"`]?\s+(?:parameter|param|argument|arg|field|property)\b/i.test(post);
+}
+
 function isEffortDescriptorInContext(text: string, matchIndex: number, param: string): boolean {
-  if (isExplicitFieldOrParameter(text, matchIndex, param)) return false;
   if (EFFORT_RUNGS.has(param)) {
-    return REASONING_EFFORT_CONTEXT_REGEX.test(text);
+    if (namesRungAsDeclaredField(text, matchIndex, param)) return false;
+    // A rung is an effort descriptor when the surrounding words tie it to effort. The context
+    // window is the whole diagnostic minus OTHER parameters: a message that ends
+    // "Supported values are: 'low','medium','high'" must not turn the refused 'max' into a
+    // competing field merely because the same sentence lists a ladder.
+    const pre = text.slice(Math.max(0, matchIndex - EFFORT_DESCRIPTOR_WINDOW), matchIndex);
+    if (REASONING_EFFORT_CONTEXT_REGEX.test(pre)) return true;
+    const post = text.slice(matchIndex + param.length, Math.min(text.length, matchIndex + param.length + EFFORT_DESCRIPTOR_WINDOW));
+    return REASONING_EFFORT_CONTEXT_REGEX.test(post);
   }
   if (STRUCTURAL_EFFORT_WORDS.has(param)) {
     const preText = text.slice(Math.max(0, matchIndex - 32), matchIndex);
@@ -770,15 +898,47 @@ function tokenStartIndex(m: RegExpExecArray, rawToken: string, isPrefixToken: bo
 function isCompetingParameterToken(text: string, tokenIndex: number, rawToken: string): boolean {
   const p = cleanParam(rawToken);
   if (!p || EFFORT_PARAM_NAMES.has(p) || SUBJECT_FOLLOWING_VERBS.has(p)) return false;
+  // A diagnostic adjective or noun ("Unsupported", "invalid", "value", "field") occupies the
+  // syntactic slot of a field name without naming one. GENERIC_PARAM_WORDS covers most of them;
+  // "bad" and "malformed" were missing there, so the two sets stay separate.
+  if (DIAGNOSTIC_NOISE_WORDS.has(p)) return false;
+  // A bare number names a limit, not a request field ("thinking budget 32000 is not supported").
+  if (NUMERIC_VALUE_TOKEN.test(p)) return false;
   if (isExplicitFieldOrParameter(text, tokenIndex, p)) return true;
   if (GENERIC_PARAM_WORDS.has(p)) return false;
   if (isEffortDescriptorInContext(text, tokenIndex, p)) return false;
   return true;
 }
 
-function diagnosticTextNamesOtherParameter(text: string): boolean {
+/**
+ * Concrete request fields a diagnostic can name instead of effort. Unlike the heuristic subject
+ * patterns below, a member of this list is a real wire field, so naming one beside an
+ * authoritative effort param really is a different subject.
+ */
+const CONCRETE_FIELD_TERM =
+  /\b(?:temperature|top_p|top_k|max_tokens|max_completion_tokens|max_output_tokens|min_tokens|stop|stop_sequences|presence_penalty|frequency_penalty|repetition_penalty|logit_bias|logprobs|top_logprobs|seed|tools|tool_choice|functions|function_call|response_format|stream|stream_options|user|safety_identifier|service_tier|modalities|prediction|parallel_tool_calls|messages|prompt|input|image_url)\b/gi;
+
+/**
+ * Whether the text names a concrete non-effort request field while rejecting something.
+ *
+ * This is the only inference allowed to override a structured `param` that already names
+ * reasoning effort. Everything heuristic in `diagnosticTextNamesOtherParameter` — adjective
+ * subjects, quoted rungs, "value:" prefixes — must not, or it would re-break every canonical
+ * effort refusal whose prose happens to quote the refused value (#8173).
+ */
+function diagnosticTextNamesConcreteOtherField(text: string): boolean {
+  for (let m = CONCRETE_FIELD_TERM.exec(text); m; m = CONCRETE_FIELD_TERM.exec(text)) {
+    const from = Math.max(0, m.index - REJECTION_WINDOW);
+    const to = Math.min(text.length, m.index + m[0].length + REJECTION_WINDOW);
+    if (REJECTION_LANGUAGE.test(text.slice(from, to))) return true;
+  }
+  return false;
+}
+
+function diagnosticTextNamesOtherParameter(text: string, authoritativeEffortSubject = false): boolean {
   if (!text) return false;
   const s = text.replace(GENERIC_ERROR_TYPE, " ");
+  if (authoritativeEffortSubject) return diagnosticTextNamesConcreteOtherField(s);
 
   const paramPattern = /\b(?:parameter|param|argument|arg|field|property)\s*(?:[:=]\s*['"`]?|['"`]|\s+)['"`]?([a-zA-Z0-9_\-\.]+)['"`]?/gi;
   for (let m = paramPattern.exec(s); m; m = paramPattern.exec(s)) {
@@ -834,7 +994,7 @@ function diagnosticTextNamesOtherParameter(text: string): boolean {
   return false;
 }
 
-function isConflictingDiagnosticProse(str: string | undefined): boolean {
+function isConflictingDiagnosticProse(str: string | undefined, authoritativeEffortSubject = false): boolean {
   if (!str) return false;
   const s = str.trim();
   if (!s) return false;
@@ -846,17 +1006,35 @@ function isConflictingDiagnosticProse(str: string | undefined): boolean {
   const codeMatch = /\bcode\s*[:=]\s*["']?([a-zA-Z0-9_\-]+)["']?/i.exec(s);
   if (codeMatch && codeMatch[1]) {
     const code = codeMatch[1].trim().toLowerCase().replaceAll("-", "_");
-    if (!EFFORT_COMPATIBLE_CODES.has(code)) return true;
+    if (!EFFORT_COMPATIBLE_CODES.has(code) && !isHttpStatusText(code)) return true;
   }
   const typeMatch = /\btype\s*[:=]\s*["']?([a-zA-Z0-9_\-]+)["']?/i.exec(s);
   if (typeMatch && typeMatch[1]) {
     const type = typeMatch[1].trim().toLowerCase().replaceAll("-", "_");
     if (!EFFORT_COMPATIBLE_TYPES.has(type)) return true;
   }
-  if (diagnosticTextNamesOtherParameter(s)) {
+  if (diagnosticTextNamesOtherParameter(s, authoritativeEffortSubject)) {
     return true;
   }
   return false;
+}
+
+/**
+ * Whether a numeric code is the HTTP status echoed back rather than a vendor error code.
+ *
+ * Google answers a bad reasoning effort with `{"code":400,"error":{"message":"…"}}`, where the
+ * numeric field is the response status. Treating it as an unrecognized semantic code made that
+ * genuine refusal terminal (#8173). Only 4xx is accepted: a numeric 5xx is a server failure and
+ * must keep its terminal verdict.
+ */
+function isHttpStatusText(token: string): boolean {
+  if (!NUMERIC_VALUE_TOKEN.test(token)) return false;
+  const value = Number(token);
+  return Number.isInteger(value) && value >= 400 && value <= 499;
+}
+
+function isHttpStatusNumber(value: unknown): boolean {
+  return typeof value === "number" && Number.isInteger(value) && value >= 400 && value <= 499;
 }
 
 /**
@@ -901,7 +1079,7 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
       (unescaped.includes("[") &&
         unescaped.includes("]") &&
         (unescaped.includes('"') || unescaped.includes("'") || unescaped.includes(",")));
-    if (hasBraces || hasBrackets) return true;
+    if (hasBraces || (hasBrackets && !carriesOnlyEffortEnumerations(unescaped))) return true;
     return isConflictingDiagnosticProse(unescaped);
   }
   try {
@@ -973,15 +1151,23 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
         continue;
       }
       const rec = candidate as Record<string, unknown>;
+      // A structured param/field naming effort is authoritative about the subject. Text
+      // inference may only override it by naming a concrete other request field, never by
+      // reading a diagnostic adjective or the refused value as a field name (#8173).
+      const authoritativeEffortSubject = typeof rec.param === "string" && EFFORT_PARAM_NAMES.has(rec.param.trim().toLowerCase());
       if (rec.param !== undefined && rec.param !== null) {
         if (typeof rec.param !== "string") return true;
         const param = rec.param.trim().toLowerCase();
         if (param.length > 0 && !EFFORT_PARAM_NAMES.has(param)) return true;
       }
       if (rec.code !== undefined && rec.code !== null) {
-        if (typeof rec.code !== "string") return true;
-        const code = rec.code.trim().toLowerCase().replaceAll("-", "_");
-        if (!EFFORT_COMPATIBLE_CODES.has(code)) return true;
+        if (isHttpStatusNumber(rec.code)) {
+          // An HTTP status echoed into `code` says nothing about which field was refused.
+        } else if (typeof rec.code !== "string") return true;
+        else {
+          const code = rec.code.trim().toLowerCase().replaceAll("-", "_");
+          if (!EFFORT_COMPATIBLE_CODES.has(code)) return true;
+        }
       }
       if (rec.type !== undefined && rec.type !== null) {
         if (typeof rec.type !== "string") return true;
@@ -1007,13 +1193,13 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
             }
           }
           if (inner && typeof inner === "object") {
-            if (isConflictingDiagnosticProse(innerPrefix) || isConflictingDiagnosticProse(innerSuffix)) {
+            if (isConflictingDiagnosticProse(innerPrefix, authoritativeEffortSubject) || isConflictingDiagnosticProse(innerSuffix, authoritativeEffortSubject)) {
               return true;
             }
             queue.push(inner);
           } else if (isIncompleteStructuredWrapper(val)) {
             return true;
-          } else if (isConflictingDiagnosticProse(val)) {
+          } else if (isConflictingDiagnosticProse(val, authoritativeEffortSubject)) {
             return true;
           }
         }
@@ -1303,7 +1489,8 @@ export function isReasoningEffortRejection(text: string | undefined, depth = 0):
     (unescaped.includes("[") &&
       unescaped.includes("]") &&
       (unescaped.includes('"') || unescaped.includes("'") || unescaped.includes(",")));
-  if (hasBraces || hasBrackets || isIncompleteStructuredWrapper(unescaped)) return false;
+  if (hasBraces || (hasBrackets && !carriesOnlyEffortEnumerations(unescaped))) return false;
+  if (isIncompleteStructuredWrapper(unescaped)) return false;
 
   return diagnosticTextBlamesReasoningEffort(unescaped);
 }
