@@ -93,3 +93,41 @@ export function roleListOrder<T extends RoleModel>(models: readonly T[], default
   const rank = (route: string) => (route === defaultRoute ? 0 : route === quickRoute ? 1 : 2);
   return models.toSorted((a, b) => rank(a.route) - rank(b.route) || a.label.localeCompare(b.label) || a.route.localeCompare(b.route));
 }
+
+/**
+ * Routes the user can remove (#8165): unavailable right now and still assigned in the draft.
+ * `available: false` also covers a provider that is only briefly offline, so removal stays an
+ * explicit action on these rows and never happens on its own.
+ */
+export function removableUnavailableRoutes(models: readonly RoleModel[], profile: DesktopProfile): string[] {
+  return models.filter(model => !model.available && profile.assignments[model.route]).map(model => model.route);
+}
+
+/**
+ * Drop `routes` from the draft. A family whose default was dropped falls to its first remaining
+ * member (sorted), or null when it is empty, matching `reconcileDesktopProfile` on the server and
+ * the profile parser's rule that an empty family has no default. With `models`, a route that is
+ * available is kept: the server refuses no such removal, but the page only offers unavailable ones.
+ */
+export function removeAssignments(profile: DesktopProfile, routes: readonly string[], models?: readonly RoleModel[]): DesktopProfile {
+  const available = new Set((models ?? []).filter(model => model.available).map(model => model.route));
+  const dropped = new Set(routes.filter(route => profile.assignments[route] && !available.has(route)));
+  if (dropped.size === 0) return profile;
+  const assignments = Object.fromEntries(Object.entries(profile.assignments).filter(([route]) => !dropped.has(route)));
+  const defaults = { ...profile.defaults };
+  for (const family of FAMILIES) {
+    const current = defaults[family];
+    if (current === null || !dropped.has(current)) continue;
+    defaults[family] = Object.keys(assignments).filter(route => assignments[route]!.family === family).sort()[0] ?? null;
+  }
+  return { ...profile, assignments, defaults };
+}
+
+/**
+ * The models the page lists for this draft. The server's list still carries an unavailable route
+ * until the removal is saved and reloaded; without this filter the row would fall into Opus (the
+ * family an unassigned route defaults to) instead of disappearing.
+ */
+export function listedDesktopModels<T extends RoleModel>(models: readonly T[], profile: DesktopProfile): T[] {
+  return models.filter(model => model.available || profile.assignments[model.route]);
+}

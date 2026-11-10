@@ -1195,6 +1195,13 @@ gateway (default) or first-party, with the running proxy port in first-party mod
 **Save & apply** switches modes; **Save** alone stores the gateway profile lanes for a later
 gateway apply and leaves the current mode as is.
 
+A model whose route is no longer in the catalog stays in the profile and shows **Unavailable**,
+because a provider that is only briefly offline reads the same way. **Remove unavailable (N)** above
+the model list, or **Remove** in an unavailable row of the Advanced lanes, drops those assignments
+and their aliases from the page; a family whose default was removed falls to its first remaining
+model. Nothing changes until **Save** (or **Save & apply** to rewrite Claude Desktop's list), and
+nothing is ever removed automatically.
+
 `GET /api/claude-code` returns effective defaults, config, context-window registry, effective env,
 available route ids, aliases, and port. `PUT /api/claude-code` is partial and preserves omitted
 fields; `null` resets context/blocklist/compact-window values.

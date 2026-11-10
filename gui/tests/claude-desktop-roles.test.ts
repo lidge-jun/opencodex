@@ -2,6 +2,9 @@ import { expect, test } from "bun:test";
 import {
   assignFamily,
   effectiveFamilyDefaults,
+  listedDesktopModels,
+  removableUnavailableRoutes,
+  removeAssignments,
   roleListOrder,
   roleOptions,
   roleValue,
@@ -69,4 +72,39 @@ test("role options are available models minus the other role", () => {
 
 test("the compact list leads with default then quick", () => {
   expect(roleListOrder(models, "p/d", "p/b").map(m => m.route)).toEqual(["p/d", "p/b", "p/a", "p/c"]);
+});
+
+// #8165: an assignment whose route left the catalog had no control that removed it.
+test("only unavailable routes still assigned in the draft are removable", () => {
+  expect(removableUnavailableRoutes(models, profile())).toEqual(["p/c"]);
+  expect(removableUnavailableRoutes(models, removeAssignments(profile(), ["p/c"]))).toEqual([]);
+});
+
+test("removing a route drops its assignment and hands its default to the first remaining member", () => {
+  const twoHaiku: DesktopProfile = {
+    ...profile(),
+    assignments: { ...profile().assignments, "p/e": { family: "haiku", alias: "claude-haiku-e" } },
+  };
+  const next = removeAssignments(twoHaiku, ["p/c"]);
+  expect(next.assignments["p/c"]).toBeUndefined();
+  expect(next.defaults.haiku).toBe("p/e");
+  // A family left empty has no default, which is what the server's profile parser requires.
+  expect(removeAssignments(profile(), ["p/c"]).defaults.haiku).toBeNull();
+  // Everything else is untouched, including aliases and the applied marker.
+  expect(next.assignments["p/a"]).toEqual(profile().assignments["p/a"]!);
+  expect(next.defaults.opus).toBe("p/a");
+  expect(next.appliedFingerprint).toBe("fp");
+});
+
+test("an available route is never removed, even when asked", () => {
+  const next = removeAssignments(profile(), ["p/a"], models);
+  expect(next.assignments["p/a"]).toBeDefined();
+});
+
+test("a removed route disappears from the listed models before the profile is saved", () => {
+  const listed = listedDesktopModels(models, removeAssignments(profile(), ["p/c"]));
+  expect(listed.map(model => model.route)).toEqual(["p/a", "p/b", "p/d"]);
+  // An available model with no assignment yet still lists: the server assigns it on load.
+  const fresh = { ...profile(), assignments: { "p/a": profile().assignments["p/a"]! } };
+  expect(listedDesktopModels(models, fresh).map(model => model.route)).toEqual(["p/a", "p/b", "p/d"]);
 });
