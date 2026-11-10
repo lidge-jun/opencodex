@@ -203,8 +203,12 @@ unknown kinds or model families preserve usable shared windows without claiming 
 family enumeration. An authoritative inactive family row can retire a previous
 passive family refusal; an incomplete enumeration cannot. Shared cooldown recovery
 still requires finite headroom for each rejected window, never an invented zero.
+`weekly_scoped_shares[]` names, by raw `limits` index, the share of the weekly limit a
+selected scoped row may consume (Fable: "up to 50% of your weekly limit"); the window carries
+it as `weeklyAllowancePercent`. It is read from upstream and never inferred from a plan, and a
+share that points at no selected scoped row, falls outside (0, 100] or conflicts is ignored.
 `tests/providers/provider-anthropic-usage-windows.test.ts` covers source precedence, scoped
-admission, raw precision, pool projection and legacy compatibility.
+admission, raw precision, pool projection, weekly shares and legacy compatibility.
 
 Profile tiers in `src/oauth/anthropic-identity.ts` accept both `default_claude_`
 and `claude_` prefixes and the Ultra display spelling. `max_20x` remains the legacy
@@ -484,6 +488,14 @@ statuses retain soft utilization without creating a hard family refusal.
 strategy, reactive selection and physical dispatch use that model. A family-only refusal
 preserves unrelated sessions and account-wide health. Numeric thresholds stay soft: zero
 and the all-drained fallback remain preferences, with no hard billing cap introduced.
+Under the `weekly` and `max-utilization` windows, lowest-usage ranking restates a family window
+that carries a weekly allowance on the shared weekly scale (`anthropicModelRankPercent`): Fable
+at 60% of a 50% allowance ranks at 80, because it has 20 weekly points left. The default
+`five-hour` window has no five-hour tie-break, so it keeps the family's own percent rather than
+let a fresh seat's 50 mask lower five-hour readings. Auto-switch thresholds keep it too, so
+a fresh Fable seat does not read as half spent. Exhaustion is unchanged, since both scales
+reach 100 together, and a passive header reading keeps the allowance the last usage probe read.
+`tests/adapters/anthropic/anthropic-account-threshold.test.ts` covers both sides.
 
 Passive family evidence expires after thirty minutes or its known reset. An expired
 exclusion admits one request-driven revalidation send at a time, released at response
