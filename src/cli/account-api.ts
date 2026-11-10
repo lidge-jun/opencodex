@@ -313,12 +313,16 @@ export interface ProviderQuotaWindowDto {
   percent: number;
   resetAt?: number;
   modelId?: string;
+  /** Share of the weekly limit a model family may use, when upstream reports it. */
+  weeklyAllowancePercent?: number;
 }
 
 export interface ProviderQuotaDto extends CodexQuotaDto {
   fiveHourPercent?: number;
   fiveHourResetAt?: number;
   customWindows?: ProviderQuotaWindowDto[];
+  /** Readings upstream reports as not in effect; shown, never routed on. */
+  displayWindows?: ProviderQuotaWindowDto[];
   unknownBudgetWindows?: { label: string; resetAt?: number }[];
   updatedAt?: number;
 }

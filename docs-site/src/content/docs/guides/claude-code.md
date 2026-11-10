@@ -87,7 +87,11 @@ Usage reads support Ultra (formerly Max 20x). Pro, Max 5x and Team retain their 
 five-hour and weekly meters whichever one is currently binding. An Ultra null five-hour limit
 leaves that meter absent unless Anthropic marks a finite session meter active. Current `limits`
 counters take precedence over legacy duplicates; shared usage can affect routing even when
-inactive, while only active model-specific weekly limits affect that model family.
+inactive, while only active model-specific weekly limits affect that model family. An inactive
+model-specific limit, such as Fable while the shared week is the binding limit, still appears on
+the account's quota bars tagged "Not in effect now". A Fable bar also shows the share Anthropic
+reports, for example "Up to 50% of your weekly limit". A plan whose usage has no Fable row shows
+no Fable bar.
 The dashboard shows Pro, Max 5x, or Ultra beside Claude account quotas, using subscription
 metadata from the authenticated profile. Both `ultra` and `claude_max_20x` display as Ultra
 (the existing `ultra` and `max_20x` tier aliases are retained). Unfamiliar validated tiers retain their original name without
