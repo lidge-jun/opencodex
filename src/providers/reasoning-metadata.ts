@@ -434,7 +434,7 @@ export async function flushReasoningSupportCache(): Promise<void> {
  * these beside the effort term is what separates "the gateway rejected reasoning effort" from
  * "the gateway rejected something else and echoed the request back".
  */
-const REJECTION_LANGUAGE = /unsupported|not supported|does not support|invalid|unrecognized|unknown|not allowed|not permitted|must be|requires|required|cannot|can't|out of range/i;
+const REJECTION_LANGUAGE = /unsupported|not supported|does not support|invalid|not valid|unrecognized|unknown|not allowed|not permitted|must be|requires|required|cannot|can't|out of range/i;
 
 /**
  * How far from the effort term the rejection language may sit and still be about it. Kept
@@ -455,6 +455,7 @@ const EFFORT_COMPATIBLE_CODES = new Set([
   "",
   "invalid_request_error",
   "invalid_argument",
+  "invalid_parameter",
   "unsupported_parameter",
   "unsupported_value",
   "invalid_parameter_error",
@@ -463,7 +464,17 @@ const EFFORT_COMPATIBLE_TYPES = new Set([
   "",
   "invalid_request_error",
   "upstream_error",
+  "bad_request",
 ]);
+
+/**
+ * Error codes and types arrive as snake_case, kebab-case or PascalCase depending on the gateway
+ * (Volcengine Ark sends `InvalidParameter` / `BadRequest`). Fold all three to snake_case before the
+ * compatibility lookup so a generic vendor code is not read as naming some other field.
+ */
+function normalizeErrorTag(value: string): string {
+  return value.trim().replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase().replaceAll("-", "_");
+}
 
 function isIncompleteStructuredWrapper(text: string): boolean {
   let s = text.trim();
@@ -959,7 +970,7 @@ function diagnosticTextNamesOtherParameter(text: string, authoritativeEffortSubj
   }
 
   const subjectIsRejection =
-    /\b['"`]?([a-zA-Z0-9_\-\.]+)['"`]?\s+(?:is|are)\s+(?:invalid|unsupported|unrecognized|unknown|not\s+allowed|not\s+permitted|not\s+supported|required|missing)\b/gi;
+    /\b['"`]?([a-zA-Z0-9_\-\.]+)['"`]?\s+(?:is|are)\s+(?:invalid|not\s+valid|unsupported|unrecognized|unknown|not\s+allowed|not\s+permitted|not\s+supported|required|missing)\b/gi;
   for (let m = subjectIsRejection.exec(s); m; m = subjectIsRejection.exec(s)) {
     const tokenIndex = tokenStartIndex(m, m[1], true);
     if (isCompetingParameterToken(s, tokenIndex, m[1])) return true;
@@ -1005,12 +1016,12 @@ function isConflictingDiagnosticProse(str: string | undefined, authoritativeEffo
   }
   const codeMatch = /\bcode\s*[:=]\s*["']?([a-zA-Z0-9_\-]+)["']?/i.exec(s);
   if (codeMatch && codeMatch[1]) {
-    const code = codeMatch[1].trim().toLowerCase().replaceAll("-", "_");
+    const code = normalizeErrorTag(codeMatch[1]);
     if (!EFFORT_COMPATIBLE_CODES.has(code) && !isHttpStatusText(code)) return true;
   }
   const typeMatch = /\btype\s*[:=]\s*["']?([a-zA-Z0-9_\-]+)["']?/i.exec(s);
   if (typeMatch && typeMatch[1]) {
-    const type = typeMatch[1].trim().toLowerCase().replaceAll("-", "_");
+    const type = normalizeErrorTag(typeMatch[1]);
     if (!EFFORT_COMPATIBLE_TYPES.has(type)) return true;
   }
   if (diagnosticTextNamesOtherParameter(s, authoritativeEffortSubject)) {
@@ -1130,7 +1141,7 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
                   return true;
                 }
               } else {
-                const codeLike = trimmed.toLowerCase().replaceAll("-", "_");
+                const codeLike = normalizeErrorTag(trimmed);
                 if (
                   !codeLike.includes(" ") &&
                   (codeLike.includes("_") || codeLike.length < 32) &&
@@ -1165,13 +1176,13 @@ export function hasConflictingReasoningEffortCode(text: string | undefined): boo
           // An HTTP status echoed into `code` says nothing about which field was refused.
         } else if (typeof rec.code !== "string") return true;
         else {
-          const code = rec.code.trim().toLowerCase().replaceAll("-", "_");
+          const code = normalizeErrorTag(rec.code);
           if (!EFFORT_COMPATIBLE_CODES.has(code)) return true;
         }
       }
       if (rec.type !== undefined && rec.type !== null) {
         if (typeof rec.type !== "string") return true;
-        const type = rec.type.trim().toLowerCase().replaceAll("-", "_");
+        const type = normalizeErrorTag(rec.type);
         if (!EFFORT_COMPATIBLE_TYPES.has(type)) return true;
       }
       for (const field of ["message", "error", "details", "detail", "response", "last_error", "errors"] as const) {

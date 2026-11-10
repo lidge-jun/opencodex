@@ -1226,6 +1226,15 @@ const CANONICAL_EFFORT_REFUSALS = [
     "google numeric status",
     JSON.stringify({ code: 400, error: { message: "reasoning effort max is unsupported" } }),
   ],
+  [
+    "volcengine ark PascalCase code",
+    JSON.stringify({
+      error: {
+        code: "InvalidParameter",
+        message: "The parameter reasoning_effort specified in the request are not valid: max",
+      },
+    }),
+  ],
 ] as const;
 
 describe("canonical upstream effort refusals", () => {
