@@ -642,6 +642,17 @@ The one change to the body is tool-call ids. A `tool_use.id` or `tool_result.too
 Disable with `claudeCode.nativePassthrough: false`; point elsewhere with
 `claudeCode.anthropicBaseUrl`.
 
+**Rate limits on passthrough.** A passthrough request uses the credential the caller sent, so it is
+subject to that login's limits. When the login answers 429, OpenCodex returns that response; it does
+not resend a request authenticated with your credential through another provider or account.
+Claude Code sends some requests on its small-fast model, such as WebSearch on `claude-haiku-5-5`,
+so those can fail on a rate-limited login while routed main turns keep working. To move that traffic
+to a managed provider, map the model id: `claudeCode.intercept.modelMap` (or
+`ocx claude desktop bind`) for first-party Desktop and CLI traffic, `claudeCode.modelMap` for every
+entry point, or `claudeCode.tierModels.haiku` for `ocx claude` sessions. A mapped id no longer
+resolves to itself, so the passthrough condition above is not met and the request is routed like
+any other ([#7912](https://github.com/lidge-jun/opencodex/issues/7912)).
+
 ## Claude Desktop on a connected remote hub
 
 When this machine is connected to a hub, `ocx claude desktop apply` (or `ocx claude desktop`)
