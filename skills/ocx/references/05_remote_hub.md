@@ -337,7 +337,8 @@ reason `legacy-ocx`); a Windows Child that old reports the version it sent over 
 Client-initiated links and `ocx-child` Children are reported without SSH. The command polls the job
 every 2 s and prints the final `ocx.link.child-job/1` document
 ([02_json_shapes.md](02_json_shapes.md#remote-link-child-block-and-job-document)); `--no-wait` prints the
-queued job. One operation runs per link per Home process; a second one on the same link answers 409.
+queued job. One operation runs per link on a running Home: a single-link request for a link another job
+holds answers 409, and in a multi-link job that link's item ends `busy` (`link-operation-in-progress`).
 
 `ocx link status` asks the Home for each row's `child` block: installed and running versions, the
 update route from the last check, whether the Child last pulled the Home's current catalog, and whether

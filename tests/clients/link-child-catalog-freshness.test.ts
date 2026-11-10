@@ -244,7 +244,7 @@ describe("relay catalog pull hook", () => {
     expect(served).toEqual([{ linkId: null, keyId: "key-cdef", etag: catalogEtag(body.join("")) }]);
   });
 
-  test("a recorder that throws or blocks still closes the stream and releases the session", async () => {
+  test("a recorder that throws or returns a never-settling promise still closes the stream and releases the session", async () => {
     for (const catalogServed of [() => { throw new Error("boom"); }, () => { void new Promise(() => {}); }]) {
       const h = relayHarness({ catalogServed });
       const warn = spyOn(console, "warn").mockImplementation(() => {});
