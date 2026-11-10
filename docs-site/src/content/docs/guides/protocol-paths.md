@@ -99,7 +99,7 @@ These switches stage the new paths. Each defaults to off except `antigravityDire
 | Switch | When on |
 | --- | --- |
 | `nativeChatCombos` | An eligible Chat candidate inside a combo is sent natively from its own copy of the client body; the other candidates keep the bridge. |
-| `managedMessagesNative` | Send eligible direct Anthropic routes and canonical Anthropic children of strict failover combos as Messages. Combo defaults/effort rewrites and bridge-only behaviour (pinned effort, blocked-skill elision, web-search sidecar, vision preprocessing, synthetic rows) retain the bridge. |
+| `managedMessagesNative` | Send eligible direct Anthropic routes and key-auth Anthropic-compatible or first-party Anthropic children of strict failover combos as Messages. Combo defaults/effort rewrites and bridge-only behaviour (pinned effort, blocked-skill elision, web-search sidecar, vision preprocessing, synthetic rows) retain the bridge. |
 | `managedMessagesNativeOAuth` | Extend native Messages to configured Anthropic OAuth instances on `api.anthropic.com`, including stored account pools and eligible failover children. Effective only together with `managedMessagesNative`. |
 | `directEncoders` | For a non-Responses upstream, the answer to a Chat or Messages client is encoded directly from the adapter's events instead of through the internal Responses stream. The request side is unchanged. |
 | `antigravityDirect` | **On by default**; set it to `false` to turn it off. A Chat or Messages request whose route is one Google Antigravity provider skips the internal Responses body in both directions: the conversation is decoded from the client body straight into what the Google adapter compiles from, and the answer is encoded directly as with `directEncoders`. The path reads `chat -> ir -> other` or `messages -> ir -> other`. Request settings (model, effort, limits, tool choice) still pass through the usual policies, so account rotation, effort rules and usage are unchanged. Combos, policies, a hosted web-search tool, images for a model marked text-only, a model the shadow-call intercept could rewrite, and text the proxy rewrites (a skills catalog, a generated-image link) stay on the bridge, and the log row names the reason. On a Chat request the decoded conversation counts toward the shared translation budget, so a request whose retained IR exceeds it is refused with HTTP 413 and `translation_buffer_limit` before anything goes upstream. |
@@ -136,7 +136,7 @@ These paths still use the internal Responses bridge or are not covered:
   on a translated path. The exception is a Chat or Messages request to a single Google Antigravity route,
   unless `antigravityDirect` is set to `false`.
 - Routing-policy candidates, combos reached through an effort row, and Chat combo candidates while
-  `nativeChatCombos` is off. Messages combos retain the bridge except eligible canonical Anthropic
+  `nativeChatCombos` is off. Messages combos retain the bridge except eligible Anthropic key-auth compatible or first-party
   children of strict failover combos without a default effort. Each eligible child starts from the
   source Messages envelope, preserving system/messages/tools/cache breakpoints under the existing
   native allowlist and credential rules. Without explicit operator retention, TTL-less combo

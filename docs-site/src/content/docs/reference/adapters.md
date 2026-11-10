@@ -783,7 +783,11 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   guard. Tool availability, execution policy, and approval/sandbox behavior are unchanged.
   In code mode — a freeform unified `exec` and no bare shell bridge — the redirect points inside `exec`, where
   shell, file, search, and fetch are nested `tools.<name>(...)` helpers of the JavaScript cell,
-  and never recommends the top-level shell bridge code mode does not expose. A flat catalog that
+  and never recommends the top-level shell bridge code mode does not expose. Cursor can defer the
+  Codex tools, `exec` included, behind its own `GetDynamicTools`/`CallDynamicTool` pair, so
+  code-mode guidance tells the model to call `CallDynamicTool` with namespace
+  `opencodex-responses` and the listed tool name when a listed tool is missing from its top-level
+  list. A model can still try a Cursor-native tool first; that attempt is denied as before. A flat catalog that
   carries `shell_command`/`exec_command` or a non-freeform unified `exec` keeps the bridge wording;
   a catalog that carries neither — an orchestrator client exposing only its own Responses tools,
   for example — is redirected to the request's actual wire names, so the model is pointed at a

@@ -82,6 +82,7 @@ request's execution budget, so a combo child that derives its own scope draws on
 counter rather than holding a second. A replacement never widens a send budget: it still has to
 fit inside the allowance the leg already had, and it is charged to the same counter every other
 send goes through; initial Combo bookings follow the [prepaid-send contract](responses-spend.md#prepaid-initial-sends).
+Native passthrough judges the inbound body minus a `previous_response_id` this proxy already expanded from its own replay state, because the native adapter strips that id from every send; an unexpanded id still refuses. Every ambiguous refusal on that lane is logged with its stage and reason (`ambiguous-no-policy`, `ambiguous-request-not-replayable`, `ambiguous-allowance-spent`) and nothing from the body. Coverage: `tests/responses/responses-reset-replay-chained.test.ts` (#8453).
 
 Generic translated dispatch in `src/server/responses/adapter-dispatch.ts` asks the same pre-header gate for initial and rebuilt sends, sharing the replacement grant and charging each physical send once to the existing request/workflow budgets. Adapter-owned transports and translated post-header failures are excluded. Coverage: `tests/responses/responses-translated-reset.test.ts`. The number of replacements is the request's as well. A leg reads it from `route.provider`, which
 credential rotation, OAuth refresh, transport resolution and each combo target reassign inside one

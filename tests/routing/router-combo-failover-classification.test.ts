@@ -812,12 +812,15 @@ describe("definite upstream context overflow", () => {
     expect(comboFailureDecision(502, failedTerminal(prose), { code: "context_length_exceeded" })).toBe("hop");
     expect(comboFailureDecision(400, "context length exceeded", { code: "context_length_exceeded" })).toBe("hop");
     expect(comboFailureDecision(400, `Provider error 400: ${prose}`)).toBe("hop");
+    expect(comboFailureDecision(400, "This is not a timeout: the model's context window is full")).toBe("hop");
+    expect(comboFailureDecision(400, "Request was not accepted because its history is at or past the model's context limit")).toBe("hop");
   });
 
   test("evidence must come from the innermost message, not a stray code token", () => {
     const unrelated = JSON.stringify({ error: { ...unsupportedUser, code: "context_length_exceeded" } });
     expect(comboFailureDecision(400, unrelated)).toBe("stop");
     expect(comboFailureDecision(400, "ordinary invalid request", { code: "context_length_exceeded" })).toBe("stop");
+    expect(comboFailureDecision(400, "Requested tokens should not exceed maximum context length (8192)")).toBe("stop");
     // Reflected prose inside an unrelated body is not the provider's own verdict.
     expect(comboFailureDecision(400, JSON.stringify({ error: { ...unsupportedUser, param: "tools", note: prose } })))
       .toBe("stop");
@@ -869,6 +872,181 @@ describe("bounded optional-control error envelopes", () => {
     const message = JSON.stringify({ error: unsupportedEffort });
     expect(comboFailureDecision(400, message, { code: "unsupported_value" })).toBe("hop");
     expect(comboFailureCooldownScope(400, message, { code: "unsupported_value" })).toBe("none");
+  });
+  test("exact reasoning effort refusal hops when wrapped in single-line data: prefix", () => {
+    const payload = JSON.stringify({ code: "invalid-argument", error: "Invalid reasoning effort." });
+    for (const msg of [
+      payload,
+      `data: ${payload}`,
+      `Provider error 400: data: ${payload}`,
+    ]) {
+      expect(comboFailureDecision(400, msg)).toBe("hop");
+      expect(comboFailureCooldownScope(400, msg)).toBe("none");
+    }
+  });
+  test("rejects malformed error codes before granting a combo hop for reasoning effort", () => {
+    for (const malformedCode of [42, true, {}, []]) {
+      const payloadWithCode = JSON.stringify({
+        error: { type: "invalid_request_error", code: malformedCode, message: "Invalid reasoning effort." },
+      });
+      expect(comboFailureDecision(400, payloadWithCode)).toBe("stop");
+      expect(comboFailureCooldownScope(400, payloadWithCode)).toBe("target");
+
+      const rootWithCode = JSON.stringify({
+        code: malformedCode,
+        error: "Invalid reasoning effort.",
+      });
+      expect(comboFailureDecision(400, rootWithCode)).toBe("stop");
+      expect(comboFailureCooldownScope(400, rootWithCode)).toBe("target");
+    }
+  });
+  test("rejects conflicting root and nested codes before granting a combo hop for reasoning effort", () => {
+    for (const conflictingCode of ["context_length_exceeded", "origin_rejected", "unknown_terminal_code"]) {
+      const payloadWithCode = JSON.stringify({
+        error: { type: "invalid_request_error", code: conflictingCode, message: "Invalid reasoning effort." },
+      });
+      expect(comboFailureDecision(400, payloadWithCode)).toBe("stop");
+      expect(comboFailureCooldownScope(400, payloadWithCode)).toBe("target");
+
+      const rootWithCode = JSON.stringify({
+        code: conflictingCode,
+        error: { type: "invalid_request_error", message: "Invalid reasoning effort." },
+      });
+      expect(comboFailureDecision(400, rootWithCode)).toBe("stop");
+      expect(comboFailureCooldownScope(400, rootWithCode)).toBe("target");
+    }
+  });
+  test("pins root code behavior against reasoning effort matcher (dev regression)", () => {
+    for (const code of ["insufficient_quota", "model_not_found", "rate_limit_exceeded"]) {
+      const body = JSON.stringify({ code, error: { type: "invalid_request_error", message: "Invalid reasoning effort." } });
+      expect(comboFailureDecision(400, body)).toBe("stop");
+      expect(comboFailureCooldownScope(400, body)).toBe("target");
+    }
+    const permBody = JSON.stringify({ code: "permission_denied", error: { type: "invalid_request_error", message: "Invalid reasoning effort." } });
+    expect(comboFailureDecision(400, permBody)).toBe("hop");
+    expect(comboFailureCooldownScope(400, permBody)).toBe("target");
+  });
+
+  test("rejects competing error carriers before granting a target-local combo hop for reasoning effort", () => {
+    const payload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      response: { code: "permission_denied" },
+    });
+    expect(comboFailureCooldownScope(400, payload)).toBe("target");
+  });
+
+  test("rejects competing diagnostic arrays before granting a target-local combo hop for reasoning effort", () => {
+    const payload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      details: [{ code: "unknown_terminal_code" }],
+    });
+    expect(comboFailureDecision(400, payload)).toBe("stop");
+    expect(comboFailureCooldownScope(400, payload)).toBe("target");
+  });
+
+  test("fails closed when diagnostic array exceeds bounded scan budget", () => {
+    const payload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      details: [...Array(32).fill({}), { code: "unknown_terminal_code" }],
+    });
+    expect(comboFailureDecision(400, payload)).toBe("stop");
+    expect(comboFailureCooldownScope(400, payload)).toBe("target");
+  });
+
+  test("rejects nested error carriers in details before granting combo hop", () => {
+    const payload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      details: { error: { code: "unknown_terminal_code" } },
+    });
+    expect(comboFailureDecision(400, payload)).toBe("stop");
+    expect(comboFailureCooldownScope(400, payload)).toBe("target");
+  });
+
+  test("rejects serialized diagnostic entries in details before granting combo hop", () => {
+    const payload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      details: ['{"code":"unknown_terminal_code"}'],
+    });
+    expect(comboFailureDecision(400, payload)).toBe("stop");
+    expect(comboFailureCooldownScope(400, payload)).toBe("target");
+  });
+
+  test("fails closed on unclassifiable string entries in details array", () => {
+    const payload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      details: ["unrecognized_plain_text_error"],
+    });
+    expect(comboFailureDecision(400, payload)).toBe("stop");
+    expect(comboFailureCooldownScope(400, payload)).toBe("target");
+  });
+
+  test("rejects conflicting named parameters before exact-effort combo hop", () => {
+    const payload = JSON.stringify({
+      param: "temperature",
+      error: {
+        type: "invalid_request_error",
+        param: "reasoning_effort",
+        message: "Invalid reasoning effort.",
+      },
+    });
+    expect(comboFailureDecision(400, payload)).toBe("stop");
+    expect(comboFailureCooldownScope(400, payload)).toBe("target");
+  });
+
+  test("rejects competing root or nested diagnostic messages before granting exact-effort hop", () => {
+    // Competing root message on vendor envelope elevates to target cooldown or stop, never cooldown none
+    const permPayload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      message: "permission_denied",
+    });
+    expect(comboFailureDecision(400, permPayload)).toBe("hop");
+    expect(comboFailureCooldownScope(400, permPayload)).toBe("target");
+
+    for (const competing of ["unknown_terminal_code", "invalid_request_error", "unsupported parameter: user"]) {
+      const payload = JSON.stringify({
+        code: "invalid-argument",
+        error: "Invalid reasoning effort.",
+        message: competing,
+      });
+      expect(comboFailureDecision(400, payload)).toBe("stop");
+      expect(comboFailureCooldownScope(400, payload)).toBe("target");
+
+      const nestedPayload = JSON.stringify({
+        message: competing,
+        error: {
+          type: "invalid_request_error",
+          message: "Invalid reasoning effort.",
+        },
+      });
+      expect(comboFailureDecision(400, nestedPayload)).toBe("stop");
+      expect(comboFailureCooldownScope(400, nestedPayload)).toBe("target");
+
+      const competingNestedError = JSON.stringify({
+        error: {
+          type: "invalid_request_error",
+          message: "Invalid reasoning effort.",
+          error: competing,
+        },
+      });
+      expect(comboFailureDecision(400, competingNestedError)).toBe("stop");
+      expect(comboFailureCooldownScope(400, competingNestedError)).toBe("target");
+    }
+
+    // Reconciled matching message grants hop without cooldown
+    const matchingPayload = JSON.stringify({
+      code: "invalid-argument",
+      error: "Invalid reasoning effort.",
+      message: "Invalid reasoning effort.",
+    });
+    expect(comboFailureDecision(400, matchingPayload)).toBe("hop");
+    expect(comboFailureCooldownScope(400, matchingPayload)).toBe("none");
   });
 });
 
