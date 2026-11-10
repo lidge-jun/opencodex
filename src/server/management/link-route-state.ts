@@ -17,10 +17,15 @@ export interface PendingLinkHost {
   probedAt: number;
   sshLatencyMs?: number;
   remotePlatform?: "posix" | "windows";
+  runtimeKind?: "full" | "ephemeral" | "missing";
+  targetTriple?: import("../../link/child-binary-source").ChildTargetTriple | null;
 }
 
 export interface ConfirmedLinkHost extends PendingLinkHost {
-  ocxVersion: string;
+  ocxVersion: string | null;
+  plantable?: boolean;
+  binarySizeBytes?: number;
+  plantUnavailableReason?: import("../../link/child-binary-source").PlantUnavailableReason;
 }
 
 export interface LinkRouteListener {

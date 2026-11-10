@@ -154,7 +154,10 @@ native routing and catalog identity on the next sync.
 
 For Responses requests that require a tool, Meta Responses targets are skipped before sending
 because Meta does not support mandatory `tool_choice`. An eligible later target receives the
-original choice. If every target is incompatible for this reason, the combo reports the constraint.
+original choice, subject to its existing adapter compatibility rules. This includes hosted choices
+such as `web_search`, `tool_search`, `computer_use` and `image_gen`, and MCP choices with a
+nonempty `server_label` and an omitted, null or nonempty name, including inside required allowed-tools lists. Chat translation preserves a forced `tool_search` as the synthetic function choice. If every target is incompatible for this reason,
+the combo reports the constraint. Chat targets that cannot preserve a mandatory selector, including models configured for auto-only tool choice, are also skipped before sending. Registered OpenAI API virtual models use the actual wire model's adapter and tool-choice policy for this decision. Malformed or unknown choices retain the provider's ordinary error path.
 
 `failover` selects the first eligible target in configuration order. A target is eligible when its
 provider exists, is enabled, is not cooling down, and can handle any special request constraint.
@@ -648,10 +651,13 @@ target/effort, a coarse decision gate, latency, optional confidence/probability,
 Automated tests use mocked TypeSafe responses plus a no-key fail-open smoke; a live TypeSafe decision
 requires an operator-supplied key and is not run implicitly.
 
-JEV's selected effort applies to the first Responses child and to native Chat children on the opt-in
-`protocols.rollout.nativeChatCombos` path. It replaces caller effort and removes conflicting thinking
-controls and caller `service_tier`; an explicit no-effort choice removes effort even when the Combo has
-a forced default. Provider effort pins, caps and wire normalization still apply afterward.
+With `jevEffortMode: "decide"` (the default), JEV's selected effort applies to the first Responses child
+and to native Chat children on the opt-in `protocols.rollout.nativeChatCombos` path. It replaces caller
+effort and removes conflicting thinking controls and caller `service_tier`; an explicit no-effort choice
+removes effort even when the Combo has a forced default. With `"client"`, JEV keeps its selected target
+but leaves effort resolution to ordinary Combo policy: the caller and the target ladder, plus
+`defaultEffort`, so `defaultEffortMode: "force"` still overrides caller effort in client mode. Provider
+effort pins, caps and wire normalization still apply afterward.
 Request and attempt logs show a differing applied effort as `high->xhigh` or `high->low`, retaining later
 adjustments such as `high->xhigh->medium`. An unchanged effort or a no-effort choice keeps the existing
 label. Later fallback targets use ordinary Combo policy from the original request, without another JEV call.
@@ -797,7 +803,10 @@ is recorded as failed and the combo may try its next eligible target. A zero-out
 `response.incomplete` follows the same path when its reason is missing or is `adapter_eof`,
 `missing_terminal_event`, or `upstream_stall_timeout`. Explicit semantic reasons such as
 `max_output_tokens` and `content_filter` remain terminal, as does an explicit null reason.
-A reasonless final snapshot that already contains output items is also kept. Once any output event begins,
+A reasonless final snapshot that already contains output items is also kept. The rate-limit and
+response-metadata frames that a native Codex (ChatGPT account) target sends over its WebSocket are
+not output, so an overload error that follows them with no output still moves to the next target.
+Once any output event begins,
 the target is committed: a later stream failure is returned to the client and is never replayed on
 another provider, which prevents duplicate text and tool execution. If the pre-output buffer reaches
 its safety cap without a terminal or output boundary, OpenCodex also commits the current target
@@ -1018,6 +1027,7 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; resolved against each target's advertised ladder. |
 | `defaultEffortMode` | No | `"fallback"` | `"fallback"` preserves explicit caller effort. `"force"` overrides valid caller effort, requires a valid non-null default, and can increase cost and latency. |
 | `reasoningEffortMode` | No | `"strict"` | `"strict"` intersects every known target ladder, so one target advertising no effort control empties the combo's picker. `"adaptive"` excludes those empty ladders from the published intersection. At dispatch, explicit empty or adaptive unknown ladders remove unsupported effort/thinking controls while preserving supported non-effort reasoning fields such as `reasoning.summary`; known non-empty targets keep existing effort resolution. |
+| `jevEffortMode` | No | `"decide"` | JEV combos only. `"decide"` applies the decision effort and lets it override the caller. `"client"` keeps the decision target choice but leaves effort to the caller and the target ladder, so a provider that swaps its upstream model id per tier is not re-tiered by JEV. `defaultEffortMode: "force"` still overrides caller effort in client mode. Cache reuse still needs a stable caller effort, target and prompt prefix, and depends on the provider and account. |
 | `imageInput` | No | `"auto"` | `"auto"` or `"disabled"`. `"auto"` publishes image support only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
 | `alias` | No | none | Optional trimmed public model id; use the alias rules above. An empty value is stored as no alias. |
 | `nativeAlias` | No | `false` | Explicitly permit a currently supported bare native `alias` to take routing and catalog precedence. Never inferred from the alias. |
@@ -1040,13 +1050,15 @@ Every target is currently ineligible: for example, its provider is disabled, it 
 it has already been attempted for this request, or an encrypted v2 task excludes it. Check target
 provider state and recent upstream errors. When no target was attempted, the error message lists
 why each target was skipped, for example
-`No available targets for combo: fast (openai/gpt-6: quota exhausted; anthropic/claude-opus-5-5: cooldown 42s)`.
+`No available targets for combo (2 targets; target 1 (openai): quota exhausted; target 2 (anthropic): cooldown)`. The client error names targets by position and provider only; the service log records the target's position and provider when it fails or when the proxy waits out its cooldown.
 For cooldowns, follow an observed `Retry-After` value first;
 Codex reset headers also take precedence over `cooldownMs`.
 If neither upstream signal is usable, the configured `cooldownMs` applies, or the upstream fallback applies
 when it is unset (5 seconds for request-rate codes `1302`/`1305`, 10 minutes for a spent usage
 window or a credential/billing failure, otherwise 60 seconds). Explicit
 `Retry-After` delays are capped at 24 hours; the other cooldowns are capped at 10 minutes.
+
+Validation errors (HTTP 400/422) that quote quota or free-tier cap text do not trigger fallback by that text alone. A structured `free_rate_limited` refusal still tries the next eligible target without cooling the healthy provider or target.
 
 ### Why was my alias rejected?
 

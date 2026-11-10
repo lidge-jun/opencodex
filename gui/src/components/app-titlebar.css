@@ -1,3 +1,6 @@
+/* Imported by its component, so it sits in the `legacy` cascade layer itself:
+   unlayered CSS would outrank design/bridge.css and every Tailwind utility. */
+@layer legacy {
 /*
   Integrated title bar (Codex-style): ONE shared top row spans the window — the sidebar's
   top strip holds the traffic lights and the collapse toggle, the main column's top strip
@@ -180,4 +183,5 @@
     margin-left: calc(-1 * var(--tl-inset, 80px));
     justify-content: flex-end;
   }
+}
 }

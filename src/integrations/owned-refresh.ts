@@ -44,8 +44,14 @@ export interface OwnedIntegrationRefreshOutcome {
 }
 
 /**
- * Returns `null` when the client has never been connected by OpenCodex.
- * Callers use that distinction to report "left alone" rather than "skipped".
+ * Returns `null` when the client has never been connected by OpenCodex, or
+ * when it was connected and has since been uninstalled. Callers use that
+ * distinction to report "left alone" rather than "skipped".
+ *
+ * An uninstalled client keeps its ownership record: an implicit refresh must
+ * not edit ownership, and a reinstall resumes refreshing. Reporting it as a
+ * failure instead turned every model toggle into a "pi is not installed"
+ * warning for a client the user no longer has.
  */
 export async function refreshOwnedIntegration(
   input: OwnedIntegrationRefreshInput,
@@ -72,6 +78,7 @@ export async function refreshOwnedIntegration(
     input.io?.now ?? Date.now,
     () => refreshIntegrationCoordinated(bound, options),
   );
+  if (!result.ok && result.reason === "not_installed") return null;
   return result.ok
     ? {
         client: input.clientId,

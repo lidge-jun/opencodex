@@ -41,12 +41,11 @@ jobs:
           # PR's head, so `base.sha` let an unpromoted commit choose which code
           # runs with this job's issues/pull-requests write token.
           #
-          # The branch is chosen, not fixed: `pull_request_target` loads this
-          # workflow from the default branch, so a `main`-targeting PR must
-          # take its scripts from `main` too, or the gate runs a `main`
-          # workflow against `dev` scripts. Everything else, including stacked
-          # bases, resolves to `dev`, the single integration line.
-          ref: ${{ github.event.pull_request.base.ref == 'main' && 'main' || 'dev' }}
+          # `pull_request_target` loads this workflow from the default branch,
+          # and `dev` is the single integration line. A fixed `dev` keeps the
+          # scripts, workflow definition, and stacked children on one trusted
+          # revision.
+          ref: dev
           persist-credentials: false
           sparse-checkout: .github/scripts
 

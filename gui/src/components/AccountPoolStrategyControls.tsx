@@ -6,6 +6,8 @@ import {
 import { clampNumberDraft } from "../clamp-draft";
 import { NumberStepper } from "./NumberStepper";
 import { Select } from "../ui";
+import { HelpButton, HelpRegion } from "./v2-accounts/surface";
+import { useHelp } from "./v2-accounts/use-help";
 
 const STRATEGY_LABEL_KEYS = {
   "reset-first": "accountPool.strategyResetFirst",
@@ -56,6 +58,7 @@ export default function AccountPoolStrategyControls({
   onStickyCommit,
 }: AccountPoolStrategyControlsProps) {
   const t = useT();
+  const help = useHelp();
   const strategyOptions = ACCOUNT_POOL_STRATEGIES.filter(value => codex || value !== "reset-first").map((value) => ({
     value,
     label: t(STRATEGY_LABEL_KEYS[value]),
@@ -91,10 +94,17 @@ export default function AccountPoolStrategyControls({
       */}
       <div className="setting-row">
         <div className="setting-label">
-          <span className="title" id={`${strategySelectId}-label`}>{t("accountPool.strategy")}</span>
-          <span className="desc">{t("accountPool.strategyDesc")}</span>
-          <span className="desc">{t(STRATEGY_HINT_KEYS[strategy])}</span>
-          <span className="desc">{t("accountPool.unboundDefinition")}</span>
+          {/* The choice is the state and stays on screen; why it behaves that way opens
+              behind the "?" (all three lines, kept in the document while closed). */}
+          <span className="acc-strategy-title flex items-center gap-1.5">
+            <span className="title" id={`${strategySelectId}-label`}>{t("accountPool.strategy")}</span>
+            <HelpButton open={help.open} controls={help.id} name={t("accountPool.strategy")} onToggle={help.toggle} />
+          </span>
+          <HelpRegion id={help.id} open={help.open} className="acc-strategy-help mt-1.5 flex flex-col gap-1.5">
+            <span className="desc">{t("accountPool.strategyDesc")}</span>
+            <span className="desc">{t(STRATEGY_HINT_KEYS[strategy])}</span>
+            <span className="desc">{t("accountPool.unboundDefinition")}</span>
+          </HelpRegion>
         </div>
         <div className="setting-controls">
           <Select

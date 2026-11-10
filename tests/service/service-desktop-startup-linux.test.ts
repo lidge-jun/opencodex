@@ -60,7 +60,7 @@ const healthBase = {
 linuxTest("matching install, XDG login entry and the app supervising its sidecar grant desktop protection on Linux", () => {
   const { deps } = fixture();
   const desktop = diagnoseLinuxDesktopStartup(deps);
-  expect(desktop).toEqual({ owned: true, loginEnabled: true, running: true, viable: true });
+  expect(desktop).toEqual({ owned: true, loginEnabled: true, loginState: "enabled", running: true, viable: true });
   expect(diagnoseDesktopStartup(deps)).toEqual(desktop);
   const health = deriveStartupHealth({ ...healthBase, desktop });
   expect(health).toMatchObject({ status: "protected", rebootSafe: true, protection: "desktop", recommendedCommand: null });
@@ -211,7 +211,7 @@ linuxTest("failed identity, login entry or process evidence retains the durable 
 
 linuxTest("Linux desktop ownership never recommends the service it superseded", () => {
   const f = fixture();
-  expect(desktopStartupOwnership(f.deps)).toEqual({ owned: true, loginEnabled: false, running: false, viable: false });
+  expect(desktopStartupOwnership(f.deps)).toEqual({ owned: true, loginEnabled: false, loginState: "unknown", running: false, viable: false });
   f.state.pid = null;
   const health = deriveStartupHealth({ ...healthBase, desktop: diagnoseLinuxDesktopStartup(f.deps) });
   expect(health).toMatchObject({ status: "at-risk", protection: "none", recommendedCommand: null });
@@ -239,7 +239,7 @@ linuxTest("unowned Linux Desktop supervision credits the same app's login entry 
     kind: "desktop", runtimePid: 100, supervisorPid: 200, app: f.app, proxy: f.proxy,
   });
   expect(diagnoseLinuxDesktopStartup(f.deps)).toEqual({
-    owned: false, loginEnabled: true, running: true, viable: true,
+    owned: false, loginEnabled: true, loginState: "enabled", running: true, viable: true,
     supervisor: { supervisorPid: 200, runtimePid: 100, app: f.app },
   });
   expect(desktopStartupOwnership(f.deps)).toBeUndefined();
@@ -258,7 +258,7 @@ linuxTest("unowned Linux login failures preserve live supervision without granti
   for (const mutate of mutations) {
     const f = fixture(); f.state.owner = { kind: "none", revision: 0 }; mutate(f);
     expect(diagnoseLinuxDesktopStartup(f.deps)).toEqual({
-      owned: false, loginEnabled: false, running: true, viable: false,
+      owned: false, loginEnabled: false, loginState: "unknown", running: true, viable: false,
       supervisor: { supervisorPid: 200, runtimePid: 100, app: f.app },
     });
   }

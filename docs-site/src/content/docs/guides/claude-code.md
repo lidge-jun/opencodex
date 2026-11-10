@@ -15,7 +15,7 @@ This output-order fix does not resolve Cognition's separate refusal of some gene
 text. It preserves system instructions and safety constraints.
 
 For an Anthropic route on stored OAuth or an Anthropic API key, native Fast is available on
-`claude-opus-5-5`, `claude-opus-5`, and `claude-opus-4-8`: pick the model's `--fast` row (listed
+`claude-fable-5-2`, `claude-opus-5-5`, `claude-opus-5`, and `claude-opus-4-8`: pick the model's `--fast` row (listed
 when Fast rows are enabled) or set `fastMode: true`. Claude Code's own `/fast` toggle is not
 translated on routed requests: the `speed` field it sends does not survive translation. The proxy sends Anthropic's Fast request and records the returned `usage.speed`; only
 confirmed Fast usage gets the 2x API-equivalent cost estimate. A recognized Fast-specific refusal
@@ -64,10 +64,24 @@ actual model served. This is especially useful for external classifiers requesti
 
 ## Claude OAuth account pool (experimental)
 
-Native Anthropic subscription passthrough retains the upstream `anthropic-ratelimit-*`
-response headers on streaming, JSON and upstream-error responses, so compatible Claude Code
-statusLine consumers can read the provider's quota observations. Missing observations are
-not filled with invented values. This relay does not change account selection or retry behavior.
+Native Anthropic subscription passthrough retains recognized, valid `anthropic-ratelimit-*`
+observations with normalized values on streaming, JSON and upstream-error responses.
+Unrecognized names and invalid values are omitted; missing observations are not filled in.
+Tests check the forwarded-header contract used by Claude Code statusLine consumers, including
+fractional utilization and reset times. Account selection and retry behavior are unchanged.
+
+Usage reads support Ultra (formerly Max 20x). Pro, Max 5x and Team retain their measured
+five-hour and weekly meters whichever one is currently binding. An Ultra null five-hour limit
+leaves that meter absent unless Anthropic marks a finite session meter active. Current `limits`
+counters take precedence over legacy duplicates; shared usage can affect routing even when
+inactive, while only active model-specific weekly limits affect that model family.
+The dashboard shows Pro, Max 5x, or Ultra beside Claude account quotas, using subscription
+metadata from the authenticated profile. Both `ultra` and `claude_max_20x` display as Ultra
+(the existing `ultra` and `max_20x` tier aliases are retained). Unfamiliar validated tiers retain their original name without
+failing the usage read. Claude account rows prefer your alias, then a masked email, and
+fall back to a numbered label when no safe identity is available. The provider Overview shows the
+same label as a separate current-account field when its account list is verified. Set
+`privacy.maskEmails` to `false` to show the full email in these rows instead.
 
 You can log in multiple Claude accounts via the Providers dashboard (`ocx login anthropic` /
 add-account). By default every request uses the **active** account only.
@@ -78,9 +92,9 @@ session affinity and usage-aware new-session selection across those OAuth accoun
 to another account whether the pool is on or off, and the toggle does not switch that off; pause
 an account to keep it out of failover. For **new**
 sessions,
-`anthropicAccountPool.strategy` selects among eligible accounts: `quota` (default) picks the
-lowest known usage in the window set by `quotaWindow` (`five-hour` by default, or `weekly` /
-`max-utilization`) when above `autoSwitchThreshold`; `round-robin` spreads evenly
+`anthropicAccountPool.strategy` selects among eligible accounts: `quota` (default) keeps the active account until its usage in the window set by `quotaWindow`
+(`five-hour` by default, or `weekly` / `max-utilization`) reaches `autoSwitchThreshold`
+(default 80), then moves to the least-used account, preferring accounts still under their own threshold; `round-robin` spreads evenly
 (`stickyLimit`, default `1`); `fill-first` drains the active account until cooldown,
 reauthentication, or threshold, then advances. It is **off by default** and experimental.
 
@@ -144,6 +158,7 @@ thinking fallback. Adaptive thinking without an explicit effort stays blank. The
 request controls; they do not confirm what effort the upstream applied or change the wire body.
 
 An enabled Anthropic account pool prefers native Messages for eligible direct Anthropic routes
+and canonical Anthropic children of strict failover combos without a default effort
 when neither native rollout flag explicitly disables that path. In Providers → Anthropic →
 Account pooling → **How account selection works**, **Preserve native Claude requests** stores
 `anthropicAccountPool.nativeMessages` (default true). Turning it off selects the legacy bridge
@@ -781,20 +796,18 @@ upstream input limit. A classified input-limit rejection reaches Claude Code as
 compacts the conversation and retries on its own; a non-streaming response uses HTTP 400 instead
 of a retryable 502. Providers on the native Messages lane get the same wording.
 
-Overflow normalization uses only the first **65,536 UTF-16 code units** of the provider's error
-message, including messages that already use Anthropic's wording. This is a string-length limit,
-not a byte or token limit. Text beyond it is discarded without an ellipsis or truncation marker,
-so diagnostic details and token counts near the end may be absent from the error Claude Code
-receives. The added `prompt is too long:` prefix, followed by a space, can make the final message
-longer than this retained portion.
+Messages error-response normalization uses fixed proxy-written wording. A recognized context
+rejection uses `prompt is too long: The request exceeds the model's context window.` instead of
+provider prose or token counts. Throughput errors keep a separate fixed rate-limit sentence.
 
-Within that portion, recognized Anthropic wording is kept; otherwise OpenCodex emits
-`prompt is too long: <requested> tokens > <limit> maximum` only when it finds
-`maximum context length is <limit> tokens` followed by `resulted in <requested> tokens` or
-`you requested <requested> tokens`. It uses the first stated limit and the first matching request
-count after it. If that pair is missing, reversed, or cut off, it prefixes the retained text with
-`prompt is too long:` followed by a space, without inventing counts. A throughput limit that only mentions tokens
-(for example "too many tokens per minute") keeps its text and is not treated as an overflow.
+On native and caller-forward Messages streams, only blocks whose first non-comment field is
+exactly `event:error` or `event: error` have their error data normalized. The full diagnostic within
+the 1 MiB error hold determines recovery wording. Above that bound, the stream emits
+`The provider stream reported an error.` without a compaction phrase (OVERSIZE-1M), preserving its
+issued HTTP status. Separately, native non-stream folds of collected error events return 502 where
+an untyped proxy-built error envelope previously returned 200 (FOLD-502). See the
+[Messages format contract](/reference/proxy-formats/#post-v1messages-and-count_tokens) for field
+ordering, rename replay and the scope of these two exceptions.
 
 If compaction itself still exceeds the limit, preserve the original
 history and try compacting a fork with fewer enabled tool or MCP schemas, if your client supports
@@ -1087,7 +1100,7 @@ on the schema to reject a malformed argument.
 **Error taxonomy:** 400 `invalid_request_error`, 401 `authentication_error`,
 402 `billing_error`, 403 `permission_error`, 404 `not_found_error`, 409 `conflict_error`,
 413 `request_too_large`, 429 `rate_limit_error`, 504 `timeout_error`, 529 `overloaded_error`,
-other 5xx `api_error`. `Retry-After` is preserved.
+other 5xx `api_error`. `Retry-After` is sent as whole seconds (an HTTP date becomes the remaining seconds), capped at eight days.
 
 ## Prompt caching and token usage
 
@@ -1095,9 +1108,16 @@ other 5xx `api_error`. `Retry-After` is preserved.
 and the penultimate user message, plus top-level automatic `cache_control`. Stable turns normally
 produce about a 99.9% cache hit rate.
 
-**Native OpenAI/ChatGPT routing:** derives a session-scoped `prompt_cache_key` (from
-`metadata.user_id` when present, falling back to a system-content hash) and `session_id` header
-for cache affinity. The cache key includes model and full tool schemas.
+**Native OpenAI/ChatGPT routing:** derives a `prompt_cache_key` for cache affinity, and a
+`session_id` header only from a session identity, never from the shared fallback key. When
+`metadata.user_id` is a string, the key is session-scoped. Remote Claude Code puts a JSON object in
+that string and adds a per-turn attribution token (`tk`) to it; when the object has other keys,
+`tk` is dropped before hashing, so every turn of one session keeps one cache key and one
+conversation id. Any other string (not JSON, a JSON array, or a JSON object holding only `tk`) is
+hashed unchanged, and the `user` field is still derived from the raw string. Without a string
+`metadata.user_id`, and when system content is present, the key falls back to a hash of the
+resolved model, system prompt and full tool schemas: a cohort key shared by requests with the same
+values, not a session key.
 
 **Token math:** Anthropic output subtracts `cached_tokens` and `cache_write_tokens` from
 `input_tokens`, exposing them as `cache_read_input_tokens` and `cache_creation_input_tokens`.

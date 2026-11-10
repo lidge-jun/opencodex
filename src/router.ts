@@ -320,6 +320,7 @@ function crossProviderRedirectTarget(config: OcxConfig, providerName: string, va
     }
     if (isProviderApiKeyPaused(effective)) return undefined;
     return authMode === "local" || effective.keyOptional === true || Boolean(effective.apiKey?.trim())
+      || (authMode === "key" && effective.adapter === "google" && effective.googleMode === "vertex")
       ? value : undefined;
   } catch {
     return undefined;

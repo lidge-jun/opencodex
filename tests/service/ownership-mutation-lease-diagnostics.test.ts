@@ -46,6 +46,13 @@ describe("ownership mutation lease diagnostic lookup (carry #6655)", () => {
     });
   }
 
+  test("diagnostics distinguish a dead holder from its live delegate", () => {
+    writeFileSync(owner, JSON.stringify({ version: 1, pid, delegatePid: 9876, processInstance: instance, token, createdAt: 1000 }));
+    const line = ownershipMutationLeaseStatusLine(paths, { processAlive: value => value === 9876, processImage: () => "wrong-image" });
+    expect(line).toContain(`recorded PID ${pid} [not alive, identity unverified]`);
+    expect(line).toContain("delegate PID 9876");
+  });
+
   test("Windows inspection, status and busy refusal launch zero diagnostic subprocesses and preserve the owner", () => {
     const bytes = readFileSync(owner);
     const identity = lstatSync(owner);

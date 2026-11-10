@@ -341,9 +341,7 @@ v1 别名按字面解码（历史上 model ID 中包含的两字符序列 `~s` /
 可以在 Claude 页面调整压缩值。**警告：**如果将其提高到超过模型的实际窗口，该模型将无法正常
 工作——聊天会在触发摘要之前报错。
 
-规范化上下文超限错误时，只使用提供方错误消息的前 65,536 个 UTF-16 代码单元。
-后面的诊断信息或 token 数可能被丢弃，且不会添加截断标记。
-详细限制和 token 数处理条件见[英文指南](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)。
+Messages 错误响应规范化使用固定文案，不保留提供方的原文或 token 数量。识别到上下文超限时返回 `prompt is too long: The request exceeds the model's context window.`。流中首个字段为 error 事件的块最多保留 1 MiB；超过后返回不含压缩触发短语的固定错误。范围和两项例外见[英文指南](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)。
 
 低于 1M 的原生 Anthropic 模型绝不会被自动标记。你自行导出的压缩值在启动槽位标记上始终优先（代理会使用**你的**
 值来判断哪些模型可以安全标记）。发现列表忽略该导出值并保持固定下限。手动编辑配置时填入的无效值会回退到 829,800。
@@ -531,16 +529,16 @@ role；`tool_result` 缺少 `tool_use_id`；`tool_use` 缺少 id/name；指定�
 **错误分类：**400 `invalid_request_error`、401 `authentication_error`、
 402 `billing_error`、403 `permission_error`、404 `not_found_error`、409 `conflict_error`、
 413 `request_too_large`、429 `rate_limit_error`、504 `timeout_error`、529 `overloaded_error`，
-其他 5xx 为 `api_error`。`Retry-After` 会保留。
+其他 5xx 为 `api_error`。`Retry-After` 以整数秒发送（HTTP 日期会换算为剩余秒数），上限为 8 天。
 
 ## 提示缓存与 token 用量
 
 **Anthropic 路由请求：**适配器会管理工具、系统内容和倒数第二条用户消息的缓存断点，以及顶层
 自动 `cache_control`。稳定轮次通常能达到约 99.9% 的缓存命中率。
 
-**原生 OpenAI/ChatGPT 路由：**派生会话范围的 `prompt_cache_key`（存在时取自
-`metadata.user_id`，否则回退到系统内容哈希）和用于缓存亲和性的 `session_id` 请求头。
-缓存键包含模型和完整的工具 schema。
+**原生 OpenAI/ChatGPT 路由：**派生 `prompt_cache_key`（`metadata.user_id` 为字符串时取自该值，
+否则回退到系统内容哈希），并仅在存在会话标识时派生用于缓存亲和性的 `session_id` 请求头（不会从共享回退键派生）。
+由系统内容哈希派生的回退键（仅在存在系统内容时使用）还包含模型和完整的工具 schema。
 
 **Token 计算：**Anthropic 输出会从 `input_tokens` 中减去 `cached_tokens` 和
 `cache_write_tokens`，并将它们分别公开为 `cache_read_input_tokens` 和

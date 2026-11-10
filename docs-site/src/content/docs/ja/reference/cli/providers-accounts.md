@@ -103,7 +103,7 @@ ocx login anthropic
 実行中のプロキシを介してプロバイダー アカウントと API キー プールを一覧表示し、切り替えます。出荷されたヘルプ画面は次のとおりです。
 
 ```text
-Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
+Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|reset-affinity|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
@@ -117,6 +117,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
 strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
@@ -131,7 +132,7 @@ main <doctor|list|register|add|reauth|switch|recover>  Manage the Codex App logi
 Codex pool selection applies to the next request after clearing existing affinity; in-flight requests keep their captured account.
 ```
 
-サブコマンドはプロキシが実行されている必要があり、記録されたランタイムポートを自動解決します。ただし `import-orca` は例外で、プレビューはローカルのみ、`import-orca --apply` はプロキシの停止が必要です。操作が成功した場合は 0 で終了します。無効な使用法、不明なプロバイダーまたはアカウント/キー ID、到達不能なプロキシ、または API エラーが発生した場合は 1 で終了します。資格情報フィールドは、管理 API が返したとおりに表示されます (マスキングを含む)。生の API キーと OAuth トークンは決して返されません。表示の利便性は、ダッシュボードと同様にクライアント側で合成されます。`main` は、`openai` アカウント プール内の Codex アプリ ログインの CLI エイリアスであり、電子メールのない OAuth アカウントは `Account N` として表示され、プラン/ラベル列はプラン、マスクされた電子メール、ラベル、およびマスクされたキーにわたってフォールバックされます。
+サブコマンドはプロキシが実行されている必要があり、記録されたランタイムポートを自動解決します。ただし `import-orca` は例外で、プレビューはローカルのみ、`import-orca --apply` はプロキシの停止が必要です。操作が成功した場合は 0 で終了します。無効な使用法、不明なプロバイダーまたはアカウント/キー ID、到達不能なプロキシ、または API エラーが発生した場合は通常 1 で終了します。ただし `reset-affinity` は HTTP 404 で終了コード 4、HTTP 409 で終了コード 5 を返し、その他の API エラーや未確認の結果では 1 を返します。資格情報フィールドは、管理 API が返したとおりに表示されます (マスキングを含む)。生の API キーと OAuth トークンは決して返されません。表示の利便性は、ダッシュボードと同様にクライアント側で合成されます。`main` は、`openai` アカウント プール内の Codex アプリ ログインの CLI エイリアスであり、電子メールのない OAuth アカウントは `Account N` として表示され、プラン/ラベル列はプラン、マスクされた電子メール、ラベル、およびマスクされたキーにわたってフォールバックされます。
 
 `--json` アカウント行では、次の一般的な形状が使用されます (オプションのフィールドが使用できない場合は省略されます)。
 
@@ -180,7 +181,7 @@ Codex クライアント連携を無効にしても、既存のネイティブ�
 `auto` は手動の選択を解除し、プールが自身の戦略で再び配置するようにします — ただし id が `auto` の Codex アカウントが存在する場合は完全一致の id が優先され、`ocx account clear <provider>` が常に自動選択を復元します。Codex アカウントは id の代わりに `ocx account alias` で付けたエイリアスでも指定でき、`priority`、`pause`、`resume`、`clear-cooldown`、`remove`、`alias` でも同様です。Codex アカウントでは `auto`、`main`、`__main__` は大文字・小文字を区別せず予約語として扱われるため、エイリアスとして設定できません。OAuth アカウントと API キーの表示名には従来のルールが適用されます。
 
 既存の Codex アカウント、OAuth アカウント、または API key を選びます。`openai` で `main` は Codex App ログインを
-選択します。Codex Pool の選択は process-local affinity を消去し、既存の表示タスクを含む次のリクエストから適用されます。プロキシ再起動や affinity eviction 後もタスクは未紐付けになり得ますが、処理中のリクエストは取得済みアカウントを維持します。この選択は Pool routing のみを制御し、Direct mode は caller-owned/native main credential を使い続けます。使用量ベースのプロアクティブ切り替え、401/403 再認証、429/retry-after cooldown、除外、出力前 429/402 の障害回復により、後で別の適格 Pool アカウントが選ばれる場合があります。これらの回復経路は使用量ベース切り替えが off でも有効です。アカウント変更後も OpenCodex は会話コンテキストを再生しますが、provider prompt cache は再ウォームアップが必要な場合があります。
+選択します。Codex Pool の選択は affinity を消去し、既存の表示タスクを含む次のリクエストから適用されます。セッションIDを持つリクエスト（通常の Codex CLI・App のターンやサブエージェントを含む）と、直近の親に紐付くセッションなしリクエストの紐付けは、シャットダウン時の最終的な affinity 保存が成功した場合、プロキシの正常な再起動後も最大24時間の非活動期間まで保持されることがあります。より深いセッションなしの連鎖と Codex App のメインログインへの紐付けはメモリ内にのみ残り、再起動後に再割り当てされます。eviction、アカウント削除、再ログイン、クラッシュ、affinity リセットではタスクが未紐付けになり得ますが、処理中のリクエストは取得済みアカウントを維持します。この選択は Pool routing のみを制御し、Direct mode は caller-owned/native main credential を使い続けます。使用量ベースのプロアクティブ切り替え、401/403 再認証、429/retry-after cooldown、除外、出力前 429/402 の障害回復により、後で別の適格 Pool アカウントが選ばれる場合があります。これらの回復経路は使用量ベース切り替えが off でも有効です。アカウント変更後も OpenCodex は会話コンテキストを再生しますが、provider prompt cache は再ウォームアップが必要な場合があります。
 不明なプロバイダーや id は終了コード 1 です。`--json` は次を返します。
 **401/403** では、そのアカウントへのプロセスローカルな affinity を解除し、再認証を要求します。
 **429** では `Retry-After` を尊重してアカウントの cooldown を開始し、affinity を解除したうえで、
@@ -343,13 +344,15 @@ native-main トラフィックまたはジャーナル復旧を受け入れる�
 
 ### `ocx models [subcommand]`・`ocx model <subcommand>`
 
-`ocx model` は `ocx models` の別名です。サブコマンドを使用しない場合、構成されたプロバイダーに静的にシードされたモデルを一覧表示します。 `--provider` は 1 つの構成済みプロバイダーをフィルターし、`--json` はモデル メタデータを返します。 `live` は実行中のカタログを読み取ります。 `add`、`edit`、`remove`、および `list-custom` は手動カタログ エントリを管理します。 `enable`、`disable`、および `provider` は可視性を制御します。 `selected` はプロバイダー許可リストを制御します。 `context` はプロバイダーのコンテキストの上限を制御します。 `shadow` はバックグラウンドのシャドウ コール インターセプトを管理します。
+`ocx model` は `ocx models` の別名です。サブコマンドを使用しない場合、保存済みモデルとルーターが認識するモデル ID を一覧表示します。レジストリのシード、カスタムモデル、この CLI プロセス自身の検出キャッシュが含まれます。新しい CLI プロセスのキャッシュは空の場合があり、実行中のプロキシのカタログとは異なります。従来のキー方式プリセットでは、接続先を変更してもレジストリのシードが残る場合があります。 `--provider` は 1 つの構成済みプロバイダーをフィルターし、`--json` はモデル メタデータを返します。 `live` は実行中のカタログを読み取ります。 `add`、`edit`、`remove`、および `list-custom` は手動カタログ エントリを管理します。 `enable`、`disable`、および `provider` は可視性を制御します。 `selected` はプロバイダー許可リストを制御します。 `context` はプロバイダーのコンテキストの上限を制御します。 `shadow` はバックグラウンドのシャドウ コール インターセプトを管理します。
+
+`reasoningEfforts` は `--json` でのみ表示されます。`null` は一覧が不明または未照会であることを示し、OS のキーチェーンを開く必要がある場合も含みます。空配列 `[]` は明示的な空の一覧、または `noReasoningModels` などによってそのモデルの推論 effort が無効であることを示します。稼働中のプロキシのカタログは `ocx models live` で確認できます。
 
 `add` と `remove` は既定でローカル保存し、`--live` で稼働中のプロキシを変更します。ローカル `--json` 保存時にプロキシがなければ `sync.status: "not-attempted"`、`needsSync: true`、終了コード 0 を返します。試行した同期が失敗しても保存は維持され、終了コードは非ゼロです。`list-custom` はローカル一覧です。`display-name` は raw upstream ID、`order` は picker の public ID を使います。完全な並べ替え、featured 接頭部、native 順序のリセット制約は[英語版](/reference/cli/providers-accounts/#display-names-and-picker-identities)を参照してください。
 
 |サブコマンド |サポートされているフラグ |アクション |
 | --- | --- | --- |
-| `list` (デフォルト) | `--provider <name>`、`--json` |構成されたプロバイダーにシードされたモデルをリストします。 |
+| `list` (デフォルト) | `--provider <name>`、`--json` | 保存済みモデルとローカルでルーターが認識するモデルを一覧表示します。 |
 | `live` | `--provider <name>`、`--json` |実行時に検出されたモデルを含む、実行中のカタログを読み取ります。行には、`native`/`routed`、`custom`、および `enabled`/`disabled` というフラグが付けられます。 |
 | `add <provider> <modelId>` | `--display-name <name>`、`--context-window <tokens>`、`--modalities <text,image,audio>`, `--live`, `--json` | カスタムモデルをローカルに、または `--live` で稼働中のプロキシに登録します。 |
 | `edit <custom-id>` | `--model-id <id>`、`--display-name <name\|->`、`--context-window <tokens\|0>`、`--modalities <text,image,audio\|->`、`--json` |カスタムモデルを編集します。 `-` はフィールドをクリアします。 `0` はコンテキスト ウィンドウをクリアします。 |

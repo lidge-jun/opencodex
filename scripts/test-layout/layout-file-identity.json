@@ -1,4 +1,5 @@
 {
   "file-identity.test.ts": "lib",
-  "file-identity-callers.test.ts": "lib"
+  "file-identity-callers.test.ts": "lib",
+  "private-sqlite-path.test.ts": "lib"
 }

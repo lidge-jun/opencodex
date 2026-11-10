@@ -3,10 +3,11 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../../src/config";
-import { startServer } from "../../src/server";
+import { createServerTracker } from "../helpers/leftover-servers";
+import { guardWebSocketDials } from "../helpers/websocket-dial-guard";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
-import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { OPENAI_PROVIDER_TIER_VERSION, type OcxConfig, type OcxProviderConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { chatCompletionsToResponsesBody, ChatCompletionsRequestError } from "../../src/chat/inbound";
@@ -60,6 +61,8 @@ let testDir = "";
 let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 const originalFetch = globalThis.fetch;
+const { startServer, stopLeftoverServers } = createServerTracker();
+let webSocketGuard: ReturnType<typeof guardWebSocketDials> | undefined;
 
 // A case that calls a handler directly never takes the writer lease startServer takes, so its
 // dispatch is refused. Never file-wide: most cases here start a real server that takes it too.
@@ -67,6 +70,7 @@ let releaseSpendHome: (() => void) | undefined;
 const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
 
 beforeEach(() => {
+  webSocketGuard = guardWebSocketDials();
   previousHome = process.env.OPENCODEX_HOME;
   isolatedCodexHome = installIsolatedCodexHome("ocx-chat-completions-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-chat-completions-"));
@@ -74,16 +78,26 @@ beforeEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-afterEach(() => {
-  releaseSpendHome?.();
-  releaseSpendHome = undefined;
-  resetProviderRequestPacingForTest();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  isolatedCodexHome?.restore();
-  isolatedCodexHome = null;
-  globalThis.fetch = originalFetch;
-  if (testDir) removeTreeWithRetry(testDir);
+afterEach(async () => {
+  const refusedDials = webSocketGuard?.restore() ?? [];
+  try {
+    // A timed-out case never reaches its finally; its live server would fail every later start.
+    await stopLeftoverServers();
+  } finally {
+    try {
+      releaseSpendHome?.();
+      releaseSpendHome = undefined;
+      resetProviderRequestPacingForTest();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      isolatedCodexHome?.restore();
+      isolatedCodexHome = null;
+      globalThis.fetch = originalFetch;
+      if (testDir) removeTreeWithRetry(testDir);
+    } finally {
+      expect(refusedDials).toEqual([]);
+    }
+  }
 });
 
 function mockChatUpstream() {
@@ -1418,7 +1432,7 @@ test("chat-native redacts structured provider errors before returning them", asy
     });
     const text = await response.text();
     expect(response.status).toBe(401);
-    expect(text).toContain("Bearer [REDACTED]");
+    expect(text).toContain("The provider rejected the configured credentials.");
     expect(text).not.toContain("opaquecredential123456");
   } finally {
     await server.stop(true);
@@ -1460,7 +1474,7 @@ test("chat-native preserves a structured cyber_policy type on JSON and SSE failu
     expect(jsonResponse.status).toBe(400);
     expect(jsonResponse.headers.get("retry-after")).toBeNull();
     await expect(jsonResponse.json()).resolves.toMatchObject({
-      error: { type: "server_error", code: "cyber_policy", message: safeMessage },
+      error: { type: "server_error", code: "cyber_policy", message: "Request blocked by the upstream cybersecurity policy." },
     });
 
     const sseResponse = await request(true);
@@ -1468,7 +1482,7 @@ test("chat-native preserves a structured cyber_policy type on JSON and SSE failu
     const sseText = await sseResponse.text();
     expect(sseText).toContain('"type":"server_error"');
     expect(sseText).toContain('"code":"cyber_policy"');
-    expect(sseText).toContain("Authorization: Bearer [REDACTED]");
+    expect(sseText).toContain("Request blocked by the upstream cybersecurity policy.");
     expect(sseText).not.toContain("chatnativesecret123456");
     expect(sseText).not.toContain("data: [DONE]");
   } finally {
@@ -2047,12 +2061,12 @@ test("POST /v1/chat/completions direct mode forwards caller Authorization", asyn
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },
@@ -2164,13 +2178,12 @@ test("chat-native skips optional main enrichment while routed work survives drai
     await server.stop(true);
     saveConfig({
       port: 0,
-      openaiProviderTierVersion: 2,
-      defaultProvider: "openai",
+      defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
       providers: {
         openai: {
           adapter: "openai-responses",
           baseUrl: "https://chatgpt.com/backend-api/codex",
-          authMode: "forward",
+          authMode: "forward", upstreamWebsocket: false,
           codexAccountMode: "pool",
         },
       },
@@ -2228,12 +2241,12 @@ test("POST /v1/chat/completions finalizes native passthrough request logs", asyn
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },
@@ -2301,12 +2314,12 @@ test("POST /v1/chat/completions logs native cyber terminals as 400 cyber_policy"
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },
@@ -2326,15 +2339,17 @@ test("POST /v1/chat/completions logs native cyber terminals as 400 cyber_policy"
       }),
     });
     expect(response.status).toBe(200);
-    expect(await response.text()).toContain("blocked");
+    expect(await response.text()).toContain("Request blocked by the upstream cybersecurity policy.");
     const entry = getRequestLogEntries().findLast(e => e.inboundProtocol === "chat");
     expect(entry).toMatchObject({
       status: 400,
       errorCode: "cyber_policy",
       terminalStatus: "failed",
       closeReason: "terminal",
-      upstreamError: "blocked",
+      upstreamCondition: "request_rejected",
     });
+    // The row keeps the classified condition only, never the provider's words.
+    expect(entry?.upstreamError).toBeUndefined();
   } finally {
     await server.stop(true);
     await upstream.stop(true);
@@ -2384,7 +2399,7 @@ test("responsesSseToChatCompletionsSse emits error frame on response.failed (no 
 
   const text = await new Response(stream).text();
   expect(text).toContain('"error"');
-  expect(text).toContain("upstream exploded");
+  expect(text).toContain("The provider failed to complete the request.");
   expect(text).not.toContain("[error]");
   expect(text).not.toContain("data: [DONE]");
 
@@ -2659,12 +2674,12 @@ test("non-streaming /v1/chat/completions returns error status on upstream failur
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },
@@ -2685,7 +2700,7 @@ test("non-streaming /v1/chat/completions returns error status on upstream failur
     });
     expect(response.status).toBeGreaterThanOrEqual(400);
     const json = await response.json() as { error?: { message?: string; type?: string }; choices?: unknown };
-    expect(json.error?.message ?? "").toContain("provider blew up");
+    expect(json.error?.message ?? "").toBe("The provider failed to complete the request.");
     expect(json.choices).toBeUndefined();
   } finally {
     await server.stop(true);
@@ -2717,12 +2732,12 @@ test("streaming /v1/chat/completions does not clean-DONE after response.failed",
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },
@@ -2744,7 +2759,7 @@ test("streaming /v1/chat/completions does not clean-DONE after response.failed",
     // Stream opens with 200, then body carries an error frame and ends without [DONE].
     expect(response.status).toBe(200);
     const text = await response.text();
-    expect(text).toContain("stream boom");
+    expect(text).toContain("The provider failed to complete the request.");
     expect(text).toContain('"error"');
     expect(text).not.toContain("[error]");
     expect(text).not.toContain("data: [DONE]");
@@ -3026,14 +3041,14 @@ test("stall incomplete becomes an error frame with no [DONE] (WP3)", async () =>
   expect(chunks.some(chunk => chunk.choices?.[0]?.finish_reason === "stop")).toBe(false);
 });
 
-test("adapter_eof incomplete surfaces the upstream message and no [DONE] (WP3)", async () => {
+test("adapter_eof incomplete uses fixed wording and no [DONE] (WP3)", async () => {
   const frames = [
     `event: response.incomplete\ndata: ${JSON.stringify({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "adapter_eof", message: "upstream closed mid-turn" } } })}\n\n`,
   ];
   const { raw, chunks } = await convertResponsesFrames(frames);
   const errorChunk = chunks.find(chunk => (chunk as { error?: { message?: string } }).error !== undefined) as
     { error: { message: string } } | undefined;
-  expect(errorChunk?.error.message).toBe("upstream closed mid-turn");
+  expect(errorChunk?.error.message).toBe("The provider stream ended before the request completed.");
   expect(raw).not.toContain("[DONE]");
 });
 
@@ -3290,12 +3305,12 @@ test("/v1/chat/completions non-OK upstream preserves top-level structured cyber_
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },
@@ -3317,7 +3332,7 @@ test("/v1/chat/completions non-OK upstream preserves top-level structured cyber_
     expect(response.status).toBe(400);
     expect(response.headers.get("retry-after")).toBeNull();
     await expect(response.json()).resolves.toMatchObject({
-      error: { type: "server_error", code: "cyber_policy", message: safeMessage },
+      error: { type: "server_error", code: "cyber_policy", message: "Request blocked by the upstream cybersecurity policy." },
     });
   } finally {
     await server.stop(true);
@@ -3351,12 +3366,12 @@ test("/v1/chat/completions non-OK upstream preserves structured model_not_found"
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },
@@ -3380,7 +3395,7 @@ test("/v1/chat/completions non-OK upstream preserves structured model_not_found"
     expect(json.error).toMatchObject({
       code: "model_not_found",
       type: "invalid_request_error",
-      message: "Request failed",
+      message: "The requested model is not available from the provider.",
     });
   } finally {
     await server.stop(true);
@@ -3416,12 +3431,12 @@ test("/v1/chat/completions status:failed replay normalizes translation_buffer_li
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },
@@ -3480,12 +3495,12 @@ test("/v1/chat/completions status:failed replay preserves structured cyber_polic
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },
@@ -3506,7 +3521,7 @@ test("/v1/chat/completions status:failed replay preserves structured cyber_polic
     });
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
-      error: { type: "server_error", code: "cyber_policy", message: safeMessage },
+      error: { type: "server_error", code: "cyber_policy", message: "Request blocked by the upstream cybersecurity policy." },
     });
   } finally {
     await server.stop(true);
@@ -3542,12 +3557,12 @@ test("/v1/chat/completions status:failed replay preserves structured model_not_f
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },
@@ -3571,7 +3586,7 @@ test("/v1/chat/completions status:failed replay preserves structured model_not_f
     expect(json.error).toMatchObject({
       code: "model_not_found",
       type: "invalid_request_error",
-      message: "Request failed",
+      message: "The requested model is not available from the provider.",
     });
   } finally {
     await server.stop(true);

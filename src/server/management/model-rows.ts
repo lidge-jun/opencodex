@@ -348,12 +348,16 @@ export async function listManagementModelRows(
   const native: ManagementModelRow[] = [...nativeRows, ...accountNativeRows].map(row => {
     const reasoningEfforts = nativeReasoningEfforts(row.metadataSlug).filter(isVisionReasoningEffort);
     const defaultReasoningEffort = nativeDefaultReasoningEffort(row.metadataSlug);
+    const labels = config.providers.openai?.modelDisplayNames;
+    const displayName = row.slug === row.metadataSlug && labels && Object.hasOwn(labels, row.slug)
+      ? labels[row.slug]?.trim() : undefined;
     return {
       provider: "openai",
       id: row.slug,
       namespaced: row.slug,
       disabled: row.disabled,
       native: true,
+      ...(displayName ? { displayName, displayNameOverride: displayName, displayNameSource: "operator" as const } : {}),
       reasoningEfforts,
       ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
       inputModalities: nativeInputModalities(row.slug),

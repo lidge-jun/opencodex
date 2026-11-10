@@ -122,6 +122,8 @@ function applyCacheControlToLastText(blocks: Array<Record<string, unknown>>, cc:
 type PromptCachingOptions = {
   maxExplicitBreakpoints?: number;
   skipLastUser?: boolean;
+  /** The last system block is the caller's uncached per-turn tail; mark the block before it. */
+  uncachedSystemTail?: boolean;
 };
 
 /** Place explicit cache_control breakpoints on the built Anthropic body. */
@@ -158,7 +160,8 @@ function applyPromptCaching(
   // 2. system
   const system = body.system as Array<Record<string, unknown>> | undefined;
   if (system && system.length > 0) {
-    applyCacheControlToLast(system, cc);
+    const i = system.length - (options.uncachedSystemTail && system.length > 1 ? 2 : 1);
+    system[i] = { ...system[i], cache_control: cc };
     used++;
   }
   if (used >= explicitLimit || !messages) return;
@@ -759,7 +762,7 @@ function messagesToAnthropicFormat(
   parsed: OcxParsedRequest,
   toolNames: { toWire: (name: string) => string },
   serverReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>,
-): { system: string | undefined; messages: unknown[] } {
+): { system: string[]; messages: unknown[] } {
   // The client's server-tool exchanges go back ahead of the block they preceded. Their anchors are
   // unique in the caller's history (replayedAnthropicServerBlocks drops repeated ones); each is used once.
   const pendingReplay = new Map(serverReplay);
@@ -787,9 +790,14 @@ function messagesToAnthropicFormat(
     tool => toolNames.toWire(namespacedToolName(tool.namespace, tool.name)),
   );
   const systemParts = [...(parsed.context.systemPrompt ?? []), ...(toolCatalogNudge ? [toolCatalogNudge] : [])];
-  const system = systemParts.length
-    ? identifyRoutedModel(systemParts.join("\n\n"), parsed.modelId) || undefined
-    : undefined;
+  // End a block at the caller's cached prefix so its breakpoint skips the per-turn tail.
+  const prefix = parsed._anthropicSystemCachePrefix
+    ? identifyRoutedModel(parsed._anthropicSystemCachePrefix, parsed.modelId) : undefined;
+  const head = prefix && systemParts[0] ? identifyRoutedModel(systemParts[0], parsed.modelId) : systemParts[0];
+  const texts = prefix && head?.startsWith(`${prefix}\n\n`)
+    ? [prefix, [head.slice(prefix.length + 2), ...systemParts.slice(1)].join("\n\n")]
+    : [systemParts.join("\n\n")];
+  const system = texts.map(text => identifyRoutedModel(text, parsed.modelId)).filter(Boolean);
   const messages: unknown[] = [];
 
   for (let i = 0; i < parsed.context.messages.length; i++) {
@@ -1078,10 +1086,10 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         // Claude OAuth (Pro/Max) requires the first system block to be the Claude Code identity.
         body.system = [
           { type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION },
-          ...(system ? [{ type: "text", text: system }] : []),
+          ...system.map(text => ({ type: "text", text })),
         ];
-      } else if (system) {
-        body.system = [{ type: "text", text: system }];
+      } else if (system.length > 0) {
+        body.system = system.map(text => ({ type: "text", text }));
       }
       if (tools) body.tools = tools;
       if (parsed.options.temperature !== undefined) body.temperature = parsed.options.temperature;
@@ -1101,6 +1109,18 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       const summary = (parsed._rawBody as { reasoning?: { summary?: unknown } } | undefined)?.reasoning?.summary;
       // Codex sends "auto" by default, so only an explicit concise/detailed request opts out of updates (#7728).
       const summaryRequested = summary === "concise" || summary === "detailed";
+      // Operator policy for the adaptive `thinking.display` field (#8363). Unset and "auto" keep
+      // the built-in selection. Any model entry wins over the provider-wide value, including an
+      // explicit "auto" that opts one model back out. "updates" is only sendable where this
+      // adapter already sent it (native Opus 5.5), so anywhere else it is treated as auto rather
+      // than inventing a display value the model never received.
+      const modelThinkingDisplay = modelRecordValue(provider.modelThinkingDisplay, parsed.modelId);
+      const configuredThinkingDisplay = modelThinkingDisplay !== undefined
+        ? modelThinkingDisplay
+        : provider.thinkingDisplay;
+      const thinkingDisplayPolicy = configuredThinkingDisplay === "updates" && !nativeOpus55
+        ? "auto"
+        : configuredThinkingDisplay ?? "auto";
       const thinkingToggleWire = declaresThinkingToggleWire(provider, parsed.modelId);
       const reasoningControlsUnsupported = reasoningControlsAreUnsupported(provider, parsed.modelId);
       const capabilities = resolveReasoningCapabilities(provider, parsed.modelId);
@@ -1137,7 +1157,16 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           // thinking blocks, so a Chat client sees minutes of heartbeats and no reasoning delta
           // during a long think (#5824). Native Opus 5.5 selects its display below;
           // other models request summarized thinking unless the caller hides it.
-          body.thinking = parsed.options.hideThinkingSummary
+          // Under the default policy this stays the pre-existing selection, including its local
+          // hideThinkingSummary behavior; a configured "summarized" overrides that hiding.
+          // An explicit request summary forces summarized on every adaptive model (#7881), so it
+          // also outranks a configured "omitted". "updates" already degraded to auto above
+          // because only native Opus 5.5 can send it.
+          // Local hideThinkingSummary only speaks for the built-in policy, where it keeps its
+          // pre-existing meaning; an operator choice replaces that local preference.
+          const hiddenThinkingDisplay = (thinkingDisplayPolicy === "omitted" && !summaryRequested)
+            || (thinkingDisplayPolicy === "auto" && parsed.options.hideThinkingSummary);
+          body.thinking = hiddenThinkingDisplay
             ? { type: "adaptive" }
             : { type: "adaptive", display: "summarized" };
           const effort = adaptiveEffort(effectiveReasoning);
@@ -1185,7 +1214,12 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       }
 
       if (nativeOpus55 && !reasoningControlsUnsupported && thinkingEnabled !== false) {
-        body.thinking = { type: "adaptive", display: summaryRequested ? "summarized" : "updates" };
+        // An explicit per-request summary (concise/detailed) still forces summarized (#7881).
+        body.thinking = summaryRequested || thinkingDisplayPolicy === "summarized"
+          ? { type: "adaptive", display: "summarized" }
+          : thinkingDisplayPolicy === "omitted"
+            ? { type: "adaptive" }
+            : { type: "adaptive", display: "updates" };
       }
       // One discriminator governs the display beta and response classification, including reuse.
       progressUpdates = (body.thinking as { display?: string } | undefined)?.display === "updates";
@@ -1277,6 +1311,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       applyPromptCaching(body, cc, {
         maxExplicitBreakpoints: explicitLimit,
         skipLastUser: !!automaticPromptCaching,
+        uncachedSystemTail: system.length > 1,
       });
       enforceCacheControlLimit(body, explicitLimit);
       normalizeTtlOrdering(body);

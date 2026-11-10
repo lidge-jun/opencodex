@@ -43,8 +43,29 @@ describe("provider workspace auth surface", () => {
 });
 
 describe("safe OAuth account labels", () => {
+  test("Anthropic identity uses alias first, then the safe label and never raw email", () => {
+    const alias = { id: "opaque-a", alias: "Work", maskedLabel: "f***t@example.com", email: "first@example.com" };
+    const identity = { id: "opaque-b", maskedLabel: "s***d@example.com", email: "second@example.com" };
+    const legacy = { id: "opaque-c", email: "third@example.com" };
+    const rows = [alias, identity, legacy];
+    expect(oauthAccountDisplayLabel(rows, alias, t)).toBe("Work");
+    expect(oauthAccountDisplayLabel(rows, identity, t)).toBe("s***d@example.com");
+    expect(oauthAccountDisplayLabel(rows, legacy, t)).toBe("Account 3");
+  });
+
+  test("the server account label wins over the masked label and follows the privacy setting (#8286)", () => {
+    const unmasked = { id: "opaque-a", accountLabel: "first@example.com", maskedLabel: "f***t@example.com" };
+    const masked = { id: "opaque-b", accountLabel: "s***d@example.com", maskedLabel: "s***d@example.com" };
+    const aliased = { id: "opaque-c", alias: "Work", accountLabel: "third@example.com", maskedLabel: "t***d@example.com" };
+    const blank = { id: "opaque-d", accountLabel: "  ", maskedLabel: "f***h@example.com" };
+    const rows = [unmasked, masked, aliased, blank];
+    expect(oauthAccountDisplayLabel(rows, unmasked, t)).toBe("first@example.com");
+    expect(oauthAccountDisplayLabel(rows, masked, t)).toBe("s***d@example.com");
+    expect(oauthAccountDisplayLabel(rows, aliased, t)).toBe("Work");
+    expect(oauthAccountDisplayLabel(rows, blank, t)).toBe("f***h@example.com");
+  });
   const accounts = [
-    { id: "opaque-first", email: "f***@example.com" },
+    { id: "opaque-first", maskedLabel: "f***@example.com" },
     { id: "opaque-second" },
   ];
 
@@ -170,7 +191,10 @@ describe("workspace account integration seam", () => {
     expect(page).toContain("prov.reauthIdentityMismatch");
     expect(page).toContain("oauthLoginGenerationRef");
     expect(page).toContain('from "../oauth-cancellation-barrier"');
-    expect(page).toContain("cancelOAuthLogin(apiBase, provider)");
+    // Cancellation runs on the capture the login started with, never on the live base:
+    // an old login's cleanup must not cancel B after an A-to-B target change.
+    expect(page).toContain("cancelOAuthLogin(capture, provider)");
+    expect(page).toContain("activeLoginCapturesRef.current.get(provider)");
     const cancellation = await Bun.file("gui/src/oauth-cancellation-barrier.ts").text();
     expect(cancellation).toContain("/api/oauth/login/cancel");
     expect(page).toContain("deviceCode");
@@ -235,11 +259,14 @@ describe("workspace account integration seam", () => {
     expect(hook).toContain("pauseTokensRef");
     expect(hook).toContain("if (!enabled || pauseCount > 0) return;");
     // The initial load must not be re-triggered by pause transitions.
-    // `apiBase` joined the dep list when the initial-load guard became per-base
-    // (cafdc4986): the effect reads it, so omitting it would be the stale-closure bug
-    // this assertion is meant to protect against. What still matters is the absence of
-    // `pauseCount` — that is what would re-fire the initial load on every pause.
-    expect(hook).toContain("}, [apiBase, enabled, load]);");
+    // The guard is per logical target (`seedKey`), so the dep list carries both the
+    // relay base and the target key: a re-pair on the same apiBase must still reload.
+    // What still matters is the absence of `pauseCount` — that is what would re-fire
+    // the initial load on every pause.
+    expect(hook).toContain("const seedKey = targetKey ?? apiBase;");
+    expect(hook).toContain("}, [apiBase, seedKey, enabled, load]);");
+    // A target change also clears the previous target's rows before the new read.
+    expect(hook).toContain("}, [seedKey]);");
     // Reauth OAuth payload lives in the extracted OAuth hook (modal only wires props).
     expect(oauthHook).toContain("reauth: true");
     expect(oauthHook).toContain("startedReauthRef");

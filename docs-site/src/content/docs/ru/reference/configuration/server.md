@@ -33,6 +33,7 @@ description: Listener, удалённый доступ, admission key, тайм�
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Настройки sidecar'а web-search. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Настройки sidecar'а описания изображений. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Настройки standalone Images relay для Codex `image_gen`. |
+| `telemetry?` | `OcxTelemetryConfig` | включено по умолчанию после уведомления человека | Состояние согласия на ежедневную анонимную телеметрию (`decision`, `decidedAt`, `noticeShownAt`). Ничего не отправляется, пока человек не увидит уведомление или не даст согласие. Переопределяется `OCX_TELEMETRY=0` или `DO_NOT_TRACK=1`. См. [Телеметрия (`telemetry`)](#телеметрия-telemetry) и [Телеметрия и конфиденциальность](/ru/guides/telemetry/). |
 
 Если более старая development-сборка изменила metadata resume-history до появления резервного
 backup'а, выполните `ocx recover-history --legacy-openai --yes`, чтобы принудительно вернуть
@@ -109,6 +110,35 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 проброса, которые открывают клиентскую сторону на `0.0.0.0`. Если сомневаетесь, явно указывайте
 `ssh -L 127.0.0.1:20100:localhost:10100`.
 :::
+
+## Телеметрия (`telemetry`)
+
+Ежедневная анонимная телеметрия использования включается по умолчанию только после того, как человек увидел уведомление (во всплывающем окне GUI или в интерактивном терминале). Блок `telemetry` в `config.json` хранит это состояние согласия:
+
+```json
+{
+  "telemetry": {
+    "decision": "accepted",
+    "decidedAt": "2026-11-07T09:00:00.000Z",
+    "noticeShownAt": "2026-11-07T09:00:00.000Z"
+  }
+}
+```
+
+| Поле | Тип | По умолчанию | Значение |
+| --- | --- | --- | --- |
+| `telemetry.decision?` | `"accepted" \| "declined"` | не задано (не решено) | Явный выбор пользователя. `"declined"` отключает телеметрию и удаляет `<OPENCODEX_HOME>/telemetry-id.json`; `"accepted"` включает ежедневные отчёты. |
+| `telemetry.decidedAt?` | `string` (ISO 8601) | не задано | Временная метка UTC, когда было записано `decision`. Отправляются только завершённые календарные сутки UTC строго после суток UTC `decidedAt ?? noticeShownAt` (`day > formatUtcDay(decidedAt ?? noticeShownAt)`); сами сутки согласия и более ранние дни никогда не досылаются. |
+| `telemetry.noticeShownAt?` | `string` (ISO 8601) | не задано | Временная метка UTC, когда человек увидел уведомление в веб-дашборде или интерактивном терминале. Когда `decision` не задано, телеметрия отправляется только при наличии `noticeShownAt` (`default-on`); без него прокси остаётся в состоянии `awaiting-notice`. |
+
+Адрес коллектора (`https://telemetry.opencodex.me/v1/events`) задан константой в коде и не настраивается через `config.json`.
+
+Две переменные окружения переопределяют `config.json` и немедленно отключают телеметрию без изменения `config.json` (при обнаружении при запуске прокси или на тике планировщика также сохраняется `ineligibleThroughDay` в `<OPENCODEX_HOME>/telemetry-state.json` и удаляется `<OPENCODEX_HOME>/telemetry-id.json`, поэтому дни отключения не досылаются, а после снятия переменной создаётся новый ID):
+
+- `OCX_TELEMETRY=0` (также принимает `false`, `off` или `no` без учёта регистра)
+- `DO_NOT_TRACK=1` (также принимает `true` или `yes` без учёта регистра)
+
+Команды `ocx config set telemetry` и `ocx config unset telemetry` отклоняются, а `ocx config import` игнорирует импортируемый блок `telemetry` для всех клиентов, сохраняя текущее состояние; используйте `ocx telemetry enable` (требует интерактивного терминала и подтверждения, иначе завершается с `agent_consent_required` / `tty_required`), `ocx telemetry disable`, `ocx telemetry status [--json]` или переключатель в разделе **Proxy details** веб-дашборда. Полная схема пакета и правила хранения описаны в разделе [Телеметрия и конфиденциальность](/ru/guides/telemetry/).
 
 ## Очистка storage
 

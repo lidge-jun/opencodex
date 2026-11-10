@@ -1896,6 +1896,12 @@ describe("free-provider directory isolation", () => {
     }
   });
 
+  test("Perch is listed as a reference row with no runtime destination", () => {
+    const perch = FREE_PROVIDER_DIRECTORY.find(entry => entry.id === "perch");
+    expect(perch).toMatchObject({ supportLevel: "reference", verification: "unverified", baseUrl: "", discovery: "unsupported", liveModels: false });
+    expect(perch?.lastVerified).toBeUndefined();
+  });
+
   /*
    * #1057. The registry classifies DeepSeek V4 ids Flash-versus-Pro with a substring
    * test, which is correct for every id shipped today but is exactly the kind of

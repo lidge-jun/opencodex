@@ -13,6 +13,12 @@ A stable OpenCodex Desktop install configures `ocx` for new terminals when the a
 
 On macOS and Linux, a current npm/pnpm package launcher that still runs delegates eligible commands to the Desktop CLI when its record is enabled and passes ownership, permission and file-safety checks. Windows has no package-launcher handoff: new terminals select the Desktop `ocx.exe` through user `Path` order. A `record-unsafe` error means the record or its directory failed a safety check. Open OpenCodex Desktop to repair the terminal command, or use `OCX_NO_DESKTOP_HANDOFF=1` for a package invocation on macOS/Linux. Package update/removal and internal inspection keep their existing path. `OCX_NO_DESKTOP_HANDOFF=1` suppresses that package handoff for one invocation; it does not change a direct Desktop shim or PATH configuration.
 
+With an enabled Desktop command record, eligible macOS/Linux package-launcher calls stop if
+the selected Desktop executable is missing or cannot start; they do not silently run the
+npm/pnpm implementation. This can briefly interrupt commands during app replacement. Repair
+or disable the terminal command in Desktop, or explicitly use `OCX_NO_DESKTOP_HANDOFF=1`
+for one package invocation. That bypass does not repair the Desktop record, shim or PATH.
+
 ## Prerequisites
 
 | Requirement | Why |
@@ -24,7 +30,7 @@ On macOS and Linux, a current npm/pnpm package launcher that still runs delegate
 ## Install
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ```
 
 With pnpm 10.4 or later:
@@ -64,6 +70,12 @@ npm install -g --allow-scripts=bun @bitkyc08/opencodex
 # if the original install used sudo, keep using sudo:
 sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ```
+
+On Windows a running proxy keeps `node_modules\bun\bin` open, so a manual
+`npm install -g` fails with `EBUSY`. `ocx update` stops the proxy and restarts the service itself;
+for a manual reinstall, stop it first (`ocx stop`), install, then restart through the owning service
+(`ocx service restart`) or `ocx start` when unmanaged. `ocx doctor` prints this sequence when it finds
+a package install whose bundled runtime never unpacked.
 :::
 
 Verify both command aliases are on your `PATH`:
@@ -110,7 +122,7 @@ the catalog entries do not grant access by themselves. Use the preview channel o
 unreleased opencodex builds:
 
 ```bash
-npm install -g @bitkyc08/opencodex@preview
+npm install -g --allow-scripts=bun @bitkyc08/opencodex@preview
 ocx update --tag preview
 ```
 

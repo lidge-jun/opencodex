@@ -89,6 +89,18 @@ transport; it does not infer subscription attribution from the inbound protocol.
   Adjacent text blocks share inline-tag parsing; typed thinking resets it.
   Unsupported or malformed array blocks return an upstream error. Other hosts
   keep their existing behavior. This does not add Mistral signature replay.
+- Canonical key-auth Mistral Chat (`https://api.mistral.ai/v1`) maps `max_completion_tokens` to
+  `max_tokens` while keeping an explicit non-null `max_tokens`, and drops `user`, `store`, `thinking`,
+  `include_reasoning`, `reasoning` and `top_k`. Its preset folds developer messages to system by
+  default; an explicit `foldDeveloperRoleToSystem: false` overrides this. Native Chat also follows
+  the configured model effort ladder: an unsupported `medium` becomes `low` for the bundled
+  DeepSeek/GLM ladders. Mistral Large 4 keeps its supported `medium` rung.
+- On that canonical destination, native Chat responses normalize typed arrays in both SSE deltas
+  and JSON messages: text becomes string `content`, thinking becomes `reasoning_content`.
+  OpenAI-compatible clients receive strings rather than rendering array objects as `[object Object]`.
+- Schema-validation 4xx errors retain a bounded list of recognized field names and error types in
+  Logs failure details. Upstream messages, submitted values and unknown location keys are omitted;
+  the client-facing error message policy is unchanged.
 - Suppresses bare `<tool_call>` text when it duplicates a structured call, and collapses two
   immediately adjacent identical blocks when exactly one structured call agrees with their function
   and input. A doubled `input` is reduced to one copy, joined either directly or by one newline,
@@ -188,7 +200,37 @@ An explicitly configured provider `User-Agent` remains authoritative regardless 
 if the caller sends none, OpenCodex does not invent one. Additional caller metadata can be selected
 with `forwardClientHeaders`; provider `headers` win for this option, and credential or transport-owned
 names are refused. Canonical ChatGPT forward auth retains its separate fixed header allowlist.
-Only `originator`, `x-client-request-id`, `x-codex-app-version`, and `user-agent` are supported by `forwardClientHeaders`; arbitrary names are rejected on load/write and ignored at runtime.
+Only `originator`, `x-client-request-id`, `x-codex-app-version`, `user-agent`,
+`x-codex-window-id`, and `x-codex-installation-id` are supported by `forwardClientHeaders`;
+arbitrary names and wildcard prefixes are rejected on load/write and ignored at runtime.
+
+For a custom gateway that requires original Codex client metadata (for example, a sub2api
+account with `codex_cli_only` enabled), select only the fields its operator requires.
+If it requires the caller's window identifier, opt in on that provider:
+
+```json
+{
+  "forwardClientHeaders": [
+    "originator", "user-agent", "x-codex-app-version", "x-client-request-id",
+    "x-codex-window-id"
+  ]
+}
+```
+
+This preserves only values the client actually sends, including across native compact fallback.
+WebSocket clients retain their original `User-Agent` and app-version metadata through the
+handshake, with the same provider forwarding policy as HTTP clients.
+Responses authentication preparation preserves that permitted metadata before the final
+provider transport applies its header policy, for both HTTP and WebSocket turns.
+Both identifier headers are off by default on custom providers and require separate selection.
+Add `x-codex-installation-id` only when the trusted destination also requires it: an installation
+identifier can correlate requests across sessions. Selecting a window identifier does not enable
+the installation identifier. Removing a name stops this option copying it on subsequent requests;
+it does not erase identifiers already received by the destination. Provider `headers` remain
+authoritative, and this option does not filter identifiers already present in the request body.
+Missing identifiers are never generated, and connection tests or model discovery do not acquire
+a Codex identity through this option. These headers preserve caller metadata; they do not prove
+that the caller is an official client or grant permission under a gateway's access policy.
 
 ### Native compaction on custom gateways
 
@@ -274,12 +316,16 @@ For Meta Responses at the exact `api.meta.ai` host, OpenCodex omits the unsuppor
 `output.encrypted_content` include requested by Codex Desktop. Meta otherwise rejects the
 request before inference. `reasoning.encrypted_content` and other include entries remain
 intact, so stateless reasoning replay is preserved. The same exact-entry normalization
-applies to xAI; unrelated Responses destinations keep their original include list.
+applies to xAI and to Kimi Code at its exact HTTPS Responses endpoint
+(`https://api.kimi.com/coding/v1/responses`); unrelated Responses destinations keep their original include list.
 
 These request-shape fixes do not change account entitlements. Meta limits Muse Code
 subscription credentials to the Muse Code client; other clients require a separately
 billed Meta API key. A subscription key can therefore return HTTP 403 through OpenCodex
-even when the request shape is valid. See [Meta's subscription rules](https://dev.meta.ai/docs/muse-code/subscriptions).
+even when the request shape is valid. OpenCodex answers that refusal in one sentence: it is a
+plan restriction on a valid credential rather than a rejected or expired one, and the
+supported path is the `meta-model` provider with a pay-as-you-go key, not a re-login. See
+[Meta's subscription rules](https://dev.meta.ai/docs/muse-code/subscriptions).
 
 For xAI Responses, `auto` or `none` tool selection is omitted when normalization leaves no tools
 in the request, including when cached-only search is removed. Valid forced function selections
@@ -382,6 +428,11 @@ MiMo model Command Code serves.
   (`reasoning.summary: "none"`) keeps the provider default. Native Opus 5.5 on `api.anthropic.com`
   defaults to `display: "updates"`; explicit `reasoning.summary: "concise"` or `"detailed"`
   selects `"summarized"` without the updates beta. See [Opus 5.5 progress updates](/guides/providers/#claude-opus-55-progress-updates).
+  The provider or exact-model `thinkingDisplay` setting overrides that default:
+  `summarized` forces `display: "summarized"`, `updates` keeps progress commentary, and
+  `omitted` drops the display field so a Chat client receives no reasoning deltas during the
+  think. An explicit request summary still wins. See
+  [provider configuration](/reference/configuration/providers/).
 - **Structured output:** Responses `text.format` and Chat Completions `response_format` requests
   with `type: "json_schema"` become Anthropic `output_config.format`. The format merges into an
   existing adaptive-thinking output configuration, preserving a compatible `output_config.effort`.
@@ -418,6 +469,17 @@ MiMo model Command Code serves.
 `/v1beta/models/{model}:streamGenerateContent`; the other modes use their native Google endpoints.
 **Auth:** API key, Vertex ADC, or Google Antigravity OAuth, selected by `googleMode`.
 
+For the Google Vertex AI dashboard preset, Project ID and Location are optional fields. With
+an empty API key, the proxy uses ADC on the **proxy host**, unless `GOOGLE_CLOUD_API_KEY` is set;
+that environment key takes precedence. ADC also needs a project and location, supplied in the
+form or by `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` on the proxy
+host. Adding the provider does not verify that credentials or permissions are usable. A key
+without an explicit project uses Vertex express mode.
+The dashboard preset uses a static catalog seeded by the configured default model; its connection
+test does not verify Vertex credentials or permissions.
+Existing Vertex rows without `liveModels` retain live discovery through the generic discovery endpoint.
+Use `liveModels: false` for a static catalog; Settings can switch between the two modes.
+
 - **Location denials are permission errors, not invalid requests.** Google rejects unsupported
   geographic or datacenter locations with HTTP 400 `FAILED_PRECONDITION: User location is not
   supported for the API use.` The proxy reports this as `… location not supported: …` and
@@ -430,7 +492,13 @@ MiMo model Command Code serves.
 - Tool-call ids are synthesized when Gemini omits them. Vertex and Antigravity preserve and replay
   opaque `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
   The signature cache is snapshotted to the config directory, so continuations also survive proxy
-  restarts.
+  restarts. On Vertex and Antigravity, when upstream rejects a request with any HTTP 400, or with
+  `INVALID_ARGUMENT` or a signature error inside a 200 response, that conversation's in-memory
+  signature replay entry is cleared so the next turn does not replay it. A rejection whose text
+  names a signature also evicts the rejected signatures from the durable store; any other
+  rejection leaves durable entries in place. The rejected request itself is not retried.
+- Antigravity's Gemini 4 Argon requests include the selected thinking tier when thought summaries
+  are enabled, allowing its thought summaries to appear in supported clients.
 - **Malformed response shapes fail closed.** A claimed candidate, its `content`, or its
   `content.parts` that is not the documented container terminates the turn with a
   `google response contained invalid …` error naming the structural reason and the offending
@@ -506,9 +574,46 @@ MiMo model Command Code serves.
   solely because the client permits parallel calls.
 - Accepts Responses `text` controls that are not structured output — `text.verbosity` and
   `text.format: {"type":"text"}` — without forwarding them. Kiro has no wire field for either, so
-  they are ignored rather than rejected. Structured output (`text.format` of type `json_schema`
-  or `json_object`) is still refused: the Kiro wire cannot constrain the response shape, and a
-  caller expecting JSON would otherwise receive prose.
+  they are ignored rather than rejected.
+- Emulates structured output (Responses `text.format` of type `json_schema` or `json_object`, and
+  Messages `output_config.format`). The Kiro wire cannot constrain the response shape, so the
+  adapter advertises a private output tool whose input schema is the requested schema and returns
+  that tool's input as the response text. A plain-text reply that is already the requested JSON is
+  accepted as is. Any other reply, including an empty one, gets one bounded retry when the model stopped cleanly (a reply cut by the output-token limit, a content filter or a full context window ends with that stop's own error instead), and if the retry also fails the request ends
+  with an `invalid_kiro_structured_output` error. Prose is not returned as the structured answer;
+  commentary preceding a real client tool call can still stream with that call.
+  Without `strict: true` the check covers JSON syntax, the root type and the root's required
+  properties. With `strict: true` the whole value is checked exactly against the schema, and a
+  strict schema outside this subset is refused before the request is sent:
+  - `type`, `properties`, `required`, `additionalProperties`, single-schema `items`, `enum`,
+    `const` and `anyOf`. A `const` or `enum` value that contains a number is refused: the proxy
+    receives the request already parsed, so a number such as `1.0000000000000001` arrives as `1`
+    and an exact match could accept a value the caller excluded.
+  - `$ref` only to `#/$defs/<name>` or `#/definitions/<name>` at the schema root, with `~0` and
+    `~1` as the only JSON Pointer escapes. References such
+    as `#`, `#/properties/...` or `#/default`, nested `$defs`, and reference cycles that never
+    reach a property or item are refused, and so is a `$ref` with an assertion keyword beside it
+    (drafts disagree on whether such siblings apply), a `$id` below the root, and `$anchor`.
+  - `minLength`, `maxLength`, `minItems` and `maxItems` as non-negative integers.
+  - `minimum`, `maximum`, `exclusiveMinimum` and `exclusiveMaximum` as safe integers or decimals
+    with at most 15 significant digits. The model's numbers are compared exactly as written. This is
+    a heuristic for the bound itself: a bound written with more digits than a double holds can still
+    arrive rounded, so a value within about one unit in the last place of the bound may be judged on
+    the wrong side.
+  - `multipleOf`, `pattern` and `patternProperties` are refused in strict mode. Without
+    `strict: true` they are accepted and left to the light checks above.
+
+  Validation work is capped per answer (10,000 schema checks plus 16 per JSON value, 128 schema
+  levels deep), including `const`/`enum` comparisons and every pass over `required` lists, object
+  entries, long strings and long numbers. A strict format without a JSON object schema is refused,
+  and so is a `type` list that repeats a type. An answer that needs more counts as not
+  matching the format. A strict schema with more than 10,000 nodes, or more than 10,000 values in
+  its `const`/`enum` literals, is refused. Error messages name the failed check only, never a
+  property name or path from the answer or the schema.
+  A Messages `output_config.format` schema always gets the `strict: true` checks, even when it
+  has optional properties and is therefore forwarded to OpenAI-compatible destinations without
+  `strict`: Anthropic promises an answer that conforms to the schema. A Messages schema outside
+  this subset is refused before the request is sent.
 - Decodes `application/vnd.amazon.eventstream`, reconstructs text/thinking/tool events, detects
   truncated tool JSON, and estimates usage because the upstream does not return token counts.
   Decoder teardown initiates cancellation without waiting for transport cleanup to settle, so a
@@ -602,6 +707,8 @@ retry cannot recurse: an empty or reasoning-only retry is returned as retryable 
 real client tool call keeps the turn open. A completion-tool answer is always emitted as
 `final_answer`, even when it exactly repeats prior commentary, because phase correctness is more
 important than cosmetic de-duplication. Tool-free requests retain normal text completion behavior.
+
+The continuation's instruction tells the model that its ordinary text has not reached the user, and asks it to call `codex_kiro_final_answer` with the complete final answer if the task is complete, submitting its previous reply unchanged when that reply already was the answer. A model that answered a trivial request in plain text therefore keeps its answer, instead of being told to continue a task it had already finished.
 
 ### Reasoning effort
 
@@ -722,7 +829,10 @@ configuration that names the old id is rewritten at startup.
   This supports continuity but does not guarantee an upstream cache hit or a particular saving.
 - Reasoning continuity carries provider signatures across turns. If Cognition refuses a signed
   Anthropic replay before visible output, Devin retries once with the signature withheld and the
-  thinking text preserved.
+  thinking text preserved. Responses clients keep live text/tool streaming: a late turn signature
+  receives its own output index after the owning item closes, avoiding duplicate text and
+  unfinished-tool errors in index-keyed clients. Replay pairs the trailer only with adjacent
+  assistant output; matching IDs are checked when present, while ID-stripping clients remain supported.
 - Live model discovery via `GetCascadeModelConfigs`; the static seed is filtered against the
   account's live roster so models not on the plan drop out instead of failing at request time.
 - Tool definitions are encoded in the request and tool-call events are decoded from the response
