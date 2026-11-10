@@ -715,7 +715,11 @@ Audit verdict GO-WITH-FIXES (blockers 2). Dispositions, binding on the implement
    plan-consistency check is lost for those Children. Test: a token starting with `-` produces argv without
    `--expect-plan`; any other token includes it. No `src/update/*` change (D19).
 5. **Medium, accepted:** the clock marker regex captures `child-now:(.*)` and validates after capture (10–16 digits, safe
-   integer); a malformed value yields `childNowMs: "invalid"` as the test expects.
+   integer). A malformed value (non-numeric, outside 10–16 digits, or not a safe integer) or more than one clock line
+   makes the whole framing invalid: `readGatedFraming` returns `{ kind: "invalid" }` (`src/link/child-gated-ocx.ts:73-75`),
+   so a plan probe classifies as `failed`/`child-output-invalid` and an apply as `uncertain`/`child-output-invalid`.
+   No `childNowMs` sentinel exists; `childNowMs` is a number or `null` (no clock line). Tests:
+   `tests/clients/link-gated-ocx-argv.test.ts:313-315`. (Corrected after CodeRabbit on #8505.)
 6. **Low, accepted:** the result parser accepts `"unknown"` for `fromVersion`.
 7. **Low, accepted:** the new gated-argv test links `date` into its fake tool path.
 8. **Low, accepted:** `ChildVerdict` gains an optional `executable` field in the moved classifier; wp4 must drop it before
