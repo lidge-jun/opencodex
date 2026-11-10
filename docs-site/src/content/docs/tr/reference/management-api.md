@@ -304,6 +304,7 @@ Güvenilir ilk model listesi hazır olana kadar `/api/selected-models` ve `/api/
 | `GET, POST, DELETE /api/providers/keys` | Maskelenmiş sağlayıcı anahtarlarını listeleyin, bir tane ekleyin/etkinleştirin veya kaldırın | 400 geçersiz girdi; 404 sağlayıcı/anahtar eksik |
 | `PUT /api/providers/keys/active` | Bir sağlayıcının etkin anahtarını seçin | 400 geçersiz girdi; 404 sağlayıcı/anahtar eksik |
 | `PUT /api/providers/keys/alias` | Bir sağlayıcı anahtarı takma adını ayarlayın veya temizleyin | 400 geçersiz girdi; 404 sağlayıcı/anahtar eksik |
+| `PUT /api/providers/keys/pause` | Bir sağlayıcı API anahtarını duraklatın veya sürdürün. Body `{ name, id, paused }`; etkin anahtar duraklatıldığında halka sırasına göre bir sonraki kullanılabilir anahtar seçilir. Başarılı yanıtta sonuç `activeAccountId` (veya `null`) ve `activeAccountChanged` yer alır. | 400 geçersiz girdi; 404 sağlayıcı/anahtar eksik |
 | `GET, POST, PATCH, DELETE /api/keys` | Veri düzlemi kabul anahtarlarını listeleyin, oluşturun, düzenleyin veya silin | 400 geçersiz gövde/kimlik; 404 anahtar eksik |
 | `PUT /api/oauth/accounts/affinity-reset` | Hesap gerektirmeden provider konuşma bağlantılarının sıfırlanmasını doğrulayın. Body `{ provider }`; başarı: `affinityResetConfirmed: true`. CLI: `ocx account reset-affinity anthropic --json` (`anthropic2` supported). | 400 invalid body/provider; 503 `affinity_reset_not_persisted`, `retryable: true` |
 

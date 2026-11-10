@@ -160,7 +160,9 @@ export function StartupOptionsSection({
           <OptionCard option="desktop" icon={hugeIcon(LaptopIcon)} title={t("startup.protection.desktop")}
             badge={{ tone: desktopOk ? "ok" : startupPresentation(data, failed) === "unverified" ? "neutral" : "warn", label: t(startupPresentation(data, failed) === "unverified" ? "startup.loginUnverifiedTitle" : desktopBadgeKey(data.desktop, failed)) }}>
             {desktopOk ? <p className="m-0">{t("startup.desktopHint")}</p>
-              : !failed && data.desktop.running ? <p className="m-0">{t("startup.desktopRunning")}</p> : null}
+              : failed ? null
+              : data.desktop.running ? <p className="m-0">{t("startup.desktopRunning")}</p>
+              : <p className="m-0">{t("startup.desktopReopenRecovery")}</p>}
           </OptionCard>
         )}
         <OptionCard option="service" icon={hugeIcon(ServerStack01Icon)} title={t("startup.service")}

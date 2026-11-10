@@ -15,7 +15,7 @@ This output-order fix does not resolve Cognition's separate refusal of some gene
 text. It preserves system instructions and safety constraints.
 
 For an Anthropic route on stored OAuth or an Anthropic API key, native Fast is available on
-`claude-opus-5-5`, `claude-opus-5`, and `claude-opus-4-8`: pick the model's `--fast` row (listed
+`claude-fable-5-2`, `claude-opus-5-5`, `claude-opus-5`, and `claude-opus-4-8`: pick the model's `--fast` row (listed
 when Fast rows are enabled) or set `fastMode: true`. Claude Code's own `/fast` toggle is not
 translated on routed requests: the `speed` field it sends does not survive translation. The proxy sends Anthropic's Fast request and records the returned `usage.speed`; only
 confirmed Fast usage gets the 2x API-equivalent cost estimate. A recognized Fast-specific refusal
@@ -25,6 +25,19 @@ Team/Enterprise accounts need organization enablement, and API keys need provisi
 research-preview access. See
 [Anthropic Fast configuration](/reference/configuration/providers/#anthropic-fast-anthropic-speed)
 for the exact model and recovery scope.
+
+## Claude OAuth client-version errors
+
+If an Anthropic OAuth request returns `claude_code_version_too_old`, check which provider you use.
+For Codex routed through the `anthropic` adapter, OpenCodex supplies its own Claude Code
+compatibility profile. Updating a separately installed `claude` executable does not update that
+profile; update OpenCodex and restart the proxy instead. For the `claude-cli` provider or Claude
+Code used directly, update the CLI instead. First-party native Messages requests with an observed
+Claude client identity retain that client's version, and configured header overrides take precedence.
+
+For example, the error reported for `claude-fable-5-2` required Claude Code 2.1.290 or newer;
+the profile in this version of OpenCodex presents 2.1.321. A newer upstream requirement may need
+a later OpenCodex profile. Updating the profile does not grant model access or change subscription limits.
 
 ## Tier defaults for CLI and external launchers
 
@@ -74,7 +87,11 @@ Usage reads support Ultra (formerly Max 20x). Pro, Max 5x and Team retain their 
 five-hour and weekly meters whichever one is currently binding. An Ultra null five-hour limit
 leaves that meter absent unless Anthropic marks a finite session meter active. Current `limits`
 counters take precedence over legacy duplicates; shared usage can affect routing even when
-inactive, while only active model-specific weekly limits affect that model family.
+inactive, while only active model-specific weekly limits affect that model family. An inactive
+model-specific limit, such as Fable while the shared week is the binding limit, still appears on
+the account's quota bars tagged "Not in effect now". A Fable bar also shows the share Anthropic
+reports, for example "Up to 50% of your weekly limit". A plan whose usage has no Fable row shows
+no Fable bar.
 The dashboard shows Pro, Max 5x, or Ultra beside Claude account quotas, using subscription
 metadata from the authenticated profile. Both `ultra` and `claude_max_20x` display as Ultra
 (the existing `ultra` and `max_20x` tier aliases are retained). Unfamiliar validated tiers retain their original name without

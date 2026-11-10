@@ -6,7 +6,7 @@ import { HubCard, type HubBadge } from "@/components/ui-v2/hub-card";
 import { Button } from "@/components/ui-v2/button";
 import { frame, sectionTitle } from "@/components/v2-connect/classes";
 import { cn } from "@/lib/utils";
-import { startupChecklistDone } from "../startup-health-ui";
+import { startupChecklistStep } from "../startup-health-ui";
 import { useStartupChecklist } from "../hooks/useStartupChecklist";
 
 /*
@@ -53,7 +53,7 @@ export default function SetupHub({ apiBase, navigate }: SetupHubProps) {
 
   const providers = config.data ? Object.keys(config.data.providers ?? {}).length > 0 : undefined;
   const requested = usage.data ? (usage.data.summary?.requests ?? 0) > 0 : undefined;
-  const protectedStart = startup.data ? startupChecklistDone(startup.data) : undefined;
+  const autostart = startupChecklistStep(startup.data);
 
   const steps: Step[] = [
     { key: "provider", title: t("shellV2.stepProvider"), hint: t("shellV2.stepProviderHint"),
@@ -62,8 +62,8 @@ export default function SetupHub({ apiBase, navigate }: SetupHubProps) {
       done: requested, open: () => navigate("integrations") },
     { key: "request", title: t("shellV2.stepFirstRequest"), hint: t("shellV2.stepFirstRequestHint"),
       done: requested, open: () => navigate("providers") },
-    { key: "autostart", title: t("shellV2.stepAutostart"), hint: t("shellV2.stepAutostartHint"),
-      done: protectedStart, open: () => navigate("startup") },
+    { key: "autostart", title: t(autostart.titleKey), hint: t(autostart.hintKey),
+      done: autostart.done, open: () => autostart.subPath ? navigate("startup", autostart.subPath) : navigate("startup") },
   ];
   const doneCount = steps.filter(step => step.done === true).length;
   const allDone = doneCount === steps.length;
@@ -117,7 +117,7 @@ function SetupRow({ step, index, current, openLabel, doneLabel, todoLabel }: {
 }) {
   const done = step.done === true;
   return (
-    <li className={cn("flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3.5", current && "bg-surface")}>
+    <li data-step={step.key} className={cn("flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3.5", current && "bg-surface")}>
       <span
         className={cn(
           "grid size-7 shrink-0 place-items-center rounded-full text-[12px] font-semibold tabular-nums [&_svg]:size-3.5",
