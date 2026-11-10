@@ -1580,6 +1580,13 @@ describe("#2565 ocx provider quota renders bars, not a count", () => {
     expect(line).toBe("anthropic weekly 91% Opus 10% Fable 4% (up to 50% of weekly; not in effect)");
   });
 
+  test("a weekly share outside (0, 100] is not printed", () => {
+    const line = providerQuotaLine("anthropic", report("anthropic", {
+      displayWindows: [{ label: "Fable", percent: 4, weeklyAllowancePercent: 1e9 }],
+    }) as never);
+    expect(line).toBe("anthropic Fable 4% (not in effect)");
+  });
+
   test("a report with no windows still names its provider", () => {
     expect(providerQuotaLine("plain", report("plain", {}) as never)).toBe("plain");
   });

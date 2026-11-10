@@ -17,7 +17,7 @@ import { replaceCachedProviderQuotas } from "../quota-routing-cache";
 import { getProviderRegistryEntry } from "../registry";
 import { getProviderQuotaReportCache, hasQuotaRows, routingEvidence, setProviderQuotaReportCache } from "./report-cache";
 import { isCanonicalCommandCodeBaseUrl, isCanonicalKimiCodeBaseUrl } from "./vendor-probes-key";
-import type { AccountQuotaMode, ProviderQuota, ProviderQuotaWindow, QuotaFailureCode } from "../quota-types";
+import { isWeeklyAllowancePercent, type AccountQuotaMode, type ProviderQuota, type ProviderQuotaWindow, type QuotaFailureCode } from "../quota-types";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 
 /** Match oauth/index REFRESH_SKEW_MS — use stored access without refresh when still fresh. */
@@ -66,14 +66,16 @@ function retainedQuotaWindows(value: unknown, now: number): ProviderQuotaWindow[
       changed = true;
       continue;
     }
-    if (window.resetAt !== undefined && !validReset(window.resetAt)) {
-      const normalized = { ...window };
-      delete normalized.resetAt;
-      retained.push(normalized);
-      changed = true;
-    } else {
-      retained.push(window);
+    const normalized = { ...window };
+    if (window.resetAt !== undefined && !validReset(window.resetAt)) delete normalized.resetAt;
+    // A hand-edited share outside (0, 100] is dropped; the measurement itself stays usable.
+    if (window.weeklyAllowancePercent !== undefined && !isWeeklyAllowancePercent(window.weeklyAllowancePercent)) {
+      delete normalized.weeklyAllowancePercent;
     }
+    const rewritten = "resetAt" in window !== "resetAt" in normalized
+      || "weeklyAllowancePercent" in window !== "weeklyAllowancePercent" in normalized;
+    retained.push(rewritten ? normalized : window);
+    if (rewritten) changed = true;
   }
   return changed ? retained : null;
 }

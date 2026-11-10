@@ -3,6 +3,7 @@ import { loadConfig } from "../config";
 import { anthropicProviderIdentityError, cmdAnthropicAccountThreshold } from "./account-anthropic-threshold";
 import { isReservedCodexAccountWord, reportCodexAccountTargetError, resolveCodexAccountTarget } from "./account-target";
 import { hasPassiveAccountQuota } from "../providers/quota";
+import { isWeeklyAllowancePercent } from "../providers/quota-types";
 import { closeSync, openSync, readSync, readFileSync, statSync } from "node:fs";
 import {
   MAX_ACCOUNT_PRIORITY,
@@ -289,7 +290,7 @@ function quotaParts(quota: ProviderQuotaDto): string[] {
   const routed = new Set((quota.customWindows ?? []).map(window => window.label));
   for (const window of quota.displayWindows ?? []) {
     if (routed.has(window.label)) continue;
-    const share = typeof window.weeklyAllowancePercent === "number" ? `up to ${window.weeklyAllowancePercent}% of weekly; ` : "";
+    const share = isWeeklyAllowancePercent(window.weeklyAllowancePercent) ? `up to ${window.weeklyAllowancePercent}% of weekly; ` : "";
     add(window.label, window.percent, window.resetAt, `${share}not in effect`);
   }
   return parts;

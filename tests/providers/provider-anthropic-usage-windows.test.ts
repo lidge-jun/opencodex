@@ -296,3 +296,20 @@ test("plans that report no Fable row get no Fable bar", async () => {
     expect(quota?.customWindows ?? []).toEqual([]);
   }
 });
+test("cached quota windows drop a weekly share outside (0, 100] and keep the row", () => {
+  const future = now + 3_600_000;
+  const quota = normalizeAnthropicQuota({ weeklyPercent: 40, weeklyResetAt: future, updatedAt: now,
+    customWindows: [{ label: "Opus", scope: "model", percent: 10, resetAt: future, weeklyAllowancePercent: 0 }],
+    displayWindows: [
+      { label: "Fable", scope: "model", percent: 4, resetAt: future, weeklyAllowancePercent: 1e9 },
+      { label: "Sonnet", scope: "model", percent: 5, resetAt: future, weeklyAllowancePercent: "<b>" as never },
+    ] }, now);
+  expect(quota?.customWindows).toEqual([{ label: "Opus", scope: "model", percent: 10, resetAt: future }]);
+  expect(quota?.displayWindows).toEqual([
+    { label: "Fable", scope: "model", percent: 4, resetAt: future },
+    { label: "Sonnet", scope: "model", percent: 5, resetAt: future },
+  ]);
+  const valid = { label: "Fable", scope: "model" as const, percent: 4, resetAt: future, weeklyAllowancePercent: 50 };
+  expect(normalizeAnthropicQuota({ weeklyPercent: 40, weeklyResetAt: future, updatedAt: now, displayWindows: [valid] }, now)?.displayWindows)
+    .toEqual([valid]);
+});

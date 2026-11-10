@@ -102,3 +102,8 @@ export type QuotaFailureCode = typeof QUOTA_FAILURE_CODES[number];
 export function parseQuotaFailureCode(value: unknown): QuotaFailureCode | undefined {
   return QUOTA_FAILURE_CODES.find(code => code === value);
 }
+
+/** A model family's share of the weekly limit is meaningful only as a finite percent in (0, 100]. */
+export function isWeeklyAllowancePercent(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 100;
+}
