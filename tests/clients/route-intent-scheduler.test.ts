@@ -41,3 +41,19 @@ test("busy applies reject the request and retry on the short cadence without ove
   expect(timers.at(-1)?.ms).toBe(60_000);
   scheduler.stop();
 });
+
+test("machine clients reports the saved selection a scheduled sync changed, only for the served connection", async () => {
+  const { handleMachineApi } = await import("../../src/client/machine-api");
+  const state = { serverUrl: "http://127.0.0.1:22001", managementUrl: "http://127.0.0.1:22001", managementTransport: "direct" as const,
+    selectedClients: ["codex"] as Array<"codex" | "pi">, tokenEnv: "OPENCODEX_API_AUTH_TOKEN" as const, apiKeyId: "fixture-key",
+    tokenFingerprint: "fixture", protocolVersion: 1 as const, connectedAt: "2026-11-09T00:00:00.000Z", catalogFingerprint: "x", priorCatalog: "" };
+  const url = new URL("/api/machine/clients", "http://127.0.0.1:10100");
+  const base = { sync: async () => { throw new Error("unused"); }, disconnect: async () => { throw new Error("unused"); }, scheduleStandaloneRecycle: () => {} };
+  const read = async (saved: unknown) => (await (await handleMachineApi(new Request(url), url, state as never,
+    { ...base, readConnection: () => saved as never } as never))!.json()).selectedClients;
+  expect(await read({ kind: "connected", value: { ...state, selectedClients: ["codex", "pi"] } })).toEqual(["codex", "pi"]);
+  // Another connection's selection is never reported by this listener.
+  expect(await read({ kind: "connected", value: { ...state, connectedAt: "2026-11-10T00:00:00.000Z", selectedClients: ["pi"] } })).toEqual(["codex"]);
+  expect(await read({ kind: "disconnected" })).toEqual(["codex"]);
+});
+
