@@ -193,6 +193,7 @@ test.skipIf(process.platform === "win32").each([
   ["three entries", censusBody([{ command: ["/a", "/b", "/c"] }])],
   ["an empty command", censusBody([{ command: [] }])],
   ["a first record without a command", censusBody([{ version: "2.77.0" }, { command: ["/opt/stale/ocx"] }])],
+  ["a top-level command before the runtimes", JSON.stringify({ command: ["/opt/stray/ocx"], runtimes: [{ version: "2.77.0" }] }, null, 2) + "\n"],
   ["a truncation inside the command", complete.slice(0, complete.indexOf('"/opt/good/ocx"') + 16)],
   ["a truncation after the command", complete.slice(0, complete.indexOf("],") + 3)],
   ["a truncation after the first record", complete.slice(0, complete.indexOf("},") + 3)],
