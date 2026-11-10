@@ -215,7 +215,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`; on a subscription launch an unset slot gets the native `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`, so `--model opus`, `sonnet` and `fable` keep their 1M context |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | The `/model` label for a tier slot that OpenCodex sets to a routed alias, such as `gpt-6.1-sol (native)` for `ocx-claude-native--gpt-6.1-sol`. Without it, Claude Code labels that row with the alias. The alias stays the selected model id. When system env is on, the launchd environment and the shell hook get the same slot and label pair. A slot or label you set yourself is left alone |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1` when `alwaysEnableEffort` is on (conditional) |
-| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` when set (conditional; off by default — see [MCP tool schemas fill the context](#troubleshooting)) |
+| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` when set (conditional; not injected by default, so Claude Code's own default applies — see [MCP tool schemas fill the context](#troubleshooting)) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | Legacy context override when `maxContextTokens` is set (conditional) |
 Variables you export yourself always win. Extra arguments pass through: `ocx claude -p "hello"`.
 
@@ -1237,16 +1237,26 @@ window may be below the fixed 829,800-token floor.
 on Claude model mentions. This is normal for native passthrough; on routed models, opencodex stubs
 it by default (`blockedSkills: ["claude-api"]`).
 
-**MCP tool schemas fill the context on turn one** — Claude Code turns MCP tool deferral off
-whenever `ANTHROPIC_BASE_URL` is not a first-party Anthropic host. The check is keyed on the
-host, not the model, so it applies to every `ocx claude` session: with many connectors
-configured, every tool schema is inlined before you type anything. Re-enable deferral with:
+**MCP tool schemas fill the context on turn one** — Whether Claude Code defers MCP tools behind a
+gateway depends on its version. From v2.1.304, tool search is on by default when
+`ANTHROPIC_BASE_URL` points to a gateway, which includes every `ocx claude` session, so MCP tools
+are deferred and loaded through `ToolSearch`. Earlier versions turn deferral off behind a gateway
+and inline every tool schema before you type anything. On those versions, re-enable it with:
 
 ```json
 { "claudeCode": { "toolSearch": true } }
 ```
 
-This remains off by default. **Native Anthropic passthrough** preserves Anthropic's server-side
+`ocx claude` injects `ENABLE_TOOL_SEARCH` only when `claudeCode.toolSearch` is set to an enabling
+value; with the setting unset, the client's own default applies. `toolSearch: false` injects nothing,
+so it does not turn tool search off. On a translated Chat route (DeepSeek, GLM and
+similar providers), each `ToolSearch` load changes the tool list and the system message, so the
+next request re-reads most of the conversation instead of hitting the provider's prompt cache
+([#7963](https://github.com/lidge-jun/opencodex/issues/7963)). To trade first-turn context for a
+stable cache prefix there, export `ENABLE_TOOL_SEARCH=false` before running `ocx claude`; a value
+you export yourself always wins.
+
+**Native Anthropic passthrough** preserves Anthropic's server-side
 tool search: the client still sends deferred definitions, and Anthropic keeps them out of the
 model context until discovery. The default translated path does not implement that server tool;
 it drops the typed search declaration and ordinarily sends function schemas eagerly, which can

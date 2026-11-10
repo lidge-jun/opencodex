@@ -150,11 +150,11 @@ export interface OcxClaudeCodeConfig {
   /**
    * Opt-in ENABLE_TOOL_SEARCH injection for launched Claude Code sessions (#4838).
    *
-   * Claude Code turns MCP tool deferral off whenever ANTHROPIC_BASE_URL names a
-   * non-first-party host, so an `ocx claude` session ships every tool schema in
-   * full on every request. Its own diagnostic states the precondition for turning
-   * that back on: "Set ENABLE_TOOL_SEARCH=true (or auto / auto:N) if your proxy
-   * forwards tool_reference blocks."
+   * Claude Code v2.1.304+ turns tool search on by default behind an
+   * ANTHROPIC_BASE_URL gateway; earlier versions keep it off there unless
+   * ENABLE_TOOL_SEARCH is true / auto / auto:N (#7963). Unset leaves the client's
+   * default; `false` injects nothing either, so a user who wants upfront loading
+   * exports ENABLE_TOOL_SEARCH=false themselves.
    *
    * Default OFF. Native Anthropic passthrough retains server-side search; the
    * ordinary translated route drops the typed search tool and sends function schemas
