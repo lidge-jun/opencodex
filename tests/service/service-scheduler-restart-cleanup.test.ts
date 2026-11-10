@@ -116,7 +116,16 @@ test("a failed asset rewrite after the stop puts the old assets back and restart
     deps.snapshotSchedulerAssets = () => { effects.push("snapshot"); return () => { effects.push("restore-assets"); }; };
     deps.writeSchedulerAssets = () => { effects.push("assets"); throw Object.assign(new Error("fixture read-only asset"), { code: "EACCES" }); };
     await expect(repairService(deps)).rejects.toThrow("fixture read-only asset");
-    expect(effects).toEqual(["stop", "wrappers", "tracked", "verify-stopped", "snapshot", "assets", "restore-assets", "start"]);
+    expect(effects).toEqual(["snapshot", "stop", "wrappers", "tracked", "verify-stopped", "assets", "restore-assets", "start"]);
+  });
+});
+
+test.each(["restart", "repair"] as const)("an unreadable asset snapshot refuses %s before anything is stopped", async verb => {
+  await scenario(async (deps, effects) => {
+    deps.verb = verb;
+    deps.snapshotSchedulerAssets = () => { throw Object.assign(new Error("fixture EACCES"), { code: "EACCES" }); };
+    await expect(repairService(deps)).rejects.toThrow("fixture EACCES");
+    expect(effects).toEqual([]);
   });
 });
 

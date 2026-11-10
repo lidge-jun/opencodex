@@ -85,7 +85,7 @@ export const CONNECT_USAGE = `Usage:
   ocx connect revoke --admin-token-stdin [--json]`;
 
 export const DISCONNECT_USAGE = `Usage:
-  ocx disconnect [--keep-catalog] [--json]
+  ocx disconnect [--keep-catalog] [--recover-config --yes] [--json]
   ocx disconnect --orphaned-token --yes [--json]`;
 
 export type ClientConnectionStatus = {

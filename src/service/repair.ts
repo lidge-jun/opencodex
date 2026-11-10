@@ -312,6 +312,10 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
         throw new Error("Task Scheduler registration changed before stop; it was preserved and not stopped.");
       }
     };
+    // Capture the assets the verified registration runs before anything is stopped. A snapshot that
+    // cannot be read (an ACL refusal) then refuses while the service is still running, rather than
+    // after the stop, where the failed-rewrite recovery below could never start it again.
+    const restoreAssets = (deps.snapshotSchedulerAssets ?? snapshotWindowsSchedulerAssets)();
     if (deps.verb === "restart") {
       await prepareDisconnectedRestart(verifyRegistrationBeforeStop);
       assertRestartOwnership();
@@ -338,8 +342,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     }
     // The proxy is stopped now. A rewrite that fails (a read-only asset, an ACL refusal) must not
     // leave it stopped: put the previous assets back and start the registration verified above,
-    // which still runs them, then report the original failure.
-    const restoreAssets = (deps.snapshotSchedulerAssets ?? snapshotWindowsSchedulerAssets)();
+    // which still runs them (the snapshot above), then report the original failure.
     try {
       (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)(runtime);
     } catch (err) {
