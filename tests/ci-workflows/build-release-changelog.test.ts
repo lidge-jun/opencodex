@@ -9,6 +9,7 @@ import {
   hasRenderedPullReference,
   isPrereleaseVersion,
   isReleaseMetadataCommit,
+  legacyChangelogRangeStart,
   parseAssociatedPulls,
   parseGitLog,
   selectReleaseBaseline,
@@ -542,3 +543,53 @@ describe("buildReleaseNotes", () => {
     expect(selectReleaseBaseline("1.2.0", ["v1.0.0", "v1.1.0-preview.1"])).toBe("v1.0.0");
   });
 });
+
+describe("legacy main-line baseline", () => {
+  // v2.99.0 was tagged on the retired main line, so no dev target reaches it. The reviewed mapping
+  // in .github/scripts/release-history.cjs is the only way across; anything else stays refused.
+  const legacySha = "667662903a6c139524506667d12656d9ad50fad0";
+  const devBaseline = "0627a2c255bc239d5748119f1d0bc4457a1c03e3";
+
+  test("the reviewed 2.99.0 tag starts the range at its dev baseline", () => {
+    expect(legacyChangelogRangeStart("v2.99.0", legacySha, true)).toBe(devBaseline);
+  });
+
+  test("a moved tag, an unreached baseline or an unmapped tag is refused", () => {
+    expect(legacyChangelogRangeStart("v2.99.0", "b".repeat(40), true)).toBeNull();
+    expect(legacyChangelogRangeStart("v2.99.0", undefined, true)).toBeNull();
+    expect(legacyChangelogRangeStart("v2.99.0", legacySha, false)).toBeNull();
+    expect(legacyChangelogRangeStart("v2.98.0", legacySha, true)).toBeNull();
+  });
+
+  test("the stable 2.100.0 baseline selects the legacy tag once it is admitted", () => {
+    const tags = ["v2.42.0", "v2.99.0", "v2.99.0-preview.20261108"];
+    expect(selectReleaseBaseline("2.100.0", tags, tag => tag === "v2.42.0")).toBe("v2.42.0");
+    expect(selectReleaseBaseline("2.100.0", tags, tag => tag === "v2.42.0" || tag === "v2.99.0")).toBe("v2.99.0");
+  });
+});
+
+
+describe("legacy range in assembled notes", () => {
+  test("generated PRs outside the reviewed range and the tag compare link stay out", () => {
+    const generated = [
+      "## What's Changed",
+      "### Bug Fixes",
+      "* fix(api): inside the range by @alice in https://github.com/lidge-jun/opencodex/pull/10",
+      "* chore(release): open dev before the legacy tag by @bot in https://github.com/lidge-jun/opencodex/pull/8313",
+    ].join("\n");
+    const devBaseline = "0627a2c255bc239d5748119f1d0bc4457a1c03e3";
+    const result = buildReleaseNotes({
+      version: "2.100.0", tags: ["v2.42.0", "v2.99.0"], npmMetadata: "", repository: "lidge-jun/opencodex",
+      generatedNotes: generated,
+      commits: [commit("a", "fix(api): inside the range (#10)")],
+      compareFrom: devBaseline,
+      rangePulls: new Set([10]),
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.body).toContain("#10");
+    expect(result.body).not.toContain("#8313");
+    expect(result.body).toContain(`compare/${devBaseline}...v2.100.0`);
+    expect(result.body).not.toContain("compare/v2.99.0");
+  });
+});
+
