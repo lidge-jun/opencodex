@@ -70,7 +70,9 @@ export function normalizeUpstreamErrorText(text: string, fallback: string): Norm
       message = redactSecretString(source.message.trim()).slice(0, 500);
     }
     if (typeof source.type === "string" && source.type.trim()) type = source.type.trim();
-    if (typeof source.code === "string" && source.code.trim()) code = source.code.trim();
+    if (typeof source.code === "string" && source.code.trim()) {
+      code = source.code.trim();
+    }
   } catch {
     /* non-JSON upstream body — retain the bounded display-safe text */
   }

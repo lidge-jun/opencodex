@@ -3,7 +3,14 @@ import { carryProxyErrorPresentation } from "../../lib/client-error-body";
 import { carryPolicyCandidateRefusal } from "./policy-request-scope";
 import { comboFailureEvidence, carryProxyError } from "../../lib/client-error-body";
 import { carryWorkflowRefusal } from "../workflow-refusal";
-import { codexAccountModelRefusal, codexAccountModelRefusalHardStopCode, type CodexAccountModelRefusal } from "../../combos/failover";
+import {
+  codexAccountModelRefusal,
+  codexAccountModelRefusalHardStopCode,
+  isMalformedResponseFormatRequest,
+  isOpenRouterOpaque400Envelope,
+  upstreamEnvelopeRootCode,
+  type CodexAccountModelRefusal,
+} from "../../combos/failover";
 import { parseRetryAfterMs } from "../../combos";
 import type { ConsumedComboFailure, HandleResponsesOptions } from "./core-options";
 import type { OcxUsage } from "../../types";
@@ -57,8 +64,11 @@ export async function consumeComboFailure(
   const fallback = `Provider error ${response.status}`;
   let classificationText = fallback;
   let codexModelRefusal: CodexAccountModelRefusal | undefined;
+  let malformedResponseFormat: boolean | undefined;
+  let openRouterOpaque400: boolean | undefined;
   let usage: OcxUsage | undefined;
   let upstreamCode: string | undefined;
+  let upstreamRootCode: string | undefined;
   let upstreamMessage: string | undefined;
   let upstreamType: string | undefined;
   // Whether the body itself confirms a quota/rate-limit refusal, computed on the SAME read as
@@ -92,7 +102,14 @@ export async function consumeComboFailure(
       // A combo child's row is attributed from the same evidence the parent uses: Meta's Muse
       // Code refusal is a plan restriction, not a rejected credential (#8352).
       if (logCtx) stampMetaMusePlanRefusal(logCtx, response.status, body.text);
-      if (response.status === 400) codexModelRefusal = codexAccountModelRefusal(response.status, body.text);
+      if (response.status === 400) {
+        codexModelRefusal = codexAccountModelRefusal(response.status, body.text);
+        malformedResponseFormat = isMalformedResponseFormatRequest(response.status, body.text);
+        openRouterOpaque400 = isOpenRouterOpaque400Envelope(body.text);
+      }
+      // Status-independent: the nested record is what normalization selects, so a root verdict
+      // beside it has to be captured here or the conflict rule never sees it.
+      upstreamRootCode = upstreamEnvelopeRootCode(body.text);
       const normalized = normalizeUpstreamErrorText(body.text, fallback);
       if (utf8Trusted || isCyberPolicyCode(normalized.code) || isCyberPolicyMessage(normalized.safeText)) {
         classificationText = normalized.safeText;
@@ -170,7 +187,12 @@ export async function consumeComboFailure(
     ...(verifiedPlanRefusal ? { verifiedPlanRefusal: true } : {}),
     classificationText,
     ...(codexModelRefusal !== undefined ? { codexModelRefusal } : {}),
+    ...(malformedResponseFormat !== undefined ? { malformedResponseFormat } : {}),
+    ...(openRouterOpaque400 !== undefined ? { openRouterOpaque400 } : {}),
     ...(normalizedUpstreamCode !== undefined ? { upstreamCode: normalizedUpstreamCode } : {}),
+    // A rewritten identity (policy, replay refusal) is the whole verdict; the root's own code
+    // would only re-open a decision that rewrite already settled.
+    ...(!cyberFailure && !replayRefusal && upstreamRootCode !== undefined ? { upstreamRootCode } : {}),
     ...(upstreamMessage !== undefined ? { upstreamMessage } : {}),
     ...(upstreamType !== undefined ? { upstreamType } : {}),
     ...(!cyberFailure && cooldownRetryAfter !== undefined ? { retryAfter: cooldownRetryAfter } : {}),
