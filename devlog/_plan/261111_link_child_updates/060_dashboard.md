@@ -312,11 +312,11 @@ implementation because `../src/pages/RemoteLinkChildActions` does not exist.
 9. *active job* — row with `activeJob`: action buttons and Disconnect disabled; on first load the page fetches
    `jobs/<activeJob.jobId>` and shows its progress (Revision 4, 4529522080); two rows with two different active jobs ⇒
    two progress panels, one fetch each.
-11. *withheld restart* (Revision 4, 4529522073) — a job item with `restart.outcome: "skipped"` renders
-   "Restart withheld: a turn was running", never "Restart requested".
 10. *client-initiated row* — no action buttons, badges still shown.
 11. *policy panel* — loads, shows the invalid-file banner for `warning`, saving one changed select sends a PUT with only that key.
-12. *parsers* — `parseChildOps` returns null for a malformed block; `parseChildJob` maps an unknown state to `failed`.
+12. *withheld restart* (Revision 4, 4529522073) — a job item with `restart.outcome: "skipped"` renders
+   "Restart withheld: a turn was running", never "Restart requested".
+13. *parsers* — `parseChildOps` returns null for a malformed block; `parseChildJob` maps an unknown state to `failed`.
 
 `gui/tests/remote-link.test.tsx:60-73` changes: the scanned list adds `"link-child-ops-routes"` and the
 regex adds a second pattern `/case "([a-z_]+)": return fail\(code/g` so the `refusal()` switch (030 :689-695)

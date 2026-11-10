@@ -441,7 +441,7 @@ unions above; `servingPath`/`cliPath` are strings of 1–4096 characters without
 | any other reason | installer | none | `refused:<reason>` |
 
 `installedVersion` is `currentVersion` unless it is `"unknown"` (then null). `updateInFlight` is carried
-through; the engine (wp3) turns it into `busy`.
+through; the engine (wp3) turns it into `busy`, and the observe runner persists it on `ChildObservation.updateInFlight` (Revision 5).
 
 `mapUpdateApplyExit(code, payload)` (D12 step 5, refined against the code):
 
@@ -482,8 +482,13 @@ export interface ChildObservation {
   catalogSyncedEtag: string | null;
   /** Revision 4. Counted automatic update attempts for one target (070); survives a Home restart. */
   autoUpdateAttempts: { target: string; count: number } | null;
-  /** Revision 4. An update whose result is unknown (030 writes on uncertain; 070 clears after recovery). */
-  /** desktopRequestId: set by 080's Desktop route so the next run reconciles that request before sending another. */
+  /** Revision 5 (final review r2). plan.updateInFlight from the last ocx.update.plan/1 probe; null when the observation
+   *  did not come from a plan (source "inspect" or "peer", or a Child below 2.97.0). Written by the observe runner beside
+   *  updateRoute; read by 070 recover(). Not a carried field: every observe replaces it. */
+  updateInFlight: boolean | null;
+  /** Revision 4. An update whose result is unknown (030 writes on uncertain; 070 clears after recovery).
+   *  desktopRequestId: set by 080's Desktop route so the next run reconciles that request before sending another;
+   *  a record carrying it is cleared only by 080's status reconciliation or by expiry, never by a sync. */
   pendingUpdateRecovery: { target: string; since: string; until: string; desktopRequestId?: string } | null;
 }
 /** Fields an operation or the Home owns; a fresh observe never overwrites them. Missing in an older file ⇒ null. */

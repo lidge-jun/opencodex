@@ -185,11 +185,14 @@ export function createChildUpdateSweep(deps: ChildUpdateSweepDeps): ChildUpdateS
     if (!pending) return;
     if (Date.parse(pending.until) <= env.now()) { env.writeObservation(item.linkId, { pendingUpdateRecovery: null }); return; }
     // A recovery observe that sees no update in flight ⇒ one pinned sync, no restart, to restore routing. Never an update.
-    if (job.op === "observe" && item.state === "succeeded" && env.readObservation(item.linkId)?.updateReason !== "update-in-flight") {
+    // Revision 5 (final review r2): gate on the plan's own updateInFlight (010 ChildObservation). null (no plan probe)
+    // means "unknown": do nothing and let the next scheduled re-observe or expiry decide.
+    if (job.op === "observe" && item.state === "succeeded" && env.readObservation(item.linkId)?.updateInFlight === false) {
       if (!deps.engine.activeJob(item.linkId)) deps.engine.submit({ op: "sync", linkIds: [item.linkId], restart: "none", trigger: "auto" }, env);
       return;
     }
-    if (job.op === "sync" && item.state === "succeeded") env.writeObservation(item.linkId, { pendingUpdateRecovery: null });
+    // A Desktop record (desktopRequestId set) is cleared only by 080's status reconciliation or expiry.
+    if (job.op === "sync" && item.state === "succeeded" && !pending.desktopRequestId) env.writeObservation(item.linkId, { pendingUpdateRecovery: null });
   };
 
   const onItem = (job: Readonly<ChildJob>, item: Readonly<ChildJobItem>): void => {
@@ -522,3 +525,14 @@ that puts this, the default-on catalog fan-out (050) and A5 into the GitHub rele
 
 - R1: attempts() counts only outcomes in UPDATE_ATTEMPT_CAP_STATES; busy and offline still grow the per-link backoff but never exhaust the cap. Test: three consecutive busy/update-in-flight results leave suppressedTarget null and the link eligible after its backoff.
 - R4: a Windows link whose remotePlatform is not yet recorded can pass the candidate check with an orchestrated route; the engine discovers the platform, ends unsupported/windows-apply and the item counts toward the cap. It fails safe; accepted as is.
+
+
+## Revision 5 (final review r2 on #8500)
+
+- recover() now reads ChildObservation.updateInFlight (new in 010, from plan.updateInFlight). Before this, it compared
+  updateReason to "update-in-flight", a value no observation holds, so the gate was always open.
+- A recovery sync no longer clears a pendingUpdateRecovery that carries desktopRequestId; 080's status reconciliation
+  or expiry clears it, as 080 states.
+- Tests added to the recovery cases: (a) an observe whose plan reports updateInFlight true submits no sync and keeps the
+  record; (b) updateInFlight null (inspect-only observe) submits no sync; (c) a Desktop record with desktopRequestId
+  survives a successful recovery sync and is cleared only by a terminal status answer.
