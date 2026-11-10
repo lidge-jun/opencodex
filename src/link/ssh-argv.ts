@@ -19,7 +19,7 @@
  */
 
 import { isAbsolute } from "node:path";
-import { POWERSHELL_ENCODED_MAX, windowsGatedOcxArgv, windowsOcxArgv } from "./remote-windows";
+import { POWERSHELL_ENCODED_MAX, PowerShellCommandTooLongError, windowsGatedOcxArgv, windowsOcxArgv } from "./remote-windows";
 
 export type TunnelDirection = "R" | "L";
 
@@ -420,7 +420,16 @@ exit ${REMOTE_COMMAND_NOT_FOUND}`;
 
 export function remoteGatedOcxArgv(cmd: GatedOcxCommand, platform: "posix" | "windows" = "posix"): string[] {
   const versionParts = assertGated(cmd);
-  if (platform === "windows") return windowsGatedOcxArgv({ ...cmd, versionParts });
+  if (platform === "windows") {
+    // A dropped channel kills the orchestrating parent with the Job, so no Windows apply is ever built (D20).
+    if (cmd.args[0] === "update" && cmd.args.includes("--yes")) throw new LinkSshArgumentError("unsupported:windows-apply");
+    try {
+      return windowsGatedOcxArgv({ ...cmd, versionParts });
+    } catch (error) {
+      if (error instanceof PowerShellCommandTooLongError) throw new LinkSshArgumentError("windows-command-too-long");
+      throw error;
+    }
+  }
   return ["sh", "-c", remoteGatedScript(cmd), "ocx", ...cmd.args];
 }
 
@@ -431,6 +440,8 @@ const RESTART_FLAG: Readonly<Record<ChildRestartRequest, string>> = { "app-serve
 export function remotePinnedSyncArgv(linkId: string, platform: "posix" | "windows" = "posix", opts: PinnedSyncOptions = {}): string[] {
   if (!LINK_ID_PATTERN.test(linkId)) throw new LinkSshArgumentError("invalid link id");
   if (opts.restart !== undefined && !Object.hasOwn(RESTART_FLAG, opts.restart)) throw new LinkSshArgumentError("invalid restart request");
+  // D20: the Home never sends a restart to a Windows Child.
+  if (opts.restart !== undefined && platform === "windows") throw new LinkSshArgumentError("unsupported:windows-restart");
   const restart = opts.restart === undefined ? [] : [RESTART_FLAG[opts.restart]];
   return remoteGatedOcxArgv({ minVersion: "2.93.0", lacksMarker: "child-ocx-lacks-expect-link", acceptEphemeral: true,
     reportEntry: false, reportClock: false, reportSelectedKind: restart.length > 0,

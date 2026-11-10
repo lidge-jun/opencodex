@@ -66,7 +66,9 @@ export async function runHomeFanout(deps: {
             timer = setTimeout(() => resolve({ state: "timed-out", reason: "termination-unconfirmed", exit: null }), budget + (deps.terminationGraceMs ?? 3000));
           }),
         ]);
-        result.children[index] = { linkId: link.id, alias: link.alias, ...child, ...(child.state === "skipped" ? { hint: childSkipHint(child.reason, link.alias) } : {}) };
+        // Build the row from the schema's own fields, so an extra key on a runner's result never reaches ocx.sync.fanout/1.
+        const hint = child.state === "skipped" ? childSkipHint(child.reason, link.alias) : child.hint;
+        result.children[index] = { linkId: link.id, alias: link.alias, state: child.state, reason: child.reason, exit: child.exit, ...(hint === undefined ? {} : { hint }) };
       } catch { result.children[index] = classify(link, "failed", "internal-error"); }
       finally { if (timer !== undefined) clearTimeout(timer); }
     }

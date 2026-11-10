@@ -44,7 +44,11 @@ function validDocument(value: unknown): "synced" | "stale" | null {
   return home.state;
 }
 
-export function classifySyncResult(result: { code: number; stdout: string; stderr: string }): ChildVerdict {
+/**
+ * expectSelectedKind: only a restarting pinned sync asks its script to print ocx-fanout:selected-kind. Every other
+ * caller leaves it false, and then a selected-kind line in remote stderr is ignored exactly like any other noise.
+ */
+export function classifySyncResult(result: { code: number; stdout: string; stderr: string }, options: { expectSelectedKind?: boolean } = {}): ChildVerdict {
   const { code, stdout, stderr } = result;
   if (code === 255) return failure("ssh-failed");
   if (code === 127) return failure("child-ocx-not-found");
@@ -59,9 +63,10 @@ export function classifySyncResult(result: { code: number; stdout: string; stder
   }
   const markers = lines.map(line => /^ocx-fanout:selected:(.+)$/.exec(line)).filter(match => match !== null);
   if (markers.length !== 1 || !parseStrictSemver(markers[0]![1]!)) return failure("child-output-invalid");
-  // At most one selected-kind line, after the selection marker, naming ocx-child (the restart was ignored).
+  // Requested only: at most one selected-kind line, after the selection marker, naming ocx-child (the restart was ignored).
   const selectedAt = lines.findIndex(line => line.startsWith("ocx-fanout:selected:"));
-  const kinds = lines.flatMap((line, index) => line.startsWith(SELECTED_KIND) ? [{ index, value: line.slice(SELECTED_KIND.length) }] : []);
+  const kinds = options.expectSelectedKind !== true ? []
+    : lines.flatMap((line, index) => line.startsWith(SELECTED_KIND) ? [{ index, value: line.slice(SELECTED_KIND.length) }] : []);
   if (kinds.length > 1 || (kinds.length === 1 && (kinds[0]!.value !== "ocx-child" || kinds[0]!.index < selectedAt))) return failure("child-output-invalid");
   const kind = (verdict: ChildVerdict): ChildVerdict => kinds.length === 1 ? { ...verdict, executable: "ocx-child" } : verdict;
   const outputLines = stdout.split(/\r?\n/);

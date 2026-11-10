@@ -151,8 +151,7 @@ describe("pinned sync options", () => {
     const result = desktopRun("2.93.0", remotePinnedSyncArgv(LINK, "posix", { restart }));
     expect(result.code).toBe(0);
     expect(result.calls).toBe("--version\nsync --expect-link " + LINK + " --json " + flag + "\n");
-    expect(windowsScriptData(Buffer.from(remotePinnedSyncArgv(LINK, "windows", { restart })[5]!, "base64").toString("utf16le")))
-      .toEqual({ args: ["sync", "--expect-link", LINK, "--json", flag] });
+    expect(() => remotePinnedSyncArgv(LINK, "windows", { restart })).toThrow(new LinkSshArgumentError("unsupported:windows-restart"));
   });
 
   posix("no option leaves the sync arguments unchanged", () => {
@@ -212,7 +211,7 @@ describe("Windows scripts", () => {
     const script = inflated(argv);
     expect(script).toContain("$b=@('2','97','0')");
     expect(script).toContain("ocx-fanout:child-ocx-lacks-orchestrated-update");
-    expect(script).toContain("StartsWith('ocx-child')){[Console]::Error.WriteLine('ocx-fanout:child-ocx-ephemeral');exit 121}");
+    expect(script).toContain("if($x -match '(^|[\\\\/])ocx-child[^\\\\/]*$'){[Console]::Error.WriteLine('ocx-fanout:child-ocx-ephemeral');exit 121}");
     // Windows reads no census, so the Home infers entry "binary" and the script prints no entry marker.
     expect(script).not.toContain("ocx-fanout:entry:");
     expect(script).toContain("$env:OCX_NO_DESKTOP_HANDOFF='1'");

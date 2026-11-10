@@ -84,7 +84,8 @@ export type PlanProbeVerdict =
   | { kind: "offline"; reason: "ssh-failed" }
   | { kind: "failed"; reason: string };
 
-export function classifyUpdatePlanProbe(result: SshResult, ctx: { homeVersion: string; desktopUpdateRequest: boolean }): PlanProbeVerdict {
+/** platform "windows": the Windows script prints no entry marker because it reads no census, so the entry is "binary". */
+export function classifyUpdatePlanProbe(result: SshResult, ctx: { homeVersion: string; desktopUpdateRequest: boolean; platform?: "posix" | "windows" }): PlanProbeVerdict {
   const framing = readGatedFraming(result);
   if (framing.kind === "transport") return framing.reason === "ssh-failed" ? { kind: "offline", reason: "ssh-failed" } : { kind: "failed", reason: framing.reason };
   if (framing.kind === "refused") {
@@ -96,8 +97,9 @@ export function classifyUpdatePlanProbe(result: SshResult, ctx: { homeVersion: s
   if (framing.code !== 0) return { kind: "failed", reason: framing.code === 64 ? "contract-usage" : "child-plan-failed" };
   const parsed = parseChildUpdatePlan(framing.payload);
   if (!parsed.ok) return { kind: "failed", reason: parsed.reason };
+  const entry = framing.entry ?? (ctx.platform === "windows" ? "binary" : null);
   return { kind: "plan", selectedVersion: framing.selectedVersion, childNowMs: framing.childNowMs,
-    classification: classifyChildUpdatePlan(parsed.value, { ...ctx, entry: framing.entry }) };
+    classification: classifyChildUpdatePlan(parsed.value, { homeVersion: ctx.homeVersion, desktopUpdateRequest: ctx.desktopUpdateRequest, entry }) };
 }
 
 export function classifyUpdateApply(result: SshResult): UpdateApplyVerdict {
