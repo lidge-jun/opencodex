@@ -729,6 +729,14 @@ export function emptyDraft(id = ""): ComboItem {
 const JEV_AUTO_MODEL_IDS = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna"] as const;
 export const OPENAI_AUTO_MODEL_IDS = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"] as const;
 
+// Editable routing hints adapted from https://learn.chatgpt.com/docs/models#where-each-model-shines.
+export const OPENAI_AUTO_MODEL_PROFILES: Readonly<Record<typeof OPENAI_AUTO_MODEL_IDS[number], string>> = {
+  "gpt-6-astra": "Highest-capability option for the hardest end-to-end reasoning and judgment across code, apps, and research. Reserve for demanding problems that need more capability than Sol, Terra, or Luna.",
+  "gpt-6.1-sol": "Efficient option for sustained coding, debugging, multi-file implementation, and repeated work across apps and documents. Use when a task needs more depth than Luna; reserve Astra for the hardest problems.",
+  "gpt-6.1-terra": "Efficient option for everyday writing, clear communication, visual interpretation, screenshots, and computer use across apps. Good for drafting, reviewing visual material, and filling forms from source documents.",
+  "gpt-6-luna": "Lowest-resource option for clear, bounded tasks with an obvious result: short replies, extraction, classification, formatting, transformations, and structured summaries. Prefer when deeper reasoning or visual interaction is unnecessary.",
+};
+
 /** Build the opt-in JEV Combo template from models that are available right now. */
 export function jevAutoDraft(
   models: readonly { provider: string; id: string }[],
@@ -736,11 +744,14 @@ export function jevAutoDraft(
   decisionProvider?: string | null,
   id = "jev-auto",
   modelIds: readonly string[] = JEV_AUTO_MODEL_IDS,
+  modelProfiles: Readonly<Record<string, string>> = {},
 ): ComboItem {
   const targets = modelIds.flatMap((id) => {
     const model = models.find((candidate) => candidate.id === id
       && (eligibleProviders === undefined || eligibleProviders.has(candidate.provider)));
-    return model ? [newComboTarget({ provider: model.provider, model: model.id })] : [];
+    return model ? [newComboTarget({
+      provider: model.provider, model: model.id, modelProfile: modelProfiles[model.id],
+    })] : [];
   });
   return {
     id,

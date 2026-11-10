@@ -368,6 +368,10 @@ runs through its existing provider connection.
 The `openai-auto` starter prefills GPT-6 Astra → GPT-6.1 Sol → GPT-6.1 Terra → GPT-6 Luna
 when those models are available through eligible providers. You can add, remove, or reorder
 targets before saving. Creating it does not change your default model or existing Combos.
+Each starter target includes editable capability notes adapted from
+[OpenAI's model guidance](https://learn.chatgpt.com/docs/models#where-each-model-shines).
+These notes help the router distinguish the models; you can edit or clear them in the Combo's
+target settings. They are saved as `targets[].modelProfile` when you create the Combo.
 
 You can also select this provider in an existing JEV Combo's **Decision method** section.
 The saved configuration keeps `strategy: "jev"` and names the provider in `decisionProvider`.

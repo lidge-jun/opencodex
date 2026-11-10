@@ -3,6 +3,7 @@ import {
   type ComboItem,
   COMBO_EFFORTS,
   OPENAI_AUTO_MODEL_IDS,
+  OPENAI_AUTO_MODEL_PROFILES,
   buildComboAttention,
   comboQuotaState,
   comboPublicModelId,
@@ -221,6 +222,7 @@ describe("combo-workspace-data", () => {
       { provider: "openai", model: "gpt-5.6-luna" },
     ]);
     expect(draft.targets.every(target => typeof target.clientKey === "string")).toBe(true);
+    expect(draft.targets.every(target => target.modelProfile === undefined)).toBe(true);
     draft.targets.splice(1, 1);
     expect(draft.targets.map(target => target.model)).toEqual(["gpt-6-astra", "gpt-5.6-luna"]);
   });
@@ -233,16 +235,39 @@ describe("combo-workspace-data", () => {
       { provider: "openai", id: "gpt-6.1-sol" },
       { provider: "openai", id: "gpt-5.6-sol" },
     ];
-    const draft = jevAutoDraft(models, new Set(["openai"]), "my-router", "openai-auto", OPENAI_AUTO_MODEL_IDS);
+    const draft = jevAutoDraft(models, new Set(["openai"]), "my-router", "openai-auto",
+      OPENAI_AUTO_MODEL_IDS, OPENAI_AUTO_MODEL_PROFILES);
     expect(draft.targets.map(({ provider, model }) => ({ provider, model }))).toEqual([
       { provider: "openai", model: "gpt-6.1-sol" },
       { provider: "openai", model: "gpt-6-luna" },
     ]);
     expect(draft).toMatchObject({ alias: "openai-auto", decisionProvider: "my-router", reasoningEffortMode: "adaptive" });
+    expect(draft.targets.map(target => target.modelProfile)).toEqual([
+      expect.stringContaining("sustained coding"), expect.stringContaining("clear, bounded tasks"),
+    ]);
 
-    const empty = jevAutoDraft(models, new Set(), "my-router", "openai-auto", OPENAI_AUTO_MODEL_IDS);
+    const empty = jevAutoDraft(models, new Set(), "my-router", "openai-auto",
+      OPENAI_AUTO_MODEL_IDS, OPENAI_AUTO_MODEL_PROFILES);
     expect(empty.targets).toHaveLength(1);
     expect(empty.targets[0]).toMatchObject({ provider: "", model: "" });
+    expect(empty.targets[0]!.modelProfile).toBeUndefined();
+  });
+
+  test("OpenAI Auto notes can be edited or cleared without changing future starters", () => {
+    const makeDraft = () => jevAutoDraft(OPENAI_AUTO_MODEL_IDS.map(id => ({ provider: "openai", id })),
+      undefined, "my-router", "openai-auto", OPENAI_AUTO_MODEL_IDS, OPENAI_AUTO_MODEL_PROFILES);
+    const draft = makeDraft();
+    for (const target of draft.targets) {
+      expect(target.modelProfile!.length).toBeGreaterThan(0);
+      expect(target.modelProfile!.length).toBeLessThanOrEqual(512);
+    }
+    draft.targets[0]!.modelProfile = "Our architecture review model.";
+    draft.targets[1]!.modelProfile = "";
+    const saved = toPutBody(draft).combo.targets;
+    expect(saved[0]!.modelProfile).toBe("Our architecture review model.");
+    expect(saved[1]).not.toHaveProperty("modelProfile");
+    expect(makeDraft().targets[0]!.modelProfile).toContain("hardest end-to-end");
+    expect(makeDraft().targets[1]!.modelProfile).toContain("sustained coding");
   });
 
   test("parseComboList accepts normalized GET rows and skips malformed entries", () => {
