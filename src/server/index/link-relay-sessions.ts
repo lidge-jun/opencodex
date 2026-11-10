@@ -133,15 +133,17 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         // Older peers may still use the ordinary key admission. Its response also owns a drain lease.
         release = acquire();
       }
-      // Counted only after session validation, so a refused request never counts. Both halves are idempotent and
-      // every path below (body end, cancel, abort before headers, HEAD, dispatch throw) calls this release.
-      let endActivity: ((record?: boolean) => void) | undefined;
-      if (options.activity && linkActivityCounts(url, req)) {
+      // Activity wraps the release every path below calls (body end, cancel, abort, HEAD, dispatch throw); both halves
+      // are idempotent. A relay-session request counts from session validation, so a refused proof never counts. A
+      // legacy key admission counts only once its response status is known and below 400: until then the key has not
+      // been accepted, so an unauthenticated or refused request never touches inFlight or lastDataEndAt.
+      const countsActivity = options.activity !== undefined && linkActivityCounts(url, req);
+      const beginActivity = (): void => {
         const lease = release;
-        const end = options.activity.begin(sessionLink);
-        endActivity = end;
+        const end = options.activity!.begin(sessionLink);
         release = () => { end(); lease(); };
-      }
+      };
+      if (countsActivity && sessionLink !== null) beginActivity();
       // Socket cancellation before headers is terminal too; an upstream handler that is
       // settling its own cleanup cannot keep a dead transport's listener lease forever.
       const beforeHeadersAbort = () => release();
@@ -150,8 +152,7 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
       try {
         const response = await dispatch(req, server);
         req.signal.removeEventListener("abort", beforeHeadersAbort);
-        // A legacy request the Home refused never ran a model turn: it ends without a data end.
-        if (endActivity && sessionLink === null && (response.status === 401 || response.status === 403)) endActivity(false);
+        if (countsActivity && sessionLink === null && response.status < 400 && !req.signal.aborted) beginActivity();
         if (!response.body || req.method === "HEAD") { release(); return response; }
         const reader = response.body.getReader();
         const catalogHash = options.catalogServed && req.method === "GET" && url.pathname === "/v1/catalog" && url.search === ""

@@ -79,13 +79,20 @@ describe("link child activity", () => {
     expect(activity.snapshot(OTHER, clock)).toMatchObject({ inFlight: 0, lastDataEndAt: 20 });
   });
 
-  test("a legacy request refused 401 or 403 records no data end", async () => {
+  test("a legacy request refused 400, 401 or 403 records no data end and never raises inFlight", async () => {
     const activity = createLinkActivity({ now: () => 99 });
     const h = relayHarness({ activity });
-    for (const status of [401, 403]) {
-      const response = await h.dispatch(h.request("/v1/responses", { method: "POST", body: "{}" }), async () => new Response("no", { status }));
+    const seen: number[] = [];
+    // 400 is the pre-auth refusal of an `Authorization: AgentAssertion` header on the hub-link ingress.
+    for (const status of [400, 401, 403]) {
+      const response = await h.dispatch(h.request("/v1/responses", { method: "POST", body: "{}" }), async () => {
+        seen.push(activity.snapshot(LINK, 99).inFlight);
+        return new Response("no", { status });
+      });
+      seen.push(activity.snapshot(LINK, 99).inFlight);
       await response.text();
     }
+    expect(seen).toEqual([0, 0, 0, 0, 0, 0]);
     expect(activity.snapshot(LINK, 99)).toEqual({ inFlight: 0, lastDataEndAt: null, observedSince: 99 });
   });
 

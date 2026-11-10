@@ -8,9 +8,9 @@ export interface LinkActivitySnapshot { inFlight: number; lastDataEndAt: number 
 export interface LinkActivity {
   /**
    * Start one relayed model request. null = a legacy key admission without a relay session; it counts against every
-   * link. The returned end is idempotent; `end(false)` closes the request without stamping lastDataEndAt.
+   * link. The returned end is idempotent and stamps lastDataEndAt.
    */
-  begin(linkId: string | null): (record?: boolean) => void;
+  begin(linkId: string | null): () => void;
   snapshot(linkId: string, now: number): LinkActivitySnapshot;
 }
 
@@ -41,11 +41,11 @@ export function createLinkActivity(deps: { now?: () => number } = {}): LinkActiv
       const entry = linkId === null ? legacy : entryFor(linkId);
       entry.inFlight += 1;
       let ended = false;
-      return (record = true) => {
+      return () => {
         if (ended) return;
         ended = true;
         entry.inFlight -= 1;
-        if (record) entry.lastDataEndAt = now();
+        entry.lastDataEndAt = now();
       };
     },
     snapshot(linkId) {
