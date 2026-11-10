@@ -26,6 +26,7 @@ import { ProviderApiKeyPausedError } from "./api-key-pause-state";
 // providers/quota.ts -- so the cached reader reaches the dispatch path without dragging the
 // probe machinery onto it.
 import { cachedApiKeyQuota } from "./quota-key-accounts";
+import { isDisplayOnlyQuota } from "./quota-types";
 
 // ---- cooldown state (in-memory, same as codex/routing.ts) ----
 
@@ -423,7 +424,7 @@ type ApiKeyPoolEntry = NonNullable<OcxProviderConfig["apiKeyPool"]>[number];
  */
 function keyHeadroom(providerName: string, provider: OcxProviderConfig, entry: ApiKeyPoolEntry): number | null {
   const quota = cachedApiKeyQuota(providerName, provider, entry.id, entry.key);
-  if (!quota) return null;
+  if (!quota || isDisplayOnlyQuota(quota)) return null;
   const percents = [
     quota.fiveHourPercent,
     quota.weeklyPercent,

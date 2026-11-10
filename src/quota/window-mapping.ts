@@ -27,7 +27,18 @@ type ProviderLikeQuota = {
   monthlyPercent?: number;
   monthlyResetAt?: number;
   customWindows?: ReadonlyArray<{ label: string; percent: number; resetAt?: number; modelId?: string }>;
+  unknownBudgetWindows?: ReadonlyArray<{ label: string; resetAt?: number }>;
 };
+
+/** Retain only recognized Mistral budgets with a valid, comparable reset clock. */
+export function mistralUnknownBudgetWindows(quota: ProviderLikeQuota): { window: string; resetAt: number }[] {
+  return (quota.unknownBudgetWindows ?? []).flatMap(entry => {
+    const match = /^(API budget|Vibe budget)(?: \((?:FREE|INDIVIDUAL|EDU|TEAM)\))?$/.exec(entry.label);
+    return match && typeof entry.resetAt === "number" && Number.isFinite(entry.resetAt) && entry.resetAt > 0
+      ? [{ window: `custom:${match[1]}`, resetAt: entry.resetAt }]
+      : [];
+  });
+}
 
 function window(
   label: string,

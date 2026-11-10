@@ -13,6 +13,8 @@ export type QuotaBarRow = {
   windowKey?: QuotaWindowKey;
   customLabel?: string;
   label: string;
+  /** Presentation-only text; identity stays in customLabel. */
+  displayLabel?: string;
   limitLabel: string;
   percent: number;
   resetAt?: number;
@@ -116,6 +118,7 @@ export function buildQuotaRows(quota: AccountQuota | null, plan: string | null |
         id: JSON.stringify([w.modelId ?? null, w.label, w.resetAt ?? null]),
         customLabel,
         label: localized,
+        ...(typeof w.displayLabel === "string" && w.displayLabel.trim() ? { displayLabel: w.displayLabel } : {}),
         limitLabel: localized,
         percent: w.percent,
         resetAt: w.resetAt,
@@ -281,6 +284,16 @@ export default function QuotaBars({
 }) {
   const { locale } = useI18n();
   const rows = buildQuotaRows(quota, plan, t);
+  const unknownWindows = quota?.unknownBudgetWindows ?? [];
+  const unknownRows = unknownWindows.map((window, index) => (
+    <div className="quota-stacked-row" key={`unknown-${window.label}-${index}`}>
+      <div className="quota-stacked-head">
+        <span className="quota-stacked-limit">{window.label}</span>
+        <span className="quota-stacked-reset muted">{formatResetFuture(window.resetAt, t, locale)}</span>
+      </div>
+      <span className="muted">{t("cws.quota.unknown")}</span>
+    </div>
+  ));
   // Rendered above the bars in both layouts. Null age (under a minute, or no observation)
   // renders nothing rather than "just now", which would be one more thing to read.
   const observedAge = observedAt === undefined ? null : formatObservedAge(observedAt, t);
@@ -289,7 +302,7 @@ export default function QuotaBars({
       {t("quota.observedAgo").replace("{age}", observedAge)}
     </p>
   );
-  if (rows.length === 0) {
+  if (rows.length === 0 && unknownWindows.length === 0) {
     if (!pending) return layout === "compact" && afterWeekly ? (
       <div className={`codex-account-quota-slot quota-compact${className ? ` ${className}` : ""}`}>{afterWeekly}</div>
     ) : null;
@@ -348,6 +361,7 @@ export default function QuotaBars({
               : isCustomQuotaWindowIncomplete(row.customLabel, incompleteCustomWindowLabels)}
           />
         ))}
+        {unknownRows}
       </div>
     );
   }
@@ -358,7 +372,7 @@ export default function QuotaBars({
         <Fragment key={row.id}>
           <QuotaRow
             credits={row.customLabel === SUBSCRIPTION_CREDITS_LABEL}
-            label={row.label}
+            label={row.displayLabel ?? row.label}
             percent={row.percent}
             resetAt={row.resetAt}
             threshold={threshold}
@@ -368,6 +382,7 @@ export default function QuotaBars({
           {row.windowKey === "weekly" && afterWeekly}
         </Fragment>
       ))}
+      {unknownRows}
       {!rows.some(row => row.windowKey === "weekly") && afterWeekly}
     </div>
   );
@@ -425,7 +440,7 @@ function StackedQuotaRow({ row, threshold, t, locale, incomplete }: {
     <div className={`quota-stacked-row${warn ? " quota-stacked-row--warn" : ""}${exhausted ? " quota-stacked-row--exhausted" : ""}`}>
       <div className="quota-stacked-head">
         <span className="quota-stacked-limit-group">
-          <span className="quota-stacked-limit">{row.limitLabel}</span>
+          <span className="quota-stacked-limit">{row.displayLabel ?? row.limitLabel}</span>
           {incomplete && (
             <span
               className="quota-window-partial"
