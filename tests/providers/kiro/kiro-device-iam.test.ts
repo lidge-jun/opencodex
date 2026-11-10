@@ -181,6 +181,19 @@ test("profile pagination rejects cycles instead of presenting a partial list", a
   expect(calls).toBeLessThanOrEqual(4);
 });
 
+test("profile pagination continues with only nextToken and merges every page", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const discovered = await listKiroIamProfiles(async (url, body) => {
+    if (!url.includes("us-east-1")) return { status: 200, errorType: "", data: { profiles: [] } };
+    bodies.push(body);
+    return body.nextToken === "page-2"
+      ? { status: 200, errorType: "", data: { profiles: [second] } }
+      : { status: 200, errorType: "", data: { profiles: [profile], nextToken: "page-2" } };
+  }, "private-access");
+  expect(bodies).toEqual([{}, { nextToken: "page-2" }]);
+  expect(discovered.map(item => item.arn)).toEqual([profileArn, second.arn]);
+});
+
 test("a region without permission is skipped, but transient discovery failure is not hidden", async () => {
   const discovered = await listKiroIamProfiles(async url => ({
     status: url.includes("eu-central-1") ? 403 : 200, errorType: "",
