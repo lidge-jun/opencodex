@@ -183,6 +183,12 @@ states its own terminal code remain terminal; a root that states a hop signal of
 code is treated as no code. Recognized target incompatibilities described later in this guide
 still advance.
 
+A streamed error event that carries no status of its own but an integral numeric `code` between
+400 and 599 is judged with that code as its HTTP status, so it gets the same decision and cooldown
+as the matching HTTP response. Before output starts, a generic streamed 400, 409, 413 or 422 therefore
+stops the combo as it does over HTTP, a 401, 402 or 403 cools the provider, and a recognized context
+overflow still advances.
+
 ### Round-robin: smooth weighted batches
 
 `round-robin` uses smooth weighted round-robin. A larger target weight gives that target a larger
