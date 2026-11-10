@@ -148,6 +148,21 @@ token。
   JSON。上游不返回 token 数量，因此 usage 采用估算值。
 - 经 `fetchResponse` 负责有界重试和分类/脱敏后的错误；非流式 parser 会排空同一 event stream，
   供 web-search loop 使用。
+- 每次请求最多发送 48 个客户端工具、96 KB 的转换后工具 JSON，并把每个工具说明截断到 1,024 个字符
+  （`gpt-5.6-sol` 为 9,216 个）。通过 tool search 加载的工具和 Codex code-mode 执行工具
+  优先入选，被省略的工具会告知模型。在代理环境中设置 `OCX_KIRO_TOOL_BUDGET=off` 可发送完整的
+  客户端目录，设置 `OCX_KIRO_TOOL_DESCRIPTION_LIMIT=off` 可发送完整说明。两者都在请求转换时读取，
+  对所有 Kiro 模型生效，其他限制保持不变。关闭预算后限制本身消失，不再有需要排序或省略的对象：
+  声明的全部工具按声明顺序上线，省略提示也随之消失，声明数量超过 Kiro 上限的客户端会收到上游
+  `ValidationException`，而不是被裁剪的目录。请求大小也会随客户端目录增长。这些开关面向已实测
+  能接受更大请求的账户，并不能让过大的目录变得安全。
+- 移除 Kiro 校验器拒绝的 JSON Schema 关键字（`pattern`、`minLength`、`maximum`、
+  `additionalProperties` 等 29 个），但保留探针在对应模型上实测通过的关键字。
+  `claude-opus-4.5` 全部保留；`claude-opus-5.5` 与 `claude-sonnet-5.5` 只保留
+  `pattern`、`maximum`，其余仍然移除，
+  因为没有探针向这两个模型发送过其他关键字。包括其余 Claude id 在内的其他 Kiro 模型全部移除。
+  例外按模型和关键字划分，是因为这条 wire 在 reasoning effort 上已经区分 Claude 模型，而 Kiro
+  拒绝的关键字不只是丢掉提示，还会让整个请求失败。
 ### 完成与原生 stop reason
 
 Kiro 的 assistant 文本本身没有可靠的回合结束标记，但终止的 `metadataEvent` 可能带有原生 `stopReason`。
@@ -175,12 +190,16 @@ GPT-5.6 系列使用 `additionalModelRequestFields.reasoning.effort`，`claude-o
 
 Kiro 对 `claude-opus-5`、`claude-opus-5.5`、`claude-opus-4.8`、`claude-opus-4.7`、
 `claude-opus-4.6`、`claude-sonnet-5.5`、`claude-sonnet-5`、`claude-sonnet-4.6` 和
-`claude-haiku-5.5` 接受 `output_config.effort`。有两个档位改用模拟 thinking 块而不是原生字段：
-`claude-opus-4.6` 和 `claude-sonnet-4.6` 拒绝原生 `xhigh`；该列表中除 `claude-opus-5` 和
-`claude-opus-5.5` 之外的所有模型都把 `minimal` 视为 Kiro 原生档位之外的 effort，因此保留模拟块而不会让请求失败。
-这两个 Opus 5 模型把 `minimal` 当作配置错误拒绝，与使用原生 effort 的 GPT 系列相同。
-`claude-haiku-4.5`、`claude-opus-4.5`、`claude-sonnet-4.5` 以及上面未列出的 Kiro 模型在每个 effort 上
-都使用模拟推理；提供 effort 选项并不代表原生支持。
+`claude-haiku-5.5` 在 `low`、`medium`、`high`、`xhigh` 和 `max` 上接受
+`output_config.effort`。有一个例外：`claude-opus-4.6` 和 `claude-sonnet-4.6` 拒绝原生
+`xhigh`，因此该档位保留模拟 thinking 块。
+
+Kiro 没有 `minimal` 档位。除 `claude-opus-5` 和 `claude-opus-5.5` 外的上述九个模型在
+`minimal` 时保留模拟块，而不是让启用原生 effort 之前可用的请求失败。这两个 Opus 5 模型以及使用
+原生 effort 的 GPT 模型会以 400 `invalid_request_error` 拒绝 `minimal`，并在错误中标明模型和
+effort。`ultra` 永远不会到达 Kiro：Responses 和 Messages 路径都会在适配器构建请求前把它降为
+`max`。`claude-haiku-4.5`、`claude-opus-4.5`、`claude-sonnet-4.5` 以及上面未列出的 Kiro
+模型在每个 effort 上都使用模拟推理；提供 effort 选项并不代表原生支持。
 
 ## `cursor`
 

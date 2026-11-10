@@ -126,6 +126,21 @@ token。
   JSON。上游不回傳 token 數量，因此 usage 採用估算值。
 - 經 `fetchResponse` 負責有界重試和分類/脫敏後的錯誤；非流式 parser 會排空同一 event stream，
   供 web-search loop 使用。
+- 每次請求最多傳送 48 個用戶端工具、96 KB 的轉換後工具 JSON，並把每個工具說明截斷到 1,024 個字元
+  （`gpt-5.6-sol` 為 9,216 個）。透過 tool search 載入的工具和 Codex code-mode 執行工具
+  優先入選，被省略的工具會告知模型。在代理環境設定 `OCX_KIRO_TOOL_BUDGET=off` 可傳送完整的
+  用戶端目錄，設定 `OCX_KIRO_TOOL_DESCRIPTION_LIMIT=off` 可傳送完整說明。兩者都在請求轉換時讀取，
+  對所有 Kiro 模型生效，其他限制維持不變。關閉預算後限制本身消失，不再有需要排序或省略的對象：
+  宣告的全部工具依宣告順序上線，省略提示也隨之消失，宣告數量超過 Kiro 上限的用戶端會收到上游
+  `ValidationException`，而不是被裁剪的目錄。請求大小也會隨用戶端目錄成長。這些開關面向已實測
+  能接受更大請求的帳戶，並不能讓過大的目錄變得安全。
+- 移除 Kiro 驗證器拒絕的 JSON Schema 關鍵字（`pattern`、`minLength`、`maximum`、
+  `additionalProperties` 等 29 個），但保留探針在對應模型上實測通過的關鍵字。
+  `claude-opus-4.5` 全部保留；`claude-opus-5.5` 與 `claude-sonnet-5.5` 只保留
+  `pattern`、`maximum`，其餘仍然移除，
+  因為沒有探針向這兩個模型傳送過其他關鍵字。包括其餘 Claude id 在內的其他 Kiro 模型全部移除。
+  例外按模型和關鍵字劃分，是因為這條 wire 在 reasoning effort 上已經區分 Claude 模型，而 Kiro
+  拒絕的關鍵字不只是丟掉提示，還會讓整個請求失敗。
 
 ### 完成與原生 stop reason
 
@@ -155,12 +170,16 @@ GPT-5.6 系列使用 `additionalModelRequestFields.reasoning.effort`，`claude-o
 
 Kiro 對 `claude-opus-5`、`claude-opus-5.5`、`claude-opus-4.8`、`claude-opus-4.7`、
 `claude-opus-4.6`、`claude-sonnet-5.5`、`claude-sonnet-5`、`claude-sonnet-4.6` 和
-`claude-haiku-5.5` 接受 `output_config.effort`。有兩個檔位改用模擬 thinking 區塊而非原生欄位：
-`claude-opus-4.6` 和 `claude-sonnet-4.6` 拒絕原生 `xhigh`；該清單中除 `claude-opus-5` 和
-`claude-opus-5.5` 以外的所有模型都把 `minimal` 視為 Kiro 原生檔位之外的 effort，因此保留模擬區塊而不會讓請求失敗。
-這兩個 Opus 5 模型把 `minimal` 當成設定錯誤拒絕，與使用原生 effort 的 GPT 系列相同。
-`claude-haiku-4.5`、`claude-opus-4.5`、`claude-sonnet-4.5` 以及上面未列出的 Kiro 模型在每個 effort 上
-都使用模擬推理；提供 effort 選項不代表原生支援。
+`claude-haiku-5.5` 在 `low`、`medium`、`high`、`xhigh` 和 `max` 上接受
+`output_config.effort`。有一個例外：`claude-opus-4.6` 和 `claude-sonnet-4.6` 拒絕原生
+`xhigh`，因此該檔位保留模擬 thinking 區塊。
+
+Kiro 沒有 `minimal` 檔位。除 `claude-opus-5` 和 `claude-opus-5.5` 外的上述九個模型在
+`minimal` 時保留模擬區塊，而不是讓啟用原生 effort 之前可用的請求失敗。這兩個 Opus 5 模型以及使用
+原生 effort 的 GPT 模型會以 400 `invalid_request_error` 拒絕 `minimal`，並在錯誤中標明模型和
+effort。`ultra` 永遠不會到達 Kiro：Responses 和 Messages 路徑都會在適配器建置請求前把它降為
+`max`。`claude-haiku-4.5`、`claude-opus-4.5`、`claude-sonnet-4.5` 以及上面未列出的 Kiro
+模型在每個 effort 上都使用模擬推理；提供 effort 選項不代表原生支援。
 
 ## `cursor`
 

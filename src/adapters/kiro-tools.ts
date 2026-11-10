@@ -21,8 +21,8 @@ const textEncoder = new TextEncoder();
 // but the `memories__*` tools (add_ad_hoc_note/read/search/list) emit pattern/length/range
 // constraints via schemars, which trip the validator. Strip them everywhere in the schema tree;
 // the constraints are advisory for the model, so dropping them does not change tool behavior.
-// Claude models accept every one of these keys (live probe on 2026-11-07, one key per request
-// plus a full Claude Code catalog), so their schemas keep the constraints the model needs.
+// PR #8451 reports keyword probes on claude-opus-4.5 and a constrained-tool probe on two
+// 5.5 models. Other Claude ids have no reported schema-keyword measurements.
 const KIRO_REJECTED_SCHEMA_KEYS = new Set([
   "additionalProperties",
   "pattern",
@@ -73,9 +73,35 @@ const SCHEMA_LITERAL_KEYS = new Set(["const", "enum", "default", "examples"]);
 
 const NO_SCHEMA_KEYS: ReadonlySet<string> = new Set();
 
-/** Schema keywords Kiro rejects for `modelId`: none for Claude models, the measured set otherwise. */
+/**
+ * The rejected-key set minus `accepted`: the keywords one model id was measured to take.
+ *
+ * `KIRO_REJECTED_SCHEMA_KEYS` is the default; a probe can only widen what one id accepts, so an
+ * exception is written as the keys that probe covered, never as "everything".
+ */
+function rejectAllExcept(accepted: readonly string[]): ReadonlySet<string> {
+  const keep = new Set(accepted);
+  return new Set([...KIRO_REJECTED_SCHEMA_KEYS].filter(key => !keep.has(key)));
+}
+
+// PR #8451 reports the rejected keys accepted on opus-4.5, with if/then/else grouped
+// in its count of 28. Its two 5.5 probes explicitly name only pattern and maximum.
+// Other keywords and model ids retain the default strip until supported by evidence.
+const KIRO_SCHEMA_KEY_EXCEPTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["claude-opus-4.5", NO_SCHEMA_KEYS],
+  ["claude-opus-5.5", rejectAllExcept(["pattern", "maximum"])],
+  ["claude-sonnet-5.5", rejectAllExcept(["pattern", "maximum"])],
+]);
+
+/**
+ * Schema keywords Kiro rejects for `modelId`.
+ *
+ * Keys are dropped unless a probe measured that exact id taking them, and only the keys that probe
+ * covered survive. An id nobody probed behaves like every other Kiro model, which is the shape that
+ * shipped before this exception existed.
+ */
 export function kiroRejectedSchemaKeys(modelId: string): ReadonlySet<string> {
-  return normalizeKiroModelId(modelId).startsWith("claude-") ? NO_SCHEMA_KEYS : KIRO_REJECTED_SCHEMA_KEYS;
+  return KIRO_SCHEMA_KEY_EXCEPTIONS.get(normalizeKiroModelId(modelId)) ?? KIRO_REJECTED_SCHEMA_KEYS;
 }
 
 function sanitizeSchemaMap(value: unknown, rejected: ReadonlySet<string> = KIRO_REJECTED_SCHEMA_KEYS): unknown {
