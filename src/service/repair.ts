@@ -13,7 +13,7 @@ import type { LaunchdInstallOutcome } from "./launchd";
 import { TASK, writeServiceInstallState, serviceSourceDir, resolveServiceOwnership, serviceLauncherPathDiagnostic } from "./state";
 import type { ServiceOwnership, ServiceOwnershipResolution } from "./state";
 import { installSystemd } from "./systemd";
-import { writeWindowsSchedulerAssets, reregisterWindowsSchedulerTask, windowsSchedulerRegistrationMatchesSnapshot, restoreWindowsSchedulerTaskIfAbsent, startWindows, stopWindows, statusWindowsXml, killWindowsServiceWrapperProcesses } from "./windows-ops";
+import { writeWindowsSchedulerAssets, reregisterWindowsSchedulerTask, windowsSchedulerRegistrationMatchesSnapshot, restoreWindowsSchedulerTaskIfAbsent, startWindows, stopWindows, statusWindowsXml, killWindowsServiceWrapperProcesses, snapshotWindowsSchedulerAssets } from "./windows-ops";
 import { probeWindowsSchedulerTask, SCHEDULER_SETTLE_DELAYS_MS, settleDelay } from "./windows-scheduler";
 import type { WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { taskXmlSection, taskXmlWithoutCommentsAndCdata, taskXmlElementCount, taskXmlOptionalValueEquals, windowsTaskRegistrationOwnedByAttempt, windowsTaskHasSessionRecoveryTriggers, windowsTaskRegistrationHealthy, windowsTaskRegistrationRefreshableLegacy } from "./windows-taskxml";
@@ -36,6 +36,8 @@ export interface RepairServiceDeps extends RuntimePreflightDeps {
   assertEnv?: () => void;
   assertAuth?: () => void;
   writeSchedulerAssets?: (runtime: DurableBunRuntime) => void;
+  /** Captures the current scheduler assets and returns their restore; see snapshotWindowsSchedulerAssets. */
+  snapshotSchedulerAssets?: () => () => void;
   stopScheduler?: () => void;
   /** Same installation-scoped wrapper cleanup used by service stop/install. */
   killServiceWrappers?: () => void;
@@ -334,7 +336,35 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     } else {
       try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
     }
-    (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)(runtime);
+    // The proxy is stopped now. A rewrite that fails (a read-only asset, an ACL refusal) must not
+    // leave it stopped: put the previous assets back and start the registration verified above,
+    // which still runs them, then report the original failure.
+    const restoreAssets = (deps.snapshotSchedulerAssets ?? snapshotWindowsSchedulerAssets)();
+    try {
+      (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)(runtime);
+    } catch (err) {
+      const recoveryErrors: unknown[] = [];
+      try { restoreAssets(); } catch (error) { recoveryErrors.push(error); }
+      if (recoveryErrors.length === 0) {
+        try {
+          await assertSchedulerSnapshotBeforeStart(
+            readSchedulerXml,
+            registeredXml,
+            deps.settleSchedulerRead ?? settleDelay,
+            "Task Scheduler registration changed after the failed asset write; it was preserved and not started.",
+            "Task Scheduler registration became unreadable after the failed asset write; it was preserved and not started.",
+          );
+          assertNoDesktopSupervision(deps.inspectSupervision, latch);
+          (deps.startScheduler ?? startWindows)();
+        } catch (error) {
+          recoveryErrors.push(error);
+        }
+      }
+      if (recoveryErrors.length > 0) {
+        throw new AggregateError([err, ...recoveryErrors], "Scheduler assets could not be written, and the previous registration was not restarted.");
+      }
+      throw err;
+    }
     // Rewriting the on-disk assets does not touch the definition Task Scheduler holds, so a
     // task registered by an older version keeps its old triggers forever: status reports it
     // stale, tells the user to run repair, and repair changes nothing it complains about.

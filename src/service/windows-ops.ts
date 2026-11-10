@@ -125,6 +125,38 @@ export function writeWindowsSchedulerAssets(runtime: DurableBunRuntime = durable
   );
 }
 
+/**
+ * The on-disk scheduler assets as they are now, so a failed rewrite can put back what the
+ * registered task already runs. The returned restore rewrites only assets whose bytes changed
+ * (one that failed to write is still intact) and removes one that did not exist before.
+ */
+export function snapshotWindowsSchedulerAssets(): () => void {
+  const assets = [
+    { path: windowsServiceScriptPath(), encoding: "utf8" as const },
+    { path: windowsLauncherVbsPath(), encoding: "utf16le" as const },
+    { path: windowsTaskXmlPath(), encoding: "utf16le" as const },
+  ].map(asset => {
+    try { return { ...asset, bytes: readFileSync(asset.path) as Buffer | null }; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ...asset, bytes: null };
+      throw error;
+    }
+  });
+  return () => {
+    for (const asset of assets) {
+      let current: Buffer | null;
+      try { current = readFileSync(asset.path); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        current = null;
+      }
+      if (asset.bytes === null) { if (current !== null) unlinkSync(asset.path); continue; }
+      if (current !== null && current.equals(asset.bytes)) continue;
+      writeServiceDefinitionFile(asset.path, asset.bytes.toString(asset.encoding), asset.encoding);
+    }
+  };
+}
+
 const WINDOWS_SCHEDULER_STAGE_PREFIX = "opencodex-service-stage-";
 
 const ownedWindowsSchedulerStages = new Set<string>();
