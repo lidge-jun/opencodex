@@ -61,6 +61,7 @@ async function invite(
     const code = await runHubCommand(args, {
       loadConfig: () => config,
       findLiveProxy: async () => (options.live === undefined ? LIVE : options.live),
+      restartHint: () => "Restart to apply: ocx restart.",
       requestPairingGrant: async (_target, browserOrigin) => {
         boundOrigin = browserOrigin;
         return options.result ?? {
@@ -345,6 +346,24 @@ describe("hub invite refuses before burning a code", () => {
     });
     expect(refused.code).toBe(1);
     expect(refused.err.join(" ")).toContain("(attestation)");
+    // Only an origin refusal can be cured by a restart, so other reasons do not suggest one.
+    expect(refused.err.join(" ")).not.toContain("Restart to apply");
+  });
+
+  test("#8319: a rejected mint names the bound origin, the settings, and the restart", async () => {
+    // The running hub checks the origin against the config it loaded at startup, while the CLI
+    // picks the origin from the config on disk. A corsAllowOrigins edit made after start is the
+    // reported trigger, and the reason code alone gave the operator nothing to act on.
+    const rejected = await invite(["invite"], hubConfig(), {
+      result: { kind: "unavailable", reason: "rejected" },
+    });
+    expect(rejected.code).toBe(1);
+    const stderr = rejected.err.join("\n");
+    expect(stderr).toContain("Minting a pairing code failed (rejected).");
+    expect(stderr).toContain("http://localhost:10100");
+    expect(stderr).toContain("corsAllowOrigins");
+    expect(stderr).toContain("hub.managementPublicOrigin");
+    expect(stderr).toContain("Restart to apply: ocx restart.");
   });
 
   test("an unknown subcommand prints usage rather than guessing invite", async () => {

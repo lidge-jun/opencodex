@@ -482,6 +482,10 @@ above already sets it. A whole-array set replaces the array, so when the hub alr
 run the line `invite` prints — it carries the existing ones plus the new origin. `ocx config get
 corsAllowOrigins` shows what is there now.
 
+A running hub reads `corsAllowOrigins` and `hub.managementPublicOrigin` only when it starts, while
+`invite` picks the origin from the config file. After changing either, restart the hub before
+inviting; `ocx config set` prints a reminder for both keys.
+
 `ocx hub invite --json` emits `{ code, expiresAt, dataUrl, managementUrl, command }` with `expiresAt`
 as ISO 8601. The code is a secret: single-use, five-minute lifetime, rate-limited at the hub, and not
 to be persisted, logged, or pasted into an issue. `--clients codex,claude` picks which client configs
@@ -768,6 +772,10 @@ For a service rollback, stop the branch service and repair the prior release aga
   loopback browser origin, so an origin-bound grant could never match. Nothing was minted. Run the
   `ocx config set corsAllowOrigins` line the error prints, with the joining machine's proxy port.
   See [Inviting another machine](#inviting-another-machine).
+- **`ocx hub invite` says `Minting a pairing code failed (rejected)`:** the running hub refused the
+  browser origin the invite names. It admits only the `hub.managementPublicOrigin` and
+  `corsAllowOrigins` it loaded at startup, so an entry added since then is not active yet. Restart
+  the hub (the error prints the restart command for this install) and invite again.
 - **`ocx hub invite` says the advertised data origin would be this machine's own loopback:** the
   bind is loopback-only or a wildcard and `hub.dataPublicOrigin` is unset, so there is no address
   to advertise and nothing guesses a tailnet or LAN one. Nothing was minted. Set

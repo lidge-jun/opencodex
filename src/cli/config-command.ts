@@ -142,6 +142,21 @@ function pathSegments(path: string): string[] {
   return segments;
 }
 
+/**
+ * #8319: `config set` writes the file, but a running proxy keeps the origin allow-list it loaded
+ * at startup: the pairing and CORS checks read that copy (`createGuiPairingGrant`,
+ * `isRemoteGuiBrowserOriginAllowed`), and nothing reloads it. Saying only "Set <path>." left an
+ * operator retrying a refused `ocx hub invite` against the old list. Limited to the keys known to
+ * be startup-only, so the note never claims a restart that is not needed.
+ */
+export function startupOnlyConfigNotes(path: string): string[] {
+  const segments = pathSegments(path);
+  const startupOnly = segments[0] === "corsAllowOrigins"
+    || (segments[0] === "hub" && (segments.length === 1 || segments[1] === "managementPublicOrigin"));
+  if (!startupOnly) return [];
+  return [`A running OpenCodex applies ${segments.join(".")} only when it starts; restart it to use the new value.`];
+}
+
 function getPath(root: unknown, path: string): unknown {
   let current = root;
   for (const segment of pathSegments(path)) {
@@ -298,7 +313,10 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
           : `config is ${outcome.reason}`);
       }
       printData({ ok: true, path, value: redact(savedValue, pathSegments(path).at(-1)) }, wantsJson,
-        [`${action === "unset" ? "Unset" : "Set"} ${path}.`]);
+        [
+          `${action === "unset" ? "Unset" : "Set"} ${path}.`,
+          ...(outcome.status === "committed" ? startupOnlyConfigNotes(path) : []),
+        ]);
       return;
     }
     if (action === "validate") {
