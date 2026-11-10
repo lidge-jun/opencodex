@@ -169,8 +169,7 @@ import {
 } from "./core-opaque-recovery";
 import type { RequestLogContext } from "../request-log";
 import { deferProtocolSafeResetRecovery, preflightComboStreamResponse } from "./combo-stream-preflight";
-import { authorizeResendForRecovery } from "../../lib/request-resend-gate";
-import { ambiguousResendAllowanceFor, selfContainedResponsesBody } from "./reset-replay";
+import { ambiguousResendAllowanceFor, ambiguousResendAuthorizer, nativePassthroughReplayJudgmentBody, selfContainedResponsesBody } from "./reset-replay";
 import { upstreamErrorMessageFromPayload, ENCRYPTED_FUNCTION_OUTPUT_REJECTION } from "../../lib/errors";
 import { isTransientConsoleGoUploadRejection } from "../../providers/opencode-zen-rate-limit";
 import { planReasoningEffortDowngrade } from "../../providers/reasoning-metadata";
@@ -774,7 +773,7 @@ export async function preparePassthroughExchange(
      */
     let selfContainedJudgment: boolean | undefined;
     const requestIsSelfContained = (): boolean =>
-      selfContainedJudgment ??= selfContainedResponsesBody(parsed._rawBody);
+      selfContainedJudgment ??= selfContainedResponsesBody(nativePassthroughReplayJudgmentBody(parsed));
     /**
      * The operator's replacement grant for THIS logical request.
      *
@@ -785,6 +784,7 @@ export async function preparePassthroughExchange(
      */
     const ambiguousResend = () =>
       ambiguousResendAllowanceFor(route.provider, requestIsSelfContained, claimAmbiguousResend);
+    const authorizeAmbiguousResend = ambiguousResendAuthorizer(ambiguousResend, () => safeHostLabel(request.url));
     /**
      * The pre-header row of the stage table, asked through the one gate.
      *
@@ -792,8 +792,7 @@ export async function preparePassthroughExchange(
      * the server tree; routing the answer through `authorizeResendForRecovery` here is what
      * keeps the decision derived from the table rather than restated as a boolean.
      */
-    const claimPreHeaderResend = (): boolean =>
-      authorizeResendForRecovery("pre-header", "connection-reset", ambiguousResend()).allowed;
+    const claimPreHeaderResend = (): boolean => authorizeAmbiguousResend("pre-header");
     /**
      * The one replacement send the ambiguous rows at the end of the recovery loop may buy: an SSE
      * body that died before any output, and a Codex WebSocket that died under its create frame
@@ -1870,7 +1869,7 @@ export async function preparePassthroughExchange(
       // Asked before the gate, which claims last: a replacement the budget cannot fund must not
       // spend the request's one grant.
       && remainingTransientSendBudget(transientSendAttempts()) > 0
-      && authorizeResendForRecovery(socketDeathStage, "connection-reset", ambiguousResend()).allowed
+      && authorizeAmbiguousResend(socketDeathStage)
     ) {
       try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
       console.warn(`[upstream-retry] codex websocket died before any Responses event (${safeHostLabel(request.url)}); `
@@ -1931,7 +1930,7 @@ export async function preparePassthroughExchange(
             // pre-header helper shares. A committed stage refuses here without touching the
             // allowance, which is what keeps a turn that already emitted output from draining
             // the replacement a later ambiguous reset would have been entitled to.
-            authorize: () => authorizeResendForRecovery(stage, "connection-reset", ambiguousResend()).allowed,
+            authorize: () => authorizeAmbiguousResend(stage),
             acceptResponse: candidate => {
               const type = candidate.headers.get("content-type")?.toLowerCase() ?? "";
               return type.includes("text/event-stream") || (!type && upstreamRequestsStream);
