@@ -1,5 +1,4 @@
 import { join } from "node:path";
-import { dlopen, ptr } from "bun:ffi";
 import { resolveTrustedWindowsSystemDirectory } from "../lib/windows-elevation";
 
 // NtQueryInformationProcess(ProcessCommandLineInformation) fills the buffer with a
@@ -45,15 +44,20 @@ export function decodeProcessCommandLineInformation(
  * current Windows images, so the spawned probes could not answer inside their bound and
  * a live, unchanged runtime read as unverified. The DLLs load from the GetSystemDirectoryW
  * path so the search order cannot substitute them. Returns null where Bun's FFI cannot run
- * (non-Windows, Windows ARM64), leaving the spawned probes as the only path.
+ * (non-Windows, Windows ARM64), leaving the spawned probes as the only path. bun:ffi is
+ * required lazily because every process-state importer loads this module on every platform.
  */
 function loadNativeReader(): NativeReader | null {
   if (nativeReader !== undefined) return nativeReader;
   nativeReader = null;
   if (process.platform !== "win32" || process.arch !== "x64") return null;
+  let ptr: typeof import("bun:ffi").ptr;
   let kernel32;
   let ntdll;
   try {
+    const ffi = require("bun:ffi") as typeof import("bun:ffi");
+    const { dlopen } = ffi;
+    ptr = ffi.ptr;
     const systemDirectory = resolveTrustedWindowsSystemDirectory();
     kernel32 = dlopen(join(systemDirectory, "kernel32.dll"), {
       OpenProcess: { args: ["u32", "i32", "u32"], returns: "u64" },
