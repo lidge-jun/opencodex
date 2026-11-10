@@ -152,18 +152,13 @@ chance of reuse, but does not guarantee a cache hit or remove token-throughput l
 
 Mistral uses one API-key provider for both Studio and Vibe keys. Key types and plan allowances
 are described in [Mistral's API-key documentation](https://docs.mistral.ai/admin/identity-access/api-keys);
-the proxy does not infer a subscription tier from the key. When the configured base URL is the
-canonical `https://api.mistral.ai/v1`, the dashboard reads the key's API and Vibe budgets from
-`https://api.mistral.ai/v1/billing/budget` and its plan from
-`https://api.mistral.ai/v1/billing/subscription`, using the same credential and egress as
-inference. A measured window shows its used and total amount, and the summary and popover keep the
-plan label (for example `EDU`) beside it. These budgets are display-only: they never rank keys,
-route requests, pause traffic, or take part in the quota pool. A recognized plan name is shown as
-reported, not as an inferred entitlement. A window with a missing, malformed, or non-positive budget,
-a missing or malformed currency, or an out-of-range percentage is shown as unknown rather than guessed; an
-unknown plan omits the plan label. A failed reading keeps the last measured budgets while they
-are fresh, and a 401, 403, or other non-retryable client refusal suppresses them; 402, 408, 429,
-5xx, and transport failures are transient and keep the last-good display. For every model, explicit upstream
+the proxy does not infer a subscription tier from the key. At `https://api.mistral.ai/v1`, the dashboard
+reads API and Vibe budgets from `/v1/billing/budget` and the plan from `/v1/billing/subscription`,
+using the inference credential and egress. Measured windows show usage, total and recognized plan name.
+Budgets are display-only: they do not rank keys, route or pause traffic, or enter the quota pool.
+Missing, malformed or non-positive budgets, malformed currencies and out-of-range percentages are unknown;
+unknown plan names are omitted. Fresh last-good readings survive 402, 408, 429, 5xx and transport failures,
+but 401, 403 and other non-retryable client refusals suppress them. For every model, explicit upstream
 `Retry-After` deadlines are shared between calls on the same credential and model. A 429
 without a retry time can activate a conservative 60-second recovery wait when valid minute
 counters show exhausted capacity, or the refused query's measured cost exceeds the remaining
