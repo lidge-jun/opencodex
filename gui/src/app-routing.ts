@@ -178,6 +178,7 @@ export function hashBelongsToPage(rawHash: string, page: Page): boolean {
   return rawHash === page
     || (page === "claude" && ["claude/code", "claude/desktop"].includes(rawHash))
     || (page === "logs" && rawHash === "logs/debug")
+    || (page === "startup" && rawHash === "startup/desktop")
     || (page === "usage" && rawHash === "usage/companion")
     || (page === "codex-set" && (rawHash === "codex-set/prompt" || rawHash === "codex-set/desktop"))
     || (page === "models" && (

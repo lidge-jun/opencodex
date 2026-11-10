@@ -136,6 +136,11 @@ when they verify that the app runs its bundled proxy, even without recorded owne
 CLI service repairs for that runtime. On macOS and Linux, turn on **Start at Login**
 in the OpenCodex menu instead of installing a background service. Startup safety credits the app only when its login registration is verified;
 if it cannot be verified, follow the Desktop guidance in status.
+In the dashboard's Getting started checklist, the last step under the app is
+**Turn on Start at Login** and opens the Desktop card on the Startup page. It is marked
+done only when Startup safety verifies the registration and the app runs the proxy. On
+Windows the registration is not verified, so the step stays unmarked; check the item in
+the OpenCodex menu yourself.
 The Startup page shows a quiet **Start at Login not verified** note when the app's
 registration cannot be checked. A verified disabled registration is shown as action required.
 On macOS the menu's **Start at Login** item is checked only when Startup safety would
