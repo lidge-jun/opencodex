@@ -117,9 +117,11 @@ existing file that classified as this projection, once they appear; a file at th
 not this projection is never registered or modified. A passive management read opens an existing
 projection read-only, requires this projection's full table set rather than a coincidental meta
 table, and only uses it when it is current for the exact ledger revision; otherwise it streams,
-and it never creates, writes or registers anything. Index reads retry contention on nine delays
-totaling about 6.4 s and run a foreign or unsafe open and a rebuild-required read through three
-short delays before degrading. Any other
+and it never creates, writes or registers anything. The passive read makes a single attempt and
+degrades to the streaming scan on any error; it does not retry. Only the active index read
+(`readUsageFilterCandidates`) retries contention on nine delays totaling about 6.4 s and runs a
+foreign or unsafe open and a rebuild-required read through three short delays before degrading.
+Any other
 index-side failure -- unwritable home,
 full disk, a corrupt file -- falls back to the authoritative streaming scan
 instead of failing a request the scan can answer; a failure to read `usage.jsonl` itself is
