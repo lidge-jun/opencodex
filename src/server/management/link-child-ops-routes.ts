@@ -16,7 +16,6 @@ import { auth, exactBody, fail, knownHostsFile, readStoreFor, runnerFor, type Li
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 const JOB_ID = /^ljob_[0-9a-f]{16}$/;
 const MAX_LINK_IDS = 64;
-const OPERATIONS_PATH = "/api/link/children/operations";
 const JOB_PATH = /^\/api\/link\/children\/jobs\/([^/]+)$/;
 
 let revisionMonitor: CatalogRevisionMonitor | undefined;
@@ -88,7 +87,7 @@ export async function handleLinkChildOpsRoutes(ctx: ManagementContext, state: Li
   const path = url.pathname;
   const denied = auth(ctx, "either");
   if (denied) return denied;
-  if (path === OPERATIONS_PATH && req.method === "POST") {
+  if (url.pathname === "/api/link/children/operations" && req.method === "POST") {
     if (ctx.config.runtimeRole === "client") return fail("runtime_role_client", "A Child runtime does not operate other Children.", 409);
     const operation = parseOperation(await readManagementJsonBodyOr(req, null));
     if (!operation) return fail("invalid_body", "The body must be exactly {op:\"observe\", linkIds}.", 400);
