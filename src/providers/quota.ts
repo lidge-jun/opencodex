@@ -21,7 +21,7 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isPassiveRead } from "../lib/passive-read";
 import type { ProviderQuota, QuotaFailureCode } from "./quota-types";
 import {
-  accountReportCurrent,
+  accountReportCurrent, observedQuotaFor,
   AUTHORITATIVE_EMPTY_QUOTA,
   bumpProviderQuotaInvalidationEpoch,
   captureProviderReportEpochs, providerReportEpochChanged,
@@ -211,7 +211,7 @@ function notifyProviderQuotaSnapshot(
   const observations = reports.filter(report => config.providers[report.provider]?.adapter !== "claude-cli").map(report => ({
     scope: report.provider,
     accountKey: providerObservationAccountKey(report.provider, config, report),
-    quota: report.quota,
+    quota: observedQuotaFor.get(report) ?? report.quota,
     ...(report.source === "mistral:budget" ? { retainUnknownWindows: mistralUnknownBudgetWindows(report.quota) } : {}),
   }));
   if (observations.length === 0) return;

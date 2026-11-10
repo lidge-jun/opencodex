@@ -10,11 +10,13 @@ options. Service diagnostics follow the [producer bounds](../ops/service-logging
 
 ## Context-window refusals
 
-`isDefiniteContextOverflow` in `src/combos/failover.ts` reads bounded innermost provider messages.
+`isDefiniteContextOverflow` in `src/lib/context-overflow-verdict.ts` (re-exported by
+`src/combos/failover.ts`) reads bounded innermost provider messages.
 OpenAI context-length wording keeps its substring match; Anthropic `prompt is too long: N tokens > M maximum`,
-Bedrock `input is too long for requested model` and `Please reduce the length of the messages or completion`
-count only at the start of the leaf message, so a validation error or SDK wrapper that echoes them is not
-evidence. Parameter validation (`invalid_value`/`invalid_type`, a `param` outside the conversation and token
+Bedrock `input is too long for requested model`, provider messages confirming the conversation/input has reached or passed its model context limit, a prompt that is too long for the model's context window, a window/length/limit that is full, exhausted, at its limit or has been exceeded, and `Please reduce the length of the messages or completion`
+count only in the innermost provider message (the anchored verdicts need the provider message to start with them, while the explicit too-long/context-window wording may appear inside it), so a validation error or SDK wrapper that echoes them is not
+evidence. A negator that governs the overflow wording denies it, and capacity prose about the service keeps its
+cooldown instead of authorizing a hop. Structured error messages and bounded string-valued JSON `error` fields can carry the leaf message. Parameter validation (`invalid_value`/`invalid_type`, a `param` outside the conversation and token
 budget fields, `Invalid '<x>'`, Pydantic `input_value=`) never counts. This shared detector grants a
 target-local hop before the generic HTTP 400 stop, without recording a cooldown. Code-only evidence
 beside unrelated prose, malformed envelopes and arbitrary shorten-parameter requests stay terminal.
