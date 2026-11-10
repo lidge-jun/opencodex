@@ -19,7 +19,7 @@
  */
 
 import { isAbsolute } from "node:path";
-import { POWERSHELL_ENCODED_MAX, windowsOcxArgv, windowsPinnedSyncArgv } from "./remote-windows";
+import { POWERSHELL_ENCODED_MAX, windowsGatedOcxArgv, windowsOcxArgv } from "./remote-windows";
 
 export type TunnelDirection = "R" | "L";
 
@@ -322,7 +322,55 @@ export function quoteRemote(argv: readonly string[]): string {
   }).join(" ");
 }
 
-const REMOTE_PINNED_SYNC_SCRIPT = `export PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+/** Minimum served ocx for a gated command. Closed set: the literals are spliced into awk and PowerShell. */
+export type GatedMinVersion = "2.93.0" | "2.97.0";
+export type GatedLacksMarker = "child-ocx-lacks-expect-link" | "child-ocx-lacks-orchestrated-update";
+export interface GatedOcxCommand {
+  minVersion: GatedMinVersion;
+  lacksMarker: GatedLacksMarker;
+  /** false: a selected ocx-child exits 121 with ocx-fanout:child-ocx-ephemeral before args run. */
+  acceptEphemeral: boolean;
+  /** true: print ocx-fanout:entry:pair|binary on stderr right after the selection marker. */
+  reportEntry: boolean;
+  /** true: print ocx-fanout:child-now:<epoch-ms> (the Child's own clock) after the entry marker. Plan probe only. */
+  reportClock: boolean;
+  /** With acceptEphemeral, print ocx-fanout:selected-kind:ocx-child when the selected candidate is ocx-child.
+   *  Set only by remotePinnedSyncArgv when a restart is requested (ocx-child ignores the restart flags). */
+  reportSelectedKind?: boolean;
+  args: readonly string[];
+}
+export const GATED_VERSION_PARTS: Readonly<Record<GatedMinVersion, readonly [string, string, string]>> = {
+  "2.93.0": ["2", "93", "0"], "2.97.0": ["2", "97", "0"],
+};
+const LACKS_MARKERS: ReadonlySet<string> = new Set(["child-ocx-lacks-expect-link", "child-ocx-lacks-orchestrated-update"]);
+export const LINK_ID_PATTERN = /^lnk_[0-9a-f]{16}$/;
+
+function assertGated(cmd: GatedOcxCommand): readonly [string, string, string] {
+  const parts = Object.hasOwn(GATED_VERSION_PARTS, cmd.minVersion) ? GATED_VERSION_PARTS[cmd.minVersion] : undefined;
+  if (!parts || !LACKS_MARKERS.has(cmd.lacksMarker)) throw new LinkSshArgumentError("invalid gated ocx command");
+  if (cmd.args.length === 0 || cmd.args.some(arg => arg.includes("\0"))) throw new LinkSshArgumentError("invalid gated ocx arguments");
+  return parts;
+}
+
+/**
+ * The pinned script for one gate: select a candidate, read its version inside the remote script, refuse below the
+ * minimum, then exec it with "$@". OCX_NO_DESKTOP_HANDOFF=1 makes a package launcher answer --version for itself and
+ * run the command itself, so a Desktop handoff can never pass the gate on behalf of an older launcher.
+ */
+function remoteGatedScript(cmd: GatedOcxCommand): string {
+  const [major, minor, patch] = assertGated(cmd);
+  const ephemeral = cmd.acceptEphemeral ? "" : `
+  case "\${c##*/}" in ocx-child*) printf '%s\\n' 'ocx-fanout:child-ocx-ephemeral' >&2; exit 121;; esac`;
+  // Only a pinned sync that carries a restart asks for this, so the plain sync's stderr stays exact.
+  const kind = cmd.acceptEphemeral && cmd.reportSelectedKind ? `
+  case "\${c##*/}" in ocx-child*) printf '%s\\n' 'ocx-fanout:selected-kind:ocx-child' >&2;; esac` : "";
+  const entry = cmd.reportEntry ? `
+  if [ -n "$ocx_entry" ]; then printf '%s\\n' 'ocx-fanout:entry:pair' >&2; else printf '%s\\n' 'ocx-fanout:entry:binary' >&2; fi` : "";
+  // Seconds resolution is enough for a 120 s window; a date(1) that prints nothing numeric prints no marker.
+  const clock = cmd.reportClock ? `
+  now=$(date +%s 2>/dev/null); case "$now" in ''|*[!0-9]*) ;; *) printf 'ocx-fanout:child-now:%s000\\n' "$now" >&2;; esac` : "";
+  return `export PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+export OCX_NO_DESKTOP_HANDOFF=1
 case "$(uname -s 2>/dev/null)" in Windows*|MSYS*|MINGW*|CYGWIN*) exit ${REMOTE_PLATFORM_UNSUPPORTED};; esac
 umask 077
 dir=$(mktemp -d "\${TMPDIR:-/tmp}/ocx-fanout.XXXXXXXX") || exit 127
@@ -353,22 +401,39 @@ try_ocx() {
       dash=index(v,"-"); if(dash) { pre=substr(v,dash+1); v=substr(v,1,dash-1); if(!idlist(pre,1)) {result=2; next} }
       if(split(v,a,/\\./)!=3) { result=2; next }
       for(i=1;i<=3;i++) if(a[i] !~ /^(0|[1-9][0-9]*)$/) { result=2; next }
-      c=cmp(a[1],"2"); if(!c)c=cmp(a[2],"93"); if(!c)c=cmp(a[3],"0"); if(c<0 || (!c && dash))result=1
+      c=cmp(a[1],"${major}"); if(!c)c=cmp(a[2],"${minor}"); if(!c)c=cmp(a[3],"${patch}"); if(c<0 || (!c && dash))result=1
     }
     NR>1 {result=2}
     END {exit result}
   ' 2>/dev/null
   status=$?
-  if [ "$status" -eq 1 ]; then printf '%s\\n' 'ocx-fanout:child-ocx-lacks-expect-link' >&2; exit 121; fi
-  if [ "$status" -ne 0 ]; then printf '%s\\n' 'ocx-fanout:child-ocx-version-unknown' >&2; exit 121; fi
+  if [ "$status" -eq 1 ]; then printf '%s\\n' 'ocx-fanout:${cmd.lacksMarker}' >&2; exit 121; fi
+  if [ "$status" -ne 0 ]; then printf '%s\\n' 'ocx-fanout:child-ocx-version-unknown' >&2; exit 121; fi${ephemeral}
   rm -rf "$dir"; trap - EXIT HUP INT TERM
-  printf 'ocx-fanout:selected:%s\\n' "$version" >&2
+  printf 'ocx-fanout:selected:%s\\n' "$version" >&2${kind}${entry}${clock}
   printf '%s\\n' 'ocx-fanout:stdout-begin'
-  exec "$c" \${ocx_entry:+"$ocx_entry"} sync --expect-link "$1" --json
+  exec "$c" \${ocx_entry:+"$ocx_entry"} "$@"
 }
 ${REMOTE_OCX_CANDIDATES}
 exit ${REMOTE_COMMAND_NOT_FOUND}`;
-
-export function remotePinnedSyncArgv(linkId: string, platform: "posix" | "windows" = "posix"): string[] {
-  return platform === "windows" ? windowsPinnedSyncArgv(linkId) : ["sh", "-c", REMOTE_PINNED_SYNC_SCRIPT, "ocx", linkId];
 }
+
+export function remoteGatedOcxArgv(cmd: GatedOcxCommand, platform: "posix" | "windows" = "posix"): string[] {
+  const versionParts = assertGated(cmd);
+  if (platform === "windows") return windowsGatedOcxArgv({ ...cmd, versionParts });
+  return ["sh", "-c", remoteGatedScript(cmd), "ocx", ...cmd.args];
+}
+
+export type ChildRestartRequest = "app-server" | "codex";
+export interface PinnedSyncOptions { restart?: ChildRestartRequest }
+const RESTART_FLAG: Readonly<Record<ChildRestartRequest, string>> = { "app-server": "--restart-app-server-only", codex: "--restart-codex" };
+
+export function remotePinnedSyncArgv(linkId: string, platform: "posix" | "windows" = "posix", opts: PinnedSyncOptions = {}): string[] {
+  if (!LINK_ID_PATTERN.test(linkId)) throw new LinkSshArgumentError("invalid link id");
+  if (opts.restart !== undefined && !Object.hasOwn(RESTART_FLAG, opts.restart)) throw new LinkSshArgumentError("invalid restart request");
+  const restart = opts.restart === undefined ? [] : [RESTART_FLAG[opts.restart]];
+  return remoteGatedOcxArgv({ minVersion: "2.93.0", lacksMarker: "child-ocx-lacks-expect-link", acceptEphemeral: true,
+    reportEntry: false, reportClock: false, reportSelectedKind: restart.length > 0,
+    args: ["sync", "--expect-link", linkId, "--json", ...restart] }, platform);
+}
+
