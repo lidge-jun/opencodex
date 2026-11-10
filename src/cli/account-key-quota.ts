@@ -27,6 +27,8 @@ function windowProjection(value: unknown): ProviderQuotaWindow {
   const label = optionalString(row, "label");
   if (label === undefined) throw new Error("Malformed API-key quota response.");
   const result: ProviderQuotaWindow = { label, percent: finite(row.percent) };
+  const displayLabel = optionalString(row, "displayLabel");
+  if (displayLabel !== undefined) result.displayLabel = displayLabel;
   if (row.resetAt !== undefined) result.resetAt = finite(row.resetAt);
   if (row.passiveObservedAt !== undefined) result.passiveObservedAt = finite(row.passiveObservedAt);
   if (row.scope !== undefined) {
@@ -59,6 +61,15 @@ function quotaProjection(value: unknown): ProviderQuota | null {
   if (row.customWindows !== undefined) {
     if (!Array.isArray(row.customWindows)) throw new Error("Malformed API-key quota response.");
     result.customWindows = row.customWindows.map(windowProjection);
+  }
+  if (row.unknownBudgetWindows !== undefined) {
+    if (!Array.isArray(row.unknownBudgetWindows)) throw new Error("Malformed API-key quota response.");
+    result.unknownBudgetWindows = row.unknownBudgetWindows.map(value => {
+      const item = record(value);
+      const label = optionalString(item, "label");
+      if (label === undefined) throw new Error("Malformed API-key quota response.");
+      return { label, ...(item.resetAt === undefined ? {} : { resetAt: finite(item.resetAt) }) };
+    });
   }
   if (row.creditsUsd !== undefined) result.creditsUsd = creditsProjection(row.creditsUsd);
   return result;
@@ -109,8 +120,17 @@ export function apiKeyQuotaText(row: AccountRow): string {
   }
   for (const window of quota.customWindows ?? []) {
     // Labels are upstream text: keep terminal controls out of the human table.
-    const label = terminalSafeText(window.label);
-    parts.push(`${label} ${window.percent}%${window.rejected ? " (rejected)" : ""}`);
+    const label = terminalSafeText(window.displayLabel ?? window.label);
+    // Only a probe that supplied its own display text adds the reset clock; every other
+    // provider keeps the dev-era text byte for byte.
+    const resetAt = window.displayLabel === undefined || window.resetAt === undefined ? undefined : new Date(window.resetAt);
+    const reset = resetAt && Number.isFinite(resetAt.getTime()) ? `; resets ${resetAt.toISOString()}` : "";
+    parts.push(`${label} ${window.percent}%${window.rejected ? " (rejected)" : ""}${reset}`);
+  }
+  for (const window of quota.unknownBudgetWindows ?? []) {
+    const resetAt = window.resetAt === undefined ? undefined : new Date(window.resetAt);
+    const reset = resetAt && Number.isFinite(resetAt.getTime()) ? `; resets ${resetAt.toISOString()}` : "";
+    parts.push(`${terminalSafeText(window.label)} unknown${reset}`);
   }
   if (quota.creditsUsd) {
     const c = quota.creditsUsd;

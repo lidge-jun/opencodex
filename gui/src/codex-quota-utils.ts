@@ -2,6 +2,8 @@ import { hasElapsedShortWindow, isTerminalShortWindow } from "../../src/codex/qu
 
 export interface QuotaWindowReading {
   label: string;
+  /** Presentation-only text; identity stays in label. */
+  displayLabel?: string;
   percent: number;
   resetAt?: number;
   modelId?: string;
@@ -30,6 +32,8 @@ export interface AccountQuota {
    * this field, matching the server, where routing reads only `customWindows`.
    */
   displayWindows?: QuotaWindowReading[];
+  /** Display-only budgets whose entitlement upstream did not report; never a usage percentage. */
+  unknownBudgetWindows?: { label: string; resetAt?: number }[];
   creditsUsd?: {
     used: number;
     limit: number;

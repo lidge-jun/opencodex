@@ -309,6 +309,7 @@ export interface CodexQuotaDto {
 
 export interface ProviderQuotaWindowDto {
   label: string;
+  displayLabel?: string;
   percent: number;
   resetAt?: number;
   modelId?: string;
@@ -322,6 +323,7 @@ export interface ProviderQuotaDto extends CodexQuotaDto {
   customWindows?: ProviderQuotaWindowDto[];
   /** Readings upstream reports as not in effect; shown, never routed on. */
   displayWindows?: ProviderQuotaWindowDto[];
+  unknownBudgetWindows?: { label: string; resetAt?: number }[];
   updatedAt?: number;
 }
 

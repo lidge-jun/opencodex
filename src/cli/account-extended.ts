@@ -4,6 +4,7 @@ import { anthropicProviderIdentityError, cmdAnthropicAccountThreshold } from "./
 import { isReservedCodexAccountWord, reportCodexAccountTargetError, resolveCodexAccountTarget } from "./account-target";
 import { hasPassiveAccountQuota } from "../providers/quota";
 import { isWeeklyAllowancePercent } from "../providers/quota-types";
+import { terminalSafeText } from "./runtime-api";
 import { closeSync, openSync, readSync, readFileSync, statSync } from "node:fs";
 import {
   MAX_ACCOUNT_PRIORITY,
@@ -285,13 +286,18 @@ function quotaParts(quota: ProviderQuotaDto): string[] {
   add("5h", quota.fiveHourPercent, quota.fiveHourResetAt);
   add("weekly", quota.weeklyPercent, quota.weeklyResetAt);
   add("monthly", quota.monthlyPercent, quota.monthlyResetAt);
-  for (const window of quota.customWindows ?? []) add(window.label, window.percent, window.resetAt);
+  for (const window of quota.customWindows ?? []) add(terminalSafeText(window.displayLabel ?? window.label), window.percent, window.resetAt);
   // Same rule as the dashboard: a routed row with the same label wins over a display-only one.
   const routed = new Set((quota.customWindows ?? []).map(window => window.label));
   for (const window of quota.displayWindows ?? []) {
     if (routed.has(window.label)) continue;
     const share = isWeeklyAllowancePercent(window.weeklyAllowancePercent) ? `up to ${window.weeklyAllowancePercent}% of weekly; ` : "";
-    add(window.label, window.percent, window.resetAt, `${share}not in effect`);
+    add(terminalSafeText(window.label), window.percent, window.resetAt, `${share}not in effect`);
+  }
+  for (const window of quota.unknownBudgetWindows ?? []) {
+    parts.push(`${terminalSafeText(window.label)} unknown`);
+    const reset = resetIso(window.resetAt);
+    if (reset) parts.push(`resets ${reset}`);
   }
   return parts;
 }

@@ -10,6 +10,16 @@
 
 export const PROVIDER_QUOTA_MAX_AGE_MS = 30 * 60_000;
 
+// Process-local authority: display readings must not acquire key-selection authority.
+const displayOnlyQuotas = new WeakSet<ProviderQuota>();
+export function markDisplayOnlyQuota(quota: ProviderQuota): ProviderQuota {
+  displayOnlyQuotas.add(quota);
+  return quota;
+}
+export function isDisplayOnlyQuota(quota: ProviderQuota): boolean {
+  return displayOnlyQuotas.has(quota);
+}
+
 /** Management-only eligibility evidence; private credential binding never leaves the server. */
 export type ProviderRoutingQuota =
   | { state: "unknown" }
@@ -17,6 +27,8 @@ export type ProviderRoutingQuota =
 
 export interface ProviderQuotaWindow {
   label: string;
+  /** Presentation text only; identity and routing use label and structured fields. */
+  displayLabel?: string;
   percent: number;
   resetAt?: number;
   /**
@@ -60,6 +72,8 @@ export interface ProviderQuotaCreditsUsd {
 }
 
 export interface ProviderQuota {
+  /** Display-only budget windows for which the upstream did not provide a usable entitlement. */
+  unknownBudgetWindows?: { label: string; resetAt?: number }[];
   /** Display-only subscription credits; not a routing or exhaustion window. */
   workbuddyCredits?: import("./workbuddy-credit-balance").WorkBuddyCreditBalance;
   fiveHourPercent?: number;
