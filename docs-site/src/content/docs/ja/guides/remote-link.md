@@ -85,9 +85,12 @@ ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
+ocx link check (--link-id <id> | --all) [--no-wait] [--json]
 ```
 
 対話型端末（TTY）でない場合、`--expect-fingerprint` は必須です。対話型端末では省略できますが、提示されたフィンガープリントを明示的に承認する必要があります。
+
+Home で `ocx link check (--link-id <id> | --all)` を実行すると、Home から追加した各 Child のインストール済みバージョン、インストール種別、更新経路を読み取ります。リンクの SSH 経由で Child の `ocx update --plan` を実行し（Child ごとに 60 秒、同時に 3 台まで）、計画を計算するだけで何も変更しません。2.97.0 より古い Child は `owner-action`（`legacy-ocx`）となり、バージョンは macOS と Linux では読み取り専用の SSH 呼び出しをもう 1 回行って、Windows ではリンク経由で報告されたバージョンから取得します。Child 側から接続したリンクと `ocx-child` の Child は SSH なしで報告されます。`ocx link status --json` は各行に `child` ブロック（バージョン、バージョン差、カタログの鮮度、アクティビティ、直近の操作）を追加します。詳細と終了コードは [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity)（英語）を参照してください。
 
 ## 関連ガイド
 
