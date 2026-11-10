@@ -113,6 +113,12 @@ describe("connect status lines", () => {
     expect(probes).toBe(1);
   });
 
+  test("a probe that throws degrades to unknown instead of failing the status command", async () => {
+    const link = { state: "connected", transport: "link", catalog: "present", token: "owned", rotation: "clean" } as ClientConnectionStatus;
+    const result = await withLinkTunnelStatus(link, async () => { throw new Error("probe exploded"); });
+    expect(result.linkTunnel).toEqual({ state: "unknown", reason: "runtime_unreadable" });
+  });
+
   const base: ClientConnectionStatus = {
     state: "connected", serverUrl: "http://127.0.0.1:40123", managementUrl: "http://127.0.0.1:40123",
     managementTransport: "direct", transport: "link", protocolVersion: 1, apiKeyId: "k1",
@@ -126,6 +132,8 @@ describe("connect status lines", () => {
     expect(lines[1]).toContain("Local Codex CLI: ready");
     expect(lines[2]).toBe("Link tunnel: down (home_unreachable)");
     expect(clientConnectionStatusLines({ ...base, linkTunnel: { state: "up" } })[2]).toBe("Link tunnel: up");
+    expect(clientConnectionStatusLines({ ...base, linkTunnel: { state: "unknown", reason: "runtime_not_running" } })[2])
+      .toBe("Link tunnel: unknown (runtime_not_running)");
   });
 
   test("a hub client prints no tunnel line", () => {

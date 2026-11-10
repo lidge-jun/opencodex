@@ -360,11 +360,14 @@ export async function withLinkTunnelStatus(
   probe: () => Promise<LinkTunnelStatus>,
 ): Promise<ClientConnectionStatus> {
   if (status.state !== "connected" || status.transport !== "link") return status;
-  return { ...status, linkTunnel: await probe() };
+  // An optional diagnostic: a probe that fails must not take the durable status down with it.
+  let linkTunnel: LinkTunnelStatus;
+  try { linkTunnel = await probe(); } catch { linkTunnel = { state: "unknown", reason: "runtime_unreadable" }; }
+  return { ...status, linkTunnel };
 }
 
 function linkTunnelLine(tunnel: LinkTunnelStatus): string {
-  return tunnel.state === "up" ? "Link tunnel: up" : `Link tunnel: ${tunnel.state} (${tunnel.reason})`;
+  return tunnel.state === "up" ? "Link tunnel: up" : `Link tunnel: ${tunnel.state} (${terminalSafeText(tunnel.reason)})`;
 }
 
 export function clientConnectionStatusLines(status: ClientConnectionStatus): string[] {
