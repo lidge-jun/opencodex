@@ -40,7 +40,7 @@ export async function probeAnthropicUsageQuota(accessToken: string): Promise<Ant
   const { buckets, familyEnumeration } = anthropicUsageBuckets(body);
   const shared: Partial<ProviderQuota> = {};
   const customWindows: ProviderQuotaWindow[] = [];
-  for (const { window, row, percentField } of buckets) {
+  for (const { window, row, percentField, weeklyAllowancePercent } of buckets) {
     const percent = normalizePercent(row[percentField]);
     const resetAt = normalizeResetAt(row.resets_at);
     if (window === "5h" || window === "weekly") {
@@ -48,7 +48,8 @@ export async function probeAnthropicUsageQuota(accessToken: string): Promise<Ant
       if (resetAt !== undefined) shared[window === "5h" ? "fiveHourResetAt" : "weeklyResetAt"] = resetAt;
     } else if (percent !== undefined) {
       const label = { fable: "Fable", opus: "Opus", sonnet: "Sonnet" }[window];
-      customWindows.push({ label, scope: "model", percent, ...(resetAt !== undefined ? { resetAt } : {}) });
+      customWindows.push({ label, scope: "model", percent, ...(resetAt !== undefined ? { resetAt } : {}),
+        ...(weeklyAllowancePercent !== undefined ? { weeklyAllowancePercent } : {}) });
     }
   }
   const quota: ProviderQuota = {

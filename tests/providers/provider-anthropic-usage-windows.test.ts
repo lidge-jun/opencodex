@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { probeAnthropicUsageQuota } from "../../src/providers/claude-cli-usage";
 import { rawAnthropicUsageWindows } from "../../src/providers/quota/anthropic-decision-windows";
-import { hasAnthropicFamilyEnumeration } from "../../src/providers/quota/anthropic-family-headers";
-import { anthropicModelPercents } from "../../src/oauth/anthropic-model-quota";
+import { hasAnthropicFamilyEnumeration, mergeAnthropicFamilyWindows, parseAnthropicFamilyHeaders } from "../../src/providers/quota/anthropic-family-headers";
+import { anthropicModelPercents, anthropicModelRankPercent, anthropicModelWeeklyPercent } from "../../src/oauth/anthropic-model-quota";
 import { resolveAnthropicAccountIdentity } from "../../src/oauth/anthropic-identity";
 import { providerQuotaWindows } from "../../src/quota-pool/assemble";
 import { pooledWindows } from "../../src/quota-pool/pooled";
@@ -179,3 +179,66 @@ for (const [status, failure] of [[401, "access_denied"], [429, "rate_limited"]] 
     expect(await probeAnthropicUsageQuota("synthetic-usage-bearer")).toEqual({ quota: null, failure });
   });
 }
+
+// Live /api/oauth/usage shape (2026-11-10): weekly_scoped_shares indexes the raw limits array.
+const fableShareBody = (fable: number, weekly: number, shares: unknown, extraFirst: unknown[] = []) => ({
+  limits: [...extraFirst, { kind: "session", percent: 3, is_active: true }, { kind: "weekly_all", percent: weekly, is_active: true },
+    { kind: "weekly_scoped", percent: fable, is_active: true, resets_at: weeklyReset, scope: { model: { id: null, display_name: "Fable" }, surface: null } }],
+  weekly_scoped_shares: shares,
+});
+
+test("Fable carries its weekly allowance and ranks on the weekly scale", async () => {
+  const tight = await parse(fableShareBody(60, 10, [{ limit_index: 2, used_percent_of_weekly: 30, allowance_percent_of_weekly: 50 }]));
+  expect(tight?.customWindows).toEqual([{ label: "Fable", scope: "model", percent: 60, resetAt: Date.parse(weeklyReset), weeklyAllowancePercent: 50 }]);
+  // 60% of a half-week allowance leaves 20 weekly points: rank at 80, while exhaustion stays at the raw 100.
+  expect(anthropicModelRankPercent(tight, "claude-fable-5-2")).toBe(80);
+  expect(anthropicModelWeeklyPercent(tight, "claude-fable-5-2")).toBe(60);
+  const roomy = await parse(fableShareBody(0, 70, [{ limit_index: 2, used_percent_of_weekly: 0, allowance_percent_of_weekly: 50 }]));
+  const rank = (quota: typeof tight) => Math.max(quota!.weeklyPercent!, anthropicModelRankPercent(quota, "claude-fable-5-2")!);
+  // Real Fable headroom: tight min(20, 90) = 20, roomy min(50, 30) = 30, so roomy must rank first.
+  expect(rank(roomy)).toBeLessThan(rank(tight));
+  expect(anthropicModelRankPercent(roomy, "claude-sonnet-5-5")).toBeUndefined();
+  expect(anthropicModelPercents(tight, "claude-fable-5-2").some(percent => percent >= 100)).toBe(false);
+  const spent = await parse(fableShareBody(100, 40, [{ limit_index: 2, allowance_percent_of_weekly: 50 }]));
+  expect(anthropicModelRankPercent(spent, "claude-fable-5-2")).toBe(100);
+});
+
+test("weekly share follows the raw limits index, including skipped leading rows", async () => {
+  const quota = await parse(fableShareBody(20, 10, [{ limit_index: 3, allowance_percent_of_weekly: 50 }], [{ kind: "future_kind", percent: 1 }]));
+  expect(quota?.customWindows?.[0]?.weeklyAllowancePercent).toBe(50);
+});
+
+for (const [name, shares] of [
+  ["a shared row", [{ limit_index: 1, allowance_percent_of_weekly: 50 }]],
+  ["an out-of-range index", [{ limit_index: 9, allowance_percent_of_weekly: 50 }]],
+  ["a fractional index", [{ limit_index: 2.5, allowance_percent_of_weekly: 50 }]],
+  ["a zero allowance", [{ limit_index: 2, allowance_percent_of_weekly: 0 }]],
+  ["an allowance above the week", [{ limit_index: 2, allowance_percent_of_weekly: 150 }]],
+  ["a malformed allowance", [{ limit_index: 2, allowance_percent_of_weekly: "x" }]],
+  ["conflicting shares", [{ limit_index: 2, allowance_percent_of_weekly: 50 }, { limit_index: 2, allowance_percent_of_weekly: 40 }]],
+  ["a non-array", { limit_index: 2, allowance_percent_of_weekly: 50 }],
+] as const) test(`weekly share ignores ${name}`, async () => {
+  const quota = await parse(fableShareBody(60, 10, shares));
+  expect(quota?.customWindows?.[0]).toEqual({ label: "Fable", scope: "model", percent: 60, resetAt: Date.parse(weeklyReset) });
+  expect(anthropicModelRankPercent(quota, "claude-fable-5-2")).toBe(60);
+});
+
+test("an inactive Fable row stays unpublished even with a share", async () => {
+  const body = { ...ultraUsage, weekly_scoped_shares: [{ limit_index: 1, used_percent_of_weekly: 0, allowance_percent_of_weekly: 50 }] };
+  expect((await parse(body))?.customWindows ?? []).toEqual([]);
+});
+
+test("a passive Fable header reading keeps the probed weekly allowance", () => {
+  const headers = new Headers({ "anthropic-ratelimit-unified-7d_oi-utilization": "0.3" });
+  const merged = mergeAnthropicFamilyWindows([{ label: "Fable", scope: "model", percent: 10, weeklyAllowancePercent: 50 }],
+    parseAnthropicFamilyHeaders(headers, now));
+  expect(merged).toEqual([{ label: "Fable", scope: "model", percent: 30, passiveObservedAt: now, weeklyAllowancePercent: 50 }]);
+});
+
+
+test("a usage probe without a share drops the previous weekly allowance", () => {
+  const merged = mergeAnthropicFamilyWindows([{ label: "Fable", scope: "model", percent: 10, weeklyAllowancePercent: 50 }],
+    [{ label: "Fable", scope: "model", percent: 20 }]);
+  expect(merged).toEqual([{ label: "Fable", scope: "model", percent: 20 }]);
+});
+

@@ -1,10 +1,10 @@
 // Holds INV-LINK-CHILD-01 from structure/overview.md; shared TypeScript/Rust golden conformance suite for native/ocx-child.
 import { createHash, createHmac } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { userInfo } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { fixturePath, repoPath } from "../helpers/repo-root";
+import { rustToolchainEnv } from "../helpers/rust-toolchain-env";
 import { linkRouteAllowed } from "../../src/link/routes";
 import { linkManagementRouteAllowed } from "../../src/link/management-routes";
 import { isDetachedEphemeralChildConfig, isEphemeralChildHealth } from "../../src/link/ephemeral-child";
@@ -633,20 +633,14 @@ describe("ocx-child shared golden conformance vectors (INV-LINK-CHILD-01)", () =
     }, 10100)).toBe(false);
   });
 
-  const exeSuffix = process.platform === "win32" ? ".exe" : "";
-  const realHome = process.env.OCX_REAL_HOME?.trim() || userInfo().homedir;
-  const cargoBin = Bun.which("cargo") ?? join(realHome, ".cargo", "bin", `cargo${exeSuffix}`);
-  const cargoAvailable = existsSync(cargoBin);
+  const cargo = rustToolchainEnv("cargo");
+  const cargoAvailable = cargo.bin !== null;
 
   test.skipIf(!cargoAvailable)("Rust conformance runner passes against the identical shared fixture", () => {
     const run = Bun.spawnSync(
-      [cargoBin, "test", "--locked", "--manifest-path", repoPath("native", "ocx-child", "Cargo.toml"), "--test", "conformance"],
+      [cargo.bin!, "test", "--locked", "--manifest-path", repoPath("native", "ocx-child", "Cargo.toml"), "--test", "conformance"],
       {
-        env: {
-          ...process.env,
-          RUSTUP_HOME: process.env.RUSTUP_HOME || join(realHome, ".rustup"),
-          CARGO_HOME: process.env.CARGO_HOME || join(realHome, ".cargo"),
-        },
+        env: cargo.env,
         stdout: "pipe",
         stderr: "pipe",
         timeout: 90_000,
@@ -655,6 +649,6 @@ describe("ocx-child shared golden conformance vectors (INV-LINK-CHILD-01)", () =
     if (run.signalCode) {
       throw new Error(`cargo test conformance terminated by signal ${run.signalCode} (90s timeout check):\n${run.stderr.toString()}`);
     }
-    expect(run.exitCode, run.stderr.toString()).toBe(0);
+    expect(run.exitCode, `${run.stderr.toString()}\ntoolchain: ${cargo.describe()}`).toBe(0);
   }, 90_000);
 });

@@ -48,7 +48,7 @@
  * `device=all`) still has to normalize every row in its window; the index makes the
  * selection exact, not sublinear.
  */
-import { Database } from "bun:sqlite";
+import { constants as sqliteConstants, Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync } from "node:fs";
 import { getConfigDir } from "../config";
@@ -87,6 +87,8 @@ const MAX_REFRESH_ATTEMPTS = 3;
 // asynchronously instead of parking the event loop behind another writer. A single ingest batch
 // or publish holds the write lock for a few milliseconds.
 const SQLITE_BUSY_TIMEOUT_MS = 250;
+/** Bound on the WAL kept between checkpoints; it is truncated to empty on the last close. */
+const RETAINED_WAL_LIMIT_BYTES = 4 * 1024 * 1024;
 const BATCH_BUSY_RETRIES = 3;
 const BATCH_BUSY_RETRY_MS = 5;
 const BUSY_RETRY_DELAYS_MS = [10, 25, 50] as const;
@@ -280,6 +282,8 @@ interface IndexMeta {
 let ingestFlight: { path: string; promise: Promise<UsageFilterIndexSnapshot> } | null = null;
 const ingestPassesByPath = new Map<string, number>();
 const rebuildRequestedPaths = new Set<string>();
+/** Index paths whose kept sidecars this process has already registered for uninstall. */
+const sidecarOwnershipChecked = new Set<string>();
 let testHooks: UsageFilterIndexTestHooks | null = null;
 
 export function usageFilterIndexPath(configDir: string): string {
@@ -498,6 +502,52 @@ function ensureSchema(db: Database, classification: "fresh" | "ours"): void {
   recreateSchema(db, { onlyIfStale: true });
 }
 
+/**
+ * Keep the WAL and shared-memory sidecars after the last connection closes.
+ *
+ * SQLite's default deletes both on the final close, so every filtered query created and removed two
+ * entries in the config directory. On Windows that churn is not free: the config directory's ACL
+ * memo is keyed on its change time, so the next config load re-ran icacls over the directory, the
+ * inherited-ACE rewrite moved usage.jsonl's ChangeTime, and both the usage aggregate and this
+ * index then rebuilt from the whole ledger. macOS's system SQLite already persists WAL; this makes
+ * every platform behave that way. Read-only connections never delete the sidecars, so only the
+ * connections that can write set it, and only after the file classified as this projection: a
+ * foreign WAL database keeps SQLite's default and leaves nothing behind.
+ *
+ * The writer also checkpoints with TRUNCATE before it closes (see refreshUsageFilterIndex), so a
+ * clean close leaves the kept WAL empty on every SQLite build: a large rebuild does not leave its
+ * bytes on disk, and no stale frames remain to replay into whatever file later sits at this path.
+ * The size limit bounds the WAL between checkpoints.
+ */
+function keepWalSidecars(db: Database): void {
+  db.fileControl(sqliteConstants.SQLITE_FCNTL_PERSIST_WAL, 1);
+  db.exec(`PRAGMA journal_size_limit = ${RETAINED_WAL_LIMIT_BYTES}`);
+}
+
+/**
+ * Register the WAL sidecars that now persist beside this projection.
+ *
+ * Creation registers the sidecar names up front, but an existing file skips that: a 0-byte
+ * projection left by a crash between the private create and the first open, or one whose names
+ * were never recorded. Its sidecars now persist and would otherwise survive uninstall. Called only
+ * after the file classified as this projection and WAL mode is on, so every sidecar present is
+ * this database's own. Sidecars appear only once SQLite has used the WAL, so the path is
+ * remembered only when both exist and were offered for registration; until then each open checks.
+ */
+function registerKeptSidecars(dir: string, path: string): void {
+  if (sidecarOwnershipChecked.has(path)) return;
+  // The same crash leaves the projection file itself unrecorded; it is this projection now.
+  recordOwnedConfigPath(dir, path);
+  let present = 0;
+  for (const suffix of ["-wal", "-shm"] as const) {
+    const sidecar = `${path}${suffix}`;
+    if (!existsSync(sidecar)) continue;
+    recordOwnedConfigPath(dir, sidecar);
+    present += 1;
+  }
+  if (present === 2) sidecarOwnershipChecked.add(path);
+}
+
 function openIndexForWrite(dir: string, path: string): Database {
   const existed = existsSync(path);
   preparePrivateSqliteDatabase(path);
@@ -508,6 +558,7 @@ function openIndexForWrite(dir: string, path: string): Database {
     db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
     const classification = classifyDatabase(db);
     if (classification === "foreign") throw new UsageFilterIndexForeignError();
+    keepWalSidecars(db);
     if (!existed) {
       // Register only names this module is about to create; an existing sidecar may belong to
       // something else and is never adopted.
@@ -522,6 +573,7 @@ function openIndexForWrite(dir: string, path: string): Database {
       hardenSecretPath(path, { required: false });
     }
     db.exec("PRAGMA journal_mode = WAL");
+    registerKeptSidecars(dir, path);
     ensureSchema(db, classification);
     return db;
   } catch (error) {
@@ -550,6 +602,7 @@ function openIndexForRead(path: string): Database {
     const db = new Database(path, { create: false });
     try {
       if (classifyDatabase(db) !== "ours") throw new UsageFilterIndexForeignError();
+      keepWalSidecars(db);
       return db;
     } catch (inner) {
       try { db.close(); } catch { /* already closed */ }
@@ -1077,6 +1130,10 @@ async function refreshUsageFilterIndex(
       }
       return await refreshWithRetry(db, dir, path);
     } finally {
+      // A reader in another process can still pin the WAL; then this checkpoint is partial (SQLite
+      // reports that as a result row, not an error) and a later writer's TRUNCATE empties it once
+      // no reader pins it. The close itself never empties a kept WAL that still has frames.
+      try { db.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } catch { /* the close below still runs */ }
       db.close();
     }
   })();
@@ -1407,5 +1464,6 @@ export function resetUsageFilterIndexForTests(): void {
   ingestFlight = null;
   ingestPassesByPath.clear();
   rebuildRequestedPaths.clear();
+  sidecarOwnershipChecked.clear();
   testHooks = null;
 }

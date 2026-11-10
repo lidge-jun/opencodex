@@ -434,6 +434,9 @@ describe("release pipeline contract", () => {
     expect(steps.some(step => /^\s*(?:bun install|npm (?:install|run|pack))\b/m.test(step.run ?? ""))).toBe(false);
     expect(steps.find(step => step.name === "Verify immutable npm receipt")?.run).toContain("sha256");
     expect(steps.find(step => step.id === "publication")?.run).toContain('npm publish "$NPM_TARBALL" --ignore-scripts');
+    // npm treats "npm-artifact/package.tgz" as the GitHub repo npm-artifact/package.tgz; only an
+    // explicitly local spec (./ or an absolute path) publishes the verified file.
+    expect(String(publish?.env?.NPM_TARBALL)).toMatch(/^(?:\.\/|\/)/);
     expect(publish?.if).toContain("inputs.dry-run != true");
   });
 

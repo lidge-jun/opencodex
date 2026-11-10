@@ -17,7 +17,7 @@ let calls: Array<{ method: string; path: string; body?: unknown }>;
 let status: Record<string, unknown>;
 let rank: Record<string, unknown>;
 let deleteReply: Record<string, unknown>;
-let postReply: () => Response;
+let postReply: () => Response | Promise<Response>;
 
 const PROFILE = { handle: "jun-dev", displayName: "Jun", avatar: "teal", connectedAt: "2026-11-01T00:00:00.000Z", lastSentDay: "2026-11-08", pendingDelete: false, revoked: false };
 
@@ -246,5 +246,29 @@ test("switching anonymous telemetry in Proxy details updates the card without wa
   });
   await settle(50);
   expect(card()).toBeNull();
+});
+
+
+test("Connect shows a spinner until the collector answers", async () => {
+  let release!: () => void;
+  postReply = () => new Promise<Response>(resolve => {
+    release = () => resolve(new Response(JSON.stringify({ ok: false, code: "collector_unavailable" }), { status: 502 }));
+  });
+  await mount();
+  await click(buttonByText("Connect"));
+  await type("handle", "jun");
+  await type("displayName", "Jun");
+  await click(host.querySelector('button[aria-label="blue"]')!);
+  await click(host.querySelector('input[name="acknowledgePublic"]')!);
+  const submit = host.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  expect(submit.querySelector("svg")).toBeNull();
+  await click(submit);
+  expect(submit.getAttribute("aria-busy")).toBe("true");
+  expect(submit.querySelector("svg.animate-spin")).not.toBeNull();
+  await act(async () => { release(); });
+  await settle(50);
+  expect(submit.getAttribute("aria-busy")).toBe("false");
+  expect(submit.querySelector("svg")).toBeNull();
+  expect(host.querySelector('[role="alert"]')).not.toBeNull();
 });
 

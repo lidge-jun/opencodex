@@ -14,6 +14,7 @@ import {
   type TelemetryStatusSnapshot,
 } from "../telemetry-api";
 import { Notice } from "../ui";
+import { IconSpinner } from "../icons";
 
 const CONSENT_DIALOG_SELECTOR = "dialog.telemetry-consent-overlay";
 
@@ -255,12 +256,14 @@ function TelemetryConsentDialog({
         <div className="modal-actions">
           <button
             type="button"
-            className="btn btn-primary"
+            className="btn btn-primary inline-flex items-center gap-2"
             disabled={submitting}
+            aria-busy={submitting}
             onClick={() => {
               void handleContinue();
             }}
           >
+            {submitting && <IconSpinner aria-hidden width={16} height={16} className="shrink-0 animate-spin motion-reduce:animate-none" />}
             {t("proxyV2.telemetryConsentContinue")}
           </button>
         </div>
