@@ -213,7 +213,11 @@ test("a later refresh does not take focus back, and a new arrival focuses again"
   const other = document.createElement("button");
   host.append(other);
   other.focus();
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 2100)); });
+  // Wait for Startup's stale retry (2 s) instead of racing a fixed sleep against it.
+  for (let waited = 0; reads < 2 && waited < 6000; waited += 100) {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 100)); });
+  }
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
   expect(reads).toBe(2);
   expect(document.activeElement).toBe(other);
   await act(async () => {
