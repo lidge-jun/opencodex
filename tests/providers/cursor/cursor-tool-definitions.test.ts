@@ -792,7 +792,9 @@ describe("Cursor code mode tool guidance", () => {
     if (!note) throw new Error("Expected Cursor tool guidance note");
 
     expect(note).toContain("is Codex code mode");
-    expect(note).toContain("remains callable at the top level as usual");
+    expect(note).toContain("is called directly, outside `exec`, as usual");
+    expect(note).not.toContain("callable at the top level");
+    expect(note).toContain("call `CallDynamicTool` with namespace `opencodex-responses`, `toolName`");
     expect(note).toContain("`apply_patch`");
     expect(note).not.toContain("do not call `exec_command`, `shell_command`, or `apply_patch` at the top level here");
     expect(note).toContain("do not call `exec_command` or `shell_command` at the top level here");
@@ -810,7 +812,9 @@ describe("Cursor code mode tool guidance", () => {
     if (!note) throw new Error("Expected Cursor tool guidance note");
 
     expect(note).toContain("is Codex code mode");
-    expect(note).toContain("remains callable at the top level as usual");
+    expect(note).toContain("is called directly, outside `exec`, as usual");
+    expect(note).not.toContain("callable at the top level");
+    expect(note).toContain("call `CallDynamicTool` with namespace `opencodex-responses`, `toolName`");
     expect(note).toContain("mcp__fs__read_file");
     expect(note).not.toContain("they are not separate top-level tools");
   });
