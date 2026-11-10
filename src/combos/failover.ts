@@ -670,16 +670,66 @@ function isReflectedValidationText(text: string): boolean {
   );
 }
 
+/**
+ * A moderation phrase echoed inside quotes is a reflected parameter value (`Invalid enum value
+ * 'blocked by moderation'`), not a verdict. Track quote state so verdict evidence must appear
+ * in prose; an apostrophe inside a word ("don't") is literal text, not a quote delimiter.
+ */
+function isInsideQuotedSpan(text: string, end: number): boolean {
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < end; i += 1) {
+    const ch = text[i];
+    if (ch === "\\") {
+      i += 1;
+      continue;
+    }
+    if (inDouble) {
+      if (ch === "\"") inDouble = false;
+      continue;
+    }
+    if (inSingle) {
+      if (ch === "'") inSingle = false;
+      continue;
+    }
+    if (ch === "\"") {
+      inDouble = true;
+      continue;
+    }
+    if (
+      ch === "'"
+      && !(i > 0 && i + 1 < text.length && /[A-Za-z]/.test(text[i - 1]) && /[A-Za-z]/.test(text[i + 1]))
+    ) {
+      inSingle = true;
+    }
+  }
+  return inSingle || inDouble;
+}
+
+function hasUnquotedOccurrence(text: string, needle: string): boolean {
+  let from = 0;
+  for (;;) {
+    const idx = text.indexOf(needle, from);
+    if (idx === -1) return false;
+    if (!isInsideQuotedSpan(text, idx)) return true;
+    from = idx + 1;
+  }
+}
+
+const MODERATION_REFUSAL_VERDICT_PHRASES = [
+  "refused by moderation",
+  "blocked by moderation",
+  "flagged by moderation",
+  "content management policy",
+];
+
 function namesModerationRefusal(text: string): boolean {
   if (isReflectedValidationText(text)) return false;
   const lower = text.toLowerCase();
-  return (
-    lower.includes("refused by moderation")
-    || lower.includes("blocked by moderation")
-    || lower.includes("flagged by moderation")
-    || lower.includes("content management policy")
-    || (lower.includes("moderation") && lower.includes("categories:"))
-  );
+  for (const phrase of MODERATION_REFUSAL_VERDICT_PHRASES) {
+    if (hasUnquotedOccurrence(lower, phrase)) return true;
+  }
+  return hasUnquotedOccurrence(lower, "moderation") && hasUnquotedOccurrence(lower, "categories:");
 }
 
 /**

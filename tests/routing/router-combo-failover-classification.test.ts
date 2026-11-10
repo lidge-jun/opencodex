@@ -843,6 +843,30 @@ describe("provider moderation refusal", () => {
     }
   });
 
+  test("quoted moderation phrases in validation values stay terminal", () => {
+    const reflected = [
+      "Invalid enum value 'blocked by moderation' for param 'prompt'",
+      'The value "blocked by moderation" is invalid',
+      "param 'mode' does not accept \"flagged by moderation\"",
+      "Unknown value 'content management policy' supplied for 'reason'",
+      "Unsupported value 'refused by moderation' at messages[0].content",
+    ];
+    for (const message of reflected) {
+      expect(isProviderModerationRefusal(400, message)).toBe(false);
+      expect(comboFailureDecision(400, message)).toBe("stop");
+
+      const body = JSON.stringify({ error: { message, param: "prompt" } });
+      expect(isProviderModerationRefusal(400, body)).toBe(false);
+      expect(comboFailureDecision(400, body)).toBe("stop");
+    }
+  });
+
+  test("truncated envelope quoting a moderation value stays terminal", () => {
+    const truncated = '{"error":{"message":"Invalid enum value \\"blocked by moderation\\" for param","param":"prompt"';
+    expect(isProviderModerationRefusal(400, truncated)).toBe(false);
+    expect(comboFailureDecision(400, truncated)).toBe("stop");
+  });
+
   test("truncated or malformed JSON with moderation wording in unrelated fields fails closed", () => {
     const malformed = '{"error":{"message":"Invalid input","note":"blocked by moderation"';
     expect(isProviderModerationRefusal(400, malformed)).toBe(false);
