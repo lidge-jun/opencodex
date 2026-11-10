@@ -57,6 +57,11 @@ export const PROVIDER_COMPAT_CARRY_FIELDS = [
   "singleLeadingSystemMessage",
   "reasoningWireFormat",
   "omitReasoningEffortWithToolsModels",
+  // Hosted-tool denials describe the same upstream, and the form sends neither. They travel
+  // together: carrying only the conditional list (#8204) would let a hosted-only request
+  // forward a tool the dropped unconditional list had denied.
+  "unsupportedHostedTools",
+  "unsupportedHostedToolsWithClientTools",
   ...RETRY_POLICY_FIELDS,
 ] as const satisfies readonly (keyof OcxProviderConfig)[];
 

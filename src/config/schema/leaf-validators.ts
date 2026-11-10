@@ -302,6 +302,23 @@ const providerNoProxySchema = z.unknown().superRefine((value, ctx) => {
 }).transform(value => value as string | string[] | undefined);
 
 /**
+ * A provider's hosted-tool denial list, validated against a closed vocabulary rather than
+ * accepted as free strings. The provider schema ends in `.passthrough()`, so a misspelled
+ * `web_serch` would otherwise be accepted, persisted, and strip nothing -- leaving the
+ * operator with the upstream 400 the field was set to prevent, and no message saying why
+ * (the `codexToolMode` lesson, #2106).
+ */
+function hostedToolDenialSchema(field: string) {
+  return z.array(z.string().min(1))
+    .transform(normalizeNonBlankStringArray)
+    .refine(
+      tools => tools.every(tool => DECLARABLE_HOSTED_TOOL_TYPES.has(tool)),
+      { message: `${field} accepts only hosted tool types: ${[...DECLARABLE_HOSTED_TOOL_TYPES].join(", ")}` },
+    )
+    .optional();
+}
+
+/**
  * Zod schema for one provider entry: known fields are validated strictly while unknown
  * fields pass through (preserved for runtime extensions).
  */
@@ -408,18 +425,9 @@ export const providerConfigSchema = z.object({
   omitReasoningEffortWithToolsModels: z.array(z.string().min(1))
     .transform(normalizeNonBlankStringArray)
     .optional(),
-  // Validated against a closed vocabulary rather than accepted as free strings. This
-  // schema ends in `.passthrough()`, so a misspelled `web_serch` would otherwise be
-  // accepted, persisted, and strip nothing -- leaving the operator with the upstream 400
-  // the field was set to prevent, and no message saying why (the `codexToolMode` lesson,
-  // #2106).
-  unsupportedHostedTools: z.array(z.string().min(1))
-    .transform(normalizeNonBlankStringArray)
-    .refine(
-      tools => tools.every(tool => DECLARABLE_HOSTED_TOOL_TYPES.has(tool)),
-      { message: `unsupportedHostedTools accepts only hosted tool types: ${[...DECLARABLE_HOSTED_TOOL_TYPES].join(", ")}` },
-    )
-    .optional(),
+  unsupportedHostedTools: hostedToolDenialSchema("unsupportedHostedTools"),
+  // Same closed vocabulary; applied only when the request also declares client tools (#8204).
+  unsupportedHostedToolsWithClientTools: hostedToolDenialSchema("unsupportedHostedToolsWithClientTools"),
   retryOn429: retryOn429PolicySchema.optional(),
   transientRetryOn5xx: transientRetryOn5xxPolicySchema.optional(),
   // Degrades to "absent" like `webSearchBridge`: a malformed hand edit of an opt-in feature

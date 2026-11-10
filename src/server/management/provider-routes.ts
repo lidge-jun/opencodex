@@ -721,23 +721,25 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
-  if (Object.hasOwn(rawBody, "unsupportedHostedTools")) {
-    const value = rawBody.unsupportedHostedTools;
+  // The conditional list (#8204) shares the unconditional list's vocabulary and clearing rules.
+  for (const field of ["unsupportedHostedTools", "unsupportedHostedToolsWithClientTools"] as const) {
+    if (!Object.hasOwn(rawBody, field)) continue;
+    const value = rawBody[field];
     if (value === null) {
-      delete next.unsupportedHostedTools;
+      delete next[field];
     } else {
-      const error = nonBlankStringArrayConfigError(value, "unsupportedHostedTools");
+      const error = nonBlankStringArrayConfigError(value, field);
       if (error) return { error };
       const tools = normalizeNonBlankStringArray(value as string[]);
       const unknownTool = tools.find(tool => !DECLARABLE_HOSTED_TOOL_TYPES.has(tool));
       if (unknownTool !== undefined) {
         return {
-          error: `unsupportedHostedTools must name only hosted tool types: `
+          error: `${field} must name only hosted tool types: `
             + `${[...DECLARABLE_HOSTED_TOOL_TYPES].join(", ")}`,
         };
       }
-      if (tools.length > 0) next.unsupportedHostedTools = tools;
-      else delete next.unsupportedHostedTools;
+      if (tools.length > 0) next[field] = tools;
+      else delete next[field];
     }
     touched = true;
   }
@@ -939,6 +941,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       noStructuredOutputModels: p.noStructuredOutputModels,
       noJsonSchemaModels: p.noJsonSchemaModels,
       unsupportedHostedTools: p.unsupportedHostedTools,
+      unsupportedHostedToolsWithClientTools: p.unsupportedHostedToolsWithClientTools,
       retainModels: p.retainModels,
       omitReasoningEffortWithToolsModels: p.omitReasoningEffortWithToolsModels,
       upstreamHttpVersion: p.upstreamHttpVersion,
