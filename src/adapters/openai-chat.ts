@@ -1,10 +1,5 @@
 import { withRequiredChatToolResult } from "./openai-chat/required-tool-result";
-import {
-  hasShrinkableOpenAIChatImages,
-  hasUndersizedOpenAIChatImages,
-  normalizeOpenAIChatImages,
-  upscaleUndersizedOpenAIChatImages,
-} from "./openai-chat-images";
+import { prepareOpenAIChatImages } from "./openai-chat-images";
 import { registryEntryForProviderDestination } from "../providers/registry";
 import { protectGlmSummaryBudget, resolveMaxTokens } from "./openai-chat/summary-budget";
 import { chatParallelToolCallsWireValue } from "./openai-chat/parallel-tool-calls";
@@ -98,6 +93,7 @@ function canSerializeOpenAIChatServiceTier(
 export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAdapter {
   let lastRequestedModelId: string | undefined;
   let freeformTools = new Map<string, FreeformToolIdentity>();
+  const minImageEdge = registryEntryForProviderDestination(provider)?.minImageEdge;
   return withRequiredChatToolResult(withOpenAIChatToolNames(toolNames => ({
     name: "openai-chat",
 
@@ -272,21 +268,9 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           ...(tierLog ? { tierLog } : {}),
         };
       };
-      const minImageEdge = registryEntryForProviderDestination(provider)?.minImageEdge;
-      const shrink = hasShrinkableOpenAIChatImages(messages);
-      if (shrink || (minImageEdge !== undefined && hasUndersizedOpenAIChatImages(messages, minImageEdge))) {
-        const abortSignal = incoming?.abortSignal;
-        const prepareImages = async (): Promise<void> => {
-          if (shrink) await normalizeOpenAIChatImages(messages, { tierBias: incoming?.imageTierBias, abortSignal });
-          // Budget normalization can floor a wide screenshot below the upstream minimum.
-          if (minImageEdge !== undefined) await upscaleUndersizedOpenAIChatImages(messages, minImageEdge, { abortSignal });
-        };
-        return prepareImages().then(finish, error => {
-          if (incoming?.abortSignal?.aborted) throw error;
-          return finish();
-        });
-      }
-      return finish();
+      const imageOptions = { tierBias: incoming?.imageTierBias, abortSignal: incoming?.abortSignal };
+      const prepared = prepareOpenAIChatImages(messages, minImageEdge, imageOptions);
+      return prepared ? prepared.then(finish) : finish();
     },
 
     async *parseStream(

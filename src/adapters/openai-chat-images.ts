@@ -1,6 +1,7 @@
 import { parseDataUrl } from "./image";
 import { sniffImageDimensions } from "./anthropic-image-guard";
 import { MAX_INPUT_PIXELS } from "./anthropic-image-codec";
+import { enterImageDecode } from "./anthropic-image-normalize";
 import {
   normalizeImageTargets,
   type NormalizeOptions,
@@ -120,15 +121,44 @@ export async function upscaleUndersizedOpenAIChatImages(
     const target = dims ? upscaledImageSize(dims.width, dims.height, minEdge) : null;
     if (source && target) jobs.push({ imageUrl, base64: source.base64, ...target });
   });
-  for (const job of jobs) {
+  const throwIfAborted = (): void => {
     if (options.abortSignal?.aborted) throw options.abortSignal.reason ?? new DOMException("Aborted", "AbortError");
+  };
+  for (const job of jobs) {
+    throwIfAborted();
+    // Decoded bitmaps share the process-wide decode bound with the other image normalizers.
+    const release = await enterImageDecode(options.abortSignal);
     try {
       const out = await upscale(Buffer.from(job.base64, "base64"), job.width, job.height);
       job.imageUrl.url = `data:${out.mediaType};base64,${out.data}`;
     } catch {
       // Keep the original image; the upstream reports its own validation error.
+    } finally {
+      release();
     }
   }
+  // A cancellation during the last resize must not let a request for a cancelled turn through.
+  throwIfAborted();
+}
+
+/**
+ * Image work the openai-chat adapter must finish before it builds the request, or null when
+ * there is none. Budget normalization runs first because it can floor a wide screenshot below
+ * the upstream minimum. A failure keeps the original images unless the request was cancelled.
+ */
+export function prepareOpenAIChatImages(
+  messages: unknown,
+  minImageEdge: number | undefined,
+  options: NormalizeOpenAIChatImagesOptions = {},
+): Promise<void> | null {
+  const shrink = hasShrinkableOpenAIChatImages(messages);
+  if (!shrink && (minImageEdge === undefined || !hasUndersizedOpenAIChatImages(messages, minImageEdge))) return null;
+  return (async () => {
+    if (shrink) await normalizeOpenAIChatImages(messages, options);
+    if (minImageEdge !== undefined) await upscaleUndersizedOpenAIChatImages(messages, minImageEdge, { abortSignal: options.abortSignal });
+  })().catch(error => {
+    if (options.abortSignal?.aborted) throw error;
+  });
 }
 
 /**
