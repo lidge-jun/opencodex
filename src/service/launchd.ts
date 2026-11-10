@@ -87,6 +87,7 @@ ${envLines}
  * process happens to be repairing.
  */
 const PLIST_PATH_ENTRY = /^(\s*<key>PATH<\/key><string>)([^\n]*)(<\/string>)$/m;
+const PLIST_INTERACTIVE_POLICY = /^[ \t]*<key>ProcessType<\/key><string>Interactive<\/string>\r?\n/m;
 
 function filterPlistPathVariable(plist: string): string {
   return plist.replace(PLIST_PATH_ENTRY, (_match, open: string, value: string, close: string) =>
@@ -95,7 +96,7 @@ function filterPlistPathVariable(plist: string): string {
 
 /**
  * The rendered plist with the PREVIOUS definition's `PATH` put back — or null when `PATH`
- * is not the only difference.
+ * and the addition of the Interactive policy are not the only differences.
  *
  * `buildPlist` bakes `process.env.PATH`, and `ocx service repair` is run by whatever has a
  * shell: a tray helper, `ocx update`'s child, an ssh session, a cron job. Each of those
@@ -114,7 +115,8 @@ function filterPlistPathVariable(plist: string): string {
  * install baked: that is the evidence that the running definition is the one on disk, which
  * is what makes keeping its PATH correct rather than a guess. Whenever anything ELSE about
  * the definition changed the plist is rewritten in full, PATH included, so a real
- * re-install still updates it.
+ * re-install still updates it. Adding the Interactive policy also retains the previous
+ * normalized PATH, but keeps the policy line so the caller still reloads the definition.
  */
 export function reusePreviousPlistPathVariable(previous: string, rendered: string): string | null {
   if (previous === rendered) return null;
@@ -127,7 +129,8 @@ export function reusePreviousPlistPathVariable(previous: string, rendered: strin
   // otherwise be re-expanded into the file.
   const adopted = rendered.replace(PLIST_PATH_ENTRY, (_match, open: string, _value: string, close: string) =>
     `${open}${previousPath}${close}`);
-  return adopted === normalizedPrevious ? normalizedPrevious : null;
+  return adopted.replace(PLIST_INTERACTIVE_POLICY, "") === normalizedPrevious.replace(PLIST_INTERACTIVE_POLICY, "")
+    ? adopted : null;
 }
 
 /** The homes a launchd plist pins, resolved once per definition. */
@@ -583,10 +586,12 @@ export interface LaunchdInstallOutcome {
  *     that PAIRS with the bootout target. Legacy `load -w` is domain-implicit: it acts on
  *     the caller's own bootstrap domain, so from ssh/cron it deleted the gui-domain job and
  *     registered nothing (defect 1a).
- *  4. Success needs `launchctl print` agreeing and an accepted bootstrap for changed bytes:
+ *  4. Verified success needs `launchctl print` agreeing and an accepted bootstrap for changed bytes:
  *     a command match alone cannot attest a new policy. Measured on macOS 27.0,
  *     `load -w` over a bootstrapped job exits 0 with "Load failed: 5" and does nothing,
  *     and `bootstrap` exits 5 with "Bootstrap failed: 5" for the same condition.
+ *     An unreadable post-bootstrap probe never triggers another eviction or rollback;
+ *     an accepted bootstrap warns, while a refused bootstrap throws with the new plist retained.
  *  5. On terminal failure restore the previous plist, try to bootstrap it back, and throw
  *     an error that says what the probe actually found — down, or up on a different
  *     command — and names the manual remedy.

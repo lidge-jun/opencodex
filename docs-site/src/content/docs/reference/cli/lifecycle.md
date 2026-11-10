@@ -825,8 +825,11 @@ environment on a later restart. After upgrading a version-manager installation, 
 The macOS agent uses launchd's `Interactive` resource policy because Codex and dashboard requests
 depend on its responsiveness. This avoids the default daemon CPU and I/O throttling under load.
 After upgrading an existing installation, `ocx service repair` applies this policy as well.
-If launchd refuses the changed definition, repair reports failure and restores the previous
-definition instead of claiming the new policy is active just because the command still matches.
+If launchd refuses the changed definition and its state can be checked, repair reports failure
+and attempts to restore the previous definition. A matching command alone cannot confirm the new policy.
+If launchd's state cannot be checked, repair keeps the new plist and any backup without another eviction:
+a refused bootstrap throws, while an accepted bootstrap reports an unverified reload with a warning.
+Inspect the job with `launchctl print gui/$(id -u)/com.opencodex.proxy` before retrying repair.
 Launchd restarts the proxy after a crash or failed restart handoff, but leaves it stopped when
 the service deliberately exits cleanly because the desktop app owns the runtime. Run
 `ocx service repair` once to apply this behavior to a service installed by an older version.

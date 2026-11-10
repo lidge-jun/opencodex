@@ -124,12 +124,14 @@ for (const liveClockReads of [1, 2]) {
     const owner = await holder(home);
     let calls = 0;
     let nowCalls = 0;
+    const timer = spyOn(globalThis, "setTimeout");
     const clock = spyOn(performance, "now").mockImplementation(() => nowCalls++ < liveClockReads ? 0 : 10_001);
     try {
       await expect(withCredentialPublicationFenceAsync(home, async () => { calls += 1; })).rejects.toMatchObject({ code: "SQLITE_BUSY" });
       expect(calls).toBe(0);
+      expect(timer).toHaveBeenCalledTimes(liveClockReads - 1);
     } finally {
-      clock.mockRestore(); owner.send("release"); await owner.exited;
+      clock.mockRestore(); timer.mockRestore(); owner.send("release"); await owner.exited;
       rmSync(home, { recursive: true, force: true });
     }
   });

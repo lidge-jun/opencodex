@@ -191,6 +191,33 @@ describe("installLaunchd: repair must not be an outage (#4236 defect 1)", () => 
     expect(readFileSync(plistPath, "utf8")).toBe(current);
   });
 
+  for (const transientPrefix of ["", "/tmp/fnm_multishells/1/bin:"]) {
+    test(`policy migration preserves the normalized installed PATH from a narrower repair environment (${transientPrefix || "stable"})`, () => {
+      const originalPath = process.env.PATH;
+      try {
+        const installedPath = "/opt/ocx-login-shell-only/bin:/usr/bin:/bin";
+        process.env.PATH = installedPath;
+        const expected = renderedPlist();
+        process.env.PATH = transientPrefix + installedPath;
+        const legacy = renderedPlist().replace(/\s*<key>ProcessType<\/key><string>Interactive<\/string>/, "");
+        process.env.PATH = "/usr/bin:/bin";
+        const plistPath = fixturePlist();
+        writeFileSync(plistPath, legacy);
+        const first = recordingLaunchctl({ bootstrap: [ok()] });
+
+        expect(installLaunchd({ launchctl: first.launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} }).reloaded).toBe(true);
+        expect(verbs(first.argv)).toContain("bootstrap");
+        expect(readFileSync(plistPath, "utf8")).toBe(expected);
+        const again = recordingLaunchctl({});
+        expect(installLaunchd({ launchctl: again.launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} }).reloaded).toBe(false);
+        expect(again.argv).toEqual([]);
+      } finally {
+        if (originalPath === undefined) delete process.env.PATH;
+        else process.env.PATH = originalPath;
+      }
+    });
+  }
+
   for (const status of [1, 5]) {
     test(`policy repair refuses a failed bootstrap despite the old command matching (${status})`, () => {
       const plistPath = fixturePlist();
