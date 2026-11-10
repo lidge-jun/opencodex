@@ -33,9 +33,10 @@ import {
   commandCodeProviderRoot,
   type ExportContext,
 } from "../../src/clients/config-export";
+import { defaultIntegrationIO, type IntegrationIO } from "../../src/integrations/config-io";
 import { setPath } from "../../src/integrations/merge";
 import { refreshOwnedCatalogIntegrations } from "../../src/integrations/catalog-refresh";
-import { LOOPBACK_API_KEY_PLACEHOLDER, OPENCODE_PROVIDER_ID } from "../../src/clients/config-export/constants";
+import { OPENCODE_PROVIDER_ID } from "../../src/clients/config-export/constants";
 import { MANAGED_PATH_TEMPLATES } from "../../src/integrations/mutation-plan";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
@@ -43,6 +44,7 @@ import { readIntegrationState } from "../../src/integrations/state";
 import {
   applyIntegration,
   disableIntegration,
+  overwriteIntegration,
   refreshIntegration,
   restoreIntegration,
   type IntegrationWriteInput,
@@ -402,19 +404,18 @@ describe("Command Code real integration writer root-precedence and lifecycle", (
 });
 
 /**
- * The desktop shell (`Command Code Desktop`, the app this integration is used
- * from on Windows/macOS) gates its workspace on a credential that lives OUTSIDE
- * `providers.json`: `checkCommandAuthStatus()` in its bundled harness answers
- * `authenticated: true` only for a `COMMAND_CODE_API_KEY` or an `apiKey` in
- * `~/.commandcode/auth.json`. It never looks at the keyless provider block, so
- * without a seed the app stops on a sign-in screen and asks for a subscription
- * the BYOK user does not have.
+ * Command Code's credential store (`~/.commandcode/auth.json`) is NOT this
+ * integration's file. The desktop app gates its workspace on a credential there,
+ * but that store is shared with real Command Code logins and every other
+ * provider's tokens; Command Code owns that file and its lifecycle.
  *
- * Reached by reading the shipped app (v0.1.60, `resources/app/out/main/index.js`
- * → `readAuthStatusStrict`) — the CLI has no such gate, which is why the
- * keyless form is correct for it and insufficient for the app.
+ * The product contract is therefore strict non-mutation: enabling Command Code
+ * writes only `providers.json`. The desktop user signs in themselves. Every case
+ * below is a behavior boundary on that promise, not an implementation detail —
+ * they assert the file's exact bytes and, where it matters, that the writer never
+ * even opens the path.
  */
-describe("Command Code desktop credential seed", () => {
+describe("Command Code desktop credential store is never written", () => {
   let base: string;
   let home: string;
   let store: IntegrationStateStore;
@@ -435,7 +436,7 @@ describe("Command Code desktop credential seed", () => {
   }
 
   beforeEach(() => {
-    base = mkdtempSync(join(tmpdir(), "cc-auth-seed-"));
+    base = mkdtempSync(join(tmpdir(), "cc-auth-no-mutation-"));
     home = join(base, "home");
     mkdirSync(join(home, ".commandcode"), { recursive: true });
     store = createIntegrationStateStore(join(base, "store", "integrations"));
@@ -447,47 +448,136 @@ describe("Command Code desktop credential seed", () => {
     return commandCodeAuthPath({}, home);
   }
 
-  test("enabling seeds the store the desktop gate reads", () => {
-    expect(applyIntegration(input()).ok).toBe(true);
+  function configPath(): string {
+    return commandCodeConfigPath({}, home);
+  }
 
-    const seeded = JSON.parse(readFileSync(authPath(), "utf8"));
-    // `checkCommandAuthStatus` returns on the first truthy `apiKey`; any string
-    // is enough, and the loopback placeholder is what the proxy admits.
-    expect(seeded.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
+  /** Records every IO call that names the vendor credential store. */
+  function spyingIO(): { io: IntegrationIO; touched: string[] } {
+    const touched: string[] = [];
+    const real = defaultIntegrationIO(store);
+    const note = (path: string) => {
+      if (path === authPath()) touched.push(path);
+    };
+    return {
+      touched,
+      io: {
+        ...real,
+        readText: path => {
+          note(path);
+          return real.readText(path);
+        },
+        statKind: path => {
+          note(path);
+          return real.statKind(path);
+        },
+        writeText: (path, text) => {
+          note(path);
+          real.writeText(path, text);
+        },
+        removeFile: path => {
+          note(path);
+          real.removeFile(path);
+        },
+        mkdirp: path => {
+          note(path);
+          real.mkdirp(path);
+        },
+      },
+    };
+  }
+
+  test("enabling an absent store creates no credential file", () => {
+    expect(existsSync(authPath())).toBe(false);
+
+    expect(applyIntegration(input()).ok).toBe(true);
+    expect(existsSync(authPath())).toBe(false);
+
+    expect(overwriteIntegration(input()).ok).toBe(true);
+    expect(existsSync(authPath())).toBe(false);
   });
 
-  test("a real login is never overwritten", () => {
-    const real = `${JSON.stringify({ apiKey: "sk-real", userName: "someone" }, null, 2)}\n`;
+  test("an existing real login is left byte-for-byte alone", () => {
+    const real = `${JSON.stringify({ apiKey: "fixture-vendor-key", userName: "fixture-user" }, null, 2)}\n`;
     writeFileSync(authPath(), real, "utf8");
 
     expect(applyIntegration(input()).ok).toBe(true);
     expect(readFileSync(authPath(), "utf8")).toBe(real);
+
+    expect(overwriteIntegration(input()).ok).toBe(true);
+    expect(readFileSync(authPath(), "utf8")).toBe(real);
   });
 
-  test("a store without a key keeps the other providers' credentials", () => {
+  test("a signed-out store is not resurrected by apply, overwrite or refresh", async () => {
+    // A deliberate sign-out empties `apiKey` while leaving the file behind.
+    const signedOut = `${JSON.stringify({ apiKey: "" }, null, 2)}\n`;
+    writeFileSync(authPath(), signedOut, "utf8");
+
+    expect(applyIntegration(input()).ok).toBe(true);
+    expect(readFileSync(authPath(), "utf8")).toBe(signedOut);
+
+    expect(overwriteIntegration(input()).ok).toBe(true);
+    expect(readFileSync(authPath(), "utf8")).toBe(signedOut);
+
+    await refreshIntegration(input());
+    expect(readFileSync(authPath(), "utf8")).toBe(signedOut);
+  });
+
+  test("apply and overwrite never read or write the credential path", () => {
+    // Strongest form of the promise: not a preserved write, no touch at all. A
+    // read is outside this integration's credential-store contract.
+    const spy = spyingIO();
+    expect(applyIntegration(input({ io: spy.io })).ok).toBe(true);
+    expect(spy.touched).toEqual([]);
+
+    const spy2 = spyingIO();
+    expect(overwriteIntegration(input({ io: spy2.io })).ok).toBe(true);
+    expect(spy2.touched).toEqual([]);
+
+    expect(existsSync(authPath())).toBe(false);
+  });
+
+  test("a concurrent vendor login or token refresh is not lost", () => {
+    // The store already holds a fresh vendor credential on disk, but the writer's
+    // view of it is stale/keyless.
+    const vendor = `${JSON.stringify({ apiKey: "fixture-fresh-vendor-key", userName: "fixture-user" }, null, 2)}\n`;
+    writeFileSync(authPath(), vendor, "utf8");
+
+    let authReads = 0;
+    const real = defaultIntegrationIO(store);
+    const staleIO: IntegrationIO = {
+      ...real,
+      readText: path => {
+        if (path === authPath()) {
+          authReads += 1;
+          // Simulate the read racing ahead of the vendor's write: report the
+          // keyless state that existed a moment ago, never the fresh token.
+          return { kind: "text", text: "{}" };
+        }
+        return real.readText(path);
+      },
+    };
+
+    expect(applyIntegration(input({ io: staleIO })).ok).toBe(true);
+
+    // The new contract never consults the file, so the vendor's token survives.
+    expect(authReads).toBe(0);
+    expect(readFileSync(authPath(), "utf8")).toBe(vendor);
+  });
+
+  test("an unparseable store is preserved", () => {
+    writeFileSync(authPath(), "{ not json", "utf8");
+    expect(applyIntegration(input()).ok).toBe(true);
+    expect(readFileSync(authPath(), "utf8")).toBe("{ not json");
+  });
+
+  test("another client's credentials in the shared store are untouched", () => {
     // auth.json is shared with the ChatGPT/Copilot sign-ins the app also writes.
-    writeFileSync(authPath(), JSON.stringify({ codex: { accessToken: "keep-me" } }, null, 2), "utf8");
+    const shared = `${JSON.stringify({ codex: { accessToken: "keep-me" } }, null, 2)}\n`;
+    writeFileSync(authPath(), shared, "utf8");
 
     expect(applyIntegration(input()).ok).toBe(true);
-    const seeded = JSON.parse(readFileSync(authPath(), "utf8"));
-    expect(seeded.codex).toEqual({ accessToken: "keep-me" });
-    expect(seeded.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
-  });
-
-  test("a deliberate sign-out is not re-seeded by a refresh", async () => {
-    expect(applyIntegration(input()).ok).toBe(true);
-    writeFileSync(authPath(), JSON.stringify({}, null, 2), "utf8");
-
-    // The block is still owned, but a catalog sync is not an enable.
-    const refreshed = await refreshIntegration(input());
-    expect(refreshed.ok).toBe(true);
-    expect(JSON.parse(readFileSync(authPath(), "utf8")).apiKey).toBeUndefined();
-  });
-
-  test("disabling leaves the store behind, so the app does not sign out", async () => {
-    expect(applyIntegration(input()).ok).toBe(true);
-    expect((await disableIntegration(input())).ok).toBe(true);
-    expect(JSON.parse(readFileSync(authPath(), "utf8")).apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
+    expect(readFileSync(authPath(), "utf8")).toBe(shared);
   });
 
   test("enabling a different client never touches the Command Code store", () => {
@@ -497,9 +587,30 @@ describe("Command Code desktop credential seed", () => {
     expect(existsSync(authPath())).toBe(false);
   });
 
-  test("an unparseable store is left alone rather than rewritten", () => {
-    writeFileSync(authPath(), "{ not json", "utf8");
-    expect(applyIntegration(input()).ok).toBe(true);
-    expect(readFileSync(authPath(), "utf8")).toBe("{ not json");
+  test("the provider config and lifecycle still work without touching the store", async () => {
+    const applied = applyIntegration(input());
+    expect(applied.ok).toBe(true);
+    expect(applied.state).toBe("current");
+
+    const providers = JSON.parse(readFileSync(configPath(), "utf8"));
+    expect(publishedCommandCodeRoot(providers)![OPENCODE_PROVIDER_ID]).toBeDefined();
+    expect(publishedCommandCodeRoot(providers)![OPENCODE_PROVIDER_ID]!.apiKey).toBe(false);
+    expect(existsSync(authPath())).toBe(false);
+
+    expect((await disableIntegration(input())).ok).toBe(true);
+    const disabled = JSON.parse(readFileSync(configPath(), "utf8"));
+    expect(publishedCommandCodeRoot(disabled)?.[OPENCODE_PROVIDER_ID]).toBeUndefined();
+    expect(existsSync(authPath())).toBe(false);
+  });
+
+  test("the credential path resolves beside providers.json, including on Windows", () => {
+    expect(commandCodeAuthPath({}, "/home/u")).toBe(join("/home/u", ".commandcode", "auth.json"));
+    // The same `HOME ?? USERPROFILE` resolution the client and the provider path use.
+    const envHome = "C:\\Users\\vendor";
+    expect(commandCodeAuthPath({ HOME: envHome }, undefined, "win32")).toBe(join(envHome, ".commandcode", "auth.json"));
+    const userProfile = "C:\\Users\\default";
+    expect(commandCodeAuthPath({ USERPROFILE: userProfile }, homedir(), "win32")).toBe(join(userProfile, ".commandcode", "auth.json"));
+    // No relocation override, matching `commandCodeHomeDir`.
+    expect(commandCodeAuthPath({ COMMANDCODE_HOME: "C:\\relocated" }, "/home/u")).toBe(join("/home/u", ".commandcode", "auth.json"));
   });
 });
