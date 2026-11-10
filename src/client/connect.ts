@@ -102,7 +102,7 @@ import { ClientLinkStateError, clearClientLinkState, readClientLinkState } from 
 import { isLinkPort } from "../link/ports";
 import { assertRouteIntentPort, clientSyncRuntimeGuard, ClientSyncRuntimeError } from "./sync-runtime";
 import { prepareConnectedRouteIntent, initialConnectRouteIntent, connectedRouteSelectedClients, applyConnectedRouteIntent } from "../integrations/route-intent-connected";
-import { clearRouteIntentReceipt, readRouteIntentReceiptStrict } from "../integrations/route-intent-state";
+import { clearRouteIntentReceipt, clearRouteIntentUnappliedProof, readRouteIntentReceiptStrict, writeRouteIntentUnappliedProof } from "../integrations/route-intent-state";
 import type { RouteIntentReceipt } from "../integrations/route-intent-contract";
 import { clearHomeRouteIntentRecord } from "./link-home";
 import { clearInitialRouteIntent, recordInitialRouteIntent } from "../integrations/route-intent-initial";
@@ -825,6 +825,8 @@ async function connectClientUnlocked(
         recordInitialRouteIntent(linkMetadata.linkId, routeIntent?.document, options.selectedClients);
         initialSelectionWritten = true;
       }
+      // No route apply has begun for this connection; the first one removes this proof.
+      if (linkMetadata) writeRouteIntentUnappliedProof(linkMetadata.linkId, connection.connectedAt);
       clearClientConnectPending(persisted.fingerprint);
       commitClientConnection(connection);
       committed = true;
@@ -874,6 +876,8 @@ async function connectClientUnlocked(
           try { clearInitialRouteIntent(linkMetadata.linkId); }
           catch { rollbackFailures.push("initial route selection rollback unavailable"); }
         }
+        // Bound to a connection that never committed, so it could never match; remove it anyway.
+        if (!committed && linkMetadata) { try { clearRouteIntentUnappliedProof(); } catch { /* matches nothing */ } }
         let nativeRestoreFailed = false;
         if (restoreNativeIntent && !committed && pendingConnectFingerprint) {
           const fingerprint = pendingConnectFingerprint;
@@ -1371,6 +1375,7 @@ export async function disconnectClient(
       // Its clients were restored by the route cleanup above, which phase gating never reruns.
       clearFileIntentOriginals();
       if (readRouteIntentReceiptStrict()?.linkId === connection.link?.linkId) clearRouteIntentReceipt();
+      clearRouteIntentUnappliedProof();
     }
     // Standalone native switches come back before the token that displaced them is removed.
     // The record is machine-scoped, so any transport drains one a crashed enrollment left.

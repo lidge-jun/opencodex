@@ -11,7 +11,8 @@ import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { ROUTE_CLIENT_IDS, type HomeRouteIntentDocument } from "../link/route-intent";
 import type { OcxClientConnectionConfig } from "../types";
 import type { RouteIntentReceipt } from "./route-intent-contract";
-import { effectiveRouteIntent, readLocalRouteIntentOff, readRouteIntentReceipt, readRouteIntentReceiptStrict, writeRouteIntentReceipt } from "./route-intent-state";
+import { clearRouteIntentUnappliedProof, effectiveRouteIntent, readLocalRouteIntentOff, readRouteIntentReceipt, readRouteIntentReceiptStrict,
+  writeRouteIntentReceipt } from "./route-intent-state";
 import { resolveInitialRouteIntent, initialRouteOutcomeMetadata } from "./route-intent-initial";
 import { LINK_ROUTE_CATALOG_PATH } from "../link/management-routes";
 import { MAX_ROUTE_CATALOG_BYTES, parseRouteCatalogFacts } from "./route-intent-catalog";
@@ -219,6 +220,8 @@ export async function applyConnectedRouteIntent(
   const store = options.store ?? createIntegrationStateStore();
   withClientLifecycleSync(() => {
     guard();
+    // An apply begins here: from now on only a receipt can prove what this link left behind.
+    clearRouteIntentUnappliedProof(options.statePath);
     // Write-ahead, before any client changes: which file integrations were standalone. Only a
     // receipt read strictly proves a first apply; a corrupt one refuses here, before an owner the
     // link created could be recorded as standalone and the receipt naming it replaced.

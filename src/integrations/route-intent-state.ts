@@ -71,6 +71,37 @@ export function clearRouteIntentReceipt(statePath = routeIntentStatePath()): voi
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
 }
 
+/**
+ * Link-bound proof that no route apply has begun for one committed Link connection. Connect writes
+ * it with the connection; the first route apply removes it before changing any client. Disconnect
+ * reads a matching proof as evidence that a missing receipt was never written, so a `--no-sync`
+ * enrollment over standalone integrations can still disconnect. Anything unreadable is no proof.
+ */
+export interface RouteIntentUnappliedProof { version: 1; linkId: string; connectedAt: string }
+const UNAPPLIED_PROOF = "unapplied.json";
+
+export function writeRouteIntentUnappliedProof(linkId: string, connectedAt: string, statePath = routeIntentStatePath()): void {
+  if (!/^lnk_[0-9a-f]{16}$/.test(linkId) || !Number.isFinite(Date.parse(connectedAt))) throw new Error("Invalid route intent apply proof");
+  assertNotRealHomeUnderTest(statePath);
+  mkdirSync(statePath, { recursive: true, mode: 0o700 });
+  atomicWriteFileNoFollow(join(statePath, UNAPPLIED_PROOF), JSON.stringify({ version: 1, linkId, connectedAt } satisfies RouteIntentUnappliedProof));
+}
+
+export function readRouteIntentUnappliedProof(statePath = routeIntentStatePath()): RouteIntentUnappliedProof | null {
+  let raw: unknown;
+  try { raw = readJson(join(statePath, UNAPPLIED_PROOF), 4 * 1024); } catch { return null; }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) || Object.keys(raw).sort().join(",") !== "connectedAt,linkId,version") return null;
+  const value = raw as Record<string, unknown>;
+  return value.version === 1 && typeof value.linkId === "string" && /^lnk_[0-9a-f]{16}$/.test(value.linkId)
+    && typeof value.connectedAt === "string" ? { version: 1, linkId: value.linkId, connectedAt: value.connectedAt } : null;
+}
+
+export function clearRouteIntentUnappliedProof(statePath = routeIntentStatePath()): void {
+  assertNotRealHomeUnderTest(statePath);
+  try { unlinkSync(join(statePath, UNAPPLIED_PROOF)); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+}
+
 /** true opts out; false drops the override and inherits the Home again. Never enables locally. */
 export function setLocalRouteIntentOff(client: RouteClientId, off: boolean, statePath = routeIntentStatePath()): void {
   if (!ROUTE_CLIENT_IDS.includes(client) || typeof off !== "boolean") throw new Error("Invalid local route intent override");

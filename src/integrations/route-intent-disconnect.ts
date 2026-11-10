@@ -5,7 +5,7 @@ import { readClientConnectionState, sameClientConnectionOwner } from "../client/
 import { withClientLifecycle, withClientLifecycleSync, type ClientLifecycleLockDeps } from "../client/lifecycle-lock";
 import { readDesktopDisconnectReceipt, type DesktopDisconnectReceipt } from "../claude/desktop-remote-store";
 import { readServiceApiTokenState } from "../lib/service-secrets";
-import { readLocalRouteIntentOff, readRouteIntentReceiptStrict } from "./route-intent-state";
+import { readLocalRouteIntentOff, readRouteIntentReceiptStrict, readRouteIntentUnappliedProof } from "./route-intent-state";
 import { homeRouteIntentPath } from "../client/link-home";
 import type { OcxClientConnectionConfig } from "../types";
 
@@ -47,14 +47,21 @@ export async function cleanupConnectedRouteIntent(
       const { readIntegrationState } = await import("./state");
       const { listAsideProfileStores } = await import("./aside-profile-context");
       const store = createIntegrationStateStore();
-      const owned = Object.keys(store.readRecordsStrict()).length > 0
-        || listAsideProfileStores(store).some(child => Object.keys(child.store.readRecordsStrict()).length > 0);
+      const records = store.readRecordsStrict();
+      // Connect proved, for this exact connection, that no route apply has begun (`--no-sync`, an
+      // older Home). An ownership record then predates the link: it is the person's standalone
+      // integration, which disconnect keeps. Unowned routing residue still refuses below.
+      const proof = readRouteIntentUnappliedProof();
+      const neverApplied = !homeReceiptPresent && proof?.linkId === connection.link.linkId && proof.connectedAt === connection.connectedAt;
+      const owned = !neverApplied && (Object.keys(records).length > 0
+        || listAsideProfileStores(store).some(child => Object.keys(child.store.readRecordsStrict()).length > 0));
+      const standalone = (id: string) => neverApplied && records[id as keyof typeof records] !== undefined;
       const config = loadConfig();
       // Older Homes and --no-sync may never invoke the controller. Only disk absence,
       // not selectedClients alone, proves those file clients have nothing to drain.
-      const unproved = connection.selectedClients.some(id => id !== "codex" && id !== "claude"
+      const unproved = connection.selectedClients.some(id => id !== "codex" && id !== "claude" && !standalone(id)
         && (!isIntegrationClientId(id) || readIntegrationState({ clientId: id, config, port: config.port, models: [], store }).state !== "absent"));
-      const droidUnproved = connection.selectedClients.includes("droid") && !await droidRoutingAbsent(config.port);
+      const droidUnproved = connection.selectedClients.includes("droid") && !standalone("droid") && !await droidRoutingAbsent(config.port);
       if (homeReceiptPresent || owned || unproved || droidUnproved) {
         throw new Error("Route intent cleanup receipt is missing; preserve the connection and repair its route ownership evidence before disconnect");
       }

@@ -15,7 +15,7 @@ function scenario(before: string, body: string, homePi: boolean) {
   try {
     const result = spawnSync(process.execPath, ["--eval", `
       import { expect } from 'bun:test';
-      import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+      import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
       import { join, dirname } from 'node:path';
       import { getDefaultConfig, saveConfig, loadConfig } from './src/config';
       import { connectClient, disconnectClient, syncConnectedClient } from './src/client/connect';
@@ -46,10 +46,11 @@ function scenario(before: string, body: string, homePi: boolean) {
       };
       const deps={fetchImpl,linkHome:{fetchImpl},catalogCompatibility:{supportedEfforts:()=>new Set()},
         lifecycleLockDeps:{lockPath:join(process.env.OPENCODEX_HOME,'lifecycle.sqlite')}};
+      let connectExtra = {};
       ${before}
       await connectClient({serverUrl:'http://127.0.0.1:22001',managementTransport:'direct',transport:'link',
         link:{tunnelPort:22001,linkId:'lnk_0123456789abcdef'},credential:{kind:'link',apiKeyId:'fixture-key',key:'ocx_data_'+'a'.repeat(40)},
-        selectedClients:['codex','claude'],selectedClientsExplicit:false},deps);
+        selectedClients:['codex','claude'],selectedClientsExplicit:false,...connectExtra},deps);
       ${body}
     `], { cwd: repoRoot(), encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000, env: { ...process.env,
       HOME: home, USERPROFILE: home, OPENCODEX_HOME: join(home, ".opencodex"), CODEX_HOME: join(home, ".codex"),
@@ -128,4 +129,29 @@ test("a corrupt route receipt refuses the next sync before a link-created integr
   expect(result.owned).toBe(true);
   // The damaged receipt is preserved for repair rather than replaced by the refused sync.
   expect(result.receipt).toBe('{"version":1}');
+});
+
+test("a --no-sync link over a standalone integration disconnects and keeps it, because no route apply began", () => {
+  const result = scenario(ownedBefore + "connectExtra = { noSync: true };", `
+    const linked = { owned: owned(), routed: routed(), receipt: existsSync(join(process.env.OPENCODEX_HOME,'route-intent','receipt.json')) };
+    let error; try { await disconnectClient({},deps); } catch (e) { error = e.message; }
+    console.log(JSON.stringify({ linked, error, state: readClientConnectionState().kind, owned: owned(), routed: routed(),
+      proof: existsSync(join(process.env.OPENCODEX_HOME,'route-intent','unapplied.json')) }));
+  `, true);
+  expect(result.linked).toEqual({ owned: true, routed: true, receipt: false });
+  expect(result.error).toBeUndefined();
+  expect(result).toMatchObject({ state: "disconnected", owned: true, routed: true, proof: false });
+});
+
+test("once a route apply began, a lost receipt still refuses disconnect", () => {
+  const result = scenario(ownedBefore + "connectExtra = { noSync: true };", `
+    await syncConnectedClient({}, deps);
+    const proofAfterSync = existsSync(join(process.env.OPENCODEX_HOME,'route-intent','unapplied.json'));
+    rmSync(join(process.env.OPENCODEX_HOME,'route-intent','receipt.json'));
+    let error; try { await disconnectClient({},deps); } catch (e) { error = e.message; }
+    console.log(JSON.stringify({ proofAfterSync, error, state: readClientConnectionState().kind }));
+  `, true);
+  expect(result.proofAfterSync).toBe(false);
+  expect(result.error).toContain("Route intent cleanup receipt is missing");
+  expect(result.state).toBe("connected");
 });
