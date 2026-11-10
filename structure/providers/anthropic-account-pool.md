@@ -200,15 +200,19 @@ a non-boolean flag also makes enumeration incomplete. When legacy `five_hour` is
 null, only a finite session marked active creates a five-hour meter. Inactive shared usage
 is valid routing and cooldown recovery evidence. Scoped rows retain active-only semantics
 for routing; an inactive scoped row is published only as `displayWindows`, which quota
-display renders and routing, exhaustion and cooldown recovery never read.
+display renders and routing, exhaustion, cooldown recovery, pool assembly and reset ordering
+never read, so Fable shows whether or not it binds, regardless of plan name. The GUI keeps them in
+`AccountQuota.displayWindows` (a routed label wins); only `gui/src/components/QuotaBars.tsx`
+draws them, marked not in effect (`gui/tests/quota-display-only-window.test.tsx`).
 Unknown kinds or model families preserve usable shared windows without claiming a complete
 family enumeration. An authoritative inactive family row can retire a previous
 passive family refusal; an incomplete enumeration cannot. Shared cooldown recovery
 still requires finite headroom for each rejected window, never an invented zero.
 `weekly_scoped_shares[]` names, by raw `limits` index, the share of the weekly limit a
-selected scoped row may consume (Fable: "up to 50% of your weekly limit"); the window carries
-it as `weeklyAllowancePercent`. It is read from upstream and never inferred from a plan, and a
-share that points at no selected scoped row, falls outside (0, 100] or conflicts is ignored.
+recognized scoped row, routed or display-only, may consume (Fable: "up to 50% of your weekly
+limit"); the window carries it as `weeklyAllowancePercent`, shown under the bar label, whose
+value stays the family's own `percent`. It is read from upstream and never inferred from a
+plan; a share pointing at no recognized scoped row, outside (0, 100] or conflicting is ignored.
 `tests/providers/provider-anthropic-usage-windows.test.ts` covers source precedence, scoped
 admission, raw precision, pool projection, weekly shares and legacy compatibility.
 

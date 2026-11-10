@@ -139,6 +139,11 @@ const dateTimestamp = (value: unknown): number | undefined => {
 
 type QuotaWindowView = NonNullable<AccountQuota["customWindows"]>[number];
 
+const weeklyAllowance = (value: unknown): number | undefined => {
+  const allowance = finite(value);
+  return allowance !== undefined && allowance > 0 && allowance <= 100 ? allowance : undefined;
+};
+
 function windowsFromUnknown(value: unknown): QuotaWindowView[] {
   return Array.isArray(value)
     ? (value as unknown[]).flatMap(w => {
@@ -150,6 +155,8 @@ function windowsFromUnknown(value: unknown): QuotaWindowView[] {
           percent: row.percent as number,
           ...(finite(row.resetAt) !== undefined ? { resetAt: row.resetAt as number } : {}),
           ...(typeof row.modelId === "string" && row.modelId.length <= 128 ? { modelId: row.modelId } : {}),
+          ...(weeklyAllowance(row.weeklyAllowancePercent) !== undefined
+            ? { weeklyAllowancePercent: weeklyAllowance(row.weeklyAllowancePercent) } : {}),
         }];
       })
     : [];
@@ -159,10 +166,11 @@ function quotaFromUnknown(quota: unknown, fallbackUpdatedAt?: number): AccountQu
   if (!quota || typeof quota !== "object" || Array.isArray(quota)) return null;
   const q = quota as Record<string, unknown>;
   const windows = windowsFromUnknown(q.customWindows);
-  // Display-only rows (an inactive Anthropic model limit) share the bars. A routed row with the
-  // same label can only come from a later rate-limit header observation, so it wins.
+  // Display-only rows (an inactive Anthropic model limit) stay in their own field, so only the
+  // quota bars draw them. A routed row with the same label can only come from a later rate-limit
+  // header observation, so it wins.
   const routedLabels = new Set(windows.map(w => w.label));
-  windows.push(...windowsFromUnknown(q.displayWindows).filter(w => !routedLabels.has(w.label)));
+  const displayWindows = windowsFromUnknown(q.displayWindows).filter(w => !routedLabels.has(w.label));
   const creditsRaw = q.creditsUsd && typeof q.creditsUsd === "object" && !Array.isArray(q.creditsUsd)
     ? q.creditsUsd as Record<string, unknown>
     : null;
@@ -194,6 +202,7 @@ function quotaFromUnknown(quota: unknown, fallbackUpdatedAt?: number): AccountQu
     ...(finite(q.monthlyPercent) !== undefined ? { monthlyPercent: q.monthlyPercent as number } : {}),
     ...(finite(q.monthlyResetAt) !== undefined ? { monthlyResetAt: q.monthlyResetAt as number } : {}),
     ...(windows.length > 0 ? { customWindows: windows } : {}),
+    ...(displayWindows.length > 0 ? { displayWindows } : {}),
     ...(creditsUsd ? { creditsUsd } : {}),
     updatedAt: finite(q.updatedAt) ?? fallbackUpdatedAt ?? Date.now(),
   };
@@ -201,6 +210,7 @@ function quotaFromUnknown(quota: unknown, fallbackUpdatedAt?: number): AccountQu
     || out.weeklyPercent !== undefined
     || out.monthlyPercent !== undefined
     || (out.customWindows?.length ?? 0) > 0
+    || (out.displayWindows?.length ?? 0) > 0
     || out.creditsUsd !== undefined
     || out.workbuddyCredits !== undefined
     ? out

@@ -275,9 +275,9 @@ function refreshLine(row: FamilyRows["rows"][number]): string {
 
 function quotaParts(quota: ProviderQuotaDto): string[] {
   const parts: string[] = [];
-  const add = (label: string, percent: number | undefined, resetAt?: number) => {
+  const add = (label: string, percent: number | undefined, resetAt?: number, note?: string) => {
     if (percent === undefined) return;
-    parts.push(`${label} ${percent}%`);
+    parts.push(`${label} ${percent}%${note ? ` (${note})` : ""}`);
     const reset = resetIso(resetAt);
     if (reset) parts.push(`resets ${reset}`);
   };
@@ -285,6 +285,13 @@ function quotaParts(quota: ProviderQuotaDto): string[] {
   add("weekly", quota.weeklyPercent, quota.weeklyResetAt);
   add("monthly", quota.monthlyPercent, quota.monthlyResetAt);
   for (const window of quota.customWindows ?? []) add(window.label, window.percent, window.resetAt);
+  // Same rule as the dashboard: a routed row with the same label wins over a display-only one.
+  const routed = new Set((quota.customWindows ?? []).map(window => window.label));
+  for (const window of quota.displayWindows ?? []) {
+    if (routed.has(window.label)) continue;
+    const share = typeof window.weeklyAllowancePercent === "number" ? `up to ${window.weeklyAllowancePercent}% of weekly; ` : "";
+    add(window.label, window.percent, window.resetAt, `${share}not in effect`);
+  }
   return parts;
 }
 

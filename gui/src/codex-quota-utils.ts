@@ -1,5 +1,14 @@
 import { hasElapsedShortWindow, isTerminalShortWindow } from "../../src/codex/quota-types";
 
+export interface QuotaWindowReading {
+  label: string;
+  percent: number;
+  resetAt?: number;
+  modelId?: string;
+  /** Share of the weekly limit this model family may use ("up to 50% of your weekly limit"). */
+  weeklyAllowancePercent?: number;
+}
+
 export interface AccountQuota {
   workbuddyCredits?: import("../../src/providers/workbuddy-credit-balance").WorkBuddyCreditBalance;
   weeklyPercent?: number;
@@ -14,7 +23,13 @@ export interface AccountQuota {
   shortObservedAt?: number;
   shortWindowSeconds?: number;
   monthlyResetAt?: number;
-  customWindows?: { label: string; percent: number; resetAt?: number; modelId?: string }[];
+  customWindows?: QuotaWindowReading[];
+  /**
+   * Display-only readings: an Anthropic model limit upstream reports as not binding right now.
+   * Only the quota bars render them; summary headlines, tray rows and urgency sorting never read
+   * this field, matching the server, where routing reads only `customWindows`.
+   */
+  displayWindows?: QuotaWindowReading[];
   creditsUsd?: {
     used: number;
     limit: number;

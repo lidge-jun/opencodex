@@ -16,6 +16,10 @@ export type QuotaBarRow = {
   limitLabel: string;
   percent: number;
   resetAt?: number;
+  /** Share of the weekly limit this model family may use, when upstream reports it. */
+  weeklyAllowancePercent?: number;
+  /** Upstream reports this limit as not the one in effect; it never gates routing. */
+  notInEffect?: boolean;
 };
 
 /**
@@ -119,6 +123,23 @@ export function buildQuotaRows(quota: AccountQuota | null, plan: string | null |
         limitLabel: localized,
         percent: w.percent,
         resetAt: w.resetAt,
+        ...(w.weeklyAllowancePercent !== undefined ? { weeklyAllowancePercent: w.weeklyAllowancePercent } : {}),
+      },
+    });
+  }
+  // Display-only limits (not in effect upstream) follow the routed rows they sit beside.
+  for (const w of displayQuota.displayWindows ?? []) {
+    ranked.push({
+      rank: rawCustomWindowRank(w.label),
+      row: {
+        id: JSON.stringify(["display", w.label, w.resetAt ?? null]),
+        customLabel: w.label,
+        label: w.label,
+        limitLabel: w.label,
+        percent: w.percent,
+        resetAt: w.resetAt,
+        ...(w.weeklyAllowancePercent !== undefined ? { weeklyAllowancePercent: w.weeklyAllowancePercent } : {}),
+        notInEffect: true,
       },
     });
   }
@@ -358,6 +379,7 @@ export default function QuotaBars({
         <Fragment key={row.id}>
           <QuotaRow
             credits={row.customLabel === SUBSCRIPTION_CREDITS_LABEL}
+            hint={quotaRowNotes(row, t).join(" · ")}
             label={row.label}
             percent={row.percent}
             resetAt={row.resetAt}
@@ -373,8 +395,22 @@ export default function QuotaBars({
   );
 }
 
-function QuotaRow({ credits, label, percent, resetAt, threshold, t, locale }: {
+/** The weekly share and the not-in-effect state, in display order; empty for an ordinary window. */
+function quotaRowNotes(row: QuotaBarRow, t: TFn): string[] {
+  return [
+    ...(row.weeklyAllowancePercent !== undefined ? [weeklyShareText(row.weeklyAllowancePercent, t)] : []),
+    ...(row.notInEffect ? [t("quota.notInEffect")] : []),
+  ];
+}
+
+function weeklyShareText(allowance: number, t: TFn): string {
+  return t("quota.weeklyShare", { pct: Math.round(allowance) });
+}
+
+function QuotaRow({ credits, hint, label, percent, resetAt, threshold, t, locale }: {
   credits?: boolean;
+  /** Extra context for the label tooltip, such as a model family's weekly share. */
+  hint?: string;
   label: string;
   percent: number;
   resetAt?: number;
@@ -392,7 +428,7 @@ function QuotaRow({ credits, label, percent, resetAt, threshold, t, locale }: {
   const hasReset = reset.day !== "" || reset.time !== "";
   return (
     <div className={`quota-row${credits ? " quota-row--credits" : ""}${warn ? " quota-row--warn" : ""}${exhausted ? " quota-row--exhausted" : ""}`}>
-      <span className="quota-label" title={resetTitle}>{label}</span>
+      <span className="quota-label" title={[hint, resetTitle].filter(Boolean).join(" · ") || undefined}>{label}</span>
       <span className="quota-reset-label">{hasReset ? t("codexAuth.resets") : ""}</span>
       <span className="quota-reset-day">{reset.day}</span>
       <span className="quota-reset-time">{reset.time}</span>
@@ -436,9 +472,17 @@ function StackedQuotaRow({ row, threshold, t, locale, incomplete }: {
               {t("pws.capacity.windowPartial")}
             </span>
           )}
+          {row.notInEffect && (
+            <span className="quota-window-inactive muted" role="note" title={t("quota.notInEffectHint")}>
+              {t("quota.notInEffect")}
+            </span>
+          )}
         </span>
         <span className="quota-stacked-reset muted">{resetText}</span>
       </div>
+      {row.weeklyAllowancePercent !== undefined && (
+        <span className="quota-window-share muted">{weeklyShareText(row.weeklyAllowancePercent, t)}</span>
+      )}
       <div className="quota-stacked-bar-row">
         <div className="bar quota-stacked-bar">
           <div className={`bar-fill ${color}`} style={barFillStyle(row.percent)} />
