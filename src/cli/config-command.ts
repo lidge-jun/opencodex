@@ -144,7 +144,8 @@ function pathSegments(path: string): string[] {
 
 /**
  * #8319: `config set` writes the file, but a running proxy keeps checking pairing and CORS origins
- * against the config it is running with. `hub` is live topology and is applied only at start
+ * against the config it is running with. `hub` is live topology and is applied only at start, including the
+ * management listener (`hub.managementIngress`)
  * (`LIVE_TOPOLOGY_KEYS`); `corsAllowOrigins` reaches the running config only when some later live
  * save adopts the file. Saying only "Set <path>." left an operator retrying a refused
  * `ocx hub invite` against the old list. Limited to these keys, so the note never claims a restart
@@ -155,7 +156,7 @@ export function startupOnlyConfigNotes(path: string): string[] {
   if (segments[0] === "corsAllowOrigins") {
     return ["A running OpenCodex may keep using its previous corsAllowOrigins until it restarts; restart it to apply the new value now."];
   }
-  if (segments[0] === "hub" && (segments.length === 1 || segments[1] === "managementPublicOrigin")) {
+  if (segments[0] === "hub" && (segments.length === 1 || segments[1] === "managementPublicOrigin" || segments[1] === "managementIngress")) {
     return [`A running OpenCodex applies ${segments.join(".")} only when it starts; restart it to use the new value.`];
   }
   return [];

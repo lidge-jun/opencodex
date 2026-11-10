@@ -346,7 +346,9 @@ async function runInvite(args: string[], deps: HubCommandDeps): Promise<number> 
       );
       console.error((deps.restartHint ?? hubDisableRestartHint)());
     } else if (result.reason === "rate-limited") {
-      console.error("The hub mints only a few pairing codes per minute; wait a minute and invite again.");
+      // The 429 covers both the per-minute grant limit and the cap on unused codes, which only
+      // clears as earlier codes are used or expire (five minutes), so the advice fits both.
+      console.error("The hub is limiting new pairing codes (a per-minute limit and a cap on unused codes). Wait for earlier codes to be used or expire, then invite again.");
     }
     return 1;
   }

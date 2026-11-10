@@ -369,7 +369,8 @@ describe("hub invite refuses before burning a code", () => {
   test("#8495 review: a rate limit or a generic refusal never blames the allow-list", async () => {
     const limited = await invite(["invite"], hubConfig(), { result: { kind: "unavailable", reason: "rate-limited" } });
     expect(limited.code).toBe(1);
-    expect(limited.err.join(" ")).toContain("wait a minute");
+    // The 429 covers both the per-minute limit and the cap on unused codes, so the advice fits both.
+    expect(limited.err.join(" ")).toContain("expire");
     for (const outcome of [limited, await invite(["invite"], hubConfig(), { result: { kind: "unavailable", reason: "rejected" } })]) {
       const stderr = outcome.err.join(" ");
       expect(stderr).not.toContain("corsAllowOrigins");

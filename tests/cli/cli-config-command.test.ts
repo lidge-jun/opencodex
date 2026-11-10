@@ -127,6 +127,14 @@ describe("ocx config display redaction", () => {
       const hub = runCli(["config", "set", "hub", '{"managementPublicOrigin":"https://hub.test"}'], { OPENCODEX_HOME: dir });
       expect(hub.status).toBe(0);
       expect(hub.stdout).toContain("restart");
+      // The nested paths take the same note (#8495 review): the management listener and its origin
+      // are created when the hub starts.
+      const origin = runCli(["config", "set", "hub.managementPublicOrigin", '"https://hub2.test"'], { OPENCODEX_HOME: dir });
+      expect(origin.status).toBe(0);
+      expect(origin.stdout).toContain("restart");
+      const ingress = runCli(["config", "set", "hub.managementIngress", '{"enabled":false}'], { OPENCODEX_HOME: dir });
+      expect(ingress.status).toBe(0);
+      expect(ingress.stdout).toContain("restart");
 
       // The JSON payload keeps its shape; the note is for people reading the terminal.
       const json = runCli(["config", "set", "corsAllowOrigins", '["http://localhost:9999"]', "--json"], { OPENCODEX_HOME: dir });

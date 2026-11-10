@@ -64,6 +64,10 @@ function sameRuntime(left: RuntimePortState, right: RuntimePortState | null): bo
  * admit this origin, the one case an allow-list edit or a restart can cure (#8319). Its 429 is the
  * per-minute grant limit. A coded refusal, a capability refusal and anything else stay `rejected`,
  * so the caller does not send an operator to edit a correct allow-list (#8495 review).
+ *
+ * This is a heuristic: the route answers the same uncoded 403 for any unexpected failure inside
+ * grant creation, not only for a refused origin. Those are rare and the advice (check the two origin
+ * settings, restart) is harmless there; an explicit server code would make it exact.
  */
 async function refusalReason(response: Response): Promise<"origin-refused" | "rate-limited" | "rejected"> {
   if (response.status === 429) return "rate-limited";
