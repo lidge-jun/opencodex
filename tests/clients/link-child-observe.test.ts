@@ -3,6 +3,9 @@ import { createHash } from "node:crypto";
 import * as gated from "../../src/link/child-gated-ocx";
 import { observeChild, type ObserveDeps } from "../../src/link/child-observe";
 import { emptyChildObservations, patchChildObservation, withoutCarriedFields } from "../../src/link/child-observations";
+import { createChildOpsEngine } from "../../src/link/child-ops-engine";
+import type { ObserveOutcome } from "../../src/link/child-observe";
+import { ConfigMutationLockError } from "../../src/config/mutation-lock";
 import type { LinkPeerEntry } from "../../src/link/peer-report";
 import type { ParsedRemoteRuntimeInspection } from "../../src/link/remote-plant";
 import { SshRunnerError, type SshRunResult } from "../../src/link/ssh-runner";
@@ -149,5 +152,94 @@ describe("observeChild", () => {
     expect(observed.calls).toHaveLength(1);
     expect(observed.calls[0]).toContain("child-a");
     expect(observed.calls[0]!.at(-1)).toContain("--plan");
+  });
+});
+
+describe("child ops engine", () => {
+  const ids = Array.from({ length: 5 }, (_, index) => "lnk_" + String(index).repeat(16));
+  const store = (links: LinkRecord[]) => ({ version: 1 as const, listenerPort: null, links });
+  const succeeded = (now: Date): ObserveOutcome => ({ state: "succeeded", reason: null, probe: null, observation: {
+    observedAt: now.toISOString(), source: "peer", installedVersion: null, installKind: "ocx-child", runtimeOwner: null, updateRoute: "replant",
+    updateReason: "ocx-child", targetVersion: null, updateInFlight: null, catalogPulledAt: null, catalogPulledEtag: null, catalogSyncedEtag: null,
+    lastOperation: null, suppressedTarget: null, autoUpdateAttempts: null, pendingUpdateRecovery: null } });
+
+  test("runs three items at a time and ends refused for a link removed before its turn", async () => {
+    let links = ids.map(id => record({ id }));
+    let running = 0, peak = 0;
+    const releases: Array<() => void> = [];
+    const engine = createChildOpsEngine({ readStore: () => store(links), now: () => NOW, writeObservation: () => {}, observe: async () => {
+      running += 1; peak = Math.max(peak, running);
+      await new Promise<void>(resolve => releases.push(resolve));
+      running -= 1;
+      return succeeded(NOW);
+    } });
+    const submitted = engine.submit({ op: "observe", linkIds: "all", trigger: "manual" });
+    if (!submitted.ok) throw new Error("submit refused");
+    expect(submitted.job.items.map(item => item.state)).toEqual(["running", "running", "running", "queued", "queued"]);
+    expect(engine.activeJob(ids[4]!)).toEqual({ jobId: submitted.job.jobId, op: "observe", state: "running" });
+    links = links.filter(link => link.id !== ids[4]);
+    while (releases.length) { releases.shift()!(); await new Promise(resolve => setTimeout(resolve, 0)); }
+    await engine.settled();
+    const done = engine.job(submitted.job.jobId)!;
+    expect(peak).toBe(3);
+    expect(done.state).toBe("done");
+    expect(done.items.map(item => [item.state, item.reason])).toEqual([["succeeded", null], ["succeeded", null], ["succeeded", null], ["succeeded", null], ["refused", "link-removed"]]);
+    expect(engine.activeJob(ids[0]!)).toBeNull();
+  });
+
+  test("an ephemeral observe over a stored plan entry leaves updateInFlight null and keeps observedAt for lastOperation", async () => {
+    const file = emptyChildObservations();
+    const linkId = ids[0]!;
+    file.children[linkId] = { observedAt: "2026-11-01T00:00:00.000Z", source: "plan", installedVersion: "2.97.0", installKind: "npm",
+      runtimeOwner: "service", updateRoute: "orchestrated", updateReason: null, targetVersion: "2.100.0", catalogPulledAt: 5, lastOperation: null,
+      suppressedTarget: null, catalogPulledEtag: "\"e\"", catalogSyncedEtag: null, autoUpdateAttempts: null, updateInFlight: true, pendingUpdateRecovery: null };
+    let clock = NOW.getTime();
+    const engine = createChildOpsEngine({ readStore: () => store([record({ id: linkId, childKind: "ephemeral" })]), now: () => new Date(clock),
+      writeObservation: (id, patch) => { clock += 1_000; patchChildObservation(file, id, patch, new Date(clock)); },
+      observe: async target => observeChild(target, deps(ran(plan())).value) });
+    engine.submit({ op: "observe", linkIds: [linkId], trigger: "manual" });
+    await engine.settled();
+    expect(file.children[linkId]).toMatchObject({ updateInFlight: null, runtimeOwner: null, targetVersion: null, installKind: "ocx-child",
+      catalogPulledAt: 5, observedAt: new Date(NOW.getTime() + 1_000).toISOString(), lastOperation: { op: "observe", state: "succeeded", reason: null } });
+  });
+
+  test("a failed cache write is logged and leaves the item's result", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const engine = createChildOpsEngine({ readStore: () => store([record({ id: ids[0]! })]), now: () => NOW,
+        writeObservation: () => { throw new ConfigMutationLockError("busy"); }, observe: async () => succeeded(NOW) });
+      const submitted = engine.submit({ op: "observe", linkIds: [ids[0]!], trigger: "manual" });
+      await engine.settled();
+      expect(engine.job(submitted.ok ? submitted.job.jobId : "")?.items[0]).toMatchObject({ state: "succeeded", reason: null });
+      expect(warn.mock.calls.map(call => String(call[0]))).toEqual([
+        `[link] child observation write failed linkId=${ids[0]} error=ConfigMutationLockError`,
+        `[link] child observation write failed linkId=${ids[0]} error=ConfigMutationLockError`,
+      ]);
+    } finally { warn.mockRestore(); }
+  });
+
+  test("submit refusals and retention of at most 32 finished jobs for one hour", async () => {
+    let clock = NOW.getTime();
+    let counter = 0;
+    const engine = createChildOpsEngine({ readStore: () => store([record({ id: ids[0]! })]), now: () => new Date(clock), writeObservation: () => {},
+      observe: async () => succeeded(NOW), jobId: () => "ljob_" + (counter++).toString(16).padStart(16, "0") });
+    expect(engine.submit({ op: "observe", linkIds: [ids[1]!], trigger: "manual" })).toEqual({ ok: false, code: "link_not_found" });
+    const empty = createChildOpsEngine({ readStore: () => store([]), writeObservation: () => {}, observe: async () => succeeded(NOW) });
+    expect(empty.submit({ op: "observe", linkIds: "all", trigger: "manual" })).toEqual({ ok: false, code: "no_eligible_links" });
+    for (let index = 0; index < 33; index++) {
+      clock += 1_000;
+      expect(engine.submit({ op: "observe", linkIds: [ids[0]!], trigger: "manual" }).ok).toBe(true);
+      await engine.settled();
+    }
+    // 33 finished jobs: the oldest is dropped on the next read.
+    expect(engine.job("ljob_0000000000000000")).toBeUndefined();
+    expect(engine.job("ljob_0000000000000001")).toBeDefined();
+    clock += 1_000;
+    engine.submit({ op: "observe", linkIds: [ids[0]!], trigger: "manual" });
+    await engine.settled();
+    expect(engine.job("ljob_0000000000000001")).toBeUndefined();
+    expect(engine.job("ljob_0000000000000002")).toBeDefined();
+    clock += 60 * 60 * 1000 + 1;
+    expect(engine.job("ljob_0000000000000021")).toBeUndefined();
   });
 });
