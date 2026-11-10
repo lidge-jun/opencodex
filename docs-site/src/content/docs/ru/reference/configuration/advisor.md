@@ -35,7 +35,7 @@ description: Независимые консультации с политика
 
 Управляйте через страницу **Advisor** на дашборде или `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>`.
 
-Без текущего согласия `ocx advisor on` не включает межпровайдерную отправку: команда печатает раскрытие и останавливается. `ocx advisor on --ack-context-sharing` и `ocx advisor consent` записывают `v1`. `ocx advisor consent --revoke` снимает согласие и сразу прекращает отправку. `ocx advisor set` согласие не выдаёт. Флажок на дашборде изначально снят.
+Без текущего согласия `ocx advisor on` не включает межпровайдерную отправку: команда печатает раскрытие и останавливается. `ocx advisor on --ack-context-sharing` и `ocx advisor consent` записывают `v1`. `ocx advisor consent --revoke` снимает согласие. Ещё не отправленные консультации блокируются, но уже отправленную консультацию нельзя отменить, а ушедший из прокси контекст нельзя отозвать. `ocx advisor set` согласие не выдаёт. Флажок на дашборде изначально снят.
 
 ## Политики
 

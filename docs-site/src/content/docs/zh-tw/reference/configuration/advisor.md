@@ -35,7 +35,7 @@ description: 獨立專家諮詢，支援 manual、preflight 與依據證據的 a
 
 透過儀表板的 **Advisor** 頁面或 `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>` 管理。
 
-沒有目前同意時，`ocx advisor on` 不會開啟跨 provider 傳送：它會印出揭露並停止。`ocx advisor on --ack-context-sharing` 與 `ocx advisor consent` 記錄 `v1`。`ocx advisor consent --revoke` 會移除同意並立即停止傳送。`ocx advisor set` 不授予同意。儀表板上的同意核取方塊預設不勾選。
+沒有目前同意時，`ocx advisor on` 不會開啟跨 provider 傳送：它會印出揭露並停止。`ocx advisor on --ack-context-sharing` 與 `ocx advisor consent` 記錄 `v1`。`ocx advisor consent --revoke` 會移除同意。尚未發出的諮詢會被阻擋，但已經發出的諮詢無法取消，已經離開代理的上下文也無法收回。`ocx advisor set` 不授予同意。儀表板上的同意核取方塊預設不勾選。
 
 ## 策略
 

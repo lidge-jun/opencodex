@@ -35,7 +35,7 @@ description: 独立专家咨询，支持 manual、preflight 与基于证据的 a
 
 通过仪表盘的 **Advisor** 页面或 `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>` 管理。
 
-`ocx advisor on` 在没有当前同意时不会开启跨 provider 发送：它会打印披露并停止。`ocx advisor on --ack-context-sharing` 与 `ocx advisor consent` 记录 `v1`。`ocx advisor consent --revoke` 会移除同意并立即停止发送。`ocx advisor set` 不授予同意。仪表盘上的同意复选框默认不勾选。
+`ocx advisor on` 在没有当前同意时不会开启跨 provider 发送：它会打印披露并停止。`ocx advisor on --ack-context-sharing` 与 `ocx advisor consent` 记录 `v1`。`ocx advisor consent --revoke` 会移除同意。尚未发出的咨询会被阻断，但已经发出的咨询无法取消，已经离开代理的上下文也无法收回。`ocx advisor set` 不授予同意。仪表盘上的同意复选框默认不勾选。
 
 ## 策略
 

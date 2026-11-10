@@ -43,7 +43,7 @@ Sur la page **Advisor**, choisissez le modèle dans le catalogue. Le sélecteur 
 Gérez-le via la page **Advisor** du tableau de bord ou
 `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>`.
 
-Sans consentement courant, `ocx advisor on` n'active pas le partage inter-fournisseurs : il affiche cette divulgation et s'arrête. `ocx advisor on --ack-context-sharing` et `ocx advisor consent` enregistrent `v1`. `ocx advisor consent --revoke` retire le consentement et arrête immédiatement l'envoi. `ocx advisor set` n'accorde pas le consentement. La case du tableau de bord n'est pas précochée.
+Sans consentement courant, `ocx advisor on` n'active pas le partage inter-fournisseurs : il affiche cette divulgation et s'arrête. `ocx advisor on --ack-context-sharing` et `ocx advisor consent` enregistrent `v1`. `ocx advisor consent --revoke` retire le consentement. Les consultations qui n'ont pas encore été envoyées sont bloquées, mais une consultation déjà envoyée ne peut pas être annulée, et le contexte déjà transmis hors du proxy ne peut pas être retiré. `ocx advisor set` n'accorde pas le consentement. La case du tableau de bord n'est pas précochée.
 
 ## Politiques
 

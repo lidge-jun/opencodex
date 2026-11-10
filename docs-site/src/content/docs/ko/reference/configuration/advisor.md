@@ -35,7 +35,7 @@ description: manual, preflight 및 증거 기반 adaptive 정책을 제공하는
 
 대시보드 **Advisor** 페이지 또는 `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>`로 관리합니다.
 
-현재 동의가 없으면 `ocx advisor on`은 프로바이더 간 전송을 켜지 않습니다. 고지를 출력하고 멈춥니다. `ocx advisor on --ack-context-sharing`와 `ocx advisor consent`가 `v1`을 기록합니다. `ocx advisor consent --revoke`는 동의를 지우고 전송을 즉시 멈춥니다. `ocx advisor set`은 동의를 부여하지 않습니다. 대시보드의 동의 확인란은 미리 선택되지 않습니다.
+현재 동의가 없으면 `ocx advisor on`은 프로바이더 간 전송을 켜지 않습니다. 고지를 출력하고 멈춥니다. `ocx advisor on --ack-context-sharing`와 `ocx advisor consent`가 `v1`을 기록합니다. `ocx advisor consent --revoke`는 동의를 지웁니다. 아직 디스패치되지 않은 상담은 차단되지만, 이미 디스패치된 상담은 취소할 수 없고 이미 프록시를 떠난 맥락도 되돌릴 수 없습니다. `ocx advisor set`은 동의를 부여하지 않습니다. 대시보드의 동의 확인란은 미리 선택되지 않습니다.
 
 ## 정책
 

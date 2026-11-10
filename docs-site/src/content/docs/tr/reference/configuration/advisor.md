@@ -35,7 +35,7 @@ Kontrol panelindeki **Advisor** sayfasında katalogdan model seçin. Yerel, sağ
 
 Panodaki **Advisor** sayfası veya `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>` ile yönetin.
 
-Güncel onay yokken `ocx advisor on` sağlayıcılar arası gönderimi açmaz: açıklamayı basar ve durur. `ocx advisor on --ack-context-sharing` ile `ocx advisor consent` `v1` kaydeder. `ocx advisor consent --revoke` onayı kaldırır ve gönderimi hemen durdurur. `ocx advisor set` onay vermez. Panodaki onay kutusu önceden işaretli değildir.
+Güncel onay yokken `ocx advisor on` sağlayıcılar arası gönderimi açmaz: açıklamayı basar ve durur. `ocx advisor on --ack-context-sharing` ile `ocx advisor consent` `v1` kaydeder. `ocx advisor consent --revoke` onayı kaldırır. Henüz gönderilmemiş danışmalar engellenir, ancak gönderilmiş bir danışma iptal edilemez ve proxy'den ayrılmış bağlam geri alınamaz. `ocx advisor set` onay vermez. Panodaki onay kutusu önceden işaretli değildir.
 
 ## Politikalar
 
