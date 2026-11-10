@@ -267,25 +267,6 @@ function shortResetHasElapsed(resetAt: number | undefined, now: number): boolean
 }
 
 /**
- * Whether upstream itself moved the weekly deadline forward.
- *
- * Only the NEXT window can report a later deadline, so this is positive proof that the previous
- * window closed — as opposed to merely predicting it will. Compared as data rather than against
- * `Date.now()`, so clock skew, fake timers, and a stale sandbox clock cannot fabricate it. Equal
- * deadlines mean "same window" and never fire.
- */
-function weeklyResetDeadlineAdvanced(
-  incoming: Omit<StoredAccountQuota, "updatedAt">,
-  existing: StoredAccountQuota | undefined,
-): boolean {
-  const previousReset = existing?.weeklyResetAt;
-  const nextReset = incoming.weeklyResetAt;
-  if (typeof previousReset !== "number" || !Number.isFinite(previousReset) || previousReset <= 0) return false;
-  if (typeof nextReset !== "number" || !Number.isFinite(nextReset) || nextReset <= 0) return false;
-  return resetAtToMs(nextReset) > resetAtToMs(previousReset);
-}
-
-/**
  * Whether the account's reset tickets went DOWN, which means one was just redeemed.
  *
  * A manual reset zeroes the current window's usage without ending it: the deadline moves further
@@ -320,13 +301,13 @@ function resetTicketWasRedeemed(
  * This is the weekly counterpart of `shortResetHasElapsed`. The short (5h) branch has always
  * expired a carried tuple whose reset had passed; the weekly branch never did, so a stale
  * weekly percentage could outlive its own deadline indefinitely as long as observations omitted
- * the weekly header. Any of these retires the reading:
+ * the weekly header. Either of these retires the reading (an observation that carries the weekly
+ * window itself, including a later deadline, already replaces the tuple before this is consulted):
  *
- * 1. Upstream advanced the deadline (`weeklyResetDeadlineAdvanced`) — positive proof.
- * 2. The stored deadline has already elapsed. Usage only accumulates inside an open window, so a
+ * 1. The stored deadline has already elapsed. Usage only accumulates inside an open window, so a
  *    percentage pinned to a closed one is history, not current state. This is exactly the rule
  *    `shortResetHasElapsed` applies to the 5h tuple and it is what lets a stuck account re-measure.
- * 3. A reset ticket was redeemed (`resetTicketWasRedeemed`) — the window's usage was zeroed on
+ * 2. A reset ticket was redeemed (`resetTicketWasRedeemed`) — the window's usage was zeroed on
  *    purpose, so the pre-redemption percentage describes a window nobody is spending in any more.
  *
  * Why this matters beyond a cosmetic bar: this display/rotation snapshot feeds quota exhaustion and
@@ -351,7 +332,6 @@ function weeklyWindowRolledOver(
   existing: StoredAccountQuota | undefined,
   now: number,
 ): boolean {
-  if (weeklyResetDeadlineAdvanced(incoming, existing)) return true;
   if (resetTicketWasRedeemed(incoming, existing)) return true;
   const previousReset = existing?.weeklyResetAt;
   if (typeof previousReset !== "number" || !Number.isFinite(previousReset) || previousReset <= 0) return false;

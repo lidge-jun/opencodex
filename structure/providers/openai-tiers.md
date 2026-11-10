@@ -352,7 +352,7 @@ bulk-pause and recovery suites `tests/codex-integration/codex-routing.test.ts`,
 cache when its stored reset instant has elapsed. Seconds and milliseconds are accepted;
 future or missing deadlines remain carried, and explicit incoming short readings remain stored.
 This stops partial weekly/Spark or credits-only refreshes from renewing obsolete Spark-derived
-5h rows through the cache-wide `updatedAt` timestamp. Plan labels do not suppress real windows. An omitted weekly tuple is retired from the same cache when its stored `weeklyResetAt` has elapsed, upstream reports a later weekly deadline, or the reset-ticket count dropped (a redeemed ticket zeroed the window); a missing or invalid stored deadline never expires it by the clock, and a ticket grant or unchanged count is ignored (`tests/codex-integration/codex-quota-weekly-rollover.test.ts`).
+5h rows through the cache-wide `updatedAt` timestamp. Plan labels do not suppress real windows. An omitted weekly tuple is retired from the same cache when its stored `weeklyResetAt` has elapsed or the reset-ticket count dropped (a redeemed ticket zeroed the window); a missing or invalid stored deadline never expires it by the clock, and a ticket grant or unchanged count is ignored. An observation that carries the weekly window, including a later deadline, replaces the tuple directly (`tests/codex-integration/codex-quota-weekly-rollover.test.ts`).
 
 The separately retained main-policy snapshot preserves omitted blocking short evidence even after
 its reset clock passes. Credits-only, partial weekly-only, and metadata-only updates cannot remove an

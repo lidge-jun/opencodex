@@ -107,8 +107,9 @@ describe("weekly window rollover", () => {
     expect(getAccountQuota(ACCOUNT)?.weeklyPercent).toBe(98);
   });
 
-  test("an upstream-advanced deadline retires the old percentage even before it elapses", () => {
-    // Both deadlines are in the future; only the advance itself proves the old window closed.
+  test("a monthly-only observation still clears a live weekly reading (unchanged #382 behavior)", () => {
+    // The weekly deadline is still in the future, so neither expiry signal applies; the legacy
+    // monthly-only clearing rule is what retires it, and the expiry change must not alter that.
     setAccountQuotaFromParsed(ACCOUNT, { weeklyPercent: 98, weeklyResetAt: secondsFromNow(600) });
     setAccountQuotaFromParsed(ACCOUNT, { monthlyPercent: 5, monthlyResetAt: secondsFromNow(600) });
 
