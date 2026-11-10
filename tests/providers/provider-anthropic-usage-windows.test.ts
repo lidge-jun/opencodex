@@ -235,3 +235,10 @@ test("a passive Fable header reading keeps the probed weekly allowance", () => {
   expect(merged).toEqual([{ label: "Fable", scope: "model", percent: 30, passiveObservedAt: now, weeklyAllowancePercent: 50 }]);
 });
 
+
+test("a usage probe without a share drops the previous weekly allowance", () => {
+  const merged = mergeAnthropicFamilyWindows([{ label: "Fable", scope: "model", percent: 10, weeklyAllowancePercent: 50 }],
+    [{ label: "Fable", scope: "model", percent: 20 }]);
+  expect(merged).toEqual([{ label: "Fable", scope: "model", percent: 20 }]);
+});
+
