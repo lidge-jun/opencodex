@@ -85,6 +85,9 @@ const REQUEST_STATE_WORDING = [
   "The context window is at its limit. Compact the loaded conversation.",
   "The context window is full. The pool of remaining tokens is empty.",
   "The context window is full. The worker will reject this payload.",
+  // Whitespace inside the predicate does not change which rule applies to it.
+  "The context window is at  its  limit.",
+  "The context window is at\tits\nlimit.",
 ];
 
 /**

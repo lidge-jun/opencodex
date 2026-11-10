@@ -265,7 +265,9 @@ function hasAffirmedVerdict(text: string, verdict: OverflowVerdict, allowAmbiguo
     // "full", "exhausted" and "at its limit" are ambiguous between an input overflow and service
     // back-pressure. They count only on a status that speaks about the request, and only when the
     // text around the predicate is free of capacity framing.
-    if (CAPACITY_AMBIGUOUS_PREDICATES.has(predicate.toLowerCase())
+    // The predicate pattern allows any whitespace ("at  its\tlimit"), so normalize it before the
+    // set lookup or a reflowed message would bypass the 5xx rule.
+    if (CAPACITY_AMBIGUOUS_PREDICATES.has(predicate.toLowerCase().replace(/\s+/g, " "))
       && (!allowAmbiguous || hasCapacityFraming(text, predicateStart))) continue;
     return true;
   }
