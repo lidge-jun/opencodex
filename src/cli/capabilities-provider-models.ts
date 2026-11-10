@@ -249,6 +249,22 @@ export const PROVIDER_MODEL_CAPABILITIES: readonly Capability[] = [
     flags: [{ name: "--provider", value: "string", summary: "Limit the toggle to one provider." }, { name: "--json", value: "boolean", summary: "Emit the alias settings receipt." }],
   },
   {
+    command: ["alias", "template", "set"], summary: "Set a provider's opt-in alias template for models without an alias.",
+    usage: "ocx alias template set <provider> <template> [--json]", routes: [{ method: "PUT", path: "/api/providers/{provider}/alias-template" }], mutates: true, json: "payload",
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the receipt with the generated and skipped preview." }],
+    details: ["Only the literal {providerAlias} and {modelBasename} placeholders are allowed, and {modelBasename} is required. Aliases are derived when models resolve and never written to config. Manual and built-in aliases win; a generated name that collides with anything already claimed is skipped, never renamed."],
+  },
+  {
+    command: ["alias", "template", "rm"], summary: "Remove a provider's alias template; its generated aliases disappear at once.",
+    usage: "ocx alias template rm <provider> [--json]", routes: [{ method: "PUT", path: "/api/providers/{provider}/alias-template" }], mutates: true, json: "payload",
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the receipt." }],
+  },
+  {
+    command: ["alias", "template", "show"], summary: "Read configured alias templates.",
+    usage: "ocx alias template show [<provider>] [--json]", routes: [{ method: "GET", path: "/api/aliases" }], mutates: false, json: "payload",
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the template map, or one provider's template." }],
+  },
+  {
     command: ["provider","pacing"],
     usage: "ocx provider pacing <name> [--json]; ocx provider pacing <name> [--enabled <on|off>] [--rpm <number>] [--min-interval-ms <integer>] [--max-concurrent <integer>] [--json]; ocx provider pacing <name> --file <FILE|-> [--json]",
     summary: "Read request pacing rules/status or explicitly replace the configured block.",

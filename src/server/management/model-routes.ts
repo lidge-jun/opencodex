@@ -116,7 +116,8 @@ import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
 import { encodedModelIdCollides, routedSlug, slugEquals } from "../../providers/slug-codec";
 import { knownModelIdsForProvider } from "../../router";
-import { effectiveModelAliases, MODEL_ALIAS_PATTERN } from "../../providers/default-aliases";
+import { effectiveModelAliases, MODEL_ALIAS_PATTERN, templateAliasPlan } from "../../providers/default-aliases";
+import { aliasTemplateError } from "../../providers/alias-template";
 import { isValidModelDiscoveryModelId } from "../../providers/model-discovery-limits";
 import { commitProviderPatch } from "./provider-patch-transaction";
 import { ConfigWritePublishedError } from "../../config/persist-unlocked";
@@ -277,18 +278,20 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
 
   if (url.pathname === "/api/aliases" && req.method === "GET") {
     const providers: Record<string, string> = {};
-    const models: Record<string, Record<string, { alias: string; source: "user" | "builtin"; stale?: boolean }>> = {};
+    const models: Record<string, Record<string, { alias: string; source: "user" | "builtin" | "template"; stale?: boolean }>> = {};
     for (const [name, provider] of Object.entries(config.providers)) {
       if (provider.alias) providers[name] = provider.alias;
       const known = knownModelIdsForProvider(name, provider, config);
       const knownSet = new Set(known);
-      const rows: Record<string, { alias: string; source: "user" | "builtin"; stale?: boolean }> = {};
-      for (const [id, value] of effectiveModelAliases(config, provider, new Set([...known, ...Object.keys(provider.modelAliases ?? {})]))) {
+      const rows: Record<string, { alias: string; source: "user" | "builtin" | "template"; stale?: boolean }> = {};
+      for (const [id, value] of effectiveModelAliases(config, provider, new Set([...known, ...Object.keys(provider.modelAliases ?? {})]), name)) {
         rows[id] = { ...value, ...(!knownSet.has(id) ? { stale: true } : {}) };
       }
       if (Object.keys(rows).length) models[name] = rows;
     }
-    return jsonResponse({ providers, models, defaults: {
+    const templates = Object.fromEntries(Object.entries(config.providers)
+      .filter(([, provider]) => typeof provider.aliasTemplate === "string").map(([name, provider]) => [name, provider.aliasTemplate]));
+    return jsonResponse({ providers, models, templates, defaults: {
       global: config.defaultModelAliases ?? false,
       providers: Object.fromEntries(Object.entries(config.providers).filter(([, p]) => p.defaultAliases !== undefined).map(([n, p]) => [n, p.defaultAliases])),
     } });
@@ -319,6 +322,36 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     persistConfig(config);
     const catalogRefresh = await convergeCodexCatalog();
     return jsonResponse({ ok: true, provider: name, alias, catalogRefresh });
+  }
+
+  // #7705: the opt-in template is stored as text and derived at resolution time; this route only
+  // validates, saves and previews it. The preview is the same plan routing uses, bounded.
+  const aliasTemplateMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/alias-template$/);
+  if (aliasTemplateMatch && req.method === "PUT") {
+    const name = decodeURIComponent(aliasTemplateMatch[1]!);
+    if (name === "keys") return null;
+    const provider = config.providers[name];
+    if (!provider) return jsonResponse({ error: `provider '${name}' not found` }, 404, req, config);
+    let raw: unknown;
+    try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(raw) || (raw.template !== null && typeof raw.template !== "string")) {
+      return jsonResponse({ error: "template must be a string or null" }, 400, req, config);
+    }
+    const template = typeof raw.template === "string" ? raw.template.trim() : null;
+    const problem = template === null ? null : aliasTemplateError(template);
+    if (problem) return jsonResponse({ error: problem }, 400, req, config);
+    if (template) provider.aliasTemplate = template; else delete provider.aliasTemplate;
+    persistConfig(config);
+    const catalogRefresh = await convergeCodexCatalog();
+    if (!template) return jsonResponse({ ok: true, provider: name, template: null, catalogRefresh });
+    const known = knownModelIdsForProvider(name, provider, config);
+    const existing = effectiveModelAliases(config, { ...provider, aliasTemplate: undefined }, known, name);
+    const plan = templateAliasPlan(config, provider, name, known, existing);
+    return jsonResponse({
+      ok: true, provider: name, template,
+      preview: { generated: plan.accepted.size, skipped: plan.skipped.slice(0, 50), skippedTotal: plan.skipped.length },
+      catalogRefresh,
+    });
   }
 
   const modelAliasMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/model-aliases$/);

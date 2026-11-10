@@ -38,3 +38,26 @@ test("alias write routes reject case-insensitive collisions", async () => {
   expect((await request(c, "/api/providers/alpha/model-aliases", { set: { m1: "same", m2: "SAME" } }))?.status).toBe(409);
   expect((await request(c, "/api/providers/alpha/model-aliases", { set: { m1: "gpt-5.6-sol" } }))?.status).toBe(409);
 });
+
+test("#7705: an alias template is set, previewed, listed with its source, and cleared", async () => {
+  const c = config();
+  c.providers.alpha!.alias = "AL";
+  const set = await request(c, "/api/providers/alpha/alias-template", { template: "{providerAlias}-{modelBasename}" });
+  expect(set?.status).toBe(200);
+  expect(await set?.json()).toMatchObject({ ok: true, provider: "alpha", template: "{providerAlias}-{modelBasename}", preview: { generated: 2, skipped: [] } });
+  expect(c.providers.alpha!.aliasTemplate).toBe("{providerAlias}-{modelBasename}");
+  const list = await (await request(c, "/api/aliases"))!.json();
+  expect(list).toMatchObject({ templates: { alpha: "{providerAlias}-{modelBasename}" }, models: { alpha: { m1: { alias: "AL-m1", source: "template" }, m2: { alias: "AL-m2", source: "template" } } } });
+  expect((await request(c, "/api/providers/alpha/alias-template", { template: null }))?.status).toBe(200);
+  expect(c.providers.alpha!.aliasTemplate).toBeUndefined();
+  expect((await (await request(c, "/api/aliases"))!.json()).models.alpha).toBeUndefined();
+});
+
+test("#7705: an invalid template or unknown provider is refused without a write", async () => {
+  const c = config();
+  for (const template of ["{vendor}-{modelBasename}", "{providerAlias}", "", 7]) {
+    expect((await request(c, "/api/providers/alpha/alias-template", { template }))?.status).toBe(400);
+  }
+  expect(c.providers.alpha!.aliasTemplate).toBeUndefined();
+  expect((await request(c, "/api/providers/nobody/alias-template", { template: "{modelBasename}" }))?.status).toBe(404);
+});

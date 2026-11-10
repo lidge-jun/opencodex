@@ -22,7 +22,7 @@ export function attachExportAliasSelectors(config: OcxConfig, input: readonly Ex
   // A minimal or partially repaired config can omit providers; it then has no aliases.
   const aliases = new Map(Object.entries(config.providers ?? {}).map(([name, provider]) => [name, {
     namespace: effectiveProviderAlias(name, provider, config) ?? name,
-    models: effectiveModelAliases(config, provider, knownModelIdsForProvider(name, provider, config)),
+    models: effectiveModelAliases(config, provider, knownModelIdsForProvider(name, provider, config), name),
   }]));
   const candidates = models.map(model => {
     if (model.native || model.provider === "combo") return undefined;

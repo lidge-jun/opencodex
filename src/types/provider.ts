@@ -313,6 +313,12 @@ export interface OcxProviderConfig {
   alias?: string;
   /** Native model id -> short, slash-free request alias. */
   modelAliases?: Record<string, string>;
+  /**
+   * Opt-in alias template for models without a manual or built-in alias (#7705), for example
+   * `{providerAlias}-{modelBasename}`. Derived at resolution time and never written back; only the
+   * literal `{providerAlias}` and `{modelBasename}` placeholders are allowed.
+   */
+  aliasTemplate?: string;
   /** Display-only labels for exact native model ids discovered under this provider. */
   modelDisplayNames?: Record<string, string>;
   /** Override the global built-in model-alias switch for this provider. */

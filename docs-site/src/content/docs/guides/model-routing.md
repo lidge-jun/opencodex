@@ -67,6 +67,12 @@ through to one another.
 8. **Default provider** — if nothing matched, the id is sent to `config.defaultProvider` unchanged.
    (If no default provider is configured, or it is disabled, routing throws.)
 
+## Model alias templates
+
+`aliasTemplate` (opt-in, per provider) names every model of that provider that has no manual or built-in alias, for example `"aliasTemplate": "{providerAlias}-{modelBasename}"` on a provider whose alias is `CC` turns `reflection/beam:free` into `CC-beam-free`. Only two literal placeholders exist: `{providerAlias}` (the provider's alias; a template that uses it does nothing for a provider without one) and `{modelBasename}` (the last `/` segment of the model id with `:` written as `-`), and `{modelBasename}` is required. The aliases are derived whenever models are resolved and are never written to the config, so a new model gets its alias as soon as it is discovered and removing the template removes them at once.
+
+Manual aliases win, then built-in ones, then the template. A generated name is skipped, never renamed, when it is not a valid alias, starts with a reserved prefix (`gpt-`, `o1-`, `o3-`, `o4-`, `codex-`), or matches anything already claimed: a native model id or alias of the provider, a built-in alias name, a provider name or alias, another provider's manual alias, or a combo id or alias. When two models produce the same name, both are skipped, so the result does not depend on the order models are listed. A bare template alias that another provider's template also produced is ambiguous like any other alias; the `<provider-alias>/<alias>` form still works. Set it with `ocx alias template set <provider> <template>` (or `PUT /api/providers/<name>/alias-template` with `{ "template": … }`, `null` to remove), which reports how many aliases it generates and lists skipped ones with their reason; `ocx alias list` shows generated rows with source `template`. An invalid template in a hand-edited `config.json` is ignored with a warning.
+
 ## API keys and environment variables
 
 Whatever route is chosen, the provider's `apiKey` is resolved through `resolveEnvValue()`: a value of
