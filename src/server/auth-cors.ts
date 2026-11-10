@@ -998,19 +998,17 @@ export function providerManagementConfigError(
     "omitReasoningEffortWithToolsModels",
   );
   if (toolReasoningOptOutError) return `provider ${name} ${toolReasoningOptOutError}`;
-  const unsupportedHostedToolsError = nonBlankStringArrayConfigError(
-    raw.unsupportedHostedTools,
-    "unsupportedHostedTools",
-  );
-  if (unsupportedHostedToolsError) return `provider ${name} ${unsupportedHostedToolsError}`;
-  if (Array.isArray(raw.unsupportedHostedTools)) {
+  for (const field of ["unsupportedHostedTools", "unsupportedHostedToolsWithClientTools"] as const) {
+    const hostedToolsError = nonBlankStringArrayConfigError(raw[field], field);
+    if (hostedToolsError) return `provider ${name} ${hostedToolsError}`;
+    if (!Array.isArray(raw[field])) continue;
     // Closed vocabulary, same reason as the config schema: an unrecognized name would be
     // stored and then strip nothing, so the operator would keep getting the upstream 400
     // this field exists to prevent.
-    const unknownTool = (raw.unsupportedHostedTools as unknown[])
+    const unknownTool = (raw[field] as unknown[])
       .find(tool => typeof tool === "string" && !DECLARABLE_HOSTED_TOOL_TYPES.has(tool.trim()));
     if (unknownTool !== undefined) {
-      return `provider ${name} unsupportedHostedTools must name only hosted tool types: `
+      return `provider ${name} ${field} must name only hosted tool types: `
         + `${[...DECLARABLE_HOSTED_TOOL_TYPES].join(", ")}`;
     }
   }
@@ -1190,6 +1188,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   zaiResponsesDefaultVersion: "runtime",
   supportsResponsesCustomTools: "editor",
   unsupportedHostedTools: "editor",
+  unsupportedHostedToolsWithClientTools: "editor",
   responsesSnapshotRepair: "editor",
   webSearchBridge: "editor",
   reasoningEffortMap: "editor",

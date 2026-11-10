@@ -104,6 +104,22 @@ const tool = {
   function: { name: "get_weather", parameters: { type: "object", properties: {} } },
 };
 
+/** Hosted search mixed with a client function tool, serialized through the Responses adapter. */
+function mixedHostedToolTypes(provider: OcxProviderConfig): unknown {
+  const built = withTestTranslatorBudget(createResponsesPassthroughAdapter({ ...provider, adapter: "openai-responses" })).buildRequest({
+    modelId: MODEL,
+    context: { messages: [] },
+    stream: true,
+    options: {},
+    _rawBody: {
+      model: MODEL,
+      input: "hi",
+      tools: [{ type: "web_search" }, { type: "function", name: "get_weather", parameters: { type: "object", properties: {} } }],
+    },
+  }, { headers: new Headers() });
+  return (JSON.parse(String(built.body)) as { tools?: Array<{ type: string }> }).tools?.map(entry => entry.type);
+}
+
 interface CarryCase {
   /** The stored row besides adapter and base URL. */
   seed: Partial<OcxProviderConfig>;
@@ -184,6 +200,14 @@ const CASES: Record<ProviderCompatCarryField, CarryCase> = {
   retryOnReset: {
     seed: { retryOnReset: { enabled: true, replacements: 1 } },
     probe: provider => resetReplayPolicyFor(provider),
+  },
+  unsupportedHostedTools: {
+    seed: { unsupportedHostedTools: ["web_search"] },
+    probe: mixedHostedToolTypes,
+  },
+  unsupportedHostedToolsWithClientTools: {
+    seed: { unsupportedHostedToolsWithClientTools: ["web_search"] },
+    probe: mixedHostedToolTypes,
   },
 };
 
@@ -341,6 +365,57 @@ describe("PATCH and POST validate the settings they name", () => {
       const cleared = loadConfig().providers.relay!;
       expect(cleared).not.toHaveProperty("foldDeveloperRoleToSystem");
       expect(cleared).not.toHaveProperty("reasoningWireFormat");
+    });
+  });
+
+  test("PATCH writes, normalizes, and clears unsupportedHostedToolsWithClientTools; GET returns it", async () => {
+    await withServer({ relay: { adapter: "openai-responses", baseUrl: BASE_URL, apiKey: "sk-relay" } }, async url => {
+      const set = await send(url, "/api/providers?name=relay", "PATCH", {
+        unsupportedHostedToolsWithClientTools: [" web_search ", "web_search"],
+      });
+      expect(set.status).toBe(200);
+      expect(loadConfig().providers.relay?.unsupportedHostedToolsWithClientTools).toEqual(["web_search"]);
+
+      const listed = await (await fetch(new URL("/api/providers", url))).json() as Array<Record<string, unknown>>;
+      expect(listed.find(row => row.name === "relay")?.unsupportedHostedToolsWithClientTools).toEqual(["web_search"]);
+
+      for (const value of [["web_serch"], "web_search", [42], {}]) {
+        const bad = await send(url, "/api/providers?name=relay", "PATCH", { unsupportedHostedToolsWithClientTools: value });
+        expect(bad.status).toBe(400);
+        expect(((await bad.json()) as { error: string }).error).toContain("unsupportedHostedToolsWithClientTools");
+        expect(loadConfig().providers.relay?.unsupportedHostedToolsWithClientTools).toEqual(["web_search"]);
+      }
+
+      // An unrelated PATCH leaves it alone.
+      const unrelated = await send(url, "/api/providers?name=relay", "PATCH", { promoteAdditionalTools: true });
+      expect(unrelated.status).toBe(200);
+      expect(loadConfig().providers.relay?.unsupportedHostedToolsWithClientTools).toEqual(["web_search"]);
+
+      const clear = await send(url, "/api/providers?name=relay", "PATCH", { unsupportedHostedToolsWithClientTools: null });
+      expect(clear.status).toBe(200);
+      expect(loadConfig().providers.relay).not.toHaveProperty("unsupportedHostedToolsWithClientTools");
+
+      const empty = await send(url, "/api/providers?name=relay", "PATCH", { unsupportedHostedToolsWithClientTools: [] });
+      expect(empty.status).toBe(200);
+      expect(loadConfig().providers.relay).not.toHaveProperty("unsupportedHostedToolsWithClientTools");
+    });
+  });
+
+  test("POST accepts a valid unsupportedHostedToolsWithClientTools and refuses a misspelling", async () => {
+    await withServer({}, async url => {
+      const bad = await send(url, "/api/providers", "POST", {
+        name: "relay",
+        provider: { adapter: "openai-responses", baseUrl: BASE_URL, unsupportedHostedToolsWithClientTools: ["web_serch"] },
+      });
+      expect(bad.status).toBe(400);
+      expect(loadConfig().providers.relay).toBeUndefined();
+
+      const good = await send(url, "/api/providers", "POST", {
+        name: "relay",
+        provider: { adapter: "openai-responses", baseUrl: BASE_URL, unsupportedHostedToolsWithClientTools: ["web_search_preview"] },
+      });
+      expect(good.status).toBe(200);
+      expect(loadConfig().providers.relay?.unsupportedHostedToolsWithClientTools).toEqual(["web_search_preview"]);
     });
   });
 

@@ -900,6 +900,19 @@ export interface OcxProviderConfig {
    */
   unsupportedHostedTools?: string[];
   /**
+   * Hosted tool declarations this Responses destination rejects only in combination with
+   * client tools, so they are stripped when the same request also declares a `function` or
+   * `custom` tool, or a namespace with members, in `tools`, a client-loaded
+   * `additional_tools` catalog, or a `tool_search_output` result. A request that declares
+   * only hosted tools keeps them.
+   *
+   * This describes a gateway that serves hosted `web_search` alone and function calling
+   * alone, but answers HTTP 400 when one request carries both (#8204). Same vocabulary and
+   * alias expansion as `unsupportedHostedTools`, which stays authoritative: a tool listed
+   * there is removed whether or not client tools are present.
+   */
+  unsupportedHostedToolsWithClientTools?: string[];
+  /**
    * Provider-local repair for Responses gateways whose lifecycle snapshots omit canonical
    * fields or closing events (#893). Disabled by default and applied only to client-facing
    * SSE/JSON; raw inspection state remains authoritative.

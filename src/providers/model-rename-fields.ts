@@ -112,6 +112,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   zaiResponsesDefaultVersion: "none",
   supportsResponsesCustomTools: "none",
   unsupportedHostedTools: "none",
+  unsupportedHostedToolsWithClientTools: "none",
   responsesSnapshotRepair: "none",
   webSearchBridge: "none",
   reasoningEffortMap: "none",

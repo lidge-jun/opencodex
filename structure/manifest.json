@@ -879,6 +879,19 @@
       ]
     },
     {
+      "path": "providers/hosted-tool-denials.md",
+      "tier": 4,
+      "title": "Hosted-Tool Denials",
+      "scope": "Provider-declared Responses hosted-tool denials, unconditional and conditional on client tools, with their validation and save carry.",
+      "documents": [
+        "src/responses/hosted-tool-policy.ts",
+        "src/adapters/openai-responses/tool-schema.ts",
+        "src/config/schema/leaf-validators.ts",
+        "src/server/auth-cors.ts",
+        "src/server/management/provider-overwrite-carry.ts"
+      ]
+    },
+    {
       "path": "providers/completed-tool-blocks.md",
       "tier": 4,
       "title": "Negotiated Completed Tool Blocks",
