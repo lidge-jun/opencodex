@@ -127,6 +127,8 @@ interface ProviderAdapter {
 
 ## `anthropic`
 
+Об опциональном режиме совместимости OAuth и потере приоритета системных инструкций см. [основную документацию на английском](/reference/adapters/#anthropic).
+
 **Назначение:** Anthropic **Messages** (`/v1/messages`).
 **Аутентификация:** `key` (по умолчанию `x-api-key`, либо `Authorization: Bearer` при `apiKeyTransport: "bearer"`) или `oauth` (Bearer + `anthropic-beta`, для Claude Pro/Max).
 

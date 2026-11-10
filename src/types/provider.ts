@@ -586,6 +586,9 @@ export interface OcxProviderConfig {
    * `Authorization: Bearer <key>` instead.
    */
   apiKeyTransport?: "x-api-key" | "bearer";
+  /** Opt-in translated OAuth compatibility: move caller system instructions to user content,
+   * losing system-role precedence. Default false; API-key and native passthrough are unchanged. */
+  anthropicOAuthUserInstructions?: boolean;
   /**
    * Multi-key pool (API-key twin of OAuth multiauth). `apiKey` always mirrors the ACTIVE
    * entry so routing stays single-key; managed via /api/providers/keys. A legacy bare

@@ -105,6 +105,8 @@ HTTP リトライ ループの対象外です。
 
 ## `anthropic`
 
+OAuth 互換設定のオプトインと system 命令の優先順位への影響は、[英語の正規リファレンス](/reference/adapters/#anthropic)を参照してください。
+
 **対象:** Anthropic **Messages**（`/v1/messages`）。
 **認証:** `key`（デフォルトは `x-api-key`、または `apiKeyTransport: "bearer"` による `Authorization: Bearer`）または `oauth`（Bearer + `anthropic-beta`、Claude Pro/Max 用）。
 

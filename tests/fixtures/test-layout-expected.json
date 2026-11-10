@@ -341,6 +341,7 @@
   "alibaba-token-plan-responses-optin.test.ts": "providers", "alibaba-token-plan-wire-defaults.test.ts": "providers",
   "always-on-429-failover.test.ts": "routing", "ambiguous-resend-composition.test.ts": "lib",
   "ambiguous-resend-gate.test.ts": "lib", "anthropic-client-identity.test.ts": "adapters/anthropic",
+  "anthropic-oauth-caller-system-shape.test.ts": "adapters/anthropic",
   "anthropic-account-metadata.test.ts": "adapters/anthropic", "anthropic-account-pool.test.ts": "adapters/anthropic",
   "anthropic-affinity-restart.test.ts": "adapters/anthropic", "anthropic-affinity-store.test.ts": "adapters/anthropic",
   "anthropic-account-pause-outbound.test.ts": "adapters/anthropic",
