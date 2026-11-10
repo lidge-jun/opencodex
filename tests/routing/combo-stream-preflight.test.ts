@@ -401,6 +401,203 @@ describe("combo stream preflight", () => {
     }
   });
 
+  test("retries a zero-output opaque OpenRouter numeric 400 without a structured code", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      status: 400,
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+      },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(400);
+  });
+
+  test("retries a zero-output opaque OpenRouter numeric 400 when status is omitted from SSE error", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+      },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(400);
+    const body = await result.response.json();
+    expect(body.error).toMatchObject({
+      message: "Provider returned error",
+      code: 400,
+      metadata: { raw: "ERROR" },
+    });
+  });
+
+  test("treats a zero-output opaque OpenRouter numeric 400 carrying root detail for malformed response_format as terminal", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      detail: "Invalid schema for response_format: 'type' must be 'object'",
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+      },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("a conflicting root and nested code still fails over when each would on its own", async () => {
+    // Neither code is a hard stop, so the conflict alone is no reason to keep a retryable failure.
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      code: "server_error",
+      status: 503,
+      error: { message: "overloaded", code: "server_is_overloaded" },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("failed");
+  });
+
+  test("a conflicting root hard stop keeps a retryable nested code terminal", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      code: "origin_rejected",
+      status: 429,
+      error: { message: "rate limited", code: "rate_limit_exceeded" },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("treats a zero-output opaque OpenRouter numeric 400 carrying root code invalid_request_error as terminal", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      code: "invalid_request_error",
+      status: 400,
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+      },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("retries a zero-output flat opaque OpenRouter numeric 400 SSE frame without status", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      message: "Provider returned error",
+      code: 400,
+      metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(400);
+    const body = await result.response.json();
+    expect(body.error).toMatchObject({
+      message: "Provider returned error",
+      code: 400,
+      metadata: { raw: "ERROR" },
+    });
+  });
+
+  test("retries a zero-output flat opaque OpenRouter numeric 400 SSE frame with explicit status 400", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      status: 400,
+      message: "Provider returned error",
+      code: 400,
+      metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(400);
+  });
+
+  test("treats a wrapped invalid_request_error with upstream_error as terminal", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      status: 400,
+      error: {
+        type: "upstream_error",
+        message: 'Provider error 400: {"type":"error","error":{"type":"invalid_request_error","message":"tools.0.custom.name: String should match pattern ..."}}',
+      },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("retries a zero-output bare SSE error carrying numeric code 1308", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      error: { code: 1308, message: "Usage limit reached" },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("failed");
+  });
+
+  test("treats a zero-output bare SSE error with HTTP 400 and non-400 numeric code as terminal", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      status: 400,
+      error: {
+        code: 404,
+        type: "upstream_error",
+        message: "Resource not found",
+      },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("a root hop code leaves an opaque wrapper retryable, and a blank root code is no verdict", async () => {
+    // HTTP used to stop on any root code other than "400". The stream never did, so the carrier
+    // -- not the envelope -- decided. These four were the divergence: two hop signals, and the
+    // two ways a root states no code at all.
+    for (const code of ["model_not_found", "input_admission_refused", "", "  "]) {
+      const result = await preflightComboStreamResponse(sse({
+        type: "error",
+        status: 400,
+        code,
+        error: { message: "Provider returned error", code: 400, metadata: { raw: "ERROR" } },
+      }), { model: "m1", provider: "a" });
+
+      expect(result.kind).toBe("failed");
+      expect(result.response.status).toBe(400);
+    }
+  });
+
+  test("a root hard stop keeps a retryable nested record terminal, matching HTTP", async () => {
+    for (const code of ["content_policy_violation", "origin_rejected", "context_length_exceeded"]) {
+      const result = await preflightComboStreamResponse(sse({
+        type: "error",
+        status: 400,
+        code,
+        error: { message: "retryable", code: "model_not_found" },
+      }), { model: "m1", provider: "a" });
+
+      expect(result.kind).toBe("accepted");
+    }
+  });
+
+  test("a bare response.error is not an error event, so the frame commits like any other payload", async () => {
+    // Neither transport reads this carrier: under `type: "error"` it is not an error event, and
+    // HTTP has no error record to classify. Reading it on HTTP alone made one document hop there
+    // and stop here.
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      status: 400,
+      response: { error: { message: "Provider returned error", code: 400, metadata: { raw: "ERROR" } } },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("accepted");
+  });
+
   test("passes a zero-output credential error to the ordinary combo classifier", async () => {
     const result = await preflightComboStreamResponse(sse({
       type: "error",

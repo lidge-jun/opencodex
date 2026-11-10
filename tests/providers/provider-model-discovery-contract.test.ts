@@ -647,7 +647,7 @@ describe("registry-owned provider model discovery", () => {
     });
     for (const id of [" padded/model", "model\nwith-control"]) {
       expect(extractProviderModelItems({ data: [{ id }] }, discovery))
-        .toEqual({ ok: false, reason: "invalid_shape", diagnostic: "row 0 has an invalid id" });
+        .toEqual({ ok: false, reason: "invalid_shape", diagnostic: "row 0 has an invalid id; 1 of 1 rows invalid" });
     }
   });
 
@@ -656,11 +656,11 @@ describe("registry-owned provider model discovery", () => {
       adapter: "openai-chat", baseUrl: "https://example.test/v1",
     });
     expect(extractProviderModelItems({ data: [{ id: "", secret: "do-not-log" }, { id: "valid" }] }, discovery))
-      .toEqual({ ok: false, reason: "invalid_shape", diagnostic: "row 0 has an empty id" });
+      .toEqual({ ok: false, reason: "invalid_shape", diagnostic: "row 0 has an empty id; 1 of 2 rows invalid" });
     expect(extractProviderModelItems({ data: [{ id: "valid" }, null] }, discovery))
-      .toEqual({ ok: false, reason: "invalid_shape", diagnostic: "row 1 is not an object" });
+      .toEqual({ ok: false, reason: "invalid_shape", diagnostic: "row 1 is not an object; 1 of 2 rows invalid" });
     expect(extractProviderModelItems({ data: [{ id: "valid" }, { id: 7 }] }, discovery))
-      .toEqual({ ok: false, reason: "invalid_shape", diagnostic: "row 1 has a non-string id" });
+      .toEqual({ ok: false, reason: "invalid_shape", diagnostic: "row 1 has a non-string id; 1 of 2 rows invalid" });
   });
 
   test("catalog warns safely and retains configured fallback for invalid rows (#7910)", async () => {

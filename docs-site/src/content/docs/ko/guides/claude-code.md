@@ -14,6 +14,19 @@ Messages API를 통해 사용하는 Devin 경로(SWE-2 포함)에서는 늦게 �
 이 출력 순서 수정으로 Cognition이 생성된 일부 시스템 텍스트를 거부하는 별개의 문제가 해결되지는 않아요.
 시스템 지시와 안전 제약은 그대로 유지해요.
 
+## Claude OAuth 클라이언트 버전 오류
+
+Anthropic OAuth 요청에서 `claude_code_version_too_old`가 반환되면 사용하는 프로바이더를 확인하세요.
+Codex에서 `anthropic` 어댑터로 연결할 때는 OpenCodex 자체의 Claude Code 호환 프로필을 사용합니다.
+별도로 설치한 `claude` 실행 파일을 업데이트해도 이 프로필은 바뀌지 않습니다. OpenCodex를 업데이트하고
+프록시를 재시작하세요. `claude-cli` 프로바이더나 Claude Code를 직접 사용한다면 해당 CLI를 업데이트하세요.
+실제 Claude 클라이언트의 식별 정보를 전달받은 Anthropic 네이티브 Messages 요청은 그 클라이언트의 버전을 유지하며,
+설정한 헤더가 있으면 그 값이 우선합니다.
+
+예를 들어 `claude-fable-5-2`에서 보고된 오류는 Claude Code 2.1.290 이상을 요구했습니다.
+이 버전의 OpenCodex 프로필은 2.1.321을 사용합니다. 향후 상위 버전이 필요해지면 더 최신 OpenCodex
+프로필이 필요할 수 있습니다. 프로필을 갱신해도 모델 이용 권한이나 구독 한도는 바뀌지 않습니다.
+
 ## CLI와 외부 실행 앱의 티어 기본값
 
 Claude Code 탭에서 Opus, Sonnet, Haiku, Fable 기본 모델을 선택한 뒤 **저장**하세요.
@@ -56,7 +69,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (구독으로 실행할 때 설정하지 않으면 네이티브 `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`) |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | OpenCodex가 라우팅 별칭으로 설정한 티어 슬롯의 `/model` 라벨(예: `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`). launchd 시스템 환경과 셸 훅에도 같은 짝으로 기록합니다. 모델 ID는 별칭 그대로입니다. 직접 설정한 슬롯이나 라벨은 건드리지 않습니다 |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort`가 켜져 있으면 `1` (조건부) |
-| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch`가 설정된 경우 (조건부, 기본값은 꺼짐) |
+| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch`가 설정된 경우 (조건부, 기본으로는 주입하지 않으며 Claude Code 자체 기본값을 따름) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `maxContextTokens`가 설정된 경우 기존 컨텍스트 재정의 값 (조건부) |
 직접 내보낸 변수가 항상 우선해요. 추가 인자는 그대로 전달돼요: `ocx claude -p "hello"`.
 
@@ -152,6 +165,8 @@ hook을 제거해요. Claude Desktop은 별도 profile을 사용하며 shell hoo
 
 `claudeCode.nativePassthrough: false`로 끌 수 있고, `claudeCode.anthropicBaseUrl`로 다른 주소를
 지정할 수 있어요.
+
+**패스스루의 레이트 리밋.** 패스스루 요청은 호출자가 보낸 자격 증명을 그대로 쓰므로 그 로그인의 한도를 따라요. 그 로그인이 429를 돌려주면 OpenCodex는 레이트 리밋 헤더와 `Retry-After`를 유지한 429를 돌려주고, 사용자 자격 증명으로 인증된 요청을 다른 프로바이더나 계정으로 다시 보내지 않아요. Claude Code는 `claude-haiku-5-5`에서 실행하는 WebSearch처럼 일부 요청을 small-fast 모델로 보내기 때문에, 라우팅된 메인 턴은 잘 되는데 이런 요청만 레이트 리밋에 걸린 로그인에서 실패할 수 있어요. 이 트래픽을 관리형 프로바이더로 옮기려면 모델 ID를 매핑하세요. 1P Desktop·CLI 트래픽은 `claudeCode.intercept.modelMap`(또는 `ocx claude desktop bind`), 모든 진입점은 `claudeCode.modelMap`을 쓰면 돼요. 매핑된 ID는 자기 자신으로 해석되지 않으므로 위 패스스루 조건을 만족하지 않고 다른 요청처럼 라우팅돼요. `ocx claude` 세션에서는 `claudeCode.tierModels.haiku`로 그 슬롯이 라우팅된 모델 ID를 요청하게 할 수도 있어요. 다만 여기에 일반 `claude-*` ID를 넣으면 여전히 패스스루되고, 직접 export한 `ANTHROPIC_DEFAULT_HAIKU_MODEL`이 우선해요([#7912](https://github.com/lidge-jun/opencodex/issues/7912)).
 
 ## Claude Desktop 모드: 게이트웨이(기본값)와 1P
 
@@ -719,11 +734,15 @@ Anthropic 백엔드를 명시하면 의도적으로 실패 후 중단해요.
 언급하면 자동으로 불러와요. 네이티브 패스스루에서는 정상이며, 라우팅 모델에서는 opencodex가
 기본적으로 스텁으로 바꿔요(`blockedSkills: ["claude-api"]`).
 
-**첫 턴부터 MCP 도구 스키마가 컨텍스트를 채움** — `claudeCode.toolSearch: true`는 클라이언트의 도구 검색을 켜는 선택 설정이며 기본값은 꺼짐입니다. 네이티브 Anthropic 경로는 서버 측 검색과 지연 도구 참조를 그대로 전달합니다. 기본 번역 경로는 같은 서버 기능을 제공하지 않으므로 모든 타사 경로에서 켜도 된다는 뜻은 아닙니다.
+**첫 턴부터 MCP 도구 스키마가 컨텍스트를 채움** — 게이트웨이 뒤에서 Claude Code가 MCP 도구를 지연 로드하는지는 버전에 따라 다릅니다. v2.1.304부터는 `ANTHROPIC_BASE_URL`이 게이트웨이를 가리켜도(모든 `ocx claude` 세션 포함) 도구 검색이 기본으로 켜집니다. 그 이전 버전은 게이트웨이 뒤에서 지연 로드를 끄고 첫 턴에 모든 도구 스키마를 넣으므로 `claudeCode.toolSearch: true`로 다시 켤 수 있습니다. `ocx claude`는 이 설정이 켜는 값일 때만 `ENABLE_TOOL_SEARCH`를 주입하고, 설정이 없으면 클라이언트 자체 기본값을 따릅니다. `toolSearch: false`는 아무것도 주입하지 않으므로 도구 검색을 끄지 않습니다. 번역 Chat 경로(DeepSeek, GLM 등)에서는 `ToolSearch`로 도구를 불러올 때마다 도구 목록과 시스템 메시지가 바뀌어 다음 요청이 프롬프트 캐시를 대부분 놓칩니다([#7963](https://github.com/lidge-jun/opencodex/issues/7963)). 캐시를 우선하려면 `ocx claude` 실행 전에 `ENABLE_TOOL_SEARCH=false`를 export하세요. 직접 export한 값이 항상 우선합니다. 도구 검색을 켠 채로 prefix를 유지하려면 검증한 직접 Chat 경로를 `claudeCode.chatToolDispatchModels`로 선택하세요(아래 Chat 경로 설명 참고). 네이티브 Anthropic 경로는 서버 측 검색과 지연 도구 참조를 그대로 전달합니다. 기본 번역 경로는 같은 서버 기능을 제공하지 않으므로 모든 타사 경로에서 켜도 된다는 뜻은 아닙니다.
 
 예외적으로, 클라이언트가 직접 실행하는 eager `ToolSearch` 함수와 구조화된 검색 결과를 제공하고 최종 Responses 목적지가 `additional_tools`를 지원한다면 `claudeCode.appendOnlyToolLoadingModels`로 그 목적지를 명시하여 사용할 수 있습니다. 이 옵션은 사용하지 않은 지연 정의를 초기 카탈로그에서 제외하고 성공한 검색 위치에 현재 정의를 배치합니다. 런처의 `toolSearch` 설정만으로 이 동작이나 서버 측 검색이 활성화되지는 않습니다. 지원되는 클라이언트와 게이트웨이 조합에서만 켜고, 그 밖의 타사 경로에서는 꺼 두세요. 기존 compatibility-enforcement 검사는 그대로 적용되므로 지원하지 않는 요청을 거절할 수 있습니다. 캐시 적중이나 네이티브 검색과의 완전한 동등성은 보장하지 않습니다. [영문 설정 안내](/guides/claude-code/#preserve-cache-prefixes-when-client-tools-load)를 참고하세요.
 
 OpenCode Go의 Responses 엔드포인트와 공식 xAI Responses 호스트는 선택 목록에 있어도 원래 전체 도구 카탈로그를 유지합니다. 이 목적지들은 `additional_tools`를 초기 `tools`로 승격하거나 거절하므로 시간순 로딩 prefix를 보존할 수 없습니다. 검색 결과의 정의를 초기 `tools`로 승격하는 다른 게이트웨이에서도 이 옵션을 꺼 두세요.
+
+`additional_tools`를 받아들이지만 오류 없이 버리는 Responses 공급자도 이 옵션의 대상이 아닙니다. 불러온 정의가 모델에게 전달되지 않기 때문입니다. 2026-10-31 측정에서 DeepSeek 공식 Responses API가 이렇게 동작했습니다. DeepSeek에는 아래 Chat 경로 옵션을 사용하세요.
+
+Chat Completions 경로에는 `additional_tools`에 해당하는 수단이 없습니다. 변환된 Chat 경로에서는 ToolSearch로 도구를 불러올 때마다 도구 카탈로그와 시스템 메시지의 도구 이름 목록이 바뀌어, 다음 요청이 대화 전체에서 공급자 프롬프트 캐시를 놓칩니다. `ENABLE_TOOL_SEARCH=false`로 도구 검색을 끌 수도 있고, 도구 검색을 켠 채로 사용하는 모델로 검증한 직접 Chat 경로라면 `claudeCode.chatToolDispatchModels`(예: `["deepseek/deepseek-flash"]`)로 둘을 고정할 수 있습니다. 선택자 문법, 제한, 메타데이터와 eager `ToolSearch` 전제, combo·policy·늦은 대체 경로 규칙은 `appendOnlyToolLoadingModels`와 같고, 최종 물리 경로가 직접 `openai-chat` 공급자일 때만 적용됩니다. 선택된 경로에서는 첫 요청부터 카탈로그에 `use_loaded_tool` 함수 하나를 더하고 사용하지 않은 지연 도구는 뺍니다. 검색으로 찾은 도구의 이름, 설명, 매개변수 스키마는 그 도구를 불러온 ToolSearch 결과 뒤에 텍스트로 붙습니다. 모델은 `use_loaded_tool`로 그 도구를 호출하고, opencodex는 형식이 올바른 `use_loaded_tool` 호출을 모두 이름이 가리키는 도구 호출로 바꿔 Claude Code에 전달하므로 Claude Code는 항상 실제 도구 이름을 받습니다. 선언된 도구는 직접 호출한 것과 똑같이 실행되고, Claude Code가 모르는 이름은 그 이름 그대로 알 수 없는 도구로 보고됩니다. 형식이 맞지 않거나 다른 키가 섞인 호출은 그대로 전달되어 알 수 없는 도구로 실패합니다. 모델이 ToolSearch로 불러오지 않은 지연 도구를 직접 또는 `use_loaded_tool`로 호출하면 그 도구가 카탈로그로 돌아와 캐시 prefix를 한 번 잃습니다. 정의가 텍스트로 전달되므로 공급자 측 strict 스키마 검사는 적용되지 않습니다. 안내가 도구 결과 안에 있어 따르지 않는 모델이 있을 수 있으니 모델마다 검증한 뒤 켜세요. 옵션이 없거나 비어 있거나 목록에 없는 경로는 이전과 같은 요청 바이트를 보냅니다. 캐시 적중을 보장하지는 않습니다. Claude Code는 래퍼 호출의 인자를 호출이 끝난 뒤에 받는데, 변환된 Chat 경로의 모든 도구 호출이 이렇게 전달되므로 이 옵션으로 달라지는 점은 아닙니다. [영문 설정 안내](/guides/claude-code/#chat-routes)를 참고하세요.
 
 **서브에이전트가 잘못된 모델로 디스패치됨** — 로스터 에이전트(`ocx-*`)는 Agent 도구의 `model`
 인자가 아니라 `<!-- ocx-route: ... -->` 지시문을 사용해요. 지시문이 원하는 라우트와 일치하는지
