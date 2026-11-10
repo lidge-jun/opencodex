@@ -282,6 +282,13 @@ export async function fetchAnthropicUsageProbeForInstance(
   return probe;
 }
 
+/** Pool switch plus each seat's routability, in store order; a change retires a cached pooled report. */
+function anthropicPoolState(config: OcxConfig, instance: AnthropicInstanceId): string {
+  const accounts = getAccountSet(instance)?.accounts ?? [];
+  return JSON.stringify([isAnthropicPoolEnabledFor(config, instance),
+    accounts.map(row => [row.id, row.paused === true, row.needsReauth === true])]);
+}
+
 /**
  * Pooled Anthropic report: the same display-only configured-weight estimate the Codex pool row
  * carries, so the Providers overview shows pool-wide 5-hour/weekly bars, the next recovery and the
@@ -374,10 +381,15 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
       accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota, isCurrent: anthropicCurrent }); anthropicPublish?.();
     }
   }
-  const quotaReport = anthropicPoolReport(provider, instance, config, probedAccountId, quota)
-    ?? report(provider, "anthropic:oauth-usage", quota);
-  if (quotaReport && anthropicCurrent) {
-    accountReportCurrent.set(quotaReport, () => anthropicCurrent() && getAccountSet(instance)?.activeAccountId === probedAccountId);
+  const pooledReport = anthropicPoolReport(provider, instance, config, probedAccountId, quota);
+  const quotaReport = pooledReport ?? report(provider, "anthropic:oauth-usage", quota);
+  // A pooled report is current only while the pool's switch and membership are unchanged: pausing,
+  // resuming or reauthorizing an inactive seat changes the aggregate without moving the active one.
+  const poolState = pooledReport ? anthropicPoolState(config, instance) : undefined;
+  const poolCurrent = () => poolState === undefined || anthropicPoolState(config, instance) === poolState;
+  if (quotaReport && (anthropicCurrent || poolState !== undefined)) {
+    accountReportCurrent.set(quotaReport, () => (anthropicCurrent?.() ?? true) && poolCurrent()
+      && getAccountSet(instance)?.activeAccountId === probedAccountId);
   }
   return quotaReport;
 }

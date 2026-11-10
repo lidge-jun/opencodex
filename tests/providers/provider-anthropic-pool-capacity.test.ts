@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { clearPoolRotationState } from "../../src/codex/pool-rotation";
 import { clearAnthropicAccountPoolState } from "../../src/oauth/anthropic-routing";
 import { getAccountSet, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
-import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
+import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
 import { fetchAnthropicQuota } from "../../src/providers/quota/vendor-probes-oauth";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -37,7 +37,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  clearAnthropicAccountPoolState(); clearPoolRotationState(); clearAccountQuotaCache();
+  clearAnthropicAccountPoolState(); clearPoolRotationState(); clearAccountQuotaCache(); clearProviderQuotaCache();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   removeTreeWithRetry(home);
@@ -103,5 +103,39 @@ test("with the account pool off the report stays the active account's own readin
 
   expect(result?.quota.fiveHourPercent).toBe(40);
   expect(result?.quota.weeklyPercent).toBe(20);
+  expect(result?.aggregation).toBeUndefined();
+});
+
+test("pausing an inactive pool account retires the cached pooled report", async () => {
+  const [, b, c] = ids as [string, string, string];
+  const now = Date.now();
+  setCachedProviderAccountQuotaForTests("anthropic", b, { fiveHourPercent: 100, weeklyPercent: 100, updatedAt: now });
+  setCachedProviderAccountQuotaForTests("anthropic", c, { fiveHourPercent: 10, weeklyPercent: 0, updatedAt: now });
+  let probes = 0;
+  const probe = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => { probes++; return probe(input, init); }) as typeof fetch;
+  const cfg = config(true);
+  clearProviderQuotaCache();
+
+  const first = (await fetchProviderQuotaReports(cfg)).reports.find(item => item.provider === "anthropic");
+  expect(first?.aggregation).toMatchObject({ includedAccounts: 3, pausedAccounts: 0 });
+  const afterFirst = probes;
+  // Pausing a seat that is not active leaves the active account and the cache key unchanged.
+  await setAccountPaused("anthropic", b, true);
+
+  const second = (await fetchProviderQuotaReports(cfg)).reports.find(item => item.provider === "anthropic");
+  expect(probes).toBeGreaterThan(afterFirst);
+  expect(second?.aggregation).toMatchObject({ includedAccounts: 2, pausedAccounts: 1, incomplete: true });
+});
+
+test("an enabled pool holding one account reports that account's own reading", async () => {
+  const [, b, c] = ids as [string, string, string];
+  const { removeAccount } = await import("../../src/oauth/store");
+  await removeAccount("anthropic", b);
+  await removeAccount("anthropic", c);
+
+  const result = await fetchAnthropicQuota("anthropic", config(true));
+
+  expect(result?.quota.fiveHourPercent).toBe(40);
   expect(result?.aggregation).toBeUndefined();
 });
