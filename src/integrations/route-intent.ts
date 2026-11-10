@@ -112,7 +112,10 @@ async function applyAside(input: RouteIntentApplyInput, intent: RouteClientInten
   if (intent.enabled && accounts !== "none" && selected.length === 0) {
     return { client: "aside", outcome: "not_installed", message: "No local Aside profile matches the requested userIds" };
   }
-  return { client: "aside", outcome: "current", target: selected.map(profile => `u${profile.id}`).join(",") };
+  // `--accounts none` (or an off intent) selects no profile: an empty slot list is no target at
+  // all, and the receipt and Home record outcome schemas reject an empty one.
+  const target = selected.map(profile => `u${profile.id}`).join(",");
+  return { client: "aside", outcome: "current", ...(target ? { target } : {}) };
 }
 
 async function applyClient(input: RouteIntentApplyInput, client: RouteClientId, intent: RouteClientIntent): Promise<RouteClientOutcome> {

@@ -9,6 +9,7 @@ import { createTempHome, type TempHome } from "../helpers/temp-home";
 import type { OcxConfig } from "../../src/types";
 import { readHomeRouteIntentState } from "../../src/routing/home-route-intent";
 import { emptyRouteIntentState } from "../../src/link/route-intent";
+import { homeRouteIntentReceipt, readHomeRouteIntentRecord, writeHomeRouteIntentRecord } from "../../src/client/link-home";
 
 let home: TempHome;
 let input: RouteIntentApplyInput;
@@ -85,3 +86,21 @@ test("legacy Aside ownership follows its recorded path after the current account
   const migrated = readHomeRouteIntentState(input.config, { home: input.home, store: input.store, state: emptyRouteIntentState() });
   expect(migrated.defaults.aside).toEqual({ enabled: true, accounts: ["selected-user"] });
 });
+
+test("aside on --accounts none records no target, so a linked Child can persist its Home receipt", async () => {
+  input.linkId = "lnk_0123456789abcdef";
+  input.document.clients.aside.accounts = "all";
+  await materializeRouteIntent(input);
+  input.document.clients.aside.accounts = "none";
+  const receipt = await materializeRouteIntent(input);
+  const aside = receipt.outcomes.find(row => row.client === "aside")!;
+  expect(aside.outcome).toBe("current");
+  expect(Object.hasOwn(aside, "target")).toBe(false);
+  for (const slot of [0, 7]) expect(read(slot).providers.opencodex).toBeUndefined();
+  // The connected persistence step validates these outcomes before it writes the Home record.
+  const recordPath = home.path("link", "home-route-intent.json");
+  const record = homeRouteIntentReceipt(input.linkId, input.document, receipt.appliedAt, receipt.appliedAt, receipt.outcomes, null);
+  expect(() => writeHomeRouteIntentRecord(record, recordPath)).not.toThrow();
+  expect(readHomeRouteIntentRecord(input.linkId, recordPath)?.routeClientOutcomes.find(row => row.client === "aside")?.outcome).toBe("current");
+});
+
