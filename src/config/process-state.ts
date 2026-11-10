@@ -332,10 +332,12 @@ export function setProcessCommandLinePlatformForTests(next: NodeJS.Platform | nu
 type ProcessCommandLineNative = (pid: number) => string | undefined;
 let processCommandLineNativeForTests: ProcessCommandLineNative | null = null;
 
+/** Replace the in-process Windows command-line read; null restores the real one. */
 export function setProcessCommandLineNativeForTests(next: ProcessCommandLineNative | null): void {
   processCommandLineNativeForTests = next;
 }
 
+/** The in-process Windows read, or undefined so the spawned probes take their turn. */
 function readNativeWindowsCommandLine(pid: number): string | undefined {
   try {
     if (processCommandLineNativeForTests) return processCommandLineNativeForTests(pid);
