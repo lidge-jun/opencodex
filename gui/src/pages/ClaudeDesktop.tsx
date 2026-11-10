@@ -794,7 +794,6 @@ export default function ClaudeDesktop({
                   type="button"
                   className="btn btn-ghost btn-sm"
                   disabled={pending !== null}
-                  title={t("claudeDesktop.removeUnavailableHint")}
                   onClick={() => removeUnavailable(removable)}
                 >
                   {t("claudeDesktop.removeAllUnavailable", { n: removable.length })}
