@@ -661,6 +661,9 @@ const REQUEST_SHAPE_FAILURE_CODES = new Set([
   // A route that cannot read the request's media (image input to a text-only CLI route) is
   // healthy for every other request, so cooling it would only block unrelated turns.
   "unsupported_input_modality",
+  // A request whose token cap was reached before output was produced is request-specific;
+  // the candidate remains healthy for subsequent requests with larger limits.
+  "zero_output_token_limit",
 ]);
 
 /** Credential/billing failures that every target sharing the provider inherits. */

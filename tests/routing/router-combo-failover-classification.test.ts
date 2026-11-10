@@ -76,6 +76,13 @@ describe("combo failure cooldown scope", () => {
     expect(comboFailureCooldownScope(502,
       "Your input exceeds the context window of this model. Please adjust your input and try again.",
       { code: "upstream_server_error" })).toBe("none");
+    // A request whose token cap was exhausted before output was produced is request-specific.
+    expect(comboFailureCooldownScope(502,
+      "Provider reached its output token limit before producing output",
+      { code: "zero_output_token_limit" })).toBe("none");
+    expect(comboFailureDecision(502,
+      "Provider reached its output token limit before producing output",
+      { code: "zero_output_token_limit" })).toBe("hop");
     // A credential verdict keeps its provider scope even when the body quotes context prose.
     expect(comboFailureCooldownScope(401, "invalid key for the 200k context window tier")).toBe("provider");
     // A provider's own per-target hard cap (vendor code 5059) is equally request-shaped.

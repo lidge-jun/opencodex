@@ -53,6 +53,8 @@ any other. The measured caps ship as registry
 keeps them; any other model uses 8. Declare a model's own cap with
 `modelCapabilities: { "mistral-small-2603": { mistralMaxImages: 8 } }` (an integer from 1 to
 1000). The declaration outranks the registry row, and PATCH `null` on the axis removes it.
+Only `image_url` parts with a nonempty string in `image_url` or `image_url.url` count toward the cap; this check does not validate URL syntax or reachability. Parts with missing, empty, or non-string image references that reach the limiter are replaced with `[image omitted: missing or malformed image URL]` in the outbound copy without consuming the cap, even when the valid-image count is below the cap. For translated Responses requests, the parser drops `input_image` blocks with no usable image URL or file ID before the limiter runs. A nonempty `file_id` without a nonempty `image_url` in message content or tool output is refused by the translated-adapter media guard before Mistral dispatch; inside a replayed `agent_message`, whose content the guard does not inspect, the parser instead emits an `[image: <file id>]` text marker that travels as ordinary text and does not consume the image cap.
+
 Pruning adds no separate upload or persistence. Images retained within the cap
 are sent to Mistral in the outbound request. Other destinations are unchanged.
 
@@ -847,8 +849,8 @@ Explicit capability `false` and Responses caller-tier forwarding retain their ex
 ### Anthropic Fast (`anthropic-speed`)
 
 The built-in `anthropic` (stored Claude OAuth) and `anthropic-apikey` entries advertise Fast only
-for `claude-opus-5-5`, `claude-opus-5`, and `claude-opus-4-8`. Other Claude models are unclassified;
-the entries have no provider-wide Fast default.
+for `claude-fable-5-2`, `claude-opus-5-5`, `claude-opus-5`, and `claude-opus-4-8`. Other Claude models
+(including Fable 5 and 5.1) are unclassified; the entries have no provider-wide Fast default.
 
 Anthropic Fast is **off by default** because it spends usage credits (subscription) or fast-mode
 access (API) at 2x price. Turn it on per provider with the Off/On row on the dashboard Models page,
@@ -865,7 +867,8 @@ injection.
 
 Anthropic's `usage.speed` echo determines the outcome: `fast` confirms Fast, `standard` records a
 downgrade, and a missing echo is unconfirmed. Only confirmed Fast usage receives the 2x list-price
-estimate (Opus 5.5 $8 input / $40 output; Opus 5 and 4.8 $10 input / $50 output per million tokens).
+estimate (Fable 5.2 $16 input / $80 output; Opus 5.5 $8 input / $40 output; Opus 5 and 4.8 $10 input /
+$50 output per million tokens).
 If the first fast send is rejected because usage credits are required, an organization disabled Fast,
 the model rejects `speed`, or the fast pool is empty, the main adapter dispatch can make one budgeted
 standard-speed resend. Generic rate limits and capacity errors keep their usual handling. Subsequent
