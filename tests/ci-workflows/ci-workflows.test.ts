@@ -725,7 +725,8 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("pull-requests: read");
     expect(workflow).toContain("id-token: write");
     expect(workflow).toContain("cancel-in-progress: false");
-    expect(workflow).toContain("timeout-minutes: 15");
+    // The publish job bounds its two post-publish registry waits (about 20 minutes each, ~55 worst case).
+    expect(workflow).toContain("timeout-minutes: 75");
 
     // The exact-SHA CI gate already includes the three hosted keyring legs. The
     // release workflow must not duplicate the Linux bootstrap and drift from CI.
@@ -5382,8 +5383,9 @@ test.skipIf(process.platform === "win32")("release shell recovers only unverifie
   const scenarios = [
     { mode: "match", dry: false, status: 0, receipt: true, verification: "verified", reads: 1 },
     { mode: "delayed", dry: false, status: 0, receipt: true, verification: "verified", reads: 3 },
-    { mode: "unavailable", dry: false, status: 0, receipt: true, verification: "pending", reads: 6 },
-    { mode: "timeout", dry: false, status: 0, receipt: true, verification: "pending", reads: 6 },
+    // npm took ~15 minutes to serve 2.100.1, so the smoke waits 40 x 30 s before reporting pending.
+    { mode: "unavailable", dry: false, status: 0, receipt: true, verification: "pending", reads: 40 },
+    { mode: "timeout", dry: false, status: 0, receipt: true, verification: "pending", reads: 40 },
     { mode: "wrong", dry: false, status: 1, receipt: true, verification: "", reads: 1 },
     { mode: "empty", dry: false, status: 1, receipt: true, verification: "", reads: 1 },
     { mode: "dist-failure", dry: false, status: 0, receipt: true, verification: "verified", reads: 1 },
@@ -5453,7 +5455,7 @@ test.skipIf(process.platform === "win32")("release shell recovers only unverifie
       if (scenario.verification === "pending") {
         expect(stdout).toContain("::warning::npm publish succeeded");
         expect(readFileSync(summary, "utf8")).toContain("registry verification pending");
-        expect(log.filter(line => line === "sleep 5")).toHaveLength(5);
+        expect(log.filter(line => line === "sleep 30")).toHaveLength(39);
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }
