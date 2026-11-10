@@ -848,7 +848,32 @@ export async function cmdPause(args: string[], deps: AccountDeps, paused: boolea
     const result = await apiJson(deps, baseUrl, "PUT", "/api/providers/keys/pause", { name, id: target.id, paused });
     if (result.status === 0) return proxyUnreachable(result.transportError);
     if (result.status !== 200) return apiError(result.json, `failed to ${verb} account`, result.status);
-    console.log(wantsJson ? JSON.stringify({ ok: true, provider: name, id: target.id, paused }, null, 2) : `${name}: account ${paused ? "paused" : "resumed"}`);
+    const idx = rows.rows.findIndex(row => row.id === target.id);
+    const ordered = idx >= 0 ? [...rows.rows.slice(idx + 1), ...rows.rows.slice(0, idx)] : rows.rows;
+    const beforeActiveId = rows.rows.find(row => row.active && !row.paused)?.id ?? null;
+    const inferredActiveId = paused
+      ? (beforeActiveId === target.id
+        ? (ordered.find(row => row.id !== target.id && !row.paused)?.id ?? null)
+        : beforeActiveId)
+      : (beforeActiveId ?? (rows.rows.some(row => row.paused) ? target.id : null));
+    const activeAccountId = result.json.activeAccountId !== undefined
+      ? result.json.activeAccountId
+      : result.json.activeId !== undefined
+        ? result.json.activeId
+        : inferredActiveId;
+    const activeAccountChanged = typeof result.json.activeAccountChanged === "boolean"
+      ? result.json.activeAccountChanged
+      : beforeActiveId !== activeAccountId;
+    if (wantsJson) {
+      console.log(JSON.stringify({ ok: true, provider: name, id: target.id, paused,
+        activeAccountId: activeAccountId ?? null,
+        activeAccountChanged }, null, 2));
+    } else {
+      console.log(`${name}: account ${paused ? "paused" : "resumed"}`);
+      if (activeAccountChanged) {
+        console.error(`Active account changed to ${String(activeAccountId ?? "none")}.`);
+      }
+    }
     return 0;
   }
   if (classified.type !== "codex") {
