@@ -122,7 +122,7 @@ The sidebar exposes eight rows (`gui/src/nav-groups.ts` `NAV_GROUPS`), in order:
 
 | Surface | Shape |
 | --- | --- |
-| Providers | Rail of configured providers plus a detail pane whose tabs are Overview, Models, Usage, then Accounts or API Keys when the provider has an auth surface, then Settings (`gui/src/components/provider-workspace/ProviderDetails.tsx`). |
+| Providers | Rail of configured providers plus a detail pane whose tabs are Overview, Models, Usage, then Accounts or API Keys when the provider has an auth surface, then Settings (`gui/src/components/provider-workspace/ProviderDetails.tsx`). Settings and the raw JSON editor keep unsaved drafts in memory per logical dashboard target (`gui/src/provider-workspace/target-drafts.ts`, keyed by hub origin plus link id in link mode because a relay apiBase is shared across re-pairs; API-key rotation is not a target change and labels show only the origin): switching targets parks the draft and shows the new target's saved values, a save only ever writes to the target that started it (the form owns the capture and passes it through the typed update callback; a remove or mode confirmation keeps the capture from when it opened), and a changed saved baseline requires an explicit keep-draft or use-saved choice. JSON keep-draft merges only the user delta into the latest config and reports same-field, deletion and rename conflicts; Settings patches only changed fields. App discovery coalesces session/focus/mismatch refreshes into one in-flight read, so a relay re-pair updates identity and session readiness without remounting the draft owner. An embedded surface that supplies its own `apiBase` uses that base only while no topology has been discovered; a configured relay always wins, and a relay capability string this dashboard does not recognize reads as legacy. Nothing is persisted to browser storage. |
 | API keys | Key table plus per-key detail (`gui/src/components/apikeys-workspace/`). The list payload carries masked prefixes only; each row deletes in place behind a two-step confirm, and clicking a key fetches the full value from `POST /api/keys/reveal`, which requires a current pairing or trusted Tailscale-identity session and answers `no-store`; automatic loopback sessions and raw admin tokens cannot reveal stored values, and a refusal there answers with the pairing surface — on the same-origin standalone transport the local pairing form, elsewhere the explanation alone — and requires a fresh reveal click after pairing. Displayed secrets and copy feedback are cleared on shared-session loss, pairing, inactive/hidden views, or a target change; stale asynchronous completions cannot restore them. |
 | Storage | Rail plus cleanup and trash detail (`gui/src/components/storage-workspace/`). |
 | Subagents | Featured-roster selection workspace (`gui/src/components/subagents-workspace/`). |
@@ -497,7 +497,7 @@ The existing dashboard file-client maps include Cline CLI and reuse its committe
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates. The account history response can include a [low-confidence effective capacity estimate](providers/openai-accounts.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples. Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; an initial JEV null choice separately strips caller effort.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; in the default `decide` mode an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 Dashboard overview polling observes authorization failures independently of stalled or rejected peer requests, cancels remaining child requests after a decisive result, and exposes resource-level deadline failures without rewriting them as authentication failures.
@@ -536,19 +536,19 @@ write when an existing baseline is forgotten: `src/quota/reset-observer.ts` runs
 (`src/server/background-lifecycle.ts`) whose tick is a no-op until the section is enabled, so
 enabling it takes effect without a restart.
 
-- `src/quota/window-mapping.ts` maps provider and Codex quota snapshots to one neutral window list,
-  and `src/quota/reset-detector.ts` compares two consecutive observations of a window and emits at
-  most one reset event, classified as scheduled or surprise.
-- `src/quota/reset-observer.ts` is the only place a snapshot becomes a delivered notification. It
-  never throws into the quota write that triggered it. `src/codex/quota.ts` and
-  `src/providers/quota.ts` reach it only through a lazy import, because both are statically
-  reachable from `src/server/responses/core.ts` and a static edge would load the subsystem into
-  every install.
-- `src/quota/reset-seen-store.ts` keeps a durable already-notified ledger. The observer claims a
-  reset there before dispatch, so a reset is attempted at most once, across restarts and racing
-  observers; a failed delivery is not retried. `src/quota/reset-sinks.ts` delivers to a webhook or
-  a local command; each sink is best-effort and isolated from the other.
-- `src/quota/reset-poller.ts` is an opt-in idle refresh (default 15 minutes, floor 10). Without it,
+- `src/quota/window-mapping.ts` maps provider and Codex quota snapshots to one neutral window list, and
+  `src/quota/reset-detector.ts` emits at most one reset per window, scheduled or surprise; Mistral's `retainUnknownWindows` keeps a baseline through an unknown window only while a deadline identifies it. The selection of those Mistral windows lives in `src/providers/quota-mistral-budget.ts`, not under `src/quota/`, because `src/providers/quota.ts` imports it statically on the core path.
+- `src/quota/reset-observer.ts` is the only place a snapshot becomes a delivered notification, and it
+  never throws into the quota write that triggered it. `src/codex/quota.ts` and `src/providers/quota.ts`
+  reach it only through a lazy import, because both are statically reachable from `src/server/responses/core.ts`.
+  A probe-bound report may carry a private credential digest (`keyReportCredentialIds` in
+  `src/providers/quota/report-cache.ts`); only opted-in producers (today Mistral) bind it, reset identity
+  uses it instead of `apiKeyPoolEntryId`, and cached rows re-validate against the current credential and
+  destination; passive reads use literal or environment keys without publishing evidence and withhold keychain-backed rows. Others keep identity byte for byte.
+- `src/quota/reset-seen-store.ts` keeps a durable already-notified ledger; the observer claims a reset there
+  before dispatch, so each reset is attempted at most once across restarts and racing observers, and a failed
+  delivery is not retried. `src/quota/reset-sinks.ts` delivers to a webhook or local command, each best-effort and isolated.
+- `src/quota/reset-poller.ts` is an opt-in idle refresh (default 15 min, floor 10). Without it,
   quota reports are fetched only when the dashboard or CLI asks, and an overnight reset goes
   unobserved. `src/quota/reset-activation.ts` installs the sink independently of the poller, so
   `pollSeconds: 0` observes live traffic only.

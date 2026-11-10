@@ -31,7 +31,8 @@ import {
 const USAGE = `Usage:
   ocx telemetry [status] [--json]
   ocx telemetry enable [--json]
-  ocx telemetry disable [--json]`;
+  ocx telemetry disable [--json]
+  ocx telemetry profile [status|connect|disconnect] [--json]`;
 
 export const TELEMETRY_DEFERRAL_FILE = ".telemetry-deferred";
 const DEFERRAL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -186,6 +187,13 @@ export async function handleTelemetryCommand(argv: string[], deps: RuntimeApiDep
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
   const sub = (args.shift() ?? "status").toLowerCase();
+  if (sub === "profile") {
+    if (args.includes("--json")) {
+      return runCliAction(async () => { throw new CliUsageError("telemetry flags may only be specified once", USAGE); });
+    }
+    const { handleTelemetryProfileCommand } = await import("./telemetry-profile");
+    return handleTelemetryProfileCommand(args, wantsJson, deps);
+  }
   if (sub === "enable") {
     if (isAgentDriven()) {
       const error = {

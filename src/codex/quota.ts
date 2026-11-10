@@ -266,6 +266,78 @@ function shortResetHasElapsed(resetAt: number | undefined, now: number): boolean
   return resetAtToMs(resetAt) <= now;
 }
 
+/**
+ * Whether the account's reset tickets went DOWN, which means one was just redeemed.
+ *
+ * A manual reset zeroes the current window's usage without ending it: the deadline moves further
+ * out, but the account keeps spending in what is effectively a fresh window. The percentage we
+ * cached before the redemption measures the window that was thrown away, so it must not be
+ * carried into the reset one — the user has, by definition, just bought themselves an empty
+ * window, and reporting the old 98% keeps them locked out of the quota they paid to recover.
+ *
+ * Only a DECREASE counts. Upstream periodically grants new tickets (`available_count` rising),
+ * which says nothing about current usage and must never invalidate a reading.
+ *
+ * This is the one signal that catches a redemption made outside this process — in the ChatGPT web
+ * UI, or on another machine. The header stream carries no reset-ticket field at all, so it can
+ * only ever be learned from the `/wham/usage` payload, and the hard lock delays that probe by
+ * minutes-to-an-hour. Keeping the judgement data-driven and here means the moment any observation
+ * does carry the new count, the stale percentage is retired instead of replayed.
+ */
+function resetTicketWasRedeemed(
+  incoming: Omit<StoredAccountQuota, "updatedAt">,
+  existing: StoredAccountQuota | undefined,
+): boolean {
+  const previousCount = existing?.resetCredits;
+  const nextCount = incoming.resetCredits;
+  if (typeof previousCount !== "number" || !Number.isFinite(previousCount)) return false;
+  if (typeof nextCount !== "number" || !Number.isFinite(nextCount)) return false;
+  return nextCount < previousCount;
+}
+
+/**
+ * Whether the stored weekly reading belongs to a window that is demonstrably over.
+ *
+ * This is the weekly counterpart of `shortResetHasElapsed`. The short (5h) branch has always
+ * expired a carried tuple whose reset had passed; the weekly branch never did, so a stale
+ * weekly percentage could outlive its own deadline indefinitely as long as observations omitted
+ * the weekly header. Either of these retires the reading (an observation that carries the weekly
+ * window itself, including a later deadline, already replaces the tuple before this is consulted):
+ *
+ * 1. The stored deadline has already elapsed. Usage only accumulates inside an open window, so a
+ *    percentage pinned to a closed one is history, not current state. This is exactly the rule
+ *    `shortResetHasElapsed` applies to the 5h tuple and it is what lets a stuck account re-measure.
+ * 2. A reset ticket was redeemed (`resetTicketWasRedeemed`) — the window's usage was zeroed on
+ *    purpose, so the pre-redemption percentage describes a window nobody is spending in any more.
+ *
+ * Why this matters beyond a cosmetic bar: this display/rotation snapshot feeds quota exhaustion and
+ * the pool rotation score. A percentage that can never expire keeps a recovered account excluded and
+ * its card at "usage limit reached" while upstream shows a nearly-empty window. The main-account hard
+ * lock is unaffected: it reads the separate policy snapshot, which these signals never touch.
+ *
+ * Policy callers must NOT use these signals. The hard lock's contract is that only an explicit
+ * observation that replaces a blocking reading may release it — "a predicted reset is not
+ * recovery evidence". There, a clock elapsing, an advanced deadline, and a redeemed ticket are
+ * all non-events; the arriving low percentage is what releases it.
+ *
+ * Observed live, twice:
+ * - Upstream had rolled the window over while every response carried only credits headers, so the
+ *   old 98% was replayed for ~20h against a true 4%.
+ * - The user then redeemed a reset ticket in the web UI. Upstream reported 0% used with a deadline
+ *   4.84 days further out, but the cache still said 98%, so the hard lock kept refusing to send.
+ * Both times only manual cache surgery recovered the account.
+ */
+function weeklyWindowRolledOver(
+  incoming: Omit<StoredAccountQuota, "updatedAt">,
+  existing: StoredAccountQuota | undefined,
+  now: number,
+): boolean {
+  if (resetTicketWasRedeemed(incoming, existing)) return true;
+  const previousReset = existing?.weeklyResetAt;
+  if (typeof previousReset !== "number" || !Number.isFinite(previousReset) || previousReset <= 0) return false;
+  return resetAtToMs(previousReset) <= now;
+}
+
 /** Display/rotation carry expires; a reset clock cannot retract blocking hard-lock evidence. */
 function assignCarriedShort(
   next: StoredAccountQuota,
@@ -409,8 +481,14 @@ function mergeAccountQuota(
   }
 
   if (creditsOnly) {
-    if (existing?.weeklyPercent !== undefined) next.weeklyPercent = existing.weeklyPercent;
-    if (existing?.weeklyResetAt !== undefined) next.weeklyResetAt = existing.weeklyResetAt;
+    // A credits-only refresh says nothing about usage windows, so it normally carries the known
+    // ones. The exception is a weekly window upstream has already rolled over: replaying that
+    // percentage would report the previous window's usage as the current one, and a
+    // credits-only-only stream would keep doing so indefinitely. Policy evidence is exempt for
+    // the same reason as below: only an explicit lower observation may release the hard lock.
+    const weeklyRolledOver = !policyEvidence && weeklyWindowRolledOver(quota, existing, updatedAt);
+    if (existing?.weeklyPercent !== undefined && !weeklyRolledOver) next.weeklyPercent = existing.weeklyPercent;
+    if (existing?.weeklyResetAt !== undefined && !weeklyRolledOver) next.weeklyResetAt = existing.weeklyResetAt;
     if (existing?.monthlyPercent !== undefined) next.monthlyPercent = existing.monthlyPercent;
     if (existing?.monthlyResetAt !== undefined) next.monthlyResetAt = existing.monthlyResetAt;
     if (existing?.monthlyIsPrimaryWindow === true) next.monthlyIsPrimaryWindow = true;
@@ -422,9 +500,19 @@ function mergeAccountQuota(
   }
 
   const existingWeeklyPercent = existing?.weeklyPercent;
+  // The one thing a stale reading must never survive: proof that its window is over.
+  // Display only. Policy evidence obeys a stricter contract — see preserveKnownWeekly below.
+  const weeklyRolledOver = weeklyWindowRolledOver(quota, existing, updatedAt);
   // A reset-only weekly observation is not a lower reading. Policy mode keeps a blocking weekly
   // tuple whole, exactly like preserveKnownShort; a governing monthly-primary observation still
   // replaces it, so that release path does not depend on this guard.
+  //
+  // This guard is deliberately NOT relaxed for a rolled-over or advanced window. Policy evidence
+  // is the hard lock's only input, and "a predicted reset is not recovery evidence" is a pinned
+  // contract: `main-account-hard-lock-policy` asserts that advancing `weeklyResetAt` from now+60s
+  // to now+120s alone must NOT clear a retained 99. Releasing the lock has to stay a deliberate,
+  // explicitly-observed decision, so the policy path is left exactly as upstream wrote it. The
+  // display path below is where a dead reading is allowed to expire.
   const preserveKnownWeekly = policyEvidence
     && quota.weeklyPercent === undefined
     && quota.monthlyIsPrimaryWindow !== true
@@ -438,7 +526,17 @@ function mergeAccountQuota(
     && (!policyEvidence || quota.monthlyIsPrimaryWindow === true)) {
     // Legacy monthly-only clearing is unchanged (#382). Policy needs a governing
     // monthly-primary observation: a tertiary-only header cannot retract weekly99.
-  } else if (existing?.weeklyPercent !== undefined) {
+  } else if (existing?.weeklyPercent !== undefined
+    && (policyEvidence || !weeklyRolledOver)) {
+    // Carry-forward is for windows whose deadline upstream has not moved. Once it has, the
+    // percentage we hold belongs to the closed window; re-publishing it would hand the next
+    // window a usage figure it never earned. Leaving the field unset is correct here — the
+    // caller treats "unknown" as "needs a fresh measurement", which is exactly the state that
+    // lets quota auto-refresh recover.
+    //
+    // Policy mode is exempt and always carries: it must only ever change through an explicit
+    // observation, so it never expires on its own clock. That is the pinned contract above, and
+    // admitting either signal here re-opens the "predicted reset releases the lock" hole.
     next.weeklyPercent = existing.weeklyPercent;
     if (existing.weeklyResetAt !== undefined) next.weeklyResetAt = existing.weeklyResetAt;
   }
@@ -685,23 +783,30 @@ export function updateAccountQuota(
   if (nextWeekly === undefined && nextMonthly === undefined && resetCredits === undefined) return;
   hydrateAccountQuotasFromDisk();
   const existing = accountQuota.get(accountId);
+  // The WHAM/usage path carries the same staleness hazard as `mergeAccountQuota`: pre-seeding
+  // from `existing` and only overwriting when a new value arrives replays an expired weekly
+  // reading forever, because a caller that omits the weekly window never clears it. That is the
+  // second half of the "weekly bar stuck at 98%" bug - the header path is fixed above, and
+  // without this the WHAM path would keep the stale value alive on its own.
+  const now = Date.now();
+  const weeklyExpired = weeklyWindowRolledOver({}, existing, now);
 
   const quota: StoredAccountQuota = {
-    ...(existing?.weeklyPercent !== undefined ? { weeklyPercent: existing.weeklyPercent } : {}),
+    ...(existing?.weeklyPercent !== undefined && !weeklyExpired ? { weeklyPercent: existing.weeklyPercent } : {}),
     ...(existing?.monthlyPercent !== undefined ? { monthlyPercent: existing.monthlyPercent } : {}),
     // Carry provenance with the value it describes. Dropping it here would downgrade a proven
     // explicit-primary reading to "unproven" on the next unrelated weekly update.
     ...(existing?.monthlyPercent !== undefined && existing.monthlyIsPrimaryWindow === true
       ? { monthlyIsPrimaryWindow: true }
       : {}),
-    ...(existing?.weeklyResetAt !== undefined ? { weeklyResetAt: existing.weeklyResetAt } : {}),
+    ...(existing?.weeklyResetAt !== undefined && !weeklyExpired ? { weeklyResetAt: existing.weeklyResetAt } : {}),
     ...(existing?.monthlyResetAt !== undefined ? { monthlyResetAt: existing.monthlyResetAt } : {}),
     ...(existing?.customWindows !== undefined ? { customWindows: existing.customWindows } : {}),
     ...(existing?.resetCredits !== undefined ? { resetCredits: existing.resetCredits } : {}),
     ...(existing?.credits !== undefined ? { credits: existing.credits } : {}),
     ...(existing?.credits === null && existing.creditObservationUnavailable === true
       ? { creditObservationUnavailable: true as const } : {}),
-    updatedAt: Date.now(),
+    updatedAt: now,
   };
   assignCarriedShort(quota, existing, quota.updatedAt);
 

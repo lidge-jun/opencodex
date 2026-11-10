@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 import type { TKey } from "./en";
 
 /**
@@ -139,6 +140,7 @@ export const ja: Record<TKey, string> = {
   ...connectV2Copy("ja"),
   ...startupV2Copy("ja"),
   ...proxyV2Copy("ja"),
+  ...telemetryProfileCopy("ja"),
   "claude.tierDefaults.unset": "未指定（既存のClaude設定を維持）",
   "claude.tierDefaults.recovery": "適用が停止し、自動復元に失敗しました。再試行する前に以下のバックアップを確認してください。",
   "claude.tierDefaults.title": "CLIのティア既定モデル",
@@ -812,6 +814,8 @@ export const ja: Record<TKey, string> = {
   "prov.port": "ポート",
   "prov.default": "デフォルト",
   "prov.loadingConfig": "読み込み中…",
+  "prov.targetChanged": "ダッシュボードの対象が変更されました。現在のサーバーでこのフォームを開き直してください。",
+  "prov.legacyTargetPreflight": "このプロキシは送信前に保存先を確認しますが、アトミックには検証できません。保存先に固定した保存にはプロキシを更新してください。",
   "prov.saved": "保存しました! 適用にはプロキシを再起動してください。",
   "prov.loadConfigFail": "設定の読み込みに失敗しました",
   "prov.invalidJson": "無効な JSON です",
@@ -1757,6 +1761,9 @@ export const ja: Record<TKey, string> = {
   "quota.creditsBalance": "クレジット残高",
   "quota.creditsPeriodEnds": "請求期間終了日: {date}",
   "quota.usedPercent": "{pct}% 使用",
+  "quota.weeklyShare": "週間上限の最大 {pct}%",
+  "quota.notInEffect": "現在は適用外",
+  "quota.notInEffectHint": "Claude はこの上限が現在の使用量を制限していないと報告しています。参考として表示しており、アカウントのルーティングには適用中の上限のみを使います。",
   "quota.limitReached": "上限に達しました",
   "quota.resetsToday": "今日 {time} にリセット",
   "quota.resetsTomorrow": "明日 {time} にリセット",
@@ -1886,6 +1893,7 @@ export const ja: Record<TKey, string> = {
   "pws.accountSwitching": "切り替え中…",
   "pws.accountCurrent": "現在のアカウント",
   "pws.accountPausedHint": "再開するまで、自動選択、再試行、クールダウン復旧、手動選択、トークンの事前更新の対象外です。",
+  "pws.resumeAndActivateKey": "再開して使用",
   "pws.defaultModelNone": "なし(プロバイダーのデフォルトを使用)",
   "pws.discardSettings": "破棄",
   "pws.jsonEditorDesc": "生のプロバイダー JSON 設定を編集します。変更はすぐに保存されます。",
@@ -1965,12 +1973,19 @@ export const ja: Record<TKey, string> = {
   "pws.pacingRemoveModel": "{model} のリクエスト間隔設定を削除",
   "pws.pacingRuleRequired": "プロバイダー制限またはモデル別設定を追加してから有効にしてください。",
   "pws.pacingCapInvalid": "最大同時リクエスト数は 1 以上の整数にしてください。",
+  "pws.pacingValueInvalid": "有効なペーシング値を入力してください: RPM 1/60～60,000、遅延 1～3,600,000 ms、同時実行数 1 以上。",
   "pws.saving": "保存中…",
   "pws.settingsSaved": "設定を保存しました。",
   "pws.accountModeSaved": "アカウントモードを保存しました。",
   "pws.accountModeFailed": "アカウントモードを切り替えられませんでした。",
   "pws.accountModeConfirm": "OpenAI のアカウントモードを切り替えますか？実行中の会話はもう一方のモードのアカウントセットに再割り当てされ、クォータ使用量は新しいモードで計上されます。",
   "pws.settingsUnsavedBar": "未保存の変更があります。",
+  "pws.draftTarget": "編集中: {target}",
+  "pws.draftConflict": "編集中にこのサーバーの保存済み設定が変更されました。下書きは保持されています。どちらの値を残すか選択してください。",
+  "pws.draftConflictFields": "両方で変更されたフィールドです。下書きを編集するか、保存済みの値を使用してください:",
+  "pws.draftConflictUseSaved": "保存済みの値を使う",
+  "pws.draftConflictKeepDraft": "下書きを残す",
+  "pws.draftConflictResolveFirst": "保存する前に残す値を選択してください。",
   "pws.unsavedLeaveBody": "未保存の変更があります。保存してから移動しますか?",
   "pws.unsavedLeaveTitle": "未保存の変更",
   "pws.attentionRequired": "要対応",

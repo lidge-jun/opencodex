@@ -1,4 +1,5 @@
 import { parseKiroDeviceView, type KiroDeviceView } from "./kiro-device-login-helpers";
+import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "./api";
 
 export type KiroFinalOutcome = "added" | "ended" | "failed";
 export type KiroStatusResult =
@@ -19,7 +20,12 @@ function cancelBody(response: Response): void {
 }
 
 /** Own fetch, body EOF and parsing as one cancellable operation; headers alone are not completion. */
-export function readKiroDeviceStatus(apiBase: string, flowId: string, timeoutMs = 45_000): KiroStatusRead {
+export function readKiroDeviceStatus(
+  apiBase: string,
+  flowId: string,
+  timeoutMs = 45_000,
+  capture?: ApiTargetCapture,
+): KiroStatusRead {
   const controller = new AbortController();
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let settled = false;
@@ -41,10 +47,13 @@ export function readKiroDeviceStatus(apiBase: string, flowId: string, timeoutMs 
   const timer = setTimeout(cancel, Math.max(0, timeoutMs));
   void (async () => {
     try {
-      const response = await fetch(
-        `${apiBase}/api/oauth/status?provider=kiro&flowId=${encodeURIComponent(flowId)}`,
-        { signal: controller.signal },
-      );
+      // A stale capture means the dashboard moved while this flow was pending. Stop the
+      // poll instead of sending the old flowId to whatever target is live now.
+      if (capture && !isApiTargetCaptureCurrent(capture)) { settle({ kind: "missing" }); return; }
+      const url = `${apiBase}/api/oauth/status?provider=kiro&flowId=${encodeURIComponent(flowId)}`;
+      const response = capture
+        ? await targetFetch(capture, url, { signal: controller.signal })
+        : await fetch(url, { signal: controller.signal });
       if (settled) { cancelBody(response); return; }
       if (response.status === 404) { cancelBody(response); settle({ kind: "missing" }); return; }
       if (!response.ok || !response.body) { cancelBody(response); settle({ kind: "retry" }); return; }
@@ -113,7 +122,7 @@ export function observeKiroDeviceFinal(apiBase: string, flowId: string, view: Ki
 
 /** Detached reconciliation survives dialog and page unmount. One loop per flowId. */
 export function finalizeKiroDeviceFlow(apiBase: string, flowId: string, expiresAt?: number,
-  inFlight?: KiroStatusRead): Promise<KiroFinalOutcome> {
+  inFlight?: KiroStatusRead, capture?: ApiTargetCapture): Promise<KiroFinalOutcome> {
   const key = keyFor(apiBase, flowId);
   const prior = active.get(key);
   if (prior) return prior;
@@ -124,7 +133,7 @@ export function finalizeKiroDeviceFlow(apiBase: string, flowId: string, expiresA
     let pending = inFlight;
     while (Date.now() < deadline) {
       const remaining = deadline - Date.now();
-      const read = pending ?? readKiroDeviceStatus(apiBase, flowId, Math.min(45_000, remaining));
+      const read = pending ?? readKiroDeviceStatus(apiBase, flowId, Math.min(45_000, remaining), capture);
       pending = undefined;
       const status = await awaitStatusRead(read, remaining);
       if (terminal.has(key)) return terminal.get(key)!;

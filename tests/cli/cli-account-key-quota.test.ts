@@ -52,6 +52,28 @@ function depsFor(reply: unknown): AccountDeps {
   }) as typeof fetch };
 }
 
+test("account refresh strips terminal controls from unknown budget labels", async () => {
+  const escape = String.fromCharCode(27);
+  const bell = String.fromCharCode(7);
+  const report = { provider: "openrouter", quota: { unknownBudgetWindows: [{ label: `API budget${escape}]0;spoof${bell}` }] } };
+  expect(await cmdAccount(["refresh", "openrouter"], depsFor({ reports: [report] }))).toBe(0);
+  const output = logs.join("\n");
+  expect(output).toContain("API budget");
+  expect(output).toContain("unknown");
+  expect(output).not.toContain(escape);
+  expect(output).not.toContain(bell);
+});
+
+test("account refresh strips terminal controls from custom window labels", async () => {
+  const escape = String.fromCharCode(27);
+  const report = { provider: "openrouter", quota: { customWindows: [{ label: `window${escape}[2J`, percent: 12 }] } };
+  expect(await cmdAccount(["refresh", "openrouter"], depsFor({ reports: [report] }))).toBe(0);
+  const output = logs.join("\n");
+  expect(output).toContain("window");
+  expect(output).toContain("12%");
+  expect(output).not.toContain(escape);
+});
+
 test("quota intent uses encoded fixed query and redirect:error only on opt-in", async () => {
   const calls: { url: string; init?: RequestInit }[] = [];
   const deps: AccountDeps = { ...depsFor(body()), loadConfigImpl: () => config("team/key +"),

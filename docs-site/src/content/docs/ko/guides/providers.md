@@ -42,6 +42,8 @@ shipped v1 config는 marker 2의 단일 옵션 행으로 자동 이관됩니다.
 `~/.opencodex/config.json.pre-openai-tiers-v2.bak`에 한 번 보존되며 다음 명령으로 복원합니다:
 `cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`.
 
+[Claude OAuth 클라이언트 버전 오류](/ko/guides/claude-code/#claude-oauth-클라이언트-버전-오류)
+
 ## 인증 모드
 
 프로바이더 설정에서 쓸 수 있는 `authMode`는 세 가지이며, 기본값은 `key`입니다. 빌트인 레지스트리는

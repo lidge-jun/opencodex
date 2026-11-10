@@ -414,6 +414,7 @@ export function captureProviderGather(
     ...(resolved.spec ? { spec: resolved.spec } : {}),
     maxResponseBytes: resolved.maxResponseBytes,
     maxModels: resolved.maxModels,
+    ...(resolved.skipInvalidRows ? { skipInvalidRows: true as const } : {}),
   });
   const trustedOpenAiApi = captureTrustedOpenAiApiPolicy(name, registryTransportMatch);
   const policy = detachedFrozen({
@@ -431,6 +432,7 @@ export function captureProviderGather(
     preferFirst: capturedField(discovery.spec, "preferFirst"),
     maxResponseBytes: discovery.maxResponseBytes,
     maxModels: discovery.maxModels,
+    skipInvalidRows: discovery.skipInvalidRows === true,
     trustedOpenAiApi,
   });
   const effectiveAlias = effectiveProviderAliasDecision(name, configured, config);

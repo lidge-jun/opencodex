@@ -15,6 +15,7 @@ import {
 } from "./report-cache";
 import { getTokenForAccountQuotaProbe } from "./account-cache";
 import type { AccountQuotaMode, ProviderQuota, ProviderQuotaCreditsUsd } from "../quota-types";
+import { markDisplayOnlyQuota } from "../quota-types";
 import type { OcxProviderConfig } from "../../types";
 
 // A quota probe must use the provider's inference route so it neither reports a false healthy path nor leaks a key through another exit.
@@ -41,6 +42,7 @@ const OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1";
 const OPENCODE_GO_USAGE_URL = `${OPENCODE_GO_BASE_URL}/usage`;
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+const MISTRAL_BASE_URL = "https://api.mistral.ai";
 const CLINE_BASE_URL = "https://api.cline.bot";
 const OLLAMA_CLOUD_BASE_URL = "https://ollama.com";
 const OLLAMA_CLOUD_USAGE_URL = `${OLLAMA_CLOUD_BASE_URL}/api/usage`;
@@ -74,6 +76,74 @@ function isCanonicalOpenRouterBaseUrl(baseUrl: string): boolean {
 function isCanonicalDeepSeekBaseUrl(baseUrl: string): boolean {
   const normalized = normalizedBaseUrl(baseUrl);
   return normalized === DEEPSEEK_BASE_URL || normalized === `${DEEPSEEK_BASE_URL}/v1`;
+}
+
+/** Only the exact HTTPS origin, optionally with the `/v1` API root: no credentials, port, query or fragment. */
+function isCanonicalMistralBaseUrl(baseUrl: string): boolean {
+  const normalized = normalizedBaseUrl(baseUrl);
+  return normalized === MISTRAL_BASE_URL || normalized === `${MISTRAL_BASE_URL}/v1`;
+}
+
+const MISTRAL_PLAN_NAMES = new Set(["FREE", "INDIVIDUAL", "EDU", "TEAM"]);
+const MISTRAL_BUDGETS = [["api_budget", "API budget"], ["vibe_budget", "Vibe budget"]] as const;
+
+/**
+ * Mistral Studio/Vibe budgets (#8290).
+ *
+ * Display-only: the result never carries routing evidence, so neither key ranking nor the
+ * passive quota pool may spend or order a key from it. The destination is fixed and canonical,
+ * the request rides the provider's own egress, redirects are refused, and the body is bounded
+ * by readQuotaJson. A denial (401/403 and other non-retryable client statuses) is terminal and
+ * suppresses the previous row; transport trouble, 408, 429 and 5xx are transient and keep it.
+ */
+async function fetchMistralQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  if (!isCanonicalMistralBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const init: RequestInit = {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  };
+  const settled = await Promise.allSettled([
+    quotaFetch(provider, config, `${MISTRAL_BASE_URL}/v1/billing/budget`, init),
+    quotaFetch(provider, config, `${MISTRAL_BASE_URL}/v1/billing/subscription`, init),
+  ]);
+  const responses = settled.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
+  // 402 is a billing refusal of the reading, not proof that the credential is invalid: the
+  // plan may be exhausted or the billing endpoint may be gated. Keep the last-good row, as for
+  // 408/429, instead of erasing the measured budgets on a payment-required response.
+  if (responses.some(response => response.status >= 400 && response.status < 500 && response.status !== 402 && response.status !== 408 && response.status !== 429)) return TERMINAL_QUOTA_FAILURE;
+  if (responses.length !== 2 || responses.some(response => !response.ok)) return null;
+  const [budgetResponse, subscriptionResponse] = responses as [Response, Response];
+  const [budgetValue, subscriptionValue] = await Promise.all([
+    readQuotaJson(budgetResponse), readQuotaJson(subscriptionResponse),
+  ]);
+  if (budgetValue === QUOTA_JSON_READ_FAILURE || subscriptionValue === QUOTA_JSON_READ_FAILURE) return null;
+  const budget = asRecord(budgetValue);
+  const subscription = asRecord(subscriptionValue);
+  if (!budget || !subscription) return null;
+  const plan = typeof subscription.plan_name === "string" && MISTRAL_PLAN_NAMES.has(subscription.plan_name)
+    ? subscription.plan_name : undefined;
+  const customWindows: NonNullable<ProviderQuota["customWindows"]> = [];
+  const unknownBudgetWindows: NonNullable<ProviderQuota["unknownBudgetWindows"]> = [];
+  for (const [key, label] of MISTRAL_BUDGETS) {
+    const row = asRecord(budget[key]);
+    const resetAt = normalizeResetAt(row?.reset_at);
+    const reset = resetAt === undefined ? {} : { resetAt };
+    const suffix = plan ? ` (${plan})` : "";
+    const initial = toFiniteNumber(row?.initial_budget);
+    const percent = toFiniteNumber(row?.usage_percentage);
+    const currency = typeof row?.currency === "string" && /^[A-Za-z]{3}$/.test(row.currency) ? row.currency.toUpperCase() : undefined;
+    if (initial === undefined || initial <= 0 || percent === undefined || percent < 0 || percent > 100 || !currency) {
+      unknownBudgetWindows.push({ label: `${label}${suffix}`, ...reset });
+      continue;
+    }
+    const used = initial * (percent / 100);
+    customWindows.push({ label, displayLabel: `${label} (${currency} ${used.toFixed(2)} of ${currency} ${initial.toFixed(2)} used${plan ? `; ${plan}` : ""})`, percent, ...reset });
+  }
+  const quota: ProviderQuota = { customWindows, unknownBudgetWindows, updatedAt: Date.now() };
+  // Vibe and PAYG entitlements are display information, not inference eligibility evidence.
+  return keyReport(provider, "mistral:budget", markDisplayOnlyQuota(quota), config, apiKey, undefined, { bindCredential: true });
 }
 
 function isCanonicalClineBaseUrl(baseUrl: string): boolean {
@@ -1470,6 +1540,9 @@ export function keyQuotaReaderForProvider(name: string, provider: OcxProviderCon
   if (isCanonicalA6apiBaseUrl(provider.baseUrl)) return fetchA6apiQuota;
   if (name === "openrouter" && isCanonicalOpenRouterBaseUrl(provider.baseUrl)) return fetchOpenRouterQuota;
   if (name === "deepseek" && isCanonicalDeepSeekBaseUrl(provider.baseUrl)) return fetchDeepSeekQuota;
+  // The canonical-URL guard alone decides eligibility, so a custom provider name that points
+  // at Mistral's own origin still probes, and a Mistral-named lookalike still dispatches nothing.
+  if (isCanonicalMistralBaseUrl(provider.baseUrl)) return fetchMistralQuota;
   if (name === "cline-pass" && isCanonicalClineBaseUrl(provider.baseUrl)) return fetchClineQuota;
   if (isCanonicalOllamaCloudBaseUrl(provider.baseUrl ?? getProviderRegistryEntry(name)?.baseUrl)) return fetchOllamaCloudQuota;
   // #4201: the Responses preset is the same domestic GLM Coding Plan subscription on the OpenAI

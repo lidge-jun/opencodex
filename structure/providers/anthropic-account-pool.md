@@ -198,13 +198,23 @@ and malformed shared measurements cannot revive legacy data and make family enum
 incomplete. Shared finite measurements are used regardless of the binding `is_active` flag;
 a non-boolean flag also makes enumeration incomplete. When legacy `five_hour` is explicitly
 null, only a finite session marked active creates a five-hour meter. Inactive shared usage
-is valid routing and cooldown recovery evidence. Scoped rows retain active-only semantics;
-unknown kinds or model families preserve usable shared windows without claiming a complete
+is valid routing and cooldown recovery evidence. Scoped rows retain active-only semantics
+for routing; an inactive scoped row is published only as `displayWindows`, which quota
+display renders and routing, exhaustion, cooldown recovery, pool assembly and reset ordering
+never read, so Fable shows whether or not it binds, regardless of plan name. The GUI keeps them in
+`AccountQuota.displayWindows` (a routed label wins); only `gui/src/components/QuotaBars.tsx`
+draws them, marked not in effect (`gui/tests/quota-display-only-window.test.tsx`).
+Unknown kinds or model families preserve usable shared windows without claiming a complete
 family enumeration. An authoritative inactive family row can retire a previous
 passive family refusal; an incomplete enumeration cannot. Shared cooldown recovery
 still requires finite headroom for each rejected window, never an invented zero.
+`weekly_scoped_shares[]` names, by raw `limits` index, the share of the weekly limit a
+recognized scoped row, routed or display-only, may consume (Fable: "up to 50% of your weekly
+limit"); the window carries it as `weeklyAllowancePercent`, shown under the bar label, whose
+value stays the family's own `percent`. It is read from upstream and never inferred from a
+plan; a share pointing at no recognized scoped row, outside (0, 100] or conflicting is ignored.
 `tests/providers/provider-anthropic-usage-windows.test.ts` covers source precedence, scoped
-admission, raw precision, pool projection and legacy compatibility.
+admission, raw precision, pool projection, weekly shares and legacy compatibility.
 
 Profile tiers in `src/oauth/anthropic-identity.ts` accept both `default_claude_`
 and `claude_` prefixes and the Ultra display spelling. `max_20x` remains the legacy
@@ -217,7 +227,7 @@ flight on the credential actually dispatched, and publishes only while the insta
 quota epoch, configured row, account incarnation and login identity are unchanged.
 `captureProviderAccountQuotaEpoch(instance)` and the cache keys in
 `src/providers/quota/account-cache.ts` are per instance, so clearing Pool 2 quota never
-invalidates the primary pool.
+invalidates the primary pool. With the pool on and two or more accounts, `fetchAnthropicQuota` (`src/providers/quota/vendor-probes-oauth.ts`) reports a display-only estimate via `aggregateCodexPoolCapacity`: seats weigh 1, inactive seats use their last-good row (no extra probes), paused, reauth or stale seats count as incomplete coverage. Every Anthropic report is current only while the pool switch and each seat's id, paused and reauth state are unchanged; pool off or one account keeps the active report. Quota reset detection observes the active seat's own reading (`observedQuotaFor`), never the estimate, which has no reset times (`tests/providers/provider-anthropic-pool-capacity.test.ts`).
 
 A probe that yields no quota names one closed `quotaFailure` code from
 `src/providers/quota/failure-codes.ts`: `account_unavailable` when no usable credential could
@@ -484,6 +494,14 @@ statuses retain soft utilization without creating a hard family refusal.
 strategy, reactive selection and physical dispatch use that model. A family-only refusal
 preserves unrelated sessions and account-wide health. Numeric thresholds stay soft: zero
 and the all-drained fallback remain preferences, with no hard billing cap introduced.
+Under the `weekly` and `max-utilization` windows, lowest-usage ranking restates a family window
+that carries a weekly allowance on the shared weekly scale (`anthropicModelRankPercent`): Fable
+at 60% of a 50% allowance ranks at 80, because it has 20 weekly points left. The default
+`five-hour` window has no five-hour tie-break, so it keeps the family's own percent rather than
+let a fresh seat's 50 mask lower five-hour readings. Auto-switch thresholds keep it too, so
+a fresh Fable seat does not read as half spent. Exhaustion is unchanged, since both scales
+reach 100 together, and a passive header reading keeps the allowance the last usage probe read.
+`tests/adapters/anthropic/anthropic-account-threshold.test.ts` covers both sides.
 
 Passive family evidence expires after thirty minutes or its known reset. An expired
 exclusion admits one request-driven revalidation send at a time, released at response

@@ -51,6 +51,7 @@ import { googleVertexLocationConfigError } from "../providers/google-vertex-loca
 import { xaiResponsesOptInState } from "../providers/xai-responses-opt-in";
 import { authorizationCredential } from "../lib/authorization-scheme";
 import { noteTurnStateCaller } from "./turn-state-handles";
+import { providerModelDiscoveryConfigError } from "../providers/model-discovery-config";
 
 let _corsOrigin = "http://localhost:10100";
 // Listener identity is process-local. Never infer this trust from forwarded headers: the
@@ -993,24 +994,24 @@ export function providerManagementConfigError(
   if (jsonSchemaOptOutError) return `provider ${name} ${jsonSchemaOptOutError}`;
   const retainModelsError = nonBlankStringArrayConfigError(raw.retainModels, "retainModels");
   if (retainModelsError) return `provider ${name} ${retainModelsError}`;
+  const modelDiscoveryError = providerModelDiscoveryConfigError(raw.modelDiscovery);
+  if (modelDiscoveryError) return `provider ${JSON.stringify(redactSecretString(name))} ${modelDiscoveryError}`;
   const toolReasoningOptOutError = nonBlankStringArrayConfigError(
     raw.omitReasoningEffortWithToolsModels,
     "omitReasoningEffortWithToolsModels",
   );
   if (toolReasoningOptOutError) return `provider ${name} ${toolReasoningOptOutError}`;
-  const unsupportedHostedToolsError = nonBlankStringArrayConfigError(
-    raw.unsupportedHostedTools,
-    "unsupportedHostedTools",
-  );
-  if (unsupportedHostedToolsError) return `provider ${name} ${unsupportedHostedToolsError}`;
-  if (Array.isArray(raw.unsupportedHostedTools)) {
+  for (const field of ["unsupportedHostedTools", "unsupportedHostedToolsWithClientTools"] as const) {
+    const hostedToolsError = nonBlankStringArrayConfigError(raw[field], field);
+    if (hostedToolsError) return `provider ${name} ${hostedToolsError}`;
+    if (!Array.isArray(raw[field])) continue;
     // Closed vocabulary, same reason as the config schema: an unrecognized name would be
     // stored and then strip nothing, so the operator would keep getting the upstream 400
     // this field exists to prevent.
-    const unknownTool = (raw.unsupportedHostedTools as unknown[])
+    const unknownTool = (raw[field] as unknown[])
       .find(tool => typeof tool === "string" && !DECLARABLE_HOSTED_TOOL_TYPES.has(tool.trim()));
     if (unknownTool !== undefined) {
-      return `provider ${name} unsupportedHostedTools must name only hosted tool types: `
+      return `provider ${name} ${field} must name only hosted tool types: `
         + `${[...DECLARABLE_HOSTED_TOOL_TYPES].join(", ")}`;
     }
   }
@@ -1136,6 +1137,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   defaultModel: "editor",
   models: "editor",
   liveModels: "editor",
+  modelDiscovery: "editor",
   selectedModels: "editor",
   initialModelSelection: "runtime",
   retainModels: "editor",
@@ -1190,6 +1192,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   zaiResponsesDefaultVersion: "runtime",
   supportsResponsesCustomTools: "editor",
   unsupportedHostedTools: "editor",
+  unsupportedHostedToolsWithClientTools: "editor",
   responsesSnapshotRepair: "editor",
   webSearchBridge: "editor",
   reasoningEffortMap: "editor",

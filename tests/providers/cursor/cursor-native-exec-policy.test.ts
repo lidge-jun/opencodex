@@ -468,7 +468,10 @@ describe("Cursor native exec catalog-aware redirect hint", () => {
     // The bare bridge names may only appear in the "do not call at the top level" clause.
     expect(hint).toContain("do not call `shell_command` or `exec_command` at the top level");
     // "No bare shell bridge" must not read as forbidding separately listed namespaced tools.
-    expect(hint).toContain("remains callable at the top level as usual");
+    expect(hint).toContain("is called directly, outside `exec`, as usual");
+    // Cursor can defer the client tools behind CallDynamicTool (#8132); never claim top-level reach.
+    expect(hint).not.toContain("callable at the top level");
+    expect(hint).toContain("call `CallDynamicTool` with namespace `opencodex-responses`, `toolName`");
     for (const pattern of SILENT_REDIRECT_FORBIDDEN) expect(hint).not.toMatch(pattern);
   });
 

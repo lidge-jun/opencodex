@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 // Vietnamese — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -141,6 +142,7 @@ export const vi: Record<TKey, string> = {
   ...connectV2Copy("vi"),
   ...startupV2Copy("vi"),
   ...proxyV2Copy("vi"),
+  ...telemetryProfileCopy("vi"),
   "claude.tierDefaults.unset": "Chưa đặt (giữ cài đặt Claude hiện có)",
   "claude.tierDefaults.recovery": "Đã dừng áp dụng và khôi phục tự động thất bại. Kiểm tra bản sao lưu bên dưới trước khi thử lại.",
   "claude.tierDefaults.title": "Mô hình mặc định CLI",
@@ -817,6 +819,8 @@ export const vi: Record<TKey, string> = {
   "prov.port": "Cổng (Port)",
   "prov.default": "Mặc định",
   "prov.loadingConfig": "Đang tải…",
+  "prov.targetChanged": "Máy chủ bảng điều khiển đã thay đổi. Hãy mở lại biểu mẫu này trên máy chủ hiện tại.",
+  "prov.legacyTargetPreflight": "Proxy này kiểm tra đích lưu trước khi gửi nhưng không thể xác minh nguyên tử. Hãy cập nhật proxy để lưu gắn với đích.",
   "prov.saved": "Đã lưu! Hãy khởi động lại proxy để áp dụng.",
   "prov.loadConfigFail": "Không thể tải cấu hình",
   "prov.invalidJson": "JSON không hợp lệ",
@@ -1845,6 +1849,9 @@ export const vi: Record<TKey, string> = {
   "quota.creditsBalance": "Số dư credit",
   "quota.creditsPeriodEnds": "Chu kỳ thanh toán kết thúc vào {date}",
   "quota.usedPercent": "Đã dùng {pct}%",
+  "quota.weeklyShare": "Tối đa {pct}% giới hạn hằng tuần",
+  "quota.notInEffect": "Hiện chưa áp dụng",
+  "quota.notInEffectHint": "Claude báo rằng giới hạn này hiện không ràng buộc mức sử dụng. Mục này chỉ để tham khảo; định tuyến tài khoản chỉ dùng các giới hạn đang áp dụng.",
   "quota.limitReached": "Đã đạt giới hạn",
   "quota.resetsToday": "Đặt lại hôm nay lúc {time}",
   "quota.resetsTomorrow": "Đặt lại ngày mai lúc {time}",
@@ -1988,6 +1995,7 @@ export const vi: Record<TKey, string> = {
   "pws.accountSwitching": "Đang chuyển…",
   "pws.accountCurrent": "Tài khoản hiện tại",
   "pws.accountPausedHint": "Được loại trừ khỏi chọn tài khoản tự động, thử lại, hồi phục sau thời gian chờ, lựa chọn thủ công và làm mới token chủ động cho đến khi tiếp tục.",
+  "pws.resumeAndActivateKey": "Tiếp tục và sử dụng",
   "pws.defaultModelNone": "Không có (sử dụng mặc định của provider)",
   "pws.discardSettings": "Huỷ bỏ",
   "pws.jsonEditorDesc": "Chỉnh sửa config dạng JSON thô của provider. Các thay đổi sẽ được lưu ngay lập tức.",
@@ -2067,12 +2075,19 @@ export const vi: Record<TKey, string> = {
   "pws.pacingRemoveModel": "Xoá ghi đè pacing yêu cầu cho {model}",
   "pws.pacingRuleRequired": "Chỉ bật pacing yêu cầu sau khi đã thiết lập giới hạn provider hoặc một ghi đè model.",
   "pws.pacingCapInvalid": "Số yêu cầu đồng thời tối đa phải là số nguyên lớn hơn hoặc bằng 1.",
+  "pws.pacingValueInvalid": "Nhập giá trị giới hạn hợp lệ: RPM 1/60–60.000, độ trễ 1–3.600.000 ms, đồng thời 1 trở lên.",
   "pws.saving": "Đang lưu…",
   "pws.settingsSaved": "Đã lưu cài đặt.",
   "pws.accountModeSaved": "Đã lưu chế độ tài khoản.",
   "pws.accountModeFailed": "Không thể chuyển chế độ tài khoản.",
   "pws.accountModeConfirm": "Chuyển chế độ tài khoản OpenAI? Các cuộc hội thoại đang chạy sẽ được gán lại cho bộ tài khoản của chế độ khác, và mức sử dụng hạn mức sẽ được theo dõi trên chế độ mới.",
   "pws.settingsUnsavedBar": "Bạn có các thay đổi chưa lưu.",
+  "pws.draftTarget": "Đang chỉnh sửa: {target}",
+  "pws.draftConflict": "Cài đặt đã lưu trên máy chủ này đã thay đổi trong khi bạn chỉnh sửa. Bản nháp của bạn được giữ lại; hãy chọn giá trị cần giữ.",
+  "pws.draftConflictFields": "Các trường này đã thay đổi ở cả hai bên. Hãy sửa bản nháp hoặc dùng giá trị đã lưu:",
+  "pws.draftConflictUseSaved": "Dùng giá trị đã lưu",
+  "pws.draftConflictKeepDraft": "Giữ bản nháp của tôi",
+  "pws.draftConflictResolveFirst": "Chọn giá trị cần giữ trước khi lưu.",
   "pws.unsavedLeaveBody": "Bạn có các thay đổi chưa lưu. Lưu chúng lại trước khi rời đi?",
   "pws.unsavedLeaveTitle": "Thay đổi chưa lưu",
   "pws.attentionRequired": "Cần sự chú ý",
