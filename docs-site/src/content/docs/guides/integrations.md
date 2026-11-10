@@ -199,6 +199,7 @@ stops that deletion. Cleanup is sequential: earlier successful disables are not 
 one fails. If compensation also fails, a client file may be left in an intermediate state. Inspect
 the reported client files and retained recovery snapshots before retrying; retained state does not
 mean every client was restored or left unchanged.
+A placeholder `apiKey` seeded into Command Code's `~/.commandcode/auth.json` is not removed.
 
 For Gajae built-in presets, keep the routing choice in `~/.gjc/agent/config.yml`:
 
@@ -1110,6 +1111,10 @@ has none — the file is shared with real Command Code logins, so an existing
 `apiKey` is never overwritten, other entries are kept, and Disable leaves the file
 in place. A sign-out inside the app is not undone by a later catalog sync; only a
 fresh enable seeds again.
+The placeholder is not a Command Code account key: Command Code's own cloud models
+still fail against it and the app logs `COMMAND_CODE_API_KEY was rejected by the API`
+until you sign in (`cmd login` or the app's login), which stores a real key. If you
+enabled this integration before the seed existed, disable and enable it once to write it.
 
 **Home resolution.** There is no `COMMANDCODE_HOME` override here. The published
 client resolves `HOME ?? USERPROFILE` and then appends `/.commandcode/providers.json`;
