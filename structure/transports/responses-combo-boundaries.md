@@ -162,6 +162,9 @@ is not a prelude: it commits.
   terminal;
 - a top-level `error` arrives before output, in which case unknown, rate-limit, and server failures
   may advance while errors explicitly classified as non-retryable 4xx remain committed;
+  a bare error with no status field of its own but an integral numeric `code` in 400..599 takes
+  that code as its HTTP status (`bareErrorStatus`), so it gets the same decision and cooldown scope
+  as the same HTTP response; non-integral, out-of-range and string codes keep the symbolic mapping;
 - another completed/incomplete terminal or the aggregate preflight byte or retained-chunk cap is reached,
   in which case the current target is committed conservatively.
 

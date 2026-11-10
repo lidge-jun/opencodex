@@ -116,6 +116,8 @@ context 上限或覆寫已宣告的能力。它會改變精確路由的優先順
 
 每個請求從 Anthropic 開始。Anthropic 的可重試失敗會將該請求移到 OpenAI；OpenAI 的可重試失敗可將它移到 Google。終端錯誤會立即停止，而不嘗試剩餘目標。
 
+提供者的 HTTP 400 回應仍可能是針對特定目標的。OpenRouter 的不透明提供者包裝（帶有數字 `code: 400`、無 `type` 且 `metadata.raw: "ERROR"` 的 `Provider returned error`）會被視為目標特定的，允許 combo 嘗試下一個目標而無需冷卻失敗的目標。具類型的未編碼 400、已知的格式錯誤 `response_format` 結構錯誤，以及根層自行宣告終端代碼的封裝仍為終端錯誤；根層自行宣告跳轉訊號（`model_not_found`、`insufficient_quota`、`usage_limit_exceeded`、`free_rate_limited`、`input_admission_refused` 或 `unsupported_input_modality`）不會新增判定，空代碼視為無代碼。本指南後續描述的已辨識目標不相容情況仍會繼續推進。
+
 ### Round-robin：平滑加權批次
 
 `round-robin` 使用平滑加權輪詢。較大的目標權重讓該目標隨時間獲得較大份額，而不會將其所有份額一次送出為一長區塊。`stickyLimit` 控制在下次加權選擇前有多少成功請求留在所選目標上。
@@ -300,7 +302,7 @@ Combo id 未知。回應為 HTTP 404 並帶 type `invalid_request_error`。執�
 
 ## 選用參數相容性
 
-一般 400 錯誤仍會終止請求，但明確拒絕 `user`、對 `reasoning.effort`/`reasoning_effort` 回傳不支援值、回傳模型特定影像輸入拒絕（`param: input`），或拒絕該路由無法讀取的輸入媒體（`unsupported_input_modality`）的結構化錯誤，以及完全相符的供應商包 `{"code":"invalid-argument","error":"Invalid reasoning effort."}`，可在輸出提交前跳轉。當 combo 目標拒絕所請求的 reasoning effort 時，combo 首先在共用發送預算內、每次拒絕退一個檔位地在該目標上重試下一個更低的已發布 effort 檔位；這適用於所有識別出的 effort 拒絕。如果更低檔位均未成功，符合上述形式之一的拒絕將前進到另一個目標而不冷卻被拒絕的目標，在下一檔位無剩餘發送額度時保留該目標的原始 400；其他 effort 拒絕保持終止。以 `unsupported_input_modality` 拒絕媒體的路由以相同方式跳轉。這些是針對該請求的不相容，並非目標不健康的證據。直接請求保留其單次 effort 降級修復。相容性復原不會隱式將 `none` 改為其他 effort，也不會將 combo 跳轉擴大到任意無效請求。安全政策拒絕、取消及已開始的輸出仍不可重播。單目標請求仍回傳未解決的上游拒絕。
+一般 400 錯誤仍會終止請求，但 OpenRouter 的不透明提供者包裝（帶有數字 `code: 400`、無 `type` 且 `metadata.raw: "ERROR"` 的 `Provider returned error`），或明確拒絕 `user`、對 `reasoning.effort`/`reasoning_effort` 回傳不支援值、回傳模型特定影像輸入拒絕（`param: input`），或拒絕該路由無法讀取的輸入媒體（`unsupported_input_modality`）的結構化錯誤，以及完全相符的供應商包 `{"code":"invalid-argument","error":"Invalid reasoning effort."}`，可在輸出提交前跳轉。當 combo 目標拒絕所請求的 reasoning effort 時，combo 首先在共用發送預算內、每次拒絕退一個檔位地在該目標上重試下一個更低的已發布 effort 檔位；這適用於所有識別出的 effort 拒絕。如果更低檔位均未成功，符合上述形式之一的拒絕將前進到另一個目標而不冷卻被拒絕的目標，在下一檔位無剩餘發送額度時保留該目標的原始 400；其他 effort 拒絕保持終止。以 `unsupported_input_modality` 拒絕媒體的路由以相同方式跳轉。這些是針對該請求的不相容，並非目標不健康的證據。直接請求保留其單次 effort 降級修復。相容性復原不會隱式將 `none` 改為其他 effort，也不會將 combo 跳轉擴大到任意無效請求。安全政策拒絕、取消及已開始的輸出仍不可重播。單目標請求仍回傳未解決的上游拒絕。
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
 
