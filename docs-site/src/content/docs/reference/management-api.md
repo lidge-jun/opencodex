@@ -928,8 +928,8 @@ build check: `assessedVersion` (the baseline holding native acceptance evidence)
 install reading: a stopped runtime, an app update or a pending or interrupted check can leave it
 older than the installed package, and only a completed check replaces it. `observedVersion` is
 null unless discovery matched the assessed package family and entry point; an identified build
-keeps its own version, and `verified` reports whether its official package proof completed at
-`completedAt`, never whatever is installed later. The field is absent until the
+keeps its own version, and `verified` reports whether the package passed its official package
+proof at `completedAt`, never whatever is installed later. The field is absent until the
 service creates its probe during start and `null` until that probe finishes a check; reading
 status never starts one.
 

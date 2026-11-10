@@ -1167,13 +1167,16 @@ controls for immediate changes. If a save cannot be confirmed, refresh its statu
 A running service does not establish that Codex is connected through it. A normal app launch or
 an app updater can omit the managed connection argument. Save drafts, close Codex, then use
 **Open Codex** in this panel to restore that connection. This control never closes the app for you.
-After a Codex update, the changed package identity revokes any active trial before the next
-usage response. A proof-verified newer build can then be observed again with fresh consent;
+After a Codex update, the runtime checks the changed package identity before emitting a
+correction, not before every usage response; a non-200 or otherwise correction-ineligible
+response can leave an active trial in place until a periodic check or an eligible usage
+response. A proof-verified newer build can then be observed again with fresh consent;
 reinstalling the certificate does not make an unverifiable package supported.
 
 The panel can also report the last completed build check as diagnostic metadata: the package
 version serving as the natively assessed baseline, the package version observed at that check,
-whether its official package proof verified, and when the check finished. It is a past observation, not a live reading of the
+and when the check finished; the proof verdict itself is reported by the runtime status API, not
+the panel. It is a past observation, not a live reading of the
 installed package. After the service stops, the app updates, or a check is still running or was
 interrupted, it can lag the actual installation; only a completed probe refreshes it, and a
 `verified` result describes the package observed at that check, not whatever is installed now.
