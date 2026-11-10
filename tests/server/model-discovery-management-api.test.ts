@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { clearModelCache, setCached } from "../../src/codex/model-cache";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxConfig } from "../../src/types";
 import { ManagementRequest as Request } from "../helpers/management-auth";
@@ -82,6 +83,35 @@ describe("#8236 arrival status and the admit policy", () => {
     live.modelDiscovery = { recentArrivals: { vendor: [{ id: "fresh", at: "t", disabledByPolicy: false }] } } as never;
     const get = await call(live, "/api/model-discovery");
     expect((get.json.recentArrivals as Record<string, Array<{ state: string }>>).vendor![0]!.state).toBe("enabled");
+  });
+
+  // An Antigravity base row stands for its low/medium/high tiers in the picker.
+  const family = { provider: "vendor", id: "fam", antigravityEffortWireModelIds: { low: "fam-low", medium: "fam-medium", high: "fam-high" } };
+
+  test("an Antigravity base arrival selected through one of its tiers reports enabled", async () => {
+    const live = config();
+    live.disabledModels = [];
+    live.providers.vendor.selectedModels = ["fam-high"];
+    live.modelDiscovery = { recentArrivals: { vendor: [{ id: "fam", at: "t", disabledByPolicy: false }] } } as never;
+    setCached("vendor", [family as never]);
+    try {
+      const get = await call(live, "/api/model-discovery");
+      expect((get.json.recentArrivals as Record<string, Array<{ state: string }>>).vendor![0]!.state).toBe("enabled");
+    } finally { clearModelCache("vendor"); }
+  });
+
+  test("an Antigravity base arrival whose known tiers are all disabled reports disabled", async () => {
+    const live = config();
+    live.disabledModels = ["vendor/fam-low", "vendor/fam-medium", "vendor/fam-high"];
+    live.modelDiscovery = {
+      knownModels: { vendor: { ids: ["fam-low", "fam-medium", "fam-high"], removed: [], updatedAt: "t" } },
+      recentArrivals: { vendor: [{ id: "fam", at: "t", disabledByPolicy: false }] },
+    } as never;
+    setCached("vendor", [family as never]);
+    try {
+      const get = await call(live, "/api/model-discovery");
+      expect((get.json.recentArrivals as Record<string, Array<{ state: string }>>).vendor![0]!.state).toBe("disabled");
+    } finally { clearModelCache("vendor"); }
   });
 
   test("PUT accepts admit globally and per provider, and still rejects anything else", async () => {

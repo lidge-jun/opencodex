@@ -82,7 +82,8 @@ function readDefaultReasoningEffort(raw: unknown, efforts: string[] | undefined)
 import type { CatalogModel } from "../../codex/catalog";
 import { accountBoundNativeOpenAiSlugsBySelector, catalogModelSlug, configuredNativeAliasSlugs, disabledNativeSlugs, invalidateCodexModelsCache, nativeModelRows, shouldIncludeAccountBoundNativeOpenAi, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import { CatalogGatherBusyError } from "../../codex/catalog/provider-fetch";
-import { clearModelCache, getProviderLiveModelCount } from "../../codex/model-cache";
+import { clearModelCache, getProviderLiveModelCount, getStaleCached } from "../../codex/model-cache";
+import { antigravityFamilyDisabled, projectAntigravitySelectedModels } from "../../providers/antigravity-effort-families";
 import { NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-models";
 
 import {
@@ -198,19 +199,26 @@ function summarizeExportedModels(client: ExportClientId, document: unknown): { m
  * a disabled slug hides it, and a non-empty provider selection shows only what it names.
  * `auto-disabled` means the `off` policy disabled it (or a row from before that was recorded),
  * `disabled` that someone else did; `not-selected` that the selection leaves it out.
+ * `rows` is the provider's cached discovery, read passively: an Antigravity base inherits the
+ * disable of its known tiers and is selected through any of them, exactly as
+ * `filterCatalogVisibleModels` decides. Without cached rows those family rules have nothing to read.
  */
 function arrivalState(
   config: OcxConfig,
   provider: string,
   row: { id: string; disabledByPolicy?: boolean },
+  rows: readonly CatalogModel[],
 ): "enabled" | "auto-disabled" | "disabled" | "not-selected" {
   if ((config.disabledModels ?? []).some(slug => slugEquals(slug, provider, row.id))) {
     return row.disabledByPolicy === false ? "disabled" : "auto-disabled";
   }
+  const candidate = rows.find(model => model.provider === provider && model.id === row.id) ?? { provider, id: row.id };
+  if (antigravityFamilyDisabled(config, candidate, rows)) return "disabled";
   const selected = config.providers[provider]?.selectedModels ?? [];
   if (selected.length === 0) return "enabled";
-  const key = slugEquivalenceKey(routedSlug(provider, row.id));
-  return selected.some(id => slugEquivalenceKey(routedSlug(provider, id)) === key) ? "enabled" : "not-selected";
+  const keys = new Set(projectAntigravitySelectedModels(provider, selected, rows)
+    .map(id => slugEquivalenceKey(routedSlug(provider, id))));
+  return keys.has(slugEquivalenceKey(routedSlug(provider, row.id))) ? "enabled" : "not-selected";
 }
 
 export async function handleModelRoutes(ctx: ManagementContext): Promise<Response | null> {
@@ -236,10 +244,10 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     const providers = Object.fromEntries(Object.entries(config.providers).map(([name, provider]) => [
       name, provider.newModelPolicy ?? "inherit",
     ]));
-    const recentArrivals = Object.fromEntries(Object.entries(config.modelDiscovery?.recentArrivals ?? {}).map(([name, rows]) => [
-      name,
-      rows.map(row => ({ ...row, state: arrivalState(config, name, row) })),
-    ]));
+    const recentArrivals = Object.fromEntries(Object.entries(config.modelDiscovery?.recentArrivals ?? {}).map(([name, rows]) => {
+      const cached = getStaleCached(name) ?? [];
+      return [name, rows.map(row => ({ ...row, state: arrivalState(config, name, row, cached) }))];
+    }));
     const baselineCounts = Object.fromEntries(Object.entries(config.modelDiscovery?.knownModels ?? {}).map(([name, baseline]) => [
       name, baseline.ids.length,
     ]));
