@@ -410,7 +410,7 @@ test.skipIf(process.platform === "win32")("runtime inspection reports the served
   writeFileSync(cli, "// entry\n");
   recordServingRuntime({ command: [bun, cli], version: "2.99.0", servedAt: "2026-11-09T00:00:00.000Z" }, join(home, ".opencodex"));
   const bin = join(home, "tools"); mkdirSync(bin);
-  for (const tool of ["sh", "uname", "awk", "wc"]) symlinkSync(Bun.which(tool)!, join(bin, tool));
+  for (const tool of ["sh", "uname", "awk", "dd", "wc"]) symlinkSync(Bun.which(tool)!, join(bin, tool));
   const result = Bun.spawnSync(remoteInspectRuntimeArgv("posix"), { env: { HOME: home, PATH: bin }, stdout: "pipe", stderr: "pipe" });
   const lines = result.stdout.toString().split("\n");
   expect(result.exitCode).toBe(0);
@@ -433,6 +433,17 @@ test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unread
 
 test.skipIf(process.platform === "win32")("a Child without awk falls through without stderr noise (#8359)", async () => {
   const f = servedFixture(["dd", "wc"]);
+  const served = join(f.home, "standalone/ocx");
+  executable(served, "if [ \"$1\" = --version ]; then printf 'opencodex 2.99.0\\n'; exit 0; fi\nprintf 'standalone\\n'");
+  f.census([served]);
+  const result = await f.run();
+  expect(result.stdout).toBe("0\nlink\0port\0");
+  expect(result.stderr).toBe("");
+}, SPAWN_BUDGET_MS);
+
+// Without dd the census size cannot be bounded, so the census is not read at all.
+test.skipIf(process.platform === "win32")("a Child without dd falls through without reading the census (#8359)", async () => {
+  const f = servedFixture(["awk", "wc"]);
   const served = join(f.home, "standalone/ocx");
   executable(served, "if [ \"$1\" = --version ]; then printf 'opencodex 2.99.0\\n'; exit 0; fi\nprintf 'standalone\\n'");
   f.census([served]);

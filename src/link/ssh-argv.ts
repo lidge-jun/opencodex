@@ -150,7 +150,8 @@ export const REMOTE_PLATFORM_UNSUPPORTED = 125;
  * Shared by the ocx discovery, pinned sync and runtime inspection scripts.
  */
 export const REMOTE_SERVED_RUNTIME = `served_runtime() {
-  [ -f "$1" ] || return 1
+  # The size count below takes wc's status, so a missing dd or an unreadable file must fail here.
+  [ -f "$1" ] && [ -r "$1" ] && command -v dd >/dev/null 2>&1 || return 1
   served_size=$( { dd if="$1" bs=65537 count=1 2>/dev/null | wc -c; } 2>/dev/null ) || return 1
   [ "$served_size" -le 65536 ] 2>/dev/null || return 1
   awk '
