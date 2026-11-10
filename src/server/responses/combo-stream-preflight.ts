@@ -9,6 +9,7 @@ import { carryResponseToolOwnership } from "./response-tool-ownership";
 import { createSseInspector } from "../relay";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import { REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
+import { isPausedTurn } from "../../lib/client-error-body";
 import { requiredToolReasoningPrelude } from "./combo-required-tool-stream";
 
 const COMBO_STREAM_PREFLIGHT_MAX_BYTES = MAX_CLIENT_SSE_FRAME_BYTES;
@@ -141,17 +142,19 @@ function heldOnlyOutput(...outputs: unknown[]): boolean {
     && !Array.isArray(item) && ["message", "reasoning"].includes((item as { type?: unknown }).type as string));
 }
 
-function retryableZeroOutputTerminal(payload: unknown): boolean {
+function retryableZeroOutputTerminal(payload: unknown, context?: object): boolean {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   const event = payload as {
     type?: unknown;
     status?: unknown;
-    incomplete_details?: { reason?: unknown };
+    end_turn?: unknown;
+    incomplete_details?: { reason?: unknown; retryable?: unknown };
     output?: unknown;
     error?: { code?: unknown; retryable?: unknown };
     response?: {
       status?: unknown;
-      incomplete_details?: { reason?: unknown };
+      end_turn?: unknown;
+      incomplete_details?: { reason?: unknown; retryable?: unknown };
       output?: unknown;
       error?: { code?: unknown; retryable?: unknown };
     };
@@ -179,12 +182,23 @@ function retryableZeroOutputTerminal(payload: unknown): boolean {
   const isIncomplete = event.type === "response.incomplete" || event.status === "incomplete";
   if (!isIncomplete) return false;
   if (!emptyOutput) return false;
-  const incompleteDetails = (target.incomplete_details && typeof target.incomplete_details === "object" && !Array.isArray(target.incomplete_details))
-    ? (target.incomplete_details as { reason?: unknown }).reason
+  const details = (target.incomplete_details && typeof target.incomplete_details === "object" && !Array.isArray(target.incomplete_details))
+    ? target.incomplete_details as { reason?: unknown; retryable?: unknown }
     : undefined;
-  const reason = incompleteDetails;
+  const reason = details?.reason;
   if (reason === undefined) return true;
-  if (reason === "max_output_tokens") return true;
+  if (reason === "max_output_tokens") {
+    // Same evidence the run-turn classifier requires before it treats an output limit as a
+    // replayable zero-output terminal: an explicitly unfinished turn or an explicitly
+    // non-retryable limit is an answer, not a target failure. A normalized Anthropic
+    // `pause_turn` also reads as max_output_tokens on the wire, so the request-scoped marker
+    // keeps a paused turn the client must continue from hopping to another provider.
+    if (isPausedTurn(context)) return false;
+    const endTurn = target.end_turn ?? event.end_turn;
+    if (endTurn === false) return false;
+    if (details?.retryable === false) return false;
+    return true;
+  }
   return typeof reason === "string" && RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason);
 }
 
@@ -353,7 +367,7 @@ export type ComboStreamPreflightResult =
 export async function preflightComboStreamResponse(
   response: Response,
   logCtx: RequestLogContext,
-  retryableTerminal: (payload: unknown) => boolean = retryableZeroOutputTerminal,
+  retryableTerminal?: (payload: unknown) => boolean,
   options?: {
     allowMissingContentType?: boolean;
     replayReadErrors?: boolean;
@@ -361,6 +375,7 @@ export async function preflightComboStreamResponse(
     signal?: AbortSignal;
   },
 ): Promise<ComboStreamPreflightResult> {
+  const retryableTerminalFor = retryableTerminal ?? ((payload: unknown) => retryableZeroOutputTerminal(payload, logCtx));
   const contentType = response.headers.get("content-type");
   const isEventStream = hasResponseMediaType(response.headers, "text/event-stream")
     || (!contentType && options?.allowMissingContentType === true);
@@ -392,7 +407,7 @@ export async function preflightComboStreamResponse(
       if (terminalStatus !== undefined || outputCommitted || retryableTerminalPayload) return;
       if (payload !== null && typeof payload === "object" && !Array.isArray(payload)
         && (payload as { type?: unknown }).type === "response.created") responseCreated = true;
-      const retryable = retryableTerminal(payload);
+      const retryable = retryableTerminalFor(payload);
       const matchedBareError = retryable && payload !== null && typeof payload === "object"
         && !Array.isArray(payload) && (payload as { type?: unknown }).type === "error";
       // A zero-output bare error is terminal evidence. Explicit client errors stay

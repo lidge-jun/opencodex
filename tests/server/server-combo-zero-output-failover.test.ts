@@ -1091,4 +1091,98 @@ describe("combo zero-output bare Responses error failover", () => {
       expect(hits).not.toContain("m2");
     });
   }
+
+  test("translated Anthropic pause_turn stays on its target and delivers the incomplete", async () => {
+    const hits: string[] = [];
+    const anthropic = serve(async request => {
+      hits.push("a");
+      const body = await request.json() as { stream?: boolean };
+      expect(body.stream).toBe(true);
+      const frame = (name: string, data: Record<string, unknown>) =>
+        `event: ${name}\ndata: ${JSON.stringify({ type: name, ...data })}\n\n`;
+      return new Response([
+        frame("message_start", { message: { id: "msg_1", model: "m1", usage: { input_tokens: 11, output_tokens: 0 } } }),
+        frame("message_delta", { delta: { stop_reason: "pause_turn" }, usage: { output_tokens: 7 } }),
+        frame("message_stop", {}),
+      ].join(""), { headers: { "content-type": "text/event-stream" } });
+    });
+    const backup = serve(() => {
+      hits.push("b");
+      return new Response(`data: ${JSON.stringify({ type: "response.completed", response: responsesSuccess("pause backup", "m2") })}\n\n`,
+        { headers: { "content-type": "text/event-stream" } });
+    });
+    const config = comboConfig({
+      a: provider("anthropic", baseUrl(anthropic), "key-a"),
+      b: provider("openai-responses", baseUrl(backup), "key-b"),
+    });
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
+    }), config, { model: "", provider: "" });
+
+    const body = await response.text();
+    expect(response.status).toBe(200);
+    expect(hits).toEqual(["a"]);
+    expect(body).toContain("response.incomplete");
+    expect(body).toContain('"reason":"max_output_tokens"');
+    expect(body).toContain('"output_tokens":7');
+    expect(body).not.toContain("pause backup");
+  });
+
+  for (const [name, details, endTurn] of [
+    ["end_turn false", {}, false],
+    ["retryable false", { retryable: false }, undefined],
+  ] as const) {
+    test(`empty max_output_tokens incomplete with ${name} stays on its target and is delivered`, async () => {
+      const hits: string[] = [];
+      const encoder = new TextEncoder();
+      const frame = (event: unknown) => encoder.encode(`data: ${JSON.stringify(event)}\n\n`);
+      const a = serve(() => {
+        hits.push("a");
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(frame({ type: "response.created", response: { id: "r1", status: "in_progress" } }));
+            controller.enqueue(frame({
+              type: "response.incomplete",
+              response: {
+                id: "r1",
+                status: "incomplete",
+                ...(endTurn === false ? { end_turn: false } : {}),
+                incomplete_details: { reason: "max_output_tokens", ...details },
+                output: [],
+                usage: { input_tokens: 9, output_tokens: 0, total_tokens: 9 },
+              },
+            }));
+            controller.close();
+          },
+        }), { headers: { "content-type": "text/event-stream" } });
+      });
+      const b = serve(() => {
+        hits.push("b");
+        return new Response(`data: ${JSON.stringify({ type: "response.completed", response: responsesSuccess("limit backup", "m2") })}\n\n`,
+          { headers: { "content-type": "text/event-stream" } });
+      });
+      const config = comboConfig({
+        a: provider("openai-responses", baseUrl(a), "key-a"),
+        b: provider("openai-responses", baseUrl(b), "key-b"),
+      });
+
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
+      }), config, { model: "", provider: "" });
+
+      const body = await response.text();
+      expect(response.status).toBe(200);
+      expect(hits).toEqual(["a"]);
+      expect(body).toContain("response.incomplete");
+      expect(body).toContain('"reason":"max_output_tokens"');
+      if (endTurn === false) expect(body).toContain('"end_turn":false');
+      if (details.retryable === false) expect(body).toContain('"retryable":false');
+      expect(body).not.toContain("limit backup");
+    });
+  }
 });

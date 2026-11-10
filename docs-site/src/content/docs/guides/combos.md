@@ -806,12 +806,19 @@ turn advances to another eligible target without cooling the healthy candidate; 
 hold expires or visible output begins, the target commits and buffered reasoning is streamed
 immediately to the client. A zero-output `response.incomplete` follows the same path when its reason
 is missing or is `adapter_eof`, `missing_terminal_event`, `upstream_stall_timeout`, or an explicit
-`max_output_tokens` limit before any output is emitted. Other explicit semantic reasons such as
-`content_filter` remain terminal, as do post-output `max_output_tokens` limits and an explicit null reason.
-When every target ends with such a zero-output `max_output_tokens` limit, and no confirmed context
-refusal was seen (that one still takes precedence), the client receives the last attempt's HTTP 200
-`incomplete` response (reason `max_output_tokens`) with that attempt's usage, rather than a 502 failure.
-A reasonless final snapshot that already contains output items is also kept. The rate-limit and
+`max_output_tokens` limit before any output is emitted. The `max_output_tokens` exception requires
+the turn to look finished: a snapshot that carries `end_turn: false`, or whose
+`incomplete_details.retryable` is `false`, stays on its target. An Anthropic `pause_turn` is a paused
+long-running turn the client is expected to continue; it reaches you as the same `incomplete` with
+reason `max_output_tokens` it always has, and it also stays on its target instead of moving to the
+next one. Other explicit semantic reasons such as `content_filter` remain terminal, as do post-output
+`max_output_tokens` limits and an explicit null reason.
+When every run-turn or SSE target ends with such a zero-output `max_output_tokens` limit, and no
+confirmed context refusal was seen (that one still takes precedence), the client receives the last
+attempt's HTTP 200 `incomplete` response (reason `max_output_tokens`) with that attempt's usage,
+rather than a 502 failure. Non-streaming native JSON is the exception: that body is never inspected,
+so its `incomplete` body, empty or not, is returned to you unchanged. A reasonless final snapshot
+that already contains output items is also kept. The rate-limit and
 response-metadata frames that a native Codex (ChatGPT account) target sends over its WebSocket are
 not output, so an overload error that follows them with no output still moves to the next target.
 Once any output event begins or the reasoning hold deadline is reached, the target is committed: a later stream failure is

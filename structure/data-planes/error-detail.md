@@ -425,6 +425,10 @@ The legacy envelope stays in the combo-evidence side channel, separate from the 
 
 Messages local-refusal presentation uses construction-registered process metadata in
 `src/lib/client-error-body.ts`, carried through response clones and registered terminal contexts.
+The same module holds the request-scoped `pause_turn` fact the bridge records when an Anthropic
+turn is paused: the client still receives `incomplete/max_output_tokens`, while combo stream
+preflight reads the marker and keeps the turn on its target instead of replaying it. It adds no
+wire field, and `carryProxyErrorContext` carries it with the rest of that context.
 `src/lib/messages-error-body.ts` selects fixed guidance from that closed reason or a closed local
 code; serialized fields and diagnostic text cannot register a reason. The original message still
 feeds status, recovery, logs and private combo evidence. Messages/count_tokens non-2xx delivery

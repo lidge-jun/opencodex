@@ -150,7 +150,14 @@ is not a prelude: it commits.
 - a `response.failed` terminal arrives first, in which case the terminal is converted back through
   the ordinary bounded combo-failure classifier and may advance to the next declared target;
 - a zero-output `response.incomplete` with no reason, `adapter_eof`, `missing_terminal_event`,
-  `upstream_stall_timeout`, or an empty-output `max_output_tokens` limit follows the same failure path; other explicit semantic or unknown reasons stay terminal;
+  `upstream_stall_timeout`, or an empty-output `max_output_tokens` limit follows the same failure path.
+  The `max_output_tokens` arm needs the evidence `classifyZeroOutputTokenLimit` requires in
+  `src/adapters/run-turn-queue.ts`: `end_turn` must not be `false` and
+  `incomplete_details.retryable` must not be `false`. A translated Anthropic `pause_turn` also
+  reaches the wire as `incomplete/max_output_tokens`, so `src/bridge/sse.ts` records it on the
+  request context (`src/lib/client-error-body.ts`) and this preflight keeps it on its target while
+  the client keeps the same reason and usage. Other explicit semantic or unknown reasons stay
+  terminal;
 - a top-level `error` arrives before output, in which case unknown, rate-limit, and server failures
   may advance while errors explicitly classified as non-retryable 4xx remain committed;
 - another completed/incomplete terminal or the aggregate preflight byte or retained-chunk cap is reached,

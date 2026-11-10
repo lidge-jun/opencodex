@@ -1,4 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { bridgeToResponsesSSE } from "../../src/bridge";
 import {
   comboStreamPayloadCommitsOutput,
   deferProtocolSafeResetRecovery,
@@ -7,6 +8,8 @@ import {
 import { stageCommitment, type RequestFailureStage } from "../../src/lib/request-failure-model";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../../src/server/sse-frame-buffer";
+import type { AdapterEvent } from "../../src/types";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 const sse = (...payloads: unknown[]): Response => new Response(
   payloads.map(payload => `data: ${JSON.stringify(payload)}\n\n`).join(""),
@@ -826,6 +829,74 @@ describe("combo stream preflight", () => {
     const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" });
     expect(result.kind).toBe("accepted");
     expect(await result.response.text()).toBe(expected);
+  });
+
+  test("does not replay an empty max_output_tokens incomplete with end_turn false", async () => {
+    const source = sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      {
+        type: "response.incomplete",
+        response: {
+          id: "r1",
+          status: "incomplete",
+          end_turn: false,
+          incomplete_details: { reason: "max_output_tokens" },
+          output: [],
+          usage: { input_tokens: 25, output_tokens: 0, total_tokens: 25 },
+        },
+      },
+    );
+
+    const expected = await source.clone().text();
+    const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" });
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.text()).toBe(expected);
+  });
+
+  test("does not replay an empty max_output_tokens incomplete marked non-retryable", async () => {
+    const source = sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      {
+        type: "response.incomplete",
+        response: {
+          id: "r1",
+          status: "incomplete",
+          incomplete_details: { reason: "max_output_tokens", retryable: false },
+          output: [],
+          usage: { input_tokens: 25, output_tokens: 0, total_tokens: 25 },
+        },
+      },
+    );
+
+    const expected = await source.clone().text();
+    const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" });
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.text()).toBe(expected);
+  });
+
+  test("delivers a translated pause_turn incomplete without replaying it", async () => {
+    // The Anthropic adapter reports `pause_turn` on its `done` event; the bridge normalizes the
+    // client-visible reason to `max_output_tokens`, so only the request context can still tell a
+    // paused long-running turn from a real output limit.
+    const context: RequestLogContext = { model: "m1", provider: "a" };
+    const budget = createTestTranslatorBudget();
+    try {
+      async function* events(): AsyncGenerator<AdapterEvent> {
+        yield { type: "done", stopReason: "pause_turn", usage: { inputTokens: 25, outputTokens: 4, totalTokens: 29 } };
+      }
+      const source = new Response(bridgeToResponsesSSE(
+        events(), "claude-test", undefined, undefined, undefined, undefined, 2_000,
+        { translatorBudget: budget, proxyErrorContext: context },
+      ), { headers: { "content-type": "text/event-stream" } });
+
+      const result = await preflightComboStreamResponse(source, context);
+      expect(result.kind).toBe("accepted");
+      const body = await result.response.text();
+      expect(body).toContain("event: response.incomplete");
+      expect(body).toContain('"reason":"max_output_tokens"');
+      expect(body).toContain('"input_tokens":25');
+      expect(body).toContain('"output_tokens":4');
+    } finally { budget.dispose(); }
   });
 
   test("converts a zero-output incomplete with max_output_tokens after empty delta into a retryable failure", async () => {
