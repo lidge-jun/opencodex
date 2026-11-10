@@ -537,7 +537,7 @@ write when an existing baseline is forgotten: `src/quota/reset-observer.ts` runs
 enabling it takes effect without a restart.
 
 - `src/quota/window-mapping.ts` maps provider and Codex quota snapshots to one neutral window list, and
-  `src/quota/reset-detector.ts` emits at most one reset per window, scheduled or surprise; Mistral's `retainUnknownWindows` keeps a baseline through an unknown window only while a deadline identifies it.
+  `src/quota/reset-detector.ts` emits at most one reset per window, scheduled or surprise; Mistral's `retainUnknownWindows` keeps a baseline through an unknown window only while a deadline identifies it. The selection of those Mistral windows lives in `src/providers/quota-mistral-budget.ts`, not under `src/quota/`, because `src/providers/quota.ts` imports it statically on the core path.
 - `src/quota/reset-observer.ts` is the only place a snapshot becomes a delivered notification, and it
   never throws into the quota write that triggered it. `src/codex/quota.ts` and `src/providers/quota.ts`
   reach it only through a lazy import, because both are statically reachable from `src/server/responses/core.ts`.

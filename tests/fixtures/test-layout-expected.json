@@ -505,7 +505,8 @@
   "claude-first-party-union.test.ts": "claude-integration", "claude-desktop-system-proxy.test.ts": "claude-integration",
   "claude-gateway-cache.test.ts": "claude-integration", "claude-config-home-isolation.test.ts": "claude-integration", "claude-inbound-cache-stabilize.test.ts": "claude-integration", "claude-inbound-token-footer.test.ts": "claude-integration",
   "claude-inbound-debug.test.ts": "claude-integration", "claude-inbound.test.ts": "claude-integration",
-  "claude-inbound-tool-loading.test.ts": "claude-integration",
+  "claude-inbound-tool-loading.test.ts": "claude-integration", "claude-chat-tool-dispatch.test.ts": "claude-integration",
+  "claude-chat-tool-dispatch-routes.test.ts": "claude-integration",
   "claude-inbound-tool-reference.test.ts": "claude-integration", "claude-native-reasoning-continuity.test.ts": "claude-integration", "claude-native-reasoning-provenance.test.ts": "claude-integration",
   "claude-output-schema-strict.test.ts": "claude-integration", "claude-intercept-integration.test.ts": "server",
   "claude-intercept-local-ca.test.ts": "claude-integration",
@@ -1301,6 +1302,7 @@
   "responses-forward-posit-continuation.test.ts": "responses", "responses-forward-prompt-envelope.test.ts": "responses",
   "responses-freeform-wrapper-keys.test.ts": "responses", "responses-function-tool-repair.test.ts": "responses",
   "responses-hosted-tool-declaration.test.ts": "responses", "responses-hosted-tool-min-spread.test.ts": "responses",
+  "responses-hosted-tool-conditional.test.ts": "responses",
   "responses-hide-raw-reasoning.test.ts": "responses", "responses-image-gen-repair.test.ts": "responses",
   "responses-inbound-store-default.test.ts": "responses", "responses-item-id-repair.test.ts": "responses",
   "codex-0164-request-compat.test.ts": "responses",
@@ -1310,8 +1312,8 @@
   "responses-parser-agent-message.test.ts": "responses", "responses-parser-malformed-content.test.ts": "responses",
   "responses-parser.test.ts": "responses", "responses-passthrough-transient-policy.test.ts": "responses",
   "responses-pool-401-refresh.test.ts": "responses", "responses-pool-refresh-attribution.test.ts": "responses",
-  "responses-preview-main-read-fence.test.ts": "responses", "responses-reasoning-effort-downgrade.test.ts": "responses", "responses-native-ultra-effort-wire.test.ts": "responses",
-  "responses-url-citation-title-repair.test.ts": "responses", "responses-reasoning-summary-passthrough.test.ts": "responses", "responses-reset-replay.test.ts": "responses",
+  "responses-preview-main-read-fence.test.ts": "responses", "responses-reasoning-effort-diagnostics.test.ts": "responses", "responses-reasoning-effort-downgrade.test.ts": "responses", "responses-native-ultra-effort-wire.test.ts": "responses",
+  "responses-url-citation-title-repair.test.ts": "responses", "responses-reasoning-summary-passthrough.test.ts": "responses", "responses-reset-replay.test.ts": "responses", "responses-reset-replay-chained.test.ts": "responses",
   "responses-translated-reset.test.ts": "responses", "responses-routed-web-search-fields.test.ts": "responses",
   "responses-self-named-namespace-scrub.test.ts": "responses", "responses-send-budget-counts.test.ts": "responses",
   "responses-send-budget-errors.test.ts": "responses", "responses-memory-models.test.ts": "responses",
@@ -1333,7 +1335,7 @@
   "restore-completes-shared-teardown.test.ts": "cli", "retry-after-429.test.ts": "server",
   "route-decision-trace.test.ts": "server", "route-explainability.test.ts": "cli",
   "routed-agent-messages.test.ts": "adapters", "router-blocked-cross-provider.test.ts": "routing",
-  "router-combo-failover-classification.test.ts": "routing", "router-discarded-baseurl-warning.test.ts": "routing",
+  "router-combo-failover-classification.test.ts": "routing", "combo-failure-transport-parity.test.ts": "routing", "router-discarded-baseurl-warning.test.ts": "routing",
   "router-template-baseurl.test.ts": "routing", "router.test.ts": "routing",
   "routing-analytics.test.ts": "routing", "routing-capability-catalog.test.ts": "routing",
   "routing-capability-model-matching.test.ts": "routing", "routing-compatibility-auth-identity.test.ts": "routing",
@@ -1351,7 +1353,7 @@
   "server-background-lifecycle.test.ts": "server", "server-clickjacking-headers.test.ts": "server",
   "server-combo-cooldown-fallback.test.ts": "server", "server-combo-failover-e2e.test.ts": "server",
   "server-combo-held-response.test.ts": "server", "server-combo-reasoning-replay-eligibility.test.ts": "server", "server-combo-tool-loop-continuation.test.ts": "server",
-  "server-combo-zero-output-failover.test.ts": "server", "server-google-antigravity-oauth-401-replay.test.ts": "server",
+  "server-combo-zero-output-failover.test.ts": "server", "server-combo-opaque-error-failover.test.ts": "server", "server-google-antigravity-oauth-401-replay.test.ts": "server",
   "server-antigravity-web-search-validation.test.ts": "server", "server-google-antigravity-oauth-429-budget.test.ts": "server", "server-gui-bundle-freshness.test.ts": "server",
   "server-images-bodyless-content-length.test.ts": "server", "server-images-pool-admission.test.ts": "server",
   "server-images.test.ts": "server", "server-key-failover-e2e.test.ts": "server", "distributed-key-401.test.ts": "server",
@@ -1625,7 +1627,7 @@
   "hermes-profiles.test.ts": "clients", "hermes-profile-routes.test.ts": "clients"
   ,"cli-sync-expect-link.test.ts": "cli"
   ,"local-credentials.test.ts": "cli", "local-credential-generation.test.ts": "config", "local-credential-fence.test.ts": "config", "link-connection-generation.test.ts": "clients"
-  ,"request-log-error-detail.test.ts": "usage", "upstream-condition.test.ts": "lib", "client-retry-after.test.ts": "lib", "client-retry-after-sites.test.ts": "server", "upstream-error-detail-boundaries.test.ts": "server", "request-log-identity-bounds.test.ts": "usage", "safe-response-headers.test.ts": "server", "turn-state-handles.test.ts": "server", "turn-state-handles-e2e.test.ts": "server", "client-error-body.test.ts": "lib", "chat-error-body-normalization.test.ts": "responses", "chat-error-collector-verdicts.test.ts": "responses", "server-chat-error-body-evidence.test.ts": "server"
+  ,"request-log-error-detail.test.ts": "usage", "provider-failure-detail.test.ts": "usage", "upstream-condition.test.ts": "lib", "client-retry-after.test.ts": "lib", "client-retry-after-sites.test.ts": "server", "upstream-error-detail-boundaries.test.ts": "server", "request-log-identity-bounds.test.ts": "usage", "safe-response-headers.test.ts": "server", "turn-state-handles.test.ts": "server", "turn-state-handles-e2e.test.ts": "server", "client-error-body.test.ts": "lib", "chat-error-body-normalization.test.ts": "responses", "chat-error-collector-verdicts.test.ts": "responses", "server-chat-error-body-evidence.test.ts": "server"
 ,"messages-error-normalization.test.ts": "claude-integration", "messages-header-normalization.test.ts": "claude-integration", "messages-lane-errors.test.ts": "claude-integration"
 ,"messages-error-contracts.test.ts": "claude-integration", "messages-overflow-verdicts.test.ts": "claude-integration", "messages-review-regressions.test.ts": "claude-integration", "messages-proxy-refusals.test.ts": "claude-integration", "messages-overflow-native.test.ts": "claude-integration", "messages-overflow-builtin.test.ts": "claude-integration", "messages-overflow-translated.test.ts": "claude-integration", "messages-overflow-stream.test.ts": "claude-integration", "messages-overflow-collectors.test.ts": "claude-integration", "messages-success-media-types.test.ts": "claude-integration", "messages-native-stream-parity.test.ts": "claude-integration", "messages-overflow-baseline-contract.test.ts": "claude-integration",
   "messages-sse-builtin-errors.test.ts": "claude-integration",
@@ -1648,5 +1650,7 @@
   "link-ephemeral-child-discovery.test.ts": "clients",
   "link-enrollment-ephemeral-child.test.ts": "server",
   "link-ocx-child-e2e.test.ts": "clients",
-  "link-child-plant-foundations.test.ts": "clients"
+  "link-child-plant-foundations.test.ts": "clients",
+  "model-discovery-skip-invalid-rows.test.ts": "providers",
+  "management-provider-model-discovery.test.ts": "server"
 }

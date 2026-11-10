@@ -99,7 +99,7 @@ varsayılan olarak kapalıdır; kapalı anahtar değişiklik yapmaz.
 | Anahtar | Açıkken |
 | --- | --- |
 | `nativeChatCombos` | Combo içindeki uygun Chat adayı, istemci gövdesinin kendine ait kopyasından yerel gönderilir; diğer adaylar köprüde kalır. |
-| `managedMessagesNative` | Uygun doğrudan Anthropic rotaları ve varsayılan çabası olmayan strict failover combo içindeki birinci taraf Anthropic adayları Messages olarak gönderilir. Çaba yeniden yazımı ve yalnızca köprüde çalışan davranışlar köprüde kalır. |
+| `managedMessagesNative` | Uygun doğrudan Anthropic rotaları ve varsayılan çabası olmayan strict failover combo içindeki anahtar kimlik doğrulamalı Anthropic uyumlu veya birinci taraf Anthropic adayları Messages olarak gönderilir. Çaba yeniden yazımı ve yalnızca köprüde çalışan davranışlar köprüde kalır. |
 | `managedMessagesNativeOAuth` | `api.anthropic.com` üzerindeki yapılandırılmış Anthropic OAuth hesapları, hesap havuzları ve uygun failover adayları için yerel Messages. Yalnızca `managedMessagesNative` ile birlikte etkilidir. |
 | `directEncoders` | Responses dışı üst sunucuda Chat/Messages yanıtı, iç Responses akışı yerine doğrudan bağdaştırıcı olaylarından kodlanır. İstek tarafı değişmez. |
 | `antigravityDirect` | **Varsayılan olarak açık**; kapatmak için `false` yapın. Tek Google Antigravity sağlayıcısına giden Chat/Messages, iç Responses gövdesini iki yönde de atlar: konuşma doğrudan Google bağdaştırıcısının derlediği biçime çözülür, yanıt `directEncoders` gibi kodlanır. Yol `chat -> ir -> other` veya `messages -> ir -> other` olur. Model, çaba, sınırlar ve araç seçimi normal ilkelerden geçtiği için hesap dönüşümü, çaba kuralları ve kullanım değişmez. Combo'lar, ilkeler, barındırılan web araması aracı, yalnızca metin modeline gelen görseller, gölge çağrı yakalamasının değiştirebileceği modeller ve proxy'nin yeniden yazdığı metinler (beceri kataloğu, üretilmiş görsel bağlantısı) köprüde kalır; neden günlükte belirtilir. |
@@ -136,7 +136,7 @@ Aşağıdakiler iç Responses köprüsünü kullanmaya devam eder veya kapsam d�
   gövdeye çözülür. Tek Google Antigravity rotası istisnadır; ancak
   `antigravityDirect: false` ise o da köprü kullanır.
 - Yönlendirme ilkesi adayları, çaba satırından ulaşılan combo'lar,
-  `nativeChatCombos` kapalıyken Chat combo adayları. Messages combo'larında varsayılan çabası olmayan strict failover içindeki uygun birinci taraf Anthropic adayları yerel yolu kullanır; diğerleri köprüde kalır. Her aday çağıranın model/sağlayıcı kapsamını uygular.
+  `nativeChatCombos` kapalıyken Chat combo adayları. Messages combo'larında varsayılan çabası olmayan strict failover içindeki uygun anahtar kimlik doğrulamalı Anthropic uyumlu veya birinci taraf Anthropic adayları yerel yolu kullanır; diğerleri köprüde kalır. Her aday çağıranın model/sağlayıcı kapsamını uygular.
 - `directEncoders`, yalnızca somut Responses dışı rotalarda akışlı teslimi kapsar.
   Combo/ilke alt istekleri, yönlendirilmiş sıkıştırma, tur çalıştıran bağdaştırıcılar
   (Cursor, Devin, kod ajanı CLI'ları, CodeBuddy) ve yardımcı servis turları köprüde kalır.
