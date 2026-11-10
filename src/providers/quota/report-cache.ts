@@ -6,7 +6,8 @@ import { effectiveCodexAuthAccountId, listCodexAuthAccountsSnapshot } from "../.
 import { CODEX_EXHAUSTED_USAGE_PERCENT, withoutRetiredCodexQuota, type StoredAccountQuota } from "../../codex/quota";
 import { isMainAccountIdentityGenerationLive } from "../../codex/main-account-cache";
 import { codexPlanKey } from "../../codex/plan";
-import { resolveProviderApiKey } from "../key-store";
+import { isKeychainReference, resolveProviderApiKey } from "../key-store";
+import { resolveEnvValue } from "../../config/proxy-env";
 import { apiKeyPoolEntryId } from "../api-keys";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "../registry";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../openai-tiers";
@@ -36,13 +37,15 @@ const keyReportDestinations = new WeakMap<ProviderQuotaReport, { adapter: string
  * comparison is a full digest: the 8-character apiKeyPoolEntryId is a cache discriminator,
  * not an identity, and two distinct keys can share it.
  */
-export function keyReportCredentialCurrent(value: ProviderQuotaReport, provider: OcxProviderConfig | undefined): boolean {
+export function keyReportCredentialCurrent(value: ProviderQuotaReport, provider: OcxProviderConfig | undefined, passive = false): boolean {
   const captured = keyReportCredentialIds.get(value);
   if (!captured) return true;
   if (!provider || provider.disabled || (provider.authMode ?? "key") !== "key") return false;
   const destination = keyReportDestinations.get(value);
   if (!destination || destination.adapter !== provider.adapter || destination.baseUrl !== provider.baseUrl) return false;
-  const current = resolveProviderApiKey(provider.apiKey)?.trim();
+  // A passive read cannot open the OS keychain or publish credential observations.
+  if (passive && isKeychainReference(provider.apiKey)) return false;
+  const current = (passive ? resolveEnvValue(provider.apiKey) : resolveProviderApiKey(provider.apiKey))?.trim();
   return !!current && createHash("sha256").update(current).digest("hex") === captured;
 }
 /** Validate joined results against the joining caller's independently mutable configuration. */
@@ -427,11 +430,13 @@ export function publishCollectedDecisionQuota(reports: ProviderQuotaReport[], co
  * no probe, token refresh, account snapshot or publication into routing evidence. The Home's own
  * dashboard and traffic keep the cache current.
  */
-export function heldProviderQuotaReports(configuredProviders: readonly string[]): ProviderQuotaResponse {
+export function heldProviderQuotaReports(config: OcxConfig): ProviderQuotaResponse {
   const held = getProviderQuotaReportCache()?.response;
-  const configured = new Set(configuredProviders);
   return {
     generatedAt: held?.generatedAt ?? Date.now(),
-    reports: (held?.reports ?? []).filter(item => configured.has(item.provider) && isProviderQuotaReportCurrent(item)),
+    reports: (held?.reports ?? []).filter(item => {
+      const provider = config.providers[item.provider];
+      return !!provider && isProviderQuotaReportCurrent(item) && keyReportCredentialCurrent(item, provider, true);
+    }),
   };
 }

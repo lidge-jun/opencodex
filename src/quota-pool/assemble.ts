@@ -314,7 +314,7 @@ function enabled(provider: OcxProviderConfig | undefined): provider is OcxProvid
 async function assemble(config: OcxConfig, identity: QuotaPoolIdentity, deps: QuotaPoolDeps): Promise<QuotaPool> {
   const now = (deps.now ?? Date.now)();
   const names = Object.keys(config.providers).filter(name => enabled(config.providers[name])).sort();
-  const reports = new Map(heldProviderQuotaReports(names).reports.map(report => [report.provider, report]));
+  const reports = new Map(heldProviderQuotaReports(config).reports.map(report => [report.provider, report]));
   const codexPool = hasCodexPoolProvider(config);
   const codex = codexPool ? (await (deps.codexSnapshot ?? listCodexAuthAccountsSnapshot)(config)).accounts : [];
   const providers: QuotaPoolProvider[] = [];

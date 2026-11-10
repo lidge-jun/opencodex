@@ -8,9 +8,11 @@ import {
   setProviderQuotaBeforePublishForTests,
 } from "../../src/providers/quota";
 import { providerApiKeyQuotaMode } from "../../src/providers/quota/vendor-probes-key";
-import { publishKeyReportForTests, routingEvidence } from "../../src/providers/quota/report-cache";
+import { keyReport, publishKeyReportForTests, routingEvidence, setProviderQuotaReportCache } from "../../src/providers/quota/report-cache";
 import { classifyUpstreamCondition } from "../../src/lib/upstream-condition";
 import { MistralBudgetPacer, resolveMistralTransport } from "../../src/providers/mistral-transport";
+import { runPassiveRead } from "../../src/lib/passive-read";
+import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/key-store";
 import type { OcxConfig } from "../../src/types";
 import { saveConfig } from "../../src/config";
 import { clearKeyCooldowns, selectProactiveApiKey } from "../../src/providers/key-failover";
@@ -53,6 +55,55 @@ afterEach(() => {
 });
 
 describe("Mistral budget probe", () => {
+  test("passive reports verify the current key and destination without probing or reading keychain", async () => {
+    expect((await fetchProviderQuotaReports(config, true)).reports).toHaveLength(1);
+    const originalCalls = calls.length;
+    const previousEnv = process.env.OCX_TEST_MISTRAL_PASSIVE;
+    process.env.OCX_TEST_MISTRAL_PASSIVE = "test-mistral-key";
+    let keychainReads = 0;
+    setProviderKeychainEntryFactoryForTests(() => ({
+      getPassword: () => { keychainReads++; return "test-mistral-key"; },
+      setPassword: () => {}, deletePassword: () => true,
+    }));
+    try {
+      const variants = [
+        { ...provider, apiKey: "replacement-key" },
+        { ...provider, disabled: true },
+        { ...provider, authMode: "oauth" },
+        { ...provider, baseUrl: "https://other.example/v1" },
+        { ...provider, apiKey: "keychain:fixture" },
+      ];
+      for (const current of variants) {
+        const changed = { ...config, providers: { mistral: current } } as OcxConfig;
+        expect((await runPassiveRead(() => fetchProviderQuotaReports(changed, true))).reports).toEqual([]);
+      }
+      const envConfig = { ...config, providers: { mistral: { ...provider, apiKey: "${OCX_TEST_MISTRAL_PASSIVE}" } } } as OcxConfig;
+      expect((await runPassiveRead(() => fetchProviderQuotaReports(envConfig, true))).reports).toHaveLength(1);
+      process.env.OCX_TEST_MISTRAL_PASSIVE = "replacement-key";
+      expect((await runPassiveRead(() => fetchProviderQuotaReports(envConfig, true))).reports).toEqual([]);
+      expect((await runPassiveRead(() => fetchProviderQuotaReports(config, true))).reports).toHaveLength(1);
+      expect(calls).toHaveLength(originalCalls);
+      expect(keychainReads).toBe(0);
+    } finally {
+      setProviderKeychainEntryFactoryForTests(null);
+      if (previousEnv === undefined) delete process.env.OCX_TEST_MISTRAL_PASSIVE;
+      else process.env.OCX_TEST_MISTRAL_PASSIVE = previousEnv;
+    }
+  });
+  test("quota pool excludes credential-bound held evidence after key rotation", async () => {
+    const now = Date.now();
+    const report = keyReport("mistral", "fixture", { weeklyPercent: 42, updatedAt: now }, provider, provider.apiKey, undefined, { bindCredential: true });
+    expect(report).not.toBeNull();
+    setProviderQuotaReportCache({ key: "fixture", ts: now, response: { generatedAt: now, reports: [report!] } });
+    ensureQuotaPoolIdentity();
+    const unchanged = await readQuotaPool(config);
+    if (!unchanged.ok) throw new Error(unchanged.error);
+    expect(unchanged.pool.providers.find(row => row.provider === "mistral")?.pooled.windows.length).toBeGreaterThan(0);
+    const rotated = { ...config, providers: { mistral: { ...provider, apiKey: "replacement-key" } } } as OcxConfig;
+    const changed = await readQuotaPool(rotated);
+    if (!changed.ok) throw new Error(changed.error);
+    expect(changed.pool.providers.find(row => row.provider === "mistral")).toBeUndefined();
+  });
   test("reports both budget windows and plan, and caches the paired read", async () => {
     const first = await fetchProviderQuotaReports(config, false);
     const report = first.reports.find(row => row.provider === "mistral");
