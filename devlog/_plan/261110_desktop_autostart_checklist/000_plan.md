@@ -107,3 +107,10 @@ Reflection (run 3): not-ready because the supervision-failure arm would return f
 Reviewer hyds/deepseek-v4.1-flash-free (task desktop-checklist-audit-a1): GO-WITH-FIXES (blockers=2). Folded: (1) routing-independent supervision-failure arm in D2; (2) A3 uses the pinned runner. Also folded: platform in the body type, named consumer and routing tests, `data-step` selector, matrix rows for macOS and Linux, docs-site build, v2-only note, D6 guard, browser arm delegates to `startupChecklistDone`, D8 hidden while failed. A mistral fallback audit was cancelled after the primary finished. The D2 change goes to the architect for reflection.
 
 Architect recheck (run 4): ALIGNED with the routing-independent arm; its guard notes are folded into D2. Main judgment: near-pass. Both High blockers folded, no residual blockers.
+
+## Evidence
+
+- Red on unchanged source `05d517e960`: `cd gui && bun ../scripts/test-with-pinned-bun.ts --isolate tests/startup-checklist-desktop.test.tsx` exited 1 with 17 fail and 3 pass. The three passes are the do-nothing cases (no reading yet, no Desktop card, plain `#startup`). The browser cases fail only on the new `data-step` selector; their copy, completion and destination already matched.
+- Green after the change: the same file 20 pass; the A3 GUI set 100 pass across 10 files; root set 70 pass across 5 files; `bun run test:changed` 322 pass; lint, typecheck, `build:gui` (`tsc -b`), `structure:check`, `privacy:scan` and the docs-site build exit 0. After rebasing onto `fdcf20b74c` the core GUI set (60 pass) and typecheck were rerun.
+- The refresh test's fixtures were split: browser readings keep the original assertions; Desktop readings run the same refresh cases with Desktop copy, and their stale stage expects the hint (D6).
+- Rendered with headless Chrome against a mocked API serving `gui/dist`: Desktop on, Desktop off, browser, Set up hub and the focused Desktop card on `#startup/desktop`. Uploaded to `pr-assets` under `desktop-autostart-checklist-261110/`.
