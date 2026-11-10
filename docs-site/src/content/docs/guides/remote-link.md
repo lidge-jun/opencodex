@@ -144,6 +144,7 @@ ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
+ocx link check (--link-id <id> | --all) [--no-wait] [--json]
 ```
 
 `ocx link status` needs the local admin token on a listener that only this machine can reach. When the public listener is bound to a non-loopback address, for example a Hub on `0.0.0.0`, no TCP listener qualifies: the hub management listener is reached through Tailscale Serve, so it refuses the raw admin token for link routes. On macOS and Linux the proxy therefore also opens a private Unix socket, `<OPENCODEX_HOME>/run/control-<port>.sock`, in a directory only your user can enter, and `ocx link status` uses it automatically. The socket answers only `GET /api/link/status` and still requires the admin token. Windows and runtimes older than this change keep the TCP path, where the read returns `403` on such a Hub.
@@ -177,6 +178,17 @@ On the Home, `ocx link status --json` reports the Home's own `local` version, re
 - `unknown`: the Child has not relayed a request since the Home started, or it sent a version or feature list the Home could not read, so its features cannot be checked.
 
 The version a Child reports is its own claim, bound to its link key. OpenCodex uses it for display and never for admission. Older `ocx` installations keep receiving the previous status document; only a 2.91.0 or newer CLI asks for these fields.
+
+### Child install, catalog and activity
+
+`ocx link status --json` on the Home also gives every link a `child` block. An older Home omits it, and an older CLI never asks for it.
+
+- `runningVersion` is the version the Child reported over the link. `installedVersion`, `installKind` and `update` (`route`, `reason`, `observedAt`) come from the last `ocx link check` and stay `null` until one ran. `versionSkew` compares the installed version, or the running one, with the Home's: `same`, `behind`, `ahead` or `unknown`. It is always `unknown` for an `ocx-child` Child.
+- `catalog.state` is `current` when the catalog the Child last downloaded from the Home is the Home's current one, `behind` when the Home's catalog changed since, and `unknown` before the first download. The Home compares the catalog's content, not file times, so restoring an older catalog file also reads `behind`. A download proves only that the Child fetched the catalog, not that it applied it; the check `ocx link add` runs at enrollment counts as a download.
+- `activity.idle` is `true` when no relayed model request has run on that link for 10 minutes. `inFlight` counts the requests running now. Token counting, catalog and readiness reads do not count, and a request from a Child older than connection-bound relay authentication counts against every link.
+- `activeJob` names an operation running on that link, and `lastOperation` the last one that finished. `codex` is `null` for now.
+
+`ocx link check --link-id <id>` (repeatable) or `ocx link check --all` asks Children for their install facts. For each Home-initiated Child the Home runs the Child's `ocx update --plan` over the link's SSH connection, which computes an update plan and changes nothing; each call has a 60-second budget and three run at a time. A Child older than 2.97.0 does not have that command: the item reads `owner-action` with reason `legacy-ocx`, and the Home learns the version from one more read-only SSH call on macOS and Linux, or from the version the Child reported over the link on Windows. On an npm or pnpm Child without a recorded serving install, the command runs through the `ocx` launcher, so the launcher's usual startup bookkeeping runs first, as it does for every `ocx sync` the Home sends there. Links a Child started from its own dashboard and `ocx-child` Children are reported without SSH. The command waits for the job and prints it as JSON (`--no-wait` prints it at once); it exits 0 when every Child answered, 6 when a Child is busy, offline, too old or not checkable, 1 on a failure, 4 for an unknown link or a Home too old for this command, and 5 when another operation is running on that link.
 
 
 ### Standalone pairing authorization
