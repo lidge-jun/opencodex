@@ -1,6 +1,6 @@
 import { statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { catalogEtag } from "../server/catalog-download";
+import { catalogEtag } from "../lib/catalog-etag";
 import { patchChildObservation, updateChildObservations } from "./child-observations";
 import { linkStorePath } from "./paths";
 import { readLinkStore, type LinkStore } from "./store";

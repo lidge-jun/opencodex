@@ -12,6 +12,12 @@ export interface LinkCheckDeps extends LinkCliDeps {
 
 export const LINK_CHECK_POLL_MS = 2_000;
 export const OLD_HOME_MESSAGE = "This Home does not support Child operations; update the Home.";
+export const NO_ELIGIBLE_LINKS_MESSAGE = "This Home has no Home-initiated links to operate on.";
+export const RUNTIME_ROLE_CLIENT_MESSAGE = "This machine is a Child; run Child operations on its Home.";
+const CONFLICT_MESSAGES: Readonly<Record<string, string>> = {
+  no_eligible_links: NO_ELIGIBLE_LINKS_MESSAGE,
+  runtime_role_client: RUNTIME_ROLE_CLIENT_MESSAGE,
+};
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 const JOB_ID = /^ljob_[0-9a-f]{16}$/;
@@ -100,6 +106,12 @@ export async function runLinkCheck(args: string[], deps: LinkCheckDeps, request:
     if (error instanceof RuntimeApiError && error.status === 404) {
       const body = error.body as { error?: { code?: unknown } } | null;
       if (body?.error?.code !== "link_not_found") throw new RuntimeApiError(OLD_HOME_MESSAGE, 404, error.body);
+    }
+    // Every 409 still exits 5; the conflicts that are not "another operation holds the link" say what happened.
+    if (error instanceof RuntimeApiError && error.status === 409) {
+      const code = (error.body as { error?: { code?: unknown } } | null)?.error?.code;
+      const message = typeof code === "string" && Object.hasOwn(CONFLICT_MESSAGES, code) ? CONFLICT_MESSAGES[code] : undefined;
+      if (message) throw new RuntimeApiError(message, 409, error.body);
     }
     throw error;
   }

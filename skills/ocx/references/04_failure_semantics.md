@@ -33,7 +33,8 @@ exit 1; a capability route miss uses 4 even when an undeclared handler exists.
 item's `state` and `reason`. `failed`, `uncertain` or an item state this CLI does not know exits 1; a
 job still running past its deadline prints the job and exits 1 (`job_still_running`). Exit 4 means an
 unknown link id, or a Home too old for Child operations (the message says to update the Home); exit 5
-means another operation holds the link.
+means a conflict: another operation holds the link, `--all` found no Home-initiated link, or the command ran on a
+Child (each has its own message).
 
 ## Distinguishing "not running" from "failing"
 

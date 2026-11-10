@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { runLinkCommand } from "../../src/cli/link";
-import { OLD_HOME_MESSAGE, validateChildJob } from "../../src/cli/link-child-ops";
+import { NO_ELIGIBLE_LINKS_MESSAGE, OLD_HOME_MESSAGE, RUNTIME_ROLE_CLIENT_MESSAGE, validateChildJob } from "../../src/cli/link-child-ops";
 import type { LinkCheckDeps } from "../../src/cli/link-child-ops";
 
 const LINK = "lnk_0123456789abcdef";
@@ -119,6 +119,15 @@ describe("ocx link check", () => {
     expect(missing.stderr[0]).toBe("Error: Link management request failed (404)");
     const busy = await run(["--link-id", LINK], deps(() => ({ status: 409, body: { error: { code: "link_operation_in_progress", message: "x" } } })));
     expect(busy.code).toBe(5);
+  });
+
+  test("other 409 answers carry an explicit message and still exit 5", async () => {
+    const none = await run(["--all"], deps(() => ({ status: 409, body: { error: { code: "no_eligible_links", message: "x" } } })));
+    expect(none.code).toBe(5);
+    expect(none.stderr[0]).toBe(`Error: ${NO_ELIGIBLE_LINKS_MESSAGE}`);
+    const child = await run(["--all"], deps(() => ({ status: 409, body: { error: { code: "runtime_role_client", message: "x" } } })));
+    expect(child.code).toBe(5);
+    expect(child.stderr[0]).toBe(`Error: ${RUNTIME_ROLE_CLIENT_MESSAGE}`);
   });
 
   test("job validator tolerance", () => {
