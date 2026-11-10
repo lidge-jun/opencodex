@@ -138,6 +138,22 @@ describe("weekly window rollover", () => {
     expect(isMainAccountHardLocked({ codexMainAccountHardLock: true })).toBe(true);
   });
 
+  test("a credits-only refresh never expires a blocking policy reading", () => {
+    // Policy evidence for the hard lock must only change through an explicit lower observation:
+    // a credits-only refresh after the weekly deadline has passed is not one.
+    observePolicy({ weeklyPercent: 99, weeklyResetAt: secondsFromNow(-3600) });
+    observePolicy(creditsOnly);
+    expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
+    expect(isMainAccountHardLocked({ codexMainAccountHardLock: true })).toBe(true);
+  });
+
+  test("a redeemed ticket on a credits-only refresh does not release the policy block", () => {
+    observePolicy({ weeklyPercent: 99, weeklyResetAt: secondsFromNow(3600), resetCredits: 2 });
+    observePolicy({ ...creditsOnly, resetCredits: 1 });
+    expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
+    expect(isMainAccountHardLocked({ codexMainAccountHardLock: true })).toBe(true);
+  });
+
   test("a genuinely lower weekly observation still releases the policy block", () => {
     // The escape hatch has to stay real, otherwise the guard would be a permanent trap.
     observePolicy({ weeklyPercent: 99, weeklyResetAt: secondsFromNow(-3600) });

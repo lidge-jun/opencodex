@@ -504,8 +504,9 @@ function mergeAccountQuota(
     // A credits-only refresh says nothing about usage windows, so it normally carries the known
     // ones. The exception is a weekly window upstream has already rolled over: replaying that
     // percentage would report the previous window's usage as the current one, and a
-    // credits-only-only stream would keep doing so indefinitely.
-    const weeklyRolledOver = weeklyWindowRolledOver(quota, existing, updatedAt);
+    // credits-only-only stream would keep doing so indefinitely. Policy evidence is exempt for
+    // the same reason as below: only an explicit lower observation may release the hard lock.
+    const weeklyRolledOver = !policyEvidence && weeklyWindowRolledOver(quota, existing, updatedAt);
     if (existing?.weeklyPercent !== undefined && !weeklyRolledOver) next.weeklyPercent = existing.weeklyPercent;
     if (existing?.weeklyResetAt !== undefined && !weeklyRolledOver) next.weeklyResetAt = existing.weeklyResetAt;
     if (existing?.monthlyPercent !== undefined) next.monthlyPercent = existing.monthlyPercent;
