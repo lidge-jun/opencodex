@@ -1,5 +1,5 @@
 import type { LinkRecord, LinkStore } from "../link/store";
-import type { LinkStatusDto } from "../link/status-projection";
+import type { LinkStatusPayload } from "./link";
 import { LinkStatusError } from "./sync-link-status";
 
 export { classifySyncResult, classifyVersionProbe, parseOcxVersion, REMOTE_LINK_SYNC_MESSAGE,
@@ -23,7 +23,7 @@ function childSkipHint(reason: string | null, alias: string): string {
 
 export async function runHomeFanout(deps: {
   home: HomeResult; catalogCurrent: boolean; localOnly?: boolean; applicable?: boolean;
-  readStore: () => LinkStore; readLinkStatus: () => Promise<LinkStatusDto>;
+  readStore: () => LinkStore; readLinkStatus: () => Promise<LinkStatusPayload>;
   runChild: (link: LinkRecord, deadline: number) => Promise<Omit<ChildResult, "linkId" | "alias">>;
   now?: () => number; deadlineMs?: number; concurrency?: number; terminationGraceMs?: number;
 }): Promise<FanoutDocument> {
@@ -40,7 +40,7 @@ export async function runHomeFanout(deps: {
     result.children = store.links.map(link => classify(link, "skipped", link.direction === "client-initiated" ? "client-initiated-link" : skipReason));
     return result;
   }
-  let status: LinkStatusDto;
+  let status: LinkStatusPayload;
   try { status = await deps.readLinkStatus(); }
   catch (error) {
     const reason = error instanceof LinkStatusError ? error.reason : "home-link-status-unavailable";
