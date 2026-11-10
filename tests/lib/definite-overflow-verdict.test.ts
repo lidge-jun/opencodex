@@ -53,11 +53,6 @@ const OVERFLOW_WORDING = [
   "The request has exceeded the maximum context length",
   "The prompt went past the context limit",
   "The history is over the context window",
-  "The model's context window is full.",
-  "The context window is now full",
-  "The context window is now completely full",
-  "The context window is completely exhausted.",
-  "The context window is at its limit.",
   "The context window has been exceeded",
   "The context window has already been exceeded",
   "The context window has (already) been exceeded",
@@ -65,10 +60,22 @@ const OVERFLOW_WORDING = [
   // A token count that shows the request crossed the limit outranks the modal rule wording.
   "Total tokens must not exceed the context window: 9000 > 8192",
   "Total tokens should not exceed the context window: 9000 > 8192",
-  // Request-local capacity plus a report of use stays a verdict; only service back-pressure does not.
-  "The context window is full (8192 tokens used)",
   // A verdict in a second sentence survives a negated first sentence.
   "The input is not past the context limit. Maximum context length exceeded instead.",
+];
+
+/**
+ * State wording that is an overflow only when the status speaks about the request. On a 5xx the
+ * same words are read as service back-pressure and keep the target cooldown, as on `dev`.
+ */
+const REQUEST_STATE_WORDING = [
+  "The model's context window is full.",
+  "The context window is now full",
+  "The context window is now completely full",
+  "The context window is completely exhausted.",
+  "The context window is at its limit.",
+  // Request-local capacity plus a report of use stays a verdict; only service back-pressure does not.
+  "The context window is full (8192 tokens used)",
 ];
 
 /**
@@ -97,6 +104,14 @@ const SERVICE_BACKPRESSURE = [
   "The context window is exhausted, retry after the queue drains",
   "The context window is at its limit, please queue and retry",
   "Context window exhausted during peak hours",
+  // Serving-stack resources and inflections outside the original vocabulary.
+  "KV cache for the context window is exhausted",
+  "The context window is exhausted on this GPU",
+  "The context window is exhausted, retrying later",
+  "The context window is at its limit, retried later",
+  "The context window is exhausted because the cache is full",
+  "The context window is full on every replica; workers are loading",
+  "GPU memory for the context window is exhausted",
 ];
 
 /** Negations, request-defect prose and quoted caller values: never an overflow. */
@@ -163,6 +178,18 @@ describe("isDefiniteContextOverflow", () => {
     for (const message of OVERFLOW_WORDING) {
       for (const status of [...REQUEST_STATUSES, ...SERVER_STATUSES]) {
         expect(isDefiniteContextOverflow(status, message), `${status}: ${message}`).toBe(true);
+      }
+    }
+  });
+
+  test("state wording is an overflow on a request status and back-pressure on a 5xx", () => {
+    for (const message of REQUEST_STATE_WORDING) {
+      for (const status of REQUEST_STATUSES) {
+        expect(isDefiniteContextOverflow(status, message), `${status}: ${message}`).toBe(true);
+      }
+      for (const status of SERVER_STATUSES) {
+        expect(isDefiniteContextOverflow(status, message), `${status}: ${message}`).toBe(false);
+        expect(comboFailureCooldownScope(status, message), `${status}: ${message}`).toBe("target");
       }
     }
   });

@@ -157,8 +157,12 @@ const PARAMETER_VALIDATION_MARKERS: readonly RegExp[] = [
  * Capacity and availability framing. A "full" verdict inside such prose describes the service, not
  * this turn: "Server busy: the context window is full" and "the context window is full, retry later"
  * are target-level back-pressure, so they keep their cooldown instead of failing over.
+ *
+ * The vocabulary covers inflections ("retrying", "loaded") and the serving-stack resources that run
+ * out under load (KV cache, GPU memory, replicas, workers, pools). It is a second line of defence:
+ * on a 5xx the ambiguous predicates never count at all (see `isDefiniteContextOverflow`).
  */
-const CAPACITY_FRAMING = /\b(?:busy|overload\w*|capacity|retry|try\s+again|peak\s+hours?|shards?|load|service|allocation|queue\w*|throttl\w*)\b/i;
+const CAPACITY_FRAMING = /\b(?:busy|overload\w*|capacity|retr(?:y|ies|ied|ying)|try(?:ing)?\s+again|peak\s+hours?|shards?|load\w*|servic\w*|allocat\w*|queu\w*|throttl\w*|cach\w*|kv|gpus?|memory|replicas?|workers?|pools?|scal(?:e|ed|es|ing)|stall\w*)\b/i;
 /** State predicates that can describe either this input or the service's availability. */
 const CAPACITY_AMBIGUOUS_PREDICATES: ReadonlySet<string> = new Set(["full", "exhausted", "at its limit"]);
 
@@ -241,7 +245,7 @@ function framingWindow(text: string, index: number): string {
   return text.slice(start, end);
 }
 
-function hasAffirmedVerdict(text: string, verdict: OverflowVerdict): boolean {
+function hasAffirmedVerdict(text: string, verdict: OverflowVerdict, allowAmbiguous: boolean): boolean {
   const flags = verdict.pattern.flags.includes("g") ? verdict.pattern.flags : `${verdict.pattern.flags}g`;
   const pattern = new RegExp(verdict.pattern.source, flags);
   for (const match of text.matchAll(pattern)) {
@@ -250,8 +254,10 @@ function hasAffirmedVerdict(text: string, verdict: OverflowVerdict): boolean {
     const predicateStart = (match.index ?? 0) + match[0].indexOf(predicate);
     if (isNegatedBefore(text, predicateStart)) continue;
     // "full", "exhausted" and "at its limit" are ambiguous between an input overflow and service
-    // back-pressure; the sentence carrying the predicate has to be free of capacity framing.
-    if (CAPACITY_AMBIGUOUS_PREDICATES.has(predicate.toLowerCase()) && CAPACITY_FRAMING.test(framingWindow(text, predicateStart))) continue;
+    // back-pressure. They count only on a status that speaks about the request, and only when the
+    // sentence carrying the predicate is free of capacity framing.
+    if (CAPACITY_AMBIGUOUS_PREDICATES.has(predicate.toLowerCase())
+      && (!allowAmbiguous || CAPACITY_FRAMING.test(framingWindow(text, predicateStart)))) continue;
     return true;
   }
   return false;
@@ -265,13 +271,13 @@ function hasAffirmedPhrase(text: string, phrase: string): boolean {
   return false;
 }
 
-function isDefiniteContextOverflowMessage(text: string): boolean {
+function isDefiniteContextOverflowMessage(text: string, allowAmbiguous = true): boolean {
   const normalized = text.toLowerCase();
   return normalized === "context_length_exceeded"
     || DEFINITE_CONTEXT_OVERFLOW_PHRASES.some(phrase => hasAffirmedPhrase(text, phrase))
-    || hasAffirmedVerdict(text, CONTEXT_WINDOW_POSITION_VERDICT)
-    || hasAffirmedVerdict(text, CONTEXT_WINDOW_TOO_LONG_VERDICT)
-    || CONTEXT_WINDOW_STATE_VERDICTS.some(verdict => hasAffirmedVerdict(text, verdict))
+    || hasAffirmedVerdict(text, CONTEXT_WINDOW_POSITION_VERDICT, allowAmbiguous)
+    || hasAffirmedVerdict(text, CONTEXT_WINDOW_TOO_LONG_VERDICT, allowAmbiguous)
+    || CONTEXT_WINDOW_STATE_VERDICTS.some(verdict => hasAffirmedVerdict(text, verdict, allowAmbiguous))
     || ANCHORED_CONTEXT_OVERFLOW_VERDICTS.some(verdict => verdict.test(text.trim()));
 }
 
@@ -290,16 +296,21 @@ function isDefiniteContextOverflowMessage(text: string): boolean {
  * Only the exact proxy wrapper is unwrapped, within a fixed envelope budget and 16,384 characters.
  * An optional caller matcher specializes the verdict on the unwrapped, validated leaf.
  * Exported for the sidecar loops, which classify their own provider failures with the same rule.
+ *
+ * On a 5xx the ambiguous state predicates ("full", "exhausted", "at its limit") never count: a
+ * server error that says the context window is exhausted is far more often KV-cache or capacity
+ * back-pressure than this turn being too large, and a hop there would skip the target cooldown.
  */
-export function isDefiniteContextOverflow(status: number, message: string, matchMessage = isDefiniteContextOverflowMessage): boolean {
+export function isDefiniteContextOverflow(status: number, message: string, matchMessage?: (text: string) => boolean): boolean {
   if (!CONTEXT_VERDICT_STATUSES.has(status) && status < 500) return false;
   if (message.length > 16_384) return false;
+  const matches = matchMessage ?? ((leaf: string) => isDefiniteContextOverflowMessage(leaf, status < 500));
   let text = message.trim();
   // One pass per unwrapped envelope, plus one for the leaf the last envelope yields.
   for (let unwrapped = 0; unwrapped <= MAX_CONTEXT_OVERFLOW_ENVELOPES; unwrapped += 1) {
     const providerPrefix = /^Provider error \d{3}:\s*/.exec(text);
     if (providerPrefix) text = text.slice(providerPrefix[0].length).trim();
-    if (!text.startsWith("{")) return !PARAMETER_VALIDATION_MARKERS.some(marker => marker.test(text)) && matchMessage(text);
+    if (!text.startsWith("{")) return !PARAMETER_VALIDATION_MARKERS.some(marker => marker.test(text)) && matches(text);
     if (unwrapped === MAX_CONTEXT_OVERFLOW_ENVELOPES) return false;
     let payload: unknown;
     try { payload = JSON.parse(text); } catch { return false; }
