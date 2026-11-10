@@ -269,7 +269,11 @@ required next page returns to the caller. Other snapshots refresh the matched
 turn or repeat the supplied search position. Stored turnStatus is not live
 execution authority and never causes an early terminal decision. A deadline or
 attempt limit preserves the last successful observation with its age, measured from that snapshot's start; a deadline
-before any observation is unavailable. Read failures remain unavailable and
+before any observation is unavailable. A snapshot is successful only when every
+read behind it completed before the deadline: helper cleanup that outlives the
+deadline keeps such a snapshot, while a snapshot whose reads completed late is
+expired even if its data looks valid and cannot be authorized by an earlier
+timely snapshot. Read failures remain unavailable and
 parent cancellation takes precedence over a stale success. Owned pause timers
 and helpers are cancelled on disconnect. Same-turn association and pagination,
 UTF-8 truncation and cursor revalidation retain the read owner's contract.

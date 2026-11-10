@@ -161,9 +161,12 @@ back to continue. The tool does not silently scan all history.
 Otherwise, the tool refreshes the matched turn or repeats the same search
 position until the time or snapshot limit, returning `wait_exhausted` with the
 last successful observation. `attempts` counts snapshots attempted and
-`lastObservationAgeMs` describes that observation's age. A timeout with no
-successful observation, a read failure, or cancellation is unavailable. A read
-failure is not converted to an empty successful wait.
+`lastObservationAgeMs` describes that observation's age. A snapshot counts only
+when every read behind it completed before the deadline; helper shutdown that
+finishes after the deadline does not discard such a snapshot, and a snapshot
+whose reads completed late is treated as expired even if its data looks valid.
+A timeout with no successful observation, a read failure, or cancellation is
+unavailable. A read failure is not converted to an empty successful wait.
 
 Stored `turnStatus` from another helper can differ from the executing server's
 live state, so even a stored terminal status does not stop the wait early.

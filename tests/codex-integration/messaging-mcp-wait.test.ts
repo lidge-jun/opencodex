@@ -110,6 +110,40 @@ describe.skipIf(process.platform === "win32")("bounded stored reply waiting", ()
     } finally { await f.close(); }
   }, 15_000);
 
+  for (const mode of ["reply-wait-timely-close", "reply-wait-timely-close-later"]) test(`${mode}: a timely complete snapshot survives cleanup after the deadline`, async () => {
+    const f = queueMcpFixture(mode);
+    try {
+      const waitMs = 6_000;
+      writeFileSync(join(f.root, "deadline"), String(Date.now() + waitMs));
+      const result = payload(await queueMcpWaitReply({ ...f.options, allowReplyRead: true }, { ...input, waitMs }));
+      expect(result).toMatchObject({ available: true, waitOutcome: "reply_observed",
+        attempts: mode === "reply-wait-timely-close" ? 1 : 2, replies: [{ itemId: "answer-1", text: "fixture answer" }] });
+      expect(result.lastObservationAgeMs).toBeGreaterThanOrEqual(0);
+    } finally { await f.close(); }
+  }, 20_000);
+
+  test("a first snapshot completed after the deadline never authorizes success", async () => {
+    const f = queueMcpFixture("reply-wait-late-frame");
+    try {
+      const waitMs = 4_000;
+      writeFileSync(join(f.root, "deadline"), String(Date.now() + waitMs));
+      expect(await queueMcpWaitReply({ ...f.options, allowReplyRead: true }, { ...input, waitMs }))
+        .toEqual({ available: false, error: { code: "reply_wait_timeout" } });
+    } finally { await f.close(); }
+  }, 20_000);
+
+  test("a stale timely snapshot does not authorize a later snapshot completed after the deadline", async () => {
+    const f = queueMcpFixture("reply-wait-late-frame-later");
+    try {
+      const waitMs = 6_000;
+      writeFileSync(join(f.root, "deadline"), String(Date.now() + waitMs));
+      const result = payload(await queueMcpWaitReply({ ...f.options, allowReplyRead: true }, { ...input, waitMs }));
+      expect(result).toMatchObject({ available: true, waitOutcome: "wait_exhausted", attempts: 2, status: "observed", replies: [] });
+      expect(JSON.stringify(result)).not.toContain("fixture answer");
+      expect(f.calls().filter(c => c.frame.method === "thread/turns/list")).toHaveLength(2);
+    } finally { await f.close(); }
+  }, 20_000);
+
   test("a malformed later snapshot stays unavailable when helper shutdown crosses the deadline", async () => {
     const f = queueMcpFixture("reply-wait-malformed-delayed");
     try {

@@ -37,15 +37,20 @@ export async function queueMcpWaitReply(options: QueueMcpOptions, raw: ReplyInpu
       budget.throwIfEnded();
       attempts++;
       const snapshotStartedAt = performance.now();
-      let observedFailure = false;
+      let observedFailure = false, observedCompleteTimely = false;
       const result = await queueMcpReadReply(options, position, budget.signal, {
         onObservedFailure: () => { observedFailure = true; },
         outcomeIsTimely: () => { try { budget.throwIfEnded(); return true; } catch { return false; } },
+        // Cleanup may outlive the deadline; what matters is when this snapshot's complete observation arrived.
+        onObservedSuccess: timely => { observedCompleteTimely = timely; },
       });
       if (signal?.aborted) return unavailable("reply_wait_cancelled");
-      if (!result.available && observedFailure) return result;
-      if (budget.signal.aborted) return exhausted();
-      if (!result.available) return result;
+      if (!result.available) {
+        if (observedFailure) return result;
+        return budget.signal.aborted ? exhausted() : result;
+      }
+      // A completion observed after the deadline is not a valid success; a timely one survives cleanup.
+      if (!observedCompleteTimely) return exhausted();
       // The reply page precedes later metadata reads and helper cleanup; age conservatively
       // from the snapshot start so that delay cannot make an older observation appear fresh.
       last = result; observedAt = snapshotStartedAt;

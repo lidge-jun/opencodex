@@ -21,15 +21,16 @@ const fs = require("node:fs");
 const rl = require("node:readline").createInterface({input:process.stdin});
 const mode = ${JSON.stringify(mode)};
 const emit = value => process.stdout.write(JSON.stringify(value)+"\\n");
-const emitBeforeDeadlineAndDelayClose = value => {
+const emitAtDeadlineOffsetAndDelayClose = (value, offsetMs) => {
   process.on("SIGTERM", () => {});
   setInterval(() => {}, 1000);
   const deadline = Number(fs.readFileSync(${JSON.stringify(join(root, "deadline"))}, "utf8"));
   setTimeout(() => {
     emit(value);
     fs.writeFileSync(${JSON.stringify(join(root, "outcome-sent"))}, "sent");
-  }, Math.max(0, deadline - Date.now() - 450));
+  }, Math.max(0, deadline - Date.now() + offsetMs));
 };
+const emitBeforeDeadlineAndDelayClose = value => emitAtDeadlineOffsetAndDelayClose(value, -450);
 rl.on("line", line => {
   const f = JSON.parse(line);
   fs.appendFileSync(${JSON.stringify(capture)}, JSON.stringify({frame:f,argv:process.argv.slice(2),sender:process.env.CODEX_THREAD_ID,home:process.env.CODEX_HOME,pid:process.pid})+"\\n");
@@ -60,7 +61,12 @@ rl.on("line", line => {
       return emit({id:2,result:{data:[user]}});
     }
     if(f.method === "thread/turns/list") {
+      const turnsCalls = fs.readFileSync(${JSON.stringify(capture)},"utf8").trim().split("\\n").map(x=>JSON.parse(x)).filter(x=>x.frame.method === "thread/turns/list").length;
       const response = {id:2,result:{data:mode === "reply-old-turn" ? [] : [{id:turnId,status:mode === "reply-bad-turns" ? "done" : mode === "reply-running" ? "inProgress" : mode === "reply-failed" ? "failed" : ["reply-interrupted","reply-wait-terminal"].includes(mode) ? "interrupted" : "completed",items:[]}],nextCursor:null}};
+      if(mode === "reply-wait-timely-close") return emitBeforeDeadlineAndDelayClose(response);
+      if(mode === "reply-wait-timely-close-later" && turnsCalls >= 2) return emitBeforeDeadlineAndDelayClose(response);
+      if(mode === "reply-wait-late-frame") return emitAtDeadlineOffsetAndDelayClose(response, 150);
+      if(mode === "reply-wait-late-frame-later" && turnsCalls >= 2) return emitAtDeadlineOffsetAndDelayClose(response, 150);
       if(mode === "reply-slow-metadata") return setTimeout(() => emit(response), 1200);
       return emit(response);
     }
@@ -97,8 +103,10 @@ rl.on("line", line => {
     if(mode.startsWith("reply-wait-")) {
       const calls=fs.readFileSync(${JSON.stringify(capture)},"utf8").trim().split("\\n").map(x=>JSON.parse(x));
       const reads=calls.filter(x=>x.frame.method === "thread/items/list" && x.frame.params.turnId).length;
+      if(!searching && mode === "reply-wait-timely-close-later" && reads<2) {final.item.phase="partial_answer";final.item.text="PRIVATE_PARTIAL";}
       if(searching && mode === "reply-wait-late-input" && calls.filter(x=>x.frame.method === "thread/items/list").length===1) data=[];
-      if(!searching && (mode === "reply-wait-empty" || (mode !== "reply-wait-late-input" && reads<2))) data=[user,commentary];
+      const earlyComplete = ["reply-wait-late-input","reply-wait-timely-close","reply-wait-late-frame"].includes(mode);
+      if(!searching && (mode === "reply-wait-empty" || (!earlyComplete && reads<2))) data=[user,commentary];
       if(!searching && mode === "reply-wait-failure" && reads>=2) return emit({id:2,error:{code:-32601,message:"PRIVATE_READ_FAILURE"}});
       if(!searching && mode === "reply-wait-hang-second" && reads>=2) return;
     }
