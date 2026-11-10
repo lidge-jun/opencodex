@@ -33,9 +33,10 @@ export const CHILD_JOB_RETENTION_COUNT = 32;
 const errorName = (error: unknown): string => error instanceof Error ? error.name : "unknown";
 
 /**
- * The D11 job model: one in-memory registry, one engine-wide lock per link, concurrency 3, finished jobs kept one hour
- * and at most 32. A Home restart loses the jobs only; the observation cache keeps each Child's last result. Items carry
- * closed tokens, never remote text. No timers: retention is applied on each submit and read.
+ * The D11 job model: one in-memory registry, one engine-wide lock per link, at most 3 items running across every job
+ * of the engine, finished jobs kept one hour and at most 32. A Home restart loses the jobs only; the observation cache
+ * keeps each Child's last result. Items carry closed tokens, never remote text. No timers: retention is applied on
+ * each submit and read.
  */
 export function createChildOpsEngine(deps: {
   readStore: () => LinkStore; observe: (record: LinkRecord) => Promise<ObserveOutcome>;
@@ -49,6 +50,9 @@ export function createChildOpsEngine(deps: {
   const jobs = new Map<string, ChildJob>();
   const locks = new Map<string, string>();
   const idle = new Set<() => void>();
+  // One engine-wide queue: the concurrency limit bounds SSH sessions across jobs, not per job.
+  const pending: Array<{ job: ChildJob; item: ChildJobItem }> = [];
+  let active = 0;
 
   const write = (linkId: string, patch: Partial<ChildObservation>): void => {
     try { deps.writeObservation(linkId, patch); } catch (error) {
@@ -64,10 +68,12 @@ export function createChildOpsEngine(deps: {
     const kept = finished.filter(job => jobs.has(job.jobId)).sort((a, b) => Date.parse(a.finishedAt!) - Date.parse(b.finishedAt!));
     for (const job of kept.slice(0, Math.max(0, kept.length - CHILD_JOB_RETENTION_COUNT))) jobs.delete(job.jobId);
   };
-  const finishItem = (job: ChildJob, item: ChildJobItem, state: ChildItemState, reason: string | null): void => {
+  /** `ran` is false for an item that never touched its link (busy): the link's lastOperation belongs to its holder. */
+  const finishItem = (job: ChildJob, item: ChildJobItem, state: ChildItemState, reason: string | null, ran = true): void => {
     item.state = state;
     item.reason = reason;
     item.finishedAt = now().toISOString();
+    if (!ran) return;
     if (locks.get(item.linkId) === job.jobId) locks.delete(item.linkId);
     const summary: ChildOperationSummary = { op: job.op, jobId: job.jobId, state, reason, finishedAt: item.finishedAt };
     write(item.linkId, { lastOperation: summary });
@@ -94,14 +100,16 @@ export function createChildOpsEngine(deps: {
     if (outcome.observation) write(item.linkId, withoutCarriedFields(outcome.observation));
     finishItem(job, item, outcome.state, outcome.reason);
   };
-  const start = (job: ChildJob): void => {
-    const queue = job.items.filter(item => item.state === "queued");
-    const worker = async (): Promise<void> => {
-      for (let item = queue.shift(); item; item = queue.shift()) await runItem(job, item);
-    };
-    const workers = Array.from({ length: Math.min(concurrency, queue.length) }, () => worker());
-    void Promise.all(workers).finally(() => finishJob(job));
-    finishJob(job);
+  const pump = (): void => {
+    while (active < concurrency && pending.length > 0) {
+      const { job, item } = pending.shift()!;
+      active += 1;
+      void runItem(job, item).finally(() => {
+        active -= 1;
+        finishJob(job);
+        pump();
+      });
+    }
   };
 
   return {
@@ -128,10 +136,11 @@ export function createChildOpsEngine(deps: {
           startedAt: null, finishedAt: null })) };
       jobs.set(jobId, job);
       for (const item of job.items) {
-        if (locks.has(item.linkId)) finishItem(job, item, "busy", "link-operation-in-progress");
-        else locks.set(item.linkId, jobId);
+        if (locks.has(item.linkId)) finishItem(job, item, "busy", "link-operation-in-progress", false);
+        else { locks.set(item.linkId, jobId); pending.push({ job, item }); }
       }
-      start(job);
+      pump();
+      finishJob(job);
       return { ok: true, job: structuredClone(job) };
     },
     job(jobId) {

@@ -218,6 +218,48 @@ describe("child ops engine", () => {
     } finally { warn.mockRestore(); }
   });
 
+  test("three SSH observes at a time across every job of the engine", async () => {
+    const links = ids.map(id => record({ id }));
+    let running = 0, peak = 0;
+    const releases: Array<() => void> = [];
+    const engine = createChildOpsEngine({ readStore: () => store(links), now: () => NOW, writeObservation: () => {}, observe: async () => {
+      running += 1; peak = Math.max(peak, running);
+      await new Promise<void>(resolve => releases.push(resolve));
+      running -= 1;
+      return succeeded(NOW);
+    } });
+    const first = engine.submit({ op: "observe", linkIds: ids.slice(0, 2), trigger: "manual" });
+    const second = engine.submit({ op: "observe", linkIds: ids.slice(2, 5), trigger: "manual" });
+    if (!first.ok || !second.ok) throw new Error("submit refused");
+    expect(running).toBe(3);
+    expect(second.job.state).toBe("running");
+    expect(second.job.items.map(item => item.state)).toEqual(["running", "queued", "queued"]);
+    expect(engine.activeJob(ids[4]!)).toEqual({ jobId: second.job.jobId, op: "observe", state: "running" });
+    while (releases.length) { releases.shift()!(); await new Promise(resolve => setTimeout(resolve, 0)); }
+    await engine.settled();
+    expect(peak).toBe(3);
+    expect([engine.job(first.job.jobId)!.state, engine.job(second.job.jobId)!.state]).toEqual(["done", "done"]);
+  });
+
+  test("a busy item leaves the held link's lastOperation to the job that runs it", async () => {
+    const links = ids.slice(0, 2).map(id => record({ id }));
+    const writes: Array<{ linkId: string; jobId: string; state: string }> = [];
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const engine = createChildOpsEngine({ readStore: () => store(links), now: () => NOW, observe: async target => {
+      if (target.id === ids[0]) await held;
+      return succeeded(NOW);
+    }, writeObservation: (linkId, patch) => { if (patch.lastOperation) writes.push({ linkId, jobId: patch.lastOperation.jobId, state: patch.lastOperation.state }); } });
+    const first = engine.submit({ op: "observe", linkIds: [ids[0]!], trigger: "manual" });
+    const second = engine.submit({ op: "observe", linkIds: "all", trigger: "manual" });
+    if (!first.ok || !second.ok) throw new Error("submit refused");
+    expect(second.job.items[0]).toMatchObject({ linkId: ids[0], state: "busy", reason: "link-operation-in-progress" });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    release();
+    await engine.settled();
+    expect(writes).toEqual([{ linkId: ids[1]!, jobId: second.job.jobId, state: "succeeded" }, { linkId: ids[0]!, jobId: first.job.jobId, state: "succeeded" }]);
+  });
+
   test("submit refusals and retention of at most 32 finished jobs for one hour", async () => {
     let clock = NOW.getTime();
     let counter = 0;
