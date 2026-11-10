@@ -158,9 +158,9 @@ canonical `https://api.mistral.ai/v1`, the dashboard reads the key's API and Vib
 `https://api.mistral.ai/v1/billing/subscription`, using the same credential and egress as
 inference. A measured window shows its used and total amount, and the summary and popover keep the
 plan label (for example `EDU`) beside it. These budgets are display-only: they never rank keys,
-route requests, pause traffic, or take part in the quota pool. The plan is shown as reported, not
-as an inferred entitlement. A window with a missing, malformed, or non-positive budget, an
-unrecognized currency, or an out-of-range percentage is shown as unknown rather than guessed; an
+route requests, pause traffic, or take part in the quota pool. A recognized plan name is shown as
+reported, not as an inferred entitlement. A window with a missing, malformed, or non-positive budget,
+a missing or malformed currency, or an out-of-range percentage is shown as unknown rather than guessed; an
 unknown plan omits the plan label. A failed reading keeps the last measured budgets while they
 are fresh, and a 401, 403, or other non-retryable client refusal suppresses them; 402, 408, 429,
 5xx, and transport failures are transient and keep the last-good display. For every model, explicit upstream
