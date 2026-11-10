@@ -118,9 +118,10 @@ not this projection is never registered or modified. A passive management read o
 projection read-only, requires this projection's full table set rather than a coincidental meta
 table, and only uses it when it is current for the exact ledger revision; otherwise it streams,
 and it never creates, writes or registers anything. Index reads retry contention on nine delays
-totaling about 6.4 s and a rebuild-required read on three short delays before degrading. Any other
+totaling about 6.4 s and run a foreign or unsafe open and a rebuild-required read through three
+short delays before degrading. Any other
 index-side failure -- unwritable home,
-full disk, contention, a corrupt or foreign file -- falls back to the authoritative streaming scan
+full disk, a corrupt file -- falls back to the authoritative streaming scan
 instead of failing a request the scan can answer; a failure to read `usage.jsonl` itself is
 propagated. A `UsageFilterIndexPageError` from a `src/usage/filter-index.ts` page read clears the
 retained filtered aggregate, then retries the authoritative streaming scan under
