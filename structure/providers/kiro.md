@@ -157,13 +157,31 @@ intact and the upstream `ValidationException` becomes the failure mode instead o
 request. The default remains bounded because that is the shape a fresh Kiro account is measured to
 accept.
 
-Schema sanitization is chosen per model, not per transport. `kiroRejectedSchemaKeys(modelId)`
-returns an empty set for `claude-*` models — the 2026-11-07 probe accepted all 28 rejected
-keywords there, one per request — and `KIRO_REJECTED_SCHEMA_KEYS` for every other family. Both
-the client-tool path and the structured-output tool (`kiroStructuredOutputSpec` in
+Schema sanitization is chosen per model id and per keyword, not per family or transport.
+`kiroRejectedSchemaKeys(modelId)` returns `KIRO_REJECTED_SCHEMA_KEYS` for every id except those in
+`KIRO_SCHEMA_KEY_EXCEPTIONS`, which maps an id to the rejected keys minus the ones a probe measured
+it taking. An exception can only widen what a probe covered; it is never "this model accepts
+everything".
+
+PR #8451 reports an opus-4.5 probe covering the rejected keywords (counting `if/then/else`
+as one item in its total of 28), so its exception is the empty set. It reports a constrained
+tool probe on `claude-opus-5.5` and `claude-sonnet-5.5` naming `pattern` and `maximum`; only
+those two keys survive for those ids. The report does not establish the other schema keys.
+
+The remaining Claude ids on this provider (`claude-opus-4.8`, `claude-opus-4.7`,
+`claude-opus-4.6`, `claude-sonnet-5`, `claude-sonnet-4.6`, `claude-haiku-5.5`,
+`claude-haiku-4.5`, `claude-sonnet-4.0`) were not probed for schema keywords and keep the full
+strip. The scope is deliberate: this wire already separates Claude models on another field — Haiku
+4.5, Opus 4.5 and Sonnet 4.5 reject `output_config.effort` outright and the 4.6 pair rejects
+`xhigh` — so a family-wide promise would be an inference, and a wrong one surfaces as an upstream
+`ValidationException` for the whole request rather than a lost hint. The prose contract restates the original schema only when it fits the instruction budget;
+otherwise stripped constraints are absent from the model-facing structured-output request.
+
+Both the client-tool path and the structured-output tool (`kiroStructuredOutputSpec` in
 `src/adapters/kiro/structured-output.ts`) pass that set into `sanitizeKiroSchema`, so the two
-cannot drift. Root `oneOf`/`anyOf`/`allOf` flattening in `ensureRootObjectType` stays
-unconditional: it is a wire requirement, not a constraint strip.
+cannot drift. Root
+`oneOf`/`anyOf`/`allOf` flattening in `ensureRootObjectType` stays unconditional for every
+model: it is a wire requirement, not a constraint strip.
 
 The Codex tool-catalog nudge is scoped by inbound surface, not by routed model. Requests prepared
 from the Anthropic Messages wire carry `_anthropicInbound`
@@ -192,7 +210,8 @@ comes from `output_config.format`) is a contract the CodeWhisperer wire has no r
 `src/adapters/kiro/structured-output.ts` emulates it with the private terminal tool
 `codex_kiro_structured_output`, reserved against client tools in `src/adapters/kiro-wire.ts`:
 
-- The tool's input schema is the caller's schema, sanitized like every Kiro tool schema. A root that
+- The tool's input schema is the caller's schema, stripped of the keywords `kiroRejectedSchemaKeys`
+  lists for that model id, exactly as a client tool schema is. A root that
   is not a plain `type: "object"` (array, scalar, root `anyOf`/`oneOf`/`allOf`/`$ref`) is wrapped
   as `{value: <schema>}` with `$defs`/`definitions` hoisted and every other local `$ref` (`#`,
   `#/items`, ...) re-pointed under `#/properties/value`, rather than flattened the way
@@ -337,13 +356,25 @@ individual rung on the emulated path. Luna and terra send only `low`, `medium`, 
 `max` on the native field, and their `xhigh` keeps the previous emulated thinking tags because
 that native rung is unverified. On the Claude side, `claude-opus-4.6` and `claude-sonnet-4.6`
 reject a native `xhigh` (HTTP 400 in the 2026-11-07 probe), so `KIRO_NO_XHIGH_NATIVE_MODELS`
-routes that rung to the emulated block instead. Kiro's native effort ladder has no `minimal`
-rung; the seven Claude models that gained native effort in #8451 used the emulated block for
-every effort before, so `KIRO_EMULATED_EXTRA_EFFORT_MODELS` keeps that block for an effort
-outside the ladder instead of turning it into a request error. `claude-opus-5` and
-`claude-opus-5.5` are deliberately absent from that set: they had native effort before the
-change, and `minimal` stays a configuration error for them, as it is for the GPT models with
-native effort. A future shared effort rung does not widen any of these allowlists.
+routes that rung to the emulated block instead.
+
+`KIRO_NATIVE_EFFORTS` is `low`, `medium`, `high`, `xhigh`, `max`. For `minimal`
+`buildKiroPayload` throws, and the request becomes HTTP 400 `invalid_request_error` before
+anything is sent, unless `kiroEmulatesUnsupportedEffort` accepts the model. `minimal` is the only
+outside-ladder value that reaches a Kiro request: the Responses parser folds `ultra` to `max`, as
+does the Messages translator, and combo resolution draws from the catalog's `low`..`max` ladder.
+The emulation set is the seven Claude ids #8451 moved to native effort — `claude-opus-4.8`,
+`claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5.5`, `claude-sonnet-5`,
+`claude-sonnet-4.6`, `claude-haiku-5.5` — and they emulated every effort before the change, so
+they keep the emulated block for `minimal` instead of failing a request they used to serve.
+`claude-opus-5` and `claude-opus-5.5` are deliberately absent: they had native effort before the
+change, so `minimal` stays an error for them, as it is for the GPT models with native effort.
+
+The split is operator-visible. A `minimal` request reaches the seven as the emulated thinking
+block with no error, while the same request to Opus 5, Opus 5.5 or a native GPT model is a 400
+`invalid_request_error` naming the model and the effort. This is an enumerated fallback, not a
+general unknown-effort path: a value outside both the ladder and this set still throws. A future
+shared effort rung does not widen any of these allowlists.
 
 The two members of `reasoningContent` are not interchangeable. The wire validates the shape of the
 member rather than its content, and the signature is not base64 — its alphabet contains `.` and

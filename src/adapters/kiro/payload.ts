@@ -488,7 +488,7 @@ export function buildKiroPayload(
   const effort = parsed.options.reasoning;
   const effortField = kiroNativeEffortField(parsed.modelId);
   if (effortField && effort && effort !== "none") {
-    if (!KIRO_NATIVE_EFFORTS.includes(effort) && !kiroEmulatesUnsupportedEffort(parsed.modelId)) {
+    if (!KIRO_NATIVE_EFFORTS.includes(effort) && !kiroEmulatesUnsupportedEffort(parsed.modelId, effort)) {
       throw new Error(`Kiro ${normalizeKiroModelId(parsed.modelId)} does not support reasoning effort ${JSON.stringify(effort)}`);
     }
     // Model eligibility still owns unsupported-effort validation above; wire eligibility

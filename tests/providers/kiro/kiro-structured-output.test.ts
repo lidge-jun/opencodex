@@ -116,8 +116,10 @@ describe("Kiro structured-output payload", () => {
     const { current, tools, names } = await payloadOf(parsed);
     // The structured tool REPLACES the completion tool: both would offer the model a prose exit.
     expect(names).toEqual([KIRO_STRUCTURED_OUTPUT_TOOL_NAME]);
-    // Sanitized the way the model's client tools are: Claude models keep every keyword.
-    expect(tools[0].toolSpecification.inputSchema.json).toEqual(titleSchema);
+    // The 5.5 policy strips unproven additionalProperties while retaining the caller schema in prose.
+    expect(tools[0].toolSpecification.inputSchema.json).toEqual({
+      type: "object", properties: { title: { type: "string" } }, required: ["title"],
+    });
     // The caller's original constraints are also restated verbatim in the prose contract.
     expect(current.content).toContain(`calling ${KIRO_STRUCTURED_OUTPUT_TOOL_NAME} exactly once`);
     expect(current.content).toContain(JSON.stringify(titleSchema));
@@ -146,6 +148,36 @@ describe("Kiro structured-output payload", () => {
     });
   });
 
+  test("the structured tool follows the per-id keyword measurement, not a Claude-wide rule", async () => {
+    // `maxLength` was measured on opus-4.5 only. On opus-5.5 the same keyword must still be
+    // stripped, or an unprobed keyword becomes a whole-request ValidationException.
+    const schema = {
+      type: "object",
+      properties: { title: { type: "string", maxLength: 80, pattern: "^[a-z ]+$" } },
+      required: ["title"],
+    };
+    const format = { type: "json_schema", name: "title", schema };
+    const wide = await payloadOf(parseRequest({
+      model: "kiro/claude-opus-4.5",
+      input: "Title this thread",
+      stream: true,
+      text: { format },
+    } as never));
+    expect(wide.tools[0].toolSpecification.inputSchema.json.properties.title)
+      .toEqual({ type: "string", maxLength: 80, pattern: "^[a-z ]+$" });
+
+    const narrow = await payloadOf(parseRequest({
+      model: "kiro/claude-opus-5.5",
+      input: "Title this thread",
+      stream: true,
+      text: { format },
+    } as never));
+    expect(narrow.tools[0].toolSpecification.inputSchema.json.properties.title)
+      .toEqual({ type: "string", pattern: "^[a-z ]+$" });
+    // The caller's stripped `maxLength` still reaches the model through the prose restatement.
+    expect(narrow.current.content).toContain(JSON.stringify(schema));
+  });
+
   test("a non-object or composed root is wrapped under `value`, with definitions hoisted", async () => {
     const schema = {
       anyOf: [{ $ref: "#/$defs/item" }, { type: "array", items: { $ref: "#/$defs/item" } }],
@@ -157,7 +189,13 @@ describe("Kiro structured-output payload", () => {
       required: ["value"],
       $defs: { item },
     });
-    const claude = await payloadOf(structuredRequest({ type: "json_schema", name: "items", schema }));
+    // opus-4.5, because the wrapped `maxLength` only survives where its probe measured it.
+    const claude = await payloadOf(parseRequest({
+      model: "kiro/claude-opus-4.5",
+      input: "Title this thread: fix the Kiro structured output bug",
+      stream: true,
+      text: { format: { type: "json_schema", name: "items", schema } },
+    } as never));
     expect(claude.tools[0].toolSpecification.inputSchema.json).toEqual(wrapped({ type: "string", maxLength: 10 }));
 
     const gpt = await payloadOf(parseRequest({

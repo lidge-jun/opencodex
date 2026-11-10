@@ -216,6 +216,26 @@ model listesi kanıtı bulunmayabilir.
 - `application/vnd.amazon.eventstream` kodunu çözer, metin/düşünme/araç
   olaylarını yeniden oluşturur, kesilmiş araç JSON'ını algılar ve yukarı akış
   belirteç sayılarını döndürmediği için kullanımı tahmin eder.
+- İstek başına en fazla 48 istemci aracı ve 96 KB dönüştürülmüş araç JSON'ı gönderir, her araç
+  açıklamasını 1.024 karaktere (`gpt-5.6-sol` için 9.216) kısaltır. Tool search ile yüklenen
+  araçlar ve Codex code-mode yürütme aracı önce alınır, atlanan araçlar modele bildirilir. Proxy
+  ortamında `OCX_KIRO_TOOL_BUDGET=off` tüm istemci kataloğunu, `OCX_KIRO_TOOL_DESCRIPTION_LIMIT=off`
+  tam açıklamaları göndermenizi sağlar. İkisi de istek dönüştürülürken okunur, tüm Kiro modellerine
+  uygulanır ve diğer sınırları değiştirmez. Bütçeyi kapatmak sınırın kendisini ortadan kaldırır:
+  önceliklendirilecek ya da atlanacak bir şey kalmaz. Bildirilen tüm araçlar bildirim sırasıyla
+  gönderilir, atlama bildirimi kaybolur ve Kiro'nun kabul ettiğinden fazlasını bildiren istemci
+  kırpılmış katalog yerine yukarı akıştan `ValidationException` alır. İstek boyutu da istemci
+  kataloğuyla birlikte büyür. Bu anahtarlar daha büyük isteği kabul ettiği ölçülmüş bir hesap için
+  geri çekilme seçeneğidir; aşırı büyük bir kataloğu güvenli hale getirme yolu değildir.
+- Kiro doğrulayıcısının reddettiği JSON Schema anahtar sözcüklerini (`pattern`, `minLength`,
+  `maximum`, `additionalProperties` ve 25 diğeri) araç ve yapılandırılmış çıktı şemalarından
+  çıkarır, ancak bir testin o modelde ölçtüğü anahtar sözcükleri bırakır. `claude-opus-4.5`
+  hepsini korur. `claude-opus-5.5` ve `claude-sonnet-5.5` yalnızca `pattern` ve `maximum` anahtar sözcüklerini korur;
+  diğerleri çıkarılmış kalır, çünkü hiçbir test bunları o modellere göndermedi. Diğer Claude
+  kimlikleri dahil öteki Kiro modelleri tam çıkarmayı korur. İstisna model ve anahtar sözcük
+  bazındadır, çünkü bu hat akıl yürütme çabasında Claude modellerini zaten ayırıyor ve Kiro'nun
+  reddettiği bir anahtar sözcük yalnızca bir ipucunu kaybettirmekle kalmayıp tüm isteği
+  başarısız kılıyor.
 - Özel olduğunda yapılandırılmış `baseUrl`'i birebir kullanır. Kurallı bir
   `runtime.{region}.kiro.dev` URL'si içe aktarılan kimlik bilgisinin API
   bölgesini takip eder; bir uç nokta, imza, DNS veya bağlantı hatasından ya da çıktı başlamadan alınan HTTP 502/503/504 yanıtından sonra
@@ -289,13 +309,18 @@ davranışını sürdürür.
 
 Kiro `output_config.effort` alanını `claude-opus-5`, `claude-opus-5.5`, `claude-opus-4.8`,
 `claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5.5`, `claude-sonnet-5`, `claude-sonnet-4.6`
-ve `claude-haiku-5.5` için kabul eder. İki seviye yerel alan yerine öykünülen düşünme bloğunu
-kullanır: `claude-opus-4.6` ve `claude-sonnet-4.6` yerel `xhigh` seviyesini reddeder ve bu listedeki
-`claude-opus-5` ile `claude-opus-5.5` dışındaki tüm modeller `minimal` seviyesini Kiro'nun yerel
-basamağı dışında bir çaba sayar; istek başarısız olmak yerine öykünülen bloğu korur. Bu iki Opus 5
-modeli, yerel çaba kullanan GPT modelleri gibi `minimal` seviyesini yapılandırma hatası olarak
-reddeder. `claude-haiku-4.5`, `claude-opus-4.5`, `claude-sonnet-4.5` ve yukarıda listelenmeyen
-Kiro modelleri her seviyede öykünme kullanır; çaba seçeneği yerel desteğin kanıtı değildir.
+ve `claude-haiku-5.5` için `low`, `medium`, `high`, `xhigh` ve `max` seviyelerinde kabul
+eder. Tek istisna `claude-opus-4.6` ile `claude-sonnet-4.6` modellerinin yerel `xhigh` seviyesini
+reddetmesidir; o seviye öykünülen düşünme bloğunu korur.
+
+Kiro'da `minimal` seviyesi yoktur. Yukarıdaki dokuz modelden `claude-opus-5` ve `claude-opus-5.5`
+dışındakiler, yerel çaba açılmadan önce çalışan bir isteği başarısız kılmamak için `minimal`
+seviyesinde öykünülen bloğu korur. Bu iki Opus 5 modeli ve yerel çaba kullanan GPT modelleri
+`minimal` seviyesini modeli ve seviyeyi belirten 400 `invalid_request_error` ile reddeder.
+`ultra` Kiro'ya hiç ulaşmaz: hem Responses hem Messages yolu, adaptör isteği kurmadan önce onu
+`max` seviyesine indirir. `claude-haiku-4.5`, `claude-opus-4.5`, `claude-sonnet-4.5` ve
+yukarıda listelenmeyen Kiro modelleri her seviyede öykünme kullanır; çaba seçeneği yerel desteğin
+kanıtı değildir.
 
 ## `cursor`
 

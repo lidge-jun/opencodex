@@ -587,8 +587,12 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
   Request sizes then grow with the client's own catalog. These switches are an opt-out for an
   account measured to accept the larger request, not a way to make an oversized catalog safe.
 - Strips the JSON Schema keywords Kiro's validator rejects (`pattern`, `minLength`, `maximum`,
-  `additionalProperties` and others) from tool and structured-output schemas, except for Claude
-  models, which accept them and keep the constraints.
+  `additionalProperties` and 25 others) from tool and structured-output schemas, except the
+  keywords a probe measured a model taking. `claude-opus-4.5` keeps all of them. `claude-opus-5.5`
+  and `claude-sonnet-5.5` keep `pattern` and `maximum`; their other keywords stay stripped, because the PR does not report them. Every other Kiro
+  model, including the other Claude ids, keeps the full strip. The exception is per model and per
+  keyword because this wire already separates Claude models on reasoning effort, and a keyword
+  Kiro rejects fails the whole request rather than just costing the model a hint.
 - Emulates structured output (Responses `text.format` of type `json_schema` or `json_object`, and
   Messages `output_config.format`). The Kiro wire cannot constrain the response shape, so the
   adapter advertises a private output tool whose input schema is the requested schema and returns
@@ -736,14 +740,18 @@ native `low`, `medium`, `high`, `xhigh`, and `max` behavior.
 
 Kiro accepts `output_config.effort` for `claude-opus-5`, `claude-opus-5.5`,
 `claude-opus-4.8`, `claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5.5`,
-`claude-sonnet-5`, `claude-sonnet-4.6`, and `claude-haiku-5.5`. Two rungs stay on the
-emulated thinking block instead of the native field: `claude-opus-4.6` and `claude-sonnet-4.6`
-reject native `xhigh`, and every model in that list except `claude-opus-5` and
-`claude-opus-5.5` treats `minimal` as an effort outside Kiro's native ladder, so it keeps the
-emulated block rather than failing the request. Those two Opus 5 models reject `minimal` as a
-configuration error, as do the GPT models that carry native effort. `claude-haiku-4.5`,
-`claude-opus-4.5` and `claude-sonnet-4.5`, along with any Kiro model not listed above, use
-emulated reasoning at every effort; an advertised effort control is not proof of native support.
+`claude-sonnet-5`, `claude-sonnet-4.6`, and `claude-haiku-5.5` at `low`, `medium`,
+`high`, `xhigh` and `max`, with one exception: `claude-opus-4.6` and `claude-sonnet-4.6`
+reject native `xhigh`, so that rung keeps the emulated thinking block.
+
+Kiro has no `minimal` rung. On all nine models except `claude-opus-5` and `claude-opus-5.5`,
+`minimal` keeps the emulated block instead of failing a request that worked before native effort
+was enabled. Those two Opus 5 models, and the GPT models that carry native effort, reject
+`minimal` with a 400 `invalid_request_error` naming the model and the effort. `ultra` never
+reaches Kiro: the Responses and Messages paths both reduce it to `max` before the adapter builds
+a request. `claude-haiku-4.5`, `claude-opus-4.5` and `claude-sonnet-4.5`, along with any Kiro
+model not listed above, use emulated reasoning at every effort; an advertised effort control is
+not proof of native support.
 
 ## `cursor`
 

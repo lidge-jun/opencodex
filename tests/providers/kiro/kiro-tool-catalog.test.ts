@@ -168,8 +168,8 @@ describe("kiro tool-catalog nudge and the Anthropic Messages surface", () => {
 });
 
 describe("kiro tool schemas by model family", () => {
-  // Live probe on 2026-11-07: Claude models on Kiro accept every JSON Schema keyword the
-  // sanitizer used to strip, so the constraints reach the model. Other families keep the strip.
+  // PR #8451 reports individual opus-4.5 keyword probes and names pattern and maximum
+  // in a constrained-tool probe for the two 5.5 models. Other keys remain stripped.
   const constrained = {
     $schema: "http://json-schema.org/draft-07/schema#",
     type: "object",
@@ -181,6 +181,25 @@ describe("kiro tool schemas by model family", () => {
     },
     required: ["city", "days"],
   };
+  // The same schema after the two 5.5 ids' measured keywords survive and the rest are stripped.
+  const constrainedMeasuredOn55 = {
+    type: "object",
+    properties: {
+      city: { type: "string", pattern: "^[A-Z][a-z]+$" },
+      days: { type: "integer", maximum: 7 },
+      tags: { type: "array", items: { type: "string" } },
+    },
+    required: ["city", "days"],
+  };
+  const stripped = {
+    type: "object",
+    properties: {
+      city: { type: "string" },
+      days: { type: "integer" },
+      tags: { type: "array", items: { type: "string" } },
+    },
+    required: ["city", "days"],
+  };
 
   async function emittedSchema(modelId: string): Promise<Record<string, any>> {
     const { body } = await createKiroAdapter(provider).buildRequest(
@@ -189,9 +208,22 @@ describe("kiro tool schemas by model family", () => {
     return JSON.parse(body).conversationState.currentMessage.userInputMessage.userInputMessageContext.tools[0].toolSpecification.inputSchema.json;
   }
 
-  test("a Claude model receives the schema with every constraint", async () => {
-    for (const modelId of ["claude-opus-5.5", "claude-sonnet-5.5", "claude-haiku-5.5", "claude-opus-4.5"]) {
-      expect(await emittedSchema(modelId)).toEqual(constrained);
+  test("claude-opus-4.5 receives the schema with every keyword, the id probed one per request", async () => {
+    expect(await emittedSchema("claude-opus-4.5")).toEqual(constrained);
+  });
+
+  test("the two 5.5 ids keep only the keywords their probe covered", async () => {
+    // The PR only names two tested keywords for these ids; other constraints stay stripped.
+    for (const modelId of ["claude-opus-5.5", "claude-sonnet-5.5"]) {
+      expect(await emittedSchema(modelId)).toEqual(constrainedMeasuredOn55);
+    }
+  });
+
+  test("an unmeasured Claude model keeps the strip instead of inheriting the measurement", async () => {
+    // Haiku 5.5 is in KIRO_MODELS and shares the Claude wire, but the PR reports no keyword probe for it.
+    // Guessing wide turns an unmeasured keyword into an upstream ValidationException.
+    for (const modelId of ["claude-haiku-5.5", "claude-sonnet-4.5", "claude-opus-4.8"]) {
+      expect(await emittedSchema(modelId)).toEqual(stripped);
     }
   });
 
@@ -209,11 +241,27 @@ describe("kiro tool schemas by model family", () => {
     const { body } = await createKiroAdapter(provider).buildRequest(
       parsedWith([{ role: "user", content: "hi" }], [{
         name: "either", description: "Either", parameters: { oneOf: [{ type: "object", properties: { a: { type: "string", maxLength: 3 } } }] },
-      }], "claude-opus-5.5"),
+        // opus-4.5, because `maxLength` is only measured to survive on that id: this case checks
+        // flattening, not the keyword exception.
+      }], "claude-opus-4.5"),
     );
     const schema = JSON.parse(body).conversationState.currentMessage.userInputMessage.userInputMessageContext.tools[0].toolSpecification.inputSchema.json;
     expect(schema.type).toBe("object");
     expect(schema.oneOf).toBeUndefined();
     expect(schema.properties.a).toEqual({ type: "string", maxLength: 3 });
+  });
+});
+
+describe("Kiro effort fallback", () => {
+  test("the minimal fallback is that one value, not any effort the ladder does not know", async () => {
+    // The reachable outside-ladder value is `minimal`; `ultra` is folded to `max` upstream. If the
+    // fallback keyed on "not in KIRO_NATIVE_EFFORTS" instead of the value, a future rung would
+    // silently lose reasoning here instead of failing where the operator can see it.
+    for (const modelId of ["claude-opus-4.8", "claude-sonnet-5.5"]) {
+      await expect(createKiroAdapter(provider).buildRequest({
+        ...parsedWith([{ role: "user", content: "solve" }], undefined, modelId),
+        options: { reasoning: "unheard-of" },
+      })).rejects.toThrow(`Kiro ${modelId} does not support reasoning effort "unheard-of"`);
+    }
   });
 });
