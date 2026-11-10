@@ -356,6 +356,8 @@ servisi yeniden başlatmadan önce bu yolları tazelemek için `ocx service repa
 
 macOS aracısı, varsayılan daemon sınıfının CPU ve I/O kısıtlamalarından kaçınmak ve yük altında sağlık denetimlerine yanıt verebilmek için `ProcessType=Interactive` kullanır. Mevcut bir kurulumu yükselttikten sonra bu politikayı da uygulamak için `ocx service repair` çalıştırın.
 
+Yüklenmesi doğrulanmamış bir tanım, belirteç değişse bile sonraki onarıma kadar beklemede kalır. Sonraki onarım kaydı yeniden dener ve bootstrap kabul edilip eşleşen iş doğrulanana kadar ilk yedeği korur.
+
 Bu değişiklikten önce kurulan tanımlar hâlâ eski sürümlü yolları taşır ve kendilerini taşıyamaz —
 eski yürütülebilir dosya silindiğinde, onu düzeltecek hiçbir opencodex kodu çalışmaz. Yükseltmeden
 sonra bir kez `ocx service repair` çalıştırın. Bundan sonra Linux servis başlatmaları başlatıcıyı

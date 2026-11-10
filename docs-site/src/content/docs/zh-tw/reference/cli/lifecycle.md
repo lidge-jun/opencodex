@@ -208,6 +208,8 @@ Windows 工作排程器安裝使用一般處理程序優先順序（`Priority=4`
 
 macOS 代理使用 `ProcessType=Interactive`，避免預設 daemon 類別的 CPU 與 I/O 限制，維持負載下的健康檢查回應。升級現有安裝後，請執行 `ocx service repair`，一併套用此原則。
 
+若定義的載入尚未確認，即使權杖變更，此狀態也會保留到下次修復。下次修復會重新嘗試註冊，並保留最初的備份，直到 bootstrap 獲接受且探測確認工作相符。
+
 在此變更之前安裝的定義仍帶有舊的帶版本路徑，且無法自行遷移——一旦舊執行檔被刪除，就不會有 opencodex 程式碼執行來修復它。升級後請執行一次 `ocx service repair`。之後 Linux 服務啟動會跟隨啟動器；macOS 的 repair 會將新的套件路徑寫入 launchd 定義。外部升級不會取代已在執行的代理：當已安裝的 CLI 比執行中的代理更新時，執行 `ocx service restart` 讓新組建提供服務。在 macOS 上，此情況下 `repair` 並不足夠：定義沒有改變，而不改變任何內容的 repair 不會重新載入任何內容。反之若代理較新，請依 [`ocx status`](#ocx-status---json) 的說明檢查 CLI 安裝與 `PATH`。
 
 | 子指令 | 動作 |

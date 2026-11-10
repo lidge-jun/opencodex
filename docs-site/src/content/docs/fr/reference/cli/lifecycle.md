@@ -238,6 +238,8 @@ actualiser ces chemins avant de redémarrer le service.
 
 L’agent macOS utilise `ProcessType=Interactive` pour éviter les limitations CPU et I/O de la classe daemon par défaut et préserver la réactivité des contrôles de santé sous charge. Après la mise à niveau d’une installation existante, exécutez `ocx service repair` pour appliquer également cette politique.
 
+Une définition dont le chargement reste non confirmé demeure en attente entre les réparations, même après un changement de jeton. La réparation suivante retente le chargement et conserve la sauvegarde initiale jusqu’à ce qu’un bootstrap soit accepté et qu’une sonde confirme la tâche correspondante.
+
 Les définitions installées avant ce changement portent encore les anciens chemins versionnés et ne
 peuvent pas migrer d’elles-mêmes — une fois l’ancien exécutable supprimé, aucun code opencodex ne
 s’exécute pour le réparer. Exécutez `ocx service repair` une fois après la mise à niveau. Les

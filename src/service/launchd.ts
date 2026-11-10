@@ -624,6 +624,11 @@ export function installLaunchd(deps: {
   // The previous definition, kept for rollback. An eviction whose bootstrap fails used to
   // end with the new plist on disk, nothing in launchd, and nothing listening.
   const previousPlist = wasInstalled ? readTextOrNull(p) : null;
+  // Disk bytes may be newer than launchd's cached definition after an unreadable probe.
+  // Keep this across invocations; neither a matching command nor token rotation confirms it.
+  const pendingPath = `${p}.pending`;
+  const wasPending = existsSync(pendingPath);
+  const rollbackPlist = wasPending ? readTextOrNull(`${p}.prev`) : previousPlist;
   // Keep launchd bound to the package paths selected by this trusted invocation. A PATH
   // launcher can be replaced later and would inherit the service token and proxy
   // environment.
@@ -656,9 +661,8 @@ export function installLaunchd(deps: {
 
   let rendered = buildPlist(resolvedProxyEnv(), { homes });
   if (previousPlist !== null && previousPlist !== rendered && verdict.state === "loaded-current") {
-    // The live job runs exactly the exec line this install baked, so the definition on disk
-    // IS the one launchd is running: keep the PATH it already carries instead of replacing
-    // it with the repairing process's. See `reusePreviousPlistPathVariable`.
+    // Preserve the installed PATH when all other bytes agree. This does not confirm a
+    // pending definition; that still needs a verified bootstrap below.
     const adopted = reusePreviousPlistPathVariable(previousPlist, rendered);
     if (adopted !== null) rendered = adopted;
   }
@@ -666,6 +670,7 @@ export function installLaunchd(deps: {
   // `kickstart` can be trusted. `previousPlist === null` (a fresh install) counts: whatever
   // the label may hold did not come from a definition we can see.
   const renderedDiffers = previousPlist !== rendered;
+  const needsDefinitionConfirmation = renderedDiffers || wasPending;
 
   // ── Writes start here. ──
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -678,7 +683,7 @@ export function installLaunchd(deps: {
   // repair a no-op?" — the plist `cat`s this file at launch.
   const tokenUnchanged = readTextOrNull(tokenFile) === previousToken;
 
-  if (!renderedDiffers && tokenUnchanged && verdict.state === "loaded-current") {
+  if (!needsDefinitionConfirmation && tokenUnchanged && verdict.state === "loaded-current") {
     // The plist is not rewritten and launchd is not touched; only the owner-only mode
     // is re-asserted, for a definition an older version may have left at 0644.
     try { chmodSync(p, 0o600); } catch { /* best-effort */ }
@@ -691,7 +696,7 @@ export function installLaunchd(deps: {
     return { reloaded: false };
   }
 
-  if (previousPlist !== null) {
+  if (previousPlist !== null && !wasPending) {
     // Best-effort: a backup we could not write must not stop the repair, but it is the
     // only thing that makes the rollback below able to restore bytes rather than guesses.
     //
@@ -700,6 +705,9 @@ export function installLaunchd(deps: {
     // Label fighting the real one for the port.
     try { writeServiceDefinitionFile(`${p}.prev`, previousPlist, "utf8"); } catch { /* best-effort */ }
   }
+  // Persist before replacing the plist or touching launchd, so interruption cannot make
+  // the next repair treat unconfirmed bytes as loaded or overwrite the recovery copy.
+  if (needsDefinitionConfirmation) writeServiceDefinitionFile(pendingPath, "unconfirmed\n", "utf8");
   writeServiceDefinitionFile(p, rendered, "utf8");
 
   // This EVICTS the running job, and from here until the verification below nothing is
@@ -735,7 +743,7 @@ export function installLaunchd(deps: {
   let loaded = evictThenBootstrap();
   verdict = probeLive();
   /** A matching command cannot prove changed policy/environment bytes were loaded. */
-  const currentDefinitionLoaded = (): boolean => verdict.state === "loaded-current" && (!renderedDiffers || loaded.ok);
+  const currentDefinitionLoaded = (): boolean => verdict.state === "loaded-current" && (!needsDefinitionConfirmation || loaded.ok);
   // `unknown` is excluded on purpose: a retry means another eviction, and a probe that
   // could not answer is not a reason to take the job down again.
   if (verdict.state !== "unknown" && !currentDefinitionLoaded()) {
@@ -761,7 +769,7 @@ export function installLaunchd(deps: {
       //    spelling of it, and it is idempotent on a job that was never disabled — but it
       //    runs only here, so an ordinary repair does not quietly undo a deliberate
       //    `launchctl disable`.
-      const kicked = renderedDiffers ? null : run(["kickstart", "-k", guiTarget]);
+      const kicked = needsDefinitionConfirmation ? null : run(["kickstart", "-k", guiTarget]);
       if (kicked?.ok) verdict = probeLive();
       if (!currentDefinitionLoaded()) {
         run(["enable", guiTarget]);
@@ -804,9 +812,9 @@ export function installLaunchd(deps: {
     // Do NOT write install state for a load that did not take: state describing an unused
     // plist is what made this failure invisible.
     let rolledBack: "restored" | "on-disk-only" | "none" = "none";
-    if (previousPlist !== null) {
+    if (rollbackPlist !== null) {
       try {
-        writeServiceDefinitionFile(p, previousPlist, "utf8");
+        writeServiceDefinitionFile(p, rollbackPlist, "utf8");
         evictEveryDomain();
         run(["bootstrap", guiDomain, p]);
         rolledBack = run(["print", guiTarget]).ok ? "restored" : "on-disk-only";
@@ -837,6 +845,7 @@ export function installLaunchd(deps: {
       + `then re-run '${wasInstalled ? "ocx service repair" : "ocx service install"}'.`,
     );
   }
+  if (needsDefinitionConfirmation) unlinkSync(pendingPath);
   writeServiceInstallState("scheduler");
   // The rollback copy has done its job: the new definition is verified loaded. Leaving it
   // behind makes the NEXT repair's backup ambiguous (which failure did it come from?) and
@@ -1010,6 +1019,8 @@ export function uninstallLaunchd(deps: { launchctl?: typeof runLaunchctl } = {})
   assertNotRealLaunchAgentsUnderTest(dirname(p));
   stopLaunchd(deps);
   if (existsSync(p)) unlinkSync(p);
-  // The rollback copy is part of the installation, not a user file.
-  if (existsSync(`${p}.prev`)) { try { unlinkSync(`${p}.prev`); } catch { /* best-effort */ } }
+  // Recovery artifacts are part of the installation, not user files.
+  for (const suffix of [".prev", ".pending"]) {
+    if (existsSync(`${p}${suffix}`)) { try { unlinkSync(`${p}${suffix}`); } catch { /* best-effort */ } }
+  }
 }

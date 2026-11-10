@@ -830,6 +830,9 @@ and attempts to restore the previous definition. A matching command alone cannot
 If launchd's state cannot be checked, repair keeps the new plist and any backup without another eviction:
 a refused bootstrap throws, while an accepted bootstrap reports an unverified reload with a warning.
 Inspect the job with `launchctl print gui/$(id -u)/com.opencodex.proxy` before retrying repair.
+An unconfirmed definition remains pending across repairs, including after a token change. The next
+repair retries its registration and keeps the original backup until a bootstrap is accepted and the
+probe confirms the matching job; identical disk bytes and command alone cannot make it a no-op.
 Launchd restarts the proxy after a crash or failed restart handoff, but leaves it stopped when
 the service deliberately exits cleanly because the desktop app owns the runtime. Run
 `ocx service repair` once to apply this behavior to a service installed by an older version.

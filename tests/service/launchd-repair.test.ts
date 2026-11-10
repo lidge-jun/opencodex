@@ -23,7 +23,7 @@
  * `com.opencodex.proxy.plist`.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -259,6 +259,72 @@ describe("installLaunchd: repair must not be an outage (#4236 defect 1)", () => 
     expect(verbs(argv)).not.toContain("kickstart");
     expect(readFileSync(plistPath, "utf8")).toBe(current);
     expect(existsSync(`${plistPath}.prev`)).toBe(false);
+  });
+
+  for (const accepted of [false, true]) {
+    for (const rotateToken of [false, true]) {
+      test(`an unverified policy remains pending across repairs (accepted=${accepted}, token rotation=${rotateToken})`, () => {
+        const plistPath = fixturePlist();
+        const current = renderedPlist();
+        const legacy = current.replace(/\s*<key>ProcessType<\/key><string>Interactive<\/string>/, "");
+        writeFileSync(plistPath, legacy);
+        const previousToken = process.env.OPENCODEX_API_AUTH_TOKEN;
+        try {
+          process.env.OPENCODEX_API_AUTH_TOKEN = "test-launchd-pending-first";
+          const first = recordingLaunchctl({ bootstrap: [accepted ? ok() : fail(1, "bootstrap refused")] });
+          const repair = () => installLaunchd({
+            launchctl: first.launchctl, plistPath, sleepSync: () => {},
+            probe: scriptedProbe("loaded-current", "unknown").probe,
+          });
+          if (accepted) expect(repair().reloaded).toBe(true);
+          else expect(repair).toThrow(/could not be verified/);
+          expect(readFileSync(plistPath, "utf8")).toBe(current);
+          expect(readFileSync(`${plistPath}.prev`, "utf8")).toBe(legacy);
+
+          if (rotateToken) process.env.OPENCODEX_API_AUTH_TOKEN = "test-launchd-pending-second";
+          const second = recordingLaunchctl({
+            bootout: fail(1, "bootout refused"), print: ok("old job still loaded"),
+            bootstrap: [fail(1, "bootstrap refused again"), ok()],
+          });
+          // Identical disk bytes and command are not proof the previous load took effect.
+          expect(() => installLaunchd({
+            launchctl: second.launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {},
+          })).toThrow(/NOT confirmed loaded/);
+          expect(verbs(second.argv)).not.toContain("kickstart");
+          expect(readFileSync(`${plistPath}.prev`, "utf8")).toBe(legacy);
+          expect(readFileSync(plistPath, "utf8")).toBe(legacy);
+          expect(existsSync(`${plistPath}.pending`)).toBe(true);
+          if (process.platform !== "win32") expect(statSync(`${plistPath}.pending`).mode & 0o777).toBe(0o600);
+
+          const verified = recordingLaunchctl({ bootstrap: [ok()] });
+          expect(installLaunchd({
+            launchctl: verified.launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {},
+          }).reloaded).toBe(true);
+          expect(readFileSync(plistPath, "utf8")).toBe(current);
+          expect(existsSync(`${plistPath}.pending`)).toBe(false);
+          expect(existsSync(`${plistPath}.prev`)).toBe(false);
+          const again = recordingLaunchctl({});
+          expect(installLaunchd({
+            launchctl: again.launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {},
+          }).reloaded).toBe(false);
+          expect(again.argv).toEqual([]);
+        } finally {
+          if (previousToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
+          else process.env.OPENCODEX_API_AUTH_TOKEN = previousToken;
+        }
+      });
+    }
+  }
+
+  test("a pending definition left by another process cannot become a command-only no-op", () => {
+    const plistPath = fixturePlist();
+    writeFileSync(plistPath, renderedPlist());
+    writeFileSync(`${plistPath}.pending`, "unconfirmed\n", { mode: 0o600 });
+    const { argv, launchctl } = recordingLaunchctl({ bootstrap: [fail(5, "Bootstrap failed: 5"), ok()] });
+    expect(installLaunchd({ launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} }).reloaded).toBe(true);
+    expect(verbs(argv).filter(verb => verb === "bootstrap")).toHaveLength(2);
+    expect(verbs(argv)).not.toContain("kickstart");
+    expect(existsSync(`${plistPath}.pending`)).toBe(false);
   });
 
   /**
