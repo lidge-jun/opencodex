@@ -22,7 +22,9 @@ install. `sidecar-execution.ts` reads the core-owned slot, not Advisor settings 
 Request-scoped copies of the live config, such as the Claude replay config `/v1/messages` passes to
 the Responses pipeline, are linked with `linkAdvisorPlanConfig` so they resolve the live config's
 factory at lookup time. The view's `advisor` reads through to the live config, so a consent
-revocation after the copy still blocks outbound transfer
+revocation after the copy still blocks outbound transfer up to dispatch: the runtime rechecks
+consent immediately before the loopback call, and a revocation after that call has been dispatched
+neither cancels it nor retracts context already sent
 (`tests/advisor/advisor-messages-replay-config.test.ts`).
 Advisor settings admit the complete synchronous candidate/read/patch/save/activation phase through the [config admission contract](config.md). Production uses the current disk candidate when present, preserving unrelated disk edits during admission. Successful saves adopt the committed Advisor subtree and its field-scoped live baseline together, including known absence after reset, without advancing unrelated pending live edits. Fallback or error-bearing diagnostics are refused before mutation. Deadline refusal leaves live and durable settings untouched and retains the existing `write_failed` response. Successful receipts are serialized in that callback before another settings mutation can run.
 Management loads `advisor-routes.ts` only for the Advisor namespace. The guard is attached through
@@ -337,7 +339,9 @@ request under the advisor model. Consultation usage is never merged into the wor
 usage; intercepted worker legs are, via the same usage-merge rule the terminal guard applies.
 
 `src/advisor/activity.ts` holds config-scoped process memory: at most 100 records, at most 24
-hours old, with pruning on access and no timer. `GET /api/advisor/activity` and `ocx advisor
+hours old, with pruning on access and no timer. The store is keyed by the LIVE config object, so a
+request that runs on a linked view (the Claude replay config) records into the feed the management
+route reads. `GET /api/advisor/activity` and `ocx advisor
 activity` expose trigger, status, models, requested/mapped effort, duration and reported tokens.
 There are no task bodies, commands, advice, conversation identifiers or provider error bodies
 in these records. Dashboard polling runs only while its page is visible. Restart clears activity,

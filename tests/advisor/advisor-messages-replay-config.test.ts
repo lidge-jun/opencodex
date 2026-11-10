@@ -2,12 +2,15 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createAdvisorRuntimePlan } from "../../src/advisor/runtime";
+import { createAdvisorRuntimePlan, type AdvisorRuntimeDeps } from "../../src/advisor/runtime";
 import { createAdvisorTaskBudget } from "../../src/advisor/budget";
 import { createAdvisorActivityStore } from "../../src/advisor/activity";
 import { createAdvisorPreflightLedger } from "../../src/advisor/state";
 import { parseRequest } from "../../src/responses/parser";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
+import { handleChatCompletions } from "../../src/server/chat-completions";
+import { handleAdvisorRoutes } from "../../src/server/management/advisor-routes";
+import type { ManagementContext } from "../../src/server/management/context";
 import {
   createRegisteredAdvisorPlan, linkAdvisorPlanConfig, setAdvisorPlanFactory, type AdvisorPlanInput,
 } from "../../src/server/responses/advisor-plan-slot";
@@ -22,6 +25,12 @@ import type { OcxConfig, OcxParsedRequest } from "../../src/types";
 const workerStream = 'data: {"choices":[{"delta":{"content":"fixture"},"finish_reason":null}]}\n\n'
   + 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n';
 
+/** Distinctive advice so the dispatched worker body proves what the preflight pass delivered. */
+const ADVICE = "advise from the translated messages fixture";
+
+/** Distinctive advice so the worker body proves it carried the preflight payload. */
+const STUB_ADVICE = '{"advisor_result":{"status":"advice","advice":"stub-advice-marker"}}';
+
 const originalFetch = globalThis.fetch;
 const roots: string[] = [];
 afterEach(() => {
@@ -33,7 +42,14 @@ const plan = (seen: AdvisorPlanInput[], preflights: OcxParsedRequest[] = []) => 
   seen.push(input);
   return {
     tool: { name: "advisor", description: "fixture", parameters: { type: "object", properties: {} }, advisor: true },
-    preflightInject: async (parsed: OcxParsedRequest) => { preflights.push(parsed); return false; },
+    preflightInject: async (parsed: OcxParsedRequest) => {
+      preflights.push(parsed);
+      parsed.context.messages = [
+        ...parsed.context.messages,
+        { role: "user", content: STUB_ADVICE, timestamp: Date.now() },
+      ];
+      return true;
+    },
     attachGuard: () => {},
   };
 };
@@ -90,6 +106,8 @@ test("/v1/messages reaches the factory registered on the live config and sends t
     expect(workerBodies).toHaveLength(1);
     const tools = (workerBodies[0]!.tools ?? []) as { function?: { name?: string } }[];
     expect(tools.map(tool => tool.function?.name)).toContain("advisor");
+    // The advice the preflight pass injected reached the dispatch, not just the tool declaration.
+    expect(JSON.stringify(workerBodies[0])).toContain("stub-advice-marker");
   } finally { setAdvisorPlanFactory(config, null); release(); }
 });
 
@@ -121,4 +139,144 @@ test("consent revoked on the live config after the view was copied blocks the co
     // Request-scoped overrides on the view are untouched.
     expect(view.cacheRetention).toBe("short");
   } finally { setAdvisorPlanFactory(live, null); }
+});
+
+/** The management activity route as the dashboard and CLI reach it: it reads its own config object. */
+async function managementActivity(config: OcxConfig) {
+  const ctx: ManagementContext = {
+    req: new Request("http://localhost/api/advisor/activity"),
+    url: new URL("http://localhost/api/advisor/activity"),
+    config,
+    deps: {},
+    version: "test",
+    trustedLoopbackIngress: false,
+    guiSessionIssuance: null,
+    convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
+    syncClaudeAgentDefsBestEffort: async () => {},
+  };
+  const response = await handleAdvisorRoutes(ctx);
+  return (await response!.json()) as { entries: { trigger: string; status: string; advisorModel: string }[] };
+}
+
+/** A real translated /v1/messages turn: worker provider "worker", Advisor routed to "expert". */
+function translatedAdvisorFixture(options: { revokeOnDispatch?: boolean } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "advisor-messages-fixture-")); roots.push(root);
+  const workerBodies: Record<string, unknown>[] = [];
+  const expertBodies: { url: string; body: Record<string, unknown> }[] = [];
+  let revoked = false;
+  const config: OcxConfig = {
+    defaultProvider: "worker",
+    advisor: { enabled: true, model: "expert/worker", policy: "preflight", effort: "high", contextSharingConsent: "v1" },
+    providers: {
+      worker: { adapter: "openai-chat", apiKey: "fixture", models: ["m"], liveModels: false,
+        baseUrl: "https://worker.test/v1",
+        fetch: (async (_url, init) => {
+          workerBodies.push(JSON.parse(String(init?.body)));
+          return new Response(workerStream, { headers: { "content-type": "text/event-stream" } });
+        }) as typeof fetch },
+      expert: { adapter: "openai-chat", apiKey: "fixture", models: ["worker"], liveModels: false,
+        baseUrl: "https://expert.test/v1",
+        fetch: (async (url, init) => {
+          // Provider-facing model id is the target model ("worker"); the destination proves the route.
+          expertBodies.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+          // A revocation that lands only after the outbound hop has begun.
+          if (options.revokeOnDispatch) revoke();
+          return Response.json({ choices: [{ message: { content: ADVICE } }],
+            usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 } });
+        }) as typeof fetch },
+    },
+  } as OcxConfig;
+  const revoke = () => {
+    if (revoked) return;
+    revoked = true;
+    // Management writes replace the object; nothing mutates the copied reference in place.
+    const { contextSharingConsent: _revokedConsent, ...rest } = config.advisor!;
+    config.advisor = rest;
+  };
+  const register = (extra: Partial<AdvisorRuntimeDeps> = {}) => setAdvisorPlanFactory(config, async input => createAdvisorRuntimePlan({
+    ...input,
+    ledger: createAdvisorPreflightLedger(),
+    budget: createAdvisorTaskBudget(join(root, "budget.sqlite")),
+    ...extra,
+  }));
+  // The Advisor self-fetches over loopback; re-enter the real data plane so the expert provider runs.
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/v1/chat/completions")) {
+      return await handleChatCompletions(new Request(url, init), config, { model: "", provider: "" });
+    }
+    throw new Error("unexpected external fetch: " + url);
+  }) as typeof fetch;
+  return { config, workerBodies, expertBodies, revoke, register, revoked: () => revoked };
+}
+
+/** The real Messages request, with orientation evidence after the latest user turn. */
+function messagesRequest(): Request {
+  return new Request("http://localhost/v1/messages", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "worker/m", max_tokens: 100, stream: false, messages: [
+      { role: "user", content: [{ type: "text", text: "repair the token store" },
+        { type: "tool_result", tool_use_id: "call_1", content: "3 tests failed" }] },
+    ] }),
+    signal: AbortSignal.timeout(10_000),
+  });
+}
+
+// Regression: the plan used to take its activity store from the replay view. Stores are keyed by
+// config identity, and the management route reads the live config's store, so a consultation made
+// through /v1/messages was invisible in the dashboard and the CLI activity feed.
+test("/v1/messages records its consultation in the management-visible activity feed", async () => {
+  const release = acquireOwnedSpendHome();
+  const fixture = translatedAdvisorFixture();
+  fixture.register();
+  try {
+    const response = await handleClaudeMessages(messagesRequest(),
+      fixture.config, { model: "", provider: "" }, { requestId: "advisor-messages-activity", start: Date.now() });
+    await response.text();
+    expect(response.status).toBe(200);
+    expect(fixture.expertBodies).toHaveLength(1);
+    expect(fixture.expertBodies[0]!.url).toBe("https://expert.test/v1/chat/completions");
+
+    const feed = await managementActivity(fixture.config);
+    expect(feed.entries).toHaveLength(1);
+    expect(feed.entries[0]).toMatchObject({ trigger: "preflight", status: "ok", advisorModel: "expert/worker" });
+    // The feed's record is the consultation whose advice reached the worker.
+    expect(JSON.stringify(fixture.workerBodies[0])).toContain(ADVICE);
+  } finally { setAdvisorPlanFactory(fixture.config, null); release(); }
+});
+
+// Consent is rechecked before the outbound hop. A revocation in the claim-to-dispatch window
+// blocks the transfer; the worker still runs without advisory context.
+test("revocation after the view was copied but before dispatch blocks the /v1/messages consultation", async () => {
+  const release = acquireOwnedSpendHome();
+  const fixture = translatedAdvisorFixture();
+  fixture.register({ afterPreflightClaim: fixture.revoke });
+  try {
+    const response = await handleClaudeMessages(messagesRequest(),
+      fixture.config, { model: "", provider: "" }, { requestId: "advisor-messages-revoke-before", start: Date.now() });
+    await response.text();
+    expect(fixture.revoked()).toBe(true);
+    expect(response.status).toBe(200);
+    expect(fixture.expertBodies).toHaveLength(0);
+    expect(fixture.workerBodies).toHaveLength(1);
+    expect(JSON.stringify(fixture.workerBodies[0])).not.toContain(ADVICE);
+  } finally { setAdvisorPlanFactory(fixture.config, null); release(); }
+});
+
+// The documented boundary: once dispatched, a revocation neither cancels the consultation nor
+// retracts context already sent. This is what the docs now say, instead of promising a retraction.
+test("revocation after dispatch does not cancel the /v1/messages consultation", async () => {
+  const release = acquireOwnedSpendHome();
+  const fixture = translatedAdvisorFixture({ revokeOnDispatch: true });
+  fixture.register();
+  try {
+    const response = await handleClaudeMessages(messagesRequest(),
+      fixture.config, { model: "", provider: "" }, { requestId: "advisor-messages-revoke-after", start: Date.now() });
+    await response.text();
+    expect(fixture.revoked()).toBe(true);
+    expect(response.status).toBe(200);
+    // Dispatched: the context left the proxy, and the consultation completed.
+    expect(fixture.expertBodies).toHaveLength(1);
+    expect(JSON.stringify(fixture.workerBodies[0])).toContain(ADVICE);
+  } finally { setAdvisorPlanFactory(fixture.config, null); release(); }
 });
