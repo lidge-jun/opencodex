@@ -865,7 +865,8 @@ injection.
 
 Anthropic's `usage.speed` echo determines the outcome: `fast` confirms Fast, `standard` records a
 downgrade, and a missing echo is unconfirmed. Only confirmed Fast usage receives the 2x list-price
-estimate (Opus 5.5 $8 input / $40 output; Opus 5 and 4.8 $10 input / $50 output per million tokens).
+estimate (Fable 5.2 $16 input / $80 output; Opus 5.5 $8 input / $40 output; Opus 5 and 4.8 $10 input /
+$50 output per million tokens).
 If the first fast send is rejected because usage credits are required, an organization disabled Fast,
 the model rejects `speed`, or the fast pool is empty, the main adapter dispatch can make one budgeted
 standard-speed resend. Generic rate limits and capacity errors keep their usual handling. Subsequent
