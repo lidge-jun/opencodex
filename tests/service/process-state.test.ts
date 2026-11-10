@@ -246,6 +246,25 @@ describe("proxy process-state ownership", () => {
     },
   );
 
+  test.skipIf(process.platform !== "win32" || process.arch !== "x64")(
+    "the native Windows read grows its buffer for a command line longer than the first one",
+    async () => {
+      // 8,000 UTF-16 units overflow the 4,096-byte first buffer, so only the resized retry
+      // can return the marker placed after the padding.
+      const marker = `ocx-native-long-${process.pid}-${Date.now()}`;
+      const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)", "x".repeat(8_000), marker], {
+        stdio: ["ignore", "ignore", "ignore"],
+        windowsHide: true,
+      });
+      try {
+        expect(readWindowsProcessCommandLineNative(child.pid)).toContain(marker);
+      } finally {
+        child.kill();
+        await child.exited;
+      }
+    },
+  );
+
   test("the ownership probe distinguishes a real owner from a reused PID", () => {
     // The stop-side teardown recovery asks this about a PID recorded in a receipt. Bare
     // liveness said "still running" for any process that inherited the number, so the
