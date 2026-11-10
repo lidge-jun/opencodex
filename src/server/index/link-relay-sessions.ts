@@ -166,6 +166,8 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
           }
         };
         let ended = false;
+        // A cancel resolves a pending read as done; that end is not a completed body.
+        let cancelled = false;
         const finish = () => {
           if (ended) return;
           ended = true;
@@ -173,6 +175,7 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
           release();
         };
         const cancel = async (reason?: unknown) => {
+          cancelled = true;
           try { await reader.cancel(reason); } finally { finish(); }
         };
         const aborted = () => { void cancel(req.signal.reason).catch(() => {}); };
@@ -182,7 +185,7 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
           async pull(controller) {
             try {
               const next = await reader.read();
-              if (next.done) { finish(); controller.close(); reportCatalog(); }
+              if (next.done) { finish(); controller.close(); if (!cancelled) reportCatalog(); }
               else { catalogHash?.update(next.value); controller.enqueue(next.value); }
             } catch (error) { finish(); controller.error(error); }
           },
