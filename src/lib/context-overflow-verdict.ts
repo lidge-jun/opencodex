@@ -185,10 +185,12 @@ const CLAUSE_BREAK = String.raw`[,.;:!?\n]|\b(?:and|but|because|although|though|
  * Curated asides that do not start a new clause: a negator still governs the predicate across
  * "never, as far as we can tell, exceeded" and "does not approach, let alone exceed". Only these
  * phrases are folded away; an arbitrary comma pair still separates clauses, because collapsing one
- * was what turned a negated first clause into an overflow verdict.
+ * was what turned a negated first clause into an overflow verdict. Each aside is matched as whole
+ * words: an unbounded `ever` would fold the negator out of "never" ("The input never exceeded the
+ * context window") and read the prohibition as an overflow report.
  */
 const NEGATION_ASIDE = String.raw`(?:in\s+fact|actually|ever|really|truly|yet|appear\s+to|seem\s+to|as\s+far\s+as\s+(?:we|i)\s+can\s+tell|per\s+(?:our\s+checks|the\s+tokenizer))`;
-const NEGATION_ASIDE_PATTERN = new RegExp(`\\s*,?\\s*${NEGATION_ASIDE}\\s*,?\\s*`, "gi");
+const NEGATION_ASIDE_PATTERN = new RegExp(`\\s*,?\\s*\\b${NEGATION_ASIDE}\\b\\s*,?\\s*`, "gi");
 const LET_ALONE_PATTERN = /\s*,?\s*(?:approach|come\s+close\s+to)?\s*,?\s*let\s+alone\s*,?\s*/gi;
 
 /** A count that shows this request crossed the limit, which overrides a modal prohibition. */

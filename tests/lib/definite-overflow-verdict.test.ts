@@ -113,6 +113,12 @@ const NOT_AN_OVERFLOW = [
   "The context window is not full",
   "The context window has not been exceeded",
   "The context window was never exceeded",
+  // A bare "never" with no aside: the aside fold must not eat the negator inside the word.
+  "The input never exceeded the context window",
+  "The messages never exceeded the context limit",
+  "The request must never exceed the context limit",
+  "Input should never be past the context limit",
+  "The prompt has never been beyond the context window",
   "Neither the prompt nor the context window was exceeded",
   "No context window overflow occurred",
   // A rule about the limit, not a report that this request crossed it.
