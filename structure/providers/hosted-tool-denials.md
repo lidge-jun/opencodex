@@ -58,5 +58,7 @@ the same closed vocabulary and validation as the unconditional list, and a same-
 dashboard save carries both lists (`PROVIDER_COMPAT_CARRY_FIELDS` in
 `src/server/management/provider-overwrite-carry.ts`). They travel together: keeping only the
 conditional list would let a hosted-only request forward a tool the dropped unconditional list
-denied. A conditional denial does not conflict with `modelPreferHostedTools`; the preference
-still applies whenever the request carries no client tools.
+denied. `modelPreferHostedTools` cannot name a tool either list denies. Codex turns always carry
+client tools, so a conditional denial would strip the hosted tool after the preference had
+already removed the client `image_gen` declaration, leaving the turn with neither;
+`modelPreferHostedToolsConfigError` rejects the pair for both lists.

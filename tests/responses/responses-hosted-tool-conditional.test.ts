@@ -3,6 +3,7 @@ import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterP
 import { stripUnsupportedHostedTools } from "../../src/adapters/openai-responses/tool-schema";
 import { validateConfigCandidate } from "../../src/config/diagnostics";
 import { providerManagementConfigError } from "../../src/server/auth-cors";
+import { modelPreferHostedToolsConfigError } from "../../src/config/schema/leaf-validators";
 import type { OcxProviderConfig } from "../../src/types";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 
@@ -179,5 +180,24 @@ describe("unsupportedHostedToolsWithClientTools configuration", () => {
     const rejected = validateConfigCandidate(candidate(["web_serch"]));
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) expect(rejected.error).toContain("unsupportedHostedToolsWithClientTools");
+  });
+
+  test("a provider cannot prefer a hosted tool its conditional list denies", () => {
+    // Codex requests always carry client tools, so the conditional denial would apply on every
+    // turn and silently cancel the preference after it already removed the client image tool.
+    const error = modelPreferHostedToolsConfigError(
+      { [GATEWAY_MODEL]: ["image_generation"] },
+      "modelPreferHostedTools",
+      "relay",
+      { ...gateway(), unsupportedHostedToolsWithClientTools: ["image_gen"] },
+    );
+    expect(error).toContain("cannot prefer image_generation");
+    expect(error).toContain("unsupportedHostedToolsWithClientTools");
+    expect(modelPreferHostedToolsConfigError(
+      { [GATEWAY_MODEL]: ["image_generation"] },
+      "modelPreferHostedTools",
+      "relay",
+      { ...gateway(), unsupportedHostedToolsWithClientTools: ["web_search"] },
+    )).toBeNull();
   });
 });

@@ -554,6 +554,7 @@ export function modelPreferHostedToolsConfigError(
     modelAdapters?: unknown;
     baseUrl?: unknown;
     unsupportedHostedTools?: unknown;
+    unsupportedHostedToolsWithClientTools?: unknown;
   },
 ): string | null {
   if (value === undefined) return null;
@@ -567,6 +568,12 @@ export function modelPreferHostedToolsConfigError(
   // request time, so accepting the pair would silently ignore the preference.
   const declaredUnsupported = declaredUnsupportedHostedTools(
     provider as { unsupportedHostedTools?: readonly string[] },
+  );
+  // The conditional list (#8204) denies the same tool whenever client tools travel with it,
+  // which is every Codex turn, so it cancels a preference just as surely.
+  const declaredWithClientTools = declaredUnsupportedHostedTools(
+    provider as { unsupportedHostedTools?: readonly string[]; unsupportedHostedToolsWithClientTools?: readonly string[] },
+    true,
   );
   // Effective transport: a `preserveCustomDestination` registry row reused under a
   // different endpoint keeps its own adapter AND its own auth at runtime, because
@@ -630,6 +637,9 @@ export function modelPreferHostedToolsConfigError(
       }
       if (declaredUnsupported.has(tool)) {
         return `${field}.${key} cannot prefer ${tool}: unsupportedHostedTools declares it unsupported`;
+      }
+      if (declaredWithClientTools.has(tool)) {
+        return `${field}.${key} cannot prefer ${tool}: unsupportedHostedToolsWithClientTools declares it unsupported`;
       }
       if (isHostedToolUnsupportedForModel(key, tool)) {
         return `${field}.${key} cannot prefer ${tool}: the model does not support it`;
