@@ -1233,8 +1233,9 @@ and inline every tool schema before you type anything. On those versions, re-ena
 { "claudeCode": { "toolSearch": true } }
 ```
 
-`ocx claude` injects `ENABLE_TOOL_SEARCH` only when `claudeCode.toolSearch` is set; with the
-setting unset, the client's own default applies. On a translated Chat route (DeepSeek, GLM and
+`ocx claude` injects `ENABLE_TOOL_SEARCH` only when `claudeCode.toolSearch` is set to an enabling
+value; with the setting unset, the client's own default applies. `toolSearch: false` injects nothing,
+so it does not turn tool search off. On a translated Chat route (DeepSeek, GLM and
 similar providers), each `ToolSearch` load changes the tool list and the system message, so the
 next request re-reads most of the conversation instead of hitting the provider's prompt cache
 ([#7963](https://github.com/lidge-jun/opencodex/issues/7963)). To trade first-turn context for a
