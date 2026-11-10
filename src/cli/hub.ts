@@ -7,7 +7,7 @@ import {
   type GuiPairRequestResult,
 } from "./gui-pair-client";
 import type { RuntimeApiDeps } from "./runtime-api";
-import { HUB_DISABLE_USAGE, runHubDisable, type HubDisableDeps } from "./hub-disable";
+import { HUB_DISABLE_USAGE, hubDisableRestartHint, runHubDisable, type HubDisableDeps } from "./hub-disable";
 
 export const HUB_USAGE =
   "ocx hub invite [--json] [--data-url <origin>] [--management-url <origin>] [--clients codex,claude]\n  " + HUB_DISABLE_USAGE;
@@ -32,6 +32,8 @@ export interface HubCommandDeps extends RuntimeApiDeps, HubDisableDeps {
     browserOrigin: string,
     deps?: GuiPairClientDeps,
   ) => Promise<GuiPairRequestResult>;
+  /** Supervisor-aware "Restart to apply: …" line; injected so tests do not probe the machine. */
+  restartHint?: () => string;
 }
 
 export interface HubInviteOptions {
@@ -333,6 +335,21 @@ async function runInvite(args: string[], deps: HubCommandDeps): Promise<number> 
   });
   if (result.kind !== "created") {
     console.error(`Minting a pairing code failed (${result.reason}).`);
+    if (result.reason === "origin-refused") {
+      // #8319: the CLI picks the origin from the config on disk, but the running hub checks it
+      // against the config it is running with, so an allow-list edited since then can be refused
+      // until a restart. The reason code alone did not say which origin, setting, or step.
+      console.error(
+        `The running hub refused to mint a code bound to browser origin ${browserOrigin}. It admits only `
+          + "hub.managementPublicOrigin and the corsAllowOrigins entries it is running with, which can predate "
+          + "a recent 'ocx config set'. If you changed either, restart the hub and invite again.",
+      );
+      console.error((deps.restartHint ?? hubDisableRestartHint)());
+    } else if (result.reason === "rate-limited") {
+      // The 429 covers both the per-minute grant limit and the cap on unused codes, which only
+      // clears as earlier codes are used or expire (five minutes), so the advice fits both.
+      console.error("The hub is limiting new pairing codes (a per-minute limit and a cap on unused codes). Wait for earlier codes to be used or expire, then invite again.");
+    }
     return 1;
   }
   const payload: HubInvitePayload = {
