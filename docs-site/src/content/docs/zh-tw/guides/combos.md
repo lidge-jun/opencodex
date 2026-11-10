@@ -302,7 +302,7 @@ Combo id 未知。回應為 HTTP 404 並帶 type `invalid_request_error`。執�
 
 ## 選用參數相容性
 
-一般 400 錯誤仍會終止請求，但 OpenRouter 的不透明提供者包裝（帶有數字 `code: 400` 的 `Provider returned error`），或明確拒絕 `user`、對 `reasoning.effort`/`reasoning_effort` 回傳不支援值、回傳模型特定影像輸入拒絕（`param: input`），以及拒絕該路由無法讀取的輸入媒體（`unsupported_input_modality`）的結構化錯誤，可讓 combo 在輸出開始前嘗試下一個符合條件的目標，而不記錄冷卻時間。安全政策拒絕、取消及已開始的輸出仍不可重播。
+一般 400 錯誤仍會終止請求，但 OpenRouter 的不透明提供者包裝（帶有數字 `code: 400`、無 `type` 且 `metadata.raw: "ERROR"` 的 `Provider returned error`），或明確拒絕 `user`、對 `reasoning.effort`/`reasoning_effort` 回傳不支援值、回傳模型特定影像輸入拒絕（`param: input`），以及拒絕該路由無法讀取的輸入媒體（`unsupported_input_modality`）的結構化錯誤，可讓 combo 在輸出開始前嘗試下一個符合條件的目標，而不記錄冷卻時間。安全政策拒絕、取消及已開始的輸出仍不可重播。
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
 

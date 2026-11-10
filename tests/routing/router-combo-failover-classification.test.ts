@@ -250,6 +250,70 @@ describe("combo failure cooldown scope", () => {
     expect(isOpenRouterOpaque400Envelope(JSON.stringify({ code: 400, error: opaque }))).toBe(true);
   });
 
+  test("an envelope root is authoritative only when its code is itself a terminal verdict", async () => {
+    const opaque = { message: "Provider returned error", code: 400, metadata: { raw: "ERROR" } };
+    // The root code used to be read by inequality against "400", which made every other code
+    // -- including the ones that are ordinary hop signals, and a blank one -- suppress the
+    // opaque verdict. Each of these must leave the wrapper target-local.
+    for (const code of [
+      "model_not_found",
+      "insufficient_quota",
+      "usage_limit_exceeded",
+      "free_rate_limited",
+      "input_admission_refused",
+      "unsupported_input_modality",
+      "",
+      "   ",
+    ]) {
+      const body = JSON.stringify({ code, error: opaque });
+      expect(isOpenRouterOpaque400Envelope(body)).toBe(true);
+      const failure = await consumeComboFailure(new Response(body, {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      }));
+      expect(comboFailureDecision(400, failure.classificationText, {
+        code: failure.upstreamCode,
+        rootCode: failure.upstreamRootCode,
+        openRouterOpaque400: failure.openRouterOpaque400,
+        malformedResponseFormat: failure.malformedResponseFormat,
+      })).toBe("hop");
+      expect(comboFailureCooldownScope(400, failure.classificationText, {
+        code: failure.upstreamCode,
+        openRouterOpaque400: failure.openRouterOpaque400,
+        malformedResponseFormat: failure.malformedResponseFormat,
+      })).toBe("none");
+    }
+  });
+
+  test("a root hard stop keeps a retryable nested record terminal over HTTP", async () => {
+    // normalizeUpstreamErrorText selects the nested record first, so the root code needs its own
+    // carrier. The rule is the one SSE already applies: each code alone must authorize the hop.
+    for (const [rootCode, nestedCode] of [
+      ["content_policy_violation", "model_not_found"],
+      ["origin_rejected", "rate_limit_exceeded"],
+      ["context_length_exceeded", "insufficient_quota"],
+    ]) {
+      const body = JSON.stringify({ code: rootCode, error: { message: "retryable", code: nestedCode } });
+      const failure = await consumeComboFailure(new Response(body, {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      }));
+      expect(failure.upstreamRootCode).toBe(rootCode);
+      expect(comboFailureDecision(400, failure.classificationText, {
+        code: failure.upstreamCode,
+        rootCode: failure.upstreamRootCode,
+      })).toBe("stop");
+    }
+    // The mirror case: a retryable root and record still hop, which is dev's behavior.
+    const retryable = await consumeComboFailure(new Response(JSON.stringify({
+      code: "server_error", error: { message: "overloaded", code: "server_is_overloaded" },
+    }), { status: 503, headers: { "content-type": "application/json" } }));
+    expect(comboFailureDecision(503, retryable.classificationText, {
+      code: retryable.upstreamCode,
+      rootCode: retryable.upstreamRootCode,
+    })).toBe("hop");
+  });
+
   test("preserves complete evidence across display truncation for longer envelopes and late details", async () => {
     const longPadding = "x".repeat(600);
     const longOpenRouterBody = JSON.stringify({

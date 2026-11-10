@@ -1,8 +1,11 @@
 import {
   codexAccountModelRefusal,
   codexAccountModelRefusalPayload,
+  envelopeErrorRecord,
+  envelopeRecordCode,
   hasConflictingCodexModelRefusalEnvelopes,
   isMalformedResponseFormatRecord,
+  isOpenRouterOpaque400EnvelopeRoot,
   isOpenRouterOpaque400Record,
   type CodexAccountModelRefusal,
 } from "../../combos/failover";
@@ -90,7 +93,9 @@ function bareErrorStatus(payload: unknown): number | undefined {
       ? String(rawCode)
       : null;
   if (explicitStatus === undefined && code === "invalid_request_error") return 400;
-  if (explicitStatus === undefined && (isOpenRouterOpaque400Record(error) || isOpenRouterOpaque400Record(event))) {
+  // Status is the record's own evidence; whether that record speaks for the envelope is the
+  // decision's question, so a root hard stop still reports 400 instead of inventing a 5xx.
+  if (explicitStatus === undefined && isOpenRouterOpaque400Record(envelopeErrorRecord(event))) {
     return 400;
   }
   return explicitStatus ?? httpStatusFromTerminalError({
@@ -128,41 +133,28 @@ function bareErrorIsRetryable(payload: unknown): boolean {
     return false;
   }
   const event = payload as Record<string, unknown>;
-  const nested = event.error;
-  const error = nested && typeof nested === "object" && !Array.isArray(nested)
-    ? nested as Record<string, unknown>
-    : event;
-  const rootRawCode = event.code;
-  const nestedRawCode = nested && typeof nested === "object" && !Array.isArray(nested)
-    ? (nested as Record<string, unknown>).code
-    : undefined;
-  const rootCode = typeof rootRawCode === "string"
-    ? rootRawCode
-    : typeof rootRawCode === "number" && Number.isFinite(rootRawCode)
-      ? String(rootRawCode)
-      : null;
-  const nestedCode = typeof nestedRawCode === "string"
-    ? nestedRawCode
-    : typeof nestedRawCode === "number" && Number.isFinite(nestedRawCode)
-      ? String(nestedRawCode)
-      : null;
+  // The record selection, the opaque verdict and the code conflict rule are shared with the HTTP
+  // consumer; only the carrier (one parsed frame here, one body there) differs.
+  const record = envelopeErrorRecord(event);
+  const error = record ?? event;
+  const rootCode = envelopeRecordCode(event);
+  const recordCode = envelopeRecordCode(record);
   const message = typeof error.message === "string"
     ? error.message
     : typeof event.message === "string" ? event.message : "";
   const rawRecord = {
-    ...((nested && typeof nested === "object" && !Array.isArray(nested) ? nested : event) as Record<string, unknown>),
+    ...(error as Record<string, unknown>),
     ...(typeof event.detail === "string" ? { detail: event.detail } : {}),
   };
   const malformedResponseFormat = status === 400 ? isMalformedResponseFormatRecord(rawRecord, message) : undefined;
-  const openRouterOpaque400 = status === 400 ? isOpenRouterOpaque400Record(rawRecord) : undefined;
-  const hops = (code: string | null): boolean => comboFailureDecision(status, message, {
-    code, codexModelRefusal: terminalModelRefusal(status, event),
+  const openRouterOpaque400 = status === 400 ? isOpenRouterOpaque400EnvelopeRoot(event) : undefined;
+  // A conflicting root and record code hop only when each would hop on its own, so a root hard
+  // stop is never hidden behind a retryable record code (and a retryable pair keeps dev's hop).
+  return comboFailureDecision(status, message, {
+    code: recordCode ?? rootCode, rootCode,
+    codexModelRefusal: terminalModelRefusal(status, event),
     malformedResponseFormat, openRouterOpaque400,
   }) === "hop";
-  // Conflicting root and nested codes may hop only when each would hop on its own, so a root hard
-  // stop is never hidden behind a retryable nested code (and a retryable pair keeps dev's hop).
-  if (rootCode !== null && nestedCode !== null && rootCode !== nestedCode) return hops(rootCode) && hops(nestedCode);
-  return hops(nestedCode ?? rootCode);
 }
 
 function retryableZeroOutputTerminal(payload: unknown): boolean {

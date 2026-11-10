@@ -176,9 +176,12 @@ trying the remaining targets.
 A provider's HTTP 400 response can still be target-specific. OpenRouter's opaque provider wrapper
 (`Provider returned error` with numeric `code: 400`, no `type`, and `metadata.raw: "ERROR"`) is
 treated as target-local and allows the combo to try the next target without cooling the failed one.
-Typed uncoded 400s, known malformed `response_format` schema errors, and structured
-`invalid_request_error` codes on this opaque 400 path remain terminal. Recognized target
-incompatibilities described later in this guide still advance.
+Typed uncoded 400s, known malformed `response_format` schema errors, and an envelope whose root
+states its own terminal code remain terminal; a root that states a hop signal of its own
+(`model_not_found`, `insufficient_quota`, `usage_limit_exceeded`, `free_rate_limited`,
+`input_admission_refused` or `unsupported_input_modality`) adds no new verdict, and an empty
+code is treated as no code. Recognized target incompatibilities described later in this guide
+still advance.
 
 ### Round-robin: smooth weighted batches
 

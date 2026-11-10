@@ -1,5 +1,5 @@
 import { parseResetCooldownMs } from "../codex/routing";
-import { classifyError, isCyberPolicyCode } from "../lib/errors";
+import { classifyError, isCyberPolicyCode, isTerminalRefusalCode } from "../lib/errors";
 import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
 import { isAnthropicBillingFailure } from "../providers/anthropic-billing-refusal";
 import { isKiroAccountProfileRefusal } from "../adapters/kiro-refusal";
@@ -383,34 +383,71 @@ function normalizedFailureCode(code?: string | number | null): string {
   return code?.trim().toLowerCase().replaceAll("-", "_") ?? "";
 }
 
-/** Parse one bounded error record from an HTTP 400 body or a single SSE data frame. */
-export function http400ErrorRecord(message: string): Record<string, unknown> | undefined {
+/** Parse one bounded error body or single SSE data frame into its root record. */
+function parseErrorEnvelope(message: string): Record<string, unknown> | undefined {
   if (message.length > 16_384) return undefined;
   let text = message.trim();
-  if (text.startsWith("Provider error 400: ")) text = text.slice("Provider error 400: ".length).trim();
+  const proxyPrefix = /^Provider error \d{3}: /.exec(text);
+  if (proxyPrefix) text = text.slice(proxyPrefix[0].length).trim();
   if (text.startsWith("data:") && !text.includes("\n")) text = text.slice("data:".length).trim();
   try {
     const payload: unknown = JSON.parse(text);
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
-    const root = payload as Record<string, unknown>;
-    const nested = root.response && typeof root.response === "object" && !Array.isArray(root.response)
-      ? (root.response as Record<string, unknown>).error
-      : undefined;
-    const error = root.error ?? nested;
-    if (error !== null && typeof error === "object" && !Array.isArray(error)) {
-      const record = { ...(error as Record<string, unknown>) };
-      if (typeof record.detail !== "string" && typeof root.detail === "string") {
-        record.detail = root.detail;
-      }
-      return record;
-    }
-    if (typeof root.message === "string" || typeof root.detail === "string") {
-      return root;
-    }
-    return undefined;
+    return payload as Record<string, unknown>;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The one error record an envelope carries: its own `error`, else the root when that root states
+ * the failure itself. HTTP consumption and the SSE preflight both select through here so the two
+ * transports cannot disagree about which record speaks.
+ *
+ * A `response.error` alone is deliberately not a carrier here. Under a bare frame it is not an
+ * error event at all, so reading it on HTTP only made the same envelope hop on one transport and
+ * stop on the other; leaving it unread is the behavior both transports had.
+ */
+export function envelopeErrorRecord(root: Record<string, unknown>): Record<string, unknown> | undefined {
+  const error = root.error;
+  if (error !== null && typeof error === "object" && !Array.isArray(error)) {
+    const record = { ...(error as Record<string, unknown>) };
+    if (typeof record.detail !== "string" && typeof root.detail === "string") {
+      record.detail = root.detail;
+    }
+    return record;
+  }
+  if (typeof root.message === "string" || typeof root.detail === "string") {
+    return root;
+  }
+  return undefined;
+}
+
+/** Parse one bounded error record from an HTTP 400 body or a single SSE data frame. */
+export function http400ErrorRecord(message: string): Record<string, unknown> | undefined {
+  const root = parseErrorEnvelope(message);
+  return root ? envelopeErrorRecord(root) : undefined;
+}
+
+/** A record's own structured code as a string; blank, absent and non-finite values state none. */
+export function envelopeRecordCode(record: Record<string, unknown> | undefined): string | undefined {
+  if (!record) return undefined;
+  const code = record.code;
+  if (typeof code === "number") {
+    return Number.isFinite(code) ? String(code) : undefined;
+  }
+  return typeof code === "string" && code.trim() !== "" ? code : undefined;
+}
+
+/**
+ * The envelope root's own structured code, when it states one beside a nested record.
+ *
+ * The nested record is what normalization selects for display and classification, so this is
+ * the only place a root verdict survives. Numeric codes are stringified the way the decision
+ * normalizes them. An absent, empty or whitespace-only code is no verdict at all.
+ */
+export function upstreamEnvelopeRootCode(message: string): string | undefined {
+  return envelopeRecordCode(parseErrorEnvelope(message));
 }
 
 /** Check whether a parsed error record or raw diagnostic text represents a malformed response_format. */
@@ -444,27 +481,56 @@ export function isOpenRouterOpaque400Record(record?: Record<string, unknown>): b
 
 /** Recognize OpenRouter's uncoded numeric-400 wrapper for an opaque provider failure. */
 export function isOpenRouterOpaque400Envelope(message: string): boolean {
-  return isOpenRouterOpaque400Record(http400ErrorRecord(message)) && !http400RootIsTyped(message);
+  const root = parseErrorEnvelope(message);
+  return !!root && isOpenRouterOpaque400EnvelopeRoot(root);
 }
 
 /**
- * A typed or coded root (`{"type":"invalid_request_error","error":{...}}`,
- * `{"code":"context_length_exceeded","error":{...}}`) names its own verdict even when the nested record
- * looks opaque; the SSE path already refuses those shapes through the frame's own type and code.
+ * The same verdict for an already parsed envelope root, which is what the SSE preflight holds.
+ * Both transports entering here is what keeps their answers equal.
  */
-function http400RootIsTyped(message: string): boolean {
-  let text = message.trim();
-  if (text.startsWith("Provider error 400: ")) text = text.slice("Provider error 400: ".length).trim();
-  if (text.startsWith("data:") && !text.includes("\n")) text = text.slice("data:".length).trim();
-  try {
-    const root: unknown = JSON.parse(text);
-    if (!root || typeof root !== "object" || Array.isArray(root)) return false;
-    const { type, code } = root as Record<string, unknown>;
-    if (type !== undefined && type !== null && type !== "error") return true;
-    return code !== undefined && code !== null && normalizedFailureCode(code as string | number) !== "400";
-  } catch {
-    return false;
-  }
+export function isOpenRouterOpaque400EnvelopeRoot(root: Record<string, unknown>): boolean {
+  return isOpenRouterOpaque400Record(envelopeErrorRecord(root)) && !envelopeRootStatesVerdict(root);
+}
+
+/**
+ * Root codes that state a request verdict of their own, so the record beside them does not
+ * speak for the envelope.
+ *
+ * Membership is a correctness question, not a formatting one: an equality test against `"400"`
+ * made every other root code -- including a blank one and the codes that are ordinary combo hop
+ * signals -- suppress the opaque verdict, so HTTP stopped on failures SSE advanced past. Each
+ * entry here is a code `comboFailureDecision` reaches its terminal arms with when read alone.
+ * Content refusals are the shared {@link isTerminalRefusalCode} set; the post-send codes are the
+ * ones {@link isNonReplayableUpstreamCode} owns; the rest are the generic request verdicts and the
+ * origin's own refusal.
+ */
+const ROOT_VERDICT_CODES = new Set([
+  "origin_rejected",
+  "content_policy_violation",
+  "context_length_exceeded",
+  "invalid_request_error",
+  "client_closed_request",
+  "client_cancelled",
+]);
+
+/** A root code that is itself a hard stop or terminal request verdict; blank means "no verdict". */
+function rootCodeStatesVerdict(code: string): boolean {
+  const normalized = normalizedFailureCode(code);
+  return ROOT_VERDICT_CODES.has(normalized)
+    || isTerminalRefusalCode(normalized)
+    || isNonReplayableUpstreamCode(normalized);
+}
+
+/**
+ * Does the envelope root name its own verdict? A non-`"error"` type and any terminal root code do;
+ * a blank, absent, numeric-`400` or hop-signal code does not, so the nested record keeps speaking.
+ */
+function envelopeRootStatesVerdict(root: Record<string, unknown>): boolean {
+  const { type } = root;
+  if (type !== undefined && type !== null && type !== "error") return true;
+  const code = envelopeRecordCode(root);
+  return code !== undefined && rootCodeStatesVerdict(code);
 }
 
 /** Check whether an uncoded numeric 400 is an opaque OpenRouter failure that may safely advance without cooling. */
@@ -899,15 +965,50 @@ export function codexAccountModelRefusal(
   return codexAccountModelRefusalPayload(status, payload);
 }
 
-/** Decide whether a zero-output combo failure can move to another eligible target. */
+/**
+ * Decide whether a zero-output combo failure can move to another eligible target.
+ *
+ * `rootCode` is the envelope root's own structured code when the record `code` came from is a
+ * nested one. Told about both, this applies the same rule for every transport: each code must
+ * authorize the hop on its own, so a root hard stop is never hidden behind a retryable record
+ * and a retryable pair is not stopped merely because the envelope states them twice.
+ */
 export function comboFailureDecision(
+  status: number,
+  message: string,
+  options?: {
+    code?: string | number | null;
+    /** The envelope root's own code when it differs from `code`; absent or blank states none. */
+    rootCode?: string | number | null;
+    codexModelRefusal?: CodexAccountModelRefusal;
+    failedAdapter?: string;
+    /** The caller proved the failure is an adapter-normalized plan refusal (`isModelNotInPlanRefusal`). */
+    verifiedPlanRefusal?: boolean;
+    malformedResponseFormat?: boolean;
+    openRouterOpaque400?: boolean;
+  },
+): ComboFailureDecision {
+  const rootRawCode = typeof options?.rootCode === "number" ? String(options.rootCode) : options?.rootCode;
+  const nestedRawCode = typeof options?.code === "number" ? String(options.code) : options?.code;
+  const rootCode = normalizedFailureCode(rootRawCode);
+  const nestedCode = normalizedFailureCode(nestedRawCode);
+  if (rootCode !== "" && rootCode !== nestedCode) {
+    if (nestedCode === "") return decideComboFailure(status, message, { ...options, code: rootRawCode });
+    const rootDecision = decideComboFailure(status, message, { ...options, code: rootRawCode });
+    if (rootDecision === "stop") return "stop";
+    return decideComboFailure(status, message, { ...options, code: nestedRawCode }) === "hop"
+      ? "hop" : "stop";
+  }
+  return decideComboFailure(status, message, options);
+}
+
+function decideComboFailure(
   status: number,
   message: string,
   options?: {
     code?: string | number | null;
     codexModelRefusal?: CodexAccountModelRefusal;
     failedAdapter?: string;
-    /** The caller proved the failure is an adapter-normalized plan refusal (`isModelNotInPlanRefusal`). */
     verifiedPlanRefusal?: boolean;
     malformedResponseFormat?: boolean;
     openRouterOpaque400?: boolean;

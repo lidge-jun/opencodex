@@ -39,6 +39,14 @@ export interface ConsumedComboFailure {
   openRouterOpaque400?: boolean;
   /** Structured upstream `error.code` when present in the failure body. */
   upstreamCode?: string;
+  /**
+   * The envelope root's own structured code when it differs from {@link upstreamCode}.
+   *
+   * `normalizeUpstreamErrorText` selects the nested record first, so a root verdict would
+   * otherwise never reach the combo decision. Both transports pass it, and the decision hops
+   * only when the root and the record each would.
+   */
+  upstreamRootCode?: string;
   /** Sanitized structured `error.message`; compared only against proxy-owned constants, never emitted. */
   upstreamMessage?: string;
   /** Complete structured provider type, retained for conservative recovery classification. */

@@ -8,6 +8,7 @@ import {
   codexAccountModelRefusalHardStopCode,
   isMalformedResponseFormatRequest,
   isOpenRouterOpaque400Envelope,
+  upstreamEnvelopeRootCode,
   type CodexAccountModelRefusal,
 } from "../../combos/failover";
 import { parseRetryAfterMs } from "../../combos";
@@ -65,6 +66,7 @@ export async function consumeComboFailure(
   let openRouterOpaque400: boolean | undefined;
   let usage: OcxUsage | undefined;
   let upstreamCode: string | undefined;
+  let upstreamRootCode: string | undefined;
   let upstreamMessage: string | undefined;
   let upstreamType: string | undefined;
   // Whether the body itself confirms a quota/rate-limit refusal, computed on the SAME read as
@@ -102,6 +104,9 @@ export async function consumeComboFailure(
         malformedResponseFormat = isMalformedResponseFormatRequest(response.status, body.text);
         openRouterOpaque400 = isOpenRouterOpaque400Envelope(body.text);
       }
+      // Status-independent: the nested record is what normalization selects, so a root verdict
+      // beside it has to be captured here or the conflict rule never sees it.
+      upstreamRootCode = upstreamEnvelopeRootCode(body.text);
       const normalized = normalizeUpstreamErrorText(body.text, fallback);
       if (utf8Trusted || isCyberPolicyCode(normalized.code) || isCyberPolicyMessage(normalized.safeText)) {
         classificationText = normalized.safeText;
@@ -182,6 +187,9 @@ export async function consumeComboFailure(
     ...(malformedResponseFormat !== undefined ? { malformedResponseFormat } : {}),
     ...(openRouterOpaque400 !== undefined ? { openRouterOpaque400 } : {}),
     ...(normalizedUpstreamCode !== undefined ? { upstreamCode: normalizedUpstreamCode } : {}),
+    // A rewritten identity (policy, replay refusal) is the whole verdict; the root's own code
+    // would only re-open a decision that rewrite already settled.
+    ...(!cyberFailure && !replayRefusal && upstreamRootCode !== undefined ? { upstreamRootCode } : {}),
     ...(upstreamMessage !== undefined ? { upstreamMessage } : {}),
     ...(upstreamType !== undefined ? { upstreamType } : {}),
     ...(!cyberFailure && cooldownRetryAfter !== undefined ? { retryAfter: cooldownRetryAfter } : {}),

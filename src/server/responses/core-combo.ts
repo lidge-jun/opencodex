@@ -1416,6 +1416,7 @@ export async function executeComboResponses(
       : isPolicyCandidateRefusal(failure.response) ? "hop"
       : comboFailureDecision(failure.response.status, failure.classificationText, {
         code: failure.upstreamCode,
+        rootCode: failure.upstreamRootCode,
         codexModelRefusal: failure.codexModelRefusal,
         verifiedPlanRefusal: failure.verifiedPlanRefusal,
         malformedResponseFormat: failure.malformedResponseFormat,

@@ -293,7 +293,7 @@ opencodex 인스턴스에 기록했는지 확인하세요.
 
 ## 선택적 매개변수 호환성
 
-일반적인 400 오류는 종료되지만, OpenRouter의 불투명 제공자 래퍼(숫자 `code: 400`을 포함하는 `Provider returned error`) 또는 `user`를 명시적으로 거부하거나 `reasoning.effort`/`reasoning_effort`의 지원되지 않는 값, 모델별 이미지 입력 거부(`param: input`), 경로가 읽을 수 없는 입력 미디어 거부(`unsupported_input_modality`)를 나타내는 구조화된 오류는 출력 시작 전에 다음 적격 대상으로 넘어갈 수 있습니다. 이 경우 쿨다운을 기록하지 않습니다. 보안 정책 거부, 취소 및 이미 시작된 출력은 재실행하지 않습니다.
+일반적인 400 오류는 종료되지만, OpenRouter의 불투명 제공자 래퍼(숫자 `code: 400`, `type` 없음, `metadata.raw: "ERROR"`를 포함하는 `Provider returned error`) 또는 `user`를 명시적으로 거부하거나 `reasoning.effort`/`reasoning_effort`의 지원되지 않는 값, 모델별 이미지 입력 거부(`param: input`), 경로가 읽을 수 없는 입력 미디어 거부(`unsupported_input_modality`)를 나타내는 구조화된 오류는 출력 시작 전에 다음 적격 대상으로 넘어갈 수 있습니다. 이 경우 쿨다운을 기록하지 않습니다. 보안 정책 거부, 취소 및 이미 시작된 출력은 재실행하지 않습니다.
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
 

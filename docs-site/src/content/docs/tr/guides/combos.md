@@ -419,7 +419,7 @@ reddedilen istek kaynağını düzeltin. Kombolar bu durumlar için atlama yapma
 
 ## İsteğe bağlı parametre uyumluluğu
 
-Sonlandırıcı 400 hatalarının dar bir istisnası vardır: OpenRouter'ın opak sağlayıcı sarmalayıcısı (`code: 400` içeren `Provider returned error`), veya `user` alanını açıkça reddeden, `reasoning.effort`/`reasoning_effort` için desteklenmeyen değer bildiren, modele özgü görüntü girdisini reddeden (`param: input`) ya da rotanın okuyamadığı girdi medyasını reddeden (`unsupported_input_modality`) yapılandırılmış hata, çıktı başlamadan önce sonraki uygun hedefe geçebilir. Bu uyumsuzluk için bekleme süresi kaydedilmez. Güvenlik politikası reddi, iptal ve başlamış çıktı yeniden yürütülmez.
+Sonlandırıcı 400 hatalarının dar bir istisnası vardır: OpenRouter'ın opak sağlayıcı sarmalayıcısı (`code: 400` içeren, `type` içermeyen ve `metadata.raw: "ERROR"` taşıyan `Provider returned error`), veya `user` alanını açıkça reddeden, `reasoning.effort`/`reasoning_effort` için desteklenmeyen değer bildiren, modele özgü görüntü girdisini reddeden (`param: input`) ya da rotanın okuyamadığı girdi medyasını reddeden (`unsupported_input_modality`) yapılandırılmış hata, çıktı başlamadan önce sonraki uygun hedefe geçebilir. Bu uyumsuzluk için bekleme süresi kaydedilmez. Güvenlik politikası reddi, iptal ve başlamış çıktı yeniden yürütülmez.
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
 

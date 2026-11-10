@@ -1625,7 +1625,7 @@
     "route-explainability.test.ts": "cli",
     "routed-agent-messages.test.ts": "adapters",
     "router-blocked-cross-provider.test.ts": "routing",
-    "router-combo-failover-classification.test.ts": "routing",
+    "router-combo-failover-classification.test.ts": "routing", "combo-failure-transport-parity.test.ts": "routing",
     "router-discarded-baseurl-warning.test.ts": "routing",
     "router-template-baseurl.test.ts": "routing",
     "router.test.ts": "routing",

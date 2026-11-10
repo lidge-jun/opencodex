@@ -533,6 +533,49 @@ describe("combo stream preflight", () => {
     expect(result.kind).toBe("accepted");
   });
 
+  test("a root hop code leaves an opaque wrapper retryable, and a blank root code is no verdict", async () => {
+    // HTTP used to stop on any root code other than "400". The stream never did, so the carrier
+    // -- not the envelope -- decided. These four were the divergence: two hop signals, and the
+    // two ways a root states no code at all.
+    for (const code of ["model_not_found", "input_admission_refused", "", "  "]) {
+      const result = await preflightComboStreamResponse(sse({
+        type: "error",
+        status: 400,
+        code,
+        error: { message: "Provider returned error", code: 400, metadata: { raw: "ERROR" } },
+      }), { model: "m1", provider: "a" });
+
+      expect(result.kind).toBe("failed");
+      expect(result.response.status).toBe(400);
+    }
+  });
+
+  test("a root hard stop keeps a retryable nested record terminal, matching HTTP", async () => {
+    for (const code of ["content_policy_violation", "origin_rejected", "context_length_exceeded"]) {
+      const result = await preflightComboStreamResponse(sse({
+        type: "error",
+        status: 400,
+        code,
+        error: { message: "retryable", code: "model_not_found" },
+      }), { model: "m1", provider: "a" });
+
+      expect(result.kind).toBe("accepted");
+    }
+  });
+
+  test("a bare response.error is not an error event, so the frame commits like any other payload", async () => {
+    // Neither transport reads this carrier: under `type: "error"` it is not an error event, and
+    // HTTP has no error record to classify. Reading it on HTTP alone made one document hop there
+    // and stop here.
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      status: 400,
+      response: { error: { message: "Provider returned error", code: 400, metadata: { raw: "ERROR" } } },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("accepted");
+  });
+
   test("passes a zero-output credential error to the ordinary combo classifier", async () => {
     const result = await preflightComboStreamResponse(sse({
       type: "error",
