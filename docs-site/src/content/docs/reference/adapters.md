@@ -582,7 +582,12 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
   execution tool are admitted first; the model is told which tools were omitted. Set
   `OCX_KIRO_TOOL_BUDGET=off` in the proxy's environment to send the whole client catalog, and
   `OCX_KIRO_TOOL_DESCRIPTION_LIMIT=off` to send full descriptions. Both are read when a request is
-  converted, apply to every Kiro model, and leave other limits unchanged.
+  converted, apply to every Kiro model, and leave other limits unchanged. Disabling the budget
+  removes the limit itself, so there is nothing to prioritize or omit: every declared tool goes
+  on the wire in declaration order, the omission notice disappears, and a client that declares
+  more than Kiro accepts gets the upstream `ValidationException` instead of a trimmed catalog.
+  Request sizes then grow with the client's own catalog. These switches are an opt-out for an
+  account measured to accept the larger request, not a way to make an oversized catalog safe.
 - Strips the JSON Schema keywords Kiro's validator rejects (`pattern`, `minLength`, `maximum`,
   `additionalProperties` and others) from tool and structured-output schemas, except for Claude
   models, which accept them and keep the constraints.
@@ -724,12 +729,23 @@ The continuation's instruction tells the model that its ordinary text has not re
 ### Reasoning effort
 
 The GPT-5.6 family uses `additionalModelRequestFields.reasoning.effort`; `claude-opus-5`
-uses `additionalModelRequestFields.output_config.effort`. For `gpt-5.6-luna` and
-`gpt-5.6-terra`, only `low`, `medium`, `high`, and `max` use the verified native path.
-Their `xhigh` selection retains the previous bounded thinking instructions in user content
-because that native rung has not been verified. `gpt-5.6-sol` and `claude-opus-5` keep
-their existing native `low`, `medium`, `high`, `xhigh`, and `max` behavior. Other Kiro
-models use emulated reasoning; an advertised effort control is not proof of native support.
+and the other models listed below use `additionalModelRequestFields.output_config.effort`.
+For `gpt-5.6-luna` and `gpt-5.6-terra`, only `low`, `medium`, `high`, and `max` use the
+verified native path. Their `xhigh` selection retains the previous bounded thinking
+instructions in user content because that native rung has not been verified. `gpt-5.6-sol`
+and the GPT-6 models (`gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6.1-terra`) keep their
+native `low`, `medium`, `high`, `xhigh`, and `max` behavior.
+
+Kiro accepts `output_config.effort` for `claude-opus-5`, `claude-opus-5.5`,
+`claude-opus-4.8`, `claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5.5`,
+`claude-sonnet-5`, `claude-sonnet-4.6`, and `claude-haiku-5.5`. Two rungs stay on the
+emulated thinking block instead of the native field: `claude-opus-4.6` and `claude-sonnet-4.6`
+reject native `xhigh`, and every model in that list except `claude-opus-5` and
+`claude-opus-5.5` treats `minimal` as an effort outside Kiro's native ladder, so it keeps the
+emulated block rather than failing the request. Those two Opus 5 models reject `minimal` as a
+configuration error, as do the GPT models that carry native effort. `claude-haiku-4.5`,
+`claude-opus-4.5` and `claude-sonnet-4.5`, along with any Kiro model not listed above, use
+emulated reasoning at every effort; an advertised effort control is not proof of native support.
 
 ## `cursor`
 

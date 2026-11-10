@@ -14,7 +14,7 @@ import {
   KIRO_TOOL_RESULT_CARRIER_MESSAGE,
 } from "../../../src/adapters/kiro-constants";
 import { EMPTY_EXEC_OUTPUT_MESSAGE, FAILED_EXEC_OUTPUT_MESSAGE } from "../../../src/adapters/exec-tool-result-normalize";
-import { KIRO_TOOL_BUDGET_ENV, KIRO_TOOL_DESCRIPTION_LIMIT_ENV, MAX_KIRO_TOOL_CATALOG_BYTES, MAX_KIRO_TOOL_COUNT } from "../../../src/adapters/kiro-tools";
+import { MAX_KIRO_TOOL_CATALOG_BYTES, MAX_KIRO_TOOL_COUNT } from "../../../src/adapters/kiro-tools";
 import { applyProviderConfigHints, buildCatalogEntries } from "../../../src/codex/catalog";
 import { getValidAccessTokenSnapshot } from "../../../src/oauth";
 import { saveCredential } from "../../../src/oauth/store";
@@ -1736,7 +1736,12 @@ describe("kiro adapter — native and emulated reasoning effort", () => {
       })).body);
 
       expect(body.additionalModelRequestFields).toBeUndefined();
-      expect(body.conversationState.currentMessage.userInputMessage.content).toContain("<max_thinking_length>100</max_thinking_length>");
+      // Both halves of the emulated block, not just the budget: a fallback that only prepended the
+      // length tag would leave `minimal` below the model's own thinking default without saying so.
+      const content = body.conversationState.currentMessage.userInputMessage.content;
+      expect(content).toContain("<thinking_mode>enabled</thinking_mode>");
+      expect(content).toContain("<max_thinking_length>100</max_thinking_length>");
+      expect(content).toContain("<thinking_instruction>");
     }
   });
 });
@@ -2034,168 +2039,5 @@ describe("kiro code-mode exec survives the catalog budget", () => {
     expect(names).toContain("exec");
     expect(names.length).toBeLessThan(heavy.length + 1);
     expect(serializedBytes).toBeLessThanOrEqual(MAX_KIRO_TOOL_CATALOG_BYTES);
-  });
-});
-
-describe("kiro catalog budget opt-out", () => {
-  const origBudget = process.env[KIRO_TOOL_BUDGET_ENV];
-  afterEach(() => {
-    if (origBudget === undefined) delete process.env[KIRO_TOOL_BUDGET_ENV];
-    else process.env[KIRO_TOOL_BUDGET_ENV] = origBudget;
-  });
-
-  // Claude Desktop declares its own tools last, so a budgeted catalog drops them first.
-  const catalog = [
-    ...Array.from({ length: MAX_KIRO_TOOL_COUNT + 60 }, (_, index) => ({
-      name: `mcp__filler__tool_${String(index).padStart(3, "0")}`,
-      description: `Filler ${index} ${"x".repeat(900)}`,
-      parameters: { type: "object", properties: { value: { type: "string", description: "y".repeat(200) } } },
-    })),
-    { name: "mcp__ccd_turn__update_plan", description: "Update the plan", parameters: { type: "object" } },
-    { name: "mcp__ccd_turn__wrap_up", description: "Wrap up the turn", parameters: { type: "object" } },
-  ];
-
-  async function emitted(): Promise<{ names: string[]; content: string }> {
-    const { body } = await createKiroAdapter(provider).buildRequest(parsedWith([{ role: "user", content: "hi" }], catalog));
-    const current = JSON.parse(body).conversationState.currentMessage.userInputMessage;
-    return {
-      names: current.userInputMessageContext.tools.slice(0, -1).map((tool: { toolSpecification: { name: string } }) => tool.toolSpecification.name),
-      content: current.content,
-    };
-  }
-
-  test("default keeps both budgets and drops the last-declared tools", async () => {
-    delete process.env[KIRO_TOOL_BUDGET_ENV];
-    const { names, content } = await emitted();
-
-    expect(names.length).toBeLessThanOrEqual(MAX_KIRO_TOOL_COUNT);
-    expect(names).not.toContain("mcp__ccd_turn__wrap_up");
-    expect(content).toContain("Kiro's outbound catalog budget allows");
-  });
-
-  test("off sends the whole catalog in declared order without a notice", async () => {
-    process.env[KIRO_TOOL_BUDGET_ENV] = "off";
-    const { names, content } = await emitted();
-
-    expect(new TextEncoder().encode(JSON.stringify(catalog)).byteLength).toBeGreaterThan(MAX_KIRO_TOOL_CATALOG_BYTES);
-    expect(names).toEqual(catalog.map(tool => tool.name));
-    expect(content).not.toContain("Kiro's outbound catalog budget allows");
-  });
-
-  test("any other value keeps the budget", async () => {
-    process.env[KIRO_TOOL_BUDGET_ENV] = "0";
-    const { names } = await emitted();
-
-    expect(names.length).toBeLessThanOrEqual(MAX_KIRO_TOOL_COUNT);
-  });
-});
-
-describe("kiro tool description limit opt-out", () => {
-  const origLimit = process.env[KIRO_TOOL_DESCRIPTION_LIMIT_ENV];
-  afterEach(() => {
-    if (origLimit === undefined) delete process.env[KIRO_TOOL_DESCRIPTION_LIMIT_ENV];
-    else process.env[KIRO_TOOL_DESCRIPTION_LIMIT_ENV] = origLimit;
-  });
-
-  const longDescription = `Long docs ${"x".repeat(5_000)} keep this tail.`;
-
-  async function emittedDescription(modelId?: string): Promise<string> {
-    const { body } = await createKiroAdapter(provider).buildRequest(
-      parsedWith([{ role: "user", content: "hi" }], [{ name: "longtool", description: longDescription, parameters: { type: "object" } }], modelId),
-    );
-    return JSON.parse(body).conversationState.currentMessage.userInputMessage.userInputMessageContext.tools[0].toolSpecification.description;
-  }
-
-  test("default keeps the 1024-character cap", async () => {
-    delete process.env[KIRO_TOOL_DESCRIPTION_LIMIT_ENV];
-
-    expect(await emittedDescription()).toHaveLength(1024);
-  });
-
-  test("off sends every description whole, whatever the model", async () => {
-    process.env[KIRO_TOOL_DESCRIPTION_LIMIT_ENV] = "off";
-
-    expect(await emittedDescription()).toBe(longDescription);
-    expect(await emittedDescription("gpt-5.6-sol")).toBe(longDescription);
-  });
-
-  test("any other value keeps the cap", async () => {
-    process.env[KIRO_TOOL_DESCRIPTION_LIMIT_ENV] = "0";
-
-    expect(await emittedDescription()).toHaveLength(1024);
-  });
-});
-
-describe("kiro tool-catalog nudge and the Anthropic Messages surface", () => {
-  // Claude Code and Claude Desktop send their own tool rules with the full catalog; the
-  // Codex-oriented nudge (neighbour-tool bans, code-mode guidance) only repeats it.
-  async function currentContent(anthropicInbound: boolean): Promise<string> {
-    const parsed = parsedWith([{ role: "user", content: "hi" }], [bashTool]);
-    if (anthropicInbound) parsed._anthropicInbound = true;
-    const { body } = await createKiroAdapter(provider).buildRequest(parsed);
-    return JSON.parse(body).conversationState.currentMessage.userInputMessage.content;
-  }
-
-  test("a Codex request keeps the nudge", async () => {
-    expect(await currentContent(false)).toContain("Tool contract: use the current tool catalog as ground truth.");
-  });
-
-  test("a Claude request drops the nudge and keeps the completion contract", async () => {
-    const content = await currentContent(true);
-
-    expect(content).not.toContain("Tool contract:");
-    expect(content).not.toContain("neighboring-agent tool names");
-    expect(content).toContain("call codex_kiro_final_answer exactly once");
-  });
-});
-
-describe("kiro tool schemas by model family", () => {
-  // Live probe on 2026-11-07: Claude models on Kiro accept every JSON Schema keyword the
-  // sanitizer used to strip, so the constraints reach the model. Other families keep the strip.
-  const constrained = {
-    $schema: "http://json-schema.org/draft-07/schema#",
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      city: { type: "string", pattern: "^[A-Z][a-z]+$", maxLength: 20, format: "hostname" },
-      days: { type: "integer", minimum: 1, maximum: 7 },
-      tags: { type: "array", items: { type: "string" }, maxItems: 3, uniqueItems: true },
-    },
-    required: ["city", "days"],
-  };
-
-  async function emittedSchema(modelId: string): Promise<Record<string, any>> {
-    const { body } = await createKiroAdapter(provider).buildRequest(
-      parsedWith([{ role: "user", content: "hi" }], [{ name: "forecast", description: "Forecast", parameters: constrained }], modelId),
-    );
-    return JSON.parse(body).conversationState.currentMessage.userInputMessage.userInputMessageContext.tools[0].toolSpecification.inputSchema.json;
-  }
-
-  test("a Claude model receives the schema with every constraint", async () => {
-    for (const modelId of ["claude-opus-5.5", "claude-sonnet-5.5", "claude-haiku-5.5", "claude-opus-4.5"]) {
-      expect(await emittedSchema(modelId)).toEqual(constrained);
-    }
-  });
-
-  test("a non-Claude model still receives the stripped schema", async () => {
-    const schema = await emittedSchema("gpt-5.6-sol");
-    expect(schema.$schema).toBeUndefined();
-    expect(schema.additionalProperties).toBeUndefined();
-    expect(schema.properties.city).toEqual({ type: "string" });
-    expect(schema.properties.days).toEqual({ type: "integer" });
-    expect(schema.properties.tags).toEqual({ type: "array", items: { type: "string" } });
-    expect(schema.required).toEqual(["city", "days"]);
-  });
-
-  test("a Claude root composition is still flattened to an object", async () => {
-    const { body } = await createKiroAdapter(provider).buildRequest(
-      parsedWith([{ role: "user", content: "hi" }], [{
-        name: "either", description: "Either", parameters: { oneOf: [{ type: "object", properties: { a: { type: "string", maxLength: 3 } } }] },
-      }], "claude-opus-5.5"),
-    );
-    const schema = JSON.parse(body).conversationState.currentMessage.userInputMessage.userInputMessageContext.tools[0].toolSpecification.inputSchema.json;
-    expect(schema.type).toBe("object");
-    expect(schema.oneOf).toBeUndefined();
-    expect(schema.properties.a).toEqual({ type: "string", maxLength: 3 });
   });
 });

@@ -190,12 +190,22 @@ incomplete. `TOOL_USE` без фактического вызова инстру
 
 ### Reasoning effort
 
-Семейство GPT-5.6 использует `additionalModelRequestFields.reasoning.effort`, а `claude-opus-5` —
-`additionalModelRequestFields.output_config.effort`. Для `gpt-5.6-luna` и `gpt-5.6-terra` нативный
-путь проверен только для `low`, `medium`, `high` и `max`. Их `xhigh` сохраняет прежнюю эмуляцию
-через ограниченные инструкции thinking, поскольку нативный уровень не проверен.
-Существующие нативные уровни `gpt-5.6-sol` и `claude-opus-5` (`low`, `medium`, `high`, `xhigh`, `max`)
-не меняются. Остальные модели Kiro используют эмуляцию; наличие настройки effort не доказывает нативную поддержку.
+Семейство GPT-5.6 использует `additionalModelRequestFields.reasoning.effort`, а `claude-opus-5`
+и остальные перечисленные ниже модели — `additionalModelRequestFields.output_config.effort`. Для
+`gpt-5.6-luna` и `gpt-5.6-terra` нативный путь проверен только для `low`, `medium`, `high` и `max`.
+Их `xhigh` сохраняет прежнюю эмуляцию через ограниченные инструкции thinking, поскольку нативный
+уровень не проверен. `gpt-5.6-sol` и модели GPT-6 (`gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`,
+`gpt-6.1-terra`) сохраняют нативные `low`, `medium`, `high`, `xhigh` и `max`.
+
+Kiro принимает `output_config.effort` для `claude-opus-5`, `claude-opus-5.5`, `claude-opus-4.8`,
+`claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5.5`, `claude-sonnet-5`, `claude-sonnet-4.6`
+и `claude-haiku-5.5`. Два уровня остаются на эмулируемом блоке thinking вместо нативного поля:
+`claude-opus-4.6` и `claude-sonnet-4.6` отклоняют нативный `xhigh`, а все модели этого списка,
+кроме `claude-opus-5` и `claude-opus-5.5`, считают `minimal` уровнем вне нативной шкалы Kiro и
+сохраняют эмулируемый блок вместо ошибки запроса. Эти две модели Opus 5 отклоняют `minimal` как
+ошибку конфигурации, как и модели GPT с нативным effort. `claude-haiku-4.5`, `claude-opus-4.5`,
+`claude-sonnet-4.5` и любая не перечисленная выше модель Kiro используют эмуляцию на каждом
+уровне; наличие настройки effort не доказывает нативную поддержку.
 
 ## `cursor`
 

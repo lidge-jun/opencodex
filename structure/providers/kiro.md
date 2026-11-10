@@ -133,6 +133,46 @@ Kiro's own `kiroToolName` rewrite in `src/adapters/kiro-wire.ts` is CodeWhispere
 reserves the private completion tool. Meta Muse 64-character MCP aliases live in
 `src/responses/muse-tool-name-alias.ts` and must not import that Kiro helper.
 
+## Kiro tool catalog and schema policy
+
+`convertKiroToolContext` in `src/adapters/kiro-tools.ts` builds the outbound client-tool
+catalog, and two limits apply there per request: at most `MAX_KIRO_TOOL_COUNT` (48) converted
+tools and `MAX_KIRO_TOOL_CATALOG_BYTES` (96 KB) of serialized tool JSON. Above either limit the
+catalog is sorted by `boundedCatalogPriority` — results loaded through tool search, then the
+Codex code-mode `exec` tool, then the tool-search gateway, then the rest in declaration order —
+and admitted until the next tool would not fit. The omitted tools are named in one
+`systemAdditions` notice so the model knows what it cannot call; the notice is not an error and
+the request still goes out.
+
+Each tool description is cut to 1,024 characters, or 9,216 for `gpt-5.6-sol`, with a
+surrogate-safe ellipsis. Truncation happens while each tool is converted, before the budget
+chooses entries, so the byte limit measures the truncated strings.
+
+`OCX_KIRO_TOOL_BUDGET=off` (`KIRO_TOOL_BUDGET_ENV`) and
+`OCX_KIRO_TOOL_DESCRIPTION_LIMIT=off` (`KIRO_TOOL_DESCRIPTION_LIMIT_ENV`) are operator opt-outs
+read at request-conversion time. Turning the budget off removes both limits, so the priority sort
+and the `exec` reservation have nothing to exclude: every declared tool goes on the wire in
+declaration order and no omission notice is emitted. An oversized catalog therefore reaches Kiro
+intact and the upstream `ValidationException` becomes the failure mode instead of a trimmed
+request. The default remains bounded because that is the shape a fresh Kiro account is measured to
+accept.
+
+Schema sanitization is chosen per model, not per transport. `kiroRejectedSchemaKeys(modelId)`
+returns an empty set for `claude-*` models — the 2026-11-07 probe accepted all 28 rejected
+keywords there, one per request — and `KIRO_REJECTED_SCHEMA_KEYS` for every other family. Both
+the client-tool path and the structured-output tool (`kiroStructuredOutputSpec` in
+`src/adapters/kiro/structured-output.ts`) pass that set into `sanitizeKiroSchema`, so the two
+cannot drift. Root `oneOf`/`anyOf`/`allOf` flattening in `ensureRootObjectType` stays
+unconditional: it is a wire requirement, not a constraint strip.
+
+The Codex tool-catalog nudge is scoped by inbound surface, not by routed model. Requests prepared
+from the Anthropic Messages wire carry `_anthropicInbound`
+(`src/server/responses/request-prepare.ts`), and `src/adapters/kiro/payload.ts` omits the nudge
+for them: its text names Codex-only concepts (code mode, neighboring-agent tool bans) that a
+Claude Code or Claude Desktop turn does not have, and every such client sends its own tool rules.
+A non-Claude model routed from that surface therefore drops the nudge too, while the same model
+keeps it on the Codex surface. Coverage: `tests/providers/kiro/kiro-tool-catalog.test.ts`.
+
 ## Kiro Responses text controls
 
 Kiro shares the Responses freeform restoration boundary in
@@ -290,10 +330,20 @@ on the matching `assistantResponseMessage.reasoningContent` to preserve model re
 turns; dropping it makes every turn restart without the previous turn's reasoning. Verified on
 kiro-cli 2.14.1 and 2.16.0, all three models.
 
-Native effort admission is narrower than model eligibility: luna and terra send only
-`low`, `medium`, `high`, and `max` on the native field. Their `xhigh` requests retain the
-previous emulated thinking tags because that native rung is unverified. A future shared
-effort rung does not expand this allowlist. Sol and Opus keep their existing native ladder.
+Native effort admission is narrower than model eligibility, and the narrowing lives in
+`kiroNativeEffortField` rather than in `KIRO_NATIVE_EFFORT_FIELDS` alone
+(`src/adapters/kiro/reasoning.ts`): a model can be in the field table and still send an
+individual rung on the emulated path. Luna and terra send only `low`, `medium`, `high`, and
+`max` on the native field, and their `xhigh` keeps the previous emulated thinking tags because
+that native rung is unverified. On the Claude side, `claude-opus-4.6` and `claude-sonnet-4.6`
+reject a native `xhigh` (HTTP 400 in the 2026-11-07 probe), so `KIRO_NO_XHIGH_NATIVE_MODELS`
+routes that rung to the emulated block instead. Kiro's native effort ladder has no `minimal`
+rung; the seven Claude models that gained native effort in #8451 used the emulated block for
+every effort before, so `KIRO_EMULATED_EXTRA_EFFORT_MODELS` keeps that block for an effort
+outside the ladder instead of turning it into a request error. `claude-opus-5` and
+`claude-opus-5.5` are deliberately absent from that set: they had native effort before the
+change, and `minimal` stays a configuration error for them, as it is for the GPT models with
+native effort. A future shared effort rung does not widen any of these allowlists.
 
 The two members of `reasoningContent` are not interchangeable. The wire validates the shape of the
 member rather than its content, and the signature is not base64 — its alphabet contains `.` and

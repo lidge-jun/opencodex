@@ -279,12 +279,23 @@ tam olarak tekrarlasa bile, çünkü aşama doğruluğu kozmetik tekilleştirmed
 
 ### Akıl yürütme çabası
 
-GPT-5.6 ailesi `additionalModelRequestFields.reasoning.effort`, `claude-opus-5` ise
-`additionalModelRequestFields.output_config.effort` alanını kullanır. `gpt-5.6-luna` ve
-`gpt-5.6-terra` için yalnızca doğrulanmış `low`, `medium`, `high` ve `max` seviyeleri yerel alandan
-gönderilir. Bu iki modelin yerel `xhigh` seviyesi doğrulanmadığı için mevcut sınırlı düşünme
-talimatlarıyla öykünme korunur. `gpt-5.6-sol` ve `claude-opus-5` için mevcut yerel `low`, `medium`,
-`high`, `xhigh` ve `max` davranışı değişmez. Diğer Kiro modelleri öykünme kullanır; çaba seçeneği yerel desteğin kanıtı değildir.
+GPT-5.6 ailesi `additionalModelRequestFields.reasoning.effort`, `claude-opus-5` ile aşağıda
+listelenen diğer modeller ise `additionalModelRequestFields.output_config.effort` alanını kullanır.
+`gpt-5.6-luna` ve `gpt-5.6-terra` için yalnızca doğrulanmış `low`, `medium`, `high` ve `max`
+seviyeleri yerel alandan gönderilir. Bu iki modelin yerel `xhigh` seviyesi doğrulanmadığı için mevcut
+sınırlı düşünme talimatlarıyla öykünme korunur. `gpt-5.6-sol` ve GPT-6 modelleri (`gpt-6-sol`,
+`gpt-6-luna`, `gpt-6.1-sol`, `gpt-6.1-terra`) yerel `low`, `medium`, `high`, `xhigh` ve `max`
+davranışını sürdürür.
+
+Kiro `output_config.effort` alanını `claude-opus-5`, `claude-opus-5.5`, `claude-opus-4.8`,
+`claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5.5`, `claude-sonnet-5`, `claude-sonnet-4.6`
+ve `claude-haiku-5.5` için kabul eder. İki seviye yerel alan yerine öykünülen düşünme bloğunu
+kullanır: `claude-opus-4.6` ve `claude-sonnet-4.6` yerel `xhigh` seviyesini reddeder ve bu listedeki
+`claude-opus-5` ile `claude-opus-5.5` dışındaki tüm modeller `minimal` seviyesini Kiro'nun yerel
+basamağı dışında bir çaba sayar; istek başarısız olmak yerine öykünülen bloğu korur. Bu iki Opus 5
+modeli, yerel çaba kullanan GPT modelleri gibi `minimal` seviyesini yapılandırma hatası olarak
+reddeder. `claude-haiku-4.5`, `claude-opus-4.5`, `claude-sonnet-4.5` ve yukarıda listelenmeyen
+Kiro modelleri her seviyede öykünme kullanır; çaba seçeneği yerel desteğin kanıtı değildir.
 
 ## `cursor`
 
