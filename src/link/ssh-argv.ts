@@ -151,7 +151,7 @@ export const REMOTE_PLATFORM_UNSUPPORTED = 125;
  */
 export const REMOTE_SERVED_RUNTIME = `served_runtime() {
   [ -f "$1" ] || return 1
-  served_size=$( { wc -c < "$1"; } 2>/dev/null ) || return 1
+  served_size=$( { dd if="$1" bs=65537 count=1 2>/dev/null | wc -c; } 2>/dev/null ) || return 1
   [ "$served_size" -le 65536 ] 2>/dev/null || return 1
   awk '
     { prev = last; last = $0 }

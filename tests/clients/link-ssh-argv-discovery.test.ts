@@ -112,9 +112,9 @@ test.skipIf(process.platform === "win32").each(["Windows_NT", "MSYS_NT-10.0-2263
  * #8359: the install that last started serving this home wins over a stale Desktop or PATH copy.
  * The census is written by the real recorder, so a format change on that side breaks these cases.
  */
-function servedFixture() {
+function servedFixture(tools = ["awk", "dd", "wc"]) {
   const f = fixture();
-  for (const tool of ["awk", "wc"]) symlinkSync(Bun.which(tool)!, join(f.home, "remote-bin", tool));
+  for (const tool of tools) symlinkSync(Bun.which(tool)!, join(f.home, "remote-bin", tool));
   f.install(0); // a runnable Desktop copy that must lose to the served install
   const census = (command: string[]) => recordServingRuntime(
     { command, version: "2.99.0", servedAt: "2026-11-09T00:00:00.000Z" },
@@ -197,6 +197,7 @@ test.skipIf(process.platform === "win32").each([
   ["a truncation after the command", complete.slice(0, complete.indexOf("],") + 3)],
   ["a truncation after the first record", complete.slice(0, complete.indexOf("},") + 3)],
   ["another layout", JSON.stringify({ runtimes: [{ command: ["/opt/good/ocx"] }] })],
+  ["a census over 64 KiB", censusBody([{ command: ["/opt/good/ocx"], version: "x".repeat(70_000) }])],
 ] as const)("the census reader rejects %s (#8359)", async (_label, body) => {
   expect(await readCensus(body)).toEqual({ exitCode: 1, stdout: "" });
 }, SPAWN_BUDGET_MS);
@@ -417,10 +418,23 @@ test.skipIf(process.platform === "win32")("runtime inspection reports the served
 });
 
 
-test.skipIf(process.platform === "win32")("an unreadable census falls through without stderr noise (#8359)", async () => {
+// A root runner reads the census whatever its mode, so the unreadable path cannot be exercised there.
+test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable census falls through without stderr noise (#8359)", async () => {
   const f = servedFixture();
-  f.census([join(f.home, "standalone/ocx")]);
+  const served = join(f.home, "standalone/ocx");
+  executable(served, "if [ \"$1\" = --version ]; then printf 'opencodex 2.99.0\\n'; exit 0; fi\nprintf 'standalone\\n'");
+  f.census([served]);
   chmodSync(join(f.home, ".opencodex/serving-runtimes.json"), 0o000);
+  const result = await f.run();
+  expect(result.stdout).toBe("0\nlink\0port\0");
+  expect(result.stderr).toBe("");
+}, SPAWN_BUDGET_MS);
+
+test.skipIf(process.platform === "win32")("a Child without awk falls through without stderr noise (#8359)", async () => {
+  const f = servedFixture(["dd", "wc"]);
+  const served = join(f.home, "standalone/ocx");
+  executable(served, "if [ \"$1\" = --version ]; then printf 'opencodex 2.99.0\\n'; exit 0; fi\nprintf 'standalone\\n'");
+  f.census([served]);
   const result = await f.run();
   expect(result.stdout).toBe("0\nlink\0port\0");
   expect(result.stderr).toBe("");
