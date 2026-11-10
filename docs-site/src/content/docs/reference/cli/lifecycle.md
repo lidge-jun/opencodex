@@ -1430,6 +1430,8 @@ See [Hub observation and recovery](/guides/remote-workspace/#inspect-the-hub-wit
 
 Use `ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync`, and `ocx connect rotate --pairing-code-stdin`. The initial catalog download fails after five seconds without incoming bytes, but active transfers may run longer; use `--catalog-timeout <seconds>` (1–120) to override that inactivity window. `ocx disconnect` restores local state offline and does not revoke the hub key. While connected only, `ocx connect revoke --admin-token-stdin` revokes the persisted `apiKeyId`; after disconnect use the hub's **Connect → API Keys** page. Secrets are stdin-only and never belong in argv.
 
+On a Remote Link Child, `ocx connect status` also prints a `Link tunnel:` line (`up`, `down (<reason>)` or `unknown (<reason>)`) read from the running Child's `/readyz`, and `--json` adds `linkTunnel`. `Connection: connected` still means only that the machine is linked; see the [Remote Link guide](/guides/remote-link/).
+
 ## Setup port validation
 
 `ocx init` accepts TCP ports 1–65535 as decimal whole numbers. Press Enter to use 10100. Invalid input such as `0`, `10100oops` or `1.5` is never silently replaced or truncated; setup reports it and asks for the port again.
