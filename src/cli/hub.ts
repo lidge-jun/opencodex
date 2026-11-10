@@ -335,16 +335,18 @@ async function runInvite(args: string[], deps: HubCommandDeps): Promise<number> 
   });
   if (result.kind !== "created") {
     console.error(`Minting a pairing code failed (${result.reason}).`);
-    if (result.reason === "rejected") {
+    if (result.reason === "origin-refused") {
       // #8319: the CLI picks the origin from the config on disk, but the running hub checks it
-      // against the config it loaded at startup, so an allow-list edited since then is refused
+      // against the config it is running with, so an allow-list edited since then can be refused
       // until a restart. The reason code alone did not say which origin, setting, or step.
       console.error(
         `The running hub refused to mint a code bound to browser origin ${browserOrigin}. It admits only `
-          + "hub.managementPublicOrigin and the corsAllowOrigins entries it loaded when it started. If you "
-          + "changed either since then, restart the hub and invite again.",
+          + "hub.managementPublicOrigin and the corsAllowOrigins entries it is running with, which can predate "
+          + "a recent 'ocx config set'. If you changed either, restart the hub and invite again.",
       );
       console.error((deps.restartHint ?? hubDisableRestartHint)());
+    } else if (result.reason === "rate-limited") {
+      console.error("The hub mints only a few pairing codes per minute; wait a minute and invite again.");
     }
     return 1;
   }
