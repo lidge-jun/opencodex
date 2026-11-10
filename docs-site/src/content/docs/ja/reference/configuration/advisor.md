@@ -35,7 +35,7 @@ description: manual、preflight、証拠に基づく adaptive ポリシーによ
 
 ダッシュボードの **Advisor** ページまたは `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>` で管理します。
 
-現在の同意がないとき、`ocx advisor on` はプロバイダー間送信を有効にしません。開示を表示して停止します。`ocx advisor on --ack-context-sharing` と `ocx advisor consent` が `v1` を記録します。`ocx advisor consent --revoke` は同意を消し、送信を直ちに止めます。`ocx advisor set` は同意を与えません。ダッシュボードの同意チェックは初期状態でオフです。
+現在の同意がないとき、`ocx advisor on` はプロバイダー間送信を有効にしません。開示を表示して停止します。`ocx advisor on --ack-context-sharing` と `ocx advisor consent` が `v1` を記録します。`ocx advisor consent --revoke` は同意を消します。まだディスパッチされていない相談はブロックされますが、すでにディスパッチされた相談は取り消せず、すでにプロキシを離れた文脈も取り戻せません。`ocx advisor set` は同意を与えません。ダッシュボードの同意チェックは初期状態でオフです。
 
 ## ポリシー
 
