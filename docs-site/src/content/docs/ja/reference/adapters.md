@@ -155,12 +155,22 @@ filtered incomplete になります。実際のツール呼び出しを伴わな
 
 ### Reasoning effort
 
-GPT-5.6 系は `additionalModelRequestFields.reasoning.effort`、`claude-opus-5` は
-`additionalModelRequestFields.output_config.effort` を使用します。`gpt-5.6-luna` と
-`gpt-5.6-terra` では、検証済みの `low`、`medium`、`high`、`max` だけをネイティブフィールドで送信します。
+GPT-5.6 系は `additionalModelRequestFields.reasoning.effort`、`claude-opus-5` と
+以下に挙げるその他のモデルは `additionalModelRequestFields.output_config.effort` を使用します。
+`gpt-5.6-luna` と `gpt-5.6-terra` では、検証済みの `low`、`medium`、`high`、`max` だけをネイティブフィールドで送信します。
 両モデルの `xhigh` は未検証のため、従来の上限付き thinking 指示によるエミュレーションを維持します。
-`gpt-5.6-sol` と `claude-opus-5` の既存のネイティブ段階（`low`、`medium`、`high`、`xhigh`、`max`）は変更しません。
-その他の Kiro モデルはエミュレーションを使用し、effort の選択肢だけではネイティブ対応を意味しません。
+`gpt-5.6-sol` と GPT-6 系（`gpt-6-sol`、`gpt-6-luna`、`gpt-6.1-sol`、`gpt-6.1-terra`）は
+ネイティブの `low`、`medium`、`high`、`xhigh`、`max` を維持します。
+
+Kiro は `claude-opus-5`、`claude-opus-5.5`、`claude-opus-4.8`、`claude-opus-4.7`、
+`claude-opus-4.6`、`claude-sonnet-5.5`、`claude-sonnet-5`、`claude-sonnet-4.6`、
+`claude-haiku-5.5` で `output_config.effort` を受け付けます。次の 2 つの段階はネイティブフィールドではなく
+エミュレーションの thinking ブロックを使います。`claude-opus-4.6` と `claude-sonnet-4.6` はネイティブの
+`xhigh` を拒否し、`claude-opus-5` と `claude-opus-5.5` を除くこのリストの全モデルは `minimal` を
+Kiro のネイティブ段階の外にある effort として扱うため、リクエストを失敗させずにエミュレーションの
+ブロックを維持します。この 2 つの Opus 5 モデルは、ネイティブ effort を持つ GPT 系と同じく `minimal` を
+設定エラーとして拒否します。`claude-haiku-4.5`、`claude-opus-4.5`、`claude-sonnet-4.5` と、
+上記にない Kiro モデルはすべての effort でエミュレーションを使います。effort の選択肢だけではネイティブ対応を意味しません。
 
 ## `cursor`
 

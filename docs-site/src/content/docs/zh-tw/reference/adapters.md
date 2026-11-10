@@ -146,12 +146,21 @@ Kiro 的 assistant 文字本身沒有可靠的回合結束標記，但終止的 
 
 ### Reasoning effort
 
-GPT-5.6 系列使用 `additionalModelRequestFields.reasoning.effort`，`claude-opus-5` 使用
+GPT-5.6 系列使用 `additionalModelRequestFields.reasoning.effort`，`claude-opus-5` 以及下列其他模型使用
 `additionalModelRequestFields.output_config.effort`。`gpt-5.6-luna` 和 `gpt-5.6-terra`
 只透過原生欄位傳送已驗證的 `low`、`medium`、`high` 和 `max`。
 這兩個模型的原生 `xhigh` 尚未驗證，因此仍使用原有的有界 thinking 指令模擬。
-`gpt-5.6-sol` 和 `claude-opus-5` 保留現有原生檔位（`low`、`medium`、`high`、`xhigh`、`max`）。
-其他 Kiro 模型使用模擬推理；提供 effort 選項不代表原生支援。
+`gpt-5.6-sol` 和 GPT-6 系列（`gpt-6-sol`、`gpt-6-luna`、`gpt-6.1-sol`、`gpt-6.1-terra`）
+保留原生 `low`、`medium`、`high`、`xhigh`、`max`。
+
+Kiro 對 `claude-opus-5`、`claude-opus-5.5`、`claude-opus-4.8`、`claude-opus-4.7`、
+`claude-opus-4.6`、`claude-sonnet-5.5`、`claude-sonnet-5`、`claude-sonnet-4.6` 和
+`claude-haiku-5.5` 接受 `output_config.effort`。有兩個檔位改用模擬 thinking 區塊而非原生欄位：
+`claude-opus-4.6` 和 `claude-sonnet-4.6` 拒絕原生 `xhigh`；該清單中除 `claude-opus-5` 和
+`claude-opus-5.5` 以外的所有模型都把 `minimal` 視為 Kiro 原生檔位之外的 effort，因此保留模擬區塊而不會讓請求失敗。
+這兩個 Opus 5 模型把 `minimal` 當成設定錯誤拒絕，與使用原生 effort 的 GPT 系列相同。
+`claude-haiku-4.5`、`claude-opus-4.5`、`claude-sonnet-4.5` 以及上面未列出的 Kiro 模型在每個 effort 上
+都使用模擬推理；提供 effort 選項不代表原生支援。
 
 ## `cursor`
 

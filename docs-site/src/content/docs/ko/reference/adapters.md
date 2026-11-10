@@ -188,12 +188,22 @@ commentary로 유지하고 비공개 완료 툴을 한 번 검증합니다.
 
 ### Reasoning effort
 
-GPT-5.6 계열은 `additionalModelRequestFields.reasoning.effort`를, `claude-opus-5`는
-`additionalModelRequestFields.output_config.effort`를 사용합니다. `gpt-5.6-luna`와
-`gpt-5.6-terra`는 검증된 `low`, `medium`, `high`, `max`만 네이티브 필드로 전송합니다.
+GPT-5.6 계열은 `additionalModelRequestFields.reasoning.effort`를, `claude-opus-5`와
+아래에 나열한 다른 모델은 `additionalModelRequestFields.output_config.effort`를 사용합니다.
+`gpt-5.6-luna`와 `gpt-5.6-terra`는 검증된 `low`, `medium`, `high`, `max`만 네이티브 필드로 전송합니다.
 두 모델의 `xhigh`는 네이티브 동작이 검증되지 않아 기존의 제한된 thinking 지시문 방식을 유지합니다.
-`gpt-5.6-sol`과 `claude-opus-5`의 기존 네이티브 단계(`low`, `medium`, `high`, `xhigh`, `max`)는
-바뀌지 않습니다. 다른 Kiro 모델의 effort는 에뮬레이션이며, 조절 항목이 있다고 네이티브 지원을 뜻하지는 않습니다.
+`gpt-5.6-sol`과 GPT-6 계열(`gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6.1-terra`)은
+네이티브 `low`, `medium`, `high`, `xhigh`, `max`를 그대로 사용합니다.
+
+Kiro는 `claude-opus-5`, `claude-opus-5.5`, `claude-opus-4.8`, `claude-opus-4.7`,
+`claude-opus-4.6`, `claude-sonnet-5.5`, `claude-sonnet-5`, `claude-sonnet-4.6`,
+`claude-haiku-5.5`에 `output_config.effort`를 받아들입니다. 두 단계는 네이티브 필드 대신
+에뮬레이션 thinking 블록을 씁니다. `claude-opus-4.6`과 `claude-sonnet-4.6`은 네이티브 `xhigh`를
+거부하고, `claude-opus-5`와 `claude-opus-5.5`를 뺀 이 목록의 모든 모델은 `minimal`을 Kiro의
+네이티브 단계 밖 effort로 보아 요청을 실패시키는 대신 에뮬레이션 블록을 유지합니다. 이 두 Opus 5
+모델은 네이티브 effort를 쓰는 GPT 계열처럼 `minimal`을 설정 오류로 거부합니다.
+`claude-haiku-4.5`, `claude-opus-4.5`, `claude-sonnet-4.5`와 위에 없는 Kiro 모델은 모든 effort에서
+에뮬레이션을 씁니다. 조절 항목이 있다고 네이티브 지원을 뜻하지는 않습니다.
 
 ## `cursor`
 

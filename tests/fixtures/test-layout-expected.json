@@ -978,6 +978,7 @@
   "kiro-metering-usage.test.ts": "providers/kiro", "kiro-completion-with-real-tools.test.ts": "providers/kiro",
   "kiro-single-final.test.ts": "providers/kiro", "kiro-structured-output.test.ts": "providers/kiro", "kiro-structured-output-strict.test.ts": "providers/kiro",
   "kiro-stream.test.ts": "providers/kiro", "kiro-tool-byte-accounting.test.ts": "providers/kiro", "kiro-transport-parity.test.ts": "providers/kiro",
+  "kiro-tool-catalog.test.ts": "providers/kiro",
   "kiro-usage-quota.test.ts": "providers/kiro", "kiro-usage-restart.test.ts": "providers/kiro",
   "kiro-windows-cli-db-path.test.ts": "providers/kiro", "kiro-windows-cli-executable-path.test.ts": "providers/kiro",
   "kiro-wire-estimate.test.ts": "providers/kiro", "lab-activation.test.ts": "lab",

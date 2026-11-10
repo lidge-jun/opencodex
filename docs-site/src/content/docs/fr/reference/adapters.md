@@ -142,11 +142,23 @@ Si Kiro s’arrête sans appeler l’outil d’achèvement, l’adaptateur effec
 ### Effort de raisonnement
 
 Les modèles GPT-5.6 utilisent `additionalModelRequestFields.reasoning.effort`, et `claude-opus-5`
-utilise `additionalModelRequestFields.output_config.effort`. Pour `gpt-5.6-luna` et `gpt-5.6-terra`,
+ainsi que les autres modèles listés ci-dessous utilisent
+`additionalModelRequestFields.output_config.effort`. Pour `gpt-5.6-luna` et `gpt-5.6-terra`,
 seuls `low`, `medium`, `high` et `max` empruntent le chemin natif vérifié. Leur niveau `xhigh`
 conserve les instructions de réflexion bornées existantes, car ce niveau natif n’a pas été vérifié.
-`gpt-5.6-sol` et `claude-opus-5` conservent leurs niveaux natifs existants : `low`, `medium`, `high`,
-`xhigh` et `max`. Les autres modèles Kiro utilisent une émulation ; un réglage d’effort ne prouve pas une prise en charge native.
+`gpt-5.6-sol` et les modèles GPT-6 (`gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6.1-terra`)
+conservent leurs niveaux natifs `low`, `medium`, `high`, `xhigh` et `max`.
+
+Kiro accepte `output_config.effort` pour `claude-opus-5`, `claude-opus-5.5`, `claude-opus-4.8`,
+`claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5.5`, `claude-sonnet-5`, `claude-sonnet-4.6`
+et `claude-haiku-5.5`. Deux niveaux restent sur le bloc de réflexion émulé au lieu du champ natif :
+`claude-opus-4.6` et `claude-sonnet-4.6` rejettent le `xhigh` natif, et tous les modèles de cette
+liste sauf `claude-opus-5` et `claude-opus-5.5` considèrent `minimal` comme un niveau hors de
+l’échelle native de Kiro : il conserve donc le bloc émulé au lieu de faire échouer la requête. Ces
+deux modèles Opus 5 rejettent `minimal` comme une erreur de configuration, tout comme les modèles
+GPT qui portent un effort natif. `claude-haiku-4.5`, `claude-opus-4.5`, `claude-sonnet-4.5`,
+ainsi que tout modèle Kiro non listé ci-dessus, utilisent une émulation à chaque niveau ; un
+réglage d’effort ne prouve pas une prise en charge native.
 
 ## `cursor`
 
