@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 import type { TKey } from "./en";
 
 /**
@@ -139,6 +140,7 @@ export const ko: Record<TKey, string> = {
   ...connectV2Copy("ko"),
   ...startupV2Copy("ko"),
   ...proxyV2Copy("ko"),
+  ...telemetryProfileCopy("ko"),
   "claude.tierDefaults.unset": "미지정 (기존 Claude 설정 유지)",
   "claude.tierDefaults.recovery": "적용이 중단되었고 자동 복원에 실패했어요. 다시 시도하기 전에 아래 백업을 확인하세요.",
   "claude.tierDefaults.title": "CLI 티어 기본 모델",
@@ -816,6 +818,8 @@ export const ko: Record<TKey, string> = {
   "prov.port": "포트",
   "prov.default": "기본값",
   "prov.loadingConfig": "불러오는 중…",
+  "prov.targetChanged": "대시보드 대상이 바뀌었습니다. 현재 서버에서 이 양식을 다시 여세요.",
+  "prov.legacyTargetPreflight": "이 프록시는 전송 전에 저장 대상을 확인하지만 원자적으로 검증할 수는 없습니다. 대상에 고정된 저장을 사용하려면 프록시를 업데이트하세요.",
   "prov.saved": "저장됨! 적용하려면 프록시를 재시작하세요.",
   "prov.loadConfigFail": "설정을 불러오지 못했습니다",
   "prov.invalidJson": "잘못된 JSON",
@@ -3293,12 +3297,19 @@ export const ko: Record<TKey, string> = {
   "pws.pacingRemoveModel": "{model} 모델의 요청 속도 설정 제거",
   "pws.pacingRuleRequired": "프로바이더 제한이나 모델별 제한을 하나 이상 설정한 뒤 요청 속도 조절을 켜세요.",
   "pws.pacingCapInvalid": "최대 동시 요청 수는 1 이상의 정수여야 합니다.",
+  "pws.pacingValueInvalid": "유효한 속도 제한 값을 입력하세요. RPM 1/60~60,000, 지연 1~3,600,000ms, 동시성 1 이상.",
   "pws.saving": "저장 중…",
   "pws.settingsSaved": "설정이 저장되었습니다.",
   "pws.accountModeSaved": "계정 모드가 저장되었습니다.",
   "pws.accountModeFailed": "계정 모드를 전환할 수 없습니다.",
   "pws.accountModeConfirm": "OpenAI 계정 모드를 전환할까요? 실행 중인 대화가 다른 모드의 계정 세트로 다시 연결되며, 할당량 사용량은 새 모드로 집계됩니다.",
   "pws.settingsUnsavedBar": "저장하지 않은 변경사항이 있습니다.",
+  "pws.draftTarget": "편집 중: {target}",
+  "pws.draftConflict": "편집하는 동안 이 서버에 저장된 설정이 바뀌었습니다. 초안은 그대로 보관되어 있습니다. 유지할 값을 선택하세요.",
+  "pws.draftConflictFields": "양쪽에서 바뀐 필드입니다. 초안을 수정하거나 저장된 값을 사용하세요:",
+  "pws.draftConflictUseSaved": "저장된 값 사용",
+  "pws.draftConflictKeepDraft": "내 초안 유지",
+  "pws.draftConflictResolveFirst": "저장하기 전에 유지할 값을 선택하세요.",
   "pws.unsavedLeaveBody": "저장하지 않은 변경사항이 있습니다. 나가기 전에 저장하시겠습니까?",
   "pws.unsavedLeaveTitle": "미저장 변경사항",
   "pws.attentionRequired": "주의 필요",

@@ -1,4 +1,12 @@
 import { handleIngest } from "./ingest";
+import { handleLeaderboard, handleProfileByHandle } from "./leaderboard";
+import { profileError } from "./profile-http";
+import {
+  handleCreateProfile,
+  handleDeleteOwnProfile,
+  handleGetOwnProfile,
+  handleSubmitProfileDay,
+} from "./profiles";
 import { pruneCollectorTables } from "./prune";
 import { handleStats } from "./stats";
 import type { CollectorEnv, ExecutionContext, ScheduledController } from "./types";
@@ -51,6 +59,45 @@ function jsonError(status: number, error: string, extraHeaders?: Record<string, 
   });
 }
 
+/**
+ * Opt-in profile routes. Write and bearer routes get no CORS preflight, so a browser page cannot
+ * send the profile secret cross-origin; only the public reads are preflighted.
+ */
+async function handleProfileRoutes(
+  request: Request,
+  env: CollectorEnv,
+  pathname: string,
+  method: string,
+  now: number,
+): Promise<Response | null> {
+  const methodNotAllowed = (allow: string) => profileError(405, "method not allowed", { allow });
+  if (pathname === "/v1/leaderboard") {
+    if (method === "OPTIONS") return handlePreflight(request, "GET, OPTIONS");
+    if (method !== "GET") return withCors(request, methodNotAllowed("GET, OPTIONS"));
+    return withCors(request, await handleLeaderboard(request, env, now));
+  }
+  const byHandle = /^\/v1\/profiles\/by-handle\/([^/]+)$/.exec(pathname);
+  if (byHandle) {
+    if (method === "OPTIONS") return handlePreflight(request, "GET, OPTIONS");
+    if (method !== "GET") return withCors(request, methodNotAllowed("GET, OPTIONS"));
+    return withCors(request, await handleProfileByHandle(request, env, byHandle[1]!, now));
+  }
+  if (pathname === "/v1/profiles") {
+    if (method !== "POST") return methodNotAllowed("POST");
+    return handleCreateProfile(request, env, now);
+  }
+  if (pathname === "/v1/profiles/me/days") {
+    if (method !== "POST") return methodNotAllowed("POST");
+    return handleSubmitProfileDay(request, env, now);
+  }
+  if (pathname === "/v1/profiles/me") {
+    if (method === "GET") return handleGetOwnProfile(request, env, now);
+    if (method === "DELETE") return handleDeleteOwnProfile(request, env, now);
+    return methodNotAllowed("GET, DELETE");
+  }
+  return null;
+}
+
 export async function handleCollectorFetch(
   request: Request,
   env: CollectorEnv,
@@ -86,6 +133,11 @@ export async function handleCollectorFetch(
         );
       }
       return withCors(request, await handleStats(request, env, now));
+    }
+
+    if (pathname === "/v1/leaderboard" || pathname.startsWith("/v1/profiles")) {
+      const profileResponse = await handleProfileRoutes(request, env, pathname, method, now);
+      if (profileResponse) return profileResponse;
     }
 
     if (method === "OPTIONS") {

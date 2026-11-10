@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 import type { TKey } from "./en";
 
 /**
@@ -139,6 +140,7 @@ export const fr: Record<TKey, string> = {
   ...connectV2Copy("fr"),
   ...startupV2Copy("fr"),
   ...proxyV2Copy("fr"),
+  ...telemetryProfileCopy("fr"),
   "claude.tierDefaults.unset": "Non défini (conserver le réglage Claude)",
   "claude.tierDefaults.recovery": "Application arrêtée et restauration automatique échouée. Vérifiez la sauvegarde ci-dessous avant de réessayer.",
   "claude.tierDefaults.title": "Modèles par défaut du CLI",
@@ -817,6 +819,8 @@ export const fr: Record<TKey, string> = {
   "prov.port": "Port",
   "prov.default": "Par défaut",
   "prov.loadingConfig": "Chargement…",
+  "prov.targetChanged": "La cible du tableau de bord a changé. Rouvrez ce formulaire sur le serveur actuel.",
+  "prov.legacyTargetPreflight": "Ce proxy vérifie la cible d’enregistrement avant l’envoi, mais ne peut pas la vérifier de façon atomique. Mettez à jour le proxy pour des enregistrements liés à la cible.",
   "prov.saved": "Enregistré ! Redémarrez le proxy pour appliquer les modifications.",
   "prov.loadConfigFail": "Échec du chargement de la configuration",
   "prov.invalidJson": "JSON non valide",
@@ -2044,6 +2048,7 @@ export const fr: Record<TKey, string> = {
   "pws.pacingRemoveModel": "Supprimer le remplacement du cadencement des requêtes pour {model}",
   "pws.pacingRuleRequired": "Activez le cadencement des requêtes seulement après avoir défini une limite de fournisseur ou un remplacement par modèle.",
   "pws.pacingCapInvalid": "Le nombre maximal de requêtes simultanées doit être un nombre entier supérieur ou égal à 1.",
+  "pws.pacingValueInvalid": "Saisissez une valeur de cadencement valide : RPM 1/60–60 000, délai 1–3 600 000 ms, concurrence 1 ou plus.",
   "pws.providerId": "ID du fournisseur",
   "pws.reauth": "Réauthentification requise",
   "pws.reauthenticate": "Réauthentifier",
@@ -2076,6 +2081,12 @@ export const fr: Record<TKey, string> = {
   "pws.accountModeFailed": "Impossible de changer de mode de compte.",
   "pws.accountModeConfirm": "Changer le mode de compte OpenAI ? Les conversations en cours seront réaffectées à l’ensemble de comptes de l’autre mode, et l’utilisation du quota sera suivie selon le nouveau mode.",
   "pws.settingsUnsavedBar": "Vous avez des modifications non enregistrées.",
+  "pws.draftTarget": "Modification : {target}",
+  "pws.draftConflict": "Les paramètres enregistrés sur ce serveur ont changé pendant votre modification. Votre brouillon est conservé ; choisissez les valeurs à garder.",
+  "pws.draftConflictFields": "Ces champs ont changé des deux côtés. Modifiez le brouillon ou utilisez les valeurs enregistrées :",
+  "pws.draftConflictUseSaved": "Utiliser les valeurs enregistrées",
+  "pws.draftConflictKeepDraft": "Garder mon brouillon",
+  "pws.draftConflictResolveFirst": "Choisissez les valeurs à garder avant d'enregistrer.",
   "pws.unsavedLeaveBody": "Vous avez des modifications non enregistrées. Les enregistrer avant de quitter ?",
   "pws.unsavedLeaveTitle": "Modifications non enregistrées",
   "pws.attentionRequired": "Intervention requise",

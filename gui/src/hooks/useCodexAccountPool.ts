@@ -1,9 +1,11 @@
 import { readUsageResponseJson, usageSummary30dResourceKey } from "../usage-summary-resource";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createBoundedFetch } from "../bounded-fetch";
 import { startVisibilityPoll } from "../visibility-poll";
 import { normalizeAccountPriority } from "../account-priority";
 import { useKeyedClientResource } from "../client-resource";
+import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
+import { useRenderTargetCapture } from "../use-render-target-capture";
 import { extractAutoSwitchThresholdPayload } from "../codex-auto-switch";
 import { quotaAutoRefreshAvailability, type AccountQuota } from "../codex-quota-utils";
 import { accountNeedsReauth } from "../oauth-health-display";
@@ -108,7 +110,12 @@ export type CodexAccountLoadState = "loading" | "ready" | "error";
 
 export type CodexAccountActionResult<T extends object = Record<never, never>> =
   | ({ ok: true } & T)
-  | { ok: false; reason: "busy" | "request" | "reload" | "pin_changed" };
+  /**
+   * `stale` means the dashboard target changed while the mutation was in flight. The
+   * request may have reached the old server; its result belongs there, so callers must
+   * not announce or apply it on the new target.
+   */
+  | { ok: false; reason: "busy" | "request" | "reload" | "pin_changed" | "stale" };
 
 /**
  * The auto-switch threshold arrives on the same /active response as the account list.
@@ -124,6 +131,23 @@ export interface CodexAccountLoadObserver {
 
 /** Opaque lease. Two callers pausing for the same reason must not cancel each other. */
 export type PauseToken = { readonly __brand: "codex-pool-pause" };
+
+/**
+ * One in-flight mutation's claim on a gate.
+ *
+ * The object identity is the release token: a completion may clear the gate only if the ref
+ * still holds this exact lease, so an older target's response cannot release a newer target's
+ * mutation. The epoch scopes the claim to the target that issued it; a lease from another
+ * epoch is not "in flight" here, because its result cannot apply to this target and blocking
+ * on it would strand every action behind a re-pair.
+ */
+interface MutationLease {
+  epoch: number;
+}
+
+function leaseHeld(lease: MutationLease | null, epoch: number): boolean {
+  return lease !== null && lease.epoch === epoch;
+}
 
 export interface CodexAccountPoolController {
   accounts: CodexAccountEntry[];
@@ -201,12 +225,16 @@ function normalizeAccountAutoSwitchThreshold(value: unknown): number | null {
     : null;
 }
 
-export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccountPoolController {
-  const seed = lastGoodByBase.get(apiBase);
+export function useCodexAccountPool(apiBase: string, enabled = true, targetKey?: string): CodexAccountPoolController {
+  const seedKey = targetKey ?? apiBase;
+  // The hook's render owns the target for its loads and actions; a module target change
+  // that has not re-rendered this hook cannot retarget a stale read or mutation.
+  const renderCapture = useRenderTargetCapture(apiBase, targetKey);
+  const seed = lastGoodByBase.get(seedKey);
   const [accounts, setAccounts] = useState<CodexAccountEntry[]>(() => seed?.accounts ?? []);
   const usage30d = useKeyedClientResource<CodexAccountUsageSummary>(
-    usageSummary30dResourceKey(apiBase, "codex"),
-    [apiBase],
+    usageSummary30dResourceKey(apiBase, "codex", seedKey),
+    [apiBase, seedKey],
     async (signal) => {
       const response = await fetch(`${apiBase}/api/usage?range=30d&surface=codex`, { signal });
       return readUsageResponseJson<CodexAccountUsageSummary>(response, "account usage load failed");
@@ -253,18 +281,79 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   if (observersRef.current === null) observersRef.current = new Set();
   // Last /active payload an actual read returned. Surfaces that mount after a
   // load already finished read it to seed their UI instead of waiting a poll interval.
-  const lastActiveRef = useRef<{ value: unknown } | null>(null);
-  const switchingRef = useRef<string | null>(null);
+  // Keyed by the target that answered: a payload from another target seeds nothing.
+  const lastActiveRef = useRef<{ key: string; value: unknown } | null>(null);
+  const switchingRef = useRef<MutationLease | null>(null);
   const hasAccountsRef = useRef(Boolean(seed?.accounts.length));
   // Distinct from hasAccountsRef: empty successful loads still count as loaded so soft
   // polls do not flip the UI back to the cold skeleton.
   const hasLoadedRef = useRef(seed != null);
-  const pauseMutationRef = useRef<"bulk" | { accountId: string } | null>(null);
+  // A logical target change must not leave the previous target's rows looking ready.
+  const previousSeedKeyRef = useRef(seedKey);
+  // The rows clear while rendering, so the new target never paints the previous target's
+  // accounts for a frame. The refs below move in an effect: they are read by in-flight
+  // loads, and a render-phase ref write is what the compiler rejects.
+  const [syncedSeedKey, setSyncedSeedKey] = useState(seedKey);
+  // Which reset the in-flight counter belongs to. The seed key alone cannot say: A -> B -> A
+  // returns to the same key, and a read issued before the first A must not give back an
+  // increment the clear already discarded.
+  const [targetEpoch, setTargetEpoch] = useState(0);
+  if (syncedSeedKey !== seedKey) {
+    setSyncedSeedKey(seedKey);
+    setTargetEpoch(targetEpoch + 1);
+    setAccounts([]);
+    setActiveId(null);
+    setLoadState("loading");
+    setRefreshFailed(false);
+    setActivePinnedId(null);
+    setFirstAttemptSettled(false);
+    setInflightCount(0);
+    // A mutation still running for the previous target is not this target's busy state, and
+    // its gate is not this target's gate. The lease refs keep their own claim; this is what
+    // the new target paints until its own mutation takes one.
+    setSwitchingId(null);
+    setPauseUpdatingId(null);
+    setPriorityUpdatingId(null);
+    setAutoSwitchUpdatingId(null);
+    setCreditsAfterLimitUpdatingId(null);
+    setPausingExhausted(false);
+  }
+  // The target identity this render owns, readable by an in-flight load's continuation.
+  // A layout effect is early enough: a superseded read settles in a microtask after the
+  // commit's layout phase but before its passive effects, so a passive ref write would
+  // still name the old target when the response lands.
+  const seedKeyRef = useRef(seedKey);
+  const targetEpochRef = useRef(targetEpoch);
+  useLayoutEffect(() => {
+    seedKeyRef.current = seedKey;
+    targetEpochRef.current = targetEpoch;
+    // Both belong to the target that produced them. A pending switch left behind would
+    // spend its one reconciliation on the new target's first /active read, and the last
+    // payload would seed the new target's threshold and strategy with the old one's.
+    pendingActiveIdRef.current = null;
+    lastActiveRef.current = null;
+  }, [seedKey, targetEpoch]);
+  useEffect(() => {
+    if (previousSeedKeyRef.current === seedKey) return;
+    previousSeedKeyRef.current = seedKey;
+    loadGenerationRef.current += 1;
+    hasAccountsRef.current = false;
+    hasLoadedRef.current = false;
+    initialLoadKeyRef.current = null;
+  }, [seedKey]);
+  const pauseMutationRef = useRef<MutationLease | null>(null);
   // Its own gate, deliberately not the pause one: re-ordering one account and pausing
   // another are independent writes, and a shared ref would make either reject the other.
-  const priorityMutationRef = useRef<{ accountId: string } | null>(null);
-  const autoSwitchMutationRef = useRef<{ accountId: string } | null>(null);
-  const creditsAfterLimitMutationRef = useRef(false);
+  const priorityMutationRef = useRef<MutationLease | null>(null);
+  const autoSwitchMutationRef = useRef<MutationLease | null>(null);
+  const creditsAfterLimitMutationRef = useRef<MutationLease | null>(null);
+  // A standalone embedded surface names its server with the apiBase prop, so a prop change
+  // is a target change even though the module-level topology never moved.
+  const apiBaseRef = useRef(apiBase);
+  useLayoutEffect(() => { apiBaseRef.current = apiBase; }, [apiBase]);
+  /** May this action still apply its result here? A ref read keeps this callback stable. */
+  const captureIsCurrent = useCallback((capture: ApiTargetCapture) =>
+    isApiTargetCaptureCurrent(capture) && capture.apiBase === apiBaseRef.current, []);
 
   const subscribeLoadObserver = useCallback((observer: CodexAccountLoadObserver) => {
     observersRef.current!.add(observer);
@@ -278,20 +367,41 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
 
   /** Last threshold an actual read returned, or undefined when none has succeeded yet. */
   const readLastThreshold = useCallback(
-    () => extractAutoSwitchThresholdPayload(lastActiveRef.current?.value),
-    [],
+    () => (lastActiveRef.current?.key === seedKey
+      ? extractAutoSwitchThresholdPayload(lastActiveRef.current.value)
+      : undefined),
+    [seedKey],
   );
 
   /** Full last /active payload, or undefined when none has succeeded yet. */
-  const readLastActive = useCallback(() => lastActiveRef.current?.value, []);
+  const readLastActive = useCallback(
+    () => (lastActiveRef.current?.key === seedKey ? lastActiveRef.current.value : undefined),
+    [seedKey],
+  );
 
   const load = useCallback(async (refreshQuota = false, options: { validatePending?: boolean } = {}): Promise<boolean> => {
+    const capture = renderCapture;
+    const targetSeedKey = seedKey;
+    const epoch = targetEpoch;
+    // A callback captured by an earlier render can still be invoked after this surface moved
+    // (a poll timer armed for A, say). Its request belongs to the target that render owned, so
+    // it must not start here at all: the counter and the first-attempt flag it would touch are
+    // the new target's.
+    if (!captureIsCurrent(capture) || seedKeyRef.current !== targetSeedKey) return false;
     const generation = ++loadGenerationRef.current;
     const validatePending = options.validatePending === true;
+    /**
+     * May this read still write the surface? The generation alone is not enough: the render
+     * that clears the rows bumps it in a passive effect, so a response that lands between the
+     * target's commit and that flush still matches. The captured target is what moved.
+     */
+    const loadIsCurrent = () => loadGenerationRef.current === generation
+      && captureIsCurrent(capture)
+      && seedKeyRef.current === targetSeedKey;
     // Validation can include token recovery, WHAM and two 30s model attempts.
     // Budget per known row (conservatively ignoring server parallelism), plus
     // native-main lookup time. Ordinary reads retain their short polling deadline.
-    const knownAccounts = lastGoodByBase.get(apiBase)?.accounts.length ?? 0;
+    const knownAccounts = lastGoodByBase.get(seedKey)?.accounts.length ?? 0;
     const bounded = createBoundedFetch(validatePending ? 30_000 + 120_000 * Math.max(1, knownAccounts) : 20_000);
     // A periodic read must not supersede this longer-running explicit operation.
     const validationLease = validatePending ? {} as PauseToken : null;
@@ -315,13 +425,13 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
 
       const accountsTask = (async (): Promise<boolean> => {
         try {
-          const response = await fetch(`${apiBase}/api/codex-auth/accounts${validatePending ? "/refresh" : refreshQuota ? "?refresh=1" : ""}`, {
+          const response = await targetFetch(capture, `${apiBase}/api/codex-auth/accounts${validatePending ? "/refresh" : refreshQuota ? "?refresh=1" : ""}`, {
             method: validatePending ? "POST" : "GET",
             signal: bounded.signal,
           });
           if (!response.ok) throw new Error("account load failed");
           const payload = await response.json();
-          if (loadGenerationRef.current === generation) {
+          if (loadIsCurrent()) {
             // Selection order is required downstream (badge, select). Normalizing here keeps
             // a payload without it from rendering a NaN order on every card.
             nextAccounts = ((payload.accounts ?? []) as CodexAccountEntry[]).map(account => {
@@ -359,10 +469,10 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
 
       const activeTask = (async (): Promise<boolean> => {
         try {
-          const response = await fetch(`${apiBase}/api/codex-auth/active`, { signal: bounded.signal });
+          const response = await targetFetch(capture, `${apiBase}/api/codex-auth/active`, { signal: bounded.signal });
           if (!response.ok) throw new Error("active account load failed");
           const active = await response.json();
-          if (loadGenerationRef.current === generation) {
+          if (loadIsCurrent()) {
             const serverActiveId = active.activeCodexAccountId ?? null;
             const pending = pendingActiveIdRef.current;
             if (pending && pending.staleReadsRemaining > 0 && serverActiveId !== pending.id) {
@@ -374,7 +484,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
               nextActiveId = serverActiveId;
               setActiveId(serverActiveId);
             }
-            lastActiveRef.current = { value: active };
+            lastActiveRef.current = { key: targetSeedKey, value: active };
             setActivePinnedId(typeof active.pinnedAccountId === "string" ? active.pinnedAccountId : null);
             for (const observer of observers) {
               observer.acceptActiveRead(active, revisions.get(observer)!);
@@ -382,7 +492,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
           }
           return true;
         } catch {
-          if (loadGenerationRef.current === generation) {
+          if (loadIsCurrent()) {
             for (const observer of observers) observer.rejectActiveRead();
           }
           return false;
@@ -390,13 +500,13 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
       })();
 
       const [accountsOk, activeOk] = await Promise.all([accountsTask, activeTask]);
-      // A newer load already superseded this one; leave its state in place.
-      if (loadGenerationRef.current !== generation) return false;
+      // A newer load, or a target change this read predates, owns the surface now.
+      if (!loadIsCurrent()) return false;
       if (accountsOk) {
         setLoadState("ready");
         hasLoadedRef.current = true;
-        const prior = lastGoodByBase.get(apiBase);
-        lastGoodByBase.set(apiBase, {
+        const prior = lastGoodByBase.get(seedKey);
+        lastGoodByBase.set(seedKey, {
           accounts: nextAccounts ?? prior?.accounts ?? [],
           activeId: nextActiveId !== undefined ? nextActiveId : (prior?.activeId ?? null),
         });
@@ -414,11 +524,15 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
         pauseTokensRef.current!.delete(validationLease);
         setPauseCount(pauseTokensRef.current!.size);
       }
-      setInflightCount(count => Math.max(0, count - 1));
-      setFirstAttemptSettled(true);
+      // The counter belongs to the reset that created it. A read from before that reset must not
+      // give back an increment the render-phase clear already discarded, while a read superseded
+      // by a newer read on the same target still has to release its own. The first-attempt flag
+      // belongs to the newest read only.
+      if (targetEpochRef.current === epoch) setInflightCount(count => Math.max(0, count - 1));
+      if (loadIsCurrent()) setFirstAttemptSettled(true);
     }
   // oxlint-disable-next-line react/react-compiler -- preserve existing callback dependency semantics during Oxlint migration
-  }, [apiBase]);
+  }, [apiBase, seedKey, targetEpoch, renderCapture, captureIsCurrent]);
 
   // Initial load plus background refresh. Owned here so mounting or unmounting a surface
   // never changes the request count.
@@ -438,10 +552,10 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     //
     // Guarded per identity because StrictMode runs this effect twice on mount: without the guard
     // the uncancellable microtask fires two identical loads, doubling /accounts and /active.
-    if (initialLoadKeyRef.current === apiBase) return;
-    initialLoadKeyRef.current = apiBase;
+    if (initialLoadKeyRef.current === seedKey) return;
+    initialLoadKeyRef.current = seedKey;
     void Promise.resolve().then(() => { void load(); });
-  }, [apiBase, enabled, load]);
+  }, [apiBase, seedKey, enabled, load]);
 
   // Soft /accounts returns before background WHAM finishes. Re-poll cheaply until
   // credentialed rows have quota (or the user navigates away). Keyed on the boolean so
@@ -477,15 +591,28 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   }, []);
 
   const switchAccount = useCallback(async (id: string | null, options?: { expectedPinnedAccountId: string }) => {
+    const capture = renderCapture;
+    const epoch = targetEpochRef.current;
+    // A callback captured by an earlier render belongs to the target that render owned. Its
+    // request may not take this target's gate, and its result may not release it.
+    if (epoch !== targetEpoch || !captureIsCurrent(capture)) return { ok: false, reason: "stale" } as const;
+    if (options?.expectedPinnedAccountId
+      && !accounts.some(account => account.id === options.expectedPinnedAccountId
+        || (options.expectedPinnedAccountId === "__main__" && account.isMain))) {
+      return { ok: false, reason: "pin_changed" } as const;
+    }
     // Cross-gated with the order write, not just with itself: both PUTs move the pin,
     // and in opposite directions, so letting them overlap lets the client settle on
     // the inverse of the server's final pin until a reload happens to correct it.
-    if (switchingRef.current || priorityMutationRef.current) return { ok: false, reason: "busy" } as const;
-    switchingRef.current = id ?? "__main__";
+    if (leaseHeld(switchingRef.current, epoch) || leaseHeld(priorityMutationRef.current, epoch)) {
+      return { ok: false, reason: "busy" } as const;
+    }
+    const lease: MutationLease = { epoch };
+    switchingRef.current = lease;
     setSwitchingId(id ?? "__main__");
     let failure: "request" | "pin_changed" = "request";
     try {
-      const response = await fetch(`${apiBase}/api/codex-auth/active`, {
+      const response = await targetFetch(capture, `${apiBase}/api/codex-auth/active`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accountId: id, ...(options ? { expectedPinnedAccountId: options.expectedPinnedAccountId } : {}) }),
@@ -495,6 +622,9 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
         if (error.code === "account_pin_changed") failure = "pin_changed";
         throw new Error("account switch failed");
       }
+      // The accepted write belongs to the target it was sent to. After a switch, its
+      // active id, pin and reload must not be applied to the new target's rows.
+      if (!captureIsCurrent(capture)) return { ok: false, reason: "stale" } as const;
       const result = await response.json().catch(() => ({})) as { activeCodexAccountId?: string | null };
       const selectedId = result.activeCodexAccountId ?? id;
       pendingActiveIdRef.current = {
@@ -512,7 +642,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
       void load();
       return { ok: true, activeId: selectedId ?? null } as const;
     } catch {
-      if (id === null) {
+      if (id === null && captureIsCurrent(capture)) {
         // A lost reply or unconfirmed publication can already have changed the saved pin.
         // Observe /active before feedback; do not let an older optimistic pick mask it.
         pendingActiveIdRef.current = null;
@@ -520,37 +650,48 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
       }
       return { ok: false, reason: failure } as const;
     } finally {
-      switchingRef.current = null;
-      setSwitchingId(null);
+      // Only this lease may release the gate; a newer target's mutation must not be
+      // cancelled by an older completion.
+      if (switchingRef.current === lease) {
+        switchingRef.current = null;
+        setSwitchingId(null);
+      }
     }
-  }, [apiBase, load]);
+  }, [accounts, apiBase, captureIsCurrent, load, renderCapture, targetEpoch]);
 
   const saveAlias = useCallback(async (id: string, alias: string) => {
+    const capture = renderCapture;
     try {
-      const response = await fetch(`${apiBase}/api/codex-auth/accounts/alias`, {
+      const response = await targetFetch(capture, `${apiBase}/api/codex-auth/accounts/alias`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, alias: alias.trim() }),
       });
       if (!response.ok) return { ok: false, reason: "request" } as const;
+      if (!captureIsCurrent(capture)) return { ok: false, reason: "stale" } as const;
       await load();
       return { ok: true } as const;
     } catch {
       return { ok: false, reason: "request" } as const;
     }
-  }, [apiBase, load]);
+  }, [apiBase, captureIsCurrent, load, renderCapture]);
 
   const setAccountPaused = useCallback(async (id: string, paused: boolean) => {
-    if (pauseMutationRef.current) return { ok: false, reason: "busy" } as const;
-    pauseMutationRef.current = { accountId: id };
+    const capture = renderCapture;
+    const epoch = targetEpochRef.current;
+    if (epoch !== targetEpoch || !captureIsCurrent(capture)) return { ok: false, reason: "stale" } as const;
+    if (leaseHeld(pauseMutationRef.current, epoch)) return { ok: false, reason: "busy" } as const;
+    const lease: MutationLease = { epoch };
+    pauseMutationRef.current = lease;
     setPauseUpdatingId(id);
     try {
-      const response = await fetch(`${apiBase}/api/codex-auth/accounts/pause`, {
+      const response = await targetFetch(capture, `${apiBase}/api/codex-auth/accounts/pause`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, paused }),
       });
       if (!response.ok) return { ok: false, reason: "request" } as const;
+      if (!captureIsCurrent(capture)) return { ok: false, reason: "stale" } as const;
       const raw = await response.json().catch(() => ({}));
       const result = (raw && typeof raw === "object" ? raw : {}) as { activeCodexAccountId?: string | null };
       setAccounts(current => current.map(account => (
@@ -576,19 +717,27 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     } catch {
       return { ok: false, reason: "request" } as const;
     } finally {
-      pauseMutationRef.current = null;
-      setPauseUpdatingId(null);
+      if (pauseMutationRef.current === lease) {
+        pauseMutationRef.current = null;
+        setPauseUpdatingId(null);
+      }
     }
-  }, [apiBase, load]);
+  }, [apiBase, captureIsCurrent, load, renderCapture, targetEpoch]);
 
   const setAccountPriority = useCallback(async (id: string, priority: number | null) => {
+    const capture = renderCapture;
+    const epoch = targetEpochRef.current;
+    if (epoch !== targetEpoch || !captureIsCurrent(capture)) return { ok: false, reason: "stale" } as const;
     // The other half of the cross-gate in switchAccount: an order write clears the
     // pin that a switch sets, so the two cannot be in flight together.
-    if (priorityMutationRef.current || switchingRef.current) return { ok: false, reason: "busy" } as const;
-    priorityMutationRef.current = { accountId: id };
+    if (leaseHeld(priorityMutationRef.current, epoch) || leaseHeld(switchingRef.current, epoch)) {
+      return { ok: false, reason: "busy" } as const;
+    }
+    const lease: MutationLease = { epoch };
+    priorityMutationRef.current = lease;
     setPriorityUpdatingId(id);
     try {
-      const response = await fetch(`${apiBase}/api/codex-auth/accounts/priority`, {
+      const response = await targetFetch(capture, `${apiBase}/api/codex-auth/accounts/priority`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, priority }),
@@ -596,6 +745,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
       // A rejected write leaves the row alone, so the card snaps back to the last
       // confirmed order instead of showing a value the server never accepted.
       if (!response.ok) return { ok: false, reason: "request" } as const;
+      if (!captureIsCurrent(capture)) return { ok: false, reason: "stale" } as const;
       const raw = await response.json().catch(() => ({}));
       const result = (raw && typeof raw === "object" ? raw : {}) as { priority?: unknown };
       const stored = normalizeAccountPriority(result.priority ?? priority);
@@ -620,25 +770,32 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     } catch {
       return { ok: false, reason: "request" } as const;
     } finally {
-      priorityMutationRef.current = null;
-      setPriorityUpdatingId(null);
+      if (priorityMutationRef.current === lease) {
+        priorityMutationRef.current = null;
+        setPriorityUpdatingId(null);
+      }
     }
-  }, [apiBase, load]);
+  }, [apiBase, captureIsCurrent, load, renderCapture, targetEpoch]);
 
   const setAccountAutoSwitchThreshold = useCallback(async (
     id: string,
     threshold: number | null,
   ) => {
-    if (autoSwitchMutationRef.current) return { ok: false, reason: "busy" } as const;
-    autoSwitchMutationRef.current = { accountId: id };
+    const capture = renderCapture;
+    const epoch = targetEpochRef.current;
+    if (epoch !== targetEpoch || !captureIsCurrent(capture)) return { ok: false, reason: "stale" } as const;
+    if (leaseHeld(autoSwitchMutationRef.current, epoch)) return { ok: false, reason: "busy" } as const;
+    const lease: MutationLease = { epoch };
+    autoSwitchMutationRef.current = lease;
     setAutoSwitchUpdatingId(id);
     try {
-      const response = await fetch(`${apiBase}/api/codex-auth/auto-switch`, {
+      const response = await targetFetch(capture, `${apiBase}/api/codex-auth/auto-switch`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, threshold }),
       });
       if (!response.ok) return { ok: false, reason: "request" } as const;
+      if (!captureIsCurrent(capture)) return { ok: false, reason: "stale" } as const;
       const raw = await response.json().catch(() => ({}));
       const result = (raw && typeof raw === "object" ? raw : {}) as {
         autoSwitchThresholdOverride?: unknown;
@@ -656,10 +813,12 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     } catch {
       return { ok: false, reason: "request" } as const;
     } finally {
-      autoSwitchMutationRef.current = null;
-      setAutoSwitchUpdatingId(null);
+      if (autoSwitchMutationRef.current === lease) {
+        autoSwitchMutationRef.current = null;
+        setAutoSwitchUpdatingId(null);
+      }
     }
-  }, [apiBase, load]);
+  }, [apiBase, captureIsCurrent, load, renderCapture, targetEpoch]);
 
   // One writer for the per-account and the global switch: they edit the same list, so a second
   // write while one is in flight is refused rather than raced.
@@ -668,26 +827,33 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     body: { id: string; creditsAfterLimit: boolean } | { all: boolean },
     apply: (account: CodexAccountEntry) => CodexAccountEntry,
   ) => {
-    if (creditsAfterLimitMutationRef.current) return { ok: false, reason: "busy" } as const;
-    creditsAfterLimitMutationRef.current = true;
+    const capture = renderCapture;
+    const epoch = targetEpochRef.current;
+    if (epoch !== targetEpoch || !captureIsCurrent(capture)) return { ok: false, reason: "stale" } as const;
+    if (leaseHeld(creditsAfterLimitMutationRef.current, epoch)) return { ok: false, reason: "busy" } as const;
+    const lease: MutationLease = { epoch };
+    creditsAfterLimitMutationRef.current = lease;
     setCreditsAfterLimitUpdatingId(updatingId);
     try {
-      const response = await fetch(`${apiBase}/api/codex-auth/accounts/credits`, {
+      const response = await targetFetch(capture, `${apiBase}/api/codex-auth/accounts/credits`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       if (!response.ok) return { ok: false, reason: "request" } as const;
+      if (!captureIsCurrent(capture)) return { ok: false, reason: "stale" } as const;
       setAccounts(current => current.map(apply));
       void load();
       return { ok: true } as const;
     } catch {
       return { ok: false, reason: "request" } as const;
     } finally {
-      creditsAfterLimitMutationRef.current = false;
-      setCreditsAfterLimitUpdatingId(null);
+      if (creditsAfterLimitMutationRef.current === lease) {
+        creditsAfterLimitMutationRef.current = null;
+        setCreditsAfterLimitUpdatingId(null);
+      }
     }
-  }, [apiBase, load]);
+  }, [apiBase, captureIsCurrent, load, renderCapture, targetEpoch]);
 
   const setAccountCreditsAfterLimit = useCallback((id: string, enabled: boolean) => writeCreditsAfterLimit(
     id,
@@ -702,12 +868,17 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   ), [writeCreditsAfterLimit]);
 
   const pauseExhaustedAccounts = useCallback(async () => {
-    if (pauseMutationRef.current) return { ok: false, reason: "busy" } as const;
-    pauseMutationRef.current = "bulk";
+    const capture = renderCapture;
+    const epoch = targetEpochRef.current;
+    if (epoch !== targetEpoch || !captureIsCurrent(capture)) return { ok: false, reason: "stale" } as const;
+    if (leaseHeld(pauseMutationRef.current, epoch)) return { ok: false, reason: "busy" } as const;
+    const lease: MutationLease = { epoch };
+    pauseMutationRef.current = lease;
     setPausingExhausted(true);
     try {
-      const response = await fetch(`${apiBase}/api/codex-auth/accounts/pause-exhausted`, { method: "PUT" });
+      const response = await targetFetch(capture, `${apiBase}/api/codex-auth/accounts/pause-exhausted`, { method: "PUT" });
       if (!response.ok) return { ok: false, reason: "request" } as const;
+      if (!captureIsCurrent(capture)) return { ok: false, reason: "stale" } as const;
       const raw = await response.json().catch(() => ({}));
       const result = (raw && typeof raw === "object" ? raw : {}) as {
         pausedAccountIds?: string[];
@@ -736,18 +907,22 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     } catch {
       return { ok: false, reason: "request" } as const;
     } finally {
-      pauseMutationRef.current = null;
-      setPausingExhausted(false);
+      if (pauseMutationRef.current === lease) {
+        pauseMutationRef.current = null;
+        setPausingExhausted(false);
+      }
     }
-  }, [apiBase, load]);
+  }, [apiBase, captureIsCurrent, load, renderCapture, targetEpoch]);
 
   const removeAccount = useCallback(async (id: string) => {
+    const capture = renderCapture;
     try {
-      const response = await fetch(
+      const response = await targetFetch(capture,
         `${apiBase}/api/codex-auth/accounts?id=${encodeURIComponent(id)}`,
         { method: "DELETE" },
       );
       if (!response.ok) return { ok: false, reason: "request" } as const;
+      if (!captureIsCurrent(capture)) return { ok: false, reason: "stale" } as const;
       const completion = codexAccountMutationCompletion(
         await response.json().catch(() => ({})),
       );
@@ -756,7 +931,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     } catch {
       return { ok: false, reason: "request" } as const;
     }
-  }, [apiBase, load]);
+  }, [apiBase, captureIsCurrent, load, renderCapture]);
 
   const syncAfterAccountAdded = useCallback(async () => {
     const ok = await load();
