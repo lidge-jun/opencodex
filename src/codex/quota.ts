@@ -329,10 +329,10 @@ function resetTicketWasRedeemed(
  * 3. A reset ticket was redeemed (`resetTicketWasRedeemed`) — the window's usage was zeroed on
  *    purpose, so the pre-redemption percentage describes a window nobody is spending in any more.
  *
- * Why this matters beyond a cosmetic bar: the main-account hard lock reads the *policy* snapshot
- * and gates quota auto-refresh admission. A percentage that can never expire therefore cannot be
- * replaced by a fresh measurement either — the account reports "usage limit reached" indefinitely
- * while upstream shows a nearly-empty window, with no automatic path back to the truth.
+ * Why this matters beyond a cosmetic bar: this display/rotation snapshot feeds quota exhaustion and
+ * the pool rotation score. A percentage that can never expire keeps a recovered account excluded and
+ * its card at "usage limit reached" while upstream shows a nearly-empty window. The main-account hard
+ * lock is unaffected: it reads the separate policy snapshot, which these signals never touch.
  *
  * Policy callers must NOT use these signals. The hard lock's contract is that only an explicit
  * observation that replaces a blocking reading may release it — "a predicted reset is not
