@@ -421,6 +421,23 @@ describe("release pipeline contract", () => {
     expect(run(JSON.stringify("b".repeat(40))).exitCode).not.toBe(0);
     expect(run("null").exitCode).not.toBe(0);
     expect(run("").exitCode).not.toBe(0);
+    // A version npm is still processing reads as missing for minutes (2.100.1: ~15 min). The gate keeps
+    // reading for the whole bounded window and accepts the right head once it appears.
+    const dir = mkdtempSync(join(tmpdir(), "ocx-npm-lag-"));
+    try {
+      const lag = String.raw`
+        npm() { n=$(cat "$COUNTER" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$COUNTER"; [ "$n" -ge 35 ] || return 1; printf '%s\n' "$REGISTRY_HEAD"; }
+        timeout() { shift 2; "$@"; }
+        sleep() { echo "$1" >> "$SLEEPS"; }
+      `;
+      const late = Bun.spawnSync(["bash", "-e", "-c", lag + gate!.run!], {
+        cwd: repoPath(), env: { PATH: process.env.PATH ?? "/usr/bin:/bin", SOURCE_SHA: source, RELEASE_VERSION: "9.8.7",
+          REGISTRY_HEAD: JSON.stringify(source), COUNTER: join(dir, "n"), SLEEPS: join(dir, "s") }, stdout: "pipe", stderr: "pipe",
+      });
+      expect(late.exitCode, late.stderr.toString()).toBe(0);
+      expect(readFileSync(join(dir, "s"), "utf8").trim().split("\n")).toEqual(Array(34).fill("30"));
+    } finally { removeTreeWithRetry(dir); }
+    expect(release.jobs?.publish?.["timeout-minutes"]).toBeGreaterThanOrEqual(45);
   });
 
   test("OIDC publication uses only trusted workflow code and the verified tarball", () => {
