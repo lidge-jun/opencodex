@@ -16,6 +16,7 @@ import {
 } from "../client/connect";
 import { inspectClientRotationRecoveryGate, readClientConnectionState } from "../client/state";
 import { readClientLinkState } from "../client/link-state";
+import { probeLinkTunnelStatus, type LinkTunnelStatus } from "../client/link-tunnel-status";
 import { teardownClientLink } from "../client/link-teardown";
 import { reapOrphanTunnel } from "../client/link-tunnel";
 import { readServiceApiTokenState } from "../lib/service-secrets";
@@ -55,6 +56,8 @@ export interface ClientCommandDeps extends RuntimeApiDeps {
     knownHostsFile?: string;
     timeoutMs?: number;
   };
+  /** Injected in tests; defaults to asking the running Child's /readyz. */
+  probeLinkTunnel?: () => Promise<LinkTunnelStatus>;
 }
 
 export interface ClientCatalogProbeDeps extends CatalogCompatibilityDeps {
@@ -119,6 +122,12 @@ export type ClientConnectionStatus = {
   readiness?: ClientCatalogReadiness["kind"];
   /** Present whenever readiness is not `ready`; names the fault and the way out. */
   readinessReason?: string;
+  /**
+   * A Remote Link Child's tunnel as its running runtime sees it (#8470). `state: "connected"` is
+   * the durable link record; this says whether a request can cross it now. Additive, and only on
+   * `ocx connect status` for `transport: "link"`.
+   */
+  linkTunnel?: LinkTunnelStatus;
 };
 
 function readInstalledCatalogBody(): string | null {
@@ -342,7 +351,11 @@ export function connectCompletionReport(
   };
 }
 
-function statusLines(status: ClientConnectionStatus): string[] {
+function linkTunnelLine(tunnel: LinkTunnelStatus): string {
+  return tunnel.state === "up" ? "Link tunnel: up" : `Link tunnel: ${tunnel.state} (${tunnel.reason})`;
+}
+
+export function clientConnectionStatusLines(status: ClientConnectionStatus): string[] {
   if (status.state !== "connected") {
     return [`Connection: ${status.state}${status.reason ? ` (${status.reason})` : ""}`];
   }
@@ -351,6 +364,8 @@ function statusLines(status: ClientConnectionStatus): string[] {
     // Second line on purpose. The whole of #4207 is that a reader stopped at "connected" and
     // believed the client was usable, so the local verdict has to arrive before the hub detail.
     readinessLine(status),
+    // #8470: the same holds for a link Child whose tunnel is down; say so before the detail.
+    ...(status.linkTunnel ? [linkTunnelLine(status.linkTunnel)] : []),
     `Transport: ${status.transport ?? "hub"}`,
     ...(status.link ? [`Link: ${status.link.linkId} via tunnel port ${status.link.tunnelPort}`] : []),
     `Hub: ${status.serverUrl}`,
@@ -515,8 +530,11 @@ export async function handleConnectCommand(argv: string[], deps: ClientCommandDe
       const args = argv.slice(1);
       const wantsJson = takeFlag(args, "--json");
       rejectArgs(args, CONNECT_USAGE, { redactValues: true });
-      const status = collectClientConnectionStatus(Date.now(), deps.lifecycleLockDeps, deps.catalogProbeDeps ?? {});
-      printData(status, wantsJson, statusLines(status));
+      const collected = collectClientConnectionStatus(Date.now(), deps.lifecycleLockDeps, deps.catalogProbeDeps ?? {});
+      const status: ClientConnectionStatus = collected.state === "connected" && collected.transport === "link"
+        ? { ...collected, linkTunnel: await (deps.probeLinkTunnel ?? probeLinkTunnelStatus)() }
+        : collected;
+      printData(status, wantsJson, clientConnectionStatusLines(status));
       return;
     }
     if (argv[0] === "revoke") {
