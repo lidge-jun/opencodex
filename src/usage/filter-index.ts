@@ -1415,10 +1415,10 @@ export async function readUsageFilterCandidates(
       if (error instanceof UsageFilterIndexHomeChangedError) {
         return null;
       }
-      // A foreign classification or unsafe-path flag can be a transient view of a projection
-      // another process is still creating (the schema's statements commit one by one, and a
-      // journal sidecar can vanish mid-stat). Give them the short re-check schedule before
-      // degrading, exactly like a moved publish.
+      // A foreign classification or unsafe-path flag can still be a transient view: the file at
+      // this path can be replaced mid-flight, or a sidecar appears or vanishes mid-stat while
+      // another writer transacts. Give them the short re-check schedule before degrading, exactly
+      // like a moved publish.
       if (error instanceof UsageLedgerRebuildRequiredError
         || error instanceof UsageFilterIndexForeignError
         || error instanceof UnsafeSqlitePathError) {
