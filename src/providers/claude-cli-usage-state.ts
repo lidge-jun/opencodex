@@ -50,11 +50,15 @@ export function loadClaudeUsageSnapshot(path: string): ClaudeUsageSnapshot | und
       if (!q || typeof q !== "object" || !finite(q.updatedAt)) return;
       for (const field of ["fiveHourPercent", "fiveHourResetAt", "weeklyPercent", "weeklyResetAt"])
         if (q[field] !== undefined && !finite(q[field])) return;
-      if (q.customWindows !== undefined && (!Array.isArray(q.customWindows) || !q.customWindows.every((w: unknown) => {
-        if (!w || typeof w !== "object") return false;
-        const row = w as Record<string, unknown>;
-        return typeof row.label === "string" && finite(row.percent) && (row.resetAt === undefined || finite(row.resetAt));
-      }))) return;
+      // Display-only rows (an inactive model limit) reach the dashboard too, so they pass the same check.
+      for (const field of ["customWindows", "displayWindows"]) {
+        const windows: unknown = q[field];
+        if (windows !== undefined && (!Array.isArray(windows) || !windows.every((w: unknown) => {
+          if (!w || typeof w !== "object") return false;
+          const row = w as Record<string, unknown>;
+          return typeof row.label === "string" && finite(row.percent) && (row.resetAt === undefined || finite(row.resetAt));
+        }))) return;
+      }
     }
     return saved;
   } catch { /* Missing or malformed cache is unknown, never proof of capacity. */ }

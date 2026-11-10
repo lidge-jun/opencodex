@@ -39,8 +39,8 @@ export function familyWeeklyEquivalentPercent(window: { percent?: number; weekly
 
 /**
  * `weekly_scoped_shares[]` names, by raw `limits` index, the share of the weekly limit a scoped
- * row may consume (Fable: "up to 50% of your weekly limit"). Only a selected scoped row
- * receives it; a malformed, out-of-range or conflicting share is ignored.
+ * row may consume (Fable: "up to 50% of your weekly limit"). Only a recognized scoped row,
+ * routed or display-only, receives it; a malformed, out-of-range or conflicting share is ignored.
  */
 function applyWeeklyShares(body: Record<string, unknown>, scopedRows: Map<number, AnthropicUsageBucket>): void {
   if (!Array.isArray(body.weekly_scoped_shares)) return;
@@ -94,7 +94,10 @@ export function anthropicUsageBuckets(body: Record<string, unknown>): {
       continue;
     }
     if (row.is_active === false) {
-      displayOnly.set(window, { window, row, percentField: "percent" });
+      // Display-only rows still carry their share, so a dashboard can say "up to 50% of the week".
+      const bucket: AnthropicUsageBucket = { window, row, percentField: "percent" };
+      displayOnly.set(window, bucket);
+      scopedRows.set(index, bucket);
       continue;
     }
     if (row.is_active !== undefined && row.is_active !== true) { familyEnumeration = false; continue; }

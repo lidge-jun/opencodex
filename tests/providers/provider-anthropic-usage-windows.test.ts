@@ -8,7 +8,9 @@ import { providerQuotaWindows } from "../../src/quota-pool/assemble";
 import { pooledWindows } from "../../src/quota-pool/pooled";
 import { anthropicResetGrantBlocker, parseAnthropicResetGrantStatus } from "../../src/providers/anthropic-reset-grants";
 import { normalizeAnthropicQuota } from "../../src/providers/quota/account-cache";
-import { inactiveSessionUsage, maxTeamInactiveWeeklyUsage, maxTeamInactiveSessionUsage, legacyMax20xUsage, noResetGrant, ultraUsage, weeklyReset } from "../fixtures/anthropic-usage-shapes";
+import { earliestQuotaResetAt } from "../../src/combos/reset-window";
+import type { ProviderQuota } from "../../src/providers/quota-types";
+import { inactiveFableShareUsage, inactiveFableWeeklyReset, inactiveSessionUsage, maxTeamInactiveWeeklyUsage, maxTeamInactiveSessionUsage, legacyMax20xUsage, noResetGrant, ultraUsage, weeklyReset } from "../fixtures/anthropic-usage-shapes";
 
 const originalFetch = globalThis.fetch;
 const now = Date.parse("2026-10-31T14:00:00Z");
@@ -255,3 +257,42 @@ test("a usage probe without a share drops the previous weekly allowance", () => 
   expect(merged).toEqual([{ label: "Fable", scope: "model", percent: 20 }]);
 });
 
+test("an inactive Fable row with no legacy key is displayed with its percent, reset and weekly share", async () => {
+  const quota = await parse(inactiveFableShareUsage);
+  // The inactive session still shows because legacy five_hour is not null (#8088 is unchanged).
+  expect(quota).toMatchObject({ fiveHourPercent: 35, weeklyPercent: 91, weeklyResetAt: Date.parse(inactiveFableWeeklyReset) });
+  expect(quota?.customWindows ?? []).toEqual([]);
+  // The bar is Fable's own 4%, never the weekly-scale used_percent_of_weekly (2).
+  expect(quota?.displayWindows).toEqual([{ label: "Fable", scope: "model", percent: 4,
+    resetAt: Date.parse(inactiveFableWeeklyReset), weeklyAllowancePercent: 50 }]);
+  expect(hasAnthropicFamilyEnumeration(quota!)).toBe(true);
+});
+
+test("display-only rows never reach routing, exhaustion or reset ordering", async () => {
+  const quota = (await parse(inactiveFableShareUsage))!;
+  const routedOnly: ProviderQuota = { ...quota };
+  delete routedOnly.displayWindows;
+  const louder: ProviderQuota = { ...quota, displayWindows: [{ label: "Fable", scope: "model", percent: 100,
+    resetAt: now + 60_000, weeklyAllowancePercent: 50 }] };
+  const decisions = (variant: ProviderQuota) => ({
+    pool: providerQuotaWindows(variant, "measured", now),
+    pooled: pooledWindows([{ eligible: true, weight: 1, windows: providerQuotaWindows(variant, "measured", now) }], now),
+    reset: earliestQuotaResetAt(variant, now),
+    families: ["claude-fable-5-2", "claude-opus-5-5", "claude-sonnet-5-5"].map(model => [
+      anthropicModelPercents(variant, model), anthropicModelWeeklyPercent(variant, model), anthropicModelRankPercent(variant, model)]),
+  });
+  expect(decisions(quota)).toEqual(decisions(routedOnly));
+  expect(decisions(louder)).toEqual(decisions(routedOnly));
+  // The binding weekly_all row (91%, critical) still drives routing; Fable's 4% does not.
+  expect(providerQuotaWindows(quota, "measured", now).map(row => [row.id, row.usedPercent])).toEqual([["5h", 35], ["weekly", 91]]);
+  expect(anthropicModelPercents(quota, "claude-fable-5-2")).not.toContain(4);
+  expect(rawAnthropicUsageWindows(inactiveFableShareUsage, now).some(row => row.window === "fable")).toBe(false);
+});
+
+test("plans that report no Fable row get no Fable bar", async () => {
+  for (const body of [maxTeamInactiveWeeklyUsage, maxTeamInactiveSessionUsage]) {
+    const quota = await parse(body);
+    expect(quota?.displayWindows).toBeUndefined();
+    expect(quota?.customWindows ?? []).toEqual([]);
+  }
+});
