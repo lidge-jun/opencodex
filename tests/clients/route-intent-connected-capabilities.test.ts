@@ -1,14 +1,18 @@
 import { expect, test } from "bun:test";
 import { loadConnectedRouteModels } from "../../src/integrations/route-intent-connected";
 import { buildClientConfig } from "../../src/clients/config-export";
+import { buildGrokManagedBlock } from "../../src/grok/inject";
+import { generateDesktop3pModels } from "../../src/claude/desktop-3p";
+import { LINK_ROUTE_CATALOG_PATH } from "../../src/link/management-routes";
 import type { OcxConfig } from "../../src/types";
 
 const connection = { transport: "link", apiKeyId: "fixture-key", link: { linkId: "lnk_0123456789abcdef", tunnelPort: 22001 } } as const;
 
-function served(rows: unknown[], calls: string[] = []) {
+function served(rows: unknown[], calls: string[] = [], combos: Array<{ publicId: string; comboId: string }> = []) {
   const fetchImpl = (async (input: RequestInfo | URL) => {
     const url = String(input); calls.push(url);
     if (url.endsWith("/v1/models")) return Response.json({ object: "list", data: rows });
+    if (url.endsWith(LINK_ROUTE_CATALOG_PATH)) return Response.json({ version: 1, combos });
     return new Response(null, { status: 404 });
   }) as typeof fetch;
   return loadConnectedRouteModels(connection, "ocx_data_" + "a".repeat(40), { fetchImpl });
@@ -106,4 +110,54 @@ test("malformed served capability values are dropped rather than passed through"
 test("a served row without capability metadata gains none", async () => {
   const models = await served([{ id: "gemini/plain", owned_by: "gemini" }]);
   expect(models[0]).toEqual({ namespaced: "gemini/plain", provider: "gemini", id: "plain" });
+});
+
+test("a served Grok ladder reaches the Grok config and a routed 1M window reaches Claude Desktop", async () => {
+  const models = await served([
+    { id: "xai/grok-4.3", owned_by: "xai", supports_reasoning_effort: true, reasoning_effort: "high", context_window: 2_000_000,
+      reasoning_efforts: ["minimal", "low", "medium", "high", "xhigh"].map(value => ({ value, label: value, ...(value === "high" ? { default: true } : {}) })),
+      capabilities: { context_length: 2_000_000, supports_reasoning: true, supports_reasoning_effort: true, reasoning_effort: ["minimal", "low", "medium", "high", "xhigh"] } },
+    { id: "gemini/gemini-3-pro", owned_by: "gemini", context_window: 1_048_576, capabilities: { context_length: 1_048_576 } },
+  ]);
+  // The Child's Grok adapter (src/client/route-intent-apply.ts) passes exactly these fields.
+  const block = buildGrokManagedBlock(18274, models.map(model => ({ id: model.namespaced, name: model.displayName,
+    contextWindow: model.contextWindow, reasoningEfforts: model.reasoningEfforts, defaultReasoningEffort: model.defaultReasoningEffort })));
+  expect(block).toContain("supports_reasoning_effort = true");
+  expect(block).toContain('reasoning_effort = "high"');
+  for (const effort of ["minimal", "low", "medium", "high", "xhigh"]) expect(block).toContain(`value = "${effort}"`);
+  expect(block).toContain("context_window = 2000000");
+  // And its Desktop adapter passes the routed models' windows, which decide supports1m.
+  const desktop = generateDesktop3pModels([], models.filter(model => !model.native)
+    .map(model => ({ provider: model.provider, id: model.id, contextWindow: model.contextWindow })));
+  const gemini = desktop.find(entry => entry.labelOverride.includes("(gemini)"));
+  expect(gemini?.supports1m).toBe(true);
+});
+
+test("expanded combo selectors take their verified base identity, and an unverified one is left out alone", async () => {
+  const calls: string[] = [];
+  const models = await served([
+    { id: "combo/fixture", owned_by: "openai", is_combo: true },
+    { id: "combo/fixture--fast", owned_by: "openai", is_combo: true },
+    { id: "combo/fixture--high", owned_by: "openai", is_combo: true },
+    // Its base is not in the route catalog, so the Child cannot verify what it routes to.
+    { id: "combo/unlisted--fast", owned_by: "openai", is_combo: true },
+    { id: "gemini/plain", owned_by: "gemini" },
+  ], calls, [{ publicId: "combo/fixture", comboId: "fixture" }]);
+  expect(models.map(model => [model.namespaced, model.provider, model.id])).toEqual([
+    ["combo/fixture", "combo", "fixture"],
+    ["combo/fixture--fast", "combo", "fixture"],
+    ["combo/fixture--high", "combo", "fixture"],
+    ["gemini/plain", "gemini", "plain"],
+  ]);
+  expect(calls.some(url => url.endsWith(LINK_ROUTE_CATALOG_PATH))).toBe(true);
+});
+
+test("an unlisted combo that is not an expanded selector still rejects the roster", async () => {
+  await expect(served([
+    { id: "combo/fixture", owned_by: "openai", is_combo: true },
+    { id: "combo/other", owned_by: "openai", is_combo: true },
+  ], [], [{ publicId: "combo/fixture", comboId: "fixture" }])).rejects.toThrow("no verified route identity");
+  // A suffix outside the selector grammar is not an expansion either.
+  await expect(served([{ id: "combo/fixture--turbo", owned_by: "openai", is_combo: true }], [],
+    [{ publicId: "combo/fixture", comboId: "fixture" }])).rejects.toThrow("no verified route identity");
 });

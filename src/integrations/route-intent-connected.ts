@@ -11,7 +11,7 @@ import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { ROUTE_CLIENT_IDS, type HomeRouteIntentDocument } from "../link/route-intent";
 import type { OcxClientConnectionConfig } from "../types";
 import type { RouteIntentReceipt } from "./route-intent-contract";
-import { effectiveRouteIntent, readLocalRouteIntentOff, readRouteIntentReceipt, writeRouteIntentReceipt } from "./route-intent-state";
+import { effectiveRouteIntent, readLocalRouteIntentOff, readRouteIntentReceipt, readRouteIntentReceiptStrict, writeRouteIntentReceipt } from "./route-intent-state";
 import { resolveInitialRouteIntent, initialRouteOutcomeMetadata } from "./route-intent-initial";
 import { LINK_ROUTE_CATALOG_PATH } from "../link/management-routes";
 import { MAX_ROUTE_CATALOG_BYTES, parseRouteCatalogFacts } from "./route-intent-catalog";
@@ -89,6 +89,20 @@ function servedCapabilities(row: object): Partial<ExportModel> {
 
 export interface PreparedConnectedRouteIntent { document: HomeRouteIntentDocument; fetchedAt: string; stale: boolean; localOnly?: true }
 
+/**
+ * The Home's `/v1/models` expands a listed combo into synthetic selectors the route catalog does
+ * not list: `<base>--fast` (src/server/fast-row.ts) and `<base>--<effort>` (src/server/effort-row.ts).
+ * Such a row routes to its base combo, so its identity is the base's when that base is verified.
+ * Returns the base public id the selector grammar names, or undefined when it is not one.
+ */
+function expandedComboBase(publicId: string): string | undefined {
+  const separator = publicId.lastIndexOf("--");
+  if (separator <= 0) return undefined;
+  const suffix = publicId.slice(separator + 2);
+  if (suffix !== "fast" && (suffix === "none" || !isDeclaredReasoningEffort(suffix))) return undefined;
+  return publicId.slice(0, separator);
+}
+
 /** Provisioning preview; connect records its enabled-only choices after enrollment. */
 export function initialConnectRouteIntent(
   prepared: PreparedConnectedRouteIntent | undefined, selected: OcxClientConnectionConfig["selectedClients"], explicit = false,
@@ -148,16 +162,21 @@ export async function loadConnectedRouteModels(connection: LinkHomeConnection, t
     if (!facts) throw new Error("Invalid combo route metadata");
     for (const row of facts.combos) comboIdentity.set(row.publicId, row.comboId);
   }
-  return raw.data.map((row: unknown): ExportModel => {
+  return raw.data.flatMap((row: unknown): ExportModel[] => {
     if (!row || typeof row !== "object" || !("id" in row) || typeof row.id !== "string" || !row.id || seen.has(row.id)) {
       throw new Error("Invalid or duplicate Child served model identifier");
     }
     seen.add(row.id);
     const owner = "owned_by" in row ? row.owned_by : undefined;
     if ("is_combo" in row && row.is_combo === true) {
-      const id = comboIdentity.get(row.id);
+      const listed = comboIdentity.get(row.id);
+      const base = listed === undefined ? expandedComboBase(row.id) : undefined;
+      // An expanded selector whose base is not verified is left out on its own: it never fails
+      // the rest of the roster, and its id is never trusted.
+      if (base !== undefined && !comboIdentity.has(base)) return [];
+      const id = listed ?? (base === undefined ? undefined : comboIdentity.get(base));
       if (!id) throw new Error("The served combo has no verified route identity");
-      return { namespaced: row.id, provider: COMBO_NAMESPACE, id, ...servedCapabilities(row) };
+      return [{ namespaced: row.id, provider: COMBO_NAMESPACE, id, ...servedCapabilities(row) }];
     }
     const canonical = "native_id" in row ? row.native_id : row.id;
     if (typeof canonical !== "string" || !canonical || canonical !== canonical.trim() || canonical.length > 4096 || /[\x00-\x1f\x7f]/.test(canonical)) {
@@ -167,8 +186,8 @@ export async function loadConnectedRouteModels(connection: LinkHomeConnection, t
     const native = slash < 0 && owner !== COMBO_NAMESPACE && (nativeIds.has(canonical) || owner === "openai");
     if (slash < 0 && !native) throw new Error("The served alias has no verified canonical route identity");
     if (!native && (slash === 0 || slash === canonical.length - 1)) throw new Error("Invalid canonical routed model identity");
-    return { namespaced: row.id, provider: native ? "openai" : canonical.slice(0, slash),
-      id: native ? canonical : canonical.slice(slash + 1), ...(native ? { native: true } : {}), ...servedCapabilities(row) };
+    return [{ namespaced: row.id, provider: native ? "openai" : canonical.slice(0, slash),
+      id: native ? canonical : canonical.slice(slash + 1), ...(native ? { native: true } : {}), ...servedCapabilities(row) }];
   });
 }
 
@@ -200,8 +219,10 @@ export async function applyConnectedRouteIntent(
   const store = options.store ?? createIntegrationStateStore();
   withClientLifecycleSync(() => {
     guard();
-    // Write-ahead, before any client changes: which file integrations were standalone.
-    captureFileIntentOriginals(linkId, readRouteIntentReceipt(options.statePath)?.linkId === undefined, store.readRecordsStrict());
+    // Write-ahead, before any client changes: which file integrations were standalone. Only a
+    // receipt read strictly proves a first apply; a corrupt one refuses here, before an owner the
+    // link created could be recorded as standalone and the receipt naming it replaced.
+    captureFileIntentOriginals(linkId, readRouteIntentReceiptStrict(options.statePath)?.linkId === undefined, store.readRecordsStrict());
     // A failed materialization must not leave the separately reportable Home proof current.
     clearHomeRouteIntentRecord();
   }, options.lifecycleLockDeps);

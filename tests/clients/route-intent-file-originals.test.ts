@@ -111,3 +111,21 @@ test("a block the person wrote while linked is kept instead of being re-applied"
   `, false);
   expect(result).toEqual({ state: "disconnected", owned: false, same: true });
 });
+
+test("a corrupt route receipt refuses the next sync before a link-created integration is recorded as standalone", () => {
+  const result = scenario("", `
+    const receiptPath = join(process.env.OPENCODEX_HOME,'route-intent','receipt.json');
+    const linked = { owned: owned(), record: existsSync(fileIntentOriginalsPath()) };
+    writeFileSync(receiptPath, '{"version":1}');
+    let error; try { await syncConnectedClient({}, deps); } catch (e) { error = e.message; }
+    console.log(JSON.stringify({ linked, error, owned: owned(), record: existsSync(fileIntentOriginalsPath()),
+      receipt: readFileSync(receiptPath,'utf8') }));
+  `, true);
+  // Pi was created by the link, so no standalone record exists before the receipt is damaged.
+  expect(result.linked).toEqual({ owned: true, record: false });
+  expect(result.error).toContain("Route intent receipt is malformed");
+  expect(result.record).toBe(false);
+  expect(result.owned).toBe(true);
+  // The damaged receipt is preserved for repair rather than replaced by the refused sync.
+  expect(result.receipt).toBe('{"version":1}');
+});
