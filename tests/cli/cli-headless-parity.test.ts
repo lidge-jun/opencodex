@@ -636,6 +636,9 @@ describe("headless GUI parity CLI", () => {
       ["/api/subagent", "ocx agent"],
       ["/api/sync", "ocx system sync"],
       ["/api/system", "ocx observe/system"],
+      // Telemetry: status, enable and disable are `ocx telemetry`. The GUI's consent
+      // write (`PUT /api/telemetry`) is dashboard-session-only by design (an agent must not answer).
+      ["/api/telemetry", "ocx telemetry"],
       ["/api/update", "ocx system update"],
       ["/api/usage", "ocx observe usage"],
       ["/api/v2", "ocx v2/agent"],

@@ -1,4 +1,5 @@
 import type { ProxyRestartStartOutcome } from "./tray-proxy";
+import type { RestartSupervisor } from "./restart-failure";
 /**
  * Registry-driven command dispatch (Phase 3 of the CLI deepening).
  *
@@ -59,7 +60,7 @@ export interface CliDispatchDeps {
   handleTrayProxyStart: (existingIsSuccess?: boolean) => Promise<boolean>;
   handleTrayProxyRestart: () => Promise<void>;
   handleRestartStartWhenStopped: (recoveringLiveRestart?: boolean) => Promise<ProxyRestartStartOutcome>;
-  handleProxyRestart: (startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>) => Promise<boolean>;
+  handleProxyRestart: (startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>, onSupervised?: (supervisor: RestartSupervisor) => void) => Promise<boolean>;
   handleUninstall: () => Promise<void>;
   handleStatus: () => Promise<void>;
   handleRecoverHistory: () => Promise<void>;
@@ -911,6 +912,10 @@ const commandRunners: Record<string, CommandRunner> = {
   cmd: async deps => {
     const { handleCommandcodeCommand } = await import("./integrations");
     return await handleCommandcodeCommand(deps.args.slice(1));
+  },
+  telemetry: async deps => {
+    const { handleTelemetryCommand } = await import("./telemetry");
+    return await handleTelemetryCommand(deps.args.slice(1));
   },
   help: async () => {
     printUsage();

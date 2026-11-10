@@ -17,6 +17,7 @@ import { markSidecarContextOverflow, sidecarLoopTerminalEvent, upstreamErrorCode
 import { markVerifiedModelNotInPlanResponse, MODEL_NOT_IN_PLAN_CODE, UNDECLARED_TOOL_CALL_ERROR_CODE, verifiedPlanRefusalMessage } from "../lib/errors";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
 import { runAnthropicWebSearch } from "./anthropic-executor";
+import type { AuxiliaryModelSend } from "../lib/request-execution-budget";
 import { runXaiWebSearch, type XaiSearchOptions } from "./xai-executor";
 import { runGeminiWebSearch } from "./gemini-executor";
 import { runExaWebSearch } from "./exa-executor";
@@ -33,7 +34,7 @@ import {
   TranslatorBudgetExceededError,
 } from "../lib/translator-budget";
 import { formatWebSearchResults } from "./format-result";
-import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "./progress-stream";
+import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchConsumerInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "./progress-stream";
 import { WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 import { newSidecarSearchCellId, rememberSidecarSearch, restoreSidecarSearchResults } from "./sidecar-search-replay";
 import {
@@ -373,6 +374,7 @@ export interface WebSearchLoopDeps {
   forwardProvider?: OcxProviderConfig;
   /** Required for the anthropic backend: the stored-OAuth provider that runs web_search_20250305. */
   anthropicSidecar?: { providerName: string; provider: OcxProviderConfig; config: OcxConfig };
+  dispatchSidecarSend?: AuxiliaryModelSend;
   /** Required for the xai backend: the stored Grok OAuth provider (L7). */
   xaiSidecar?: { providerName: string; provider: OcxProviderConfig };
   /** Required for the gemini backend: the stored Antigravity CCA provider (L8). */
@@ -916,6 +918,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       }
       if (error instanceof LoopError) throw error;
       if (error instanceof RoutedModelInactivityError) throw new LoopError(504, error.message);
+      if (error instanceof WebSearchConsumerInactivityError) throw new LoopError(504, error.message);
       if (error instanceof WebSearchStreamProtocolError) throw new LoopError(502, error.message);
       throw new LoopError(502, `Provider stream error: ${error instanceof Error ? error.message : String(error)}`);
     } finally { releaseCapture(); }
@@ -1022,7 +1025,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         // signal would otherwise look like an ordinary degradable failure).
         try {
           if (backend === "anthropic" && anthropicSidecar) {
-            outcome = await runAnthropicWebSearch(query, anthropicSidecar.providerName, anthropicSidecar.provider, settings, signal, anthropicSidecar.config);
+            outcome = await runAnthropicWebSearch(query, anthropicSidecar.providerName, anthropicSidecar.provider, settings, signal, anthropicSidecar.config, deps.dispatchSidecarSend);
           } else if (backend === "xai") {
             // L7: stored Grok OAuth to the pinned api.x.ai Responses endpoint; same
             // never-throws contract and no Codex/OpenAI pool outcome recording (F5 parity).

@@ -1,3 +1,4 @@
+import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,6 +18,7 @@ const NUMERIC_KEY = "73915028461739205817";
 const saved = { home: process.env.OPENCODEX_HOME };
 let home = "";
 let status = 400;
+let validationBody: unknown;
 let upstream: ReturnType<typeof Bun.serve>;
 let releaseSpendHome: (() => void) | undefined;
 
@@ -29,7 +31,7 @@ beforeAll(() => {
     const echoed = (req.headers.get("authorization") ?? "").replace(/^Bearer /, "") || req.headers.get("x-api-key") || "";
     const anthropic = new URL(req.url).pathname.endsWith("/messages");
     const error = { message: "invalid key " + echoed + "; retry in " + NUMERIC_KEY + " seconds", type: echoed, code: echoed, param: echoed };
-    const body = anthropic ? { type: "error", error: { type: echoed, message: error.message } } : { error };
+    const body = validationBody ?? (anthropic ? { type: "error", error: { type: echoed, message: error.message } } : { error });
     return Response.json(body, { status, headers: { "retry-after": NUMERIC_KEY, "x-request-id": echoed, "request-id": echoed } });
   } });
   releaseSpendHome = acquireOwnedSpendHome();
@@ -50,7 +52,8 @@ function saveProviders(messagesNative: boolean) {
       fxr: { adapter: "openai-responses", baseUrl: base + "/v1", authMode: "key", apiKey: PROVIDER_KEY, allowPrivateNetwork: true, models: ["m1"] },
       fxa: { adapter: "anthropic", baseUrl: base, authMode: "key", apiKey: PROVIDER_KEY, allowPrivateNetwork: true, models: ["claude-x"] },
     },
-    combos: { echo: { strategy: "failover", targets: [{ provider: "fxc", model: "m1" }, { provider: "fxr", model: "m1" }] } },
+    combos: { echo: { strategy: "failover", targets: [{ provider: "fxc", model: "m1" }, { provider: "fxr", model: "m1" }] },
+      schema: { strategy: "failover", targets: [{ provider: "fxc", model: "m1" }] } },
     ...(messagesNative ? { protocols: { rollout: { managedMessagesNative: true } } } : {}),
   } as unknown as OcxConfig);
 }
@@ -138,4 +141,48 @@ describe("upstream error details stay out of retry advice and request logs", () 
       }
     }
   }
+});
+
+describe("schema rejections preserve only closed operator diagnostics", () => {
+  for (const [path, model] of [["/v1/chat/completions", "fxc/m1"], ["/v1/responses", "fxc/m1"], ["/v1/responses", "combo/schema"]]) {
+    test(path + " " + model + " retains fields through live logs, disk and hydration", async () => {
+      saveProviders(false);
+      clearComboSelectionState("schema");
+      clearComboTargetCooldowns("schema");
+      status = 422;
+      validationBody = { type: "invalid_request_error", detail: [
+        { type: "extra_forbidden", loc: ["body", "max_completion_tokens"], msg: PROVIDER_KEY, input: "private fixture prompt", ctx: { key: PROVIDER_KEY } },
+        { type: "union_tag_invalid", loc: ["body", "messages", 0, "role"], msg: "private fixture prompt", input: PROVIDER_KEY },
+        { type: "extra_forbidden", loc: ["body", PROVIDER_KEY], input: PROVIDER_KEY },
+      ] };
+      try {
+        const body = path.endsWith("completions")
+          ? { model, messages: [{ role: "user", content: "hi" }] }
+          : { model, input: "hi" };
+        const result = await exchange(path, body);
+        expect(result.status).toBe(422);
+        const expected = { code: "provider_error", type: "invalid_request_error", validation: [
+          { field: "max_completion_tokens", type: "extra_forbidden" }, { field: "messages.role", type: "union_tag_invalid" },
+        ] };
+        expect(result.rows[0]!.failureDetail).toEqual(expected);
+        const disk = readUsageEntries().find(entry => entry.requestId === result.rows[0]!.requestId)!;
+        expect(disk.failureDetail).toEqual(expected);
+        expect(requestLogEntryFromPersistedUsage(disk).failureDetail).toEqual(expected);
+        const recorded = JSON.stringify({ rows: result.rows, disk, printed: result.printed });
+        expect(recorded).not.toContain(PROVIDER_KEY);
+        expect(recorded).not.toContain("private fixture prompt");
+      } finally { validationBody = undefined; }
+    });
+  }
+});
+
+test("translated validation bodies above the existing retention cap remain status-only", async () => {
+  saveProviders(false);
+  status = 422;
+  validationBody = { detail: [{ type: "extra_forbidden", loc: ["body", "store"], input: "x".repeat(70 * 1024) }] };
+  try {
+    const result = await exchange("/v1/responses", { model: "fxc/m1", input: "hi" });
+    expect(result.status).toBe(422);
+    expect(result.rows[0]!.failureDetail?.validation).toBeUndefined();
+  } finally { validationBody = undefined; }
 });

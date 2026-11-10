@@ -5,6 +5,10 @@ description: 공급자 항목, 인증, 엔드포인트, 모델 카탈로그, 할
 
 공급자는 opencodex에 모델의 위치, 사용하는 와이어 어댑터, 요청 인증 방식을 알려줍니다.
 
+## Mistral 요청당 이미지 수
+
+Mistral 요청의 이미지 수 제한과 `mistralMaxImages` 설정은 [영문 기준 문서](/reference/configuration/providers/#mistral-images-per-request)를 참조하세요. 제한기에 도달한 `image_url` 항목의 이미지 참조가 누락되거나 비어 있거나 문자열이 아니면 전송용 사본에서 텍스트로 대체되며 이미지 한도를 소비하지 않습니다. 번역되는 Responses 요청에서 사용 가능한 URL과 파일 ID가 모두 없는 `input_image`는 파서가 제외합니다. 메시지나 도구 출력 블록 안에서 비어 있지 않은 `file_id`만 있고 비어 있지 않은 `image_url`이 없으면 미디어 가드가 Mistral 전송 전에 요청을 거절합니다. 가드가 검사하지 않는 재생된 `agent_message` 내부에서는 파서가 대신 `[image: <file id>]` 텍스트 마커를 내보내며 일반 텍스트로 전송되고 이미지 한도를 소비하지 않습니다. 제한기는 `image_url` 또는 `image_url.url`의 비어 있지 않은 문자열만 계산하고 URL 문법이나 접근 가능성은 검증하지 않습니다. 다른 대상의 동작은 바뀌지 않습니다.
+
 ## 사용자 지정 공급자의 컨텍스트
 
 모델 창이 보고되거나 설정되지 않으면 Azure 메타데이터, 모델 ID로 찾은 번들 공급업체/집계 메타데이터, 활성 Context cap, 128k 순서로 보완합니다. 보고된 값과 설정 값 중 작은 값을 유지하고 Context cap은 계속 상한으로 적용됩니다. 기본 공급자는 바뀌지 않습니다. 정확한 ID를 우선하며 대소문자 및 점/하이픈 변형은 충돌이 없을 때만 허용합니다. 추정값은 Codex 압축 예산과 Claude 등 클라이언트 카탈로그에 반영되지만 라우팅의 검증된 용량으로 취급하지 않습니다. 같은 모델 이름이 중계 서비스의 실제 용량을 보장하지 않으므로 modelContextWindows 또는 Context cap으로 실제 상한을 설정하세요. cap을 자동으로 켜거나 모델 시험 요청을 보내지 않습니다. OpenAI API 값은 Codex 구독의 제한이 아닙니다.
@@ -519,7 +523,9 @@ Vercel AI Gateway는 하나의 모델을 여러 기반 추론 공급자에 걸�
 적용된 재정의와 여전히 일치할 때만 원래 네이티브 이름을 복원합니다. 외부에서 변경된 표시 이름도 기존 네이티브 메타데이터 정규화 규칙을 따릅니다.
 예를 들어 Astra (`gpt-6-astra`)는 고정된 네이티브 이름과 다른 이름을 여전히 그 고정 이름으로 교체합니다.
 표시 이름 재정의는 모델 ID, 기능을 포함한 메타데이터, 정렬 순서, 라우팅된 콤보 별칭 및 계정 선택자가 붙은 항목을 바꾸지 않습니다.
-이 로컬 카탈로그 재정의는 HTTP 모델 목록이나 가상 `*-pro` 항목의 이름을 바꾸지 않습니다.
+`GET /api/models`도 접두사 없는 네이티브 행에 비어 있지 않은 재정의 이름을 반환하므로 클라이언트 내보내기와 `ocx opencode`가 이 이름을 사용합니다.
+OpenCode는 `sol (native)`처럼 기존 접미사를 유지합니다. `ocx opencode`를 다시 실행하거나 관리형 통합을 새로 고치면 생성된 설정에 반영됩니다.
+재정의가 없을 때의 이름, `/v1/models`, 가상 `*-pro` 항목은 바뀌지 않습니다.
 
 프리뷰 GPT-5.6 폴백 항목도 같은 메커니즘을 사용합니다. OpenAI API 키 프리셋은 base와 Pro id에 컨텍스트 `1050000`, 최대 입력 `922000`을 채웁니다. OpenRouter는 `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`에 컨텍스트 `1050000`을 채웁니다. 네이티브 Pool/Direct 창은 [예약된 OpenAI 공급자 정책](/reference/configuration/providers/#reserved-openai-providers)을 따릅니다. 동기화된 카탈로그는 `xhigh`를 구분한 채 `max`를 노출합니다.
 

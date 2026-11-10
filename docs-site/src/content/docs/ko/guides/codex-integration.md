@@ -213,7 +213,7 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-macOS에서는 명시적 선택, shim, PATH, 기존 설치 경로와 실행 가능한 기본 `codex` 후보 뒤에 `/Applications/ChatGPT.app`, `~/Applications/ChatGPT.app` 순서로 Codex 앱의 번들 CLI를 확인하며, 번들의 XML `Info.plist` 식별자가 `com.openai.codex`여야 하고 실행 가능한 저장된 선택을 앱 후보로 자동 교체하지 않습니다.
+macOS에서는 명시적 선택, shim, PATH, 기존 설치 경로와 실행 가능한 기본 `codex` 후보 뒤에 `/Applications/ChatGPT.app`, `~/Applications/ChatGPT.app` 순서로 Codex 앱의 번들 CLI를 확인하며, 번들의 XML `Info.plist` 식별자가 `com.openai.codex`여야 하고 실행 가능한 저장된 선택을 앱 후보로 자동 교체하지 않습니다. Codex CLI가 전혀 발견되지 않으면 `ocx connect status` 준비 상태 뒤의 카탈로그 프로브도 해당 번들 위치를 시도하므로, 앱 번들 CLI만 있는 Child는 `unverified` 대신 지원 추론 수준을 보고합니다. 실행 시에는 아래 검사가 그대로 적용됩니다.
 
 실행 시에는 위치와 관계없이 `Codex.app`과 `ChatGPT.app`을 인식하며, 이동한 번들, 명시적
 `CODEX_CLI_PATH`·설정 런타임 명령, 심볼릭 링크 별칭에도 같은 검증을 적용합니다. 앱 이름은 검증

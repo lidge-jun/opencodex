@@ -12,14 +12,15 @@ const hasQuotaRows = (q: ProviderQuota) => q.fiveHourPercent !== undefined || q.
 const FAMILY_LABELS: Partial<Record<AnthropicUsageBucket["window"], string>> = { fable: "Fable", opus: "Opus", sonnet: "Sonnet" };
 
 /** Project a model-family bucket into a quota window; shared buckets and unusable percents yield none. */
-function familyWindow({ window, row, percentField }: AnthropicUsageBucket): ProviderQuotaWindow | undefined {
+function familyWindow({ window, row, percentField, weeklyAllowancePercent }: AnthropicUsageBucket): ProviderQuotaWindow | undefined {
   const label = FAMILY_LABELS[window];
   const percent = normalizePercent(row[percentField]);
   if (!label || percent === undefined) {
     return undefined;
   }
   const resetAt = normalizeResetAt(row.resets_at);
-  return { label, scope: "model", percent, ...(resetAt !== undefined ? { resetAt } : {}) };
+  return { label, scope: "model", percent, ...(resetAt !== undefined ? { resetAt } : {}),
+    ...(weeklyAllowancePercent !== undefined ? { weeklyAllowancePercent } : {}) };
 }
 
 /** Read the Anthropic OAuth usage endpoint for an access token and return the parsed quota, or null on a non-OK or malformed response. */

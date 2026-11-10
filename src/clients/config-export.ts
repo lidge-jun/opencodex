@@ -531,6 +531,18 @@ export function commandCodeConfigPath(env: OpencodeLaunchEnv = process.env, home
 }
 
 /**
+ * Command Code's credential store, next to the provider file.
+ *
+ * Only the DESKTOP app reads this before it will show a workspace; the published
+ * CLI is content with `apiKey: false` in `providers.json`. See
+ * `seedCommandCodeAuth` in `src/integrations/writer.ts` for why a key is seeded
+ * there and why the seed is never removed again.
+ */
+export function commandCodeAuthPath(env: OpencodeLaunchEnv = process.env, home: string = homedir(), platform: NodeJS.Platform = process.platform): string {
+  return join(commandCodeHomeDir(env, home, platform), "auth.json");
+}
+
+/**
  * The provider store a current ZCode reads, which is NOT the file above.
  *
  * ZCode 3.14 moved custom providers to `v2/provider_config.json` and left
@@ -1623,7 +1635,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     // No env var exists behind this integration: buildCommandCodeClientConfig
     // writes `apiKey: false`, the documented keyless form for a loopback endpoint.
     apiKeyEnv: "",
-    exportHint: "The provider is written with `apiKey: false` — Command Code treats a keyless loopback endpoint as already authenticated. No key is stored or referenced.",
+    exportHint: "The provider is written with `apiKey: false` — the CLI treats a keyless loopback endpoint as already authenticated. The desktop app gates on `~/.commandcode/auth.json` instead, so enabling also seeds a placeholder `apiKey` there when that store has none; a real login is never overwritten.",
     build: buildCommandCodeClientConfig,
     format: "json",
     summarize: summarizeCommandCode,

@@ -10,6 +10,9 @@ import {
 } from "../../src/lib/spend-reservation-ledger";
 import { createRequestExecutionBudget, reportDispatchSends, createPhysicalSendReporter } from "../../src/lib/request-execution-budget";
 import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
+import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
+import { estimateTokens } from "../../src/lib/token-estimate";
+import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
 import { SpendLedgerOwnerError, type SpendLedgerOwnerErrorCode } from "../../src/lib/spend-ledger-owner";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -57,6 +60,123 @@ const logContext = (overrides: Record<string, unknown> = {}) => ({
   spendOutputCeilingTokens: 400,
   ...overrides,
 }) as Parameters<typeof createRequestSpendTracker>[0];
+
+describe("auxiliary helper spend ownership", () => {
+  const target = (key: string) => ({ poolId: "anthropic", identityId: "", targetKey: key,
+    estimate: { inputTokens: 2, outputCeilingTokens: 8 } });
+  function fixture(enforced: boolean, initialPermit = false, oneSend = false) {
+    const journal = memoryJournal();
+    const ledger = createSpendReservationLedger({ journal, policy: {
+      ...DEFAULT_SPEND_RESERVATION_POLICY, pool: enforced ? { maxTokens: 10_000 } : {},
+      canonicalProviderIds: ["parent-pool", "anthropic"],
+    } });
+    const log = logContext({ accountLogLabel: "parent-account", spendPoolId: "parent-pool" });
+    const tracker = createRequestSpendTracker(log, `root-helper-${crypto.randomUUID()}`, ledger);
+    let claims = 0;
+    const claim = tracker.beforePhysicalSend!.bind(tracker);
+    tracker.beforePhysicalSend = () => { claims++; return claim(); };
+    const budget = createRequestExecutionBudget(oneSend ? {
+      maxTotalModelSends: 1, baseSendAllowance: 1, finalRecoveryAllowance: 0,
+      maxAlternateTargetSends: 0, maxTargetTransitions: 0,
+    } : undefined, "helper-test", tracker);
+    const booking = initialPermit ? budget.reserveDispatch({ sendClass: "initial", targetKey: "parent/a", countedExternally: true }) : undefined;
+    if (booking && !booking.allowed) throw new Error("parent booking refused");
+    const translatorBudget = createTranslatorBudget();
+    const prior = process.env.OPENCODEX_HOME;
+    const home = enforced && initialPermit ? mkdtempSync(join(tmpdir(), "auxiliary-parent-booking-")) : undefined;
+    let release: (() => void) | undefined;
+    if (home) { process.env.OPENCODEX_HOME = home; release = acquireOwnedSpendHome(); }
+    const close = () => {
+      translatorBudget.dispose(); release?.();
+      if (home) {
+        if (prior === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = prior;
+        removeTreeWithRetry(home);
+      }
+    };
+    let owner: ReturnType<typeof createResponsesSendBudget>;
+    try {
+      owner = createResponsesSendBudget({ req: new Request("http://localhost/v1/responses"), logCtx: log,
+        options: { translatorBudget, sendBudget: budget, ...(booking?.allowed ? { comboInitialSend: { permit: booking.permit } } : {}) } });
+    } catch (error) { close(); throw error; }
+    if (owner instanceof Response) { close(); throw new Error("owner refused"); }
+    return { journal, ledger, tracker, budget, owner, claims: () => claims, close };
+  }
+
+  for (const enforced of [false, true]) {
+    test(`concurrent helpers cannot share the last slot (enforced=${enforced})`, async () => {
+      const f = fixture(enforced, false, true);
+      let release!: () => void;
+      const pending = new Promise<void>(resolve => { release = resolve; });
+      let calls = 0;
+      const first = f.owner.dispatchSidecarSend(target("search:q1"), async () => { calls++; await pending; });
+      try {
+        expect(f.budget.used).toBe(1);
+        await expect(f.owner.dispatchSidecarSend(target("search:q2"), async () => { calls++; })).rejects.toBeInstanceOf(SendBudgetExhaustedError);
+        expect(calls).toBe(1);
+        expect(f.claims()).toBe(1);
+      } finally {
+        release(); await first;
+        f.tracker.settle(undefined); f.close();
+      }
+    });
+
+    test(`helper scopes and terminal ownership are isolated (enforced=${enforced})`, async () => {
+      const f = fixture(enforced);
+      try {
+        const parent = f.budget.reserveDispatch({ sendClass: "initial", targetKey: "parent/a" });
+        if (!parent.allowed) throw new Error("parent refused");
+        expect(parent.permit.use()).toBe(true);
+        await f.owner.dispatchSidecarSend(target("search:q1"), async () => "ok");
+        expect(f.budget.used).toBe(2);
+        expect(f.claims()).toBe(2);
+        expect(f.owner.targetSendsUsed).toBe(0);
+        expect(f.ledger.snapshot("pool", "anthropic")?.reserved).toBe(10);
+        expect(f.ledger.snapshot("identity", "parent-account")?.reserved).toBe(500);
+        const rows = f.journal.lines.map(line => JSON.parse(line));
+        const parentId = rows.find(row => row.kind === "reserve")!.send;
+        const helperId = rows.filter(row => row.kind === "reserve").at(-1)!.send;
+        f.tracker.settle({ inputTokens: 7, outputTokens: 3 });
+        const settled = f.journal.lines.map(line => JSON.parse(line)).filter(row => row.kind === "settle");
+        expect(settled.map(row => row.send)).toContain(parentId);
+        expect(settled.map(row => row.send)).not.toContain(helperId);
+      } finally { f.close(); }
+    });
+
+    test(`a helper cannot consume or retire an unused parent booking (enforced=${enforced})`, async () => {
+      const f = fixture(enforced, true);
+      try {
+        const parentId = JSON.parse(f.journal.lines.find(line => JSON.parse(line).kind === "reserve")!).send;
+        await f.owner.dispatchSidecarSend(target("search:q1"), async () => "ok");
+        expect(f.budget.used).toBe(2);
+        expect(f.owner.targetSendsUsed).toBe(0);
+        expect(f.journal.lines.map(line => JSON.parse(line)).filter(row => row.kind === "abandon").map(row => row.send)).not.toContain(parentId);
+        f.owner.noteInitialDispatch();
+        expect(f.owner.targetSendsUsed).toBe(1);
+        expect(f.budget.used).toBe(2);
+        expect(f.claims()).toBe(2);
+        f.tracker.settle(undefined);
+      } finally { f.close(); }
+    });
+  }
+
+  test("reset attempts share their seed while a new query reserves its own", async () => {
+    const f = fixture(true);
+    try {
+      const reservations = () => f.journal.lines.map(line => JSON.parse(line)).filter(row => row.kind === "reserve").length;
+      await f.owner.dispatchSidecarSend(target("search:q1"), async () => { expect(reservations()).toBe(1); });
+      await f.owner.dispatchSidecarSend(target("search:q1"), async () => { expect(reservations()).toBe(1); });
+      expect(reservations()).toBe(2);
+      await f.owner.dispatchSidecarSend(target("search:q2"), async () => { expect(reservations()).toBe(3); });
+      expect(f.budget.used).toBe(3);
+      expect(f.claims()).toBe(3);
+      expect(f.ledger.snapshot("pool", "anthropic")?.reserved).toBe(30);
+      expect(f.ledger.snapshot("identity", "parent-account")).toBeUndefined();
+      expect(f.ledger.snapshot("pool", "parent-pool")).toBeUndefined();
+      f.tracker.settle(undefined);
+    } finally { f.close(); }
+  });
+});
 
 describe("the request path books every physical send on the durable ledger", () => {
   test("one entry per charged send, and the terminal send settles with the real usage", () => {
@@ -399,5 +519,84 @@ describe("the request path books every physical send on the durable ledger", () 
       expect(complete?.settled).toBe(150);
       expect(complete?.unresolved).toBe(500);
     }
+  });
+});
+
+/**
+ * An explicit native continuation books its own measured successor frame -- the exact
+ * reconstructed input and that frame's output ceiling -- rather than reusing the opening
+ * request's estimate, and it still owns the routed model's terminal usage like any routed
+ * send. Because the reservation is its own keyed booking, it also must not disturb the
+ * request's other pending seeds in either direction.
+ */
+describe("explicit native-continuation spend identity", () => {
+  const rootId = `root-native-${crypto.randomUUID()}`;
+  function nativeFixture() {
+    const journal = memoryJournal();
+    const ledger = createSpendReservationLedger({ journal, policy: {
+      ...DEFAULT_SPEND_RESERVATION_POLICY, root: { maxTokens: 1_000_000 },
+    } });
+    // A full RequestLogContext: createResponsesSendBudget prices the successor frame on model.
+    const log = { model: "gpt-5.6-sol", provider: "test-pool",
+      accountLogLabel: "k0123456789abcdef0123456789abcdef",
+      usageLogInputTokens: 100, spendOutputCeilingTokens: 400 };
+    const tracker = createRequestSpendTracker(log, rootId, ledger);
+    const budget = createRequestExecutionBudget(undefined, "native-continuation-test", tracker);
+    const owner = createResponsesSendBudget({ req: new Request("http://localhost/v1/responses"),
+      logCtx: log, options: { sendBudget: budget } });
+    if (owner instanceof Response) throw new Error("owner refused");
+    return { journal, ledger, tracker, owner };
+  }
+
+  test("an explicit continuation books the measured successor frame and owns terminal usage", () => {
+    const f = nativeFixture();
+    const frame = { body: { max_output_tokens: 3900 }, text: "x".repeat(2000) };
+    const reporter = f.owner.continuationSendReporter(frame);
+    expect(reporter.beforeSend!()).toBe(true);
+    // ceil(2000 / ~4) + the frame's own 3900 ceiling; the stale opening estimate (100+400)
+    // would have booked 500 for the same send.
+    const expected = Math.max(1, estimateTokens(frame.text, "gpt-5.6-sol")) + 3900;
+    const reserve = f.journal.lines.map(line => JSON.parse(line)).find(row => row.kind === "reserve");
+    expect(reserve.tokens).toBe(expected);
+    expect(f.ledger.snapshot("root", rootId)?.reserved).toBe(expected);
+    reporter(1); reporter.close!();
+    f.tracker.settle({ inputTokens: 7, outputTokens: 3 });
+    const settled = f.journal.lines.map(line => JSON.parse(line)).filter(row => row.kind === "settle");
+    // The continuation is no auxiliary helper: the routed model's terminal usage is its own.
+    expect(settled.map(row => row.send)).toContain(reserve.send);
+  });
+
+  for (const [label, body, output] of [
+    ["omitted", {}, 400], ["removed", { max_output_tokens: null }, 0],
+    ["replaced", { max_output_tokens: 900 }, 900],
+  ] as const) test(`successor output reservation is ${label} independently of fresh input`, () => {
+    const f = nativeFixture();
+    const frame = { body, text: "x".repeat(1200) };
+    const reporter = f.owner.continuationSendReporter(frame);
+    expect(reporter.beforeSend!()).toBe(true);
+    const reserve = f.journal.lines.map(line => JSON.parse(line)).find(row => row.kind === "reserve");
+    expect(reserve.tokens).toBe(estimateTokens(frame.text, "gpt-5.6-sol") + output);
+    reporter(1); reporter.close!(); f.tracker.settle(undefined);
+  });
+
+  test("an explicit-estimate successor neither retires nor is retired by another leg", () => {
+    const f = nativeFixture();
+    const sendAlias = (id: string) => hashSpendAlias("", "send", id);
+    const abandons = () => f.journal.lines.map(line => JSON.parse(line))
+      .filter(row => row.kind === "abandon").map(row => row.send);
+    const explicitTarget = () => ({ targetKey: "native-continuation:c1",
+      explicitEstimate: true as const, estimate: { inputTokens: 10, outputCeilingTokens: 10 } });
+    const pending = f.tracker.ensureSeed!({ targetKey: "pending-leg" })!;
+    const explicit = f.tracker.ensureSeed!(explicitTarget())!;
+    // The successor books beside an unstarted deferred booking instead of retiring it.
+    expect(abandons()).toHaveLength(0);
+    expect(f.tracker.ensureSeed!({ targetKey: "pending-leg" })).toBe(pending);
+    // A later routed admission still retires an unused ordinary anchor, but the unstarted
+    // explicit seed its reporter owns is not a provisional anchor it may rebind.
+    f.tracker.ensureSeed!({ targetKey: "routed-leg" });
+    expect(abandons()).toContain(sendAlias(pending.sendId));
+    expect(abandons()).not.toContain(sendAlias(explicit.sendId));
+    expect(f.tracker.ensureSeed!(explicitTarget())).toBe(explicit);
+    f.tracker.settle(undefined);
   });
 });

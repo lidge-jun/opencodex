@@ -61,12 +61,12 @@ Home의 프로바이더를 사용할 컴퓨터에서 다음을 진행합니다.
 
 ## Child 제거하기
 
-Child의 **Disconnect**를 선택하고 alias를 확인합니다. Home은 터널을 중지하고 해당 Child의 링크 키를 폐기한 뒤 저장된 링크 기록을 삭제합니다.
+Child의 **Disconnect**를 선택하고 alias를 확인합니다. Home은 터널을 중지하고 해당 Child의 링크 키를 폐기한 뒤 저장된 링크 기록을 삭제합니다. 경량 에이전트(`ocx-child`)로 연결된 Child는 기본적으로 빠른 재연결을 위해 `~/.cache/opencodex/bin/ocx-child` 파일을 남겨두며, 확인 대화상자에서 **심어둔 경량 에이전트 파일까지 원격 컴퓨터에서 함께 삭제**를 선택하거나 `ocx link revoke --link-id <id> --purge`를 실행하면 에이전트 파일까지 함께 삭제합니다. Home은 이 삭제를 `PATH`에 있는 다른 `ocx-child`가 아니라 `~/.cache/opencodex/bin/ocx-child`(Windows에서는 `%LOCALAPPDATA%\opencodex\bin\ocx-child.exe`)에 심어둔 파일로 실행합니다. 그 파일이 없거나 Child가 파일을 삭제했다고 확인하지 않으면 Disconnect는 오류를 보고하고 링크를 그대로 남겨 두므로, 다시 시도하거나 삭제 옵션 없이 연결을 해제하거나 파일을 직접 지울 수 있습니다. `--purge`는 경량 Child에만 적용됩니다. 전체 OpenCodex 설치에서는 Home이 거부하고, Home이 Child 종류를 기록하기 전에 저장된 링크라면 먼저 Child를 확인합니다.
 
 Home에서 Child의 연결 해제 명령을 실행할 수 없으면 **Remove here only**를 선택합니다. 그러면 이 컴퓨터의 터널, 키, 기록만 삭제됩니다. 그 다음 Child에 로그인하여 실행합니다.
 
 ```bash
-ocx disconnect
+ocx disconnect   # 경량 모듈 Child인 경우 ~/.cache/opencodex/bin/ocx-child detach
 ```
 
 자식 연결을 끊으려면 자식에서 `ocx disconnect`를 실행합니다. 이 명령은 클라이언트 터널을 끊고 SSH를 통해 홈에서 링크를 폐기합니다. 홈에서 폐기하지 못하면 다음 문구를 출력합니다: `Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
@@ -79,11 +79,11 @@ Child는 링크를 통해 Home 컴퓨터의 프로바이더와 프로바이더 �
 
 ```text
 ocx link probe <alias> [--json]
-ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
+ocx link add <alias> [--plant] [--expect-fingerprint SHA256:…] [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
-ocx link revoke --link-id <id> [--json]
+ocx link revoke --link-id <id> [--purge] [--force --yes] [--json]
 ocx link reconnect --link-id <id> [--json]
 ```
 

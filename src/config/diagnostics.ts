@@ -49,6 +49,7 @@ import {
   malformedQuotaResetNotifyWarning,
   malformedCatalogAutoRefreshWarning,
   malformedCodexPoolWarning,
+  malformedTelemetryWarning,
   malformedSpendWarning,
   rawConfigRecord,
   malformedNativeSubagentFields,
@@ -81,6 +82,7 @@ import {
   compactionRoutingSchema,
   reasoningRetentionSchema,
   skillsConfigSchema,
+  telemetryConfigSchema,
   memoryModelsSchema,
 } from "./schema/leaf-validators";
 
@@ -175,6 +177,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (catalogRefreshWarning) warnings.push(catalogRefreshWarning);
   const codexPoolWarning = malformedCodexPoolWarning(rawParsed);
   if (codexPoolWarning) warnings.push(codexPoolWarning);
+  const telemetryWarning = malformedTelemetryWarning(rawParsed);
+  if (telemetryWarning) warnings.push(telemetryWarning);
   const spendWarning = malformedSpendWarning(rawParsed);
   if (spendWarning) warnings.push(spendWarning);
   const retentionWarning = degradedReasoningRetentionWarning(rawParsed, normalized);
@@ -709,6 +713,16 @@ function skillsConfigError(value: unknown): string | null {
   return "schema_invalid: skills" + (field ? "." + field : "") + ": " + (issue?.message ?? "invalid configuration");
 }
 
+export function telemetryConfigError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "telemetry") || raw.telemetry === undefined) return null;
+  const result = telemetryConfigSchema.safeParse(raw.telemetry);
+  if (result.success) return null;
+  const issue = result.error.issues[0];
+  const field = issue?.path.join(".");
+  return "schema_invalid: telemetry" + (field ? "." + field : "") + ": " + (issue?.message ?? "invalid configuration");
+}
+
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
   const chatgptDesktop = rawConfigRecord(value)?.chatgptDesktop;
   if (chatgptDesktop !== undefined && !chatgptDesktopSchema.safeParse(chatgptDesktop).success) {
@@ -773,6 +787,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? managementIngressConfigError(value)
     ?? metricsExportConfigError(value)
     ?? serviceHealthRecoveryConfigError(value)
+    ?? telemetryConfigError(value)
     ?? skillsConfigError(value);
   if (boundaryError) return { ok: false, error: boundaryError };
   const result = configSchema.safeParse(value);
@@ -783,24 +798,24 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
   return { ok: false, error: schemaDiagnosticsError(result.error) };
 }
 
-export function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
-  return configDiagnosticsFromText(raw);
+export function configDiagnosticsFromRaw(raw: string, options: { warn?: (message: string) => void } = {}): ConfigDiagnostics {
+  return configDiagnosticsFromText(raw, undefined, options.warn);
 }
 
-function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Uint8Array }): ConfigDiagnostics {
+function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Uint8Array }, warn?: (message: string) => void): ConfigDiagnostics {
   try {
     const parsed = JSON.parse(raw.replace(/^\uFEFF/, ""));
     projectRemovedOpenCodeFreeSnapshot(parsed, file);
     sanitizeOpenCodeOverridesForLoad(parsed);
-    sanitizeReasoningPinsForLoad(parsed);
+    sanitizeReasoningPinsForLoad(parsed, warn);
     // Same degradation as loadConfig: a hand-edited invalid retryOn429 must not trip the
     // schema and send the caller a default-config fallback (the config command could then
     // persist that fallback over the user's providers/keys).
-    sanitizeModelDisplayNamesForLoad(parsed);
-    sanitizeAutoReviewForLoad(parsed);
-    sanitizeRetryOn429ForLoad(parsed);
-    sanitizeModelCostsForLoad(parsed);
-    sanitizeCapabilityDeclarationsForLoad(parsed);
+    sanitizeModelDisplayNamesForLoad(parsed, warn);
+    sanitizeAutoReviewForLoad(parsed, warn);
+    sanitizeRetryOn429ForLoad(parsed, warn);
+    sanitizeModelCostsForLoad(parsed, warn);
+    sanitizeCapabilityDeclarationsForLoad(parsed, warn);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
       return validFileConfigDiagnostics(normalizeApiKeyIds(result.data as OcxConfig), parsed);

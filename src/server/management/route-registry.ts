@@ -289,6 +289,8 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/storage/trash", module: "server/management/logs-usage-routes", mutates: false },
   { method: "GET", path: "/api/storage/trash/restore/test-stream", module: "server/management/logs-usage-routes", mutates: false, exempt: { reason: "test-seam", why: "Opt-in streaming seam declared at src/storage/restore-job.ts:34." } },
   { method: "GET", path: "/api/usage", module: "server/management/logs-usage-routes", mutates: false },
+  { method: "GET", path: "/api/usage/devices", module: "server/management/logs-usage-routes", mutates: false, exempt: { reason: "session-only", why: "Device inventory requires a current dashboard session and refuses raw admin and data keys." } },
+  { method: "GET", path: "/api/usage/source-facets", module: "server/management/logs-usage-routes", mutates: false, exempt: { reason: "session-only", why: "Usage source facets require a current dashboard session and refuse raw admin and data keys." } },
   // server/management/usage-timeline-routes
   { method: "GET", path: "/api/usage/timeline", module: "server/management/usage-timeline-routes", mutates: false },
   // server/management/advisor-routes
@@ -366,6 +368,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/oauth/logout", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/providers/keys", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/oauth/accounts/active", module: "server/management/oauth-account-routes", mutates: true },
+  { method: "PUT", path: "/api/oauth/accounts/affinity-reset", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/oauth/accounts/alias", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/oauth/accounts/pause", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/oauth/accounts/auto-switch", module: "server/management/oauth-account-routes", mutates: true },
@@ -448,6 +451,13 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/system/memory", module: "server/management/system-routes", mutates: false },
   { method: "GET", path: "/api/system/windows-replace-retries", module: "server/management/system-routes", mutates: false },
   { method: "POST", path: "/api/system/restart", module: "server/management/system-routes", mutates: true },
+  // server/management/telemetry-routes
+  { method: "GET", path: "/api/telemetry", module: "server/management/telemetry-routes", mutates: false },
+  { method: "PUT", path: "/api/telemetry", module: "server/management/telemetry-routes", mutates: true, exempt: { reason: "session-only", why: "User-consent boundary in AGENTS_INSTALL.md: changing telemetry consent over HTTP requires a human dashboard session; CLI callers use ocx telemetry enable/disable." } },
+  { method: "GET", path: "/api/telemetry/profile", module: "server/management/telemetry-routes", mutates: false },
+  { method: "POST", path: "/api/telemetry/profile", module: "server/management/telemetry-routes", mutates: true, exempt: { reason: "session-only", why: "User-consent boundary in AGENTS_INSTALL.md: connecting a public profile over HTTP requires a human dashboard session; CLI callers use ocx telemetry profile connect in an interactive terminal." } },
+  { method: "DELETE", path: "/api/telemetry/profile", module: "server/management/telemetry-routes", mutates: true },
+  { method: "GET", path: "/api/telemetry/profile/rank", module: "server/management/telemetry-routes", mutates: false },
   // --- Further routes an equality scan of their own file cannot see. ---
   // Each carries `mechanism`; the reconciliation test counts these separately.
   { method: "GET", path: "/api/storage", module: "server/management/storage-log-guard-routes", mutates: false, mechanism: "negated-guard" },

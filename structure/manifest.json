@@ -195,7 +195,7 @@
       "path": "local-messaging.md",
       "tier": 3,
       "title": "Local Codex Messaging",
-      "scope": "Loaded-session Unix messaging and separate opt-in stored-queue MCP tools, receipts and owned helper bounds.",
+      "scope": "Loaded-session Unix messaging and opt-in stored-queue MCP tools, explicit final-turn reads, receipts and owned helper bounds.",
       "documents": [
         "src/messaging/",
         "src/cli/"
@@ -550,6 +550,7 @@
         "src/lib/upstream-condition.ts",
         "src/lib/client-retry-after.ts",
         "src/lib/failure-detail.ts",
+        "src/lib/upstream-validation-detail.ts",
         "src/lib/response-service-tier.ts",
         "src/lib/model-identity.ts",
         "src/server/safe-response-headers.ts",
@@ -617,8 +618,8 @@
       "path": "providers/meta-muse.md",
       "tier": 4,
       "title": "Meta Muse Login",
-      "scope": "CLI credential import, approval lifecycle, explicit recovery and account-free login diagnostics.",
-      "documents": ["src/oauth/meta-muse.ts", "src/oauth/meta-muse-keychain.ts", "src/oauth/meta-muse-errors.ts", "src/oauth/login-cli.ts"]
+      "scope": "CLI credential import, approval lifecycle, explicit recovery, account-free login diagnostics and the runtime plan-refusal classification.",
+      "documents": ["src/oauth/meta-muse.ts", "src/oauth/meta-muse-keychain.ts", "src/oauth/meta-muse-errors.ts", "src/oauth/login-cli.ts", "src/providers/meta-muse-plan-refusal.ts"]
     },
     {
       "path": "providers/oauth-reconciliation.md",
@@ -860,6 +861,13 @@
       "documents": ["src/adapters/openai-chat/", "src/providers/", "src/config/", "src/types/", "src/server/management/", "src/server/auth-cors.ts"]
     },
     {
+      "path": "providers/mistral-chat.md",
+      "tier": 4,
+      "title": "Canonical Mistral Chat Wire Policy",
+      "scope": "Canonical Mistral request-field projection, native effort clamping and typed-content normalization.",
+      "documents": ["src/adapters/openai-chat/destination-policy.ts", "src/adapters/openai-chat/native-content.ts"]
+    },
+    {
       "path": "providers/chat-compat.md",
       "tier": 4,
       "title": "Chat Provider Compatibility",
@@ -974,6 +982,25 @@
         "src/routing/history/",
         "src/server/",
         "src/usage/"
+      ]
+    },
+    {
+      "path": "usage-client-attribution.md",
+      "tier": 5,
+      "title": "Usage Client Attribution",
+      "scope": "Privacy-bounded client labels carried from request ingress into usage records.",
+      "documents": [
+        "src/usage/client.ts",
+        "src/usage/source-filter.ts",
+        "src/usage/summary.ts",
+        "src/server/request-log.ts",
+        "src/server/index/",
+        "src/server/management/logs-usage-routes.ts",
+        "src/server/management/usage-aggregate-cache.ts",
+        "src/server/hub-usage.ts",
+        "src/client/link-management-relay.ts",
+        "src/remote/hub-usage.ts",
+        "src/client/hub-client.ts"
       ]
     },
     {
@@ -1329,6 +1356,11 @@
         "src/local-credentials/",
         "src/server/index/link-management.ts",
         "src/server/management/link-routes.ts",
+        "src/server/index/local-control-listener.ts",
+        "src/lib/local-control-socket.ts",
+        "src/cli/link-local-control.ts",
+        "src/server/management/link-enrollment.ts",
+        "native/ocx-child/",
         "src/lib/gui-pair-intent.ts",
         "src/lib/windows-owner-acl.ts",
         "src/server/gui-pair-delivery.ts"
@@ -1398,6 +1430,22 @@
         "src/config/account-auto-pause-revisions.ts",
         "src/oauth/api-key-pool-preserve.ts",
         "gui/src/account-pause-display.ts"
+      ]
+    },
+    {
+      "path": "telemetry.md",
+      "tier": 5,
+      "title": "Telemetry",
+      "scope": "Anonymous daily usage telemetry contract, consent state, install identity, ledger aggregation, scheduler, management API, CLI, and Cloudflare Worker collector.",
+      "documents": [
+        "src/telemetry/",
+        "src/types/telemetry.ts",
+        "src/server/management/telemetry-routes.ts",
+        "src/cli/telemetry.ts",
+        "src/config/telemetry-carry.ts",
+        "src/server/management/consent-session.ts",
+        "src/server/background-lifecycle.ts",
+        "services/telemetry-collector/"
       ]
     }
   ],

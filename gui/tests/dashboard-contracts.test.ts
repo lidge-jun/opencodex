@@ -47,13 +47,13 @@ test("Dashboard usage polling cannot delay core health and settings", async () =
   expect(core.slice(overviewFnStart, core.indexOf("export async function fetchDashboardMultiAgent"))).not.toContain("/api/sidecar-settings");
   expect(core.slice(overviewFnStart, core.indexOf("export async function fetchDashboardMultiAgent"))).not.toContain("/api/shadow-call-settings");
   expect(core.slice(sidecarsFnStart)).toContain("/api/sidecar-settings");
-  expect(hook).toContain("usageSummary30dResourceKey(apiBase)");
+  expect(hook).toContain('usageSummary30dResourceKey(apiBase, "all", targetKey)');
   expect(hook).toContain("dashboard-sidecars:${apiBase}");
   expect(hook).toContain("dashboard-overview:${apiBase}");
   expect(hook).toContain("fetchDashboardUsage(apiBase, signal)");
   expect(hook).toContain("fetchDashboardSidecars");
   expect(hook).toContain("fetchDashboardOverview");
-  expect(hook).toMatch(/usageSummary30dResourceKey\(apiBase\)[\s\S]*pollMs: 60_000/);
+  expect(hook).toMatch(/usageSummary30dResourceKey\(apiBase, "all", targetKey\)[\s\S]*pollMs: 60_000/);
 });
 
 test("Dashboard interactive controls load independently of health/providers", async () => {
@@ -197,6 +197,11 @@ test("fetchStartupHealth reports whether the server answer is still being resolv
     const settled = await fetchStartupHealth("http://test", new AbortController().signal);
     expect(settled).toEqual({ status: "protected", stale: false });
     expect(probeNeedsFastRetry(settled)).toBe(false);
+
+    globalThis.fetch = (async () => Response.json({ status: "at-risk", diagnosticStale: false,
+      routingKind: "opencodex-local", desktop: { owned: true, loginState: "unknown", running: false, viable: false } })) as typeof fetch;
+    expect(await fetchStartupHealth("http://test", new AbortController().signal))
+      .toEqual({ status: "at-risk", stale: false, desktopManaged: true });
 
     // A hard failure is the normal poll's job; re-asking every 2s would just hammer it.
     globalThis.fetch = (async () => new Response("nope", { status: 503 })) as typeof fetch;

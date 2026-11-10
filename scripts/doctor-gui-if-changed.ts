@@ -1,5 +1,5 @@
 /**
- * Run React Doctor in gui/ when this push includes gui/ changes.
+ * Run React Doctor in gui/ when this change set includes gui/ changes.
  * Used by `bun run prepush`.
  *
  * Gating by contract (doctor.config.json blocking: "warning"): findings fail
@@ -81,8 +81,8 @@ if (import.meta.main) {
   } else {
     let range: string | null = null;
     if (hasRef("@{u}")) range = "@{u}...HEAD";
-    else if (hasRef("origin/main")) range = "origin/main...HEAD";
-    else if (hasRef("main")) range = "main...HEAD";
+    else if (hasRef("origin/dev")) range = "origin/dev...HEAD";
+    else if (hasRef("dev")) range = "dev...HEAD";
     hadBase = range !== null;
     files = range ? diffNames(range) : [];
   }

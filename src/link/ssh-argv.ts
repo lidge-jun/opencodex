@@ -141,12 +141,92 @@ export const REMOTE_COMMAND_NOT_FOUND = 127;
 export const REMOTE_PLATFORM_UNSUPPORTED = 125;
 
 /**
+ * Reads the first record's \`command\` of \`serving-runtimes.json\` (#8359): one or two absolute paths
+ * without quotes or backslashes, printed one per line, from a file of at most 64 KiB. The file must
+ * be the complete document in the layout its only writer produces (\`JSON.stringify(_, null, 2)\` in
+ * src/config/serving-runtimes.ts): a first record without \`command\` never borrows a later record's,
+ * and a file cut off anywhere before its closing brace prints nothing. Any other shape fails, and an
+ * unreadable file or a missing awk fails without writing to stderr.
+ * Shared by the ocx discovery, pinned sync and runtime inspection scripts.
+ */
+export const REMOTE_SERVED_RUNTIME = `served_runtime() {
+  # The count below reports wc's status, never dd's: a missing dd or an unreadable file ends here,
+  # and a dd that fails anyway counts zero bytes, which is refused like an oversized census.
+  [ -f "$1" ] && [ -r "$1" ] && command -v dd >/dev/null 2>&1 || return 1
+  served_size=$( { dd if="$1" bs=65537 count=1 2>/dev/null | wc -c; } 2>/dev/null ) || return 1
+  [ "$served_size" -gt 0 ] 2>/dev/null && [ "$served_size" -le 65536 ] 2>/dev/null || return 1
+  awk '
+    { prev = last; last = $0 }
+    bad || done { next }
+    NR == 1 { if ($0 != "{") bad = 1; next }
+    NR == 2 { if ($0 != "  \\"runtimes\\": [") bad = 1; next }
+    NR == 3 { if ($0 != "    {") bad = 1; next }
+    inside {
+      if ($0 == "      ]" || $0 == "      ],") { inside = 0; closed = 1; next }
+      line = $0; sub(/,$/, "", line)
+      if (line !~ /^        "\\/[^"\\\\]*"$/ || ++count > 2) { bad = 1; next }
+      path[count] = substr(line, 10, length(line) - 10); next
+    }
+    $0 == "      \\"command\\": [" { if (closed) bad = 1; else inside = 1; next }
+    $0 == "    }" || $0 == "    }," { done = 1 }
+    END {
+      if (bad || !done || !closed || !count || prev != "  ]" || last != "}") exit 1
+      for (i = 1; i <= count; i++) print path[i]
+    }
+  ' "$1" 2>/dev/null
+}
+`;
+
+/**
+ * Tries the served install with \`attempt\`, which must read \`$served_bin\` and honour \`$ocx_entry\`:
+ * a compiled binary runs alone, and a package pair runs as \`bun <entry>\` only while the entry exists.
+ * The unquoted \`OCX_SERVED\` heredoc is safe only because \`served_runtime\` prints paths without
+ * quotes, backslashes or newlines; relaxing that character class would let a path expand or split.
+ */
+export function remoteServedRuntimeAttempt(attempt: string): string {
+  return `served_bin= served_entry=
+if served=$(served_runtime "\${OPENCODEX_HOME:-$HOME/.opencodex}/serving-runtimes.json"); then
+  { IFS= read -r served_bin; IFS= read -r served_entry; } <<OCX_SERVED
+$served
+OCX_SERVED
+  if [ -z "$served_entry" ]; then
+    ${attempt}
+  elif [ -f "$served_entry" ]; then
+    ocx_entry=$served_entry
+    ${attempt}
+    ocx_entry=
+  fi
+fi`;
+}
+
+/**
  * The remote sh script for every ocx call. `quoteRemote` single-quotes it, so the login shell
  * passes it through untouched and `$HOME`/`$PATH` expand in the remote `sh`; the arguments reach
- * ocx as `"$@"` without another round of parsing. Desktop binaries precede PATH candidates;
- * each candidate must run --version successfully. A missing runnable ocx exits 127.
+ * ocx as `"$@"` without another round of parsing. After an ephemeral ocx-child, the install that
+ * last started serving this home comes first, whatever its version (#8359): every `ocx start` that binds records its own
+ * relaunch argv at the front of `serving-runtimes.json` (src/config/serving-runtimes.ts), `[ocx]`
+ * for a compiled binary or `[bun, cli/index.ts]` for a package install. Only the first entry's
+ * `command`, one or two absolute paths without quotes or backslashes, is read; any other shape
+ * falls through. Desktop binaries then precede PATH candidates; each candidate must run --version
+ * successfully. A missing runnable ocx exits 127.
  */
-const REMOTE_OCX_CANDIDATES = `for candidate in "$HOME/.opencodex-desktop/bin/ocx" "/Applications/OpenCodex.app/Contents/MacOS/ocx" "/usr/bin/ocx"; do
+const REMOTE_OCX_CANDIDATES = `ocx_entry=
+${REMOTE_SERVED_RUNTIME}run_ocx_child() {
+  for candidate in "$HOME/.local/bin/ocx-child" "$HOME/.cache/opencodex/bin/ocx-child"; do
+    try_ocx "$candidate" "$@"
+  done
+  remaining=$PATH
+  while :; do
+    directory=\${remaining%%:*}
+    try_ocx "\${directory:-.}/ocx-child" "$@"
+    case "$remaining" in *:*) remaining=\${remaining#*:};; *) break;; esac
+  done
+}
+if [ -f "\${OPENCODEX_HOME:-$HOME/.opencodex}/child/state.json" ]; then
+  run_ocx_child "$@"
+fi
+${remoteServedRuntimeAttempt('try_ocx "$served_bin" "$@"')}
+for candidate in "$HOME/.opencodex-desktop/bin/ocx" "/Applications/OpenCodex.app/Contents/MacOS/ocx" "/usr/bin/ocx"; do
   try_ocx "$candidate" "$@"
 done
 remaining=$PATH
@@ -154,15 +234,16 @@ while :; do
   directory=\${remaining%%:*}
   try_ocx "\${directory:-.}/ocx" "$@"
   case "$remaining" in *:*) remaining=\${remaining#*:};; *) break;; esac
-done`;
+done
+run_ocx_child "$@"`;
 
 export const REMOTE_OCX_SCRIPT = `export PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
 case "$(uname -s 2>/dev/null)" in Windows*|MSYS*|MINGW*|CYGWIN*) exit ${REMOTE_PLATFORM_UNSUPPORTED};; esac
 try_ocx() {
-  if [ -x "$1" ] && "$1" --version >/dev/null 2>&1; then
+  if [ -x "$1" ] && "$1" \${ocx_entry:+"$ocx_entry"} --version >/dev/null 2>&1; then
     executable=$1
     shift
-    exec "$executable" "$@"
+    exec "$executable" \${ocx_entry:+"$ocx_entry"} "$@"
   fi
 }
 ${REMOTE_OCX_CANDIDATES}
@@ -250,7 +331,7 @@ trap 'rm -rf "$dir"' EXIT HUP INT TERM
 try_ocx() {
   c=$1; shift
   [ -x "$c" ] || return
-  ( ulimit -c 0; ulimit -f 1; exec "$c" --version ) >"$tmp" 2>/dev/null & vp=$!
+  ( ulimit -c 0; ulimit -f 1; exec "$c" \${ocx_entry:+"$ocx_entry"} --version ) >"$tmp" 2>/dev/null & vp=$!
   ( sleep 10 & timer=$!; trap 'kill "$timer" 2>/dev/null; wait "$timer" 2>/dev/null; exit' TERM HUP INT; : > "$ready"; wait "$timer" 2>/dev/null; kill -9 "$vp" 2>/dev/null ) >/dev/null 2>&1 & watchdog=$!
   while [ ! -f "$ready" ]; do kill -0 "$watchdog" 2>/dev/null || break; sleep 0.01 >/dev/null 2>&1; done
   { wait "$vp"; status=$?; } 2>/dev/null
@@ -283,7 +364,7 @@ try_ocx() {
   rm -rf "$dir"; trap - EXIT HUP INT TERM
   printf 'ocx-fanout:selected:%s\\n' "$version" >&2
   printf '%s\\n' 'ocx-fanout:stdout-begin'
-  exec "$c" sync --expect-link "$1" --json
+  exec "$c" \${ocx_entry:+"$ocx_entry"} sync --expect-link "$1" --json
 }
 ${REMOTE_OCX_CANDIDATES}
 exit ${REMOTE_COMMAND_NOT_FOUND}`;

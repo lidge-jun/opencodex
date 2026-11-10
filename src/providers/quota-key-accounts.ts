@@ -174,12 +174,19 @@ export async function readProviderApiKeyQuotas(
         return !!currentKey && identity(name, current, row.id, currentKey) === key;
       } catch { return false; }
     };
+    const isPaused = () => row.disabled === true
+      || roster(config.providers[name] ?? providerSnapshot).find(candidate => candidate.id === row.id)?.disabled === true;
+    const cached = key ? cache.get(key) : undefined;
     const entry = key && resolved && isCurrent()
-      ? await readEntry(key, force, isCurrent, () => {
-          const isolatedProvider = { ...providerSnapshot, apiKey: resolved, apiKeyPool: undefined };
-          const isolatedConfig = { ...config, providers: { [name]: isolatedProvider } };
-          return probe(isolatedProvider, isolatedConfig);
-        })
+      ? isPaused()
+        ? (cached && (!cached.quota || Date.now() - cached.quota.updatedAt < LAST_GOOD_MS)
+          ? cached
+          : { ts: Date.now(), quota: null, unavailable: true as const })
+        : await readEntry(key, force, isCurrent, () => {
+            const isolatedProvider = { ...providerSnapshot, apiKey: resolved, apiKeyPool: undefined };
+            const isolatedConfig = { ...config, providers: { [name]: isolatedProvider } };
+            return probe(isolatedProvider, isolatedConfig);
+          })
       : { ts: Date.now(), quota: null, unavailable: true as const };
     const result = {
       keyId: row.id,

@@ -29,7 +29,7 @@ file, and removes it again. Each client below has its own switch:
 | WorkBuddy AI | `~/.workbuddy-ai/models.json` | JSON | auto reload / new sessions | loopback placeholder |
 | Cline CLI | `~/.cline/data/settings/providers.json` and sibling `models.json` | JSON pair | after stopping and restarting Cline | loopback placeholder |
 | Kilo | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` | JSONC | new sessions | `OPENCODEX_KILO_API_KEY` |
-| Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`) |
+| Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`), plus a seeded `auth.json` credential the desktop app gates on |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | JSON | immediately via file watching | none — keyless loopback |
 | T3 Code | `$T3CODE_HOME/userdata/settings.json` (default `~/.t3/userdata/settings.json`) | JSON | immediately — T3 Code watches the file | non-secret loopback marker |
 
@@ -173,7 +173,7 @@ runs your own `claude` binary with `ANTHROPIC_BASE_URL` set to the proxy, the no
 `opencodex-proxy` marker as `ANTHROPIC_AUTH_TOKEN`, an explicitly empty `ANTHROPIC_API_KEY`, and
 `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1` so a `settings.json` env block in your Claude config cannot
 re-point it. Each routed model is a custom model keyed by its opencodex selector
-(`provider/model`), which T3 Code sends verbatim. It appears in T3 Code's model picker under
+(`provider/model`), which T3 Code sends verbatim. A model with an effort ladder declares it, so T3 Code offers its effort control and can start a subagent on it at a chosen effort. It appears in T3 Code's model picker under
 **opencodex**. T3 Code reloads the file on its own, so no restart is needed; catalog changes and
 `ocx sync` refresh the instance.
 
@@ -199,6 +199,7 @@ stops that deletion. Cleanup is sequential: earlier successful disables are not 
 one fails. If compensation also fails, a client file may be left in an intermediate state. Inspect
 the reported client files and retained recovery snapshots before retrying; retained state does not
 mean every client was restored or left unchanged.
+A placeholder `apiKey` seeded into Command Code's `~/.commandcode/auth.json` is not removed.
 
 For Gajae built-in presets, keep the routing choice in `~/.gjc/agent/config.yml`:
 
@@ -479,11 +480,15 @@ though the managed document does not change.
 
 If the file changes after you review it, the write is refused as stale. The dialog replaces the
 old plan with the updated one and asks you to confirm again; it never retries the write
-automatically. If a preview is temporarily unavailable, reload the page normally and start the
-action again.
+automatically. When a preview reports that no model catalog is loaded yet, the dialog stays open and
+offers **Load catalog and retry**: it reads the integration list again — the ordinary load that
+retains the catalog, never a preview that gathers models — and then asks for the plan once more.
 
-Aside uses the same preview and confirmation flow for one selected profile at a time. **Sync all
-profiles** remains a separate bulk action and is not bound to one combined preview.
+Aside uses the same preview and confirmation flow for one selected profile at a time, and a plan
+describes exactly that profile's file. Because one plan cannot describe several independently
+changing files, the Overview card for a conflicted Aside integration opens **Connect → Aside** with
+**Choose profile** rather than a Replace action; replace the block on the profile's own page. **Sync
+all profiles** remains a separate bulk action and is not bound to one combined preview.
 
 ## What to expect, honestly
 
@@ -1101,6 +1106,19 @@ whichever one it was written into.
 **The credential form.** The provider is written with `apiKey: false`, the documented
 form for an endpoint that needs no key. A raw string is refused by Command Code, and
 no service-token file is read, referenced, or exported by this integration.
+
+**The desktop app.** Command Code Desktop never reads that keyless form: before it
+shows a workspace it checks `~/.commandcode/auth.json` (or `COMMAND_CODE_API_KEY`)
+and, finding neither, stops on a sign-in screen that then asks for a subscription.
+Enabling therefore also seeds a placeholder `apiKey` into `auth.json` when the store
+has none — the file is shared with real Command Code logins, so an existing
+`apiKey` is never overwritten, other entries are kept, and Disable leaves the file
+in place. A sign-out inside the app is not undone by a later catalog sync; only a
+fresh enable seeds again.
+The placeholder is not a Command Code account key: Command Code's own cloud models
+still fail against it and the app logs `COMMAND_CODE_API_KEY was rejected by the API`
+until you sign in (`cmd login` or the app's login), which stores a real key. If you
+enabled this integration before the seed existed, disable and enable it once to write it.
 
 **Home resolution.** There is no `COMMANDCODE_HOME` override here. The published
 client resolves `HOME ?? USERPROFILE` and then appends `/.commandcode/providers.json`;

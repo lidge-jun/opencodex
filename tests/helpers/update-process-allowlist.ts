@@ -3,6 +3,7 @@
 // Exact existing terminal/probe lifecycle sites. No arbitrary process API is admitted.
 import { orchestratedChildReview } from "./update-review-orchestrated-child";
 import { orchestratedEntryReview } from "./update-review-orchestrated-entry";
+import { signedSupplyReview } from "./update-review-signed-supply";
 
 const baseProcessAllowlist: readonly (readonly [string, string, number])[] = [
   ["bin/ocx.mjs:runPackageManagerSelfUpdate:process.on(signal, () => {})","pre-mutation: keep the update session owner alive during installer supervision",1],
@@ -35,4 +36,4 @@ const baseProcessAllowlist: readonly (readonly [string, string, number])[] = [
   ["src/update/notify.ts:maybeShowUpdatePrompt:process.exit(0)","ordinary launcher/help/probe or terminal prompt outcome; update success remains guarded",1],
   ["src/update/service-home-probe-entry.ts:<module>:process.exit(1)","terminal failure only; cannot publish successful update",1],
 ];
-export const updateProcessAllowlist: readonly (readonly [string, string, number])[] = [...baseProcessAllowlist, ...orchestratedEntryReview.process, ...orchestratedChildReview.process];
+export const updateProcessAllowlist: readonly (readonly [string, string, number])[] = [...baseProcessAllowlist, ...orchestratedEntryReview.process, ...orchestratedChildReview.process, ...signedSupplyReview.process];

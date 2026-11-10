@@ -37,6 +37,13 @@ export interface ProviderQuotaWindow {
    * provider-wide group named "Opus" there would otherwise be mistaken for a per-model window.
    */
   scope?: "model";
+  /**
+   * Share of the provider-wide weekly limit a model-scoped window may consume, in percent:
+   * Anthropic's `weekly_scoped_shares[].allowance_percent_of_weekly` (Fable is "up to 50% of
+   * your weekly limit"). `percent` stays relative to this allowance. Read from upstream, never
+   * inferred from a plan; ranking restates family usage on the weekly scale with it.
+   */
+  weeklyAllowancePercent?: number;
   /** Passive family readings have their own freshness clock, independent of active probes. */
   passiveObservedAt?: number;
   /** Upstream refusal evidence, distinct from a measured utilization counter. */

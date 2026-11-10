@@ -1,4 +1,5 @@
 import { projectLocalModelRefusalLog } from "./request-log-failure-detail";
+import { carryWorkflowRefusal } from "./workflow-refusal";
 import { clientFacingModelLabel, clientFacingModelText, type ClientFacingModelLabel } from "../lib/error-destination";
 import { wasAccountAutoPaused } from "../lib/account-auto-pause-response";
 import { ownedChatErrorPayload, isProxyError, LOCAL_CHAT_ERROR_MESSAGES } from "../lib/client-error-body";
@@ -21,6 +22,7 @@ import { chatSettingsBody, chatToResponsesBody } from "../protocols/codecs/chat"
 import { chatConversationToIr, chatIrRouteEvidence, withDirectChatConversation, type ChatIrConversation } from "../protocols/codecs/chat-ir";
 import { antigravityDirectDeclineReason } from "./antigravity-direct-eligibility";
 import { normalizeChatImageParts } from "../chat/image-parts";
+import { chatHasInstructionImage } from "../adapters/claude-cli/instruction-images";
 import {
   chatCompletionsErrorResponse,
   collectChatCompletion,
@@ -575,6 +577,7 @@ async function handleChatCompletionsWithBudget(
     abortSignal: req.signal,
     // Body is Responses-shaped by now, but the client spoke Chat Completions.
     inboundWire: "chat",
+    chatInstructionImage: chatHasInstructionImage(chatBody),
     chatRawReasoningVisible: rawReasoningVisible,
     // A Chat caller may send an explicit empty `tools` array — a deny-all declaration the
     // translation drops along with the whole catalog. Carried separately so the
@@ -587,6 +590,7 @@ async function handleChatCompletionsWithBudget(
     ...(envelope && nativeChatCombos ? {
       protocolSource: createNativeChatComboSource({
         req, config, envelope, requestedModel, requestedStream: stream, translatorBudget,
+        workflowRefusalContext: logCtx,
         // Children run without logIds; the request's admission rides the source so their
         // replay scope resolves the same caller principal as every other surface.
         ...(admission ? { admission } : {}),
@@ -736,6 +740,7 @@ async function handleChatCompletionsWithBudget(
       },
     });
     if (replayRefusal) retainReplayRefusal(rewritten);
+    carryWorkflowRefusal(upstream, rewritten);
     return logIds
       // Deferred logging re-wraps this response and carries the verdict with it.
       ? responseWithDeferredRequestLog(rewritten, logIds.requestId, logIds.start, logCtx, undefined, legacyEnvelope)

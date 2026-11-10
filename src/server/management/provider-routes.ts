@@ -2,6 +2,7 @@ import { contextTierRecordConfigError, modelCapabilitiesConfigError, mergeModelC
 import { DECLARABLE_HOSTED_TOOL_TYPES } from "../../responses/hosted-tool-policy";
 import { randomUUID } from "node:crypto";
 import { cleanupRemovedGcpCredentials, providerGcpCredentialMarkers, snapshotProviderGcpCredentialMarkers } from "../../providers/gcp-credential-cleanup";
+import { providerHasStoredApiKey } from "../../providers/api-keys";
 import { providerGcpCredentialInputResponse, removeProviderWithGcpCredentials } from "./provider-gcp-credential-routes";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
@@ -120,6 +121,7 @@ import {
 } from "../auth-cors";
 import { providerCatalogCapabilityConfigError } from "./provider-capability-config";
 import { providerEmptyToolOutputConfigError } from "../../config/provider-validation";
+import { applyThinkingDisplayPatchFields } from "./provider-thinking-display-patch";
 import { applySystemEnvToggle } from "../system-env";
 import {
   LOCAL_PROVIDER_RELOAD_NAME_HEADER,
@@ -381,6 +383,14 @@ function applyProviderPatchFields(
     const dm = rawBody.defaultModel.trim();
     if (dm) next.defaultModel = dm;
     else delete next.defaultModel;
+    touched = true;
+  }
+  for (const field of ["project", "location"] as const) {
+    if (!Object.hasOwn(rawBody, field)) continue;
+    const value = rawBody[field];
+    if (typeof value !== "string") return { error: `${field} must be a string` };
+    if (value.trim()) next[field] = value.trim();
+    else delete next[field];
     touched = true;
   }
   if (Object.hasOwn(rawBody, "authMode")) {
@@ -680,6 +690,11 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "thinkingDisplay") || Object.hasOwn(rawBody, "modelThinkingDisplay")) {
+    const displayError = applyThinkingDisplayPatchFields(next, rawBody);
+    if (displayError) return displayError;
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "noStructuredOutputModels")) {
     const value = rawBody.noStructuredOutputModels;
     if (value === null) {
@@ -901,7 +916,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
 
   if (url.pathname === "/api/providers" && req.method === "GET") {
     return jsonResponse(Object.entries(config.providers).map(([name, p]) => ({
-      name, adapter: p.adapter, baseUrl: publicProviderBaseUrl(p.baseUrl), defaultModel: p.defaultModel, hasApiKey: !!p.apiKey,
+      name, adapter: p.adapter, baseUrl: publicProviderBaseUrl(p.baseUrl), defaultModel: p.defaultModel,
+      hasApiKey: providerHasStoredApiKey(p),
       // Presence only (#959 review): header names and values never leave the process.
       hasHeaders: !!p.headers && Object.keys(p.headers).length > 0,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
@@ -1599,7 +1615,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       success: true,
       name,
       disabled: config.providers[name]!.disabled === true,
-      hasApiKey: !!config.providers[name]!.apiKey,
+      hasApiKey: providerHasStoredApiKey(config.providers[name]!),
       ...(shadowDependency ? { dependentShadowIntercept: shadowDependency } : {}),
       ...(name === "xai"
         ? { xaiResponsesOptInState: xaiResponsesOptInState(config.providers[name]!) }
