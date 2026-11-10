@@ -51,7 +51,7 @@ export const CAPABILITIES: readonly Capability[] = [
     command: ["link","issue"],
     summary: "Issue one link credential and record its tunnel metadata.",
     routes: [{"method":"POST","path":"/api/link/issue"}],
-    flags: [{"name":"--clients","value":"string","summary":"Initial device selection; defaults to Codex and Claude Code. Other Home client defaults remain inherited."},{"name":"--alias","value":"string","required":true,"summary":"SSH host alias for the linked machine."},{"name":"--tunnel-port","value":"number","required":true,"summary":"Remote loopback port for the reverse tunnel."},{"name":"--json","value":"boolean","summary":"Emit the issue result as JSON."}],
+    flags: [{"name":"--clients","value":"string","summary":"Initial device selection: listed clients start on for this device, and Codex and Claude Code start off unless listed; other clients inherit Home defaults. Omitted, the device inherits every Home default, including an off Codex or Claude Code."},{"name":"--alias","value":"string","required":true,"summary":"SSH host alias for the linked machine."},{"name":"--tunnel-port","value":"number","required":true,"summary":"Remote loopback port for the reverse tunnel."},{"name":"--json","value":"boolean","summary":"Emit the issue result as JSON."}],
     mutates: true,
     json: "payload",
     details: ["Human-only handoff: issues a credential and prints its plaintext once. Never capture it in an agent transcript. Requires loopback admin authority; tunnel port must be 1024-65535."],

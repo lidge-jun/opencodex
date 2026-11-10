@@ -81,7 +81,7 @@ State-changing: yes. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--clients` | string | Initial device selection; defaults to Codex and Claude Code. Other Home client defaults remain inherited. |
+| `--clients` | string | Initial device selection: listed clients start on for this device, and Codex and Claude Code start off unless listed; other clients inherit Home defaults. Omitted, the device inherits every Home default, including an off Codex or Claude Code. |
 | `--alias` | string | SSH host alias for the linked machine. |
 | `--tunnel-port` | number | Remote loopback port for the reverse tunnel. |
 | `--json` | boolean | Emit the issue result as JSON. |
