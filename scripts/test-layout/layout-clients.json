@@ -179,5 +179,8 @@
   "link-ephemeral-child-discovery.test.ts": "clients",
   "link-enrollment-ephemeral-child.test.ts": "server",
   "link-ocx-child-e2e.test.ts": "clients",
-  "link-child-plant-foundations.test.ts": "clients"
+  "link-child-plant-foundations.test.ts": "clients",
+  "link-gated-ocx-argv.test.ts": "clients",
+  "link-child-update-contract.test.ts": "clients",
+  "link-child-observations.test.ts": "clients"
 }

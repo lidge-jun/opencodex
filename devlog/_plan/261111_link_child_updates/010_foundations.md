@@ -587,7 +587,7 @@ cases reuse the fake-executable harness of `link-pinned-sync-argv.test.ts:12-36`
 - `selected kind` (Revision 4) — the pinned-sync argv with `restart: "app-server"` against a fake `ocx-child` candidate
   prints `ocx-fanout:selected-kind:ocx-child` after the selection marker and `classifySyncResult` returns
   `executable: "ocx-child"`; the same argv against a fake `ocx` prints no such line; the plain sync argv never prints it.
-- `carried fields` (Revision 4) — a file written before revision 4 parses with the four new fields `null`;
+- `carried fields` (Revision 4) — a file written before revision 4 parses with the five new fields `null` (including `updateInFlight`);
   `withoutCarriedFields` drops exactly `CARRIED_OBSERVATION_FIELDS`.
 
 `tests/clients/link-child-update-contract.test.ts` (new; fails before implementation):
@@ -674,3 +674,56 @@ never stored). Windows: plan probe and sync builders are supported; apply is ref
 drops, `structure/remote-link.md:15`).
 
 NOT RUN: `bun run test` (full suite; shared loaded host), `tests/test-layout*.test.ts`.
+
+
+## wp1 P re-verification (base dev ddee2c2003)
+
+- Stale check: `git diff 00680193cb..ddee2c2003` over every file this phase modifies or reads as an oracle
+  (`src/link/ssh-argv.ts`, `remote-windows.ts`, `paths.ts`, `store.ts`, `src/cli/sync-fanout.ts`,
+  `src/update/orchestrated-plan.ts`, `orchestrated-outcome.mjs`, `orchestrated-entry.ts`, `src/config/serving-runtimes.ts`,
+  `src/lib/strict-semver.ts`, `native/ocx-child/src/lib.rs`, `scripts/test-layout/layout-clients.json`,
+  `structure/remote-link.md`) shows only `tests/fixtures/test-layout-expected.json` changed (other branches' entries).
+  Line anchors in this doc are current.
+- Folded residual from the #8500 final review: the carried-fields test now names five new fields.
+- Architect consultation for this phase is the roadmap's (005); no design decision changed at this P.
+
+
+
+## Revision 6 (wp1 plan audit, base ddee2c2003)
+
+Audit verdict GO-WITH-FIXES (blockers 2). Dispositions, binding on the implementation:
+
+1. **High, accepted: disable the Desktop CLI handoff inside update gates.** A package launcher forwards `--version` to the
+   Desktop's `ocx` through the handoff (`bin/ocx.mjs:1407`, `src/lib/desktop-cli-handoff.mjs:13`) but runs `update`
+   itself, so the gate could read a newer Desktop version while `update` reaches an old launcher. Every gated script
+   (POSIX and Windows) exports `OCX_NO_DESKTOP_HANDOFF=1` before both the `--version` probe and the exec. The pinned
+   sync gate gets it too (harmless: sync was never excluded from the handoff, and the selected binary should answer for
+   itself). Test: a fake launcher whose `--version` prints a Desktop version `2.99.0` only when
+   `OCX_NO_DESKTOP_HANDOFF` is unset, and `2.93.0` otherwise; the gate must refuse with exit 121 and the fake must
+   record no `update` invocation. The bypass record's "Known bypass: none" becomes "none known after the handoff is
+   disabled; an install that ignores `OCX_NO_DESKTOP_HANDOFF` would reopen it (every launcher since v2.90.0 honours it)".
+2. **High, accepted: keep `windowsPinnedSyncArgv`.** It stays exported from `remote-windows.ts` as a one-line wrapper over
+   `windowsGatedOcxArgv`, because `tests/clients/link-ephemeral-child-discovery.test.ts` and
+   `tests/clients/link-ssh-argv-discovery.test.ts` import it. Both files join the unchanged-regression list.
+3. **Medium, accepted:** `readGatedFraming` returns `ran` whenever exactly one selection marker and the stdout delimiter are
+   present, before looking at the exit code; an exit outside the contract after selection maps to `uncertain` (re-check),
+   never `failed`.
+4. **Medium, accepted with a Home-side fix:** a plan token that starts with `-` (base64url, about 1 in 64) cannot be passed
+   to `--expect-plan` (`src/update/orchestrated-arguments.mjs:47` rejects a value starting with `-`, unchanged since
+   v2.97.0). `remoteUpdateApplyArgv` omits `--expect-plan` for such a token; the apply is still pinned by `--version`
+   (Home version), bounded by `--not-after`, serialized by the Child's update mutex and refused on downgrade. Only the
+   plan-consistency check is lost for those Children. Test: a token starting with `-` produces argv without
+   `--expect-plan`; any other token includes it. No `src/update/*` change (D19).
+5. **Medium, accepted:** the clock marker regex captures `child-now:(.*)` and validates after capture (10–16 digits, safe
+   integer); a malformed value yields `childNowMs: "invalid"` as the test expects.
+6. **Low, accepted:** the result parser accepts `"unknown"` for `fromVersion`.
+7. **Low, accepted:** the new gated-argv test links `date` into its fake tool path.
+8. **Low, accepted:** `ChildVerdict` gains an optional `executable` field in the moved classifier; wp4 must drop it before
+   building `ocx.sync.fanout/1` output (noted in 040). wp1 has no caller that emits it.
+9. **Low, accepted:** `structure/remote-link.md:9` ("without a restart flag" stays true for wp1, but the sentence gains the
+   gated builder and the handoff rule) and `structure/cli-management.md:9` (classifier now lives in
+   `src/link/sync-fanout-classify.ts`, re-exported) are updated. No manifest change (the `src/link/` claim covers new files).
+10. **Low, accepted:** `updateChildObservations` throws `ConfigMutationLockError` on lock contention (`busy_timeout=0`);
+   callers in wp2+ handle it. Counts refreshed: `layout.json` 1999 lines, expected fixture 1655 lines,
+   `remotePinnedSyncArgv` has 3 test importers.
+
