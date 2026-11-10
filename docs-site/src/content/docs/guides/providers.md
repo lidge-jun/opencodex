@@ -69,6 +69,19 @@ Shipped v1 configs migrate automatically to marker 2 and one option-aware row. T
 is retained once at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore it with
 `cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`.
 
+## Claude OAuth client-version errors
+
+If an Anthropic OAuth request returns `claude_code_version_too_old`, check which provider you use.
+For Codex routed through the `anthropic` adapter, OpenCodex supplies its own Claude Code
+compatibility profile. Updating a separately installed `claude` executable does not update that
+profile; update OpenCodex and restart the proxy instead. For the `claude-cli` provider or Claude
+Code used directly, update the CLI instead. First-party native Messages requests with an observed
+Claude client identity retain that client's version, and configured header overrides take precedence.
+
+For example, the error reported for `claude-fable-5-2` required Claude Code 2.1.290 or newer;
+the profile in this version of OpenCodex presents 2.1.321. A newer upstream requirement may need
+a later OpenCodex profile. Updating the profile does not grant model access or change subscription limits.
+
 ## Claude Opus 5.5 progress updates
 
 When the `anthropic` adapter sends Claude Opus 5.5 to `api.anthropic.com` (OAuth or API key),
