@@ -1651,5 +1651,8 @@
   "link-ocx-child-e2e.test.ts": "clients",
   "link-child-plant-foundations.test.ts": "clients",
   "model-discovery-skip-invalid-rows.test.ts": "providers",
-  "management-provider-model-discovery.test.ts": "server"
+  "management-provider-model-discovery.test.ts": "server",
+  "link-gated-ocx-argv.test.ts": "clients",
+  "link-child-update-contract.test.ts": "clients",
+  "link-child-observations.test.ts": "clients"
 }
