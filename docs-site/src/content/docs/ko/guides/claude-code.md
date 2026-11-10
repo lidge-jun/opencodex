@@ -14,6 +14,19 @@ Messages API를 통해 사용하는 Devin 경로(SWE-2 포함)에서는 늦게 �
 이 출력 순서 수정으로 Cognition이 생성된 일부 시스템 텍스트를 거부하는 별개의 문제가 해결되지는 않아요.
 시스템 지시와 안전 제약은 그대로 유지해요.
 
+## Claude OAuth 클라이언트 버전 오류
+
+Anthropic OAuth 요청에서 `claude_code_version_too_old`가 반환되면 사용하는 프로바이더를 확인하세요.
+Codex에서 `anthropic` 어댑터로 연결할 때는 OpenCodex 자체의 Claude Code 호환 프로필을 사용합니다.
+별도로 설치한 `claude` 실행 파일을 업데이트해도 이 프로필은 바뀌지 않습니다. OpenCodex를 업데이트하고
+프록시를 재시작하세요. `claude-cli` 프로바이더나 Claude Code를 직접 사용한다면 해당 CLI를 업데이트하세요.
+실제 Claude 클라이언트의 식별 정보를 전달받은 Anthropic 네이티브 Messages 요청은 그 클라이언트의 버전을 유지하며,
+설정한 헤더가 있으면 그 값이 우선합니다.
+
+예를 들어 `claude-fable-5-2`에서 보고된 오류는 Claude Code 2.1.290 이상을 요구했습니다.
+이 버전의 OpenCodex 프로필은 2.1.321을 사용합니다. 향후 상위 버전이 필요해지면 더 최신 OpenCodex
+프로필이 필요할 수 있습니다. 프로필을 갱신해도 모델 이용 권한이나 구독 한도는 바뀌지 않습니다.
+
 ## CLI와 외부 실행 앱의 티어 기본값
 
 Claude Code 탭에서 Opus, Sonnet, Haiku, Fable 기본 모델을 선택한 뒤 **저장**하세요.

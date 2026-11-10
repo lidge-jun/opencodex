@@ -10,7 +10,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getConfigDir } from "../config/paths";
-import type { ProviderQuota } from "./quota-types";
+import { isWeeklyAllowancePercent, type ProviderQuota } from "./quota-types";
 
 export type ClaudeUsageSnapshot = {
   identity: string;
@@ -50,11 +50,16 @@ export function loadClaudeUsageSnapshot(path: string): ClaudeUsageSnapshot | und
       if (!q || typeof q !== "object" || !finite(q.updatedAt)) return;
       for (const field of ["fiveHourPercent", "fiveHourResetAt", "weeklyPercent", "weeklyResetAt"])
         if (q[field] !== undefined && !finite(q[field])) return;
-      if (q.customWindows !== undefined && (!Array.isArray(q.customWindows) || !q.customWindows.every((w: unknown) => {
-        if (!w || typeof w !== "object") return false;
-        const row = w as Record<string, unknown>;
-        return typeof row.label === "string" && finite(row.percent) && (row.resetAt === undefined || finite(row.resetAt));
-      }))) return;
+      // Display-only rows (an inactive model limit) reach the dashboard too, so they pass the same check.
+      for (const field of ["customWindows", "displayWindows"]) {
+        const windows: unknown = q[field];
+        if (windows !== undefined && (!Array.isArray(windows) || !windows.every((w: unknown) => {
+          if (!w || typeof w !== "object") return false;
+          const row = w as Record<string, unknown>;
+          return typeof row.label === "string" && finite(row.percent) && (row.resetAt === undefined || finite(row.resetAt))
+            && (row.weeklyAllowancePercent === undefined || isWeeklyAllowancePercent(row.weeklyAllowancePercent));
+        }))) return;
+      }
     }
     return saved;
   } catch { /* Missing or malformed cache is unknown, never proof of capacity. */ }

@@ -10,6 +10,16 @@
 
 export const PROVIDER_QUOTA_MAX_AGE_MS = 30 * 60_000;
 
+// Process-local authority: display readings must not acquire key-selection authority.
+const displayOnlyQuotas = new WeakSet<ProviderQuota>();
+export function markDisplayOnlyQuota(quota: ProviderQuota): ProviderQuota {
+  displayOnlyQuotas.add(quota);
+  return quota;
+}
+export function isDisplayOnlyQuota(quota: ProviderQuota): boolean {
+  return displayOnlyQuotas.has(quota);
+}
+
 /** Management-only eligibility evidence; private credential binding never leaves the server. */
 export type ProviderRoutingQuota =
   | { state: "unknown" }
@@ -17,6 +27,8 @@ export type ProviderRoutingQuota =
 
 export interface ProviderQuotaWindow {
   label: string;
+  /** Presentation text only; identity and routing use label and structured fields. */
+  displayLabel?: string;
   percent: number;
   resetAt?: number;
   /**
@@ -60,6 +72,8 @@ export interface ProviderQuotaCreditsUsd {
 }
 
 export interface ProviderQuota {
+  /** Display-only budget windows for which the upstream did not provide a usable entitlement. */
+  unknownBudgetWindows?: { label: string; resetAt?: number }[];
   /** Display-only subscription credits; not a routing or exhaustion window. */
   workbuddyCredits?: import("./workbuddy-credit-balance").WorkBuddyCreditBalance;
   fiveHourPercent?: number;
@@ -72,6 +86,12 @@ export interface ProviderQuota {
   kiroCreditsUsed?: number;
   kiroCreditsLimit?: number;
   customWindows?: ProviderQuotaWindow[];
+  /**
+   * Display-only measurements the producer withheld from routing: Anthropic model-scoped rows
+   * that upstream reports with `is_active: false`. Routing, exhaustion, cooldown recovery and
+   * reset ordering read only `customWindows`; nothing but quota display reads this field.
+   */
+  displayWindows?: ProviderQuotaWindow[];
   creditsUsd?: ProviderQuotaCreditsUsd;
   updatedAt: number;
 }
@@ -95,4 +115,9 @@ export const QUOTA_FAILURE_CODES = [
 export type QuotaFailureCode = typeof QUOTA_FAILURE_CODES[number];
 export function parseQuotaFailureCode(value: unknown): QuotaFailureCode | undefined {
   return QUOTA_FAILURE_CODES.find(code => code === value);
+}
+
+/** A model family's share of the weekly limit is meaningful only as a finite percent in (0, 100]. */
+export function isWeeklyAllowancePercent(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 100;
 }

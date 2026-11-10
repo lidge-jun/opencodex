@@ -778,8 +778,10 @@ every eligible target is cooling; that `combo_unavailable` 503 carries a `Retry-
 to the earliest remaining cooldown, rounded up to whole seconds with a minimum of 1. Waits are not jittered, so
 synchronized wake-ups are possible. An aborted request cancels this wait and returns the normal
 `client_cancelled` response; it does not dispatch a backup target after cancellation. A combo target
-cooldown is process-local per-combo state and is separate from the account-level Codex quota cooldown
-used by native account routing.
+cooldown is per-combo state, separate from the account-level Codex quota cooldown used by native
+account routing. It is saved with its absolute expiry to `combo-cooldowns.json` in the opencodex home,
+so a restart keeps it until that expiry; proxies sharing one home never shorten each other's
+cooldowns. Saving, renaming or deleting the combo clears its cooldowns.
 
 After a confirmed HTTP 400 context refusal, exhaustion returns the first such refusal as
 `context_length_exceeded`, including when the remaining targets cannot replay reasoning or lack
@@ -799,18 +801,32 @@ classify the original HTTP 403 as a hop.
 For streaming requests, the upstream HTTP status is not the final decision. OpenCodex buffers a
 bounded pre-output prefix of the selected child's Responses SSE. If the stream reports a retryable
 `response.failed` terminal before any text, reasoning, tool call, or other output event, the child
-is recorded as failed and the combo may try its next eligible target. A zero-output
-`response.incomplete` follows the same path when its reason is missing or is `adapter_eof`,
-`missing_terminal_event`, or `upstream_stall_timeout`. Explicit semantic reasons such as
-`max_output_tokens` and `content_filter` remain terminal, as does an explicit null reason.
-A reasonless final snapshot that already contains output items is also kept. The rate-limit and
+is recorded as failed and the combo may try its next eligible target. Run-turn combo targets buffer
+their pre-output reasoning for up to one second instead: if a
+zero-output `max_output_tokens` terminal arrives before any visible output and within the hold, the
+turn advances to another eligible target without cooling the healthy candidate; once the reasoning
+hold expires or visible output begins, the target commits and buffered reasoning is streamed
+immediately to the client. A zero-output `response.incomplete` follows the same path when its reason
+is missing or is `adapter_eof`, `missing_terminal_event`, `upstream_stall_timeout`, or an explicit
+`max_output_tokens` limit before any output is emitted. The `max_output_tokens` exception requires
+the turn to look finished: a snapshot that carries `end_turn: false`, or whose
+`incomplete_details.retryable` is `false`, stays on its target. An Anthropic `pause_turn` is a paused
+long-running turn the client is expected to continue; it reaches you as the same `incomplete` with
+reason `max_output_tokens` it always has, and it also stays on its target instead of moving to the
+next one. Other explicit semantic reasons such as `content_filter` remain terminal, as do post-output
+`max_output_tokens` limits and an explicit null reason.
+When every run-turn or SSE target ends with such a zero-output `max_output_tokens` limit, and no
+confirmed context refusal was seen (that one still takes precedence), the client receives the last
+attempt's HTTP 200 `incomplete` response (reason `max_output_tokens`) with that attempt's usage,
+rather than a 502 failure. Non-streaming native JSON is the exception: that body is never inspected,
+so its `incomplete` body, empty or not, is returned to you unchanged. A reasonless final snapshot
+that already contains output items is also kept. The rate-limit and
 response-metadata frames that a native Codex (ChatGPT account) target sends over its WebSocket are
 not output, so an overload error that follows them with no output still moves to the next target.
-Once any output event begins,
-the target is committed: a later stream failure is returned to the client and is never replayed on
-another provider, which prevents duplicate text and tool execution. If the pre-output buffer reaches
-its safety cap without a terminal or output boundary, OpenCodex also commits the current target
-instead of growing memory without a bound.
+Once any output event begins or the reasoning hold deadline is reached, the target is committed: a later stream failure is
+returned to the client and is never replayed on another provider, which prevents duplicate text and tool
+execution. If the pre-output buffer reaches its safety cap without a terminal or output boundary,
+OpenCodex also commits the current target instead of growing memory without a bound.
 
 ## Request-local target compatibility
 
@@ -1069,7 +1085,7 @@ validation message.
 
 ### Context-window refusals
 
-Combo recovery reuses the bounded context-overflow detector used by Responses recovery. It reads the innermost provider message, including `context_length_exceeded`, `prompt is too long`, `input is too long for requested model`, and `Please reduce the length of the messages or completion`. The last three count only when the provider message starts with them (Anthropic's with its token counts), so a validation error that quotes one as a parameter value, or an SDK error string that wraps one, does not qualify. A code beside an unrelated message, malformed JSON, a parameter validation error, or a generic instruction to shorten a parameter does not qualify either. Already-committed output is never replayed. Fallback policy, spend consent and send budgets still apply; each physical attempt retains its own usage. When eligible targets or the send budget run out, the first confirmed HTTP 400 context refusal takes precedence over later retryable errors, including quota errors. A later fatal refusal still stops immediately.
+Combo recovery reuses the bounded context-overflow detector used by Responses recovery. It reads the innermost provider message and recognizes explicit context-window/length overflow wording: a history, conversation, input, prompt, request, turn, or messages that have reached or passed a model's context limit; a prompt, input, request, or messages that are too long for the model's context window; a context window/length/limit that is full, exhausted, at its limit, or has been exceeded; and `context_length_exceeded`, `prompt is too long`, `input is too long for requested model`, and `Please reduce the length of the messages or completion`. The last three count only when the provider message starts with them (Anthropic's with its token counts), so a validation error that quotes one as a parameter value, or an SDK error string that wraps one, does not qualify. A negator that governs the overflow wording -- "does not exceed", "has not been exceeded", or "must not exceed" without a token count showing the limit was crossed -- keeps it out, while a negation in an earlier clause does not cancel a later overflow report. Capacity and availability prose about the service ("the context window is full, retry later", "shards exhausted", "KV cache for the context window is exhausted") describes back-pressure, not this turn's size, and keeps its cooldown. That wording is read in the clause that carries the verdict; a remedy that follows it ("Remove older messages before retrying", "enable prompt caching") does not turn an overflow into back-pressure. On a 5xx, "full", "exhausted" and "at its limit" never count as an overflow; they qualify only on a 4xx that speaks about the request. The detector can read the diagnostic from a string-valued JSON `error` field as well as a structured error message; a code beside an unrelated message, malformed JSON, a parameter validation error, or a generic instruction to shorten a parameter does not qualify. Already-committed output is never replayed. Fallback policy, spend consent and send budgets still apply; each physical attempt retains its own usage. When eligible targets or the send budget run out, the first confirmed HTTP 400 context refusal takes precedence over later retryable errors, including quota errors. A later fatal refusal still stops immediately.
 
 ### Why did failover stop after the first error?
 

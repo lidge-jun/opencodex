@@ -139,6 +139,8 @@ writer budget. Retry delays start at 25 ms and grow to at most 100 ms, capped by
 Contention never runs the publication callback before the exclusive lock is acquired;
 permanent SQLite errors and expiration still fail closed. `tests/config/local-credential-fence.test.ts`
 checks HTTP liveness with separate reader/writer processes, deadline refusal, reentrance and cleanup.
+`tests/codex-integration/native-profile-healthz.test.ts` also switches a real encrypted profile
+through the production management route and probes the production `/healthz` before releasing a peer's publication fence.
 
 ## Standalone pairing delivery
 
