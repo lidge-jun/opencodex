@@ -724,7 +724,12 @@ describe("release pipeline contract", () => {
       } finally { removeTreeWithRetry(cwd); }
     });
 
-    /** Run the actual YAML block with an allowlisted gh mock. */
+    /**
+     * Run the actual YAML block with an allowlisted gh mock. Actions runs a step as
+     * `bash ... {0}` on a script file, so this does too. Passed as a `-c` argument, the
+     * block crossed the Windows command line into Git Bash with the checker's `\\` folded to
+     * one backslash; its name regex then rejected every asset as an invalid receipt.
+     */
     function attach(env: Record<string, string> = {}) {
       const run = release.jobs?.["attach-release"]?.steps
         ?.find(step => step.run?.includes("gh release upload"))?.run;
@@ -735,7 +740,7 @@ describe("release pipeline contract", () => {
         writeFileSync(join(cwd, "dist/release/app.zip"), "archive");
         const digest = createHash("sha256").update("archive").digest("hex");
         writeFileSync(join(cwd, "verification/receipt.json"), JSON.stringify({ assets: { "app.zip": digest } }));
-        const result = Bun.spawnSync([bash!, "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", `
+        writeFileSync(join(cwd, "attach-step.sh"), `
           gh() {
             printf 'gh:%s\\n' "$*" >&2
             case "$1:$2" in
@@ -754,7 +759,9 @@ describe("release pipeline contract", () => {
           }
           ${run}
           printf 'attach-completed\\n'
-        `], { cwd, env: releaseTestEnv({ PATH: releaseShellPath(dirname(Bun.which("node")!), bash!, process.platform === "win32"), RUNNER_TEMP: ".", RELEASE_VERSION: "2.65.0", DRAFT_STATE: "true",
+        `);
+        const result = Bun.spawnSync([bash!, "--noprofile", "--norc", "-e", "-o", "pipefail", "attach-step.sh"], {
+          cwd, env: releaseTestEnv({ PATH: releaseShellPath(dirname(Bun.which("node")!), bash!, process.platform === "win32"), RUNNER_TEMP: ".", RELEASE_VERSION: "2.65.0", DRAFT_STATE: "true",
           RELEASE_INFO: '{"isDraft":true,"assets":[]}', INITIAL_STATUS: "0",
           FINAL_INFO: JSON.stringify({ isDraft: true, assets: [{ name: "app.zip", state: "uploaded", digest: `sha256:${digest}` }] }),
           UPLOAD_STATUS: "0", VIEW_STATUS: "0", EDIT_STATUS: "0", ...env }),

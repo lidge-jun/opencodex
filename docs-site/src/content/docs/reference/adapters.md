@@ -200,7 +200,37 @@ An explicitly configured provider `User-Agent` remains authoritative regardless 
 if the caller sends none, OpenCodex does not invent one. Additional caller metadata can be selected
 with `forwardClientHeaders`; provider `headers` win for this option, and credential or transport-owned
 names are refused. Canonical ChatGPT forward auth retains its separate fixed header allowlist.
-Only `originator`, `x-client-request-id`, `x-codex-app-version`, and `user-agent` are supported by `forwardClientHeaders`; arbitrary names are rejected on load/write and ignored at runtime.
+Only `originator`, `x-client-request-id`, `x-codex-app-version`, `user-agent`,
+`x-codex-window-id`, and `x-codex-installation-id` are supported by `forwardClientHeaders`;
+arbitrary names and wildcard prefixes are rejected on load/write and ignored at runtime.
+
+For a custom gateway that requires original Codex client metadata (for example, a sub2api
+account with `codex_cli_only` enabled), select only the fields its operator requires.
+If it requires the caller's window identifier, opt in on that provider:
+
+```json
+{
+  "forwardClientHeaders": [
+    "originator", "user-agent", "x-codex-app-version", "x-client-request-id",
+    "x-codex-window-id"
+  ]
+}
+```
+
+This preserves only values the client actually sends, including across native compact fallback.
+WebSocket clients retain their original `User-Agent` and app-version metadata through the
+handshake, with the same provider forwarding policy as HTTP clients.
+Responses authentication preparation preserves that permitted metadata before the final
+provider transport applies its header policy, for both HTTP and WebSocket turns.
+Both identifier headers are off by default on custom providers and require separate selection.
+Add `x-codex-installation-id` only when the trusted destination also requires it: an installation
+identifier can correlate requests across sessions. Selecting a window identifier does not enable
+the installation identifier. Removing a name stops this option copying it on subsequent requests;
+it does not erase identifiers already received by the destination. Provider `headers` remain
+authoritative, and this option does not filter identifiers already present in the request body.
+Missing identifiers are never generated, and connection tests or model discovery do not acquire
+a Codex identity through this option. These headers preserve caller metadata; they do not prove
+that the caller is an official client or grant permission under a gateway's access policy.
 
 ### Native compaction on custom gateways
 

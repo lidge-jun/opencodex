@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 // Turkish — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -140,6 +141,7 @@ export const tr: Record<TKey, string> = {
   ...connectV2Copy("tr"),
   ...startupV2Copy("tr"),
   ...proxyV2Copy("tr"),
+  ...telemetryProfileCopy("tr"),
   "claude.tierDefaults.unset": "Belirtilmedi (mevcut Claude ayarını koru)",
   "claude.tierDefaults.recovery": "Uygulama durdu ve otomatik geri yükleme başarısız oldu. Yeniden denemeden önce aşağıdaki yedeği kontrol edin.",
   "claude.tierDefaults.title": "CLI varsayılan modelleri",
@@ -821,6 +823,8 @@ export const tr: Record<TKey, string> = {
   "prov.port": "Port",
   "prov.default": "Varsayılan",
   "prov.loadingConfig": "Yükleniyor…",
+  "prov.targetChanged": "Pano hedefi değişti. Bu formu geçerli sunucuda yeniden açın.",
+  "prov.legacyTargetPreflight": "Bu proxy göndermeden önce kayıt hedefini kontrol eder ancak bunu atomik olarak doğrulayamaz. Hedefe bağlı kayıtlar için proxy’yi güncelleyin.",
   "prov.saved": "Kaydedildi! Uygulamak için proxy'yi yeniden başlatın.",
   "prov.loadConfigFail": "Konfigürasyon yüklenemedi",
   "prov.invalidJson": "Geçersiz JSON",
@@ -2083,12 +2087,19 @@ export const tr: Record<TKey, string> = {
   "pws.pacingRemoveModel": "{model} için istek aralığı kuralını kaldır",
   "pws.pacingRuleRequired": "Önce bir sağlayıcı sınırı veya model kuralı belirleyin.",
   "pws.pacingCapInvalid": "Maksimum eşzamanlı istek sayısı 1 veya daha büyük bir tam sayı olmalıdır.",
+  "pws.pacingValueInvalid": "Geçerli bir hız değeri girin: RPM 1/60–60.000, gecikme 1–3.600.000 ms, eşzamanlılık 1 veya daha fazla.",
   "pws.saving": "Kaydediliyor…",
   "pws.settingsSaved": "Ayarlar kaydedildi.",
   "pws.accountModeSaved": "Hesap modu kaydedildi.",
   "pws.accountModeFailed": "Hesap modu değiştirilemedi.",
   "pws.accountModeConfirm": "OpenAI hesap modu değiştirilsin mi? Aktif oturumlar hedef hesap havuzuna yönlendirilecek ve kota yeni mod altında birikecektir.",
   "pws.settingsUnsavedBar": "Kaydedilmemiş değişiklikleriniz var.",
+  "pws.draftTarget": "Düzenleniyor: {target}",
+  "pws.draftConflict": "Siz düzenlerken bu sunucudaki kayıtlı ayarlar değişti. Taslağınız korunuyor; hangi değerlerin kalacağını seçin.",
+  "pws.draftConflictFields": "Bu alanlar iki tarafta da değişti. Taslağı düzenleyin veya kayıtlı değerleri kullanın:",
+  "pws.draftConflictUseSaved": "Kayıtlı değerleri kullan",
+  "pws.draftConflictKeepDraft": "Taslağımı koru",
+  "pws.draftConflictResolveFirst": "Kaydetmeden önce hangi değerlerin kalacağını seçin.",
   "pws.unsavedLeaveBody": "Kaydedilmemiş değişiklikleriniz var. Ayrılmadan önce kaydetmek ister misiniz?",
   "pws.unsavedLeaveTitle": "Kaydedilmemiş değişiklikler",
   "pws.attentionRequired": "Dikkat gerekiyor",

@@ -1,7 +1,10 @@
 import { parseQuotaFailureCode } from "../../../src/providers/quota-types";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import type { AccountLoadState, AccountQuotaReading } from "../components/provider-workspace/types";
 import { createBoundedFetch } from "../bounded-fetch";
+import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
+import { errorMessageFrom } from "../api-error";
+import { useRenderTargetCapture } from "../use-render-target-capture";
 import { confirmAction, requestTextValue } from "../action-dialogs";
 import { credentialAliasRejection, CREDENTIAL_ALIAS_MAX_LENGTH } from "../credential-alias";
 import { accountNeedsReauth } from "../oauth-health-display";
@@ -112,8 +115,41 @@ export function buildActiveAccountNeedsReauthMap(
   return map;
 }
 
+/**
+ * One bounded roster read, released on every path.
+ *
+ * This lives outside the hook on purpose: a `try`/`finally` inside the memoized callback
+ * makes the compiler unable to infer its dependencies, so it reports the capture the read
+ * actually uses as an extra dependency. The callback below stays a plain delegation.
+ */
+async function readRosterWithCleanup<T>(
+  capture: ApiTargetCapture,
+  url: string,
+  signal: AbortSignal | undefined,
+  requests: Set<AbortController>,
+): Promise<T> {
+  const bounded = createBoundedFetch(20_000);
+  const abort = () => bounded.controller.abort();
+  if (signal?.aborted) abort();
+  signal?.addEventListener("abort", abort, { once: true });
+  requests.add(bounded.controller);
+  try {
+    const response = await targetFetch(capture, url, { signal: bounded.signal });
+    if (!response.ok) throw new Error(String(response.status));
+    const data = await response.json() as T;
+    if (bounded.signal.aborted) throw new Error("Quota roster deadline exceeded");
+    return data;
+  } finally {
+    bounded.clear();
+    signal?.removeEventListener("abort", abort);
+    requests.delete(bounded.controller);
+  }
+}
+
 export function useProviderAccountPools(deps: {
   apiBase: string;
+  /** Stable logical target; a relay apiBase can stay the same across a re-pair. */
+  targetKey?: string;
   t: (key: string, ...args: unknown[]) => string;
   config: Config | null;
   oauthStatus: Record<string, OAuthStatus>;
@@ -127,10 +163,16 @@ export function useProviderAccountPools(deps: {
   setOauthStatus?: React.Dispatch<React.SetStateAction<Record<string, OAuthStatus>>>;
 }) {
   const {
-    apiBase, t, config, aliveRef, notify,
+    apiBase, targetKey = apiBase, t, config, aliveRef, notify,
     fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth, invalidateOauthStatusReads, setOauthStatus,
   } = deps;
-  const accountTarget = useMemo(() => ({ apiBase }), [apiBase]);
+  // Keep the historical apiBase key for standalone callers; only a logical target that
+  // differs from the request base needs the additional discriminator.
+  const serverIdentity = targetKey === apiBase ? apiBase : `${apiBase}\u0000${targetKey}`;
+  // This hook's render owns the target for its actions. A module target change that has
+  // not re-rendered the hook cannot retarget a stale action.
+  const renderCapture = useRenderTargetCapture(apiBase, targetKey);
+  const accountTarget = useMemo(() => ({ apiBase, targetKey }), [apiBase, targetKey]);
   const [accountStateTarget, setAccountStateTarget] = useState(accountTarget);
   const [accountSets, setAccountSets] = useState<Record<string, { activeAccountId: string | null; accounts: OAuthAccount[] }>>({});
   const [accountLoadStates, setAccountLoadStates] = useState<Record<string, AccountLoadState>>({});
@@ -139,12 +181,20 @@ export function useProviderAccountPools(deps: {
   const setSwitchingAccount = (target: { provider: string; accountId: string } | null) => setSwitchingAccounts(target ? { [target.provider]: target } : {});
   const [pausingAccounts, setPausingAccounts] = useState<Record<string, { provider: string; accountId: string; paused: boolean }>>({});
   const pendingAffinityResets = useSyncExternalStore(subscribeAffinityResetRetries,
-    () => affinityResetRetries(apiBase), () => affinityResetRetries(apiBase));
+    () => affinityResetRetries(serverIdentity), () => affinityResetRetries(serverIdentity));
   const pausingAccount = Object.values(pausingAccounts)[0] ?? null;
   const [openAccounts, setOpenAccounts] = useState<Record<string, boolean>>({});
   const [keyPools, setKeyPools] = useState<Record<string, ApiKeyEntry[]>>({});
   const [addingKeyFor, setAddingKeyFor] = useState<string | null>(null);
   const [newKeyValue, setNewKeyValue] = useState("");
+  // A key typed on one target must not be submittable on another. Clear the add-key form
+  // when the logical target changes; it is not persisted anywhere.
+  const [keyInputIdentity, setKeyInputIdentity] = useState(serverIdentity);
+  if (keyInputIdentity !== serverIdentity) {
+    setKeyInputIdentity(serverIdentity);
+    setAddingKeyFor(null);
+    setNewKeyValue("");
+  }
   const accountRequestGenerationRef = useRef<Record<string, number>>({});
   const rosterGenerationRef = useRef<Record<string, number>>({});
   const quotaGenerationRef = useRef<Record<string, number>>({});
@@ -153,7 +203,30 @@ export function useProviderAccountPools(deps: {
   const pausingAccountRef = useRef(new Map<string, { provider: string; accountId: string }>());
   const switchingAccountRef = useRef(new Map<string, { provider: string; accountId: string }>());
   const mountedRef = useRef(true);
-  const serverRef = useRef(apiBase);
+  const serverRef = useRef(serverIdentity);
+  // The target identity this render owns, readable by an in-flight read's continuation.
+  // A layout effect is early enough: a superseded read settles in a microtask after the
+  // commit's layout phase but before its passive effects, so a passive ref write would
+  // still name the old target when the response lands.
+  const apiBaseRef = useRef(apiBase);
+  useLayoutEffect(() => { apiBaseRef.current = apiBase; }, [apiBase]);
+  useLayoutEffect(() => { serverRef.current = serverIdentity; }, [serverIdentity]);
+  /** May a completion still write the surface this render owns? */
+  const captureIsCurrent = useCallback((capture: ApiTargetCapture) =>
+    isApiTargetCaptureCurrent(capture) && capture.apiBase === apiBaseRef.current, []);
+  // The rows clear while rendering, so the new target never paints the previous target's
+  // accounts or keys for a frame. A passive-effect flush is too late for a read that settles
+  // in the commit's microtask gap; a render-phase reset is the same shape as the Codex pool.
+  const [syncedServerIdentity, setSyncedServerIdentity] = useState(serverIdentity);
+  if (syncedServerIdentity !== serverIdentity) {
+    setSyncedServerIdentity(serverIdentity);
+    setAccountSets({});
+    setAccountLoadStates({});
+    setSwitchingAccounts({});
+    setPausingAccounts({});
+    setKeyPools({});
+    setAccountStateTarget(accountTarget);
+  }
   useEffect(() => {
     const generations = accountRequestGenerationRef.current;
     const requests = requestsRef.current;
@@ -163,17 +236,6 @@ export function useProviderAccountPools(deps: {
     const pausingOwners = pausingAccountRef.current;
     const switchingOwners = switchingAccountRef.current;
     mountedRef.current = true;
-    const serverChanged = serverRef.current !== apiBase;
-    serverRef.current = apiBase;
-    if (serverChanged) void Promise.resolve().then(() => {
-      if (!mountedRef.current || serverRef.current !== apiBase) return;
-      setAccountSets({});
-      setPausingAccounts({});
-      setSwitchingAccounts({});
-      setKeyPools({});
-      setAccountLoadStates({});
-      setAccountStateTarget(accountTarget);
-    });
     return () => {
       mountedRef.current = false;
       for (const key of Object.keys(generations)) generations[key] += 1;
@@ -185,33 +247,19 @@ export function useProviderAccountPools(deps: {
       for (const controller of requests) controller.abort();
       requests.clear();
     };
-  }, [apiBase, accountTarget]);
+  }, [apiBase, accountTarget, serverIdentity]);
   // Provider lists this instance has already fetched for. The deferred loads below are deliberately
   // uncancellable, and StrictMode double-invokes their effects, so dedupe by list identity here.
   const accountSetsKeyRef = useRef<string | null>(null);
   const keyPoolsKeyRef = useRef<string | null>(null);
 
-  const readRoster = useCallback(async <T,>(url: string, signal?: AbortSignal): Promise<T> => {
-    const bounded = createBoundedFetch(20_000);
-    const abort = () => bounded.controller.abort();
-    if (signal?.aborted) abort();
-    signal?.addEventListener("abort", abort, { once: true });
-    requestsRef.current.add(bounded.controller);
-    try {
-      const response = await fetch(url, { signal: bounded.signal });
-      if (!response.ok) throw new Error(String(response.status));
-      const data = await response.json() as T;
-      if (bounded.signal.aborted) throw new Error("Quota roster deadline exceeded");
-      return data;
-    } finally {
-      bounded.clear();
-      signal?.removeEventListener("abort", abort);
-      requestsRef.current.delete(bounded.controller);
-    }
-  }, []);
+  // A read belongs to this render's target too. A stale capture is refused before
+  // fetch, so a stale render cannot paint the new target's roster.
+  const readRoster = useCallback(async <T,>(url: string, signal?: AbortSignal): Promise<T> =>
+    await readRosterWithCleanup<T>(renderCapture, url, signal, requestsRef.current), [renderCapture]);
 
   const fetchAccountSets = useCallback(async (providers: string[], refresh = false): Promise<boolean> => {
-    if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase) return false;
+    if (!aliveRef.current || !mountedRef.current || serverRef.current !== serverIdentity || !captureIsCurrent(renderCapture)) return false;
     const uniqueProviders = [...new Set(providers)];
     setAccountLoadStates(current => {
       const next = { ...current };
@@ -224,7 +272,8 @@ export function useProviderAccountPools(deps: {
       accountRequestGenerationRef.current[key] = generation;
       const rosterGeneration = (rosterGenerationRef.current[key] ?? 0) + 1;
       rosterGenerationRef.current[key] = rosterGeneration;
-      const currentRequest = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase && accountRequestGenerationRef.current[key] === generation;
+      const currentRequest = () => aliveRef.current && mountedRef.current && serverRef.current === serverIdentity
+        && captureIsCurrent(renderCapture) && accountRequestGenerationRef.current[key] === generation;
       const currentRoster = () => currentRequest() && rosterGenerationRef.current[key] === rosterGeneration;
       const url = `${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}`;
       try {
@@ -246,8 +295,8 @@ export function useProviderAccountPools(deps: {
           // Manual selection invalidates roster reads, not a per-ID quota probe already sent.
           const quotaGeneration = (quotaGenerationRef.current[key] ?? 0) + 1;
           quotaGenerationRef.current[key] = quotaGeneration;
-          const currentQuota = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
-            && quotaGenerationRef.current[key] === quotaGeneration;
+          const currentQuota = () => aliveRef.current && mountedRef.current && serverRef.current === serverIdentity
+            && captureIsCurrent(renderCapture) && quotaGenerationRef.current[key] === quotaGeneration;
           try {
             const quotaData = await readRoster<{ activeAccountId?: string | null; accounts?: OAuthAccount[] }>(`${url}&quota=1${refresh ? "&refresh=1" : ""}`);
             if (!Array.isArray(quotaData.accounts)) throw new Error("Invalid account quota roster");
@@ -294,17 +343,18 @@ export function useProviderAccountPools(deps: {
       }
     }));
     return results.every(Boolean);
-  }, [aliveRef, apiBase, readRoster]);
+  }, [aliveRef, apiBase, captureIsCurrent, readRoster, renderCapture, serverIdentity]);
 
   const fetchKeyPools = useCallback(async (providers: string[], refresh = false): Promise<boolean> => {
-    if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase) return false;
+    if (!aliveRef.current || !mountedRef.current || serverRef.current !== serverIdentity || !captureIsCurrent(renderCapture)) return false;
     const results = await Promise.all([...new Set(providers)].map(async name => {
       const key = `key:${name}`;
       const generation = (accountRequestGenerationRef.current[key] ?? 0) + 1;
       accountRequestGenerationRef.current[key] = generation;
       const rosterGeneration = (rosterGenerationRef.current[key] ?? 0) + 1;
       rosterGenerationRef.current[key] = rosterGeneration;
-      const currentRequest = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase && accountRequestGenerationRef.current[key] === generation;
+      const currentRequest = () => aliveRef.current && mountedRef.current && serverRef.current === serverIdentity
+        && captureIsCurrent(renderCapture) && accountRequestGenerationRef.current[key] === generation;
       const currentRoster = () => currentRequest() && rosterGenerationRef.current[key] === rosterGeneration;
       const url = `${apiBase}/api/providers/keys?name=${encodeURIComponent(name)}`;
       const failed = () => {
@@ -322,8 +372,8 @@ export function useProviderAccountPools(deps: {
         const enrich = async (): Promise<boolean> => {
           const quotaGeneration = (quotaGenerationRef.current[key] ?? 0) + 1;
           quotaGenerationRef.current[key] = quotaGeneration;
-          const currentQuota = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
-            && quotaGenerationRef.current[key] === quotaGeneration;
+          const currentQuota = () => aliveRef.current && mountedRef.current && serverRef.current === serverIdentity
+            && captureIsCurrent(renderCapture) && quotaGenerationRef.current[key] === quotaGeneration;
           try {
             const data = await readRoster<{ activeId?: string | null; keys?: ApiKeyEntry[] }>(`${url}&quota=1${refresh ? "&refresh=1" : ""}`);
             if (!Array.isArray(data.keys)) throw new Error("Invalid key quota roster");
@@ -346,10 +396,11 @@ export function useProviderAccountPools(deps: {
       } catch { return failed(); }
     }));
     return results.every(Boolean);
-  }, [apiBase, aliveRef, readRoster]);
+  }, [apiBase, aliveRef, captureIsCurrent, readRoster, renderCapture, serverIdentity]);
 
   const refreshAccountRosters = useCallback(async (target?: AccountSelectionTarget, signal?: AbortSignal): Promise<boolean> => {
-    if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase || signal?.aborted) return false;
+    if (!aliveRef.current || !mountedRef.current || serverRef.current !== serverIdentity
+      || !captureIsCurrent(renderCapture) || signal?.aborted) return false;
     const targets: AccountSelectionTarget[] = target ? [target] : Object.entries(config?.providers ?? {}).flatMap<AccountSelectionTarget>(([provider, p]) =>
       p.authMode === "oauth" && provider !== "openai" ? [{ provider, kind: "oauth" as const }]
         : p.hasApiKey && p.authMode !== "oauth" && p.authMode !== "forward" ? [{ provider, kind: "api-key" as const }] : []);
@@ -359,8 +410,8 @@ export function useProviderAccountPools(deps: {
       if (selectionMutationsRef.current.has(key)) return false;
       const generation = (rosterGenerationRef.current[key] ?? 0) + 1;
       rosterGenerationRef.current[key] = generation;
-      const ownsRoster = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
-        && rosterGenerationRef.current[key] === generation && !selectionMutationsRef.current.has(key);
+      const ownsRoster = () => aliveRef.current && mountedRef.current && serverRef.current === serverIdentity
+        && captureIsCurrent(renderCapture) && rosterGenerationRef.current[key] === generation && !selectionMutationsRef.current.has(key);
       const currentRequest = () => ownsRoster() && !signal?.aborted;
       if (kind === "oauth") setAccountLoadStates(current => currentRequest() ? { ...current, [provider]: "loading" } : current);
       try {
@@ -390,13 +441,13 @@ export function useProviderAccountPools(deps: {
       }
     }));
     return results.every(Boolean);
-  }, [aliveRef, apiBase, config, readRoster]);
+  }, [aliveRef, apiBase, captureIsCurrent, config, readRoster, renderCapture, serverIdentity]);
 
   const invalidateSelectionReads = (provider: string, kind: AccountSelectionTarget["kind"]) => {
     const key = `${kind === "oauth" ? "oauth" : "key"}:${provider}`;
     accountRequestGenerationRef.current[key] = (accountRequestGenerationRef.current[key] ?? 0) + 1;
     rosterGenerationRef.current[key] = (rosterGenerationRef.current[key] ?? 0) + 1;
-    if (kind === "oauth" && aliveRef.current && mountedRef.current && serverRef.current === apiBase) {
+    if (kind === "oauth" && aliveRef.current && mountedRef.current && serverRef.current === serverIdentity && captureIsCurrent(renderCapture)) {
       setAccountLoadStates(current => ({ ...current, [provider]: "loading" }));
     }
     // The independent quota generation still owns pending/error flags for surviving IDs.
@@ -405,7 +456,7 @@ export function useProviderAccountPools(deps: {
 
   const beginAccountLogout = (provider: string): (() => void) | null => {
     const key = `oauth:${provider}`;
-    if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase
+    if (!aliveRef.current || !mountedRef.current || serverRef.current !== serverIdentity || !captureIsCurrent(renderCapture)
       || selectionMutationsRef.current.has(key)) return null;
     invalidateSelectionReads(provider, "oauth");
     const owner = Symbol();
@@ -418,7 +469,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const setAccountPoolThreshold = async (provider: string, threshold: number): Promise<boolean> => {
-    if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase) return false;
+    if (!aliveRef.current || !mountedRef.current || serverRef.current !== serverIdentity || !captureIsCurrent(renderCapture)) return false;
     // Pool settings and roster reads describe one server value. Invalidate older reads before
     // publishing the confirmed save, then refresh so a concurrent external write can still win.
     invalidateSelectionReads(provider, "oauth");
@@ -438,6 +489,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const switchAccount = async (provider: string, account: OAuthAccount, retryPending = false) => {
+    const capture = renderCapture;
     if (account.active && !retryPending || account.needsReauth || account.paused || switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider) || selectionMutationsRef.current.has(`oauth:${provider}`)) return;
     const target = { provider, accountId: account.id };
     switchingAccountRef.current.set(provider, target);
@@ -445,11 +497,12 @@ export function useProviderAccountPools(deps: {
     const key = invalidateSelectionReads(provider, "oauth");
     const mutation = Symbol();
     selectionMutationsRef.current.set(key, mutation);
-    const currentMutation = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase && selectionMutationsRef.current.get(key) === mutation;
+    const currentMutation = () => aliveRef.current && mountedRef.current && serverRef.current === serverIdentity
+      && captureIsCurrent(capture) && selectionMutationsRef.current.get(key) === mutation;
     const label = accountLabel(provider, account);
-    const receipt = beginAffinityResetOperation(apiBase, provider);
+    const receipt = beginAffinityResetOperation(serverIdentity, provider);
     try {
-      const res = await fetch(`${apiBase}/api/oauth/accounts/active`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, accountId: account.id }) });
+      const res = await targetFetch(capture, `${apiBase}/api/oauth/accounts/active`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, accountId: account.id }) });
       if (!res.ok) {
         const failure = await res.json().catch(() => ({})) as { activeAccountId?: string | null;
           code?: string; retryable?: boolean; selectionCommitted?: boolean };
@@ -488,26 +541,27 @@ export function useProviderAccountPools(deps: {
       }
       if (switchingAccountRef.current.get(provider) === target) {
         switchingAccountRef.current.delete(provider);
-        if (aliveRef.current && mountedRef.current && serverRef.current === apiBase) setSwitchingAccounts(current => { const next = { ...current }; delete next[provider]; return next; });
+        if (aliveRef.current && mountedRef.current && serverRef.current === serverIdentity && captureIsCurrent(capture)) setSwitchingAccounts(current => { const next = { ...current }; delete next[provider]; return next; });
       }
     }
   };
 
   const setAccountThreshold = async (provider: string, account: OAuthAccount, threshold: number | null): Promise<boolean> => {
+    const capture = renderCapture;
     const key = `oauth:${provider}`;
     if (switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider) || selectionMutationsRef.current.has(key)) return false;
     const mutationKey = invalidateSelectionReads(provider, "oauth");
     const mutation = Symbol();
     selectionMutationsRef.current.set(mutationKey, mutation);
-    const currentMutation = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
-      && selectionMutationsRef.current.get(mutationKey) === mutation;
+    const currentMutation = () => aliveRef.current && mountedRef.current && serverRef.current === serverIdentity
+      && captureIsCurrent(capture) && selectionMutationsRef.current.get(mutationKey) === mutation;
     const label = accountLabel(provider, account);
     try {
       const bounded = createBoundedFetch(20_000);
       requestsRef.current.add(bounded.controller);
       let result: Pick<OAuthAccount, "autoSwitchThresholdOverride" | "autoSwitchThreshold" | "effectiveAutoSwitchThreshold">;
       try {
-        const res = await fetch(`${apiBase}/api/oauth/accounts/auto-switch`, {
+        const res = await targetFetch(capture, `${apiBase}/api/oauth/accounts/auto-switch`, {
           method: "PUT", headers: { "Content-Type": "application/json" }, signal: bounded.signal,
           body: JSON.stringify({ provider, accountId: account.id, threshold }),
         });
@@ -544,6 +598,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const pauseAccount = async (provider: string, account: OAuthAccount, paused: boolean, retryAffinityReset = false) => {
+    const capture = renderCapture;
     if (switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider) || selectionMutationsRef.current.has(`oauth:${provider}`)) return;
     const target = { provider, accountId: account.id };
     pausingAccountRef.current.set(provider, target);
@@ -551,14 +606,14 @@ export function useProviderAccountPools(deps: {
     const key = invalidateSelectionReads(provider, "oauth");
     const mutation = Symbol();
     selectionMutationsRef.current.set(key, mutation);
-    const currentMutation = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
-      && selectionMutationsRef.current.get(key) === mutation;
+    const currentMutation = () => aliveRef.current && mountedRef.current && serverRef.current === serverIdentity
+      && captureIsCurrent(capture) && selectionMutationsRef.current.get(key) === mutation;
     const label = accountLabel(provider, account);
-    const receipt = beginAffinityResetOperation(apiBase, provider);
+    const receipt = beginAffinityResetOperation(serverIdentity, provider);
     let result: { activeAccountId?: string | null; activeAccountChanged?: boolean;
       code?: string; retryable?: boolean; pauseCommitted?: boolean };
     try {
-      const res = await fetch(`${apiBase}/api/oauth/accounts/pause`, {
+      const res = await targetFetch(capture, `${apiBase}/api/oauth/accounts/pause`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider, accountId: account.id, paused, ...(retryAffinityReset ? { retryAffinityReset: true } : {}) }),
@@ -606,12 +661,12 @@ export function useProviderAccountPools(deps: {
       }
       if (pausingAccountRef.current.get(provider) === target) {
         pausingAccountRef.current.delete(provider);
-        if (aliveRef.current && mountedRef.current && serverRef.current === apiBase) setPausingAccounts(current => { const next = { ...current }; delete next[provider]; return next; });
+        if (aliveRef.current && mountedRef.current && serverRef.current === serverIdentity && captureIsCurrent(capture)) setPausingAccounts(current => { const next = { ...current }; delete next[provider]; return next; });
       }
     }
     // The server persisted the change. A failed follow-up read is not a failed pause: keep
     // the saved state visible and report only the refresh failure.
-    if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase) return;
+    if (!aliveRef.current || !mountedRef.current || serverRef.current !== serverIdentity || !captureIsCurrent(capture)) return;
     notify(t(paused ? "codexAuth.pauseSucceeded" : "codexAuth.resumeSucceeded", { email: label }), true);
     try {
       const refreshed = await refreshAccountRosters({ provider, kind: "oauth" });
@@ -623,22 +678,23 @@ export function useProviderAccountPools(deps: {
   };
 
   const retryAffinityResetOnly = async (provider: string, accountId: string) => {
+    const capture = renderCapture;
     const key = `oauth:${provider}`;
     if (selectionMutationsRef.current.has(key) || switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider)) return;
     const retry = { kind: "reset" as const, accountId };
-    rememberAffinityResetRetry(apiBase, provider, retry);
-    const rememberedRetry = affinityResetRetries(apiBase)[provider];
+    rememberAffinityResetRetry(serverIdentity, provider, retry);
+    const rememberedRetry = affinityResetRetries(serverIdentity)[provider];
     const target = { provider, accountId };
     const mutation = Symbol();
     invalidateSelectionReads(provider, "oauth");
     selectionMutationsRef.current.set(key, mutation);
     switchingAccountRef.current.set(provider, target);
     setSwitchingAccounts(current => ({ ...current, [provider]: target }));
-    const currentRetry = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
-      && selectionMutationsRef.current.get(key) === mutation && affinityResetRetries(apiBase)[provider] === rememberedRetry;
-    const receipt = beginAffinityResetOperation(apiBase, provider);
+    const currentRetry = () => aliveRef.current && mountedRef.current && serverRef.current === serverIdentity
+      && captureIsCurrent(capture) && selectionMutationsRef.current.get(key) === mutation && affinityResetRetries(serverIdentity)[provider] === rememberedRetry;
+    const receipt = beginAffinityResetOperation(serverIdentity, provider);
     try {
-      const res = await fetch(`${apiBase}/api/oauth/accounts/affinity-reset`, { method: "PUT",
+      const res = await targetFetch(capture, `${apiBase}/api/oauth/accounts/affinity-reset`, { method: "PUT",
         headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider }) });
       if (!res.ok) {
         const failure = (await res.json().catch(() => ({})) ?? {}) as { code?: string; retryable?: boolean };
@@ -654,7 +710,7 @@ export function useProviderAccountPools(deps: {
         receipt(() => undefined, true, { kind: "confirmed" });
       }
       if (showResult) {
-        const complete = result.affinityResetConfirmed === true && !affinityResetRetries(apiBase)[provider];
+        const complete = result.affinityResetConfirmed === true && !affinityResetRetries(serverIdentity)[provider];
         notify(t(complete ? "prov.affinityResetComplete" : "prov.affinityResetPending"), complete);
       }
     } catch {
@@ -663,14 +719,14 @@ export function useProviderAccountPools(deps: {
       receipt();
       if (selectionMutationsRef.current.get(key) === mutation) {
         selectionMutationsRef.current.delete(key);
-        if (aliveRef.current && mountedRef.current && serverRef.current === apiBase) {
+        if (aliveRef.current && mountedRef.current && serverRef.current === serverIdentity && captureIsCurrent(capture)) {
           invalidateSelectionReads(provider, "oauth");
           void refreshAccountRosters({ provider, kind: "oauth" });
         }
       }
       if (switchingAccountRef.current.get(provider) === target) {
         switchingAccountRef.current.delete(provider);
-        if (aliveRef.current && mountedRef.current && serverRef.current === apiBase) {
+        if (aliveRef.current && mountedRef.current && serverRef.current === serverIdentity && captureIsCurrent(capture)) {
           setSwitchingAccounts(current => { const next = { ...current }; delete next[provider]; return next; });
         }
       }
@@ -679,7 +735,7 @@ export function useProviderAccountPools(deps: {
 
   const retryAffinityReset = async (provider: string) => {
     const pending = pendingAffinityResets[provider];
-    if (!pending || !aliveRef.current || !mountedRef.current || serverRef.current !== apiBase) return;
+    if (!pending || !aliveRef.current || !mountedRef.current || serverRef.current !== serverIdentity || !captureIsCurrent(renderCapture)) return;
     if (pending.kind === "reset") return retryAffinityResetOnly(provider, pending.accountId);
     const account = accountSets[provider]?.accounts.find(row => row.id === pending.accountId);
     if (!account) {
@@ -696,24 +752,30 @@ export function useProviderAccountPools(deps: {
   };
 
   const switchApiKey = async (provider: string, entry: ApiKeyEntry) => {
+    const capture = renderCapture;
     if (entry.active && !entry.disabled || selectionMutationsRef.current.has(`key:${provider}`)) return;
     const key = invalidateSelectionReads(provider, "api-key");
     const mutation = Symbol();
     selectionMutationsRef.current.set(key, mutation);
-    const currentMutation = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase && selectionMutationsRef.current.get(key) === mutation;
+    const currentMutation = () => aliveRef.current && mountedRef.current && serverRef.current === serverIdentity
+      && captureIsCurrent(capture) && selectionMutationsRef.current.get(key) === mutation;
     let resumed = false;
     try {
       if (entry.disabled) {
-        const resumeResponse = await fetch(`${apiBase}/api/providers/keys/pause`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, id: entry.id, paused: false }) });
+        const resumeResponse = await targetFetch(capture, `${apiBase}/api/providers/keys/pause`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, id: entry.id, paused: false }) });
         if (!currentMutation()) return;
         if (!resumeResponse.ok) { notify(t("prov.keySwitchFail"), false); return; }
         resumed = true;
       }
-      const res = await fetch(`${apiBase}/api/providers/keys/active`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, id: entry.id }) });
+      const res = await targetFetch(capture, `${apiBase}/api/providers/keys/active`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, id: entry.id }) });
       if (!currentMutation()) return;
       if (!res.ok) {
         const failure = await res.json().catch(() => ({})) as { error?: string };
-        if (currentMutation()) notify(resumed ? t("prov.keyResumedSwitchFailed") : failure.error || t("prov.keySwitchFail"), false);
+        if (currentMutation()) {
+          notify(resumed
+            ? t("prov.keyResumedSwitchFailed")
+            : errorMessageFrom(failure, t("prov.keySwitchFail"), t("prov.targetChanged")), false);
+        }
         return;
       }
       const data = await res.json().catch(() => ({})) as { activeId?: string | null };
@@ -735,13 +797,17 @@ export function useProviderAccountPools(deps: {
   };
 
   const removeApiKey = async (provider: string, entry: ApiKeyEntry) => {
+    const capture = renderCapture;
+    const currentMutation = () => aliveRef.current && mountedRef.current
+      && serverRef.current === serverIdentity && captureIsCurrent(capture);
     const consented = await confirmAction({
       message: t("prov.keyRemoveConfirm", { key: entry.label ?? entry.masked }),
       confirmLabel: t("common.remove"),
       tone: "danger",
     });
-    if (!consented) return;
-    const res = await fetch(`${apiBase}/api/providers/keys?name=${encodeURIComponent(provider)}&id=${encodeURIComponent(entry.id)}`, { method: "DELETE" });
+    if (!consented || !currentMutation()) return;
+    const res = await targetFetch(capture, `${apiBase}/api/providers/keys?name=${encodeURIComponent(provider)}&id=${encodeURIComponent(entry.id)}`, { method: "DELETE" });
+    if (!currentMutation()) return;
     if (res.ok) {
       notify(t("prov.keyRemoved", { key: entry.label ?? entry.masked }), true);
       void fetchKeyPools(Object.keys(keyPools));
@@ -751,13 +817,17 @@ export function useProviderAccountPools(deps: {
   };
 
   const addApiKeyValue = async (provider: string, rawKey: string): Promise<boolean> => {
+    const capture = renderCapture;
+    const currentMutation = () => aliveRef.current && mountedRef.current
+      && serverRef.current === serverIdentity && captureIsCurrent(capture);
     const key = rawKey.trim();
     if (!key) return false;
     try {
-      const res = await fetch(`${apiBase}/api/providers/keys`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, key }) });
+      const res = await targetFetch(capture, `${apiBase}/api/providers/keys`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, key }) });
+      if (!currentMutation()) return false;
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
-        notify(data.error || t("prov.keyAddFail"), false);
+        notify(errorMessageFrom(data, t("prov.keyAddFail"), t("prov.targetChanged")), false);
         return false;
       }
       notify(t("prov.keyAdded", { name: provider }), true);
@@ -779,6 +849,9 @@ export function useProviderAccountPools(deps: {
   };
 
   const editCredentialAlias = async (provider: string, type: "oauth" | "api-key", id: string, current?: string) => {
+    const capture = renderCapture;
+    const currentMutation = () => aliveRef.current && mountedRef.current
+      && serverRef.current === serverIdentity && captureIsCurrent(capture);
     const entered = await requestTextValue({
       message: t("prov.aliasPrompt"),
       initialValue: current ?? "",
@@ -787,13 +860,14 @@ export function useProviderAccountPools(deps: {
     });
     if (entered === null) return;
     const alias = entered.trim();
-    const response = await fetch(type === "oauth" ? `${apiBase}/api/oauth/accounts/alias` : `${apiBase}/api/providers/keys/alias`, {
+    const response = await targetFetch(capture, type === "oauth" ? `${apiBase}/api/oauth/accounts/alias` : `${apiBase}/api/providers/keys/alias`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(type === "oauth" ? { provider, accountId: id, alias } : { name: provider, id, alias }),
     });
+    if (!currentMutation()) return;
     if (!response.ok) {
       const data = await response.json().catch(() => ({})) as { error?: string };
-      notify(data.error || t("prov.aliasSaveFailed"), false);
+      notify(errorMessageFrom(data, t("prov.aliasSaveFailed"), t("prov.targetChanged")), false);
       return;
     }
     if (type === "oauth") await fetchAccountSets([provider]);
@@ -806,6 +880,7 @@ export function useProviderAccountPools(deps: {
   );
 
   const removeAccount = async (provider: string, account: OAuthAccount) => {
+    const capture = renderCapture;
     const label = accountLabel(provider, account);
     const consented = await confirmAction({
       message: t("prov.accountRemoveConfirm", { email: label }),
@@ -813,7 +888,7 @@ export function useProviderAccountPools(deps: {
       tone: "danger",
     });
     const key = `oauth:${provider}`;
-    if (!consented || !aliveRef.current || !mountedRef.current || serverRef.current !== apiBase) return;
+    if (!consented || !aliveRef.current || !mountedRef.current || serverRef.current !== serverIdentity || !captureIsCurrent(capture)) return;
     if (selectionMutationsRef.current.has(key) || switchingAccountRef.current.has(provider)
       || pausingAccountRef.current.has(provider)) return;
     invalidateSelectionReads(provider, "oauth");
@@ -835,13 +910,13 @@ export function useProviderAccountPools(deps: {
       clearStatus();
       void fetchOauth().catch(() => {});
     };
-    const pending = affinityResetRetries(apiBase)[provider];
-    const current = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
-      && selectionMutationsRef.current.get(key) === mutation;
+    const pending = affinityResetRetries(serverIdentity)[provider];
+    const current = () => aliveRef.current && mountedRef.current && serverRef.current === serverIdentity
+      && captureIsCurrent(capture) && selectionMutationsRef.current.get(key) === mutation;
     let committed = false;
-    const receipt = beginAffinityResetOperation(apiBase, provider);
+    const receipt = beginAffinityResetOperation(serverIdentity, provider);
     try {
-      const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}&id=${encodeURIComponent(account.id)}${pending ? "&retryAffinityReset=true" : ""}`, { method: "DELETE" });
+      const res = await targetFetch(capture, `${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}&id=${encodeURIComponent(account.id)}${pending ? "&retryAffinityReset=true" : ""}`, { method: "DELETE" });
       let result: { code?: string; retryable?: boolean; deletionCommitted?: boolean; affinityResetConfirmed?: boolean };
       let partial = false;
       if (res.ok) result = (await res.json().catch(() => ({})) ?? {}) as typeof result;
@@ -869,7 +944,7 @@ export function useProviderAccountPools(deps: {
       }
       await fetchAccountSets([provider]);
       if (!statusBlocked) void fetchOauth().catch(() => {
-        if (aliveRef.current && mountedRef.current && serverRef.current === apiBase) notify(t("pws.accountsLoadFailed"), false);
+        if (aliveRef.current && mountedRef.current && serverRef.current === serverIdentity && captureIsCurrent(capture)) notify(t("pws.accountsLoadFailed"), false);
       });
       await fetchProviderQuotas(true);
     } catch {
@@ -879,7 +954,7 @@ export function useProviderAccountPools(deps: {
       receipt();
       if (selectionMutationsRef.current.get(key) === mutation) {
         selectionMutationsRef.current.delete(key);
-        if (aliveRef.current && mountedRef.current && serverRef.current === apiBase) {
+        if (aliveRef.current && mountedRef.current && serverRef.current === serverIdentity && captureIsCurrent(capture)) {
           invalidateSelectionReads(provider, "oauth");
           void refreshAccountRosters({ provider, kind: "oauth" });
         }
@@ -899,11 +974,11 @@ export function useProviderAccountPools(deps: {
     // guaranteeing the request goes out.
     // Keyed on the provider list because this effect re-runs whenever that memo changes, and
     // StrictMode double-invokes it on mount; an uncancellable microtask would otherwise duplicate.
-    const key = `${apiBase}:${oauthCardProviders.join(",")}`;
+    const key = `${serverIdentity}:${apiBase}:${oauthCardProviders.join(",")}`;
     if (accountSetsKeyRef.current === key) return;
     accountSetsKeyRef.current = key;
     void Promise.resolve().then(() => { void fetchAccountSets(oauthCardProviders); });
-  }, [apiBase, fetchAccountSets, oauthCardProviders]);
+  }, [apiBase, fetchAccountSets, oauthCardProviders, serverIdentity]);
 
   const keyCardProviders = useMemo(
     () => config ? Object.entries(config.providers).filter(([, p]) => p.hasApiKey && p.authMode !== "oauth" && p.authMode !== "forward").map(([n]) => n) : [],
@@ -911,11 +986,11 @@ export function useProviderAccountPools(deps: {
   );
   useEffect(() => {
     if (keyCardProviders.length === 0) return;
-    const key = `${apiBase}:${keyCardProviders.join(",")}`;
+    const key = `${serverIdentity}:${apiBase}:${keyCardProviders.join(",")}`;
     if (keyPoolsKeyRef.current === key) return;
     keyPoolsKeyRef.current = key;
     void Promise.resolve().then(() => { void fetchKeyPools(keyCardProviders); });
-  }, [apiBase, fetchKeyPools, keyCardProviders]);
+  }, [apiBase, fetchKeyPools, keyCardProviders, serverIdentity]);
 
   const activeAccountNeedsReauth = useMemo(
     () => buildActiveAccountNeedsReauthMap(accountSets, codexActiveNeedsReauth),
@@ -923,7 +998,11 @@ export function useProviderAccountPools(deps: {
   );
 
   return {
-    accountSets, accountLoadStates: accountStateTarget === accountTarget ? accountLoadStates : {}, switchingAccount, pausingAccount, switchingAccounts, pausingAccounts, pendingAffinityResets, retryAffinityReset, openAccounts, keyPools, addingKeyFor, newKeyValue,
+    accountSets: accountStateTarget === accountTarget ? accountSets : {},
+    accountLoadStates: accountStateTarget === accountTarget ? accountLoadStates : {},
+    switchingAccount, pausingAccount, switchingAccounts, pausingAccounts, pendingAffinityResets, retryAffinityReset, openAccounts,
+    keyPools: accountStateTarget === accountTarget ? keyPools : {},
+    addingKeyFor, newKeyValue,
     setAccountSets, setAccountLoadStates, setSwitchingAccount, setOpenAccounts, setKeyPools, setAddingKeyFor, setNewKeyValue,
     fetchAccountSets, fetchKeyPools, refreshAccountRosters, beginAccountLogout, switchAccount, pauseAccount, setAccountPoolThreshold, setAccountThreshold, switchApiKey, removeApiKey, addApiKeyValue, addApiKey, editCredentialAlias, removeAccount,
     oauthCardProviders, keyCardProviders, activeAccountNeedsReauth,

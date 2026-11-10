@@ -14,6 +14,8 @@ import { useT } from "../i18n/shared";
 import { useProviderAccountPools, type AccountSelectionTarget } from "../hooks/useProviderAccountPools";
 import { useCodexAccountPool } from "../hooks/useCodexAccountPool";
 import { useJsonConfigEditor } from "../hooks/useJsonConfigEditor";
+import { createProviderDraftStore, providerDraftTargetLabel } from "../provider-workspace/target-drafts";
+import { useLegacyTargetPreflightNotice } from "./use-legacy-target-preflight-notice";
 import { useKeyedClientResource } from "../client-resource";
 import { readSessionListCache } from "../session-list-cache";
 import type { ProvidersConfig } from "./providers-shared";
@@ -214,24 +216,51 @@ function useAccountSelectionEvents(
   return useCallback(() => recoverRef.current(), []);
 }
 
-export default function Providers({ apiBase }: { apiBase: string }) {
+export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase: string; targetKey?: string; targetLabel?: string }) {
   const t = useT();
-  const configCacheKey = `ocx.providers.config.v1:${apiBase}`;
-  const [config, setConfig] = useState<ProvidersConfig | null>(
-    () => readSessionListCache<ProvidersConfig>(configCacheKey),
+  const draftTargetKey = targetKey ?? apiBase;
+  const draftTargetLabel = targetLabel ?? providerDraftTargetLabel(draftTargetKey);
+  const target = useMemo(() => ({ apiBase, targetKey: draftTargetKey }), [apiBase, draftTargetKey]);
+  const configCacheKey = `ocx.providers.config.v1:${encodeURIComponent(draftTargetKey)}`;
+  const seededConfig = useMemo(() => readSessionListCache<ProvidersConfig>(configCacheKey), [configCacheKey]);
+  // Config belongs to the target that answered it. A late response from the previous
+  // target is ignored, and the first paint after a switch never renders the old server's
+  // providers under the new server's save callbacks.
+  const [configSnapshot, setConfigSnapshot] = useState<{ target: object; config: ProvidersConfig | null }>(
+    () => ({ target, config: seededConfig }),
   );
+  const config = configSnapshot.target === target ? configSnapshot.config : seededConfig;
+  const currentTargetRef = useRef(target);
+  useLayoutEffect(() => { currentTargetRef.current = target; }, [target]);
+  const setConfig = useCallback<React.Dispatch<React.SetStateAction<ProvidersConfig | null>>>((next) => {
+    if (currentTargetRef.current !== target) return;
+    setConfigSnapshot(current => {
+      const base = current.target === target ? current.config : seededConfig;
+      return { target, config: typeof next === "function" ? next(base) : next };
+    });
+  }, [seededConfig, target]);
+  /** In-memory only; a target switch parks its drafts here for the return trip. */
+  const draftStore = useMemo(() => createProviderDraftStore(), []);
   const [adding, setAdding] = useState(false);
   const [status, setStatus] = useState("");
   const [statusOk, setStatusOk] = useState(false);
   const [statusTone, setStatusTone] = useState<NoticeTone>("err");
   /** Bumped on every notify so repeated identical success toasts restart the dismiss timer. */
   const [statusRevision, setStatusRevision] = useState(0);
-  const { oauthProviders, setOauthProviders, oauthStatus, setOauthStatus } = useTargetOAuthState(apiBase);
+  const { oauthProviders, setOauthProviders, oauthStatus, setOauthStatus } = useTargetOAuthState(apiBase, draftTargetKey);
   const [busy, setBusy] = useState<string | null>(null);
   const [loginInfo, setLoginInfo] = useState<{ provider: string; url?: string; instructions?: string; deviceCode?: string; browserLaunch?: BrowserLaunch } | null>(null);
   const [workspaceSelected, setWorkspaceSelected] = useState<string | null>(null);
   const [addIntent, setAddIntent] = useState<AddProviderIntent | null>(null);
   const [removeConfirmName, setRemoveConfirmName] = useState<string | null>(null);
+  // A destructive confirmation belongs to the target that opened it. Close it when the
+  // logical target changes so the next confirm cannot delete a same-named provider on
+  // the new server.
+  const [removeConfirmIdentity, setRemoveConfirmIdentity] = useState(draftTargetKey);
+  if (removeConfirmIdentity !== draftTargetKey) {
+    setRemoveConfirmIdentity(draftTargetKey);
+    setRemoveConfirmName(null);
+  }
   /** ChatGPT/Codex login from Add Provider → Accounts (uses /api/codex-auth, not /api/oauth). */
   const [codexLoginOpen, setCodexLoginOpen] = useState(false);
   const [modelsRefreshToken, setModelsRefreshToken] = useState(0);
@@ -264,6 +293,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     setStatusOk(false);
     setStatusTone("err");
   }, []);
+
+  useLegacyTargetPreflightNotice(draftTargetKey, () => notify(t("prov.legacyTargetPreflight"), false, "warn"));
 
   const notifyCodexCompletion = useCallback((completion: CodexAccountMutationCompletion) => {
     if (completion.validationPending || completion.catalogRefreshPending) {
@@ -306,8 +337,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   // AddProviderModal). Prefetch usage too so the catalog does not paint alpha then
   // re-rank when the slow usage probe (~5s cold) finally returns.
   const presetResource = useKeyedClientResource(
-    `add-provider-presets:${apiBase}`,
-    [apiBase],
+    `add-provider-presets:${draftTargetKey}`,
+    [apiBase, draftTargetKey],
     async (signal) => {
       const res = await fetch(`${apiBase}/api/provider-presets`, { signal });
       if (!res.ok) throw new Error(String(res.status));
@@ -316,7 +347,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     },
   );
   useKeyedClientResource(
-    usageSummary30dResourceKey(apiBase),
+    usageSummary30dResourceKey(apiBase, "all", draftTargetKey),
     [apiBase],
     async (signal) => {
       const res = await fetch(`${apiBase}/api/usage?range=30d`, { signal });
@@ -339,7 +370,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
    */
   const { quotaRefresh, invalidateProviderQuotas, settleQuotaRefresh, beginQuotaRefresh } = useQuotaRefreshCoordinator(apiBase);
   const { fetchConfig: refreshConfigResult, fetchOauth, fetchProviderQuotas, invalidateOauthStatusReads, captureOauthStatusRead } = useProvidersFetch({
-    apiBase, t, setConfig, setOauthProviders, setOauthStatus, notify,
+    apiBase, targetKey: draftTargetKey, t, setConfig, setOauthProviders, setOauthStatus, notify,
     invalidateProviderQuotas,
     configCacheKey,
   });
@@ -354,7 +385,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   // WP3: one Codex account controller for the whole Providers page, shared by the
   // Overview tab and the Accounts tab so a mutation on either is instantly visible on
   // both. Mounting CodexAccountPool twice used to fork this state.
-  const codexPool = useCodexAccountPool(apiBase);
+  const codexPool = useCodexAccountPool(apiBase, true, draftTargetKey);
   // Single source for Codex reauth health: the controller derives it from the same
   // accounts/active pair this page used to poll on its own 30s timer.
   const codexActiveNeedsReauth = codexPool.activeNeedsReauth;
@@ -381,7 +412,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   }, [oauthStatus, codexPool.accounts, codexPool.loadState, codexActiveNeedsReauth]);
 
   const pools = useProviderAccountPools({
-    apiBase, t: t as unknown as Parameters<typeof useProviderAccountPools>[0]["t"],
+    apiBase, targetKey: draftTargetKey, t: t as unknown as Parameters<typeof useProviderAccountPools>[0]["t"],
     config, oauthStatus: oauthStatusWithCodex, aliveRef,
     notify,
     fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth, invalidateOauthStatusReads, setOauthStatus,
@@ -397,7 +428,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     return refreshAccountRosters(target);
   }, [refreshAccountRosters, oauthCardProviders, keyCardProviders]);
   const recoverSelectionStream = useAccountSelectionEvents(apiBase, config !== null, refreshSelection);
-  const rosterKey = JSON.stringify([apiBase, oauthCardProviders.toSorted(), keyCardProviders.toSorted()]);
+  const rosterKey = JSON.stringify([draftTargetKey, apiBase, oauthCardProviders.toSorted(), keyCardProviders.toSorted()]);
   const rosterRecoveryKeyRef = useRef<string | null>(null);
   useKeyedClientResource(`provider-rosters:${rosterKey}`, [rosterKey], async signal => {
     // Existing bootstrap effects own the first enriched reads. This resource is recovery only.
@@ -406,7 +437,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     return refreshAccountRosters(undefined, signal);
   }, { enabled: config !== null, pollMs: 30_000 });
   const jsonEditor = useJsonConfigEditor({
-    apiBase, config,
+    apiBase, targetKey: draftTargetKey, config,
     notify,
     fetchConfig, fetchProviderQuotas, onSaved: added => {
       if (added.length) {
@@ -420,7 +451,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const {
     draft, setDraft, jsonEditorOpen, jsonSaving, jsonLeaveOpen,
     saveConfig, openJsonEditor, discardJsonEditor, requestCloseJsonEditor, restoreJsonEditor,
-    jsonIsDirty, setJsonLeaveOpen,
+    jsonIsDirty, jsonConflict, jsonConflicts, useSavedJsonValues, keepJsonDraft, setJsonLeaveOpen,
   } = jsonEditor;
 
   /**
@@ -467,18 +498,18 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     // Quotas: the workspace shell owns this page's /api/provider-quotas read, including the
     // forced ?refresh=1 fan-out — do not double-fetch on mount. The header QuotaSummaryBar
     // keeps its own separate, passive 60s read of the same endpoint.
-    if (bootstrapKeyRef.current === apiBase) return;
-    bootstrapKeyRef.current = apiBase;
+    if (bootstrapKeyRef.current === draftTargetKey) return;
+    bootstrapKeyRef.current = draftTargetKey;
     void Promise.resolve().then(() => {
       void fetchConfig();
       void fetchOauth();
     });
-  }, [apiBase, fetchConfig, fetchOauth]);
+  }, [apiBase, draftTargetKey, fetchConfig, fetchOauth]);
 
   const bumpModelsRefresh = () => setModelsRefreshToken(n => n + 1);
 
-  const { cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled } = useProvidersOAuth({
-    apiBase, t, aliveRef, accountSets, setAccountSets,
+  const { cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled, loginCapture } = useProvidersOAuth({
+    apiBase, targetKey: draftTargetKey, t, aliveRef, accountSets, setAccountSets,
     setBusy, setStatus, setLoginInfo, setOauthStatus, invalidateOauthStatusReads, captureOauthStatusRead, beginAccountLogout, notify,
     fetchConfig, fetchOauth, fetchAccountSets, fetchProviderQuotas, bumpModelsRefresh,
     onLoginSettled: onProviderLoginSettled,
@@ -493,8 +524,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   }), [apiBase]);
 
   const { removeProvider, confirmRemoveProvider, setProviderDisabled, setDefaultProvider, updateProvider } = useProvidersCrud({
-    apiBase, t, removeBusyRef, workspaceSelected, setWorkspaceSelected, setRemoveConfirmName,
+    apiBase, targetKey: draftTargetKey, t, removeBusyRef, workspaceSelected, setWorkspaceSelected, setRemoveConfirmName,
     notify, fetchConfig, fetchOauth, fetchProviderQuotas,
+    onProviderRemoved: name => draftStore.clear(draftTargetKey, name),
     // Mode PATCHes clear quota caches and thread affinity; the shared controller
     // must re-read /active (with quota) so both tabs show the post-switch state.
     refreshCodexAccount: () => codexPool.load(true),
@@ -615,9 +647,12 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         <ToastNotice tone={statusTone} onDismiss={clearStatus} dismissLabel={t("common.close")}>{status}</ToastNotice>
       )}
       <ProviderWorkspaceShell
+        key={draftTargetKey}
         onRemoveProvider={removeProvider}
         providers={config.providers as Record<string, WorkspaceProvider>}
         apiBase={apiBase}
+        targetKey={draftTargetKey}
+        targetLabel={draftTargetLabel}
         defaultProvider={config.defaultProvider}
         selectedName={workspaceSelected}
         onSelect={setWorkspaceSelected}
@@ -631,6 +666,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           onSave: () => saveConfig(),
           onClose: requestCloseJsonEditor,
           onRestore: restoreJsonEditor,
+          conflict: jsonConflict,
+          conflicts: jsonConflicts,
+          onUseSaved: useSavedJsonValues,
+          onKeepDraft: keepJsonDraft,
         }}
         jsonSaving={jsonSaving}
         modelsRefreshToken={modelsRefreshToken}
@@ -680,6 +719,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             pausingAccountId={pausingAccounts[item.name]?.accountId ?? null}
             busyProvider={busy}
             loginHint={loginInfo}
+            loginCapture={loginCapture(item.name)}
             authHandlers={authHandlers}
             onRefreshQuota={() => refreshProviderQuota(item.name)}
             isDefault={item.name === config.defaultProvider}
@@ -687,6 +727,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             onSetDisabled={setProviderDisabled}
             onSetDefault={name => { void setDefaultProvider(name); }}
             onUpdateProvider={updateProvider}
+            targetKey={draftTargetKey}
+            targetLabel={draftTargetLabel}
+            draftStore={draftStore}
             codexController={codexPool}
           />
           );
@@ -694,6 +737,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       />
       <ProvidersPageModals
         apiBase={apiBase}
+        targetKey={draftTargetKey}
         config={config}
         adding={adding}
         modelsNotice={modelsNotice.notice ? {
