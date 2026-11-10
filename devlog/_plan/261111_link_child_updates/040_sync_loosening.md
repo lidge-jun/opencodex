@@ -5,6 +5,12 @@
 > M8 (`--restart-children=codex` requires `--yes`; activity is already read per Child at run time, deviation 3) and
 > L12 (verifier facts on 61151e3457).
 
+> **Revision 4 (CodeRabbit on #8500).** Folds 4529522026 (a sync verdict with `executable: "ocx-child"`, 010's new
+> marker, reports `restart-unsupported:ocx-child` for a record without `childKind`), 4529522035 (a failed activity
+> re-read withholds the restart with `restart-skipped:activity-unknown`) and 4529521916 (the Child is synced first and
+> the restart goes out as a second pinned sync after a fresh activity read, as in 030).
+> Also escapes the regex pipe in the Verifiers table (`Codex\|Fan-out`), which split that row.
+
 - **Work phase:** wp4. **Depends on:** wp1 (`remotePinnedSyncArgv(linkId, platform, opts)`, the classifier in
   `src/link/sync-fanout-classify.ts`), wp2 (`GET /api/link/status?children=1` with `child.activity` and
   `child.activeJob`, and `validateStatus` accepting `child`). **Class:** C3, promoted to C4 for the
@@ -40,9 +46,11 @@
    it does for a hinted skip (`sync-fanout.ts:153-156`). `not-selected` and `child-busy` rows carry no hint and
    keep exit 0, as D16 and D8 specify.
 3. **Activity is re-read per Child, not once.** `runHomeFanout` reads status once (`sync-fanout.ts:119`).
-   With `--restart-children` it reads it again immediately before each Child's SSH command, so the window in
-   which a new turn can start shrinks from the whole fan-out (up to 180 s per Child) to one loopback request
-   plus SSH setup. The residual window is recorded under "Enforcement bypass record".
+   With `--restart-children` it reads it again for each Child after that Child's plain sync and immediately before a
+   second pinned sync that carries the restart (Revision 4), so the window in which a new turn can start shrinks
+   from the whole fan-out (up to 180 s per Child) to one loopback request plus one SSH round trip of a no-op sync. A
+   failed re-read withholds the restart (`restart-skipped:activity-unknown`); the first read is never reused.
+   The residual window is recorded under "Enforcement bypass record".
 4. **An absent `child` block withholds the restart.** A CLI newer than the running Home runtime (not restarted
    after an update) gets rows without `child`; the Home cannot see running turns, so it syncs and reports
    `restart-skipped:activity-unknown` instead of guessing idle (D5: unknown is never idle).
@@ -216,17 +224,24 @@ Worker loop (`sync-fanout.ts:127-147`), after `const link` and the client-initia
       if (wire.state !== "connected") { ...unchanged tunnel-<state>... }
       if (wire.child?.activeJob) { result.children[index] = classify(link, "skipped", "child-busy"); continue; }
       let options: { restart?: ChildRestartRequest } = {}, note: RestartNote | undefined;
-      if (deps.restartChildren) {
-        if (link.childKind === "ephemeral") note = "restart-unsupported:ocx-child";
+      if (deps.restartChildren && link.childKind === "ephemeral") note = "restart-unsupported:ocx-child";
+      ...race unchanged, calling deps.runChild(link, deadline, {}) (the plain sync, never a restart)...
+      // Revision 4 (4529521916): activity is read after the sync, then the restart goes out as a second pinned sync.
+      if (deps.restartChildren && !note && run.state === "synced") {
+        let fresh: typeof wire | undefined;
+        // 4529522035: a failed re-read means activity is unknown; the first read is not reused.
+        try { fresh = (await deps.readLinkStatus()).links.find(row => row.id === link.id); } catch { fresh = undefined; }
+        const activity = fresh?.child?.activity;
+        if (!activity) note = "restart-skipped:activity-unknown";
+        else if (activity.inFlight > 0) note = "restart-skipped:link-active";
         else {
-          try { wire = (await deps.readLinkStatus()).links.find(row => row.id === link.id) ?? wire; } catch { /* keep the first read */ }
-          const activity = wire.child?.activity;
-          if (!activity) note = "restart-skipped:activity-unknown";
-          else if (activity.inFlight > 0) note = "restart-skipped:link-active";
-          else options = { restart: deps.restartChildren };
+          // ...race again within the same deadline:
+          const second = await deps.runChild(link, deadline, { restart: deps.restartChildren });
+          // 4529522026: ocx-child ignores the flag; 010's selected-kind marker tells us even without childKind.
+          if (second.executable === "ocx-child") note = "restart-unsupported:ocx-child";
+          else if (second.state !== "synced") run = { ...second, restartNote: second.restartNote };
         }
       }
-      ...race unchanged, calling deps.runChild(link, deadline, options)...
       const { restartNote, ...child } = run;
       const finalNote = note ?? restartNote;
       result.children[index] = child.state === "synced" && finalNote
@@ -310,13 +325,17 @@ lack `child`, which only matters with `--restart-children` (decision 4) or for t
   - `--child runs only the selected link`: two connected links, `selected = {A}`; B is `skipped/not-selected`
     with no hint; `runChild` called once; exit 0.
   - `busy link is skipped`: row with `child.activeJob`; `skipped/child-busy`, no hint, no SSH.
-  - `idle link gets the restart`: `child.activity.inFlight: 0`; `runChild` receives `{restart: "app-server"}`;
-    row `synced`, `reason null`, exit 0.
+  - `idle link gets the restart`: `child.activity.inFlight: 0`; `runChild` receives `{}` and then
+    `{restart: "app-server"}` (Revision 4: sync first, restart second); row `synced`, `reason null`, exit 0.
   - `active link syncs without restart` (A2): the second status read returns `inFlight: 1`; `runChild` receives
     `{}`; row `synced`/`restart-skipped:link-active` with hint; exit 6.
   - `a turn that starts after the first read is seen`: first read idle, second read `inFlight: 1` → withheld
     (proves the per-Child re-read).
   - `missing child block withholds`: rows without `child` → `restart-skipped:activity-unknown`.
+  - `failed re-read withholds` (Revision 4, 4529522035): first read idle, the re-read throws →
+    `restart-skipped:activity-unknown`, `runChild` called once with `{}`, exit 6.
+  - `ocx-child without childKind` (Revision 4, 4529522026): no `childKind`; the second `runChild` returns
+    `executable: "ocx-child"` → `synced`/`restart-unsupported:ocx-child` with hint, exit 6.
   - `ocx-child withholds`: `childKind: "ephemeral"` → `restart-unsupported:ocx-child`, no status re-read.
   - `Windows note is merged`: `runChild` returns `restartNote: "restart-skipped:windows"` → reason set, exit 6.
   - `failed sync keeps its own reason`: `runChild` fails with `child-sync-failed` while a note exists → the failure wins.
@@ -346,7 +365,7 @@ Registration (000 "Test registration rule"): both files as `"cli"`, one line eac
 
 | Guard | Tier | Executing surface | Known bypass | Residual risk / wording |
 | --- | --- | --- | --- | --- |
-| skip restart while a relayed turn runs | runtime, Home | `runHomeFanout` before each Child | a turn that starts between the per-Child status read and the Child's restart (one loopback request plus SSH setup and the Child's sync); traffic the Home does not relay (a Child user composing locally) | docs say "skips the restart for a Child that is relaying a model request at that moment", never "never interrupts a turn" |
+| skip restart while a relayed turn runs | runtime, Home | `runHomeFanout` after each Child's plain sync (Revision 4) | a turn that starts between the per-Child status read and the Child's restart (one loopback request plus one SSH round trip of a no-op sync; the catalog sync itself now runs before the read); traffic the Home does not relay (a Child user composing locally) | docs say "skips the restart for a Child that is relaying a model request at that moment", never "never interrupts a turn" |
 | no restart on Windows / `ocx-child` | runtime, Home | `runChild`, `runHomeFanout` | none: the flag is never sent | — |
 | Home's own scope unaffected | parse rule | `readRestartScope` exact tokens | none | — |
 | unknown `--child` refused | runtime, Home | `runSyncCommand` | an id removed between the check and fan-out reads `link-not-in-runtime` or is absent from the store | harmless |
@@ -360,7 +379,7 @@ Registration (000 "Test registration rule"): both files as `"cli"`, one line eac
 | `bun test tests/cli/sync-fanout-select-restart.test.ts tests/cli/sync-command-child-flags.test.ts` | new; fail before implementation | new behaviour |
 | `bun run skill:surface:check` | ran: exit 0 (current) | `capabilities-base.ts:786` → `01_surface_lifecycle.md` |
 | `bun test tests/cli/cli-capabilities.test.ts tests/ci-workflows/skill-ocx.test.ts` | ran in the 020 batch: 0 fail | flag/route parity, hand pages |
-| `rg -n -i "never requests a Codex|Fan-out never" src skills structure docs-site` | ran: 5 hits (lifecycle.md:609, 05_remote_hub.md:325, 01_surface_lifecycle.md:110, capabilities-base.ts:786, registry.ts:190); must be 0 English hits after the change, and each locale's paragraph is rewritten | wording sync |
+| `rg -n -i "never requests a Codex\|Fan-out never" src skills structure docs-site` | ran: 5 hits (lifecycle.md:609, 05_remote_hub.md:325, 01_surface_lifecycle.md:110, capabilities-base.ts:786, registry.ts:190); must be 0 English hits after the change, and each locale's paragraph is rewritten | wording sync |
 | `bun run typecheck` | ran: exit 0 | all `src/` |
 | `bun run structure:check` | revision 1: exit 1 on 00680193cb (an unrelated 603-line doc); audit r1 on 61151e3457: exit 0 | `structure/remote-link.md`, `cli-management.md` |
 

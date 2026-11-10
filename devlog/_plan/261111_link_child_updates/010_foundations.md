@@ -6,6 +6,13 @@
 > `classifyUpdatePlanProbe` return it), L12 (base and verifier facts refreshed), L15 (plan-probe comment) and
 > L16 (the real-CLI test runs plan and usage cases only).
 
+> **Revision 4 (CodeRabbit on #8500).** Folds 4529521956 (the audit r2 R5 `launcher` check moves to 030, which
+> adds the field; wp1's `assertGated` no longer names it), 4529521993 and 4529522026 (a pinned sync that carries a
+> restart prints `ocx-fanout:selected-kind:ocx-child` when the selected candidate is `ocx-child`, and
+> `classifySyncResult` returns it as `executable`, so a record without `childKind` is still recognised), and the
+> cache fields that 4529521968, 4529522106 and 4529522112 need (`catalogSyncedEtag`, `autoUpdateAttempts`,
+> `pendingUpdateRecovery`, plus `withoutCarriedFields`), declared here because the tolerant parser drops unknown keys.
+
 - **Work phase:** wp1. **Depends on:** nothing (base `dev` 61151e3457 at revision 2; first drafted on 00680193cb). **Class:** C4: it builds the
   remote command that later runs another machine's updater, so the D20 security review applies.
 - **Outcome:** the Home can build one SSH command that selects the Child's served `ocx`, checks its
@@ -127,6 +134,9 @@ export interface GatedOcxCommand {
   reportEntry: boolean;
   /** true: print ocx-fanout:child-now:<epoch-ms> (the Child's own clock) after the entry marker. Plan probe only. */
   reportClock: boolean;
+  /** Revision 4: with acceptEphemeral, print ocx-fanout:selected-kind:ocx-child when the selected candidate is ocx-child.
+   *  Set only by remotePinnedSyncArgv when a restart is requested (ocx-child ignores the restart flags, F2). */
+  reportSelectedKind?: boolean;
   args: readonly string[];
 }
 export const GATED_VERSION_PARTS: Readonly<Record<GatedMinVersion, readonly [string, string, string]>> = {
@@ -139,8 +149,6 @@ function assertGated(cmd: GatedOcxCommand): readonly [string, string, string] {
   const parts = Object.hasOwn(GATED_VERSION_PARTS, cmd.minVersion) ? GATED_VERSION_PARTS[cmd.minVersion] : undefined;
   if (!parts || !LACKS_MARKERS.has(cmd.lacksMarker)) throw new LinkSshArgumentError("invalid gated ocx command");
   if (cmd.args.length === 0 || cmd.args.some(arg => arg.includes("\0"))) throw new LinkSshArgumentError("invalid gated ocx arguments");
-  // audit r2 R5: the launcher union is validated like minVersion; anything else refuses to build.
-  if (cmd.launcher !== undefined && cmd.launcher !== "none" && cmd.launcher !== "report" && cmd.launcher !== "apply") throw new LinkSshArgumentError("invalid gated ocx launcher");
   return parts;
 }
 
@@ -149,6 +157,9 @@ function remoteGatedScript(cmd: GatedOcxCommand): string {
   const [major, minor, patch] = assertGated(cmd);
   const ephemeral = cmd.acceptEphemeral ? "" : `
   case "\${c##*/}" in ocx-child*) printf '%s\\n' 'ocx-fanout:child-ocx-ephemeral' >&2; exit 121;; esac`;
+  // Revision 4: only a pinned sync that carries a restart asks for this, so the plain sync's stderr stays exact.
+  const kind = cmd.acceptEphemeral && cmd.reportSelectedKind ? `
+  case "\${c##*/}" in ocx-child*) printf '%s\\n' 'ocx-fanout:selected-kind:ocx-child' >&2;; esac` : "";
   const entry = cmd.reportEntry ? `
   if [ -n "$ocx_entry" ]; then printf '%s\\n' 'ocx-fanout:entry:pair' >&2; else printf '%s\\n' 'ocx-fanout:entry:binary' >&2; fi` : "";
   // Seconds resolution is enough for a 120 s window; a date(1) that prints nothing numeric prints no marker.
@@ -165,7 +176,7 @@ function remoteGatedScript(cmd: GatedOcxCommand): string {
   if [ "$status" -eq 1 ]; then printf '%s\\n' 'ocx-fanout:${cmd.lacksMarker}' >&2; exit 121; fi
   if [ "$status" -ne 0 ]; then printf '%s\\n' 'ocx-fanout:child-ocx-version-unknown' >&2; exit 121; fi${ephemeral}
   rm -rf "$dir"; trap - EXIT HUP INT TERM
-  printf 'ocx-fanout:selected:%s\\n' "$version" >&2${entry}${clock}
+  printf 'ocx-fanout:selected:%s\\n' "$version" >&2${kind}${entry}${clock}
   printf '%s\\n' 'ocx-fanout:stdout-begin'
   exec "$c" \${ocx_entry:+"$ocx_entry"} "$@"
 }
@@ -188,15 +199,22 @@ export function remotePinnedSyncArgv(linkId: string, platform: "posix" | "window
   if (opts.restart !== undefined && !Object.hasOwn(RESTART_FLAG, opts.restart)) throw new LinkSshArgumentError("invalid restart request");
   const restart = opts.restart === undefined ? [] : [RESTART_FLAG[opts.restart]];
   return remoteGatedOcxArgv({ minVersion: "2.93.0", lacksMarker: "child-ocx-lacks-expect-link", acceptEphemeral: true,
-    reportEntry: false, reportClock: false, args: ["sync", "--expect-link", linkId, "--json", ...restart] }, platform);
+    reportEntry: false, reportClock: false, reportSelectedKind: restart.length > 0,
+    args: ["sync", "--expect-link", linkId, "--json", ...restart] }, platform);
 }
 ```
+
+`classifySyncResult` (moved below) accepts at most one `ocx-fanout:selected-kind:ocx-child` line after the selection
+marker and returns it as `executable: "ocx-child"` on its verdict (absent otherwise); two such lines are `invalid`.
+A record without `childKind` (optional, `src/link/store.ts:32`) whose Child selects `ocx-child` is therefore known to
+have ignored the restart flag, and 030's runners and 040's fan-out report the restart as unsupported. Windows never
+sends a restart (D20), so the PowerShell builder ignores the field.
 
 The rest of the script is byte-identical: the `try_ocx` probe, the watchdog, the private temp dir and the
 `( sleep 10 & timer=$!;` budget that `tests/clients/link-pinned-sync-argv.test.ts:182-183` rewrites. The
 positional change (`"$1"` → `"$@"`) is safe because `try_ocx` shifts the candidate off first
 (`ssh-argv.ts:332`) and every candidate call passes `"$@"` (`:216, :221, :226, :228, :230, :235, :238`).
-For the 2.93 sync gate with `acceptEphemeral: true` and `reportEntry: false`, stderr stays exactly
+For the 2.93 sync gate with `acceptEphemeral: true`, `reportEntry: false` and no restart, stderr stays exactly
 `ocx-fanout:selected:<v>`, which the existing exact-match assertions require (`link-pinned-sync-argv.test.ts:56`).
 The restart flags are the exact tokens `readRestartScope` reads (`src/cli/restart-scope.ts:35-37`); one is
 sent at most. A 2.93 Child already parses them (F2). In wp1 no production caller passes `opts` (wp4 does).
@@ -457,7 +475,21 @@ export interface ChildObservation {
   installedVersion: string | null; installKind: InstallKind; runtimeOwner: PlanRuntimeOwner | null;
   updateRoute: UpdateRoute; updateReason: string | null; targetVersion: string | null;
   catalogPulledAt: number | null; lastOperation: ChildOperationSummary | null; suppressedTarget: string | null;
+  /** Revision 4. Etag of the catalog bytes served with the pull at catalogPulledAt (020 recorder). Display verdict only. */
+  catalogPulledEtag: string | null;
+  /** Revision 4. Home catalog etag current when a Home-run pinned sync of this Child last reported synced (030 writes,
+   *  050 reads). A GET of /v1/catalog only proves a fetch, so fan-out eligibility uses this field, never catalogPulledAt. */
+  catalogSyncedEtag: string | null;
+  /** Revision 4. Counted automatic update attempts for one target (070); survives a Home restart. */
+  autoUpdateAttempts: { target: string; count: number } | null;
+  /** Revision 4. An update whose result is unknown (030 writes on uncertain; 070 clears after recovery). */
+  /** desktopRequestId: set by 080's Desktop route so the next run reconciles that request before sending another. */
+  pendingUpdateRecovery: { target: string; since: string; until: string; desktopRequestId?: string } | null;
 }
+/** Fields an operation or the Home owns; a fresh observe never overwrites them. Missing in an older file ⇒ null. */
+export const CARRIED_OBSERVATION_FIELDS = ["catalogPulledAt", "catalogPulledEtag", "catalogSyncedEtag", "lastOperation",
+  "suppressedTarget", "autoUpdateAttempts", "pendingUpdateRecovery"] as const;
+export function withoutCarriedFields(observation: ChildObservation): Partial<ChildObservation>;
 export interface ChildObservationsFile {
   schema: typeof CHILD_OBSERVATIONS_SCHEMA;
   homeCatalog: { etag: string; changedAt: number } | null;   // D6 header, written by wp2
@@ -547,6 +579,11 @@ cases reuse the fake-executable harness of `link-pinned-sync-argv.test.ts:12-36`
   `classifyUpdatePlanProbe` carries `childNowMs` into the `plan` verdict.
 - `classifier move` — `classifySyncResult` from `src/cli/sync-fanout` is the same function object as from
   `src/link/sync-fanout-classify`.
+- `selected kind` (Revision 4) — the pinned-sync argv with `restart: "app-server"` against a fake `ocx-child` candidate
+  prints `ocx-fanout:selected-kind:ocx-child` after the selection marker and `classifySyncResult` returns
+  `executable: "ocx-child"`; the same argv against a fake `ocx` prints no such line; the plain sync argv never prints it.
+- `carried fields` (Revision 4) — a file written before revision 4 parses with the four new fields `null`;
+  `withoutCarriedFields` drops exactly `CARRIED_OBSERVATION_FIELDS`.
 
 `tests/clients/link-child-update-contract.test.ts` (new; fails before implementation):
 - `oracle: every plan buildOrchestratedPlan can emit parses` — feed `buildOrchestratedPlan`

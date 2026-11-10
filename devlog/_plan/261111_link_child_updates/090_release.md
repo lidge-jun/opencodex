@@ -5,6 +5,11 @@
 > `gh release view`; acceptance criterion 8) and L12 (facts re-checked by audit r1 on 61151e3457: `structure:check` exit 0,
 > `layout.json` 1998 lines; the version derivation in step 5 must be rerun on the release commit).
 
+> **Revision 4 (CodeRabbit on #8500).** Folds 4529522154 (step 5 assigns `V`, refuses an empty value and prints it)
+> and 4529522164 (the Remote Link disclosure ships inside the generated notes the draft is created with: step 0 lands
+> `scripts/release-highlights/<V>.md` before `R` is chosen, `build-release-changelog.ts` prepends it, step 5a checks
+> the rendered notes before dispatch, and step 8a only verifies; editing a published release becomes a recovery path).
+
 - **Work phase:** wp9
 - **Depends on:** wp1–wp8 squash-merged into `dev`, each with green exact-head required CI, a
   fresh independent review, and the explicit security review recorded for wp3 (mutating
@@ -81,6 +86,18 @@ Home, Children or this machine (`000_plan.md:32-36`, UNSAFE outcome); the
 
 Variables used below: `R` = the full 40-hex release commit, `V` = the derived version.
 
+0. **Land the release highlights before choosing `R` (Revision 4, 4529522164).** The Release workflow creates the draft
+   with `--notes-file` from `build-release-changelog.ts` (`.github/workflows/release.yml:1597-1600`, `:1836-1837`) and
+   publishes that draft (`:1379-1381`), so text that must be public from the first minute has to be in those notes.
+   (a) A small wp9 code PR teaches `scripts/build-release-changelog.ts` to prepend
+   `scripts/release-highlights/<version>.md` when that file exists for the exact `--version`, and to fail when the file
+   exists but the output does not start with its first line; test in the release-notes suite (file present, absent,
+   other version ignored). It is release tooling, so it gets the explicit security review (`MAINTAINERS.md:83-111`).
+   (b) Compute `V` with step 5's command on the current `dev` head, then a C0 PR adds
+   `scripts/release-highlights/<V>.md` holding exactly the section in step 8a. Both merge before step 1, so `R`, the
+   `lane=all` run and the release all include them. If step 5 later derives a different `V` on `R`, stop and rename the
+   file through another PR (the run is not dispatched).
+
 1. **Confirm the batch is complete.** Every wp1–wp8 PR is merged; nothing from this unit is open.
    ```sh
    gh pr list -R lidge-jun/opencodex --state open --search "head:codex/link-child" --json number,title
@@ -122,16 +139,32 @@ Variables used below: `R` = the full 40-hex release commit, `V` = the derived ve
 5. **Compute the expected version** (so a surprise derivation fails the run instead of publishing).
    ```sh
    git fetch --tags origin && git checkout --detach "$R"
-   git tag --list 'v[0-9]*' | bun -e '
+   V="$(git tag --list 'v[0-9]*' | bun -e '
      import { devReleaseVersion, parseVersion } from "./scripts/version-line.ts";
      const tags = (await Bun.stdin.text()).trim().split("\n").filter(Boolean).map(t => t.slice(1));
      const s = [], p = [];
      for (const v of tags) (parseVersion(v)?.prerelease === null ? s : p).push(v);
      const base = (await Bun.file("package.json").json()).version;
-     console.log(devReleaseVersion({ base, stableTags: s, previewTags: p, channel: "latest" }));'
+     console.log(devReleaseVersion({ base, stableTags: s, previewTags: p, channel: "latest" }));')"
+   # Revision 4 (4529522154): every later step reads V; an empty or malformed value stops here.
+   printf '%s\n' "$V" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' || { echo "version derivation failed: '$V'" >&2; exit 1; }
+   echo "V=$V"
    ```
    Run at base 00680193cb on 2026-11-11 it printed `2.100.2` (exit 0). The workflow also unions npm
    versions (`release.yml:131-141`); if they disagree, the `version` input makes the run stop.
+
+5a. **Check the notes before dispatch (Revision 4, 4529522164).** Render the notes exactly as the workflow will and
+   refuse to dispatch unless the section leads them:
+   ```sh
+   test -s "scripts/release-highlights/$V.md" || { echo "missing scripts/release-highlights/$V.md (step 0)" >&2; exit 1; }
+   pre="$(mktemp -d)"
+   bun scripts/build-release-changelog.ts --version "$V" --dist-tag latest \
+     --repository lidge-jun/opencodex --target "$R" --out "$pre/notes.md"
+   head -n 1 "$pre/notes.md" | grep -qx '## Remote Link changes' && grep -q -- '--updates notify' "$pre/notes.md" \
+     && grep -q -- '--catalog-fanout manual' "$pre/notes.md" || { echo "notes lack the Remote Link section" >&2; exit 1; }
+   ```
+   The script also fails by itself when the highlights file exists but is not rendered (step 0a), so the workflow's
+   own changelog step stops a release whose notes lack the section before any tag, draft or npm publication.
 
 6. **Dispatch the Release workflow with publication.** Either the maintainer script:
    ```sh
@@ -167,10 +200,11 @@ Variables used below: `R` = the full 40-hex release commit, `V` = the derived ve
    `latest.json` reports `V`; the packed source contains the three feature ids. The last command
    only unpacks a tarball into a temp dir; it installs and runs nothing.
 
-8a. **Prepend the Remote Link section to the GitHub release body (M11).** The generated changelog
-   (`scripts/build-release-changelog.ts`) lists PR titles only; it cannot carry the A1, fan-out and A5 disclosures.
-   Keep the generated body and put this section first. The step is idempotent: it does nothing if the heading is
-   already there.
+8a. **Verify the Remote Link section in the published body (M11, Revision 4).** The generated changelog lists PR titles
+   only, so the A1, fan-out and A5 disclosures come from `scripts/release-highlights/<V>.md` (step 0), whose text is the
+   heredoc below. The draft was created with them, so this step normally only runs the final check. The `else` branch
+   is a recovery path for a release that somehow published without the section; reaching it is recorded as a defect in
+   step 10, never treated as the normal flow.
    ```sh
    notes="$(mktemp -d)"
    cat > "$notes/remote-link.md" <<'EOF'
@@ -227,8 +261,8 @@ fingerprint check. No test-layout registration.
 
 ## Docs and source-of-truth sync
 
-No repository doc changes in this phase beyond the unit record (step 10); step 8a edits the published release text
-(audit M11). The rest of the release notes are generated by
+Repository changes in this phase: the highlights file and the changelog-script change of step 0 (Revision 4), and the
+unit record (step 10); step 8a verifies the published release text (audit M11). The rest of the release notes are generated by
 `scripts/build-release-changelog.ts` from the commit range and PR labels (:1-11, :130-134); each wp
 PR must carry its label (`enhancement` for wp2–wp8, `documentation` for docs-only follow-ups) and
 none may carry `skip-changelog`.
@@ -318,4 +352,6 @@ and restart stay refused at runtime (`unsupported:windows-apply`, `unsupported:w
 The release notes must state, in their first lines about Remote Link, that an upgraded Home now updates idle
 eligible Children to its own version automatically (`updates: auto-when-idle`, 070), that Desktop Children join
 once both sides run this release (A5), and how to opt out: `ocx link policy --updates notify` or `off`, or the
-Remote Link policy panel. A release whose notes omit this is not ready. Step 8a is the executable form of this requirement; it also discloses the default-on catalog fan-out (050).
+Remote Link policy panel. A release whose notes omit this is not ready. Steps 0, 5a and 8a are the executable form of
+this requirement (Revision 4: the text is in the notes the draft is created with, so it is public from the first
+minute); it also discloses the default-on catalog fan-out (050).

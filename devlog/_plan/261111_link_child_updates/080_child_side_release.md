@@ -1,5 +1,12 @@
 # 080 — Child-side release: Codex-state report, restart outcome, ocx-child build info, Desktop update request
 
+> **Revision 4 (CodeRabbit on #8500).** Folds 4529522121 (a 404 from an older Home pauses the Codex-state report for
+> 30 minutes instead of for the process lifetime, so a Home upgrade is picked up without restarting the Child),
+> 4529522131 (a failed `check_and_show` never reaches `after_check`: the request stays pending and is retried; a
+> request whose checks fail until its window ends is `check-failed`) and 4529522141 (`installing` or `busy` at the
+> end of the window is `uncertain`/`desktop-install-unresolved`, recorded in `pendingUpdateRecovery` with its request
+> id, and reconciled by a status call before any new request).
+
 > **Revision 2 (audit r1).** Folds H1 (registration per 000 "Test registration rule"), H4 (the Desktop branch in
 > `runUpdateItem` precedes the Windows refusal; 070's `AUTO_UPDATE_ROUTES` gains `desktop-request`; Windows Desktop
 > claims match the code), H5 (the widened `restart.outcome` needs no CLI change: 030's validator passes unknown values
@@ -178,8 +185,10 @@ export function linkCodexStateReport(linkId: string, runtimeStartedAt: number, s
 export function createLinkCodexStateReporter(deps: LinkCodexStateReporterDeps): { start(): void; stop(): void };
 ```
 Tick rule: every `CHECK_MS` read the catalog pair; collect and send when the pair differs from the
-last accepted send **or** `PERIOD_MS` has passed since it; `"unsupported"` (404) stops for the life
-of the process; `"failed"` retries on the next check. Timers are unref'd like
+last accepted send **or** `PERIOD_MS` has passed since it; `"unsupported"` (404) pauses sending for
+`UNSUPPORTED_RETRY_MS` (30 min, Revision 4) and then tries again, so a Home upgraded underneath a running Child starts
+receiving reports within 30 minutes without a Child restart; a reconnect of the link tunnel also ends the pause at once.
+An older Home answers that retry with one more 404, which costs nothing. `"failed"` retries on the next check. Timers are unref'd like
 `link-parity-reporter.ts:60-64`. The 60 s check is what makes "after each sync" true: the sync runs
 in another process and writes `catalogSyncedAt` (`connect.ts:939-945`), which the next check sees.
 
@@ -341,7 +350,7 @@ pub const RESULT_FILE: &str = "update-result.json";
 #[derive(Deserialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Request { pub schema: String, pub request_id: String, pub target_version: String, pub requested_at: u64, pub not_after: u64 }
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)] #[serde(rename_all = "kebab-case")]
-pub enum State { Installing, Installed, NotAvailable, VersionMismatch, Busy, Failed, Expired }
+pub enum State { Installing, Installed, NotAvailable, VersionMismatch, Busy, Failed, Expired, CheckFailed }
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)] #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Outcome { pub schema: String, pub request_id: String, pub state: State, pub target_version: String, pub at: u64 }
 #[derive(Debug, PartialEq)] pub enum Step { Ignore, Finish(State), Check }
@@ -368,8 +377,11 @@ pub fn after_check(pending: Option<&str>, target: &str) -> Result<(), State> {
 // decide/after_check above are the binding, tested contract.
 pub fn start_poll(app: AppHandle);   // every 30 s: home = crate::recovery::home(&app)?; read (≤ 1 KiB) home/desktop/REQUEST_FILE,
 // prior RESULT_FILE; decide(..., env!("CARGO_PKG_VERSION"), now_ms()); Check ⇒ if tray::is_installing ⇒ write Busy;
-// else updater::check_and_show(&app).await; after_check(page_status(&app).latest_version.as_deref(), target);
-// Ok ⇒ write Installing, then updater::install_pending_version(&app, Some(target)).await; Err ⇒ write Failed.
+// else match updater::check_and_show(&app).await {
+//   Err(_) ⇒ Revision 4 (4529522131): do not call after_check (the pending version may be an earlier check's, or none);
+//            write nothing and retry at the next 30 s tick; once now > req.not_after with every check failed, write
+//            CheckFailed ("check-failed"). Ok(()) ⇒ after_check(page_status(&app).latest_version.as_deref(), target) }
+// after_check Ok ⇒ write Installing, then updater::install_pending_version(&app, Some(target)).await; Err(state) ⇒ write state.
 // Writes: temp file in the same dir (0600 on Unix) then fs::rename.
 ```
 **`updater.rs`.** `install_pending(app)` becomes `install_pending_version(app, None)`; the new
@@ -398,7 +410,9 @@ export function desktopItemOutcome(state: DesktopRequestState | { refused: Deskt
 ```
 | Child answer | Item |
 | --- | --- |
-| `pending`, `installing`, `busy` | `wait` (poll again; after the window ⇒ `owner-action`/`desktop-app-not-polling`) |
+| `pending` | `wait` (poll again; after the window ⇒ `owner-action`/`desktop-app-not-polling`: the app never picked it up) |
+| `installing`, `busy` | `wait`; after the window ⇒ `uncertain`/`desktop-install-unresolved` (Revision 4: the app is polling and may still finish) |
+| `check-failed` (Revision 4) | `offline`/`desktop-update-check-failed` (transient: grows 070's backoff, never spends the attempt cap) |
 | `installed` | wait for peer version == target (≤ 5 min) ⇒ `succeeded`, else `uncertain`/`version-unconfirmed` |
 | `not-available` | `owner-action`/`desktop-update-not-published` |
 | `version-mismatch` | `refused`/`desktop-version-mismatch` (the published Desktop release differs from the Home's version) |
@@ -424,6 +438,13 @@ then status calls (`desktopStatusArgs`, same gate fields) every 60 s through `en
 `DESKTOP_REQUEST_TTL_MS` plus the 5-minute peer-version wait has passed on the Home's clock. `requestId` =
 `"dreq_" + randomBytes(8).hex`. The Home never sends an absolute deadline to the Desktop path.
 The post-update `--expect-link` sync (D12 step 7) runs after `succeeded` as for orchestrated updates.
+Revision 4 (4529522141): every `uncertain` Desktop outcome (`desktop-install-unresolved`, `version-unconfirmed`) writes
+`pendingUpdateRecovery` with `desktopRequestId: requestId` (010 field), so 070 never submits another automatic update for
+that link before the record clears or expires. When `runDesktopRequestItem` starts for a link whose unexpired record
+carries a `desktopRequestId`, it first runs `desktopStatusArgs(thatId)` and maps the answer by the table above; only a
+terminal answer (or none, after expiry) clears the record and allows a new request id.
+`check-failed` is a new value of the result file's state: the Child's `desktop update-request --status` reader and the
+Home's `parseDesktopRequestStatus` both accept it, since the Rust writer, the CLI and the Home parser ship in this phase.
 The route is chosen only when the peer features carry `desktop-update-request/1` (010 :395).
 
 ## Field chains
@@ -458,7 +479,9 @@ registration rule"): every new file, whatever its domain (server, cli or clients
 - **`tests/clients/link-codex-state-reporter.test.ts`** (clients). Fake timers, collect and send. Cases:
   *first send after 15 s*; *no send at 60 s when nothing changed*; *send within one check after
   catalogSyncedAt changes* (activation: the fake `readCatalog` returns a new pair); *periodic send at 5 min*;
-  *404 stops for good*; *failure retries at the next check*; *staleCount counts only processes at or before mtime*;
+  *404 pauses for 30 min, then retries* and *old Home upgraded to a new Home* (Revision 4: the fake Home answers 404,
+  then 204 after the switch; the next send after the pause is accepted, with no reporter restart); *a tunnel reconnect
+  ends the pause*; *failure retries at the next check*; *staleCount counts only processes at or before mtime*;
   *a "stale" status with no countable process is sent as "unknown"*.
 - **`tests/cli/restart-outcome-marker.test.ts`** (cli). Table over every `DesktopAppRestartReason` plus
   app-server `failed`/`surviving` and `null`. *sync prints the marker only with --expect-link and a restart
@@ -476,12 +499,17 @@ registration rule"): every new file, whatever its domain (server, cli or clients
 - **`tests/clients/link-child-desktop-request.test.ts`** (clients). argv shape; strict status parse (other id ⇒ null);
   every row of the outcome table, driven through `runUpdateItem` with a fake runner whose status calls
   return a scripted sequence (activation: `pending, pending, installed` then peer version == target ⇒ succeeded).
+  Revision 4: `installing` past the window ⇒ `uncertain`/`desktop-install-unresolved` with `pendingUpdateRecovery`
+  holding the request id; the next item for that link sends a status call for that id before any new request;
+  `check-failed` ⇒ `offline`/`desktop-update-check-failed`.
 - **Modified:** `tests/server/readyz-features.test.ts` (`none`/`all` sources gain the two fields; expected
   lists gain `link-child-codex-state/1` and, with `desktopUpdateRequest: true`, `desktop-update-request/1`);
   wp2's projection test and `validateChildOps` test for the widened `codex` and `childBuild`; 030's runner test
   for the widened restart outcome.
 - **Rust:** unit tests in `update_request.rs` for every `decide` branch and `after_check` (equal, newer,
-  older, none) and a temp-dir round trip of the result writer; `native/ocx-child/tests/conformance.rs` gains
+  older, none) and a temp-dir round trip of the result writer; Revision 4 (4529522131): *a failed check with an older
+  pending version installs nothing and writes nothing*, and *checks failing until `not_after` write `CheckFailed`*
+  (the I/O step takes the check as an injected closure so this runs without a network); `native/ocx-child/tests/conformance.rs` gains
   *build-info prints schema ocx-child.build/1 and crateVersion equals CARGO_PKG_VERSION* and *--version still
   prints 2.98.0*.
 

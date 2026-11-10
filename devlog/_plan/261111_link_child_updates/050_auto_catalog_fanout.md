@@ -6,6 +6,15 @@
 > M7 (this phase fixes layer 1 only; layer 2 stays manual by default, 000 "Root cause"), M11 (docs disclose the
 > default-on fan-out) and L12 (verifier facts on 61151e3457).
 
+> **Revision 4 (CodeRabbit on #8500).** Folds 4529521968 (eligibility compares 030's `catalogSyncedEtag` with the
+> current etag; a GET no longer marks a Child current, superseding reconciliation item 4 for the scheduler),
+> 4529522014 (`childObservationsPath` from `paths.ts`), 4529522051 (an unreadable or invalid policy file turns
+> automatic operations off until the operator saves a policy; `ENOENT` keeps the defaults), 4529522058 (a legacy
+> backoff with no known peer version retries after `BACKOFF_MAX_MS` or as soon as a version appears),
+> 4529522063 (the host gives each automatic job `autoSyncAllowed`, which 030's sync runner asks at item start) and
+> 4529522103 (`createLinkBackoff` gains `countOn`, so 070's cap counts only `UPDATE_ATTEMPT_CAP_STATES`, the R1
+> rule that 070 stated but this code did not implement).
+
 - **Work-phase:** wp5. **Depends on:** wp3 ([030](030_child_operations.md): engine, routes, CLI), wp4
   ([040](040_sync_loosening.md): restart-children plumbing and busy skips), and through them wp1/wp2.
 - **Class:** C3 with C4 parts (a new mutating management route, a background job that opens SSH sessions
@@ -112,6 +121,10 @@ export interface ChildPolicy {
 export const DEFAULT_CHILD_POLICY: Readonly<ChildPolicy> = Object.freeze({
   catalogFanout: "auto", childCodexRestart: "never", updates: "auto-when-idle", idleAfterMs: 600_000,
 });
+/** Revision 4 (4529522051): what a damaged or unreadable file means. Nothing automatic runs until the operator saves. */
+export const FAIL_CLOSED_CHILD_POLICY: Readonly<ChildPolicy> = Object.freeze({
+  catalogFanout: "manual", childCodexRestart: "never", updates: "off", idleAfterMs: 600_000,
+});
 export interface ChildPolicyRead { policy: ChildPolicy; warning: "policy-file-invalid" | null }
 const KEYS = ["schema", "catalogFanout", "childCodexRestart", "updates", "idleAfterMs"] as const;
 
@@ -132,11 +145,12 @@ export function validPolicyPatch(value: Record<string, unknown>): Partial<ChildP
   return out;
 }
 
-/** Absent file ⇒ defaults, no warning. Strict: any unknown key or bad value ⇒ defaults plus a warning. */
+/** Absent file ⇒ defaults, no warning. Unreadable, unknown key or bad value ⇒ FAIL_CLOSED_CHILD_POLICY plus a warning. */
 export function readChildPolicy(path = childPolicyPath()): ChildPolicyRead {
   let text: string;
   try { text = readFileSync(path, "utf8"); } catch (error) {
-    return { policy: { ...DEFAULT_CHILD_POLICY }, warning: (error as NodeJS.ErrnoException).code === "ENOENT" ? null : "policy-file-invalid" };
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? { policy: { ...DEFAULT_CHILD_POLICY }, warning: null }
+      : { policy: { ...FAIL_CLOSED_CHILD_POLICY }, warning: "policy-file-invalid" };
   }
   try {
     const parsed: unknown = JSON.parse(text);
@@ -147,7 +161,7 @@ export function readChildPolicy(path = childPolicyPath()): ChildPolicyRead {
     const patch = validPolicyPatch(fields);
     if (!patch) throw new Error("value");
     return { policy: { ...DEFAULT_CHILD_POLICY, ...patch }, warning: null };
-  } catch { return { policy: { ...DEFAULT_CHILD_POLICY }, warning: "policy-file-invalid" }; }
+  } catch { return { policy: { ...FAIL_CLOSED_CHILD_POLICY }, warning: "policy-file-invalid" }; }
 }
 
 /** Read-merge-write under the config mutation lock; the file always holds every key. */
@@ -161,7 +175,9 @@ export function updateChildPolicy(patch: Partial<ChildPolicy>, path = childPolic
 }
 ```
 A damaged file is not rewritten on read: the warning stays visible in `GET /api/link/children/policy`
-until the operator saves a policy. `atomicWriteFile(path, content)` (src/config/atomic-write.ts:458)
+until the operator saves a policy. Until then fan-out is `manual` and updates are `off` (Revision 4): a file the
+operator wrote to opt out must not turn the defaults back on by becoming unreadable. A save merges onto that
+fail-closed policy and writes every key, so the operator sees and chooses each mode again. `atomicWriteFile(path, content)` (src/config/atomic-write.ts:458)
 publishes from an exclusively created private temp, the same path `links.json` uses, so the file is private.
 
 ### 2.2 src/link/child-ops-scheduler.ts (NEW, full exported API and core logic)
@@ -189,11 +205,15 @@ export interface LinkBackoff {
   /** Last attempt for the link under any key; 070 rotates candidates by it (least recent first). */
   lastAttemptAt(linkId: string): number | null;
 }
-interface BackoffEntry { until: number; delayMs: number; attempts: number; legacyAtVersion: string | null }
+/** legacy: a Child below 2.93 (lacks --expect-link). legacyAtVersion null means its version was not known yet. */
+interface BackoffEntry { until: number; delayMs: number; attempts: number; legacy: boolean; legacyAtVersion: string | null }
 
 /** Per-link exponential backoff shared by the catalog fan-out (here) and the update sweep (070). */
-export function createLinkBackoff(options: { growOn?: ReadonlySet<string>; minMs?: number; maxMs?: number } = {}): LinkBackoff {
+export function createLinkBackoff(options: { growOn?: ReadonlySet<string>; countOn?: ReadonlySet<string>; minMs?: number;
+  maxMs?: number } = {}): LinkBackoff {
   const growOn = options.growOn ?? BACKOFF_STATES;
+  // Revision 4 (4529522103): only these states count toward attempts(); absent ⇒ every non-success outcome counts.
+  const countOn = options.countOn ?? null;
   const minMs = options.minMs ?? BACKOFF_MIN_MS, maxMs = options.maxMs ?? BACKOFF_MAX_MS;
   const entries = new Map<string, BackoffEntry>();
   const last = new Map<string, number>();
@@ -202,23 +222,26 @@ export function createLinkBackoff(options: { growOn?: ReadonlySet<string>; minMs
     blocked(linkId, key, now, peerVersion) {
       const entry = entries.get(id(linkId, key));
       if (!entry) return false;
-      // A Child below 2.93 is retried only after it reports a different version (D6).
-      if (entry.legacyAtVersion !== null) return peerVersion === entry.legacyAtVersion;
+      // A Child below 2.93 is retried only after it reports a different version (D6). Revision 4 (4529522058): with no
+      // version known at the time, any reported version, or the end of the maxMs backoff, allows one retry.
+      if (entry.legacy) return entry.legacyAtVersion !== null ? peerVersion === entry.legacyAtVersion
+        : peerVersion === null && now < entry.until;
       return now < entry.until;
     },
     record(linkId, key, { state, reason }, now, peerVersion) {
       last.set(linkId, now);
       const k = id(linkId, key);
       const previous = entries.get(k);
-      const attempts = (previous?.attempts ?? 0) + 1;
       if (state === "succeeded" || state === "up-to-date") { entries.delete(k); return; }
+      const attempts = (previous?.attempts ?? 0) + (countOn === null || countOn.has(state) ? 1 : 0);
       if (state === "owner-action" && reason === "child-ocx-lacks-expect-link") {
-        entries.set(k, { until: Number.POSITIVE_INFINITY, delayMs: maxMs, attempts, legacyAtVersion: peerVersion });
+        entries.set(k, { until: peerVersion === null ? now + maxMs : Number.POSITIVE_INFINITY, delayMs: maxMs, attempts,
+          legacy: true, legacyAtVersion: peerVersion });
         return;
       }
-      if (!growOn.has(state)) { entries.set(k, { until: now, delayMs: previous?.delayMs ?? 0, attempts, legacyAtVersion: null }); return; }
+      if (!growOn.has(state)) { entries.set(k, { until: now, delayMs: previous?.delayMs ?? 0, attempts, legacy: false, legacyAtVersion: null }); return; }
       const delayMs = previous && previous.delayMs > 0 ? Math.min(previous.delayMs * 2, maxMs) : minMs;
-      entries.set(k, { until: now + delayMs, delayMs, attempts, legacyAtVersion: null });
+      entries.set(k, { until: now + delayMs, delayMs, attempts, legacy: false, legacyAtVersion: null });
     },
     attempts: (linkId, key) => entries.get(id(linkId, key))?.attempts ?? 0,
     lastAttemptAt: linkId => last.get(linkId) ?? null,
@@ -230,7 +253,8 @@ export interface ChildOpsSchedulerDeps {
   env: () => ChildOpsEnv;
   readPolicy: () => ChildPolicyRead;
   revision: { current(): { etag: string | null; changedAt: number | null }; recompute(): Promise<boolean> };
-  pulledAt: (linkId: string) => number | null;            // binding.pulledAt: 020 recorder, memory (reconciliation item 4)
+  /** Revision 4 (4529521968): 030's catalogSyncedEtag; a GET of /v1/catalog no longer counts as delivered. */
+  syncedEtag: (linkId: string) => string | null;
   homeDigest: () => string | null;                         // codexSettingsDigest of the Home settings
   childDigest: (linkId: string) => string | null;          // parity appliedCodexSettingsDigest
   peerVersion: (linkId: string) => string | null;          // relay peer report
@@ -261,10 +285,9 @@ export function createChildOpsScheduler(deps: ChildOpsSchedulerDeps): ChildOpsSc
   let stopped = true;
 
   const behind = (linkId: string): boolean => {
-    const changedAt = deps.revision.current().changedAt;
-    if (changedAt === null) return false;
-    const pulled = deps.pulledAt(linkId);
-    return pulled === null || pulled < changedAt;
+    const etag = deps.revision.current().etag;
+    if (etag === null) return false;
+    return deps.syncedEtag(linkId) !== etag;   // etag equality, never time order (4529521959)
   };
 
   const record = (job: ChildJob, now: number): void => {
@@ -366,7 +389,8 @@ import { isLinkIdle, type LinkActivitySnapshot } from "./child-activity";
 import { observeChild, type ObserveDeps } from "./child-observe";
 import { inspectRemoteChildRuntime } from "./remote-plant";
 import { requireRemotePlatform } from "./remote-platform";
-import { childObservationsPath, patchChildObservation, readChildObservations, updateChildObservations } from "./child-observations";
+import { childObservationsPath } from "./paths";      // Revision 4 (4529522014): exported by paths.ts (010)
+import { patchChildObservation, readChildObservations, updateChildObservations } from "./child-observations";
 import { homeLinkChildParity } from "./child-parity";
 import { codexSettingsDigest, projectHomeCodexSettings } from "./codex-settings";
 import { packageVersion } from "../lib/package-version";
@@ -378,7 +402,7 @@ export interface ChildOpsHostBinding {
   listenerStatus: () => { state: "off" | "listening" | "failed"; port: number | null };
   /** 020's listener linkActivity; null when the listener has no activity book (never idle). */
   activity: (linkId: string, now: number) => LinkActivitySnapshot | null;
-  /** 020's CatalogPullRecorder.pulledAt: memory value, newer than the observation file (reconciliation item 4). */
+  /** 020's CatalogPullRecorder.pulledAt: status display only since Revision 4; the scheduler reads syncedEtag. */
   pulledAt: (linkId: string) => number | null;
   /** 020's listener peerObservation. */
   peer: ObserveDeps["peer"];
@@ -398,13 +422,16 @@ export function schedulerRevision(monitor: CatalogRevisionMonitor = sharedCatalo
   };
 }
 
-/** One env shape for the routes (030 childOpsEnvFor) and this host; idleAfterMs is the policy value (item 5). */
-export function hostChildOpsEnv(binding: ChildOpsHostBinding, runner: ReturnType<typeof createSshRunner>): ChildOpsEnv {
+/** One env shape for the routes (030 childOpsEnvFor) and this host; idleAfterMs is the policy value (item 5).
+ *  Revision 4 (4529522063): autoSyncAllowed is the scheduler's own rule (idle, or settings already equal), asked again
+ *  by 030's runSyncItem when each automatic item starts. */
+export function hostChildOpsEnv(binding: ChildOpsHostBinding, runner: ReturnType<typeof createSshRunner>,
+  digests?: { home: () => string | null; child: (linkId: string) => string | null }): ChildOpsEnv {
   const store = () => readLinkStore(linkStorePath());
   const hosts = linkKnownHostsPath();
   const version = packageVersion("0.0.0");
   const idleAfterMs = readChildPolicy().policy.idleAfterMs;
-  return {
+  const env: ChildOpsEnv = {
     readStore: store, runner, knownHostsFile: hosts, homeVersion: version, now: Date.now, sleep: ms => Bun.sleep(ms),
     wireState: id => projectLinkStatus(store(), binding.supervisorStatus(), binding.listenerStatus(), binding.config())
       .links.find(link => link.id === id)?.state ?? null,
@@ -418,7 +445,14 @@ export function hostChildOpsEnv(binding: ChildOpsHostBinding, runner: ReturnType
       now: () => new Date() }),
     readObservation: id => readChildObservations(childObservationsPath()).children[id] ?? null,
     writeObservation: (id, patch) => { updateChildObservations(file => patchChildObservation(file, id, patch, new Date())); },
+    catalogEtag: () => sharedCatalogRevisionMonitor().current()?.etag ?? null,
   };
+  if (digests) env.autoSyncAllowed = id => {
+    if (env.activity(id)?.idle === true) return true;
+    const home = digests.home();
+    return home !== null && digests.child(id) === home;
+  };
+  return env;
 }
 
 export function startChildOpsHost(binding: ChildOpsHostBinding): () => void {
@@ -426,12 +460,14 @@ export function startChildOpsHost(binding: ChildOpsHostBinding): () => void {
   const version = packageVersion("0.0.0");
   const peerVersion = (id: string): string | null => binding.peer(id).observed?.version ?? null;
   const unref = <T>(handle: T): T => { (handle as { unref?: () => void }).unref?.(); return handle; };
+  const homeDigest = (): string | null => { try { return codexSettingsDigest(projectHomeCodexSettings(binding.config(), version).settings); } catch { return null; } };
+  const childDigest = (id: string): string | null => homeLinkChildParity.get(id).appliedCodexSettingsDigest;
   const scheduler: ChildOpsScheduler = createChildOpsScheduler({
-    engine: sharedChildOpsEngine(), env: () => hostChildOpsEnv(binding, runner), readPolicy: () => readChildPolicy(),
+    engine: sharedChildOpsEngine(), env: () => hostChildOpsEnv(binding, runner, { home: homeDigest, child: childDigest }),
+    readPolicy: () => readChildPolicy(),
     revision: schedulerRevision(),
-    pulledAt: binding.pulledAt,
-    homeDigest: () => { try { return codexSettingsDigest(projectHomeCodexSettings(binding.config(), version).settings); } catch { return null; } },
-    childDigest: id => homeLinkChildParity.get(id).appliedCodexSettingsDigest,
+    syncedEtag: id => readChildObservations(childObservationsPath()).children[id]?.catalogSyncedEtag ?? null,
+    homeDigest, childDigest,
     peerVersion,
     setCatalogChangedSlot: setCatalogAutoRefreshLinkFanout,
     setTimeout: (fn, ms) => unref(setTimeout(fn, ms)), clearTimeout: h => clearTimeout(h as ReturnType<typeof setTimeout>),
@@ -638,7 +674,7 @@ Capability (appended to wp3's block in `capabilities-access-remote.ts`):
 |---|---|---|---|---|
 | `ocx.link.child-policy/1` file (`catalogFanout`, `childCodexRestart`, `updates`, `idleAfterMs`) | `updateChildPolicy` via `PUT /api/link/children/policy` | `child-policy.json`, 2-space JSON | `readChildPolicy` (strict) | scheduler `evaluate` (`catalogFanout`, `childCodexRestart`); 070 sweep (`updates`, `idleAfterMs`); 020 activity idle threshold reads `idleAfterMs` through the binding (default `DEFAULT_IDLE_AFTER_MS` until wp5 lands); GUI panel (060) |
 | `{ policy, warning }` response | policy routes | JSON | `validatePolicyRead` (CLI, exact keys) | `ocx link policy` output; GUI (060) |
-| `warning: "policy-file-invalid"` | `readChildPolicy` | response | CLI / GUI | operator message; never blocks the scheduler (defaults apply) |
+| `warning: "policy-file-invalid"` | `readChildPolicy` | response | CLI / GUI | operator message; automatic fan-out and updates stay off until a save (Revision 4) |
 | `trigger:"auto"` sync jobs | scheduler | engine job (in-process), `lastOperation` in observations | 030 validator | `?children=1` rows; GUI "automatic" label (060) |
 | restart `app-server` on auto sync | scheduler when `childCodexRestart === "app-server-when-idle"` and the link is idle | job `restart` | — | 030 `runSyncItem` (POSIX full Children only) |
 | `setCatalogAutoRefreshLinkFanout` slot | `startChildOpsHost` (set), `stop` (null) | N/A (in-process function) | N/A | `tick()` in catalog-auto-refresh.ts |
@@ -667,25 +703,36 @@ policy routes have their own owner.
 - `burst coalesces`: three notifications 20 s apart ⇒ one job 60 s after the last; `ceiling`: notifications every 30 s for
   10 min ⇒ a job at 5 min.
 - `manual policy`: `catalogFanout:"manual"` ⇒ no submit.
-- `eligibility`: client-initiated, tunnel `reconnecting`, engine `activeJob` set, `pulledAt >= changedAt` ⇒ excluded;
-  `pulledAt null` ⇒ included.
+- `eligibility`: client-initiated, tunnel `reconnecting`, engine `activeJob` set, `syncedEtag` equal to the current
+  etag ⇒ excluded; `syncedEtag null` or different ⇒ included (Revision 4: after the upgrade each connected Child is
+  synced once, which also records its etag). `fetched but not synced` (4529521968): a recorded pull of the current
+  etag with `syncedEtag` still old ⇒ included.
 - `digest rule`: not idle + digest equal ⇒ included; not idle + digest different ⇒ excluded; idle + digest different ⇒ included.
 - `restart knob`: `app-server-when-idle` + idle ⇒ second job with `restart:"app-server"`; not idle ⇒ plain job.
 - `backoff`: item `failed` ⇒ skipped until +5 min, then +10 min after a second failure, capped at 6 h; `succeeded` clears.
 - `legacy Child`: item `owner-action/child-ocx-lacks-expect-link` ⇒ never retried while `peerVersion` stays `2.92.0`;
   retried once it reports `2.97.0`.
+- `legacy Child, version unknown` (Revision 4, 4529522058): the same item with `peerVersion null` ⇒ blocked while it stays
+  null until `BACKOFF_MAX_MS`, then retried; retried at once when a version is reported.
+- `auto sync rechecks` (Revision 4, 4529522063): the host env's `autoSyncAllowed` is false when the link is busy and its
+  digest differs, true when idle or when the digests match; with a link that turns busy between submit and item start,
+  the item ends `busy/link-active` with no SSH call.
 - `poll`: `recompute` returns true ⇒ quiet armed; false with a behind idle link ⇒ immediate evaluation.
 - `start/stop`: `start` sets the slot and one interval; `stop` clears both and nulls the slot; a second `start` is a no-op.
 
 - `createLinkBackoff` (H3, shared with 070): keys are independent (`catalog` backoff does not block key `2.100.0`);
-  `attempts` counts every record since the last success and resets on `succeeded`; `growOn` including `busy` grows on
-  `busy`; `lastAttemptAt` is the latest record under any key.
+  `attempts` counts every record since the last success and resets on `succeeded`; with `countOn` (Revision 4,
+  4529522103) only those states count, while `growOn` still decides growth: `countOn` without `busy` and three `busy`
+  records ⇒ `attempts` 0 and the backoff grown; `growOn` including `busy` grows on `busy`; `lastAttemptAt` is the
+  latest record under any key.
 - `host env` (2.3): `hostChildOpsEnv` maps a snapshot with `inFlight 0` and `lastDataEndAt` older than the policy's
-  `idleAfterMs` to `idle: true` and a newer one to `false`; `pulledAt` comes from the binding, not the observation file.
+  `idleAfterMs` to `idle: true` and a newer one to `false`; `syncedEtag` comes from the observation file's
+  `catalogSyncedEtag`.
 
 **link-child-policy.test.ts**: absent file ⇒ defaults with `updates:"auto-when-idle"` and no warning; unknown key, bad
-enum, `idleAfterMs: 59_999` or `3_600_001`, wrong schema, malformed JSON ⇒ defaults + `policy-file-invalid` and the file
-is untouched; `updateChildPolicy({updates:"notify"})` keeps other keys and writes all five; POSIX mode `0o600`
+enum, `idleAfterMs: 59_999` or `3_600_001`, wrong schema, malformed JSON, or a read error other than `ENOENT` (a directory
+at the path) ⇒ `FAIL_CLOSED_CHILD_POLICY` (`catalogFanout:"manual"`, `updates:"off"`) + `policy-file-invalid` and the
+file is untouched (Revision 4, 4529522051); `updateChildPolicy({updates:"notify"})` keeps other keys and writes all five; POSIX mode `0o600`
 (skipped on Windows, where ACL hardening is covered by existing atomic-write tests).
 
 **link-child-policy-routes.test.ts**: auth matrix (admin loopback, dashboard, Tailscale 403); `GET` answers `{policy, warning}`;

@@ -1,5 +1,10 @@
 # A1 — Architect proposal: Home orchestration of linked Children
 
+> **Revision 4 (CodeRabbit on #8500).** This is the architect's record; where a later plan doc changed a decision, the
+> change is noted in place. Folds 4529521934 (escaped pipe in the module map), 4529521944 (D12 step 7: routing is also
+> restored after a failed or rolled-back apply, and after an uncertain one once no update is in flight; 030, 070) and
+> 4529521950 (D14: the CLI's mutating verbs are explicitly unsupported on a non-loopback Home and say so; 030, 050).
+
 Base: origin/dev 00680193cb (package and Desktop 2.100.0, latest tag v2.100.1). Read-only design; no tracked file changed.
 Inputs verified rather than trusted: r1 (context root cause), R2 (Child updates), r3 (surface map). Where this
 proposal disagrees with them it says so (D3 overturns R2's detection probe).
@@ -55,7 +60,7 @@ F7. **Relay activity is countable per link at no protocol cost.** Each relay ses
 | src/link/child-ops-engine.ts | Job registry, per-link lock, bulk queue, runners for observe/sync/restart/update (D11-D13) | the four above, ssh-runner, store |
 | src/link/child-ops-scheduler.ts | Automatic modes (D17); started only when links exist | engine, policy |
 | src/server/management/link-child-ops-routes.ts | /api/link/children/* routes (D14); link-routes.ts gains one delegating branch | link-route-state.ts helpers |
-| src/cli/link-child-ops.ts | `ocx link update|sync|restart-codex|policy` (D15); link.ts gains switch arms only | cli/link.ts linkRequest |
+| src/cli/link-child-ops.ts | `ocx link update\|sync\|restart-codex\|policy` (D15); link.ts gains switch arms only | cli/link.ts linkRequest |
 | src/cli/capabilities-access-remote.ts (edit) | One Capability per verb; contract `link.child-ops/1` in src/cli/capability-contracts.ts:2 | — |
 | gui/src/remote-link-child-ops-api.ts, gui/src/pages/RemoteLinkChildActions.tsx | Parsing, row actions, Update all, policy panel; RemoteLink.tsx only renders it | — |
 
@@ -195,6 +200,8 @@ Two Home-only signals:
   `changedAt` is persisted in the observation file header so a restart does not reset it to "now".
 
 Verdict per link: `catalog.state = pulledAt === null ? "unknown" : pulledAt >= changedAt ? "current" : "behind"`.
+(Superseded by 020 Revision 4, CodeRabbit 4529521959 and 4529521968: the verdict compares etags, and fan-out eligibility
+uses the etag a Home-run sync confirmed.)
 Automatic fan-out (D17, default on): after a revision change, wait for a 60 s quiet period (coalesces a
 burst of GUI edits), then run the per-Child "sync" op (D13, no restart) for every link that is hub-initiated,
 connected in the status projection, not busy in the engine, and either idle (D5) or known to share the Home's
@@ -359,6 +366,10 @@ type ChildJobItemSummary = Pick<ChildJobItem, "state"|"reason"|"fromVersion"|"to
    removed, structure/remote-link.md "start alone does not reapply routing"), plus the restart scope from the
    job/policy. Exit 7 ⇒ wait 30 s, retry once. Result goes to `item.sync`; a sync failure leaves the item
    `succeeded` with `sync.state:"failed"` and a hint, because the version did move.
+   Revision 4: the same restore-routing sync (never with a restart) also runs after `failed`/`rolled-back` (the
+   updater may have stopped the proxy before failing), and for `uncertain` it runs once a re-observe shows no update
+   in flight; an uncertain update is still never re-applied (030 `runUpdateItem`, 070 recovery). A
+   `post-update-sync-failed` item makes the CLI exit 6.
 
 ### D13 — Per-Child sync and restart-codex ops
 
@@ -380,12 +391,17 @@ type ChildJobItemSummary = Pick<ChildJobItem, "state"|"reason"|"fromVersion"|"to
 | GET /api/link/children/jobs/{jobId} | either | — | 200 `{job}`; 404 job_not_found |
 | GET /api/link/children/policy | either | — | `{policy}` (D17) |
 | PUT /api/link/children/policy | either | exactly the policy keys | `{policy}` |
+
 "either" = dashboard session or admin token on loopback; Tailscale identity sessions are refused
 (link-route-state.ts:68-101). Long work follows the `POST /api/update/run` + status precedent
 (src/server/management/config-routes.ts:964-1013). Every route is declared in
 src/server/management/route-registry.ts:431-439 (regex mechanism for the jobId path). The local-control socket
 allowlist stays GET /api/link/status only (src/server/index/local-control-listener.ts:41,347), so on a
 non-loopback Home the CLI's POSTs hit the same 403 as revoke today; widening it is out of scope.
+Revision 4: that limit is made explicit instead of surfacing as a bare 403. On a 403 from a Home that is not bound to
+loopback, `ocx link update|sync|restart-codex|check|policy` (the policy write; reads still work through the socket only
+where allowlisted) exit 1 with "Child operations from the CLI need a Home bound to loopback; use the Remote Link page
+in the dashboard." The docs-site CLI reference states the same limit. The socket allowlist does not change.
 
 ### D15 — CLI
 

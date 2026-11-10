@@ -6,6 +6,12 @@
 > wire mirror of 010's type), A2 (restart outcome `skipped` gets a label) and L17 (the TSX component bodies and the
 > page wiring are outlines, marked below, to be made diff-level at this phase's own P).
 
+> **Revision 4 (CodeRabbit on #8500).** Folds 4529522073 (the wire union gains `skipped`, the producer's value from 030;
+> an unknown outcome renders as `<code>` text, never as `requested`, matching test 6 and H5), 4529522080 (the page
+> discovers running jobs from the status rows' `activeJob` and tracks every active job, including automatic ones and
+> after a reload) and 4529522094 (a 404 `job_not_found` is exposed by the hook, shown with its message, and refreshes
+> status without calling the operation failed; new key `remoteLink.job.notFound`).
+
 - **Work phase:** wp6
 - **Depends on:** wp3 (`POST /api/link/children/operations`, `GET /api/link/children/jobs/{jobId}`, the
   `ocx.link.child-job/1` document, `link_operation_in_progress` on DELETE; 030), wp5 (`GET/PUT
@@ -52,7 +58,8 @@ export type ChildUpdateRoute = "orchestrated" | "desktop-request" | "owner-actio
 export type ChildOp = "observe" | "sync" | "restart-codex" | "update";   // wire mirror of src/link/child-observations.ts (000 "Canonical names"); gui cannot import src/
 export type ChildItemState = "queued" | "running" | "succeeded" | "up-to-date" | "busy" | "offline" | "refused"
   | "owner-action" | "unsupported" | "failed" | "uncertain";
-export type ChildRestartOutcome = "requested" | "unsupported" | "not-run" | "done" | "refused" | "failed";
+/** 030 produces requested/unsupported/not-run/skipped; 080 adds done/refused/failed. Seven values (Revision 4). */
+export type ChildRestartOutcome = "requested" | "unsupported" | "not-run" | "skipped" | "done" | "refused" | "failed";
 export interface ChildCodexView { appServers: "fresh" | "stale" | "not_running" | "unknown"; staleCount: number;
   catalogMatchesHome: boolean | null; catalogSyncedAt: number | null; reportedAt: number }
 export interface ChildOpsRowView {
@@ -135,8 +142,12 @@ Before (:69-79) `LinkRowWire` ends with `appliedCodexSettingsDigest?: string | n
   `t("remoteLink.child.disconnectBlocked")` (the server answers 409 anyway; 030).
 - Above the list, when `status?.role === "home" && statusRows.some(r => r.child)`:
   `<ChildBulkBar apiBase={apiBase} rows={statusRows} onJob={setChildJob} onError={setActionError} />`,
-  `{childJob && <ChildJobProgress apiBase={apiBase} job={childJob} onDone={() => void refreshStatus()} />}`,
-  `<ChildPolicyPanel apiBase={apiBase} />`. New state: `const [childJob, setChildJob] = useState<ChildJobView | null>(null);`.
+  `{childJobs.map(job => <ChildJobProgress key={job.jobId} apiBase={apiBase} job={job} onDone={() => void refreshStatus()} />)}`,
+  `<ChildPolicyPanel apiBase={apiBase} />`. New state (Revision 4, 4529522080): `const [childJobs, setChildJobs] =
+  useState<ChildJobView[]>([]);` A started job is added by `onJob`. After every status read, each distinct
+  `row.child.activeJob.jobId` that is not in the list is fetched once with `getChildJob` and added, so a job started
+  before a reload, by another tab or by the scheduler (`trigger: "auto"`) gets its progress panel. A job leaves the list
+  when it is `done` and its `onDone` has run, or when its snapshot is gone (404).
 
 ### `gui/src/pages/RemoteLinkChildActions.tsx` (NEW)
 
@@ -181,13 +192,17 @@ export function ChildBulkBar(props: { apiBase: string; rows: readonly LinkRowWir
 // "remoteLink.child.updateAllConfirm" {version: homeVersion, count} → { op: "update", linkIds: "all" }.
 // Hidden when no row is hub-initiated; "Update all" disabled when no row has updateAvailable().
 
-export function useChildJob(apiBase: string, job: ChildJobView | null): ChildJobView | null;
+export function useChildJob(apiBase: string, job: ChildJobView | null): { job: ChildJobView | null; missing: boolean };
 // Polls getChildJob every CHILD_JOB_POLL_MS while state !== "done" and the document is visible; aborts on
-// unmount or job change; a 404 job_not_found (Home restarted) ends polling and keeps the last snapshot.
+// unmount or job change. Revision 4 (4529522094): a 404 job_not_found (the Home restarted) ends polling and sets
+// missing: true; the last snapshot is kept for reference only.
 
 export function ChildJobProgress(props: { apiBase: string; job: ChildJobView; onDone(): void }): ReactElement;
 // aria-live="polite" list: alias, "remoteLink.job.state.<state>", reason in <code>, fromVersion→toVersion,
-// sync and restart sub-lines ("remoteLink.job.restart.<outcome>"); calls onDone once when state becomes "done".
+// sync and restart sub-lines ("remoteLink.job.restart.<outcome>"; an outcome outside the seven renders as <code>);
+// calls onDone once when state becomes "done". When missing: items still queued or running render
+// "remoteLink.job.state.uncertain" (never failed), a neutral Banner shows "remoteLink.job.notFound", and onDone runs
+// once so the status rows show what the Child actually reports.
 
 export function ChildPolicyPanel({ apiBase }: { apiBase: string }): ReactElement;
 // Loads getChildPolicy once (and after save). Three <select>s and one minutes <input type=number min=1 max=60>;
@@ -238,6 +253,7 @@ string. English and Korean values below; product names (Codex, GOAT, OpenCodex D
 | `remoteLink.job.state.<11 states>` (11) | Queued, Running, Succeeded, Up to date, Busy, Offline, Refused, Needs owner action, Not supported, Failed, Outcome unknown | 대기 중, 실행 중, 성공, 최신 상태, 사용 중, 오프라인, 거부됨, 소유자 조치 필요, 지원 안 함, 실패, 결과 불확실 |
 | `remoteLink.job.restart.<7 outcomes>` (7) | Restart requested, Restart not supported, Restart not run, Restart withheld: a turn was running, Restarted, Restart refused, Restart failed | 재시작 요청됨, 재시작 미지원, 재시작 안 함, 재시작 보류: 작업 진행 중, 재시작됨, 재시작 거부됨, 재시작 실패 |
 | `remoteLink.job.last` | Last {op}: {state} | 마지막 {op}: {state} |
+| `remoteLink.job.notFound` (Revision 4) | This Home restarted, so the job's progress is gone. The rows below show each Child's current state. | 이 Home이 다시 시작되어 작업 진행 상황이 사라졌습니다. 아래 행에 각 Child의 현재 상태가 표시됩니다. |
 | `remoteLink.job.automatic` | Automatic | 자동 |
 | `remoteLink.policy.title` | Child automation | Child 자동화 |
 | `remoteLink.policy.catalogFanout` + `.auto` `.manual` | Catalog fan-out: Automatic / Manual | 카탈로그 전파: 자동 / 수동 |
@@ -266,7 +282,7 @@ allowlist); only the five owner-action reasons above get sentences.
 | `activeJob` | engine (020/030) | same | same | active badge, buttons disabled |
 | `lastOperation` | observation cache (010 D4) | same | same | "Last …" line |
 | `ChildJob` | 030 engine | 202 `{job}`, 200 `{job}` | `parseChildJob` | `ChildJobProgress` |
-| `restart.outcome` (6 values) | 030 + 080 | job document | enum, unknown ⇒ `requested` | progress sub-line |
+| `restart.outcome` (7 values, Revision 4) | 030 (`skipped` included) + 080 | job document | enum, unknown ⇒ `<code>` text, never `requested` | progress sub-line |
 | `{policy, warning}` | 050 policy routes | GET/PUT JSON | `parseChildPolicyRead` | `ChildPolicyPanel` |
 | `ChildOperationBody` | `ChildRowActions`, `ChildBulkBar`, dialog | POST JSON, exactly `{op, linkIds, restart?}` | 030 route parser | engine |
 | five error codes | 030/050 routes | `{error:{code}}` | `readLinkJson` → `LinkApiError` | `ERROR_TKEY` → banner |
@@ -291,8 +307,13 @@ implementation because `../src/pages/RemoteLinkChildActions` does not exist.
    row has an update. An unknown `restart.outcome` string renders as `<code>` text, not a crash (H5).
 7. *job progress* — POST returns a running job; the stub answers `jobs/<id>` running then done; the panel
    shows each item state and the restart outcome `done`, polls stop after done, and status refreshes once.
-8. *409 link_operation_in_progress* renders its translated text; *404 job_not_found* stops polling.
-9. *active job* — row with `activeJob`: action buttons and Disconnect disabled.
+8. *409 link_operation_in_progress* renders its translated text; *404 job_not_found* stops polling, shows
+   `remoteLink.job.notFound`, renders a still-running item as "Outcome unknown" and refreshes status once (Revision 4).
+9. *active job* — row with `activeJob`: action buttons and Disconnect disabled; on first load the page fetches
+   `jobs/<activeJob.jobId>` and shows its progress (Revision 4, 4529522080); two rows with two different active jobs ⇒
+   two progress panels, one fetch each.
+11. *withheld restart* (Revision 4, 4529522073) — a job item with `restart.outcome: "skipped"` renders
+   "Restart withheld: a turn was running", never "Restart requested".
 10. *client-initiated row* — no action buttons, badges still shown.
 11. *policy panel* — loads, shows the invalid-file banner for `warning`, saving one changed select sends a PUT with only that key.
 12. *parsers* — `parseChildOps` returns null for a malformed block; `parseChildJob` maps an unknown state to `failed`.

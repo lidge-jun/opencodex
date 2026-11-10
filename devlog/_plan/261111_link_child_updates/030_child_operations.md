@@ -8,6 +8,16 @@
 > `restart-skipped:link-active`, `--yes` for scope `codex`), M9 (`--not-after` on the Child's clock, `plan-expired`,
 > `clock-skew` hint) and L12 (base and verifier facts).
 
+> **Revision 4 (CodeRabbit on #8500).** Folds 4529521916 (a restart is sent as a second pinned sync after the plain
+> sync and a fresh activity read; the remaining gap is recorded), 4529521925 (an identity sync precedes every update),
+> 4529521944 (a failed or rolled-back apply resyncs; an uncertain one is recorded for 070's recovery),
+> 4529521956 (the R5 `launcher` check lands here with its field), 4529521968 (a synced item records
+> `catalogSyncedEtag`), 4529521982 (engine-wide slots), 4529521993 (the `ocx-child` marker decides the restart
+> outcome), 4529522000 (an `ocx-child` observe ends `unsupported`/`ephemeral`), 4529522006
+> (`post-update-sync-failed` exits 6), 4529522014 (`childObservationsPath` from `paths.ts`), 4529522063 (an
+> automatic sync rechecks eligibility when its item starts) and 4529522112 (`pendingUpdateRecovery`).
+> Also 4529521950: on a non-loopback Home the CLI verbs name the loopback requirement instead of a bare 403 (Section 10).
+
 - **Work-phase:** wp3. **Depends on:** wp1 ([010](010_foundations.md)), wp2 ([020](020_signals_visibility.md)).
 - **Class:** C4. New mutating management routes, remote update execution over the pinned SSH channel,
   a new CLI contract (`link.child-ops/1`). Explicit security review is required before merge
@@ -19,8 +29,8 @@ the CLI: `sync` (the pinned `sync --expect-link` with an optional restart scope)
 same pinned sync carrying `--restart-app-server-only` or `--restart-codex`, which works on every full
 Child at or above 2.93.0, D13/F2) and `update` (the Child's own `update.orchestrated/1` command,
 version-gated inside the remote script, target always the Home's version, followed by a pinned sync,
-D12). Every operation is a job in one process-wide engine that serializes work per link, runs bulk
-updates one Child at a time and other bulk operations three at a time, keeps 32 finished jobs or one
+D12). Every operation is a job in one process-wide engine that serializes work per link, runs at most one
+update item and at most three other items at a time across all jobs (engine-wide slots), keeps 32 finished jobs or one
 hour, and records each item's summary as `lastOperation` in the observation cache.
 `DELETE /api/link/{id}` answers `409 link_operation_in_progress` while a job holds the link. Operators
 get `ocx link update|sync|restart-codex`; agents see contract `link.child-ops/1` in `ocx capabilities`.
@@ -89,8 +99,10 @@ plan: `launcher:unavailable` and the plan still runs; apply: `ocx-fanout:child-n
 
 **Changes to wp1 files (MODIFY in wp3).**
 - `src/link/ssh-argv.ts` (where `remoteGatedScript` lives, 010 deviation 1): `GatedOcxCommand` gains
-  `launcher: "none" | "report" | "apply"` (`remotePinnedSyncArgv` passes `"none"`). The final lines of the selected-ocx
-  branch become:
+  `launcher: "none" | "report" | "apply"` (`remotePinnedSyncArgv` passes `"none"`), and `assertGated` gains the
+  audit r2 R5 check in the same diff (Revision 4: it cannot land in wp1, which has no such field):
+  `if (cmd.launcher !== "none" && cmd.launcher !== "report" && cmd.launcher !== "apply") throw new LinkSshArgumentError("invalid gated ocx launcher");`
+  The final lines of the selected-ocx branch become:
   ```sh
   find_launcher_node() {
     case "$1" in */lib/node_modules/@bitkyc08/opencodex)
@@ -234,7 +246,8 @@ export interface ChildJobItem {
   hint?: string;
   fromVersion?: string;
   toVersion?: string;
-  sync?: { state: "synced" | "skipped" | "failed" | "timed-out"; reason: string | null };
+  /** executable: set only when 010's selected-kind marker reported ocx-child (Revision 4). */
+  sync?: { state: "synced" | "skipped" | "failed" | "timed-out"; reason: string | null; executable?: "ocx-child" };
   restart?: { requested: "app-server" | "codex"; outcome: ChildRestartOutcome };
   startedAt: string | null;
   finishedAt: string | null;
@@ -270,6 +283,10 @@ export interface ChildOpsEnv {
   readObservation(linkId: string): ChildObservation | null;
   /** updateChildObservations(file => patchChildObservation(file, linkId, patch, new Date(now()))). */
   writeObservation(linkId: string, patch: Partial<ChildObservation>): void;
+  /** Revision 4: the Home catalog etag now (020 monitor); a synced item records it as catalogSyncedEtag. */
+  catalogEtag(): string | null;
+  /** Revision 4: 050's host sets it for automatic jobs; a sync item re-asks it when the item starts. Absent ⇒ allowed. */
+  autoSyncAllowed?(linkId: string): boolean;
 }
 
 export type ItemRunner = (record: LinkRecord, job: Readonly<Pick<ChildJob, "op" | "trigger" | "restart">>,
@@ -319,6 +336,16 @@ const DEFAULT_RUNNERS: Record<ChildOp, ItemRunner> = {
 const DONE = new Set(["succeeded", "up-to-date", "busy", "offline", "refused", "owner-action", "unsupported", "failed", "uncertain"]);
 const iso = (ms: number): string => new Date(ms).toISOString();
 
+/** Revision 4 (CodeRabbit 4529521982): a counting semaphore. The engine owns one per bound, shared by every job. */
+function createSlots(size: number): { take(): Promise<void>; give(): void } {
+  let free = size;
+  const waiters: Array<() => void> = [];
+  return {
+    async take() { if (free > 0) { free -= 1; return; } await new Promise<void>(resolve => waiters.push(resolve)); },
+    give() { const next = waiters.shift(); if (next) next(); else free += 1; },
+  };
+}
+
 /** 010's persisted slice; called after finishedAt is set. */
 export function summarize(job: ChildJob, item: ChildJobItem): ChildOperationSummary {
   return { op: job.op, jobId: job.jobId, state: item.state, reason: item.reason, finishedAt: item.finishedAt!,
@@ -331,6 +358,9 @@ export function createChildOpsEngine(options: ChildOpsEngineOptions = {}): Child
   const retainJobs = options.retainJobs ?? 32;
   const retainMs = options.retainMs ?? 3_600_000;
   const width = Math.max(1, Math.min(options.bulkConcurrency ?? 3, 3));
+  // Process-wide bounds: at most one update item and at most `width` other items run at once, across all jobs.
+  const updateSlots = createSlots(1);
+  const bulkSlots = createSlots(width);
   const jobs = new Map<string, ChildJob>();
   const holds = new Map<string, string>();          // linkId -> jobId
   const running = new Set<Promise<void>>();
@@ -354,8 +384,11 @@ export function createChildOpsEngine(options: ChildOpsEngineOptions = {}): Child
     if (queue.length > 0) job.state = "running";
     let cursor = 0;
     const lanes = job.op === "update" ? 1 : Math.min(width, queue.length);
+    const slots = job.op === "update" ? updateSlots : bulkSlots;
     await Promise.all(Array.from({ length: lanes }, async () => {
       for (let item = queue[cursor++]; item; item = queue[cursor++]) {
+        await slots.take();                              // the item stays "queued" while another job holds the slot
+        try {
         item.state = "running";
         item.startedAt = iso(env.now());
         let record: LinkRecord | undefined;
@@ -367,6 +400,7 @@ export function createChildOpsEngine(options: ChildOpsEngineOptions = {}): Child
           if (!DONE.has(item.state)) Object.assign(item, { state: "failed", reason: "internal-error" });
         }
         finishItem(job, item, env);
+        } finally { slots.give(); }
       }
     }));
     job.state = "done";
@@ -448,6 +482,7 @@ import { classifySyncResult, childSkipHint } from "./sync-fanout-classify";
 import type { LinkRecord } from "./store";
 import { RESTART_SKIPPED, type ChildJobItem, type ChildOpsEnv, type ChildRestart, type ItemOutcome,
   type ItemRunner } from "./child-ops-types";
+import { withoutCarriedFields } from "./child-observations";
 
 export const SYNC_TIMEOUT_MS = 180_000;
 /** The --not-after window, counted on the Child's clock from the plan probe (M9). */
@@ -456,6 +491,9 @@ export const APPLY_NOT_AFTER_MS = 120_000;
 export const APPLY_MIN_REMAINING_MS = 15_000;
 export const APPLY_GRACE_MS = 120_000;
 export const POST_UPDATE_SYNC_RETRY_MS = 30_000;
+/** Revision 4: how long an uncertain update stays recorded for recovery (070 imports it from here). */
+export const UNCERTAIN_RECOVERY_WINDOW_MS = 3_600_000;
+const iso = (ms: number): string => new Date(ms).toISOString();
 type Platform = "posix" | "windows";
 type SyncResult = NonNullable<ChildJobItem["sync"]>;
 type RestartReport = NonNullable<ChildJobItem["restart"]>;
@@ -483,25 +521,45 @@ function linkBusy(record: LinkRecord, env: ChildOpsEnv): boolean {
 export async function pinnedSync(record: LinkRecord, platform: Platform, restart: ChildRestart,
   env: ChildOpsEnv): Promise<SyncResult> {
   const argv = remotePinnedSyncArgv(record.id, platform, restart === "none" ? {} : { restart });
+  // Revision 4 (4529521968): read the etag before the sync. If the catalog changes during the sync, the recorded etag
+  // is the older one, so the fan-out sees the Child as behind and syncs again; it is never credited with a newer one.
+  const etag = env.catalogEtag();
   try {
     const result = await env.runner.run(buildExecArgv({ alias: record.alias, knownHostsFile: env.knownHostsFile, argv }),
       { timeoutMs: SYNC_TIMEOUT_MS });
-    return classifySyncResult(result);
+    const verdict = classifySyncResult(result);
+    // Only a synced Home-run sync proves the Child applied the catalog; a GET of /v1/catalog proves only a fetch.
+    if (verdict.state === "synced" && etag !== null) {
+      try { env.writeObservation(record.id, { catalogSyncedEtag: etag }); } catch { /* cache only */ }
+    }
+    return verdict;
   } catch (error) {
     return error instanceof SshRunnerError && error.code === "timeout"
       ? { state: "timed-out", reason: "deadline-exceeded" } : { state: "failed", reason: "ssh-runner-failed" };
   }
 }
 
-/** The pinned sync with an optional restart that obeys A2: unsupported where it cannot run, withheld while busy. */
+/**
+ * The pinned sync with an optional restart that obeys A2: unsupported where it cannot run, withheld while busy.
+ * Revision 4 (4529521916): the catalog sync runs first without a restart; activity is read after it; the restart then
+ * goes out as a second pinned sync, which is close to a no-op sync. The gap between the activity read and the restart is
+ * one SSH round trip instead of a whole sync (up to SYNC_TIMEOUT_MS). It cannot be closed from the Home: the restart
+ * executes on the Child, and holding a relayed request at the Home would not save a turn whose app-server is restarting.
+ */
 async function syncWithRestart(record: LinkRecord, platform: Platform, requested: ChildRestart,
   env: ChildOpsEnv): Promise<{ sync: SyncResult; restart?: RestartReport }> {
   if (requested === "none") return { sync: await pinnedSync(record, platform, "none", env) };
-  const restartable = platform === "posix" && record.childKind !== "ephemeral";
-  const withheld = restartable && linkBusy(record, env);
-  const sync = await pinnedSync(record, platform, restartable && !withheld ? requested : "none", env);
-  const outcome = !restartable ? "unsupported" : withheld ? "skipped" : sync.state === "synced" ? "requested" : "not-run";
-  return { sync, restart: { requested, outcome } };
+  const sync = await pinnedSync(record, platform, "none", env);
+  if (platform !== "posix" || record.childKind === "ephemeral") return { sync, restart: { requested, outcome: "unsupported" } };
+  if (sync.state !== "synced") return { sync, restart: { requested, outcome: "not-run" } };
+  if (linkBusy(record, env)) return { sync, restart: { requested, outcome: "skipped" } };
+  const second = await pinnedSync(record, platform, requested, env);
+  // 4529521993: a record without childKind can still select ocx-child, which ignores the flag (010 selected-kind marker).
+  if (second.executable === "ocx-child") return { sync, restart: { requested, outcome: "unsupported" } };
+  if (second.state === "synced") return { sync, restart: { requested, outcome: "requested" } };
+  // The restart was sent but its result is unknown: the item reports the second sync, so it ends uncertain.
+  if (second.state === "timed-out") return { sync: second, restart: { requested, outcome: "requested" } };
+  return { sync, restart: { requested, outcome: "not-run" } };
 }
 
 export function syncOutcome(sync: SyncResult, alias: string): ItemOutcome {
@@ -522,14 +580,15 @@ export function syncOutcome(sync: SyncResult, alias: string): ItemOutcome {
 /** 020's observe dispatch as a runner: fresh fields only, so catalogPulledAt, lastOperation and suppressedTarget survive. */
 export const runObserveItem: ItemRunner = async (record, _job, env) => {
   const outcome = await env.observe(record);
-  if (outcome.observation) {
-    const { catalogPulledAt: _pulled, lastOperation: _last, suppressedTarget: _suppressed, ...fresh } = outcome.observation;
-    env.writeObservation(record.id, fresh);
-  }
+  // Revision 4: every carried field (010 CARRIED_OBSERVATION_FIELDS) survives, including the three revision 4 added.
+  if (outcome.observation) env.writeObservation(record.id, withoutCarriedFields(outcome.observation));
   return { state: outcome.state, reason: outcome.reason };
 };
 
 export const runSyncItem: ItemRunner = async (record, job, env) => {
+  // 4529522063: the scheduler checked idle and the settings digest when it queued the job; the item may have waited
+  // behind other Children since. Re-ask at item start; a no answer is busy with no SSH, retried at the next poll.
+  if (job.trigger === "auto" && env.autoSyncAllowed?.(record.id) === false) return { state: "busy", reason: "link-active" };
   const offline = unreachable(record, env);
   if (offline) return offline;
   const platform = await platformOf(record, env);
@@ -560,22 +619,33 @@ export const runRestartCodexItem: ItemRunner = async (record, job, env) => {
   }
   // A2 / M8: the restart is the purpose of this op, so a busy link runs nothing (no SSH) and reports partial (exit 6).
   if (linkBusy(record, env)) return { state: "busy", reason: RESTART_SKIPPED, restart: { requested, outcome: "skipped" } };
-  const sync = await pinnedSync(record, platform, requested, env);
-  const outcome = syncOutcome(sync, record.alias);
-  return { ...outcome, restart: { requested, outcome: sync.state === "synced" ? "requested" : "not-run" } };
+  // Revision 4: same two-step path as sync with a restart, so activity is read again just before the restart goes out.
+  const { sync, restart } = await syncWithRestart(record, platform, requested, env);
+  if (restart!.outcome === "unsupported") return syncOutcome(sync, record.alias).state === "succeeded"
+    ? { ...refused("ephemeral-restart"), sync } : { ...syncOutcome(sync, record.alias), restart: { requested, outcome: "not-run" } };
+  if (restart!.outcome === "skipped") return { state: "busy", reason: RESTART_SKIPPED, sync, restart };
+  return { ...syncOutcome(sync, record.alias), restart };
 };
 
 export const runUpdateItem: ItemRunner = async (record, job, env) => {
   if (record.childKind === "ephemeral") return { state: "unsupported", reason: "ephemeral" };     // D10
   const offline = unreachable(record, env);
   if (offline) return offline;
+  // Revision 4 (4529521925): bind the Child's identity before anything can mutate it. The pinned sync is the Child's own
+  // check (sync --expect-link, under its lifecycle lock, src/client/sync-expectation.ts:109): a Child that disconnected or
+  // linked to another Home answers child-link-mismatch:* and nothing below runs. It precedes the plan probe, so the
+  // probe's 120 s window is not spent on it; the gap left before apply is the probe itself (at most 60 s).
+  const identityPlatform = await platformOf(record, env);
+  if (typeof identityPlatform !== "string") return identityPlatform;
+  const identity = await pinnedSync(record, identityPlatform, "none", env);
+  if (identity.state !== "synced") return syncOutcome(identity, record.alias);
   // D3: a fresh plan every time. Windows Children are observed too: desktop-request is the one route they can take (H4, A5).
   const observed = await env.observe(record);
-  if (observed.observation) {
-    const { catalogPulledAt: _pulled, lastOperation: _last, suppressedTarget: _suppressed, ...fresh } = observed.observation;
-    env.writeObservation(record.id, fresh);
-  }
+  if (observed.observation) env.writeObservation(record.id, withoutCarriedFields(observed.observation));
   const probe = observed.probe;
+  // 4529522000: observe step 4 ends "succeeded" with probe null for a record without childKind whose Child runs
+  // ocx-child (020). Nothing was updated, so this is unsupported, never a success.
+  if (observed.state === "succeeded" && probe === null) return { state: "unsupported", reason: "ephemeral" };
   if (observed.state !== "succeeded" || probe === null) return { state: observed.state, reason: observed.reason };
   const plan = probe.classification;
   const target = env.homeVersion;
@@ -612,6 +682,10 @@ export const runUpdateItem: ItemRunner = async (record, job, env) => {
       { timeoutMs: plan.mutationBoundMs + APPLY_GRACE_MS });
   } catch (error) {
     // The Child's update keeps running or has finished; only a re-observe can tell (R2 hazard 4).
+    // Revision 4 (4529522112, 4529521944): recorded apart from lastOperation, which the next observe replaces; 070
+    // re-observes it, never re-applies, and resyncs once the Child reports no update in flight.
+    env.writeObservation(record.id, { pendingUpdateRecovery: { target, since: iso(env.now()),
+      until: iso(env.now() + UNCERTAIN_RECOVERY_WINDOW_MS) } });
     return { state: "uncertain", reason: error instanceof SshRunnerError && error.code === "timeout"
       ? "deadline-exceeded" : "ssh-runner-failed", ...versions };
   }
@@ -623,6 +697,12 @@ export const runUpdateItem: ItemRunner = async (record, job, env) => {
     ...(homeClock ? { hint: `The clocks of this Home and ${record.alias} differ (clock-skew); correct the Child's clock or run the update again.` } : {}),
     ...verdictVersions };
   if (verdict.state === "up-to-date") return { state: "up-to-date", reason: null, ...verdictVersions };
+  if (verdict.state === "uncertain") env.writeObservation(record.id, { pendingUpdateRecovery: { target,
+    since: iso(env.now()), until: iso(env.now() + UNCERTAIN_RECOVERY_WINDOW_MS) } });
+  // 4529521944: a failed or rolled-back apply may already have stopped the proxy unsupervised, which removes routing.
+  // Resync without a restart; the verdict (and any suppressedTarget written above) stands, the sync is reported beside it.
+  if (verdict.state === "failed") return { state: "failed", reason: verdict.reason, ...verdictVersions,
+    sync: await pinnedSync(record, "posix", "none", env) };
   if (verdict.state !== "succeeded") return { state: verdict.state, reason: verdict.reason, ...verdictVersions };
   // Always resync: an unsupervised stop removed routing and start alone does not reapply it. The restart obeys A2.
   let { sync, restart } = await syncWithRestart(record, "posix", job.restart, env);
@@ -635,7 +715,8 @@ export const runUpdateItem: ItemRunner = async (record, job, env) => {
   const extra = { ...verdictVersions, sync, ...(restart ? { restart } : {}) };
   return sync.state === "synced"
     ? { state: "succeeded", reason: restart?.outcome === "skipped" ? RESTART_SKIPPED : null, ...extra }
-    : { state: "succeeded", reason: "post-update-sync-failed", hint: childSkipHint(sync.reason, record.alias), ...extra };
+    // Revision 4 (4529522006): the update stands, but routing may be gone; the CLI exits 6 for this reason (Section 3).
+    : { state: "succeeded", reason: "post-update-sync-failed", hint: `${childSkipHint(sync.reason, record.alias) ?? ""} Run \`ocx link sync ${record.alias}\` to restore routing.`.trim(), ...extra };
 };
 ```
 
@@ -662,7 +743,9 @@ import { DEFAULT_IDLE_AFTER_MS, isLinkIdle } from "../../link/child-activity";
 import { observeChild } from "../../link/child-observe";
 import { CHILD_JOB_ID, sharedChildOpsEngine, type ChildOpsEngine, type SubmitRefusal } from "../../link/child-ops-engine";
 import { CHILD_OPS, type ChildOp, type ChildOpsEnv, type ChildRestart } from "../../link/child-ops-types";
-import { childObservationsPath, patchChildObservation, readChildObservations, updateChildObservations } from "../../link/child-observations";
+// Revision 4 (4529522014): childObservationsPath is exported by src/link/paths.ts (010 file map), not child-observations.
+import { childObservationsPath } from "../../link/paths";
+import { patchChildObservation, readChildObservations, updateChildObservations } from "../../link/child-observations";
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 const MAX_LINK_IDS = 64;
@@ -698,6 +781,9 @@ export function childOpsEnvFor(ctx: ManagementContext, state: LinkRouteState, id
     writeObservation: (linkId, patch) => {
       updateChildObservations(file => patchChildObservation(file, linkId, patch, new Date(now())));
     },
+    // Revision 4: 020's monitor on LinkRouteState.catalogRevision, created here on first use exactly as 020's status hook
+    // creates it (050 later defaults it to sharedCatalogRevisionMonitor()). null when the catalog cannot be read.
+    catalogEtag: () => (state.catalogRevision ??= catalogRevisionForRoutes()).current()?.etag ?? null,
   };
 }
 
@@ -1060,7 +1146,10 @@ authority on the Home and act only on Home-initiated links."
 3. **CLI exit codes follow `runCliAction`.** D15 says "1 any failed/uncertain or API error". The existing
    wrapper maps a `RuntimeApiError` 404 to exit 4 and 409 to exit 5 (src/cli/runtime-api.ts:553-555), and
    every link verb already relies on that. wp3 keeps it: job verdict 0/6/1, an older Home 4 (with the
-   D21 message), a held link 5. D21's "exit 1" for an old Home is superseded.
+   D21 message), a held link 5. Revision 4 (4529522006): an item that ends `succeeded` with reason
+   `post-update-sync-failed` counts as partial (exit 6) like `restart-skipped:link-active`: the update is kept and
+   reported, and the hint names the manual `ocx link sync <alias>` that restores routing. D21's "exit 1" for an old
+   Home is superseded.
 4. **Every restart request names its links (A2, audit M8).** D14 accepts `"all"` for every op; any request that
    carries a restart (`restart-codex`, or `sync` with `restart`) is `400 invalid_body` with `"all"` and a usage error in
    the CLI, and `--restart-codex` needs `--yes` on `ocx link sync` as on `restart-codex`. Every runner reads the
@@ -1140,6 +1229,23 @@ real wp1 builders and classifiers, a stubbed `observeChild` (`mock.module` on `.
   state succeeded`; `activity null ⇒ skipped` (unknown counts as in flight); `inFlight 0 ⇒ flag sent`; the activity stub
   changes between submit and run and the run-time value wins.
 - restart-codex guard: `inFlight 1 ⇒ busy/restart-skipped:link-active with zero SSH calls` (manual trigger too).
+- Revision 4 cases (runners file):
+  - `restart after sync` (4529521916): with a restart requested, the first SSH call carries no restart flag and the
+    second does; the activity stub turns `inFlight 1` between the two calls ⇒ one SSH call, restart `skipped`, item
+    `succeeded` with `restart-skipped:link-active`; the second call times out ⇒ item `uncertain`, restart `requested`.
+  - `ocx-child without childKind` (4529521993): second sync verdict `executable: "ocx-child"` ⇒ restart `unsupported`.
+  - `identity before update` (4529521925): the first SSH call of an update is the pinned sync; a
+    `child-link-mismatch:other_link` verdict ⇒ `refused`, and `env.observe` and the apply are never called.
+  - `observe ocx-child` (4529522000): observe `succeeded` with `probe: null` ⇒ `unsupported/ephemeral`, no apply.
+  - `failed apply resyncs` (4529521944): exit 1 with a rolled-back result ⇒ `failed`, `suppressedTarget` written, one
+    pinned sync with no restart flag after the apply, its result on `item.sync`.
+  - `uncertain apply recorded` (4529522112): runner timeout ⇒ `pendingUpdateRecovery` written with `until` one hour later.
+  - `synced records etag` (4529521968): `catalogEtag` "A" before the sync, "B" after ⇒ `catalogSyncedEtag` "A".
+  - `auto sync rechecks` (4529522063): `autoSyncAllowed` false at item start ⇒ `busy/link-active`, zero SSH calls.
+- engine, `engine-wide slots` (4529521982): four single-link `sync` jobs on four links with deferred stub runners ⇒ at
+  most three runners in flight and the fourth item `queued` until one resolves; two single-link `update` jobs ⇒ the
+  second runner starts only after the first resolves.
+- CLI, `post-update sync failed exits 6` (4529522006): one item `succeeded/post-update-sync-failed` ⇒ exit 6.
 - update, one case per D12 row, each asserting the observable item and the SSH call list (`env.observe` stubbed with
   scripted `ObserveOutcome` values): `ephemeral`, `observe outcome passthrough`, `up-to-date`, `owner-action goat`,
   `desktop route ⇒ owner-action/desktop-app`, `updateInFlight ⇒ busy`, `auto + suppressed ⇒ refused/target-failed-before`,
@@ -1296,14 +1402,25 @@ Run on 00680193cb (before any wp1–wp3 code exists), 2026-11-11:
   focus: auth (`either` = dashboard session or loopback admin token; Tailscale identity refused, link-route-state.ts:94-101),
   no new credential, artifact source or trust root (D20), body strictness (unknown keys rejected, ≤ 64 ids), no
   remote output stored or logged (items carry closed reason codes and `boundHint`-bounded hints only), `--not-after`
-  120 s and `--expect-plan` binding, the post-update `--expect-link` sync as identity check.
+  120 s and `--expect-plan` binding, the pre-update and post-update `--expect-link` syncs as identity checks.
+- **Identity residual (Revision 4, 4529521925):** the identity sync runs before the plan probe, so a relink on the Child
+  during the probe (at most 60 s) or the apply is not caught before mutation; the post-update sync reports it. Closing
+  that gap needs the Child's updater to hold the Child's link lifecycle lock through the apply, a `src/update/*`
+  change this unit excludes (000 non-goals, D19). Both sides of that race are the same operator.
+- **Restart residual (Revision 4, 4529521916):** a relayed request that starts during the restart's own SSH round trip
+  (after the second activity read) is cut by the restart. The Home cannot fence it: the restart runs on the Child, and
+  delaying the request at the Home would not save a turn whose app-server is being restarted.
 - **Consenting principal:** the operator holding the SSH key. The docs say not to link a machine you do not own.
 - **Risks:** (1) An update stops the Child's runtime and ends relayed turns; manual updates do not check idle by
   design (the operator asked), automatic ones do (070). (2) The env captures one request's `ctx` for the job
   lifetime; a config reload during a job keeps the old object for wire-state projection only. (3) A Home restart
   loses running jobs; the Child's update continues and the next observe reports it. (4) Non-loopback Homes: the
   CLI's POST reaches the TCP listener, which refuses the admin token there (403, as for revoke); the dashboard path
-  works; widening the local-control socket is out of scope.
+  works; widening the local-control socket is out of scope. Revision 4 (4529521950): this configuration is explicitly
+  unsupported for the CLI. `runLinkChildOp` and `runLinkCheck` catch a `RuntimeApiError` 403 and exit 1 with
+  "Child operations from the CLI need a Home bound to loopback; use the Remote Link page in the dashboard." (050's
+  `ocx link policy` write does the same.) Test in `cli-link-child-ops.test.ts`: a stub answering 403 ⇒ that message,
+  exit 1. The docs-site CLI reference and `skills/ocx` hand page state the limit.
 - **Clock skew (M9):** the deadline uses the Child's own clock from the plan probe (seconds resolution), so a skewed
   Child clock no longer turns every apply into `deadline-passed`. If the marker is missing the Home clock is used and a
   `deadline-passed` refusal carries a `clock-skew` hint. Nothing ran in either refusal.

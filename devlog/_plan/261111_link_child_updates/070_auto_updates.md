@@ -8,6 +8,14 @@
 > acceptable), L12 (verifier facts) and L13 (a preview-channel Child below the Home's stable version moves to the
 > Home's version; the Child has no local opt-out in this unit).
 
+> **Revision 4 (CodeRabbit on #8500).** Folds 4529522103 (the backoff is built with `countOn:
+> UPDATE_ATTEMPT_CAP_STATES`; audit r2 R1 below stated the rule, and 050's helper now implements it), 4529522106 (the
+> per-link, per-target count is persisted as `autoUpdateAttempts` after each counted outcome, the cap writes
+> `suppressedTarget` from `onItem` at once, and a restart restores the count), 4529522112 (recovery reads
+> `pendingUpdateRecovery`, which 030 writes apart from `lastOperation`; a link with an unexpired record is never a
+> candidate) and 4529521944 (once a recovery observe shows no update in flight, the sweep submits one pinned sync
+> without a restart to restore routing, then clears the record; it never re-applies).
+
 - **Work-phase:** wp7. **Depends on:** wp5 ([050](050_auto_catalog_fanout.md): policy file with `updates`, the
   Child-ops host and its poll hook), and through it wp3 ([030](030_child_operations.md): engine and update runner),
   wp2 ([020](020_signals_visibility.md): observe, activity) and wp1 ([010](010_foundations.md): plan classifier).
@@ -89,7 +97,8 @@ export const SWEEP_START_MIN_MS = 60_000;
 export const SWEEP_START_JITTER_MS = 240_000;           // first sweep 1–5 min after the host starts
 export const HOME_FIRST_MS = 600_000;                   // the Home serves its version 10 min before any Child update
 export const REOBSERVE_DELAYS_MS = [120_000, 300_000, 900_000] as const;
-export const UNCERTAIN_RECOVERY_WINDOW_MS = 3_600_000;  // a restart re-observes uncertain items this recent
+// Revision 4: the uncertain-recovery window (UNCERTAIN_RECOVERY_WINDOW_MS, 1 h) lives in 030's child-ops-runners.ts, which
+// writes pendingUpdateRecovery with its `until`; this file reads `until` and needs no constant of its own.
 /** H3: outcomes that back an automatic update off (5 min doubling to 6 h, 050), keyed by link and target version. */
 // Audit r2 R1: transient "busy" (link active, update-in-flight, plan-expired) and "offline" grow the backoff delay
 // but never count toward the 3-attempt cap, so they cannot suppress a target.
@@ -110,7 +119,7 @@ export interface ChildUpdateSweepDeps {
   clearTimeout: (handle: unknown) => void;
   setInterval: (fn: () => void, ms: number) => unknown;
   clearInterval: (handle: unknown) => void;
-  /** Test seam; production uses createLinkBackoff({ growOn: UPDATE_BACKOFF_STATES }). */
+  /** Test seam; production uses createLinkBackoff({ growOn: UPDATE_BACKOFF_STATES, countOn: UPDATE_ATTEMPT_CAP_STATES }). */
   backoff?: LinkBackoff;
 }
 
@@ -133,7 +142,7 @@ export function homeAutoUpdateAllowed(homeVersion: string, homeStartedAt: number
 
 export function createChildUpdateSweep(deps: ChildUpdateSweepDeps): ChildUpdateSweep {
   const reobserve = new Map<string, unknown[]>();       // linkId -> pending timer handles
-  const backoff = deps.backoff ?? createLinkBackoff({ growOn: UPDATE_BACKOFF_STATES });
+  const backoff = deps.backoff ?? createLinkBackoff({ growOn: UPDATE_BACKOFF_STATES, countOn: UPDATE_ATTEMPT_CAP_STATES });
   let interval: unknown = null;
   let startTimer: unknown = null;
   let unsubscribe: (() => void) | null = null;
@@ -164,14 +173,46 @@ export function createChildUpdateSweep(deps: ChildUpdateSweepDeps): ChildUpdateS
     reobserve.set(linkId, handles);
   };
 
+  /** Revision 4 (4529522106): memory and file agree; the file wins after a restart (memory starts at 0). */
+  const attemptsFor = (env: ChildOpsEnv, linkId: string, target: string): number => {
+    const saved = env.readObservation(linkId)?.autoUpdateAttempts;
+    return Math.max(backoff.attempts(linkId, target), saved?.target === target ? saved.count : 0);
+  };
+
+  /** Revision 4 (4529521944, 4529522112): recovery of an uncertain update, driven by the persisted record. */
+  const recover = (env: ChildOpsEnv, job: Readonly<ChildJob>, item: Readonly<ChildJobItem>): void => {
+    const pending = env.readObservation(item.linkId)?.pendingUpdateRecovery;
+    if (!pending) return;
+    if (Date.parse(pending.until) <= env.now()) { env.writeObservation(item.linkId, { pendingUpdateRecovery: null }); return; }
+    // A recovery observe that sees no update in flight ⇒ one pinned sync, no restart, to restore routing. Never an update.
+    if (job.op === "observe" && item.state === "succeeded" && env.readObservation(item.linkId)?.updateReason !== "update-in-flight") {
+      if (!deps.engine.activeJob(item.linkId)) deps.engine.submit({ op: "sync", linkIds: [item.linkId], restart: "none", trigger: "auto" }, env);
+      return;
+    }
+    if (job.op === "sync" && item.state === "succeeded") env.writeObservation(item.linkId, { pendingUpdateRecovery: null });
+  };
+
   const onItem = (job: Readonly<ChildJob>, item: Readonly<ChildJobItem>): void => {
-    if (job.op !== "update") return;
+    const env = deps.env();
+    if (job.op !== "update") { recover(env, job, item); return; }
     if (item.state === "uncertain") scheduleReobserve(item.linkId);
     // H3: automatic attempts feed the backoff and the cap; a manual success clears them as well.
-    const target = item.toVersion ?? deps.env().homeVersion;
-    if (job.trigger === "auto" || item.state === "succeeded" || item.state === "up-to-date") {
-      backoff.record(item.linkId, target, item, deps.env().now(), null);
+    const target = item.toVersion ?? env.homeVersion;
+    if (item.state === "succeeded" || item.state === "up-to-date") {
+      backoff.record(item.linkId, target, item, env.now(), null);
+      env.writeObservation(item.linkId, { autoUpdateAttempts: null });
+      return;
     }
+    if (job.trigger !== "auto") return;
+    backoff.record(item.linkId, target, item, env.now(), null);
+    if (!UPDATE_ATTEMPT_CAP_STATES.has(item.state)) return;
+    // This outcome is already in memory (record above); the file adds it to whatever survived a restart.
+    const saved = env.readObservation(item.linkId)?.autoUpdateAttempts;
+    const count = Math.max(backoff.attempts(item.linkId, target), (saved?.target === target ? saved.count : 0) + 1);
+    env.writeObservation(item.linkId, { autoUpdateAttempts: { target, count } });
+    // The cap is enforced here, not when the link next becomes a candidate, so a restart in between cannot reset it.
+    if (count >= MAX_AUTO_UPDATE_ATTEMPTS) env.writeObservation(item.linkId,
+      { suppressedTarget: target, updateReason: "update-attempts-exhausted", autoUpdateAttempts: null });
   };
 
   /**
@@ -186,6 +227,8 @@ export function createChildUpdateSweep(deps: ChildUpdateSweepDeps): ChildUpdateS
       if (link.direction !== "hub-initiated" || link.childKind === "ephemeral") continue;
       if (deps.engine.activeJob(link.id) || reobserve.has(link.id)) continue;
       const seen = env.readObservation(link.id);
+      // Revision 4 (4529522112): an unresolved uncertain update blocks re-apply until its record is cleared or expires.
+      if (seen?.pendingUpdateRecovery && Date.parse(seen.pendingUpdateRecovery.until) > env.now()) continue;
       if (!seen || !AUTO_UPDATE_ROUTES.has(seen.updateRoute) || seen.installKind === "goat") continue;
       // H4: a Windows Child can only take the Desktop request route; orchestrated apply is refused there (D20).
       if (link.remotePlatform === "windows" && seen.updateRoute !== "desktop-request") continue;
@@ -194,8 +237,8 @@ export function createChildUpdateSweep(deps: ChildUpdateSweepDeps): ChildUpdateS
       if (!installed || compareStrictSemver(installed, home) >= 0) continue;  // never sideways or down
       if (env.wireState(link.id) !== "connected" || env.activity(link.id)?.idle !== true) continue;
       if (backoff.blocked(link.id, env.homeVersion, env.now(), null)) continue;
-      if (backoff.attempts(link.id, env.homeVersion) >= MAX_AUTO_UPDATE_ATTEMPTS) {
-        // Persisted like a rollback: survives a Home restart, and a manual Update clears it (030 runUpdateItem).
+      if (attemptsFor(env, link.id, env.homeVersion) >= MAX_AUTO_UPDATE_ATTEMPTS) {
+        // Normally already written by onItem; kept for a count restored from the file. A manual Update clears it.
         env.writeObservation(link.id, { suppressedTarget: env.homeVersion, updateReason: "update-attempts-exhausted" });
         continue;
       }
@@ -223,11 +266,12 @@ export function createChildUpdateSweep(deps: ChildUpdateSweepDeps): ChildUpdateS
       if (!stopped) return;
       stopped = false;
       unsubscribe = deps.engine.onItemFinished(onItem);
-      // A Home restarted during an uncertain update re-observes it instead of trusting the stale verdict.
+      // A Home restarted during an uncertain update re-observes it instead of trusting the stale verdict. Revision 4
+      // (4529522112): read pendingUpdateRecovery, which the first scheduled observe does not overwrite (lastOperation it does).
       const env = deps.env();
       for (const link of env.readStore().links) {
-        const last = env.readObservation(link.id)?.lastOperation;
-        if (last?.op === "update" && last.state === "uncertain" && env.now() - Date.parse(last.finishedAt) < UNCERTAIN_RECOVERY_WINDOW_MS) scheduleReobserve(link.id);
+        const pending = env.readObservation(link.id)?.pendingUpdateRecovery;
+        if (pending && Date.parse(pending.until) > env.now()) scheduleReobserve(link.id);
       }
       startTimer = deps.setTimeout(() => { startTimer = null; void sweep().catch(() => null); },
         SWEEP_START_MIN_MS + Math.floor(deps.random() * SWEEP_START_JITTER_MS));
@@ -263,11 +307,17 @@ Why each guard exists:
   link off for that target (5 min doubling to 6 h, 050's helper); candidates are taken least recently attempted first. A
   Child that fails every time (for example `deadline-passed` before 030 fixed the clock, or a broken install) costs at
   most three attempts of two SSH calls each per target, instead of two SSH calls every five minutes forever, and never
-  blocks the Children behind it in the store. The counters live in memory; the cap persists through `suppressedTarget`.
-- **Uncertain ⇒ re-observe, never re-apply:** a link with a pending schedule is not a candidate; the observe at
-  2/5/15 min refreshes `installedVersion` and `updateInFlight`; once installed equals the Home version the link is no
-  longer a candidate; if the update really failed, the next poll after the schedule may try again, and a second
-  rollback suppresses the target.
+  blocks the Children behind it in the store. Revision 4: the delay lives in memory, the count is persisted as
+  `autoUpdateAttempts` after each counted outcome, and reaching the cap writes `suppressedTarget` at once, so a Home
+  restart neither resets the count nor skips the suppression.
+- **Uncertain ⇒ re-observe, never re-apply:** a link with a pending schedule, or with an unexpired
+  `pendingUpdateRecovery` (Revision 4, persisted by 030 apart from `lastOperation`), is not a candidate; the observe at
+  2/5/15 min refreshes `installedVersion` and `updateInFlight`. When one of those observes sees no update in flight,
+  the sweep submits one pinned sync without a restart (it restores routing an unsupervised stop may have removed) and
+  clears the record when that sync succeeds; the record also lapses after its hour. Recovery runs in every `updates`
+  mode, because it applies nothing: the host starts the sweep object whenever it runs, and only `sweep` and `onPoll`
+  check the mode. Once installed equals the Home version the link is no longer a candidate; if the update really
+  failed, a later poll may try again, and a second rollback suppresses the target.
 - **GOAT-managed Children skipped:** `installKind === "goat"` (010 classification from the serving path), so GOAT and the
   Home never race. Desktop qualifies only after 080 adds `"desktop-request"` to `AUTO_UPDATE_ROUTES` (A5); until then it
   is owner-action. A Windows Child qualifies only through that route (H4). mise, source and ocx-child never qualify.
@@ -369,6 +419,19 @@ in-memory store and observations. Register `"link-child-update-sweep.test.ts": "
 lastOperation, and a throwing listener does not change the job`.
 **Host wiring** is covered by 050's `tests/lab/link-child-ops-no-timer.test.ts`: extend its "one link" case to assert the
 sweep's start timer and 6-hour interval exist only while the host runs.
+
+Revision 4 cases in the sweep test file:
+- `busy never spends the cap` (4529522103): three automatic `busy/link-active` items ⇒ `autoUpdateAttempts` unchanged,
+  `suppressedTarget` null, the link eligible again after its backoff.
+- `count survives a restart` (4529522106): two automatic `failed` items, then a new sweep instance over the same
+  observation file and a fresh backoff; a third `failed` item ⇒ `suppressedTarget` written by `onItem` with
+  `update-attempts-exhausted`, before any later candidate scan.
+- `recovery survives a restart` (4529522112): an `uncertain` item writes `pendingUpdateRecovery`; one recovery observe
+  replaces `lastOperation`; a new sweep instance still schedules the re-observes and `candidate` skips the link until
+  `until`.
+- `recovery restores routing` (4529521944): a recovery observe with no update in flight ⇒ one `sync` job with
+  `restart: "none"` and no `update` job; its success clears `pendingUpdateRecovery`; with `updates: "off"` the same
+  happens.
 
 ## 6. Docs and source-of-truth sync
 

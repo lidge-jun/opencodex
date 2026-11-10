@@ -6,6 +6,13 @@
 > longer patches this module; `link-child-ops-routes.test.ts` is NEW here and MODIFY in 030), M9 (`probe`
 > carries the Child clock) and L15 (the observe op mutates no install but is not side-effect-free everywhere).
 
+> **Revision 4 (CodeRabbit on #8500).** Folds 4529521959 (freshness compares the etag a Child was served or synced
+> with the current etag; time is display only, so a restored file with an old mtime still reads `behind`) and
+> 4529521968 (a GET proves a fetch only: the pull recorder stores the etag served once the body is fully written, and
+> the wp5 fan-out decides eligibility from `catalogSyncedEtag`, which 030 writes only when a Home-run sync reports
+> `synced`). The routes module exports `catalogRevisionForRoutes()`, the lazy production wiring of
+> `createCatalogRevisionMonitor` that 030's env reuses.
+
 - **Work phase:** wp2. **Depends on:** wp1 (`010_foundations.md`: `remoteUpdatePlanArgv`,
   `classifyUpdatePlanProbe`, `child-observations.ts`). **Class:** C4: one new POST route that runs a
   remote command over the pinned SSH channel, and a new opt-in status projection.
@@ -39,8 +46,9 @@
    etag changed. The hook beside `setCatalogAutoRefreshClientFanout` (`src/codex/catalog-auto-refresh.ts:53-58`)
    and the quiet-period trigger belong to wp5, which needs them for fan-out. A Home without links runs none
    of this: the attacher runs only for `?children=1` on `role === "home"`.
-3. **`changedAt` is the file's mtime, not "now".** When the etag changes, `changedAt = min(now, mtimeMs)`, so a
-   Child that pulled after the write but before the Home noticed still reads `current`.
+3. **`changedAt` is the file's mtime, not "now", and it is display only.** When the etag changes,
+   `changedAt = min(now, mtimeMs)`. Revision 4 (4529521959): no verdict compares times. A file restored with an
+   older preserved mtime changes the etag but not the order of times, so the verdict compares etags instead.
 4. **What counts as activity.** Every POST that `linkRouteAllowed` admits (`src/link/routes.ts:23-29`)
    except `/v1/messages/count_tokens`. GET/HEAD (`/v1/catalog`, `/readyz`, `/v1/usage`, artifacts), the
    management relay and the parity POST never count (they are not admitted by `linkRouteAllowed` alone,
@@ -184,19 +192,27 @@ In `start`, next to the supervisor subscription (`:126`):
 
 ```ts
       catalogPulls ??= createCatalogPullRecorder({ storePath: linkDeps.storePath });
-      unregisterCatalogPulls ??= linkListener.onAuthenticatedCatalog(apiKeyId => catalogPulls!.record(apiKeyId));
+      unregisterCatalogPulls ??= linkListener.onAuthenticatedCatalog((apiKeyId, etag) => catalogPulls!.record(apiKeyId, etag));
 ```
 
 and `stop` (`:166`) unregisters it and calls `catalogPulls?.flush()`. `onAuthenticatedCatalog` fires only for a
 configured link key on the hub-link ingress (`serve-options.ts:391-393`), so a Home without links records nothing.
+Revision 4: it fires when the response body has been written in full, never on admission, and passes the
+`catalogEtag` of the bytes served (`src/server/catalog-download.ts:40-42`). An aborted body records nothing. That
+still proves only a fetch: a Child whose sync fails after fetching is shown as having pulled, and that is why wp5's
+fan-out does not use this record (050 `behind`).
 
 ### src/link/child-catalog-freshness.ts (NEW)
 
 ```ts
-export interface CatalogPullRecorder { record(apiKeyId: string): void; pulledAt(linkId: string): number | null; flush(): void }
+export interface CatalogPull { at: number; etag: string }
+export interface CatalogPullRecorder { record(apiKeyId: string, etag: string): void; pulled(linkId: string): CatalogPull | null;
+  /** Kept for 050's binding and the status row; equals pulled(linkId)?.at ?? null. */
+  pulledAt(linkId: string): number | null; flush(): void }
 /** keyId → linkId through links.json; memory always, file at most once per link per 30 s. */
 export function createCatalogPullRecorder(deps: { storePath?: string; now?: () => number; debounceMs?: number;
-  write?: (linkId: string, pulledAt: number) => void }): CatalogPullRecorder;
+  /** Persists catalogPulledAt and catalogPulledEtag (010 cache fields). */
+  write?: (linkId: string, pull: CatalogPull) => void }): CatalogPullRecorder;
 
 export interface CatalogRevision { etag: string; changedAt: number }
 export interface CatalogRevisionMonitor { current(): CatalogRevision | null }
@@ -205,9 +221,10 @@ export function createCatalogRevisionMonitor(deps: { catalogPath: () => string; 
   load: () => CatalogRevision | null; persist: (revision: CatalogRevision) => void; now?: () => number }): CatalogRevisionMonitor;
 
 export type CatalogState = "current" | "behind" | "unknown";
-export function catalogVerdict(pulledAt: number | null, revision: CatalogRevision | null): CatalogState {
-  if (pulledAt === null || revision === null) return "unknown";
-  return pulledAt >= revision.changedAt ? "current" : "behind";
+/** Revision 4: etag equality, never time order. syncedEtag is 030's catalogSyncedEtag (a Home-run sync that synced). */
+export function catalogVerdict(pulledEtag: string | null, syncedEtag: string | null, revision: CatalogRevision | null): CatalogState {
+  if (revision === null || (pulledEtag === null && syncedEtag === null)) return "unknown";
+  return pulledEtag === revision.etag || syncedEtag === revision.etag ? "current" : "behind";
 }
 ```
 
@@ -394,7 +411,8 @@ No contract string yet: `link.child-ops/1` is claimed by wp3 when all ops exist.
 | Field | Created | Serialized | Deserialized | Consumers |
 | --- | --- | --- | --- | --- |
 | activity `inFlight`/`lastDataEndAt` | `createLinkActivity` via relay `dispatch` | `child.activity` | `validateChildOps`; GUI wp6 | wp3 restart idle gate, wp4 `restart-skipped:link-active`, wp5/wp7 schedulers |
-| `catalogPulledAt` | pull recorder | memory + `child-observations.json` | wp1 reader | `child.catalog.pulledAt`, verdict, wp5 fan-out |
+| `catalogPulledAt`, `catalogPulledEtag` | pull recorder (body fully written) | memory + `child-observations.json` | wp1 reader | `child.catalog.pulledAt`, verdict (etag) |
+| `catalogSyncedEtag` (Revision 4) | 030 `pinnedSync` on `synced` | `child-observations.json` | wp1 reader | verdict, wp5 fan-out eligibility |
 | `homeCatalog` | revision monitor | file header | wp1 reader | `child.catalog.homeChangedAt`, verdict, wp5 trigger |
 | observation fields | `observeChild` → engine | file | wp1 reader | `child.installedVersion/installKind/update`, wp3 update item, wp7 sweep |
 | `versionSkew` | `attachLinkChildOps` | `child.versionSkew` | `validateChildOps` | CLI JSON, GUI badge (wp6), wp7 "Update available" |
@@ -413,7 +431,9 @@ New files (all fail before implementation: their imports or routes do not exist)
   with a fake clock (`observedSince` keeps a fresh Home non-idle for 600 s).
 - `tests/clients/link-child-catalog-freshness.test.ts` (clients): `records pulls by key id` with a temp store;
   `writes at most once per 30 s`; `monitor hashes only on size/mtime change` (spy `read`); `changedAt is the
-  mtime`; `verdicts current/behind/unknown`; `unreadable catalog is unknown`.
+  mtime`; `verdicts current/behind/unknown`; `unreadable catalog is unknown`. Revision 4: `restored file with an older
+  mtime reads behind` (4529521959: etag moves, mtime goes back, a pull of the old etag is `behind`); `aborted body
+  records nothing` and `recorded pull carries the served etag` (4529521968).
 - `tests/clients/link-child-observe.test.ts` (clients), fake `runner.run` returning scripted framed output:
   `client-initiated and ephemeral never call SSH`; `plan up-to-date, orchestrated, desktop-request (peer feature)
   and launcher-bypassed rows`; `exit 121 lacks marker → inspect (POSIX) or peer (Windows) and owner-action`;

@@ -6,6 +6,12 @@
 > (Child-clock deadline, D20 paragraph), L12 (base `dev` 61151e3457) and L14 (D20 wording). Audit:
 > `.tmp/research/audit-r1.md` (scratch, untracked).
 
+> **Revision 4 (CodeRabbit on #8500).** Folds 4529521916 (A2: sync first, then a fresh activity read, then the
+> restart as a second pinned sync; residual recorded), 4529521925 (an identity sync precedes every update),
+> 4529521934 (escaped pipe in the phase table), 4529521944 (A1: routing is restored after a failed, rolled-back or
+> recovered uncertain update) and 4529522014 (Canonical names rows for `childObservationsPath` and the revision 4
+> cache fields). Triage: `.tmp/research/cr-8500-triage.md` (scratch, untracked).
+
 A Remote Link Home cannot see which OpenCodex a Child runs, cannot update it, and
 cannot ask it to resync or restart Codex. Children therefore drift: on an
 outdated Child, Home models with a 1M context show about 258k in Codex. That is
@@ -124,7 +130,8 @@ for 10 minutes; a Child is updated only when the Home has relayed no model
 request for it for `idleAfterMs` (default 10 minutes) and its plan says
 `canApply`; a target that rolled back is never retried automatically; an
 uncertain outcome is re-observed, never re-applied; and the pinned
-`--expect-link` sync runs after every update to restore routing. GOAT-managed
+`--expect-link` sync runs after every update to restore routing: after a success, after a failed or rolled-back
+apply, and after an uncertain one once a re-observe shows no update in flight (030, 070). GOAT-managed
 Children stay with GOAT. `notify` and `off` remain one click away in the
 Remote Link policy panel and `ocx link policy`. Catalog fan-out defaults to
 `auto` and Child Codex restart to `never`, as proposed.
@@ -137,7 +144,11 @@ request in flight and reports `restart-skipped:link-active`. The same rule binds
 every restart the Home sends, manual or automatic: the 030 runners read the
 link's activity when the item runs (not when the job is queued) and withhold the
 restart with reason `restart-skipped:link-active` while a relayed model request is
-in flight. A request that carries a restart (`sync` with `restart`, or
+in flight. Revision 4: every restart path syncs first without a restart, reads the activity after that sync, and
+only then sends the restart as a second pinned sync, so the gap between the read and the restart is one SSH round
+trip. A request that starts inside that gap is still cut; the Home cannot fence it, because the restart runs on the
+Child and holding the request at the Home would not save a turn whose app-server is restarting (030 Section 10,
+040 "Enforcement bypass record"). A request that carries a restart (`sync` with `restart`, or
 `restart-codex`) through the API route or the `ocx link` verbs must name its links (ocx sync --restart-children and the automatic restart policy select links themselves and apply the same activity check): `linkIds: "all"` is a usage error at the
 route and in the CLI. Scope `codex` (quit and relaunch the desktop app) also
 requires `--yes` on every CLI verb that can send it.
@@ -187,7 +198,10 @@ verifies the plan token (`--expect-plan`), the deadline (`--not-after`, a
 010/030), its update mutex and its downgrade refusal. Version equality with the
 Home and link identity are not checked by the Child's updater: the Home enforces
 the first by only ever passing its own version as `--version`, and the
-post-update `sync --expect-link <linkId>` enforces the second.
+pinned `sync --expect-link <linkId>` enforces the second, both before the plan probe (Revision 4: a mismatch refuses
+the update before anything mutates) and after the update. The gap between the first check and the apply (the plan
+probe, at most 60 s, plus the apply) stays open: closing it needs the Child's updater to hold its link lifecycle lock,
+a `src/update/*` change this unit excludes.
 Signed envelopes, a Home update key and Child-local grants are not built.
 The consenting principal is the operator holding the SSH key, which fits one
 owner's fleet; the docs say not to link a machine you do not own.
@@ -204,7 +218,7 @@ automation, Child-side release). One PR per phase.
 | wp1 | [010](010_foundations.md) | — | Gated remote-ocx builder (POSIX, Windows), sync builder options, strict `update.orchestrated/1` parser and exit mapping, observation cache, shared sync classifier in `src/link`. |
 | wp2 | [020](020_signals_visibility.md) | wp1 | Per-link activity, catalog pull and revision signals, observe op, `?children=1` rows, `ocx link status` columns and `ocx link check`. |
 | wp3 | [030](030_child_operations.md) | wp2 | Job engine, sync / restart-codex / update ops, `/api/link/children/*` routes, CLI verbs, capabilities, skill surface. |
-| wp4 | [040](040_sync_loosening.md) | wp1, wp2 | `ocx sync --child <linkId>` and `--restart-children[=app-server|codex]`, busy and active-link skips. |
+| wp4 | [040](040_sync_loosening.md) | wp1, wp2 | `ocx sync --child <linkId>` and `--restart-children[=app-server\|codex]`, busy and active-link skips. |
 | wp5 | [050](050_auto_catalog_fanout.md) | wp3, wp4 | Policy file and routes, `ocx link policy`, automatic catalog fan-out (fix for root-cause layer 1), catalog oracle test. |
 | wp6 | [060](060_dashboard.md) | wp3, wp5 | Remote Link badges, actions, Update all, policy panel, 11 locales. |
 | wp7 | [070](070_auto_updates.md) | wp5 | `notify` sweep and `auto-when-idle` updates, suppression and re-observe. |
@@ -239,6 +253,9 @@ file or symbol; later phases MODIFY it.
 | file | `child-gated-ocx.ts`: `remoteUpdatePlanArgv`, `remoteUpdateApplyArgv`, `readGatedFraming`, `classifyUpdatePlanProbe`, `classifyUpdateApply` | `src/link/child-gated-ocx.ts` | 010 |
 | file | `child-update-contract.ts`: `parseChildUpdatePlan`, `parseChildUpdateResult`, `classifyChildUpdatePlan`, `mapUpdateApplyExit`, `PlanClassification`, `UpdateApplyVerdict` | `src/link/child-update-contract.ts` | 010 |
 | file | `child-observations.ts`: `ChildObservation`, `ChildOperationSummary`, `readChildObservations`, `updateChildObservations`, `patchChildObservation(file, linkId, patch, now: Date)` | `src/link/child-observations.ts` | 010 |
+| function | `childObservationsPath(configDir?)` lives in `paths.ts`, not `child-observations.ts`; every importer takes it from there | `src/link/paths.ts` | 010 |
+| field | revision 4 cache fields `catalogPulledEtag` (020 recorder), `catalogSyncedEtag` (030 writes, 050 reads), `autoUpdateAttempts` (070), `pendingUpdateRecovery` (030 writes, 070 clears); `CARRIED_OBSERVATION_FIELDS` and `withoutCarriedFields` | `src/link/child-observations.ts` | 010 |
+| constant | `UNCERTAIN_RECOVERY_WINDOW_MS` (sets `pendingUpdateRecovery.until`; 070 reads `until` and has no copy) | `src/link/child-ops-runners.ts` | 030 |
 | type | `ChildOp` is declared once, here; every server module imports it. The only other copy is the GUI wire mirror in `gui/src/remote-link-child-ops-api.ts` (060), which cannot import `src/`. | `src/link/child-observations.ts` | 010 |
 | file | `child-activity.ts`: `LinkActivitySnapshot`, `isLinkIdle(snapshot, now, idleAfterMs)`, `DEFAULT_IDLE_AFTER_MS` | `src/link/child-activity.ts` | 020 |
 | file | `child-catalog-freshness.ts`: `createCatalogPullRecorder`, `createCatalogRevisionMonitor`, `catalogVerdict`; the shared monitor is `sharedCatalogRevisionMonitor()` | `src/link/child-catalog-freshness.ts` | 020 (050 adds the shared monitor) |
