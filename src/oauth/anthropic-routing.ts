@@ -1,4 +1,4 @@
-import { clearAllAnthropicFamilyQuota, anthropicModelQuotaFor, anthropicModelPercents, anthropicModelWeeklyPercent } from "./anthropic-model-quota";
+import { clearAllAnthropicFamilyQuota, anthropicModelQuotaFor, anthropicModelPercents, anthropicModelRankPercent, anthropicModelWeeklyPercent } from "./anthropic-model-quota";
 /**
  * Opt-in Anthropic OAuth account pool (#294).
  *
@@ -584,9 +584,11 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     }
   }
 
-  function usageScore(config: OcxConfig, accountId: string, model?: string): number {
+  /** `rank` compares accounts, restating a family allowance on the weekly scale; thresholds use the family's own percent. */
+  function usageScore(config: OcxConfig, accountId: string, model?: string, rank = false): number {
     if (model) {
-      const family = anthropicModelWeeklyPercent(getCachedProviderAccountQuota(PROVIDER, accountId), model);
+      const quota = getCachedProviderAccountQuota(PROVIDER, accountId);
+      const family = rank ? anthropicModelRankPercent(quota, model) : anthropicModelWeeklyPercent(quota, model);
       if (family === undefined) return usageScore(config, accountId);
       return hasKnownUsage(config, accountId) ? Math.max(family, usageScore(config, accountId)) : family;
     }
@@ -804,7 +806,7 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     const scored: ScoredAccount[] = eligible.map(accountId => ({
       accountId,
       hasKnownUsage: hasKnownUsage(config, accountId, model),
-      score: usageScore(config, accountId, model),
+      score: usageScore(config, accountId, model, true),
       fiveHourTieBreak: window === "five-hour" ? 0 : fiveHourScore(accountId),
       // Every window EXCEPT the legacy five-hour default is an explicit opt-in, so
       // known-before-unknown applies to all of them and to none of the default path.
