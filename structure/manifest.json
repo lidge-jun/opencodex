@@ -738,6 +738,7 @@
         "src/oauth/",
         "src/providers/",
         "src/providers/quota/anthropic-account-quota.ts",
+        "src/providers/quota/anthropic-cooldown-recovery-worker.ts",
         "src/server/management/anthropic-pool-settings.ts",
         "src/sidecar/anthropic-binding.ts"
       ]
