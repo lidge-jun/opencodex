@@ -521,9 +521,9 @@
     {
       "path": "data-planes/claude-tool-loading.md",
       "tier": 3,
-      "title": "Append-only Claude Tool Loading",
-      "scope": "Physical-adapter tool-loading projection, preserved catalogs, fallback exclusions and opt-in prerequisites.",
-      "documents": ["src/claude/", "src/server/responses/"]
+      "title": "Claude Tool Loading: Append-only and Chat Dispatcher",
+      "scope": "Physical-adapter tool-loading projections (Responses additional_tools and the Chat use_loaded_tool dispatcher with its response rewrite), preserved catalogs, fallback exclusions and opt-in prerequisites.",
+      "documents": ["src/claude/", "src/server/responses/", "src/types/claude-tool-loading.ts"]
     },
     {
       "path": "data-planes/ollama-inbound.md",
