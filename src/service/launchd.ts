@@ -583,7 +583,8 @@ export interface LaunchdInstallOutcome {
  *     that PAIRS with the bootout target. Legacy `load -w` is domain-implicit: it acts on
  *     the caller's own bootstrap domain, so from ssh/cron it deleted the gui-domain job and
  *     registered nothing (defect 1a).
- *  4. Success is `launchctl print` agreeing, never a stderr regex: measured on macOS 27.0,
+ *  4. Success needs `launchctl print` agreeing and an accepted bootstrap for changed bytes:
+ *     a command match alone cannot attest a new policy. Measured on macOS 27.0,
  *     `load -w` over a bootstrapped job exits 0 with "Load failed: 5" and does nothing,
  *     and `bootstrap` exits 5 with "Bootstrap failed: 5" for the same condition.
  *  5. On terminal failure restore the previous plist, try to bootstrap it back, and throw
@@ -720,6 +721,7 @@ export function installLaunchd(deps: {
   // settle loop above returned at once while `bootstrap` keeps failing 5/EIO until the old
   // process exits (#8362). The FIRST attempt stays a single call so its stderr reaches the
   // operator unchanged; only the recovery path spends the bounded wait.
+  /** Retry a transient teardown only after evicting registrations in both user domains. */
   const evictThenBootstrapSettling = () => {
     evictEveryDomain();
     return bootstrapWaitingOutTeardown(run, guiDomain, p, sleepSync);
@@ -727,9 +729,11 @@ export function installLaunchd(deps: {
 
   let loaded = evictThenBootstrap();
   verdict = probeLive();
+  /** A matching command cannot prove changed policy/environment bytes were loaded. */
+  const currentDefinitionLoaded = (): boolean => verdict.state === "loaded-current" && (!renderedDiffers || loaded.ok);
   // `unknown` is excluded on purpose: a retry means another eviction, and a probe that
   // could not answer is not a reason to take the job down again.
-  if (verdict.state === "not-loaded" || verdict.state === "loaded-stale") {
+  if (verdict.state !== "unknown" && !currentDefinitionLoaded()) {
     // ONE more eviction round, which waits out a teardown between bounded bootstrap
     // attempts (see `bootstrapWaitingOutTeardown`). Unbounded would turn a wedged domain
     // into a hang instead of the diagnosable throw below.
@@ -754,7 +758,7 @@ export function installLaunchd(deps: {
       //    `launchctl disable`.
       const kicked = renderedDiffers ? null : run(["kickstart", "-k", guiTarget]);
       if (kicked?.ok) verdict = probeLive();
-      if (verdict.state !== "loaded-current") {
+      if (!currentDefinitionLoaded()) {
         run(["enable", guiTarget]);
         loaded = evictThenBootstrapSettling();
         verdict = probeLive();
@@ -791,7 +795,7 @@ export function installLaunchd(deps: {
     return { reloaded: true };
   }
 
-  if (verdict.state !== "loaded-current") {
+  if (!currentDefinitionLoaded()) {
     // Do NOT write install state for a load that did not take: state describing an unused
     // plist is what made this failure invisible.
     let rolledBack: "restored" | "on-disk-only" | "none" = "none";
@@ -808,11 +812,13 @@ export function installLaunchd(deps: {
     // What the probe actually found, rather than one sentence for both outcomes: a
     // `loaded-stale` job IS running, and telling its operator "nothing is listening" sends
     // them to fix the wrong thing.
-    const state = verdict.state === "loaded-stale"
-      ? `is still loaded in ${verdict.domain ?? guiDomain} from a DIFFERENT command than the plist just written`
-      : rolledBack === "restored"
-        ? `was evicted from ${guiDomain}; the PREVIOUS plist was restored and re-bootstrapped`
-        : `was evicted from ${guiDomain} and IS NOT RUNNING — nothing is listening`;
+    const state = verdict.state === "loaded-current"
+      ? `is still loaded in ${verdict.domain ?? guiDomain}, but the changed definition was NOT confirmed loaded`
+      : verdict.state === "loaded-stale"
+        ? `is still loaded in ${verdict.domain ?? guiDomain} from a DIFFERENT command than the plist just written`
+        : rolledBack === "restored"
+          ? `was evicted from ${guiDomain}; the PREVIOUS plist was restored and re-bootstrapped`
+          : `was evicted from ${guiDomain} and IS NOT RUNNING — nothing is listening`;
     throw new Error(
       `launchctl could not bootstrap ${p}: ${loaded.stderr || "bootstrap reported failure"}\n`
       + `The ${LABEL} job ${state}.\n`

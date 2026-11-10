@@ -135,7 +135,8 @@ A link-mode Child reports its current tunnel connection as `link.connectionGener
 
 Async credential-publication acquisition in `src/local-credentials/publication-fence.ts` uses
 nonwaiting SQLite attempts separated by timer yields within the existing monotonic 10-second
-writer budget. Contention never runs the publication callback before the exclusive lock is acquired;
+writer budget. Retry delays start at 25 ms and grow to at most 100 ms, capped by the remaining budget.
+Contention never runs the publication callback before the exclusive lock is acquired;
 permanent SQLite errors and expiration still fail closed. `tests/config/local-credential-fence.test.ts`
 checks HTTP liveness with separate reader/writer processes, deadline refusal, reentrance and cleanup.
 

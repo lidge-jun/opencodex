@@ -339,6 +339,8 @@ macOS에서 launchd는 대신 설치 또는 repair 때 선택한 패키지 내�
 버전 관리자 설치를 업그레이드한 뒤에는 서비스를 재시작하기 전에 `ocx service repair`를 실행해
 해당 경로를 새로 고치세요.
 
+macOS 에이전트는 `ProcessType=Interactive`를 사용하여 기본 daemon의 CPU 및 I/O 제한을 피하고 부하 중에도 상태 확인에 응답합니다. 기존 설치를 업그레이드한 후 `ocx service repair`를 실행하면 이 정책도 적용됩니다.
+
 이 변경 이전에 설치된 정의는 여전히 이전 버전 경로를 지니고 스스로 마이그레이션할 수 없습니다.
 이전 실행 파일이 삭제되면 이를 고칠 opencodex 코드가 실행되지 않습니다. 업그레이드 후
 `ocx service repair`를 한 번 실행하세요. 이후 Linux 서비스 시작은 런처를 따르고, macOS repair는

@@ -354,6 +354,8 @@ kullanır. Bu, değiştirilebilir bir PATH shim'inin sonraki bir yeniden başlat
 ve yapılandırılmış proxy ortamını almasını engeller. Sürüm yöneticili bir kurulumu yükselttikten sonra,
 servisi yeniden başlatmadan önce bu yolları tazelemek için `ocx service repair` komutunu çalıştırın.
 
+macOS aracısı, varsayılan daemon sınıfının CPU ve I/O kısıtlamalarından kaçınmak ve yük altında sağlık denetimlerine yanıt verebilmek için `ProcessType=Interactive` kullanır. Mevcut bir kurulumu yükselttikten sonra bu politikayı da uygulamak için `ocx service repair` çalıştırın.
+
 Bu değişiklikten önce kurulan tanımlar hâlâ eski sürümlü yolları taşır ve kendilerini taşıyamaz —
 eski yürütülebilir dosya silindiğinde, onu düzeltecek hiçbir opencodex kodu çalışmaz. Yükseltmeden
 sonra bir kez `ocx service repair` çalıştırın. Bundan sonra Linux servis başlatmaları başlatıcıyı

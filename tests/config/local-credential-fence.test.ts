@@ -12,12 +12,14 @@ import {
 
 const moduleUrl = pathToFileURL(repoPath("src/local-credentials/publication-fence.ts")).href;
 
+/** Synchronize subprocess readiness without timing-dependent sleeps. */
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(done => { resolve = done; });
   return { promise, resolve };
 }
 
+/** Keep a real peer-process SQLite lock until its parent explicitly releases it. */
 async function holder(home: string, mode: "reader" | "writer" = "writer") {
   const locked = deferred<void>();
   const child = Bun.spawn([process.execPath, "--no-env-file", "-e", `
@@ -132,6 +134,32 @@ for (const liveClockReads of [1, 2]) {
     }
   });
 }
+
+test("prolonged contention bounds retry churn without extending the acquisition deadline", async () => {
+  const home = mkdtempSync(join(tmpdir(), "ocx-fence-backoff-"));
+  const owner = await holder(home);
+  let now = 0;
+  let calls = 0;
+  const waits: number[] = [];
+  const clock = spyOn(performance, "now").mockImplementation(() => now);
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, delay = 0) => {
+    waits.push(delay);
+    now += delay;
+    queueMicrotask(callback);
+    return {} as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout);
+  try {
+    await expect(withCredentialPublicationFenceAsync(home, async () => { calls += 1; })).rejects.toMatchObject({ code: "SQLITE_BUSY" });
+    expect(calls).toBe(0);
+    expect(waits[0]).toBe(25);
+    expect(Math.max(...waits)).toBeLessThanOrEqual(100);
+    expect(waits.length).toBeLessThan(120);
+    expect(now).toBe(10_000);
+  } finally {
+    timer.mockRestore(); clock.mockRestore(); owner.send("release"); await owner.exited;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
 
 test("async acquisition propagates permanent open failures without invoking the callback", async () => {
   const home = mkdtempSync(join(tmpdir(), "ocx-fence-open-"));

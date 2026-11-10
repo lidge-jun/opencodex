@@ -191,6 +191,49 @@ describe("installLaunchd: repair must not be an outage (#4236 defect 1)", () => 
     expect(readFileSync(plistPath, "utf8")).toBe(current);
   });
 
+  for (const status of [1, 5]) {
+    test(`policy repair refuses a failed bootstrap despite the old command matching (${status})`, () => {
+      const plistPath = fixturePlist();
+      const legacy = renderedPlist().replace(/\s*<key>ProcessType<\/key><string>Interactive<\/string>/, "");
+      writeFileSync(plistPath, legacy);
+      const { argv, launchctl } = recordingLaunchctl({
+        bootout: fail(1, "Boot-out failed: 1: Operation not permitted"),
+        bootstrap: Array.from({ length: 110 }, () => fail(status, `Bootstrap failed: ${status}: refused`)),
+        print: ok("old job still loaded"),
+      });
+
+      // A policy-only change preserves the command, so the old job keeps matching.
+      // A second repair must retry the migration rather than silently becoming a no-op.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        let failure: unknown;
+        try { installLaunchd({ launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} }); }
+        catch (error) { failure = error; }
+        expect(failure).toBeInstanceOf(Error);
+        const message = String(failure);
+        expect(message).toContain(`Bootstrap failed: ${status}: refused`);
+        expect(message).toContain("NOT confirmed loaded");
+        expect(message).not.toContain("IS NOT RUNNING");
+        expect(readFileSync(plistPath, "utf8")).toBe(legacy);
+        expect(readFileSync(`${plistPath}.prev`, "utf8")).toBe(legacy);
+      }
+      expect(verbs(argv)).not.toContain("kickstart");
+    });
+  }
+
+  test("policy repair retries a refused bootstrap even when the old command matches", () => {
+    const plistPath = fixturePlist();
+    const current = renderedPlist();
+    writeFileSync(plistPath, current.replace(/\s*<key>ProcessType<\/key><string>Interactive<\/string>/, ""));
+    const { argv, launchctl } = recordingLaunchctl({
+      bootstrap: [fail(5, "Bootstrap failed: 5: Input/output error"), ok()],
+    });
+    expect(installLaunchd({ launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} }).reloaded).toBe(true);
+    expect(verbs(argv).filter(verb => verb === "bootstrap")).toHaveLength(2);
+    expect(verbs(argv)).not.toContain("kickstart");
+    expect(readFileSync(plistPath, "utf8")).toBe(current);
+    expect(existsSync(`${plistPath}.prev`)).toBe(false);
+  });
+
   /**
    * Review finding 2. `buildPlist` bakes `process.env.PATH`, so the byte comparison above
    * only holds for a repair run from the same shell that installed the service. From a tray

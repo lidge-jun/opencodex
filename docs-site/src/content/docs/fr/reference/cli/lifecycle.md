@@ -236,6 +236,8 @@ service et l’environnement de proxy configuré lors d’un redémarrage ultér
 d’une installation gérée par un gestionnaire de versions, exécutez `ocx service repair` pour
 actualiser ces chemins avant de redémarrer le service.
 
+L’agent macOS utilise `ProcessType=Interactive` pour éviter les limitations CPU et I/O de la classe daemon par défaut et préserver la réactivité des contrôles de santé sous charge. Après la mise à niveau d’une installation existante, exécutez `ocx service repair` pour appliquer également cette politique.
+
 Les définitions installées avant ce changement portent encore les anciens chemins versionnés et ne
 peuvent pas migrer d’elles-mêmes — une fois l’ancien exécutable supprimé, aucun code opencodex ne
 s’exécute pour le réparer. Exécutez `ocx service repair` une fois après la mise à niveau. Les

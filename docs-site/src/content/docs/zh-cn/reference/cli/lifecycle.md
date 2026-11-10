@@ -214,6 +214,8 @@ Windows 任务计划程序安装使用普通进程优先级（`Priority=4`）。
 
 在 macOS 上，launchd 则改用安装或修复时选定的包内 Bun 与 CLI 路径。这可防止可变的 PATH shim 在后续重启时获得服务 API 令牌和已配置的代理环境。升级版本管理器安装后，请在重启服务前运行 `ocx service repair` 刷新这些路径。
 
+macOS 代理使用 `ProcessType=Interactive`，以避免默认 daemon 类别的 CPU 和 I/O 限制，保持负载下的健康检查响应。升级现有安装后，请运行 `ocx service repair`，同时应用此策略。
+
 在此变更之前安装的定义仍带有旧的带版本路径，无法自行迁移——一旦旧可执行文件被删除，就没有 opencodex 代码运行来修复它。升级后请运行一次 `ocx service repair`。之后 Linux 服务启动会跟随启动器；macOS 的 repair 会把新的包路径写入 launchd 定义。外部升级不会替换已在运行的代理：当已安装的 CLI 比运行中的代理更新时，运行 `ocx service restart` 让新构建提供服务。在 macOS 上，此处的 `repair` 并不够：定义没有变化，而不改变任何内容的 repair 不会重新加载任何内容。反之若代理更新，请按 [`ocx status`](#ocx-status---json) 中的说明检查 CLI 安装与 `PATH`。
 
 | 子命令 | 操作 |
