@@ -96,6 +96,7 @@ export function normalizeAnthropicQuota(quota: ProviderQuota | null | undefined,
     delete result[reset];
   }
   for (const field of ["customWindows", "displayWindows"] as const) {
+    // Read the caller's original object; `result` may already be a copy with other fields rewritten.
     if (quota[field] === undefined) {
       continue;
     }
