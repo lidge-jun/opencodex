@@ -3,12 +3,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateRawSync } from "node:zlib";
+import { createHash } from "node:crypto";
 import { LinkSshArgumentError, remoteGatedOcxArgv, remotePinnedSyncArgv } from "../../src/link/ssh-argv";
 import { POWERSHELL_ENCODED_MAX, windowsScriptData } from "../../src/link/remote-windows";
 import { classifyUpdateApply, classifyUpdatePlanProbe, readGatedFraming, remoteUpdateApplyArgv, remoteUpdatePlanArgv } from "../../src/link/child-gated-ocx";
 import { classifySyncResult as linkClassifySyncResult } from "../../src/link/sync-fanout-classify";
-import { classifySyncResult as cliClassifySyncResult } from "../../src/cli/sync-fanout";
+import { classifySyncResult as cliClassifySyncResult, runHomeFanout } from "../../src/cli/sync-fanout";
 import { recordServingRuntime } from "../../src/config/serving-runtimes";
+import type { LinkRecord } from "../../src/link/store";
 
 const LINK = "lnk_0123456789abcdef";
 const TOKEN = "AbCdEfGhIjKlMnOpQrStUvWxYz012345_-";
@@ -163,7 +165,7 @@ describe("pinned sync options", () => {
     const { home, bin } = childFixture();
     const restarting = runIn(home, bin, remotePinnedSyncArgv(LINK, "posix", { restart: "app-server" }));
     expect(restarting.stderr).toBe("ocx-fanout:selected:2.98.0\nocx-fanout:selected-kind:ocx-child\n");
-    expect(linkClassifySyncResult({ code: 0, stdout: "ocx-fanout:stdout-begin\nRemote Link Home catalog synchronized.\n", stderr: restarting.stderr }))
+    expect(linkClassifySyncResult({ code: 0, stdout: "ocx-fanout:stdout-begin\nRemote Link Home catalog synchronized.\n", stderr: restarting.stderr }, { expectSelectedKind: true }))
       .toEqual({ state: "synced", reason: null, executable: "ocx-child" });
     const plain = runIn(home, bin, remotePinnedSyncArgv(LINK, "posix"));
     expect(plain.stderr).toBe("ocx-fanout:selected:2.98.0\n");
@@ -172,8 +174,29 @@ describe("pinned sync options", () => {
 
   test("classifySyncResult refuses two selected-kind lines", () => {
     const stderr = "ocx-fanout:selected:2.98.0\nocx-fanout:selected-kind:ocx-child\nocx-fanout:selected-kind:ocx-child\n";
-    expect(linkClassifySyncResult({ code: 0, stdout: "ocx-fanout:stdout-begin\nRemote Link Home catalog synchronized.\n", stderr }))
+    expect(linkClassifySyncResult({ code: 0, stdout: "ocx-fanout:stdout-begin\nRemote Link Home catalog synchronized.\n", stderr }, { expectSelectedKind: true }))
       .toEqual({ state: "failed", reason: "child-output-invalid" });
+  });
+
+  test.each(["ocx-child", "other", "ocx-child\nocx-fanout:selected-kind:ocx-child"])("a plain sync ignores a selected-kind:%s line", kind => {
+    const verdict = linkClassifySyncResult({ code: 0, stdout: "ocx-fanout:stdout-begin\nRemote Link Home catalog synchronized.",
+      stderr: "ocx-fanout:selected:2.95.0\nocx-fanout:selected-kind:" + kind + "\n" });
+    expect(verdict).toEqual({ state: "synced", reason: null });
+    expect(Object.hasOwn(verdict, "executable")).toBe(false);
+  });
+
+  test("the public fan-out row never carries executable", async () => {
+    const link: LinkRecord = { id: LINK, alias: "host1", direction: "hub-initiated", hostKeyFingerprint: "SHA256:AAAAAAAAAAAAAAAA", tunnelPort: 25000,
+      apiKeyId: "key1", createdAt: "2026-01-01T00:00:00Z", remotePlatform: "posix" };
+    const result = await runHomeFanout({
+      home: { state: "synced", exit: 0 }, catalogCurrent: true,
+      readStore: () => ({ version: 1, listenerPort: 27000, links: [link] }),
+      readLinkStatus: async () => ({ role: "home", listener: { state: "listening", port: 27000 }, child: null, links: [{ ...link, state: "connected", since: link.createdAt,
+        reason: null, lastApplyAt: null, runtimeStartedAt: null, appliedCodexSettingsDigest: null }] }),
+      runChild: async () => ({ state: "synced", reason: null, exit: 0, executable: "ocx-child" }) as never,
+    });
+    expect(result.children).toEqual([{ linkId: LINK, alias: "host1", state: "synced", reason: null, exit: 0 }]);
+    expect(Object.hasOwn(result.children[0]!, "executable")).toBe(false);
   });
 
   test("classifier move keeps one function", () => {
@@ -190,8 +213,37 @@ describe("Windows scripts", () => {
     expect(script).toContain("$b=@('2','97','0')");
     expect(script).toContain("ocx-fanout:child-ocx-lacks-orchestrated-update");
     expect(script).toContain("StartsWith('ocx-child')){[Console]::Error.WriteLine('ocx-fanout:child-ocx-ephemeral');exit 121}");
-    expect(script).toContain("ocx-fanout:entry:binary");
+    // Windows reads no census, so the Home infers entry "binary" and the script prints no entry marker.
+    expect(script).not.toContain("ocx-fanout:entry:");
     expect(script).toContain("$env:OCX_NO_DESKTOP_HANDOFF='1'");
+  });
+
+  test.each(["2.100.0", "2.100.0-preview.20261111", "9999.9999.9999-preview.20261111.12345678"])("the Windows plan probe fits for Home %s", version => {
+    const argv = remoteUpdatePlanArgv(version, "windows");
+    expect(argv[5]!.length).toBeLessThanOrEqual(POWERSHELL_ENCODED_MAX);
+    expect(windowsScriptData(Buffer.from(argv[5]!, "base64").toString("utf16le"))).toEqual({ args: ["update", "--plan", "--json", "--version", version] });
+  });
+
+  test("a Windows command over the budget throws the named error", () => {
+    const version = "1.0.0-a" + createHash("sha512").update("x").digest("hex").slice(0, 120);
+    expect(version.length).toBeLessThanOrEqual(128);
+    expect(() => remoteUpdatePlanArgv(version, "windows")).toThrow(new LinkSshArgumentError("windows-command-too-long"));
+  });
+
+  test("the plan probe infers entry binary on Windows", () => {
+    const plan = { schema: "ocx.update.plan/1", currentVersion: "2.97.0", targetVersion: "2.100.0", installer: "npm", runtimeOwner: "service",
+      servingPath: "C:\\ocx", cliPath: "C:\\ocx", canApply: true, restartRequired: true, planToken: TOKEN, updateInFlight: false, mutationBoundMs: 900_000 };
+    const verdict = classifyUpdatePlanProbe({ code: 0, stdout: "ocx-fanout:stdout-begin\n" + JSON.stringify(plan) + "\n", stderr: "ocx-fanout:selected:2.97.0\n" },
+      { homeVersion: "2.100.0", desktopUpdateRequest: false, platform: "windows" });
+    expect(verdict).toMatchObject({ kind: "plan", classification: { updateRoute: "orchestrated", installKind: "npm" } });
+  });
+
+  test("Windows restart and Windows apply are refused by the shipped builders", () => {
+    expect(() => remotePinnedSyncArgv(LINK, "windows", { restart: "codex" })).toThrow(new LinkSshArgumentError("unsupported:windows-restart"));
+    expect(() => remotePinnedSyncArgv(LINK, "windows", { restart: "app-server" })).toThrow(new LinkSshArgumentError("unsupported:windows-restart"));
+    expect(() => remoteGatedOcxArgv({ minVersion: "2.97.0", lacksMarker: "child-ocx-lacks-orchestrated-update", acceptEphemeral: false, reportEntry: true, reportClock: false,
+      args: ["update", "--yes", "--json", "--version", "2.100.0"] }, "windows")).toThrow(new LinkSshArgumentError("unsupported:windows-apply"));
+    expect(remotePinnedSyncArgv(LINK, "windows")[0]).toBe("powershell.exe");
   });
 
   test("the Windows sync script keeps its gate and also disables the handoff", () => {
