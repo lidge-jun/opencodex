@@ -30,7 +30,8 @@ export function setAdvisorPlanFactory(config: OcxConfig, factory: AdvisorPlanFac
 }
 
 /** Request-scoped config views (e.g. the Claude replay config) -> the live config they were built from. */
-const views = new WeakMap<OcxConfig, OcxConfig>();
+type AdvisorLinkedConfig = Pick<OcxConfig, "advisor">;
+const views = new WeakMap<AdvisorLinkedConfig, OcxConfig>();
 
 /**
  * Record that `view` is a request-scoped copy of `live`. A view resolves the live config's
@@ -49,6 +50,16 @@ export function linkAdvisorPlanConfig<T extends OcxConfig>(live: OcxConfig, view
   return view;
 }
 
+/**
+ * The live config a request-scoped view was linked to, or the config itself when it was not
+ * linked. Identity-scoped state that must outlive one request (the activity feed the management
+ * route reads from its own config object) resolves through the same link as the factory.
+ */
+export function advisorPlanRootConfig<T extends AdvisorLinkedConfig>(config: T): T | OcxConfig {
+  return views.get(config) ?? config;
+}
+
+/** Create the plan from the factory registered for this config, or for the live config it was linked to. */
 export function createRegisteredAdvisorPlan(input: AdvisorPlanInput): Promise<RegisteredAdvisorPlan | null> | null {
   const live = views.get(input.config);
   return (factories.get(input.config) ?? (live && factories.get(live)))?.(input) ?? null;

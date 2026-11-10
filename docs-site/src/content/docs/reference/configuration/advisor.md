@@ -209,7 +209,9 @@ consultation never switches the session's main model.
 - Translated `/v1/messages` requests (for example Claude Code routed to a translated provider)
   get the synthetic tool and preflight like `/v1/responses` and `/v1/chat/completions`. The
   same `policy` and context-sharing consent rules apply, and the settings are read from the live
-  config, so a consent revocation also blocks consultations for requests already in flight.
+  config, so a consent revocation blocks consultations for requests already in flight that have
+  not yet been dispatched. It does not cancel a dispatched consultation or retract context that
+  already left the proxy.
 - No semantic stuck detection, completion review, escalation tiers, multiple advisors or voting.
   Adaptive consultation requires the structured validation/edit/retry evidence described above.
 - The preflight dedup ledger is process-local; after a proxy restart, a task in progress may
