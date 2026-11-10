@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   statSync,
@@ -15,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { resetAppOwnedMemoryForTests } from "../../src/lib/app-owned-memory";
+import { initializeConfigOwnership } from "../../src/lib/config-ownership";
 import { runPassiveRead } from "../../src/lib/passive-read";
 import {
   getFilteredUsageAggregate,
@@ -1124,6 +1126,72 @@ describe("filtered usage index availability", () => {
     } finally {
       chmodSync(testDir, 0o755);
     }
+  });
+
+  test("filtered queries after the first leave the config directory's entries unchanged", async () => {
+    // On Windows a changed config directory re-runs its ACL harden, which moves usage.jsonl's
+    // ChangeTime and forces whole-ledger rebuilds; SQLite deleting its WAL sidecars on every
+    // close changed the directory on each filtered query.
+    // Discriminates only on stock SQLite (Linux, Windows): macOS's system SQLite already keeps
+    // the sidecars, so a local macOS pass is not evidence for this guard.
+    writeRows(Array.from({ length: 20 }, (_, index) => syntheticRow(index)));
+    const first = await getFilteredUsageAggregate({ provider: "openai" });
+    const observeHome = () => {
+      const stat = statSync(testDir);
+      return { entries: readdirSync(testDir).sort(), mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs };
+    };
+    const before = observeHome();
+    const other = await getFilteredUsageAggregate({ provider: "kimi" });
+    // An append makes the refresh open the index for writing again.
+    appendRows([{ ...syntheticRow(99), requestId: "late" }]);
+    const appended = await getFilteredUsageAggregate({ provider: "openai" });
+    expect(observeHome()).toEqual(before);
+    for (const result of [first, other, appended]) expect(result.filterIndex).toBeDefined();
+    // The append really went through a writable refresh, not a retained answer.
+    expect(appended.filterIndex?.totalRows).toBe(21);
+    // The kept WAL is empty after the writer's clean close.
+    expect(statSync(`${usageFilterIndexPath(testDir)}-wal`).size).toBe(0);
+  });
+
+  test("a projection whose sidecars are not in the uninstall manifest is repaired on the next write", async () => {
+    // Sidecars now persist, so any that exist beside this projection must be owned, or uninstall
+    // leaves them behind.
+    expect(initializeConfigOwnership(testDir)).toBe(true);
+    writeRows(Array.from({ length: 20 }, (_, index) => syntheticRow(index)));
+    await getFilteredUsageAggregate({ provider: "openai" });
+    const indexPath = usageFilterIndexPath(testDir);
+    const manifestPath = join(testDir, ".opencodex-uninstall.json");
+    const owned = () => (JSON.parse(readFileSync(manifestPath, "utf8")) as { paths: string[] }).paths;
+    const sidecars = ["usage-filter-index.sqlite-wal", "usage-filter-index.sqlite-shm"];
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { paths: string[] };
+    writeFileSync(manifestPath, JSON.stringify({ ...manifest, paths: manifest.paths.filter(path => !sidecars.includes(path)) }, null, 2));
+    for (const suffix of ["-wal", "-shm"]) rmSync(`${indexPath}${suffix}`, { force: true });
+    resetUsageAggregateCacheForTests();
+    resetAppOwnedMemoryForTests();
+    expect(owned().filter(path => sidecars.includes(path))).toEqual([]);
+
+    appendRows([{ ...syntheticRow(99), requestId: "after-upgrade" }]);
+    expect((await getFilteredUsageAggregate({ provider: "openai" })).filterIndex).toBeDefined();
+    expect(owned().filter(path => sidecars.includes(path)).sort()).toEqual([...sidecars].sort());
+  });
+
+  test("a 0-byte projection left by a crash and its sidecars are registered once they appear", async () => {
+    // A crash between the private create and the first open leaves an empty file, so the next open
+    // sees an existing projection and skips creation-time registration. The sidecars only appear
+    // once SQLite uses the WAL, after this open checked, so a later open in the same process must
+    // still register them.
+    expect(initializeConfigOwnership(testDir)).toBe(true);
+    writeRows(Array.from({ length: 20 }, (_, index) => syntheticRow(index)));
+    const indexPath = usageFilterIndexPath(testDir);
+    writeFileSync(indexPath, "", { mode: 0o600 });
+    const manifestPath = join(testDir, ".opencodex-uninstall.json");
+    const projection = ["usage-filter-index.sqlite", "usage-filter-index.sqlite-wal", "usage-filter-index.sqlite-shm"];
+    const ownedSidecars = () => (JSON.parse(readFileSync(manifestPath, "utf8")) as { paths: string[] }).paths
+      .filter(path => projection.includes(path)).sort();
+    expect((await getFilteredUsageAggregate({ provider: "openai" })).filterIndex).toBeDefined();
+    appendRows([{ ...syntheticRow(99), requestId: "after-crash" }]);
+    expect((await getFilteredUsageAggregate({ provider: "openai" })).filterIndex).toBeDefined();
+    expect(ownedSidecars()).toEqual([...projection].sort());
   });
 
   test("a passive read never creates or writes index files", async () => {

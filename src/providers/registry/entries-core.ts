@@ -102,8 +102,8 @@ import {
 /**
  * Claude fast mode (`speed: "fast"` + beta), shared by the OAuth and API-key Anthropic entries.
  * Only the models Anthropic documents for the lane are classified; Opus 4.6 silently runs
- * standard and Opus 4.7, Sonnet, Haiku and Fable reject `speed`, so they and future ids stay
- * unclassified. Source: https://platform.claude.com/docs/en/build-with-claude/fast-mode
+ * standard and Opus 4.7, Sonnet, Haiku, Fable 5 and Fable 5.1 reject `speed`, so they and future
+ * ids stay unclassified. Source: https://platform.claude.com/docs/en/build-with-claude/fast-mode
  * (2026-09-23) and the live probe in devlog/_fin/260923_anthropic_fast_speed.
  */
 const ANTHROPIC_FAST_WIRE = Object.freeze({
@@ -113,6 +113,9 @@ const ANTHROPIC_FAST_WIRE = Object.freeze({
   betas: Object.freeze([ANTHROPIC_FAST_MODE_BETA]),
 });
 const ANTHROPIC_FAST_MODELS: Readonly<Record<string, boolean>> = Object.freeze({
+  // 261110: Fable 5.2 is the first Fable with Claude API fast mode (16 / 80, 2x); Fable 5 and 5.1
+  // still reject `speed`. Source: platform.claude.com pricing and fast-mode pages.
+  "claude-fable-5-2": true,
   "claude-opus-5-5": true,
   "claude-opus-5": true,
   "claude-opus-4-8": true,
@@ -252,7 +255,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // only the old devin entry carried. Degraded-mode seed only either way —
     // `liveModels` discovers the account's real roster.
     // 261027 preemptive: GPT-6.1 Terra (same degraded seed policy as GPT-6.1 Sol).
-    models: ["swe-2", "swe-1-7", "gpt-5-6-sol", "gpt-6-astra", "gpt-6-1-sol", "gpt-6-1-terra", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-sonnet-5", "glm-5-3", "kimi-k3", "gemini-3-8-flash", "grok-4-6", "grok-4-7", "swe-1-7-lightning", "gpt-5-6-luna", "gpt-5-6-terra", "claude-opus-4-8", "glm-5-2", "kimi-k2-7", "grok-4-5"],
+    models: ["swe-2", "swe-1-7", "gpt-5-6-sol", "gpt-6-astra", "gpt-6-1-sol", "gpt-6-1-terra", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-2", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-sonnet-5", "glm-5-3", "kimi-k3", "gemini-3-8-flash", "grok-4-6", "grok-4-7", "swe-1-7-lightning", "gpt-5-6-luna", "gpt-5-6-terra", "claude-opus-4-8", "glm-5-2", "kimi-k2-7", "grok-4-5"],
     liveModels: true,
     defaultModel: "swe-2",
     modelContextWindows: DEVIN_MODEL_CONTEXT_WINDOWS,
