@@ -1166,10 +1166,21 @@ async function refreshUsageFilterIndex(
   }
 }
 
-function buildCandidateSelect(
+interface CandidateBranch {
+  sql: string;
+  values: Array<string | number>;
+}
+
+/**
+ * One UNION branch of the candidate select. When `paged` is set each branch ends with
+ * `byte_offset > ?` so the pager can seek from its cursor instead of re-reading the candidates
+ * before it; the caller appends the cursor value at the end of each branch's values.
+ */
+function candidateBranches(
   query: UsageFilterIndexQuery,
   snapshot: UsageFilterIndexSnapshot,
-): { sql: string; values: Array<string | number> } {
+  paged: boolean,
+): CandidateBranch[] {
   const attrClauses: string[] = [];
   const attrValues: Array<string | number> = [];
   const rowClauses: string[] = [];
@@ -1244,18 +1255,15 @@ function buildCandidateSelect(
     // estimate prefers the row primary key, which examines every row in the ledger even when
     // one API key or client matches a handful.
     const baseIndex = rowAccessIndexWithoutClient(query);
-    const branches = clientAlternatives.map(alternative => {
+    const cursor = paged ? " AND r.byte_offset > ?" : "";
+    return clientAlternatives.map(alternative => {
       const index = alternative.clauses.length > 0 ? "idx_usage_rows_client" : baseIndex;
       const clauses = [...rowClauses, ...alternative.clauses];
       return {
-        sql: `SELECT r.byte_offset AS byteOffset FROM usage_rows r${index ? ` INDEXED BY ${index}` : ""} WHERE r.generation = ? AND ${clauses.join(" AND ")}`,
+        sql: `SELECT r.byte_offset AS byteOffset FROM usage_rows r${index ? ` INDEXED BY ${index}` : ""} WHERE r.generation = ? AND ${clauses.join(" AND ")}${cursor}`,
         values: [snapshot.generation, ...rowValues, ...alternative.values],
       };
     });
-    return {
-      sql: `${branches.map(branch => branch.sql).join(" UNION ")} ORDER BY byteOffset`,
-      values: branches.flatMap(branch => branch.values),
-    };
   }
   // Drive from the attribution index rather than scanning the row range: SQLite's default
   // estimate otherwise prefers the row primary key, which examines every row in the ledger.
@@ -1263,18 +1271,36 @@ function buildCandidateSelect(
   // Rows with no usable attribution are selected too: the accumulator is what decides, and a
   // hand-edited row with a missing model must fail a provider/model filter exactly as the
   // streaming read does rather than disappear from the result.
+  return [
+    {
+      sql: `SELECT DISTINCT a.byte_offset AS byteOffset FROM usage_attributions a INDEXED BY ${attrIndex} WHERE a.generation = ? AND ${attrClauses.join(" AND ")} AND a.byte_offset <= ? AND EXISTS (SELECT 1 FROM usage_rows r WHERE r.generation = a.generation AND r.byte_offset = a.byte_offset AND ${rowSql})${paged ? " AND a.byte_offset > ?" : ""}`,
+      values: [
+        snapshot.generation,
+        ...attrValues,
+        snapshot.indexedOffset,
+        ...rowValues,
+        ...clientAlternatives.flatMap(alternative => alternative.values),
+      ],
+    },
+    {
+      sql: `SELECT r.byte_offset AS byteOffset FROM usage_rows r INDEXED BY idx_usage_rows_unattributable WHERE r.generation = ? AND r.unattributable = 1 AND ${rowSql}${paged ? " AND r.byte_offset > ?" : ""}`,
+      values: [
+        snapshot.generation,
+        ...rowValues,
+        ...clientAlternatives.flatMap(alternative => alternative.values),
+      ],
+    },
+  ];
+}
+
+function buildCandidateSelect(
+  query: UsageFilterIndexQuery,
+  snapshot: UsageFilterIndexSnapshot,
+): { sql: string; values: Array<string | number> } {
+  const branches = candidateBranches(query, snapshot, false);
   return {
-    sql: `SELECT DISTINCT a.byte_offset AS byteOffset FROM usage_attributions a INDEXED BY ${attrIndex} WHERE a.generation = ? AND ${attrClauses.join(" AND ")} AND a.byte_offset <= ? AND EXISTS (SELECT 1 FROM usage_rows r WHERE r.generation = a.generation AND r.byte_offset = a.byte_offset AND ${rowSql}) UNION SELECT r.byte_offset AS byteOffset FROM usage_rows r INDEXED BY idx_usage_rows_unattributable WHERE r.generation = ? AND r.unattributable = 1 AND ${rowSql} ORDER BY byteOffset`,
-    values: [
-      snapshot.generation,
-      ...attrValues,
-      snapshot.indexedOffset,
-      ...rowValues,
-      ...clientAlternatives.flatMap(alternative => alternative.values),
-      snapshot.generation,
-      ...rowValues,
-      ...clientAlternatives.flatMap(alternative => alternative.values),
-    ],
+    sql: `${branches.map(branch => branch.sql).join(" UNION ")} ORDER BY byteOffset`,
+    values: branches.flatMap(branch => branch.values),
   };
 }
 
@@ -1290,16 +1316,36 @@ function rowAccessIndexWithoutClient(query: UsageFilterIndexQuery): string | nul
 
 const CANDIDATE_PAGE_SIZE = 2_000;
 
+/**
+ * The page statement behind the candidate pager: each UNION branch seeks from the page cursor
+ * and stops at the page size, so a late page reads at most `CANDIDATE_PAGE_SIZE` rows per branch
+ * rather than re-materializing every candidate before the cursor. The cursor value is appended
+ * at the end of each branch's values when the statement runs.
+ */
+function candidatePageSql(
+  query: UsageFilterIndexQuery,
+  snapshot: UsageFilterIndexSnapshot,
+): { sql: string; branchValues: Array<Array<string | number>> } {
+  // A compound operand cannot carry its own ORDER BY/LIMIT, so each branch is wrapped before
+  // the UNION deduplicates and the outer ORDER BY/LIMIT merges the bounded branch pages.
+  const branches = candidateBranches(query, snapshot, true);
+  const paged = branches.map(
+    branch => `SELECT * FROM (${branch.sql} ORDER BY byteOffset LIMIT ${CANDIDATE_PAGE_SIZE})`,
+  );
+  return {
+    sql: `SELECT byteOffset FROM (${paged.join(" UNION ")}) ORDER BY byteOffset LIMIT ?`,
+    branchValues: branches.map(branch => branch.values),
+  };
+}
+
 /** Keyset pager over the candidate select: bounded pages, each validated in its own transaction. */
 function candidatePager(
   db: Database,
   snapshot: UsageFilterIndexSnapshot,
   query: UsageFilterIndexQuery,
 ): Pick<UsageFilterCandidateRead, "candidateRows" | "nextPage"> {
-  const { sql, values } = buildCandidateSelect(query, snapshot);
-  const statement = db.query(
-    `SELECT byteOffset FROM (${sql}) WHERE byteOffset > ? ORDER BY byteOffset LIMIT ?`,
-  );
+  const { sql, branchValues } = candidatePageSql(query, snapshot);
+  const statement = db.query(sql);
   let cursor = -1;
   const pager = {
     candidateRows: 0,
@@ -1315,7 +1361,10 @@ function candidatePager(
           || meta.generation !== snapshot.generation) {
           throw new UsageLedgerRebuildRequiredError("content_changed");
         }
-        const rows = statement.all(...values, cursor, CANDIDATE_PAGE_SIZE) as Array<{ byteOffset: number }>;
+        const rows = statement.all(
+          ...branchValues.flatMap(values => [...values, cursor]),
+          CANDIDATE_PAGE_SIZE,
+        ) as Array<{ byteOffset: number }>;
         const offsets = rows.map(row => row.byteOffset);
         db.exec("COMMIT");
         if (offsets.length > 0) cursor = offsets[offsets.length - 1]!;
@@ -1518,13 +1567,24 @@ export async function readUsageFilterCandidatesPassive(
   }
 }
 
-/** Test seam: the SQLite plan for one filter's candidate select. */
-export function usageFilterCandidatePlan(query: UsageFilterIndexQuery): string[] {
+/** Test seam: the SQLite plan for one filter's candidate select; `paged` explains the pager statement. */
+export function usageFilterCandidatePlan(
+  query: UsageFilterIndexQuery,
+  options: { paged?: boolean } = {},
+): string[] {
   const path = indexPathForCurrentHome();
   const db = new Database(path, { readonly: true });
   try {
     const meta = readMeta(db);
     const snapshot = snapshotFrom(meta, 0, 0);
+    if (options.paged) {
+      const { sql, branchValues } = candidatePageSql(query, snapshot);
+      const rows = db.query(`EXPLAIN QUERY PLAN ${sql}`).all(
+        ...branchValues.flatMap(values => [...values, 0]),
+        CANDIDATE_PAGE_SIZE,
+      ) as Array<{ detail: string }>;
+      return rows.map(row => row.detail);
+    }
     const { sql, values } = buildCandidateSelect(query, snapshot);
     const rows = db.query(`EXPLAIN QUERY PLAN ${sql}`).all(...values) as Array<{ detail: string }>;
     return rows.map(row => row.detail);

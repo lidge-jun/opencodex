@@ -243,6 +243,20 @@ describe("filtered usage candidate index", () => {
     }
   });
 
+  test("a broad provider filter answers complete totals across bounded pages", async () => {
+    // More matching candidates than one page (2,000) forces late pages; each must still seek
+    // from the page cursor rather than re-reading the candidates before it.
+    const rows = Array.from({ length: 4_100 }, (_, index) => ({
+      ...syntheticRow(index),
+      provider: "openai",
+    }));
+    writeRows(rows);
+    const result = await getFilteredUsageAggregate({ provider: "openai" });
+    expect(result.filterIndex?.candidateRows).toBe(rows.length);
+    expect(summary(result)).toEqual((await fullScan({ provider: "openai" })).summarize("all", NOW));
+    expect(summary(result).summary.requests).toBe(rows.length);
+  });
+
   test("an append ingests only new bytes and a retained filter folds only new matches", async () => {
     const rows = Array.from({ length: SYNTHETIC_ROWS }, (_, index) => syntheticRow(index));
     writeRows(rows);
@@ -1756,6 +1770,22 @@ describe("filtered usage index selection evidence", () => {
     })).toContain("idx_usage_rows_admission");
     expect(plan({ provider: null, model: null, apiKeyId: null, window: { since: NOW - 60_000, until: NOW } }))
       .toContain("idx_usage_rows_ts");
+  });
+
+  test("the paged candidate select seeks each branch from the page cursor", async () => {
+    writeRows(Array.from({ length: 50 }, (_, index) => syntheticRow(index)));
+    await getFilteredUsageAggregate({ provider: "openai" });
+
+    const paged = (query: Parameters<typeof usageFilterCandidatePlan>[0]) =>
+      usageFilterCandidatePlan(query, { paged: true }).join("\n");
+    // Every UNION branch carries the `byte_offset > cursor` bound and its own LIMIT, so a late
+    // page seeks from the cursor instead of re-materializing the candidates before it.
+    const providerOnly = paged({ provider: "openai", model: null, apiKeyId: null });
+    expect(providerOnly).toContain("idx_usage_attr_provider");
+    expect(providerOnly).toContain("idx_usage_rows_unattributable");
+    expect(providerOnly).toContain("byte_offset>");
+    expect(paged({ provider: null, model: null, apiKeyId: null }))
+      .toContain("PRIMARY KEY (generation=? AND byte_offset>");
   });
 
   test("every source filter selects exactly the rows matchesUsageSource keeps", async () => {
