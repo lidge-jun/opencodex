@@ -40,6 +40,22 @@ export function readHomeRouteIntentState(config: OcxConfig, options: { store?: I
 }
 
 /**
+ * For status reads and the Home's own sync: existing Aside ownership that cannot be named by stable
+ * userIds leaves the Children's Aside default unresolved. The returned state then carries a
+ * placeholder off default only so a document can be projected; a device without its own Aside entry
+ * must be reported as unresolved (`routeToAsideUnresolved`), never as off.
+ */
+export function readHomeRouteIntentStateAsideTolerant(config: OcxConfig, options: { state?: RouteIntentState } = {}): { state: RouteIntentState; asideUnresolved: boolean } {
+  try { return { state: readHomeRouteIntentState(config, options), asideUnresolved: false }; }
+  catch (error) {
+    if (!(error instanceof HomeAsideIntentDerivationError)) throw error;
+    const pinned = structuredClone(options.state ?? readRouteIntentState());
+    pinned.defaults.aside = { enabled: false };
+    return { state: readHomeRouteIntentState(config, { state: pinned }), asideUnresolved: true };
+  }
+}
+
+/**
  * The Aside intent the Home's current Aside ownership amounts to: the stable userIds of every owned
  * profile, all profiles under the all-profiles policy, or undefined when nothing is owned.
  * `extraProfileIds` adds profiles about to be enabled, so a caller can refuse before writing

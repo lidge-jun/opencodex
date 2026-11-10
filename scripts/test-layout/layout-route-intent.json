@@ -58,5 +58,6 @@
   "service-disconnected-client-restart.test.ts": "service",
   "service-restart-registration-guard.test.ts": "service",
   "service-scheduler-restart-cleanup.test.ts": "service",
-  "route-intent-connect-post-commit.test.ts": "clients"
+  "route-intent-connect-post-commit.test.ts": "clients",
+  "route-to-home-sync-review.test.ts": "routing"
 }

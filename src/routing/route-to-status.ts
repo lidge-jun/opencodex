@@ -2,7 +2,12 @@ import { ROUTE_CLIENT_IDS, routeClientIntentDigest, routeIntentDigest, type Home
 
 export interface RouteToClientStatus {
   client: RouteClientId;
-  intent: "on" | "off";
+  /**
+   * `unresolved`: only Aside, on a device that follows the Children's Aside default while the Home's
+   * existing Aside ownership cannot be named by stable userIds. Nothing decides it yet, so it is
+   * neither on nor off; the status carries a warning saying how to resolve it.
+   */
+  intent: "on" | "off" | "unresolved";
   /** `native`: a Home row governed by the Home's own persisted native switch. */
   source: "builtin" | "default" | "device" | "native" | "local";
   applied: RouteClientOutcome["outcome"] | null;
@@ -33,11 +38,19 @@ export interface RouteToStatus {
   devices: RouteToDeviceStatus[];
   syncs?: RouteToSyncRow[];
   deferred?: { reason: "intent_or_catalog_pending"; clients: RouteClientId[] };
+  /** Actionable notices about clients the request left alone, such as unresolved Aside on the Home. */
+  warnings?: string[];
 }
 
 /** The status row of an ephemeral Child: route intent is unsupported, never stale or pending. */
 export function unsupportedRouteToDevice(id: string, alias: string): RouteToDeviceStatus {
   return { id, alias, desiredDigest: "", appliedRouteIntentDigest: null, clients: [], routeIntent: "unsupported", reason: EPHEMERAL_NO_ROUTE_INTENT };
+}
+
+/** Report a device's Aside row as unresolved: its projected placeholder is not a decision. */
+export function routeToAsideUnresolved(device: RouteToDeviceStatus): RouteToDeviceStatus {
+  return { ...device, clients: device.clients.map(row => row.client === "aside"
+    ? { client: "aside", intent: "unresolved", source: row.source, applied: null } : row) };
 }
 
 /**

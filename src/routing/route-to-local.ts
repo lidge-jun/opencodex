@@ -2,20 +2,27 @@
 import { readClientConnectionState } from "../client/state";
 import { withLinkApply } from "../client/link-home";
 import { projectHomeRouteIntent, ROUTE_CLIENT_IDS, type RouteClientId, type RouteClientIntent, type RouteClientOutcome } from "../link/route-intent";
-import { HomeAsideIntentDerivationError, initializeHomeRouteIntentDefaults, readHomeRouteIntentState } from "./home-route-intent";
+import { HomeAsideIntentDerivationError, initializeHomeRouteIntentDefaults, readHomeRouteIntentState, readHomeRouteIntentStateAsideTolerant } from "./home-route-intent";
 import { captureHomeRouteDefaults } from "./home-route-capture";
-import { routeToDeviceStatus, type RouteToDeviceStatus, type RouteToStatus } from "./route-to-status";
+import { routeToAsideUnresolved, routeToDeviceStatus, type RouteToDeviceStatus, type RouteToStatus } from "./route-to-status";
 import { withDurableRouteNativeSettings } from "./route-to-live-settings";
 import { dropLegacyHomeNativeOverrides, readRouteIntentState, type RouteIntentState } from "./route-intent-state";
 import { readLocalRouteIntentOff, readRouteIntentReceipt, setLocalRouteIntentOff } from "../integrations/route-intent";
 import type { LinkChildContext } from "../cli/link-child";
 import type { OcxConfig } from "../types";
 
+/**
+ * The Home's status row. Existing Aside ownership without stable userIds and no saved Home Aside
+ * decision is reported as unresolved Aside (with `HOME_ASIDE_UNRESOLVED_MESSAGE` in the response)
+ * and every other client as usual, so a full sync that left Aside alone can still report the rest.
+ */
 export function readHomeRouteToStatus(config: OcxConfig, version: string): RouteToDeviceStatus {
   const local = withDurableRouteNativeSettings(config);
-  const document = projectHomeRouteIntent(local, version, "home", readHomeRouteIntentState(local));
+  const { state, asideUnresolved } = readHomeRouteIntentStateAsideTolerant(local);
+  const document = projectHomeRouteIntent(local, version, "home", state);
   const receipt = readRouteIntentReceipt();
-  return routeToDeviceStatus("home", "home", document, receipt?.outcomes ?? [], receipt?.appliedRouteIntentDigest ?? null);
+  const status = routeToDeviceStatus("home", "home", document, receipt?.outcomes ?? [], receipt?.appliedRouteIntentDigest ?? null);
+  return asideUnresolved && state.devices.home?.aside === undefined ? routeToAsideUnresolved(status) : status;
 }
 
 /** What a full Home sync tells the person when it leaves Aside alone. */
@@ -86,7 +93,14 @@ export async function syncHomeRouteTo(config: OcxConfig, version: string, overwr
     // A single-client write keeps the other clients' last proven outcomes in the Home receipt.
     const scope = only ? { retainSkippedOutcomes: true, ...(deps.onlyClient ? { decidedClient: deps.onlyClient } : {}) } : {};
     const off = ROUTE_CLIENT_IDS.filter(client => !document.clients[client].enabled && (!only || only.includes(client)));
-    await materialize(local, document, [], { overwriteConflict, overwriteClient, onlyClients: off, ...scope });
+    // Disabling needs no catalog. The off pass keeps the receipt's last served roster, so a decision
+    // that only turns clients off completes here without waiting for unrelated model discovery.
+    const previousModels = readRouteIntentReceipt()?.models ?? [];
+    const offReceipt = await materialize(local, document, previousModels, { overwriteConflict, overwriteClient, onlyClients: off, ...scope });
+    if (only && only.every(client => off.includes(client))) {
+      if (asideUnresolved) deps.onAsideUnresolved?.(HOME_ASIDE_UNRESOLVED_MESSAGE);
+      return asideUnresolved ? offReceipt.outcomes.filter(row => row.client !== "aside") : offReceipt.outcomes;
+    }
     const receipt = await materialize(local, document, await (deps.loadModels ?? loadExportModels)(local), { overwriteConflict, overwriteClient,
       ...(only ? { onlyClients: only } : {}), ...scope });
     if (asideUnresolved) deps.onAsideUnresolved?.(HOME_ASIDE_UNRESOLVED_MESSAGE);

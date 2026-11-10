@@ -1384,6 +1384,7 @@ State-changing: no. JSON mode: `payload`.
 
 - On a Child this reads local receipts without a Home management relay. Intent and applied state are distinct; null applied means no recorded outcome.
 - Sources: builtin, default, device, local (Child opt-out) and native (a Home row governed by the Home's own switch). An outcome recorded for an earlier intent reads stale.
+- Intent unresolved appears only for Aside, while the Home's existing Aside profiles have no stable userIds and nothing decided Aside; warnings[] then names the fix (ocx route to aside on|off --device home).
 
 ### `ocx route to sync`
 
@@ -1405,3 +1406,4 @@ State-changing: yes. JSON mode: `payload`.
 
 - No conflict retry or implicit overwrite. Child sync calls its local materializer and sends no Home management write.
 - Home sync never changes the Home's native switches for codex, claude, grok or claude-desktop; it refreshes what each switch says.
+- On a Home whose Aside ownership is unresolved, sync applies every other client, leaves Aside unchanged, reports it unresolved and prints the warning; that alone does not fail the sync.

@@ -9,9 +9,10 @@ import { homeLinkChildParity } from "../../link/child-parity";
 import { homeRouteIntentWatch } from "../../link/route-intent-watch";
 import { ROUTE_CLIENT_IDS, isHomeNativeRouteClient, parseRouteClientIntent, type HomeNativeRouteClientId, type RouteClientId, type RouteClientIntent, type RouteClientOutcome } from "../../link/route-intent";
 import { clearRouteClientIntent, readRouteIntentState, recordHomeNativeDecision, RouteIntentStateUnreadableError, setRouteClientIntent } from "../../routing/route-intent-state";
-import { initializeHomeRouteIntentDefaults, projectChildRouteIntent, reconcileHomeRouteDevices } from "../../routing/home-route-intent";
+import { initializeHomeRouteIntentDefaults, readHomeRouteIntentStateAsideTolerant, reconcileHomeRouteDevices } from "../../routing/home-route-intent";
 import { captureHomeRouteDefaults, homeHasLinks } from "../../routing/home-route-capture";
-import { EPHEMERAL_NO_ROUTE_INTENT, routeToDeviceStatus, unsupportedRouteToDevice, type RouteToStatus, type RouteToSyncRow } from "../../routing/route-to-status";
+import { EPHEMERAL_NO_ROUTE_INTENT, routeToAsideUnresolved, routeToDeviceStatus, unsupportedRouteToDevice, type RouteToStatus, type RouteToSyncRow } from "../../routing/route-to-status";
+import { projectHomeRouteIntent } from "../../link/route-intent";
 import { refreshRouteNativeSettings, withDurableRouteNativeSettings } from "../../routing/route-to-live-settings";
 import { withLinkApply, LinkApplyBusyError } from "../../client/link-home";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
@@ -48,18 +49,25 @@ async function view(ctx: ManagementContext, selected?: string): Promise<RouteToS
   const links = devices(ctx);
   const selection = selected === "all" ? "all" : resolveDevice(selected ?? "home", links);
   const rows: RouteToStatus["devices"] = [];
+  const warnings: string[] = [];
   if (selection === "all" || selection === "home") {
-    const { readHomeRouteToStatus } = await import("../../routing/route-to-local");
-    rows.push(await readHomeRouteToStatus(ctx.config, ctx.version));
+    const { readHomeRouteToStatus, HOME_ASIDE_UNRESOLVED_MESSAGE } = await import("../../routing/route-to-local");
+    const home = readHomeRouteToStatus(ctx.config, ctx.version);
+    if (home.clients.some(row => row.intent === "unresolved")) warnings.push(HOME_ASIDE_UNRESOLVED_MESSAGE);
+    rows.push(home);
   }
+  // Read once: a Child without its own Aside entry inherits the same unresolved default.
+  let inherited: ReturnType<typeof readHomeRouteIntentStateAsideTolerant> | undefined;
   for (const link of links) {
     if (selection !== "all" && selection !== link.id) continue;
     if (ephemeral(link)) { rows.push(unsupportedRouteToDevice(link.id, link.alias)); continue; }
     const peer = homeLinkChildParity.get(link.id);
-    rows.push(routeToDeviceStatus(link.id, link.alias, projectChildRouteIntent(ctx.config, ctx.version, link.id),
-      peer.routeClientOutcomes ?? [], peer.appliedRouteIntentDigest ?? null));
+    inherited ??= readHomeRouteIntentStateAsideTolerant(ctx.config);
+    const row = routeToDeviceStatus(link.id, link.alias, projectHomeRouteIntent(ctx.config, ctx.version, link.id, inherited.state),
+      peer.routeClientOutcomes ?? [], peer.appliedRouteIntentDigest ?? null);
+    rows.push(inherited.asideUnresolved && inherited.state.devices[link.id]?.aside === undefined ? routeToAsideUnresolved(row) : row);
   }
-  return { schema: "ocx.route-to/1", devices: rows };
+  return { schema: "ocx.route-to/1", devices: rows, ...(warnings.length ? { warnings } : {}) };
 }
 
 async function applyHome(ctx: ManagementContext, overwriteConflict: boolean, deps: RouteToRouteDeps, overwriteClient?: RouteClientId, commit?: () => void,

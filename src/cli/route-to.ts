@@ -1,5 +1,5 @@
 import {
-  CliUsageError, RuntimeApiError, printData, rejectArgs, runCliAction, runtimeRequest,
+  CliUsageError, RuntimeApiError, printData, rejectArgs, runCliAction, runtimeRequest, terminalSafeText,
   type RuntimeApiDeps,
 } from "./runtime-api";
 import { integrationFlag, integrationOption } from "./integration-input";
@@ -128,12 +128,13 @@ export async function routeToAction(argv: string[], deps: RouteToDeps = {}): Pro
       || !Array.isArray(status.deferred.clients) || status.deferred.clients.some(client => !isRouteClientId(client))))
     || (status.syncs !== undefined && (!Array.isArray(status.syncs) || status.syncs.some(row => !row || typeof row.id !== "string"
       || !["synced", "failed", "pending", "unsupported"].includes(row.state) || (row.reason !== undefined && typeof row.reason !== "string"))))
+    || (status.warnings !== undefined && (!Array.isArray(status.warnings) || status.warnings.some(row => typeof row !== "string")))
     || status.devices.some(row => !row || typeof row.id !== "string" || !Array.isArray(row.clients)
       || (row.routeIntent === undefined ? row.clients.length === 0
         : row.routeIntent !== "unsupported" || row.clients.length !== 0 || typeof row.reason !== "string")
       || (row.alias !== undefined && typeof row.alias !== "string")
       || row.clients.some(client => !client || !isRouteClientId(client.client)
-        || (client.intent !== "on" && client.intent !== "off")
+        || (client.intent !== "on" && client.intent !== "off" && !(client.intent === "unresolved" && client.client === "aside"))
         || !["builtin", "default", "device", "native", "local"].includes(client.source)
         || (client.applied !== null && !["current", "stale", "not_installed", "conflict", "failed"].includes(client.applied))
         || (client.target !== undefined && typeof client.target !== "string")))) {
@@ -148,6 +149,8 @@ export async function routeToAction(argv: string[], deps: RouteToDeps = {}): Pro
     }
   }
   printData(status, json, routeToStatusLines(status));
+  // Notices about a client the request left alone; the JSON body carries them too.
+  for (const warning of status.warnings ?? []) console.error(terminalSafeText(warning));
   if (requestFailure) throw requestFailure;
   if (status.syncs?.some(row => row.state === "failed")) {
     throw new RuntimeApiError("Route sync failed for one or more devices. Read status before retrying.", 502, null);
