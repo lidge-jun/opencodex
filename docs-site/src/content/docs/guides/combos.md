@@ -775,8 +775,10 @@ every eligible target is cooling; that `combo_unavailable` 503 carries a `Retry-
 to the earliest remaining cooldown, rounded up to whole seconds with a minimum of 1. Waits are not jittered, so
 synchronized wake-ups are possible. An aborted request cancels this wait and returns the normal
 `client_cancelled` response; it does not dispatch a backup target after cancellation. A combo target
-cooldown is process-local per-combo state and is separate from the account-level Codex quota cooldown
-used by native account routing.
+cooldown is per-combo state, separate from the account-level Codex quota cooldown used by native
+account routing. It is saved with its absolute expiry to `combo-cooldowns.json` in the opencodex home,
+so a restart keeps it until that expiry; proxies sharing one home never shorten each other's
+cooldowns. Saving, renaming or deleting the combo clears its cooldowns.
 
 After a confirmed HTTP 400 context refusal, exhaustion returns the first such refusal as
 `context_length_exceeded`, including when the remaining targets cannot replay reasoning or lack
