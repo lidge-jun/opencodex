@@ -3,6 +3,7 @@ import { isConnectedRuntime } from "../api-targets";
 import { useKeyedClientResource } from "../client-resource";
 import { getActiveLocale, useT } from "../i18n/shared";
 import { Button } from "@/components/ui-v2/button";
+import { IconSpinner } from "../icons";
 import { cn } from "@/lib/utils";
 import { TELEMETRY_STATUS_CHANGED_EVENT } from "../telemetry-api";
 import {
@@ -170,7 +171,8 @@ export function TelemetryProfileCard({ apiBase }: { apiBase: string }) {
                 <span>{t("telemetryProfile.acknowledge")}</span>
               </label>
               <div className="flex flex-wrap gap-2">
-                <Button variant="primary" type="submit" disabled={!canConnect}>
+                <Button variant="primary" type="submit" disabled={!canConnect} aria-busy={busy}>
+                  {busy && <IconSpinner aria-hidden className="animate-spin motion-reduce:animate-none" />}
                   {t(busy ? "telemetryProfile.connecting" : "telemetryProfile.connect")}
                 </Button>
                 <Button variant="outline" onClick={() => { setFormOpen(false); setFailure(null); }}>{t("telemetryProfile.cancel")}</Button>
@@ -237,11 +239,15 @@ export function TelemetryProfileCard({ apiBase }: { apiBase: string }) {
               </a>
             )}
             {profile.pendingDelete || deletionPending ? (
-              <Button variant="outline" disabled={busy} onClick={() => { void disconnect(); }}>{t("telemetryProfile.retry")}</Button>
+              <Button variant="outline" disabled={busy} aria-busy={busy} onClick={() => { void disconnect(); }}>
+                {busy && <IconSpinner aria-hidden className="animate-spin motion-reduce:animate-none" />}{t("telemetryProfile.retry")}
+              </Button>
             ) : confirmingDisconnect ? (
               <>
                 <span className="text-[13px]">{t("telemetryProfile.disconnectConfirm")}</span>
-                <Button variant="outline" disabled={busy} onClick={() => { void disconnect(); }}>{t("telemetryProfile.disconnectYes")}</Button>
+                <Button variant="outline" disabled={busy} aria-busy={busy} onClick={() => { void disconnect(); }}>
+                  {busy && <IconSpinner aria-hidden className="animate-spin motion-reduce:animate-none" />}{t("telemetryProfile.disconnectYes")}
+                </Button>
                 <Button variant="outline" onClick={() => setConfirmingDisconnect(false)}>{t("telemetryProfile.cancel")}</Button>
               </>
             ) : (
