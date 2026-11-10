@@ -4,6 +4,7 @@ import {
   effectiveFamilyDefaults,
   listedDesktopModels,
   removableUnavailableRoutes,
+  removalRoutes,
   removeAssignments,
   roleListOrder,
   roleOptions,
@@ -107,4 +108,43 @@ test("a removed route disappears from the listed models before the profile is sa
   // An available model with no assignment yet still lists: the server assigns it on load.
   const fresh = { ...profile(), assignments: { "p/a": profile().assignments["p/a"]! } };
   expect(listedDesktopModels(models, fresh).map(model => model.route)).toEqual(["p/a", "p/b", "p/d"]);
+});
+
+// #8497 review: two unavailable routes in one tier, and the default among them. Promoting the
+// other unavailable route made a profile the PUT refuses ("cannot be the default").
+test("removing an unavailable default never promotes another unavailable route", () => {
+  const stale: DesktopProfile = {
+    version: 1,
+    assignments: {
+      "p/y": { family: "opus", alias: "claude-opus-y" },
+      "p/z": { family: "opus", alias: "claude-opus-z" },
+      "p/a": { family: "sonnet", alias: "claude-sonnet-a" },
+    },
+    defaults: { opus: "p/z", fable: null, sonnet: "p/a", haiku: null },
+  };
+  const tierModels = [
+    { route: "p/y", label: "Y", available: false },
+    { route: "p/z", label: "Z", available: false },
+    { route: "p/a", label: "A", available: true },
+  ];
+  // No available member is left in Opus, so the removal takes the tier's other stale route too.
+  expect(removalRoutes(stale, ["p/z"], tierModels)).toEqual(["p/y", "p/z"]);
+  const next = removeAssignments(stale, ["p/z"], tierModels);
+  expect(Object.keys(next.assignments)).toEqual(["p/a"]);
+  expect(next.defaults.opus).toBeNull();
+
+  // With an available member in the tier, that member becomes the default and nothing else goes.
+  const mixed: DesktopProfile = {
+    ...stale,
+    assignments: { ...stale.assignments, "p/b": { family: "opus", alias: "claude-opus-b" } },
+  };
+  const mixedModels = [...tierModels, { route: "p/b", label: "B", available: true }];
+  expect(removalRoutes(mixed, ["p/z"], mixedModels)).toEqual(["p/z"]);
+  const kept = removeAssignments(mixed, ["p/z"], mixedModels);
+  expect(kept.defaults.opus).toBe("p/b");
+  expect(kept.assignments["p/y"]).toBeDefined();
+
+  // A non-default stale route is removed alone.
+  expect(removalRoutes(stale, ["p/y"], tierModels)).toEqual(["p/y"]);
+  expect(removeAssignments(stale, ["p/y"], tierModels).defaults.opus).toBe("p/z");
 });

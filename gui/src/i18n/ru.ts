@@ -3494,6 +3494,7 @@ export const ru: Record<TKey, string> = {
   "claudeDesktop.removeUnavailable": "Удалить",
   "claudeDesktop.removeAllUnavailable": "Удалить недоступные ({n})",
   "claudeDesktop.removeUnavailableHint": "Удаляет это назначение и его псевдоним из сохранённого профиля. Сохраните, чтобы применить.",
+  "claudeDesktop.removeUnavailableTierHint": "Также удаляет другие недоступные модели этого уровня ({n}), потому что модель уровня по умолчанию должна быть доступна. Сохраните, чтобы применить.",
   "claudeDesktop.removedUnavailable": "Удалено недоступных моделей: {n}. Сохраните, чтобы применить.",
   "claudeDesktop.status.applied": "Применено к Desktop",
   "claudeDesktop.status.stale": "Конфигурация Desktop устарела — примените заново",

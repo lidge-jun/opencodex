@@ -3745,6 +3745,7 @@ export const tr: Record<TKey, string> = {
   "claudeDesktop.removeUnavailable": "Kaldır",
   "claudeDesktop.removeAllUnavailable": "Kullanılamayanları kaldır ({n})",
   "claudeDesktop.removeUnavailableHint": "Bu atamayı ve takma adını kayıtlı profilden kaldırır. Uygulamak için kaydedin.",
+  "claudeDesktop.removeUnavailableTierHint": "Bir katmanın varsayılanı kullanılabilir olmalı; bu yüzden bu katmandaki diğer {n} kullanılamayan modeli de kaldırır. Uygulamak için kaydedin.",
   "claudeDesktop.removedUnavailable": "{n} kullanılamayan model kaldırıldı. Uygulamak için kaydedin.",
   "claudeDesktop.status.applied": "Desktop'a Uygulandı",
   "claudeDesktop.status.stale": "Desktop yapılandırması güncel değil — tekrar uygulayın",

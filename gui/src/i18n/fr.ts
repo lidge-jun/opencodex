@@ -3722,6 +3722,7 @@ export const fr: Record<TKey, string> = {
   "claudeDesktop.removeUnavailable": "Retirer",
   "claudeDesktop.removeAllUnavailable": "Retirer les indisponibles ({n})",
   "claudeDesktop.removeUnavailableHint": "Retire cette affectation et son alias du profil enregistré. Enregistrez pour appliquer.",
+  "claudeDesktop.removeUnavailableTierHint": "Retire aussi {n} autre(s) modèle(s) indisponible(s) de ce niveau, car le modèle par défaut d'un niveau doit être disponible. Enregistrez pour appliquer.",
   "claudeDesktop.removedUnavailable": "{n} modèle(s) indisponible(s) retiré(s). Enregistrez pour appliquer.",
   "claudeDesktop.status.applied": "Appliqué à Desktop",
   "claudeDesktop.status.stale": "La configuration de Desktop n’est pas à jour — appliquer de nouveau",

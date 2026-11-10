@@ -104,21 +104,43 @@ export function removableUnavailableRoutes(models: readonly RoleModel[], profile
 }
 
 /**
- * Drop `routes` from the draft. A family whose default was dropped falls to its first remaining
- * member (sorted), or null when it is empty, matching `reconcileDesktopProfile` on the server and
- * the profile parser's rule that an empty family has no default. With `models`, a route that is
- * available is kept: the server refuses no such removal, but the page only offers unavailable ones.
+ * The routes a removal actually drops. A route that is available is never removed. When a dropped
+ * route is its family's default and no available member would remain, the family's other
+ * unavailable routes go with it: the profile parser requires a non-empty family to name a member
+ * as its default, and the PUT refuses to make an unavailable route a new default, so no other
+ * outcome can be saved (#8497 review).
+ */
+export function removalRoutes(profile: DesktopProfile, routes: readonly string[], models: readonly RoleModel[]): string[] {
+  const available = new Set(models.filter(model => model.available).map(model => model.route));
+  const dropped = new Set(routes.filter(route => profile.assignments[route] && !available.has(route)));
+  for (const family of FAMILIES) {
+    const current = profile.defaults[family];
+    if (current === null || !dropped.has(current)) continue;
+    const rest = Object.keys(profile.assignments)
+      .filter(route => profile.assignments[route]!.family === family && !dropped.has(route));
+    if (rest.some(route => available.has(route))) continue;
+    for (const route of rest) dropped.add(route);
+  }
+  return [...dropped].sort();
+}
+
+/**
+ * Drop `routes` from the draft (see {@link removalRoutes} for what is dropped with `models`). A
+ * family whose default was dropped falls to its first available remaining member (sorted), then to
+ * its first remaining member, or null when it is empty, matching `reconcileDesktopProfile` on the
+ * server and the profile parser's rule that an empty family has no default.
  */
 export function removeAssignments(profile: DesktopProfile, routes: readonly string[], models?: readonly RoleModel[]): DesktopProfile {
   const available = new Set((models ?? []).filter(model => model.available).map(model => model.route));
-  const dropped = new Set(routes.filter(route => profile.assignments[route] && !available.has(route)));
+  const dropped = new Set(models ? removalRoutes(profile, routes, models) : routes.filter(route => profile.assignments[route]));
   if (dropped.size === 0) return profile;
   const assignments = Object.fromEntries(Object.entries(profile.assignments).filter(([route]) => !dropped.has(route)));
   const defaults = { ...profile.defaults };
   for (const family of FAMILIES) {
     const current = defaults[family];
     if (current === null || !dropped.has(current)) continue;
-    defaults[family] = Object.keys(assignments).filter(route => assignments[route]!.family === family).sort()[0] ?? null;
+    const members = Object.keys(assignments).filter(route => assignments[route]!.family === family).sort();
+    defaults[family] = members.find(route => available.has(route)) ?? members[0] ?? null;
   }
   return { ...profile, assignments, defaults };
 }

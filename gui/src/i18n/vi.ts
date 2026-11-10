@@ -3733,6 +3733,7 @@ export const vi: Record<TKey, string> = {
   "claudeDesktop.removeUnavailable": "Gỡ",
   "claudeDesktop.removeAllUnavailable": "Gỡ mô hình không khả dụng ({n})",
   "claudeDesktop.removeUnavailableHint": "Gỡ phân công này và bí danh của nó khỏi hồ sơ đã lưu. Lưu để áp dụng.",
+  "claudeDesktop.removeUnavailableTierHint": "Đồng thời gỡ {n} mô hình không khả dụng khác trong tầng này, vì mặc định của một tầng phải khả dụng. Lưu để áp dụng.",
   "claudeDesktop.removedUnavailable": "Đã gỡ {n} mô hình không khả dụng. Lưu để áp dụng.",
   "claudeDesktop.status.applied": "Đã áp dụng cho Desktop",
   "claudeDesktop.status.stale": "Cấu hình Desktop chưa cập nhật — hãy áp dụng lại",

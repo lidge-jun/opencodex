@@ -3404,6 +3404,7 @@ export const ja: Record<TKey, string> = {
   "claudeDesktop.removeUnavailable": "削除",
   "claudeDesktop.removeAllUnavailable": "利用不可を削除 ({n})",
   "claudeDesktop.removeUnavailableHint": "この割り当てとエイリアスを保存済みプロファイルから削除します。保存すると反映されます。",
+  "claudeDesktop.removeUnavailableTierHint": "この層の既定は利用可能である必要があるため、同じ層の利用不可モデル {n} 件も削除します。保存すると反映されます。",
   "claudeDesktop.removedUnavailable": "利用不可のモデルを {n} 件削除しました。保存すると反映されます。",
   "claudeDesktop.status.applied": "Desktop に適用済み",
   "claudeDesktop.status.stale": "Desktop の設定が最新ではありません — 再適用してください",

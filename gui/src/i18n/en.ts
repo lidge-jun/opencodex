@@ -3809,6 +3809,7 @@ export const en = {
   "claudeDesktop.removeUnavailable": "Remove",
   "claudeDesktop.removeAllUnavailable": "Remove unavailable ({n})",
   "claudeDesktop.removeUnavailableHint": "Removes this assignment and its alias from the saved profile. Save to apply.",
+  "claudeDesktop.removeUnavailableTierHint": "Also removes {n} other unavailable model(s) in this tier, because a tier's default must be available. Save to apply.",
   "claudeDesktop.removedUnavailable": "Removed {n} unavailable model(s). Save to apply.",
   "claudeDesktop.status.applied": "Applied to Desktop",
   "claudeDesktop.status.stale": "Desktop configuration is out of date — re-apply",

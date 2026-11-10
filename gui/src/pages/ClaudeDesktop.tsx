@@ -23,6 +23,7 @@ import {
   familySize,
   listedDesktopModels,
   removableUnavailableRoutes,
+  removalRoutes,
   removeAssignments,
   roleListOrder,
   roleOptions,
@@ -436,8 +437,9 @@ export default function ClaudeDesktop({
   /** Drop unavailable assignments from the draft; Save writes it through the existing profile PUT. */
   const removeUnavailable = (routes: string[]) => {
     if (!profile || routes.length === 0) return;
+    const removed = removalRoutes(profile, routes, data?.models ?? []);
     setProfile(current => current && removeAssignments(current, routes, data?.models ?? []));
-    setAnnouncement(t("claudeDesktop.removedUnavailable", { n: routes.length }));
+    setAnnouncement(t("claudeDesktop.removedUnavailable", { n: removed.length }));
   };
 
   const moveModel = (route: string, family: Family, makeDefault = false) => {
@@ -1005,7 +1007,16 @@ export default function ClaudeDesktop({
 
                     {!model.available && assignment && (
                       <div className="claude-remove-row">
-                        <span className="claude-remove-hint">{t("claudeDesktop.removeUnavailableHint")}</span>
+                        <span className="claude-remove-hint">
+                          {(() => {
+                            // A tier's default must be available, so removing the default of a tier
+                            // with no available member also clears the tier's other stale routes.
+                            const others = removalRoutes(profile, [model.route], models).length - 1;
+                            return others > 0
+                              ? t("claudeDesktop.removeUnavailableTierHint", { n: others })
+                              : t("claudeDesktop.removeUnavailableHint");
+                          })()}
+                        </span>
                         <button
                           type="button"
                           className="btn btn-ghost btn-sm"

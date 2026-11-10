@@ -2887,6 +2887,7 @@ export const zhTW: Record<TKey, string> = {
   "claudeDesktop.removeUnavailable": "移除",
   "claudeDesktop.removeAllUnavailable": "移除不可用模型 ({n})",
   "claudeDesktop.removeUnavailableHint": "從已儲存的設定中移除此指派及其別名。儲存後生效。",
+  "claudeDesktop.removeUnavailableTierHint": "由於某一層級的預設模型必須可用，也會移除該層級中另外 {n} 個不可用模型。儲存後生效。",
   "claudeDesktop.removedUnavailable": "已移除 {n} 個不可用模型。儲存後生效。",
   "claudeDesktop.status.applied": "已套用到 Desktop",
   "claudeDesktop.status.stale": "Desktop 設定尚未更新 — 需重新套用",

@@ -3695,6 +3695,7 @@ export const de: Record<TKey, string> = {
   "claudeDesktop.removeUnavailable": "Entfernen",
   "claudeDesktop.removeAllUnavailable": "Nicht verfügbare entfernen ({n})",
   "claudeDesktop.removeUnavailableHint": "Entfernt diese Zuordnung und ihren Alias aus dem gespeicherten Profil. Zum Übernehmen speichern.",
+  "claudeDesktop.removeUnavailableTierHint": "Entfernt auch {n} weitere nicht verfügbare Modell(e) dieser Stufe, weil der Standard einer Stufe verfügbar sein muss. Zum Übernehmen speichern.",
   "claudeDesktop.removedUnavailable": "{n} nicht verfügbare(s) Modell(e) entfernt. Zum Übernehmen speichern.",
   "claudeDesktop.status.applied": "Auf Desktop angewendet",
   "claudeDesktop.status.stale": "Desktop-Konfiguration ist nicht aktuell — erneut anwenden",
