@@ -53,6 +53,8 @@ any other. The measured caps ship as registry
 keeps them; any other model uses 8. Declare a model's own cap with
 `modelCapabilities: { "mistral-small-2603": { mistralMaxImages: 8 } }` (an integer from 1 to
 1000). The declaration outranks the registry row, and PATCH `null` on the axis removes it.
+Only `image_url` parts with a nonempty string in `image_url` or `image_url.url` count toward the cap; this check does not validate URL syntax or reachability. Parts with missing, empty, or non-string image references that reach the limiter are replaced with `[image omitted: missing or malformed image URL]` in the outbound copy without consuming the cap, even when the valid-image count is below the cap. For translated Responses requests, the parser drops `input_image` blocks with no usable image URL or file ID before the limiter runs. A nonempty `file_id` without a nonempty `image_url` in message content or tool output is refused by the translated-adapter media guard before Mistral dispatch; inside a replayed `agent_message`, whose content the guard does not inspect, the parser instead emits an `[image: <file id>]` text marker that travels as ordinary text and does not consume the image cap.
+
 Pruning adds no separate upload or persistence. Images retained within the cap
 are sent to Mistral in the outbound request. Other destinations are unchanged.
 

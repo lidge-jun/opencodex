@@ -98,3 +98,11 @@ bunx wrangler secret put RATE_LIMIT_SALT
 ```bash
 bunx wrangler deploy
 ```
+
+Run every step logged in to the Cloudflare account that owns the `opencodex.me` zone: a Custom Domain
+attaches only to a zone in the Worker's own account. The deploy creates the `telemetry.opencodex.me`
+DNS record and certificate. Then check it:
+
+```bash
+curl -s "https://telemetry.opencodex.me/v1/leaderboard?period=day&metric=tokens&limit=1"
+```
