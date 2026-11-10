@@ -1,6 +1,6 @@
 import { CHILD_TARGET_TRIPLES, type ChildTargetTriple } from "./child-binary-source";
 import { MANAGED_PURGE_CHILD_MISSING_MARKER, windowsInspectRuntimeArgv, windowsManagedPurgeDisconnectArgv, windowsPlantChildArgv, windowsPurgePlantedChildArgv } from "./remote-windows";
-import { buildExecArgv } from "./ssh-argv";
+import { buildExecArgv, REMOTE_SERVED_RUNTIME, remoteServedRuntimeAttempt } from "./ssh-argv";
 import { sshFailureHint, sshRunnerErrorHint, type SshRunner } from "./ssh-runner";
 
 export type RemoteRuntimeKind = "full" | "ephemeral" | "missing";
@@ -41,10 +41,11 @@ export const POSIX_INSPECT_SCRIPT = [
   "export PATH=\"$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin\"",
   "case \"$(uname -s 2>/dev/null)\" in Windows*|MSYS*|MINGW*|CYGWIN*) exit 125;; esac",
   "printf 'ocx-inspect:uname:%s:%s\\n' \"$(uname -s 2>/dev/null)\" \"$(uname -m 2>/dev/null)\"",
+  "ocx_entry=",
   "try_inspect() {",
   "  kind=$1; candidate=$2",
   "  if [ -x \"$candidate\" ]; then",
-  "    ver=$(\"$candidate\" --version 2>/dev/null) || return 0",
+  "    ver=$(\"$candidate\" ${ocx_entry:+\"$ocx_entry\"} --version 2>/dev/null) || return 0",
   "    first=$(printf '%s\\n' \"$ver\" | awk 'NR==1{print; exit}')",
   "    if [ -n \"$first\" ]; then",
   "      printf 'ocx-inspect:kind:%s\\n' \"$kind\"",
@@ -67,6 +68,9 @@ export const POSIX_INSPECT_SCRIPT = [
   "if [ -f \"${OPENCODEX_HOME:-$HOME/.opencodex}/child/state.json\" ]; then",
   "  inspect_ocx_child",
   "fi",
+  // #8359: report the install that last started serving this home before any Desktop or PATH copy.
+  REMOTE_SERVED_RUNTIME.trimEnd(),
+  remoteServedRuntimeAttempt("try_inspect full \"$served_bin\""),
   "for candidate in \"$HOME/.opencodex-desktop/bin/ocx\" \"/Applications/OpenCodex.app/Contents/MacOS/ocx\" \"/usr/bin/ocx\"; do",
   "  try_inspect full \"$candidate\"",
   "done",

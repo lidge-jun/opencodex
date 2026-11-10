@@ -7,6 +7,8 @@ import {
   setCodexRuntimeResolveCacheForTests, type ResolveCodexRuntimeDeps,
 } from "../../src/codex/runtime";
 import { loadBundledCodexCatalog, loadBundledCodexCatalogAsync } from "../../src/codex/catalog/bundled";
+import { codexSupportedReasoningEfforts } from "../../src/codex/catalog/effort";
+import { inspectClientCatalogReadiness } from "../../src/client/catalog-compatibility";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const roots: string[] = [];
@@ -315,4 +317,123 @@ describe("bundled app catalog consumer", () => {
       else expect(sync).toBeNull();
     });
   }
+});
+
+/**
+ * #8360: a macOS Child whose only Codex is the CLI inside ChatGPT.app reported
+ * `readiness: unverified` ("the selected local Codex runtime did not report the reasoning
+ * levels it supports"). The runtime resolver only offers the app candidate after it can
+ * classify the bundle's XML `Info.plist` identity, so a bundle it cannot classify leaves the
+ * selection on the bare `codex` sentinel. The readiness probe then asked a command that does
+ * not exist while a real, trusted Codex sat inside the app.
+ */
+// The virtual app paths below are POSIX; on Windows the exec boundary treats them as relative.
+describe.skipIf(process.platform === "win32")("app-bundled CLI fallback for connect readiness (#8360)", () => {
+  /** A catalog with a distinctive ladder, so a warm fixture value cannot pass by accident. */
+  const bundledCatalog = JSON.stringify({ models: [{
+    slug: "gpt-5.6-sol",
+    base_instructions: "Fixture instructions.",
+    supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }],
+  }] });
+
+  /** Exec seam: only the bundled CLI answers, with its version or its bundled catalog. */
+  function bundledOnlyExec(appCommand: string, spawned: string[]) {
+    return (file: string, args: readonly string[]) => {
+      spawned.push(file);
+      if (file !== appCommand) throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      return args[0] === "debug" ? bundledCatalog : "codex-cli 0.166.0-alpha.6";
+    };
+  }
+
+  test("an app-bundled-only layout yields the bundled ladder and reports ready", () => {
+    const f = fixture();
+    // The bundle identity is not classifiable (the shape an app update can leave behind), so
+    // discovery declines the app candidate and the resolver ends on the bare sentinel.
+    f.deps.readBundleIdentifier = () => null;
+    f.versions.set(f.current, "0.166.0-alpha.6");
+    const spawned: string[] = [];
+    const exec = bundledOnlyExec(f.current, spawned);
+    const selected = resolveCodexRuntime({ ...f.deps, discoverAlternatives: false, execFileSync: exec });
+    expect(selected.runtime.command).toBe("codex");
+
+    const efforts = codexSupportedReasoningEfforts({
+      ...f.deps, execFileSync: exec, commandCandidates: () => [selected.runtime.command],
+      selectedRuntime: selected.runtime,
+    });
+    expect(efforts).toEqual(new Set(["low", "high"]));
+    expect(inspectClientCatalogReadiness("present", bundledCatalog, { supportedEfforts: () => efforts }))
+      .toEqual({ kind: "ready" });
+    expect(spawned).toContain(f.current);
+  });
+
+  test("app locations that do not exist leave the ladder unverified instead of inventing one", () => {
+    const f = fixture();
+    f.deps.readBundleIdentifier = () => null;
+    const spawned: string[] = [];
+    const exec = bundledOnlyExec(f.current, spawned);
+    const efforts = codexSupportedReasoningEfforts({
+      ...f.deps, execFileSync: exec, commandCandidates: () => ["codex"],
+      selectedRuntime: { command: "codex", version: null, source: "fallback" },
+    });
+    expect(efforts).toBeNull();
+    // No app binary exists, so none is offered; the bare sentinel cannot resolve at the exec
+    // boundary either. A missing runtime stays unverified rather than borrowing a ladder.
+    expect(spawned).toEqual([]);
+  });
+
+  test("a resolved absolute command is probed as given, without widening to app candidates", () => {
+    const f = fixture();
+    const standalone = "/fixture/bin/codex";
+    f.versions.set(standalone, "0.167.0");
+    f.versions.set(f.current, "0.166.0-alpha.6");
+    const spawned: string[] = [];
+    const exec = (file: string, args: readonly string[]) => {
+      spawned.push(file);
+      return args[0] === "debug" ? bundledCatalog : "codex-cli 0.167.0";
+    };
+    expect(codexSupportedReasoningEfforts({
+      ...f.deps, execFileSync: exec, commandCandidates: () => [standalone],
+      selectedRuntime: { command: standalone, version: "0.167.0", source: "installed" },
+    })).toEqual(new Set(["low", "high"]));
+    expect(spawned).toEqual([standalone]);
+  });
+
+  test("a selected runnable bare command keeps its own answer instead of borrowing the app's ladder", async () => {
+    const f = fixture();
+    f.versions.set(f.current, "0.166.0-alpha.6");
+    const spawned: string[] = [];
+    // Only the app answers. The selected bare command was runnable when it was resolved (it has a
+    // version), so it is the operator's runtime rather than the unresolved sentinel: its failure to
+    // report a catalog must leave the ladder unverified, not substitute the app's.
+    const exec = bundledOnlyExec(f.current, spawned);
+    for (const selectedRuntime of [
+      { command: "codex", version: "0.140.0", source: "fallback" },
+      { command: "codex-beta", version: "0.141.0", source: "environment" },
+    ] as const) {
+      expect(codexSupportedReasoningEfforts({
+        ...f.deps, execFileSync: exec, commandCandidates: () => [selectedRuntime.command], selectedRuntime,
+      })).toBeNull();
+      expect(await loadBundledCodexCatalogAsync({
+        ...f.deps, commandCandidates: () => [selectedRuntime.command], selectedRuntime,
+        execFileSync: exec as never, execFile: async (file, args) => exec(file, args),
+      })).toBeNull();
+    }
+    expect(spawned).not.toContain(f.current);
+  });
+
+  test("the async bundled-catalog driver widens a bare sentinel the same way", async () => {
+    const f = fixture();
+    f.versions.set(f.current, "0.166.0-alpha.6");
+    const spawned: string[] = [];
+    const exec = bundledOnlyExec(f.current, spawned);
+    const catalog = await loadBundledCodexCatalogAsync({
+      ...f.deps,
+      commandCandidates: () => ["codex"],
+      selectedRuntime: { command: "codex", version: null, source: "fallback" },
+      execFileSync: exec as never,
+      execFile: async (file, args) => exec(file, args),
+    });
+    expect(catalog?.models[0]?.slug).toBe("gpt-5.6-sol");
+    expect(spawned).toContain(f.current);
+  });
 });

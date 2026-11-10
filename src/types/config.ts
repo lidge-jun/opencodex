@@ -3,6 +3,7 @@ import type { CodexAccount } from "./accounts";
 import type { AnthropicAccountPoolConfig, OcxAccountPoolRotationStrategy } from "./anthropic-account-pool";
 import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import type { OcxFallbackConfig } from "./fallback";
+import type { OcxTelemetryConfig } from "./telemetry";
 export type { AnthropicAccountPoolConfig, AnthropicModelRoute, OcxAccountPoolRotationStrategy, OcxAccountPoolQuotaWindow } from "./anthropic-account-pool";
 export type { OcxFallbackConfig, OcxFallbackDeviceConfig, OcxFallbackKind, OcxFallbackSwitches } from "./fallback";
 
@@ -574,6 +575,7 @@ export interface OcxConfig {
   skills?: OcxSkillsConfig;
   /** Opt-in process-local aggregate request metrics on the authenticated management plane. */
   metricsExport?: { enabled?: boolean };
+  telemetry?: OcxTelemetryConfig;
   /**
    * Opt-in recovery of a managed service proxy that stays alive but stops answering /healthz:
    * a separate sentinel process terminates it so its supervisor restarts it (#6671).
@@ -1538,6 +1540,7 @@ export interface OcxComboConfig {
    * explicitly empty target ladder suppresses the whole combo's effort control.
    */
   reasoningEffortMode?: OcxComboReasoningEffortMode;
+  jevEffortMode?: import("./combo-jev-effort-mode").OcxComboJevEffortMode; // wire-effort owner on a `jev` combo; omitted = "decide"
   /**
    * Disable image input even when every target supports it.
    * Omitted / `"auto"` keeps automatic capability derivation (default: enabled when

@@ -1,0 +1,13 @@
+name = "opencodex-telemetry-collector"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+route = "telemetry.opencodex.me/*"
+
+# Real D1 database_id is configured by a maintainer at deploy time.
+[[d1_databases]]
+binding = "DB"
+database_name = "opencodex-telemetry"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[triggers]
+crons = ["15 * * * *"]
