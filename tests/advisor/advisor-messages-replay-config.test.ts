@@ -158,11 +158,11 @@ async function managementActivity(config: OcxConfig) {
     syncClaudeAgentDefsBestEffort: async () => {},
   };
   const response = await handleAdvisorRoutes(ctx);
-  return (await response!.json()) as { entries: { trigger: string; status: string; advisorModel: string }[] };
+  return (await response!.json()) as { entries: { trigger: string; status: string; advisorModel: string; requestedEffort: string }[] };
 }
 
 /** A real translated /v1/messages turn: worker provider "worker", Advisor routed to "expert". */
-function translatedAdvisorFixture(options: { revokeOnDispatch?: boolean; failExpert?: boolean } = {}) {
+function translatedAdvisorFixture(options: { revokeOnDispatch?: boolean; failExpert?: boolean; throwTransport?: boolean; advice?: string } = {}) {
   const root = mkdtempSync(join(tmpdir(), "advisor-messages-fixture-")); roots.push(root);
   const workerBodies: Record<string, unknown>[] = [];
   const expertBodies: { url: string; body: Record<string, unknown> }[] = [];
@@ -185,7 +185,7 @@ function translatedAdvisorFixture(options: { revokeOnDispatch?: boolean; failExp
           // A revocation that lands only after the outbound hop has begun.
           if (options.revokeOnDispatch) revoke();
           if (options.failExpert) return new Response(ERROR_BODY, { status: 400 });
-          return Response.json({ choices: [{ message: { content: ADVICE } }],
+          return Response.json({ choices: [{ message: { content: options.advice ?? ADVICE } }],
             usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 } });
         }) as typeof fetch },
     },
@@ -204,9 +204,10 @@ function translatedAdvisorFixture(options: { revokeOnDispatch?: boolean; failExp
     ...extra,
   }));
   // The Advisor self-fetches over loopback; re-enter the real data plane so the expert provider runs.
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const activate = () => { globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.includes("/v1/chat/completions")) {
+      if (options.throwTransport) throw new Error("exception-task-marker exception-advice-marker exception-credential-marker");
       const response = await handleChatCompletions(new Request(url, init), config, { model: "", provider: "" });
       // Exercise a loopback error that echoes private content even if the provider adapter
       // itself sanitized its error. The actual expert dispatch still ran above.
@@ -215,15 +216,17 @@ function translatedAdvisorFixture(options: { revokeOnDispatch?: boolean; failExp
     }
     throw new Error("unexpected external fetch: " + url);
   }) as typeof fetch;
-  return { config, workerBodies, expertBodies, revoke, register, revoked: () => revoked };
+  };
+  activate();
+  return { config, workerBodies, expertBodies, revoke, register, activate, revoked: () => revoked };
 }
 
 /** The real Messages request, with orientation evidence after the latest user turn. */
-function messagesRequest(): Request {
+function messagesRequest(task = TASK): Request {
   return new Request("http://localhost/v1/messages", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "worker/m", max_tokens: 100, stream: false, messages: [
-      { role: "user", content: [{ type: "text", text: `repair the token store ${TASK}` },
+      { role: "user", content: [{ type: "text", text: `repair the token store ${task}` },
         { type: "tool_result", tool_use_id: "call_1", content: "3 tests failed" }] },
     ] }),
     signal: AbortSignal.timeout(10_000),
@@ -352,4 +355,80 @@ test("revocation after dispatch does not cancel the /v1/messages consultation", 
     expect(JSON.stringify(fixture.expertBodies[0]!.body)).toContain(TASK);
     expect(JSON.stringify(fixture.workerBodies[0])).toContain(ADVICE);
   } finally { setAdvisorPlanFactory(fixture.config, null); release(); }
+});
+
+
+test("translated transport exceptions preserve safe failure without leaking exception contents", async () => {
+  const release = acquireOwnedSpendHome();
+  const fixture = translatedAdvisorFixture({ throwTransport: true });
+  fixture.register();
+  const originalWarn = console.warn;
+  const logs: string[] = [];
+  console.warn = (...args: unknown[]) => { logs.push(args.map(String).join(" ")); };
+  try {
+    const response = await handleClaudeMessages(messagesRequest(), fixture.config,
+      { model: "", provider: "" }, { requestId: "advisor-transport-error", start: Date.now() });
+    const body = await response.text();
+    expect(response.status).toBe(200);
+    const feed = await managementActivity(fixture.config);
+    expect(feed.entries).toHaveLength(1);
+    expect(feed.entries[0]!.status).toBe("failed");
+    expect(logs.some(line => line.includes("advisor connect_error"))).toBe(true);
+    expect(JSON.stringify(fixture.workerBodies)).toContain("advisor connect_error");
+    for (const marker of ["exception-task-marker", "exception-advice-marker", "exception-credential-marker"]) {
+      expect(JSON.stringify([feed, logs, fixture.workerBodies, body])).not.toContain(marker);
+    }
+  } finally {
+    console.warn = originalWarn;
+    setAdvisorPlanFactory(fixture.config, null);
+    release();
+  }
+});
+
+test("two live translated configurations isolate activity and consent", async () => {
+  const release = acquireOwnedSpendHome();
+  const a = translatedAdvisorFixture({ advice: "advice-for-config-a" });
+  const b = translatedAdvisorFixture({ advice: "advice-for-config-b" });
+  b.config.advisor = { ...b.config.advisor!, effort: "low" };
+  a.register(); b.register();
+  const run = async (fixture: typeof a, task: string) => {
+    fixture.activate();
+    const response = await handleClaudeMessages(messagesRequest(task), fixture.config,
+      { model: "", provider: "" }, { requestId: task, start: Date.now() });
+    await response.text();
+    expect(response.status).toBe(200);
+  };
+  try {
+    await run(a, "task-for-config-a");
+    await run(b, "task-for-config-b");
+    expect(a.expertBodies).toHaveLength(1);
+    expect(b.expertBodies).toHaveLength(1);
+    expect(JSON.stringify(a.expertBodies)).toContain("task-for-config-a");
+    expect(JSON.stringify(b.expertBodies)).toContain("task-for-config-b");
+    expect(JSON.stringify(a.workerBodies)).toContain("advice-for-config-a");
+    expect(JSON.stringify(b.workerBodies)).toContain("advice-for-config-b");
+    expect(JSON.stringify([a.expertBodies, a.workerBodies])).not.toContain("config-b");
+    expect(JSON.stringify([b.expertBodies, b.workerBodies])).not.toContain("config-a");
+    const feedA = await managementActivity(a.config);
+    const feedB = await managementActivity(b.config);
+    expect(feedA.entries).toHaveLength(1);
+    expect(feedB.entries).toHaveLength(1);
+    expect(feedA.entries[0]!.requestedEffort).toBe("high");
+    expect(feedB.entries[0]!.requestedEffort).toBe("low");
+    for (const marker of ["task-for-config-a", "task-for-config-b", "advice-for-config-a", "advice-for-config-b", CREDENTIAL]) {
+      expect(JSON.stringify([feedA, feedB])).not.toContain(marker);
+    }
+    a.revoke();
+    await run(a, "after-revoke-a");
+    await run(b, "after-revoke-b");
+    expect(a.expertBodies).toHaveLength(1);
+    expect(b.expertBodies).toHaveLength(2);
+    expect((await managementActivity(a.config)).entries).toHaveLength(1);
+    expect((await managementActivity(b.config)).entries).toHaveLength(2);
+    b.revoke();
+    await run(b, "after-revoke-b-again");
+    expect(b.expertBodies).toHaveLength(2);
+  } finally {
+    setAdvisorPlanFactory(a.config, null); setAdvisorPlanFactory(b.config, null); release();
+  }
 });

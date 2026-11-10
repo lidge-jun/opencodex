@@ -203,9 +203,8 @@ substring search. Automatic preflight is not decided from developer-message text
 manual tool result is a separate provenance check; every other history form — ordinary tool
 output, developer text, user text, and failure notices (`<opencodex_advisor_unavailable>`) —
 matches nothing. The guard never composes failure prose itself: `AdvisorPlan.formatUnavailable`
-owns that text and neutralizes untrusted fragments. Upstream HTTP failures are logged as a
-status code only, so an error body that echoes the prompt is not written to the worker context
-or the log line.
+owns that text and neutralizes untrusted fragments. Upstream HTTP failures use a status code only; transport exceptions use a fixed failure category.
+Neither upstream error bodies nor exception messages enter worker context or consultation logs.
 
 Keys are SHA-256 digests, never a short fold and never raw text: one domain-separated digest
 over `conversation identity + task boundary + worker model`, where the task boundary digests the
