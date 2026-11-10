@@ -452,6 +452,18 @@ test.skipIf(process.platform === "win32")("a Child without dd falls through with
   expect(result.stderr).toBe("");
 }, SPAWN_BUDGET_MS);
 
+// A dd that fails counts zero bytes through wc; zero is refused, so the census is not parsed unbounded.
+test.skipIf(process.platform === "win32")("a failing dd falls through without reading the census (#8359)", async () => {
+  const f = servedFixture(["awk", "wc"]);
+  executable(join(f.home, "remote-bin/dd"), "exit 1");
+  const served = join(f.home, "standalone/ocx");
+  executable(served, "if [ \"$1\" = --version ]; then printf 'opencodex 2.99.0\\n'; exit 0; fi\nprintf 'standalone\\n'");
+  f.census([served]);
+  const result = await f.run();
+  expect(result.stdout).toBe("0\nlink\0port\0");
+  expect(result.stderr).toBe("");
+}, SPAWN_BUDGET_MS);
+
 test.skipIf(process.platform === "win32")("only the first record's command counts; a later record is never run (#8359)", async () => {
   const f = servedFixture();
   const older = join(f.home, "older/ocx");
