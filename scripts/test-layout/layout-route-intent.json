@@ -57,5 +57,6 @@
   "route-to-sync-child.test.ts": "routing",
   "service-disconnected-client-restart.test.ts": "service",
   "service-restart-registration-guard.test.ts": "service",
-  "service-scheduler-restart-cleanup.test.ts": "service"
+  "service-scheduler-restart-cleanup.test.ts": "service",
+  "route-intent-connect-post-commit.test.ts": "clients"
 }

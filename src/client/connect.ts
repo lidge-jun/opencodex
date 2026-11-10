@@ -842,19 +842,23 @@ async function connectClientUnlocked(
       }
     }
     if (!options.noSync && routeIntent) {
-      const appliedConnection = withClientLifecycleSync(() => {
-        const current = readClientConnectionState();
-        if (current.kind !== "connected" || !Bun.deepEquals(current.value, connection, true)) throw new Error("client_connection_changed");
-        return current.value;
-      }, deps.lifecycleLockDeps);
-      try { await applyConnectedRouteIntent(connection, admissionToken, routeIntent, {
+      // The connection is committed: nothing from here on may reach the enrollment rollback below,
+      // including a lifecycle lock another operation holds now or a connection it already changed.
+      // Either one leaves the route apply to the next sync, which reconciles the current connection.
+      try {
+        const appliedConnection = withClientLifecycleSync(() => {
+          const current = readClientConnectionState();
+          if (current.kind !== "connected" || !Bun.deepEquals(current.value, connection, true)) throw new Error("client_connection_changed");
+          return current.value;
+        }, deps.lifecycleLockDeps);
+        await applyConnectedRouteIntent(connection, admissionToken, routeIntent, {
         codexApplied: injectionCommitted, lifecycleLockDeps: deps.lifecycleLockDeps, beforeWrite: () => {
           deps.signal?.throwIfAborted(); assertClientConnectionUnchanged(appliedConnection);
           const token = readServiceApiTokenState();
           if (token.kind !== "present" || token.fingerprint !== connection.tokenFingerprint) throw new Error("client_token_changed");
         },
-      }, deps.linkHome); }
-      catch { console.warn("Warning: local route intent needs reconciliation; run 'ocx route to sync'."); }
+        }, deps.linkHome);
+      } catch { console.warn("Warning: local route intent needs reconciliation; run 'ocx route to sync'."); }
     }
     return connection;
   } catch (error) {
