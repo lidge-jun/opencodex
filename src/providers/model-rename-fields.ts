@@ -58,6 +58,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   defaultModel: "scalar",
   models: "list",
   liveModels: "none",
+  modelDiscovery: "none",
   selectedModels: "list",
   initialModelSelection: "none",
   retainModels: "list",

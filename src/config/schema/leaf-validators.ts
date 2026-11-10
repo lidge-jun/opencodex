@@ -422,6 +422,10 @@ export const providerConfigSchema = z.object({
   retainModels: z.array(z.string().min(1))
     .transform(normalizeNonBlankStringArray)
     .optional(),
+  // Provider-level discovery compatibility (#7910), unrelated to the top-level persisted
+  // `modelDiscovery` state. Degrades to "absent" (strict discovery) like the other default-off
+  // opt-ins; the management write boundary still rejects a malformed block loudly.
+  modelDiscovery: z.object({ skipInvalidRows: z.boolean().optional() }).strict().optional().catch(undefined),
   omitReasoningEffortWithToolsModels: z.array(z.string().min(1))
     .transform(normalizeNonBlankStringArray)
     .optional(),

@@ -100,6 +100,7 @@ ocx models provider openrouter on
 | `defaultModel?` | `string` | 在未指定明確模型時選擇此供應商所使用的模型。 |
 | `models?` | `string[]` | 初始／後備模型列表。`liveModels: false` 時，非空 `models` 後接 `retainModels`；若 `models` 為空或省略，則按已設定的 `defaultModel`、`retainModels` 順序建立初始列表，重複 ID 僅保留首次出現的位置。 |
 | `liveModels?` | `boolean` | 在啟動／同步時擷取即時目錄（預設 `true`）。自訂供應商使用 `${baseUrl}/models`；內建可能使用 registry URL 並過濾。 |
+| `modelDiscovery?` | `{ skipInvalidRows?: boolean }` | 針對 `/models` 清單含有格式錯誤列的閘道的即時探索相容設定。預設只要有一列無效就拒絕整份清單，警告會列出第一個無效列與無效列數量。設定 `skipInvalidRows: true` 時，非物件列以及 id 缺少、非字串、空白或其他無效的列會被略過，並只發出一次警告回報略過的數量，不含列內容。回應大小與列數上限仍計算收到的所有列；去重、供應商過濾與 id 前綴移除作用於剩餘的列。若略過了列且沒有剩餘列，清單仍會被拒絕，不會被當成空目錄。同一目的地的儲存省略此欄位時會保留，移到其他目的地時會捨棄。與頂層 `modelDiscovery`（新模型政策狀態）無關。 |
 | `selectedModels?` | `string[]` | 探索後的目錄允許清單。非空時僅暴露那些 id；空或省略時暴露所有探索的模型。 |
 | `contextWindow?` | `number` | 供應商範圍的 Codex 可見 context 上限。較小的即時中繼資料被保留。 |
 | `modelContextWindows?` | `Record<string, number>` | Per-model context 上限。這些覆寫 `contextWindow` 且永不提高較小的即時中繼資料。 |
