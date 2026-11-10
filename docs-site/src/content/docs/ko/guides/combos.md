@@ -84,7 +84,7 @@ alias는 클라이언트가 요청하는 공개 이름만 바꿉니다. 콤보�
 
 각 요청은 Anthropic에서 시작합니다. Anthropic에서 재시도 가능한 실패가 나면 그 요청은 OpenAI로 넘어갑니다. OpenAI에서도 재시도 가능한 실패가 나면 Google로 넘어갈 수 있습니다. 종결 오류가 나면 남은 대상은 더 시도하지 않고 즉시 멈춥니다.
 
-제공자의 HTTP 400 응답도 대상별 오류일 수 있습니다. OpenRouter의 불투명 제공자 래퍼(숫자 `code: 400`, `type` 없음, `metadata.raw: "ERROR"`를 포함하는 `Provider returned error`)는 대상 로컬로 처리되어 실패한 대상을 쿨다운하지 않고 콤보가 다음 대상을 시도할 수 있도록 합니다. 타입이 지정된 비코드 400, 알려진 잘못된 형식의 `response_format` 스키마 오류 및 이 불투명 400 경로의 구조화된 `invalid_request_error` 코드는 계속 종결 오류로 유지됩니다. 이 가이드의 뒷부분에 설명된 인식된 대상 비호환성은 계속 진행됩니다.
+제공자의 HTTP 400 응답도 대상별 오류일 수 있습니다. OpenRouter의 불투명 제공자 래퍼(숫자 `code: 400`, `type` 없음, `metadata.raw: "ERROR"`를 포함하는 `Provider returned error`)는 대상 로컬로 처리되어 실패한 대상을 쿨다운하지 않고 콤보가 다음 대상을 시도할 수 있도록 합니다. 타입이 지정된 비코드 400, 알려진 잘못된 형식의 `response_format` 스키마 오류, 그리고 루트가 자체 종결 코드를 명시하는 봉투는 계속 종결 오류로 유지됩니다. 루트가 자체 홉 신호(`model_not_found`, `insufficient_quota`, `usage_limit_exceeded`, `free_rate_limited`, `input_admission_refused` 또는 `unsupported_input_modality`)를 명시하더라도 새로운 판정이 추가되지 않으며, 빈 코드는 코드가 없는 것으로 처리됩니다. 이 가이드의 뒷부분에 설명된 인식된 대상 비호환성은 계속 진행됩니다.
 
 ### 라운드 로빈: 부드러운 가중 배치
 

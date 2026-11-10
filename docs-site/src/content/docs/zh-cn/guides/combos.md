@@ -104,7 +104,7 @@ modality 和 reasoning metadata；目标显式声明的限制仍然优先，因�
 
 每个请求都会先从 Anthropic 开始。Anthropic 的可重试失败会把该请求切换到 OpenAI；OpenAI 的可重试失败则可以切换到 Google。终止性错误会立即停止，而不会尝试剩余目标。
 
-提供方的 HTTP 400 响应仍可能是针对特定目标的。OpenRouter 的不透明提供方包装（带有数字 `code: 400`、无 `type` 且 `metadata.raw: "ERROR"` 的 `Provider returned error`）会被视为目标特定的，允许 combo 尝试下一个目标而无需冷却失败的目标。带类型的未编码 400、已知的格式错误的 `response_format` 模式错误以及此不透明 400 路径上的结构化 `invalid_request_error` 代码仍为终止性错误。本指南后面描述的已识别目标不兼容情况仍会继续推进。
+提供方的 HTTP 400 响应仍可能是针对特定目标的。OpenRouter 的不透明提供方包装（带有数字 `code: 400`、无 `type` 且 `metadata.raw: "ERROR"` 的 `Provider returned error`）会被视为目标特定的，允许 combo 尝试下一个目标而无需冷却失败的目标。带类型的未编码 400、已知的格式错误的 `response_format` 模式错误，以及根层自行声明终止代码的封装仍为终止性错误；根层自行声明跳转信号（`model_not_found`、`insufficient_quota`、`usage_limit_exceeded`、`free_rate_limited`、`input_admission_refused` 或 `unsupported_input_modality`）不会新增判定，空代码视为无代码。本指南后面描述的已识别目标不兼容情况仍会继续推进。
 
 ### 轮询：平滑的加权批次
 

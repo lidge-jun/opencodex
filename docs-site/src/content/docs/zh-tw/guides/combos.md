@@ -116,7 +116,7 @@ context 上限或覆寫已宣告的能力。它會改變精確路由的優先順
 
 每個請求從 Anthropic 開始。Anthropic 的可重試失敗會將該請求移到 OpenAI；OpenAI 的可重試失敗可將它移到 Google。終端錯誤會立即停止，而不嘗試剩餘目標。
 
-提供者的 HTTP 400 回應仍可能是針對特定目標的。OpenRouter 的不透明提供者包裝（帶有數字 `code: 400`、無 `type` 且 `metadata.raw: "ERROR"` 的 `Provider returned error`）會被視為目標特定的，允許 combo 嘗試下一個目標而無需冷卻失敗的目標。具類型的未編碼 400、已知的格式錯誤 `response_format` 結構錯誤以及在此不透明 400 路徑上的結構化 `invalid_request_error` 代碼仍為終端錯誤。本指南後續描述的已辨識目標不相容情況仍會繼續推進。
+提供者的 HTTP 400 回應仍可能是針對特定目標的。OpenRouter 的不透明提供者包裝（帶有數字 `code: 400`、無 `type` 且 `metadata.raw: "ERROR"` 的 `Provider returned error`）會被視為目標特定的，允許 combo 嘗試下一個目標而無需冷卻失敗的目標。具類型的未編碼 400、已知的格式錯誤 `response_format` 結構錯誤，以及根層自行宣告終端代碼的封裝仍為終端錯誤；根層自行宣告跳轉訊號（`model_not_found`、`insufficient_quota`、`usage_limit_exceeded`、`free_rate_limited`、`input_admission_refused` 或 `unsupported_input_modality`）不會新增判定，空代碼視為無代碼。本指南後續描述的已辨識目標不相容情況仍會繼續推進。
 
 ### Round-robin：平滑加權批次
 

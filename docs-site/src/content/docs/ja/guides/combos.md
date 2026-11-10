@@ -78,7 +78,7 @@ ocx combo show main
 
 各リクエストは Anthropic で始まります。再試行可能な Anthropic エラーが発生すると、そのリクエストは OpenAI に移動します。再試行可能な OpenAI が失敗すると、OpenAI が Google に移される可能性があります。端末エラーは、残りのターゲットを試行する代わりに、ただちに停止します。
 
-プロバイダーの HTTP 400 応答も、ターゲット固有である場合があります。OpenRouter の不透明なプロバイダーラッパー（数値の `code: 400`、`type` なし、`metadata.raw: "ERROR"` を持つ `Provider returned error`）はターゲットローカルとして扱われ、失敗したターゲットをクールダウンせずに combo が次のターゲットを試行できるようにします。型付きの未コード化 400、既知の不正な `response_format` スキーマエラー、およびこの不透明な 400 パス上の構造化された `invalid_request_error` コードは終了扱いのままです。このガイドで後述する認識されたターゲット非互換性は引き続き進行します。
+プロバイダーの HTTP 400 応答も、ターゲット固有である場合があります。OpenRouter の不透明なプロバイダーラッパー（数値の `code: 400`、`type` なし、`metadata.raw: "ERROR"` を持つ `Provider returned error`）はターゲットローカルとして扱われ、失敗したターゲットをクールダウンせずに combo が次のターゲットを試行できるようにします。型付きの未コード化 400、既知の不正な `response_format` スキーマエラー、およびルートが独自の終了コードを示すエンベロープは終了扱いのままです。ルートが独自のホップ信号（`model_not_found`、`insufficient_quota`、`usage_limit_exceeded`、`free_rate_limited`、`input_admission_refused` または `unsupported_input_modality`）を示しても新しい判定は追加されず、空のコードはコードなしとして扱われます。このガイドで後述する認識されたターゲット非互換性は引き続き進行します。
 
 ### ラウンドロビン: スムーズな加重バッチ
 

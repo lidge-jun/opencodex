@@ -99,6 +99,14 @@ function bareErrorStatus(payload: unknown): number | undefined {
   if (explicitStatus === undefined && isOpenRouterOpaque400Record(envelopeErrorRecord(event))) {
     return 400;
   }
+  // OpenRouter-style envelopes carry the HTTP status as a bare numeric `code` (e.g. `code: 400`)
+  // with no separate status field. `httpStatusFromTerminalError` only understands symbolic codes,
+  // so without this the opaque 400 stringifies to "400", reads as unknown, and falls back to 502 —
+  // which cools the target on the generic 5xx path instead of taking the intended no-cool hop.
+  if (explicitStatus === undefined
+    && typeof rawCode === "number" && Number.isInteger(rawCode) && rawCode >= 400 && rawCode <= 599) {
+    return rawCode;
+  }
   return explicitStatus ?? httpStatusFromTerminalError({
     type: typeof error.type === "string" && error.type !== "error" ? error.type : undefined,
     code,

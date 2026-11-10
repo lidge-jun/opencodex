@@ -162,7 +162,7 @@ her istek Anthropic ile başlar. Yeniden denenebilir bir Anthropic hatası bu
 isteği OpenAI'ye taşır; yeniden denenebilir bir OpenAI hatası onu Google'a
 taşıyabilir. Bir terminal hatası kalan hedefleri denemek yerine hemen durur.
 
-Bir sağlayıcının HTTP 400 yanıtı yine de hedefe özgü olabilir. OpenRouter'ın opak sağlayıcı sarmalayıcısı (sayısal `code: 400`, `type` yok ve `metadata.raw: "ERROR"` içeren `Provider returned error`), hedefe yerel olarak değerlendirilir ve combo'nun başarısız hedefi beklemeye almadan sonraki hedefi denemesine izin verir. Türü belirtilmiş kodsuz 400'ler, bilinen bozuk `response_format` şema hataları ve bu opak 400 yolundaki yapılandırılmış `invalid_request_error` kodları sonlandırıcı kalır. Bu kılavuzun ilerleyen bölümlerinde açıklanan tanınan hedef uyumsuzlukları ilerlemeye devam eder.
+Bir sağlayıcının HTTP 400 yanıtı yine de hedefe özgü olabilir. OpenRouter'ın opak sağlayıcı sarmalayıcısı (sayısal `code: 400`, `type` yok ve `metadata.raw: "ERROR"` içeren `Provider returned error`), hedefe yerel olarak değerlendirilir ve combo'nun başarısız hedefi beklemeye almadan sonraki hedefi denemesine izin verir. Türü belirtilmiş kodsuz 400'ler, bilinen bozuk `response_format` şema hataları ve kökünde kendi sonlandırıcı kodunu bildiren bir zarf sonlandırıcı kalır; kendi atlama sinyalini bildiren bir kök (`model_not_found`, `insufficient_quota`, `usage_limit_exceeded`, `free_rate_limited`, `input_admission_refused` veya `unsupported_input_modality`) yeni bir karar eklemez ve boş kod kod yok sayılır. Bu kılavuzun ilerleyen bölümlerinde açıklanan tanınan hedef uyumsuzlukları ilerlemeye devam eder.
 
 ### Round-robin: pürüzsüz ağırlıklı gruplar
 

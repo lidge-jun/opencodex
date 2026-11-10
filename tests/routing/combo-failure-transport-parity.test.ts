@@ -104,6 +104,14 @@ describe("combo failure verdict parity across HTTP and SSE", () => {
       body: { code: "model_not_found", error: { message: "refused", code: "content_policy_violation" } },
       decision: "stop",
     },
+    // A bare numeric `code` is the envelope's own HTTP status evidence: without a separate
+    // status field it must not collapse to 502 on the stream carrier.
+    {
+      name: "numeric 429 code without status", status: 429,
+      body: { error: { message: "slow down", code: 429 } },
+      frame: { status: undefined, error: { message: "slow down", code: 429 } },
+      decision: "hop", scope: "target",
+    },
     // An absent root code is no verdict, so the wrapper keeps speaking.
     { name: "empty root code", status: 400, body: { code: "", error: OPAQUE }, decision: "hop", scope: "none" },
     { name: "blank root code", status: 400, body: { code: "   ", error: OPAQUE }, decision: "hop", scope: "none" },
