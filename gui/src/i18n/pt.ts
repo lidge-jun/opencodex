@@ -3905,7 +3905,7 @@ export const pt: Record<TKey, string> = {
   "models.fastSaveFailed": "Não foi possível salvar o modo Fast",
   "models.newPolicy_inherit": "Herdar",
   "models.newPolicy_off": "Desativado",
-  "models.newPolicy_on": "Ativado",
+  "models.newPolicy_on": "Ativado", "models.newPolicy_admit": "Admitir",
   "models.newBadge": "NOVO",
   "models.newCount": "{count} novos, desativados",
   "models.aliases": "Aliases",

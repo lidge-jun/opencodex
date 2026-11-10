@@ -3866,7 +3866,7 @@ export const de: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "Provider-Tabellen können vorhandene Threads mit openai-Kennung in manchen mobilen Remote-Listen ausblenden. Der Verlauf wird nicht gelöscht. Der Remote-Client muss alle Provider auflisten; dieser Schalter korrigiert dessen Filter nicht.",
   "models.newPolicyGlobal": "Neue Modelle zunächst deaktivieren", "models.newPolicyProvider": "Richtlinie für neue Modelle",
   "models.fastProvider": "Fast-Modus", "models.fastProviderHint": "Verbraucht Nutzungsguthaben zum doppelten Preis", "models.fastEnabled": "Fast-Modus an", "models.fastDisabled": "Fast-Modus aus", "models.fastSaveFailed": "Fast-Modus konnte nicht gespeichert werden",
-  "models.newPolicy_inherit": "Übernehmen", "models.newPolicy_off": "Aus", "models.newPolicy_on": "An", "models.newBadge": "NEU", "models.newCount": "{count} neu, aus",
+  "models.newPolicy_inherit": "Übernehmen", "models.newPolicy_off": "Aus", "models.newPolicy_on": "An", "models.newPolicy_admit": "Aufnehmen", "models.newBadge": "NEU", "models.newCount": "{count} neu, aus",
   "models.aliases": "Aliase",
   "models.aliasesTable": "Alias-Tabelle",
   "models.aliasPrompt": "Anbieter-Alias (leer lassen zum Entfernen)",

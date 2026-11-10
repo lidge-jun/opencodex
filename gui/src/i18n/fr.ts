@@ -3855,7 +3855,7 @@ export const fr: Record<TKey, string> = {
   "lab.layer.task_effectiveness": "Efficacité des tâches",
   "models.newPolicyGlobal": "Désactiver les nouveaux modèles par défaut", "models.newPolicyProvider": "Politique des nouveaux modèles",
   "models.fastProvider": "Mode Fast", "models.fastProviderHint": "Consomme des crédits d'utilisation au double du prix", "models.fastEnabled": "Mode Fast activé", "models.fastDisabled": "Mode Fast désactivé", "models.fastSaveFailed": "Impossible d'enregistrer le mode Fast",
-  "models.newPolicy_inherit": "Hériter", "models.newPolicy_off": "Désactivé", "models.newPolicy_on": "Activé", "models.newBadge": "NOUVEAU", "models.newCount": "{count} nouveaux, désactivés",
+  "models.newPolicy_inherit": "Hériter", "models.newPolicy_off": "Désactivé", "models.newPolicy_on": "Activé", "models.newPolicy_admit": "Admettre", "models.newBadge": "NOUVEAU", "models.newCount": "{count} nouveaux, désactivés",
   "models.aliases": "Alias",
   "models.aliasesTable": "Table des alias",
   "models.aliasPrompt": "Alias du fournisseur (laisser vide pour effacer)",

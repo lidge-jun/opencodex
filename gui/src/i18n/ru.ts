@@ -3889,7 +3889,7 @@ export const ru: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "Таблица провайдеров может скрыть существующие диалоги с меткой openai в некоторых мобильных удалённых списках. История не удаляется. Удалённый клиент должен запрашивать все провайдеры; этот переключатель не исправляет его фильтр.",
   "models.newPolicyGlobal": "Добавлять новые модели выключенными", "models.newPolicyProvider": "Политика новых моделей",
   "models.fastProvider": "Режим Fast", "models.fastProviderHint": "Расходует кредиты использования по двойной цене", "models.fastEnabled": "Режим Fast включён", "models.fastDisabled": "Режим Fast выключен", "models.fastSaveFailed": "Не удалось сохранить режим Fast",
-  "models.newPolicy_inherit": "Наследовать", "models.newPolicy_off": "Выкл.", "models.newPolicy_on": "Вкл.", "models.newBadge": "НОВАЯ", "models.newCount": "Новых: {count}, выкл.",
+  "models.newPolicy_inherit": "Наследовать", "models.newPolicy_off": "Выкл.", "models.newPolicy_on": "Вкл.", "models.newPolicy_admit": "Добавлять", "models.newBadge": "НОВАЯ", "models.newCount": "Новых: {count}, выкл.",
   "models.aliases": "Псевдонимы",
   "models.aliasesTable": "Таблица псевдонимов",
   "models.aliasPrompt": "Псевдоним провайдера (оставьте пустым, чтобы очистить)",
