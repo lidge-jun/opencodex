@@ -14,7 +14,7 @@ exit contract. Its common mappings and the main exceptions are:
 | 64 | usage validation in `capabilities`, `ready`, `resolve` | fix arguments; no discovery/request for invalid input |
 | 4 | HTTP 404 — the named account, provider, key, or route does not exist | no |
 | 5 | HTTP 409 — conflict; a lock is held or state moved under you | inspect first; stale baselines require review |
-| 6 | `ocx sync` completed the Home step but a Child failed or timed out, or the link store was unreadable | inspect the fan-out result |
+| 6 | `ocx sync` completed the Home step but a Child failed or timed out, or the link store was unreadable; `ocx link check` finished with an item `busy`, `offline`, `refused`, `owner-action` or `unsupported` | inspect the fan-out result or the job's items |
 | 7 | reserved for an update in flight during sync | wait for the update, then retry |
 | 1 | everything else: transport failure, 5xx, unexpected errors | depends on `reason` |
 
@@ -28,6 +28,12 @@ fields and warnings as well; a successful save can leave live convergence pendin
 **A local usage refusal is not a transport failure.** Fix the arguments rather than
 retrying unchanged. Unknown root commands and unavailable explicit help topics use
 exit 1; a capability route miss uses 4 even when an undeclared handler exists.
+
+**`ocx link check` reports per Child.** Exit 6 is a partial result, not a failed command: read each
+item's `state` and `reason`. `failed`, `uncertain` or an item state this CLI does not know exits 1; a
+job still running past its deadline prints the job and exits 1 (`job_still_running`). Exit 4 means an
+unknown link id, or a Home too old for Child operations (the message says to update the Home); exit 5
+means another operation holds the link.
 
 ## Distinguishing "not running" from "failing"
 
