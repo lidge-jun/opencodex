@@ -3,7 +3,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { windowsOcxArgv, windowsNativeArgv, windowsChildHttpArgv, windowsPinnedSyncArgv, packedPowerShellArgv, powershellArgv, windowsScriptData, windowsScriptHelperSource, OCX_JOB_SOURCE, WINDOWS_CONTAINMENT_EXIT } from "../../src/link/remote-windows";
-import { quoteRemote, REMOTE_OCX_SCRIPT, remoteOcxArgv } from "../../src/link/ssh-argv";
+import { quoteRemote, REMOTE_OCX_SCRIPT, REMOTE_SERVED_RUNTIME, remoteOcxArgv } from "../../src/link/ssh-argv";
 import { recordServingRuntime } from "../../src/config/serving-runtimes";
 import { remoteInspectRuntimeArgv } from "../../src/link/remote-plant";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -166,18 +166,39 @@ test.skipIf(process.platform === "win32")("a served install that is gone or cann
   expect((await entryless.run()).stdout).toBe("0\nlink\0port\0");
 }, SPAWN_BUDGET_MS);
 
+/** Runs the remote census reader alone, so a rejection is observed as no output and status 1. */
+async function readCensus(body: string): Promise<{ exitCode: number; stdout: string }> {
+  const dir = mkdtempSync(join(tmpdir(), "ocx-served-census-")); roots.push(dir);
+  const file = join(dir, "serving-runtimes.json");
+  writeFileSync(file, body);
+  const child = Bun.spawn(["sh", "-c", REMOTE_SERVED_RUNTIME + 'served_runtime "$1"', "sh", file], { stdout: "pipe", stderr: "pipe" });
+  const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+  return { exitCode, stdout };
+}
+const censusBody = (runtimes: unknown[]) => JSON.stringify({ runtimes }, null, 2) + "\n";
+
+test.skipIf(process.platform === "win32")("the census reader prints only the first record's command (#8359)", async () => {
+  const home = mkdtempSync(join(tmpdir(), "ocx-served-census-")); roots.push(home);
+  recordServingRuntime({ command: ["/opt/old/ocx"], version: "2.70.0", servedAt: "2026-11-01T00:00:00.000Z" }, home);
+  recordServingRuntime({ command: ["/opt/npm prefix/bun", "/opt/npm prefix/index.ts"], version: "2.99.0", servedAt: "2026-11-09T00:00:00.000Z" }, home);
+  expect(await readCensus(readFileSync(join(home, "serving-runtimes.json"), "utf8")))
+    .toEqual({ exitCode: 0, stdout: "/opt/npm prefix/bun\n/opt/npm prefix/index.ts\n" });
+}, SPAWN_BUDGET_MS);
+
+const complete = censusBody([{ command: ["/opt/good/ocx"], version: "2.99.0" }, { command: ["/opt/stale/ocx"], version: "2.70.0" }]);
 test.skipIf(process.platform === "win32").each([
-  ["a relative path", '{\n  "runtimes": [\n    {\n      "command": [\n        "relative/ocx"\n      ]\n    }\n  ]\n}\n'],
-  ["a quoted path", '{\n  "runtimes": [\n    {\n      "command": [\n        "/tmp/a\\"b/ocx"\n      ]\n    }\n  ]\n}\n'],
-  ["three entries", '{\n  "runtimes": [\n    {\n      "command": [\n        "/a",\n        "/b",\n        "/c"\n      ]\n    }\n  ]\n}\n'],
-  ["a truncated file", '{\n  "runtimes": [\n    {\n      "command": [\n        "/a"\n'],
-] as const)("a census with %s is ignored (#8359)", async (_label, body) => {
-  const f = servedFixture();
-  mkdirSync(join(f.home, ".opencodex"), { recursive: true });
-  writeFileSync(join(f.home, ".opencodex/serving-runtimes.json"), body);
-  const result = await f.run();
-  expect(result.exitCode).toBe(0);
-  expect(result.stdout).toBe("0\nlink\0port\0");
+  ["a relative path", censusBody([{ command: ["relative/ocx"] }])],
+  ["a quoted path", censusBody([{ command: ['/tmp/a"b/ocx'] }])],
+  ["a backslash", censusBody([{ command: ["/tmp/a\\b/ocx"] }])],
+  ["three entries", censusBody([{ command: ["/a", "/b", "/c"] }])],
+  ["an empty command", censusBody([{ command: [] }])],
+  ["a first record without a command", censusBody([{ version: "2.77.0" }, { command: ["/opt/stale/ocx"] }])],
+  ["a truncation inside the command", complete.slice(0, complete.indexOf('"/opt/good/ocx"') + 16)],
+  ["a truncation after the command", complete.slice(0, complete.indexOf("],") + 3)],
+  ["a truncation after the first record", complete.slice(0, complete.indexOf("},") + 3)],
+  ["another layout", JSON.stringify({ runtimes: [{ command: ["/opt/good/ocx"] }] })],
+] as const)("the census reader rejects %s (#8359)", async (_label, body) => {
+  expect(await readCensus(body)).toEqual({ exitCode: 1, stdout: "" });
 }, SPAWN_BUDGET_MS);
 
 test.skipIf(process.platform !== "win32")("Windows native execution preserves spaces quotes Unicode empty arguments and stdin bytes", async () => {

@@ -141,8 +141,12 @@ export const REMOTE_COMMAND_NOT_FOUND = 127;
 export const REMOTE_PLATFORM_UNSUPPORTED = 125;
 
 /**
- * Reads the first \`command\` of \`serving-runtimes.json\` (#8359): one or two absolute paths without
- * quotes or backslashes, printed one per line, from a file of at most 64 KiB. Any other shape fails.
+ * Reads the first record's \`command\` of \`serving-runtimes.json\` (#8359): one or two absolute paths
+ * without quotes or backslashes, printed one per line, from a file of at most 64 KiB. The file must
+ * be the complete document in the layout its only writer produces (\`JSON.stringify(_, null, 2)\` in
+ * src/config/serving-runtimes.ts): a first record without \`command\` never borrows a later record's,
+ * and a file cut off anywhere before its closing brace prints nothing. Any other shape fails, and an
+ * unreadable file or a missing awk fails without writing to stderr.
  * Shared by the ocx discovery, pinned sync and runtime inspection scripts.
  */
 export const REMOTE_SERVED_RUNTIME = `served_runtime() {
@@ -150,18 +154,23 @@ export const REMOTE_SERVED_RUNTIME = `served_runtime() {
   served_size=$( { wc -c < "$1"; } 2>/dev/null ) || return 1
   [ "$served_size" -le 65536 ] 2>/dev/null || return 1
   awk '
-    !open {
-      if ($0 ~ /^ *"command": \\[$/) open = 1
-      else if ($0 ~ /^ *},?$/) exit
-      next
+    { prev = last; last = $0 }
+    bad || done { next }
+    NR == 1 { if ($0 != "{") bad = 1; next }
+    NR == 2 { if ($0 != "  \\"runtimes\\": [") bad = 1; next }
+    NR == 3 { if ($0 != "    {") bad = 1; next }
+    inside {
+      if ($0 == "      ]" || $0 == "      ],") { inside = 0; closed = 1; next }
+      line = $0; sub(/,$/, "", line)
+      if (line !~ /^        "\\/[^"\\\\]*"$/ || ++count > 2) { bad = 1; next }
+      path[count] = substr(line, 10, length(line) - 10); next
     }
-    $0 ~ /^ *\\],?$/ { closed = 1; exit }
-    {
-      line = $0; sub(/^ +/, "", line); sub(/,$/, "", line)
-      if (line !~ /^"\\/[^"\\\\]*"$/ || ++count > 2) { bad = 1; exit }
-      print substr(line, 2, length(line) - 2)
+    $0 == "      \\"command\\": [" { if (closed) bad = 1; else inside = 1; next }
+    $0 == "    }" || $0 == "    }," { done = 1 }
+    END {
+      if (bad || !done || !closed || !count || prev != "  ]" || last != "}") exit 1
+      for (i = 1; i <= count; i++) print path[i]
     }
-    END { if (bad || !closed || !count) exit 1 }
   ' "$1" 2>/dev/null
 }
 `;
@@ -169,6 +178,8 @@ export const REMOTE_SERVED_RUNTIME = `served_runtime() {
 /**
  * Tries the served install with \`attempt\`, which must read \`$served_bin\` and honour \`$ocx_entry\`:
  * a compiled binary runs alone, and a package pair runs as \`bun <entry>\` only while the entry exists.
+ * The unquoted \`OCX_SERVED\` heredoc is safe only because \`served_runtime\` prints paths without
+ * quotes, backslashes or newlines; relaxing that character class would let a path expand or split.
  */
 export function remoteServedRuntimeAttempt(attempt: string): string {
   return `served_bin= served_entry=
