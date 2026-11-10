@@ -43,6 +43,11 @@ Diğer tüm `/api/*` yolları opencodex yönetim API'sinin parçası olarak kal�
 - `options`: `temperature`, `top_p`, `num_predict` ve `stop`.
 - `format`: yalnızca `"json"`.
 
+Her `/api/chat` isteği, tüm assistant mesajlarında **toplam en fazla 1.024 araç çağrısı** kabul eder;
+sonucu zaten bulunan çağrılar da bu sayıya dahildir. Sınır aşılırsa istek sağlayıcıya ulaşmadan HTTP 400
+döndürür. Konuşma geçmişini kısaltıp yeniden gönderin; tuttuğunuz her araç sonucuyla birlikte ilgili
+assistant araç çağrısını da koruyun.
+
 Bunların dışındaki her şey yok sayılmak yerine HTTP 400 ile reddedilir: `think`, `keep_alive`, `suffix`,
 `raw`, `template`, `context`, diğer `options`, JSON şeması biçimindeki `format` ve görsel URL'leri. Ollama'nın
 model yönetimi ve embedding uç noktaları sağlanmaz.

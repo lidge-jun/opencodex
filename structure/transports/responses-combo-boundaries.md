@@ -37,7 +37,22 @@ The child parser accepts `tool_search`, `computer_use` and `image_gen` as recogn
 Its raw body preserves the selector; existing destination compatibility, including routed private
 tool-search lowering, still applies after parsing. Chat translation maps a direct `tool_search`
 choice to its existing synthetic function name. MCP null names also parse inside required allowed-tools lists; function/custom null names remain invalid. A Chat destination is skipped before send when translation would degrade a mandatory choice to auto/none, including the resolved model's auto-only tool-choice policy; exhaustion reports the tool-choice constraint. Eligibility resolves synthetic Fast/effort selectors before model policy, matching child request preparation while preserving exact configured IDs.
+For `required` with nonempty declarations at the top level or in `additional_tools`/`tool_search_output`, final preparation and Copilot renegotiation check the full parsed tool union; an empty union refuses Chat unless top-level hosted search belongs to later sidecar injection. Static candidate checks defer this decision until parsed tools are available.
 Registered OpenAI API virtual models resolve to their wire model before adapter and auto-only policy checks, using the same registry resolver as child normalization. Other providers and unregistered IDs remain literal. Coverage: `tests/server/server-combo-required-tool-contract.test.ts`.
+
+Required allowed-tools lists containing MCP entries also exclude Chat: a function name cannot retain
+the MCP server's ownership, even when a client function has the same name. The shared predicate in
+`src/server/responses/combo-required-tool-contract.ts` also guards direct Chat destinations after final
+normalization in `src/server/responses/request-prepare.ts`. An incompatible direct route returns 400
+before dispatch; an authorized policy candidate uses the [local policy refusal](policy-fallback.md)
+so another originally eligible destination can serve the unchanged choice.
+Copilot targets that negotiate Auto defer the static eligibility verdict to the child's final wire
+and model check. A locally minted policy-candidate refusal survives failure rebuilding and permits a
+hop without inferring authority from its serialized code or text. Non-replayable responses and spent
+replacement grants still stop before this local-skip branch. A local candidate refusal does not cool
+the target, so later compatible requests can select the healthy target again. `tests/providers/github-copilot/github-copilot-auto-runtime.test.ts`
+and `tests/adapters/translator-budget-lifetime.test.ts` cover negotiation and refusal provenance.
+On target-ladder exhaustion, a private tool-specific refusal identity yields the existing 503 combo-unavailable diagnostic only while every observed failure has that identity. Any generic local or upstream failure keeps the ordinary exhaustion result; copied error bytes cannot acquire the identity. A denied later send reservation keeps the retained failure instead of projecting this diagnostic. The diagnostic describes attempted targets, without claiming that eligibility-skipped targets were tried.
 
 Before combo success bookkeeping, native delivery in `src/server/responses/passthrough-delivery.ts`
 uses `src/server/responses/combo-required-tool-contract.ts` to check successful native
@@ -116,14 +131,19 @@ SSE selection uses the [exact internal media-type match](inventory.md#internal-r
 Explicit non-SSE types pass through unread, including parameters or longer subtypes containing the
 event-stream token. A caller can still opt into inspecting a response without a content type.
 
-Native post-header reset recovery shares that boundary, because it is asking the same question
-about the same bytes. With `replayReadErrors`, the preflight reports the stage it observed —
-`headers-only` before any parsed event, `protocol-prelude` after `response.created`,
-`semantic-output` once anything else arrives, including a payload it could not parse — and the
-resend gate decides. A `response.created` whose snapshot already carries output items is not a
-prelude.
+Native post-header reset recovery shares that boundary, because it is asking the same question about
+the same bytes. With `replayReadErrors`, a read error that arrives while the preflight is still
+inspecting returns the buffered prefix with the stage it observed — `headers-only` until
+`response.created`, `protocol-prelude` after it — and the resend gate decides. Control frames
+(`response.in_progress`, `response.queued`, `response.heartbeat`, the Codex metadata frames below, a
+held mandatory-tool reasoning prelude) do not advance the stage. Once output or a payload the
+preflight could not parse commits the stream, or a terminal ends inspection, the preflight returns
+`accepted` (`failed` for a retryable zero-output terminal); a later read error belongs to the relay
+and never reaches the resend gate. A `response.created` whose snapshot already carries output items
+is not a prelude: it commits.
 
-- a non-control Responses event (apart from the held mandatory-tool reasoning prelude above) begins client-visible output or a tool/action item, after which the
+- a non-control Responses event (apart from the held mandatory-tool reasoning prelude above and the
+  Codex metadata frames) begins client-visible output or a tool/action item, after which the
   target is committed and cross-target replay is forbidden;
 - a `response.failed` terminal arrives first, in which case the terminal is converted back through
   the ordinary bounded combo-failure classifier and may advance to the next declared target;
@@ -133,6 +153,14 @@ prelude.
   may advance while errors explicitly classified as non-retryable 4xx remain committed;
 - another completed/incomplete terminal or the aggregate preflight byte or retained-chunk cap is reached,
   in which case the current target is committed conservatively.
+
+The Codex WebSocket metadata channel writes `codex.rate_limits` and `codex.response.metadata` into
+the same body, usually before `response.created`. These frames are rebuilt from quota and header
+metadata, so the preflight treats them like the lifecycle preamble: they neither commit the child
+nor end inspection. Any other unknown event type still commits. A zero-output
+`server_is_overloaded` refusal that follows a rate-limit frame while the preflight is still
+inspecting (below its byte and chunk caps) therefore advances to the next target;
+`tests/responses/combo-codex-ws-overload-failover.test.ts` covers that hop (#8107).
 
 The buffered bytes are replayed unchanged before the reader continues. Native passthrough and eager
 relay identity markers are restored on the wrapped response so Windows/Bun stream paths and deferred
@@ -152,6 +180,19 @@ Hop warnings in `src/server/responses/core-combo.ts` name the status and the clo
 messages and bodies stay out. `tests/responses/responses-combo-exhausted-error.test.ts` pins that log boundary.
 
 A `runTurn` adapter has the equivalent boundary in `preflightAdapterEvents` (`src/adapters/run-turn-queue.ts`), streaming and non-streaming alike: when its first meaningful event is a tool call the current request did not declare, and no earlier replay-unsafe heartbeat recorded a side effect, `src/server/responses/run-turn-execution.ts` projects the fail-closed undeclared-tool refusal as a pre-commit 502 so the combo can hop with the unchanged catalog. After any output or a replay-unsafe heartbeat the refusal stays with that child. Chat Completions and Anthropic Messages inbound requests do not use this classification. The same heartbeat also decides an ordinary pre-output adapter error or an empty end: after a replay-unsafe heartbeat the child's 502 is marked non-replayable, so the combo stops on it instead of sending the turn to the next target.
+
+A native Messages child uses `src/server/messages-native-preflight.ts` after the native log tap,
+so the tap retains byte-stall/size/cancellation ownership. SSE media types are matched case-insensitively. Its bounded prelude accepts only an
+empty-content `message_start` and `ping` as replayable. As in the native tap, the last untrimmed SSE event name must match the payload type (or be absent); a mismatch commits conservatively. A structured retryable `error` before
+any other event returns to the ordinary combo failure classifier unless a later frame read with it commits; any content block (including
+a tool start), unknown/malformed payload (a named event without data included; comment-only blocks are skipped), terminal or byte/chunk cap commits conservatively.
+Buffered bytes replay unchanged. A collected failure after that commitment is non-replayable, while first output waits for a content frame the tap has seen.
+For combo children, a bounded observer before frame transforms preserves the original read boundary for the replay decision. Complete harmless pings may follow a refusal; an unfinished following frame or a named empty frame commits conservatively. The observer stops after that decision or semantic output, and leaves ordinary standalone streaming and log ownership unchanged.
+Preflight retention is charged to the translator budget and released on delivery/cancellation.
+The Messages ingress offers its parsed body as that source by reference, with no ingress copy, and
+only when no effort override rewrites it.
+Native plans enforce the captured caller model scope, including internal calls with broad host admission. The same native executor binds the accepted stream to the parent's held lease, carries observed
+usage on cancellation, and reports terminal errors without treating them as successful rows.
 
 HTTP 410 remains terminal by default. It advances and cools only the exact combo target when the
 structured code or message explicitly identifies a model lifecycle event (end-of-life, retired,
@@ -183,3 +224,15 @@ The Devin direct chat adapter (`src/adapters/devin/cloud-direct/chat.ts`) maps a
 Coverage: `tests/routing/router-combo-failover-classification.test.ts`, `tests/providers/devin-hardening.test.ts`, `tests/server/error-fidelity.test.ts`, `tests/codex-integration/combo-codex-exhaustion-cooldown.test.ts`, `tests/server/server-combo-quota-code-provenance.test.ts`, and `tests/responses/responses-combo-run-turn-classified-failure.test.ts`.
 
 Native Chat child error bodies follow [the owned client-body contract](../data-planes/error-detail.md#client-error-bodies-chat). Combo classification consumes the retained legacy envelope through the ordinary bounded reader, while headers and response identity retain their original owners.
+
+## Local workflow send refusals
+
+A root workflow send ceiling stops the entire Combo ladder before another target is dispatched.
+`src/server/workflow-refusal.ts` marks that locally constructed response as non-replayable;
+`src/server/responses/core-combo-failure.ts` and `src/server/chat-completions.ts` preserve its
+`x-opencodex-local-refusal` header and browser exposure when rebuilding the response. This propagation
+requires the in-process proxy-error marker as well as the header: an upstream 429 cannot stop
+ordinary failover by supplying the same header. The wire body remains `rate_limit_exceeded`.
+The message says no additional provider request was sent when the current request already has
+physical sends; an admission refusal before its first send retains the no-provider wording.
+Coverage: `tests/responses/chat-native-spend.test.ts` and `tests/responses/responses-spend-contract-c.test.ts`.

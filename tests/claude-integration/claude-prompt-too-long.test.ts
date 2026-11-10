@@ -130,7 +130,7 @@ describe("translated Responses stream throughput limit", () => {
     } } };
     const body = new Response(`event: response.failed\ndata: ${JSON.stringify(failed)}\n\n`).body!;
     const text = await new Response(responsesSseToAnthropicSse(body, "m", { translatorBudget: createTestTranslatorBudget() })).text();
-    expect(text).toContain("too many tokens per minute");
+    expect(text).toContain("The provider rate limit was reached; retry later.");
     expect(text).not.toContain("prompt is too long");
   });
 });
@@ -200,7 +200,7 @@ describe("native Messages lane", () => {
     expect(response.status).toBe(400);
     const body = JSON.parse(text);
     expect(body).toEqual({ type: "error", error: {
-      type: "invalid_request_error", message: "prompt is too long: Your request exceeded model token limit: 262144",
+      type: "invalid_request_error", message: "prompt is too long: The request exceeds the model's context window.",
     } });
   });
 
@@ -210,7 +210,7 @@ describe("native Messages lane", () => {
     expect(claudeCodeSeesPromptTooLong(JSON.parse(large.text).error.message)).toBe(true);
     await upstream?.stop(true);
     const coded = await send(nativeConfig(refusal("unfamiliar wording", 400, { code: "context_length_exceeded" })), false);
-    expect(JSON.parse(coded.text).error.message).toBe("prompt is too long: unfamiliar wording");
+    expect(JSON.parse(coded.text).error.message).toBe("prompt is too long: The request exceeds the model's context window.");
   });
 
   test("HTTP 429 that mentions tokens is not treated as an overflow", async () => {
@@ -229,7 +229,7 @@ describe("native Messages lane", () => {
     const { response, text } = await send(nativeConfig(sseReply), true);
     expect(response.status).toBe(200);
     const data = JSON.parse(text.split("\n").find(line => line.startsWith("data:"))!.slice(5));
-    expect(data.error.message).toBe("prompt is too long: Your request exceeded model token limit: 262144");
+    expect(data.error.message).toBe("prompt is too long: The request exceeds the model's context window.");
   });
 
   test("bounds oversized overflow messages on the managed native SSE route", async () => {
@@ -242,7 +242,7 @@ describe("native Messages lane", () => {
     })), true);
     expect(response.status).toBe(200);
     const data = JSON.parse(text.split("\n").find(line => line.startsWith("data:"))!.slice(5));
-    expect(data.error.message).toBe(`prompt is too long: ${message.slice(0, 64 * 1024)}`);
+    expect(data.error.message).toBe("prompt is too long: The request exceeds the model's context window.");
   });
 
   test("stall detection still times raw upstream bytes, not whole rewritten frames", async () => {
@@ -281,7 +281,7 @@ describe("native Messages lane", () => {
     const { response, text } = await send(config, false);
     expect(response.status).toBe(400);
     expect(JSON.parse(text).error).toMatchObject({
-      type: "invalid_request_error", message: "prompt is too long: Your request exceeded model token limit: 262144",
+      type: "invalid_request_error", message: "prompt is too long: The request exceeds the model's context window.",
     });
   });
 });

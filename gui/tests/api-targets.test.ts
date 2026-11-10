@@ -2,12 +2,43 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import {
   apiBaseForPlane,
+  apiTargetIdentity,
+  ClientStateChangedError,
   discoverApiTargets,
   relayUrlForPath,
   standaloneApiTargets,
   targetsFromMachineStatus,
   type MachineStatusV1,
 } from "../src/api-targets";
+
+test("a relay base shared by two hubs still has distinct logical target identities", () => {
+  const base = standaloneApiTargets("");
+  const hubA = apiTargetIdentity({
+    ...base,
+    shared: { ...base.shared, serverOrigin: "https://hub-a.example" },
+    apiKeyId: "machine-key",
+  });
+  const hubB = apiTargetIdentity({
+    ...base,
+    shared: { ...base.shared, serverOrigin: "https://hub-b.example" },
+    apiKeyId: "machine-key",
+  });
+  expect(hubA.key).not.toBe(hubB.key);
+  expect(hubA.label).toBe("https://hub-a.example");
+  expect(hubA.label).not.toContain("machine-key");
+});
+
+test("API-key rotation is not a logical target change, but a different link is", () => {
+  const base = standaloneApiTargets("");
+  const shared = { ...base.shared, serverOrigin: "https://hub.example" };
+  const keyA = apiTargetIdentity({ ...base, shared, apiKeyId: "key-a" });
+  const keyB = apiTargetIdentity({ ...base, shared, apiKeyId: "key-b" });
+  expect(keyA.key).toBe(keyB.key);
+  const linkA = apiTargetIdentity({ ...base, shared, link: { linkId: "link-a", home: null, readOnly: true } });
+  const linkB = apiTargetIdentity({ ...base, shared, link: { linkId: "link-b", home: null, readOnly: true } });
+  expect(linkA.key).not.toBe(linkB.key);
+  expect(linkA.label).toBe("https://hub.example");
+});
 
 let win: Window;
 let previousWindow: unknown;
@@ -96,13 +127,20 @@ describe("two-plane API targets", () => {
       link: { linkId: `lnk_${"a".repeat(16)}`, home: "home-box", readOnly: true },
     });
     expect(linked.shared).toMatchObject({ baseUrl: "/api/machine/hub-relay", serverOrigin: machine, transport: "relay" });
+    expect(linked.usageTopology).toBe("link");
     expect(linked.link).toEqual({ linkId: `lnk_${"a".repeat(16)}`, home: "home-box" });
     const malformed = targetsFromMachineStatus("", {
       ...status("relay"),
       link: { linkId: "not-a-link", home: "x", readOnly: true },
     });
     expect(malformed.link).toBeUndefined();
-    expect(targetsFromMachineStatus("", status("relay")).link).toBeUndefined();
+    expect(malformed.usageTopology).toBe("unknown");
+    const hubRelay = targetsFromMachineStatus("", status("relay"));
+    expect(hubRelay.link).toBeUndefined();
+    expect(hubRelay.usageTopology).toBe("hub");
+    expect(targetsFromMachineStatus("", { ...status("relay"), sharedServerOrigin: machine }).usageTopology).toBe("unknown");
+    expect(targetsFromMachineStatus("", status("direct")).usageTopology).toBe("hub");
+    expect(standaloneApiTargets("").usageTopology).toBe("home");
   });
 
   test("rejects a non-string catalog fetch timestamp", async () => {
@@ -110,6 +148,20 @@ describe("two-plane API targets", () => {
       headers: { "content-type": "application/json" },
     })) as typeof fetch;
     await expect(discoverApiTargets("")).rejects.toThrow("local machine plane returned invalid status");
+  });
+
+  test("an unknown relay capability is legacy, not an invalid status", async () => {
+    // A relay that advertises a capability this dashboard does not understand is an older
+    // or newer peer. Treating it as malformed would break discovery; it must read as
+    // legacy so the preflight path applies.
+    globalThis.fetch = (async () => new Response(JSON.stringify({ ...status("relay"), relayTargetCheck: "expected-target-v2" }), {
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+    const targets = await discoverApiTargets("");
+    expect(targets.shared.transport).toBe("relay");
+    expect(targets.relayTargetCheck).toBeUndefined();
+    expect(targetsFromMachineStatus("", { ...status("relay"), relayTargetCheck: "expected-target-v2" } as MachineStatusV1).relayTargetCheck)
+      .toBeUndefined();
   });
 
   test("standalone discovers nothing and sends no request", async () => {
@@ -137,5 +189,14 @@ describe("two-plane API targets", () => {
     globalThis.fetch = (async () => { calls += 1; return new Response(null, { status: 404 }); }) as typeof fetch;
     await discoverApiTargets("");
     expect(calls).toBe(1);
+  });
+
+  test("a Child whose saved connection diverged reports client_state_changed instead of a generic refusal", async () => {
+    globalThis.fetch = (async () => Response.json({ error: "client_state_changed" }, { status: 503 })) as typeof fetch;
+    await expect(discoverApiTargets("")).rejects.toBeInstanceOf(ClientStateChangedError);
+    globalThis.fetch = (async () => Response.json({ error: "busy" }, { status: 503 })) as typeof fetch;
+    const generic = discoverApiTargets("");
+    await expect(generic).rejects.toThrow("local machine plane refused discovery (503)");
+    await expect(generic).rejects.not.toBeInstanceOf(ClientStateChangedError);
   });
 });

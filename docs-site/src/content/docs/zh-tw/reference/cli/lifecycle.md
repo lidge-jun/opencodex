@@ -30,7 +30,7 @@ ocx start --socks5-off
 
 無人監督的 Link Child 處理結束訊號時，會在每次寫入前核對連線，並在關閉接聽器前還原 Codex 原生設定及受管理的 Grok。服務/Desktop、sibling、重新啟動交接和父程序 stop 收據會保留設定。結束中的重新啟動要求回傳 `409 runtime_stopping`。強制終止可能略過訊號處理，仍需父程序 `ocx stop` 的還原路徑。
 
-停止執行中的代理（依 PID）、移除 PID 檔案，並還原原生 Codex。若已安裝受管背景服務，`ocx stop` 也會先停止它，使其無法重新生成代理。網頁儀表板的 **Stop** 按鈕在多數後端執行相同動作（`POST /api/stop`），但 Windows 工作排程器除外：工作結束後包裝程序仍可能重新啟動 Proxy，因此儀表板會以 `respawnable_service` 拒絕、不做任何變更，並請你改用 `ocx stop`。
+停止執行中的代理（依 PID）、移除 PID 檔案，並還原原生 Codex。若已安裝受管背景服務，`ocx stop` 也會先停止它，使其無法重新生成代理。網頁儀表板側欄的代理拉桿拉到底時，在多數後端執行相同動作（`POST /api/stop`），但 Windows 工作排程器除外：工作結束後包裝程序仍可能重新啟動 Proxy，因此儀表板會以 `respawnable_service` 拒絕、不做任何變更，並請你改用 `ocx stop`。
 
 對已連線的 hub 用戶端，`ocx stop`（包括成功的 API 停止）會保留連線擁有的 Codex 路由、目錄和 Grok 設定，`ocx start` 會再次提供服務。明確停止 Remote Link Child 時，若共用設定還原成功，則會還原原生 Codex 路由、目錄與已備份的續接歷程中繼資料，並移除受管理的 Grok 設定。已儲存的 Home 連線會保留，可用 `ocx disconnect` 移除。
 
@@ -38,7 +38,11 @@ ocx start --socks5-off
 
 ### `ocx restart`
 
-執行 `stop` 後接 `ensure`：停止代理／服務、還原原生 Codex、在背景啟動代理，並將即時連接埠同步回 Codex。
+一般情況下，代理正在執行時，指令會向身分已驗證的特定 PID 與連接埠請求原地重新啟動，等待正常排空，並確認同一連接埠上出現不同的執行階段 PID。此路徑會保留受管路由與服務監督；若請求結果不確定，不會將其重試為獨立的停止與啟動。只有代理未執行時，才會回退至一般的 `ensure` 啟動。
+
+若目前 CLI 比已驗證的獨立 POSIX 代理新，且符合嚴格的擁有權與監督條件，受保護的更新路徑會停止舊代理，確認其已停止後才從目前的安裝啟動新代理；此路徑不同於上述原地重新啟動。若資格或停止狀態無法確認，指令會回報失敗。條件與其他情況請參閱[重新啟動參考資料](/reference/cli/lifecycle/#ocx-restart)（英文）。
+
+如果更新後的重新啟動回報執行階段紀錄中的主機名稱為空白，這次嘗試不會停止代理。請參閱[狀態與復原指引](/reference/cli/lifecycle/#status-and-health)（英文），先確認擁有權與實際綁定位址；若確認不完整，請洽擁有者或管理員。
 
 ### `ocx ensure`
 
@@ -72,6 +76,10 @@ ocx eject back
 ### `ocx uninstall` · `ocx remove`
 
 停止服務與代理、移除服務與 Codex shim、還原原生 Codex，然後僅在所有還原步驟成功時移除 opencodex 本機設定。`remove` 是 `uninstall` 的別名。設定清理需要由全新安裝建立的擁有權中繼資料；舊版或共享目錄會被原樣保留。
+
+當 `ocx uninstall` 以 root 身分或在已提升（系統管理員）權限的 Windows 提示字元中執行時，會先確認其他帳號無法變更設定目錄、其上層目錄以及其中的任何目錄，並確認設定目錄內沒有指向其外部的連結（在 Windows 上則是完全沒有連結）。只要有一項不符合，解除安裝就會在做出任何變更之前停止並說明原因。請以擁有設定目錄的帳號、不使用 `sudo` 或系統管理員權限執行 `ocx uninstall`，或將這些目錄限制為僅該帳號可寫入並移除此類連結，然後再次執行。在無法判斷提示字元是否已提升權限的 Windows ARM64 上也會進行相同檢查；若檢查無法完成，請先停止 opencodex，再手動移除設定目錄。
+
+若某個已記錄項目在設定目錄內的上層目錄是連結（符號連結或連接點），該項目會保留原樣並列為剩餘路徑，本次執行以部分解除安裝結束。將該連結換成實際目錄或將其移除後，再次執行 `ocx uninstall` 即可完成。
 
 ## 狀態與健康
 
@@ -152,11 +160,11 @@ ocx status --json
 
 ### `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only]` <span id="ocx-sync---restart-codex---restart-app-server-only"></span>
 
-在 Remote Link Home 上成功提交最新目錄後，`ocx sync` 也會向符合條件的已連結 Child 同步。`--local-only` 可停用這個傳播。`--json` 會輸出單一 `ocx.sync.fanout/1` 文件，包含 Home 的結果與各 Child 的狀態；遭略過的 Child 也會顯示原因。Home 自身的非零結束碼會原樣回傳。Home 成功時，若 Child 失敗、逾時或連結儲存區無法讀取，指令以結束碼 6 結束；其他情況均以 0 結束，包括 Child 遭略過時。文字模式下，連結儲存區無法讀取的錯誤不包含路徑。結束碼 7 保留給進行中的更新。JSON 模式下若 Home 同步擲出例外，stdout 仍只包含一份結果文件，stderr 則輸出經安全轉義的診斷訊息。
+在 Remote Link Home 上成功提交最新目錄後，`ocx sync` 也會向符合條件的已連結 Child 同步。`--local-only` 可停用這個傳播。`--json` 會輸出單一 `ocx.sync.fanout/1` 文件，包含 Home 的結果與各 Child 的狀態；遭略過的 Child 也會顯示原因。Home 自身的非零結束碼會原樣回傳。Home 成功時，若傳播時略過已連結的 Child，或 Child 失敗、逾時或連結儲存區無法讀取，指令以結束碼 6 結束。用戶端發起的連結和 `--local-only` 等刻意略過的情況保留原有行為；遭略過的已連結 Child 會附帶操作建議 `hint`。文字模式下，連結儲存區無法讀取的錯誤不包含路徑。結束碼 7 保留給進行中的更新。JSON 模式下若 Home 同步擲出例外，stdout 仍只包含一份結果文件，stderr 則輸出經安全轉義的診斷訊息。
 
-傳播不會要求重新啟動 Child 上的 Codex 應用程式或 app-server。若需要重新啟動，請使用 GOAT 或在該 Child 執行 `ocx sync --restart-codex`。不過，Child 的固定目標同步在套用變更後的 Home 設定時，仍可能重新啟動它自己的 OpenCodex 用戶端執行階段。Home 逾時並停止本機 SSH 程序後，已開始的遠端同步仍可能在 Child 上繼續。
+傳播不會要求重新啟動 Child 上的 Codex 應用程式或 app-server。若需要重新啟動，請使用 GOAT，在完整 `ocx` Child 執行 `ocx sync --restart-codex`，或在輕量級 `ocx-child` 主機上單獨重新啟動 Codex 桌面應用程式與 `app-server` 程序。不過，Child 的固定目標同步在套用變更後的 Home 設定時，仍可能重新啟動它自己的 OpenCodex 用戶端執行階段。Home 逾時並停止本機 SSH 程序後，已開始的遠端同步仍可能在 Child 上繼續。
 
-> **Remote Link Child：** `ocx sync` 也會套用 Home 的 Codex 設定；如果用戶端執行階段在該次套用之前啟動，即使沒有重新啟動旗標也會重新啟動執行階段。重新啟動失敗時，原有執行階段會繼續提供服務，指令以非零狀態結束。`ocx status --json` 與 `ocx link status --json` 的相關欄位請見 [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英文）。
+> **Remote Link Child：** 在完整 `ocx` Child 上，`ocx sync` 也會套用 Home 的 Codex 設定並在用戶端執行階段早於該次套用啟動時重新啟動它；重新啟動失敗時原有執行階段會繼續提供服務並以非零狀態結束。在輕量級 `ocx-child` 主機上，`ocx-child sync` 會在中繼未執行時啟動 `ocx-child serve`，在 `runtimeStartedAt < lastApplyAt` 時輪替程序，並在非 `stale` 同步時盡力回報 parity（若輪替失敗，舊中繼已停止且指令以非零狀態結束；Codex 桌面應用程式與長期執行的 `app-server` 程序如需重新載入請單獨重新啟動）。Child 上的 `ocx status --json`（或 `ocx-child status --json`）與 Home 上的 `ocx link status --json` 相關欄位請見 [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英文）。
 
 明確指定重新啟動旗標後，即使目錄和快取的位元組未變，成功提交 `config.toml` 變更也會觸發重新啟動。僅處理設定的操作若沒有變更、遭拒、只做預先檢查或寫入已回復，則不會觸發重新啟動。未指定重新啟動旗標時，sync 不會自動重新啟動 Codex。
 

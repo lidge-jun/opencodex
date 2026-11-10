@@ -12,6 +12,8 @@ function decodeQuoted(value: string): string | undefined {
     } else if (char === "\\") {
       const escaped = value[++index];
       if (escaped === "n") decoded += "\n";
+      else if (escaped === "r") decoded += "\r";
+      else if (escaped === "t") decoded += "\t";
       else if (escaped === "\\" || escaped === '"') decoded += escaped;
       else return undefined;
     } else if (char === '"' || char === "\0") {

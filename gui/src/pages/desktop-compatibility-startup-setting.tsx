@@ -5,6 +5,7 @@ import { setClientResourceData, useClientResource } from "../client-resource";
 import { createBoundedFetch, type BoundedFetch } from "../bounded-fetch";
 import { CompatibilityApiError, readCompatibilityStartupSettings, saveCompatibilityStartupSettings } from "../desktop-compatibility-api";
 import { SESSION_CHANGED_EVENT } from "../api";
+import { InlineBanner } from "../components/v2-accounts/surface";
 
 export default function DesktopCompatibilityStartupSetting({ apiBase, active, authorized }: { apiBase: string; active: boolean; authorized: boolean }) {
   const t = useT(), key = `desktop-compatibility-startup:${apiBase}`;
@@ -46,11 +47,13 @@ export default function DesktopCompatibilityStartupSetting({ apiBase, active, au
     }
   }
   const readError = resource.error instanceof CompatibilityApiError ? resource.error.code : resource.error ? "connection_unconfirmed" : null;
-  return <div className="panel">
+  // A settings row (React Bits `settings-form-3`): the switch and its label, the consequence
+  // under it, and a recovery only when the saved state is uncertain.
+  return <div className="panel acc-desktop__setting">
     <Switch on={resource.data?.startOnProxyStart === true} label={t("desktopCompat.autoStart")} showLabel
       disabled={!authorized || busy || uncertain || !resource.lastAttemptOk || resource.refreshing} onClick={() => void run(true)} />
     <p className="muted text-control">{t("desktopCompat.autoStartHint")}</p>
-    {(error || readError) && <p className="notice-err" role="alert">{t("desktopCompat.error")} <code>{error ?? readError}</code></p>}
-    {(uncertain || readError) && <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void run(false)}>{t("desktopCompat.refresh")}</button>}
+    {(error || readError) && <InlineBanner tone="err" role="alert">{t("desktopCompat.error")} <code>{error ?? readError}</code></InlineBanner>}
+    {(uncertain || readError) && <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void run(false)}>{t("desktopCompat.refresh")}</button>}
   </div>;
 }

@@ -47,11 +47,15 @@ Refresh gives the profile read a 2-second deadline because a refresh can sit on 
 a missed read leaves the stored label in place.
 An account replacement cannot inherit another account's label. `src/providers/anthropic-subscription.ts`
 projects optional management `planLabel`: Pro, Max 5x, Ultra (both `ultra` and `max_20x`),
-or the original unfamiliar validated tier. Dashboard Claude account rows use ordinal labels,
-omit account IDs/emails and show the subscription beside quota. The same ordinal policy in
-`gui/src/provider-workspace/auth.ts` covers reset-grant dialogs and account mutation
-confirmations/notifications through `gui/src/hooks/useProviderAccountPools.ts`; custom providers
-retain their existing alias/email labels. `gui/src/pages/providers-page-utils.ts` also strips
+or the original unfamiliar validated tier. Dashboard OAuth rows prefer a user alias, then the
+management roster's `accountLabel`, then its always-masked `maskedLabel`, then a localized
+ordinal. `accountLabel` follows `privacy.maskEmails` (#8286): the validated masked identity by
+default, the trimmed stored email when the operator sets the flag to `false`. The same
+policy in `gui/src/provider-workspace/auth.ts` covers reset-grant dialogs and account mutation
+confirmations/notifications through `gui/src/hooks/useProviderAccountPools.ts`. The roster label
+`maskedLabel`, which tray surfaces read, never follows the unmasked email projection; malformed
+identities are omitted from both labels in masked mode.
+`gui/src/pages/providers-page-utils.ts` also strips
 Claude email metadata from the catalog/Add Provider account-status projection without mutating
 the source OAuth status; generic/custom account-status labels remain intact. The current quota section keeps
 that label even if usage is unavailable. Pro, Max 5x and Team retain measured five-hour and
@@ -199,8 +203,12 @@ unknown kinds or model families preserve usable shared windows without claiming 
 family enumeration. An authoritative inactive family row can retire a previous
 passive family refusal; an incomplete enumeration cannot. Shared cooldown recovery
 still requires finite headroom for each rejected window, never an invented zero.
+`weekly_scoped_shares[]` names, by raw `limits` index, the share of the weekly limit a
+selected scoped row may consume (Fable: "up to 50% of your weekly limit"); the window carries
+it as `weeklyAllowancePercent`. It is read from upstream and never inferred from a plan, and a
+share that points at no selected scoped row, falls outside (0, 100] or conflicts is ignored.
 `tests/providers/provider-anthropic-usage-windows.test.ts` covers source precedence, scoped
-admission, raw precision, pool projection and legacy compatibility.
+admission, raw precision, pool projection, weekly shares and legacy compatibility.
 
 Profile tiers in `src/oauth/anthropic-identity.ts` accept both `default_claude_`
 and `claude_` prefixes and the Ultra display spelling. `max_20x` remains the legacy
@@ -337,6 +345,21 @@ recovery limitation. These rules do not authenticate the local host owner who ca
 
 Regression coverage: `tests/oauth/oauth-anthropic-identity.test.ts`, `tests/oauth/oauth-refresh.test.ts`.
 
+On macOS the local Claude Code credential is read from the Keychain with `security -w`, and
+`src/oauth/claude-keychain-read.ts` never signals that child: killing `security` while an unlock
+prompt is pending can crash `securityd` and re-lock the keychain (#8161). The async reader resolves
+null after five seconds and leaves the child to exit on its own, keeps one child per process,
+and backs off for sixty seconds after a timeout; a child that never exits keeps that slot, so the
+process stays on the credentials file rather than raising a second prompt. The synchronous reader does not spawn while a
+child is running or the backoff is active; its own timeout, which does kill, starts the backoff.
+Only the child's own close frees the slot once it has a process: an error event after spawn does
+not prove it ended. The metadata probe in `src/claude/auth-detect.ts` (`probeClaudeKeychain`, no
+`-w`) runs under the same admission: it answers `unknown` without spawning while a read is blocked
+or backing off, and its own timeout starts the backoff. The synchronous reader and the probe still
+signal their child on timeout, at most once per window; moving them onto the async reader is the
+remaining part of #8161. Every null falls back to the credentials file.
+`tests/oauth/local-token-detect.test.ts` and `tests/claude-integration/claude-auth-detect.test.ts` cover this.
+
 ## Model routes
 
 For Anthropic OAuth, `src/oauth/anthropic-routing.ts` applies the first matching `anthropicAccountPool.routes` rule to every eligible pick. The declared account order is stable while its candidates remain eligible; active, manual, affinity, quota and strategy preferences only choose inside that set. A healthy session affinity outside a model route is ignored for that request and retained for later unrouted or differently routed models; the routed commit does not overwrite it. An explicit fallback widens an empty route to the ordinary pool, and fill-first then advances in ordinary pool order from the active account. A missing eligible route fails locally without that fallback. The rules are operator allowlists, not provider entitlement evidence. Request logs use `route:#<n>` for the 1-based rule position, not the operator name.
@@ -465,6 +488,14 @@ statuses retain soft utilization without creating a hard family refusal.
 strategy, reactive selection and physical dispatch use that model. A family-only refusal
 preserves unrelated sessions and account-wide health. Numeric thresholds stay soft: zero
 and the all-drained fallback remain preferences, with no hard billing cap introduced.
+Under the `weekly` and `max-utilization` windows, lowest-usage ranking restates a family window
+that carries a weekly allowance on the shared weekly scale (`anthropicModelRankPercent`): Fable
+at 60% of a 50% allowance ranks at 80, because it has 20 weekly points left. The default
+`five-hour` window has no five-hour tie-break, so it keeps the family's own percent rather than
+let a fresh seat's 50 mask lower five-hour readings. Auto-switch thresholds keep it too, so
+a fresh Fable seat does not read as half spent. Exhaustion is unchanged, since both scales
+reach 100 together, and a passive header reading keeps the allowance the last usage probe read.
+`tests/adapters/anthropic/anthropic-account-threshold.test.ts` covers both sides.
 
 Passive family evidence expires after thirty minutes or its known reset. An expired
 exclusion admits one request-driven revalidation send at a time, released at response
@@ -520,7 +551,7 @@ session digest, opaque account ID, last-use timestamp and hashed persistent logi
 without `loginId` retain runtime-only affinity. Token refresh preserves the fence; replacement login,
 removal/re-add, pause and reauthentication invalidate it. Invalid, oversized, future and expired rows are ignored;
 the newest 2,000 entries survive, with a 24-hour idle lifetime. A restored binding precedes the startup active
-preference; an explicit runtime selection clears bindings and persists the reset.
+preference; a confirmed management selection clears bindings and persists the reset.
 
 Temporary throttle and model-route/family detours retain a valid original binding and refresh its idle timestamp.
 Commit preserves a binding excluded by the route, an active admission pause or family rejection, or a transient
@@ -532,9 +563,16 @@ touched row; ordinary publication does not reread auth or revalidate every bindi
 ACL settlement barrier and private no-follow atomic publisher; bounded hydration rejects final-entry symlinks,
 junctions and non-regular files with identifier-free warnings. Aliases above the config root remain supported.
 Memory and pending writes belong to the resolved config home; reset or an observed home change retires that scope.
-Timestamp-only updates coalesce for at most one second, with a best-effort shutdown flush. Failures emit identifier-free warnings
-and preserve the previous snapshot. `tests/adapters/anthropic/anthropic-affinity-restart.test.ts` and
+Ordinary routing mutations coalesce behind a one-second publication timer so caller-selected session keys cannot trigger
+synchronous snapshot writes. Manual management selection and pause-induced selection changes explicitly await confirmed
+reset publication before reporting success. Inactive management pauses hydrate and confirm targeted invalidation as well,
+preserving unrelated eligible bindings even when no routing owner observed the pause event. A failed publication leaves the account mutation committed and returns
+503 `affinity_reset_not_persisted` with `selectionCommitted` or `pauseCommitted` and `retryable: true`; repeating the
+selection request finishes the pending reset; pause retries preserve the account and desired state and add `retryAffinityReset: true` to rebuild reset intent even after restart. Without an active-account change, this uses reset-only confirmation and creates no manual one-dispatch preference or rotation-ring seed. The synchronous routing-reset API is preserved. Account deletion with that explicit retry flag and the provider-only affinity-reset endpoint re-arm and confirm a global reset independently of the removed account, including an empty roster; failure after deletion reports `deletionCommitted` while retaining a retryable warning. This explicit retry also clears bindings formed since the first failure but never selects or resumes an account. Plain deletion preserves surviving bindings and only flushes an already pending reset. UI absence is not proof of durable publication, and a reset-only response must carry `affinityResetConfirmed: true` before its warning clears.
+Explicit best-effort and shutdown flushes remain distinct from confirmed operator publication. Failures emit identifier-free
+warnings and preserve the previous snapshot. `tests/adapters/anthropic/anthropic-affinity-restart.test.ts` and
 `tests/adapters/anthropic/anthropic-affinity-store.test.ts` exercise routing and persistence boundaries.
+Responses captures the routing-reset generation before credential resolution and checks it before and after the asynchronous OAuth commit. A changed generation rejects obsolete admission or recovery rather than restoring an old session binding; a fresh request can admit under the new generation. This does not roll back a completed OAuth selection commit or cancel sends already admitted to transport. `tests/adapters/anthropic/anthropic-quota-dispatch.test.ts` covers reset interleavings during credentials, commit and refusal recovery.
 
 ## JEV advisory publication
 

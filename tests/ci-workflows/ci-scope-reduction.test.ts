@@ -23,8 +23,9 @@ import { repoPath } from "../helpers/repo-root";
  */
 
 const workflow = Bun.YAML.parse(readFileSync(repoPath(".github", "workflows", "ci.yml"), "utf8")) as {
-  on?: { push?: { branches?: string[] } };
+  on?: { push?: { branches?: string[] }; workflow_dispatch?: { inputs?: { lane?: { options?: string[] } } } };
   jobs?: Record<string, {
+    name?: string;
     if?: string;
     needs?: string | string[];
     "runs-on"?: string;
@@ -33,6 +34,7 @@ const workflow = Bun.YAML.parse(readFileSync(repoPath(".github", "workflows", "c
     steps?: Array<{
       name?: string;
       id?: string;
+      shell?: string;
       run?: string;
       env?: Record<string, string>;
       uses?: string;
@@ -54,7 +56,15 @@ const MACOS_JOBS = ["platform-macos", "widget"] as const;
 /** The two smoke jobs whose matrix legs shrink with the event and native selection. */
 const MATRIX_JOBS = ["keyring-smoke", "npm-global-smoke"] as const;
 
-type SelectionInputs = { event_name: string; ci: string; native: string; desktop?: string; docker?: string };
+test("release history checks run with complete git history in gates", () => {
+  const steps = jobs.gates?.steps ?? [];
+  const checkout = steps.find(step => step.uses?.startsWith("actions/checkout@"));
+  const releaseTests = steps.find(step => step.run?.includes("release-history.test.cjs"));
+  expect(releaseTests).toBeDefined();
+  expect(checkout?.with?.["fetch-depth"]).toBe(0);
+});
+
+type SelectionInputs = { event_name: string; ci: string; native: string; desktop?: string; docker?: string; lane?: string; ref?: string };
 
 function term(source: string, inputs: SelectionInputs): string | boolean {
   const text = source.trim();
@@ -67,6 +77,9 @@ function term(source: string, inputs: SelectionInputs): string | boolean {
   const literal = /^'([^']*)'$/.exec(text);
   if (literal) return literal[1]!;
   if (text === "github.event_name") return inputs.event_name;
+  if (text === "github.event.inputs.lane") return inputs.lane ?? "";
+  if (text === "github.ref") return inputs.ref ?? "";
+  if (text === "always()") return true;
   const output = /^needs\.changes\.outputs\.([a-z-]+)$/.exec(text);
   if (output) {
     if (output[1] === "ci") return inputs.ci;
@@ -146,9 +159,10 @@ function emitterStep(outputName: string) {
   return step;
 }
 
-function renderFilterOutputs(text: string, inputs: { ci: string; native: string; event: string }): string {
+function renderFilterOutputs(text: string, inputs: { ci: string; native: string; event: string; lane: string }): string {
   // A pull_request emitter sees the plain filter value; the nightly override only matters on schedule.
-  const rendered = text.replace(/\$\{\{\s*(?:github\.event_name == 'schedule' && 'true' \|\| )?steps\.filter\.outputs\.([a-z_-]+)\s*\}\}/g, (_match, name: string) => {
+  const rendered = text.replace(/\$\{\{\s*(?:(?:github\.event_name == 'schedule' && 'true'|\(github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch' && \(github\.event\.inputs\.lane == '' \|\| github\.event\.inputs\.lane == 'all'\)\) && 'true') \|\| )?steps\.filter\.outputs\.([a-z_-]+)\s*\}\}/g, (match, name: string) => {
+    if (inputs.event === "schedule" || (inputs.event === "workflow_dispatch" && ["", "all"].includes(inputs.lane) && match.includes("github.event.inputs.lane"))) return "true";
     if (name === "ci") return inputs.ci;
     if (name === "native") return inputs.native;
     throw new Error(`unsupported filter output in emitter: ${name}`);
@@ -159,7 +173,7 @@ function renderFilterOutputs(text: string, inputs: { ci: string; native: string;
 }
 
 /** Run the emitter step the way Actions would, and parse what it wrote to GITHUB_OUTPUT. */
-function emittedOutputs(jobName: string, ci: string, native: string, event = "push"): { exitCode: number; values: Record<string, string> } {
+function emittedOutputs(jobName: string, ci: string, native: string, event = "push", lane = "all"): { exitCode: number; values: Record<string, string> } {
   const step = emitterStep(matrixOutputName(jobName));
   const directory = mkdtempSync(join(tmpdir(), "ocx-ci-scope-"));
   try {
@@ -170,8 +184,8 @@ function emittedOutputs(jobName: string, ci: string, native: string, event = "pu
       GITHUB_ENV: join(directory, "github-env"),
       GITHUB_STEP_SUMMARY: join(directory, "step-summary"),
     };
-    for (const [key, value] of Object.entries(step.env ?? {})) env[key] = renderFilterOutputs(String(value), { ci, native, event });
-    const run = renderFilterOutputs(String(step.run ?? ""), { ci, native, event });
+    for (const [key, value] of Object.entries(step.env ?? {})) env[key] = renderFilterOutputs(String(value), { ci, native, event, lane });
+    const run = renderFilterOutputs(String(step.run ?? ""), { ci, native, event, lane });
     const result = Bun.spawnSync(["/bin/bash", "-e", "-o", "pipefail", "-c", run], { env, cwd: directory });
     const values: Record<string, string> = {};
     try {
@@ -201,9 +215,9 @@ function emittedOutputs(jobName: string, ci: string, native: string, event = "pu
   }
 }
 
-function legsFor(jobName: string, ci: "true" | "false", native: "true" | "false", event = "push"): string[] {
+function legsFor(jobName: string, ci: "true" | "false", native: "true" | "false", event = "push", lane = "all"): string[] {
   const outputName = matrixOutputName(jobName);
-  const { exitCode, values } = emittedOutputs(jobName, ci, native, event);
+  const { exitCode, values } = emittedOutputs(jobName, ci, native, event, lane);
   expect(exitCode, `${jobName} emitter failed under event=${event} ci=${ci} native=${native}`).toBe(0);
   const raw = values[outputName];
   expect(`${jobName} emitted ${outputName}:${typeof raw === "string" && raw.length > 0}`)
@@ -308,14 +322,64 @@ function runGate(inputs: GateInputs, results: Record<string, string>): { gatedJo
   return { gatedJobs, expectations, bad: badIndex >= 0 ? stdout.slice(badIndex + "BAD=".length) : "" };
 }
 
-describe("the push trigger", () => {
-  test("carries main and preview, and never dev", () => {
-    // main and preview must stay: release.yml requires a successful push-event
-    // run for the exact release SHA and states that a pull_request run does not
-    // qualify, so removing either breaks publication. dev is deliberately absent
-    // (CI policy): cross-platform legs run on dev only by manual dispatch.
-    expect([...(workflow.on?.push?.branches ?? [])].sort()).toEqual(["main", "preview"]);
+describe("the dispatch trigger", () => {
+  test("does not run from a push event", () => {
+    expect(workflow.on?.push).toBeUndefined();
   });
+});
+
+test.skipIf(process.platform === "win32")("the unavoidable selector refuses non-dev manual dispatches", () => {
+  const selector = jobs["select-windows-runner"]!;
+  expect(selector.if).toBeUndefined();
+  expect(selector.needs).toBeUndefined();
+  const guard = selector.steps?.find(step => step.name === "Validate dispatch source");
+  expect(guard?.shell).toBe("bash");
+  expect(guard?.env).toEqual({ EVENT_NAME: "${{ github.event_name }}", REF: "${{ github.ref }}" });
+  expect(guard?.run).toBeDefined();
+  expect(guard?.run).not.toContain("${{");
+  for (const [event, ref, expected] of [
+    ["workflow_dispatch", "refs/heads/main", 1],
+    ["workflow_dispatch", "refs/heads/feature", 1],
+    ["workflow_dispatch", "refs/heads/dev", 0],
+    ["pull_request", "refs/pull/1/merge", 0],
+  ] as const) {
+    const result = Bun.spawnSync(["/bin/bash", "-e", "-c", guard!.run!], { env: { EVENT_NAME: event, REF: ref } });
+    expect(result.exitCode, `${event} ${ref}`).toBe(expected);
+  }
+});
+
+test("Windows claim diagnostic is dev-only and bypasses the full graph", () => {
+  const lane = "windows-native-claim";
+  expect(workflow.on?.workflow_dispatch?.inputs?.lane?.options).toContain(lane);
+  const diagnostic = jobs[lane]!;
+  expect(diagnostic["runs-on"]).toBe("windows-latest");
+  expect(diagnostic.needs).toBeUndefined();
+  const base = { ci: "false", native: "false", event_name: "workflow_dispatch", ref: "refs/heads/dev", lane };
+  expect(evaluate(diagnostic.if!, base)).toBe(true);
+  for (const variation of [{ event_name: "pull_request" }, { event_name: "push" }, { ref: "refs/heads/main" }, { lane: "all" }, { lane: "release-gates" }, { lane: "macos-control" }, { lane: "" }]) {
+    expect(evaluate(diagnostic.if!, { ...base, ...variation })).toBe(false);
+  }
+  expect(evaluate(changes!.if!, base)).toBe(false);
+  expect(evaluate(jobs.ci!.if!, base)).toBe(false);
+  for (const lane of ["", "all", "release-gates", "macos-control"]) {
+    expect(evaluate(changes!.if!, { ...base, lane })).toBe(true);
+    expect(evaluate(jobs.ci!.if!, { ...base, lane })).toBe(true);
+  }
+  expect(evaluate(changes!.if!, { ...base, event_name: "pull_request" })).toBe(true);
+  expect(evaluate(jobs.ci!.if!, { ...base, event_name: "pull_request" })).toBe(true);
+  for (const [name, job] of Object.entries(jobs)) {
+    if ([lane, "select-windows-runner", "changes", "ci"].includes(name)) continue;
+    expect(Array.isArray(job.needs) ? job.needs : [job.needs], name).toContain("changes");
+    expect(job.if ?? "", name).not.toMatch(/\b(always|failure|cancelled)\s*\(/);
+  }
+  const steps = diagnostic.steps ?? [];
+  const checkout = steps.find(step => step.uses?.startsWith("actions/checkout@"));
+  expect(checkout?.with?.ref).toBe("${{ github.sha }}");
+  expect(checkout?.with?.["persist-credentials"]).toBe(false);
+  expect(steps.find(step => step.uses === "./.github/actions/setup-project-bun")?.with?.role).toBe("test-runner");
+  expect(steps.some(step => step.run?.includes("bun install --frozen-lockfile"))).toBe(true);
+  expect(steps.some(step => step.run?.includes("bun test tests/codex-integration/main-quota-provenance.test.ts"))).toBe(true);
+  expect(steps.some(step => step.run?.includes("OPENCODEX_HOME") && step.run.includes("CODEX_HOME") && step.run.includes("GITHUB_ENV"))).toBe(true);
 });
 
 describe("Docker PR selection", () => {
@@ -424,6 +488,44 @@ describe("the packaged desktop selection", () => {
 });
 
 describe("the smoke matrices", () => {
+  test.skipIf(cannotRunEmitters)("release evidence names match the full-dispatch workflow graph", () => {
+    const { CI_JOBS } = require(repoPath(".github", "scripts", "release-evidence.cjs")) as { CI_JOBS: string[] };
+    const scalar = ["changes", "select-windows-runner", "storage-policy", "api-usage", "gates", "macos-control", "docker-smoke", "docs-site-build", "structure-gate", "widget", "desktop-shell", "ci"];
+    const expected = scalar.map(id => {
+      const name = jobs[id]?.name;
+      if (!name) throw new Error(`missing job name: ${id}`);
+      return name;
+    });
+    for (const id of ["test", "platform-macos", "platform-windows"]) {
+      const job = jobs[id]!;
+      const shards = job.strategy?.matrix?.shard as number[];
+      for (const shard of shards) expected.push(job.name!.replace("${{ matrix.shard }}", String(shard)));
+    }
+    for (const id of ["keyring-smoke", "npm-global-smoke"]) {
+      const job = jobs[id]!;
+      const output = emittedOutputs(id, "false", "false", "workflow_dispatch").values[matrixOutputName(id)];
+      for (const entry of JSON.parse(output!) as Array<Record<string, string>>) {
+        expected.push(job.name!.replace(/\$\{\{ matrix\.(name|os) \}\}/, (_, key: string) => entry[key]!));
+      }
+    }
+    for (const id of ["setup-action", "remote-helper"]) {
+      const job = jobs[id]!;
+      const expression = String(job.strategy?.matrix?.os);
+      const arrays = [...expression.matchAll(/'\[([^']+)\]'/g)];
+      if (arrays.length !== 2) throw new Error(`unexpected matrix expression: ${id}`);
+      for (const os of JSON.parse(`[${arrays[1]![1]}]`) as string[]) expected.push(job.name!.replace("${{ matrix.os }}", os));
+    }
+    expect([...CI_JOBS].sort()).toEqual(expected.sort());
+  });
+
+  test("service evidence names match the service workflow", () => {
+    const { serviceJobs } = require(repoPath(".github", "scripts", "release-evidence.cjs")) as { serviceJobs: (sha: string) => string[] };
+    const source = "a".repeat(40);
+    const service = Bun.YAML.parse(readFileSync(repoPath(".github", "workflows", "service-lifecycle.yml"), "utf8")) as { jobs: Record<string, { name: string }> };
+    const names = ["validate-source", "linux-systemd", "macos-launchd", "windows-schtasks"].map(id => service.jobs[id]!.name.replace("${{ github.event.inputs.source_sha }}", source));
+    expect(serviceJobs(source)).toEqual(names);
+  });
+
   test("consume their matrices from validated changes outputs", () => {
     for (const jobName of MATRIX_JOBS) {
       const outputName = matrixOutputName(jobName);
@@ -444,6 +546,8 @@ describe("the smoke matrices", () => {
       expect(legsFor(jobName, "true", "true", "pull_request")).toEqual(["ubuntu-latest"]);
       expect(legsFor(jobName, "true", "false", "push").sort()).toEqual(["ubuntu-latest", "windows-latest"]);
       expect(legsFor(jobName, "true", "true", "push").sort()).toEqual(["macos-latest", "ubuntu-latest", "windows-latest"]);
+      expect(legsFor(jobName, "false", "false", "workflow_dispatch", "all").sort()).toEqual(["macos-latest", "ubuntu-latest", "windows-latest"]);
+      expect(legsFor(jobName, "false", "false", "workflow_dispatch", "release-gates").sort()).toEqual(["ubuntu-latest", "windows-latest"]);
     }
   });
 
@@ -467,9 +571,9 @@ describe("the aggregate gate", () => {
     expect(step?.env?.CHANGES_CI).toBe("${{ needs.changes.outputs.ci }}");
   });
 
-  test.skipIf(cannotRunGate)("gates every job by name, with the aggregate itself excepted", () => {
+  test.skipIf(cannotRunGate)("gates every ordinary job by name, excluding the standalone diagnostic", () => {
     const { gatedJobs } = runGate(PR_WITHOUT_NATIVE, {});
-    expect(gatedJobs.sort()).toEqual(Object.keys(jobs).filter(name => name !== "ci").sort());
+    expect(gatedJobs.sort()).toEqual(Object.keys(jobs).filter(name => !["ci", "windows-native-claim"].includes(name)).sort());
   });
 
   test.skipIf(cannotRunGate)("treats an unselected native job as not-requested and stays green over skips", () => {
@@ -485,7 +589,7 @@ describe("the aggregate gate", () => {
     // Results consistent with those expectations must pass the gate: skipped is
     // the correct outcome for a job this event never asked for.
     const consistent = Object.fromEntries(Object.keys(jobs)
-      .filter(name => name !== "ci")
+      .filter(name => !["ci", "windows-native-claim"].includes(name))
       .map(name => [name, expectations[name] === "requested" ? "success" : "skipped"]));
     const { bad } = runGate(PR_WITHOUT_NATIVE, consistent);
     expect(bad).toBe("");
@@ -513,7 +617,7 @@ describe("the aggregate gate", () => {
     expect([outOfScope.test, outOfScope["test-changed"]]).toEqual(["not-requested", "not-requested"]);
     // Results consistent with the fast lane pass; a shard that ran anyway fails by name.
     const consistent = Object.fromEntries(Object.keys(jobs)
-      .filter(name => name !== "ci")
+      .filter(name => !["ci", "windows-native-claim"].includes(name))
       .map(name => [name, fast[name] === "requested" ? "success" : "skipped"]));
     expect(runGate({ ...PR_WITHOUT_NATIVE, fast: "true" }, consistent).bad).toBe("");
     expect(runGate({ ...PR_WITHOUT_NATIVE, fast: "true" }, { ...consistent, test: "success" }).bad).toContain("test was not requested");
@@ -581,7 +685,7 @@ describe("the aggregate gate", () => {
     }
     // Results consistent with the narrowed expectations pass; a smoke job that ran anyway fails by name.
     const consistent = Object.fromEntries(Object.keys(jobs)
-      .filter(name => name !== "ci")
+      .filter(name => !["ci", "windows-native-claim"].includes(name))
       .map(name => [name, expectations[name] === "requested" ? "success" : "skipped"]));
     expect(runGate(narrow, consistent).bad).toBe("");
     expect(runGate(narrow, { ...consistent, "docker-smoke": "success" }).bad).toContain("docker-smoke");

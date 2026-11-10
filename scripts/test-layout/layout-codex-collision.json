@@ -1,4 +1,5 @@
 {
+  "codex-shim-legacy-record.test.ts": "codex-integration",
   "codex-installation-live-content.test.ts": "codex-integration",
   "codex-installation-invalid-account.test.ts": "codex-integration",
   "codex-installation-live-http.test.ts": "codex-integration",
@@ -30,6 +31,7 @@
   "codex-launcher-env.test.ts": "codex-integration",
   "codex-cli-update-artifacts.test.ts": "codex-integration",
   "codex-cli-update-apply.test.ts": "codex-integration",
+  "codex-cli-update-process-fixture.test.ts": "codex-integration",
   "codex-cli-update-paths.test.ts": "codex-integration",
   "codex-cli-update-admission.test.ts": "codex-integration",
   "codex-cli-update-recovery.test.ts": "codex-integration",
@@ -38,6 +40,7 @@
   "native-source-priority.test.ts": "codex-integration",
   "server-native-catalog-priority.test.ts": "server",
   "codex-catalog-heal-reanchor.test.ts": "codex-integration",
+  "codex-catalog-readonly-windows.test.ts": "codex-integration",
   "codex-quota-persistence.test.ts": "codex-integration",
   "codex-sync-user-edits.test.ts": "codex-integration",
   "codex-stored-main-duplicate.test.ts": "codex-integration",
