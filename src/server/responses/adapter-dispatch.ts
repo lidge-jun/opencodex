@@ -1,8 +1,8 @@
-import { recordUpstreamValidationDetail } from "../request-log-failure-detail";
+import { recordUpstreamProviderErrorDetail } from "../request-log-failure-detail";
 import { clientFacingModelText } from "../../lib/error-destination";
 import { responsesSpendTarget } from "./request-spend-target";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
-import { markProxyError, carryProxyError } from "../../lib/client-error-body";
+import { markProxyError, carryProxyError, isProxyError } from "../../lib/client-error-body";
 import { codexAdapterBuildRefusal } from "./passthrough-build-error";
 import { createAutoPauseRefreshErrorMapper, recoverAutoPausedAccount } from "./account-auto-pause-recovery";
 import { wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
@@ -1864,7 +1864,7 @@ export async function prepareAdapterExchange(
         // `response.body` itself with the abort signal threaded through, and the combo
         // contract is that this body's getter is touched exactly once. A guard here would be
         // a second `.body` access for no gain, since the bounded reader owns settlement.
-        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, Date.now(), logCtx)
+        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, Date.now(), logCtx, !isProxyError(upstreamResponse))
           .finally(cleanupUpstreamAbort);
         options.onConsumedComboFailure?.(failure);
         return failure.response;
@@ -1879,7 +1879,8 @@ export async function prepareAdapterExchange(
       } finally {
         cleanupUpstreamAbort();
       }
-      recordUpstreamValidationDetail(logCtx, upstreamResponse.status, errorText);
+      // The provider's own body (not a proxy-normalized one) may name its closed error class (#8446).
+      if (!isProxyError(upstreamResponse)) recordUpstreamProviderErrorDetail(logCtx, upstreamResponse.status, errorText, upstreamResponse);
       if (upstreamResponse.status === 413) {
         if (options.clientModelLabel) projectLocalModelRefusalLog(logCtx, options.clientModelLabel);
         return clientRequestedStream

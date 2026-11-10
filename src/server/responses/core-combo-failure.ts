@@ -1,4 +1,4 @@
-import { recordUpstreamValidationDetail, type FailureDetail } from "../request-log-failure-detail";
+import { recordUpstreamProviderErrorDetail, recordUpstreamValidationDetail, type FailureDetail } from "../request-log-failure-detail";
 import { carryProxyErrorPresentation } from "../../lib/client-error-body";
 import { carryPolicyCandidateRefusal } from "./policy-request-scope";
 import { comboFailureEvidence, carryProxyError } from "../../lib/client-error-body";
@@ -47,6 +47,8 @@ export async function consumeComboFailure(
   signal?: AbortSignal,
   now = Date.now(),
   logCtx?: { failureDetail?: FailureDetail; causeHint?: RequestFailureCause },
+  /** True only when `response` is the provider's own HTTP answer, so its closed error class is evidence. */
+  rawUpstream = false,
 ): Promise<ConsumedComboFailure> {
   // Read before the body: the marker lives on this Response object, and the failure below is
   // rebuilt as a new one that would otherwise lose it.
@@ -85,7 +87,8 @@ export async function consumeComboFailure(
         && isRateLimitOrQuotaFailureMessage(quotaMessage);
     }
     if (body.displaySafe && !body.truncated) {
-      if (logCtx) recordUpstreamValidationDetail(logCtx, response.status, body.text);
+      if (logCtx && rawUpstream) recordUpstreamProviderErrorDetail(logCtx, response.status, body.text, response);
+      else if (logCtx) recordUpstreamValidationDetail(logCtx, response.status, body.text);
       // A combo child's row is attributed from the same evidence the parent uses: Meta's Muse
       // Code refusal is a plan restriction, not a rejected credential (#8352).
       if (logCtx) stampMetaMusePlanRefusal(logCtx, response.status, body.text);
