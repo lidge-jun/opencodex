@@ -488,9 +488,11 @@ statuses retain soft utilization without creating a hard family refusal.
 strategy, reactive selection and physical dispatch use that model. A family-only refusal
 preserves unrelated sessions and account-wide health. Numeric thresholds stay soft: zero
 and the all-drained fallback remain preferences, with no hard billing cap introduced.
-Lowest-usage ranking restates a family window that carries a weekly allowance on the shared
-weekly scale (`anthropicModelRankPercent`): Fable at 60% of a 50% allowance ranks at 80,
-because it has 20 weekly points left. Auto-switch thresholds keep the family's own percent, so
+Under the `weekly` and `max-utilization` windows, lowest-usage ranking restates a family window
+that carries a weekly allowance on the shared weekly scale (`anthropicModelRankPercent`): Fable
+at 60% of a 50% allowance ranks at 80, because it has 20 weekly points left. The default
+`five-hour` window has no five-hour tie-break, so it keeps the family's own percent rather than
+let a fresh seat's 50 mask lower five-hour readings. Auto-switch thresholds keep it too, so
 a fresh Fable seat does not read as half spent. Exhaustion is unchanged, since both scales
 reach 100 together, and a passive header reading keeps the allowance the last usage probe read.
 `tests/adapters/anthropic/anthropic-account-threshold.test.ts` covers both sides.

@@ -584,11 +584,16 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     }
   }
 
-  /** `rank` compares accounts, restating a family allowance on the weekly scale; thresholds use the family's own percent. */
+  /**
+   * `rank` compares accounts, restating a family allowance on the weekly scale where the configured
+   * window ranks on weekly usage. Five-hour ranking has no five-hour tie-break, so a fresh Fable
+   * seat's 50 would mask every lower five-hour reading there; it and thresholds keep the family's own percent.
+   */
   function usageScore(config: OcxConfig, accountId: string, model?: string, rank = false): number {
     if (model) {
       const quota = getCachedProviderAccountQuota(PROVIDER, accountId);
-      const family = rank ? anthropicModelRankPercent(quota, model) : anthropicModelWeeklyPercent(quota, model);
+      const weeklyScale = rank && anthropicQuotaWindow(anthropicAccountPoolConfig(config)) !== "five-hour";
+      const family = weeklyScale ? anthropicModelRankPercent(quota, model) : anthropicModelWeeklyPercent(quota, model);
       if (family === undefined) return usageScore(config, accountId);
       return hasKnownUsage(config, accountId) ? Math.max(family, usageScore(config, accountId)) : family;
     }

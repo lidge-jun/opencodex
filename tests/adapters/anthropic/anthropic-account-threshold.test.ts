@@ -332,3 +332,15 @@ test("Fable ranks accounts on weekly headroom while thresholds read the Fable me
   }
 });
 
+
+test("five-hour ranking keeps five-hour order for fresh Fable seats", async () => {
+  const [a, b, c] = ids; const resetAt = Date.now() + 3600_000;
+  const seat = (id: string, fiveHour: number) => setCachedProviderAccountQuotaForTests("anthropic", id, { fiveHourPercent: fiveHour,
+    weeklyPercent: 0, fiveHourResetAt: resetAt, weeklyResetAt: resetAt, updatedAt: Date.now(),
+    customWindows: [{ label: "Fable", scope: "model", percent: 0, resetAt, weeklyAllowancePercent: 50 }] });
+  seat(a, 95); seat(b, 49); seat(c, 1);
+  const cfg = config("quota", "five-hour");
+  await setActiveAccount("anthropic", a);
+  expect(resolveAnthropicAccountForSession("fable-5h", cfg, Date.now(), null, FABLE).accountId).toBe(c);
+});
+
