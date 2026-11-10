@@ -147,8 +147,8 @@ function quotaFromUnknown(quota: unknown, fallbackUpdatedAt?: number): AccountQu
         if (typeof row.label !== "string" || finite(row.percent) === undefined) return [];
         return [{
           label: row.label,
+          ...(typeof row.displayLabel === "string" && row.displayLabel.trim() ? { displayLabel: row.displayLabel } : {}),
           percent: row.percent as number,
-          ...(typeof row.displayLabel === "string" ? { displayLabel: row.displayLabel } : {}),
           ...(finite(row.resetAt) !== undefined ? { resetAt: row.resetAt as number } : {}),
           ...(typeof row.modelId === "string" && row.modelId.length <= 128 ? { modelId: row.modelId } : {}),
         }];

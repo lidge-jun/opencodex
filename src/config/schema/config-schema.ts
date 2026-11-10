@@ -29,6 +29,7 @@ import {
   spendSchema,
   chatgptDesktopSchema,
   skillsConfigSchema,
+  telemetryConfigSchema,
   configuredCodexPoolAccountIds,
   apiKeyEntrySchema,
   asideProfileSyncSchema,
@@ -60,6 +61,8 @@ import {
   providerHeadersConfigError,
   providerForwardClientHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
+  thinkingDisplayConfigError,
+  modelThinkingDisplayConfigError,
   credentialPinnedProviderConfigError,
 } from "../provider-validation";
 import {
@@ -120,6 +123,7 @@ export const configSchema = z.object({
   skills: skillsConfigSchema.optional().catch(undefined),
   // Malformed hand edits disable this opt-in exporter. Live writes reject them in diagnostics.ts.
   metricsExport: z.object({ enabled: z.boolean().optional() }).strict().optional().catch(undefined),
+  telemetry: telemetryConfigSchema.optional().catch(undefined),
   // Same contract as metricsExport: a malformed hand edit leaves recovery off; live writes reject it.
   serviceHealthRecovery: z.object({ enabled: z.boolean().optional() }).strict().optional().catch(undefined),
   // Kept raw on purpose: `.catch(undefined)` would turn a mistyped `enabled` into "inherit",
@@ -765,6 +769,26 @@ export const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "modelReasoningSummaryDelivery"],
         message: reasoningSummaryDeliveryError,
+      });
+    }
+    const thinkingDisplayError = thinkingDisplayConfigError(
+      (provider as { thinkingDisplay?: unknown }).thinkingDisplay,
+    );
+    if (thinkingDisplayError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "thinkingDisplay"],
+        message: thinkingDisplayError,
+      });
+    }
+    const modelThinkingDisplayError = modelThinkingDisplayConfigError(
+      (provider as { modelThinkingDisplay?: unknown }).modelThinkingDisplay,
+    );
+    if (modelThinkingDisplayError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "modelThinkingDisplay"],
+        message: modelThinkingDisplayError,
       });
     }
     const minMaxOutputError = positiveIntegerConfigError(

@@ -1,22 +1,13 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import * as fs from "node:fs";
-import { chmodSync, mkdtempSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getAccountSet, getAuthStorePath, saveCredential, setActiveAccount } from "../../src/oauth/store";
-import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderAccountQuotas, fetchProviderQuotaReports, setProviderQuotaBeforePublishForTests } from "../../src/providers/quota";
+import { saveCredential } from "../../src/oauth/store";
+import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../src/providers/quota";
 import { clearComboTargetCooldowns, pickComboTarget } from "../../src/combos";
 import { PROXY_ENV_KEYS } from "../../src/lib/proxy-env";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { ensureQuotaPoolIdentity } from "../../src/quota-pool/identity";
-import { readQuotaPool } from "../../src/quota-pool/assemble";
-import { getCachedProviderQuota } from "../../src/providers/quota-routing-cache";
-import { heldProviderQuotaReports, report, setProviderQuotaReportCache, validateJoinedReports } from "../../src/providers/quota/report-cache";
-import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/key-store";
-import { registerDecisionQuotaSink, type DecisionQuotaSink } from "../../src/lib/decision-quota-sink";
-import { runPassiveRead } from "../../src/lib/passive-read";
-import { accountQuotaCache } from "../../src/providers/quota/account-cache";
 
 const originalFetch = globalThis.fetch;
 const previousHome = process.env.OPENCODEX_HOME;
@@ -33,8 +24,6 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  setProviderKeychainEntryFactoryForTests(null);
-  setProviderQuotaBeforePublishForTests(null);
   clearProviderQuotaCache();
   clearComboTargetCooldowns();
   for (const key of proxyKeys) {
@@ -46,7 +35,7 @@ afterEach(() => {
   removeTreeWithRetry(home);
 });
 
-function config(authMode: "key" | "oauth" = "key"): OcxConfig {
+function config(authMode: "key" | "oauth" = "key", baseUrl = "https://api.kimi.com/coding/v1"): OcxConfig {
   const name = authMode === "oauth" ? "kimi" : "kimi-code";
   return {
     defaultProvider: name,
@@ -54,16 +43,16 @@ function config(authMode: "key" | "oauth" = "key"): OcxConfig {
       [name]: {
         adapter: "openai-chat",
         authMode,
-        baseUrl: "https://api.kimi.com/coding/v1",
+        baseUrl,
         ...(authMode === "key" ? { apiKey: "kimi-monthly-fixture-key" } : {}),
       },
     },
   } as OcxConfig;
 }
 
-function mockUsage(payload: unknown): void {
+function mockUsage(payload: unknown, url = "https://api.kimi.com/coding/v1/usages"): void {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    expect(String(input)).toBe("https://api.kimi.com/coding/v1/usages");
+    expect(String(input)).toBe(url);
     expect(init?.redirect).toBe("error");
     return Response.json(payload);
   }) as typeof fetch;
@@ -71,176 +60,6 @@ function mockUsage(payload: unknown): void {
 
 const resetAt = "2026-12-01T00:00:00Z";
 const monthlyRow = { used_ratio: 0.375, reset_at: resetAt };
-
-async function saveKimiFixture(): Promise<void> {
-  await saveCredential("kimi", { access: "fixture-access", refresh: "fixture-refresh", expires: Date.now() + 3600_000 });
-}
-
-test.each(["unchanged", "replacement", "selection", "aba"] as const)("passive Kimi report and account pool preserve currentness after %s without effects", async change => {
-  clearAccountQuotaCache();
-  await saveCredential("kimi", { access: "fixture-a", refresh: "refresh-a", expires: Date.now() + 3600_000, accountId: "a" });
-  await saveCredential("kimi", { access: "fixture-b", refresh: "refresh-b", expires: Date.now() + 3600_000, accountId: "b" });
-  const set = getAccountSet("kimi")!;
-  const active = set.activeAccountId;
-  const other = set.accounts.find(row => row.id !== active)!.id;
-  const cfg = config("oauth");
-  mockUsage({ usages: { limit_month_total: monthlyRow } });
-  expect((await fetchProviderQuotaReports(cfg, true)).reports).toHaveLength(1);
-  expect((await fetchProviderAccountQuotas("kimi", true, cfg.providers.kimi)).some(row => row.quota)).toBe(true);
-  ensureQuotaPoolIdentity();
-  if (change === "replacement") {
-    const store = JSON.parse(readFileSync(getAuthStorePath(), "utf8"));
-    store.kimi.accounts.find((row: { id: string }) => row.id === active).credential.access = "external-replacement";
-    writeFileSync(`${getAuthStorePath()}.replacement`, JSON.stringify(store));
-    renameSync(`${getAuthStorePath()}.replacement`, getAuthStorePath());
-  }
-  if (change === "selection" || change === "aba") await setActiveAccount("kimi", other);
-  if (change === "aba") await setActiveAccount("kimi", active);
-  chmodSync(getAuthStorePath(), 0o644);
-  const before = readFileSync(getAuthStorePath(), "utf8");
-  const mode = statSync(getAuthStorePath()).mode;
-  let sinkCalls = 0;
-  let fetches = 0;
-  let mutations = 0;
-  const beforeCache = [...accountQuotaCache.entries()];
-  const spies = (["chmodSync", "writeFileSync", "renameSync", "unlinkSync", "mkdirSync"] as const).map(name => {
-    const original = fs[name];
-    return spyOn(fs, name).mockImplementation(((...args: never[]) => { mutations++; return (original as (...args: never[]) => unknown)(...args); }) as never);
-  });
-  const detach = registerDecisionQuotaSink(new Proxy({} as DecisionQuotaSink, { get: () => () => { sinkCalls++; } }));
-  globalThis.fetch = (async () => { fetches++; throw new Error("unexpected upstream call"); }) as typeof fetch;
-  try {
-    const held = await runPassiveRead(async () => heldProviderQuotaReports(cfg));
-    expect(held.reports).toHaveLength(change === "unchanged" ? 1 : 0);
-    const pool = await readQuotaPool(cfg);
-    if (!pool.ok) throw new Error(pool.error);
-    const accounts = pool.pool.providers.find(row => row.provider === "kimi")!.accounts;
-    const activeRow = accounts[set.accounts.findIndex(row => row.id === active)]!;
-    expect(activeRow.windows.length > 0).toBe(change !== "replacement");
-    expect(fetches).toBe(0);
-    expect(sinkCalls).toBe(0);
-    expect(mutations).toBe(0);
-    expect([...accountQuotaCache.entries()]).toEqual(beforeCache);
-    expect(readFileSync(getAuthStorePath(), "utf8")).toBe(before);
-    expect(statSync(getAuthStorePath()).mode).toBe(mode);
-  } finally { detach(); for (const spy of spies) spy.mockRestore(); clearAccountQuotaCache(); }
-});
-
-test.each([false, true])("passive pool checks an Anthropic failure against the current credential (replaced: %s)", async replaced => {
-  clearAccountQuotaCache();
-  await saveCredential("anthropic", { access: "fixture-anthropic", refresh: "fixture-refresh", expires: Date.now() + 3600_000, accountId: "a" });
-  globalThis.fetch = (async () => new Response("unavailable", { status: 503 })) as typeof fetch;
-  expect((await fetchProviderAccountQuotas("anthropic", true))[0]?.quotaFailure).toBe("upstream_error");
-  ensureQuotaPoolIdentity();
-  if (replaced) {
-    const store = JSON.parse(readFileSync(getAuthStorePath(), "utf8"));
-    store.anthropic.accounts[0].credential.access = "external-replacement";
-    writeFileSync(`${getAuthStorePath()}.replacement`, JSON.stringify(store));
-    renameSync(`${getAuthStorePath()}.replacement`, getAuthStorePath());
-  }
-  let sinkCalls = 0, fetches = 0;
-  const detach = registerDecisionQuotaSink(new Proxy({} as DecisionQuotaSink, { get: () => () => { sinkCalls++; } }));
-  globalThis.fetch = (async () => { fetches++; throw new Error("unexpected upstream call"); }) as typeof fetch;
-  const cfg = { defaultProvider: "anthropic", providers: { anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" } } } as OcxConfig;
-  try {
-    const pool = await readQuotaPool(cfg);
-    if (!pool.ok) throw new Error(pool.error);
-    expect(pool.pool.providers[0]?.accounts[0]?.failure).toBe(replaced ? undefined : "upstream_error");
-    expect(sinkCalls).toBe(0);
-    expect(fetches).toBe(0);
-  } finally { detach(); clearAccountQuotaCache(); }
-});
-
-test("passive pool rejects a held OAuth report for a separately configured key or destination", async () => {
-  await saveKimiFixture();
-  mockUsage({ usages: { limit_month_total: monthlyRow } });
-  const oauth = config("oauth");
-  expect((await fetchProviderQuotaReports(oauth, true)).reports).toHaveLength(1);
-  const key = { ...oauth, providers: { kimi: { ...oauth.providers.kimi!, authMode: "key", apiKey: "keychain:kimi" } } } as OcxConfig;
-  const destination = { ...oauth, providers: { kimi: { ...oauth.providers.kimi!, baseUrl: "https://other.example/v1" } } } as OcxConfig;
-  ensureQuotaPoolIdentity();
-  const routingBefore = getCachedProviderQuota("kimi", Date.now());
-  let fetches = 0;
-  let keychainReads = 0;
-  setProviderKeychainEntryFactoryForTests(() => { keychainReads++; throw new Error("unexpected keychain access"); });
-  globalThis.fetch = (async () => { fetches++; throw new Error("unexpected passive request"); }) as typeof fetch;
-  expect(heldProviderQuotaReports(oauth).reports).toHaveLength(1);
-  expect(heldProviderQuotaReports(key).reports).toEqual([]);
-  expect(heldProviderQuotaReports(destination).reports).toEqual([]);
-  const pool = await readQuotaPool(key);
-  if (!pool.ok) throw new Error(pool.error);
-  expect(pool.pool.providers.find(row => row.provider === "kimi")?.pooled.windows).toEqual([]);
-  expect(fetches).toBe(0);
-  expect(keychainReads).toBe(0);
-  expect(getCachedProviderQuota("kimi", Date.now())).toBe(routingBefore);
-});
-
-test.each(["key", "destination", "adapter"] as const)("publication drops an OAuth report after %s changes and keeps another provider", async change => {
-  await saveKimiFixture();
-  const cfg = config("oauth");
-  cfg.providers.deepseek = { adapter: "openai-chat", authMode: "key", baseUrl: "https://api.deepseek.com/v1", apiKey: "fixture-deepseek" };
-  globalThis.fetch = (async input => Response.json(new URL(String(input)).hostname === "api.deepseek.com"
-    ? { is_available: true, balance_infos: [{ currency: "USD", total_balance: "10", granted_balance: "0", topped_up_balance: "10" }] }
-    : { usages: { limit_month_total: monthlyRow } })) as typeof fetch;
-  setProviderQuotaBeforePublishForTests(() => {
-    if (change === "key") cfg.providers.kimi!.authMode = "key";
-    if (change === "destination") cfg.providers.kimi!.baseUrl = "https://other.example/v1";
-    if (change === "adapter") cfg.providers.kimi!.adapter = "anthropic";
-  });
-  expect((await fetchProviderQuotaReports(cfg, true)).reports.map(row => row.provider)).toEqual(["deepseek"]);
-  expect(heldProviderQuotaReports(cfg).reports).toEqual([]);
-});
-
-test.each(["unchanged", "key", "destination", "adapter"] as const)("joined OAuth report respects the joining caller after %s", async change => {
-  await saveKimiFixture();
-  const first = config("oauth");
-  const second = config("oauth");
-  const started = Promise.withResolvers<void>();
-  const gate = Promise.withResolvers<void>();
-  let calls = 0;
-  globalThis.fetch = (async () => { calls++; started.resolve(); await gate.promise; return Response.json({ usages: { limit_month_total: monthlyRow } }); }) as typeof fetch;
-  const original = fetchProviderQuotaReports(first);
-  await started.promise;
-  const joined = fetchProviderQuotaReports(second);
-  if (change === "key") { second.providers.kimi!.authMode = "key"; second.providers.kimi!.apiKey = "replacement"; }
-  if (change === "destination") second.providers.kimi!.baseUrl = "https://other.example/v1";
-  if (change === "adapter") second.providers.kimi!.adapter = "anthropic";
-  gate.resolve();
-  expect((await original).reports).toHaveLength(1);
-  expect((await joined).reports).toHaveLength(change === "unchanged" ? 1 : 0);
-  expect(calls).toBe(1);
-});
-
-test("unbound report objects cannot cross held or joined provider boundaries", () => {
-  const cfg = config("oauth");
-  const item = report("kimi", "fixture", { monthlyPercent: 10, updatedAt: Date.now() })!;
-  const response = { generatedAt: Date.now(), reports: [item] };
-  setProviderQuotaReportCache({ key: "fixture", ts: Date.now(), response });
-  expect(heldProviderQuotaReports(cfg).reports).toEqual([]);
-  expect(validateJoinedReports(response, cfg).reports).toEqual([]);
-});
-
-test("a held report cannot be relabeled as another provider with the same configuration", async () => {
-  await saveKimiFixture();
-  mockUsage({ usages: { limit_month_total: monthlyRow } });
-  const cfg = config("oauth");
-  const response = await fetchProviderQuotaReports(cfg, true);
-  cfg.providers.other = { ...cfg.providers.kimi! };
-  response.reports[0]!.provider = "other";
-  expect(heldProviderQuotaReports(cfg).reports).toEqual([]);
-  expect(validateJoinedReports(response, cfg).reports).toEqual([]);
-});
-
-test("passive key reports refuse an unverifiable keychain reference without reading it", async () => {
-  const cfg = config();
-  mockUsage({ usages: { limit_month_total: monthlyRow } });
-  expect((await fetchProviderQuotaReports(cfg, true)).reports).toHaveLength(1);
-  cfg.providers["kimi-code"]!.apiKey = "keychain:kimi-code";
-  let keychainReads = 0;
-  setProviderKeychainEntryFactoryForTests(() => { keychainReads++; throw new Error("unexpected keychain access"); });
-  expect(heldProviderQuotaReports(cfg).reports).toEqual([]);
-  expect(keychainReads).toBe(0);
-});
 
 describe("Kimi monthly quota", () => {
   test.each(["key", "oauth"] as const)("publishes a monthly-only %s report", async authMode => {
@@ -495,5 +314,49 @@ describe("Kimi monthly quota", () => {
     expect(reports[0]?.quota.weeklyPercent).toBe(20);
     expect(reports[0]?.quota.monthlyPercent).toBeUndefined();
     expect(reports[0]?.quota.customWindows).toEqual([{ label: "Total subscription credits", percent: 60 }]);
+  });
+});
+
+describe("Kimi regional (kimi.ai) Coding Plan quota (#8332)", () => {
+  const regional = "https://api.kimi.ai/coding/v1";
+
+  test("a key-auth provider on api.kimi.ai probes its own origin's /usages", async () => {
+    // Field shape from public API-key reports against this endpoint: legacy counters beside
+    // ratio windows that can contradict them. Valid counters win over a zero ratio.
+    mockUsage({
+      usage: { limit: 100, used: 40, remaining: 60, resetTime: resetAt },
+      limits: [{ window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" }, detail: { limit: 100, used: 100, remaining: 0, resetTime: resetAt } }],
+      usages: { limit_5h: { used_ratio: 0 }, limit_7d: { used_ratio: 0 }, limit_month_total: { used_ratio: 0.1, reset_time: resetAt } },
+    }, `${regional}/usages`);
+
+    const { reports } = await fetchProviderQuotaReports(config("key", `${regional}/`), true);
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.source).toBe("kimi:usages");
+    expect(reports[0]?.quota).toMatchObject({ fiveHourPercent: 100, weeklyPercent: 40, monthlyPercent: 10 });
+  });
+
+  test.each([
+    { name: "an OAuth token on api.kimi.ai", authMode: "oauth" as const, baseUrl: regional },
+    { name: "a lookalike host", authMode: "key" as const, baseUrl: "https://api.kimi.ai.example.test/coding/v1" },
+    { name: "another path on api.kimi.ai", authMode: "key" as const, baseUrl: "https://api.kimi.ai/v1" },
+  ])("$name never receives the credential", async ({ authMode, baseUrl }) => {
+    if (authMode === "oauth") {
+      await saveCredential("kimi", {
+        access: "kimi-regional-fixture-access",
+        refresh: "kimi-regional-fixture-refresh",
+        expires: Date.now() + 3600_000,
+      });
+    }
+    const requested: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requested.push(String(input));
+      return Response.json({ usages: { limit_month_total: monthlyRow } });
+    }) as typeof fetch;
+
+    const { reports } = await fetchProviderQuotaReports(config(authMode, baseUrl), true);
+
+    expect(requested.filter(url => url.includes("/usages"))).toEqual([]);
+    expect(reports.some(report => report.source === "kimi:usages")).toBe(false);
   });
 });

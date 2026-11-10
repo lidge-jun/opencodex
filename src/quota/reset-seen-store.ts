@@ -326,8 +326,9 @@ export function swapLastObservedWindows(
     const short = previous?.find(window => window.window === "5h");
     if (short) next.push({ ...short });
   }
-  // An explicitly unknown budget is not a new measurement. Carry its last measured
-  // baseline only when the reported deadline still identifies the same window.
+  // An explicitly unknown budget is not a new measurement. Carry its last measured baseline
+  // only when the reported deadline still identifies the same window; a moved deadline is a
+  // different window and starts a fresh baseline instead of firing a false reset.
   for (const unknown of retainUnknownWindows) {
     if (next.some(window => window.window === unknown.window)) continue;
     const prior = previous?.find(window => window.window === unknown.window && window.resetAt === unknown.resetAt);

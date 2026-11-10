@@ -18,7 +18,6 @@ import type { ProviderAccount } from "../oauth/types";
 import { hydrateKiroAccountState, kiroEvidenceIdentity, type KiroPersistedVerdict } from "./kiro-account-state-disk";
 import { accountCacheKey, accountQuotaCache } from "./quota/account-cache";
 import type { ProviderQuota, ProviderQuotaWindow } from "./quota-types";
-import { isDisplayOnlyQuota } from "./quota-types";
 import {
   ACCOUNT_QUOTA_TTL_MS,
   asRecord,
@@ -306,7 +305,6 @@ export function kiroAccountEvidence(account: ProviderAccount, now = Date.now(), 
   const key = accountCacheKey("kiro", account.id);
   const row = accountQuotaCache.get(key);
   const quota = row?.identity === kiroEvidenceIdentity(account) && row.quota
-    && !isDisplayOnlyQuota(row.quota)
     && typeof row.quota.monthlyPercent === "number" && Number.isFinite(row.quota.monthlyPercent)
     && row.quota.monthlyPercent >= 0 && row.quota.monthlyPercent <= 100
     && row.quota.updatedAt <= now && now - row.quota.updatedAt < ACCOUNT_QUOTA_TTL_MS

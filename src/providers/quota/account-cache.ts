@@ -7,8 +7,7 @@ import { createHash } from "node:crypto";
 import { getValidAccessTokenForAccount } from "../../oauth";
 import { credentialGeneration, getAccountCredential, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
 import { isAnthropicInstanceId, type AnthropicInstanceId } from "../anthropic-instance-id";
-import { readStateStoreLiveConfig, type GenerationContext } from "../../lib/state-store-sweeper";
-import { getConfigDir } from "../../config/paths";
+import type { GenerationContext } from "../../lib/state-store-sweeper";
 import { ACCOUNT_QUOTA_TTL_MS, toFiniteNumber } from "../quota-wire";
 import { clearKiroAccountUsageState, hydrateKiroUsageVerdict, kiroPersistableVerdicts, reconcileKiroAccountUsageState } from "../kiro-usage";
 import { kiroEvidenceIdentity, sanitizeKiroQuota, type KiroPersistedQuota } from "../kiro-account-state-disk";
@@ -19,10 +18,7 @@ import { getProviderRegistryEntry } from "../registry";
 import { getProviderQuotaReportCache, hasQuotaRows, routingEvidence, setProviderQuotaReportCache } from "./report-cache";
 import { isCanonicalCommandCodeBaseUrl, isCanonicalKimiCodeBaseUrl } from "./vendor-probes-key";
 import type { AccountQuotaMode, ProviderQuota, ProviderQuotaWindow, QuotaFailureCode } from "../quota-types";
-import { isDisplayOnlyQuota, markDisplayOnlyQuota } from "../quota-types";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
-import { bindMuseQuotaConfig, captureMuseQuotaOwner, museQuotaConfigIdentity, type MuseQuotaOwner } from "./muse-owner";
-import { runPassiveReadSync } from "../../lib/passive-read";
 
 /** Match oauth/index REFRESH_SKEW_MS — use stored access without refresh when still fresh. */
 const ACCOUNT_TOKEN_SKEW_MS = 60_000;
@@ -47,9 +43,6 @@ export type AccountQuotaCacheEntry = {
   /** Private passive Anthropic ownership fence; not serialized with quota bars. */
   anthropicCredentialGeneration?: string;
   isCurrent?: () => boolean;
-  isConfigCurrent?: (config: OcxConfig) => boolean;
-  museConfigIdentity?: string;
-  museHydrated?: boolean;
 };
 /** Expired measurements become unknown; missing reset evidence never implies a fresh allowance. */
 export function normalizeAnthropicQuota(quota: ProviderQuota | null | undefined, now: number): ProviderQuota | null {
@@ -104,7 +97,6 @@ export function normalizeAnthropicQuota(quota: ProviderQuota | null | undefined,
       else delete result.customWindows;
     }
   }
-  if (isDisplayOnlyQuota(quota)) markDisplayOnlyQuota(result);
   return hasQuotaRows(result) ? result : null;
 }
 
@@ -131,7 +123,6 @@ export function captureProviderAccountQuotaEpoch(provider: string): number {
  * request and is replaced by a live probe immediately after.
  */
 let diskHydrated = false;
-let rejectedPersistedMuse = false;
 export function hydrateAccountQuotaCache(): void {
   if (diskHydrated) return;
   diskHydrated = true;
@@ -139,18 +130,6 @@ export function hydrateAccountQuotaCache(): void {
   const liveKiro = new Map<string, ProviderAccount>(getAccountSet("kiro")?.accounts.map(account =>
     [accountCacheKey("kiro", account.id), account]) ?? []);
   for (const [key, quota] of readPersistedAccountQuotas(now)) {
-    if (key.startsWith("meta-muse\0")) {
-      const owner = captureMuseQuotaOwner("meta-muse", key.slice("meta-muse\0".length));
-      const saved = quota as ProviderQuota & { museIdentity?: string; museConfigIdentity?: string };
-      if (!owner || saved.museIdentity !== owner.identity || !/^[a-f0-9]{64}$/.test(saved.museConfigIdentity ?? "")) { rejectedPersistedMuse = true; continue; }
-      const { museIdentity: _identity, museConfigIdentity, ...publicQuota } = saved;
-      const config = readStateStoreLiveConfig(getConfigDir());
-      if (config && museConfigIdentity !== museQuotaConfigIdentity(config, "meta-muse")) { rejectedPersistedMuse = true; continue; }
-      const bound = config ? bindMuseQuotaConfig(owner, config, "meta-muse") : null;
-      if (!accountQuotaCache.has(key)) accountQuotaCache.set(key, { ts: quota.updatedAt, quota: publicQuota, identity: owner.identity, museConfigIdentity, museHydrated: true,
-        isCurrent: bound?.isAccountCurrent ?? owner.isAccountCurrent, isConfigCurrent: bound?.isConfigCurrent });
-      continue;
-    }
     if (key.startsWith("kiro\0")) {
       const account = liveKiro.get(key);
       if (!account || (quota as KiroPersistedQuota).identity !== kiroEvidenceIdentity(account)
@@ -185,15 +164,6 @@ export function persistAccountQuotaCache(): void {
       [accountCacheKey("kiro", account.id), account]) ?? []);
     for (const [key, entry] of accountQuotaCache) {
       const quota = isAnthropicAccountCacheKey(key) ? normalizeAnthropicQuota(entry.quota, now) : entry.quota;
-      // The in-memory provenance is not serialized; never restore display-only bars as decisions.
-      if (quota && isDisplayOnlyQuota(quota)) continue;
-      if (key.startsWith("meta-muse\0")) {
-        if (quota && entry.identity && entry.museConfigIdentity && entry.isCurrent?.()) {
-          const saved = { ...quota, museIdentity: entry.identity, museConfigIdentity: entry.museConfigIdentity };
-          yield [key, saved] as [string, ProviderQuota];
-        }
-        continue;
-      }
       if (quota && key.startsWith("kiro\0")) {
         const account = liveKiro.get(key);
         if (account && entry.identity === kiroEvidenceIdentity(account))
@@ -244,36 +214,12 @@ export function accountCacheKey(provider: string, accountId: string): string {
   return `${provider}\u0000${accountId}`;
 }
 
-/** Validate the saved owner against both the adopted config and the caller's projection. */
-export function isMuseQuotaEntryCurrent(entry: AccountQuotaCacheEntry, config?: OcxConfig): boolean {
-  if (!entry.museConfigIdentity || !entry.isCurrent?.()) return false;
-  if (config && museQuotaConfigIdentity(config, "meta-muse") !== entry.museConfigIdentity) return false;
-  const live = readStateStoreLiveConfig(getConfigDir());
-  return live ? entry.isConfigCurrent?.(live) === true : !entry.museHydrated || config !== undefined;
-}
-
-/** A writer must own the adopted provider or match any still-current retained row. */
-export function canWriteMuseQuota(owner: MuseQuotaOwner, key: string): boolean {
-  const live = readStateStoreLiveConfig(getConfigDir());
-  if (live) return owner.isConfigCurrent?.(live) === true;
-  const previous = accountQuotaCache.get(key);
-  return !previous || previous.isCurrent?.() === false
-    || !!owner.configIdentity && previous.museConfigIdentity === owner.configIdentity && previous.identity === owner.identity;
-}
-
 /**
  * Synchronous last-good per-account quota read for routing. Never probes the network.
  * Returns null when nothing is cached (or the cached row has no bars).
  */
-export function getCachedProviderAccountQuota(provider: string, accountId: string, config?: OcxConfig): ProviderQuota | null {
-  // A cold routing lookup must see persisted passive rows without publishing a roster or hardening files.
-  if (provider === "meta-muse") runPassiveReadSync(hydrateAccountQuotaCache);
+export function getCachedProviderAccountQuota(provider: string, accountId: string): ProviderQuota | null {
   const entry = accountQuotaCache.get(accountCacheKey(provider, accountId));
-  if (provider === "meta-muse" && config && (!entry || !isMuseQuotaEntryCurrent(entry, config))) return null;
-  if (provider === "meta-muse" && entry?.museConfigIdentity) {
-    const live = readStateStoreLiveConfig(getConfigDir());
-    if (live ? entry.isConfigCurrent?.(live) !== true : entry.museHydrated && !config) return null;
-  }
   if (provider === "kiro") {
     const account = getAccountSet("kiro")?.accounts.find(row => row.id === accountId);
     if (!account || entry?.identity !== kiroEvidenceIdentity(account)) return null;
@@ -282,8 +228,7 @@ export function getCachedProviderAccountQuota(provider: string, accountId: strin
     const credential = getAccountCredential(provider, accountId);
     if (!credential || credentialGeneration(credential) !== entry.anthropicCredentialGeneration) return null;
   }
-  if (!(provider === "meta-muse" && config) && entry?.isCurrent && !entry.isCurrent()) return null;
-  if (entry?.quota && isDisplayOnlyQuota(entry.quota)) return null;
+  if (entry?.isCurrent && !entry.isCurrent()) return null;
   return isAnthropicInstanceId(provider) ? normalizeAnthropicQuota(entry?.quota, Date.now()) : entry?.quota ?? null;
 }
 
@@ -366,7 +311,6 @@ export function recordAnthropicAccountQuotaFromHeadersForInstance(
   const generation = credential && credentialGeneration(credential);
   const previous = candidate?.isCurrent?.() === false
     || candidate?.anthropicCredentialGeneration && candidate.anthropicCredentialGeneration !== generation ? undefined : candidate;
-  const previousQuota = previous?.quota && !isDisplayOnlyQuota(previous.quota) ? previous.quota : null;
   if (observed.customWindows) observeAnthropicFamilyQuota(accountId, observed.customWindows, observed.updatedAt);
   accountQuotaCache.set(key, {
     ...previous,
@@ -374,8 +318,8 @@ export function recordAnthropicAccountQuotaFromHeadersForInstance(
     // Headers do not prove that the last usage probe succeeded.
     ts: previous?.ts ?? 0,
     quota: normalizeAnthropicQuota({
-      ...normalizeAnthropicQuota(previousQuota, observed.updatedAt), ...observed,
-      ...(observed.customWindows ? { customWindows: mergeAnthropicFamilyWindows(previousQuota?.customWindows, observed.customWindows) } : {}),
+      ...normalizeAnthropicQuota(previous?.quota, observed.updatedAt), ...observed,
+      ...(observed.customWindows ? { customWindows: mergeAnthropicFamilyWindows(previous?.quota?.customWindows, observed.customWindows) } : {}),
     }, observed.updatedAt),
   });
   // Advisory evidence is published for the primary pool only; Pool 2 stays unknown to decisions.
@@ -418,11 +362,8 @@ export function recordPassiveAccountQuota(
   accountId: string,
   quota: ProviderQuota,
   writerGeneration: number,
-  owner: MuseQuotaOwner | null = null,
-  epoch = captureProviderAccountQuotaEpoch(provider),
 ): void {
-  if (!hasPassiveAccountQuota(provider) || !accountId || !owner || owner.accountId !== accountId || !owner.isCurrent()
-    || epoch !== captureProviderAccountQuotaEpoch(provider)) return;
+  if (!hasPassiveAccountQuota(provider) || !accountId) return;
   const key = accountCacheKey(provider, accountId);
   if (!mayCommitAccountQuotaKey(key, writerGeneration)) return;
   // Hydrate BEFORE writing, not only on the read path. `persistAccountQuotaCache`
@@ -431,11 +372,8 @@ export function recordPassiveAccountQuota(
   // saved row -- and `diskHydrated` would then stop any later reader from recovering
   // them. A probe writer cannot hit this because its own read hydrates first; an
   // observation arrives unprompted, so it must hydrate itself.
-  runPassiveReadSync(hydrateAccountQuotaCache);
-  if (!canWriteMuseQuota(owner, key)) return;
-  accountQuotaCache.set(key, { ts: Date.now(), quota, identity: owner.identity,
-    isCurrent: () => epoch === captureProviderAccountQuotaEpoch(provider) && owner.isAccountCurrent(),
-    isConfigCurrent: owner.isConfigCurrent, museConfigIdentity: owner.configIdentity });
+  hydrateAccountQuotaCache();
+  accountQuotaCache.set(key, { ts: Date.now(), quota });
   // Persisted so a restart keeps the last observation: with no probe to re-establish it,
   // a forgotten row stays forgotten until the user happens to run another streaming turn.
   persistAccountQuotaCache();
@@ -453,7 +391,7 @@ export function recordPassiveAccountQuota(
  * ever attempted here. A user who has not yet run a streaming turn simply has no
  * measurement, which is not an error state.
  */
-export function readPassiveProviderAccountQuotas(provider: string, config?: OcxConfig): ProviderAccountQuota[] {
+export function readPassiveProviderAccountQuotas(provider: string): ProviderAccountQuota[] {
   if (!hasPassiveAccountQuota(provider)) return [];
   // Idempotent, and otherwise only reached from probe paths a passive provider never
   // enters — without it a restart shows nothing until the next streaming turn, even
@@ -464,12 +402,7 @@ export function readPassiveProviderAccountQuotas(provider: string, config?: OcxC
   const rows: ProviderAccountQuota[] = [];
   for (const account of set.accounts) {
     const entry = accountQuotaCache.get(accountCacheKey(provider, account.id));
-    const live = entry?.museConfigIdentity ? readStateStoreLiveConfig(getConfigDir()) : null;
-    if (entry?.quota && entry.isCurrent?.() && (config ? isMuseQuotaEntryCurrent(entry, config) : !entry.museConfigIdentity || (live ? entry.isConfigCurrent?.(live) === true : !entry.museHydrated))) {
-      const row: ProviderAccountQuota = { accountId: account.id, quota: entry.quota };
-      Object.defineProperty(row, "isCurrent", { value: config ? () => isMuseQuotaEntryCurrent(entry, config) : entry.isCurrent });
-      rows.push(row);
-    }
+    if (entry?.quota) rows.push({ accountId: account.id, quota: entry.quota });
   }
   return rows;
 }
@@ -488,28 +421,12 @@ export function sweepExpiredProviderAccountQuotaRows(now = Date.now()): number {
   return removed;
 }
 
-export function reconcileProviderAccountQuotaRows(context: GenerationContext, config?: OcxConfig): number {
+export function reconcileProviderAccountQuotaRows(context: GenerationContext): number {
   if (context.generation <= lastReconciledGeneration) return 0;
   hydrateAccountQuotaCache();
-  let removed = rejectedPersistedMuse ? 1 : 0;
-  rejectedPersistedMuse = false;
-  for (const [key, entry] of accountQuotaCache) {
-    let current = context.oauthAccountKeys.has(key);
-    if (current && key.startsWith("meta-muse\0")) {
-      const provider = config?.providers["meta-muse"];
-      // A hydrated row has account ownership but no live provider object yet. Bind it
-      // on the first live reconciliation so later replacement or ABA retires it too.
-      if (config && provider && !entry.isConfigCurrent && entry.museConfigIdentity === museQuotaConfigIdentity(config, "meta-muse") && entry.isCurrent?.() !== false) {
-        const owner = bindMuseQuotaConfig(captureMuseQuotaOwner("meta-muse", key.slice("meta-muse\0".length)), config, "meta-muse");
-        if (owner && owner.identity === entry.identity) {
-          const previous = entry.isCurrent;
-          entry.isCurrent = () => previous?.() !== false && owner.isAccountCurrent();
-          entry.isConfigCurrent = owner.isConfigCurrent;
-        }
-      }
-      current = entry.isCurrent?.() !== false && (!config || entry.isConfigCurrent?.(config) === true);
-    }
-    if (current) continue;
+  let removed = 0;
+  for (const key of accountQuotaCache.keys()) {
+    if (context.oauthAccountKeys.has(key)) continue;
     accountQuotaCache.delete(key);
     removed += 1;
   }
@@ -550,7 +467,6 @@ export function clearAccountQuotaCache(provider?: string): void {
     // A cleared cache must not be re-seeded from the file it was just cleared of, and any
     // pending write of the old rows is abandoned.
     diskHydrated = false;
-    rejectedPersistedMuse = false;
     cancelPendingAccountQuotaPersist();
     return;
   }

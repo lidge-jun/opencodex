@@ -121,7 +121,9 @@ export function apiKeyQuotaText(row: AccountRow): string {
   for (const window of quota.customWindows ?? []) {
     // Labels are upstream text: keep terminal controls out of the human table.
     const label = terminalSafeText(window.displayLabel ?? window.label);
-    const resetAt = window.resetAt === undefined ? undefined : new Date(window.resetAt);
+    // Only a probe that supplied its own display text adds the reset clock; every other
+    // provider keeps the dev-era text byte for byte.
+    const resetAt = window.displayLabel === undefined || window.resetAt === undefined ? undefined : new Date(window.resetAt);
     const reset = resetAt && Number.isFinite(resetAt.getTime()) ? `; resets ${resetAt.toISOString()}` : "";
     parts.push(`${label} ${window.percent}%${window.rejected ? " (rejected)" : ""}${reset}`);
   }

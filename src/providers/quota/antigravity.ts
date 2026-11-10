@@ -2,24 +2,17 @@ import { antigravityCliUserAgent, antigravityUserAgent } from "../../adapters/cl
 import { DestinationDnsResolutionError } from "../../lib/destination-policy";
 import { PinnedHttpError, type PinnedHttpErrorCode } from "../../lib/pinned-http";
 import { ProviderOutboundPolicyError, providerOutboundPost, providerRedirectError, type ProviderOutboundDependencies } from "../../lib/provider-outbound";
-import { getValidAccessTokenSnapshot } from "../../oauth";
-import { credentialGeneration, getAccountCredential, getAccountSet } from "../../oauth/store";
-import { antigravityReportOwnerCurrent, antigravityReportOwnerMatches, captureAntigravityReportOwner, captureAntigravityReportSelection } from "../../oauth/antigravity-quota-owner";
-import { isPassiveRead } from "../../lib/passive-read";
+import { getValidAccessToken } from "../../oauth";
+import { getAccountCredential, getAccountSet, getCredential } from "../../oauth/store";
 import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
-import { accountReportCurrent, accountReportObservationKeys, antigravityEvidence, bindProviderReportProbe, report, type ProviderQuotaReport } from "./report-cache";
+import { antigravityEvidence, report, type ProviderQuotaReport } from "./report-cache";
 import { captureAntigravityQuotaReceipt, decisionQuotaSinkActive } from "../../lib/decision-quota-sink";
 import { antigravityDecisionWindows } from "../quota-decision-publication";
-import { ANTIGRAVITY_OAUTH_STORE_KEY, antigravityQuotaCredentialGeneration, isAntigravityArgonIdentity } from "../antigravity-quota-identity";
-import type { OcxConfig, OcxProviderConfig } from "../../types";
+import { antigravityQuotaCredentialGeneration, isAntigravityArgonIdentity } from "../antigravity-quota-identity";
+import type { OcxProviderConfig } from "../../types";
 import { quotaCredentialIdentity } from "./account-cache";
 import type { ProviderQuota, ProviderQuotaWindow, QuotaFailureCode } from "../quota-types";
 import { httpQuotaFailure } from "./failure-codes";
-
-// External store changes need an active observation after each suspension, before accepting reports.
-export function observeAntigravityOwner(config: OcxConfig): void {
-  if (config.providers[ANTIGRAVITY_OAUTH_STORE_KEY]?.authMode === "oauth") getAccountSet(ANTIGRAVITY_OAUTH_STORE_KEY);
-}
 
 export function antigravityQuotaDiagnosticIdentity(accountId: string, credential = getAccountCredential("google-antigravity", accountId)): string | undefined {
   return credential ? quotaCredentialIdentity("google-antigravity", accountId, credential, {
@@ -369,27 +362,18 @@ export async function fetchAntigravityUsageQuota(accessToken: string, projectId:
 }
 
 /** Every store read uses `provider`, the same key inference resolves, so a row never probes another row's account. */
-export function fetchAntigravityQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
-  return bindProviderReportProbe(fetchAntigravityQuotaBound(provider, { ...config }), provider, config);
-}
-
-async function fetchAntigravityQuotaBound(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
-  const initial = getAccountSet(provider);
-  const selection = captureAntigravityReportSelection();
-  if (!initial || !selection) return null;
-  let snapshot: Awaited<ReturnType<typeof getValidAccessTokenSnapshot>>;
-  try { snapshot = await getValidAccessTokenSnapshot(provider); } catch { return null; }
-  const set = getAccountSet(provider);
+export async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
+  const credential = getCredential(provider);
+  if (!credential?.projectId) return null;
+  let accessToken: string;
+  try { accessToken = await getValidAccessToken(provider); } catch { return null; }
+  const set = decisionQuotaSinkActive() ? getAccountSet(provider) : undefined;
   const account = set?.accounts.find(row => row.id === set.activeAccountId);
-  const owner = captureAntigravityReportOwner(selection);
-  const probed = owner && account?.id === snapshot.accountId && account.credential.access === snapshot.accessToken
-    && account.credential.projectId === snapshot.projectId && credentialGeneration(account.credential) === snapshot.generation ? account : undefined;
-  if (!probed || !owner || !snapshot.projectId) return null;
-  const receipt = decisionQuotaSinkActive() ? captureAntigravityQuotaReceipt(provider, config, probed.id, antigravityQuotaCredentialGeneration(probed.credential)) : undefined;
-  const result = await probeAntigravityUsageQuota(snapshot.accessToken, snapshot.projectId);
+  const probed = account?.credential.access === accessToken && account.credential.projectId === credential.projectId ? account : undefined;
+  const receipt = probed ? captureAntigravityQuotaReceipt(provider, config, probed.id, antigravityQuotaCredentialGeneration(probed.credential)) : undefined;
+  const result = await probeAntigravityUsageQuota(accessToken, credential.projectId);
   if (result.kind === "available") {
     const value = report(provider, result.source, result.quota);
-    if (value) { accountReportCurrent.set(value, () => isPassiveRead() ? antigravityReportOwnerMatches(owner, getAccountSet(provider)) : antigravityReportOwnerCurrent(owner)); accountReportObservationKeys.set(value, owner.accountKey); }
     // Only the summary endpoint reports real family buckets. The models fallback labels one model's
     // counter Gem/Cla, so it stays display-only: no windows, and retained summary clocks survive.
     const windows = result.source === "google-antigravity:retrieveUserQuotaSummary" ? antigravityDecisionWindows(result.quota) : [];

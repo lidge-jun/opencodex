@@ -1,10 +1,5 @@
 export const STATE_SWEEP_INTERVAL_MS = 60_000;
 
-// The composition root publishes its live configuration without importing it into core readers.
-let liveConfigReader: ((root: string) => import("../types").OcxConfig | null) | null = null;
-export function setStateStoreLiveConfigReader(reader: (root: string) => import("../types").OcxConfig | null): void { liveConfigReader = reader; }
-export function readStateStoreLiveConfig(root: string): import("../types").OcxConfig | null { return liveConfigReader?.(root) ?? null; }
-
 export interface GenerationContext {
   generation: number;
   providerNames: ReadonlySet<string>;

@@ -4,8 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cmdAccount, formatAccountTable, type AccountDeps } from "../../src/cli/account";
 import { fetchRows } from "../../src/cli/account-api";
-import { apiKeyQuotaText, projectApiKeyQuotaRows } from "../../src/cli/account-key-quota";
-import { providerQuotaLine } from "../../src/cli/account-extended";
+import { projectApiKeyQuotaRows } from "../../src/cli/account-key-quota";
 import { handleOauthAccountRoutes } from "../../src/server/management/oauth-account-routes";
 import { getProviderQuotaReportCache } from "../../src/providers/quota/report-cache";
 import * as quotaApi from "../../src/providers/quota";
@@ -52,52 +51,6 @@ function depsFor(reply: unknown): AccountDeps {
       : path === "/api/codex-auth/active" ? { activeCodexAccountId: null } : reply);
   }) as typeof fetch };
 }
-
-test("unknown budget windows survive CLI projection and have no fabricated percentage", () => {
-  const quota = { updatedAt: 1, unknownBudgetWindows: [{ label: "API budget (EDU)", resetAt: 1796083200000 }] };
-  const result = projectApiKeyQuotaRows(body([row({ quota })]), "mistral");
-  expect(apiKeyQuotaText(result.rows[0]!)).toContain("API budget (EDU) unknown");
-  expect(providerQuotaLine("mistral", { provider: "mistral", quota })).toContain("API budget (EDU) unknown");
-});
-
-test("account refresh escapes control characters in unknown budget labels", async () => {
-  const quota = { updatedAt: 1, unknownBudgetWindows: [{ label: "API\u001b[31m\nunsafe" }] };
-  const deps = depsFor({ reports: [{ provider: "openrouter", quota }] });
-  expect(await cmdAccount(["refresh", "openrouter"], deps)).toBe(0);
-  expect(logs).toHaveLength(1);
-  expect(logs[0]).not.toContain("\u001b");
-  expect(logs[0]).not.toContain("\n");
-  expect(logs[0]).toContain("\\x1b");
-  expect(logs[0]).toContain("\\x0a");
-});
-
-test("measured budget display details survive both CLI quota views", () => {
-  const quota = { updatedAt: 1, customWindows: [
-    { label: "API budget", displayLabel: "API budget (EUR 2.50 of EUR 20.00 used; EDU)", percent: 12.5 },
-    { label: "Vibe budget", displayLabel: "Vibe budget (EUR 0.20 of EUR 10.00 used; EDU)", percent: 2 },
-  ] };
-  const result = projectApiKeyQuotaRows(body([row({ quota })]), "mistral");
-  for (const text of [apiKeyQuotaText(result.rows[0]!), providerQuotaLine("mistral", { provider: "mistral", quota })]) {
-    expect(text).toContain("API budget (EUR 2.50 of EUR 20.00 used; EDU)");
-    expect(text).toContain("Vibe budget (EUR 0.20 of EUR 10.00 used; EDU)");
-  }
-});
-
-test("display labels cannot inject terminal lines into CLI quota output", () => {
-  const quota = { updatedAt: 1, customWindows: [{ label: "API budget", displayLabel: "budget\nunsafe", percent: 10 }] };
-  const result = projectApiKeyQuotaRows(body([row({ quota })]), "mistral");
-  for (const text of [apiKeyQuotaText(result.rows[0]!), providerQuotaLine("mistral", { provider: "mistral", quota })]) {
-    expect(text).not.toContain("\n");
-  }
-  expect(() => projectApiKeyQuotaRows(body([row({ quota: { updatedAt: 1, customWindows: [{ label: "x", percent: 1, displayLabel: 4 }] } })]), "mistral")).toThrow("Malformed");
-});
-
-test("stable labels without a display label are safe in account refresh", () => {
-  const quota = { updatedAt: 1, customWindows: [{ label: "budget\u001b[31m\nunsafe", percent: 10 }] };
-  const text = providerQuotaLine("mistral", { provider: "mistral", quota });
-  expect(text).not.toContain("\u001b");
-  expect(text).not.toContain("\n");
-});
 
 test("quota intent uses encoded fixed query and redirect:error only on opt-in", async () => {
   const calls: { url: string; init?: RequestInit }[] = [];

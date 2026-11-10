@@ -63,7 +63,8 @@ a human seeing the disclosure. Following `AGENTS_INSTALL.md` and `src/cli/star-p
   most once per version (`.telemetry-deferred` marker in the config dir) and writes **neither**
   `noticeShownAt` nor `decision`. The install stays `awaiting-notice` until a human sees the GUI popup
   or an interactive prompt.
-- `PUT /api/telemetry` and `POST /api/telemetry/notice` both require `hasHumanDashboardSession(ctx)`.
+- `PUT /api/telemetry` requires `hasHumanDashboardSession(ctx)`. There is no separate notice route:
+  only a decision records the notice (060 D13).
 - `ocx telemetry enable` refuses with `agent_consent_required` (non-zero exit) when `isAgentDriven()`;
   `ocx telemetry disable` is always allowed (opting out is never a consent risk).
 - `src/cli/config-command.ts` `set`/`unset` refuse the `telemetry` key, and `import` drops a
@@ -121,7 +122,7 @@ run through `validateTelemetryPayloadV1` before sending or previewing.
 - Each tick (startup jitter, then every 6 h) re-reads config passively from disk and re-evaluates
   `resolveTelemetryStatus`, so CLI and GUI changes take effect without a restart. The management
   routes also call `adoptPersistedTelemetry` and nudge the scheduler.
-- It sends only completed days on or after the UTC day of `decidedAt ?? noticeShownAt` (no pre-consent
+- It sends only completed days strictly after the UTC day of `decidedAt ?? noticeShownAt` (060 D1; no pre-consent
   backfill), at most **one day per tick**, oldest first, at most the last 7 days; 10 s
   `signalWithTimeout`, no in-tick retry. Sent days live in `<OPENCODEX_HOME>/telemetry-state.json`.
 - `tests/preload.ts` sets `OCX_TELEMETRY=0` so no test process ever sends.
@@ -136,7 +137,6 @@ declared in `route-registry.ts`:
   `preview` (the exact payload for the latest completed day; hash shown as a placeholder when no id
   exists).
 - `PUT /api/telemetry` `{ decision }` — human session only; `exempt: { reason: "session-only" }`.
-- `POST /api/telemetry/notice` — human session only, idempotent; `exempt: { reason: "session-only" }`.
 
 ## CLI
 

@@ -91,11 +91,7 @@ import { isLocalUpstream } from "../../lib/local-upstream";
 import { deepSeekImageFileBody, needsDeepSeekImageFiles } from "./deepseek-image-files";
 import type { ProviderFetchOptions } from "./fetch-helpers";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
-import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuota, recordPassiveAccountQuota } from "../../providers/quota";
-import { bindMuseQuotaConfig, captureMuseQuotaOwner, type MuseQuotaOwner } from "../../providers/quota/muse-owner";
-import { captureProviderAccountQuotaEpoch } from "../../providers/quota/account-cache";
-import { isMuseSubscriptionUsagePayload, parseMuseSubscriptionUsage } from "../../providers/muse-subscription-usage";
-import { runPassiveReadSync } from "../../lib/passive-read";
+import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuota } from "../../providers/quota";
 import { checkOutboundBodySize, describeOutboundBodyRefusal } from "./outbound-body-guard";
 import { formatErrorResponse } from "../../bridge";
 import { bindRouteReasoningReplayScope } from "./core-replay";
@@ -366,17 +362,6 @@ export async function prepareResponsesTransport(
    * the case the fence exists for. Stays 0 for every provider without a passive quota.
    */
   let passiveQuotaWriterGeneration = 0;
-  let passiveQuotaOwner: MuseQuotaOwner | null = null;
-  let passiveQuotaEpoch = 0;
-  const createPassiveQuotaObserver = (): ((payload: unknown) => void) => {
-    const owner = passiveQuotaOwner, generation = passiveQuotaWriterGeneration, epoch = passiveQuotaEpoch;
-    return payload => {
-      // Deferred stream replacement invalidates the receipt for the earlier response.
-      if (!owner || owner !== passiveQuotaOwner || !isMuseSubscriptionUsagePayload(payload)) return;
-      const quota = parseMuseSubscriptionUsage(payload);
-      if (quota) recordPassiveAccountQuota(route.providerName, owner.accountId, quota, generation, owner, epoch);
-    };
-  };
   const copilotRequestedModel = route.modelId;
   /** Project only bounded Copilot refusal metadata; upstream bodies and session tokens never reach the client. */
   const copilotRefusalResponse = (error: unknown): Response | undefined => {
@@ -933,8 +918,6 @@ export async function prepareResponsesTransport(
           const ws = codexWsExecutorBinding(execute);
           const fetchImpl = (route.provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? ws?.http ?? execute;
           const binding = requestBindings.get(wireRequest);
-          // Each attempt starts without attribution; only the admitted final wire can prove it.
-          if (hasPassiveAccountQuota(route.providerName)) passiveQuotaOwner = null;
           const snapshot = anthropicInstance !== undefined && binding?.kind === "oauth"
             ? binding.snapshot : undefined;
           const target = destination instanceof Request ? destination.url : String(destination);
@@ -982,18 +965,7 @@ export async function prepareResponsesTransport(
               distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target),
               input,
               { ...physicalInit, redirect: "manual",
-                ...physicalSendObserverInit(observeAutoPause, target, deferredCopilotNote ? commitKeyAttemptSend : undefined,
-                  hasPassiveAccountQuota(route.providerName) ? (sameDestination, headers) => {
-                    passiveQuotaOwner = null;
-                    try {
-                      if (!sameDestination || target !== wireRequest.url || binding?.kind !== "oauth"
-                        || headers.get("authorization") !== `Bearer ${binding.snapshot.accessToken}` || headers.has("x-api-key")
-                        || !runPassiveReadSync(() => selectionIsCurrent(binding))) return;
-                      passiveQuotaWriterGeneration = captureConfigGeneration();
-                      passiveQuotaEpoch = captureProviderAccountQuotaEpoch(route.providerName);
-                      passiveQuotaOwner = bindMuseQuotaConfig(captureMuseQuotaOwner(route.providerName, binding.snapshot.accountId, binding.snapshot.generation), config, route.providerName);
-                    } catch { /* Quota attribution is best-effort and never blocks the send. */ }
-                  } : undefined),
+                ...physicalSendObserverInit(observeAutoPause, destination instanceof Request ? destination.url : String(destination), deferredCopilotNote ? commitKeyAttemptSend : undefined),
                 ...(hasVertexRequestAuthority(wireRequest) ? physicalSendGuardInit((finalTarget, finalHeaders) => {
                     if (!selectionIsCurrent(requestBindings.get(wireRequest)) || !vertexRequestAuthorityIsCurrent(wireRequest, finalTarget, finalHeaders)) throw new Error("Vertex credential authority changed before dispatch");
                   }) : {}) },
@@ -1254,6 +1226,10 @@ export async function prepareResponsesTransport(
         if (anthropicInstance !== undefined && anthropicRouting!.hasAnthropicFailoverQuorum()) {
           anthropicPoolAccountId = resolved.accountId;
         }
+        // Captured beside the account it fences, so the two can never disagree.
+        if (hasPassiveAccountQuota(route.providerName)) {
+          passiveQuotaWriterGeneration = captureConfigGeneration();
+        }
         if (route.providerName === "kiro") {
           // `{}` is intentional: this is an account-scoped request with no stored routing metadata.
           // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
@@ -1512,7 +1488,7 @@ export async function prepareResponsesTransport(
     adapterBindings,
     commitResolvedOAuthSelection,
     refreshResolvedOAuthSelection,
-    createPassiveQuotaObserver,
+    get passiveQuotaWriterGeneration(): number { return passiveQuotaWriterGeneration; },
     applyFailoverSnapshot,
     selectionIsCurrent,
     resolveSelectionAdapter,

@@ -4,6 +4,7 @@
 // Probe rows confer no update authority. Child rows retain only their own child.
 import { orchestratedChildReview } from "./update-review-orchestrated-child";
 import { orchestratedEntryReview } from "./update-review-orchestrated-entry";
+import { signedSupplyReview } from "./update-review-signed-supply";
 
 const basePrimitiveAllowlist: readonly (readonly [string, string])[] = [
   ["src/update/config-preflight.ts:<module>:import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from \"node:fs\";", "read-only config preflight: open with O_RDONLY | O_NONBLOCK, inspect and read the fd, then close it"],
@@ -216,4 +217,4 @@ const basePrimitiveAllowlist: readonly (readonly [string, string])[] = [
   ["src/update/npm-install.mjs:runNpmInstall:process.stderr.write(chunk)","bounded helper protocol output; no successful update publication"],
   ["src/update/refresh-scheduler.ts:createRefreshScheduler:deps.write(tag, latest, deps.now())","version badge cache only; no runtime or install authority"]
 ];
-export const updatePrimitiveAllowlist: readonly (readonly [string, string])[] = [...basePrimitiveAllowlist, ...orchestratedEntryReview.primitive, ...orchestratedChildReview.primitive];
+export const updatePrimitiveAllowlist: readonly (readonly [string, string])[] = [...basePrimitiveAllowlist, ...orchestratedEntryReview.primitive, ...orchestratedChildReview.primitive, ...signedSupplyReview.primitive];

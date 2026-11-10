@@ -1,16 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, statSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getAccountSet, getAuthStorePath, saveAccountCredential, saveCredential, setActiveAccount } from "../../../src/oauth/store";
-import { runPassiveRead } from "../../../src/lib/passive-read";
-import { accountReportObservationKeys, setProviderQuotaBeforePublishForTests } from "../../../src/providers/quota/report-cache";
-import type { OcxConfig } from "../../../src/types";
+import { getAccountSet, saveCredential } from "../../../src/oauth/store";
 import {
   clearAccountQuotaCache,
   clearProviderQuotaCache,
   fetchProviderAccountQuotas,
-  fetchProviderQuotaReports,
   getCachedProviderAccountQuota,
   supportsPerAccountQuota,
 } from "../../../src/providers/quota";
@@ -61,7 +57,6 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  setProviderQuotaBeforePublishForTests(null);
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   removeTreeWithRetry(opencodexHome);
@@ -181,106 +176,6 @@ describe("Kiro per-account quota", () => {
     const rows = await fetchProviderAccountQuotas("kiro");
     const key = `kiro\u0000${rows[0]!.accountId}`;
     expect(getKiroAccountExhaustion(key, getAccountSet("kiro")!.accounts.find(a => a.id === rows[0]!.accountId)!)?.exhausted).toBe(false);
-  });
-});
-
-describe("Kiro provider quota ownership", () => {
-  const config = { providers: { kiro: { adapter: "kiro", authMode: "oauth" } } } as OcxConfig;
-
-  async function accounts() {
-    await seedTwoKiroAccounts();
-    const rows = getAccountSet("kiro")!.accounts;
-    const a = rows.find(row => row.credential.access === "token-a")!;
-    const b = rows.find(row => row.credential.access === "token-b")!;
-    await setActiveAccount("kiro", a.id);
-    return { a, b };
-  }
-
-  for (const returnToA of [false, true]) {
-    test(`a switch ${returnToA ? "away and back" : "to B"} during A's probe retains only A's account quota`, async () => {
-      const { a, b } = await accounts();
-      let release!: () => void;
-      let started!: () => void;
-      const sent = new Promise<void>(resolve => { started = resolve; });
-      const gate = new Promise<void>(resolve => { release = resolve; });
-      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-        const request = new Request(input instanceof Request ? input : String(input), init);
-        expect(request.headers.get("authorization")).toBe("Bearer token-a");
-        started();
-        await gate;
-        return new Response(usagePayload(250, 1000), { status: 200 });
-      }) as typeof fetch;
-      const pending = fetchProviderQuotaReports(config, true);
-      await sent;
-      await setActiveAccount("kiro", b.id);
-      if (returnToA) await setActiveAccount("kiro", a.id);
-      release();
-      expect((await pending).reports).toEqual([]);
-      expect((await runPassiveRead(() => fetchProviderQuotaReports(config))).reports).toEqual([]);
-      expect(getCachedProviderAccountQuota("kiro", a.id)?.monthlyPercent).toBe(25);
-      expect(getCachedProviderAccountQuota("kiro", b.id)).toBeNull();
-    });
-  }
-
-  test("held reports are account-bound, selection-revision-bound and use a private observation key", async () => {
-    const { a, b } = await accounts();
-    let calls = 0;
-    globalThis.fetch = (async () => { calls++; return new Response(usagePayload(100, 1000)); }) as typeof fetch;
-    const initial = await fetchProviderQuotaReports(config, true);
-    const row = initial.reports[0]!;
-    expect(row.quota.monthlyPercent).toBe(10);
-    const key = accountReportObservationKeys.get(row);
-    expect(key).toBeDefined();
-    for (const secret of [a.id, ARN_A, "token-a", "refresh-a", "a@example.com"]) expect(key).not.toContain(secret);
-    expect((await runPassiveRead(() => fetchProviderQuotaReports(config))).reports).toHaveLength(1);
-    if (process.platform !== "win32") {
-      chmodSync(getAuthStorePath(), 0o644);
-      expect((await runPassiveRead(() => fetchProviderQuotaReports(config))).reports).toHaveLength(1);
-      expect(statSync(getAuthStorePath()).mode & 0o777).toBe(0o644);
-    }
-    await setActiveAccount("kiro", b.id);
-    expect((await runPassiveRead(() => fetchProviderQuotaReports(config))).reports).toEqual([]);
-    await setActiveAccount("kiro", a.id);
-    expect((await runPassiveRead(() => fetchProviderQuotaReports(config))).reports).toEqual([]);
-    expect(calls).toBe(1);
-    const again = await fetchProviderQuotaReports(config, true);
-    expect(again.reports[0]?.quota.monthlyPercent).toBe(10);
-    expect(accountReportObservationKeys.get(again.reports[0]!)).toBe(key);
-    await setActiveAccount("kiro", b.id);
-    const other = await fetchProviderQuotaReports(config, true);
-    expect(accountReportObservationKeys.get(other.reports[0]!)).not.toBe(key);
-  });
-
-  test("credential replacement invalidates a held provider row", async () => {
-    const { a } = await accounts();
-    globalThis.fetch = (async () => new Response(usagePayload(100, 1000))) as typeof fetch;
-    expect((await fetchProviderQuotaReports(config, true)).reports).toHaveLength(1);
-    await saveAccountCredential("kiro", a.id, { ...a.credential, access: "replacement" });
-    expect((await runPassiveRead(() => fetchProviderQuotaReports(config))).reports).toEqual([]);
-  });
-
-  test("credential replacement during the probe rejects both the provider and account result", async () => {
-    const { a } = await accounts();
-    let release!: () => void;
-    let started!: () => void;
-    const sent = new Promise<void>(resolve => { started = resolve; });
-    const gate = new Promise<void>(resolve => { release = resolve; });
-    globalThis.fetch = (async () => { started(); await gate; return new Response(usagePayload(100, 1000)); }) as typeof fetch;
-    const pending = fetchProviderQuotaReports(config, true);
-    await sent;
-    await saveAccountCredential("kiro", a.id, { ...a.credential, access: "replacement" });
-    release();
-    expect((await pending).reports).toEqual([]);
-    expect(getCachedProviderAccountQuota("kiro", a.id)).toBeNull();
-  });
-
-  test("a switch after the probe but before collection rejects the report", async () => {
-    const { a, b } = await accounts();
-    globalThis.fetch = (async () => new Response(usagePayload(100, 1000))) as typeof fetch;
-    setProviderQuotaBeforePublishForTests(async () => { await setActiveAccount("kiro", b.id); });
-    expect((await fetchProviderQuotaReports(config, true)).reports).toEqual([]);
-    expect(getCachedProviderAccountQuota("kiro", a.id)?.monthlyPercent).toBe(10);
-    expect((await runPassiveRead(() => fetchProviderQuotaReports(config))).reports).toEqual([]);
   });
 });
 

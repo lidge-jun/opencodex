@@ -6,6 +6,7 @@ import type { QuotaFailureCode } from "../../../../src/providers/quota-types";
 import type { ProviderSortMode, WorkspaceItem } from "../../provider-workspace/catalog";
 import type { AccountQuota } from "../../codex-quota-utils";
 import type { BrowserLaunch } from "../../oauth-browser-launch";
+import type { ApiTargetCapture } from "../../api";
 
 export type { ProviderSortMode, WorkspaceItem };
 
@@ -59,6 +60,7 @@ export type OAuthAccountRow = AccountQuotaReading & {
   id: string;
   alias?: string;
   email?: string;
+  accountLabel?: string;
   maskedLabel?: string;
   active: boolean;
   expiresAt?: number;
@@ -152,3 +154,13 @@ export type ProviderUpdateResult = {
   error?: string;
   xaiResponsesOptInState?: WorkspaceItem["xaiResponsesOptInState"];
 };
+
+/**
+ * A provider update callback. The optional capture is the form's render-owned target;
+ * the transport must use it instead of re-deriving the live target at send time.
+ */
+export type ProviderUpdateCallback = (
+  name: string,
+  patch: ProviderUpdatePatch,
+  capture?: ApiTargetCapture,
+) => Promise<ProviderUpdateResult>;

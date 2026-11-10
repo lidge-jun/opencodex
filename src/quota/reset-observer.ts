@@ -56,6 +56,7 @@ export function observeQuotaSnapshot(input: {
   readonly windows: ReadonlyArray<QuotaWindowObservation>;
   readonly now?: number;
   readonly retainAbsentShortWindow?: boolean;
+  /** Display-only windows the producer reports as unknown; their last baseline is kept. */
   readonly retainUnknownWindows?: ReadonlyArray<{ window: string; resetAt: number }>;
 }): QuotaResetEvent[] {
   try {

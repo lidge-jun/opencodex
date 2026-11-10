@@ -35,7 +35,8 @@ export function mistralUnknownBudgetWindows(quota: ProviderLikeQuota): { window:
   return (quota.unknownBudgetWindows ?? []).flatMap(entry => {
     const match = /^(API budget|Vibe budget)(?: \((?:FREE|INDIVIDUAL|EDU|TEAM)\))?$/.exec(entry.label);
     return match && typeof entry.resetAt === "number" && Number.isFinite(entry.resetAt) && entry.resetAt > 0
-      ? [{ window: `custom:${match[1]}`, resetAt: entry.resetAt }] : [];
+      ? [{ window: `custom:${match[1]}`, resetAt: entry.resetAt }]
+      : [];
   });
 }
 

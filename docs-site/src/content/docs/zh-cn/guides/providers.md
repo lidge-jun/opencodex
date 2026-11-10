@@ -222,7 +222,7 @@ API Key 提供商，也不负责让 WorkBuddy 桌面客户端使用 OpenCodex �
 
 ## 3. API 密钥目录
 
-opencodex 内置 106 个预设：85 个密钥预设、17 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 107 个预设：86 个密钥预设、17 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 
@@ -305,7 +305,7 @@ Bearer 密钥；公开模型列表不能验证密钥有效性。
 重放要求显式 `store: false`、完整输入且仅含客户端执行的工具；声明了 `web_search` 等托管工具时，即使未观察到工具事件也不会自动重放。
 
 MiniMax 和 MiniMax (CN) 的提供商卡片也会在配置的密钥有有效 Coding Plan 时显示用量。
-仪表盘读取 5 小时窗口，以及套餐提供时的每周窗口。这些观测不会否决模型路由；quota 密钥策略可用它们排序密钥，被动配额池也可显示当前密钥的窗口。
+仪表盘读取 5 小时窗口，以及套餐提供时的每周窗口；这些仅用于展示，不会改变模型路由。
 
 **OpenCode Zen**（`opencode-zen`）使用 [opencode.ai/auth](https://opencode.ai/auth) 签发的 API 密钥访问 `https://opencode.ai/zen/v1`。免费模型可能触发每分钟约 15–20 次请求的短窗口限流（社区观测；OpenCode 未公布 RPM）。限流 429 缺少 `Retry-After` 时，opencodex 会添加说明和合成的 `Retry-After`；有效的上游头优先。同密钥重试仍须通过 [`retryOn429`](/zh-cn/reference/configuration/) 启用。
 

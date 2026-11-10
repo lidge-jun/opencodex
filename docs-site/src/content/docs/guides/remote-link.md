@@ -9,7 +9,7 @@ A machine link connects an OpenCodex **Home** computer to a **Child** computer o
 
 - The Home computer can log in to the Child with an OpenSSH key.
 - For a Child-initiated link, the Child can log in to Home with an OpenSSH key (password login is not supported).
-- OpenCodex 2.66.0 or later is installed on the Child computer, and on Home for a Child-initiated link.
+- OpenCodex 2.66.0 or later on Home (and on the Child for a Child-initiated link or full Child install). When adding a Child from Home, a bare SSH host needs no pre-installed Node, Bun, or OpenCodex if Home has a verified `ocx-child` build for the Child's platform: Home can then plant that standalone binary over SSH during onboarding. The npm package and the desktop app do not include `ocx-child` builds; see [Ephemeral Child machines](#ephemeral-child-machines-ocx-child) for where Home looks for one.
 - Both computers run macOS, Linux, or Windows x64. Windows requires OpenSSH Server and Windows PowerShell; Git Bash and curl are not required.
 - The dashboard that adds a Child from Home is opened on Home itself or through a paired Hub session. Turning the current computer into a Child requires an operator-paired dashboard session; a credentialless local dashboard session cannot commit that routing change.
 
@@ -21,7 +21,7 @@ Password SSH is not supported. Links can be started from Home or Child. Windows 
 2. Choose **Home**, then **Continue**. The SSH host list opens.
 3. Choose a host from the SSH candidates, or enter an SSH config alias.
 4. Run the connection test and compare the offered host fingerprint with the fingerprint for the machine you intend to use. Comparing it helps detect a wrong host or a changed host key before SSH trusts the host.
-5. Confirm the fingerprint, then connect the Child.
+5. Confirm the fingerprint, then choose **Connect child** (or **Plant lightweight agent & connect** when connecting a bare SSH host that does not have OpenCodex installed yet).
 
 The dashboard does not ask you to enter a token. It probes the host first, and it cannot apply the link until you explicitly confirm the fingerprint.
 
@@ -97,12 +97,12 @@ These reads need an OpenCodex version with the Remote Link management relay on b
 
 ## Remove a Child
 
-Select **Disconnect** for the Child and confirm the alias. The Home stops the tunnel, revokes that Child's link key, and removes the saved link record.
+Select **Disconnect** for the Child and confirm the alias. The Home stops the tunnel, revokes that Child's link key, and removes the saved link record. On a lightweight (`ocx-child`) Child, disconnecting restores `~/.codex` and stops the relay with zero background processes while keeping `~/.cache/opencodex/bin/ocx-child` cached by default for fast reconnects; check **Also delete the planted lightweight agent binary from the remote computer** (or pass `--purge` to `ocx link revoke`) to delete the planted binary as well. Home runs that purge through the planted binary at `~/.cache/opencodex/bin/ocx-child` (`%LOCALAPPDATA%\opencodex\bin\ocx-child.exe` on Windows), never through another `ocx-child` on `PATH`. If that file is missing, or the Child does not confirm that it deleted the binary, Disconnect reports an error and keeps the link so you can retry, disconnect without the purge option, or remove the file yourself. `--purge` applies only to a lightweight Child: Home refuses it for a full OpenCodex install, and for a link saved before Home recorded the Child type it checks the Child first.
 
 If the Home cannot reach the Child to run its disconnect command, choose **Remove here only**. This removes the local tunnel, key, and record. Then log in to the Child and run:
 
 ```bash
-ocx disconnect
+ocx disconnect   # or ~/.cache/opencodex/bin/ocx-child detach on a lightweight Child
 ```
 
 To disconnect a Child-initiated link, run `ocx disconnect` on the Child. It disconnects the client tunnel and revokes the link on Home over SSH. If Home revocation fails, it prints: `Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
@@ -145,6 +145,8 @@ ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
 ```
+
+`ocx link status` needs the local admin token on a listener that only this machine can reach. When the public listener is bound to a non-loopback address, for example a Hub on `0.0.0.0`, no TCP listener qualifies: the hub management listener is reached through Tailscale Serve, so it refuses the raw admin token for link routes. On macOS and Linux the proxy therefore also opens a private Unix socket, `<OPENCODEX_HOME>/run/control-<port>.sock`, in a directory only your user can enter, and `ocx link status` uses it automatically. The socket answers only `GET /api/link/status` and still requires the admin token. Windows and runtimes older than this change keep the TCP path, where the read returns `403` on such a Hub.
 
 ## Related guides
 
@@ -193,11 +195,28 @@ The check covers the intent folder and record. It does not protect against repla
 
 On the Home, run `ocx link probe child-a --json` to inspect the offered SSH fingerprint, key type and OpenCodex version. Verify the fingerprint through a trusted source. Then run `ocx link add child-a --expect-fingerprint SHA256:… --json`. The command probes again and refuses a mismatch before storing trust or issuing a key. Without the fingerprint flag, it requires an interactive terminal and an explicit `yes` after showing the fingerprint. It never prints the link key.
 
-Home-initiated connections now restart the Child after saving its connection, including capable older Child installations. The Child must already serve standalone OpenCodex on its configured port and expose bound restart support. POSIX Children need curl; Windows uses a bounded loopback HTTP request through .NET. Update or disconnect a Child that fails this preflight. Desktop and system OpenCodex installations take precedence over generic PATH shims; broken candidates are skipped. Windows x64 Children use encoded PowerShell commands without consuming key stdin.
+Home-initiated connections now restart the Child after saving its connection, including capable older Child installations. The Child must already serve standalone OpenCodex on its configured port and expose bound restart support. POSIX Children need curl; Windows uses a bounded loopback HTTP request through .NET. Update or disconnect a Child that fails this preflight. On macOS and Linux Children, Home first runs the OpenCodex installation that most recently started serving the Child, including an npm install under a custom prefix, so an older desktop app or PATH copy no longer answers for it. If that installation is gone or cannot report its version, Desktop and system OpenCodex installations take precedence over generic PATH shims; broken candidates are skipped. Windows x64 Children use encoded PowerShell commands without consuming key stdin. The preflight reads `ocx config show --json` under the runner's 4 MiB capture limit, so a Child with a large saved configuration still accepts a link; output past that limit answers `child_preflight_output_limit` and names the command to trim. When a phase fails, `ocx link add` prints the phase together with the Child's own reason, for example an invalid saved configuration or the failing command's last error line. That reason is shortened and has OpenCodex keys and URL query strings removed.
+
+### Ephemeral Child machines (`ocx-child`)
+
+For disposable SSH devboxes, containers and lightweight cloud VMs where installing the full Bun OpenCodex runtime is unnecessary, Home can stream a SHA-256-verified standalone `ocx-child` binary (no Node or Bun required on the Child) over SSH `stdin` into `~/.cache/opencodex/bin/ocx-child` (`%LOCALAPPDATA%\opencodex\bin\ocx-child.exe` on Windows) when you choose **Plant lightweight agent & connect** in `#remote` or run `ocx link add <alias> --plant --expect-fingerprint SHA256:…` (an interactive `ocx link add <alias>` asks once before planting). The Child downloads nothing, so it needs no outbound internet access, but a POSIX Child must have `sha256sum`, `shasum`, or `openssl`: the binary is checked against its SHA-256 before it is installed or run, and without one of those tools the plant is refused (`hash_tool_unavailable`). You can also pre-place `ocx-child` in `~/.local/bin/ocx-child`, `~/.cache/opencodex/bin/ocx-child`, or `PATH`. Before enrollment, Home probes every full `ocx` candidate first and falls back to `ocx-child` when no runnable full `ocx` is present; once `$OPENCODEX_HOME/child/state.json` exists, remote commands keep targeting `ocx-child` until it detaches.
+
+Home plants only a build it can verify, and it does not download or build one. The npm package and the desktop app ship no `ocx-child` builds, so on a packaged install the probe reports the bare host as not plantable (`plantable: false`, `plantUnavailableReason: "artifact_not_found"`) until you provide one. Home looks in these places, in order, for the Child's target (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`, or `windows-x64`):
+
+1. The directory named by `OPENCODEX_CHILD_BIN_DIR` on Home: `ocx-child-<target>` (`ocx-child-windows-x64.exe` for Windows) or `<target>/ocx-child`, plus plain `ocx-child` when the Child has the Home's own target. The file must be listed in a `SHA256SUMS` file in the same directory.
+2. A `native-bin/` directory next to the OpenCodex sources or the running executable, with the same `SHA256SUMS` rule. No OpenCodex package provides this directory today.
+3. In a source checkout only, `native/ocx-child/target/release/ocx-child` when the Child has the Home's own target.
+4. `$OPENCODEX_HOME/cache/ocx-child/<Home version>/ocx-child-<target>` with a `SHA256SUMS` file beside it. Nothing fills this cache automatically; copy builds there yourself.
+
+To prepare a build, run `cargo build --release --locked --manifest-path native/ocx-child/Cargo.toml` in a source checkout (cross-compiling for other targets), copy the result to one of those directories under the `ocx-child-<target>` name, and write its `SHA256SUMS` line with `sha256sum ocx-child-<target> >> SHA256SUMS` (or `shasum -a 256`). The files must not be symlinks or group- or world-writable.
+
+Unlike a full `ocx` Child, a clean detached `ocx-child` host needs no pre-running background daemon before `ocx link add`: Home checks target-port availability and `~/.codex/config.toml` ownership before committing (`409 child_port_busy` if port `10100` is held by another process, or `409 child_external_provider_conflict` if another model provider or custom base URL already owns `config.toml`, leaving Child files untouched and rolling back any newly planted binary), pipes the link credential over SSH stdin, starts `ocx-child serve`, and confirms an authenticated `/v1/catalog` relay. Connected rows in `#remote` display a **Lightweight** / **Full install** badge and a **Home settings synced** / **Sync needed** parity badge. Running `ocx link revoke --link-id <id>` keeps the cached binary for fast re-attach, whereas `ocx link revoke --link-id <id> --purge` (or `ocx-child detach --purge` on the Child) also deletes the planted binary from the managed cache directory.
+
+Keep `OPENCODEX_HOME` and `CODEX_HOME` pointed at the same directories throughout the connection. If detach reports a restore or shutdown error, keep the Child's recovery files and resolve the error before retrying.
 
 ### Windows computers
 
-A Windows x64 Child needs OpenSSH Server, Windows PowerShell and the standalone `ocx.exe`. Home recognizes Windows during the probe, records it with the link, and runs every Child command through PowerShell over the same pinned SSH connection, whether the SSH default shell is cmd or PowerShell. The link key still travels only on standard input. Closing the SSH connection ends the remote `ocx` command. If Windows PowerShell on the Child cannot load the helper that ties `ocx.exe` to the connection, for example under Constrained Language Mode, the command is refused and nothing runs. If Home cannot tell which platform the Child runs, it stops before issuing a link key.
+A Windows x64 Child needs OpenSSH Server, Windows PowerShell and either standalone `ocx.exe` or lightweight `ocx-child.exe`. Home recognizes Windows during the probe, records it with the link, and runs every Child command through PowerShell over the same pinned SSH connection, whether the SSH default shell is cmd or PowerShell. The link key still travels only on standard input. Closing the SSH connection ends the selected remote Child command. If Windows PowerShell on the Child cannot load the helper that contains the selected executable in a kill-on-close Job, for example under Constrained Language Mode, the command is refused and nothing runs. If Home cannot tell which platform the Child runs, it stops before issuing a link key.
 
 Run `ocx link cleanup` on Home to inspect recorded Child platforms without changing them. Current Home releases disconnect Windows Children through PowerShell. If a remote disconnect fails, resolve the reported shell or installation error and retry; **Remove here only** remains an explicit recovery action that can leave the Child needing a local disconnect.
 

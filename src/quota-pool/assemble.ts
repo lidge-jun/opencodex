@@ -25,8 +25,6 @@
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import type { ProviderQuota, ProviderQuotaWindow } from "../providers/quota-types";
 import { isDisplayOnlyQuota } from "../providers/quota-types";
-import { providerQuotaRoutingBinding } from "../providers/quota-routing-cache";
-import { resolveEnvValue } from "../config/proxy-env";
 import type { StoredAccountQuota } from "../codex/quota-types";
 import { isTerminalShortWindow, resetAtToMs } from "../codex/quota-types";
 import { runPassiveRead } from "../lib/passive-read";
@@ -35,7 +33,7 @@ import { listCodexAuthAccountsSnapshot } from "../codex/auth-api";
 import { latestCodexQuotaObservationSource } from "../codex/quota";
 import { ACCOUNT_LOG_LABEL_RE, oauthAccountLogLabel } from "../codex/account-label";
 import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers-destination";
-import { hasCodexPoolProvider, heldProviderQuotaReports, keyReportCredentialIds, keyScopedEvidence, routingEvidence, type ProviderQuotaReport } from "../providers/quota/report-cache";
+import { hasCodexPoolProvider, heldProviderQuotaReports, type ProviderQuotaReport } from "../providers/quota/report-cache";
 import {
   accountCacheKey,
   accountQuotaCache,
@@ -171,6 +169,7 @@ function customWindow(window: ProviderQuotaWindow, source: QuotaPoolSource, upda
 
 /** A `ProviderQuota` (provider report or per-account cache row). */
 export function providerQuotaWindows(quota: ProviderQuota, source: QuotaPoolSource, now: number): QuotaPoolWindow[] {
+  // Display-only readings (Mistral budgets) never become pool capacity or exhaustion evidence.
   if (isDisplayOnlyQuota(quota)) return [];
   const out: QuotaPoolWindow[] = [];
   const push = (window: QuotaPoolWindow | null) => { if (window) out.push(window); };
@@ -258,11 +257,11 @@ function codexAccounts(identity: QuotaPoolIdentity, accounts: Awaited<ReturnType
  * Per-account OAuth providers have no calibrated plan-to-capacity table (the Codex weights describe
  * Codex plans only), so each routable account counts once.
  */
-function oauthAccounts(identity: QuotaPoolIdentity, provider: string, now: number, config: OcxConfig): TrackedAccount[] {
+function oauthAccounts(identity: QuotaPoolIdentity, provider: string, now: number): TrackedAccount[] {
   const set = getAccountSet(provider);
   if (!set) return [];
   return set.accounts.map(row => {
-    const quota = getCachedProviderAccountQuota(provider, row.id, config);
+    const quota = getCachedProviderAccountQuota(provider, row.id);
     const entry = accountQuotaCache.get(accountCacheKey(provider, row.id));
     const windows = quota ? providerQuotaWindows(quota, "measured", now) : [];
     const account: QuotaPoolAccount = {
@@ -314,12 +313,10 @@ function enabled(provider: OcxProviderConfig | undefined): provider is OcxProvid
 
 async function assemble(config: OcxConfig, identity: QuotaPoolIdentity, deps: QuotaPoolDeps): Promise<QuotaPool> {
   const now = (deps.now ?? Date.now)();
-  const codex = hasCodexPoolProvider(config) ? (await (deps.codexSnapshot ?? listCodexAuthAccountsSnapshot)(config)).accounts : [];
-  // The snapshot yields; select providers and validate held reports against the same current
-  // configuration used below, with no further await between validation and projection.
   const names = Object.keys(config.providers).filter(name => enabled(config.providers[name])).sort();
-  const reports = new Map(heldProviderQuotaReports(config).reports.map(report => [report.provider, report]));
+  const reports = new Map(heldProviderQuotaReports(names).reports.map(report => [report.provider, report]));
   const codexPool = hasCodexPoolProvider(config);
+  const codex = codexPool ? (await (deps.codexSnapshot ?? listCodexAuthAccountsSnapshot)(config)).accounts : [];
   const providers: QuotaPoolProvider[] = [];
   for (const name of names) {
     const provider = config.providers[name]!;
@@ -337,21 +334,16 @@ async function assemble(config: OcxConfig, identity: QuotaPoolIdentity, deps: Qu
       rows = claudeCliAccounts(identity, name, deps, now);
     } else if (supportsPerAccountQuota(name) || hasPassiveAccountQuota(name)) {
       tracked = true;
-      rows = oauthAccounts(identity, name, now, config);
+      rows = oauthAccounts(identity, name, now);
       poolFromRows = provider.authMode === "oauth";
     }
     const report = reports.get(name);
     if (!tracked && !report) continue;
-    // Claude's held report cannot outlive the identity that produced it.
-    const evidence = report && (routingEvidence.get(report) ?? keyScopedEvidence.get(report));
-    const credential = resolveEnvValue(provider.apiKey)?.trim();
-    const reportQuota = report && (keyReportCredentialIds.has(report)
-      ? (provider.apiKeyPool?.length ?? 0) <= 1 && credential && evidence?.binding === providerQuotaRoutingBinding(name, provider, credential)
-        ? evidence.quota : undefined
-      : report.quota);
+    // Account rows carry their own observation times. Claude never falls back to a held report,
+    // which may have been captured before the most recent recorded identity change.
     const windows = poolFromRows && (rows.length > 0 || provider.adapter === "claude-cli")
       ? pooledWindows(rows.map(row => row.pool), now)
-      : report && reportQuota ? providerQuotaWindows(reportQuota, reportSource(report), now) : [];
+      : report ? providerQuotaWindows(report.quota, reportSource(report), now) : [];
     const pooled: QuotaPoolProvider["pooled"] = { windows };
     const next = nextResetAt(windows);
     if (next) pooled.nextResetAt = next;

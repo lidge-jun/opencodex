@@ -4,11 +4,6 @@
 quotas for restart recovery. The Codex snapshot also carries bounded observation history
 and separately identity-bound main-policy evidence; provider snapshots include Kiro's
 identity-bound exhaustion verdicts. Their existing hydration and expiry rules govern readers.
-Meta Muse rows carry a private account and credential incarnation digest and a provider-configuration fingerprint. Hydration requires the same enabled OAuth provider, adapter and destination as the observation; missing or mismatched bindings are unknown. A cold routing lookup validates them against the home-scoped adopted config without network access, independently of active selection. Selection revisions fence in-flight publication, not retained observations or reset baselines. Managed credential replacement changes the incarnation even if the old credential is later restored. The digests are excluded from quota responses.
-
-The state-store sweeper exposes a home-scoped live-config reader registered by the composition root; quota hydration cannot import the registration module without crossing the Lab boundary. Without an adopted config, a persisted Muse row stays unavailable to unscoped account readers until reconciliation proves the binding; a standalone reader can use it only when its supplied configuration matches. Ranking, account management and quota-pool projection pass their caller's config, and the fallback rechecks ownership at delayed publication. Ranking reuses each quota only within a synchronous decision and revalidates ownership before returning it. Observed credential mismatches retire the captured owner; active reconciliation persists rejection of a mismatched stored provider configuration. Both key probes and in-band observations verify the adopted provider or, when none exists, hydrate first and replace an existing row only for its same account and provider configuration. A configless historical row is discarded rather than adopted under a new provider.
-
-Muse key-mint quota probes serialize by account: a caller with a replacement credential cannot join the old owner's result or start a parallel mint. A later attempt remains subject to the account's success spacing and failure backoff.
 
 ## Bounded write deferral
 

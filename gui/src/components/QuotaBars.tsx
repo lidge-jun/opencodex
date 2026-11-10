@@ -13,6 +13,8 @@ export type QuotaBarRow = {
   windowKey?: QuotaWindowKey;
   customLabel?: string;
   label: string;
+  /** Presentation-only text; identity stays in customLabel. */
+  displayLabel?: string;
   limitLabel: string;
   percent: number;
   resetAt?: number;
@@ -109,13 +111,14 @@ export function buildQuotaRows(quota: AccountQuota | null, plan: string | null |
   }
   for (const w of displayQuota.customWindows ?? []) {
     const customLabel = canonicalCustomWindowLabel(w.label);
-    const localized = w.displayLabel ?? localizeCustomQuotaLabel(customLabel, t);
+    const localized = localizeCustomQuotaLabel(customLabel, t);
     ranked.push({
       rank: rawCustomWindowRank(customLabel),
       row: {
         id: JSON.stringify([w.modelId ?? null, w.label, w.resetAt ?? null]),
         customLabel,
         label: localized,
+        ...(typeof w.displayLabel === "string" && w.displayLabel.trim() ? { displayLabel: w.displayLabel } : {}),
         limitLabel: localized,
         percent: w.percent,
         resetAt: w.resetAt,
@@ -282,8 +285,8 @@ export default function QuotaBars({
   const { locale } = useI18n();
   const rows = buildQuotaRows(quota, plan, t);
   const unknownWindows = quota?.unknownBudgetWindows ?? [];
-  const unknownRows = unknownWindows.map(window => (
-    <div className="quota-stacked-row" key={window.label}>
+  const unknownRows = unknownWindows.map((window, index) => (
+    <div className="quota-stacked-row" key={`unknown-${window.label}-${index}`}>
       <div className="quota-stacked-head">
         <span className="quota-stacked-limit">{window.label}</span>
         <span className="quota-stacked-reset muted">{formatResetFuture(window.resetAt, t, locale)}</span>
@@ -369,7 +372,7 @@ export default function QuotaBars({
         <Fragment key={row.id}>
           <QuotaRow
             credits={row.customLabel === SUBSCRIPTION_CREDITS_LABEL}
-            label={row.label}
+            label={row.displayLabel ?? row.label}
             percent={row.percent}
             resetAt={row.resetAt}
             threshold={threshold}
@@ -437,7 +440,7 @@ function StackedQuotaRow({ row, threshold, t, locale, incomplete }: {
     <div className={`quota-stacked-row${warn ? " quota-stacked-row--warn" : ""}${exhausted ? " quota-stacked-row--exhausted" : ""}`}>
       <div className="quota-stacked-head">
         <span className="quota-stacked-limit-group">
-          <span className="quota-stacked-limit">{row.limitLabel}</span>
+          <span className="quota-stacked-limit">{row.displayLabel ?? row.limitLabel}</span>
           {incomplete && (
             <span
               className="quota-window-partial"

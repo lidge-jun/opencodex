@@ -1441,7 +1441,9 @@ jobs:
       SOURCE_SHA: ${{ needs.validate-dispatch.outputs.source_sha }}
       WORKFLOW_SHA: ${{ needs.validate-dispatch.outputs.workflow_sha }}
       RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
-      NPM_TARBALL: npm-artifact/package.tgz
+      # The ./ prefix is load-bearing: npm reads a bare "owner/repo..." spec as a GitHub shorthand
+      # and runs git ls-remote instead of publishing the file (run 42763073267).
+      NPM_TARBALL: ./npm-artifact/package.tgz
       EXPECTED_DIGEST: ${{ needs.verify-npm.outputs.sha256 }}
     steps:
       - name: Checkout trusted workflow revision

@@ -54,12 +54,10 @@ import {
   reconcileStateGeneration,
   registerStateStore,
   setGenerationContextBuilder,
-  setStateStoreLiveConfigReader,
   type StateStoreRegistration,
 } from "./state-store-sweeper";
 
 let liveServerConfig: OcxConfig | null = null;
-let liveServerConfigRoot: string | null = null;
 
 const liveConfigObservers = new Map<string, (config: OcxConfig) => void>();
 
@@ -82,18 +80,11 @@ export function notifyLiveConfigObservers(config: OcxConfig): void {
 
 export function setLiveStateStoreConfig(config: OcxConfig): void {
   liveServerConfig = config;
-  liveServerConfigRoot = getConfigDir();
-  setStateStoreLiveConfigReader(root => root === liveServerConfigRoot ? liveServerConfig : null);
   // The one place the server's live config object is installed; detached configs (catalog sync)
   // never come through here, so the outbound compression opt-in follows the running server only.
   bindUpstreamRequestCompressionConfig(config);
   bindWorkflowBudgetConfig(config);
   notifyLiveConfigObservers(config);
-}
-
-/** Return the adopted configuration only for its owning home. */
-export function getLiveStateStoreConfig(): OcxConfig | null {
-  return liveServerConfigRoot === getConfigDir() ? liveServerConfig : null;
 }
 
 export function reconcileLiveStateStores() {
@@ -160,7 +151,7 @@ export const STATE_STORE_REGISTRATIONS = [
   { name: "combo-warning-memos", reconcileGeneration: (context: GenerationContext) => reconcileComboWarningMemos(context.generation) },
   { name: "router-warning-memos", reconcileGeneration: (context: GenerationContext) => reconcileRouterWarningMemos(context.generation) },
   { name: "codex-quota", reconcileGeneration: reconcileCodexQuotaAccounts },
-  { name: "provider-quota-history", reconcileGeneration: context => reconcileProviderAccountQuotaRows(context, liveServerConfig ?? undefined) },
+  { name: "provider-quota-history", reconcileGeneration: reconcileProviderAccountQuotaRows },
   { name: "codex-routing-health", reconcileGeneration: reconcileCodexRoutingHealth },
   { name: "model-cache-history", reconcileGeneration: reconcileModelCacheGeneration },
   { name: "pool-rotation", reconcileGeneration: reconcilePoolRotationState },

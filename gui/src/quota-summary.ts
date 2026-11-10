@@ -22,7 +22,10 @@ export interface QuotaSummaryWindow {
   labelKey?: TKey;
   /** Provider-named window label, shown verbatim. */
   label?: string;
+  /** Presentation text only (for example a measured amount and plan); identity stays in `label`. */
+  displayLabel?: string;
   percent?: number;
+  /** Entitlement was not reported; no percentage may be inferred. */
   unknownBudget?: true;
   resetAt?: number;
   severity: QuotaSummarySeverity;
@@ -36,7 +39,6 @@ export interface QuotaSummaryRow {
   updatedAt?: number;
   observed: boolean;
   severity: QuotaSummarySeverity;
-  showAllWindows?: boolean;
 }
 
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -84,8 +86,11 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
       ...(modelId !== undefined ? { modelId } : {}),
       ...("key" in window && window.key ? { labelKey: window.key } : {}),
       ...("label" in window && typeof window.label === "string" ? { label: window.label } : {}),
+      ...("displayLabel" in window && typeof window.displayLabel === "string" && window.displayLabel.trim()
+        ? { displayLabel: window.displayLabel }
+        : {}),
       ...(percent !== undefined ? { percent } : {}),
-      ...("unknownBudget" in window && window.unknownBudget ? { unknownBudget: true as const } : {}),
+      ...("unknownBudget" in window && window.unknownBudget === true ? { unknownBudget: true as const } : {}),
       ...(resetMs !== null ? { resetAt: resetMs } : {}),
       severity: modelId === undefined ? quotaSeverity(percent) : "normal",
     };
@@ -161,9 +166,6 @@ export function buildQuotaSummary(
     const windows = summaryWindows(quota);
     const headline = pickHeadline(windows);
     if (!headline) continue;
-    const showAllWindows = report.source === "mistral:budget";
-    const severity = showAllWindows && windows.some(window => window.severity === "critical") ? "critical"
-      : showAllWindows && windows.some(window => window.severity === "warn") ? "warn" : headline.severity;
     rows.push({
       provider,
       label: report.label?.trim() || displayName(provider),
@@ -171,8 +173,7 @@ export function buildQuotaSummary(
       windows,
       ...(finite(report.updatedAt) ? { updatedAt: report.updatedAt } : {}),
       observed: report.observed === true,
-      severity,
-      ...(showAllWindows ? { showAllWindows: true } : {}),
+      severity: headline.severity,
     });
   }
   return rows;

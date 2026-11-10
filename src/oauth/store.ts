@@ -21,8 +21,6 @@ import { publishCredentialSync } from "../local-credentials/generation";
  *   both append distinct identified accounts under multiauth.
  */
 import { notifyAuthStoreLoaded } from "../lib/decision-quota-sink";
-import { observeAntigravityReportStore } from "./antigravity-quota-owner";
-import { isPassiveRead } from "../lib/passive-read";
 import { accountPauseDetailsSchema } from "../config/schema/account-auto-pause";
 import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { normalizeAnthropicIdentity, matchesAnthropicImport, mergeAnthropicIdentity } from "./anthropic-identity";
@@ -367,26 +365,21 @@ function loadAuthStoreInternal(): { store: AuthStore; hadLegacy: boolean } {
   const path = getAuthStorePath();
   hardenConfigDir();
   hardenExistingSecret(path);
-  if (!existsSync(path)) { observeAntigravityReportStore({}); notifyAuthStoreLoaded({}); return { store: {}, hadLegacy: false }; }
+  if (!existsSync(path)) { notifyAuthStoreLoaded({}); return { store: {}, hadLegacy: false }; }
   let result: { store: AuthStore; hadLegacy: boolean };
   try {
     result = normalizeAuthStore(JSON.parse(readFileSync(path, "utf-8")));
   } catch {
     backupInvalidConfig(path);
-    observeAntigravityReportStore({}); notifyAuthStoreLoaded({});
+    notifyAuthStoreLoaded({});
     return { store: {}, hadLegacy: false };
   }
   // Outside the parse try: roster publication is advisory and must never route a loaded store into the invalid-config backup path.
-  observeAntigravityReportStore(result.store); notifyAuthStoreLoaded(result.store);
+  notifyAuthStoreLoaded(result.store);
   return result;
 }
 
 export function loadAuthStore(): AuthStore {
-  // Passive ownership checks must see external replacements without hardening, repair,
-  // or publishing a roster. Unreadable stores cannot establish ownership.
-  if (isPassiveRead()) {
-    try { return peekAuthStore(); } catch { return {}; }
-  }
   return loadAuthStoreInternal().store;
 }
 
@@ -433,7 +426,7 @@ function persist(store: AuthStore): void {
   }
   hardenConfigDir();
   publishCredentialSync(() => atomicWriteFile(getAuthStorePath(), JSON.stringify(store, null, 2) + "\n"));
-  observeAntigravityReportStore(store); notifyAuthStoreLoaded(store);
+  notifyAuthStoreLoaded(store);
 }
 
 export class OAuthFileLockError extends Error { readonly code = "OAUTH_FILE_LOCK_UNAVAILABLE"; constructor(message: string, options?: { cause?: unknown }) { super(message, options); this.name = "OAuthFileLockError"; } }
@@ -869,9 +862,6 @@ function serializeMutation<T>(work: () => Promise<T>, retainedValues: readonly u
 export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number; assertBeforePersist?: () => void; scrubLegacyBackup?: (result: T) => readonly string[]; finalizeResult?: (result: T, store: AuthStore) => void; afterPersist?: (result: T) => void; withConfigLock?: boolean }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
     const { store, hadLegacy } = loadAuthStoreInternal();
     if (hadLegacy) backupLegacyOnce();
-    const museSet = store["meta-muse"];
-    const museCredentials = new Map(museSet?.accounts.map(account => [account.id,
-      { credential: createHash("sha256").update(JSON.stringify(account.credential)).digest("hex"), loginId: account.loginId }]) ?? []);
     const selections = new Map(Object.entries(store).map(([provider, set]) => [provider, {
       set,
       accountId: set.activeAccountId,
@@ -879,13 +869,6 @@ export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValue
       accountIds: set.accounts.map(account => account.id),
     }]));
     const result = await fn(store);
-    // Retained Muse quota evidence must not revive when a credential changes A→B→A.
-    // Persist the incarnation with each managed replacement, including a recreated slot.
-    for (const account of store["meta-muse"]?.accounts ?? []) {
-      const before = museCredentials.get(account.id);
-      if (museSet !== store["meta-muse"] || !before || before.credential !== createHash("sha256").update(JSON.stringify(account.credential)).digest("hex") || before.loginId !== account.loginId)
-        account.loginId = randomUUID();
-    }
     // Only providers whose credentials this mutation actually removed leave the downgrade
     // backup; a no-op removal names none. The result decides, so it is read here.
     const scrubbedProviders = options?.scrubLegacyBackup?.(result) ?? [];
@@ -1334,7 +1317,7 @@ export async function saveAccountCredential(
     if (!set || !account) return;
     account.credential = safe;
     written = true;
-    if (opts.rotateLoginId || provider === "meta-muse") account.loginId = randomUUID();
+    if (opts.rotateLoginId) account.loginId = randomUUID();
     delete account.needsReauth;
     delete account.needsReauthReason;
     delete account.refreshAttentionGeneration;
