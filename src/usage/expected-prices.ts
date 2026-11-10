@@ -338,6 +338,10 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "anthropic", modelId: "claude-fable-5-2", cost4: CLAUDE_FABLE_52, source: CLAUDE_FABLE_52_SOURCE, verifiedAt: "2026-11-10", status: "verified" },
   { provider: "anthropic-apikey", modelId: "claude-fable-5-2", cost4: CLAUDE_FABLE_52, source: CLAUDE_FABLE_52_SOURCE, verifiedAt: "2026-11-10", status: "verified" },
   { provider: "cursor", modelId: "claude-fable-5-2", cost4: CLAUDE_FABLE_52, source: CURSOR_FABLE_52_PRICING, verifiedAt: "2026-11-10", status: "verified" },
+  // Kilo and Vercel are not generated bundles, and the vendor fallback cannot map these two ids
+  // onto claude-fable-5-2: Kilo's latest alias now serves 5.2, and Vercel lists the 2x fast tuple.
+  { provider: "kilo", modelId: "~anthropic/claude-fable-latest", cost4: CLAUDE_FABLE_52, source: "https://api.kilo.ai/api/openrouter/models (alias listed at the Fable 5.2 rate, 2026-11-10)", verifiedAt: "2026-11-10", status: "verified" },
+  { provider: "vercel-ai-gateway", modelId: "anthropic/claude-fable-5.2-fast", cost4: { input: 16, output: 80, cacheRead: 0.4, cacheWrite: 20 }, source: "https://ai-gateway.vercel.sh/v1/models (Fable 5.2 fast row, 2x list)", verifiedAt: "2026-11-10", status: "verified" },
   // claude-opus-5 is exposed by three providers but absent from the jawcode bundle, so
   // cost resolution returned null and the Logs `~$` column rendered an em dash. The
   // model-level vendor fallback only searches jawcode metadata, never overlays, so one
