@@ -158,11 +158,16 @@ const PARAMETER_VALIDATION_MARKERS: readonly RegExp[] = [
  * this turn: "Server busy: the context window is full" and "the context window is full, retry later"
  * are target-level back-pressure, so they keep their cooldown instead of failing over.
  *
- * The vocabulary covers inflections ("retrying", "loaded") and the serving-stack resources that run
- * out under load (KV cache, GPU memory, replicas, workers, pools). It is a second line of defence:
- * on a 5xx the ambiguous predicates never count at all (see `isDefiniteContextOverflow`).
+ * The predicate's own clause is read with the wide vocabulary, which covers inflections
+ * ("retrying", "loaded") and the serving-stack resources that run out under load (KV cache, GPU
+ * memory, replicas, workers, pools). What follows the clause (after a semicolon, or the next
+ * sentence) is usually the provider's remedy ("Remove older messages before retrying", "consider
+ * prompt caching"), so it is read only with the narrow availability vocabulary. On a 5xx the
+ * ambiguous predicates never count at all (see `isDefiniteContextOverflow`).
  */
 const CAPACITY_FRAMING = /\b(?:busy|overload\w*|capacity|retr(?:y|ies|ied|ying)|try(?:ing)?\s+again|peak\s+hours?|shards?|load\w*|servic\w*|allocat\w*|queu\w*|throttl\w*|cach\w*|kv|gpus?|memory|replicas?|workers?|pools?|scal(?:e|ed|es|ing)|stall\w*)\b/i;
+/** Availability wording that marks back-pressure even in the trailing remedy text. */
+const TRAILING_CAPACITY_FRAMING = /\b(?:busy|overload\w*|capacity|retry|try\s+again|peak\s+hours?|shards?|load|service|allocation|queue\w*|throttl\w*)\b/i;
 /** State predicates that can describe either this input or the service's availability. */
 const CAPACITY_AMBIGUOUS_PREDICATES: ReadonlySet<string> = new Set(["full", "exhausted", "at its limit"]);
 
@@ -231,18 +236,22 @@ function isNegatedBefore(text: string, predicateStart: number): boolean {
 }
 
 /**
- * The sentence containing `index` plus the one after it, read for capacity framing around a "full"
- * verdict. The trailing sentence matters because the same back-pressure often arrives split across
- * two: "The context window is full. Please retry later."
+ * Capacity framing around an ambiguous verdict at `index`. The predicate's own clause (sentence
+ * start to the next `;` or sentence end) is checked with the wide vocabulary; the rest of that
+ * sentence and the next one with the narrow one, because back-pressure often arrives split across
+ * two sentences ("The context window is full. Please retry later.") while a remedy does too.
  */
-function framingWindow(text: string, index: number): string {
+function hasCapacityFraming(text: string, index: number): boolean {
   const before = text.slice(0, index);
   const start = Math.max(before.lastIndexOf("."), before.lastIndexOf("!"), before.lastIndexOf("?"), before.lastIndexOf("\n")) + 1;
+  const clauseEnd = /[;.!?\n]/.exec(text.slice(index));
+  const clauseStop = clauseEnd === null ? text.length : index + (clauseEnd.index ?? 0);
+  if (CAPACITY_FRAMING.test(text.slice(start, clauseStop))) return true;
   const firstEnd = /[.!?\n]/.exec(text.slice(index));
   const resume = firstEnd === null ? text.length : index + (firstEnd.index ?? 0) + 1;
   const secondEnd = /[.!?\n]/.exec(text.slice(resume));
   const end = secondEnd === null ? text.length : resume + (secondEnd.index ?? 0) + 1;
-  return text.slice(start, end);
+  return TRAILING_CAPACITY_FRAMING.test(text.slice(clauseStop, end));
 }
 
 function hasAffirmedVerdict(text: string, verdict: OverflowVerdict, allowAmbiguous: boolean): boolean {
@@ -255,9 +264,9 @@ function hasAffirmedVerdict(text: string, verdict: OverflowVerdict, allowAmbiguo
     if (isNegatedBefore(text, predicateStart)) continue;
     // "full", "exhausted" and "at its limit" are ambiguous between an input overflow and service
     // back-pressure. They count only on a status that speaks about the request, and only when the
-    // sentence carrying the predicate is free of capacity framing.
+    // text around the predicate is free of capacity framing.
     if (CAPACITY_AMBIGUOUS_PREDICATES.has(predicate.toLowerCase())
-      && (!allowAmbiguous || CAPACITY_FRAMING.test(framingWindow(text, predicateStart)))) continue;
+      && (!allowAmbiguous || hasCapacityFraming(text, predicateStart))) continue;
     return true;
   }
   return false;

@@ -76,6 +76,15 @@ const REQUEST_STATE_WORDING = [
   "The context window is at its limit.",
   // Request-local capacity plus a report of use stays a verdict; only service back-pressure does not.
   "The context window is full (8192 tokens used)",
+  // A remedy after the clause is not availability framing, even when it names a cache or a retry.
+  "The context window is exhausted; scale down the prompt",
+  "The context window is exhausted; memory of this conversation must be compacted",
+  "The context window is full. Remove older messages before retrying.",
+  "The context window is full; consider enabling prompt caching",
+  "The context window is full. Enable prompt caching to continue.",
+  "The context window is at its limit. Compact the loaded conversation.",
+  "The context window is full. The pool of remaining tokens is empty.",
+  "The context window is full. The worker will reject this payload.",
 ];
 
 /**
