@@ -8,6 +8,7 @@ import { logsV2Copy } from "./v2-pages/logs-copy";
 import { connectV2Copy } from "./v2-pages/connect-copy";
 import { startupV2Copy } from "./v2-pages/startup-copy";
 import { proxyV2Copy } from "./v2-pages/proxy-copy";
+import { telemetryProfileCopy } from "./v2-pages/telemetry-profile-copy";
 import type { TKey } from "./en";
 
 /**
@@ -139,6 +140,7 @@ export const ja: Record<TKey, string> = {
   ...connectV2Copy("ja"),
   ...startupV2Copy("ja"),
   ...proxyV2Copy("ja"),
+  ...telemetryProfileCopy("ja"),
   "claude.tierDefaults.unset": "未指定（既存のClaude設定を維持）",
   "claude.tierDefaults.recovery": "適用が停止し、自動復元に失敗しました。再試行する前に以下のバックアップを確認してください。",
   "claude.tierDefaults.title": "CLIのティア既定モデル",
@@ -812,6 +814,8 @@ export const ja: Record<TKey, string> = {
   "prov.port": "ポート",
   "prov.default": "デフォルト",
   "prov.loadingConfig": "読み込み中…",
+  "prov.targetChanged": "ダッシュボードの対象が変更されました。現在のサーバーでこのフォームを開き直してください。",
+  "prov.legacyTargetPreflight": "このプロキシは送信前に保存先を確認しますが、アトミックには検証できません。保存先に固定した保存にはプロキシを更新してください。",
   "prov.saved": "保存しました! 適用にはプロキシを再起動してください。",
   "prov.loadConfigFail": "設定の読み込みに失敗しました",
   "prov.invalidJson": "無効な JSON です",
@@ -1965,12 +1969,19 @@ export const ja: Record<TKey, string> = {
   "pws.pacingRemoveModel": "{model} のリクエスト間隔設定を削除",
   "pws.pacingRuleRequired": "プロバイダー制限またはモデル別設定を追加してから有効にしてください。",
   "pws.pacingCapInvalid": "最大同時リクエスト数は 1 以上の整数にしてください。",
+  "pws.pacingValueInvalid": "有効なペーシング値を入力してください: RPM 1/60～60,000、遅延 1～3,600,000 ms、同時実行数 1 以上。",
   "pws.saving": "保存中…",
   "pws.settingsSaved": "設定を保存しました。",
   "pws.accountModeSaved": "アカウントモードを保存しました。",
   "pws.accountModeFailed": "アカウントモードを切り替えられませんでした。",
   "pws.accountModeConfirm": "OpenAI のアカウントモードを切り替えますか？実行中の会話はもう一方のモードのアカウントセットに再割り当てされ、クォータ使用量は新しいモードで計上されます。",
   "pws.settingsUnsavedBar": "未保存の変更があります。",
+  "pws.draftTarget": "編集中: {target}",
+  "pws.draftConflict": "編集中にこのサーバーの保存済み設定が変更されました。下書きは保持されています。どちらの値を残すか選択してください。",
+  "pws.draftConflictFields": "両方で変更されたフィールドです。下書きを編集するか、保存済みの値を使用してください:",
+  "pws.draftConflictUseSaved": "保存済みの値を使う",
+  "pws.draftConflictKeepDraft": "下書きを残す",
+  "pws.draftConflictResolveFirst": "保存する前に残す値を選択してください。",
   "pws.unsavedLeaveBody": "未保存の変更があります。保存してから移動しますか?",
   "pws.unsavedLeaveTitle": "未保存の変更",
   "pws.attentionRequired": "要対応",

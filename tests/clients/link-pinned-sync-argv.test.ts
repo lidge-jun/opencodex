@@ -3,6 +3,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { remotePinnedSyncArgv } from "../../src/link/ssh-argv";
+import { recordServingRuntime } from "../../src/config/serving-runtimes";
 import { inflateRawSync } from "node:zlib";
 import { POWERSHELL_ENCODED_MAX, powershellArgv, windowsScriptData, windowsScriptHelperSource } from "../../src/link/remote-windows";
 
@@ -191,3 +192,25 @@ test.skipIf(process.platform === "win32")("a version writer ignoring signals is 
   expect(() => process.kill(pid, 0)).toThrow();
   expect(readdirSync(home).filter(name => name.startsWith("ocx-fanout."))).toEqual([]);
 }, 15000);
+
+test.skipIf(process.platform === "win32").each([["2.99.0", 0], ["2.92.0", 121]] as const)("pins the served package install (%s) ahead of a Desktop copy (#8359)", (version, expectedExit) => {
+  const home = mkdtempSync(join(tmpdir(), "ocx-fanout-served-")); dirs.push(home);
+  const bin = toolDir(home);
+  const desktop = join(home, ".opencodex-desktop", "bin"); mkdirSync(desktop, { recursive: true });
+  writeFileSync(join(desktop, "ocx"), "#!/bin/sh\nprintf 'desktop %s\\n' \"$*\" >> \"$HOME/calls\"\nif [ \"$1\" = --version ]; then printf '2.99.0\\n'; fi\n", { mode: 0o755 });
+  const pkg = join(home, "npm prefix", "opencodex"); mkdirSync(pkg, { recursive: true });
+  const bun = join(pkg, "bun"), cli = join(pkg, "index.ts");
+  writeFileSync(bun, `#!/bin/sh\nprintf 'served %s\\n' "$*" >> "$HOME/calls"\nif [ "$2" = --version ]; then printf 'opencodex %s\\n' '${version}'; exit 0; fi\nprintf 'synced\\n'\n`, { mode: 0o755 });
+  writeFileSync(cli, "// entry\n");
+  recordServingRuntime({ command: [bun, cli], version: "2.99.0", servedAt: "2026-11-09T00:00:00.000Z" }, join(home, "ocx-home"));
+  const proc = Bun.spawnSync(isolatedArgv(), { env: { HOME: home, OPENCODEX_HOME: join(home, "ocx-home"), CODEX_HOME: join(home, "codex-home"), TMPDIR: home, PATH: bin }, stdout: "pipe", stderr: "pipe" });
+  expect(proc.exitCode).toBe(expectedExit);
+  const calls = readFileSync(join(home, "calls"), "utf8");
+  // The served install's own version gates the sync; an old serving install is refused, never
+  // replaced by a different binary that happens to be newer.
+  expect(calls).toBe(expectedExit === 0
+    ? `served ${cli} --version\nserved ${cli} sync --expect-link lnk_0123456789abcdef --json\n`
+    : `served ${cli} --version\n`);
+  if (expectedExit === 0) expect(proc.stdout.toString()).toBe("ocx-fanout:stdout-begin\nsynced\n");
+});
+

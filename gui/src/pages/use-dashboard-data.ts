@@ -144,7 +144,7 @@ function controlsCacheKey(apiBase: string): string {
   return `${CONTROLS_CACHE_PREFIX}${apiBase}`;
 }
 
-export function useDashboardData(apiBase: string, refreshEpoch = 0) {
+export function useDashboardData(apiBase: string, refreshEpoch = 0, targetKey?: string) {
   const { locale, t } = useI18n();
   // The hash is the source of truth for the active section (#dashboard, …).
   const [selectedSection, setSelectedSection] = useState<DashboardSection>(readDashboardSectionFromHash);
@@ -357,8 +357,8 @@ const [maBusy, setMaBusy] = useState(false);
   );
 
   const usagePoll = useKeyedClientResource(
-    usageSummary30dResourceKey(apiBase),
-    [apiBase, refreshEpoch],
+    usageSummary30dResourceKey(apiBase, "all", targetKey),
+    [apiBase, refreshEpoch, targetKey],
     (signal) => fetchDashboardUsage(apiBase, signal),
     // 30d usage is documented ~5s cold; this shared key has four subscribers, so
     // every one of them carries the same raised deadline (mount-order independent).

@@ -14,6 +14,7 @@ import { startVisibilityPoll } from "../visibility-poll";
 import { createBoundedFetch } from "../bounded-fetch";
 import { HelpButton, HelpRegion, InlineBanner } from "../components/v2-accounts/surface";
 import { useHelp } from "../components/v2-accounts/use-help";
+import { useLegacyTargetPreflightNotice } from "./use-legacy-target-preflight-notice";
 
 export type OpenAiAccountBannerState = CodexAccountModeState | "invalid" | null;
 
@@ -117,14 +118,16 @@ type CachedMode = {
  * cache to gain nothing, and the backend namespace /api/codex-auth/* does not
  * move either (devlog 004 §C: a dozen test files bind to it).
  */
-export default function CodexSetMultiauth({ apiBase }: { apiBase: string }) {
+export default function CodexSetMultiauth({ apiBase, targetKey }: { apiBase: string; targetKey?: string }) {
   // The controller, not just the setting, owns proxy-specific state and callbacks.
-  return <CodexSetMultiauthForProxy key={apiBase} apiBase={apiBase} />;
+  // A relay keeps one apiBase across a re-pair, so the logical target is the frame key:
+  // keying by apiBase alone would keep A's banner and account mode under B.
+  return <CodexSetMultiauthForProxy key={targetKey ?? apiBase} apiBase={apiBase} targetKey={targetKey} />;
 }
 
-function CodexSetMultiauthForProxy({ apiBase }: { apiBase: string }) {
+function CodexSetMultiauthForProxy({ apiBase, targetKey }: { apiBase: string; targetKey?: string }) {
   const t = useT();
-  const poolController = useCodexAccountPool(apiBase);
+  const poolController = useCodexAccountPool(apiBase, true, targetKey);
   const { load: loadAccounts } = poolController;
   const ownerMountedRef = useRef(false);
   useLayoutEffect(() => {
@@ -135,7 +138,9 @@ function CodexSetMultiauthForProxy({ apiBase }: { apiBase: string }) {
   const onHardLockSaved = useCallback(() => ownerMountedRef.current
     ? loadAccounts(false)
     : Promise.resolve(false), [loadAccounts]);
-  const configCacheKey = `ocx.codex-auth.config.v1:${apiBase}`;
+  // The cached account mode belongs to the logical target, not to the relay base that
+  // served it: two hubs share one apiBase, and A's banner must not seed B.
+  const configCacheKey = `ocx.codex-auth.config.v1:${targetKey ?? apiBase}`;
   const cached = readSessionListCache<CachedMode>(configCacheKey);
   const [bannerState, setBannerState] = useState<OpenAiAccountBannerState>(() => cached?.bannerState ?? null);
   const [accountModeState, setAccountModeState] = useState<CodexAccountModeState | null>(
@@ -146,6 +151,9 @@ function CodexSetMultiauthForProxy({ apiBase }: { apiBase: string }) {
   const initialModeKeyRef = useRef<string | null>(null);
   const [enableBusy, setEnableBusy] = useState(false);
   const [enableError, setEnableError] = useState("");
+  // The pool's own mutations hit the same legacy relay preflight as Providers'.
+  const [legacyPreflightNotice, setLegacyPreflightNotice] = useState(false);
+  useLegacyTargetPreflightNotice(targetKey ?? apiBase, () => setLegacyPreflightNotice(true));
 
   const loadMode = useCallback(async () => {
     const bounded = createBoundedFetch(15_000);
@@ -214,6 +222,7 @@ function CodexSetMultiauthForProxy({ apiBase }: { apiBase: string }) {
       busy={enableBusy}
       onEnable={() => { void enableOpenAi(); }}
     />
+    {legacyPreflightNotice && <InlineBanner tone="warn" role="status">{t("prov.legacyTargetPreflight")}</InlineBanner>}
     {enableError && <InlineBanner tone="err" role="alert">{enableError}</InlineBanner>}
   </>;
 
@@ -221,6 +230,7 @@ function CodexSetMultiauthForProxy({ apiBase }: { apiBase: string }) {
     <>
       <CodexAccountPool
         apiBase={apiBase}
+        targetKey={targetKey}
         controller={poolController}
         hasMainHardLockSetting
         accountModeState={accountModeState}
