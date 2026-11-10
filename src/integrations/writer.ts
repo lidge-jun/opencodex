@@ -551,7 +551,7 @@ function applyOrRefreshIntegration(
  * cannot be written is not worth turning a successful enable into a failure.
  */
 function seedCommandCodeAuth(input: IntegrationWriteInput, outcome: WriteOutcome): WriteOutcome {
-  if (!outcome.ok || !outcome.changed) return outcome;
+  if (input.clientId !== "commandcode" || !outcome.ok || !outcome.changed) return outcome;
   const io = input.io ?? defaultIntegrationIO(input.store ?? createIntegrationStateStore());
   const authPath = commandCodeAuthPath(input.env, input.home);
   const current = io.readText(authPath);

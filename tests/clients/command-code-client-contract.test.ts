@@ -21,7 +21,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import {
@@ -488,6 +488,13 @@ describe("Command Code desktop credential seed", () => {
     expect(applyIntegration(input()).ok).toBe(true);
     expect((await disableIntegration(input())).ok).toBe(true);
     expect(JSON.parse(readFileSync(authPath(), "utf8")).apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
+  });
+
+  test("enabling a different client never touches the Command Code store", () => {
+    mkdirSync(join(home, ".pi"), { recursive: true });
+    const outcome = applyIntegration(input({ clientId: "pi" }));
+    expect(outcome.ok).toBe(true);
+    expect(existsSync(authPath())).toBe(false);
   });
 
   test("an unparseable store is left alone rather than rewritten", () => {
