@@ -48,7 +48,7 @@ function supervisor(): LinkSupervisor {
   return { start() {}, ensureStarted: async () => {}, reload: async () => {}, stopLink: async () => {}, status: () => [], stop: async () => {} };
 }
 
-function harness(options: { links?: LinkRecord[]; runtimeRole?: OcxConfig["runtimeRole"]; gate?: Promise<void>; full?: boolean } = {}) {
+function harness(options: { links?: LinkRecord[]; runtimeRole?: OcxConfig["runtimeRole"]; gate?: Promise<void>; full?: boolean; onFlush?: () => void } = {}) {
   let current: LinkStore = { version: 1, listenerPort: 18181, links: options.links ?? [link(HUB), link(CLIENT, { direction: "client-initiated", hostKeyFingerprint: null })] };
   // Persisted too: the observation cache prunes entries whose link is absent from links.json.
   writeFileSync(join(temp, "ocx", "link", "links.json"), JSON.stringify(current));
@@ -69,6 +69,7 @@ function harness(options: { links?: LinkRecord[]; runtimeRole?: OcxConfig["runti
       peerObservation: () => ({ observed: { reported: true, version: "2.96.0", features: null, relayAuth: "2", observedAt: "2026-11-11T00:00:00.000Z" }, refused: null }),
       linkActivity: (_id: string, now: number) => ({ inFlight: 0, lastDataEndAt: now - 700_000, observedSince: now - 900_000 }),
       catalogPull: () => ({ at: 1_762_000_000_000, etag: catalogEtag(JSON.stringify({ models: [] })) }),
+      flushCatalogPulls: () => { options.onFlush?.(); },
     } : {}),
   };
   const config = { port: 10100, hostname: "127.0.0.1", runtimeRole: options.runtimeRole ?? "hub", defaultProvider: "mock", providers: {}, apiKeys: [] } as OcxConfig;
@@ -228,5 +229,14 @@ describe("link child operations routes", () => {
     expect(response?.status).toBe(404);
     expect(h.events).toEqual([]);
     expect(h.store.links.map(record => record.id)).toEqual([HUB, CLIENT]);
+  });
+
+  test("a children=1 read flushes pending catalog pull writes; a plain read does not", async () => {
+    let flushes = 0;
+    const h = harness({ full: true, onFlush: () => { flushes += 1; } });
+    expect((await h.call("/api/link/status?compatibility=1&diagnostics=1"))?.status).toBe(200);
+    expect(flushes).toBe(0);
+    expect((await h.call("/api/link/status?children=1"))?.status).toBe(200);
+    expect(flushes).toBe(1);
   });
 });

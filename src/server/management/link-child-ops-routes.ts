@@ -69,6 +69,9 @@ export function childOpsEngineFor(ctx: ManagementContext, state: LinkRouteState)
 
 /** `?children=1` on a Home: attach every row's `child` block. Never fails on the cache or the revision save. */
 export function attachLinkChildOpsForState(dto: LinkStatusDto, state: LinkRouteState, store: LinkStore, now: number = Date.now()): LinkStatusDto {
+  // A pull inside the recorder's write window would otherwise reach the file only at the next pull or at shutdown.
+  // Best effort: a lock failure is logged by the recorder and retried later; the status read never fails on it.
+  state.listener.flushCatalogPulls?.();
   const revision = (state.catalogRevision ??= catalogRevisionForRoutes()).current();
   const observations = readChildObservations();
   const known = new Set(store.links.map(link => link.id));

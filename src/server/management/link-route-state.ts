@@ -39,6 +39,8 @@ export interface LinkRouteListener {
   linkActivity?(linkId: string, now: number): import("../../link/child-activity").LinkActivitySnapshot;
   /** Optional: without it only the cached pull in child-observations.json is known. */
   catalogPull?(linkId: string): import("../../link/child-catalog-freshness").CatalogPull | null;
+  /** Optional: persist pulls held inside the recorder's 30 s write window (best effort). */
+  flushCatalogPulls?(): void;
 }
 
 export interface LinkRouteState {

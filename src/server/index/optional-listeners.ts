@@ -47,6 +47,8 @@ export interface OptionalListenerSet<T> {
   linkActivity(linkId: string, now: number): LinkActivitySnapshot;
   /** The last relayed catalog pull of a link in this process; null before start or before any pull. */
   catalogPull(linkId: string): CatalogPull | null;
+  /** Write every catalog pull still held in memory; a failed write is logged and kept for the next attempt. */
+  flushCatalogPulls(): void;
   status(): LinkListenerStatus;
   linkStatus(): LinkListenerStatus;
   linkSupervisor(): LinkSupervisor;
@@ -115,6 +117,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
     peerObservation: linkId => linkListener.peerObservation(linkId),
     linkActivity: (linkId, now) => linkListener.linkActivity(linkId, now),
     catalogPull: linkId => catalogPulls?.pulled(linkId) ?? null,
+    flushCatalogPulls: () => { catalogPulls?.flush(); },
     status: () => linkListener.status(),
     linkStatus: () => linkListener.status(),
     linkSupervisor: () => supervisor,
