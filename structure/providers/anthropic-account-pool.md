@@ -216,7 +216,7 @@ quota epoch, configured row, account incarnation and login identity are unchange
 invalidates the primary pool.
 
 With the pool on and two or more accounts, `fetchAnthropicQuota` (`src/providers/quota/vendor-probes-oauth.ts`) reports a display-only estimate via `aggregateCodexPoolCapacity`: seats weigh 1, inactive seats use their last-good row (no extra probes), paused, reauth or stale seats count as incomplete coverage.
-The cached report is current only while the pool switch and each seat's id, paused and reauth state are unchanged; pool off or one account keeps the active report (`tests/providers/provider-anthropic-pool-capacity.test.ts`).
+Every Anthropic report is current only while the pool switch and each seat's id, paused and reauth state are unchanged; pool off or one account keeps the active report. Quota reset detection observes the active seat's own reading (`observedQuotaFor`), never the estimate, which has no reset times (`tests/providers/provider-anthropic-pool-capacity.test.ts`).
 
 A probe that yields no quota names one closed `quotaFailure` code from
 `src/providers/quota/failure-codes.ts`: `account_unavailable` when no usable credential could

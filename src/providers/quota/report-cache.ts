@@ -21,6 +21,8 @@ import type { ProviderQuota, ProviderRoutingQuota } from "../quota-types";
 export const LAST_GOOD_MAX_AGE_MS = CODEX_CAPACITY_MAX_QUOTA_AGE_MS;
 const nativeMainReportGenerations = new WeakMap<ProviderQuotaReport, number>();
 export const accountReportCurrent = new WeakMap<ProviderQuotaReport, () => boolean>();
+/** The measured quota a reset detector should observe when the shown quota is an estimate (pooled rows). */
+export const observedQuotaFor = new WeakMap<ProviderQuotaReport, ProviderQuota>();
 export const routingEvidence = new WeakMap<ProviderQuotaReport, ProviderQuotaRoutingEvidence>();
 /** Only the live Antigravity probe binds this projection; display/last-good rows cannot create it. */
 export const antigravityEvidence = new WeakMap<ProviderQuotaReport, { receipt: AntigravityQuotaReceipt; windows: readonly DecisionQuotaWindow[] }>();

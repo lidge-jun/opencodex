@@ -1,11 +1,15 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearPoolRotationState } from "../../src/codex/pool-rotation";
 import { clearAnthropicAccountPoolState } from "../../src/oauth/anthropic-routing";
 import { getAccountSet, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
-import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
+import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports, flushProviderQuotaObservationsForTests, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
+import type { QuotaResetEvent } from "../../src/quota/reset-detector";
+import { setQuotaResetSink } from "../../src/quota/reset-observer";
+import { resetQuotaResetNotifyCacheForTests } from "../../src/quota/reset-notify-config";
+import { resetQuotaResetStoreForTests } from "../../src/quota/reset-seen-store";
 import { fetchAnthropicQuota } from "../../src/providers/quota/vendor-probes-oauth";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -138,4 +142,49 @@ test("an enabled pool holding one account reports that account's own reading", a
 
   expect(result?.quota.fiveHourPercent).toBe(40);
   expect(result?.aggregation).toBeUndefined();
+});
+
+describe("quota reset detection observes the active seat, not the pooled estimate", () => {
+  let captured: QuotaResetEvent[] = [];
+  let usage = { five: 90, fiveReset: 0, week: 20, weekReset: 0 };
+  beforeEach(async () => {
+    await flushProviderQuotaObservationsForTests();
+    resetQuotaResetStoreForTests();
+    resetQuotaResetNotifyCacheForTests();
+    captured = [];
+    setQuotaResetSink(event => { captured.push(event); });
+    const now = Date.now();
+    usage = { five: 90, fiveReset: now + 3_600_000, week: 20, weekReset: now + 86_400_000 };
+    globalThis.fetch = (async () => Response.json({
+      five_hour: { utilization: usage.five, resets_at: new Date(usage.fiveReset).toISOString() },
+      seven_day: { utilization: usage.week, resets_at: new Date(usage.weekReset).toISOString() },
+    })) as typeof fetch;
+    const [, b, c] = ids as [string, string, string];
+    setCachedProviderAccountQuotaForTests("anthropic", b, { fiveHourPercent: 0, weeklyPercent: 0, updatedAt: now });
+    setCachedProviderAccountQuotaForTests("anthropic", c, { fiveHourPercent: 0, weeklyPercent: 0, updatedAt: now });
+  });
+  afterEach(async () => {
+    await flushProviderQuotaObservationsForTests();
+    setQuotaResetSink(null);
+  });
+
+  test("a pool user still gets the active seat's scheduled 5-hour reset", async () => {
+    usage.fiveReset = Date.now() + 50;
+    await fetchProviderQuotaReports(config(true), true);
+    await flushProviderQuotaObservationsForTests();
+    await new Promise(resolve => setTimeout(resolve, 120));
+    usage = { ...usage, five: 5, fiveReset: Date.now() + 18_000_000 };
+    await fetchProviderQuotaReports(config(true), true);
+    await flushProviderQuotaObservationsForTests();
+    expect(captured).toEqual([expect.objectContaining({ kind: "scheduled", window: "5h", percentBefore: 90, percentAfter: 5 })]);
+  });
+
+  test("turning the pool on mid-window raises no reset", async () => {
+    await fetchProviderQuotaReports(config(false), true);
+    await flushProviderQuotaObservationsForTests();
+    const pooled = (await fetchProviderQuotaReports(config(true), true)).reports.find(item => item.provider === "anthropic");
+    await flushProviderQuotaObservationsForTests();
+    expect(pooled?.aggregation).toBeDefined();
+    expect(captured).toEqual([]);
+  });
 });

@@ -22,7 +22,7 @@ import { aggregateCodexPoolCapacity, CODEX_CAPACITY_MAX_QUOTA_AGE_MS, type Codex
 import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
 import { providerCodexAccountMode } from "../registry";
 import {
-  accountReportCurrent,
+  accountReportCurrent, observedQuotaFor,
   TERMINAL_QUOTA_FAILURE,
   providerLabel,
   providerQuotaFromCodexQuota,
@@ -383,12 +383,13 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
   }
   const pooledReport = anthropicPoolReport(provider, instance, config, probedAccountId, quota);
   const quotaReport = pooledReport ?? report(provider, "anthropic:oauth-usage", quota);
-  // A pooled report is current only while the pool's switch and membership are unchanged: pausing,
-  // resuming or reauthorizing an inactive seat changes the aggregate without moving the active one.
-  const poolState = pooledReport ? anthropicPoolState(config, instance) : undefined;
-  const poolCurrent = () => poolState === undefined || anthropicPoolState(config, instance) === poolState;
-  if (quotaReport && (anthropicCurrent || poolState !== undefined)) {
-    accountReportCurrent.set(quotaReport, () => (anthropicCurrent?.() ?? true) && poolCurrent()
+  // The estimate carries no reset times, so reset detection keeps observing the active seat's reading.
+  if (pooledReport) observedQuotaFor.set(pooledReport, quota);
+  // Current only while the pool switch and membership are unchanged: pausing, resuming or reauthorizing
+  // an inactive seat changes the aggregate, and turning the pool on or adding a seat changes the report.
+  const poolState = anthropicPoolState(config, instance);
+  if (quotaReport && anthropicCurrent) {
+    accountReportCurrent.set(quotaReport, () => anthropicCurrent() && anthropicPoolState(config, instance) === poolState
       && getAccountSet(instance)?.activeAccountId === probedAccountId);
   }
   return quotaReport;
