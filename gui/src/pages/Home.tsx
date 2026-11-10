@@ -5,7 +5,7 @@ import { IconRefresh } from "../icons";
 import { Button } from "@/components/ui-v2/button";
 import { cn } from "@/lib/utils";
 import { recentFailures, type HomeLogRow } from "./home-failures";
-import { startupChecklistDone } from "../startup-health-ui";
+import { startupChecklistStep } from "../startup-health-ui";
 import { useStartupChecklist } from "../hooks/useStartupChecklist";
 import { TelemetryProfileCard } from "../components/telemetry-profile-card";
 
@@ -68,14 +68,18 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
   const requests7d = usage.data?.summary?.requests ?? 0;
   const tokens7d = usage.data?.summary?.totalTokens ?? 0;
   const uptime = health.data?.uptime ?? 0;
+  const autostart = startupChecklistStep(startup.data);
 
   const steps = [
-    { key: "provider", done: providerCount > 0, title: t("shellV2.stepProvider"), hint: t("shellV2.stepProviderHint"), go: () => navigate("providers") },
-    { key: "request", done: requests7d > 0, title: t("shellV2.stepFirstRequest"), hint: t("shellV2.stepFirstRequestHint"), go: () => navigate("integrations") },
+    { key: "provider", done: providerCount > 0, title: t("shellV2.stepProvider"), hint: t("shellV2.stepProviderHint"), showHint: false, go: () => navigate("providers") },
+    { key: "request", done: requests7d > 0, title: t("shellV2.stepFirstRequest"), hint: t("shellV2.stepFirstRequestHint"), showHint: false, go: () => navigate("integrations") },
     {
       key: "autostart",
-      done: startup.data ? startupChecklistDone(startup.data) : undefined,
-      title: t("shellV2.stepAutostart"), hint: t("shellV2.stepAutostartHint"), go: () => navigate("startup"),
+      done: autostart.done,
+      title: t(autostart.titleKey), hint: t(autostart.hintKey),
+      // An unverified Desktop login still says where to check it.
+      showHint: Boolean(startup.data) && autostart.desktop && autostart.done === undefined,
+      go: () => autostart.subPath ? navigate("startup", autostart.subPath) : navigate("startup"),
     },
   ];
   const doneCount = steps.filter(step => step.done).length;
@@ -130,7 +134,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
               {steps.map((step, index) => {
                 const current = step.done === false && steps.findIndex(s => s.done === false) === index;
                 return (
-                  <li key={step.key}>
+                  <li key={step.key} data-step={step.key}>
                     <button type="button" onClick={step.go}
                       className={cn(
                         "group flex w-full cursor-pointer items-center gap-3 rounded-control p-2.5 text-left transition-colors hover:bg-raised",
@@ -142,7 +146,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
                       )} aria-hidden>{step.done ? "✓" : index + 1}</span>
                       <span className="flex min-w-0 flex-1 flex-col">
                         <span className={cn("text-[14px] font-medium", step.done && "text-fg-subtle line-through")}>{step.title}</span>
-                        {step.done === false && <span className="text-[13px] text-fg-muted">{step.hint}</span>}
+                        {(step.done === false || step.showHint) && <span className="text-[13px] text-fg-muted">{step.hint}</span>}
                       </span>
                       {step.done === false && <span className="text-[13px] font-medium text-highlight opacity-0 transition-opacity group-hover:opacity-100">{t("shellV2.stepOpen")} →</span>}
                     </button>

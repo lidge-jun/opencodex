@@ -1428,7 +1428,8 @@ jobs:
     needs: [validate-dispatch, verify-release, verify-npm]
     if: ${{ inputs.dry-run != true }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The two registry waits below can each take about 20 minutes (about 55 minutes worst case with read timeouts).
+    timeout-minutes: 75
     outputs:
       npm_version: ${{ steps.registry-smoke.outputs.npm_version }}
       npm_dist_tag: ${{ steps.registry-smoke.outputs.npm_dist_tag }}
@@ -1441,7 +1442,9 @@ jobs:
       SOURCE_SHA: ${{ needs.validate-dispatch.outputs.source_sha }}
       WORKFLOW_SHA: ${{ needs.validate-dispatch.outputs.workflow_sha }}
       RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
-      NPM_TARBALL: npm-artifact/package.tgz
+      # The ./ prefix is load-bearing: npm reads a bare "owner/repo..." spec as a GitHub shorthand
+      # and runs git ls-remote instead of publishing the file (run 42763073267).
+      NPM_TARBALL: ./npm-artifact/package.tgz
       EXPECTED_DIGEST: ${{ needs.verify-npm.outputs.sha256 }}
     steps:
       - name: Checkout trusted workflow revision
@@ -1713,7 +1716,10 @@ jobs:
             exit 1
           }
           pkg_name="$(node -p "require('./package.json').name")"
-          for attempt in $(seq 1 6); do
+          # npm can take 15+ minutes to serve a new version (2.100.1: ~15 min after publish), so the
+          # bounded wait is attempts x interval, about 20 minutes. Publication is never retried.
+          attempts="${REGISTRY_WAIT_ATTEMPTS:-40}"; interval="${REGISTRY_WAIT_SECONDS:-30}"
+          for attempt in $(seq 1 "$attempts"); do
             if VERSION=$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" version --fetch-retries=0 --fetch-timeout=8000 2>/dev/null); then
               if [ "$VERSION" != "$RELEASE_VERSION" ]; then
                 echo "::error::Registry returned an unexpected version; refusing to create a release"
@@ -1744,8 +1750,8 @@ jobs:
               echo "npm dist-tag ${NPM_DIST_TAG}: ${dist_tag_state}." >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
-            echo "::notice::Registry lookup not confirmed (attempt $attempt/6)"
-            if [ "$attempt" -lt 6 ]; then sleep 5; fi
+            echo "::notice::Registry lookup not confirmed (attempt $attempt/$attempts)"
+            if [ "$attempt" -lt "$attempts" ]; then sleep "$interval"; fi
           done
           # Keep each outcome explicit for the recovery report.
           # shellcheck disable=SC2129
@@ -1760,7 +1766,8 @@ jobs:
         run: |
           set -euo pipefail
           pkg_name="$(node -p "require('./package.json').name")"
-          for attempt in $(seq 1 6); do
+          attempts="${REGISTRY_WAIT_ATTEMPTS:-40}"; interval="${REGISTRY_WAIT_SECONDS:-30}"
+          for attempt in $(seq 1 "$attempts"); do
             if head="$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" gitHead --json --registry=https://registry.npmjs.org --fetch-retries=0 --fetch-timeout=8000 2>/dev/null)"; then
               if [ -n "$head" ] && [ "$head" != null ]; then
                 REGISTRY_HEAD="$head" node - <<'NODE'
@@ -1772,7 +1779,7 @@ jobs:
                 exit 0
               fi
             fi
-            if [ "$attempt" -lt 6 ]; then sleep 5; fi
+            if [ "$attempt" -lt "$attempts" ]; then sleep "$interval"; fi
           done
           echo '::error::Published npm gitHead could not be verified; do not republish and reconcile manually.'
           exit 1

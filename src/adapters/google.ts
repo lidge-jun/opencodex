@@ -20,6 +20,7 @@ import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, too
 import type { OcxTool } from "../types";
 import { contentPartsToText, parseDataUrl } from "./image";
 import { bindVertexRequestAuthority, GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount, getVertexAccessTokenWithAuthority } from "../lib/gcp-adc";
+import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../providers/api-key-pause";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
 import { readDisplaySafeErrorPayloadText } from "./upstream-http-error";
@@ -1237,6 +1238,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         headers["Authorization"] = `Bearer ${token}`;
         return { url, method: "POST", headers, body: JSON.stringify(envelope) };
       }
+
+      if (isProviderApiKeyPaused(provider)) throw new ProviderApiKeyPausedError();
 
       if (provider.googleMode === "vertex") {
         if (provider.authMode === "forward") throw new Error("Vertex does not support forward authentication");

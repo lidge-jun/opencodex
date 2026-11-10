@@ -5,6 +5,10 @@ description: 提供者条目、身份验证、端点、模型目录、配额、�
 
 提供者用于告诉 opencodex 模型位于哪里、使用哪种线协议适配器，以及请求如何进行身份验证。
 
+## Mistral 每次请求的图片数量
+
+Mistral 图片数量限制及 `mistralMaxImages` 设置见[英文规范参考](/reference/configuration/providers/#mistral-images-per-request)。对于到达限制器的 `image_url` 项，缺失、为空或非字符串的图片引用会在出站副本中替换为文本，且不占用图片限额。对于经过转换的 Responses 请求，解析器会丢弃既没有可用 URL 也没有文件 ID 的 `input_image`。在消息或工具输出块中，若存在非空 `file_id` 而没有非空 `image_url`，媒体防护会在发送到 Mistral 前拒绝请求；在防护不检查的重放 `agent_message` 内，解析器会改为输出 `[image: <file id>]` 文本标记，作为普通文本发送且不占用图片限额。限制器仅统计 `image_url` 或 `image_url.url` 中的非空字符串，不验证 URL 语法或可访问性。其他目标的行为保持不变。
+
 ## 自定义渠道的上下文窗口
 
 自定义渠道未报告或配置模型窗口时，OpenCodex 依次使用 Azure 元数据、按模型 ID 查询的内置厂商/聚合元数据、已启用的 Context cap，最后回退到 128k。已有发现值与配置值取较小者，Context cap 仍会向下限制窗口，内置渠道行为不变。精确 ID 优先，大小写或点号/短横线变体仅在无冲突时匹配；未知或浮动别名不猜测。推断会影响 Codex 压缩预算和其他客户端目录（含 Claude 长上下文选择），但不作为中转实测能力供路由使用。同名模型不保证中转支持官方窗口；请用 modelContextWindows 或 Context cap 设置中转实际上限。不会自动开启 cap，也不会调用模型探测。OpenAI API 窗口不代表 Codex 订阅窗口。

@@ -39,6 +39,8 @@ type CompletedOutput = WebSearchResult & {
   incomplete: boolean;
   parts: Map<string, string>;
   slots: Map<string, { itemId?: string; outputIndex: number; contentIndex: number; singleContent: boolean }>;
+  /** Unique message positions survive malformed content; null marks a repeated item ID. */
+  items: Map<string, { outputIndex: number; missingContent: boolean } | null>;
 };
 /** Streamed text for one `output_text` content part. */
 interface StreamedPart {
@@ -136,12 +138,20 @@ function streamedPartKey(data: Record<string, unknown>, parts: Map<string, Strea
   // content index. Only inspect the buckets when their total proves there are at most two parts.
   if (data.type === "response.output_text.done" && itemId && match
     && outputCandidates === (match.outputIndex === undefined ? 1 : 2)) {
+    const matchedContent = match.contentIndex;
     const buckets = contentIndex === undefined ? [outputBucket] : [outputContentBucket, outputUnknownContentBucket];
     const anonymous = buckets.flatMap(bucket => bucket ? [...bucket] : [])
-      .find(part => part !== match && !part.itemId && compatible(part));
+      .find(part => part !== match && !part.itemId && compatible(part)
+        && (matchedContent === undefined || part.contentIndex === undefined || matchedContent === part.contentIndex));
     if (anonymous) {
       indexPart(lookup, match, false);
       parts.delete(match.key);
+      // The linking frame can omit a field that the identified draft already supplied.
+      if (anonymous.contentIndex === undefined && matchedContent !== undefined) {
+        indexPart(lookup, anonymous, false);
+        anonymous.contentIndex = matchedContent;
+        indexPart(lookup, anonymous, true);
+      }
       return anonymous.key;
     }
   }
@@ -287,6 +297,13 @@ function reconcileCompletedParts(final: CompletedOutput, streamed: Map<string, S
     matched.add(part);
     reconciled.delete(part.key);
     reconciled.set(key, { ...part, key });
+  }
+  for (const [key, part] of reconciled) {
+    const item = part.itemId ? final.items.get(part.itemId) : undefined;
+    if (item?.missingContent && part.outputIndex === undefined && !isIndexedPartKey(key)) {
+      // The message identifies an output position, but cannot invent a content index.
+      reconciled.set(key, { ...part, outputIndex: item.outputIndex });
+    }
   }
   return reconciled;
 }
@@ -510,10 +527,14 @@ function fromOutputArray(output: OutputItem[], seen: Set<string>): CompletedOutp
   let incomplete = false;
   const parts = new Map<string, string>();
   const slots: CompletedOutput["slots"] = new Map();
+  const items: CompletedOutput["items"] = new Map();
   const sources: WebSearchSource[] = [];
   for (const [outputIndex, item] of output.entries()) {
     if (!item || typeof item !== "object") { incomplete = true; continue; }
     if (item.type !== "message") continue;
+    if (typeof item.id === "string" && item.id) {
+      items.set(item.id, items.has(item.id) ? null : { outputIndex, missingContent: !Array.isArray(item.content) });
+    }
     if (!Array.isArray(item.content)) { incomplete = true; continue; }
     for (const [contentIndex, block] of item.content.entries()) {
       if (!block || typeof block !== "object") { incomplete = true; continue; }
@@ -528,7 +549,7 @@ function fromOutputArray(output: OutputItem[], seen: Set<string>): CompletedOutp
       }
     }
   }
-  return { text, sources, incomplete, parts, slots };
+  return { text, sources, incomplete, parts, slots, items };
 }
 
 export function cancelReaderWithoutWaiting(
