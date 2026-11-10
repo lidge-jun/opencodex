@@ -1519,9 +1519,11 @@ describe("filtered usage index availability", () => {
     test(`real SQLite page failure rolls back and wraps the error (passive=${passive})`, async () => {
       writeRows(Array.from({ length: 5 }, (_, i) => syntheticRow(i)));
       await getFilteredUsageAggregate({ provider: "openai" });
+      // Explicit nulls match the normalized query shape; a bare `{}` is not a valid caller query.
+      const query = { provider: null, model: null, apiKeyId: null };
       const read = await (passive
-        ? filterIndexModule.readUsageFilterCandidatesPassive({})
-        : filterIndexModule.readUsageFilterCandidates({}));
+        ? filterIndexModule.readUsageFilterCandidatesPassive(query)
+        : filterIndexModule.readUsageFilterCandidates(query));
       expect(read).not.toBeNull();
       const writer = new Database(usageFilterIndexPath(testDir));
       writer.exec("DROP TABLE usage_rows");

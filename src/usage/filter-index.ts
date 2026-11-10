@@ -1429,9 +1429,8 @@ export async function readUsageFilterCandidates(
       }
       if (isBusyError(error)) {
         // Contention, including a peer still creating the projection, is waited out rather than
-        // read as a foreign file. The bound is four busy timeouts (the fourth attempt has no
-        // back-off) plus these delays, about 1.1 s, before the request falls back to the
-        // streaming read.
+        // read as a foreign file. The bound is the BUSY_RETRY_DELAYS_MS sum (about 6.4 s) plus up
+        // to ten busy timeouts before the request falls back to the streaming read.
         const delay = BUSY_RETRY_DELAYS_MS[attempt];
         if (delay === undefined) return null;
         testHooks?.beforeBusyRetry?.({ dbPath: path, attempt });
