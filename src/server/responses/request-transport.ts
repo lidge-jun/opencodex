@@ -1,5 +1,5 @@
 import { publicOAuthErrorPresentation } from "../../oauth";
-import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { observeProviderFailureEvent, projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { markProxyError } from "../../lib/client-error-body";
 import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { SendBudgetExhaustedError, errorDestinationText, providerErrorDestinationLabel } from "../../lib/upstream-retry";
@@ -84,6 +84,7 @@ import {
   providerApiKeySelectionIsCurrent,
   resolveCurrentProviderApiKeyTransport,
 } from "../../providers/api-key-selection";
+import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../../providers/api-key-pause";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
 import { codexWsExecutorBinding, fetchWithHeaderTimeout, physicalSendGuardInit, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
 import { resolveConnectTimeoutMs } from "../../stall-timeout";
@@ -596,6 +597,7 @@ export async function prepareResponsesTransport(
   const bindKeyUsageFromBridge = (usage: OcxUsage | undefined): void => {
     logCtx.usageFromBridge = true;
     if (usesApiKeyAccount(route.provider)) {
+      if (!logCtx.activeAttempt?.usage && usage) recordKeyAttemptUsage(logCtx, usage);
       logCtx.usage = logCtx.activeAttempt?.usage;
     } else if (usage) {
       logCtx.usage = usage;
@@ -674,6 +676,7 @@ export async function prepareResponsesTransport(
     const observeEvent = (event: AdapterEvent, response: object): void => {
       delivery.noteAdapterEvent();
       observeUsage(event, response);
+      observeProviderFailureEvent(logCtx, event);
     };
     const parseStream = resolved.parseStream.bind(resolved);
     resolved.parseStream = async function* (...args) {
@@ -793,7 +796,12 @@ export async function prepareResponsesTransport(
         const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...route.provider, _apiKeyAttempt: undefined });
         if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
       }
-      if (!current) throw new Error("API key selection is unavailable before dispatch");
+      if (!current) {
+        // Rethrown through oauthDispatch so adapter-dispatch / passthrough-dispatch map it
+        // as a local 403 admission refusal without charging an upstream send.
+        if (isProviderApiKeyPaused(config.providers[route.providerName])) throw new ProviderApiKeyPausedError();
+        throw new Error("API key selection is unavailable before dispatch");
+      }
       if (route.provider.googleMode === "vertex" || current.googleMode === "vertex") {
         const freshPolicy = captureRouteStaticPolicy(route.providerName, route.modelId, current, route.staticPolicy.effectiveAlias, inboundWire);
         if (freshPolicy.model.adapter !== route.staticPolicy.model.adapter) throw new Error("Vertex model wire changed before dispatch");
@@ -810,7 +818,7 @@ export async function prepareResponsesTransport(
     if (route.provider.authMode === "forward") return false;
     const available = route.provider.authMode === "oauth"
       ? getAccountSet(route.providerName)?.accounts.some(row => !row.paused && !row.needsReauth)
-      : !!config.providers[route.providerName]?.apiKey;
+      : !isProviderApiKeyPaused(config.providers[route.providerName]) && !!config.providers[route.providerName]?.apiKey;
     if (!available) return false;
     await refreshDispatchAdapter(requestParsed);
     // Bind before the recovery caller rebuilds. A terminal retry can be a clone;
@@ -1278,13 +1286,25 @@ export async function prepareResponsesTransport(
   // The Transport variant, not the bare picker: the picker answers with the PERSISTED row, and
   // a built-in provider stored in its valid minimal form would lose the adapter id, base URL
   // and static headers registry backfill supplies, throwing `Unknown adapter: undefined`.
-  const proactiveKeyProvider = selectProactiveApiKeyTransport(
-    config,
-    route.providerName,
-    route.provider,
-    parsed.options.promptCacheKey,
-  );
+  let proactiveKeyProvider: OcxProviderConfig | null;
+  try {
+    proactiveKeyProvider = selectProactiveApiKeyTransport(
+      config,
+      route.providerName,
+      route.provider,
+      parsed.options.promptCacheKey,
+    );
+  } catch (err) {
+    if (err instanceof OAuthAccountPausedError) {
+      return markProxyError(formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(err)), publicOAuthErrorPresentation(err));
+    }
+    throw err;
+  }
   if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
+  if (isProviderApiKeyPaused(route.provider)) {
+    const err = new ProviderApiKeyPausedError();
+    return markProxyError(formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(err)), publicOAuthErrorPresentation(err));
+  }
   route.provider = resolveProviderTransport(
     route.providerName,
     route.provider,

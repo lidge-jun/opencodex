@@ -7,6 +7,8 @@ import { hasConflictingReasoningEffortCode } from "../providers/reasoning-metada
 import { isKiroAccountProfileRefusal } from "../adapters/kiro-refusal";
 import type { OcxComboTarget } from "../types";
 import { targetKey } from "./types";
+import { PersistedCooldownMap } from "./cooldown-store";
+import { registerOptionalShutdownHook } from "../lib/optional-shutdown-hooks";
 import { isDefiniteContextOverflow } from "../lib/context-overflow-verdict";
 
 // The verdict lives in a dependency-free leaf so the presentation classifier can share it.
@@ -50,9 +52,11 @@ const HTTP_MONTH_INDEX: Record<string, number> = {
 };
 
 /** Map<`${comboId}\0${provider/model}`, TargetCooldown> */
-const targetCooldowns = new Map<string, TargetCooldown>();
 // Never reset: an in-flight reservation may still refer to an entry cleared from the map.
 let nextCooldownRevision = 0;
+// Disk-backed (combo-cooldowns.json): a restart keeps every live, reset-aware cooldown.
+const targetCooldowns = new PersistedCooldownMap<TargetCooldown>(() => ++nextCooldownRevision);
+registerOptionalShutdownHook("combo-target-cooldowns", () => targetCooldowns.flushForShutdown());
 let lastReconciledGeneration = 0;
 let liveComboTargets = new Set<string>();
 
@@ -166,7 +170,7 @@ export function isComboTargetInCooldown(
   const entry = targetCooldowns.get(key);
   if (!entry) return false;
   if (entry.cooldownUntil <= now) {
-    targetCooldowns.delete(key);
+    targetCooldowns.dropLocal(key);
     return false;
   }
   return true;
@@ -182,7 +186,7 @@ export function comboTargetCooldownExpiry(
   const entry = targetCooldowns.get(key);
   if (!entry) return undefined;
   if (entry.cooldownUntil <= now) {
-    targetCooldowns.delete(key);
+    targetCooldowns.dropLocal(key);
     return undefined;
   }
   return entry.cooldownUntil;
@@ -205,7 +209,7 @@ export function clearComboTargetCooldownIfUnchanged(
   expectedRevision: number,
 ): void {
   const key = cooldownMapKey(comboId, target);
-  if (targetCooldowns.get(key)?.revision === expectedRevision) targetCooldowns.delete(key);
+  if (targetCooldowns.get(key)?.revision === expectedRevision) targetCooldowns.dropLocal(key);
 }
 
 export function isTransientRequestRateLimit(input: {
@@ -235,7 +239,7 @@ export function remainingComboCooldownMs(comboId: string, now = Date.now()): num
     if (!key.startsWith(prefix)) continue;
     const remaining = cooldown.cooldownUntil - now;
     if (remaining <= 0) {
-      targetCooldowns.delete(key);
+      targetCooldowns.dropLocal(key);
       continue;
     }
     if (soonest === undefined || remaining < soonest) soonest = remaining;
@@ -353,7 +357,7 @@ export function sweepExpiredComboTargetCooldowns(now = Date.now()): number {
   let removed = 0;
   for (const [key, cooldown] of targetCooldowns) {
     if (cooldown.cooldownUntil > now) continue;
-    targetCooldowns.delete(key);
+    targetCooldowns.dropLocal(key);
     removed += 1;
   }
   return removed;
@@ -362,19 +366,17 @@ export function sweepExpiredComboTargetCooldowns(now = Date.now()): number {
 /** Clear all cooldowns, one combo, or only the supplied target keys within that combo. */
 export function clearComboTargetCooldowns(comboId?: string, targetKeys?: Iterable<string>): void {
   if (comboId === undefined) {
-    targetCooldowns.clear();
+    targetCooldowns.clearAllPersisted();
     liveComboTargets.clear();
     lastReconciledGeneration = 0;
     return;
   }
   const prefix = `${comboId}\0`;
   if (targetKeys !== undefined) {
-    for (const key of targetKeys) targetCooldowns.delete(`${prefix}${key}`);
+    targetCooldowns.clearPersisted([...targetKeys].map(key => `${prefix}${key}`));
     return;
   }
-  for (const key of targetCooldowns.keys()) {
-    if (key.startsWith(prefix)) targetCooldowns.delete(key);
-  }
+  targetCooldowns.clearPersisted([...targetCooldowns.keys()].filter(key => key.startsWith(prefix)));
 }
 
 export type ComboFailureDecision = "hop" | "stop";
@@ -645,6 +647,9 @@ const REQUEST_SHAPE_FAILURE_CODES = new Set([
   // A route that cannot read the request's media (image input to a text-only CLI route) is
   // healthy for every other request, so cooling it would only block unrelated turns.
   "unsupported_input_modality",
+  // A request whose token cap was reached before output was produced is request-specific;
+  // the candidate remains healthy for subsequent requests with larger limits.
+  "zero_output_token_limit",
 ]);
 
 /** Credential/billing failures that every target sharing the provider inherits. */

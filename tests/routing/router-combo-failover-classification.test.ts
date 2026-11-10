@@ -68,6 +68,13 @@ describe("combo failure cooldown scope", () => {
     expect(comboFailureCooldownScope(502,
       "Your input exceeds the context window of this model. Please adjust your input and try again.",
       { code: "upstream_server_error" })).toBe("none");
+    // A request whose token cap was exhausted before output was produced is request-specific.
+    expect(comboFailureCooldownScope(502,
+      "Provider reached its output token limit before producing output",
+      { code: "zero_output_token_limit" })).toBe("none");
+    expect(comboFailureDecision(502,
+      "Provider reached its output token limit before producing output",
+      { code: "zero_output_token_limit" })).toBe("hop");
     // A credential verdict keeps its provider scope even when the body quotes context prose.
     expect(comboFailureCooldownScope(401, "invalid key for the 200k context window tier")).toBe("provider");
     // A provider's own per-target hard cap (vendor code 5059) is equally request-shaped.
@@ -466,12 +473,15 @@ describe("definite upstream context overflow", () => {
     expect(comboFailureDecision(502, failedTerminal(prose), { code: "context_length_exceeded" })).toBe("hop");
     expect(comboFailureDecision(400, "context length exceeded", { code: "context_length_exceeded" })).toBe("hop");
     expect(comboFailureDecision(400, `Provider error 400: ${prose}`)).toBe("hop");
+    expect(comboFailureDecision(400, "This is not a timeout: the model's context window is full")).toBe("hop");
+    expect(comboFailureDecision(400, "Request was not accepted because its history is at or past the model's context limit")).toBe("hop");
   });
 
   test("evidence must come from the innermost message, not a stray code token", () => {
     const unrelated = JSON.stringify({ error: { ...unsupportedUser, code: "context_length_exceeded" } });
     expect(comboFailureDecision(400, unrelated)).toBe("stop");
     expect(comboFailureDecision(400, "ordinary invalid request", { code: "context_length_exceeded" })).toBe("stop");
+    expect(comboFailureDecision(400, "Requested tokens should not exceed maximum context length (8192)")).toBe("stop");
     // Reflected prose inside an unrelated body is not the provider's own verdict.
     expect(comboFailureDecision(400, JSON.stringify({ error: { ...unsupportedUser, param: "tools", note: prose } })))
       .toBe("stop");

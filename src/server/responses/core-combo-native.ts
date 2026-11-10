@@ -197,8 +197,10 @@ export function createComboProtocolLanes(input: {
     if (inbound === "messages") {
       const combo = getCombo(config, comboId);
       // ponytail: exact replay supports no combo effort rewrite; the existing bridge owns those policies.
+      const domain = credentialDomainFor(route.provider);
       if (!combo || combo.strategy !== "failover" || comboDefaultEffort(config, comboId)
-        || combo.reasoningEffortMode !== "strict" || !credentialDomainFor(route.provider)?.firstPartyAnthropic
+        || combo.reasoningEffortMode !== "strict" || !domain
+        || (route.provider.authMode === "oauth" && !domain.firstPartyAnthropic)
         || supportedLadderFor({ provider: route.provider, modelId: route.modelId })?.length === 0) return false;
     }
     // The concrete selector, as the bridge child's body carries it; the wire model comes from

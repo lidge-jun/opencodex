@@ -4,6 +4,7 @@
   "request-log.test.ts": "usage",
   "request-log-normalization.test.ts": "usage",
   "request-log-error-detail.test.ts": "usage",
+  "provider-failure-detail.test.ts": "usage",
   "usage-telemetry-profile-contract.test.ts": "usage",
   "usage-telemetry-profile-sync.test.ts": "usage",
   "usage-telemetry-profile-collector.test.ts": "usage",
