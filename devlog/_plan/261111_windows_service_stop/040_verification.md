@@ -23,7 +23,10 @@
 - Plain `ocx stop`: part A `denied`, `survived` and `unknown` each send no `/api/stop` POST, set `ownershipBlocked`, skip the shared restore, and record `outcome: failed`, `proxy: unknown`, `sharedTeardown: skipped`.
 - `absent`: no registered task or WinSW service and no bound wrapper → `ServiceStopOutcome` `absent`, no "Service manager stopped.", the POST is sent, part B does not run (no 6 s hold); the same with an unreadable process list → still `absent`, and plain `ocx stop` still stops the proxy.
 - Budget, with injected clocks: admission refuses with `unverified-budget` and changes nothing (no `/end`, terminate or POST) when the remaining time is below the worst case still to come; once admitted, every step at its cap ends before the deadline; the graceful exit wait is never shortened; part B never gets less than 6 s; `--deadline-ms` from both Desktop paths is honored, and a missing flag means 60 s; macOS/Linux ignore it.
-- `/api/stop` without a receipt: part A (4 s cap) plus the measured worst case of `performStopTeardown` answers within 10 s.
+- `/api/stop` without a receipt, stray of a deleted task: the 4 s sweep plus the measured worst case of `performStopTeardown` answers within 10 s; a parent POST without a receipt or without a part A record is never given less than 10 s; a registered WinSW service keeps today's in-process stop.
+- WinSW: a non-waiting stop plus an SCM poll capped at `<stoptimeout>` + 2 s; an overrun → `unknown` and nothing further; registration probes capped at 2 s, an unreadable `schtasks` answer stays `unknown`.
+- Caps that are new: `taskkill` in the forced fallback times out at 5 s; orphan discovery at 3 s (overrun refuses); `revertSystemEnv` at 1 s; inherited-receipt probes counted as 1.5 s × N at admission.
+- Admission runs after the registration probe: `absent` is never refused for budget.
 - A wrapper relaunched after bind (port still free during the hold) is caught by the final enumeration → survived.
 - Updater call sites, including the one in `preparePort`, abort on a non-`stopped` part A.
 - New test files registered in the layout maps; no capped file grows (file-size ratchet).
@@ -37,7 +40,7 @@
 | Elevated (HighestAvailable) task stopped from an unelevated shell and from unelevated Desktop | Real access checks → denied; a command line hidden from a non-admin CIM query classifies as unknown or denied consistently |
 | npm Bun runtime vs bundled `ocx.exe` | Different process trees and command lines |
 | Logon/session-unlock trigger during a stop | Trigger timing |
-| WinSW backend stop with `onfailure restart delay="5 sec"` against the part A (3 s handle wait) and part B (6 s hold) deadlines | Real SCM behavior |
+| WinSW backend stop with `onfailure restart delay="5 sec"` against the WinSW cap (`<stoptimeout>` + 2 s) and the part B (6 s hold) deadline | Real SCM behavior |
 | Slow startup / antivirus interference against the deadline | Timing on real hardware |
 | Windows ARM64 | No FFI: bounded fallback (or unknown, if the owner chooses the strict variant) |
 
