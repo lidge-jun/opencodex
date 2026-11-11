@@ -6,6 +6,7 @@ import { connectClient } from "../../src/client/connect";
 import { teardownClientLink } from "../../src/client/link-teardown";
 import { clientLinkStatePath, writeClientLinkState } from "../../src/client/link-state";
 import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
+import { DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
 import { createTempHome } from "../helpers/temp-home";
 
 const linkId = "lnk_0123456789abcdef";
@@ -150,4 +151,57 @@ test("an unreadable sidecar skips the revoke but still reports the manual revoke
   });
   expect(standalone).toEqual({ linkId: null, homeRevoke: "not_applicable", tunnel: { tunnel: "absent" } });
   expect(calls).toBe(0);
+});
+
+test("a catalog changed after connect names what was found and --keep-catalog", async () => {
+  const home = createTempHome("ocx-client-link-catalog-");
+  try {
+    const config = getDefaultConfig();
+    config.port = 10100;
+    saveConfig(config);
+    mkdirSync(home.codexHome, { recursive: true });
+    writeFileSync(home.path(".codex", "config.toml"), "model_provider = \"openai\"\n");
+    await connectClient({
+      serverUrl: "http://127.0.0.1:34567",
+      managementUrl: "http://127.0.0.1:34567",
+      managementTransport: "direct",
+      transport: "link",
+      link: { tunnelPort: 34567, linkId },
+      credential: { kind: "link", apiKeyId: "key-1", key },
+      selectedClients: ["codex"],
+      noSync: true,
+    }, {
+      fetchImpl: async input => String(input).endsWith("/readyz")
+        ? Response.json({ status: "ready", protocol: 1, minimumClientProtocol: 1, managementUrl: "http://127.0.0.1:34567" })
+        : Response.json({ models: [] }),
+      catalogCompatibility: { supportedEfforts: () => new Set() },
+      lifecycleLockDeps: { lockPath: home.path("lifecycle.sqlite") },
+    });
+    // Something else rewrote the catalog after connect: neither ours nor the recorded prior one.
+    writeFileSync(DEFAULT_CATALOG_PATH, JSON.stringify({ models: [{ slug: "rewritten-elsewhere" }] }));
+    const logs = spyOn(console, "log").mockImplementation(() => {});
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    let exit = -1;
+    let output = "";
+    try {
+      exit = await handleDisconnectCommand([], {
+        lifecycleLockDeps: { lockPath: home.path("lifecycle.sqlite") },
+        linkTeardownDeps: {
+          reapOrphanTunnel: async () => ({ tunnel: "absent" }),
+          runner: { run: async () => ({ code: 1, stdout: "", stderr: "" }) },
+          knownHostsFile,
+        },
+      });
+      output = errors.mock.calls.flat().join("\n");
+    } finally {
+      logs.mockRestore();
+      errors.mockRestore();
+    }
+    expect(exit).not.toBe(0);
+    expect(output).toContain("client_catalog_ownership_changed");
+    expect(output).toContain("matches neither the catalog this connection wrote nor the one recorded before it connected");
+    expect(output).toContain("ocx disconnect --keep-catalog");
+  } finally {
+    home.remove();
+  }
 });
