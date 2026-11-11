@@ -715,7 +715,12 @@ export function installLaunchd(deps: {
     // `.plist.prev`, not `.prev.plist`: launchd globs `~/Library/LaunchAgents/*.plist` at
     // login, so a backup ending in `.plist` would be a second registration of the same
     // Label fighting the real one for the port.
-    try { writeServiceDefinitionFile(`${p}.prev`, previousPlist, "utf8"); } catch { /* best-effort */ }
+    //
+    // A backup we could not write must not leave an older run's `.prev` behind either: the
+    // pending marker below makes the next repair roll back to whatever `.prev` holds.
+    try { writeServiceDefinitionFile(`${p}.prev`, previousPlist, "utf8"); } catch {
+      try { unlinkLaunchdOwnedFile(`${p}.prev`); } catch { /* rollback then has no backup */ }
+    }
   }
   // Persist before replacing the plist or touching launchd, so interruption cannot make
   // the next repair treat unconfirmed bytes as loaded or overwrite the recovery copy.
@@ -823,9 +828,17 @@ export function installLaunchd(deps: {
   if (!currentDefinitionLoaded()) {
     // Do NOT write install state for a load that did not take: state describing an unused
     // plist is what made this failure invisible.
-    let rolledBack: "restored" | "on-disk-only" | "none" = "none";
+    let rolledBack: "restored" | "on-disk-only" | "left-running" | "none" = "none";
     if (rollbackPlist !== null) {
-      try {
+      if (verdict.state === "loaded-current") {
+        // The job is serving from the expected command; only the changed definition is
+        // unconfirmed. Evicting it to reload the old bytes could leave nothing running, so put
+        // the previous definition back on disk and keep `.pending` for the next repair.
+        try {
+          writeServiceDefinitionFile(p, rollbackPlist, "utf8");
+          rolledBack = "left-running";
+        } catch { /* the new plist stays on disk; .pending keeps it unconfirmed */ }
+      } else try {
         writeServiceDefinitionFile(p, rollbackPlist, "utf8");
         evictEveryDomain();
         run(["bootstrap", guiDomain, p]);
@@ -849,7 +862,9 @@ export function installLaunchd(deps: {
       + `The ${LABEL} job ${state}.\n`
       + (rolledBack === "on-disk-only"
         ? "The previous plist was restored on disk but could not be bootstrapped either.\n"
-        : "")
+        : rolledBack === "left-running"
+          ? "The previous plist was restored on disk; the running job was left in place.\n"
+          : "")
       + `Recover manually with:\n  launchctl bootstrap ${guiDomain} ${p}\n`
       + `Inspect it with:\n  launchctl print ${guiTarget}\n  launchctl print-disabled ${guiDomain}\n`
       // macOS `service repair` delegates straight to installLaunchd, so this fires for

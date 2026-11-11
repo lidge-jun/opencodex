@@ -163,6 +163,38 @@ test("prolonged contention bounds retry churn without extending the acquisition 
   }
 });
 
+test("a peer that releases during the final wait is still acquired before the deadline", async () => {
+  const home = mkdtempSync(join(tmpdir(), "ocx-fence-final-"));
+  const owner = await holder(home);
+  let now = 0;
+  let calls = 0;
+  let released = false;
+  const clock = spyOn(performance, "now").mockImplementation(() => now);
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, delay = 0) => {
+    now += delay;
+    void (async () => {
+      // The last sleep ends exactly at the deadline; the peer lets go while it runs.
+      if (now >= 10_000 && !released) {
+        released = true;
+        owner.send("release");
+        await owner.exited;
+      }
+      callback();
+    })();
+    return {} as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout);
+  try {
+    await withCredentialPublicationFenceAsync(home, async () => { calls += 1; });
+    expect(released).toBe(true);
+    expect(calls).toBe(1);
+    expect(now).toBe(10_000);
+  } finally {
+    timer.mockRestore(); clock.mockRestore();
+    if (!released) { owner.send("release"); await owner.exited; }
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("async acquisition propagates permanent open failures without invoking the callback", async () => {
   const home = mkdtempSync(join(tmpdir(), "ocx-fence-open-"));
   let calls = 0;

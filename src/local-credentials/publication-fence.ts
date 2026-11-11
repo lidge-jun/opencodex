@@ -62,9 +62,9 @@ export async function withCredentialPublicationFenceAsync<T>(home: string, fn: (
       if (!String((error as { code?: unknown })?.code ?? "").startsWith("SQLITE_BUSY") || remaining <= 0) throw error;
       // A native SQLite busy wait blocks every HTTP request in this process.
       // Keep the same total budget while letting the serving event loop run.
+      // The loop tries once more after the last sleep, as SQLite's own busy handler would.
       await new Promise<void>(resolve => setTimeout(resolve, Math.min(retryDelayMs, remaining)));
       retryDelayMs = Math.min(retryDelayMs * 2, 100);
-      if (performance.now() >= deadline) throw error;
     }
   }
   try { return await fn(); } finally { release(); }

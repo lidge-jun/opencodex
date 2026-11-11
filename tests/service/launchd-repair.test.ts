@@ -23,7 +23,7 @@
  * `com.opencodex.proxy.plist`.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -251,6 +251,45 @@ describe("installLaunchd: repair must not be an outage (#4236 defect 1)", () => 
       expect(verbs(argv)).not.toContain("kickstart");
     });
   }
+
+  test("a refused policy repair leaves a job still serving the expected command in place", () => {
+    const plistPath = fixturePlist();
+    const legacy = renderedPlist().replace(/\s*<key>ProcessType<\/key><string>Interactive<\/string>/, "");
+    writeFileSync(plistPath, legacy);
+    const { argv, launchctl } = recordingLaunchctl({
+      bootstrap: Array.from({ length: 110 }, () => fail(5, "Bootstrap failed: 5: refused")),
+    });
+    let failure: unknown;
+    try { installLaunchd({ launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} }); }
+    catch (error) { failure = error; }
+    // The rollback restores the previous bytes on disk without another eviction: evicting a job
+    // that is still serving, to bootstrap an old definition that may also be refused, could leave
+    // nothing listening.
+    const verbList = verbs(argv);
+    expect(verbList.lastIndexOf("bootout")).toBeLessThan(verbList.lastIndexOf("bootstrap"));
+    expect(argv.at(-1)).not.toContain("print");
+    expect(String(failure)).toContain("left in place");
+    expect(readFileSync(plistPath, "utf8")).toBe(legacy);
+    expect(existsSync(`${plistPath}.pending`)).toBe(true);
+  });
+
+  test("a backup that cannot be written removes an older run's backup", () => {
+    const plistPath = fixturePlist();
+    const legacy = renderedPlist().replace(/\s*<key>ProcessType<\/key><string>Interactive<\/string>/, "");
+    writeFileSync(plistPath, legacy);
+    // An older failed run left this backup; a read-only file makes this run's backup write fail.
+    writeFileSync(`${plistPath}.prev`, "stale backup from an older run");
+    chmodSync(`${plistPath}.prev`, 0o400);
+    const { launchctl } = recordingLaunchctl({
+      bootstrap: Array.from({ length: 110 }, () => fail(5, "Bootstrap failed: 5: refused")),
+    });
+    expect(() => installLaunchd({ launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} }))
+      .toThrow(/NOT confirmed loaded/);
+    // The run stays pending, and the next repair rolls back to whatever .prev holds; an older
+    // run's bytes must not be what it finds.
+    expect(existsSync(`${plistPath}.pending`)).toBe(true);
+    expect(existsSync(`${plistPath}.prev`)).toBe(false);
+  });
 
   test("policy repair retries a refused bootstrap even when the old command matches", () => {
     const plistPath = fixturePlist();
