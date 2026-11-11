@@ -1168,12 +1168,17 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       activeId: current.activeId,
       keys: current.keys.map(key => {
         const row = byId.get(key.id);
-        if (!row || key.quotaMode !== "probe") return key;
+        if (key.quotaMode !== "probe") return key;
+        // A key added while the read was in flight was never read.
+        if (!row) return { ...key, quotaUnknownReason: "not_read" };
         if (!row.isCurrent()) return { ...key, quota: null, quotaUnavailable: true, quotaUnknownReason: "not_read" };
         const readAt = row.readAt === undefined ? {} : { quotaReadAt: row.readAt };
+        // A successful read with no meterable balance (authoritative empty) still names why it is unknown.
+        const reason = row.unavailable ? (row.readAt === undefined ? "not_read" : "read_failed")
+          : row.quota === null && row.readAt !== undefined ? "not_reported" : undefined;
         // Internal identity/epoch checks never enter the JSON DTO.
         return { ...key, quota: row.quota, quotaUnavailable: row.unavailable === true, ...readAt,
-          ...(row.unavailable ? { quotaUnknownReason: row.readAt === undefined ? "not_read" : "read_failed" } : {}) };
+          ...(reason ? { quotaUnknownReason: reason } : {}) };
       }),
     });
   }

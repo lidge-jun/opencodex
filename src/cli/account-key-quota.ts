@@ -101,7 +101,8 @@ export function projectApiKeyQuotaRows(value: unknown, provider: string): Family
     // #8397: a reason a newer proxy adds is dropped, not fatal; a non-string is malformed.
     const unknownReason = parseQuotaUnknownReason(optionalString(row, "quotaUnknownReason"));
     if (unknownReason) fields.quotaUnknownReason = unknownReason;
-    if (row.quotaReadAt !== undefined) fields.quotaReadAt = finite(row.quotaReadAt);
+    // Display-only: a malformed read time is dropped like an unknown reason, not fatal to the listing.
+    if (typeof row.quotaReadAt === "number" && Number.isFinite(row.quotaReadAt) && row.quotaReadAt >= 0) fields.quotaReadAt = row.quotaReadAt;
     const masked = optionalString(row, "masked");
     return { provider, type: "api-key", id, label: optionalString(row, "label") ?? masked,
       masked, active: optionalBoolean(row, "active") ?? id === activeId,
@@ -116,6 +117,7 @@ const UNKNOWN_REASON_TEXT: Record<QuotaUnknownReason, string> = {
   passive_not_observed: "not observed yet",
   read_failed: "read failed",
   not_read: "not read",
+  not_reported: "provider reported none",
 };
 export function quotaUnknownReasonText(reason: QuotaUnknownReason): string {
   return UNKNOWN_REASON_TEXT[reason];

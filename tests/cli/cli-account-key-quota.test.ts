@@ -306,6 +306,7 @@ test("#8397 human text gives the reason and the age of the last read; unknown re
     row({ quotaMode: "passive", quotaUnknownReason: "passive_not_observed" }),
     row({ quotaMode: "unsupported", quotaUnknownReason: "reason_from_a_newer_proxy" }),
     row({ quota: null, quotaUnavailable: true, quotaUnknownReason: "not_read" }),
+    row({ quota: null, quotaUnknownReason: "not_reported", quotaReadAt: now - 60_000 }),
   ]), "openrouter").rows;
   expect(rows[0]).toMatchObject({ quotaUnknownReason: "no_balance_source" });
   expect(rows[1]).toMatchObject({ quotaReadAt: now - 180_000 });
@@ -317,7 +318,9 @@ test("#8397 human text gives the reason and the age of the last read; unknown re
   expect(lines[4]).toContain("passive: balance UNKNOWN (not observed yet)");
   expect(lines[5]).toContain("unsupported: balance UNKNOWN (no balance source)");
   expect(lines[6]).toContain("probe: unavailable; balance UNKNOWN (not read)");
-  for (const line of [lines[1], lines[3], lines[4], lines[5], lines[6]]) expect(line).not.toMatch(/\b0%|USD 0/);
-  expect(() => projectApiKeyQuotaRows(body([row({ quotaReadAt: "yesterday" })]), "openrouter")).toThrow("Malformed");
+  expect(lines[7]).toContain("probe: balance UNKNOWN (provider reported none); read 1 min ago");
+  for (const line of [lines[1], lines[3], lines[4], lines[5], lines[6], lines[7]]) expect(line).not.toMatch(/\b0%|USD 0/);
+  // Display-only: a malformed read time is dropped, not fatal to the listing.
+  expect(Object.hasOwn(projectApiKeyQuotaRows(body([row({ quotaReadAt: "yesterday" })]), "openrouter").rows[0]!, "quotaReadAt")).toBe(false);
 });
 

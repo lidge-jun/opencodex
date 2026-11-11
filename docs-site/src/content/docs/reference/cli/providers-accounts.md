@@ -771,8 +771,9 @@ valid. Keys remain masked.
 When a balance is unknown, the row says why in `quotaUnknownReason`:
 `no_balance_source` (OpenCodex has no balance reader for this destination),
 `passive_not_observed` (a passive provider has not observed usage yet),
-`read_failed` (a reader exists and its last read failed), or `not_read` (a
-reader exists but no read was made, for example on a paused key). Probe rows
+`read_failed` (a reader exists and its last read failed), `not_read` (a
+reader exists but no read was made, for example on a paused key), or
+`not_reported` (the read succeeded and the provider reported no balance to meter). Probe rows
 also carry `quotaReadAt`, the time of the last read in epoch milliseconds,
 whether it succeeded or failed. Only destinations with a balance reader
 (`quotaMode: "probe"`, such as OpenRouter, DeepSeek, Ollama Cloud, Moonshot,
