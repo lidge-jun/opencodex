@@ -152,7 +152,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "link",
-    usage: "ocx link <port|issue|status|revoke|reconnect|cleanup>",
+    usage: "ocx link <port|issue|status|revoke|reconnect|cleanup|check|update|sync|restart-codex>",
     summary: "Allocate and manage a loopback remote home link.",
     details: [
       "Port: ocx link port [--json]",
@@ -161,7 +161,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "Revoke: ocx link revoke --link-id <id> [--force --yes] [--json]",
       "Reconnect: ocx link reconnect --link-id <id> [--json]",
       "Cleanup: ocx link cleanup [--link-id <id>] [--json]",
-      "Issue, status, revoke, and reconnect use the running proxy's loopback management API and admin token.",
+      "Check: ocx link check (--link-id <id> | --all) [--no-wait] [--json]",
+      "Update: ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]",
+      "Sync: ocx link sync (--link-id <id> | --all) [--no-wait] [--json]",
+      "Sync with a restart: ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]",
+      "Restart Codex: ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]",
+      "Issue, status, revoke, reconnect, check, update, sync and restart-codex use the running proxy's loopback management API and admin token; update, sync and restart-codex act only on Home-initiated links.",
     ],
   },
   {
@@ -183,10 +188,13 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "sync",
-    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--restart-codex] [--restart-app-server-only]",
+    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only] [--child <linkId>]... [--restart-children[=app-server] | --restart-children=codex --yes]",
     summary: "Fetch provider models and inject them into Codex config.",
     details: [
+      "A current Home catalog fans out to linked Children; --local-only disables fan-out and --json emits the result. Partial fan-out exits 6.",
+      "--child <linkId> (repeatable) limits fan-out to those links; the others report not-selected. A Child held by a Child operation is skipped as child-busy. Fan-out requests no Codex restart on a Child unless --restart-children[=app-server] or --restart-children=codex --yes is given; the Home then skips the restart, never the sync, for a Child with a model request in flight (restart-skipped:link-active), on Windows Children, and on ocx-child, and exits 6. The Child's pinned sync may restart its OpenCodex client runtime after applying changed Home settings.",
       "After writing the catalog, warns if long-lived Codex app-server processes are still running.",
+      "An update in flight or an unavailable update/sync mutex refuses without changes: update-in-flight, exit 7. Another sync reports sync-in-progress, exit 1.",
       "--restart-codex restarts the app-servers AND fully quits and relaunches the Codex desktop app on macOS, Linux and Windows, after catalog/cache writes or a committed configuration change. It ends live conversations.",
       "--restart-app-server-only keeps the narrow behaviour: SIGTERM to matching app-server / code-mode-host processes, desktop app left running. It wins over --restart-codex when both are given.",
       "--restart-desktop-app is a deprecated alias of --restart-codex and prints a notice.",
@@ -290,8 +298,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "update",
-    usage: "ocx update [--tag latest|preview]",
+    usage: "ocx update [--tag latest|preview] | --plan --json [--tag latest|preview | --version <version>] | --yes --json [--tag latest|preview | --version <version>] [--expect-plan <token>] [--not-after <unix-ms>]",
     summary: "Update opencodex. Preview installs stay on the preview tag unless overridden.",
+    details: [
+      "--plan --json previews an orchestrated update; --yes --json applies it. --expect-plan binds apply to the returned planToken; --not-after sets a Unix millisecond mutation deadline.",
+      "Orchestrated exit codes: 0 verified or up-to-date; 10 refused; 11 failed with previous version verified; 12 unverified or still running; 64 invalid usage.",
+    ],
   },
   {
     name: "provider",
@@ -372,7 +384,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     usage: "ocx models <list|live|add|edit|remove|enable|disable|provider|selected|preset|context|shadow> ...",
     summary: "List models and manage custom (manually registered) models.",
     details: [
-      "List available models from static config with no subcommand (liveModels may add more at runtime).",
+      "List available models: saved and router-known IDs include custom models and the process-local cache; models live reads the running proxy catalog.",
       "add/remove support --live for the selected proxy; live or JSON removal requires --yes.",
       "Local add/remove JSON reports saved state and opportunistic sync; no proxy keeps the save successful/pending.",
       "display-name <provider/raw-model> --set <label> or --clear changes an exact upstream model label.",
@@ -731,10 +743,11 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "capabilities",
-    usage: "ocx capabilities [--json] [--mutating-only] [--route <path>]",
+    usage: "ocx capabilities [--json] [--contracts] [--mutating-only] [--route <path>]",
     summary: "List the declared CLI capabilities and the management routes they drive.",
     details: [
       "The machine-readable surface index: start here when driving ocx programmatically instead of parsing help text.",
+      "--contracts lists supported versioned contracts; it cannot be combined with --route or --mutating-only.",
       "--route <path> answers the inverse question: which commands drive this management route.",
     ],
   },
@@ -825,6 +838,19 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     hidden: true,
     usage: "ocx __gui-update-worker <jobId> [channel] [restart]",
     summary: "Hidden internal: run the GUI update worker.",
+  },
+  {
+    name: "telemetry",
+    usage: "ocx telemetry <status|enable|disable|profile> [--json]",
+    summary: "Inspect or change anonymous daily usage telemetry consent and preview the payload.",
+    details: [
+      "status [--json]   Show effective state, reason, install channel, last sent day, and exact preview payload.",
+      "enable [--json]   Confirm and opt in to anonymous telemetry in an interactive terminal (refused with agent_consent_required or tty_required otherwise).",
+      "disable [--json]  Opt out of anonymous telemetry and delete telemetry-id.json.",
+      "profile [status] [--json]  Show the opt-in public leaderboard profile, the next day it would send, and its ranks.",
+      "profile connect --handle <h> [--name <n>] [--avatar <colour>] [--json]  Create a public profile in an interactive terminal (refused with agent_consent_required or tty_required otherwise).",
+      "profile disconnect [--json]  Delete the public profile and all its data on the server; always permitted.",
+    ],
   },
 ];
 

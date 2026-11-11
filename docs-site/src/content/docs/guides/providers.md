@@ -13,6 +13,9 @@ These links preserve the preset's referral parameters. Sponsor information is sh
 the configured provider name, adapter and endpoint match the preset; it never changes routing,
 account selection or defaults.
 
+While a provider login is in progress, its Accounts panel offers **Cancel** once sign-in
+instructions appear.
+
 ## OpenAI account modes
 
 | Provider id | Use | Credential/account rule |
@@ -52,7 +55,7 @@ reset is expected to recover as `+N% pool capacity`. **Incomplete coverage** mea
 accounts could not safely contribute to the estimate, for example because their plan or quota is
 unknown, their reading is stale, or the account is paused or needs reauthentication.
 
-Business Premium seats reported as `self_serve_business_prolite` count as five Standard-seat units in this estimate. This display weight does not select accounts or create a five-hour window when the upstream reports only weekly usage. The calibration follows the [official Business usage limits](https://help.openai.com/en/articles/12003714-chatgpt-business-models-and-limits), checked 2026-10-20; unknown plans continue to count at the baseline with the unknown-plan count disclosed.
+Business Premium seats reported as `self_serve_business_prolite` count as five Standard-seat units in this estimate. This display weight does not select accounts or create a five-hour window when the upstream reports only weekly usage. The calibration follows the [official Business usage limits](https://help.openai.com/en/articles/12003714-chatgpt-business-models-and-limits), checked 2026-10-20; unknown plans continue to count at the baseline with the unknown-plan count disclosed. An enabled Anthropic OAuth account pool with two or more accounts gets the same kind of estimate, every routable account weighted equally: inactive accounts use their last measured reading (no extra usage requests), paused, reauthenticating or stale accounts count as incomplete coverage, and with the pool off or one account the row shows the active account's own reading as before.
 
 A **partial window coverage** warning means some included accounts reported one quota window but
 not another. The overview keeps those windows separate and marks each affected window incomplete
@@ -62,9 +65,9 @@ This estimate is display-only. It does not change account selection, session aff
 switching, cooldowns, or any other routing decision. Use the [Codex Auth account pool](/guides/web-dashboard/#codex-auth-and-account-pools)
 for the individual account state and routing controls.
 
-Shipped v1 configs migrate automatically to marker 2 and one option-aware row. The original config
-is retained once at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore it with
-`cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`.
+Shipped v1 configs migrate automatically to marker 2 and one option-aware row. The original config is retained once at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore it with `cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`.
+
+[Claude OAuth client-version errors](/guides/claude-code/#claude-oauth-client-version-errors)
 
 ## Claude Opus 5.5 progress updates
 
@@ -92,8 +95,11 @@ The built-in Claude model seeds advertise text and image input for both `anthrop
 Explicit per-model input-modality overrides remain authoritative; unknown models are not assumed
 image-capable. This applies across integrations wherever the client's configuration supports image
 capability metadata: OpenClaw exports a declared `input` array, and Kimi Code exports
-`capabilities: ["image_in"]` only for image-capable models. OpenClaw omits `input` when no supported
-modalities are declared; Kimi omits `capabilities` for unknown or text-only models. Clients without
+`capabilities: ["image_in"]` only for image-capable models, adding `"thinking"` when the model
+declares an effort ladder. Kimi Code also receives that ladder as `support_efforts` (limited to
+`low`, `medium`, `high`, `xhigh` and `max`, in that order) and the declared default as
+`default_effort` when it is in the ladder. OpenClaw omits `input` when no supported modalities are
+declared; Kimi omits `capabilities` for models that declare neither image input nor an effort ladder. Clients without
 a supported capability field keep their existing configuration shape. After updating opencodex,
 regenerate or refresh the client configuration managed by opencodex to receive the updated metadata.
 
@@ -146,7 +152,13 @@ chance of reuse, but does not guarantee a cache hit or remove token-throughput l
 
 Mistral uses one API-key provider for both Studio and Vibe keys. Key types and plan allowances
 are described in [Mistral's API-key documentation](https://docs.mistral.ai/admin/identity-access/api-keys);
-the proxy does not infer a subscription tier from the key. For every model, explicit upstream
+the proxy does not infer a subscription tier from the key. At `https://api.mistral.ai/v1`, the dashboard
+reads API and Vibe budgets from `/v1/billing/budget` and the plan from `/v1/billing/subscription`,
+using the inference credential and egress. Measured windows show usage, total and recognized plan name.
+Budgets are display-only: they do not rank keys, route or pause traffic, or enter the quota pool.
+Missing, malformed or non-positive budgets, malformed currencies and out-of-range percentages are unknown;
+unknown plan names are omitted. Fresh last-good readings survive 402, 408, 429, 5xx and transport failures,
+but 401, 403 and other non-retryable client refusals suppress them. For every model, explicit upstream
 `Retry-After` deadlines are shared between calls on the same credential and model. A 429
 without a retry time can activate a conservative 60-second recovery wait when valid minute
 counters show exhausted capacity, or the refused query's measured cost exceeds the remaining
@@ -158,6 +170,33 @@ zero-entitlement, exhausted-monthly, or above-full-allowance evidence does not i
 disables shared pacing. If Mistral's
 retry time exceeds `retryOn429.maxIntervalMs`, the proxy returns the 429 and retry hint rather
 than replaying early. Context windows and per-model compaction preferences remain independent.
+
+Mistral accepts a different set of `reasoning_effort` values for each model and refuses the
+rest with HTTP 400 (or 422 for `ultra`). The preset ships the accepted rungs as registry
+`modelReasoningEfforts` rows. Client exports such as `ocx export --client opencode` offer only
+these variants. The Codex catalog still adds its synthetic `ultra` rung, plus `max` where a
+model's list omits it, and requests clamp those to the highest listed rung:
+
+| Model | Efforts |
+|---|---|
+| `zai-glm-5-3`, `zai-glm-5-3-flash` | `low`, `high`, `max` |
+| `mistral-large-4`, `mistral-large-4-0` | `low`, `medium`, `high` |
+| `deepseek-v4-1-flash-1017` | `low`, `high`, `xhigh`, `max` |
+
+The GLM and Large 4 rows follow [Mistral's reasoning guide](https://docs.mistral.ai/capabilities/reasoning).
+Mistral documents no values for DeepSeek V4.1 Flash 1017, so its row is the set measured to
+answer HTTP 200 in November 2026 and may change. A `modelReasoningEfforts` entry of your own
+for a model replaces its row.
+
+On native Chat Completions, for a model with reasoning enabled, a caller's `ultra` is sent as `max`, or as the model's highest
+declared rung below `max` (`high` on Large 4). This applies to every `openai-chat` provider
+unless the model's declared ladder lists `ultra` itself. A `reasoningEffortMap` alias for `max`
+applies to the folded value, and `__omit__` drops the effort field. On models with independent
+thinking and effort controls, the effort still selects the thinking switch; legacy thinking-toggle
+wires keep their existing discriminator mapping. Models with reasoning disabled (for
+example `noReasoningModels`) drop `reasoning_effort` entirely. Other caller values are forwarded
+as sent unless an effort pin or a qualifying effort cap rewrites them; rewritten values also go
+through the provider's wire mapping.
 
 When round-robin key selection is enabled, queued requests recheck key cooldowns before sending and acquire pacing capacity for any replacement key. This applies to native Chat, Messages, Responses and compact. Waiting for replacement-key capacity does not consume the upstream response-header timeout. Per-key pacing and round-robin use guarded HTTP/SSE even when upstream WebSockets are enabled; WebSocket-only steering and injection require a route without those key policies. This does not change the saved active key. An established upstream turn keeps its credential; later sends are refused if that key cools. Pre-output key rejection can recover to a healthy key within the existing request limit. Direct Images and compact requests record genuine 401/429 cooldowns without replaying that paid POST.
 
@@ -651,6 +690,8 @@ If Kiro ends with plain text instead of its private final-answer tool, one bound
 still runs, and only the resulting final answer is displayed. Progress accompanying a real
 tool call remains visible. A normal private final answer needs no completion retry.
 
+When Kiro's safety filter stops a turn (`CONTENT_FILTERED`, for example the Claude `BIO` classifier), the request ends as a refusal that clients do not retry: Claude clients see `stop_reason: "refusal"` and Codex sees a failed response carrying Kiro's category and explanation. If the filter stops the bounded retry, no final answer is displayed; the progress held from the first attempt and any partial text from the retry are shown as commentary before the refusal.
+
 When Kiro emits credit metering, request logs preserve the reported spend as
 `usage.providerCredits`, including in the persisted usage ledger. These are Kiro credits;
 token counts may still be estimated, and the credit value does not replace USD cost estimates.
@@ -744,7 +785,7 @@ On upgrade, startup adds Pro to a saved model list only when it exactly matches 
 
 ## 3. API-key catalog
 
-opencodex ships 106 built-in presets: 85 key-based, 17 OAuth, three local, and one default
+opencodex ships 107 built-in presets: 86 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -762,7 +803,7 @@ preserves those requested tiers; any backend-specific normalization remains Clin
 available in the Cline IDE/CLI, not through the API; `minimax/minimax-m2.5` is the documented API
 free-experimentation model.
 
-**OrcaRouter** ([sponsor](https://github.com/lidge-jun/opencodex/blob/main/SPONSORS.md)) is an
+**OrcaRouter** ([sponsor](https://github.com/lidge-jun/opencodex/blob/dev/SPONSORS.md)) is an
 OpenAI-compatible gateway at `https://api.orcarouter.ai/v1` with vendor-namespaced model ids
 (`openai/gpt-5.5`, `anthropic/claude-opus-4.8`, `deepseek/deepseek-v4-flash`, ...) and an adaptive
 router, `orcarouter/auto`, that grades each prompt and picks the model. Create a key in the
@@ -837,6 +878,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | TokenLab | `https://api.tokenlab.sh/v1` |
 | Modelflare | `https://modelflare.dev/v1` |
 | AI Stupid Level | `https://aistupidlevel.info/v1` |
+| cheapaimodel | `https://api.cheapaimodel.ai/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -880,11 +922,13 @@ Exhausted output budgets produce `incomplete` with `max_output_tokens`; the prox
 the requested budget. A replay-safe empty completion with budget remaining may retry once, within
 the existing send limit. Explicit `emptyCompletionRetry: false` or `OCX_EMPTY_COMPLETION_RETRY=0`
 disables that retry. Text, refusals, tool activity, and unknown stream events prevent replay and
-retain the original stream. The protection does not change other providers or their retry defaults.
+retain the original stream, as does a response snapshot that already carries aggregate `output_text`
+(an absent, `null` or empty `output_text` still allows the retry).
+The protection does not change other providers or their retry defaults.
 Replay requires explicit `store: false`, complete input, and client-executed tools only; a hosted
 tool such as `web_search` prevents automatic replay even if no tool event was observed.
 
-**TokenLab** ([sponsor](https://github.com/lidge-jun/opencodex/blob/main/SPONSORS.md)) is an
+**TokenLab** ([sponsor](https://github.com/lidge-jun/opencodex/blob/dev/SPONSORS.md)) is an
 OpenAI-compatible API gateway at [tokenlab.sh](https://tokenlab.sh/r/OPENCODEX),
 operated by TOKENLAB AI INC.
 Create a workspace [API key](https://tokenlab.sh/dashboard/api?tab=keys), then run
@@ -951,6 +995,21 @@ response header names the model that answered. Routing modes declare a 262,144-t
 output tokens, which hold for any model the router picks. The router accepts text only, so for a
 routing mode or pinned model at the preset destination the proxy hands images to the vision sidecar instead of sending them. Its Anthropic
 Messages endpoint is a passthrough to Anthropic without routing, so the preset does not use it.
+
+**cheapaimodel** is a pay-per-token API gateway for open-weight models (DeepSeek, GLM, Kimi) and
+Grok, operated by LINKOVA PTE. LTD. Create an [API key](https://console.cheapaimodel.ai/keys) on a
+prepaid USD balance, then select **cheapaimodel** in `ocx init` or the dashboard's **Add provider**
+picker, or run `ocx provider add cheapaimodel`, and give it the key directly or as the reference
+`${CHEAPAIMODEL_API_KEY}`. The preset uses [Chat Completions](https://cheapaimodel.ai/docs/api/create-chat-completion)
+for every client and discovers models from the authenticated
+[`GET /v1/models`](https://cheapaimodel.ai/docs/api/list-models), which answers 401 without a valid
+key. The seeded models are `deepseek-v4-1-flash` (the default), `glm-5.3`, `glm-5.3-flash`, `kimi-k3`
+and `grok-4.7`; `glm-5.3` is text only, so images for it go to the vision sidecar. `kimi-k3` accepts
+only its own sampling values, so the preset does not forward `temperature` or `top_p` to it. The
+preset sends every request through Chat Completions, the one interface every catalog model supports;
+it does not use the gateway's Responses or Anthropic Messages endpoints. cheapaimodel's
+[terms](https://cheapaimodel.ai/terms) and [privacy policy](https://cheapaimodel.ai/privacy) apply to
+requests sent to this service.
 
 The provider editor also accepts an optional `inputModalities` fallback: a nonempty array containing
 `text`, `image`, `audio`, or `video`. Exact per-model declarations take precedence. Invalid values
@@ -1259,7 +1318,14 @@ prove your Muse Code plan covers Muse Wonder.
 **Read this before enabling it.** Meta scopes that credential to the Muse Code CLI, so
 using it here is an *unsupported* path. Meta does not authorize subscription coverage
 outside its own client, how these calls settle is not observable from the API, and you
-should treat every call as billable against your account. The key, imported or pasted, is copied into
+should treat every call as billable against your account. Meta can also refuse the request
+outright with HTTP 403 and *"This API key is billed to a Muse Code subscription. Muse Code
+subscriptions cover requests from the Muse Code client only. Use it in Muse Code, or use a
+pay-as-you-go API key for other clients."* OpenCodex reports that as a
+plan restriction on a valid credential, not a rejected or expired one, because no re-login
+can lift it: a Muse Code subscription key cannot serve any request outside the Muse Code
+client, and a pay-as-you-go Meta API key with the `meta-model` provider is the supported
+path. The key, imported or pasted, is copied into
 OpenCodex's auth store (`~/.opencodex/auth.json`, mode 0600) like every other OAuth
 credential. The dashboard shows a Terms-of-Service warning before the first login and
 before any reauthentication — the same treatment Anthropic and Google Antigravity get.
@@ -1372,6 +1438,10 @@ WorkBuddy's Chat endpoint. The Overview and Accounts tabs show remaining credits
 balances, and the next expiring non-daily credits when available. Refresh reads the signed-in
 account's billing summary; an unavailable read is not a zero balance. These credits are
 informational and do not disable free models when paid credits run out.
+When the reported total is positive, the header quota summary shows the unavailable percentage,
+including frozen credits, rounded to the nearest whole percent. It gives no exhaustion warning:
+free models may still work. An individual
+credit expiry is not shown as a reset of the entire balance.
 
 This uses an unofficial subscription protocol based on
 [Magpie's WorkBuddy plugin](https://github.com/magpie-community/plugins/tree/e7f65641df820dfd715c0d2241f99f2092e4efb1/packages/workbuddy).
@@ -1446,9 +1516,10 @@ OpenCodex provides official adapter support for Qoder through the `qoder` (Globa
   ([Global](https://qoder.com/account/integrations), [CN](https://qoder.cn/account/integrations)) and paste it as the provider's API key. The stored key reaches the CLI only as `QODER_PERSONAL_ACCESS_TOKEN` (Global) or `QODERCN_PERSONAL_ACCESS_TOKEN` (CN) in a scoped child environment.
 - **Region Isolation:** Each preset accepts only its canonical destination (`https://qoder.com` or `https://qoder.cn`) and resolves its own executable. Credentials, model cache, usage, and health are independent; neither region falls back to the other. An older custom provider named `qoder` with a different destination keeps its existing adapter and URL.
 - **Windows executables:** Each preset launches its CLI's native executable (`qoder.exe` or `qodercli.exe` for Global, `qodercn.exe` or `qoderclicn.exe` for CN) when one is on PATH. Within one PATH folder the `.exe` wins over a same-name `.cmd`, and a later candidate name such as `qoderclicn.exe` anywhere on PATH wins over `qodercn.cmd`; an earlier PATH folder that holds only `qodercn.cmd` still shadows a later folder's `qodercn.exe`. Qoder turns pass empty `--tools` and `--setting-sources` values to keep the CLI's built-in tools and local settings out, and a dispatcher that forwards through PowerShell drops those empty values. When only such a dispatcher is found, the turn fails before the CLI starts with `cli_dispatcher_drops_empty_args`; add the folder holding the native executable to PATH (the official CN installer places it in `%USERPROFILE%\.qoder-cn\bin\qoderclicn`) and retry. A dispatcher that passes arguments straight through, such as an npm shim, keeps working.
-- **Model Discovery:** `qoder --list-models` is the authoritative entitlement roster for the current PAT. The cache is bound to an irreversible fingerprint of the token, so switching accounts never reuses another account's roster. If discovery fails, the provider degrades to a stale cache and then the documented static seed.
+- **Model Discovery:** `qoder --list-models` is the authoritative entitlement roster for the current PAT. The cache is bound to an irreversible fingerprint of the token, so switching accounts never reuses another account's roster. If discovery fails, the provider degrades to a stale cache and then the documented static seed. The CLI starts a full agent runtime first, so background catalog discovery allows each run up to 30 seconds, and concurrent callers of the same provider share one run per token. The dashboard connection test waits at most 8 seconds: past that it reports the provider as still discovering rather than failed, and when the run succeeds the catalog is re-synced without a proxy restart. Codex sessions that are already running keep their previous model list until they restart: restart Codex, or run `ocx system codex-restart --yes`, which restarts Codex app-servers (the CLI reference describes what it keeps and what it relaunches).
 - **Token usage:** Qoder CLI reports zero token counts unless its usage switch is on, so each preset turns it on in its scoped CLI child environment: `QODER_EXPOSE_TOKEN_USAGE=true` for Global and `QODERCN_EXPOSE_TOKEN_USAGE=true` for CN, which reads only its own prefix.
 - **Tool Ownership:** The CLI runs single-turn `stream-json` with `--tools ""`, `--strict-mcp-config`, setting sources disabled, and session persistence disabled, so Codex keeps exclusive tool ownership. Client-declared tools are exposed through an isolated request-scoped MCP server.
+- **Tool names:** Qoder Global and Qoder CN accept each selected tool's exact client name or its advertised MCP name. Repeating the same call ID and arguments under either spelling returns the tool call only once. Unknown or unselected names are rejected. If one selected tool's client name equals another selected tool's MCP name, the request fails with `tool_catalog_invalid` before the CLI starts. Select one of those tools or rename it to remove the ambiguity. Tool execution remains with the client.
 - **Output guard:** If the CLI echoes OpenCodex tool-call/result replay envelopes into assistant text, the turn fails with `vendor_scaffold_detected` (502) instead of returning the envelope as a successful answer, and neither reasoning nor tool calls following the envelope are forwarded. Reasoning starts a fresh replay-text block, so earlier prose or code fences cannot hide an envelope in later text. If the CLI's turn already ended with its own error, that error is reported instead, still without the envelope. The proxy does not retry that failure automatically. Ordinary prose and closed fenced examples follow the shared envelope recognizer; an unverified overflowing fenced example is refused. Assistant text preserves Unicode characters split across CLI frames; unpaired surrogates are replaced with U+FFFD.
 - **Image Input:** Global continues forwarding supported images through the shared projection without a per-model vision allowlist. CN retains its vision-sidecar defaults. Its raw-image route admits only one canonical base64 PNG of at most 1 MiB decoded, 8192 pixels per edge, and 16 million total pixels in a single user turn with `DeepSeek-Flash` or `Qwen3.8-Flash`. Use `qoderclicn 1.1.70`: [issue #7516](https://github.com/lidge-jun/opencodex/issues/7516) reports Windows 11 x64 live success for those models on both `--attachment` and inline `--input-format stream-json --output-format stream-json` stdin; OpenCodex uses only stdin. The adapter validates base64 length/padding, decoded PNG signature and basic IHDR fields before CLI discovery; it does not decompress pixels or validate every PNG chunk/CRC. These ceilings are OpenCodex resource policy, not verified vendor maxima: the reported live evidence covers a 96×96 PNG, whose RGBA raster is only 36 KiB. Larger inputs require separate verification. Other CLI versions have not been verified, and the adapter does not probe the installed version. CN refuses raw URL images, other image formats/models, multiple images, tool-result images and image-bearing history/multi-turn replay before starting the CLI with `unsupported_input_modality`; use the vision sidecar for those inputs. Injected CLI tests cover serialization and cancellation without claiming live upstream support. Qoder's supported projection keeps image blocks in conversation order and marks unsupported references as `[image omitted: unsupported reference]`. Global stateless replay can still associate historical images unreliably with their original text; CN does not enable that unverified replay surface.
 - **PAT recovery:** For both Qoder presets, a multi-key API-key pool can switch to another PAT on a supported authentication rejection or account-level quota exhaustion, but only before response content or an event that makes replay unsafe. Recovery requires Qoder-specific classification and respects credential-hop and send budgets; an HTTP 401/429 or quota message alone is not permission to replay. Single-key configurations do not rotate. Sharing the CLI runner does not enable this API-key recovery for CodeBuddy or self-authenticated Claude CLI.
@@ -1475,8 +1546,9 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
 - **Prerequisites:** `npm install -g @anthropic-ai/claude-code`, then sign in once with `claude`
   (or `claude setup-token`). The CLI uses the machine's own Claude Code sign-in (the macOS Keychain
   entry, or `~/.claude/.credentials.json` elsewhere).
-- **No credential stored:** this row holds no API key, and OpenCodex never reads, copies or forwards
-  a Claude token. The CLI owns the login and bills the account itself. A CLI that is not signed in
+- **No credential stored:** this row holds no API key. Quota preflight reads the CLI sign-in token
+  in memory and sends it only to Anthropic's usage endpoint. OpenCodex does not store that token or
+  inject it into CLI inference requests. The CLI owns the login and bills the account itself. A CLI that is not signed in
   fails the turn with a sign-in error naming the command, instead of a generic `401`.
   Classification follows the same fact: the preset is a keyless key row (`keyOptional`), so it needs
   no API key and no key field is offered for it. An API key saved on this row by other means is never
@@ -1493,11 +1565,21 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
   OpenCodex runs as, so every request routed through this row — from any client of the proxy —
   spends that one Claude account. There is no per-client account, no pooling and no multiplexing;
   giving several people their own Claude usage needs one proxy user per sign-in.
-- **Input media:** the row publishes its models as text-only for v1. The CLI accepts an image frame
-  on its stream-json input, but no headless turn has been shown to hand those bytes to the model, so
-  an image sent straight to this provider is refused (`unsupported_input_modality`) instead of
-  being silently dropped and answered blind. With the
-  vision sidecar on the request path, images are captioned into text before they reach the row.
+- **Subscription usage:** the Providers workspace shows the plan's 5-hour, weekly and model-scoped
+  windows from the last usage check OpenCodex recorded before a turn, for the account Claude Code is
+  signed in to now. Opening the page never probes or launches the CLI, and **Refresh all quotas**
+  re-reads the local sign-in and that recorded observation rather than Anthropic's endpoint. After a
+  sign-out or account switch the previous account's row disappears on **Refresh all quotas**, and
+  within a minute otherwise; a newly signed-in account shows nothing until its first Claude turn.
+- **Input media:** the row advertises text and image input. The stable replay sends native image
+  blocks directly through the official CLI, following the labelled message they belong to. This
+  includes multiple attachments, retained historical images and images returned by client tools. Text and images retain their order within each message.
+  Unsupported image references fail explicitly, including Responses image `file_id` references in messages
+  and tool results; supply a supported image URL instead. Images in system or developer instructions are refused
+  before vision preprocessing or helper calls. Omitted history also omits its images. A vision
+  sidecar is not needed. An untouched v2.94.0 text-only roster is migrated; edited lists and explicit
+  per-model capability overrides remain authoritative. Live verification used Claude Code 2.1.312
+  and Fable 5.1; other model/CLI combinations still depend on their upstream image support.
 - **Isolation:** every turn runs in a scoped child environment with no inherited `ANTHROPIC_*`
   variable (a `claude` already pointed at this proxy therefore cannot loop back into it), telemetry,
   feedback and the auto-updater disabled, and `--tools ""`, `--strict-mcp-config` plus
@@ -1613,6 +1695,16 @@ Key-based providers can also keep multiple keys. Adding a key through the Provid
 under `provider.apiKeyPool`, makes it active, and mirrors it to `provider.apiKey` so routing and
 adapters continue to read the same field as before. The same dropdown can switch or remove keys; the
 management API is `/api/providers/keys` and returns masked keys only.
+
+Each configured key row in the dashboard provides dedicated Pause and Resume controls (along with
+`ocx account pause` and `ocx account resume` in the CLI). A paused key is excluded from automatic
+request routing, failover, and cooldown recovery (a media call the Responses xAI image/video bridge has
+already planned keeps the key it was planned with). If another enabled row shares the same key reference, it remains usable. When the last enabled row for the active reference is paused, OpenCodex
+automatically selects the next usable unpaused key in the pool in ring order. If all keys in the pool
+are paused, requests that need that provider return HTTP 403 `permission_error` until a key is
+resumed. The built-in Images route can still use another eligible upstream. Selecting a paused
+key row resumes and activates it. Resume clears the pause while preserving a healthy active key;
+the resumed key becomes active when no usable key is currently selected.
 
 ### Switching accounts from the terminal
 
@@ -1770,6 +1862,22 @@ dashboard or `custom` in `ocx init` and enter the base URL. See the
 [Configuration reference](/reference/configuration/) for every provider field
 (`headers`, `noReasoningModels`, `noVisionModels`, `models`, …).
 
+For Claude models reached through the translated Chat adapter, opencodex flattens tool-schema root
+`oneOf`, `anyOf`, and `allOf` into an object. This uses the actual upstream model id whose final
+slash-separated segment starts with `claude-` (case-insensitive), not every model on the gateway.
+Nested schemas retain their existing normalization. Root required fields are retained; `allOf`
+branch required fields are merged, while `oneOf`/`anyOf` branch required fields are not promoted.
+Local root-branch references are followed for at most 64 references across the schema; unresolved,
+cyclic, external, over-budget references or referenced compositions leave the root composition intact
+and may be rejected upstream. Inline nested compositions also stay intact when they contain unread
+properties or references, or exceed 256 inspected entries per tool schema; constraint-only
+nesting still flattens. Property schemas and literal values are not scanned by this guard. Nested
+references are preserved. Flattening is lossy: branch constraints
+disappear and later property definitions win, so tools must validate arguments. Existing Zen and
+Azure schema compatibility rules remain in effect.
+
+See [Verify a custom remote gateway](/guides/custom-gateway/) for the setup and validation checklist.
+
 ## Approval reviewer per provider
 
 Codex asks a second model to review approval requests, and takes that reviewer from
@@ -1833,6 +1941,18 @@ Providers with a live probe: OpenAI/Codex, Anthropic, xAI, Cursor, Kimi,
 Google Antigravity, OpenCode Go, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax,
 Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code, and any a6api-backed
 or Abliteration custom provider.
+
+**Kimi Coding Plan quota.** Account login and API-key providers on the canonical
+`https://api.kimi.com/coding/v1` endpoint read `/usages`. API-key providers on the regional
+`https://api.kimi.ai/coding/v1` endpoint read `/usages` from that same origin; account login
+stays on `api.kimi.com`. Plans that report
+`usages.limit_month_total` (or `monthTotal`) show a monthly utilization bar, with
+`limit_month_code` (or `monthCode`) as the fallback when total usage is unavailable.
+The `used_ratio` / `usedRatio` fraction must be in `[0, 1]` before conversion to a consumed
+percentage; invalid ratios are ignored. Empty or unusable `usages` containers do not hide
+usable monthly data in another supported envelope. Any reported reset time is retained.
+Existing 5-hour, weekly, and total subscription-credit
+windows remain separate, and an absent monthly window is not shown as 0%.
 
 **Abliteration credits.** A provider of any name whose `baseUrl` is
 `https://api.abliteration.ai` or `https://api.abliteration.ai/v1` reads

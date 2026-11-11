@@ -43,7 +43,7 @@ describe("--json is order-independent", () => {
     // Generalises the two known defects: any `args[<number>] === "--json"` is the same bug
     // waiting to happen in another command.
     const offenders: string[] = [];
-    for (const rel of ["src/cli/dispatch.ts", "src/cli/index.ts", "src/cli/root.ts"]) {
+    for (const rel of ["src/cli/dispatch.ts", "src/cli/index.ts", "src/cli/root.ts", "src/cli/sync-command.ts"]) {
       const lines = read(rel).split("\n");
       lines.forEach((line, i) => {
         if (/args\[\d+\]\s*===\s*"--json"/.test(line)) offenders.push(`${rel}:${i + 1}`);

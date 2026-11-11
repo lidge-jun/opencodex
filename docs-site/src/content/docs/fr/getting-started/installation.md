@@ -19,7 +19,7 @@ ChatGPT lorsqu’un modèle routé en a besoin.
 ## Installer
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ```
 
 :::note[npm a-t-il bloqué le script postinstall de bun ?]
@@ -52,7 +52,7 @@ les entrées du catalogue n’accordent aucun accès par elles-mêmes. N’utili
 tester des versions opencodex non encore publiées :
 
 ```bash
-npm install -g @bitkyc08/opencodex@preview
+npm install -g --allow-scripts=bun @bitkyc08/opencodex@preview
 ocx update --tag preview
 ```
 

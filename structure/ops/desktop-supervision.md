@@ -109,6 +109,8 @@ plain `unknown` or `unsupported` cannot clear a prior block. Without a prior blo
 unknown and unsupported preserve the existing durable-owner and liveness decisions.
 Service install, repair, start and restart refuse before mutation, including registration staging.
 Update gates re-read supervision before stop, package replacement, restoration and recovery;
+Orchestrated plans classify a Desktop-owned installation as `desktop-app-owned` and
+refuse apply; the package launcher handles orchestrated requests before Desktop handoff.
 they refuse even for a separate npm/Bun install. Use the app updater for its bundle, or quit
 Desktop before updating the CLI install. Service stop and uninstall remain available.
 `src/service/desktop-command-guard.ts` carries that refusal for `src/service/cli.ts`,
@@ -124,6 +126,15 @@ The spawn arguments then use those prepared values; in-memory argv/environment
 formatting is the only allowlisted work between that authorizer and process creation.
 `tests/update/update-home-launcher.test.ts` and `tests/update/update-home-recovery.test.ts`
 exercise refusal when preparation changes the home observation, plus stable-home starts.
+
+The npm install argv that `updateCommand()` (and the Node launcher's own npm self-update) builds
+always carries `--allow-scripts=bun`: npm 12 blocks dependency lifecycle scripts by default, and
+bun's postinstall is what unpacks the bundled runtime, so a bare global install would leave the
+next `ocx` unable to start (#8361). npm 8 through 11 accept the flag on global installs, so it is
+not version-gated. The npm package replacement stages beside the live tree and stops the proxy
+before the swap, which is also what releases `node_modules/bun/bin` on Windows; a manual
+`npm install -g` under a live proxy still fails with `EBUSY`, so doctor prints the stop, install
+and restart sequence for npm-owned installs instead of attempting it.
 
 The bypass ledger classifies these guards as **early warning**, not enforcement:
 

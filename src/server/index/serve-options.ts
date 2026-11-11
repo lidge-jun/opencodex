@@ -1,3 +1,4 @@
+import { messagesUnknownEndpointMessage } from "../../lib/messages-error-body";
 import type { Server, ServerWebSocket } from "bun";
 import { modelAliasIdPromoter } from "./model-alias-id";
 import type { StartServerDeps } from "./startup-warnings";
@@ -98,6 +99,7 @@ import {
   isAllowedManagementOrigin,
   isApiAuthRequired,
   isLoopbackHostname,
+  markDashboardProxyPeer,
   markTrustedHubManagementRequest,
   jsonResponse,
   admissionFields,
@@ -200,9 +202,14 @@ import {
   expandFastRow,
 } from "../fast-row";
 import type { OcxConfig } from "../../types";
+import { classifyUsageClient } from "../../usage/client";
 import type { PackageTreeIntegrityGuard } from "../../lib/package-tree-integrity";
 import type { ReadinessGate } from "../readiness";
 import type { WorkflowRefusalLog } from "../workflow-refusal";
+import type { AdmittedHttpTurnOptions } from "../admitted-http-turn";
+import { isOllamaNativePath } from "../ollama-native-paths";
+import { ollamaError } from "../ollama-inbound";
+import { dispatchOllamaRoute } from "./ollama-routes";
 
 import { readyProtocolMetadata } from "../../remote/protocol";
 import { homeInstanceId, stampServedBy } from "../../remote/served-by";
@@ -212,11 +219,12 @@ import { reasoningArchiveErrorResponse } from "../responses/reasoning-archive-er
 import { withGrokSessionIdentity } from "../../grok/session-identity";
 import { withCallerSessionIdentity } from "../caller-session-identity";
 import { agentAssertionUnsupportedResponse, hasAgentAssertionAuthorization } from "../../lib/authorization-scheme";
+import { runTurnStateCallerScope } from "../turn-state-handles";
 
-export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management" | "claude-intercept" | "hub-link";
+export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management" | "claude-intercept" | "hub-link" | "local-control";
 
 export function trustedLoopbackForIngress(ingress: ServerIngress, hostname: string): boolean {
-  return ingress === "unauthenticated-loopback"
+  return ingress === "unauthenticated-loopback" || ingress === "local-control"
     || (ingress === "public" && isLoopbackHostname(hostname));
 }
 
@@ -256,6 +264,7 @@ export interface ServeOptionsContext {
     policy: RequestPolicyView,
     work: (lease: ActiveTurnLease) => Promise<Response>,
     refusalLog?: WorkflowRefusalLog,
+    options?: AdmittedHttpTurnOptions,
   ) => Promise<Response>;
 
   config: OcxConfig;
@@ -322,9 +331,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       const ingress = ingressForServer(requestServer);
       // Bind management-origin trust to the actual Bun listener object resolved above.
       // Neither Host nor any X-Forwarded-* header can manufacture this process-local mark.
-      if (ingress === "hub-management" && config.runtimeRole === "hub") {
-        markTrustedHubManagementRequest(req);
-      }
+      if (ingress === "hub-management" && config.runtimeRole === "hub") markTrustedHubManagementRequest(req);
+      // #8338: the kernel-observed peer, so the configured standalone dashboard proxy can be verified.
+      else if (ingress === "public" && config.dashboardTrustedProxy !== undefined) markDashboardProxyPeer(req, requestServer.requestIP(req)?.address);
       const requestUrl = codexCompatibleUrl(req.url);
       const linkPolicyView = ingress === "hub-link" ? linkPolicy() : undefined;
       // The unauthenticated loopback listener (#1102) serves a fixed allowlist and nothing
@@ -332,14 +341,14 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       // silently when a route is added below.
       if (ingress === "unauthenticated-loopback" && !loopbackRouteAllowed(codexCompatibleUrl(req.url), req)) {
         return withCors(
-          formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${new URL(req.url).pathname}`),
+          formatErrorResponse(404, "not_found", messagesUnknownEndpointMessage(req)),
           req,
           loopbackPolicy(),
         );
       }
       if (ingress === "hub-link" && !linkRouteAllowed(requestUrl, req)) {
         return withCors(
-          formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${new URL(req.url).pathname}`),
+          formatErrorResponse(404, "not_found", messagesUnknownEndpointMessage(req)),
           req,
           linkPolicyView!,
         );
@@ -348,14 +357,14 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       // dispatch so no data, readiness, health, WebSocket, or unknown-static handler can run.
       if (ingress === "hub-management" && !managementIngressRouteAllowed(codexCompatibleUrl(req.url), req)) {
         return withCors(
-          formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${new URL(req.url).pathname}`),
+          formatErrorResponse(404, "not_found", messagesUnknownEndpointMessage(req)),
           req,
           config,
         );
       }
       if (ingress === "claude-intercept" && !claudeInterceptRouteAllowed(codexCompatibleUrl(req.url), req)) {
         return withCors(
-          formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${new URL(req.url).pathname}`),
+          formatErrorResponse(404, "not_found", messagesUnknownEndpointMessage(req)),
           req,
           loopbackPolicy(),
         );
@@ -370,7 +379,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       // Anthropic credentials, not opencodex admission tokens — so it takes the loopback view too.
       const policy: RequestPolicyView = ingress === "hub-link"
         ? linkPolicyView!
-        : ingress === "unauthenticated-loopback" || ingress === "claude-intercept"
+        : ingress === "unauthenticated-loopback" || ingress === "claude-intercept" || ingress === "local-control"
           ? loopbackPolicy()
           : config;
       // Codex runtime agent assertion_only (Authorization: AgentAssertion) is refused before
@@ -414,6 +423,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         url.pathname === "/healthz"
         || readyzPath !== undefined
         || url.pathname.startsWith("/v1/")
+        || isOllamaNativePath(url.pathname)
       )) {
         const message = "OpenCodex package files changed while this proxy was running; it restarts on its own, or run 'ocx restart' ('ocx service restart' for a background service).";
         const fencedPort = ctx.boundPort ?? requestServer.port ?? listenPort;
@@ -437,7 +447,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
               } : {}),
               error: { code: "package_tree_changed", message },
             }, 503, req, policy)
-          : packageTreeChangedResponse(req, policy, message);
+          : isOllamaNativePath(url.pathname)
+            ? withCors(ollamaError(503, message), req, policy)
+            : packageTreeChangedResponse(req, policy, message);
         const headers = new Headers(response.headers);
         headers.set("Retry-After", "5");
         const challenge = fencedHealth ? req.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER) : null;
@@ -451,9 +463,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // path) must answer the deterministic JSON 404, never the generic 204
         // preflight response that the SPA fallback would otherwise allow.
         if (readyzPath !== undefined) {
-          return withCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, policy);
+          return withCors(formatErrorResponse(404, "not_found", messagesUnknownEndpointMessage(req)), req, policy);
         }
-        const managementPreflight = url.pathname.startsWith("/api/");
+        // The exact Ollama-compatible paths are data-plane routes and take data-plane CORS.
+        const managementPreflight = url.pathname.startsWith("/api/") && !isOllamaNativePath(url.pathname);
         const allowed = managementPreflight
           ? isAllowedManagementOrigin(req, config)
           : isAllowedRequestOrigin(req, policy);
@@ -626,6 +639,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             admission,
             websocketLease,
             sessionLaneIdFromRequest(req.headers),
+            classifyUsageClient(req.headers),
           ),
         })) return undefined as unknown as Response;
         websocketLease.release();
@@ -667,7 +681,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       // fallback (which would serve index.html with HTTP 200 once gui/dist exists).
       if (readyzPath !== undefined) {
         if (readyzPath !== "/readyz" || req.method !== "GET") {
-          return withCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, policy);
+          return withCors(formatErrorResponse(404, "not_found", messagesUnknownEndpointMessage(req)), req, policy);
         }
         // A draining proxy must never advertise ready: every data-plane branch
         // answers drainingResponse while isDraining() is set, but the one-shot
@@ -693,6 +707,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const headers = new Headers(resp.headers);
         headers.set("Retry-After", "1");
         return new Response(resp.body, { status: 503, headers });
+      }
+
+      // Checked synchronously: an await here would delay every later route's admission capture.
+      if (isOllamaNativePath(url.pathname)) {
+        const native = await dispatchOllamaRoute(req, url, { config, policy, requestServer, requestMetricsLogContext, drainingResponse, runAdmittedHttpTurn });
+        if (native) return native;
       }
 
       if (url.pathname.startsWith("/api/")) {
@@ -743,7 +763,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           return withManagementCors(signed, req, config);
         }
         if (mgmtResponse) return withManagementCors(mgmtResponse, req, config);
-        return withManagementCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);
+        return withManagementCors(formatErrorResponse(404, "not_found", messagesUnknownEndpointMessage(req)), req, config);
       }
 
       if (url.pathname === "/v1/catalog" && (req.method === "GET" || req.method === "HEAD")) {
@@ -1251,6 +1271,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
                 config,
                 provider,
                 knownModelIdsForProvider(m.provider, provider, config),
+                m.provider,
               ).get(m.id)
             : undefined;
           const effectiveId = !isCombo && !fastModelId && effective
@@ -1320,7 +1341,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "unknown",
           provider: "unknown",
-          ...requestMetricsLogContext,
+          ...requestMetricsLogContext, client: classifyUsageClient(req.headers),
           ...admissionFields(admission),
           inboundProtocol: "responses",
         };
@@ -1360,7 +1381,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "image_gen",
           provider: "unknown",
-          ...requestMetricsLogContext,
+          ...requestMetricsLogContext, client: classifyUsageClient(req.headers),
           ...admissionFields(admission),
         };
         const endpoint = url.pathname.endsWith("/edits") ? "edits" as const : "generations" as const;
@@ -1418,7 +1439,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "context_history",
           provider: "unknown",
-          ...requestMetricsLogContext,
+          ...requestMetricsLogContext, client: classifyUsageClient(req.headers),
           ...admissionFields(admission),
         };
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
@@ -1445,7 +1466,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "web_search",
           provider: "unknown",
-          ...requestMetricsLogContext,
+          ...requestMetricsLogContext, client: classifyUsageClient(req.headers),
           ...admissionFields(admission),
         };
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
@@ -1470,7 +1491,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "unknown",
           provider: "unknown",
-          ...requestMetricsLogContext,
+          ...requestMetricsLogContext, client: classifyUsageClient(req.headers),
           ...admissionFields(admission),
           inboundProtocol: "responses",
         };
@@ -1565,7 +1586,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "unknown",
           provider: "unknown",
-          ...requestMetricsLogContext,
+          ...requestMetricsLogContext, client: classifyUsageClient(req.headers),
           ...admissionFields(admission),
           inboundProtocol: "messages",
         };
@@ -1603,7 +1624,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "unknown",
           provider: "unknown",
-          ...requestMetricsLogContext,
+          ...requestMetricsLogContext, client: classifyUsageClient(req.headers),
           ...admissionFields(admission),
           inboundProtocol: "chat",
         };
@@ -1641,7 +1662,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: TRANSCRIPTION_MODEL,
           provider: "unknown",
-          ...requestMetricsLogContext,
+          ...requestMetricsLogContext, client: classifyUsageClient(req.headers),
           ...admissionFields(admission),
         };
         return runAdmittedHttpTurn(req, policy, async lease => {
@@ -1674,7 +1695,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "gpt-live",
           provider: "unknown",
-          ...requestMetricsLogContext,
+          ...requestMetricsLogContext, client: classifyUsageClient(req.headers),
           ...admissionFields(admission),
         };
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
@@ -1722,7 +1743,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "gpt-live",
           provider: "unknown",
-          ...requestMetricsLogContext,
+          ...requestMetricsLogContext, client: classifyUsageClient(req.headers),
           ...admissionFields(admission),
         };
         let liveRequestFinalized = false;
@@ -1847,6 +1868,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
               liveUpstreamProtocols: audio?.protocols,
               liveValidateFrame: audio?.validateFrame,
               liveMaxSessionMs: audio?.maxSessionMs,
+              liveFinalizationMs: audio?.finalizationMs,
               liveFinish: finish,
               liveAbortSignal: audioController?.signal,
               livePending: [],
@@ -1885,7 +1907,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       // endpoint clients — memories/*, realtime/* — would surface confusing
       // serde decode errors instead of a clean not-found).
       if (url.pathname.startsWith("/v1/")) {
-        return withCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, policy);
+        return withCors(formatErrorResponse(404, "not_found", messagesUnknownEndpointMessage(req)), req, policy);
       }
 
       if (url.pathname === "/opencodex-session") {
@@ -1946,7 +1968,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             ? withManagementCors(serveSessionBootstrap(pairing), req, config)
             : withManagementCors(new Response(null, { status: 401, headers: { "Cache-Control": "no-store" } }), req, config);
         }
-        return withCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, policy);
+        return withCors(formatErrorResponse(404, "not_found", messagesUnknownEndpointMessage(req)), req, policy);
       }
       const guiSessionCandidate = req.method === "GET" && (url.pathname === "/" || !url.pathname.includes("."))
         ? issueGuiSession(req, config, managementAuth, {
@@ -1965,12 +1987,13 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         return jsonResponse(rootFallbackPayload());
       }
 
-      return withCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);
+      return withCors(formatErrorResponse(404, "not_found", messagesUnknownEndpointMessage(req)), req, config);
     },
     websocket: createWebsocketHandler(ctx, requestMetrics),
   } as const;
   const routeFetch = serveOptions.fetch;
   // x-opencodex-served-by on GET /v1/models, whichever branch answered (src/remote/served-by.ts).
-  return { ...serveOptions, fetch: async (req: Request, requestServer: Server<WsData>): Promise<Response> =>
-    stampServedBy(req.method, codexCompatibleUrl(req.url).pathname, await routeFetch(req, requestServer)) } as const;
+  // Each request runs with its own caller slot, which admission fills for turn-state handle binding.
+  return { ...serveOptions, fetch: (req: Request, requestServer: Server<WsData>): Promise<Response> => runTurnStateCallerScope(async () =>
+    stampServedBy(req.method, codexCompatibleUrl(req.url).pathname, await routeFetch(req, requestServer))) } as const;
 }

@@ -8,12 +8,13 @@ import { createUpdateServiceHomePolicy, parseUpdateWorkerHome, UPDATE_PACKAGE_ON
 import { inspectPackageRuntimeLiveness, planUpdateRuntimeHandling } from "../../src/update/runtime-ownership.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../../src/update/tray-update-plan.mjs";
 import { manualUpdateFailureGuidance, npmUpdateFailureGuidance } from "../../src/update/update-failure-guidance.mjs";
+import { createLegacyUpdateSession } from "../../src/update/orchestrated-session.mjs";
 
 const [home, observed, ...argv] = process.argv.slice(2);
 if (!home || process.env.OPENCODEX_HOME !== home) throw new Error("isolated fixture home required");
 const launcher = fileURLToPath(new URL("../../bin/ocx.mjs", import.meta.url));
 const source = readFileSync(launcher, "utf8");
-const from = source.indexOf("async function runPackageManagerSelfUpdate(manager) {");
+const from = source.indexOf("async function runPackageManagerSelfUpdate(manager, child) {");
 const to = source.indexOf("function bunBinDir(", from);
 if (from < 0 || to < from) throw new Error("production function boundary missing");
 const body = source.slice(from, to).replaceAll("import.meta.url", JSON.stringify(new URL("../../bin/ocx.mjs", import.meta.url).href));
@@ -24,7 +25,8 @@ let trayRunning = trayInitiallyRunning;
 let packageReplaced = false;
 process.on("exit", () => process.stdout.write(`NODE_HOME_PROBE:${JSON.stringify(trace)}\n`));
 const dependencies = {
-  process: { argv: [process.execPath, launcher, "update", ...argv], env: process.env, execPath: process.execPath, platform: process.platform, exit: code => process.exit(code) },
+  process: { argv: [process.execPath, launcher, "update", ...argv], env: process.env, execPath: process.execPath, platform: process.platform, once: process.once.bind(process), exit: code => process.exit(code) },
+  createLegacyUpdateSession,
   console, PKG: "@bitkyc08/opencodex", here: dirname(launcher), dirname, join, resolve, fileURLToPath,
   currentPackageVersion: () => "1.0.0", updateTag: () => "latest",
   npmInvocation: args => ({ file: "fixture-npm", args }),

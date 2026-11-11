@@ -5,13 +5,17 @@ import { validatedCodexExecInvocationAsync } from "../codex/exec-boundary";
 import { MessageBudget } from "./budget";
 import { isRecord } from "./types";
 
-export interface QueueMcpOptions { codex: string; codexHome: string }
+export interface QueueMcpOptions { codex: string; codexHome: string; allowReplyRead?: boolean }
 export type QueueRpcResult = { status: "response"; result: Record<string, unknown> }
   | { status: "not_sent" | "unknown"; error: { code: string } };
 
-/** Execute only the stored-thread queue protocol; bodies never enter argv or diagnostics. */
-export async function queueMcpRpc(options: QueueMcpOptions, method: "thread/list" | "thread/queue/add",
-  params: Record<string, unknown>, signal?: AbortSignal): Promise<QueueRpcResult> {
+/** Execute only explicit stored-thread RPCs; bodies never enter argv or diagnostics. */
+export async function queueMcpRpc(options: QueueMcpOptions, method: "thread/list" | "thread/queue/add" | "thread/items/list" | "thread/items/read" | "thread/turns/list",
+  params: Record<string, unknown>, signal?: AbortSignal, onOutcomeBeforeCleanup?: () => void): Promise<QueueRpcResult> {
+  const reads = ["thread/items/list", "thread/items/read", "thread/turns/list"];
+  if (!["thread/list", "thread/queue/add", ...reads].includes(method) || (reads.includes(method) && !options.allowReplyRead)) {
+    return { status: "not_sent", error: { code: "queue_mcp_method_not_allowed" } };
+  }
   const budget = new MessageBudget(20_000, signal);
   try {
     budget.throwIfEnded();
@@ -42,6 +46,7 @@ export async function queueMcpRpc(options: QueueMcpOptions, method: "thread/list
       const finish = (value: QueueRpcResult): void => {
         if (outcome) return;
         outcome = value;
+        onOutcomeBeforeCleanup?.();
         clearTimeout(deadline);
         child.stdin.end();
         termTimer = setTimeout(() => stopGroup("SIGTERM"), 300);

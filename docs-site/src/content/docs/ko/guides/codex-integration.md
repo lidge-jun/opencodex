@@ -196,6 +196,8 @@ env_key = "OPENCODEX_API_AUTH_TOKEN"
 
 OpenCodex가 라우팅을 소유할 때는 두 모드 모두 `$CODEX_HOME/opencodex.config.toml`을 참고용/폴백 설정으로 작성합니다. loopback에서는 자동 주입이 사라졌을 때 수동으로 합칠 수 있는 root key가 들어가고, non-loopback에서는 전용 provider 형식이 들어갑니다. 외부 provider 모드는 이 프로필을 건드리지 않습니다.
 
+이 파일을 다시 만들 때 OpenCodex가 관리하지 않는 일반 root key는 그대로 남습니다. 그래서 `stream_idle_timeout_ms`나 `stream_max_retries`처럼 직접 추가한 설정은 다음 주입 뒤에도 유지됩니다. 남는 대입문은 여러 줄에 걸친 값과 64비트 정수까지 작성한 그대로 복사되고, 첫 번째 테이블보다 앞에 놓입니다. 테이블 안의 키와 `a.b = 1` 같은 점 표기 root key는 남지 않습니다. 충돌하면 항상 OpenCodex 쪽이 이깁니다. OpenCodex가 소유한 root key(`model_provider`, `model_catalog_json`, `openai_base_url`)는 현재 라우팅 모드에 맞게 다시 쓰이고, 프로필이 쓰는 테이블과 이름이 같은 root key(프로필이 `[features]`를 쓸 때의 인라인 `features = { ... }` 등)는 버려집니다. 주입이 쓰기 잠금을 기다리는 동안 파일이 바뀌면 주입은 재시도 가능한 오류로 멈추고 수정한 내용은 그대로 둡니다.
+
 :::caution
 `openai_base_url`, `model_provider`, `model_catalog_json` 같은 root key는 첫 번째 `[table]` 헤더보다 **반드시** 앞에 있어야 합니다. 인젝터는 그 위치를 보장하고, 자신이 남긴 오래되었거나 중복된 복사본은 지웁니다. 사용자가 소유한 root `openai_base_url`은 덮어쓰지 않습니다. 그런 값이 있으면 sync는 카탈로그만 갱신하고 라우팅은 주입하지 않았다고 알립니다.
 :::
@@ -211,7 +213,7 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-macOS에서는 명시적 선택, shim, PATH, 기존 설치 경로와 실행 가능한 기본 `codex` 후보 뒤에 `/Applications/ChatGPT.app`, `~/Applications/ChatGPT.app` 순서로 Codex 앱의 번들 CLI를 확인하며, 번들의 XML `Info.plist` 식별자가 `com.openai.codex`여야 하고 실행 가능한 저장된 선택을 앱 후보로 자동 교체하지 않습니다.
+macOS에서는 명시적 선택, shim, PATH, 기존 설치 경로와 실행 가능한 기본 `codex` 후보 뒤에 `/Applications/ChatGPT.app`, `~/Applications/ChatGPT.app` 순서로 Codex 앱의 번들 CLI를 확인하며, 번들의 XML `Info.plist` 식별자가 `com.openai.codex`여야 하고 실행 가능한 저장된 선택을 앱 후보로 자동 교체하지 않습니다. Codex CLI가 전혀 발견되지 않으면 `ocx connect status` 준비 상태 뒤의 카탈로그 프로브도 해당 번들 위치를 시도하므로, 앱 번들 CLI만 있는 Child는 `unverified` 대신 지원 추론 수준을 보고합니다. 실행 시에는 아래 검사가 그대로 적용됩니다.
 
 실행 시에는 위치와 관계없이 `Codex.app`과 `ChatGPT.app`을 인식하며, 이동한 번들, 명시적
 `CODEX_CLI_PATH`·설정 런타임 명령, 심볼릭 링크 별칭에도 같은 검증을 적용합니다. 앱 이름은 검증

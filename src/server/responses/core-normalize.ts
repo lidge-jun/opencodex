@@ -147,6 +147,7 @@ export async function applyFinalRouteRequestNormalization(args: {
   droidDefaultEffort?: HandleResponsesOptions["droidDefaultEffort"];
 }): Promise<void> {
   const { parsed, route, config, req, logCtx, inboundWire, inboundTransport } = args;
+  parsed._chatCompletionsInput = inboundWire === "chat";
   const effortSelector = prepareEffortNormalization(parsed, route);
   if (applyDroidResponsesReasoningDefault(
     parsed._rawBody,
@@ -156,6 +157,7 @@ export async function applyFinalRouteRequestNormalization(args: {
 
   // Only Anthropic message routes retain the Codex-facing selector. Other providers must keep
   // their existing response.model contract even when their public and wire model ids differ.
+  // Request preparation assigns the original client label separately for synthetic turns.
   const responseModelId = parsed.modelId;
   const preserveAnthropicResponseModel = route.providerName === "anthropic"
     || route.provider.adapter === "anthropic";

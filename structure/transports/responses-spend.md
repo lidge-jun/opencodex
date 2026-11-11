@@ -4,6 +4,64 @@ How the Responses data plane reserves credential hops and durable spend before d
 spent budget tells the client. Dispatch and retry behavior is in
 [Responses transport](responses.md) and [Responses failover](responses-failover.md).
 
+## Workflow physical-send ceiling
+
+`src/lib/workflow-budget.ts` atomically checks and claims one root slot at physical admission.
+`request-spend.ts` connects this count to both enforced and observe-only request budgets;
+reporter retries, concurrent requests and adapter-owned permits share the root's existing window.
+Unused dispatch permits consume no root sends, and cleanup cannot refund a claimed physical start.
+If root or physical admission refuses after token seeding, the observer immediately retires that exact unstarted seed; started seeds and other pending bookings retain their owners. Permit release remains responsible for the unused request-send booking.
+Root-table eviction preserves active leases, any unexpired send or child counts, and exhausted
+durable spend. Only an idle root with no remaining windowed history and no exhausted spend is
+reusable; when none is safe, a new root is refused before insertion. Count history remains
+process-local, and live limit changes do not reset it. `tests/lib/workflow-budget.test.ts`
+pins partial-history retention, empty-root reuse, saturation, window expiry and limit changes.
+Observe-only reports reconcile those starts once; already-sent legacy reports remain recorded.
+The confirmed same-account gated-model ladder owns one non-renewable allowance of seven retries
+over the shared ledger. Each rung obtains fresh normal-capacity durable spend admission and a
+producer held across its fetch; root and token refusals retain the last upstream response.
+Ordinary reservation refunds do not replenish this allowance. The exception does not increase
+the ordinary parent's send or target-change allowances.
+`tests/responses/responses-workflow-send-ceiling.test.ts` covers both spend modes and retry helpers.
+Every new inbound WebSocket inference turn admits its root before dispatch and attaches the workflow
+lease to its active turn. Terminal output or cancellation releases that lease; sequential frames
+retain the same physical-send window. `tests/responses/responses-websocket-workflow-ceiling.test.ts`
+starts with an unseen root and verifies its ceiling and lease cleanup in both spend modes.
+
+Native steering and injection keep that same turn lease across saved-result continuations.
+Each explicit successor `response.create` claims and reports a fresh physical start after pacing
+and credential revalidation, immediately before its frame is sent. `response.steer` and
+`response.inject` are control frames, not new sends. `src/server/responses/native-continuation-send.ts` uses a fresh
+reporter without an initial or recovery permit; unconfigured chains do not acquire the retry
+ladder's default send cap. Every native-capable executor — the initial passthrough send and each
+recovery leg (rebuild, OAuth replay, wire refresh and rate-limit replay) — installs that admission
+hook, so a continuation on a recovered socket is admitted the same way as on the first. Each
+successor reserves a fresh token seed before claiming its root slot, priced on the exact
+reconstructed successor frame, never reusing the opening input estimate. The reporter resolves
+the selected candidate's spend identity at physical admission for both initial and successor
+sends; `tests/responses/responses-workflow-send-ceiling.test.ts` covers that pairing.
+An explicit successor
+`max_output_tokens` replaces its output reservation (null removes it); when the wire omits that
+field, the caller's existing local output reservation remains, including canonical-backend stripping.
+Explicit starts have separate physical
+allowance; ordinary retry and bounded recovery grants are not replenished, including when recovery
+is created after earlier successors. A refused successor sends no upstream frame and ends the chain with
+the original locally constructed 429 response, including its workflow-refusal provenance and header.
+The request log retains that refusal's HTTP status rather than mapping the failed terminal to 502.
+It never falls back to HTTP or replays the initial request.
+The same known local refusal reaches the response stream when no continuation pacing hook is installed.
+The tracker carries each new denial's reason and spend detail into that response without recording the refusal event twice.
+`tests/responses/ws-native-continuation-send-budget.test.ts` covers both native modes and spend
+policies, repeated sends, cancellation before dispatch, control frames, unconfigured long chains,
+per-leg hook coverage and successor-estimate refusals.
+
+Workflow refusals constructed inside native Messages keep the Anthropic `{ type: "error", error: { type, message, code } }`
+envelope, HTTP status, local-refusal header and its CORS exposure. Projection preserves process-local proxy
+provenance, workflow presentation scope and any non-replayable marker. This applies both when the spend observer records the denial and
+when the request's physical limit refuses before the root observer can record it; the latter still names
+an exhausted live root accurately. `tests/responses/responses-spend-contract-c.test.ts` covers both paths.
+`tests/claude-integration/messages-sse-workflow-refusal.test.ts` pins the approved bound and unbound spend messages.
+
 ## Prepaid initial sends
 
 `src/server/responses/core-combo.ts` derives each target scope before reserving its initial send.
@@ -52,6 +110,24 @@ cleanup releases an unsent hop once, except while an asynchronous runTurn produc
 Producer settlement performs that release instead, clearing only the matching pending-hop reference.
 Direct callers retain their prior hop reporting contract.
 
+## Auxiliary search inference
+
+Anthropic web-search helpers in Responses, RunTurn and the passthrough bridge reserve an `auxiliary`
+send before each physical attempt. The shared request's base/total allowance and root count apply in
+both spend modes. A helper cannot consume the final recovery reserve, change routed target history,
+or settle a parent's initial/hop permit. Unsent reservations remain refundable. An inherited budget
+without a physical workflow observer uses synchronous root precheck, permit admission and root claim;
+a refused root returns the still-unused booking before any helper I/O. In that fallback, permit
+admission does not itself charge the root; the following root claim owns the single count.
+Each query invocation owns a fresh seed; bounded reset retries reuse that seed but book each send.
+Admission uses the helper's text/tool estimate and wire output ceiling, its Anthropic pool, and no
+identity scope inherited from the routed account. Pending parent seeds stay live. Routed terminal usage
+settles only a routed send; helper usage remains conservatively unresolved until independently known.
+Auxiliary root/pool refusals retain refusal counters and workflow events without marking the whole
+request terminal. A caught search error can precede a successful answer; later routed refusals still
+set terminal metadata, and an auxiliary refusal never clears an earlier terminal reason.
+Standalone search without a request budget and non-Anthropic search backends retain their existing paths.
+
 ## Credential-hop reservations
 
 A credential rotation inside one provider's roster reserves a hop from the request's shared send
@@ -89,7 +165,9 @@ physical send back through `onSendsConsumed`; that is what `countedExternally: t
 reporter's first send settles only its named pending permit instead of adding a second charge.
 `transientSendReporter` captures that permit before entering a helper; a later handoff cannot
 replace it. `reportDispatchSends` verifies shared-ledger ownership and consumes one receipt only.
-Native Chat combo children carry the same exact permit to their physical-send boundary.
+Native Chat and Messages combo children carry the same exact permit to their physical-send boundary.
+Native Messages inherits the per-target budget and opens no second tracker; enforced starts use
+the shared reporter, and observe-only starts confirm the exact permit at the final HTTP receipt.
 Reset-only generic combo helpers report their named prepaid receipt too, without changing
 the selected retry cap; compaction reconciliation therefore does not count that source again.
 Without enforced spend, numeric `used` updates and unnamed, foreign, released or already-reported permits charge
@@ -276,6 +354,10 @@ obtains a normal-capacity pre-send seed through `reserveSeed`. A failed initial 
 wire call, including rootless passthrough and generic adapter ingress. Stable retries reuse that
 seed; a real identity change must acquire its own normal seed. A prepaid combo child adopts only
 its exact permit on the same shared send ledger, excluding that reservation once from preflight.
+An `explicitEstimate` target — an explicit native continuation — reserves against its own measured
+input and output ceiling instead of the opening estimate; its seed books beside unrelated pending
+reservations rather than retiring them, is never adopted by an unkeyed same-scope lookup, and still
+owns routed terminal usage like any non-auxiliary send.
 Reported additional sends reuse the seed's exact scope references through `reserveReportedFromSeed`
 and allocate no new scope keys. Already-started sends remain booked even during persistence failure.
 
@@ -368,12 +450,24 @@ identically with and without configured ceilings: observe-only still appends, se
 Two servers in one process and one directory share a reference-counted lease; that process cannot
 hold two directories at once. Sequential ownership is allowed and concurrent ownership is not:
 releasing the final reference discards the singleton, so a later directory replays its own
-journal instead of inheriting figures. A ledger records the ownership it was built under and
+journal instead of inheriting figures.
+Final-release hooks run before that discard while existing storage tokens remain valid; each hook
+is isolated from errors in the others. Acquiring another lease or minting storage during these
+hooks is refused. Releasing a non-final reference or releasing the same lease twice runs no hooks.
+Acquired hooks run once per new ownership generation, after the owner is recorded and before
+`acquireSpendLedgerOwner` returns; a hook error does not block acquisition, and a nested lease on an
+existing owner does not run them again. The durable Codex pool affinity store uses one to open and
+prune at startup ([Durable Codex Pool Affinity](../providers/codex-pool-affinity.md)).
+The ledger records the ownership it was built under and
 proves that exact identity on every accounting read and change, so a handle kept across a release
 and a reacquire of the same directory is refused rather than resuming over writes another owner
 may have made. File-backed journal and salt writers are owner-bound at construction, and a
 directory entry that is a link -- including one whose target does not exist -- is refused instead
-of followed. A separate process may use a separate directory. SQLite crash release permits the
+of followed. The owner database `spend-ledger-owner.sqlite` and its SQLite sidecars pass the same
+`src/lib/private-sqlite-path.ts` check before the file is created and before SQLite opens it: a link, any
+Windows reparse point, a directory or a hard link there fails acquisition with
+`SPEND_LEDGER_OWNER_UNAVAILABLE` without creating what it names. On Windows ARM64, whose Bun build
+cannot run the native attribute query, only the links and junctions `lstat` reports are refused. A separate process may use a separate directory. SQLite crash release permits the
 next owner without stale-PID or TTL reclamation.
 
 Every file check admits a ledger file only when it is a regular file, not a link, with exactly

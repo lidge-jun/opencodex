@@ -73,7 +73,7 @@ async function readGateScript(): Promise<string> {
   ).text();
   const workflow = Bun.YAML.parse(text) as Workflow;
   const script = workflow.jobs?.["enforce-target"]?.steps?.find(
-    step => step.name === "Enforce PR target, ancestry, and description",
+    step => step.name === "Enforce PR target and description",
   )?.with?.script;
   if (typeof script !== "string") {
     throw new Error("enforce-target step has no inline script");
@@ -133,16 +133,16 @@ describe("workflow comment-spam hardening", () => {
     const checkoutStep = job?.steps?.find(
       step => step.name === "Checkout trusted PR-quality scripts",
     );
-    // Trusted scripts come from a fixed set of integration branches, never
-    // from the pull request itself. `status` keeps the default-branch
-    // boundary that owns the event; a `main`-targeting PR matches the workflow
-    // definition loaded from `main`; every other base resolves to `dev`.
+    // Trusted scripts come from `dev`, never from the pull request itself.
+    // `status` has no PR payload and keeps the default-branch boundary that
+    // owns the event; every pull_request event, including a stacked child's,
+    // resolves to `dev`, the single integration branch.
     expect(checkoutStep?.with?.ref).toBe(
-      "${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || 'dev') }}",
+      "${{ github.event_name == 'status' && github.event.repository.default_branch || 'dev' }}",
     );
 
     const gateStep = job?.steps?.find(
-      step => step.name === "Enforce PR target, ancestry, and description",
+      step => step.name === "Enforce PR target and description",
     );
     const script = gateStep?.with?.script ?? "";
     expect(gateStep?.env?.RESOLVED_PULL_NUMBER).toBe(

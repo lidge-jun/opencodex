@@ -1,3 +1,5 @@
+import { markProxyError } from "../../lib/client-error-body";
+import { applyClaudeBridgePoolSession } from "../claude-bridge-pool-session";
 import type { OcxProviderConfig, OcxConfig } from "../../types";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import type { CodexAuthContext } from "../../codex/auth-context";
@@ -72,6 +74,24 @@ export type CodexCredentialOwnershipOptions = Pick<HandleResponsesOptions,
   "admission" | "callerDirectAuth" | "stripClaudeMainAuthForNoncanonicalForward" | "trustedClaudeMainAuth">;
 
 /**
+ * Restore the provider's permitted caller metadata onto a header set rebuilt from a credential
+ * allowlist. Every physical send of one Responses turn goes through this rule: the first send,
+ * the 401 refresh replay and the alternate-account retry. The copier fills only names the target
+ * does not already carry, so a selected Pool installation identity and configured provider
+ * headers keep precedence over the caller's values.
+ */
+export function restoreResponsesClientMetadata(
+  headers: Headers,
+  incoming: Headers,
+  provider: OcxProviderConfig,
+  compactionRecoveryKind?: HandleResponsesOptions["compactionRecoveryKind"],
+): void {
+  if (provider.adapter === "openai-responses" || compactionRecoveryKind === "compaction-v1") {
+    copyResponsesClientMetadata(headers, incoming, provider);
+  }
+}
+
+/**
  * The caller credential the final Codex auth resolution will be given, as far as the ROUTE
  * decides it: a route change that may cross a credential domain drops the raw caller credential,
  * and a trusted Claude-main handoff replaces it.
@@ -111,7 +131,7 @@ function validatedCallerDirectHeaders(
   return captureCallerDirectAuth(headers, config) ? headers : undefined;
 }
 
-export function codexRouteCredentialDomainHeaders(
+function codexRouteCredentialDomainHeadersFor(
   req: Request,
   route: RouteResult,
   options: HandleResponsesOptions,
@@ -155,6 +175,20 @@ export function codexRouteCredentialDomainHeaders(
   return req.headers;
 }
 
+
+/**
+ * Credential-domain headers for Codex account SELECTION (previews, recovery, final resolution).
+ * A Claude bridge pool identity is completed here only; upstream headers are always materialized
+ * from the uncompleted form, so the synthesized pair never reaches the wire.
+ */
+export function codexRouteCredentialDomainHeaders(
+  req: Request, route: RouteResult, options: HandleResponsesOptions,
+  credentialDomainWasRewritten: boolean, config: OcxConfig,
+): Headers {
+  return applyClaudeBridgePoolSession(
+    codexRouteCredentialDomainHeadersFor(req, route, options, credentialDomainWasRewritten, config), route, options,
+  );
+}
 
 /**
  * Does this route substitute OUR stored main credential, and does the caller own the credential
@@ -208,9 +242,9 @@ export async function resolveResponsesCodexAuth(
   let authCtx: CodexAuthContext | undefined;
   // Ingress already refuses assertion_only; a later internal hop must not reach a pool or
   // routed credential with it either, because that would be a silent credential swap.
-  if (hasAgentAssertionAuthorization(req.headers)) return { ok: false, response: agentAssertionUnsupportedResponse() };
+  if (hasAgentAssertionAuthorization(req.headers)) return { ok: false, response: markProxyError(agentAssertionUnsupportedResponse()) };
   try {
-    let authInputHeaders = codexRouteCredentialDomainHeaders(
+    let authInputHeaders = codexRouteCredentialDomainHeadersFor(
       req,
       route,
       options,
@@ -270,7 +304,9 @@ export async function resolveResponsesCodexAuth(
       validateForwardAdmissionCredential(authInputHeaders, config);
     }
     if (route.codexAccountMode) {
-      authCtx = await resolveCodexAuthContext(authInputHeaders, config, route.codexAccountMode, {
+      // Only selection sees the Claude bridge pool identity; materialization below keeps the
+      // uncompleted headers, so the wire matches the original request.
+      authCtx = await resolveCodexAuthContext(applyClaudeBridgePoolSession(authInputHeaders, route, options), config, route.codexAccountMode, {
         admission: options.admission,
         codexAuthPolicy: options.codexAuthPolicy,
         accountId: route.codexAccountId,
@@ -323,7 +359,7 @@ export async function resolveResponsesCodexAuth(
       releaseCodexAuthContextProbeLease(authCtx);
       return {
         ok: false,
-        response: formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication"),
+        response: markProxyError(formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication")),
       };
     }
     if (stripAuthorization) {
@@ -342,11 +378,9 @@ export async function resolveResponsesCodexAuth(
         headers.delete("chatgpt-account-id");
       }
     }
-    // Codex auth materialization keeps only its credential allowlist. A compact-v1 handoff
-    // must also retain the permitted client fingerprint for its routed summarizer send.
-    if (options.compactionRecoveryKind === "compaction-v1") {
-      copyResponsesClientMetadata(headers, authInputHeaders, route.provider);
-    }
+    // Auth materialization keeps only its credential allowlist. Responses turns and compact
+    // handoffs also need the provider's permitted metadata, without replacing selected identity.
+    restoreResponsesClientMetadata(headers, authInputHeaders, route.provider, options.compactionRecoveryKind);
     // dual_header: the assertion is first-party only and travels only beside the caller's own
     // unchanged Bearer, compared with the ORIGINAL request (injected credentials do not count).
     if (isCanonicalOpenAiForwardProvider(route.provider) && authCtx?.kind === "main" && !substituteMainCredential) {
@@ -371,9 +405,9 @@ export async function resolveResponsesCodexAuth(
       console.error(`[codex-auth] Pool account ${safeAccountLabel} token failed; reauthentication required`);
     }
     if (err instanceof ForwardAdmissionCredentialError) {
-      return { ok: false, response: formatErrorResponse(401, "authentication_error", err.message) };
+      return { ok: false, response: markProxyError(formatErrorResponse(401, "authentication_error", err.message)) };
     }
-    if (err instanceof AgentAssertionUnsupportedError) return { ok: false, response: agentAssertionUnsupportedResponse() };
+    if (err instanceof AgentAssertionUnsupportedError) return { ok: false, response: markProxyError(agentAssertionUnsupportedResponse()) };
     const response = mapCodexAuthContextErrorToResponse(err, {
       accountSelector: route.codexAccountNamespace,
       now: Date.now(),
@@ -438,15 +472,15 @@ export function poolCredentialRefreshIncompleteResponse(args: {
   if (args.logCtx) markLocalRequestLogRefusal(args.logCtx, CODEX_POOL_REFRESH_INCOMPLETE_LOG_REASON);
   const label = args.accountSelector ?? codexAuthContextLogLabel(args.authCtx, args.config);
   const account = label ? `Codex pool account ${label}` : "the selected Codex pool account";
-  const response = formatErrorResponse(
+  const response = markProxyError(formatErrorResponse(
     503,
     "server_busy",
     `Codex credential refresh did not complete for ${account}; retry this request. `
       + "If it keeps failing, sign in to that account again.",
-  );
+  ));
   const headers = new Headers(response.headers);
   headers.set("Retry-After", "1");
-  return new Response(response.body, { status: response.status, headers });
+  return markProxyError(new Response(response.body, { status: response.status, headers }), "pool_refresh");
 }
 
 
@@ -484,7 +518,7 @@ export async function refreshPoolForwardAuth(args: {
         ok: false,
         quarantine: true,
         quarantineGeneration: refreshed.generation,
-        response: formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication"),
+        response: markProxyError(formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication")),
       };
     }
     // Only a CAS this request performed itself proves the new credential descends from
@@ -516,13 +550,16 @@ export async function refreshPoolForwardAuth(args: {
       signal: options.abortSignal,
       nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
     });
+    // The replay is a second physical send of the same turn: it keeps the caller metadata the
+    // first send carried instead of reverting to the credential-only allowlist.
+    restoreResponsesClientMetadata(headers, req.headers, provider, options.compactionRecoveryKind);
     return { ok: true, authCtx: refreshedAuthCtx, provider, headers };
   } catch (error) {
     if (isTerminalPoolRefreshFailure(error)) {
       return {
         ok: false,
         quarantine: true,
-        response: formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication"),
+        response: markProxyError(formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication")),
       };
     }
     if (options.abortSignal?.aborted || req.signal.aborted) {
@@ -564,7 +601,7 @@ export async function refreshNativeMainForwardAuth(args: {
 > {
   const { req, config, route, authCtx, substituteMainCredential, options } = args;
   if (authCtx.kind !== "main-pool") {
-    return { ok: false, response: formatErrorResponse(401, "authentication_error", "No native main credential to refresh") };
+    return { ok: false, response: markProxyError(formatErrorResponse(401, "authentication_error", "No native main credential to refresh")) };
   }
   try {
     const refreshed = await forceRefreshMainAccountToken(authCtx.accessToken, {
@@ -572,7 +609,7 @@ export async function refreshNativeMainForwardAuth(args: {
       ...(options.nativeMainRefreshDependencies ?? {}),
     });
     if (!refreshed) {
-      return { ok: false, response: formatErrorResponse(401, "authentication_error", "Codex main account needs reauthentication") };
+      return { ok: false, response: markProxyError(formatErrorResponse(401, "authentication_error", "Codex main account needs reauthentication")) };
     }
     const refreshedAuthCtx: CodexAuthContext = {
       ...authCtx,
@@ -593,6 +630,8 @@ export async function refreshNativeMainForwardAuth(args: {
       signal: options.abortSignal,
       nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
     });
+    // Same rule as the stored Pool refresh: the replay keeps permitted caller metadata.
+    restoreResponsesClientMetadata(headers, req.headers, provider, options.compactionRecoveryKind);
     return { ok: true, authCtx: refreshedAuthCtx, provider, headers };
   } catch (error) {
     if (options.abortSignal?.aborted || req.signal.aborted) {

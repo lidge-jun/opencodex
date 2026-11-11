@@ -1,5 +1,5 @@
 import { configuredAnthropicInstance, isAnthropicOAuthInstance } from "../providers/anthropic-instance";
-import { parseQuotaFailureCode, type QuotaFailureCode, type ProviderQuota, type AccountQuotaMode } from "../providers/quota-types";
+import { parseQuotaFailureCode, parseQuotaUnknownReason, type QuotaFailureCode, type QuotaUnknownReason, type ProviderQuota, type AccountQuotaMode } from "../providers/quota-types";
 /**
  * Data-access layer for `ocx account` (issue #180) — live-proxy HTTP client and
  * per-family account readers. Kept separate from account.ts (command handlers)
@@ -57,6 +57,10 @@ export interface AccountRow {
   quotaRefresh?: CodexQuotaRefreshOutcome;
   quotaUnavailable?: boolean;
   quotaFailure?: QuotaFailureCode;
+  /** Why the balance is unknown (#8397); reasons this CLI does not know are dropped. */
+  quotaUnknownReason?: QuotaUnknownReason;
+  /** When the server last read this balance, success or failure (epoch ms). */
+  quotaReadAt?: number;
   /**
    * Whether the pool is holding this account out of rotation.
    *
@@ -309,15 +313,21 @@ export interface CodexQuotaDto {
 
 export interface ProviderQuotaWindowDto {
   label: string;
+  displayLabel?: string;
   percent: number;
   resetAt?: number;
   modelId?: string;
+  /** Share of the weekly limit a model family may use, when upstream reports it. */
+  weeklyAllowancePercent?: number;
 }
 
 export interface ProviderQuotaDto extends CodexQuotaDto {
   fiveHourPercent?: number;
   fiveHourResetAt?: number;
   customWindows?: ProviderQuotaWindowDto[];
+  /** Readings upstream reports as not in effect; shown, never routed on. */
+  displayWindows?: ProviderQuotaWindowDto[];
+  unknownBudgetWindows?: { label: string; resetAt?: number }[];
   updatedAt?: number;
 }
 
@@ -458,6 +468,7 @@ interface OAuthAccountDto {
   quota?: CodexQuotaDto | null;
   quotaUnavailable?: boolean;
   quotaFailure?: unknown;
+  quotaUnknownReason?: unknown;
 }
 
 function isKiroSkipReason(value: unknown): value is NonNullable<AccountRow["skipReason"]> {
@@ -508,6 +519,7 @@ async function fetchOAuthRows(
     ...(a.quotaUnavailable !== undefined ? { quotaUnavailable: a.quotaUnavailable } : {}),
     ...(a.quotaUnavailable === true && parseQuotaFailureCode(a.quotaFailure)
       ? { quotaFailure: parseQuotaFailureCode(a.quotaFailure) } : {}),
+    ...(parseQuotaUnknownReason(a.quotaUnknownReason) ? { quotaUnknownReason: parseQuotaUnknownReason(a.quotaUnknownReason) } : {}),
   }));
   return { rows, activeId, status: 200 };
 }

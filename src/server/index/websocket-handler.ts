@@ -10,6 +10,7 @@ import {
   MAX_WS_FRAME_BYTES,
   WEBSOCKET_IDLE_TIMEOUT_SECONDS,
   attachLiveSidebandUpstream,
+  beginAudioFinalization,
   clientCloseForUpstream,
   closeLiveSideband,
   closeLiveSidebandBeforeUpgrade,
@@ -93,6 +94,8 @@ import type { ServeOptionsContext } from "./serve-options";
 import type { RequestMetricsRecorder } from "../request-metrics";
 import { resolveInboundBodyLimitBytes } from "../request-decompress";
 import { responseToolOwnership } from "../responses/response-tool-ownership";
+import { runTurnStateCallerScope } from "../turn-state-handles";
+import { admitHttpWorkflowTurn, workflowDecisionRefusalResponse } from "../workflow-refusal";
 
 /**
  * The WebSocket half of the Bun.serve options, split out of serve-options.ts to keep that file
@@ -155,6 +158,7 @@ export function createWebsocketHandler(
             closeLiveSideband(ws, 1008, "invalid audio event");
             return;
           }
+          beginAudioFinalization(ws, raw);
           const rawBytes = webSocketFrameBytes(raw);
           if (exceedsLiveSidebandFrameByteLimit(rawBytes)) {
             closeLiveSideband(ws, 1009, "message too large");
@@ -306,11 +310,11 @@ export function createWebsocketHandler(
         // Only a genuinely admitted turn may receive steering or continuations.
         const advisorAdmissionPolicy = captureAdmissionPolicy(config, ws.data.admission);
         const finishActivity = ws.data.responsesActivity?.beginTurn(frame.input);
-        ws.data.nativeControl = nativeControl;
         const payload: Record<string, unknown> = { ...frame };
         delete payload.type;
         turnAdmissionLease.bindAbortController(turnAbort);
-        void (async () => {
+        // The frame runs with its own caller slot, which admission fills for turn-state handle binding.
+        void runTurnStateCallerScope(async () => {
           const start = Date.now();
           const requestId = nextRequestLogId(start);
           // Resolved once at the handshake — a frame has no request headers left
@@ -323,6 +327,7 @@ export function createWebsocketHandler(
             provider: "unknown",
             ...(requestMetricsRecorder ? { requestMetricsRecorder } : {}),
             ...(wsAdmission ? admissionFields(wsAdmission) : {}),
+            client: ws.data.client ?? "unknown",
             inboundProtocol: "responses",
           };
           let logged = false;
@@ -343,6 +348,17 @@ export function createWebsocketHandler(
             body: JSON.stringify({ ...payload, stream: true }),
           });
           try {
+            // A socket can be the first ingress for a root. Admit every inference frame,
+            // then keep its workflow lease with the turn until terminal output or cancellation.
+            const workflow = admitHttpWorkflowTurn(req.headers);
+            if (workflow && !workflow.admitted) {
+              const refusal = workflowDecisionRefusalResponse(workflow, logCtx);
+              await sendResponseToWebSocket(ws, refusal, isCurrent);
+              finalizeLog(refusal.status);
+              return;
+            }
+            if (workflow?.admitted) turnAdmissionLease.attach(workflow.lease);
+            ws.data.nativeControl = nativeControl;
             let terminalRecorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined;
             const response = await handleResponses(req, config, logCtx, {
               advisorAdmissionPolicy,
@@ -431,7 +447,7 @@ export function createWebsocketHandler(
             if (!logged && turnAbort.signal.aborted) finalizeLog(499);
             if (ws.data.cancel === cancelTurn) ws.data.cancel = undefined;
           }
-        })();
+        });
       },
       close(ws: ServerWebSocket<WsData>, code: number, reason: string) {
         if (ws.data.kind === "remote-workspace-agent") {

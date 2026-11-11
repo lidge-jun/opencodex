@@ -116,7 +116,7 @@ parent derives for itself, so a chain of parent-only turns converges rather than
 every depth. No caller-supplied identifier reaches Pool state. Which requests bind at all is
 unchanged -- a bare `thread-id` with neither a session nor a parent has no family anchor and
 stays unbound. Components are trimmed and bounded at 512 bytes, missing or
-oversized values stay unbound, raw identifiers and durable hashes are never stored, and
+oversized values stay unbound, raw identifiers never enter Pool state, and
 account-qualified selectors skip both lookup and mutation. Selection, subagent fallback preview,
 and terminal outcome accounting carry the same key so route planning cannot preview one account
 and authenticate another. A transient-failure streak does not delete the live binding that
@@ -141,7 +141,7 @@ a behaviour change, not a refinement. It also interacts with the send-budget and
 thread's own conversation key, its immediate parent's thread id, and the transitive root, so a
 grandchild resolves to the same root as its parent. Records are held per authenticated scope (an
 HMAC of the caller's Authorization under the same process-local key), and bounded in both
-dimensions -- idle TTL and an LRU cap on records per scope, and an LRU cap on scopes.
+dimensions -- idle TTL and an LRU cap on records per scope, and an LRU cap on scopes. The key stays process-local; restart persistence uses its own secret ([Durable Codex Pool Affinity](codex-pool-affinity.md)).
 
 First placement is largely subsumed by cohort keying: a member of a tree any other member has
 already bound resolves to that same binding, so there is nothing to place. `pickLineageServingAccount`
@@ -352,13 +352,13 @@ bulk-pause and recovery suites `tests/codex-integration/codex-routing.test.ts`,
 cache when its stored reset instant has elapsed. Seconds and milliseconds are accepted;
 future or missing deadlines remain carried, and explicit incoming short readings remain stored.
 This stops partial weekly/Spark or credits-only refreshes from renewing obsolete Spark-derived
-5h rows through the cache-wide `updatedAt` timestamp. Plan labels do not suppress real windows.
+5h rows through the cache-wide `updatedAt` timestamp. Plan labels do not suppress real windows. An omitted weekly tuple is retired from the same cache when its stored `weeklyResetAt` has elapsed or the reset-ticket count dropped (a redeemed ticket zeroed the window); a missing or invalid stored deadline never expires it by the clock, and a ticket grant or unchanged count is ignored. An observation that carries the weekly window, including a later deadline, replaces the tuple directly (`tests/codex-integration/codex-quota-weekly-rollover.test.ts`).
 
 The separately retained main-policy snapshot preserves omitted blocking short evidence even after
 its reset clock passes. Credits-only, partial weekly-only, and metadata-only updates cannot remove an
 existing blocking short usage reading or release its hard lock; a fresh short reading can replace
 it. A validated complete WHAM snapshot can also retire the short tuple as described below.
-Expired non-blocking short evidence is dropped, so it cannot take priority over a fresh blocking weekly reading.
+Expired non-blocking short evidence is dropped, so it cannot take priority over a fresh blocking weekly reading. None of the weekly expiry signals above apply to this snapshot: a blocking weekly reading there is released only by an observed lower reading or a governing monthly-primary observation, because a predicted reset is not recovery evidence.
 
 The Codex writer explicitly asks `src/quota/reset-observer.ts` to retain an absent short window
 in `src/quota/reset-seen-store.ts`, with its original observation time. Detection compares only
@@ -371,7 +371,7 @@ Regression coverage lives in `tests/codex-integration/codex-quota-parser-parity.
 
 Codex pool display capacity in `src/providers/codex-capacity.ts` calibrates the observed Business Premium plan
 `self_serve_business_prolite` at five Standard-seat units. This estimate does not drive routing or create a
-missing five-hour window; unknown plans keep the conservative baseline and are counted in `unknownPlanAccounts`. The same weights (`codexCapacityWeight`) weight the Codex `pooled` windows of [`GET /api/quota-pool`](../quota-pool.md#pooled-windows).
+missing five-hour window; unknown plans keep the conservative baseline and are counted in `unknownPlanAccounts`. An account given an explicit `weight` (the pooled Anthropic report, where every routable seat weighs 1) bypasses the plan table and is not counted there. The same weights (`codexCapacityWeight`) weight the Codex `pooled` windows of [`GET /api/quota-pool`](../quota-pool.md#pooled-windows).
 
 `codexMainAccountHardLock` is a local admission policy that is **on by default** since #5694, at
 short 90% and long `MAIN_ACCOUNT_HARD_LOCK_PERCENT` = 98%, overridden by ordered integer
@@ -435,7 +435,7 @@ cannot prove that the short window disappeared. All-null credits-only and tertia
 the resulting weekly/monthly window still blocks at its long threshold (98% by default). This prevents old short-window exhaustion
 from surviving indefinitely on a now weekly/monthly account. A live main writer applies that same
 retirement proof to the display/rotation cache, so account selection cannot keep refusing the
-recovered main account on its old short tuple. Pool accounts get the same proof from a valid complete WHAM probe (#7961): `poolWhamPolicyObservation` marks the observation from its window topology only, so a Plus to Pro upgrade cannot keep a stored pool account on the old plan's 5-hour tuple, while partial WHAM, invalid or unparseable readings, an explicit `allowed: false` verdict and response headers keep carrying it. A pool probe retires the tuple only with a live captured pool writer for that account and credential generation, the same proof its history write needs; a missing, stale or other-account writer keeps the tuple. The login usage read marks its observation the same way, but reauthentication clears the row before writing and creation refuses existing ids, so it has nothing to retire. Main-only monthly filtering is not applied to pool observations, and a main observation without a live main writer still carries its tuple. Coverage lives in `tests/codex-integration/codex-credits-probes.test.ts` (pool),
+recovered main account on its old short tuple. Pool accounts get the same proof from a valid complete WHAM probe (#7961): `poolWhamPolicyObservation` marks the observation from its window topology only, so a Plus to Pro upgrade cannot keep a stored pool account on the old plan's 5-hour tuple, while partial WHAM, invalid or unparseable readings, an explicit `allowed: false` verdict and response headers keep carrying it. A pool probe retires the tuple only with a live captured pool writer for that account and credential generation, the same proof its history write needs; a missing, stale or other-account writer keeps the tuple. The login usage read marks its observation the same way, but reauthentication clears the row before writing and creation refuses existing ids, so it has nothing to retire. The same complete topology, when no window declares a monthly duration and no tertiary window is present, also retires a carried monthly tuple under the same writer proof (#8067), so a Free to Pro Lite change cannot keep a pool account on the old plan's exhausted monthly reading. Main-only monthly filtering is not applied to pool observations, and a main observation without a live main writer still carries its tuple. Coverage lives in `tests/codex-integration/codex-credits-probes.test.ts` (pool),
 `tests/codex-integration/main-quota-evidence-validation.test.ts`,
 `tests/codex-integration/main-account-hard-lock-retirement.test.ts`,
 `tests/codex-integration/main-quota-provenance.test.ts`, and
@@ -561,7 +561,7 @@ A keyring-backed Codex request can carry its own forwardable ChatGPT bearer whil
 in Pool mode. When the effective manual pin is `__main__`, main is not paused, and its cached quota still
 has headroom, auth resolution validates the caller bearer's own gated-model roster and uses that
 request-owned credential before stored-Pool selection. The credential never enters Pool persistence,
-affinity, entitlement cache, or health state, and this decision never reads the physical main credential.
+entitlement cache, or health state, nor by default affinity ([request-owned affinity](codex-request-owned-affinity.md)); this never reads the physical main credential.
 If the caller lacks the requested model, a stored-account model detour may serve the request without
 clearing the healthy shared main pin. With quota-strategy cache affinity, the same detour preserves an
 ordinary added-account binding and shared selection beyond the proactive-switch threshold until genuine
@@ -574,7 +574,7 @@ A forwardable request-owned bearer IS main's live credential for that request â€
 sent if selection named main â€” so `requestOwnedMainCredentialIsLive` answers the pool-liveness
 question yes, and main is compared against the stored accounts on the operator's own usage, priority
 and reset ordering. Selecting main then serves it from the caller's credential without claiming,
-reading, reconciling or priming the stored profile, and without owning affinity or health state.
+reading, reconciling or priming the stored profile, and without owning health state or (by default) affinity.
 A main that wins only through that bearer is also never recorded as the shared active account: the
 request resolves to main, while the persisted and runtime shared active account remain unchanged.
 Answering that question with the pin predicate instead scored main `main_credential_unavailable` on

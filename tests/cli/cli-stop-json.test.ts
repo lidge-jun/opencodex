@@ -21,6 +21,7 @@ import {
   type StopApproval,
 } from "../../src/cli/stop-approval";
 import type { ResolveJson } from "../../src/cli/resolve";
+import { describeTrackedRuntimeTarget } from "../../src/config/tracked-runtime-inspection";
 
 /**
  * A test batch shares ONE Bun process, and Bun does not clear process.exitCode on a
@@ -413,6 +414,44 @@ const BOUND_STOP_MANAGER = () => ({ kind: "bound" as const, pid: 42,
   managerPid: 7, backend: "launchd" as const, childNeedsSeparateStop: false as const });
 
 describe("approval-bound stop", () => {
+  test("the tracked-record inspection and stop guard accept a verified legacy default", async () => {
+    const approval = { ...STOP_APPROVAL, hostname: "127.0.0.1" };
+    const current = { ...STOP_RESOLVE, liveness: { ...STOP_RESOLVE.liveness, hostname: "127.0.0.1" } } as ResolveJson;
+    let stops = 0;
+    const target = () => describeTrackedRuntimeTarget({
+      readFile: path => path.endsWith("ocx.pid") ? "42" : JSON.stringify({ pid: 42, port: 10100 }),
+      signal: () => {}, identity: () => "match",
+    });
+    const result = await runApprovedStop(approval, async () => current, target, BOUND_STOP_MANAGER,
+      async () => { stops++; return { ok: true, summary: summarize(record(), { exitCode: 0 }) }; });
+    expect(result.summary.outcome).toBe("stopped");
+    expect(stops).toBe(1);
+  });
+  test("a missing legacy hostname permits an otherwise verified default-loopback stop", async () => {
+    const approval = { ...STOP_APPROVAL, hostname: "127.0.0.1" };
+    const current = { ...STOP_RESOLVE, liveness: { ...STOP_RESOLVE.liveness, hostname: "127.0.0.1" } } as ResolveJson;
+    let stops = 0;
+    const result = await runApprovedStop(approval, async () => current,
+      () => ({ pid: 42, port: 10100, hostname: undefined }), BOUND_STOP_MANAGER,
+      async () => { stops++; return { ok: true, summary: summarize(record(), { exitCode: 0 }) }; });
+    expect(result.summary.outcome).toBe("stopped");
+    expect(stops).toBe(1);
+  });
+
+  test.each([
+    ["127.0.0.1", "0.0.0.0"], ["0.0.0.0", "127.0.0.1"],
+    ["0.0.0.0", undefined], ["127.0.0.1", ""],
+  ] as const)("a tracked hostname change from %s to %s refuses without stopping", async (approvedHost, trackedHost) => {
+    const approval = { ...STOP_APPROVAL, hostname: approvedHost };
+    const current = { ...STOP_RESOLVE, liveness: { ...STOP_RESOLVE.liveness, hostname: approvedHost } } as ResolveJson;
+    let stops = 0;
+    const result = await runApprovedStop(approval, async () => current,
+      () => ({ pid: 42, port: 10100, hostname: trackedHost }), BOUND_STOP_MANAGER,
+      async () => { stops++; return { ok: true, summary: summarize(record(), { exitCode: 0 }) }; });
+    expect(result.summary.outcome).toBe("approval-changed");
+    expect(stops).toBe(0);
+  });
+
   test("mismatched evidence refuses before manager or proxy stop", async () => {
     expect(parseStopApproval(["--json", "--expect-pid", "42"]).ok).toBe(false);
     let managerStops = 0;

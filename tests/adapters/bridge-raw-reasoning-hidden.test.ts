@@ -47,6 +47,66 @@ const REPLAY_SCOPE: OcxReasoningReplayScopeRef = {
 const GLOBAL_SCOPE: OcxReasoningReplayScopeRef = { ...REPLAY_SCOPE, clientThreadId: "global" };
 const sseOpts = (hide: boolean) => ({ hideThinkingSummary: hide, replayCacheScope: REPLAY_SCOPE });
 
+describe("hidden raw reasoning between text chunks", () => {
+  for (const options of [{ hideThinkingSummary: true }, { hideRawReasoning: true }]) {
+    const mode = "hideThinkingSummary" in options ? "summary-hidden" : "raw-hidden";
+    for (const failed of [false, true]) {
+      test(`${mode} separates message indexes around hidden raw, failed=${failed}`, async () => {
+        const frames = await collectSse(bridgeToResponsesSSE(replay([
+          { type: "text_delta", text: "before" },
+          { type: "reasoning_raw_delta", text: "private raw" },
+          { type: "text_delta", text: "after" },
+          failed ? { type: "error", code: "upstream_error", message: "synthetic failure" } : { type: "done" },
+        ]), "m", undefined, undefined, undefined, undefined, undefined, options));
+        const added = frames.filter(frame => frame.event === "response.output_item.added").map(frame => frame.data);
+        const done = frames.filter(frame => frame.event === "response.output_item.done").map(frame => frame.data);
+        expect(added.map(event => event.output_index)).toEqual([0, 1, 2]);
+        expect(done.map(event => event.output_index)).toEqual([0, 1, 2]);
+        const items = done.map(event => event.item as Record<string, unknown>);
+        expect(items.map(item => item.type)).toEqual(["message", "reasoning", "message"]);
+        expect(decodeReasoningEnvelope(items[1]!.encrypted_content as string)).toEqual({ txt: "private raw" });
+        const slots = new Map<number, { id: unknown; text: string }>();
+        for (const frame of frames) {
+          const event = frame.data;
+          const index = event.output_index as number;
+          if (frame.event === "response.output_item.added") slots.set(index, { id: (event.item as Record<string, unknown>).id, text: "" });
+          if (frame.event === "response.output_text.delta") {
+            expect(slots.get(index)?.id).toBe(event.item_id);
+            slots.get(index)!.text += event.delta as string;
+          }
+          if (frame.event === "response.output_item.done") {
+            const item = event.item as Record<string, unknown>;
+            expect(slots.get(index)?.id).toBe(item.id);
+            if (item.type === "message") {
+              expect(slots.get(index)?.text).toBe(index === 0 ? "before" : "after");
+              expect(item.content).toEqual([{ type: "output_text", text: index === 0 ? "before" : "after", annotations: [] }]);
+            }
+            slots.delete(index);
+          }
+        }
+        expect(slots.size).toBe(0);
+        expect(items[0]!.phase).toBe("commentary");
+        expect(frames.filter(frame => frame.event === "response.reasoning_text.delta")).toHaveLength(0);
+        expect(JSON.stringify(frames)).not.toContain("private raw");
+        const terminal = frames.filter(frame => frame.event === (failed ? "response.failed" : "response.completed"));
+        expect(terminal).toHaveLength(1);
+        expect((terminal[0]!.data.response as Record<string, unknown>).output).toEqual(items);
+      });
+    }
+    test(`${mode} keeps consecutive plain text chunks in one item`, async () => {
+      const frames = await collectSse(bridgeToResponsesSSE(replay([
+        { type: "text_delta", text: "before" }, { type: "text_delta", text: "after" }, { type: "done" },
+      ]), "m", undefined, undefined, undefined, undefined, undefined, options));
+      const added = frames.filter(frame => frame.event === "response.output_item.added");
+      expect(added).toHaveLength(1);
+      const item = frames.find(frame => frame.event === "response.output_item.done")!.data.item as Record<string, unknown>;
+      expect(item.content).toEqual([{ type: "output_text", text: "beforeafter", annotations: [] }]);
+      expect(frames.filter(frame => frame.event === "response.output_text.delta").map(frame => [frame.data.output_index, frame.data.item_id, frame.data.delta]))
+        .toEqual([[0, item.id, "before"], [0, item.id, "after"]]);
+    });
+  }
+});
+
 describe("hidden raw reasoning (hideThinkingSummary parity for reasoning_raw_delta)", () => {
   beforeEach(() => {
     clearReasoningReplayCacheForTests();

@@ -513,6 +513,11 @@ export async function fetchHubUsage(
   const text = await boundedText(response, MAX_HUB_USAGE_BYTES, { inactivityTimeoutMs: safeTimeout(options.timeoutMs) });
   const report = parseHubUsage(parseJson(text, "hub_usage_invalid"));
   if (!report) throw new HubClientError("hub_usage_invalid", "Hub usage response was invalid");
+  const requestedClient = query.get("client");
+  if (requestedClient !== null && (query.getAll("client").length !== 1
+    || report.sourceFilter?.client !== requestedClient || report.sourceFilter.scope !== "authenticated-key")) {
+    throw new HubClientError("hub_usage_invalid", "Hub usage source filter was not confirmed");
+  }
   return report;
 }
 
