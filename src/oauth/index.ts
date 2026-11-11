@@ -1671,6 +1671,7 @@ export async function runLogin(
       const written = await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, reauthCred, {
         assertBeforePersist: deps.assertCurrentOwner,
         rotateLoginId: true,
+        clearAutomaticPause: true,
       });
       // A reauth whose account was deleted meanwhile wrote nothing and owns no row to report.
       if (written) deps.onAccountPersisted?.(opts.reauthAccountId);
