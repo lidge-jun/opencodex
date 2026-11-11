@@ -29,16 +29,15 @@ export async function refreshTraeCnCatalogSources(
 ): Promise<void> {
   const { fetchProviderModelsWithAuth, refreshingModelsAuthResolver } = await import("./provider-models");
   const { captureProviderGather } = await import("./gather-capture");
-  const refreshed: Array<{ name: string; generation: string; models: NonNullable<ReturnType<typeof getStaleCached>> }> = [];
+  const refreshed: Array<{ name: string; generation: string; models: CatalogModel[] }> = [];
   for (const [name, provider] of Object.entries(config.providers)) {
     if (!current()) return;
     if (provider.adapter !== "trae-cn" || provider.disabled || provider.liveModels === false) continue;
     const gathered = await fetchProviderModelsWithAuth(captureProviderGather(name, provider, refreshingModelsAuthResolver),
       config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS, providerContextCap(config, name), refreshingModelsAuthResolver);
     if (!current()) return;
-    const models = getStaleCached(name);
-    if (gathered.outcome.state === "authoritative" && models) {
-      refreshed.push({ name, models, generation: captureModelCacheGeneration(name) });
+    if (gathered.outcome.state === "authoritative") {
+      refreshed.push({ name, models: gathered.models, generation: captureModelCacheGeneration(name) });
     }
   }
   if (!after || refreshed.length === 0 || !current()) return;

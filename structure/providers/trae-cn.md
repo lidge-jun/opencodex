@@ -29,8 +29,9 @@ user home plus `.trae`, before HOME isolation. Provider `proxy`/`noProxy` overri
 are refused before CLI startup, including explicit direct routing.
 Observed-auth gathers and management admission use only cached evidence; only refreshing gathers and explicit connection
 probes may launch the CLI. Automatic refresh prepares CLI-owned evidence in its independent background
-source phase, then pins every successfully discovered roster through catalog convergence and connected-client
-refresh before releasing the publication leases. This keeps a zero-TTL roster authoritative for the full publication
+source phase, then pins every authoritative gather result through catalog convergence and connected-client
+refresh before releasing the publication leases. The pin does not depend on the ordinary cache entry surviving
+shared-memory eviction. This keeps a zero-TTL roster authoritative for the full publication
 round without launching ACP twice. Cold or stalled discovery cannot delay unrelated management responses. Lost-generation discovery rereads the current
 cache before attaching its revision. Relative PATH, user-local fallback entries and the original CLI home resolve before the child changes its cwd.
 Windows home fallback discovery uses the same native-before-launcher order as PATH, including `traecli.cmd`.
