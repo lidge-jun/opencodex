@@ -41,7 +41,7 @@ export function registerReloginPauseCases(
 
     expect(result.state.status).toBe("done");
     expect((config.pausedCodexAccountIds ?? []).includes(accountId)).toBe(stillPaused);
-    if (stillPaused) expect(config.codexAccountPauseState?.[accountId]?.details).toBeUndefined();
+    if (stillPaused) expect(config.codexAccountPauseState?.[accountId]).toEqual({ revision: "before-login" });
     else expect(config.codexAccountPauseState?.[accountId]).toMatchObject({ revision: expect.any(String) });
     if (!stillPaused) expect(config.codexAccountPauseState?.[accountId]?.details).toBeUndefined();
   });

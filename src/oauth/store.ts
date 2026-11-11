@@ -643,7 +643,6 @@ function newAccountId(cred: OAuthCredentials): string {
   return createHash("sha256").update(identity).digest("hex").slice(0, 32);
 }
 
-/** Allocate a persisted slot id without reusing any existing account's ownership key. */
 /**
  * An explicit login or reauthentication clears an AUTOMATIC pause (one that recorded
  * `pauseDetails`), because the evidence behind it described the replaced credential (#8398).
@@ -659,6 +658,7 @@ function clearAutomaticPauseForLogin(set: ProviderAccountSet, account: ProviderA
   return true;
 }
 
+/** Allocate a persisted slot id without reusing any existing account's ownership key. */
 function distinctAccountId(cred: OAuthCredentials, accounts: readonly ProviderAccount[]): string {
   const base = newAccountId(cred);
   const occupied = new Set(accounts.map(account => account.id));
@@ -1068,6 +1068,12 @@ export async function saveCredentialWithReceipt(
     const updatedSet = store[provider];
     const savedAccount = updatedSet?.accounts.find(account => account.id === accountId);
     const activeAccount = updatedSet?.accounts.find(account => account.id === updatedSet.activeAccountId);
+    // A login that cleared this account's automatic pause hands it a selection still parked on a
+    // paused row (the local-cli import branch does not select on its own), as reauth does below.
+    if (pauseCleared && updatedSet && savedAccount && savedAccount.paused !== true && savedAccount.needsReauth !== true
+      && activeAccount?.id !== accountId && (!activeAccount || activeAccount.paused === true || activeAccount.needsReauth === true)) {
+      updatedSet.activeAccountId = accountId;
+    }
     if (savedAccount?.paused === true
       && (!activeAccount || activeAccount.paused === true || activeAccount.needsReauth === true)) {
       const fallback = updatedSet.accounts.find(account => account.id !== accountId

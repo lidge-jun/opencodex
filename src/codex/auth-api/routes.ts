@@ -113,6 +113,7 @@ export async function handleCodexAuthAPI(
     const exists = id === MAIN_CODEX_ACCOUNT_ID
       || (runtimeConfig.codexAccounts ?? []).some(account => isSelectableCodexPoolAccount(account) && account.id === id);
     if (!exists) return jsonResponse({ error: "Account not found" }, 404);
+    let healthPauseRevision: string | undefined;
     if (body.ifHealthy === true) {
       // Explicit resume gated on a forced pool quota read (#8398); the read can take a while, so
       // the pause is committed against the configuration as it is after the read.
@@ -125,10 +126,19 @@ export async function handleCodexAuthAPI(
       if (refusal) return jsonResponse({ error: `account was not resumed: ${refusal}`, code: "resume_refused", reason: refusal, id }, 409);
       // Not paused when checked: a no-op that never enters the pause group.
       if (!verdict) return jsonResponse({ ok: true, id, paused: false, unchanged: true, activeCodexAccountId: getEffectiveActiveCodexAccountId(runtimeConfig) ?? null });
+      if (verdict.ok) healthPauseRevision = verdict.pauseRevision;
     }
 
     const paused = body.paused;
     return withCodexAccountPauseGroup(runtimeConfig, id, accountIds => {
+      if (body.ifHealthy === true) {
+        // Recheck right before the write: the pause-group claim above can wait, and an operator
+        // re-pause meanwhile must not be overwritten by this health-gated resume.
+        runtimeConfig = getRuntimeConfig(config);
+        if (!isCodexAccountPaused(runtimeConfig, id) || runtimeConfig.codexAccountPauseState?.[id]?.revision !== healthPauseRevision) {
+          return jsonResponse({ error: "account was not resumed: account_changed", code: "resume_refused", reason: "account_changed", id }, 409);
+        }
+      }
       // A linked account resumes with the named one, so a permanent reason on any of them refuses (#8398).
       if (body.ifHealthy === true && accountIds.some(accountId => {
         const reason = runtimeConfig.codexAccountPauseState?.[accountId]?.details?.reason;

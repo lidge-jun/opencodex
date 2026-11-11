@@ -207,3 +207,36 @@ describe("only an explicit reauthentication clears an automatic pause (#8398 rev
     expect(usageCalls).toEqual([]);
   });
 });
+
+describe("races and selection handoff (#8398 review)", () => {
+  test("a credential replaced during the usage read refuses with account_changed", async () => {
+    writeAuth([automatic, active]);
+    const { checkOAuthResumeHealth } = await import("../../src/oauth/account-resume-health");
+    const verdict = await checkOAuthResumeHealth("anthropic", "aaaa1111", { readUsage: async () => {
+      await saveAccountCredential("anthropic", "aaaa1111", { access: "t1-swap", refresh: "r1-swap", expires: FAR, email: "first@example.com", accountId: "acct-1", source: "oauth" } as never);
+      return { quota: { fiveHourPercent: 1 } };
+    } });
+    expect(verdict).toEqual({ ok: false, reason: "account_changed" });
+    expect(row("aaaa1111")?.paused).toBe(true);
+  });
+
+  test("a stale resume guard changes nothing", async () => {
+    writeAuth([automatic, active]);
+    const { setAccountPaused } = await import("../../src/oauth/store");
+    const result = await setAccountPaused("anthropic", "aaaa1111", false, undefined, { generation: "stale", pauseRevision: "rev-aaaa1111" });
+    expect(result).toEqual({ status: "changed" });
+    expect(row("aaaa1111")?.paused).toBe(true);
+    expect(row("aaaa1111")?.pauseDetails?.reason).toBe("subscription_expired");
+  });
+
+  test("a local-cli import that clears an automatic pause takes a selection parked on a paused row", async () => {
+    writeFileSync(join(testDir, "auth.json"), JSON.stringify({ anthropic: { activeAccountId: "bbbb2222", accounts: [
+      { id: "aaaa1111", paused: true, pauseRevision: "rev-a", pauseDetails: { reason: "subscription_expired", pausedAt: 1 },
+        credential: { access: "t1", refresh: "shared-refresh", expires: FAR, source: "local-cli" } },
+      { id: "bbbb2222", paused: true, credential: { access: "t2", refresh: "r2", expires: FAR, email: "second@example.com", accountId: "acct-2", source: "oauth" } },
+    ] } }), { mode: 0o600 });
+    await saveCredentialWithReceipt("anthropic", { access: "t1-new", refresh: "shared-refresh", expires: FAR, source: "local-cli" } as never);
+    expect(row("aaaa1111")?.paused).toBeUndefined();
+    expect(getAccountSet("anthropic")?.activeAccountId).toBe("aaaa1111");
+  });
+});

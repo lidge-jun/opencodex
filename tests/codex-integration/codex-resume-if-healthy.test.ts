@@ -128,3 +128,31 @@ describe("Codex resume --if-healthy across linked accounts (#8398 review)", () =
     expect(whamCalls).toEqual([]);
   });
 });
+
+describe("Codex health verdicts and races (#8398 review)", () => {
+  test("a probe that needs reauthentication refuses with needs_reauth", async () => {
+    setup({ reason: "subscription_expired", pausedAt: 1 });
+    const { checkCodexResumeHealth } = await import("../../src/codex/account-resume-health");
+    const verdict = await checkCodexResumeHealth(loadConfig(), "pool-paused", async () => ({ quota: null, needsReauth: true }));
+    expect(verdict).toEqual({ ok: false, reason: "needs_reauth" });
+  });
+
+  test("an operator re-pause during the read keeps the pause", async () => {
+    setup({ reason: "subscription_expired", pausedAt: 1 });
+    stubWham(200);
+    const { setCodexAccountPaused } = await import("../../src/codex/account-pause");
+    const config = loadConfig();
+    const read = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      // The operator pauses the same account by hand while the health read is in flight.
+      setCodexAccountPaused(config, "pool-paused", true);
+      return read(input, init);
+    }) as typeof fetch;
+    const req = new Request("http://localhost/api/codex-auth/accounts/pause", { method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: "pool-paused", paused: false, ifHealthy: true }) });
+    const response = await handleCodexAuthAPI(req, new URL(req.url), config);
+    expect(response!.status).toBe(409);
+    expect(await response!.json()).toMatchObject({ code: "resume_refused", reason: "account_changed" });
+    expect(config.pausedCodexAccountIds).toContain("pool-paused");
+  });
+});
