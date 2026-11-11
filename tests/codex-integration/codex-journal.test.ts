@@ -491,6 +491,25 @@ describe("codex-journal", () => {
     expect(JSON.parse(r.stdout.trim())).toEqual({ missing: "missing", adopted: "adopted", competingWriter: "refused" });
   });
 
+  // Review round 4: external Codex providers (approved or not) leave no standard journal, and no
+  // journal means startup recovery has nothing to restore. Only another client's journal leaves the
+  // routing at risk, so only that counts as an incomplete handover.
+  test("an external provider leaves no journal to hand over, and only a foreign journal is incomplete", () => {
+    writeFileSync(join(testDir, "config.toml"), 'model_provider = "acme"\n\n[model_providers.acme]\nname = "Acme"\nbase_url = "https://acme.example.test/v1"\n', "utf8");
+    const r = runScript(testDir, `
+      const { injectCodexConfig } = require("./src/codex/inject");
+      const { adoptJournalForClient, journalHandoverIncomplete } = require("./src/codex/journal");
+      (async () => {
+        const injected = await injectCodexConfig(10100, { port: 10100, providers: {}, defaultProvider: "openai" }, { catalogPath: null, journalOwner: { kind: "client", apiKeyId: "link-key" } });
+        const adoption = adoptJournalForClient("link-key");
+        const verdicts = ["adopted", "owned", "missing", "foreign"].map(journalHandoverIncomplete);
+        console.log(JSON.stringify({ success: injected.success, adoption, verdicts }));
+      })();
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ success: true, adoption: "missing", verdicts: [false, false, false, true] });
+  });
+
   test("removeJournal refuses unknown journal evidence", () => {
     const journalPath = join(testDir, "opencodex-journal.json");
     writeFileSync(journalPath, "{}", "utf8");

@@ -29,6 +29,7 @@ import {
 } from "../codex/inject";
 import {
   adoptJournalForClient,
+  journalHandoverIncomplete,
   journalOwner,
   restoreJournalState,
 } from "../codex/journal";
@@ -788,7 +789,7 @@ async function connectClientUnlocked(
     // (src/codex/journal.ts adoptJournalForClient). A failure keeps the connection; sync retries.
     if (injectionCommitted) {
       try {
-        adoptJournalForClient(apiKeyId, () => {
+        const adoption = adoptJournalForClient(apiKeyId, () => {
           // Under the Codex lock: still this committed connection (same owner and link) and its
           // token, or write nothing. The stored record is normalized, so identity is compared.
           assertNoClientDisconnectPending();
@@ -798,6 +799,7 @@ async function connectClientUnlocked(
           const token = readServiceApiTokenState();
           if (token.kind !== "present" || token.fingerprint !== connection.tokenFingerprint) throw new Error("client_token_changed");
         });
+        if (journalHandoverIncomplete(adoption)) console.warn(FOREIGN_JOURNAL_WARNING);
       }
       catch { console.warn("Warning: the Codex journal could not be handed to this connection; run 'ocx sync' so a supervised restart keeps Codex routing."); }
     }
@@ -1003,7 +1005,7 @@ async function syncConnectedClientUnlocked(
     try {
       const adoption = adoptJournalForClient(next.apiKeyId, beforeClientWrite);
       // No journal or another client's means the routing is not this connection's to keep.
-      if (adoption === "missing" || adoption === "foreign") journalHandoverFailed = true;
+      if (journalHandoverIncomplete(adoption)) journalHandoverFailed = true;
     } catch { journalHandoverFailed = true; }
     if (homeSettings && next.link) {
       const linkId = next.link.linkId;
@@ -1074,6 +1076,8 @@ const DISCONNECT_PHASES: readonly DesktopDisconnectReceipt["phase"][] = [
 function disconnectAtLeast(receipt: DesktopDisconnectReceipt, phase: DesktopDisconnectReceipt["phase"]): boolean {
   return DISCONNECT_PHASES.indexOf(receipt.phase) >= DISCONNECT_PHASES.indexOf(phase);
 }
+
+const FOREIGN_JOURNAL_WARNING = "Warning: the Codex journal belongs to an earlier connection, so the next OpenCodex restart restores native Codex routing. After that restart, run 'ocx sync --restart-codex' to point Codex at this connection again.";
 
 function catalogIsRecordedPrior(connection: OcxClientConnectionConfig, snapshot: CatalogSnapshot): boolean {
   return snapshot.kind === "file" && !!connection.priorCatalog

@@ -297,3 +297,41 @@ test("connect --link over a standalone injection hands the Codex journal to the 
     home.remove();
   }
 });
+
+// Review round 4: a connect over a journal an earlier connection owns must say so, not report a
+// clean handover; the routing is restored on the next restart and a sync after it re-applies it.
+test("connect over an earlier connection's Codex journal warns with the recovery step", async () => {
+  const home = createTempHome("ocx-client-link-foreign-journal-");
+  const warnings: string[] = [];
+  const warn = spyOn(console, "warn").mockImplementation((...parts) => { warnings.push(parts.map(String).join(" ")); });
+  try {
+    const config = getDefaultConfig();
+    config.port = 10100;
+    saveConfig(config);
+    writeFileSync(CODEX_CONFIG_PATH, "model_provider = \"openai\"\n");
+    const earlier = await injectCodexConfig(10100, { ...config, syncResumeHistory: false }, { catalogPath: null, journalOwner: { kind: "client", apiKeyId: "earlier-key" } });
+    expect(earlier.success).toBe(true);
+    await connectClient({
+      serverUrl: "http://127.0.0.1:34567",
+      managementUrl: "http://127.0.0.1:34567",
+      managementTransport: "direct",
+      transport: "link",
+      link: { tunnelPort: 34567, linkId },
+      credential: { kind: "link", apiKeyId: "key-1", key },
+      selectedClients: ["codex"],
+    }, {
+      fetchImpl: async input => String(input).endsWith("/readyz")
+        ? Response.json({ status: "ready", protocol: 1, minimumClientProtocol: 1, managementUrl: "http://127.0.0.1:34567" })
+        : Response.json({ models: [] }),
+      catalogCompatibility: { supportedEfforts: () => new Set() },
+      lifecycleLockDeps: { lockPath: home.path("lifecycle.sqlite") },
+    });
+    expect(JSON.parse(readFileSync(JOURNAL_PATH, "utf8")).owner).toEqual({ kind: "client", apiKeyId: "earlier-key" });
+    expect(warnings.join("\n")).toContain("belongs to an earlier connection");
+    expect(warnings.join("\n")).toContain("ocx sync --restart-codex");
+  } finally {
+    warn.mockRestore();
+    for (const created of [JOURNAL_PATH, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, DEFAULT_CATALOG_PATH]) rmSync(created, { force: true });
+    home.remove();
+  }
+});

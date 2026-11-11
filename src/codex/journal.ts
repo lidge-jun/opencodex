@@ -506,9 +506,18 @@ export interface ReconcileJournalOptions {
  * the Codex config lock and the config mutation lock together with the write, so a connection that
  * changed since its injection writes nothing and none can change before the write lands.
  * Outcomes: `adopted`, `owned` (already this client's), `missing` (no journal), `foreign` (another
- * client's journal, left alone). Only the first two mean the routing will survive a relaunch.
+ * client's journal, left alone; see {@link journalHandoverIncomplete}).
  */
 export type JournalAdoption = "adopted" | "owned" | "missing" | "foreign";
+
+/**
+ * Whether routing is still at risk after a handover. No journal (external providers leave none)
+ * gives startup recovery nothing to restore; only another client's journal is restored over this
+ * connection on the next start.
+ */
+export function journalHandoverIncomplete(adoption: JournalAdoption): boolean {
+  return adoption === "foreign";
+}
 
 export function adoptJournalForClient(apiKeyId: string, beforeWrite: () => void = () => {}): JournalAdoption {
   if (codexHomeIsAbsent(CODEX_HOME)) return "missing";

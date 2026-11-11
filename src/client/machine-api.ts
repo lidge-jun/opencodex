@@ -117,7 +117,7 @@ export async function handleMachineApi(
       deps.setHubReachability?.("online");
       // A sync whose journal handover failed is not complete: a supervised restart could undo it.
       if (result.journalHandoverFailed) {
-        return Response.json({ success: false, ...result, error: "Codex routing was applied, but the Codex journal could not be handed to this connection; sync again, and if this repeats, disconnect and connect again." }, { status: 409 });
+        return Response.json({ success: false, ...result, error: "Codex routing was applied, but the Codex journal could not be handed to this connection; sync again, and if it repeats, sync once more after the next OpenCodex restart." }, { status: 409 });
       }
       return Response.json({ success: true, ...result });
     } catch (error) {
