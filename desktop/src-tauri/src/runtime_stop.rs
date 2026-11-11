@@ -143,9 +143,9 @@ pub struct StopSummary {
     #[serde(default)]
     pub service_stop_reason: Option<String>,
     /// The CLI's own processes are gone but another program holds the runtime's port. Additive
-    /// within `ocx-stop/1`; absent means false.
+    /// within `ocx-stop/1`; absent or `null` means false, so a stray `null` never fails the parse.
     #[serde(default)]
-    pub port_held_by_foreign: bool,
+    pub port_held_by_foreign: Option<bool>,
 }
 
 impl StopSummary {
@@ -175,7 +175,7 @@ impl StopSummary {
             ),
             Some(other) => notes.push(format!("service stop reason: {other}")),
         }
-        if self.port_held_by_foreign {
+        if self.port_held_by_foreign == Some(true) {
             notes.push("another program is holding the runtime's port".to_owned());
         }
         (!notes.is_empty()).then(|| notes.join("; "))
@@ -371,11 +371,10 @@ async fn run_with_args(
         }
     };
     // Measured immediately before the spawn, so the CLI's clock and this one start together.
-    if let Some(value) =
-        deadline_env_value(deadline.saturating_duration_since(Instant::now()), margin)
-    {
-        command = command.env(DEADLINE_ENV, value);
-    }
+    // Always set, so a value inherited from this process's own environment never reaches the
+    // child: an empty value means "no deadline" to the CLI, the same as an absent one.
+    let value = deadline_env_value(deadline.saturating_duration_since(Instant::now()), margin);
+    command = command.env(DEADLINE_ENV, value.unwrap_or_default());
     match timeout_at(
         deadline,
         crate::process_spawn::with_spawn_async(command.output()),
@@ -420,7 +419,7 @@ mod tests {
         match read(Some(0), clean.as_bytes(), b"") {
             StopResult::Stopped(summary) => {
                 assert_eq!(summary.service_stop_reason, None);
-                assert!(!summary.port_held_by_foreign);
+                assert_eq!(summary.port_held_by_foreign, None);
                 assert_eq!(summary.notes(), None);
             }
             other => panic!("unexpected result: {other:?}"),
@@ -512,6 +511,14 @@ mod tests {
             read(Some(0), explicit_false.as_bytes(), b"").describe(),
             "a message"
         );
+
+        let explicit_null = with_fields(
+            &document(true, "stopped", 0, true, "stopped"),
+            r#""portHeldByForeign":null"#,
+        );
+        let result = read(Some(0), explicit_null.as_bytes(), b"");
+        assert!(result.is_stopped());
+        assert_eq!(result.describe(), "a message");
     }
 
     #[test]
