@@ -11,9 +11,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyRestartFailed, applyRestartMessage, restartRuntimeAfterApply, type ApplyRestartDeps } from "../../src/cli/link-apply-restart";
+import { applyRestartMessage, restartRuntimeAfterApply, type ApplyRestartDeps } from "../../src/cli/link-apply-restart";
 import { requestBoundSystemRestart } from "../../src/cli/system-restart-client";
-import { deferSupervisedRestart, OWNER_UNPROVEN_RECOVERY, reportRestartFailure, supervisedRestartRefusal } from "../../src/cli/restart-failure";
+import { deferSupervisedRestart, reportRestartFailure, supervisedRestartRefusal } from "../../src/cli/restart-failure";
 import { collectAppliedCodexSettingsStatus } from "../../src/cli/status-codex-settings";
 import { recordHomeCodexSettings, type HomeCodexSettingsRecord } from "../../src/client/link-home";
 import type { HomeCodexSettingsDocument } from "../../src/link/codex-settings";
@@ -119,26 +119,6 @@ describe("ocx sync restarts the runtime after an apply", () => {
       expect(calls).toEqual([]);
     });
   }
-
-  // Final review round 3: an owner that cannot be proven is not a background service. Sync reports
-  // it as its own outcome, exits 1 (the apply is not in effect while the old runtime serves), and
-  // names the command that stops that runtime instead of 'ocx service restart'.
-  test("an owner-unproven refusal is its own failed outcome with its own advice", async () => {
-    const { value, calls } = deps(0, { restart: async (_start, onSupervised) => { onSupervised("owner-unproven"); return false; } });
-    const outcome = await restartRuntimeAfterApply(record, value);
-    expect(outcome).toEqual({ kind: "owner-unproven" });
-    expect(applyRestartFailed(outcome)).toBe(true);
-    const message = applyRestartMessage(outcome);
-    expect(message).toContain(OWNER_UNPROVEN_RECOVERY);
-    expect(message).not.toContain("background service");
-    expect(calls).toEqual([]);
-    for (const supervisor of ["desktop", "service", "service-unproven"] as const) {
-      expect(applyRestartFailed({ kind: "deferred-supervisor", supervisor })).toBe(false);
-    }
-    expect(applyRestartFailed({ kind: "failed" })).toBe(true);
-    expect(applyRestartFailed({ kind: "connection-changed" })).toBe(true);
-    expect(applyRestartFailed({ kind: "restarted" })).toBe(false);
-  });
 });
 
 function clientHealthDeps(postResponse: Response) {
@@ -222,7 +202,7 @@ describe("ocx restart against a client runtime", () => {
       "Restart not performed; the running client runtime was kept. Its background service owns it: run `ocx service restart`.",
       "Restart not performed; the running client runtime was kept. The OpenCodex desktop app owns it while its connection is current: use Quit in the OpenCodex tray menu, then reopen it. After `ocx disconnect`, `ocx restart` hands it to the app.",
       "Restart not performed; the running client runtime was kept. A service manager started it (systemd opencodex-proxy.service, launchd com.opencodex.proxy or the Windows OpenCodex service), but it is not enabled or its relaunch could not be verified: restart it through the manager with 'ocx service restart', or check 'ocx service status'.",
-      `Restart not performed; the running client runtime was kept. ${OWNER_UNPROVEN_RECOVERY}`,
+      "Restart not performed; the running client runtime was kept. It was started with OCX_SERVICE=1 but without the service manager's marker while a service is installed, so it is either a service registered before that marker existed or a proxy started by ocx claude or ocx opencode. If it is the service, run 'ocx service repair' and then 'ocx service restart'; if it is a companion, end that ocx claude or ocx opencode session and start it again.",
     ]);
   });
 });

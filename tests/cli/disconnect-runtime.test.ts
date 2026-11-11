@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { attestRuntimeGeneration, bindRestartToRuntime, restartRuntimeAfterDisconnect, stopCapturedRuntime, type DisconnectRuntimeDeps, type RuntimeGeneration } from "../../src/cli/disconnect-runtime";
-import { OWNER_UNPROVEN_RECOVERY } from "../../src/cli/restart-failure";
+import { bindRestartToRuntime, restartRuntimeAfterDisconnect, type DisconnectRuntimeDeps, type RuntimeGeneration } from "../../src/cli/disconnect-runtime";
 import { requestBoundSystemRestart } from "../../src/cli/system-restart-client";
 import { runProxyRestart, type ProxyRestartIo } from "../../src/cli/tray-proxy";
 import { createLocalAttestationProof, createLocalAttestationSecret, LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER } from "../../src/lib/local-management-attestation";
@@ -11,27 +10,20 @@ type State = ReturnType<DisconnectRuntimeDeps["connectionState"]>;
 const live = (role?: string, pid = 4321): Observation => ({ kind: "live", live: { pid, port: 10100, ...(role ? { role } : {}) } });
 const generation: RuntimeGeneration = { pid: 4321, port: 10100, hostname: "127.0.0.1", attestationSecret: createLocalAttestationSecret() };
 
-function run(observation: Observation, restartOk: boolean, json = false, extra: { state?: State; states?: State[]; after?: Observation; capture?: RuntimeGeneration | null; captureAfter?: RuntimeGeneration | null; refusedBy?: "service-unproven" | "owner-unproven"; observations?: Observation[]; stopped?: "exited" | "changed" | "kept" } = {}) {
+function run(observation: Observation, restartOk: boolean, json = false, extra: { state?: State; states?: State[]; after?: Observation; capture?: RuntimeGeneration | null; captureAfter?: RuntimeGeneration | null; refusedBy?: "service-unproven" | "owner-unproven" } = {}) {
   const out: string[] = [], err: string[] = [];
   let restarts = 0;
   const bound: RuntimeGeneration[] = [];
-  const events: string[] = [];
   const done = restartRuntimeAfterDisconnect({
-    observe: async () => {
-      const seen = extra.observations ? extra.observations.shift()! : restarts > 0 ? extra.after ?? live("standalone", 9999) : observation;
-      events.push(`observe:${seen.kind}${seen.live?.role ? `:${seen.live.role}` : ""}`);
-      return seen;
-    },
+    observe: async () => (restarts > 0 ? extra.after ?? live("standalone", 9999) : observation),
     capture: () => (restarts > 0 && extra.captureAfter !== undefined ? extra.captureAfter : extra.capture === undefined ? generation : extra.capture),
     connectionState: () => extra.states?.shift() ?? extra.state ?? { kind: "disconnected" },
-    restart: async target => { restarts += 1; bound.push(target); events.push("restart"); return { ok: restartOk, ...(extra.refusedBy ? { refusedBy: extra.refusedBy } : {}) }; },
-    stopCaptured: async target => { events.push(`stop:${target.pid}`); return extra.stopped ?? "kept"; },
-    start: async () => { events.push("start"); },
+    restart: async target => { restarts += 1; bound.push(target); return { ok: restartOk, ...(extra.refusedBy ? { refusedBy: extra.refusedBy } : {}) }; },
     json,
     info: line => out.push(line),
     error: line => err.push(line),
   });
-  return done.then(code => ({ code, out, err, restarts, bound, events }));
+  return done.then(code => ({ code, out, err, restarts, bound }));
 }
 
 describe("ocx disconnect restarts the client runtime it left behind", () => {
@@ -188,45 +180,13 @@ describe("ocx disconnect restarts the client runtime it left behind", () => {
     expect(text).not.toContain("Run on this machine: ocx restart");
   });
 
-  // Final review round 3: a runtime whose owner cannot be proven is stopped by its captured
-  // generation; OpenCodex is started only after that exit was observed.
-  test("an owner-unproven runtime is stopped, its exit observed, and only then OpenCodex started", async () => {
-    const result = await run(live("client"), false, false, { refusedBy: "owner-unproven", stopped: "exited", observations: [live("client"), { kind: "absent", live: null }, live("standalone", 9999)] });
-    expect(result.events).toEqual(["observe:live:client", "restart", "stop:4321", "observe:absent", "start", "observe:live:standalone"]);
-    expect(result.code).toBe(0);
-    expect(result.out.join("\n")).toContain("now runs standalone");
-  });
-
-  test("a manager that relaunched the stopped runtime as standalone needs no start", async () => {
-    const result = await run(live("client"), false, false, { refusedBy: "owner-unproven", stopped: "exited", observations: [live("client"), live("standalone", 9999), live("standalone", 9999)] });
-    expect(result.events).not.toContain("start");
-    expect(result.code).toBe(0);
-  });
-
-  test("an owner-unproven runtime that did not exit is kept, and the advice is ocx stop", async () => {
-    const result = await run(live("client"), false, false, { after: live("client"), refusedBy: "owner-unproven", stopped: "kept" });
+  test("a restart refused because its owner is unproven names both possible owners", async () => {
+    const result = await run(live("client"), false, false, { after: live("client"), refusedBy: "owner-unproven" });
     expect(result.code).toBe(1);
-    expect(result.events).not.toContain("start");
     const text = result.err.join("\n");
-    expect(text).toContain(OWNER_UNPROVEN_RECOVERY);
-    expect(OWNER_UNPROVEN_RECOVERY).toContain("ocx stop");
-    expect(text).not.toContain("session");
+    expect(text).toContain("ocx service repair");
+    expect(text).toContain("ocx claude or ocx opencode");
     expect(text).not.toContain("Run on this machine: ocx restart");
-  });
-
-  test("another process answering for the captured runtime is not stopped and nothing is started", async () => {
-    const other = { ...generation, attestationSecret: createLocalAttestationSecret() };
-    const result = await run(live("client"), false, false, { after: live("client"), captureAfter: other, refusedBy: "owner-unproven", stopped: "changed" });
-    expect(result.code).toBe(1);
-    expect(result.events).not.toContain("start");
-    expect(result.err.join("\n")).toContain("A different client runtime");
-  });
-
-  test("a connection that lands while the runtime stops gets no start", async () => {
-    const result = await run(live("client"), false, false, { refusedBy: "owner-unproven", stopped: "exited", states: [{ kind: "disconnected" }, { kind: "connected" }, { kind: "connected" }], observations: [live("client"), { kind: "absent", live: null }] });
-    expect(result.code).toBe(1);
-    expect(result.events).not.toContain("start");
-    expect(result.err.join("\n")).toContain("A new connection is in use");
   });
 
   // P3: after a completed restart, an unreadable state must not also claim nothing was restarted.
@@ -314,51 +274,5 @@ describe("a disconnect restart bound to the captured runtime generation", () => 
     await runProxyRestart(bindRestartToRuntime(w.io, generation, w.request));
     expect(w.calls).toEqual([]);
     expect(w.posts).toEqual([]);
-  });
-});
-
-describe("stopping exactly the captured runtime", () => {
-  const io = (attested: boolean, exits: boolean, throws = false) => {
-    const calls: string[] = [];
-    return {
-      calls,
-      value: {
-        attest: async (target: RuntimeGeneration) => { calls.push(`attest:${target.attestationSecret === generation.attestationSecret}`); return attested; },
-        terminate: (pid: number, stillTarget: () => boolean) => { calls.push(`terminate:${pid}:${stillTarget()}`); if (throws) throw new Error("refused"); },
-        alive: (pid: number) => { calls.push(`alive:${pid}`); return !exits; },
-        stillTarget: () => true,
-      },
-    };
-  };
-  test("an attested runtime is terminated and reported exited only once its exit is observed", async () => {
-    const ok = io(true, true);
-    expect(await stopCapturedRuntime(generation, ok.value)).toBe("exited");
-    expect(ok.calls).toEqual(["attest:true", "terminate:4321:true", "alive:4321"]);
-    const stuck = io(true, false);
-    expect(await stopCapturedRuntime(generation, stuck.value)).toBe("kept");
-  });
-  test("a runtime that cannot prove the captured secret is never terminated", async () => {
-    const other = io(false, true);
-    expect(await stopCapturedRuntime(generation, other.value)).toBe("changed");
-    expect(other.calls).toEqual(["attest:true"]);
-  });
-  test("a refused termination of a live process is kept", async () => {
-    const refused = io(true, false, true);
-    expect(await stopCapturedRuntime(generation, refused.value)).toBe("kept");
-  });
-
-  test("attestation needs the captured secret, pid and port, answered by the listener", async () => {
-    const secret = createLocalAttestationSecret();
-    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: request => new Response("{}", {
-      headers: { [LOCAL_ATTESTATION_PROOF_HEADER]: createLocalAttestationProof(secret, request.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER) ?? "", 4321, server.port!) ?? "" },
-    }) });
-    try {
-      const target = { pid: 4321, port: server.port!, hostname: "127.0.0.1", attestationSecret: secret };
-      expect(await attestRuntimeGeneration(target)).toBe(true);
-      expect(await attestRuntimeGeneration({ ...target, attestationSecret: createLocalAttestationSecret() })).toBe(false);
-      expect(await attestRuntimeGeneration({ ...target, pid: 4322 })).toBe(false);
-    } finally {
-      await server.stop(true);
-    }
   });
 });

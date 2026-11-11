@@ -8,10 +8,6 @@
  * Every other outcome exits 1, so a Home-driven leave stops before its own `ocx restart`.
  */
 import type { ProxyRestartIo, ProxyRestartLive, ProxyRestartRequestOutcome } from "./tray-proxy";
-import { OWNER_UNPROVEN_RECOVERY } from "./restart-failure";
-import { createLocalAttestationChallenge, LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER, verifyLocalAttestationProof } from "../lib/local-management-attestation";
-import { directLocalHttpFetch } from "../server/direct-local-http";
-import { probeHostname } from "../server/proxy-liveness";
 
 /**
  * One runtime process: its runtime record. The attestation secret is created per process
@@ -45,46 +41,9 @@ export interface DisconnectRuntimeDeps {
    * supervisor that refused it: an owning service manager whose relaunch could not be proven.
    */
   restart: (target: RuntimeGeneration) => Promise<{ ok: boolean; refusedBy?: "service-unproven" | "owner-unproven" }>;
-  /**
-   * Stop exactly the captured runtime when its owner could not be proven ({@link stopCapturedRuntime}):
-   * "exited" only once its exit was observed, "changed" when another process answers for it.
-   */
-  stopCaptured: (target: RuntimeGeneration) => Promise<"exited" | "changed" | "kept">;
-  /** Start OpenCodex the way `ocx restart` does when nothing runs (the saved state decides the role). */
-  start: () => Promise<unknown>;
   json: boolean;
   info?: (line: string) => void;
   error?: (line: string) => void;
-}
-
-/**
- * Stop one runtime generation: it must prove the captured attestation secret right before it is
- * terminated (a process at a reused pid cannot), escalation re-checks that the runtime record still
- * names that secret, and "exited" needs the process to be gone afterwards.
- */
-export async function stopCapturedRuntime(target: RuntimeGeneration, io: {
-  attest: (target: RuntimeGeneration) => Promise<boolean>;
-  terminate: (pid: number, stillTarget: () => boolean) => void;
-  alive: (pid: number) => boolean;
-  stillTarget: () => boolean;
-}): Promise<"exited" | "changed" | "kept"> {
-  if (!(await io.attest(target))) return "changed";
-  try { io.terminate(target.pid, io.stillTarget); } catch { /* decided by the exit check below */ }
-  return io.alive(target.pid) ? "kept" : "exited";
-}
-
-/** Whether the listener at the captured port proves the captured secret for the captured pid now. */
-export async function attestRuntimeGeneration(target: RuntimeGeneration, fetchImpl: typeof directLocalHttpFetch = directLocalHttpFetch): Promise<boolean> {
-  try {
-    const challenge = createLocalAttestationChallenge();
-    const response = await fetchImpl(`http://${probeHostname(target.hostname)}:${target.port}/healthz`, {
-      method: "GET", headers: { [LOCAL_ATTESTATION_CHALLENGE_HEADER]: challenge }, redirect: "error", signal: AbortSignal.timeout(2_000),
-    }, { timeoutMs: 2_000 });
-    void response.body?.cancel().catch(() => {});
-    return verifyLocalAttestationProof(target.attestationSecret, challenge, target.pid, target.port, response.headers.get(LOCAL_ATTESTATION_PROOF_HEADER));
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -131,7 +90,7 @@ export function recoveryAdvice(state: DisconnectClientState, answering: Answerin
   }
   switch (answering.kind) {
     case "captured": return answering.refusedBy === "owner-unproven"
-      ? `The client runtime${answering.pid ? ` (pid ${answering.pid})` : ""} still serves the old connection and did not exit when this machine stopped it. ${OWNER_UNPROVEN_RECOVERY}`
+      ? `The client runtime${answering.pid ? ` (pid ${answering.pid})` : ""} still serves the old connection, and its owner could not be proven: it is either a service registered before the service manager\'s marker existed or a proxy started by ocx claude or ocx opencode. If it is the service, run ocx service repair and then ocx service restart; if it is a companion, end that ocx claude or ocx opencode session and start it again.`
       : answering.refusedBy
       ? `The client runtime${answering.pid ? ` (pid ${answering.pid})` : ""} still serves the old connection, and its service manager did not allow a restart from here. Restart it through the manager: ocx service restart (check ocx service status).`
       : `The client runtime${answering.pid ? ` (pid ${answering.pid})` : ""} still serves the old connection. Run on this machine: ocx restart`;
@@ -170,26 +129,11 @@ export async function restartRuntimeAfterDisconnect(deps: DisconnectRuntimeDeps)
   }
   if (!client || !target) return 0;
   // A --json caller reads one document from stdout; restart progress goes to stderr.
-  const toStderr = async <T>(step: () => Promise<T>): Promise<T> => {
-    const originalLog = console.log;
-    if (deps.json) console.log = (...args: unknown[]) => console.error(...args);
-    try { return await step(); } finally { console.log = originalLog; }
-  };
+  const originalLog = console.log;
+  if (deps.json) console.log = (...args: unknown[]) => console.error(...args);
   let ok = false;
   let refusedBy: "service-unproven" | "owner-unproven" | undefined;
-  ({ ok, refusedBy } = await toStderr(() => deps.restart(target)));
-  if (!ok && refusedBy === "owner-unproven" && (await deps.stopCaptured(target)) === "exited") {
-    // No owner could be proven to relaunch it, and none may be assumed absent: this exact
-    // generation was stopped, and OpenCodex starts only once that exit was observed, the state is
-    // still disconnected, and nothing (such as a manager's relaunch) answers instead.
-    refusedBy = undefined;
-    const stopped = deps.connectionState();
-    if (stopped.kind !== "disconnected") {
-      error(`The client runtime (pid ${target.pid}) was stopped, but the client state changed meanwhile, so OpenCodex was not started. ${recoveryAdvice(stopped, { kind: "unknown" })}`);
-      return 1;
-    }
-    if ((await deps.observe()).kind === "absent") await toStderr(deps.start);
-  }
+  try { ({ ok, refusedBy } = await deps.restart(target)); } finally { console.log = originalLog; }
   const after = await deps.observe();
   if (after.kind === "live" && after.live.role !== "client") {
     const late = deps.connectionState();
