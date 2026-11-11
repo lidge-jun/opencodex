@@ -16,6 +16,9 @@ import { MANAGEMENT_JSON_BODY_MAX_BYTES } from "../../src/server/management/body
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { desktopFirstPartyTarget } from "../../src/claude/desktop-first-party";
 import { isolateClientLifecycleLock } from "../helpers/client-lifecycle-lock";
+import { claudeKeychainReader } from "../../src/oauth/claude-keychain-read";
+
+let keychainProbe: ReturnType<typeof spyOn>;
 
 // Full-suite Windows load: startServer + multi-PUT management flows often exceed bun's
 // default 5s per-test budget (same flake class as 810fa115 / kiro-oauth).
@@ -42,6 +45,9 @@ function startServer(port?: number, deps: NonNullable<Parameters<typeof startSer
 }
 
 beforeEach(() => {
+  // GET /api/claude-code probes the Keychain; never reach the developer's real login keychain
+  // (a locked one would raise an unlock prompt). "absent" is what a Linux or Windows runner reports.
+  keychainProbe = spyOn(claudeKeychainReader, "probe").mockResolvedValue("absent");
   previousHome = process.env.OPENCODEX_HOME;
   previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
   previousDesktopConfigDir = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
@@ -63,6 +69,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  keychainProbe.mockRestore();
   lifecycleLock.restore();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
