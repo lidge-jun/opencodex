@@ -230,4 +230,14 @@ export const ACCESS_REMOTE_CAPABILITIES: readonly Capability[] = [
     mutates: true, json: "envelope",
     details: ["Reads the local capture directory. It also applies retention: capture files 72 h past their last write and an expired control file are deleted, and the count is reported as removed."],
   },
+  {
+    command: ["link", "policy"], summary: "Read or change how this Home keeps its Children current.",
+    usage: "ocx link policy [--updates off|notify|auto-when-idle] [--catalog-fanout auto|manual] [--child-codex-restart never|app-server-when-idle] [--idle-after-minutes <1-60>] [--json]",
+    routes: [{ method: "GET", path: "/api/link/children/policy" }, { method: "PUT", path: "/api/link/children/policy" }],
+    flags: [{ name: "--updates", value: "string", summary: "off, notify, or auto-when-idle (default)." }, { name: "--catalog-fanout", value: "string", summary: "auto (default) or manual." },
+      { name: "--child-codex-restart", value: "string", summary: "never (default) or app-server-when-idle." }, { name: "--idle-after-minutes", value: "number", summary: "Minutes without a relayed model request before a Child counts as idle; default 10." },
+      { name: "--json", value: "boolean", summary: "Emit {policy, warning} as JSON." }],
+    mutates: true, json: "payload",
+    details: ["Without flags it reads the policy; with flags it changes only those knobs. Stored in <configDir>/link/child-policy.json on the Home, never in config.json. An invalid file turns automatic catalog fan-out and updates off until a policy is saved.", "Catalog fan-out syncs Home-initiated Children 60 s after a Home catalog change; it restarts Codex on a Child only with app-server-when-idle, and only while that Child is idle. A Home without links runs none of it."],
+  },
 ];
