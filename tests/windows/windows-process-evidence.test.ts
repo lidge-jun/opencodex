@@ -169,6 +169,20 @@ describe("Windows process evidence: facades", () => {
     expect(await terminateWindowsProcessBound(20, 5_000, { timeoutMs: 3_000, run: async () => { throw new Error("x"); } }))
       .toEqual({ status: "unavailable" });
   });
+
+  test("a fractional deadline-derived timeout reaches the fallback as whole milliseconds", async () => {
+    setWindowsProcessPlatformForTests("win32");
+    setWindowsProcessNativeForTests(null);
+    const commands: WindowsEvidenceCommand[] = [];
+    const run = async (command: WindowsEvidenceCommand) => { commands.push(command); return "terminated\n"; };
+    expect(await terminateWindowsProcessBound(20, 5_000, { timeoutMs: 1_250.5, run }))
+      .toEqual({ status: "terminated", exited: false });
+    expect(commands.map(command => command.timeoutMs)).toEqual([1_250]);
+    expect(commands[0]!.args.at(-1)).toContain("$p.WaitForExit(750)");
+    // Under 1 ms floors to 0, which execFile reads as "no timeout": nothing is spawned.
+    expect(await terminateWindowsProcessBound(20, 5_000, { timeoutMs: 0.5, run })).toEqual({ status: "unavailable" });
+    expect(commands).toHaveLength(1);
+  });
 });
 
 const liveX64 = process.platform !== "win32" || process.arch !== "x64";

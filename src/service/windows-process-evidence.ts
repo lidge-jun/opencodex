@@ -263,12 +263,16 @@ export async function terminateWindowsProcessBound(
   }
   const run = runnerFor(options);
   if (!run) return { status: "unavailable" };
-  const exitWaitMs = Math.max(0, Math.min(FALLBACK_TERMINATE_EXIT_WAIT_MS, options.timeoutMs - 500));
+  // A timeout derived from a deadline can be fractional, and both execFile and the script
+  // take whole milliseconds. A timeout that floors to 0 would mean no timeout at all.
+  const timeoutMs = Math.floor(options.timeoutMs);
+  if (!(timeoutMs > 0)) return { status: "unavailable" };
+  const exitWaitMs = Math.max(0, Math.min(FALLBACK_TERMINATE_EXIT_WAIT_MS, timeoutMs - 500));
   try {
     return parseFallbackTerminateOutput(await run({
       program: "powershell",
       args: powershellArgs(windowsFallbackTerminateScript(pid, boundStartTime, exitWaitMs)),
-      timeoutMs: options.timeoutMs,
+      timeoutMs,
       maxBufferBytes: SMALL_MAX_BUFFER,
     }));
   } catch {
