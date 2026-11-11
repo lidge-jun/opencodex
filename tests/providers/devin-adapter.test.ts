@@ -449,7 +449,7 @@ describe("devin adapter", () => {
     expect(DEVIN_MODEL_CONTEXT_WINDOWS["claude-haiku-5-5"]).toBe(1_000_000);
     expect(DEVIN_MODEL_CONTEXT_WINDOWS["grok-4-5"]).toBe(500_000);
     expect(DEVIN_MODEL_CONTEXT_WINDOWS["gpt-5-6-sol"]).toBe(1_000_000);
-    expect(DEVIN_MODEL_CONTEXT_WINDOWS["swe-2"]).toBe(262_000);
+    expect(DEVIN_MODEL_CONTEXT_WINDOWS["swe-2"]).toBe(850_000);
     // Every statically advertised model needs one, or the picker reports 128k.
     for (const model of DEVIN_STATIC_MODELS) {
       expect(DEVIN_MODEL_CONTEXT_WINDOWS[model]).toBeGreaterThan(0);
