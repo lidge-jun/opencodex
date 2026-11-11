@@ -1,6 +1,6 @@
 import type { ComboExclusionReasons } from "../../combos/resolve";
 import { markProxyError } from "../../lib/client-error-body";
-import { formatClientRetryAfter } from "../../lib/client-retry-after";
+import { formatClientRetryAfter, formatClientRetryIn } from "../../lib/client-retry-after";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { redactSecretString } from "../../lib/redact";
 import { isCyberPolicyMessage, isCyberPolicyCode } from "../../lib/errors";
@@ -110,9 +110,12 @@ export function comboUnavailableResponse(
   // Advice leaves in this proxy's format, whatever form the earliest cooldown was recorded in.
   const advice = formatClientRetryAfter(options?.retryAfter);
   if (advice !== undefined) headers.set("Retry-After", advice);
+  // Name the earliest recovery in the body too: a client that drops the header still
+  // shows the user how long the combo stays cooled.
+  const retryIn = formatClientRetryIn(options?.retryAfter);
   return markProxyError(new Response(
     JSON.stringify({
-      error: { message, type: "server_error", code: "combo_unavailable" },
+      error: { message: retryIn === undefined ? message : `${message} (retry in ~${retryIn})`, type: "server_error", code: "combo_unavailable" },
     }),
     { status: 503, headers },
   ), options?.presentation);
