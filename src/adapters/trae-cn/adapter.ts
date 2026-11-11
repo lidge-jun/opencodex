@@ -1,5 +1,6 @@
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../types";
 import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { SpendLedgerFileRefusedError } from "../../lib/spend-reservation-ledger";
 import type { SingleUseDispatchPermit } from "../../lib/request-execution-budget";
 import type { AdapterRequest, ProviderAdapter } from "../base";
 import { requiresToolCall } from "../../types";
@@ -109,7 +110,7 @@ export function createTraeCnAdapter(provider: OcxProviderConfig, deps: TraeCnAda
         if (terminal && !incoming.abortSignal?.aborted) emit(terminal);
       } catch (error) {
         if (incoming.abortSignal?.aborted) return;
-        if (error instanceof SendBudgetExhaustedError) throw error;
+        if (error instanceof SendBudgetExhaustedError || error instanceof SpendLedgerFileRefusedError) throw error;
         emit({ ...errorEvent(error), ...(terminal?.usage ? { usage: terminal.usage } : {}) });
       } finally {
         try { permit?.release(); } finally { producer?.close(); }

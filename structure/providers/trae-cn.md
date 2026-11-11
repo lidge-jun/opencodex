@@ -49,7 +49,9 @@ Received usage is preserved even when cleanup fails. A failed workspace allocati
 already-created owned HOME. Prompt dispatch alone consumes and reports the reserved send. The adapter
 also emits a replay-unsafe heartbeat at that write, so combo preflight cannot resend the turn
 after an empty result or another post-dispatch failure. Startup failures and unavailable models
-return unused reservations and keep their existing routing policy. Replay over 1,000,000 UTF-16 code units is
+return unused reservations and keep their existing routing policy.
+Local spend-ledger file refusals propagate to the shared local-storage 503 mapping, with producer cleanup, before ACP error classification.
+Replay over 1,000,000 UTF-16 code units is
 rejected before startup. Unexpected EOF diagnostics retain bounded, redacted stderr after process
 cleanup, including stderr that arrives after stdout closes. Once stderr exceeds 8192 characters,
 all diagnostic text is suppressed so truncation cannot separate a secret from its redaction label.
