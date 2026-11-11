@@ -89,6 +89,7 @@ export function createTraeCnAdapter(provider: OcxProviderConfig, deps: TraeCnAda
       let permit: SingleUseDispatchPermit | undefined;
       let terminal: Extract<AdapterEvent, { type: "done" | "incomplete" | "error" }> | undefined;
       let cancelledUsageEmitted = false;
+      /** Report received usage once when cancellation replaces the pending terminal outcome. */
       const emitCancelledUsage = () => {
         if (!terminal?.usage || cancelledUsageEmitted) return;
         cancelledUsageEmitted = true;

@@ -61,6 +61,7 @@ const MODEL_CACHE_MAX_PINNED_ENTRIES = 16;
 const pinnedCacheEntries = new Set<CacheEntry>();
 let pinnedCacheBytes = 0;
 
+/** Select the oldest resident roster eligible for eviction, excluding active publication leases. */
 function recomputeOldestCachedProvider(): void {
   oldestCachedProvider = undefined;
   oldestCachedAt = null;
@@ -286,6 +287,7 @@ function modelCacheSizeBytes(provider: string, models: CatalogModel[]): number {
     + modelCacheEncoder.encode(JSON.stringify(models)).byteLength;
 }
 
+/** Replace resident rows, register an optional publication pin, and charge the shared memory budget. */
 function storeCached(
   provider: string, models: CatalogModel[], now: number, authorityIdentity?: string, pinned = false,
   sizeBytes = modelCacheSizeBytes(provider, models),
@@ -405,6 +407,7 @@ export function reconcileModelCacheGeneration(context: GenerationContext): numbe
   return reconcileModelCacheProviders(context.providerNames, context.generation);
 }
 
+/** Charge resident and detached pinned rosters exactly once until their leases are released. */
 export function modelCacheRetainedStoreSnapshot(): RetainedStoreSnapshot {
   let cachedPinnedBytes = 0;
   let detachedPinnedCount = 0;

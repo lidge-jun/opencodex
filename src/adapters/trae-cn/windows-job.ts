@@ -8,6 +8,7 @@ function windowsEnv(env: Record<string, string>, name: string): string | undefin
   return Object.entries(env).find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1];
 }
 
+/** Require an absolute native executable, resolving the cmd dispatcher from the scoped Windows env. */
 export function traeWindowsJobExecutable(file: string, env: Record<string, string>): string {
   if (win32.isAbsolute(file)) return file;
   if (/^cmd(?:\.exe)?$/i.test(file)) {
@@ -58,6 +59,7 @@ export class TraeWindowsJobFrames {
   private readonly utf8 = new TextDecoder();
   constructor(private readonly stderr: (text: string) => void, private readonly error: (stage: string, code: number) => void) {}
 
+  /** Frame ASCII supervisor records while dropping oversized or non-ASCII lines before interpretation. */
   push(chunk: Uint8Array): void {
     // Supervisor frames are ASCII. Decode the base64 payload's UTF-8 only after framing.
     for (const byte of chunk) {
@@ -75,6 +77,7 @@ export class TraeWindowsJobFrames {
     }
   }
 
+  /** Accept allowlisted control records and bounded base64 stderr; reject every other frame. */
   private frame(line: string): void {
     if (line === "OCX_TRAE_JOB_STOPPED") { this.stopped = true; return; }
     const diagnostic = /^OCX_TRAE_STDERR:([A-Za-z0-9+/]+={0,2})$/.exec(line);
@@ -87,6 +90,7 @@ export class TraeWindowsJobFrames {
     this.invalid = true;
   }
 
+  /** Flush stderr decoding and reject a partial or previously dropped final control record. */
   finish(): void {
     if (this.line.length || this.dropping) this.invalid = true;
     this.stderr(this.utf8.decode());
