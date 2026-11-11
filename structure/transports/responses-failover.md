@@ -499,8 +499,10 @@ target may be tried. When every failed target of an exhausted combo was refused 
 
 Scope is deliberately narrow. Direct and single-target requests keep the loose 2.5x
 pathological-input gate, because they have nowhere to hop. Compaction turns stay exempt. A
-caller that declared no output allowance remains fail-open, so this invents no limits for
-custom providers. When the routed provider config declares no window at all, the devin
+combo request that declared no output allowance cannot price headroom, so it falls back to
+the same loose 2.5x pathological-input gate direct requests use rather than the strict
+input-plus-headroom check; only a request whose ceiling never resolves stays fail-open, so
+this invents no limits for custom providers. When the routed provider config declares no window at all, the devin
 adapter falls back to its own static table (`DEVIN_MODEL_CONTEXT_WINDOWS` in
 `src/adapters/devin/live-models.ts`, effort suffixes collapsed), because live catalog windows
 reach the model list but never `provider.modelContextWindows` — without it every devin combo
