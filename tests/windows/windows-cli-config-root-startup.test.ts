@@ -12,8 +12,9 @@ import { repoPath } from "../helpers/repo-root";
 
 /**
  * #7815 owner decision: the CLI waits once at startup for the optional config-root ACL flight
- * before a command that writes under the config root does its first write. Read-only, hot-path
- * and validate-first commands, and the long-lived server, never start or wait for it.
+ * before an eligible command does its first write. Commands exempt from preflight repair
+ * (skipsCodexShimAutoRestore), internal and hidden helpers, ensure and the long-lived server never
+ * start or wait for it; other read-only commands do wait, as structure/config.md records.
  */
 const success: IcaclsResult = { success: true, exitCode: 0, timedOut: false, stdout: "" };
 const turn = () => new Promise<void>(done => setImmediate(done));
