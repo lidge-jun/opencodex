@@ -23,6 +23,8 @@ import { startJevQuotaActivation } from "../../combos/jev-quota-activation";
 import { createLocalControlListener } from "./local-control-listener";
 import { createCatalogPullRecorder, type CatalogPull, type CatalogPullRecorder } from "../../link/child-catalog-freshness";
 import type { LinkActivitySnapshot } from "../../link/child-activity";
+import type { CatalogRevisionMonitor } from "../../link/child-catalog-freshness";
+import type { ChildOpsHostBinding } from "../../link/child-ops-host";
 export { LINK_INGRESS_HOSTNAME } from "./link-listener";
 import type { ServerIngress } from "./serve-options";
 
@@ -65,7 +67,20 @@ export interface OptionalListenerSet<T> {
   stop(): Promise<void>;
 }
 
-export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): OptionalListenerSet<T> {
+/** The Child-ops host and the status rows' catalog monitor, loaded together on a Home with links (050). */
+export type ChildOpsHostLoader = () => Promise<{
+  startChildOpsHost: (binding: ChildOpsHostBinding) => () => void;
+  catalogRevision: () => CatalogRevisionMonitor;
+}>;
+
+/** Dynamic imports only: a Home without links never loads src/link/child-ops-* (INV-LINK-CHILD-OPS-01). */
+const loadChildOpsHost: ChildOpsHostLoader = async () => {
+  const [host, routes] = await Promise.all([import("../../link/child-ops-host"), import("../management/link-child-ops-routes")]);
+  return { startChildOpsHost: host.startChildOpsHost, catalogRevision: routes.catalogRevisionForRoutes };
+};
+
+export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {},
+  childOps: { load?: ChildOpsHostLoader } = {}): OptionalListenerSet<T> {
   const claudeIntercept: ClaudeInterceptLifecycle<T> = createClaudeInterceptLifecycle<T>();
   const linkListener: LinkListenerLifecycle<T> = createLinkListenerLifecycle<T>(linkDeps);
   const localControl = createLocalControlListener<T>();
@@ -95,6 +110,38 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
   let supervisorStop: (() => Promise<void>) | undefined;
   let catalogPulls: CatalogPullRecorder | undefined;
   let unregisterCatalogPulls: (() => void) | undefined;
+  let stopChildOps: (() => void) | undefined;
+  // Bumped by stop() and by every "not owned" sync, so an import still in flight cannot start a host afterwards.
+  let childOpsGeneration = 0;
+  /**
+   * The Child-ops host runs exactly while the link listener owns its socket, which it does only when links.json has
+   * links. start() stays synchronous: the import is not awaited (the startServer no-await window, AGENTS.md).
+   */
+  const syncChildOpsHost = (): void => {
+    if (!linkListenerOwnsTarget(linkListener.status())) {
+      childOpsGeneration += 1;
+      stopChildOps?.();
+      stopChildOps = undefined;
+      return;
+    }
+    if (stopChildOps) return;
+    const generation = ++childOpsGeneration;
+    void (childOps.load ?? loadChildOpsHost)()
+      .then(loaded => {
+        if (generation !== childOpsGeneration || stopChildOps || !activeConfig || !linkListenerOwnsTarget(linkListener.status())) return;
+        const config = activeConfig;
+        stopChildOps = loaded.startChildOpsHost({
+          config: () => activeConfig ?? config,
+          supervisorStatus: () => supervisor.status(),
+          listenerStatus: () => linkListener.status(),
+          activity: (linkId, now) => linkListener.linkActivity(linkId, now),
+          catalogRevision: loaded.catalogRevision,
+          peer: linkId => linkListener.peerObservation(linkId),
+        });
+      })
+      // A host that fails to load leaves manual operations working and the status rows unchanged.
+      .catch(error => { console.warn(`[link] child ops host did not start error=${error instanceof Error ? error.name : "unknown"}`); });
+  };
 
   return {
     ensureClaudeIntercept: () => claudeIntercept.ensure(),
@@ -141,6 +188,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
       unregisterCatalogPulls ??= linkListener.onCatalogServed(served => catalogPulls!.record(served));
       if (linkListenerOwnsTarget(linkListener.status())) {
         supervisor.start();
+        syncChildOpsHost();
       }
       supervisorStop = () => supervisor.stop();
       claudeIntercept.start({
@@ -157,8 +205,8 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
     abortStart() {
       try { localControl.abort(); } catch { /* the startup error is the one worth reporting */ }
     },
-    ensureStarted: () => linkListener.ensureStarted(),
-    close: () => linkListener.close(),
+    ensureStarted: () => linkListener.ensureStarted().then(() => syncChildOpsHost()),
+    close: () => linkListener.close().then(() => syncChildOpsHost()),
     registerSupervisorStop(stop) {
       supervisorStop = stop;
       return () => {
@@ -174,6 +222,10 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
       // the lease were still held by this live pid it would read as a live owner and that
       // successor would refuse the port for good.
       try { await localControl.stop(); } catch (error) { failure = error; }
+      // Synchronous: no automatic Child job is submitted once the supervisor starts tearing tunnels down.
+      childOpsGeneration += 1;
+      stopChildOps?.();
+      stopChildOps = undefined;
       if (supervisorStop) {
         try { await supervisorStop(); } catch (error) { failure ??= error; }
       }

@@ -823,6 +823,7 @@
   "cursor-stream-health.test.ts": "providers/cursor", "cursor-structured-edit.test.ts": "providers/cursor",
   "cursor-tool-arg-decoding.test.ts": "providers/cursor", "cursor-tool-choice.test.ts": "providers/cursor",
   "cursor-tool-continuation.test.ts": "providers/cursor", "cursor-tool-definitions.test.ts": "providers/cursor",
+  "cursor-auto-tool-result-replay.test.ts": "providers/cursor",
   "cursor-tool-finalize-race.test.ts": "providers/cursor", "cursor-tool-result-image.test.ts": "providers/cursor",
   "cursor-freeform-args.test.ts": "providers/cursor",
   "cursor-tool-result-invocation.test.ts": "providers/cursor",
@@ -1094,6 +1095,7 @@
   "native-model-toggle.test.ts": "codex-integration", "native-profile-api.test.ts": "codex-integration",
   "native-profile-crash-boundaries.test.ts": "codex-integration",
   "native-profile-drain-server.test.ts": "codex-integration", "native-profile-manager.test.ts": "codex-integration",
+  "native-profile-healthz.test.ts": "codex-integration",
   "native-profile-processes.test.ts": "codex-integration", "native-profile-recovery.test.ts": "codex-integration",
   "native-profile-route-security.test.ts": "codex-integration",
   "native-profile-stage-lifecycle.test.ts": "codex-integration",
@@ -1458,7 +1460,7 @@
   "system-routes.test.ts": "server", "systemd-install-cleanup-hardening.test.ts": "service",
   "tencent-siliconflow-providers.test.ts": "gui", "terminal-continuation-owner-rotation.test.ts": "adapters",
   "terminal-guard-server.test.ts": "server", "terminal-guard.test.ts": "server",
-  "test-home-guard.test.ts": "ci-workflows", "test-home-guard-unpreloaded.test.ts": "ci-workflows",
+  "test-home-guard.test.ts": "ci-workflows", "codex-home-sandbox.test.ts": "ci-workflows", "test-home-guard-unpreloaded.test.ts": "ci-workflows",
   "test-run-lock-generation.test.ts": "ci-workflows", "test-runner.test.ts": "ci-workflows", "test-runner-bun.test.ts": "ci-workflows",
   "test-runner-spawnsync-finalizer.test.ts": "ci-workflows",
   "test-sandbox-cleanup.test.ts": "ci-workflows", "test-temp-quarantine.test.ts": "ci-workflows", "thought-signature-credential-scope.test.ts": "responses",
@@ -1630,10 +1632,10 @@
   "codex-set-prompt.test.ts": "gui", "codex-prompt-writes.test.ts": "codex-integration", "codex-prompt-scalar-scope.test.ts": "codex-integration",
   "advisor-settings.test.ts": "advisor", "advisor-context.test.ts": "advisor", "advisor-state.test.ts": "advisor", "advisor-guard.test.ts": "advisor", "advisor-consult.test.ts": "advisor", "advisor-plan.test.ts": "advisor", "advisor-responses-wiring.test.ts": "advisor", "advisor-routes.test.ts": "server", "advisor-internal-authority.test.ts": "advisor", "advisor-core-boundary.test.ts": "advisor", "advisor-continuation-limit.test.ts": "advisor", "advisor-authority-transport.test.ts": "advisor", "advisor-evidence.test.ts": "advisor", "advisor-budget.test.ts": "advisor", "advisor-adaptive.test.ts": "advisor", "advisor-scope-transport.test.ts": "advisor"
   ,"link-codex-settings-digest.test.ts": "clients", "link-apply-record.test.ts": "clients", "client-runtime-restart.test.ts": "clients", "link-parity-reporter.test.ts": "clients",
-  "link-apply-restart.test.ts": "cli", "link-child-parity.test.ts": "server", "restart-replacement-not-ready.test.ts": "server",
+  "link-apply-restart.test.ts": "cli", "disconnect-runtime.test.ts": "cli", "link-child-parity.test.ts": "server", "restart-replacement-not-ready.test.ts": "server",
   "hermes-profiles.test.ts": "clients", "hermes-profile-routes.test.ts": "clients"
   ,"cli-sync-expect-link.test.ts": "cli"
-  ,"local-credentials.test.ts": "cli", "local-credential-generation.test.ts": "config", "link-connection-generation.test.ts": "clients"
+  ,"local-credentials.test.ts": "cli", "local-credential-generation.test.ts": "config", "local-credential-fence.test.ts": "config", "link-connection-generation.test.ts": "clients"
   ,"request-log-error-detail.test.ts": "usage", "provider-failure-detail.test.ts": "usage", "upstream-condition.test.ts": "lib", "client-retry-after.test.ts": "lib", "client-retry-after-sites.test.ts": "server", "upstream-error-detail-boundaries.test.ts": "server", "request-log-identity-bounds.test.ts": "usage", "safe-response-headers.test.ts": "server", "turn-state-handles.test.ts": "server", "turn-state-handles-e2e.test.ts": "server", "client-error-body.test.ts": "lib", "chat-error-body-normalization.test.ts": "responses", "chat-error-collector-verdicts.test.ts": "responses", "server-chat-error-body-evidence.test.ts": "server"
 ,"messages-error-normalization.test.ts": "claude-integration", "messages-header-normalization.test.ts": "claude-integration", "messages-lane-errors.test.ts": "claude-integration"
 ,"messages-error-contracts.test.ts": "claude-integration", "messages-overflow-verdicts.test.ts": "claude-integration", "messages-review-regressions.test.ts": "claude-integration", "messages-proxy-refusals.test.ts": "claude-integration", "messages-overflow-native.test.ts": "claude-integration", "messages-overflow-builtin.test.ts": "claude-integration", "messages-overflow-translated.test.ts": "claude-integration", "messages-overflow-stream.test.ts": "claude-integration", "messages-overflow-collectors.test.ts": "claude-integration", "messages-success-media-types.test.ts": "claude-integration", "messages-native-stream-parity.test.ts": "claude-integration", "messages-overflow-baseline-contract.test.ts": "claude-integration",
@@ -1677,5 +1679,12 @@
   "link-ssh-capture.test.ts": "clients",
   "link-ssh-capture-redact.test.ts": "clients",
   "link-ssh-capture-tunnels.test.ts": "clients",
-  "cli-link-capture.test.ts": "cli"
+  "cli-link-capture.test.ts": "cli",
+  "link-child-policy.test.ts": "clients",
+  "link-child-ops-scheduler.test.ts": "clients",
+  "catalog-auto-refresh-link-fanout.test.ts": "codex-integration",
+  "link-child-ops-no-timer.test.ts": "lab",
+  "link-child-policy-routes.test.ts": "server",
+  "cli-link-policy.test.ts": "cli",
+  "link-child-catalog-oracle.test.ts": "e2e-style"
 }

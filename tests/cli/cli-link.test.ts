@@ -280,7 +280,7 @@ describe("ocx link", () => {
     }
   });
 
-  test("registers the canonical command and all sixteen capability leaves", () => {
+  test("registers the canonical command and all seventeen capability leaves", () => {
     expect(findCommand("link")?.name).toBe("link");
     expect(DISPATCH_COMMANDS).toContain("link");
     expect(CAPABILITIES.filter(cap => cap.command[0] === "link").map(cap => cap.command.join(" "))).toEqual([
@@ -292,7 +292,7 @@ describe("ocx link", () => {
       "link diagnostics",
       "link revoke",
       "link reconnect", "link cleanup", "link check", "link update", "link sync", "link restart-codex",
-      "link capture start", "link capture stop", "link capture status",
+      "link capture start", "link capture stop", "link capture status", "link policy",
     ]);
   });
 });

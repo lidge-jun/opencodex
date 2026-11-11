@@ -15,6 +15,14 @@
 > 4529522103 (`createLinkBackoff` gains `countOn`, so 070's cap counts only `UPDATE_ATTEMPT_CAP_STATES`, the R1
 > rule that 070 stated but this code did not implement).
 
+> **Revision 5 (wp5 P re-verification on dev b114822057).** Re-anchored on merged wp1–wp4 (#8505, #8508, #8513, #8526).
+> The shared catalog monitor stays `catalogRevisionForRoutes()` in `link-child-ops-routes.ts` and reaches the host
+> through the binding: `src/link` cannot hold its production wiring, because `readCatalog` (`src/codex/catalog/parsing.ts`)
+> statically reaches `src/server/ports.ts` through `src/oauth`, which `tests/clients/link-boundary.test.ts` forbids.
+> `whenDone` is rewritten for the merged engine (no per-job execute promise exists). The policy routes reuse the
+> handler-level `auth(ctx, "either")` and refuse `runtime_role_client` on PUT. The no-timer invariant is bound in
+> `structure/overview.md`. Anchors, line counts and verifiers are refreshed; details in "wp5 P re-verification" at the end.
+
 - **Work-phase:** wp5. **Depends on:** wp3 ([030](030_child_operations.md): engine, routes, CLI), wp4
   ([040](040_sync_loosening.md): restart-children plumbing and busy skips), and through them wp1/wp2.
 - **Class:** C3 with C4 parts (a new mutating management route, a background job that opens SSH sessions
@@ -40,7 +48,8 @@ slot in `src/codex/catalog-auto-refresh.ts`, the start/stop hook in `src/server/
 **OUT:** automatic updates and the notify sweep (070, which reads `updates`); GUI policy panel (060); any
 Child-side change; `src/server/background-lifecycle.ts` (D6 rejects hooking
 `refreshConnectedClientsAfterCatalogChange`, which is gated by the local-client policy); `serve-options.ts`
-(F4: 3 lines of headroom); `src/types/config.ts` (policy stays out of `config.json`, D18).
+(1999 lines on b114822057, one line under the 2000-line ratchet threshold); `src/types/config.ts` (1990 lines; policy
+stays out of `config.json`, D18); `src/server/index.ts` (865 lines, cap 893, untouched).
 
 ## Interfaces consumed
 
@@ -48,10 +57,13 @@ Same rule as 030: names follow the earlier phases if they differ; behaviour is b
 
 | Producer | Symbol | Behaviour |
 |---|---|---|
-| wp3 | `sharedChildOpsEngine()`, `ChildOpsEnv`, `submit({ op:"sync", trigger:"auto", ... })`, `activeJob()` | 030 `2.2` |
-| wp3 | `childOpsEnvFor` shape | The host here builds the same env without a request `ctx` |
-| wp2 `src/link/child-catalog-freshness.ts` | `createCatalogRevisionMonitor(deps): { current(): CatalogRevision \| null }`; wp5 adds `sharedCatalogRevisionMonitor()` | The scheduler sees it through `schedulerRevision()` (2.3): `current()` maps null to `{ etag: null, changedAt: null }`; `recompute()` is true when the etag moved since the last look. `changedAt` is the catalog file's `mtimeMs` (020 decision 3). |
-| wp2 | `catalogPulledAt` in the observation cache, `LinkRouteListener.linkActivity` / listener `activity` | D6, D5 |
+| wp3 `src/link/child-ops-engine.ts` | `sharedChildOpsEngine()` (:205), `submit(request, env)` (:139), `activeJob(linkId)` (:178, null for a `reserve` token), `job(jobId)` (:173, a clone), `settled()` | 030 `2.2`; one engine-wide FIFO of 3 places, 1 update place |
+| wp3 `src/link/child-ops-types.ts` | `ChildOpsEnv` (:59-82) incl. `catalogEtag()` and optional `autoSyncAllowed(linkId)` | `runSyncItem` asks `autoSyncAllowed` for `trigger:"auto"` at item start and answers `busy/link-active` with no SSH (child-ops-runners.ts:148); a synced item writes `catalogSyncedEtag` (:95) |
+| wp3 `src/server/management/link-child-ops-routes.ts` | `childOpsEnvFor(ctx, state, idleAfterMs = DEFAULT_IDLE_AFTER_MS)` (:53), `catalogRevisionForRoutes()` (:29, process singleton), `attachLinkChildOpsForState` (:127) | The host builds the same env without a request `ctx`; the monitor instance is the one the status rows read |
+| wp2 `src/link/child-catalog-freshness.ts` | `createCatalogRevisionMonitor(deps): CatalogRevisionMonitor` (:91), `CatalogRevision { etag; changedAt }` (:83) | Already sets `changedAt = min(now, mtimeMs)` (:132) and says "no verdict compares times"; the scheduler sees it through `schedulerRevision()` (2.3) |
+| wp2 `src/link/child-activity.ts` | `LinkActivitySnapshot`, `isLinkIdle(snapshot, now, idleAfterMs)` (:22), `DEFAULT_IDLE_AFTER_MS` | D5 |
+| wp2 `src/server/index/optional-listeners.ts` | `linkActivity(linkId, now)` (:118), `peerObservation(linkId)` (:117) on the set; the routes' `state.listener` IS this set (`src/server/index.ts:621` passes `linkListener: () => optionalListeners`) | D6, D5 |
+| wp1 `src/link/child-observations.ts` | `catalogSyncedEtag` (:35), `CARRIED_OBSERVATION_FIELDS` (:46), `withoutCarriedFields` (:124); `childObservationsPath` in `paths.ts:22` | The scheduler reads `catalogSyncedEtag` only (Revision 4) |
 | wp4 | nothing new at runtime | `ocx sync --child` is independent; the engine's busy skip already covers concurrent work |
 
 ### Reconciliation with 020 as written (binding; applied in the code of 2.2, 2.3 and 2.6 at revision 2)
@@ -61,17 +73,21 @@ hash on change, persists `homeCatalog` in `child-observations.json`), a `Catalog
 `optional-listeners.ts` (`catalogPulledAt(linkId)` on `OptionalListenerSet`), and a monitor instance created
 lazily in the routes module and kept on `LinkRouteState.catalogRevision`. wp5 therefore:
 
-1. adds `sharedCatalogRevisionMonitor()` to `src/link/child-catalog-freshness.ts` (a process singleton with 020's
-   production wiring) and makes 020's route state default to it, so the status rows and the scheduler compare
-   against one revision;
+1. *(Revision 5)* shares 020's existing process singleton `catalogRevisionForRoutes()` (link-child-ops-routes.ts:29):
+   `optional-listeners.ts` imports that module dynamically next to the host and passes it as
+   `ChildOpsHostBinding.catalogRevision`, so the status rows and the scheduler compare against one revision. No
+   `sharedCatalogRevisionMonitor()` is added to `src/link`: its production `read` needs `readCatalog`, whose static graph
+   reaches `src/server/ports.ts` (`parsing.ts -> src/oauth/index.ts -> src/oauth/command-code.ts -> src/server/ports.ts`),
+   which `tests/clients/link-boundary.test.ts` forbids for every `src/link` module;
 2. builds the scheduler's `revision.recompute()` as "call `current()`, return true when the etag differs from the
    last one the scheduler saw", and `revision.current()` as `current() ?? { etag: null, changedAt: null }`;
-3. requires `changedAt` to be the catalog file's `mtimeMs` when the etag moves (020 states this for the first
-   observation only; if its persist path uses detection time, wp5 changes it, Deviation 3);
-4. takes `pulledAt` from the binding (`optional-listeners`'s `catalogPulledAt`, in memory and current) instead of
-   re-reading the observation file: `ChildOpsHostBinding` gains `pulledAt: (linkId) => number | null`.
-5. maps 020's `LinkActivitySnapshot` to the env's `{ idle, inFlight }` with `isLinkIdle(snapshot, now, readChildPolicy().policy.idleAfterMs)`,
-   in both `childOpsEnvFor` (030) and the host binding, so `ocx link policy --idle-after-minutes` governs every idle decision.
+3. *(Revision 5: already true)* merged 020 sets `changedAt = min(now, floor(mtimeMs))` whenever the etag moves
+   (child-catalog-freshness.ts:132); no change. Eligibility never compares times anyway (Revision 4).
+4. *(Revision 5: dropped)* the scheduler reads `catalogSyncedEtag` only (Revision 4), so the binding carries no `pulledAt`.
+5. maps 020's `LinkActivitySnapshot` to the env's `{ idle, inFlight }` with `isLinkIdle(snapshot, now, readChildPolicy().policy.idleAfterMs)`
+   in the host env, in `childOpsEnvFor` at the POST call site (link-child-ops-routes.ts:155) and in
+   `attachLinkChildOpsForState` (:135, today `DEFAULT_IDLE_AFTER_MS`), so `ocx link policy --idle-after-minutes` governs
+   every idle decision and the status row's `activity.idle`.
 
 
 ## 1. File change map
@@ -80,18 +96,18 @@ lazily in the routes module and kept on `LinkRouteState.catalogRevision`. wp5 th
 |---|---|---|---|
 | src/link/child-policy.ts | NEW | Policy schema, defaults, strict read, atomic write | — |
 | src/link/child-ops-scheduler.ts | NEW | Quiet period, eligibility (digest and idle rules), backoff, poll timer | — |
-| src/link/child-ops-host.ts | NEW | Builds the env and scheduler for the running Home; the only module optional-listeners imports (dynamically) | — |
-| src/link/child-ops-engine.ts | MODIFY | `whenDone(jobId)` | wp3 file |
+| src/link/child-ops-host.ts | NEW | Builds the env and scheduler for the running Home; optional-listeners imports it (and the routes module for the monitor) only dynamically | — |
+| src/link/child-ops-engine.ts | MODIFY | `whenDone(jobId)` (waiters resolved in `finishJob`) | :23-37 interface, :100-105 `finishJob`, :138 methods |
 | src/codex/catalog-auto-refresh.ts | MODIFY | `setCatalogAutoRefreshLinkFanout` slot, fired on `outcome.changed` | :53-58, :263-264 |
-| src/server/index/optional-listeners.ts | MODIFY | Start the host when the link listener owns its socket; stop on close and stop | :112-130, :145-146, :153-172 |
-| src/server/management/link-child-ops-routes.ts | MODIFY | `GET/PUT /api/link/children/policy` | wp3 file |
-| src/server/management/route-registry.ts | MODIFY | Two declarations | after wp3's entries |
-| src/cli/link-child-ops.ts, src/cli/link.ts | MODIFY | `ocx link policy` | wp3 files; switch :385-398 |
-| src/cli/capabilities-access-remote.ts | MODIFY | `link policy` capability | wp3 block |
-| src/cli/registry.ts | MODIFY | Help line | :154-163 |
+| src/server/index/optional-listeners.ts | MODIFY | Start the host when the link listener owns its socket; stop on close and stop | :142-145 (`supervisor.start()`), :160-161 (`ensureStarted`, `close`), :168-190 (`stop`); 192 lines, no cap |
+| src/server/management/link-child-ops-routes.ts | MODIFY | `GET/PUT /api/link/children/policy`; policy `idleAfterMs` at :155 and :135 | insert before the job branch (:159) |
+| src/server/management/route-registry.ts | MODIFY | Two declarations | after :442 |
+| src/cli/link-child-ops.ts, src/cli/link.ts | MODIFY | `ocx link policy` | `LINK_CHILD_OPS_USAGE` (:39); link.ts switch :402-411 and its "link requires one of" message (:411) |
+| src/cli/capabilities-access-remote.ts | MODIFY | `link policy` capability | after the `link restart-codex` entry (:199-207), 208 lines |
+| src/cli/registry.ts | MODIFY | Usage and help line | :155 usage, :154-169 details |
 | skills/ocx (generated + 05_remote_hub.md) | REGENERATE / MODIFY | `bun run skill:surface`; policy recipe | — |
-| docs-site guides/remote-link.md + 7 locales; reference/cli/lifecycle.md + 7 locales | MODIFY | Automatic catalog fan-out and policy | 030's new sections |
-| structure/remote-link.md, structure/manifest.json, INDEX.md | MODIFY | Scheduler behaviour, no-timer-without-links invariant | :9, :67-71 |
+| docs-site guides/remote-link.md + 7 locales; reference/cli/lifecycle.md + 7 locales | MODIFY | Automatic catalog fan-out and policy | after `### Operating Children from the Home` (guides/remote-link.md:200) |
+| structure/remote-link.md, structure/overview.md, structure/catalog.md | MODIFY | Scheduler behaviour; `INV-LINK-CHILD-OPS-01` (no-timer-without-links) | remote-link.md:9 ("nothing runs on a timer"), :73-75; overview.md after INV-LINK-CHILD-01 (:321); catalog.md:103 |
 | tests (Section 5) | NEW | scheduler, policy, routes, CLI, slot, boundary, oracle | — |
 
 ## 2. Changes
@@ -100,9 +116,11 @@ lazily in the routes module and kept on `LinkRouteState.catalogRevision`. wp5 th
 
 ```ts
 import { mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { atomicWriteFile } from "../config/atomic-write";
 import { withConfigMutationLockSync } from "../config/mutation-lock";
+import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
+import { hardenSecretDir } from "../lib/windows-secret-acl";
 import { linkDir } from "./paths";
 
 export const CHILD_POLICY_SCHEMA = "ocx.link.child-policy/1" as const;
@@ -164,11 +182,15 @@ export function readChildPolicy(path = childPolicyPath()): ChildPolicyRead {
   } catch { return { policy: { ...FAIL_CLOSED_CHILD_POLICY }, warning: "policy-file-invalid" }; }
 }
 
-/** Read-merge-write under the config mutation lock; the file always holds every key. */
+/** Read-merge-write under the config mutation lock; the file always holds every key. Revision 5: the same guard,
+ *  directory mode and Windows ACL hardening as updateChildObservations (child-observations.ts:168-182). */
 export function updateChildPolicy(patch: Partial<ChildPolicy>, path = childPolicyPath()): ChildPolicy {
+  const dir = dirname(path);
+  assertNotRealHomeUnderTest(dirname(dir));
   return withConfigMutationLockSync(() => {
     const next: ChildPolicy = { ...readChildPolicy(path).policy, ...patch };
-    mkdirSync(linkDir(), { recursive: true, mode: 0o700 });
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (process.platform === "win32") hardenSecretDir(dir, { required: true });
     atomicWriteFile(path, `${JSON.stringify({ schema: CHILD_POLICY_SCHEMA, ...next }, null, 2)}\n`);
     return next;
   });
@@ -318,8 +340,10 @@ export function createChildOpsScheduler(deps: ChildOpsSchedulerDeps): ChildOpsSc
       const jobs: ChildJob[] = [];
       for (const [ids, restart] of [[plain, "none"], [withRestart, "app-server"]] as const) {
         if (ids.length === 0) continue;
-        const result = deps.engine.submit({ op: "sync", linkIds: [...ids], restart, trigger: "auto" }, env);
-        if (!result.ok) continue;
+        // Revision 5: submit reads links.json and can throw (the POST route maps that to 503); the next poll retries.
+        let result: ReturnType<ChildOpsEngine["submit"]>;
+        try { result = deps.engine.submit({ op: "sync", linkIds: [...ids], restart, trigger: "auto" }, env); } catch { continue; }
+        if (!result.ok) continue;     // a single-link list held by a job or a reserve() answers link_operation_in_progress
         const done = await deps.engine.whenDone(result.job.jobId);
         if (done) { record(done, env.now()); jobs.push(done); }
       }
@@ -371,8 +395,8 @@ Timers come from the host as `unref`'d handles, so the scheduler never keeps the
 
 ### 2.3 src/link/child-ops-host.ts (NEW, full content)
 
-Revision 2 writes 050's reconciliation items 4 and 5 into the code: `pulledAt` comes from the binding (020's recorder,
-in memory and current), and activity is mapped with `isLinkIdle` and the policy's `idleAfterMs` on every read.
+Activity is mapped with `isLinkIdle` and the policy's `idleAfterMs` (reconciliation item 5). Revision 5: the catalog
+monitor arrives through `binding.catalogRevision` (item 1), and the binding no longer carries `pulledAt` (item 4).
 
 ```ts
 import { readLinkStore } from "./store";
@@ -384,7 +408,7 @@ import { sharedChildOpsEngine } from "./child-ops-engine";
 import type { ChildOpsEnv } from "./child-ops-types";
 import { createChildOpsScheduler, type ChildOpsScheduler } from "./child-ops-scheduler";
 import { readChildPolicy } from "./child-policy";
-import { sharedCatalogRevisionMonitor, type CatalogRevisionMonitor } from "./child-catalog-freshness";
+import type { CatalogRevisionMonitor } from "./child-catalog-freshness";
 import { isLinkIdle, type LinkActivitySnapshot } from "./child-activity";
 import { observeChild, type ObserveDeps } from "./child-observe";
 import { inspectRemoteChildRuntime } from "./remote-plant";
@@ -402,14 +426,14 @@ export interface ChildOpsHostBinding {
   listenerStatus: () => { state: "off" | "listening" | "failed"; port: number | null };
   /** 020's listener linkActivity; null when the listener has no activity book (never idle). */
   activity: (linkId: string, now: number) => LinkActivitySnapshot | null;
-  /** 020's CatalogPullRecorder.pulledAt: status display only since Revision 4; the scheduler reads syncedEtag. */
-  pulledAt: (linkId: string) => number | null;
+  /** Revision 5: 020's catalogRevisionForRoutes() singleton, handed over by optional-listeners (src/link cannot import it). */
+  catalogRevision: () => CatalogRevisionMonitor;
   /** 020's listener peerObservation. */
   peer: ObserveDeps["peer"];
 }
 
 /** The scheduler's revision view over 020's monitor: recompute() is true when the etag moved since it last looked. */
-export function schedulerRevision(monitor: CatalogRevisionMonitor = sharedCatalogRevisionMonitor()) {
+export function schedulerRevision(monitor: CatalogRevisionMonitor) {
   let seen: string | null | undefined;
   return {
     current: () => { const r = monitor.current(); return r ? { etag: r.etag, changedAt: r.changedAt } : { etag: null, changedAt: null }; },
@@ -444,8 +468,12 @@ export function hostChildOpsEnv(binding: ChildOpsHostBinding, runner: ReturnType
       platformOf: async link => requireRemotePlatform(runner, link.alias, hosts), inspect: inspectRemoteChildRuntime,
       now: () => new Date() }),
     readObservation: id => readChildObservations(childObservationsPath()).children[id] ?? null,
-    writeObservation: (id, patch) => { updateChildObservations(file => patchChildObservation(file, id, patch, new Date())); },
-    catalogEtag: () => sharedCatalogRevisionMonitor().current()?.etag ?? null,
+    // ChildOpsEnv contract: never throws (child-ops-types.ts:72-77); same shape as childOpsEnvFor (link-child-ops-routes.ts:79-82).
+    writeObservation: (id, patch) => {
+      try { updateChildObservations(file => patchChildObservation(file, id, patch, new Date())); }
+      catch (error) { console.warn(`[link] child observation write failed linkId=${id} error=${error instanceof Error ? error.name : "unknown"}`); }
+    },
+    catalogEtag: () => { try { return binding.catalogRevision().current()?.etag ?? null; } catch { return null; } },
   };
   if (digests) env.autoSyncAllowed = id => {
     if (env.activity(id)?.idle === true) return true;
@@ -465,7 +493,7 @@ export function startChildOpsHost(binding: ChildOpsHostBinding): () => void {
   const scheduler: ChildOpsScheduler = createChildOpsScheduler({
     engine: sharedChildOpsEngine(), env: () => hostChildOpsEnv(binding, runner, { home: homeDigest, child: childDigest }),
     readPolicy: () => readChildPolicy(),
-    revision: schedulerRevision(),
+    revision: schedulerRevision(binding.catalogRevision()),
     syncedEtag: id => readChildObservations(childObservationsPath()).children[id]?.catalogSyncedEtag ?? null,
     homeDigest, childDigest,
     peerVersion,
@@ -479,26 +507,44 @@ export function startChildOpsHost(binding: ChildOpsHostBinding): () => void {
 ```
 `child-ops-host.ts` importing `src/codex/catalog-auto-refresh.ts` is an outward edge from `src/link` to a
 module `background-lifecycle.ts` already loads, and the slot setter is all it uses. 070 extends this host
-with the update sweep through `afterPoll` and its own start-time sweep. `sharedCatalogRevisionMonitor()` is added to
-`child-catalog-freshness.ts` (reconciliation item 1) and 020's route state defaults its `catalogRevision` to it, so the
-status rows and this scheduler compare against one revision.
+with the update sweep through `afterPoll` and its own start-time sweep. Revision 5 checked the edge:
+`catalog-auto-refresh.ts` has no static relative import (only `node:fs` and a type import, :33-34; everything else is a
+dynamic `import()` inside the tick), so `tests/clients/link-boundary.test.ts` stays green. Every other import of the
+host is in `src/link`, `src/lib` or `src/config` and reaches no `src/server`, `src/cli`, `src/client` or `src/router`
+module (walk run on b114822057). The host's `wireState` uses `projectLinkStatus`'s default `readCompensation()`
+(status-projection.ts:199-205) but cannot see the route state's in-memory `compensationFailures`; such a link is mid-removal
+and its item fails or reports offline, which the backoff absorbs.
 
 ### 2.4 src/link/child-ops-engine.ts (MODIFY, wp3 file)
 
 Add to `ChildOpsEngine` and its implementation:
 ```ts
-  /** Resolves with the finished job, or null when it is unknown or already pruned. */
+  /** Resolves with a clone of the finished job, or null when the id is unknown or already pruned. */
   whenDone(jobId: string): Promise<ChildJob | null>;
 ```
+Revision 5: the merged engine has no per-job execute promise; items run through the engine-wide `pump()` (:120-136)
+and a job finishes in `finishJob` (:100-105), which can run inside `submit` when every item ended busy or
+child-initiated. So `whenDone` keeps per-job waiters next to the `idle` set:
 ```ts
-  const runs = new Map<string, Promise<void>>();       // jobId -> execute() promise, set in submit()
-  ...
-    async whenDone(jobId) {
-      await runs.get(jobId);
-      return this.job(jobId) ?? null;          // 020's job() answers undefined for an unknown or pruned id
+  const waiters = new Map<string, Array<(job: ChildJob) => void>>();   // jobId -> resolvers
+  // in finishJob, after job.state = "done" and job.finishedAt are set (before the idle resolution):
+  const resolvers = waiters.get(job.jobId);
+  if (resolvers) { waiters.delete(job.jobId); for (const resolve of resolvers) resolve(structuredClone(job)); }
+  // method:
+    whenDone(jobId) {
+      const entry = jobs.get(jobId);
+      if (!entry) return Promise.resolve(null);
+      if (entry.job.state === "done") return Promise.resolve(structuredClone(entry.job));
+      return new Promise<ChildJob | null>(resolve => {
+        const list = waiters.get(jobId) ?? [];
+        list.push(resolve);
+        waiters.set(jobId, list);
+      });
     },
 ```
-`submit` stores the `execute` promise in `runs` next to `running` and deletes it in the same `finally`.
+`whenDone` does not call `prune()`: a running job is never pruned (prune drops only `done` jobs), so a waiter is always
+resolved by `finishJob`. Engine test (`tests/clients/link-child-ops-engine.test.ts`, MODIFY): a job whose items all end
+busy at submit resolves `whenDone` at once; a running job resolves after its last item; an unknown id resolves null.
 
 ### 2.5 src/codex/catalog-auto-refresh.ts (MODIFY)
 
@@ -541,67 +587,82 @@ is unaffected even though `background-lifecycle.ts` loads this module statically
 ### 2.6 src/server/index/optional-listeners.ts (MODIFY)
 
 The host starts exactly when the supervisor would: when the link listener owns its socket, which happens
-only when `links.json` has links (link-listener.ts:112-115). Add inside `createOptionalListenerSet`:
+only when `links.json` has links (link-listener.ts:120, `linkListenerOwnsTarget` at :48). The management routes reach
+this set as `state.listener` (`src/server/index.ts:621` passes `linkListener: () => optionalListeners`), so wrapping the
+set's `ensureStarted` and `close` covers the add (link-routes.ts:108, :191; link-enrollment.ts:317) and last-link removal
+(link-routes.ts:274; link-route-state.ts:198) paths. Add inside `createOptionalListenerSet` (Revision 5 rewrite):
 ```ts
   let stopChildOps: (() => void) | undefined;
-  let childOpsStarting = false;
-  /** Dynamic import: a Home without links never loads src/link/child-ops-* (no-timer-without-links). */
+  let childOpsGeneration = 0;          // bumped by stop() and by every "not owned" sync, so a late import cannot start
+  /** Dynamic imports only: a Home without links never loads src/link/child-ops-* (INV-LINK-CHILD-OPS-01). */
   const syncChildOpsHost = (): void => {
-    if (!linkListenerOwnsTarget(linkListener.status())) { stopChildOps?.(); stopChildOps = undefined; return; }
-    if (stopChildOps || childOpsStarting) return;
-    childOpsStarting = true;
-    void import("../../link/child-ops-host").then(host => {
-      childOpsStarting = false;
-      if (!linkListenerOwnsTarget(linkListener.status()) || stopChildOps) return;
-      stopChildOps = host.startChildOpsHost({
-        config: () => activeConfig!,
-        supervisorStatus: () => supervisor.status(),
-        listenerStatus: () => linkListener.status(),
-        activity: (linkId, now) => linkListener.linkActivity?.(linkId, now) ?? null,   // LinkActivitySnapshot; the host maps idle
-        pulledAt: linkId => catalogPulls.pulledAt(linkId),   // 020's CatalogPullRecorder created in this file (catalogPulls)
-        peer: linkId => linkListener.peerObservation(linkId),
-      });
-    }).catch(() => { childOpsStarting = false; });
+    if (!linkListenerOwnsTarget(linkListener.status())) {
+      childOpsGeneration += 1;
+      stopChildOps?.(); stopChildOps = undefined;
+      return;
+    }
+    if (stopChildOps) return;
+    const generation = ++childOpsGeneration;
+    void Promise.all([import("../../link/child-ops-host"), import("../management/link-child-ops-routes")])
+      .then(([host, routes]) => {
+        if (generation !== childOpsGeneration || stopChildOps || !linkListenerOwnsTarget(linkListener.status())) return;
+        stopChildOps = host.startChildOpsHost({
+          config: () => activeConfig!,                       // set by start() before the first sync; mutated in place
+          supervisorStatus: () => supervisor.status(),
+          listenerStatus: () => linkListener.status(),
+          activity: (linkId, now) => linkListener.linkActivity(linkId, now),   // LinkActivitySnapshot; the host maps idle
+          catalogRevision: () => routes.catalogRevisionForRoutes(),           // the status rows' singleton (item 1)
+          peer: linkId => linkListener.peerObservation(linkId),
+        });
+      })
+      .catch(error => { console.warn(`[link] child ops host did not start error=${error instanceof Error ? error.name : "unknown"}`); });
   };
 ```
-Call sites: in `start(ctx)` after `supervisor.start()` (:127-129) add `syncChildOpsHost();` (inside the same
-`if`). Wrap `ensureStarted` (:145): `ensureStarted: () => linkListener.ensureStarted().then(() => syncChildOpsHost())`.
-Wrap `close` (:146): `close: () => linkListener.close().then(() => syncChildOpsHost())`. In `stop()` (:153) add
-`stopChildOps?.(); stopChildOps = undefined;` before `supervisorStop`. `start` stays synchronous: the dynamic
-import is not awaited, which keeps the `startServer` no-await window intact (AGENTS.md "Optional subsystems").
-The file grows from 174 to about 200 lines; it has no cap.
+Call sites: in `start(ctx)` inside the `if (linkListenerOwnsTarget(...))` block after `supervisor.start()` (:142-144) add
+`syncChildOpsHost();`. Wrap `ensureStarted` (:160): `ensureStarted: () => linkListener.ensureStarted().then(() => syncChildOpsHost())`.
+Wrap `close` (:161): `close: () => linkListener.close().then(() => syncChildOpsHost())`. In `stop()` (:168) add
+`childOpsGeneration += 1; stopChildOps?.(); stopChildOps = undefined;` right after the `localControl.stop()` line (:176) and
+before `supervisorStop` (:177); it is synchronous, so the "first, before any other await" ordering of the local control
+release is unchanged. `start` stays synchronous: the dynamic imports are not awaited, which keeps the `startServer`
+no-await window intact (AGENTS.md "Optional subsystems"; the scan in `tests/lab/core-lab-boundary.test.ts`). A
+`.catch` that only logs the error name is deliberate: a host that fails to load leaves manual operations working and
+the status rows unchanged. The file grows from 192 to about 225 lines; it has no cap. `src/server/index.ts` is untouched.
 
 ### 2.7 Policy routes (MODIFY src/server/management/link-child-ops-routes.ts)
 
-The POST handler 030 wrote now builds its env with the policy threshold (reconciliation item 5):
-`childOpsEngineFor(state).submit({ ...parsed, trigger: "manual" }, childOpsEnvFor(ctx, state, readChildPolicy().policy.idleAfterMs))`.
+The POST handler (:155) and the status attach (:135) take the policy threshold (reconciliation item 5):
+`childOpsEngineFor(state).submit({ ...operation, trigger: "manual" }, childOpsEnvFor(ctx, state, readChildPolicy().policy.idleAfterMs))`
+and `attachLinkChildOps(dto, { ..., idleAfterMs: readChildPolicy().policy.idleAfterMs, ... })`.
 
-
-Inserted before the jobs branch:
+`handleLinkChildOpsRoutes` already calls `auth(ctx, "either")` for every path (:148): that refuses a Tailscale identity
+session with 403 `tailscale_session_refused` and admits only a loopback dashboard session that
+`sessionControl.isCurrent` accepts (link-route-state.ts:91-97; for a non-GET that check requires the matching browser
+Origin and the `x-opencodex-csrf-token`, gui-session.ts:452-463) or the admin token on trusted loopback ingress (:100-102).
+The branches below therefore add no second `auth` call. Inserted before the job branch (:159):
 ```ts
   if (url.pathname === "/api/link/children/policy" && req.method === "GET") {
-    const denied = auth(ctx, "either");
-    if (denied) return denied;
     return Response.json(readChildPolicy(), { headers: NO_STORE });
   }
   if (url.pathname === "/api/link/children/policy" && req.method === "PUT") {
-    const denied = auth(ctx, "either");
-    if (denied) return denied;
-    const body = await readManagementJsonBodyOr(ctx.req, null);
+    // Same refusal as POST operations (:151): a Child's policy file would govern nothing.
+    if (ctx.config.runtimeRole === "client") return fail("runtime_role_client", "A Child runtime does not operate other Children.", 409);
+    const body = await readManagementJsonBodyOr(req, null);
     const patch = isRecord(body) && Object.keys(body).length > 0 ? validPolicyPatch(body) : null;
     if (!patch) return fail("invalid_body", "Send one or more of catalogFanout, childCodexRestart, updates, idleAfterMs with valid values.", 400);
     try { return Response.json({ policy: updateChildPolicy(patch), warning: null }, { headers: NO_STORE }); }
     catch { return fail("policy_write_failed", "The Child policy could not be saved.", 503); }
   }
 ```
-Imports: `readChildPolicy, updateChildPolicy, validPolicyPatch` from `../../link/child-policy`.
-Registry (after wp3's two entries):
+A GET on a Child answers its (unused) policy; only the write is refused. Any other method on the path falls through to
+the existing `404 not_found` (:168). Imports: `readChildPolicy, updateChildPolicy, validPolicyPatch` from
+`../../link/child-policy`. Registry, after :442 (the route is reached through `link-routes.ts:363-365`):
 ```ts
   { method: "GET", path: "/api/link/children/policy", module: "server/management/link-child-ops-routes", mutates: false },
   { method: "PUT", path: "/api/link/children/policy", module: "server/management/link-child-ops-routes", mutates: true },
 ```
 The running scheduler reads the file on every evaluation, so a PUT takes effect at the next quiet period or
-poll without a restart.
+poll without a restart. An older Home (wp3/wp4 only) answers this path `404 not_found` from the same handler, which the CLI
+maps to `OLD_HOME_MESSAGE` (2.8).
 
 ### 2.8 CLI `ocx link policy` (MODIFY src/cli/link-child-ops.ts, link.ts, capabilities, registry)
 
@@ -630,13 +691,22 @@ export async function runLinkPolicy(args: string[], deps: LinkCliDeps, request: 
   printData(read, json, [
     `catalog fan-out: ${read.policy.catalogFanout}`, `Child Codex restart: ${read.policy.childCodexRestart}`,
     `updates: ${read.policy.updates}`, `idle after: ${read.policy.idleAfterMs / 60_000} min`,
-    ...(read.warning ? ["The policy file was invalid; defaults are in effect until you save a policy."] : []),
+    ...(read.warning ? ["The policy file is invalid; automatic catalog fan-out and updates are off until you save a policy."] : []),
   ]);
 }
 ```
-`link.ts` switch: `else if (command === "policy") await runLinkPolicy(args, deps, linkRequest, LINK_USAGE);` and the
-usage line. `takeIntegerOption` already enforces `min`/`max` (src/cli/runtime-api.ts:282).
-Capability (appended to wp3's block in `capabilities-access-remote.ts`):
+Revision 5 against the merged CLI: `LinkRequest` is the local type at link-child-ops.ts:5; `takeIntegerOption` is not
+imported there yet (add it to the `./runtime-api` import at :2; it enforces `min`/`max`, runtime-api.ts:282);
+`printData` is runtime-api.ts:476; the enums come from `../link/child-policy`. `validatePolicyRead` (new, same file)
+accepts exactly `{policy:{catalogFanout, childCodexRestart, updates, idleAfterMs}, warning}` with valid enum values and
+throws `new Error("invalid link API response: child policy")` otherwise, as `readJob` does (:116-118). The request is wrapped with the same
+error mapping as `submitChildJob` (:149-162): `404` ⇒ `OLD_HOME_MESSAGE` (a wp3/wp4 Home answers `not_found` here),
+`409` with a `CONFLICT_MESSAGES` code (`runtime_role_client`) ⇒ that message, `403` ⇒ `LOOPBACK_REQUIRED_MESSAGE`.
+`LINK_POLICY_USAGE` becomes the last element of the `LINK_CHILD_OPS_USAGE` array (:39), which `LINK_USAGE` already
+embeds (link.ts:48). `link.ts` switch (:402-411):
+`else if (command === "policy") await runLinkPolicy(args, deps, linkRequest, LINK_USAGE);` before the final `else`, and
+`policy` is added to the "link requires one of" list (:411).
+Capability (inserted after the `link restart-codex` entry, capabilities-access-remote.ts:199-207, before the array's close at :208):
 ```ts
   {
     command: ["link", "policy"], summary: "Read or change how this Home keeps its Children current.",
@@ -649,7 +719,8 @@ Capability (appended to wp3's block in `capabilities-access-remote.ts`):
     details: ["Without flags it reads the policy. Stored in <configDir>/link/child-policy.json on the Home, never in config.json.", "Catalog fan-out syncs Home-initiated Children 60 s after a Home catalog change; it restarts Codex on a Child only with app-server-when-idle."],
   },
 ```
-`registry.ts` (:154-163) adds `Policy: ocx link policy [...]` to the link details.
+`registry.ts` adds `policy` to the link usage list (:155) and `Policy: ocx link policy [...]` after the "Restart Codex"
+detail (:168); the loopback sentence (:169) gains `policy` among the verbs that use the loopback management API.
 
 ## 3. Deviations from 004 and 000
 
@@ -660,7 +731,8 @@ Capability (appended to wp3's block in `capabilities-access-remote.ts`):
    070 acts on it.
 3. **`changedAt` is the catalog file mtime**, not the detection time (D6 leaves it open). Otherwise a Child that
    pulled through the Home's own `ocx sync` fan-out before the 5-minute poll noticed the change would be synced
-   a second time.
+   a second time. *(Revision 5: merged 020 already does this, child-catalog-freshness.ts:132, and since Revision 4 no
+   eligibility rule compares times; nothing to change.)*
 4. **Quiet period has a 5-minute ceiling** (`QUIET_MAX_DEFER_MS`): a steady stream of edits cannot postpone the
    fan-out forever. D6 names only the 60 s quiet period.
 5. **A Child below 2.93 is not retried until its peer version changes**, as D6 says, implemented as a backoff
@@ -672,7 +744,7 @@ Capability (appended to wp3's block in `capabilities-access-remote.ts`):
 
 | Field / value | Created | Serialized | Deserialized | Consumers |
 |---|---|---|---|---|
-| `ocx.link.child-policy/1` file (`catalogFanout`, `childCodexRestart`, `updates`, `idleAfterMs`) | `updateChildPolicy` via `PUT /api/link/children/policy` | `child-policy.json`, 2-space JSON | `readChildPolicy` (strict) | scheduler `evaluate` (`catalogFanout`, `childCodexRestart`); 070 sweep (`updates`, `idleAfterMs`); 020 activity idle threshold reads `idleAfterMs` through the binding (default `DEFAULT_IDLE_AFTER_MS` until wp5 lands); GUI panel (060) |
+| `ocx.link.child-policy/1` file (`catalogFanout`, `childCodexRestart`, `updates`, `idleAfterMs`) | `updateChildPolicy` via `PUT /api/link/children/policy` | `child-policy.json`, 2-space JSON | `readChildPolicy` (strict) | scheduler `evaluate` (`catalogFanout`, `childCodexRestart`); 070 sweep (`updates`, `idleAfterMs`); `idleAfterMs` in the host env, the POST env (link-child-ops-routes.ts:155) and the status rows' `activity.idle` (:135), all `DEFAULT_IDLE_AFTER_MS` before wp5; GUI panel (060) |
 | `{ policy, warning }` response | policy routes | JSON | `validatePolicyRead` (CLI, exact keys) | `ocx link policy` output; GUI (060) |
 | `warning: "policy-file-invalid"` | `readChildPolicy` | response | CLI / GUI | operator message; automatic fan-out and updates stay off until a save (Revision 4) |
 | `trigger:"auto"` sync jobs | scheduler | engine job (in-process), `lastOperation` in observations | 030 validator | `?children=1` rows; GUI "automatic" label (060) |
@@ -684,7 +756,8 @@ Capability (appended to wp3's block in `capabilities-access-remote.ts`):
 
 New files fail before implementation (their imports do not exist). Register each per 000 "Test registration rule": one
 line before the closing `}` of `scripts/test-layout/layout-clients.json` and of `tests/fixtures/test-layout-expected.json`,
-with the domain from the table; nothing goes into `layout.json` (1998 lines, the ratchet fails at 2000). Policy route
+with the domain from the table; nothing goes into `layout.json` (1999 lines on b114822057, the ratchet fails at 2000;
+`layout-clients.json` is 198 lines and `test-layout-expected.json` 1672, both far from it). Policy route
 cases may instead go into 020's `tests/server/link-child-ops-routes.test.ts` (MODIFY); the separate file is kept so the
 policy routes have their own owner.
 
@@ -727,7 +800,8 @@ policy routes have their own owner.
   latest record under any key.
 - `host env` (2.3): `hostChildOpsEnv` maps a snapshot with `inFlight 0` and `lastDataEndAt` older than the policy's
   `idleAfterMs` to `idle: true` and a newer one to `false`; `syncedEtag` comes from the observation file's
-  `catalogSyncedEtag`.
+  `catalogSyncedEtag`; `catalogEtag()` reads `binding.catalogRevision()` and answers null when it throws; a throwing
+  `updateChildObservations` does not escape `writeObservation` (Revision 5).
 
 **link-child-policy.test.ts**: absent file ⇒ defaults with `updates:"auto-when-idle"` and no warning; unknown key, bad
 enum, `idleAfterMs: 59_999` or `3_600_001`, wrong schema, malformed JSON, or a read error other than `ENOENT` (a directory
@@ -735,9 +809,13 @@ at the path) ⇒ `FAIL_CLOSED_CHILD_POLICY` (`catalogFanout:"manual"`, `updates:
 file is untouched (Revision 4, 4529522051); `updateChildPolicy({updates:"notify"})` keeps other keys and writes all five; POSIX mode `0o600`
 (skipped on Windows, where ACL hardening is covered by existing atomic-write tests).
 
-**link-child-policy-routes.test.ts**: auth matrix (admin loopback, dashboard, Tailscale 403); `GET` answers `{policy, warning}`;
-`PUT {updates:"off"}` ⇒ 200 and the next `GET` shows it; `PUT {}`, unknown key, bad value ⇒ 400; write failure (read-only
-dir fake) ⇒ 503 `policy_write_failed`. Registry reconciliation is the existing management-route-registry test.
+**link-child-policy-routes.test.ts** (harness of `tests/server/link-child-ops-routes.test.ts`): auth matrix — admin token on
+loopback 200; loopback dashboard session with Origin and CSRF 200; the same session PUT without `x-opencodex-csrf-token`
+or with a foreign Origin ⇒ 403 `forbidden` and the file unchanged; Tailscale identity session ⇒ 403
+`tailscale_session_refused`; admin token on non-loopback ingress ⇒ 403. `runtimeRole:"client"` ⇒ PUT 409
+`runtime_role_client` (file unchanged), GET 200. `GET` answers `{policy, warning}`; `PUT {updates:"off"}` ⇒ 200 and the next
+`GET` shows it; `PUT {}`, unknown key, bad value, non-object body ⇒ 400; `POST`/`DELETE` on the path ⇒ 404; write failure
+(read-only dir fake) ⇒ 503 `policy_write_failed`. Registry reconciliation is the existing management-route-registry test.
 
 **cli-link-policy.test.ts**: no flags ⇒ GET and human lines; `--updates notify --json` ⇒ PUT `{updates:"notify"}` and the
 JSON document; `--idle-after-minutes 0` and `61` ⇒ exit 2; `--updates sometimes` ⇒ exit 2; invalid response ⇒ exit 1.
@@ -746,12 +824,14 @@ JSON document; `--idle-after-minutes 0` and `61` ⇒ exit 2; `--updates sometime
 link slot exactly once before the client delivery; an unchanged tick never calls it; a throwing slot does not stop the
 client delivery; `setCatalogAutoRefreshLinkFanout(null)` removes it.
 
-**link-child-ops-no-timer.test.ts** (lab domain, beside core-link-boundary):
+**link-child-ops-no-timer.test.ts** (lab domain, beside core-link-boundary; carries the comment `// INV-LINK-CHILD-OPS-01`):
 - `core cannot reach the scheduler`: the import walk of `core-link-boundary.test.ts` (static edges) from `src/router.ts`,
   `src/server/lifecycle.ts`, `src/server/responses/core.ts` and `src/server/background-lifecycle.ts` never reaches
   `src/link/child-ops-*` or `child-policy.ts`.
-- `optional-listeners loads the host only dynamically`: its source has no static import of `child-ops-host` and exactly
-  one `import("../../link/child-ops-host")`.
+- `optional-listeners loads the host only dynamically`: its source has no static import of `child-ops-host`,
+  `child-ops-scheduler`, `child-policy` or `link-child-ops-routes`, exactly one `import("../../link/child-ops-host")` and
+  exactly one `import("../management/link-child-ops-routes")` (Revision 5: the monitor hand-over), and `stop()` stops the
+  host before `supervisorStop`.
 - `no timer without links`: `createOptionalListenerSet` with a fake `serve` and an empty store, `start(...)`, then assert no
   `setInterval`/`setTimeout` was created with the scheduler's intervals (spy) and a `mock.module` stand-in for
   `src/link/child-ops-host` records zero `startChildOpsHost` calls; with one link it records one start, and `close()` after
@@ -761,7 +841,8 @@ client delivery; `setCatalogAutoRefreshLinkFanout(null)` removes it.
 1 048 576, 200 000 and a native 272 000 row, each with `max_context_window`, `effective_context_window_percent` 95 and
 `auto_compact_token_limit`) is written to a temp Home `CODEX_HOME`. The Home body is `JSON.stringify(readCatalog(path))`, the
 bytes `/v1/catalog` serves (catalog-download.ts:55-62). The scheduler (real) with a real engine (030) runs one evaluation
-with one connected, idle, behind link; the fake `runner.run` recognises the pinned sync argv (`sync --expect-link <id> --json`)
+with one connected, idle, behind link whose record carries `remotePlatform:"posix"` (so `platformOf` skips the probe,
+child-ops-runners.ts:41); the fake `runner.run` recognises the pinned sync argv (`sync --expect-link <id> --json`)
 and, instead of SSH, spawns `tests/fixtures/link-child-catalog-oracle-runner.ts` with a separate `OPENCODEX_HOME` and
 `CODEX_HOME` prepared as a connected link Child (the setup of `tests/clients/client-link-stop.test.ts` around :285). That runner
 calls `syncConnectedClient` with `fetchImpl` returning the Home body (as `tests/fixtures/client-link-sync-runner.ts` does) and
@@ -778,14 +859,25 @@ Existing suites to keep green: `tests/lab/core-link-boundary.test.ts`, `tests/co
 
 ## 6. Docs and source-of-truth sync
 
-- **structure/remote-link.md**: line :9 ("before executing `sync --expect-link` without a restart flag") gains "unless the
-  Home's Child policy restarts idle Children's app-servers"; the 030 paragraph gains the scheduler (trigger slot, 5-minute
-  poll, 60 s quiet period with a 5-minute ceiling, digest and idle rules, backoff) and the invariant "the Child-ops host is
-  loaded and its timers exist only while the link listener owns its socket", bound to
-  `tests/lab/link-child-ops-no-timer.test.ts` in `structure/manifest.json` invariants. Owned files: `src/link/` already;
-  the `src/codex/catalog-auto-refresh.ts` slot is noted in `structure/catalog.md`, which already describes the
-  auto-refresh scheduler. Run `bun run structure:index` and `bun run structure:check`.
-- **docs-site** (M11 disclosure): `guides/remote-link.md` adds `### Automatic catalog fan-out and the Child policy` under 030's section.
+- **structure/remote-link.md** (Revision 5 anchors): the line-9 paragraph ends "…restart flag are called from the Child
+  operation runners (below) and `ocx sync --restart-children`, and nothing runs on a timer." It becomes: nothing runs on a
+  timer except the Child-ops scheduler, which submits no-restart `sync` jobs and restarts app-servers only for idle Children
+  under `childCodexRestart: "app-server-when-idle"`. The Child-operations paragraph (:73-75) gains the scheduler (trigger
+  slot, 5-minute poll, 60 s quiet period with a 5-minute ceiling, `catalogSyncedEtag` eligibility, digest and idle rules,
+  backoff, fail-closed policy file) and the host's load rule.
+- **structure/overview.md** (the invariant index; `structure/AGENTS.md:98-111`): add, after INV-LINK-CHILD-01 (:321),
+  `INV-LINK-CHILD-OPS-01` — "A Home without links loads none of `src/link/child-ops-host`, `child-ops-scheduler` or
+  `child-policy` and starts none of their timers; the host starts when the link listener owns its socket and stops when it
+  closes", followed by the line "Enforced by" and the path `tests/lab/link-child-ops-no-timer.test.ts`, which repeats the id in a comment. Revision 4 said
+  `structure/manifest.json` invariants; the manifest holds no invariants, so nothing is added there.
+- **structure/runtime.md:228** (owns `src/server/`): the optional-listeners sentence adds that `stop()` stops the Child-ops
+  host before the supervisor teardown.
+- **structure/catalog.md:103**: the auto-refresh paragraph notes the second, data-free `setCatalogAutoRefreshLinkFanout`
+  slot. Ownership needs no manifest change (`src/link/`, `src/codex/`, `src/server/` are already claimed). Run
+  `bun run structure:index` (only if a doc title or scope changes) and `bun run structure:check`.
+- **docs-site** (M11 disclosure): `guides/remote-link.md` adds `### Automatic catalog fan-out and the Child policy` right after
+  `### Operating Children from the Home` (:200), in the same position in each locale file (fr, ja, ko, ru, tr, zh-cn, zh-tw
+  all carry that section today). It also says an invalid policy file turns automatic fan-out and updates off until a save.
   It states plainly that catalog fan-out is **on by default**: after a Home catalog change the Home opens a background SSH
   session to each eligible Child and runs its pinned sync, with no operator action; how to turn it off
   (`ocx link policy --catalog-fanout manual`); that it fixes the Child's catalog file but not a Codex app-server that is
@@ -806,9 +898,17 @@ Existing suites to keep green: `tests/lab/core-link-boundary.test.ts`, `tests/co
 | No host, no timer without links | Load-time + test | `optional-listeners.ts` dynamic import, `link-child-ops-no-timer.test.ts` | A future static import of `child-ops-host` from a core file (the test catches it) | None at runtime | "a Home without links loads none of the Child-ops code" |
 | Digest rule for busy Children | Runtime heuristic | `evaluate` | The parity digest is the Child's own report and can be stale for up to a minute | A sync that applies settings could restart a busy Child's client runtime; the Child's apply-restart logic is unchanged | "avoids syncing a busy Child whose settings differ" |
 | Idle signal | Runtime heuristic | 020 activity book | Sees only traffic relayed through this Home | A Child user typing in Codex without a running turn counts as idle | "idle means no model request relayed for N minutes" |
-| Strict policy file | Runtime | `readChildPolicy` | Hand-editing to an invalid value | Defaults (fan-out on) apply silently except for the warning | "an invalid policy file falls back to defaults and is reported" |
+| Strict policy file | Runtime | `readChildPolicy` | Hand-editing to an invalid value | Fail-closed (Revision 4): fan-out `manual`, updates `off` until a save; the warning is the only signal | "an invalid policy file turns automatic operations off and is reported" |
 
 ## 8. Verifiers (PLAN-VERIFIER-REAL-01)
+
+**Revision 5, re-run on dev b114822057 (2026-11-11, before any wp5 code):** `bun run typecheck` exit 0 ("No type errors in
+2,405 files"); `bun test tests/lab/core-link-boundary.test.ts tests/clients/link-boundary.test.ts
+tests/codex-integration/catalog-auto-refresh-client-fanout.test.ts tests/server/management-route-registry.test.ts
+tests/clients/link-child-ops-engine.test.ts tests/server/link-child-ops-routes.test.ts
+tests/clients/link-child-catalog-freshness.test.ts` exit 0, 91 pass / 0 fail across 7 files; `bun run structure:check` exit 0
+("structure/ SSOT checks passed"); `bun run skill:surface:check` exit 0 ("All 9 generated management surface files are
+current"). The table below is the earlier record.
 
 Run on 00680193cb, 2026-11-11 (the same runs recorded in 030 `8.1`); audit r1 refreshed facts on 61151e3457 where noted:
 
@@ -836,13 +936,26 @@ Run on 00680193cb, 2026-11-11 (the same runs recorded in 030 `8.1`); audit r1 re
 7. A Child below 2.93 is attempted once, reports `owner-action`, and is not retried until it reports another version.
 8. `GET /api/link/children/policy` on a fresh Home answers `catalogFanout:"auto"`, `childCodexRestart:"never"`,
    `updates:"auto-when-idle"`, `idleAfterMs:600000`, `warning:null`.
+9. *(Revision 5)* No update starts in wp5: with `updates:"auto-when-idle"` and every Child behind the Home version, the
+   scheduler submits only `op:"sync"` jobs (scheduler test asserts no `op:"update"` submit; `afterPoll` is unset in the host).
+10. *(Revision 5)* `PUT /api/link/children/policy` is refused with the file unchanged for: a Tailscale identity session
+   (403 `tailscale_session_refused`), a dashboard session without the CSRF token or with a foreign Origin (403), the admin
+   token on non-loopback ingress (403), and `runtimeRole:"client"` (409 `runtime_role_client`).
+11. *(Revision 5)* **Security-review gate:** the PR stays draft until an independent security review of the new mutating
+   route and the default-on background SSH fan-out is recorded on the PR (`MAINTAINERS.md`, 000 "Work class: C4"),
+   covering criterion 10, the fail-closed policy file, and that the scheduler sends no command, credential or flag the
+   manual `ocx link sync` does not.
+12. *(Revision 5)* `tests/clients/link-boundary.test.ts`, `tests/lab/core-link-boundary.test.ts` and
+   `tests/lab/core-lab-boundary.test.ts` (startServer no-await scan) stay green; `structure:check` binds INV-LINK-CHILD-OPS-01.
 
 ## 10. Security review notes, risks and Windows
 
 - **Review trigger:** a background job that opens SSH sessions to Children by default, and a new mutating route. The
   sessions are the existing pinned sync with no restart (or app-server only when the operator chose it): no new command,
-  credential or trust root. The route is `either`-authorized like the other link routes; Tailscale identity sessions are
-  refused.
+  credential or trust root. The route is `either`-authorized by the handler-wide `auth` (link-child-ops-routes.ts:148):
+  Tailscale identity sessions are refused, a dashboard session must pass `sessionControl.isCurrent` (Origin and
+  `x-opencodex-csrf-token` for a PUT, gui-session.ts:452-463), the admin token needs trusted loopback ingress, and a Child
+  runtime is refused with `runtime_role_client`. The registry entry is `mutates: true` with no exemption.
 - **Risks:** (1) Default-on SSH activity: one session per eligible Child per catalog change, bounded by the quiet period,
   backoff and per-link lock; operators can switch it off. (2) A sync that applies changed Home settings may restart the
   Child's client runtime (OCX-6); the digest rule keeps that to idle Children. (3) A running Codex app-server keeps its old
@@ -851,4 +964,75 @@ Run on 00680193cb, 2026-11-11 (the same runs recorded in 030 `8.1`); audit r1 re
 - **Windows:** fan-out works for Windows Children (the pinned sync supports them); `app-server-when-idle` is reported
   `restart unsupported` there (030 `runSyncItem`). On a Windows Home the scheduler uses the same `SshRunner`; the policy
   file inherits `atomicWriteFile`'s Windows ACL hardening.
+
+
+## wp5 P re-verification (base dev b114822057)
+
+Design sub-agent, 2026-11-11, on `codex/link-child-updates-wp5` at b114822057 (origin/dev with #8505, #8508, #8513, #8526).
+Read: `src/link/child-ops-engine.ts`, `child-ops-runners.ts`, `child-ops-types.ts`, `sync-then-restart.ts`,
+`child-activity.ts`, `child-catalog-freshness.ts`, `child-observations.ts`, `child-parity.ts`, `codex-settings.ts`,
+`src/server/management/link-child-ops-routes.ts`, `link-routes.ts`, `link-route-state.ts`, `route-registry.ts`,
+`src/cli/link-child-ops.ts`, `link.ts`, `capabilities-access-remote.ts`, `registry.ts`, `src/codex/catalog-auto-refresh.ts`,
+`src/server/background-lifecycle.ts`, `src/server/index/optional-listeners.ts`, `link-listener.ts`, both boundary tests,
+`tests/fixtures/file-size-baseline.json`. Every snippet in Sections 2.1–2.8 was checked against these files; the fixes are
+folded in as Revision 5 above.
+
+| Check | Verdict | Evidence / fix |
+|---|---|---|
+| Host loads only on a Home with links | Fixed | Host and routes module are imported only dynamically from `optional-listeners.ts` when `linkListenerOwnsTarget` (link-listener.ts:48; empty store at :120). A generation counter stops a late import from starting after `close`/`stop`. `src/server/index.ts` untouched (865/893), so the startServer no-await scan is unaffected (2.6) |
+| Shared catalog monitor | **Changed** | `sharedCatalogRevisionMonitor()` in `src/link` is not buildable: `readCatalog` reaches `src/server/ports.ts` via `src/oauth` (an import walk with the boundary test's own regex found 4 forbidden chains from `src/codex/catalog/parsing.ts`). The binding carries `catalogRevisionForRoutes()` instead (item 1, 2.3, 2.6; 000 row updated) |
+| `whenDone` | Fixed | The merged engine has no per-job promise; waiters resolved in `finishJob` (child-ops-engine.ts:100-105), including jobs finished inside `submit` (2.4) |
+| Slot beside `setCatalogAutoRefreshClientFanout` | Holds | catalog-auto-refresh.ts:53-58 and :263-264 match; the module has no static relative import, so `child-ops-host` → slot keeps link-boundary green; `background-lifecycle.ts` (:19, :131, :193, :219) is not edited |
+| 5-minute poll, 60 s quiet, 5-minute ceiling | Holds | `CATALOG_POLL_MS`, `QUIET_PERIOD_MS`, `QUIET_MAX_DEFER_MS` (2.2); timers are `unref`'d |
+| Digest and idle rules | Holds | Child digest `homeLinkChildParity.get(id).appliedCodexSettingsDigest` (child-parity.ts:108-119); Home digest `codexSettingsDigest(projectHomeCodexSettings(config, version).settings)` (codex-settings.ts:62, :190); idle via `isLinkIdle` with the policy `idleAfterMs`, now also at the POST env (:155) and the status rows (:135); the runner re-asks `autoSyncAllowed` (child-ops-runners.ts:148) |
+| `createLinkBackoff` (R1) | Holds | Keyed by link and key, `growOn`/`countOn`, exported; for fan-out `busy` neither grows nor counts; 070 passes busy and offline in `growOn` and only `UPDATE_ATTEMPT_CAP_STATES` in `countOn` (070:103-106, :145, :526) |
+| Eligibility from `catalogSyncedEtag` only | Holds | Written only on a synced item (child-ops-runners.ts:95); `behind()` compares it with the current etag and nothing else |
+| Policy file | Fixed, one open point | Path `<configDir>/link/child-policy.json` (`linkDir`, paths.ts:7). The write now mirrors `updateChildObservations`: test-home guard, `mkdir(dirname(path))`, Windows ACL. **Open:** this brief says "defaults on invalid with a warning"; Revision 4 (CodeRabbit 4529522051) made an invalid file fail closed (`manual`/`off`) so an operator's opt-out is never silently lost. 050 keeps fail-closed; the CLI message and bypass table were corrected to match. The lead decides if that should flip back |
+| Routes | Fixed | Handler-wide `auth(ctx,"either")` (:148) covers both branches; PUT refuses `runtime_role_client` like POST (:151); inserted before the job branch (:159); registry after :442 (2.7) |
+| CLI, capability, registry, skill surface | Fixed anchors | link.ts switch :402-411 and :411 message; `LINK_CHILD_OPS_USAGE` (:39, embedded at link.ts:48); `takeIntegerOption` must be added to the import; error mapping copied from `submitChildJob` (:149-162); capability after :199-207; registry :155/:168-169 (2.8) |
+| Defaults (A1, D17) | Holds | `catalogFanout:"auto"`, `childCodexRestart:"never"`, `updates:"auto-when-idle"`, `idleAfterMs:600000`; wp5 starts no update (new criterion 9) |
+| Security | Added | Criteria 10–11: negative PUT matrix and a recorded independent security review before ready-for-review |
+| A3 oracle | Holds, one fix | Record carries `remotePlatform:"posix"` so no platform probe (child-ops-runners.ts:41); `syncConnectedClient` (src/client/connect.ts:873) and `tests/fixtures/client-link-sync-runner.ts` exist |
+| Docs | Fixed anchors | guides/remote-link.md:200 section exists in all 7 locales; invariant goes to `structure/overview.md` as INV-LINK-CHILD-OPS-01 (the manifest has no invariants); runtime.md:228 and remote-link.md:9 wording |
+| File-size ratchet | Clear | Touched files carry no baseline cap (optional-listeners 192, link-child-ops-routes 169, engine 212, link.ts 462, registry.ts 866, capabilities-access-remote 208, route-registry 488). Untouched near-cap files: `serve-options.ts` 1999, `src/types/config.ts` 1990, `scripts/test-layout/layout.json` 1999 |
+
+Residual risks: the host loads `link-child-ops-routes.ts` (and its `src/codex/catalog` graph) at start on a Home with
+links, where the status rows would otherwise load it on first read. The host's `wireState` cannot see the route state's
+in-memory `compensationFailures`.
+
+NOT RUN: the seven new test files (no code yet), `bun run privacy:scan`, `cd docs-site && bun run build`,
+`bun run test:changed`, the full suite.
+
+
+
+## Revision 6 (wp5 plan audit, base b114822057)
+
+Audit verdict GO-WITH-FIXES (blockers 3, no High/Critical). All findings accepted; binding on the implementation:
+
+1. **Blocker. Structure doc budget.** `structure/runtime.md` (600 lines) gains no net lines; the catalog fan-out and policy
+   sentences go to `structure/remote-link.md` (215 lines), and `structure/catalog.md` (599) gets at most one line pointing
+   there. `bun run structure:check` must pass.
+2. **Blocker. Idle at item start for automatic restarts.** For an automatic job that carries a restart, `runSyncItem` (or the
+   host's `autoSyncAllowed` with the restart passed in) requires `activity.idle` (idle window met, nothing in flight) when the
+   item starts; otherwise the sync still runs and the restart is withheld (`restart-skipped:link-active`). Test: a link idle
+   when queued and active (nothing in flight, last data end inside the idle window) when its item starts gets no restart.
+3. **Blocker. A3 oracle proves the root cause.** The oracle test seeds the fake Child with a stale catalog shaped like the
+   001 evidence: missing one Home 1M-context slug and still listing a slug the Home dropped. It changes the Home catalog file
+   and drives the real trigger (`notifyCatalogChanged` or the poll, with fake timers through the quiet period), not
+   `evaluateForTest`. It asserts that after the automatic sync every Home catalog row's `context_window` (and the row set)
+   equals the Child's. A control case with `catalogFanout: "manual"` asserts the Child stays stale (the missing slug is still
+   absent). The Child's `ocx.sync.fanout/1` document comes from the real Child serializer, not a hand-built literal.
+4. Low. Locale docs: the disclosure paragraph goes after the summary paragraph at line 101 of each of the 7 translated
+   `guides/remote-link.md` files (they have no `### Operating Children from the Home` heading).
+5. Low. `updateChildPolicy` copies `child-observations.ts:171-186` exactly: the lock with `configDir`, and `chmodSync(dir, 0o700)`
+   for an existing directory.
+6. Low. Security text: PUT is admitted for a loopback dashboard session, an admin token on loopback and a paired remote
+   dashboard session (`pairedSession`, `link-route-state.ts:91`); the route test matrix gains a paired-session row.
+7. Low. The scheduler skips evaluation entirely on a runtime whose `runtimeRole` is `client`. Test.
+8. Low. A quiet timer that fires while an evaluation runs sets a rerun flag; the scheduler evaluates again when the running
+   pass finishes. Test.
+9. Low. INV-LINK-CHILD-OPS-01 wording: a Home without links starts no Child-ops timer and loads no Child-ops host or
+   scheduler (route modules loaded by status/DELETE/policy reads may import `child-policy` statically).
+10. Low. Concurrency claim: the Home's CLI `ocx sync` fan-out runs in the CLI process, outside the engine's per-link lock;
+   the Child's own sync/update lock serializes the two, and the loser backs off. The wp4 row says so.
 
