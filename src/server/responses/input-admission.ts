@@ -182,8 +182,12 @@ interface ResolvedContextLimits {
  */
 function adapterContextWindow(provider: OcxProviderConfig, modelId: string): number | null {
   if (provider.adapter !== "devin") return null;
-  return positive(modelRecordValue(DEVIN_MODEL_CONTEXT_WINDOWS, modelId))
-    ?? positive(modelRecordValue(DEVIN_MODEL_CONTEXT_WINDOWS, collapseDevinModelUid(modelId)));
+  const collapsed = collapseDevinModelUid(modelId);
+  // A configured window for the collapsed base (operator override or registry seed) still
+  // wins over the static table for effort-suffixed ids like swe-2-flash-medium.
+  return positive(modelRecordValue(provider.modelContextWindows, collapsed))
+    ?? positive(modelRecordValue(DEVIN_MODEL_CONTEXT_WINDOWS, modelId))
+    ?? positive(modelRecordValue(DEVIN_MODEL_CONTEXT_WINDOWS, collapsed));
 }
 
 function resolveContextLimits(
