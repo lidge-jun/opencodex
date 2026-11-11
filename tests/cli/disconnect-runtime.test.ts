@@ -10,7 +10,7 @@ type State = ReturnType<DisconnectRuntimeDeps["connectionState"]>;
 const live = (role?: string, pid = 4321): Observation => ({ kind: "live", live: { pid, port: 10100, ...(role ? { role } : {}) } });
 const generation: RuntimeGeneration = { pid: 4321, port: 10100, hostname: "127.0.0.1", attestationSecret: createLocalAttestationSecret() };
 
-function run(observation: Observation, restartOk: boolean, json = false, extra: { state?: State; states?: State[]; after?: Observation; capture?: RuntimeGeneration | null; captureAfter?: RuntimeGeneration | null; refusedBy?: "service-unproven" } = {}) {
+function run(observation: Observation, restartOk: boolean, json = false, extra: { state?: State; states?: State[]; after?: Observation; capture?: RuntimeGeneration | null; captureAfter?: RuntimeGeneration | null; refusedBy?: "service-unproven" | "owner-unproven" } = {}) {
   const out: string[] = [], err: string[] = [];
   let restarts = 0;
   const bound: RuntimeGeneration[] = [];
@@ -177,6 +177,15 @@ describe("ocx disconnect restarts the client runtime it left behind", () => {
     expect(result.code).toBe(1);
     const text = result.err.join("\n");
     expect(text).toContain("ocx service restart");
+    expect(text).not.toContain("Run on this machine: ocx restart");
+  });
+
+  test("a restart refused because its owner is unproven names both possible owners", async () => {
+    const result = await run(live("client"), false, false, { after: live("client"), refusedBy: "owner-unproven" });
+    expect(result.code).toBe(1);
+    const text = result.err.join("\n");
+    expect(text).toContain("ocx service repair");
+    expect(text).toContain("ocx claude or ocx opencode");
     expect(text).not.toContain("Run on this machine: ocx restart");
   });
 

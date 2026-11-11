@@ -13,6 +13,10 @@ import type { Server } from "bun";
 import { startMachineListener } from "../../src/client/machine-listener";
 import { classifyClientRestartSupervisor, clientConnectionEnded, clientRestartRollbackAction, createClientRestartController, type ClientRestartAdmission, type ClientRestartIo } from "../../src/client/runtime-restart";
 import { readClientConnectionStateWithEvidence } from "../../src/client/state";
+import * as configModule from "../../src/config";
+import { claudeProxyStartEnv } from "../../src/cli/claude";
+import { opencodeProxyStartEnv } from "../../src/cli/opencode";
+import { spyOn } from "bun:test";
 import { deriveLaunchdServiceDiagnostic, deriveSystemdServiceDiagnostic, deriveWindowsServiceDiagnostic } from "../../src/service/diagnostics";
 import {
   createLocalAttestationChallenge,
@@ -301,6 +305,31 @@ describe("client restart controller", () => {
 
   // Final review: a manager that owns this process but cannot be proven to relaunch it must keep
   // the runtime; refused at admission, nothing recycled or detached.
+  // The restart decision table (PR body): every supervisor verdict, with the connection ended
+  // (saved, valid, disconnected or another connection) or not (served connection current, or
+  // the saved state is invalid, missing or unreadable).
+  test.each([
+    ["desktop", true, "accepted", ["recycle:desktop"]],
+    ["desktop", false, "supervised", []],
+    ["service", true, "accepted", ["recycle:service"]],
+    ["service", false, "supervised", []],
+    ["service-unproven", true, "supervised", []],
+    ["service-unproven", false, "supervised", []],
+    ["owner-unproven", true, "supervised", []],
+    ["owner-unproven", false, "supervised", []],
+    [null, true, "accepted", ["recycle:none"]],
+    [null, false, "accepted", ["stop:20000", "spawn:71000", "exit:0"]],
+  ] as const)("decision table: supervisor %s, connection ended %s", async (supervisor, ended, kind, expectedCalls) => {
+    const calls: string[] = [];
+    const { io, calls: ioCalls } = fakeIo({ supervisor: async () => supervisor, connectionChanged: () => ended, recycle: async verdict => { calls.push(`recycle:${verdict ?? "none"}`); } });
+    const controller = createClientRestartController(io);
+    const admission = await controller.request();
+    expect(admission.kind).toBe(kind);
+    if (kind === "supervised") expect(admission).toEqual({ kind: "supervised", supervisor });
+    await controller.settled();
+    expect([...calls, ...ioCalls]).toEqual([...expectedCalls]);
+  });
+
   test("an owned but unproven service refuses even an ended connection, and recycles nothing", async () => {
     const recycled: unknown[] = [];
     const { io } = fakeIo({ supervisor: async () => "service-unproven", connectionChanged: () => true, recycle: async verdict => { recycled.push(verdict); } });
@@ -352,7 +381,7 @@ describe("client restart controller", () => {
 });
 
 describe("who supervises a client restart (real service diagnostics)", () => {
-  const owned = { OCX_SERVICE: "1" } as NodeJS.ProcessEnv;
+  const owned = { OCX_SERVICE: "1", OCX_SERVICE_MANAGED: "1" } as NodeJS.ProcessEnv;
   const systemd = (enabled: boolean, running: boolean) => deriveSystemdServiceDiagnostic({ installed: true, enabled, running, stale: false, diagnostics: "test" });
   test.each([
     ["systemd running but disabled (started by hand)", systemd(false, true), "service-unproven"],
@@ -362,6 +391,37 @@ describe("who supervises a client restart (real service diagnostics)", () => {
     ["Windows native service stopped", deriveWindowsServiceDiagnostic({ schedulerXml: "", schedulerExpectedUserId: null, schedulerAssetsPresent: false, nativeStatus: "stopped", recordedBackend: "native", staleBakedPaths: false, nativeRepairAssetsOnly: false, diagnostics: "test" }), "service-unproven"],
   ] as const)("%s", (_name, diagnostic, expected) => {
     expect(classifyClientRestartSupervisor({ desktop: false, env: owned, diagnose: () => diagnostic })).toBe(expected);
+  });
+
+  // Final review round 2: launchd's unknown load state stays viable for the diagnostic's other
+  // callers, but a restart needs positive evidence that the job is loaded.
+  test("launchd job whose load state is unknown is not proof of relaunch", () => {
+    const unknown = deriveLaunchdServiceDiagnostic({ installed: true, stale: false, load: { state: "unknown", detail: "launchctl could not be asked" }, diagnostics: "test" });
+    expect(unknown.viable).toBe(true);
+    expect(classifyClientRestartSupervisor({ desktop: false, env: { OCX_SERVICE_MANAGED: "1" }, diagnose: () => unknown })).toBe("service-unproven");
+  });
+
+  // Final review round 2: ocx claude and ocx opencode start their own proxies with OCX_SERVICE=1;
+  // through their real launch environments, with no service installed, nothing supervises them.
+  const notInstalled = deriveSystemdServiceDiagnostic({ installed: false, enabled: false, running: false, stale: false, diagnostics: "test" });
+  const installedDisabled = systemd(false, false);
+  test.each([
+    ["ocx claude", () => claudeProxyStartEnv({ PATH: "/usr/bin" })],
+    ["ocx opencode", () => opencodeProxyStartEnv({ PATH: "/usr/bin" })],
+  ] as const)("a %s companion with no service installed is not supervised", (_name, env) => {
+    expect(env().OCX_SERVICE).toBe("1");
+    expect(classifyClientRestartSupervisor({ desktop: false, env: env(), diagnose: () => notInstalled })).toBeNull();
+  });
+
+  test.each([
+    ["ocx claude", () => claudeProxyStartEnv({ PATH: "/usr/bin" })],
+    ["ocx opencode", () => opencodeProxyStartEnv({ PATH: "/usr/bin" })],
+  ] as const)("a bare OCX_SERVICE=1 (%s environment) while a service is installed is owner-unproven", (_name, env) => {
+    expect(classifyClientRestartSupervisor({ desktop: false, env: env(), diagnose: () => installedDisabled })).toBe("owner-unproven");
+  });
+
+  test("the Windows wrapper's marker counts as manager-launched", () => {
+    expect(classifyClientRestartSupervisor({ desktop: false, env: { OCX_SERVICE: "1", OCX_WINDOWS_WRAPPER_PROTOCOL: "1" }, diagnose: () => systemd(true, true) })).toBe("service");
   });
 
   test("OCX_SERVICE_MANAGED alone marks the process as manager-owned", () => {
@@ -392,6 +452,35 @@ describe("connection-ended evidence from the real state reader", () => {
     } finally {
       process.env.OPENCODEX_HOME = previous;
       removeTreeWithRetry(empty);
+    }
+  });
+
+  // Final review round 2: a saved file that fails validation is not evidence either.
+  test("a saved config that fails validation is not proof", () => {
+    writeFileSync(join(root, "config.json"), JSON.stringify({ port: "bad" }));
+    const state = readClientConnectionStateWithEvidence();
+    expect(state.kind).toBe("invalid");
+    expect(clientConnectionEnded(link, state)).toBe(false);
+  });
+
+  // ...and the verdict comes from one snapshot: a connect committed after the file was read cannot
+  // pair the old bytes with a validation of the new ones. The hook commits at the second read.
+  test("a connection committed between reads never yields disconnected from a stale read", () => {
+    writeFileSync(join(root, "config.json"), JSON.stringify({ port: 0, providers: {}, defaultProvider: "openai" }));
+    const realDiagnostics = configModule.readConfigDiagnostics;
+    let committed = false;
+    const hook = spyOn(configModule, "readConfigDiagnostics").mockImplementation((options?: Parameters<typeof realDiagnostics>[0]) => {
+      if (!committed) {
+        committed = true;
+        writeFileSync(join(root, "config.json"), JSON.stringify({ port: 0, providers: {}, defaultProvider: "openai", runtimeRole: "client", client: link }));
+      }
+      return realDiagnostics(options);
+    });
+    try {
+      const state = readClientConnectionStateWithEvidence();
+      expect(committed && state.kind === "disconnected").toBe(false);
+    } finally {
+      hook.mockRestore();
     }
   });
 

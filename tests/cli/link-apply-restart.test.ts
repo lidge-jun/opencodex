@@ -151,7 +151,7 @@ function clientHealthDeps(postResponse: Response) {
 describe("ocx restart against a client runtime", () => {
   test("only explicit request-phase supervision refusals qualify for deferral", () => {
     const notices: string[] = [];
-    for (const supervisor of ["desktop", "service", "service-unproven"] as const) {
+    for (const supervisor of ["desktop", "service", "service-unproven", "owner-unproven"] as const) {
       const refused = { ok: false as const, phase: "request" as const, error: new Error(`restart_supervised_${supervisor}`) };
       expect(supervisedRestartRefusal(refused)).toBe(supervisor);
       expect(deferSupervisedRestart(refused, value => notices.push(value))).toBe(true);
@@ -160,7 +160,7 @@ describe("ocx restart against a client runtime", () => {
     const uncertain = { ok: false as const, phase: "request" as const, error: new Error("restart_request_outcome_unknown") };
     expect(supervisedRestartRefusal(uncertain)).toBeNull();
     expect(deferSupervisedRestart(uncertain, value => notices.push(value))).toBe(false);
-    expect(notices).toEqual(["desktop", "service", "service-unproven"]);
+    expect(notices).toEqual(["desktop", "service", "service-unproven", "owner-unproven"]);
     expect(supervisedRestartRefusal({ ok: false, phase: "request", error: new Error("restart_supervised_other") })).toBeNull();
     expect(supervisedRestartRefusal({ ok: true, mode: "skipped" })).toBeNull();
   });
@@ -194,6 +194,7 @@ describe("ocx restart against a client runtime", () => {
       reportRestartFailure({ ok: false, phase: "request", error: new Error("restart_supervised_service") });
       reportRestartFailure({ ok: false, phase: "request", error: new Error("restart_supervised_desktop") });
       reportRestartFailure({ ok: false, phase: "request", error: new Error("restart_supervised_service-unproven") });
+      reportRestartFailure({ ok: false, phase: "request", error: new Error("restart_supervised_owner-unproven") });
     } finally {
       console.error = original;
     }
@@ -201,6 +202,7 @@ describe("ocx restart against a client runtime", () => {
       "Restart not performed; the running client runtime was kept. Its background service owns it: run `ocx service restart`.",
       "Restart not performed; the running client runtime was kept. The OpenCodex desktop app owns it while its connection is current: use Quit in the OpenCodex tray menu, then reopen it. After `ocx disconnect`, `ocx restart` hands it to the app.",
       "Restart not performed; the running client runtime was kept. A service manager started it (systemd opencodex-proxy.service, launchd com.opencodex.proxy or the Windows OpenCodex service), but it is not enabled or its relaunch could not be verified: restart it through the manager with 'ocx service restart', or check 'ocx service status'.",
+      "Restart not performed; the running client runtime was kept. It was started with OCX_SERVICE=1 but without the service manager's marker while a service is installed, so it is either a service registered before that marker existed or a proxy started by ocx claude or ocx opencode. If it is the service, run 'ocx service repair' and then 'ocx service restart'; if it is a companion, end that ocx claude or ocx opencode session and start it again.",
     ]);
   });
 });

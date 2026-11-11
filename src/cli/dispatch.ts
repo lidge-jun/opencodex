@@ -445,8 +445,8 @@ const commandRunners: Record<string, CommandRunner> = {
         return state.kind === "invalid" || state.kind === "mismatched" ? { kind: state.kind, reason: state.reason } : { kind: state.kind };
       },
       restart: async target => {
-        let refusedBy: "service-unproven" | undefined;
-        const ok = await deps.handleProxyRestart(deps.handleRestartStartWhenStopped, supervisor => { if (supervisor === "service-unproven") refusedBy = supervisor; }, (io, deadlineAt) =>
+        let refusedBy: "service-unproven" | "owner-unproven" | undefined;
+        const ok = await deps.handleProxyRestart(deps.handleRestartStartWhenStopped, supervisor => { if (supervisor === "service-unproven" || supervisor === "owner-unproven") refusedBy = supervisor; }, (io, deadlineAt) =>
           bindRestartToRuntime(io, target, (previous, readRuntime) =>
             requestBoundSystemRestart(previous as Parameters<typeof requestBoundSystemRestart>[0], deadlineAt, { readRuntime: readRuntime as typeof readRuntimePort })));
         return { ok, ...(refusedBy ? { refusedBy } : {}) };

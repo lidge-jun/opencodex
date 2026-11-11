@@ -40,7 +40,7 @@ export interface DisconnectRuntimeDeps {
    * `ocx restart` bound to this generation (see {@link bindRestartToRuntime}). `refusedBy` names a
    * supervisor that refused it: an owning service manager whose relaunch could not be proven.
    */
-  restart: (target: RuntimeGeneration) => Promise<{ ok: boolean; refusedBy?: "service-unproven" }>;
+  restart: (target: RuntimeGeneration) => Promise<{ ok: boolean; refusedBy?: "service-unproven" | "owner-unproven" }>;
   json: boolean;
   info?: (line: string) => void;
   error?: (line: string) => void;
@@ -70,7 +70,7 @@ export function bindRestartToRuntime(
 
 /** What is known about the runtime answering when the advice is given. */
 export type AnsweringRuntime =
-  | { kind: "captured"; pid: number | null; viaServiceManager?: boolean }
+  | { kind: "captured"; pid: number | null; refusedBy?: "service-unproven" | "owner-unproven" }
   | { kind: "different"; pid: number | null }
   | { kind: "unknown" }
   | { kind: "none" };
@@ -89,7 +89,9 @@ export function recoveryAdvice(state: DisconnectClientState, answering: Answerin
     return `The client state is ${state.kind} (${state.reason}). Inspect it with ocx connect status and ocx status, fix the client state, then run ocx disconnect again.`;
   }
   switch (answering.kind) {
-    case "captured": return answering.viaServiceManager
+    case "captured": return answering.refusedBy === "owner-unproven"
+      ? `The client runtime${answering.pid ? ` (pid ${answering.pid})` : ""} still serves the old connection, and its owner could not be proven: it is either a service registered before the service manager\'s marker existed or a proxy started by ocx claude or ocx opencode. If it is the service, run ocx service repair and then ocx service restart; if it is a companion, end that ocx claude or ocx opencode session and start it again.`
+      : answering.refusedBy
       ? `The client runtime${answering.pid ? ` (pid ${answering.pid})` : ""} still serves the old connection, and its service manager did not allow a restart from here. Restart it through the manager: ocx service restart (check ocx service status).`
       : `The client runtime${answering.pid ? ` (pid ${answering.pid})` : ""} still serves the old connection. Run on this machine: ocx restart`;
     case "different": return `A different client runtime${answering.pid ? ` (pid ${answering.pid})` : ""} answers now, so it was not restarted; inspect it with ocx status and ocx connect status before restarting anything.`;
@@ -130,7 +132,7 @@ export async function restartRuntimeAfterDisconnect(deps: DisconnectRuntimeDeps)
   const originalLog = console.log;
   if (deps.json) console.log = (...args: unknown[]) => console.error(...args);
   let ok = false;
-  let refusedBy: "service-unproven" | undefined;
+  let refusedBy: "service-unproven" | "owner-unproven" | undefined;
   try { ({ ok, refusedBy } = await deps.restart(target)); } finally { console.log = originalLog; }
   const after = await deps.observe();
   if (after.kind === "live" && after.live.role !== "client") {
@@ -145,7 +147,7 @@ export async function restartRuntimeAfterDisconnect(deps: DisconnectRuntimeDeps)
   if (after.kind === "live") {
     const answering = deps.capture(after.live);
     const who: AnsweringRuntime = !answering ? { kind: "unknown" }
-      : answering.attestationSecret === target.attestationSecret ? { kind: "captured", pid: after.live.pid, ...(refusedBy ? { viaServiceManager: true } : {}) }
+      : answering.attestationSecret === target.attestationSecret ? { kind: "captured", pid: after.live.pid, ...(refusedBy ? { refusedBy } : {}) }
       : { kind: "different", pid: after.live.pid };
     if (ok && who.kind === "captured") {
       return fail("The restart completed, but the runtime still answers as a client.", { kind: "unknown" });

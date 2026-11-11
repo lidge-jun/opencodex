@@ -27,6 +27,7 @@ import {
   isDesktopSupervised,
 } from "../lib/system-restart-contract";
 import type { OcxClientConnectionConfig } from "../types";
+import { isSupervisedServiceChild } from "../service/service-child-ownership";
 import { sameClientConnectionOwner, type readClientConnectionState } from "./state";
 
 type ClientConnectionState = ReturnType<typeof readClientConnectionState>;
@@ -36,7 +37,12 @@ type ClientConnectionState = ReturnType<typeof readClientConnectionState>;
  * OCX_SERVICE_MANAGED), but its relaunch cannot be proven (for example a systemd unit started by
  * hand while disabled). Neither exiting for it nor detaching from it is safe, so the restart is refused.
  */
-export type ClientRestartSupervisor = "service" | "desktop" | "service-unproven";
+export type ClientRestartSupervisor = "service" | "desktop" | "service-unproven" | "owner-unproven";
+
+/** Verdicts that keep the runtime: an owner exists, but exiting for it or detaching is not proven safe. */
+export function restartRefusedByOwner(supervisor: ClientRestartSupervisor | null): supervisor is "service-unproven" | "owner-unproven" {
+  return supervisor === "service-unproven" || supervisor === "owner-unproven";
+}
 
 export type ClientRestartAdmission =
   | { kind: "accepted"; alreadyRestarting: boolean }
@@ -119,7 +125,7 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
         // An owner that cannot be proven to relaunch this process keeps it, connection ended or not.
         const owner = await io.supervisor();
         if (io.stopping?.()) return { kind: "stopping" };
-        if (owner === "service-unproven") return { kind: "supervised", supervisor: owner };
+        if (restartRefusedByOwner(owner)) return { kind: "supervised", supervisor: owner };
         if (flight) return { kind: "accepted", alreadyRestarting: true };
         const recycle = io.recycle, changed = io.connectionChanged;
         // Let the 202 reach the CLI before the listener closes, then confirm the connection is
@@ -127,7 +133,7 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
         // The recheck is the last step before the recycle, after the (asynchronous) supervisor lookup.
         flight = sleep(200).then(async () => {
           const supervisor = await io.supervisor();
-          if (supervisor === "service-unproven") { warn("[client] restart: the service manager's relaunch could not be proven; this runtime keeps serving"); return; }
+          if (restartRefusedByOwner(supervisor)) { warn("[client] restart: this runtime's owner could not be proven to relaunch it; it keeps serving"); return; }
           if (changed()) await recycle(supervisor);
         }).finally(() => { flight = null; });
         return { kind: "accepted", alreadyRestarting: false };
@@ -160,11 +166,24 @@ export async function clientRestartSupervisor(): Promise<ClientRestartSupervisor
 export function classifyClientRestartSupervisor(input: {
   desktop: boolean;
   env: NodeJS.ProcessEnv;
-  diagnose: () => { viable: boolean };
+  diagnose: () => { installed: boolean; viable: boolean; running: boolean };
+  /** Manager-launched evidence; defaults to src/service/service-child-ownership.ts. */
+  managed?: (env: NodeJS.ProcessEnv) => boolean;
 }): ClientRestartSupervisor | null {
   if (input.desktop) return "desktop";
-  if (input.env.OCX_SERVICE !== "1" && input.env.OCX_SERVICE_MANAGED !== "1") return null;
-  return input.diagnose().viable ? "service" : "service-unproven";
+  // The managed marker (launchd, systemd, WinSW), the Windows wrapper's protocol marker, or a
+  // legacy Windows wrapper parent. A bare OCX_SERVICE=1 is also what ocx claude and ocx opencode
+  // give their own proxies, so it alone proves no manager.
+  if (!(input.managed ?? isSupervisedServiceChild)(input.env)) {
+    if (input.env.OCX_SERVICE !== "1") return null;
+    // Bare marker: a companion when no service is installed; with one installed it may also be a
+    // service registered before the managed marker existed, which nothing here can tell apart.
+    return input.diagnose().installed ? "owner-unproven" : null;
+  }
+  // Relaunch needs positive evidence: viable AND running (launchd's viable also covers an
+  // unknown load state for its other callers; running there means loaded).
+  const diagnostic = input.diagnose();
+  return diagnostic.viable && diagnostic.running ? "service" : "service-unproven";
 }
 
 /**

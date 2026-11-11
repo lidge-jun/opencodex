@@ -742,7 +742,10 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     // updater's restart. A stray marker would mark them before any probe.
     const opencodeStartEnv = "env: withProcessRuntimeProvenance(opencodeProxyStartEnv(withoutSiblingMarker(process.env)) as NodeJS.ProcessEnv),";
     for (const [path, env] of [
-      ["src/cli/claude.ts", 'env: withProcessRuntimeProvenance(withoutSiblingMarker({ ...process.env, OCX_SERVICE: "1" })),'],
+      // ocx claude builds its proxy's environment in claudeProxyStartEnv (also read by the restart's
+      // owner classification) and spawns with it.
+      ["src/cli/claude.ts", 'return withProcessRuntimeProvenance(withoutSiblingMarker({ ...base, OCX_SERVICE: "1" }));'],
+      ["src/cli/claude.ts", "env: claudeProxyStartEnv(),"],
       ["src/cli/opencode.ts", opencodeStartEnv],
       ["src/cli/minimax.ts", opencodeStartEnv],
       ["src/update/job-pinned-start.ts", "const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);"],
