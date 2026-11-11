@@ -1948,7 +1948,7 @@
     "windows-user-principal-nonascii.test.ts": "windows",
     "windows-user-principal.test.ts": "windows",
     "winsw-stop-hardening.test.ts": "windows",
-    "winsw.test.ts": "service", "service-status-json.test.ts": "service",
+    "winsw.test.ts": "service", "service-status-json.test.ts": "service", "service-restart-replacement.test.ts": "service",
     "workflow-budget.test.ts": "lib",
     "ws-ambiguous-resend.test.ts": "responses", "ws-pre-output-refusal.test.ts": "responses", "responses-pool-overload-failover.test.ts": "responses", "compact-transient-alternate.test.ts": "responses",
     "ws-capacity-reclamation.test.ts": "responses",
