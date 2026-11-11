@@ -206,5 +206,6 @@
   "link-diagnostics-route.test.ts": "server",
   "link-child-policy.test.ts": "clients",
   "link-child-policy.test.ts": "clients",
-  "link-child-ops-scheduler.test.ts": "clients"
+  "link-child-ops-scheduler.test.ts": "clients",
+  "catalog-auto-refresh-link-fanout.test.ts": "codex-integration"
 }
