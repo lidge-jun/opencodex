@@ -4,13 +4,20 @@ import { guardedSpawn, guardedSpawnSync, materializeMutationData } from "./mutat
 import { dirname, join, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { publishWindowsInstallerPid } from "./windows-installer-marker.mjs";
+import { isTestHomeGuardArmed } from "./test-home-guard.mjs";
 
 const JOIN_MS = 10000;
 const failure = message => ({ status: null, processTreeExited: false, error: { code: "EINSTALLJOIN", message } });
 
 let windowsSupervisorSeamsForTests = null;
-/** Test seam: drive the Windows supervisor branch with a fake platform and supervisor launcher. */
-export function setWindowsInstallerSupervisorForTests(seams) { windowsSupervisorSeamsForTests = seams; }
+/**
+ * Test seam: drive the Windows supervisor branch with a fake platform and supervisor launcher. A
+ * fake launcher skips guardedSpawn, so the seam refuses outside a test process.
+ */
+export function setWindowsInstallerSupervisorForTests(seams) {
+  if (seams !== null && !isTestHomeGuardArmed()) throw Error("the Windows installer supervisor seam is test-only");
+  windowsSupervisorSeamsForTests = seams;
+}
 
 /** Bridge synchronous pnpm transactions to the same Windows Job Object barrier. */
 export function runWindowsInstallerSync(invocation, { env = process.env, cwd, timeoutMs = 180000, authorizeMutation = () => false, markerPath } = {}) {

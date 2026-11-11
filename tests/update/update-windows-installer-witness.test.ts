@@ -177,3 +177,13 @@ test("win32: a live earlier supervisor keeps its witness and the run stays uncon
   expect(result).toMatchObject({ status: null, processTreeExited: false });
   expect(readMarker(root).installerPid).toBe(process.pid);
 });
+test("the Windows supervisor seam refuses outside a test process", () => {
+  const previous = process.env.OCX_TEST_HOME_GUARD;
+  process.env.OCX_TEST_HOME_GUARD = "0";
+  try {
+    expect(() => setWindowsInstallerSupervisorForTests({ platform: "win32" })).toThrow("test-only");
+    expect(() => setWindowsInstallerSupervisorForTests(null)).not.toThrow();
+  } finally {
+    if (previous === undefined) delete process.env.OCX_TEST_HOME_GUARD; else process.env.OCX_TEST_HOME_GUARD = previous;
+  }
+});

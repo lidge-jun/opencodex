@@ -238,7 +238,9 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { dirname, join, win32 } from \"node:path\";",
     "import { fileURLToPath } from \"node:url\";",
     // Windows installer witness publication before the supervisor request (#8524).
-    'import { publishWindowsInstallerPid } from "./windows-installer-marker.mjs";'
+    'import { publishWindowsInstallerPid } from "./windows-installer-marker.mjs";',
+    // Refuses the Windows supervisor test seam outside a test process.
+    'import { isTestHomeGuardArmed } from "./test-home-guard.mjs";'
   ],
   "src/update/npm-invocation.mjs": [
     "import { existsSync, realpathSync } from \"node:fs\";",
