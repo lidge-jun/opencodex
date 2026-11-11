@@ -10,7 +10,7 @@ import { atomicWriteFile, loadConfig, withConfigMutationLockSync } from "../conf
 import { claudeDesktopIntegrationEnabledNow } from "../codex/desired-state";
 import { siblingOfLivePort, siblingSkipMessage } from "../codex/sibling-start";
 import {
-  inspectRemoteDesktopStore, readDesktopDisconnectReceipt, writeDesktopDisconnectReceipt,
+  inspectRemoteDesktopStore, readDesktopDisconnectReceipt, writeDesktopDisconnectReceipt, removeDesktopDisconnectReceipt,
   replaceRemoteDesktopCredential, restoreRemoteDesktopStore, finishRemoteDesktopCleanup,
   type DesktopDisconnectReceipt, type DesktopRemoteOwner, type DesktopStoreResult,
 } from "../claude/desktop-remote-store";
@@ -19,6 +19,8 @@ import {
   type ClientLifecycleHeld, type ClientLifecycleLockDeps,
 } from "./lifecycle-lock";
 import { invalidateCodexModelsCache, invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
+import { restoreCodexForDisconnect } from "../codex/inject/disconnect-restore";
+import { desktopLifecycleRefusal } from "./desktop-refusal";
 import { withCatalogWriteSerialization } from "../codex/catalog-write-serialization";
 import {
   injectCodexConfig,
@@ -1076,9 +1078,33 @@ function restoreConnectedCodex(connection: OcxClientConnectionConfig): void {
     throw new Error("disconnect refused: Codex journal ownership conflicts with the connected key");
   }
   if (owner !== null) {
-    if (!restoreJournalState().complete) throw new Error("disconnect refused: Codex journal restore was partial");
+    const restored = restoreCodexForDisconnect();
+    if (!restored.ok) throw new Error(`disconnect refused: Codex journal restore was partial: ${restored.reason}`);
   } else if (isCodexRoutingInjected()) {
     throw new Error("disconnect refused: Codex routing is injected but no journal records the original state");
+  }
+}
+
+/**
+ * Abort a disconnect that failed before its commit point.
+ *
+ * Until `desktop_restored` the receipt records intent only: the Claude Desktop store, the catalog,
+ * the service token and the connection are untouched, so removing it returns the Child to a
+ * plain connected state. Left in place it made every client start refuse with
+ * client_disconnect_pending until someone moved the folder aside by hand. This also clears a
+ * receipt an older release left stuck at `prepared`.
+ */
+function abortPreparedDisconnect(
+  receipt: DesktopDisconnectReceipt,
+  error: unknown,
+  deps: Pick<ClientConnectDeps, "lifecycleLockDeps">,
+): Error {
+  const base = error instanceof Error ? error.message : String(error);
+  try {
+    withClientLifecycleSync(held => withConfigMutationLockSync(() => removeDesktopDisconnectReceipt(held, receipt)), deps.lifecycleLockDeps);
+    return new Error(`${base}. The disconnect was rolled back: this Child is still connected and its runtime can start.`, { cause: error });
+  } catch {
+    return new Error(`${base}. The disconnect receipt could not be rolled back; run ocx disconnect again to finish it or roll it back.`, { cause: error });
   }
 }
 
@@ -1118,10 +1144,7 @@ export async function disconnectClient(
       }
       if (!receipt) {
         const desktop = inspectRemoteDesktopStore(desktopOwner(connection));
-        if (desktop.reason === "root_without_state") {
-          throw new Error(`desktop_lifecycle_unsafe: ${desktop.path} exists but holds no Claude Desktop remote state or disconnect receipt (a leftover or renamed file), so disconnect cannot tell what it would restore. Move that folder aside, then run ocx disconnect again.`);
-        }
-        if (desktop.kind === "unsafe" || desktop.kind === "conflict") throw new Error(`desktop_lifecycle_unsafe: the Claude Desktop remote profile store could not be verified (${desktop.kind}); nothing was changed.`);
+        if (desktop.kind === "unsafe" || desktop.kind === "conflict") throw new Error(desktopLifecycleRefusal(desktop));
         preflightDisconnectCatalog(connection, keepCatalog);
         receipt = { version: 1, owner: desktopOwner(connection), tokenFingerprint: connection.tokenFingerprint, keepCatalog, phase: "prepared" };
         writeDesktopDisconnectReceipt(held, previous, receipt);
@@ -1136,7 +1159,8 @@ export async function disconnectClient(
   // The prepared receipt blocks even a sync queued for its actual N/C injection commit.
   // Codex-only restore MUST stay outside L; it never invokes Desktop cleanup.
   if (prepared.connection && !disconnectAtLeast(prepared.receipt, "desktop_restored")) {
-    restoreConnectedCodex(prepared.connection);
+    try { restoreConnectedCodex(prepared.connection); }
+    catch (error) { throw abortPreparedDisconnect(prepared.receipt, error, deps); }
   }
 
   return withClientLifecycleSync(held => withConfigMutationLockSync(() => {

@@ -146,6 +146,40 @@ export function stripOpencodexConfig(content: string): string {
   return stripOpencodexConfigResult(content).content;
 }
 
+/**
+ * What OpenCodex still owns in a Codex config, judged by the same strip `ocx restore` applies and
+ * the journaled injection: the key or table header of each line it would remove. Empty means
+ * nothing OpenCodex wrote is left, so lines Codex or the person added are all that changed.
+ * Only keys are returned, never values, so a refusal can quote them.
+ */
+export function remainingOpencodexConfigKeys(rawContent: string): string[] {
+  const content = applyEol(rawContent, "\n");
+  const stripped = stripOpencodexConfigResult(
+    content,
+    journaledInjectedOpenaiBaseUrl(),
+    journaledInjectedRealtimeWsBaseUrl(),
+    journaledInjectedRootWebSearch(),
+    journaledReplacedRootWebSearch(),
+    journaledInjectedSubagentDefaults(),
+  );
+  if (stripped.managedDefaultsError) return ["[agents] managed subagent defaults"];
+  // The strip also normalizes blank lines; that alone is not an OpenCodex line.
+  if (stripped.content === normalizeStructuralWhitespace(content)) return [];
+  const kept = new Map<string, number>();
+  for (const line of stripped.content.split("\n")) kept.set(line.trim(), (kept.get(line.trim()) ?? 0) + 1);
+  const keys: string[] = [];
+  for (const line of content.split("\n")) {
+    const text = line.trim();
+    if (!text) continue;
+    const left = kept.get(text) ?? 0;
+    if (left > 0) { kept.set(text, left - 1); continue; }
+    const key = text.startsWith("[") ? text : text.startsWith("#") ? "an OpenCodex marker comment" : text.split("=")[0]!.trim();
+    if (!keys.includes(key)) keys.push(key);
+  }
+  // The strip changed something without removing a line: it would put back a line it replaced.
+  return keys.length > 0 ? keys : ["web_search"];
+}
+
 function hasOpencodexRouting(content: string): boolean {
   return (
     hasOcxProviderTable(content) ||

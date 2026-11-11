@@ -1211,11 +1211,13 @@ function runDesktopLifecycleScenario(mode: string) {
               owner: { kind: "client", apiKeyId: owner.apiKeyId },
             }));
             const actualRestore = journal.restoreJournalState;
-            journalSpy = spyOn(journal, "restoreJournalState").mockImplementation(() => {
+            // Forward the arguments: disconnect passes its held config write lock, and dropping it
+            // makes the real restore see its own lock as another writer.
+            journalSpy = spyOn(journal, "restoreJournalState").mockImplementation((...args) => {
               const r = store.readDesktopDisconnectReceipt();
               codexSawPrepared = r.kind === "valid" && r.value.phase === "prepared";
               codexOutsideL = locks.withClientLifecycleSync(() => true, lockDeps);
-              return actualRestore();
+              return actualRestore(...args);
             });
           }
           if (mode === "disconnect-foreign") {

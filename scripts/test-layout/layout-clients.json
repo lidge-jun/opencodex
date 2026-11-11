@@ -160,6 +160,8 @@
   "client-link-state.test.ts": "clients",
   "client-link-status.test.ts": "clients",
   "client-link-teardown.test.ts": "clients",
+  "client-disconnect-recovery.test.ts": "clients",
+  "client-disconnect-desktop-refusals.test.ts": "clients",
   "client-link-tunnel.test.ts": "clients",
   "link-ports.test.ts": "clients",
   "link-supervisor.test.ts": "clients",
