@@ -1103,10 +1103,11 @@ export async function executeResponsesRunTurn(
           ? (zeroOutputLimit ?? (firstMeaningful ? classifyUndeclaredFirstTool(firstMeaningful) : undefined))
           : undefined;
         if (!firstMeaningful || firstMeaningful.type === "error" || classifiedError) {
-          if (classifiedError?.usage) transportState.bindKeyUsageFromBridge(classifiedError.usage);
-          const classified = adapterFailureFromEvent(classifiedError ?? (firstMeaningful?.type === "error"
+          const failureEvent: Extract<AdapterEvent, { type: "error" }> = classifiedError ?? (firstMeaningful?.type === "error"
             ? firstMeaningful
-            : { type: "error", status: 502, message: "Adapter ended before producing a response" }));
+            : { type: "error", status: 502, message: "Adapter ended before producing a response" });
+          if (failureEvent.usage) transportState.bindKeyUsageFromBridge(failureEvent.usage);
+          const classified = adapterFailureFromEvent(failureEvent);
           const storageRefusal = firstMeaningful?.type === "error" && firstMeaningful.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE;
           const failure = formatErrorResponse(storageRefusal ? 503 : classified.httpStatus,
             storageRefusal ? SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE : classified.error.type,
