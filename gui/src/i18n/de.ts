@@ -1,5 +1,6 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -133,6 +134,7 @@ export const de: Record<TKey, string> = {
   "workflowBudget.saved": "Workflow-Limits gespeichert.",
   ...desktopCompatibilityCopy("de"),
   ...shellV2Copy("de"),
+  ...codexCliUpdateCopy("de"),
   ...modelsV2Copy("de"),
   ...accountsV2Copy("de"),
   ...subagentsV2Copy("de"),

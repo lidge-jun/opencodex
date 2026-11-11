@@ -179,7 +179,8 @@ See [planning details](/reference/cli/agents/#read-only-codex-cli-update-plan).
 For a reviewed applicable npm-global plan, `ocx system codex-cli-update apply --plan-id <id> --yes`
 performs the exact update and returns a durable job. `ocx system codex-cli-update status <job-id> --json`
 reads its result; use a stable `--request-id` for a lost-response retry. See
-[confirmation and job states](/reference/cli/agents/#confirmed-codex-cli-apply-and-job-status).
+[confirmation and job states](/reference/cli/agents/#confirmed-codex-cli-apply-and-job-status). The dashboard's **Codex → Codex CLI** tab uses the
+same plan, apply and job routes; see [the dashboard guide](/guides/web-dashboard/#applying-a-codex-cli-update-from-the-dashboard).
 
 For Windows x64 installation observation, see [the `attest` command](/reference/cli/agents/#explicit-installation-observation-on-windows-x64). Without explicit paths it observes the selected candidate identified from the proof-bound launcher snapshot; it does not grant update authority or attest runtime selection.
 
