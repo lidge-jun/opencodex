@@ -17,7 +17,8 @@ import { JOURNAL_PATH, removeJournal, restoreJournalState } from "../journal";
 import { CodexHomeOwnerRefusal } from "../codex-home-owner";
 import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "../paths";
 import { beginCodexWriteSection, publishCodexArtifact } from "./config-write-section";
-import { remainingOpencodexConfigKeys } from "./remove";
+import { remainingOpencodexConfigKeys, withReplacedWebSearchRestored } from "./remove";
+import { atomicWriteFile } from "../../config";
 
 export type DisconnectCodexRestore =
   | { ok: true; journalRetired: boolean }
@@ -41,6 +42,14 @@ export function restoreCodexForDisconnect(): DisconnectCodexRestore {
     const config = existsSync(CODEX_CONFIG_PATH) ? readFileSync(CODEX_CONFIG_PATH, "utf-8") : "";
     const remaining = remainingOpencodexConfigKeys(config);
     if (remaining.length > 0) {
+      // The one difference that is the person's, not OpenCodex's: their own web_search line, set
+      // aside while routed. Put back exactly that line when nothing OpenCodex owns is left after it.
+      const restoredLine = withReplacedWebSearchRestored(config);
+      if (restoredLine !== null && remainingOpencodexConfigKeys(restoredLine).length === 0) {
+        publishCodexArtifact(CODEX_CONFIG_PATH, held, (path, hooks) => atomicWriteFile(path, restoredLine, undefined, hooks));
+        publishCodexArtifact(JOURNAL_PATH, held, (_path, hooks) => removeJournal(hooks));
+        return { ok: true, journalRetired: true };
+      }
       return {
         ok: false,
         reason: `${CODEX_CONFIG_PATH} changed after OpenCodex wrote it and still has OpenCodex settings (${remaining.join(", ")}), so the journal was kept. `

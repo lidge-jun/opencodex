@@ -191,6 +191,28 @@ export function remainingOpencodexConfigKeys(rawContent: string): string[] {
   return keys.length > 0 ? keys : ["web_search"];
 }
 
+/**
+ * The config with the person's own root `web_search` line put back, when OpenCodex set it aside while
+ * routed (the journal records the exact line) and the file now has no root `web_search` at all.
+ * Only that line is inserted, at the end of the root section; every other byte is kept. Null when
+ * there is nothing to put back. The caller must re-check the result for OpenCodex settings.
+ */
+export function withReplacedWebSearchRestored(rawContent: string): string | null {
+  const line = journaledReplacedRootWebSearch();
+  if (!line || rootAssignmentKey(line) !== "web_search") return null;
+  const eol = dominantEol(rawContent);
+  const { bom, lines, rootEnd } = rootSourceLines(applyEol(rawContent, "\n"));
+  if (lines.slice(0, rootEnd).some(entry => entry.structural && rootAssignmentKey(entry.text) === "web_search")) return null;
+  // Insert after the last non-blank root line, so a blank separator before the first table stays put.
+  let at = rootEnd;
+  while (at > 0 && lines[at - 1]!.structural && lines[at - 1]!.text.trim() === "") at -= 1;
+  const inserted = { text: line.trim(), eol: "\n" as const, structural: true };
+  if (at > 0 && lines[at - 1]!.eol === "") lines[at - 1] = { ...lines[at - 1]!, eol: "\n" };
+  const next = [...lines.slice(0, at), inserted, ...lines.slice(at)];
+  return applyEol(bom + sourceText(next), eol);
+}
+
+
 /** The only names a refusal may quote: keys OpenCodex writes. Anything else gets a fixed label. */
 const OWNED_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "openai_base_url", REALTIME_WS_BASE_URL_KEY, "model_provider", "model", "model_catalog_json", "web_search", "profile",

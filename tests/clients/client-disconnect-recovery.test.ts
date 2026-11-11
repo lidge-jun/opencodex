@@ -27,7 +27,7 @@ const ROUTING_GONE = ORIGINAL + CODEX_LINES;
 // Codex dropped our marker comment but kept the value: still OpenCodex routing.
 const ROUTING_KEPT = ORIGINAL + "openai_base_url = \"" + BASE_URL + "\"\n" + CODEX_LINES;
 
-type Scenario = { config: string; stuckReceipt?: boolean; overlapping?: boolean; retryConfig?: string };
+type Scenario = { config: string; stuckReceipt?: boolean; overlapping?: boolean; retryConfig?: string; replacedWebSearch?: string };
 type Outcome = {
   error: string | null; stateKind: string; gateBefore: string; gateAfter: string;
   receipt: string; desktopRoot: boolean; journal: boolean; config: string; startupRefusal: string;
@@ -58,6 +58,7 @@ function run(scenario: Scenario): Outcome {
       version: 1, originalConfig: Buffer.from(ORIGINAL).toString("base64"), originalProfile: null,
       injectedConfigHash: sha(INJECTED), injectedProfileHash: null, injectedOpenaiBaseUrl: BASE_URL,
       injectedRealtimeWsBaseUrl: null, injectedCatalogPath: null,
+      ...(scenario.replacedWebSearch ? { replacedRootWebSearch: scenario.replacedWebSearch } : {}),
       owner: { kind: "client", apiKeyId: "client-key-1" }, pid: 999_999, timestamp: "2026-08-28T00:00:00.000Z",
     }));
     const script = `
@@ -133,6 +134,15 @@ function run(scenario: Scenario): Outcome {
 }
 
 describe("disconnect after Codex edited config.toml (O9)", () => {
+  test("a web_search line OpenCodex set aside is put back, alone, and the disconnect completes", () => {
+    // While routed, OpenCodex removed the person's own root web_search line and journaled it.
+    const out = run({ config: ROUTING_GONE, replacedWebSearch: 'web_search = "live"' });
+    expect(out.error).toBeNull();
+    expect(out.stateKind).toBe("disconnected");
+    expect(out.journal).toBe(false);
+    expect(out.config).toBe('model_provider = "openai"\nweb_search = "live"\n' + CODEX_LINES);
+  }, SPAWN_BUDGET_MS);
+
   test("no OpenCodex line left: disconnect completes, keeps every Codex line, retires the journal", () => {
     const out = run({ config: ROUTING_GONE });
     expect(out.error).toBeNull();
