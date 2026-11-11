@@ -1,15 +1,13 @@
 import { expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { JOURNAL_PATH } from "../../src/codex/journal";
-import { injectCodexConfig } from "../../src/codex/inject";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { handleDisconnectCommand } from "../../src/cli/connect";
 import { connectClient } from "../../src/client/connect";
 import { teardownClientLink } from "../../src/client/link-teardown";
 import { clientLinkStatePath, writeClientLinkState } from "../../src/client/link-state";
 import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
-import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
 import { createTempHome } from "../helpers/temp-home";
+import { fixturePath, repoPath } from "../helpers/repo-root";
 
 const linkId = "lnk_0123456789abcdef";
 const key = `ocx_data_${"a".repeat(40)}`;
@@ -155,58 +153,6 @@ test("an unreadable sidecar skips the revoke but still reports the manual revoke
   expect(calls).toBe(0);
 });
 
-test("a catalog changed after connect names what was found and --keep-catalog", async () => {
-  const home = createTempHome("ocx-client-link-catalog-");
-  try {
-    const config = getDefaultConfig();
-    config.port = 10100;
-    saveConfig(config);
-    mkdirSync(home.codexHome, { recursive: true });
-    writeFileSync(home.path(".codex", "config.toml"), "model_provider = \"openai\"\n");
-    await connectClient({
-      serverUrl: "http://127.0.0.1:34567",
-      managementUrl: "http://127.0.0.1:34567",
-      managementTransport: "direct",
-      transport: "link",
-      link: { tunnelPort: 34567, linkId },
-      credential: { kind: "link", apiKeyId: "key-1", key },
-      selectedClients: ["codex"],
-      noSync: true,
-    }, {
-      fetchImpl: async input => String(input).endsWith("/readyz")
-        ? Response.json({ status: "ready", protocol: 1, minimumClientProtocol: 1, managementUrl: "http://127.0.0.1:34567" })
-        : Response.json({ models: [] }),
-      catalogCompatibility: { supportedEfforts: () => new Set() },
-      lifecycleLockDeps: { lockPath: home.path("lifecycle.sqlite") },
-    });
-    // Something else rewrote the catalog after connect: neither ours nor the recorded prior one.
-    writeFileSync(DEFAULT_CATALOG_PATH, JSON.stringify({ models: [{ slug: "rewritten-elsewhere" }] }));
-    const logs = spyOn(console, "log").mockImplementation(() => {});
-    const errors = spyOn(console, "error").mockImplementation(() => {});
-    let exit = -1;
-    let output = "";
-    try {
-      exit = await handleDisconnectCommand([], {
-        lifecycleLockDeps: { lockPath: home.path("lifecycle.sqlite") },
-        linkTeardownDeps: {
-          reapOrphanTunnel: async () => ({ tunnel: "absent" }),
-          runner: { run: async () => ({ code: 1, stdout: "", stderr: "" }) },
-          knownHostsFile,
-        },
-      });
-      output = errors.mock.calls.flat().join("\n");
-    } finally {
-      logs.mockRestore();
-      errors.mockRestore();
-    }
-    expect(exit).not.toBe(0);
-    expect(output).toContain("client_catalog_ownership_changed");
-    expect(output).toContain("matches neither the catalog this connection wrote nor the one recorded before it connected");
-    expect(output).toContain("ocx disconnect --keep-catalog");
-  } finally {
-    home.remove();
-  }
-});
 
 test("a desktop-remote folder with no state or receipt is named, with the way to clear it", async () => {
   const home = createTempHome("ocx-client-link-desktop-store-");
@@ -263,75 +209,51 @@ test("a desktop-remote folder with no state or receipt is named, with the way to
   }
 });
 
-test("connect --link over a standalone injection hands the Codex journal to the committed client", async () => {
+/**
+ * Scenarios that write the Codex files directly. Those paths are fixed when src/codex/paths loads,
+ * so they run in tests/fixtures/client-link-journal-runner.ts, a child whose CODEX_HOME and
+ * OPENCODEX_HOME point into this test's own temp home before anything is imported; this process
+ * never touches a Codex path, and only that owned home is removed.
+ */
+async function runJournalScenario(scenario: "catalog-changed" | "standalone-handover" | "foreign-journal") {
   const home = createTempHome("ocx-client-link-journal-");
   try {
-    const config = getDefaultConfig();
-    config.port = 10100;
-    saveConfig(config);
-    // The Codex paths are fixed at import from the preload's sandboxed CODEX_HOME.
-    writeFileSync(CODEX_CONFIG_PATH, "model_provider = \"openai\"\n");
-    // The standalone proxy's own injection, journaled to this (live) process.
-    const standalone = await injectCodexConfig(10100, { ...config, syncResumeHistory: false }, { catalogPath: null });
-    expect(standalone.success).toBe(true);
-    const journalPath = JOURNAL_PATH;
-    expect(JSON.parse(readFileSync(journalPath, "utf8")).owner.kind).toBe("process");
-    await connectClient({
-      serverUrl: "http://127.0.0.1:34567",
-      managementUrl: "http://127.0.0.1:34567",
-      managementTransport: "direct",
-      transport: "link",
-      link: { tunnelPort: 34567, linkId },
-      credential: { kind: "link", apiKeyId: "key-1", key },
-      selectedClients: ["codex"],
-    }, {
-      fetchImpl: async input => String(input).endsWith("/readyz")
-        ? Response.json({ status: "ready", protocol: 1, minimumClientProtocol: 1, managementUrl: "http://127.0.0.1:34567" })
-        : Response.json({ models: [] }),
-      catalogCompatibility: { supportedEfforts: () => new Set() },
-      lifecycleLockDeps: { lockPath: home.path("lifecycle.sqlite") },
+    const codex = home.path("codex");
+    mkdirSync(codex, { recursive: true });
+    const child = Bun.spawn([process.execPath, fixturePath("client-link-journal-runner.ts")], {
+      cwd: repoPath(), stdin: new Blob([scenario]), stdout: "pipe", stderr: "pipe",
+      env: { ...process.env, HOME: home.root, USERPROFILE: home.root, OPENCODEX_HOME: home.path("ocx"), CODEX_HOME: codex, OCX_SERVICE: "", OCX_SERVICE_MANAGED: "0" },
     });
-    expect(JSON.parse(readFileSync(journalPath, "utf8")).owner).toEqual({ kind: "client", apiKeyId: "key-1" });
+    const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(exit, stderr).toBe(0);
+    return JSON.parse(stdout.trim().split("\n").at(-1)!) as { exit?: number; injected?: boolean; before?: unknown; after?: unknown; warnings: string[]; errors: string[] };
   } finally {
-    for (const created of [JOURNAL_PATH, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, DEFAULT_CATALOG_PATH]) rmSync(created, { force: true });
     home.remove();
   }
+}
+
+test("a catalog changed after connect names what was found and --keep-catalog", async () => {
+  const result = await runJournalScenario("catalog-changed");
+  expect(result.exit).not.toBe(0);
+  const output = result.errors.join("\n");
+  expect(output).toContain("client_catalog_ownership_changed");
+  expect(output).toContain("matches neither the catalog this connection wrote nor the one recorded before it connected");
+  expect(output).toContain("ocx disconnect --keep-catalog");
+});
+
+test("connect --link over a standalone injection hands the Codex journal to the committed client", async () => {
+  const result = await runJournalScenario("standalone-handover");
+  expect(result.injected).toBe(true);
+  expect((result.before as { kind: string }).kind).toBe("process");
+  expect(result.after).toEqual({ kind: "client", apiKeyId: "key-1" });
 });
 
 // Review round 4: a connect over a journal an earlier connection owns must say so, not report a
 // clean handover; the routing is restored on the next restart and a sync after it re-applies it.
 test("connect over an earlier connection's Codex journal warns with the recovery step", async () => {
-  const home = createTempHome("ocx-client-link-foreign-journal-");
-  const warnings: string[] = [];
-  const warn = spyOn(console, "warn").mockImplementation((...parts) => { warnings.push(parts.map(String).join(" ")); });
-  try {
-    const config = getDefaultConfig();
-    config.port = 10100;
-    saveConfig(config);
-    writeFileSync(CODEX_CONFIG_PATH, "model_provider = \"openai\"\n");
-    const earlier = await injectCodexConfig(10100, { ...config, syncResumeHistory: false }, { catalogPath: null, journalOwner: { kind: "client", apiKeyId: "earlier-key" } });
-    expect(earlier.success).toBe(true);
-    await connectClient({
-      serverUrl: "http://127.0.0.1:34567",
-      managementUrl: "http://127.0.0.1:34567",
-      managementTransport: "direct",
-      transport: "link",
-      link: { tunnelPort: 34567, linkId },
-      credential: { kind: "link", apiKeyId: "key-1", key },
-      selectedClients: ["codex"],
-    }, {
-      fetchImpl: async input => String(input).endsWith("/readyz")
-        ? Response.json({ status: "ready", protocol: 1, minimumClientProtocol: 1, managementUrl: "http://127.0.0.1:34567" })
-        : Response.json({ models: [] }),
-      catalogCompatibility: { supportedEfforts: () => new Set() },
-      lifecycleLockDeps: { lockPath: home.path("lifecycle.sqlite") },
-    });
-    expect(JSON.parse(readFileSync(JOURNAL_PATH, "utf8")).owner).toEqual({ kind: "client", apiKeyId: "earlier-key" });
-    expect(warnings.join("\n")).toContain("belongs to an earlier connection");
-    expect(warnings.join("\n")).toContain("ocx sync --restart-codex");
-  } finally {
-    warn.mockRestore();
-    for (const created of [JOURNAL_PATH, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, DEFAULT_CATALOG_PATH]) rmSync(created, { force: true });
-    home.remove();
-  }
+  const result = await runJournalScenario("foreign-journal");
+  expect(result.after).toEqual({ kind: "client", apiKeyId: "earlier-key" });
+  expect(result.warnings.join("\n")).toContain("belongs to an earlier connection");
+  expect(result.warnings.join("\n")).toContain("ocx sync --restart-codex");
 });
+
