@@ -251,6 +251,8 @@ The conversation field also accepts a pasted `codex://threads/<id>` deep link, t
 Codex "copy session link" puts on the clipboard — the wrapper and any link metadata such
 as `?hostId=…` are ignored and the bare thread id is matched, the same value an
 `ocx logs filter --conversation` search unwraps.
+It also accepts a remote Claude Code turn's `metadata.user_id`: the per-turn `tk` token
+is ignored, so any turn of a session finds the whole session.
 
 Time windows cover the last 15 minutes, hour, or day and refresh every 30 seconds while the
 Logs tab is active, even with auto-refresh off. Windows use the proxy timestamp from
@@ -379,9 +381,11 @@ they have been synchronized. See
 
 In **Connect → API Keys**, every row of the key table has its own delete button, which asks for confirmation in place. Clicking a key can show its full value with a **Copy** button only from an independently authorized session.
 
-### Applying a Codex CLI update over HTTP
+### Applying a Codex CLI update from the dashboard
 
-The CLI-update HTTP API has no dashboard job UI. Its apply route requires a current explicitly paired browser session on trusted loopback ingress, matching Origin and CSRF headers, and `confirmed: true`. Automatic local sign-in, a remembered admin session, an admin token or Tailscale sign-in alone cannot authorize this action.
+**Codex → Codex CLI** checks and updates the Codex CLI installation OpenCodex uses, separately from OpenCodex's own updates; it never touches the Codex desktop app. **Check for update** is read-only: it shows who installed the CLI, whether OpenCodex manages it, the installed and available versions, running Codex sessions, and why an update is refused (for example a version-manager install, an active session, or already current). An update is offered only for an applicable plan, and **Update Codex CLI** stays disabled until you tick the confirmation that only this installation changes. The dashboard applies exactly the plan on screen, then follows the job to its result (updated, not updated, refused, or unclear). An unclear result is never retried or rolled back; check the installation yourself. Running **Check for update** again discards the previous plan and confirmation. A dashboard connected to a Remote Hub shows a notice instead, because the update must run on the computer that owns the installation.
+
+The apply route requires a current explicitly paired browser session on trusted loopback ingress, matching Origin and CSRF headers, and `confirmed: true`. Automatic local sign-in, a remembered admin session, an admin token or Tailscale sign-in alone cannot authorize this action; when apply is refused for that reason the tab shows the local pairing form and the equivalent `ocx system codex-cli-update apply` command.
 
 For standalone local pairing, open the dashboard at its configured literal `http://127.0.0.1:<port>` or `http://[::1]:<port>` origin. Use the existing local pairing form in **Connect → API Keys** or Remote Link setup: run the displayed `ocx gui pair --origin "<browser-origin>"` command locally, then redeem its one-time code in that form. Pairing does not apply an update; a subsequent confirmed API request is still required. A server configured with hostname `localhost`, a wildcard bind, or a connected-client role cannot issue this local pairing authority. Remote pairing does not remove the apply route's trusted-loopback requirement.
 

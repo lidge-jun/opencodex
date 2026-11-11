@@ -1,5 +1,5 @@
-import { readFileSync, statSync, type BigIntStats } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
+import { nativeAuthStatStamp, readNativeMainAuthBytesStable } from '../native-main-auth-file';
 import type { UsageIdentity } from './usage-controller';
 
 type Credential = { identity: UsageIdentity; accessToken: string };
@@ -9,14 +9,10 @@ const equal = (a: UsageIdentity, b: UsageIdentity) => a.id === b.id && a.userId 
 /** Local native credentials remain in memory and are never returned by the public reader. */
 export function createNativeIdentityReader(authPath: string, upstreamFetch: typeof fetch = fetch) {
   const readerId = randomUUID(); let generation = 0, previousSnapshot: string | undefined;
-  const stamp = (value: BigIntStats) =>
-    `${value.dev}:${value.ino}:${value.size}:${value.mtimeNs}:${value.ctimeNs}`;
   const readCredential = (): Credential => {
-    const before = statSync(authPath, { bigint: true });
-    if (before.size > 1048576n) throw new Error('Unexpected native auth size');
-    const text = readFileSync(authPath, 'utf8'), after = statSync(authPath, { bigint: true });
-    if (stamp(before) !== stamp(after)) throw new Error('Native credentials changed during read');
-    const snapshot = `${stamp(after)}:${createHash('sha256').update(text).digest('hex')}`;
+    const { bytes, stat: after } = readNativeMainAuthBytesStable(authPath, 1048576n);
+    const text = bytes.toString('utf8');
+    const snapshot = `${nativeAuthStatStamp(after)}:${createHash('sha256').update(text).digest('hex')}`;
     if (snapshot !== previousSnapshot) { previousSnapshot = snapshot; generation++; }
     const auth = JSON.parse(text);
     if (auth.auth_mode !== 'chatgpt' || typeof auth.tokens?.id_token !== 'string'

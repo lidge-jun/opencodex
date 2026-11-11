@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
-import { serviceStayOutExitCode, WINDOWS_WRAPPER_PROTOCOL_ENV } from "../service/windows-wrapper-exit";
+import { serviceStayOutExitCode } from "../service/windows-wrapper-exit";
 import { isSupervisedServiceChild, serviceChildOwnershipDecisionForClassifiedChild } from "../service/service-child-ownership";
-import { SERVICE_MANAGED_ENV } from "../service/state";
+import { withoutSupervisorMarkers } from "../lib/supervisor-markers";
 import { raiseWindowsProxyPriority } from "../service/windows-process-priority";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
@@ -89,7 +89,7 @@ import {
   restartStartOutcome,
   waitForProxyReplacement,
   runTrayProxyStart,
-  type ProxyRestartLive,
+  type ProxyRestartIo, type ProxyRestartLive,
   type ProxyRestartStartOutcome,
 } from "./tray-proxy";
 import { duplicateRuntimeMessage, runDesktopAwareProxyRestart } from "./desktop-runtime-guidance";
@@ -806,15 +806,13 @@ async function handleStart(options: { block?: boolean } = {}) {
 }
 
 function detachedStartEnvironment(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);
+  const env: NodeJS.ProcessEnv = withoutSupervisorMarkers(withoutSiblingMarker(process.env));
   // Only a real service wrapper may claim supervision. A detached ensure/tray child is an
   // ordinary owner, never a sibling: while live it maintains routing, and on exit restores it.
   // The supervisor markers ride along whenever this runs inside a service child's
   // environment, so they must leave with OCX_SERVICE — otherwise the child would
   // answer the ownership gate as a managed job it is not.
   delete env.OCX_SERVICE;
-  delete env[SERVICE_MANAGED_ENV];
-  delete env[WINDOWS_WRAPPER_PROTOCOL_ENV];
   return withProcessRuntimeProvenance(env);
 }
 
@@ -957,10 +955,10 @@ async function handleTrayProxyStart(existingIsSuccess = true): Promise<boolean> 
 const PROXY_RESTART_OBSERVE_MS = MEMORY_DRAIN_RESTART_MS + REPLACEMENT_READY_TIMEOUT_MS + 15_000;
 /** Reserve confirmation time within the shared restart deadline. */
 async function handleProxyRestart(
-  startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>, onSupervised?: (supervisor: RestartSupervisor) => void,
+  startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>, onSupervised?: (supervisor: RestartSupervisor) => void, bindIo: (io: ProxyRestartIo, deadlineAt: number) => ProxyRestartIo = io => io,
 ): Promise<boolean> {
   const deadlineAt = Date.now() + PROXY_RESTART_OBSERVE_MS;
-  const result = await runDesktopAwareProxyRestart({
+  const result = await runDesktopAwareProxyRestart({ ...bindIo({
     findLive: () => discoverStableProxyForRestart({
       findLive: () => findLiveProxy({ deadlineAt, attempts: 2, acceptPackageTreeFenced: true }),
       expired: () => Date.now() >= deadlineAt,
@@ -977,7 +975,7 @@ async function handleProxyRestart(
     recheckAfterFailedStart: () => recheckRestartFailedStart(end => discoverStableProxyForRestart({
       findLive: () => findLiveProxy({ deadlineAt: end, attempts: 2, acceptPackageTreeFenced: true }), expired: () => Date.now() >= end,
     })),
-  });
+  }, deadlineAt) });
   if (!result.ok && result.phase === "request" && result.error instanceof UpdateRestartRequired) {
     const candidate = result.error.candidate();
     console.log(`🔄 Running proxy ${candidate.target.version} is older than this CLI (${candidate.cliVersion}); restarting it from the current installation...`);
@@ -1979,7 +1977,7 @@ process.exit(await dispatchCommand(head, {
       detached: true,
       stdio: "ignore",
       windowsHide: true,
-      env: withProcessRuntimeProvenance(withoutSiblingMarker(process.env)),
+      env: withProcessRuntimeProvenance(withoutSupervisorMarkers(withoutSiblingMarker(process.env))),
     });
     child.unref();
   },

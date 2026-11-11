@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -132,6 +134,8 @@ export const fr: Record<TKey, string> = {
   "workflowBudget.saved": "Limites de workflow enregistrées.",
   ...desktopCompatibilityCopy("fr"),
   ...shellV2Copy("fr"),
+  ...codexCliUpdateCopy("fr"),
+  ...remoteLinkDiagnosticsCopy("fr"),
   ...modelsV2Copy("fr"),
   ...accountsV2Copy("fr"),
   ...subagentsV2Copy("fr"),
@@ -283,6 +287,8 @@ export const fr: Record<TKey, string> = {
   "advisor.modelsEmpty": "Aucun modèle disponible. Activez un fournisseur et un modèle, puis réessayez.",
   "advisor.effort": "Intensité de raisonnement",
   "advisor.policy": "Politique",
+  "advisor.questionOnly": "Envoyer uniquement la question du worker",
+  "advisor.questionOnlyNote": "Seules la question du worker (jusqu’à 2000 caractères conservés, avec un avis en cas de troncature) et une instruction fixe sont envoyées. Aucun historique, résultat d’outil ou contexte de tâche n’est joint. Le worker doit inclure les informations essentielles. Les consultations automatiques sont suspendues ; les limites existantes restent actives.",
   "advisor.policy.manual": "Manuel — uniquement à la demande du worker",
   "advisor.policy.preflight": "Preflight — tentative automatique dès qu'une preuve d'orientation existe",
   "advisor.policy.adaptive": "Adaptatif — orientation et réparation en échec",
@@ -2709,6 +2715,7 @@ export const fr: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Échec du chargement du préréglage du fournisseur OpenAI.",
   "codexAuth.openaiPresetUnavailable": "Le préréglage du fournisseur OpenAI est indisponible.",
   "codexAuth.openProviders": "Ouvrir Fournisseurs",
+  "codexAuth.changeAccountMode": "Changer le mode de compte",
   "codexAuth.add": "Ajouter",
   "codexAuth.credits": "Crédits",
   "codexAuth.creditsRemaining": "restants",

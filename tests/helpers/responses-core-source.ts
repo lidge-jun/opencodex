@@ -98,6 +98,8 @@ export const RESPONSES_CORE_MODULES = [
   "adapter-delivery.ts",
   "anthropic-thinking-recovery.ts",
   "advisor-slot.ts",
+  // Reached from advisor-slot.ts: clips the opt-in question-only consultation text (#7526).
+  "advisor-question.ts",
   "advisor-retention.ts",
   "advisor-plan-slot.ts",
   "policy-refusal.ts",

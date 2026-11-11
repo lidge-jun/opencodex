@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -133,6 +135,8 @@ export const de: Record<TKey, string> = {
   "workflowBudget.saved": "Workflow-Limits gespeichert.",
   ...desktopCompatibilityCopy("de"),
   ...shellV2Copy("de"),
+  ...codexCliUpdateCopy("de"),
+  ...remoteLinkDiagnosticsCopy("de"),
   ...modelsV2Copy("de"),
   ...accountsV2Copy("de"),
   ...subagentsV2Copy("de"),
@@ -285,6 +289,8 @@ export const de: Record<TKey, string> = {
   "advisor.modelsEmpty": "Keine auswählbaren Modelle. Anbieter und Modell aktivieren und erneut versuchen.",
   "advisor.effort": "Denkintensität",
   "advisor.policy": "Richtlinie",
+  "advisor.questionOnly": "Nur die Frage des Workers senden",
+  "advisor.questionOnlyNote": "Gesendet werden nur die Frage des Workers (bis zu 2000 Zeichen; bei Kürzung mit einem Hinweis) und eine feste Berateranweisung. Verlauf, Werkzeugergebnisse und Aufgabenkontext werden nicht angehängt. Der Worker muss nötige Hintergrundinformationen ergänzen. Automatische Beratungen pausieren; bestehende Limits gelten weiter.",
   "advisor.policy.manual": "Manuell — nur wenn der Worker fragt",
   "advisor.policy.preflight": "Preflight — automatischer Konsultationsversuch, sobald Orientierungsbelege vorliegen",
   "advisor.policy.adaptive": "Adaptiv — Orientierung und fehlgeschlagene Reparaturen",
@@ -2132,6 +2138,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "OpenAI-Anbieter-Preset konnte nicht geladen werden.",
   "codexAuth.openaiPresetUnavailable": "OpenAI-Anbieter-Preset ist nicht verfügbar.",
   "codexAuth.openProviders": "Anbieter öffnen",
+  "codexAuth.changeAccountMode": "Kontomodus ändern",
   "codexAuth.add": "Hinzufügen",
   "codexAuth.credits": "Credits",
   "codexAuth.creditsRemaining": "verbleibend",

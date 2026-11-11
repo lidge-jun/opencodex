@@ -1,4 +1,3 @@
-import { pathToFileURL } from "node:url";
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import { transactionalNpmUpdateAsync, UPDATE_OWNER_MARKER } from "../../src/update/transactional-install.mjs";
 import type { runNpmInstall } from "../../src/update/npm-install.mjs";
 import { fixturePath, repoPath } from "../helpers/repo-root";
+import { importUpdateModuleCopy } from "../helpers/update-module-data-url";
 
 const alive = (pid: number) => {
   try { process.kill(pid, 0); return true; }
@@ -25,8 +25,15 @@ async function runner(root: string, transform: (source: string) => string): Prom
   const source = readFileSync(repoPath("src/update/npm-install.mjs"), "utf8");
   const anchor = 'const helper = join(dirname(fileURLToPath(import.meta.url)), "npm-install-job.ps1");';
   expect(source.split(anchor)).toHaveLength(2);
-  return (await import("data:text/javascript;base64," + Buffer.from(source.replace(anchor, `const helper = ${JSON.stringify(helper)};`).replaceAll('"./mutation-guard.mjs"', JSON.stringify(pathToFileURL(repoPath("src/update/mutation-guard.mjs")).href))).toString("base64"))).runNpmInstall;
+  return (await importUpdateModuleCopy<{ runNpmInstall: typeof runNpmInstall }>(source.replace(anchor, `const helper = ${JSON.stringify(helper)};`))).runNpmInstall;
 }
+
+test("a private copy of npm-install.mjs resolves every import on every host", async () => {
+  // The Windows-only cases below load this copy too; a relative import that a data: URL cannot
+  // resolve must fail here, on every CI host, instead of only on the Windows lane.
+  const copy = await importUpdateModuleCopy<{ runNpmInstall: unknown }>(readFileSync(repoPath("src/update/npm-install.mjs"), "utf8"));
+  expect(typeof copy.runNpmInstall).toBe("function");
+});
 
 test.skipIf(process.platform !== "win32").each(["created", "tree"])("abrupt supervisor exit at %s kills installer and retains unproven stage", async point => {
   const root = mkdtempSync(join(tmpdir(), "ocx-supervisor-exit-"));

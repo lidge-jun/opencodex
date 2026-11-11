@@ -63,6 +63,17 @@ test("Advisor activity is routed through management and isolated by runtime conf
 });
 
 describe("GET /api/advisor/settings", () => {
+  test("context mode is validated, persisted and returned without changing the model", async () => {
+    const config = baseConfig();
+    config.advisor = { model: "expert/m", policy: "manual" };
+    const { ctx, saved } = makeCtx(config, "PUT", { contextMode: "question-only" });
+    const response = await handleAdvisorRoutes(ctx);
+    expect(response!.status).toBe(200);
+    expect((await response!.json()).settings.contextMode).toBe("question-only");
+    expect(saved[0]!.advisor).toMatchObject({ model: "expert/m", policy: "manual", contextMode: "question-only" });
+    for (const contextMode of [false, null, "question", ""]) expect(parseAdvisorSettingsPatch({ contextMode }).ok).toBe(false);
+  });
+
   test("returns resolved settings with defaults and availability", async () => {
     const { ctx } = makeCtx(baseConfig(), "GET");
     const response = await handleAdvisorRoutes(ctx);

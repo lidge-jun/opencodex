@@ -152,12 +152,13 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "link",
-    usage: "ocx link <port|issue|status|revoke|reconnect|cleanup|check|update|sync|restart-codex>",
+    usage: "ocx link <port|issue|status|diagnostics|revoke|reconnect|cleanup|check|update|sync|restart-codex|capture|policy>",
     summary: "Allocate and manage a loopback remote home link.",
     details: [
       "Port: ocx link port [--json]",
       "Issue: ocx link issue --alias <alias> --tunnel-port <port> [--json]",
       "Status: ocx link status [--json]",
+      "Diagnostics: ocx link diagnostics [--limit <n>] [--since <iso-time|epoch-ms>] [--json]",
       "Revoke: ocx link revoke --link-id <id> [--force --yes] [--json]",
       "Reconnect: ocx link reconnect --link-id <id> [--json]",
       "Cleanup: ocx link cleanup [--link-id <id>] [--json]",
@@ -166,7 +167,11 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "Sync: ocx link sync (--link-id <id> | --all) [--no-wait] [--json]",
       "Sync with a restart: ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]",
       "Restart Codex: ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]",
-      "Issue, status, revoke, reconnect, check, update, sync and restart-codex use the running proxy's loopback management API and admin token; update, sync and restart-codex act only on Home-initiated links.",
+      "Capture: ocx link capture <start [--minutes <1-60>]|stop|status> [--json]",
+      "Policy: ocx link policy [--updates off|notify|auto-when-idle] [--catalog-fanout auto|manual] [--child-codex-restart never|app-server-when-idle] [--idle-after-minutes <1-60>] [--json]",
+      "Issue, status, revoke, reconnect, check, update, sync, restart-codex and policy use the running proxy's loopback management API and admin token; update, sync and restart-codex act only on Home-initiated links.",
+      "Capture is a local file operation on this machine; it needs no running proxy, works on a Home and a Child, and no sync or remote input can start it.",
+      "Diagnostics reads this computer's link diagnostics file directly and needs no running proxy.",
     ],
   },
   {
@@ -412,8 +417,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "ocx advisor and ocx advisor status read the resolved settings; use --json for machine-readable output.",
       "ocx advisor on requires current context-sharing consent. Pass --ack-context-sharing to record consent v1 and enable. ocx advisor off disables the sidecar without granting consent.",
       "ocx advisor consent records consent v1 after printing the disclosure. ocx advisor consent --revoke removes it and stops task-context transfer.",
-      "ocx advisor set updates --model, --effort, --policy and --timeout-ms; the model may be any routable model string (bare native, provider/model, or account-qualified). set does not grant consent.",
-      "policy manual consults only when the worker calls the synthetic advisor tool; policy preflight also attempts one automatic consultation per task with a stable conversation identity, once the task shows orientation evidence. Without a stable identity, each eligible request may trigger another consultation. Both require current consent before any task context is sent.",
+      "ocx advisor set updates --model, --effort, --policy, --context-mode, --max-consultations and --timeout-ms; the model may be any routable model string (bare native, provider/model, or account-qualified). set does not grant consent.",
+      "In the default context mode, policy manual consults only when the worker calls the synthetic advisor tool; policy preflight also attempts one automatic consultation per task with a stable conversation identity, once the task shows orientation evidence. Without a stable identity, each eligible request may trigger another consultation. Both require current consent before any task context is sent. The question-only mode pauses automatic consultations.",
     ],
   },
   {

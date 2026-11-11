@@ -907,6 +907,7 @@ describe("GitHub Actions hardening", () => {
 
   async function readEnforcePrTarget(): Promise<{
     workflow: WorkflowShape;
+    triggers: WorkflowShape["on"];
     jobs: [string, WorkflowJob][];
     steps: WorkflowStep[];
     allSteps: WorkflowStep[];
@@ -914,6 +915,11 @@ describe("GitHub Actions hardening", () => {
   }> {
     const text = await readText(".github/workflows/enforce-pr-target.yml");
     const workflow = Bun.YAML.parse(text) as WorkflowShape;
+    // Since #7654 the gate runs as a local reusable workflow of pr-gates.yml, which
+    // owns its pull_request_target and status triggers; the gate itself is
+    // workflow_call-only. pr-gates-workflow.test.ts pins the caller's shape.
+    expect(Object.keys(workflow.on ?? {})).toEqual(["workflow_call"]);
+    const caller = Bun.YAML.parse(await readText(".github/workflows/pr-gates.yml")) as WorkflowShape;
     const jobs = Object.entries(workflow.jobs ?? {});
     const steps = workflow.jobs?.["enforce-target"]?.steps;
     expect(Array.isArray(steps)).toBe(true);
@@ -924,7 +930,7 @@ describe("GitHub Actions hardening", () => {
     const scriptStep = steps!.find(step => typeof step.with?.script === "string");
     expect(scriptStep).toBeDefined();
     const script = stripComments(String(scriptStep!.with!.script));
-    return { workflow, jobs, steps: steps!, allSteps, script };
+    return { workflow, triggers: caller.on, jobs, steps: steps!, allSteps, script };
   }
 
   const SCRIPT_LOAD = [
@@ -1060,7 +1066,7 @@ describe("GitHub Actions hardening", () => {
    * characterisation test on a privileged workflow actually needs.
    */
   test("PR target enforcement's structure is an exact allowlist, not a deny-list", async () => {
-    const { workflow, jobs, steps } = await readEnforcePrTarget();
+    const { workflow, triggers, jobs, steps } = await readEnforcePrTarget();
 
     // Top level: concurrency lives on the write job after read-only PR resolution.
     expect(Object.keys(workflow).sort()).toEqual([
@@ -1080,7 +1086,7 @@ describe("GitHub Actions hardening", () => {
     // `status` is the only extra trigger. CodeRabbit publishes a legacy
     // commit status; this privileged workflow is loaded from the default branch
     // and re-reads live review evidence before any mutation.
-    expect(Object.keys(workflow.on ?? {}).sort()).toEqual([
+    expect(Object.keys(triggers ?? {}).sort()).toEqual([
       "pull_request_target",
       "status",
     ]);
@@ -1094,8 +1100,8 @@ describe("GitHub Actions hardening", () => {
     // particular files change, which on a docs-only PR means never. Both are
     // additive, both look like ordinary scoping in a diff, and neither failed a
     // single assertion.
-    expect(Object.keys(workflow.on?.pull_request_target ?? {})).toEqual(["types"]);
-    expect(Object.prototype.hasOwnProperty.call(workflow.on ?? {}, "status")).toBe(true);
+    expect(Object.keys(triggers?.pull_request_target ?? {})).toEqual(["types"]);
+    expect(Object.prototype.hasOwnProperty.call(triggers ?? {}, "status")).toBe(true);
 
     // Exactly the scopes this gate needs. `pull-requests: write` covers title and
     // comment updates. `contents: write` is required for the draft GraphQL
@@ -1139,13 +1145,16 @@ describe("GitHub Actions hardening", () => {
     expect(new Set(wakeLabels).size).toBe(wakeLabels.length);
     expect([...wakeLabels].sort()).toEqual([...HYGIENE_GATE_LABELS, "gui-screenshot-waived"].sort());
 
+    // The shared comment lock sits on the hygiene job (#7654): it exists only when
+    // pr-gates.yml runs hygiene, so a skipped event never enters the group.
     const hygieneWorkflow = Bun.YAML.parse(
       await readText(".github/workflows/pr-hygiene.yml"),
-    ) as { concurrency?: { group?: string; "cancel-in-progress"?: boolean } };
-    expect(hygieneWorkflow.concurrency?.group).toBe(
+    ) as { concurrency?: unknown; jobs?: { hygiene?: { concurrency?: { group?: string; "cancel-in-progress"?: boolean } } } };
+    expect(hygieneWorkflow.concurrency).toBeUndefined();
+    expect(hygieneWorkflow.jobs?.hygiene?.concurrency?.group).toBe(
       "pr-gate-comment-${{ github.event.pull_request.number }}",
     );
-    expect(hygieneWorkflow.concurrency?.["cancel-in-progress"]).toBe(false);
+    expect(hygieneWorkflow.jobs?.hygiene?.concurrency?.["cancel-in-progress"]).toBe(false);
 
     expect(jobs.map(([name]) => name)).toEqual(["resolve-pr", "enforce-target"]);
 
@@ -1233,7 +1242,8 @@ describe("GitHub Actions hardening", () => {
   });
 
   test("PR target enforcement reacts to the events that can change the verdict", async () => {
-    const { workflow, script } = await readEnforcePrTarget();
+    const { triggers: on, script } = await readEnforcePrTarget();
+    const workflow = { on };
 
     // `edited` is what catches a retarget; `ready_for_review` is what re-applies
     // the draft when someone undoes it by hand. Dropping either silently makes

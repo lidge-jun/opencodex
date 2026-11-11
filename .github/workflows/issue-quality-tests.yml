@@ -35,6 +35,7 @@ on:
       - ".github/workflows/issue-triage.yml"
       - ".github/workflows/issue-quality-tests.yml"
       - ".github/workflows/pr-hygiene.yml"
+      - ".github/workflows/pr-gates.yml"
 
 permissions:
   contents: read

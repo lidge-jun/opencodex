@@ -100,6 +100,32 @@ ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wai
 
 `ocx link sync`、`ocx link restart-codex` 和 `ocx link update` 會透過連結的 SSH 連線在由 Home 新增的 Child 上執行，並以 JSON 輸出工作。`sync` 執行固定的 `ocx sync --expect-link`（Child 需為 2.93.0 或更新版本）。`restart-codex` 會先同步，再重新啟動 Child 上的 Codex app-server，讓執行中的 Codex 載入目前的目錄；`--scope codex` 也會重新啟動桌面應用程式。重新啟動只能指定一個連結；`restart-codex` 和 `--restart-codex` 需要 `--yes`，而 `ocx link sync --link-id <id> --restart-app-server-only` 不需確認即可重新啟動 app-server。當 Home 正在為該 Child 中繼模型請求時，會略過重新啟動（`restart-skipped:link-active`）。對於早於 2.69 的 Child，非串流請求要到回應開始後才看得到。`update --yes` 會使用 Child 自己的更新程式，把 Child 的 OpenCodex 更新到這個 Home 的版本，絕不會更新到其他版本（Child 需為 2.97.0 或更新版本；npm 和 pnpm 安裝透過其 Node 啟動器套用更新，因此 `ocx link check` 也會在那裡以唯讀方式執行 `node --version`）。一次更新一台 Child，套用成功、失敗或回復後會再次同步；結果未知的套用不會重試也不會同步，請用 `ocx link check` 檢查。正在為該 Child 中繼的請求會中斷。Windows Child 只支援 `sync`，`ocx-child` Child 會將重新啟動和更新回報為不支援。CLI 需要繫結到 loopback 的 Home；在其他 Home 上無法執行這些操作，儀表板也不提供這些操作。詳情與結束代碼請見 [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home)（英文）。 此保護僅為盡力而為：在檢查與重新啟動之間開始的請求仍可能被結束，因此需要保留回合時，請先暫停該 Child 上的新請求。 `ocx sync --restart-children`（或 `--restart-children=codex --yes`）在 Home 同步向外傳播時，對所有 Child 或以 `--child <linkId>` 指定的 Child 套用同一規則：每台 Child 都會同步，只有在有中繼請求進行時才略過其重新啟動（`restart-skipped:link-active`）。
 
+### 目錄自動分發與 Child 政策
+
+目錄分發預設為開啟。當 Home 的目錄變更時（目錄自動重新整理回報變更，或每 5 分鐘一次的檢查發現在儀表板或管理 API 中所做的編輯），Home 會等待 60 秒讓編輯穩定下來（距第一次變更最多 5 分鐘）。之後不需要你做任何操作，它會在背景為每台符合條件的 Child 開啟一個 SSH 工作階段，執行與 `ocx link sync` 相同的固定 `ocx sync --expect-link`；除非你啟用（見下文 `childCodexRestart`），否則不會重新啟動 Codex。符合條件的 Child 是：由 Home 發起的連結、通道已連線、沒有其他操作在執行，而且此 Home 在那裡最後一次執行的同步早於這次變更；只下載過目錄的 Child 仍視為落後。正在中繼模型請求的 Child，只有在其 Codex 設定已經與 Home 一致、且套用這些設定後其 OpenCodex 用戶端執行環境已經重新啟動過時才會同步，否則同步會重新啟動該執行環境；否則會在它閒置後再同步。同步失敗會在 5 分鐘後重試，間隔逐次加倍，最長 6 小時；低於 2.93.0 的 Child 在回報其他版本之前不會重試。這些工作與其他工作顯示方式相同，帶有 `trigger: "auto"`。沒有連結的 Home 不會執行其中任何部分。
+
+分發修正的是 Child 的目錄檔案。Child 上已經在執行的 Codex app-server 會繼續使用已載入的清單，直到重新啟動：請使用 `ocx link restart-codex --link-id <id> --yes` 或 `ocx sync --restart-children`，或以 `ocx link policy --child-codex-restart app-server-when-idle` 讓 Home 重新啟動 app-server；Home 只會在同步執行時仍然閒置的 Child 上這麼做。該設定從下一次自動同步起生效；目錄已是最新的 Child 不會被同步，因此也不會被重新啟動，請手動重新啟動它。
+
+政策儲存在 Home 的 `<configDir>/link/child-policy.json` 中，不會寫入 `config.json`：
+
+| 設定 | 預設值 | 可用值 |
+|---|---|---|
+| `catalogFanout` | `auto` | `auto`, `manual` |
+| `childCodexRestart` | `never` | `never`, `app-server-when-idle` |
+| `updates` | `auto-when-idle` | `off`, `notify`, `auto-when-idle` |
+| `idleAfterMs` | `600000` (10 分鐘) | 1 到 60 分鐘 |
+
+`updates` 預設會自動讓閒置的 Child 維持與 Home 相同的版本。本版本中自動更新尚未生效；該設定現在就會儲存，因此以 `ocx link policy --updates notify` 或 `--updates off` 做出的退出選擇，在自動更新推出時依然有效。`idleAfterMs` 表示 Child 在沒有被中繼的模型請求的情況下持續多久才算閒置；它也決定 `ocx link status` 中的 `activity.idle`。
+
+```text
+ocx link policy                                    # 讀取政策
+ocx link policy --catalog-fanout manual            # 關閉目錄自動分發
+ocx link policy --child-codex-restart app-server-when-idle
+ocx link policy --updates off --idle-after-minutes 20 --json
+```
+
+`GET` 和 `PUT /api/link/children/policy` 讀取和變更相同的設定（迴路介面上的管理權杖，或儀表板工作階段）；`PUT` 只傳送要變更的設定。如果檔案損毀或包含未知的值，目錄自動分發和更新都會關閉，而且 `ocx link policy` 會提示這一點。儲存會清除警告，但未指定的設定仍保持關閉，請明確開啟，例如 `ocx link policy --catalog-fanout auto --updates auto-when-idle`。Home 從不自行改寫該檔案。
+
 不要連結不屬於你的機器：Home 會用你的 SSH 金鑰在那裡執行指令。
 
 ## 相關指南
