@@ -434,6 +434,22 @@ describe("devin adapter window fallback", () => {
     expect(resolveInputCeiling(provider, "devin", "swe-1.7")).toBe(262_000);
   });
 
+  test("dotted id honors a configured window on the normalized spelling", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "devin", baseUrl: "https://devin.test",
+      modelContextWindows: { "swe-1-7-medium": 111_000 },
+    };
+    expect(resolveInputCeiling(provider, "devin", "swe-1.7-medium")).toBe(111_000);
+  });
+
+  test("dotted id honors a configured input cap on the normalized spelling", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "devin", baseUrl: "https://devin.test",
+      modelMaxInputTokens: { "swe-1-7": 100_000 },
+    };
+    expect(resolveInputCeiling(provider, "devin", "swe-1.7")).toBe(100_000);
+  });
+
   test("non-devin adapters stay unresolved", () => {
     const other: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://example.test/v1" };
     expect(resolveInputCeiling(other, "custom", "swe-2-flash")).toBeNull();
