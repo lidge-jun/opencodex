@@ -313,6 +313,12 @@ export interface OcxProviderConfig {
   alias?: string;
   /** Native model id -> short, slash-free request alias. */
   modelAliases?: Record<string, string>;
+  /**
+   * Opt-in alias template for models without a manual or built-in alias (#7705), for example
+   * `{providerAlias}-{modelBasename}`. Derived at resolution time and never written back; only the
+   * literal `{providerAlias}` and `{modelBasename}` placeholders are allowed.
+   */
+  aliasTemplate?: string;
   /** Display-only labels for exact native model ids discovered under this provider. */
   modelDisplayNames?: Record<string, string>;
   /** Override the global built-in model-alias switch for this provider. */
@@ -649,8 +655,11 @@ export interface OcxProviderConfig {
    * visible. Empty/undefined = no opt-in (default behavior). See #1690.
    */
   retainModels?: string[];
-  /** Override for newly discovered models. Absent/"inherit" uses the install policy. */
-  newModelPolicy?: "on" | "off" | "inherit";
+  /**
+   * Override for newly discovered models. Absent/"inherit" uses the install policy. `admit`
+   * appends arrivals to a custom `selectedModels` (never a preset-derived one).
+   */
+  newModelPolicy?: "on" | "off" | "admit" | "inherit";
   /**
    * Model-preset marker for `selectedModels` (#2465). Absent means "all", exactly today's
    * semantics — an existing provider is never narrowed by an upgrade.

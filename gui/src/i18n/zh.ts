@@ -3888,7 +3888,7 @@ export const zh: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "提供商表路由可能使已有的 openai 标签会话在部分移动端远程列表中隐藏。历史记录并未删除。远程客户端必须列出所有提供商；此开关不会修复客户端的列表过滤器。",
   "models.newPolicyGlobal": "新模型默认停用", "models.newPolicyProvider": "新模型策略",
   "models.fastProvider": "Fast 模式", "models.fastProviderHint": "按 2 倍价格消耗用量额度", "models.fastEnabled": "已开启 Fast 模式", "models.fastDisabled": "已关闭 Fast 模式", "models.fastSaveFailed": "无法保存 Fast 模式",
-  "models.newPolicy_inherit": "继承", "models.newPolicy_off": "关闭", "models.newPolicy_on": "开启", "models.newBadge": "新增", "models.newCount": "{count} 个新增，已关闭",
+  "models.newPolicy_inherit": "继承", "models.newPolicy_off": "关闭", "models.newPolicy_on": "开启", "models.newPolicy_admit": "加入选择", "models.newBadge": "新增", "models.newCount": "{count} 个新增，已关闭",
   "models.aliases": "别名",
   "models.aliasesTable": "别名表",
   "models.aliasPrompt": "服务商别名（留空即清除）",

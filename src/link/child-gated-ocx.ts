@@ -4,28 +4,32 @@ import { classifyChildUpdatePlan, mapUpdateApplyExit, parseChildUpdatePlan, PLAN
   type UpdateApplyVerdict } from "./child-update-contract";
 
 export type SshResult = { code: number; stdout: string; stderr: string };
-export type GatedRefusal = "child-ocx-lacks-expect-link" | "child-ocx-lacks-orchestrated-update" | "child-ocx-version-unknown" | "child-ocx-ephemeral" | "child-gate-failed";
+export type GatedRefusal = "child-ocx-lacks-expect-link" | "child-ocx-lacks-orchestrated-update" | "child-ocx-version-unknown" | "child-ocx-ephemeral"
+  | "child-node-unavailable" | "child-gate-failed";
 export type GatedFraming =
   | { kind: "transport"; reason: "ssh-failed" | "child-ocx-not-found" | "child-ocx-not-contained" | "child-platform-unsupported" }
   | { kind: "refused"; reason: GatedRefusal }
-  | { kind: "ran"; code: number; selectedVersion: string; entry: "pair" | "binary" | null; childNowMs: number | null; payload: string; lastStderrLine: string | undefined }
+  | { kind: "ran"; code: number; selectedVersion: string; entry: "pair" | "binary" | null; childNowMs: number | null;
+    launcher: "available" | "unavailable" | "exec" | null; payload: string; lastStderrLine: string | undefined }
   | { kind: "invalid" };
 
 function assertHomeVersion(version: string): void {
   if (version.length > 128 || !parseStrictSemver(version)) throw new LinkSshArgumentError("invalid Home version");
 }
-const UPDATE_GATE = { minVersion: "2.97.0", lacksMarker: "child-ocx-lacks-orchestrated-update", acceptEphemeral: false, reportEntry: true, reportClock: false } as const;
+const UPDATE_GATE = { minVersion: "2.97.0", lacksMarker: "child-ocx-lacks-orchestrated-update", acceptEphemeral: false, reportEntry: true, reportClock: false,
+  launcher: "none" } as const;
 
 /**
  * Never mutates an install: below 2.97.0 the gate exits 121 before update runs, and update --plan only computes.
  * Not free of side effects on every Child: without a census pair (an npm/pnpm Child whose service never recorded one)
  * the script execs the ocx shim, so the Node launcher's ordinary bootstrap runs first (sync-guard bookkeeping, Bun
  * resolution; the Desktop handoff is disabled), exactly as for every pinned sync already sent to that Child. The probe
- * prints the Child's clock so the apply deadline can be set in the Child's time.
+ * prints the Child's clock so the apply deadline can be set in the Child's time, and (A4) reports whether a Node that
+ * could run the package launcher answers --version; it always plans through the served entry, whatever that report says.
  */
 export function remoteUpdatePlanArgv(homeVersion: string, platform: "posix" | "windows"): string[] {
   assertHomeVersion(homeVersion);
-  return remoteGatedOcxArgv({ ...UPDATE_GATE, reportClock: true, args: ["update", "--plan", "--json", "--version", homeVersion] }, platform);
+  return remoteGatedOcxArgv({ ...UPDATE_GATE, reportClock: true, launcher: "report", args: ["update", "--plan", "--json", "--version", homeVersion] }, platform);
 }
 
 /**
@@ -33,19 +37,24 @@ export function remoteUpdatePlanArgv(homeVersion: string, platform: "posix" | "w
  * A token starting with "-" cannot pass the Child's --expect-plan parser (orchestrated-arguments.mjs refuses a value
  * that looks like a flag), so it is omitted; the apply stays pinned by --version, bounded by --not-after, serialized
  * by the Child's update mutex and refused on downgrade. Only the plan-consistency check is lost for that token.
+ * viaLauncher (A4): the caller sets it only for a plan whose installer is npm or pnpm; the apply then runs through
+ * <node> <root>/bin/ocx.mjs of the served package, or exits 121 child-node-unavailable before anything runs.
  */
-export function remoteUpdateApplyArgv(input: { homeVersion: string; planToken: string; notAfter: number }, platform: "posix" | "windows"): string[] {
+export function remoteUpdateApplyArgv(input: { homeVersion: string; planToken: string; notAfter: number; viaLauncher: boolean },
+  platform: "posix" | "windows"): string[] {
   if (platform === "windows") throw new LinkSshArgumentError("unsupported:windows-apply");
   assertHomeVersion(input.homeVersion);
   if (!PLAN_TOKEN_PATTERN.test(input.planToken)) throw new LinkSshArgumentError("invalid plan token");
   if (!Number.isSafeInteger(input.notAfter) || input.notAfter <= 0) throw new LinkSshArgumentError("invalid deadline");
+  if (typeof input.viaLauncher !== "boolean") throw new LinkSshArgumentError("invalid launcher route");
   const expectPlan = input.planToken.startsWith("-") ? [] : ["--expect-plan", input.planToken];
-  return remoteGatedOcxArgv({ ...UPDATE_GATE, args: ["update", "--yes", "--json", "--version", input.homeVersion,
+  return remoteGatedOcxArgv({ ...UPDATE_GATE, launcher: input.viaLauncher ? "apply" : "none", args: ["update", "--yes", "--json", "--version", input.homeVersion,
     ...expectPlan, "--not-after", String(input.notAfter)] }, platform);
 }
 
-const REFUSAL = /^ocx-fanout:(child-ocx-lacks-expect-link|child-ocx-lacks-orchestrated-update|child-ocx-version-unknown|child-ocx-ephemeral)$/;
+const REFUSAL = /^ocx-fanout:(child-ocx-lacks-expect-link|child-ocx-lacks-orchestrated-update|child-ocx-version-unknown|child-ocx-ephemeral|child-node-unavailable)$/;
 const CHILD_NOW = "ocx-fanout:child-now:";
+const LAUNCHER = "ocx-fanout:launcher:";
 
 /**
  * The framing classifySyncResult applies, generalised to every gated command. A run is recognised by exactly one
@@ -73,8 +82,12 @@ export function readGatedFraming(result: SshResult): GatedFraming {
   // Capture any value and validate it afterwards, so a malformed clock makes the framing invalid instead of absent.
   const clocks = lines.filter(line => line.startsWith(CHILD_NOW)).map(line => line.slice(CHILD_NOW.length));
   if (clocks.length > 1 || (clocks.length === 1 && (!/^[0-9]{10,16}$/.test(clocks[0]!) || !Number.isSafeInteger(Number(clocks[0]))))) return { kind: "invalid" };
+  // A4: at most one launcher line, from a closed set; anything else breaks the framing like a malformed clock does.
+  const launchers = lines.filter(line => line.startsWith(LAUNCHER)).map(line => line.slice(LAUNCHER.length));
+  if (launchers.length > 1 || (launchers.length === 1 && !/^(available|unavailable|exec)$/.test(launchers[0]!))) return { kind: "invalid" };
   return { kind: "ran", code, selectedVersion: selected[0]![1]!, entry: entries.length ? (entries[0]!.slice("ocx-fanout:entry:".length) as "pair" | "binary") : null,
-    childNowMs: clocks.length ? Number(clocks[0]) : null, payload: out.slice(delimiters[0]! + 1).join("\n").trim(), lastStderrLine: last };
+    childNowMs: clocks.length ? Number(clocks[0]) : null, launcher: launchers.length ? launchers[0] as "available" | "unavailable" | "exec" : null,
+    payload: out.slice(delimiters[0]! + 1).join("\n").trim(), lastStderrLine: last };
 }
 
 export type PlanProbeVerdict =
@@ -99,7 +112,9 @@ export function classifyUpdatePlanProbe(result: SshResult, ctx: { homeVersion: s
   if (!parsed.ok) return { kind: "failed", reason: parsed.reason };
   const entry = framing.entry ?? (ctx.platform === "windows" ? "binary" : null);
   return { kind: "plan", selectedVersion: framing.selectedVersion, childNowMs: framing.childNowMs,
-    classification: classifyChildUpdatePlan(parsed.value, { homeVersion: ctx.homeVersion, desktopUpdateRequest: ctx.desktopUpdateRequest, entry }) };
+    // A plan never execs the launcher; an exec line here is treated as no report.
+    classification: classifyChildUpdatePlan(parsed.value, { homeVersion: ctx.homeVersion, desktopUpdateRequest: ctx.desktopUpdateRequest, entry,
+      launcher: framing.launcher === "exec" ? null : framing.launcher }) };
 }
 
 export function classifyUpdateApply(result: SshResult): UpdateApplyVerdict {
@@ -109,7 +124,10 @@ export function classifyUpdateApply(result: SshResult): UpdateApplyVerdict {
     : { state: "failed", reason: framing.reason, suppressTarget: false, reobserve: false };
   if (framing.kind === "refused") return framing.reason === "child-ocx-ephemeral"
     ? { state: "unsupported", reason: "ephemeral", suppressTarget: false, reobserve: false }
-    : { state: "owner-action", reason: framing.reason === "child-gate-failed" ? "child-gate-failed" : "legacy-ocx", suppressTarget: false, reobserve: false };
+    // A4: the npm/pnpm launcher route found no Node on the Child; nothing ran.
+    : framing.reason === "child-node-unavailable"
+      ? { state: "owner-action", reason: "launcher-node-missing", suppressTarget: false, reobserve: false }
+      : { state: "owner-action", reason: framing.reason === "child-gate-failed" ? "child-gate-failed" : "legacy-ocx", suppressTarget: false, reobserve: false };
   // Framing broken after a command may have run: never assume it did not.
   if (framing.kind === "invalid") return { state: "uncertain", reason: "child-output-invalid", suppressTarget: false, reobserve: true };
   return mapUpdateApplyExit(framing.code, framing.payload);

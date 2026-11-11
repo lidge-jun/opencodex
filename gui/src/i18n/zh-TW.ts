@@ -3853,7 +3853,7 @@ export const zhTW: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "供應商表路由可能使既有的 openai 標記對話在部分行動版遠端清單中隱藏。歷程並未刪除。遠端用戶端必須列出所有供應商；此開關不會修正用戶端的清單篩選器。",
   "models.newPolicyGlobal": "新模型預設停用", "models.newPolicyProvider": "新模型策略",
   "models.fastProvider": "Fast 模式", "models.fastProviderHint": "以 2 倍價格消耗用量額度", "models.fastEnabled": "已開啟 Fast 模式", "models.fastDisabled": "已關閉 Fast 模式", "models.fastSaveFailed": "無法儲存 Fast 模式",
-  "models.newPolicy_inherit": "繼承", "models.newPolicy_off": "關閉", "models.newPolicy_on": "開啟", "models.newBadge": "新增", "models.newCount": "{count} 個新增，已關閉",
+  "models.newPolicy_inherit": "繼承", "models.newPolicy_off": "關閉", "models.newPolicy_on": "開啟", "models.newPolicy_admit": "加入選擇", "models.newBadge": "新增", "models.newCount": "{count} 個新增，已關閉",
   "models.aliases": "別名",
   "models.aliasesTable": "別名表",
   "models.aliasPrompt": "供應商別名（留空即清除）",

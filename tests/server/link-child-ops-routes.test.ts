@@ -11,6 +11,7 @@ import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { LinkSupervisor } from "../../src/link/supervisor";
 import type { SshRunResult, SshRunner } from "../../src/link/ssh-runner";
 import { readChildObservations } from "../../src/link/child-observations";
+import { resetSharedChildOpsEngineForTests, sharedChildOpsEngine } from "../../src/link/child-ops-engine";
 import { catalogEtag } from "../../src/server/catalog-download";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -22,6 +23,7 @@ const PLAN = { schema: "ocx.update.plan/1", currentVersion: "2.97.0", targetVers
   mutationBoundMs: 900_000 };
 const PLAN_ANSWER: SshRunResult = { code: 0, stdout: "ocx-fanout:stdout-begin\n" + JSON.stringify(PLAN) + "\n",
   stderr: "ocx-fanout:selected:2.97.0\nocx-fanout:entry:binary\nocx-fanout:child-now:1762819200000\n" };
+const SYNC_ANSWER: SshRunResult = { code: 0, stdout: "ocx-fanout:stdout-begin\nRemote Link Home catalog synchronized.\n", stderr: "ocx-fanout:selected:2.97.0\n" };
 
 let temp = "";
 const saved: Record<string, string | undefined> = {};
@@ -34,7 +36,10 @@ beforeEach(() => {
   mkdirSync(join(temp, "codex"), { recursive: true });
   writeFileSync(join(temp, "codex", "opencodex-catalog.json"), JSON.stringify({ models: [] }));
 });
-afterEach(() => {
+afterEach(async () => {
+  // The routes reach the process-wide engine through handleManagementAPI; every job ends before the next test.
+  await sharedChildOpsEngine().settled();
+  resetSharedChildOpsEngineForTests();
   for (const [name, value] of Object.entries(saved)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
   removeTreeWithRetry(temp);
 });
@@ -45,10 +50,13 @@ function link(id: string, overrides: Partial<LinkRecord> = {}): LinkRecord {
 }
 
 function supervisor(): LinkSupervisor {
-  return { start() {}, ensureStarted: async () => {}, reload: async () => {}, stopLink: async () => {}, status: () => [], stop: async () => {} };
+  // HUB's tunnel is connected, so the sync, restart and update runners reach the fake SSH runner.
+  return { start() {}, ensureStarted: async () => {}, reload: async () => {}, stopLink: async () => {}, stop: async () => {},
+    status: () => [{ linkId: HUB, direction: "hub-initiated", state: { kind: "connected", since: 1_762_000_000_000 }, pid: 1 }] };
 }
 
-function harness(options: { links?: LinkRecord[]; runtimeRole?: OcxConfig["runtimeRole"]; gate?: Promise<void>; full?: boolean; onFlush?: () => void } = {}) {
+function harness(options: { links?: LinkRecord[]; runtimeRole?: OcxConfig["runtimeRole"]; gate?: Promise<void>; full?: boolean; onFlush?: () => void;
+  disconnectGate?: Promise<void>; disconnectAnswer?: SshRunResult } = {}) {
   let current: LinkStore = { version: 1, listenerPort: 18181, links: options.links ?? [link(HUB), link(CLIENT, { direction: "client-initiated", hostKeyFingerprint: null })] };
   // Persisted too: the observation cache prunes entries whose link is absent from links.json.
   writeFileSync(join(temp, "ocx", "link", "links.json"), JSON.stringify(current));
@@ -58,6 +66,12 @@ function harness(options: { links?: LinkRecord[]; runtimeRole?: OcxConfig["runti
     async run(argv) {
       sshCalls.push(argv.at(-1) ?? "");
       if (options.gate) await options.gate;
+      const remote = argv.at(-1) ?? "";
+      if (remote.includes("'sync'")) return SYNC_ANSWER;
+      if (remote.includes("'disconnect'")) {
+        if (options.disconnectGate) await options.disconnectGate;
+        return options.disconnectAnswer ?? { code: 0, stdout: "", stderr: "" };
+      }
       return PLAN_ANSWER;
     },
     spawnTunnel: () => ({ pid: 1, argv: [], exited: Promise.resolve(0), kill() {} }),
@@ -125,13 +139,80 @@ describe("link child operations routes", () => {
   test("body validation", async () => {
     const h = harness();
     const many = Array.from({ length: 65 }, (_, index) => "lnk_" + index.toString(16).padStart(16, "0"));
-    for (const body of [{ op: "observe", linkIds: [HUB], extra: 1 }, { op: "sync", linkIds: [HUB] }, { op: "observe", linkIds: many },
-      { op: "observe", linkIds: ["lnk_bad"] }, { op: "observe", linkIds: [] }, { op: "observe", linkIds: [HUB, HUB] }, { op: "observe" }, "observe"]) {
+    for (const body of [{ op: "observe", linkIds: [HUB], extra: 1 }, { op: "observe", linkIds: many }, { op: "restart", linkIds: [HUB] },
+      { op: "observe", linkIds: ["lnk_bad"] }, { op: "observe", linkIds: [] }, { op: "observe", linkIds: [HUB, HUB] }, { op: "observe" }, "observe",
+      { op: "observe", linkIds: [HUB], restart: "app-server" }, { op: "sync", linkIds: [HUB], restart: "bogus" },
+      // No body can claim an automatic trigger: trigger is an unknown key.
+      { op: "update", linkIds: [HUB], trigger: "auto" },
+      // A2 / M8: any request that carries a restart names its links.
+      { op: "restart-codex", linkIds: "all" }, { op: "sync", restart: "app-server", linkIds: "all" }, { op: "update", restart: "codex", linkIds: "all" }]) {
       const response = await h.call("/api/link/children/operations", "POST", body);
       expect(response?.status).toBe(400);
       expect(((await response!.json()) as { error: { code: string } }).error.code).toBe("invalid_body");
     }
     expect(h.sshCalls).toEqual([]);
+  });
+
+  test("sync runs the pinned sync to a succeeded item; restart-codex defaults to app-server", async () => {
+    const h = harness({ full: true });
+    const response = await h.call("/api/link/children/operations", "POST", { op: "sync", linkIds: [HUB] });
+    expect(response?.status).toBe(202);
+    const { job } = await response!.json() as { job: { jobId: string; op: string; trigger: string; restart: string } };
+    expect(job).toMatchObject({ op: "sync", trigger: "manual", restart: "none" });
+    const done = await pollDone(h, job.jobId) as unknown as { items: Array<Record<string, unknown>> };
+    expect(done.items[0]).toMatchObject({ linkId: HUB, state: "succeeded", reason: null, sync: { state: "synced", reason: null } });
+    expect(h.sshCalls.map(call => call.includes("'--expect-link' '" + HUB + "' '--json'"))).toEqual([true]);
+    expect(readChildObservations().children[HUB]?.lastOperation).toMatchObject({ op: "sync", state: "succeeded" });
+    const restart = await h.call("/api/link/children/operations", "POST", { op: "restart-codex", linkIds: [HUB] });
+    const restartJob = ((await restart!.json()) as { job: { jobId: string; restart: string } }).job;
+    expect(restartJob.restart).toBe("app-server");
+    const restarted = await pollDone(h, restartJob.jobId) as unknown as { items: Array<Record<string, unknown>> };
+    expect(restarted.items[0]).toMatchObject({ state: "succeeded", restart: { requested: "app-server", outcome: "requested" } });
+    expect(h.sshCalls.at(-1)!.endsWith("'--json' '--restart-app-server-only'")).toBe(true);
+    expect((await h.call("/api/link/children/operations", "POST", { op: "sync", linkIds: "all" }))?.status).toBe(202);
+  });
+
+  test("Child-initiated, empty-store and Child-runtime refusals", async () => {
+    const h = harness();
+    for (const op of ["sync", "restart-codex", "update"]) {
+      const refused = await h.call("/api/link/children/operations", "POST", { op, linkIds: [CLIENT] });
+      expect(refused?.status).toBe(409);
+      expect(((await refused!.json()) as { error: { code: string } }).error.code).toBe("link_not_home_initiated");
+    }
+    const observed = await h.call("/api/link/children/operations", "POST", { op: "observe", linkIds: [CLIENT] });
+    expect(observed?.status).toBe(202);
+    await pollDone(h, ((await observed!.json()) as { job: { jobId: string } }).job.jobId);
+    const empty = harness({ links: [] });
+    const none = await empty.call("/api/link/children/operations", "POST", { op: "sync", linkIds: "all" });
+    expect(none?.status).toBe(409);
+    expect(await none!.json()).toEqual({ error: { code: "no_eligible_links", message: "This Home has no links." } });
+    const child = harness({ runtimeRole: "client" });
+    for (const op of ["observe", "sync", "restart-codex", "update"]) {
+      const refused = await child.call("/api/link/children/operations", "POST", { op, linkIds: [HUB] });
+      expect(refused?.status).toBe(409);
+      expect(((await refused!.json()) as { error: { code: string } }).error.code).toBe("runtime_role_client");
+    }
+    expect(h.sshCalls).toEqual([]);
+  });
+
+  test("DELETE answers 409 while a job holds the link and removes it once the job is done", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>(resolve => { open = resolve; });
+    const h = harness({ gate });
+    const started = await h.call("/api/link/children/operations", "POST", { op: "sync", linkIds: [HUB] });
+    const jobId = ((await started!.json()) as { job: { jobId: string } }).job.jobId;
+    const held = await h.call("/api/link/" + HUB, "DELETE");
+    expect(held?.status).toBe(409);
+    expect(((await held!.json()) as { error: { code: string } }).error.code).toBe("link_operation_in_progress");
+    expect(h.events).toEqual([]);
+    expect(h.sshCalls.filter(call => call.includes("'disconnect'"))).toEqual([]);
+    open();
+    await pollDone(h, jobId);
+    const removed = await h.call("/api/link/" + HUB, "DELETE");
+    expect(removed?.status).toBe(200);
+    expect(h.sshCalls.filter(call => call.includes("'disconnect'"))).toHaveLength(1);
+    expect(h.events).toEqual(["revoke", "store"]);
+    expect(h.store.links.map(record => record.id)).toEqual([CLIENT]);
   });
 
   test("unknown link → 404; a Child runtime → 409", async () => {
@@ -240,3 +321,64 @@ describe("link child operations routes", () => {
     expect(flushes).toBe(1);
   });
 });
+
+describe("link removal reserves the link (Codex P2, final L1, security L2)", () => {
+  const until = async (check: () => boolean) => {
+    for (let attempt = 0; attempt < 400 && !check(); attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+    if (!check()) throw new Error("condition not reached");
+  };
+
+  test("a job submitted while DELETE awaits the remote disconnect is refused, and DELETE completes", async () => {
+    let open!: () => void;
+    const disconnectGate = new Promise<void>(resolve => { open = resolve; });
+    const h = harness({ disconnectGate });
+    const removal = h.call("/api/link/" + HUB, "DELETE");
+    await until(() => h.sshCalls.some(call => call.includes("'disconnect'")));
+    const single = await h.call("/api/link/children/operations", "POST", { op: "sync", linkIds: [HUB] });
+    expect(single?.status).toBe(409);
+    expect(((await single!.json()) as { error: { code: string } }).error.code).toBe("link_operation_in_progress");
+    const bulk = await h.call("/api/link/children/operations", "POST", { op: "update", linkIds: "all" });
+    expect(bulk?.status).toBe(202);
+    const bulkJob = ((await bulk!.json()) as { job: { items: Array<{ linkId: string; state: string; reason: string | null }> } }).job;
+    expect(bulkJob.items.find(item => item.linkId === HUB)).toMatchObject({ state: "busy", reason: "link-operation-in-progress" });
+    const second = await h.call("/api/link/" + HUB, "DELETE");
+    expect(second?.status).toBe(409);
+    open();
+    const removed = await removal;
+    expect(removed?.status).toBe(200);
+    expect(h.events).toEqual(["revoke", "store"]);
+    expect(h.store.links.map(record => record.id)).toEqual([CLIENT]);
+    // Only the removal's own disconnect reached the Child: the refused jobs sent nothing.
+    expect(h.sshCalls).toHaveLength(1);
+  });
+
+  test("a link a job holds is refused at entry, before any teardown", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>(resolve => { open = resolve; });
+    const h = harness({ gate });
+    const started = await h.call("/api/link/children/operations", "POST", { op: "sync", linkIds: [HUB] });
+    const jobId = ((await started!.json()) as { job: { jobId: string } }).job.jobId;
+    const held = await h.call("/api/link/" + HUB, "DELETE");
+    expect(held?.status).toBe(409);
+    expect(h.events).toEqual([]);
+    expect(h.sshCalls.some(call => call.includes("'disconnect'"))).toBe(false);
+    open();
+    await pollDone(h, jobId);
+  });
+
+  test("the reservation is released when the removal fails", async () => {
+    const h = harness({ disconnectAnswer: { code: 1, stdout: "", stderr: "refused" } });
+    const failed = await h.call("/api/link/" + HUB, "DELETE");
+    expect(failed?.status).toBe(502);
+    expect(h.store.links.map(record => record.id)).toEqual([HUB, CLIENT]);
+    const after = await h.call("/api/link/children/operations", "POST", { op: "sync", linkIds: [HUB] });
+    expect(after?.status).toBe(202);
+    await pollDone(h, ((await after!.json()) as { job: { jobId: string } }).job.jobId);
+    const invalid = await h.call("/api/link/" + HUB, "DELETE", { force: "yes" });
+    expect(invalid?.status).toBe(400);
+    const again = await h.call("/api/link/children/operations", "POST", { op: "sync", linkIds: [HUB] });
+    expect(again?.status).toBe(202);
+    await pollDone(h, ((await again!.json()) as { job: { jobId: string } }).job.jobId);
+  });
+});
+

@@ -3889,7 +3889,7 @@ export const ja: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "プロバイダーテーブル方式では、一部のモバイルリモート一覧で既存の openai タグ付きスレッドが表示されない場合があります。履歴は削除されていません。リモートクライアントは全プロバイダーを一覧取得する必要があり、このスイッチはそのフィルターを修正しません。",
   "models.newPolicyGlobal": "新しいモデルを無効で追加", "models.newPolicyProvider": "新しいモデルのポリシー",
   "models.fastProvider": "Fast モード", "models.fastProviderHint": "使用クレジットを 2 倍の料金で消費します", "models.fastEnabled": "Fast モードをオンにしました", "models.fastDisabled": "Fast モードをオフにしました", "models.fastSaveFailed": "Fast モードを保存できませんでした",
-  "models.newPolicy_inherit": "継承", "models.newPolicy_off": "オフ", "models.newPolicy_on": "オン", "models.newBadge": "新着", "models.newCount": "新着 {count} 件、オフ",
+  "models.newPolicy_inherit": "継承", "models.newPolicy_off": "オフ", "models.newPolicy_on": "オン", "models.newPolicy_admit": "選択に追加", "models.newBadge": "新着", "models.newCount": "新着 {count} 件、オフ",
   "models.aliases": "エイリアス",
   "models.aliasesTable": "エイリアス一覧",
   "models.aliasPrompt": "プロバイダーのエイリアス（空にすると解除）",
