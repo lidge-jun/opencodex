@@ -176,7 +176,7 @@ Remote Link の Home では、最新のカタログが正常にコミットさ�
 
 伝播は Child の Codex アプリや app-server の再起動を要求しません。必要な場合は GOAT を使うか、フル `ocx` Child では `ocx sync --restart-codex` を実行してください（軽量 `ocx-child` Child では Codex デスクトップと `app-server` を別途再起動してください）。ただし、Child の固定先同期は、変更された Home 設定を適用した後、自身の OpenCodex クライアントランタイムを再起動することがあります。Home がタイムアウトしてローカルの SSH プロセスを停止しても、すでに開始されたリモート同期は Child 上で続くことがあります。
 
-> **Remote Link Child:** フル `ocx` Child では `ocx sync` が Home の Codex 設定も適用し、クライアントランタイムがその適用より前に起動していた場合は再起動フラグなしでも再起動します。再起動に失敗しても以前のランタイムは動作し続け、コマンドは 0 以外で終了します。軽量 `ocx-child` ホストでは `ocx-child sync` が未起動時に `ocx-child serve` を起動し、`runtimeStartedAt < lastApplyAt` のときにローテーションして非 `stale` 同期時にベストエフォートで parity を報告します（ローテーション失敗時は旧リレー停止後に 0 以外で終了するため再実行で復旧し、Codex デスクトップや `app-server` の再起動は別途行ってください）。Child の `ocx status --json`（または `ocx-child status --json`）と Home の `ocx link status --json` の関連フィールドは [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英語）を参照してください。
+> **Remote Link Child:** フル `ocx` Child では `ocx sync` が Home の Codex 設定も適用し、クライアントランタイムがその適用より前に起動していた場合は再起動フラグなしでも再起動します。再起動に失敗しても以前のランタイムは動作し続け、コマンドは 0 以外で終了します。軽量 `ocx-child` ホストでは `ocx-child sync` が未起動時に `ocx-child serve` を起動し、`runtimeStartedAt < lastApplyAt` のときにローテーションして非 `stale` 同期時にベストエフォートで parity を報告します（ローテーション失敗時は旧リレー停止後に 0 以外で終了するため再実行で復旧し、Codex デスクトップや `app-server` の再起動は別途行ってください）。Child の `ocx status --json`（または `ocx-child status --json`）と Home の `ocx link status --json` の関連フィールドは [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英語）を参照してください。 Home では `ocx link check (--link-id <id> | --all)` が SSH 経由の `ocx update --plan`（Child ごとに 60 秒、インストールは変更しません）で Home から追加した各 Child のインストール済みバージョンと更新経路を読み取り、`ocx link status --json` は各行に `child` ブロックを追加します。詳しくは [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity)（英語）を参照してください。
 
 再起動フラグを明示した場合、カタログとキャッシュのバイト列が変わらなくても、`config.toml` の変更が正常にコミットされれば再起動します。設定だけを扱う操作が変更なし、拒否、事前検証、ロールバックとなった場合は再起動しません。再起動フラグがなければ、sync が Codex を自動的に再起動することはありません。
 
@@ -231,7 +231,9 @@ macOS では、launchd は代わりにインストールまたは修復時に選
 
 macOS のエージェントは `ProcessType=Interactive` を使用し、負荷が高い場合もヘルスチェックに応答できるよう、既定の daemon の CPU・I/O 制限を避けます。既存のインストールをアップグレードした後は、`ocx service repair` を実行してこのポリシーも適用してください。
 
-定義の読み込みを確認できなかった場合、トークンが変わっても未確認状態は次の修復に引き継がれます。次の修復は登録を再試行し、bootstrap の成功と一致するジョブの確認がそろうまで元のバックアップを保持します。
+定義の読み込みを確認できなかった場合、トークンが変わっても未確認状態は次の修復に引き継がれます。登録の再試行は、最初の launchd 状態確認が可能な場合だけ行われ、GUI ログインセッションが必要なことがあります。作成に成功した元のバックアップは、bootstrap の受け入れと一致するジョブの確認がそろうまで保持されます。バックアップ作成はベストエフォートで、新規インストールには以前の定義がありません。
+
+変更した定義の bootstrap が拒否され、状態を確認できる場合は以前の定義の復元を試みます。状態を確認できなくなった場合は追加の解除や復元を行わず、bootstrap が受け入れられた場合は未検証の再読み込みとして警告し、拒否された場合は失敗します。再試行前に `launchctl print gui/$(id -u)/com.opencodex.proxy` で確認してください。新規インストールは孤立した復旧ファイルを削除し、完全アンインストールは plist がなくても削除します。既に存在しないファイル以外の削除エラーは失敗として報告し、インストール状態を保持します。
 
 この変更より前にインストールされた定義は、古いバージョン付きパスを保持したままで、自分自身を移行できません。古い実行ファイルが削除されると、修復する opencodex コードは実行されません。アップグレード後に一度 `ocx service repair` を実行してください。その後、Linux のサービス起動はランチャーに従い、macOS の repair は新しいパッケージ パスを launchd 定義に書き込みます。外部アップグレードによって実行中のプロキシが置き換えられることはありません。インストール済み CLI が実行中のプロキシより新しい場合は、新しいビルドが提供されるよう `ocx service restart` を実行してください。macOS では、この場合 `repair` だけでは不十分です。定義は変更されていないため、何も変更しない repair は何もリロードしません。逆にプロキシの方が新しい場合は、[`ocx status`](#ocx-status---json) の説明に従って CLI のインストールと `PATH` を確認してください。
 

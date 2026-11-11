@@ -20,6 +20,13 @@ import { encodePlistString, plistKeyedString } from "./plist-xml";
 /** Encode a plist value; `field` names it if it holds a character XML cannot carry. */
 const plistString = encodePlistString;
 
+/** A concurrent cleanup may already have removed this install-owned file. */
+function unlinkLaunchdOwnedFile(path: string): void {
+  try { unlinkSync(path); } catch (error) {
+    if ((error as { code?: string }).code !== "ENOENT") throw error;
+  }
+}
+
 /**
  * Render the launchd plist from the package-local Bun + CLI pair. Unlike systemd, launchd
  * must not hand the service token and proxy environment to a PATH-discovered launcher: a
@@ -112,8 +119,8 @@ function filterPlistPathVariable(plist: string): string {
  * service already runs with is the one that survives.
  *
  * The caller applies this only when the live job is loaded from exactly the exec line this
- * install baked: that is the evidence that the running definition is the one on disk, which
- * is what makes keeping its PATH correct rather than a guess. Whenever anything ELSE about
+ * install baked. This preserves the operator's installed PATH, not evidence that a pending
+ * definition was loaded; the caller still requires verified bootstrap. Whenever anything ELSE about
  * the definition changed the plist is rewritten in full, PATH included, so a real
  * re-install still updates it. Adding the Interactive policy also retains the previous
  * normalized PATH, but keeps the policy line so the caller still reloads the definition.
@@ -627,7 +634,7 @@ export function installLaunchd(deps: {
   // Disk bytes may be newer than launchd's cached definition after an unreadable probe.
   // Keep this across invocations; neither a matching command nor token rotation confirms it.
   const pendingPath = `${p}.pending`;
-  const wasPending = existsSync(pendingPath);
+  const wasPending = wasInstalled && existsSync(pendingPath);
   const rollbackPlist = wasPending ? readTextOrNull(`${p}.prev`) : previousPlist;
   // Keep launchd bound to the package paths selected by this trusted invocation. A PATH
   // launcher can be replaced later and would inherit the service token and proxy
@@ -696,6 +703,11 @@ export function installLaunchd(deps: {
     return { reloaded: false };
   }
 
+  // With no installed plist, orphaned recovery files belong to an older installation.
+  // Remove them before publishing: a later failed repair must not restore that old backup.
+  if (!wasInstalled) {
+    for (const path of [`${p}.prev`, pendingPath]) unlinkLaunchdOwnedFile(path);
+  }
   if (previousPlist !== null && !wasPending) {
     // Best-effort: a backup we could not write must not stop the repair, but it is the
     // only thing that makes the rollback below able to restore bytes rather than guesses.
@@ -845,7 +857,7 @@ export function installLaunchd(deps: {
       + `then re-run '${wasInstalled ? "ocx service repair" : "ocx service install"}'.`,
     );
   }
-  if (needsDefinitionConfirmation) unlinkSync(pendingPath);
+  if (needsDefinitionConfirmation) unlinkLaunchdOwnedFile(pendingPath);
   writeServiceInstallState("scheduler");
   // The rollback copy has done its job: the new definition is verified loaded. Leaving it
   // behind makes the NEXT repair's backup ambiguous (which failure did it come from?) and
@@ -1012,15 +1024,12 @@ export function statusLaunchd(deps: { probe?: typeof probeLaunchdLoadState } = {
   return "";
 }
 
-export function uninstallLaunchd(deps: { launchctl?: typeof runLaunchctl } = {}): void {
-  const p = plistPath();
+export function uninstallLaunchd(deps: { launchctl?: typeof runLaunchctl; plistPath?: string } = {}): void {
+  const p = deps.plistPath ?? plistPath();
   // Same reason as `installLaunchd`: HOME isolation does not move this path, so without
   // the guard an armed test process deletes the developer's live plist.
   assertNotRealLaunchAgentsUnderTest(dirname(p));
   stopLaunchd(deps);
-  if (existsSync(p)) unlinkSync(p);
   // Recovery artifacts are part of the installation, not user files.
-  for (const suffix of [".prev", ".pending"]) {
-    if (existsSync(`${p}${suffix}`)) { try { unlinkSync(`${p}${suffix}`); } catch { /* best-effort */ } }
-  }
+  for (const suffix of ["", ".prev", ".pending"]) unlinkLaunchdOwnedFile(`${p}${suffix}`);
 }

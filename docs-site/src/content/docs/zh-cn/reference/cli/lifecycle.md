@@ -172,7 +172,7 @@ ocx status --json
 
 传播不会请求重启 Child 上的 Codex 应用或 app-server。如需重启，请使用 GOAT，在完整 `ocx` Child 上运行 `ocx sync --restart-codex`，或在轻量级 `ocx-child` 主机上单独重启 Codex 桌面应用与 `app-server` 进程。不过，Child 的固定目标同步在应用已更改的 Home 设置后，仍可能重启它自己的 OpenCodex 客户端运行时。Home 超时并停止本地 SSH 进程后，已开始的远程同步仍可能在 Child 上继续。
 
-> **Remote Link Child：** 在完整 `ocx` Child 上，`ocx sync` 还会应用 Home 的 Codex 设置并在客户端运行时早于该次应用启动时重启它；重启失败时原有运行时继续提供服务并以非零状态退出。在轻量级 `ocx-child` 主机上，`ocx-child sync` 会在中继未运行时启动 `ocx-child serve`，在 `runtimeStartedAt < lastApplyAt` 时轮换进程，并在非 `stale` 同步时尽力上报 parity（若轮换失败，旧中继已停止且命令以非零状态退出；Codex 桌面应用与长期运行的 `app-server` 进程如需刷新请单独重启）。Child 上的 `ocx status --json`（或 `ocx-child status --json`）与 Home 上的 `ocx link status --json` 相关字段见 [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英文）。
+> **Remote Link Child：** 在完整 `ocx` Child 上，`ocx sync` 还会应用 Home 的 Codex 设置并在客户端运行时早于该次应用启动时重启它；重启失败时原有运行时继续提供服务并以非零状态退出。在轻量级 `ocx-child` 主机上，`ocx-child sync` 会在中继未运行时启动 `ocx-child serve`，在 `runtimeStartedAt < lastApplyAt` 时轮换进程，并在非 `stale` 同步时尽力上报 parity（若轮换失败，旧中继已停止且命令以非零状态退出；Codex 桌面应用与长期运行的 `app-server` 进程如需刷新请单独重启）。Child 上的 `ocx status --json`（或 `ocx-child status --json`）与 Home 上的 `ocx link status --json` 相关字段见 [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英文）。 在 Home 上，`ocx link check (--link-id <id> | --all)` 通过 SSH 运行 `ocx update --plan`（每台子机 60 秒，不修改安装）读取每个由 Home 添加的子机的已安装版本和更新途径，`ocx link status --json` 会为每一行添加 `child` 块；详见 [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity)（英文）。
 
 显式指定重启标志后，即使目录和缓存的字节未变，成功提交 `config.toml` 更改也会触发重启。仅处理配置的操作若没有更改、被拒绝、仅作预检或写入已回滚，则不会触发重启。未指定重启标志时，sync 不会自动重启 Codex。
 
@@ -216,7 +216,9 @@ Windows 任务计划程序安装使用普通进程优先级（`Priority=4`）。
 
 macOS 代理使用 `ProcessType=Interactive`，以避免默认 daemon 类别的 CPU 和 I/O 限制，保持负载下的健康检查响应。升级现有安装后，请运行 `ocx service repair`，同时应用此策略。
 
-若定义的加载尚未确认，即使令牌发生变化，该状态也会保留到下次修复。下次修复会重新尝试注册，并保留最初的备份，直到 bootstrap 被接受且探测确认任务匹配。
+若定义的加载尚未确认，即使令牌发生变化，该状态也会保留到下次修复。仅在最初的 launchd 状态探测可用时才重试注册；可能需要图形登录会话。成功创建的原始备份会保留到 bootstrap 被接受且探测确认任务匹配。备份创建是尽力而为的；新安装没有先前的定义。
+
+若更改后定义的 bootstrap 被拒绝且状态可检查，repair 会尝试恢复先前定义。若状态变得不可检查，则不会再次移除任务或回滚：bootstrap 被接受时会警告重载尚未验证，被拒绝时则失败。重试前请运行 `launchctl print gui/$(id -u)/com.opencodex.proxy` 检查任务。新安装会移除孤立的恢复文件，完整卸载也会在 plist 不存在时移除它们。除文件已不存在之外的删除错误都会报告失败并保留安装状态。
 
 在此变更之前安装的定义仍带有旧的带版本路径，无法自行迁移——一旦旧可执行文件被删除，就没有 opencodex 代码运行来修复它。升级后请运行一次 `ocx service repair`。之后 Linux 服务启动会跟随启动器；macOS 的 repair 会把新的包路径写入 launchd 定义。外部升级不会替换已在运行的代理：当已安装的 CLI 比运行中的代理更新时，运行 `ocx service restart` 让新构建提供服务。在 macOS 上，此处的 `repair` 并不够：定义没有变化，而不改变任何内容的 repair 不会重新加载任何内容。反之若代理更新，请按 [`ocx status`](#ocx-status---json) 中的说明检查 CLI 安装与 `PATH`。
 

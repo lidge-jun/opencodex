@@ -23,7 +23,7 @@
  * `com.opencodex.proxy.plist`.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -37,7 +37,11 @@ import {
   restartLaunchdJob,
   reusePreviousPlistPathVariable,
   runLaunchctl,
+  setUninstallServiceHooksForTests,
+  uninstallServiceDetailed,
 } from "../../src/service";
+import { uninstallLaunchd } from "../../src/service/launchd";
+import { readServiceInstallState } from "../../src/service/state";
 import type {
   LaunchdLoadProbe,
   LaunchdLoadState,
@@ -66,6 +70,7 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = join(home, ".opencodex");
 });
 afterEach(() => {
+  setUninstallServiceHooksForTests(null);
   if (previousOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpenCodexHome;
 });
@@ -325,6 +330,92 @@ describe("installLaunchd: repair must not be an outage (#4236 defect 1)", () => 
     expect(verbs(argv).filter(verb => verb === "bootstrap")).toHaveLength(2);
     expect(verbs(argv)).not.toContain("kickstart");
     expect(existsSync(`${plistPath}.pending`)).toBe(false);
+  });
+
+  test("a fresh install ignores orphaned launchd recovery from a removed plist", () => {
+    const plistPath = fixturePlist();
+    const stale = "<plist>old command and port from a removed installation</plist>\n";
+    writeFileSync(`${plistPath}.prev`, stale);
+    writeFileSync(`${plistPath}.pending`, "unconfirmed\n");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const { launchctl } = recordingLaunchctl({ bootstrap: [fail(1, "bootstrap refused")] });
+      expect(() => installLaunchd({
+        launchctl, plistPath, probe: scriptedProbe("not-loaded").probe, sleepSync: () => {},
+      })).toThrow(/bootstrap refused/);
+      expect(readFileSync(plistPath, "utf8")).toBe(renderedPlist());
+      expect(existsSync(`${plistPath}.prev`)).toBe(false);
+    }
+  });
+
+  for (const alreadyRemoved of [true, false]) {
+    test(`pending cleanup tolerates a concurrent removal but preserves other errors (${alreadyRemoved})`, () => {
+      const plistPath = fixturePlist();
+      const { launchctl } = recordingLaunchctl({ bootstrap: [ok()] });
+      let calls = 0;
+      const probe = (() => {
+        if (calls++ === 0) return { state: "not-loaded" };
+        // Model another repair completing while this one verifies the same loaded job.
+        unlinkSync(`${plistPath}.pending`);
+        if (!alreadyRemoved) mkdirSync(`${plistPath}.pending`);
+        return { state: "loaded-current", domain: "gui/501" };
+      }) as typeof probeLaunchdLoadState;
+      const repair = () => installLaunchd({ launchctl, plistPath, probe, sleepSync: () => {} });
+      if (alreadyRemoved) {
+        expect(repair().reloaded).toBe(true);
+        expect(readServiceInstallState()).not.toBeNull();
+      } else {
+        let failure: unknown;
+        try { repair(); } catch (error) { failure = error; }
+        expect(failure).toBeInstanceOf(Error);
+        expect((failure as { code?: string }).code).not.toBe("ENOENT");
+        expect(readServiceInstallState()).toBeNull();
+      }
+    });
+  }
+
+  for (const withPlist of [true, false]) {
+    test(`full uninstall removes launchd recovery files with or without the plist (${withPlist})`, () => {
+      const plistPath = fixturePlist();
+      if (withPlist) writeFileSync(plistPath, "old installed plist\n");
+      writeFileSync(`${plistPath}.prev`, "stale rollback definition\n");
+      writeFileSync(`${plistPath}.pending`, "unconfirmed\n");
+      const { launchctl } = recordingLaunchctl({});
+      let stateRemovals = 0;
+      setUninstallServiceHooksForTests({
+        platform: "darwin", assertEnvironment: () => {},
+        probeWindowsTask: () => { throw new Error("unexpected Windows task probe"); },
+        uninstallWindowsTask: () => {}, nativeStatus: () => "nonexistent", uninstallNative: () => {},
+        removeInstallState: () => { stateRemovals += 1; }, launchdPlistPath: () => plistPath,
+        uninstallLaunchd: () => uninstallLaunchd({ launchctl, plistPath }),
+      });
+      expect(uninstallServiceDetailed()).toBe("removed");
+      for (const suffix of ["", ".prev", ".pending"]) expect(existsSync(`${plistPath}${suffix}`)).toBe(false);
+      expect(stateRemovals).toBe(1);
+      expect(uninstallServiceDetailed()).toBe("absent");
+      const fresh = recordingLaunchctl({ bootstrap: [fail(1, "fresh install refused")] });
+      expect(() => installLaunchd({
+        launchctl: fresh.launchctl, plistPath, probe: scriptedProbe("not-loaded").probe, sleepSync: () => {},
+      })).toThrow(/fresh install refused/);
+      expect(readFileSync(plistPath, "utf8")).toBe(renderedPlist());
+      expect(existsSync(`${plistPath}.prev`)).toBe(false);
+    });
+  }
+
+  test("full uninstall retains install state when a launchd recovery file cannot be removed", () => {
+    const plistPath = fixturePlist();
+    writeFileSync(plistPath, renderedPlist());
+    mkdirSync(`${plistPath}.pending`);
+    let stateRemovals = 0;
+    const { launchctl } = recordingLaunchctl({});
+    setUninstallServiceHooksForTests({
+      platform: "darwin", assertEnvironment: () => {},
+      probeWindowsTask: () => { throw new Error("unexpected Windows task probe"); },
+      uninstallWindowsTask: () => {}, nativeStatus: () => "nonexistent", uninstallNative: () => {},
+      removeInstallState: () => { stateRemovals += 1; }, launchdPlistPath: () => plistPath,
+      uninstallLaunchd: () => uninstallLaunchd({ launchctl, plistPath }),
+    });
+    expect(uninstallServiceDetailed()).toBe("failed");
+    expect(stateRemovals).toBe(0);
   });
 
   /**
@@ -1069,6 +1160,28 @@ describe("reusePreviousPlistPathVariable: PATH is the one difference repair may 
 
   test("a definition with no PATH entry refuses rather than guessing", () => {
     expect(reusePreviousPlistPathVariable("<dict/>\n", plist("/usr/bin"))).toBe(null);
+  });
+
+  test("adding the Interactive policy retains the installed PATH and the exact policy value", () => {
+    const previous = plist("/installed/bin:/usr/bin");
+    const rendered = plist("/usr/bin").replace("<dict>\n", "<dict>\n  <key>ProcessType</key><string>Interactive</string>\n");
+    const adopted = reusePreviousPlistPathVariable(previous, rendered);
+    expect(adopted).toBe(rendered.replace("<key>PATH</key><string>/usr/bin", "<key>PATH</key><string>/installed/bin:/usr/bin"));
+    expect(adopted).toContain("<key>ProcessType</key><string>Interactive</string>");
+  });
+
+  test("a Background policy cannot be ignored while adopting the installed PATH", () => {
+    const previous = plist("/installed/bin").replace("<dict>\n", "<dict>\n  <key>ProcessType</key><string>Background</string>\n");
+    const rendered = plist("/usr/bin").replace("<dict>\n", "<dict>\n  <key>ProcessType</key><string>Interactive</string>\n");
+    expect(reusePreviousPlistPathVariable(previous, rendered)).toBeNull();
+  });
+
+  test("the Interactive policy does not hide a port change while adopting PATH", () => {
+    const policy = "<dict>\n  <key>ProcessType</key><string>Interactive</string>\n";
+    expect(reusePreviousPlistPathVariable(
+      plist("/installed/bin", 10100).replace("<dict>\n", policy),
+      plist("/usr/bin", 10101).replace("<dict>\n", policy),
+    )).toBeNull();
   });
 });
 

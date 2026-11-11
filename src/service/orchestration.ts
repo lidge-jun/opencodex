@@ -583,6 +583,8 @@ type UninstallServiceHooksForTests = {
   nativeStatus: () => WinswStatus;
   uninstallNative: () => void;
   removeInstallState: () => void;
+  launchdPlistPath?: () => string;
+  uninstallLaunchd?: () => void;
 };
 
 let uninstallServiceHooksForTests: UninstallServiceHooksForTests | null = null;
@@ -612,8 +614,13 @@ export function uninstallServiceDetailed(): ServiceUninstallOutcome {
   (hooks?.assertEnvironment ?? assertServiceEnvironmentMatchesInstall)();
   const platform = hooks?.platform ?? process.platform;
   if (platform === "darwin") {
-    if (existsSync(plistPath())) {
-      try { uninstallLaunchd(); removeServiceInstallState(); return "removed"; } catch { return "failed"; }
+    const p = (hooks?.launchdPlistPath ?? plistPath)();
+    if ([p, `${p}.prev`, `${p}.pending`].some(path => existsSync(path))) {
+      try {
+        (hooks?.uninstallLaunchd ?? uninstallLaunchd)();
+        (hooks?.removeInstallState ?? removeServiceInstallState)();
+        return "removed";
+      } catch { return "failed"; }
     }
   } else if (platform === "win32") {
     let removed = false;

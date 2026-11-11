@@ -264,7 +264,7 @@ Remote Link Home에서는 최신 카탈로그가 성공적으로 커밋된 뒤 `
 
 전파는 Child의 Codex 앱이나 app-server 재시작을 요청하지 않습니다. 재시작이 필요하면 GOAT를 사용하거나, 전체 `ocx` Child에서는 `ocx sync --restart-codex`를 실행하고 경량 `ocx-child` 호스트에서는 Codex 데스크톱 앱과 `app-server`를 별도로 재시작하세요. 다만 Child의 고정 대상 동기화는 변경된 Home 설정을 적용한 뒤 자체 OpenCodex 클라이언트 런타임을 재시작할 수 있습니다. Home이 시간 초과로 로컬 SSH 프로세스를 중지하더라도 이미 시작된 원격 동기화는 Child에서 계속될 수 있습니다.
 
-> **Remote Link Child:** 전체 `ocx` Child에서는 `ocx sync`가 Home의 Codex 설정도 적용하며, 클라이언트 런타임이 그 적용보다 먼저 시작되었으면 재시작 플래그 없이도 재시작하고 실패하더라도 이전 런타임이 계속 서비스한 채 0이 아닌 코드로 끝납니다. 경량 `ocx-child` 호스트에서는 `ocx-child sync`가 릴레이가 없을 때 `ocx-child serve`를 시작하고 `runtimeStartedAt < lastApplyAt`이면 교체하며 `stale`이 아닌 동기화에서 최선을 다해 parity를 보고합니다(교체 실패 시 이전 릴레이가 멈춘 상태로 0이 아닌 코드로 끝나며, Codex 데스크톱 앱과 장기 실행 `app-server` 프로세스는 별도로 재시작해야 합니다). Child의 `ocx status --json`(또는 `ocx-child status --json`)과 Home의 `ocx link status --json` 필드는 [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)(영문)를 참고하세요.
+> **Remote Link Child:** 전체 `ocx` Child에서는 `ocx sync`가 Home의 Codex 설정도 적용하며, 클라이언트 런타임이 그 적용보다 먼저 시작되었으면 재시작 플래그 없이도 재시작하고 실패하더라도 이전 런타임이 계속 서비스한 채 0이 아닌 코드로 끝납니다. 경량 `ocx-child` 호스트에서는 `ocx-child sync`가 릴레이가 없을 때 `ocx-child serve`를 시작하고 `runtimeStartedAt < lastApplyAt`이면 교체하며 `stale`이 아닌 동기화에서 최선을 다해 parity를 보고합니다(교체 실패 시 이전 릴레이가 멈춘 상태로 0이 아닌 코드로 끝나며, Codex 데스크톱 앱과 장기 실행 `app-server` 프로세스는 별도로 재시작해야 합니다). Child의 `ocx status --json`(또는 `ocx-child status --json`)과 Home의 `ocx link status --json` 필드는 [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)(영문)를 참고하세요. Home에서는 `ocx link check (--link-id <id> | --all)`가 SSH로 `ocx update --plan`을 실행해(Child마다 60초, 설치는 바꾸지 않음) Home이 추가한 각 Child의 설치 버전과 업데이트 경로를 읽고, `ocx link status --json`은 각 행에 `child` 블록을 추가합니다. 자세한 내용은 [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity)(영문)를 참고하세요.
 
 재시작 플래그를 명시하면 카탈로그와 캐시 바이트가 같아도 `config.toml` 변경이 성공적으로 커밋된 뒤 재시작합니다. 설정만 다루는 작업이 변경 없음, 거부, 사전 검증 또는 롤백으로 끝나면 재시작하지 않습니다. 재시작 플래그가 없으면 sync는 Codex를 자동으로 재시작하지 않습니다.
 
@@ -341,7 +341,9 @@ macOS에서 launchd는 대신 설치 또는 repair 때 선택한 패키지 내�
 
 macOS 에이전트는 `ProcessType=Interactive`를 사용하여 기본 daemon의 CPU 및 I/O 제한을 피하고 부하 중에도 상태 확인에 응답합니다. 기존 설치를 업그레이드한 후 `ocx service repair`를 실행하면 이 정책도 적용됩니다.
 
-정의의 로드를 확인하지 못하면 토큰이 바뀌어도 다음 복구까지 미확인 상태를 유지합니다. 다음 복구는 등록을 다시 시도하며, bootstrap 성공과 일치하는 작업의 확인이 모두 완료될 때까지 원래 백업을 보존합니다.
+정의의 로드를 확인하지 못하면 토큰이 바뀌어도 다음 복구까지 미확인 상태를 유지합니다. 등록 재시도는 최초 launchd 상태 확인이 가능할 때만 수행하며 GUI 로그인 세션이 필요할 수 있습니다. 성공적으로 생성한 원래 백업은 bootstrap 수락과 일치하는 작업의 확인이 모두 완료될 때까지 보존합니다. 백업 생성은 최선형 작업이며 새 설치에는 이전 정의가 없습니다.
+
+변경한 정의의 bootstrap이 거부되고 상태 확인이 가능하면 이전 정의의 복원을 시도합니다. 상태를 확인할 수 없게 되면 추가 제거나 복원을 수행하지 않습니다. bootstrap이 수락되면 미검증 재로드로 경고하고, 거부되면 실패합니다. 재시도 전에 `launchctl print gui/$(id -u)/com.opencodex.proxy`로 확인하십시오. 새 설치는 고아 복구 파일을 삭제하고 전체 제거는 plist가 없어도 이를 삭제합니다. 이미 없는 파일 이외의 삭제 오류는 실패로 보고하고 설치 상태를 보존합니다.
 
 이 변경 이전에 설치된 정의는 여전히 이전 버전 경로를 지니고 스스로 마이그레이션할 수 없습니다.
 이전 실행 파일이 삭제되면 이를 고칠 opencodex 코드가 실행되지 않습니다. 업그레이드 후

@@ -398,6 +398,26 @@ Disabled Hub observation (outer HTTP 200) instead prints `available:false`, a fi
 activation/Hub reason, `devices:[]`, `runtimes:{}`, `sessions:[]` and exits 1. Inner
 HTTP 409 exits 5 with stderr and no fabricated empty success.
 
+## Remote Link Child block and job document
+
+On a Home, each `ocx link status` row can carry `child`:
+`{homeVersion, runningVersion, installedVersion, installKind, versionSkew, update:{route, reason, observedAt},
+catalog:{state, pulledAt, homeChangedAt}, codex, activity:{idle, inFlight, lastDataEndAt}, activeJob, lastOperation}`.
+`installedVersion`, `installKind` and `update` come from the last `ocx link check` and are null until one ran;
+`runningVersion` is the version the Child sent over the link. `versionSkew` is `same`, `behind`, `ahead` or
+`unknown` (always `unknown` for an `ocx-child`). `catalog.state` is `current` when the Child's last pulled or
+synced catalog has the Home's current etag, `behind` when not and `unknown` without a pull; a pull proves a fetch,
+not that the Child applied it. `activity.idle` means no relayed model turn for 10 minutes; it is false when the
+Home cannot tell. `codex` is null for now. Times are epoch milliseconds except the ISO `observedAt`. The CLI
+drops keys it does not know and reads an unknown enum value as `unknown`.
+
+`ocx link check` prints an `ocx.link.child-job/1` document:
+`{schema, jobId, op:"observe", trigger, restart:"none", state:"queued"|"running"|"done", createdAt, finishedAt, items}`,
+each item `{linkId, alias, state, reason, startedAt, finishedAt}`. Item states are `succeeded`, `busy`,
+`offline`, `refused`, `owner-action`, `unsupported`, `failed` (and, for later operations, `up-to-date` and
+`uncertain`). Reasons are closed tokens such as `legacy-ocx`, `child-initiated`, `ssh-failed`,
+`link-removed` or `link-operation-in-progress`; no remote output is included.
+
 ## Maintenance receipts
 
 New storage policy setters return `{ok:true,policy,job:{status}}`. Policy preserves

@@ -768,6 +768,22 @@ zero is retained. Malformed consumed fields or a returned key row without
 quota-mode evidence fail rather than fabricate support. An empty pool remains
 valid. Keys remain masked.
 
+When a balance is unknown, the row says why in `quotaUnknownReason`:
+`no_balance_source` (OpenCodex has no balance reader for this destination),
+`passive_not_observed` (a passive provider has not observed usage yet),
+`read_failed` (a reader exists and its last read failed), `not_read` (a
+reader exists but no read was made, for example on a paused key), or
+`not_reported` (the read succeeded and the provider reported no balance to meter). Probe rows
+also carry `quotaReadAt`, the time of the last read in epoch milliseconds,
+whether it succeeded or failed. Only destinations with a balance reader
+(`quotaMode: "probe"`, such as OpenRouter, DeepSeek, Ollama Cloud, Moonshot,
+Venice and Abliteration) ever show a value. Human output reads, for example,
+`unsupported: balance UNKNOWN (no balance source)` or `probe: mo 12%; read 3
+min ago`, and never prints zero for an unknown balance. Older CLIs ignore both
+fields, and a reason this CLI does not recognize is dropped. Passive OAuth
+accounts with no observation yet carry `passive_not_observed` too, shown as
+`UNKNOWN (not observed yet)`.
+
 Google Antigravity rows carry the same `Gem` / `Cla` windows as the provider-level quota, computed
 from that account's own credential and Cloud Code Assist project id. The per-account probe always
 talks to Google's Cloud Code Assist host through the pinned outbound transport, regardless of a
@@ -913,7 +929,24 @@ refresh remain available even when its original credential source was not record
 ```bash
 ocx account pause google-antigravity <account-id-or-alias>
 ocx account resume google-antigravity <account-id-or-alias>
+ocx account resume anthropic <account-id-or-alias> --if-healthy
 ```
+
+#### Resume if healthy
+
+An unattended supervisor can run `ocx account resume <provider> <account-id-or-alias> --if-healthy`.
+It resumes the account only after a fresh read of that account's own usage succeeds: the WHAM quota
+read for a Codex pool account, or the usage read with the stored token for an Anthropic OAuth
+account. A pause that [auto-pause](/reference/configuration/providers/#auto-pause-permanently-refused-accounts)
+recorded as `oauth_organization_disabled` or `account_permission_denied` is never resumed this way.
+An Anthropic token that has expired is not refreshed for the check: the command reports
+`credential_expired`, and a new login is the way back. Other OAuth providers and the main Codex
+account report `health_check_unsupported`; API-key pools reject the flag. A refused resume exits with
+code 3 and prints the reason, or `{ "ok": false, "resumed": false, "reason": ... }` with `--json`.
+
+An explicit login or reauthentication of a paused OAuth or Codex pool account clears a pause that
+auto-pause recorded, because that evidence described the credential the login replaced. A pause set by
+hand stays until `ocx account resume`.
 
 ### `ocx account clear-cooldown <openai|anthropic> <id|alias|main> [--json]`
 

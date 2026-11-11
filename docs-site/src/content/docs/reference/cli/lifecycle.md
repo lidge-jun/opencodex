@@ -830,9 +830,13 @@ and attempts to restore the previous definition. A matching command alone cannot
 If launchd's state cannot be checked, repair keeps the new plist and any backup without another eviction:
 a refused bootstrap throws, while an accepted bootstrap reports an unverified reload with a warning.
 Inspect the job with `launchctl print gui/$(id -u)/com.opencodex.proxy` before retrying repair.
-An unconfirmed definition remains pending across repairs, including after a token change. The next
-repair retries its registration and keeps the original backup until a bootstrap is accepted and the
-probe confirms the matching job; identical disk bytes and command alone cannot make it a no-op.
+An unconfirmed definition remains pending across repairs, including after a token change. Registration
+is retried only when the initial launchd probe is checkable; a GUI login session may be required.
+Repair preserves any original backup successfully created until bootstrap is accepted and the probe
+confirms the matching job. Backup creation is best-effort; a fresh installation has no prior definition.
+Identical disk bytes and command alone cannot make a pending repair a no-op. Fresh installation
+removes orphaned recovery files, and full uninstall removes them even when the plist is absent.
+Cleanup ignores only already-missing files; another removal error reports failure and retains install state.
 Launchd restarts the proxy after a crash or failed restart handoff, but leaves it stopped when
 the service deliberately exits cleanly because the desktop app owns the runtime. Run
 `ocx service repair` once to apply this behavior to a service installed by an older version.
@@ -1374,6 +1378,15 @@ starts and then once a minute; the Home keeps reports in memory only, so after a
 fields read `null` until the next report. A Child whose runtime started before `lastApplyAt` is
 running an older runtime than its last apply.
 
+With a Home and CLI that support it, each row also carries a `child` block: the Child's running and
+installed versions, its version skew against the Home, its update route, whether it last downloaded the
+Home's current catalog, whether a relayed model request is running, and the last operation. Installed
+version and update route come from `ocx link check (--link-id <id> | --all) [--no-wait] [--json]`, which
+runs the Child's `ocx update --plan` over SSH for each Home-initiated link (60 seconds per Child, three at
+a time) and changes no install. A POSIX Child older than 2.97.0 gets one more read-only SSH call for its
+version; a Windows Child that old reports the version it sent over the link. The fields are described in
+[Home and Child versions](/guides/remote-link/#child-install-catalog-and-activity).
+
 Lightweight `ocx-child` Child hosts run `ocx-child sync [--expect-link <id>] [--json]`, `ocx-child status [--json]` (while `ocx link status --json` remains on the Home), and `ocx-child disconnect` / `ocx-child detach`: on an attached `ocx-child` host (which runs without a system service manager), a successful `ocx-child sync` starts `ocx-child serve` if no relay is running even when settings are unchanged, rolls it over when `runtimeStartedAt < lastApplyAt`, and posts a best-effort parity report on non-stale syncs. `ocx-child sync` accepts `--restart-codex` / `--restart-app-server-only` for flag compatibility without restarting Codex processes (restart the Codex desktop app and long-lived `app-server` processes separately if needed), and `ocx-child disconnect` / `ocx-child detach` restores `~/.codex` files offline and stops `ocx-child serve` with zero background daemon left running. Only one `ocx-child` install may manage a given `CODEX_HOME` at a time: lifecycle commands lock `CODEX_HOME/.ocx-child.lock` (kept permanently) and record the owning `OPENCODEX_HOME` in `CODEX_HOME/.ocx-child-owner.json` until `ocx-child detach` completes, so an `ocx-child attach` or `sync` from a different `OPENCODEX_HOME` sharing that `CODEX_HOME` exits nonzero without changing any file and names the owning home to detach first.
 
 ## Remote Link Child attestations
@@ -1440,6 +1453,8 @@ See [Hub observation and recovery](/guides/remote-workspace/#inspect-the-hub-wit
 ## Remote Hub client lifecycle
 
 Use `ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync`, and `ocx connect rotate --pairing-code-stdin`. The initial catalog download fails after five seconds without incoming bytes, but active transfers may run longer; use `--catalog-timeout <seconds>` (1–120) to override that inactivity window. `ocx disconnect` restores local state offline and does not revoke the hub key. While connected only, `ocx connect revoke --admin-token-stdin` revokes the persisted `apiKeyId`; after disconnect use the hub's **Connect → API Keys** page. Secrets are stdin-only and never belong in argv.
+
+On a Remote Link Child, `ocx connect status` also prints a `Link tunnel:` line (`up`, `down (<reason>)` or `unknown (<reason>)`) read from the running Child's `/readyz`, and `--json` adds `linkTunnel`. `Connection: connected` still means only that the machine is linked; see the [Remote Link guide](/guides/remote-link/).
 
 ## Setup port validation
 

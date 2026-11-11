@@ -85,9 +85,12 @@ ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
+ocx link check (--link-id <id> | --all) [--no-wait] [--json]
 ```
 
 TTY olmayan kullanımda `--expect-fingerprint` zorunludur. Etkileşimli bir terminalde sunulan parmak izini açıkça onaylayarak bu seçeneği atlayabilirsiniz.
+
+Home üzerinde `ocx link check (--link-id <id> | --all)`, Home'un eklediği her Child için kurulu sürümü, kurulum türünü ve güncelleme yolunu okur: bağlantının SSH oturumu üzerinden Child'ın `ocx update --plan` komutunu çalıştırır (Child başına 60 saniye, aynı anda üç tane); bu komut yalnızca bir plan hesaplar, hiçbir şeyi değiştirmez. 2.97.0'dan eski bir Child `owner-action` (`legacy-ocx`) olarak görünür; sürümü macOS ve Linux'ta salt okunur bir SSH çağrısıyla daha, Windows'ta ise bağlantı üzerinden bildirdiği sürümden alınır. Child tarafından başlatılan bağlantılar ve `ocx-child` Child'ları SSH olmadan raporlanır. `ocx link status --json` her satıra bir `child` bloğu (sürümler, sürüm farkı, katalog güncelliği, etkinlik, son işlem) ekler. Ayrıntılar ve çıkış kodları: [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity) (İngilizce).
 
 ## İlgili kılavuzlar
 
