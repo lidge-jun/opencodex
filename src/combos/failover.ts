@@ -998,17 +998,21 @@ const UNOFFERED_TOOL_CALL_CODES = new Set(["", "invalid_request_error", "invalid
 const UNOFFERED_TOOL_CALL_TYPES = new Set(["", "invalid_request_error", "upstream_error"]);
 const UNOFFERED_TOOL_CALL_PARAMS = new Set(["tools", "tool_choice"]);
 /**
- * The provider's own verdict sentence, anchored so a validation message that merely quotes or
- * reflects it cannot impersonate the verdict -- the same failure mode moderation-refusal
- * matching guards against.
+ * The provider's own verdict sentences for target-local model failures, each anchored so a
+ * validation message that merely quotes or reflects one cannot impersonate the verdict -- the
+ * same failure mode moderation-refusal matching guards against. Both observed carriers arrive
+ * as `type: "upstream_error"` with `code: null` behind aggregator re-wraps.
  */
-const UNOFFERED_TOOL_CALL_MESSAGE = /^the model called a function that was not offered in tools\.?$/i;
+const UNOFFERED_TOOL_CALL_MESSAGES = [
+  /^the model called a function that was not offered in tools\.?$/i,
+  /^the model returned an unexpected parser control marker; no output was published\.?$/i,
+] as const;
 /** Sibling records that could smuggle a competing verdict this classifier does not inspect. */
 const UNOFFERED_TOOL_CALL_CARRIERS = ["response", "last_error", "details", "detail", "errors"] as const;
 
 function isUnofferedToolCallVerdict(text: string): boolean {
   const value = text.trim().replace(/^Provider error \d{3}: /, "").trim();
-  return UNOFFERED_TOOL_CALL_MESSAGE.test(value);
+  return UNOFFERED_TOOL_CALL_MESSAGES.some(pattern => pattern.test(value));
 }
 
 /**
@@ -1053,10 +1057,9 @@ function unofferedToolCallRecordShape(record: Record<string, unknown>): boolean 
 }
 
 /**
- * A model that emits a call for a function the request never offered hallucinated that call:
- * the provider answered, the request fit, and the failure is target-local evidence a later
- * combo target may not repeat. The 400 arrives before any output commits, so advancing is
- * replay-safe.
+ * A target-local model verdict -- an unoffered tool call, or output the transport could not
+ * publish -- is evidence a later combo target may not repeat: the provider answered, the
+ * request fit, and the failure arrives before any output commits, so advancing is replay-safe.
  *
  * The envelope is bounded like its siblings: a depth budget, one `Provider error NNN:` or
  * single-line `data:` unwrap per level, closed code/type/param sets, and fail-closed treatment

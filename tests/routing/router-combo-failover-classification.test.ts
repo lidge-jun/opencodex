@@ -1310,6 +1310,22 @@ describe("unoffered tool-call refusal", () => {
     expect(comboFailureDecision(400, reported, { code: "rate_limit_exceeded" })).toBe("stop");
   });
 
+
+  test("the parser control-marker verdict hops the same way", () => {
+    const markerVerdict = "The model returned an unexpected parser control marker; no output was published.";
+    const markerBody = JSON.stringify({
+      error: { message: `Provider error 400: ${markerVerdict}`, type: "upstream_error", code: null },
+    });
+    for (const message of [markerBody, `Provider error 400: ${markerBody}`, markerVerdict]) {
+      expect(comboFailureDecision(400, message)).toBe("hop");
+      expect(comboFailureCooldownScope(400, message)).toBe("none");
+    }
+    // Reflected inside a validation message it stays terminal, same as the tool-call verdict.
+    expect(comboFailureDecision(400, JSON.stringify({
+      error: { message: `Invalid value: "${markerVerdict}"`, type: "invalid_request_error", code: null },
+    }))).toBe("stop");
+  });
+
   test("a long refusal envelope still hops: the intact bounded body is classified, not the display prefix", async () => {
     // Padding past the 500-char display limit must not turn a valid verdict into truncated,
     // unparseable JSON. consumeComboFailure classifies body.text separately and hands the
