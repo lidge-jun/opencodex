@@ -25,6 +25,7 @@
 - Budget, with injected clocks: admission refuses with `unverified-budget` and changes nothing (no `/end`, terminate or POST) when the remaining time is below the worst case still to come; once admitted, every step at its cap ends before the deadline; the graceful exit wait is never shortened; part B never gets less than 6 s; `--deadline-ms` from both Desktop paths is honored, and a missing flag means 60 s; macOS/Linux ignore it.
 - `/api/stop` without a receipt, stray of a deleted task: the 4 s sweep plus the measured worst case of `performStopTeardown` answers within 10 s; a parent POST without a receipt or without a part A record is never given less than 10 s; a registered WinSW service keeps today's in-process stop.
 - WinSW: a non-waiting stop plus an SCM poll capped at `<stoptimeout>` + 2 s; an overrun → `unknown` and nothing further; registration probes capped at 2 s, an unreadable `schtasks` answer stays `unknown`.
+- The final enumeration runs after the 6 s hold; an unreadable result or a wrapper absent at bind → non-success; `ocx service stop` defers the teardown through a receipt and keeps it when part B fails.
 - Caps that are new: `taskkill` in the forced fallback times out at 5 s; orphan discovery at 3 s (overrun refuses); `revertSystemEnv` at 1 s; inherited-receipt probes counted as 1.5 s × N at admission.
 - Admission runs after the registration probe: `absent` is never refused for budget.
 - A wrapper relaunched after bind (port still free during the hold) is caught by the final enumeration → survived.
