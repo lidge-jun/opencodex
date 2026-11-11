@@ -20,6 +20,7 @@ export const USAGE_LEDGER_ROW_READ_WINDOW_BYTES = 64 * 1024;
 // one unterminated line an unbounded allocation.
 export const USAGE_LEDGER_MAX_LINE_BYTES = 1024 * 1024;
 export const USAGE_LEDGER_BOUNDARY_DIGEST_BYTES = 64 * 1024;
+const MAX_SCAN_SLICE_MS = 8;
 
 export interface ScanUsageLedgerOptions {
   signal?: AbortSignal;
@@ -289,6 +290,7 @@ export async function scanUsageLedgerCooperatively(
   let bytesRead = 0;
   let bytesSinceYield = 0;
   let linesSinceYield = 0;
+  let lastYieldAt = performance.now();
   let processedThroughBytes = startAtBytes;
   const capturedHash = createHash("sha256");
   const committedTail = new RollingByteWindow(USAGE_LEDGER_BOUNDARY_DIGEST_BYTES);
@@ -395,11 +397,24 @@ export async function scanUsageLedgerCooperatively(
         }
         lineLength = 0;
         cursor = newline + 1;
+        // Bytes do not bound normalization/aggregation time on a busy host. Let
+        // network callbacks, timers and cancellation run even within the final chunk.
+        // Only elapsed time triggers this yield: a row count here would yield several
+        // times per chunk of cheap rows and slow a cold scan (the chunk boundary below
+        // keeps the row limit). setTimeout, unlike setImmediate, lets due timers run.
+        if (performance.now() - lastYieldAt >= MAX_SCAN_SLICE_MS) {
+          await new Promise<void>(resolve => setTimeout(resolve, 0));
+          throwIfAborted(options.signal);
+          lastYieldAt = performance.now();
+          bytesSinceYield = 0;
+          linesSinceYield = 0;
+        }
       }
 
       if (position < scanEnd
         && (bytesSinceYield >= USAGE_LEDGER_READ_CHUNK_BYTES || linesSinceYield >= 1_000)) {
         await new Promise<void>(resolve => setTimeout(resolve, 0));
+        lastYieldAt = performance.now();
         bytesSinceYield = 0;
         linesSinceYield = 0;
       }

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { spawnSync, type ChildProcess } from "node:child_process";
 import { repoPath } from "../helpers/repo-root";
@@ -57,12 +57,24 @@ test("win32: a marker without a supervisor witness, or with a POSIX group, stays
   expect(inspectUpdateMarker(root, { now: afterFence, platform: "win32", signal: signalWith(new Set()) })).toBe("unknown");
 });
 
-test("win32: a confirmed installer never probes its old supervisor pid", () => {
-  // Windows reuses pids quickly; a finished update must not read as in flight because some
-  // unrelated process now holds the supervisor's old number.
+test("win32: a finished session leaves no supervisor pid for a reused pid to hold", async () => {
+  // Windows reuses pids quickly. A finished update must not read as in flight because an
+  // unrelated process now holds the supervisor's old number, so the confirmed exit drops it.
   const root = home();
-  writeMarker(root, { pid: LAUNCHER, phase: "installed", startedAt: 1_000, installerPid: SUPERVISOR });
+  const session = createOrchestratedChildSession({ home: root, verifyIdentity: () => true });
+  session.start(); await session.enterMutation();
+  session.noteUntrackedInstaller();
+  publishWindowsInstallerPid(markerPath(root), SUPERVISOR);
+  session.confirmInstallerExit();
+  session.finish({ phase: "installed" });
+  expect(readMarker(root).installerPid).toBeUndefined();
   expect(inspectUpdateMarker(root, { now: afterFence, platform: "win32", signal: signalWith(new Set([SUPERVISOR])) })).toBe("free");
+});
+
+test("win32: a recorded live installer keeps a marker fenced, as on POSIX", () => {
+  const root = home();
+  writeMarker(root, { pid: 2147483647, phase: "failed", startedAt: 1_000, installerPid: SUPERVISOR });
+  expect(inspectUpdateMarker(root, { now: afterFence, platform: "win32", signal: signalWith(new Set([SUPERVISOR])) })).toBe("active");
 });
 
 test("POSIX keeps requiring the installer process group", () => {
@@ -217,12 +229,17 @@ describe("legacy witnessless marker recovery hint (#8524 decision A)", () => {
 
   test("the hint names the marker and a reversible rename for the platform", () => {
     const root = home();
+    // The hint is formatted for the platform it names, whatever host runs the test.
+    const windowsPath = win32.join(root, "update-orchestrated.json");
+    const posixPath = posix.join(root, "update-orchestrated.json");
     const windows = staleUpdateMarkerHint(root, "win32").join("\n");
-    expect(windows).toContain(markerPath(root));
-    expect(windows).toContain(`ren "${markerPath(root)}" update-orchestrated.json.stale`);
+    expect(windows).toContain(windowsPath);
+    expect(windows).toContain(`ren "${windowsPath}" update-orchestrated.json.stale`);
     expect(windows).toContain("ocx update");
-    const posix = staleUpdateMarkerHint(root, "linux").join("\n");
-    expect(posix).toContain(`mv -n '${markerPath(root)}' '${markerPath(root)}.stale'`);
+    expect(staleUpdateMarkerHint("C:\\Users\\a\\.opencodex", "win32").join("\n"))
+      .toContain('ren "C:\\Users\\a\\.opencodex\\update-orchestrated.json" update-orchestrated.json.stale');
+    const posixHint = staleUpdateMarkerHint(root, "linux").join("\n");
+    expect(posixHint).toContain(`mv -n '${posixPath}' '${posixPath}.stale'`);
     // Nothing in a pasted command may expand: POSIX quotes a quote; Windows prints no command at all.
     expect(staleUpdateMarkerHint("/home/o'neil/.opencodex", "linux").join("\n"))
       .toContain("mv -n '/home/o'\\''neil/.opencodex/update-orchestrated.json'");

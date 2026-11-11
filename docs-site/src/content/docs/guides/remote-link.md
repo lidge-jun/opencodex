@@ -126,6 +126,8 @@ When a step fails, the dashboard shows the reason and, when SSH reported one, a 
 
 A relay-generated `503` includes a server-generated `x-opencodex-link-request-id`. Use it to correlate a failure with local evidence under the Child's OpenCodex configuration home: `link/diagnostics.jsonl` and one rotated backup, `link/diagnostics.jsonl.1`. Each file is capped at 256 KiB, with private permissions (directory 0700 and files 0600 on POSIX; private ACLs on Windows). Records contain only fixed event/outcome/state categories, generated correlation IDs, numeric timing/generation/attempt metadata and timestamps, never secrets, request bodies, headers, URLs, account identifiers or raw errors. Each event/outcome pair is limited to one record per second; the next record includes a count of suppressed events, so an absent record does not prove an absent failure. A backward wall-clock adjustment starts a new rate-limit window, including when the writer queue is full, and preserves the suppression count. An asynchronous writer keeps at most 56 pending records, counts overflow as suppression, and yields while Windows ACL work runs. Logging is best effort and cannot change whether a request is admitted. Graceful signal shutdown and standalone recycling wait up to one second for queued diagnostics before exiting; stalled storage, forced termination and power loss can still lose records.
 
+To read them, run `ocx link diagnostics` on that computer, or open **Diagnostics** at the bottom of the `#remote` dashboard page there. Both show the newest records, oldest file first, with the time, event, outcome, state change, attempt and tunnel port of each. `--limit <n>` (1–1000, default 200) and `--since <iso-time|epoch-ms>` narrow the list, and `--json` prints the `ocx.link.diagnostics/1` document. The command reads the files directly: it needs no running proxy, creates and changes nothing, and prints the file path with **No Remote Link diagnostics recorded yet** when neither file exists. Both views check each line against the same fixed categories the writer uses: a line that does not match is never displayed and is counted as skipped (`skipped` in `--json`). A file that is a symlink, is not a regular file, or sits under a symlinked link directory is not read at all; the views say so, and `--json` reports it in `files` with state `refused`. The dashboard section uses the same authority as link status, and a Child's dashboard shows the Child's own records.
+
 `owner_lookup` records refused ownership checks; routine successful checks are silent. `owner_lookup.elapsedMs` measures the owner lookup itself. For `auth_timeout`, `relay_retry` and `relay_failure` report the actual transport-attempt duration in `elapsedMs` (normally about five seconds). A `relay_recovered` event with outcome `recovered` is emitted only after a retry receives an upstream response with `upstream.ok` (HTTP 2xx); it does not prove the streamed body completed. Rate limiting makes request-ID correlation sampled evidence, not a guaranteed trace of every failed request.
 
 The Home writes the same kind of file under its own configuration home for the tunnels it runs. Each change of a Home-initiated tunnel's state is a `tunnel_transition` record with `previousState`, `state`, the cause as `outcome` (`auth`, `hostkey`, `forward`, `remote_forward_conflict`, `timeout`, `network`, `unknown`, `spawn_failed` or `listener_unavailable`; `connected`, `spawned` or `stopped` when nothing failed), the `attempt` count since the link was last connected, the link's `tunnelPort` and, when a retry is scheduled, `retryAfterMs`. A retry of a failed link that fails again is recorded too, so an outage leaves one record per attempt. The same rate limit applies, across all links.
@@ -133,6 +135,24 @@ The Home writes the same kind of file under its own configuration home for the t
 Before sending data, OpenCodex allows one shared preflight retry for either an owner-lookup deadline or a specifically identified five-second authentication deadline. The retry obtains fresh owner proof where required and a fresh physical socket, then authenticates that socket before sending the link credential or body. It does not reuse cached owner approval, bypass security checks, restart SSH or OpenCodex, or replay a dispatched request body. The two-second owner-lookup and five-second authentication deadlines are unchanged for each attempt; other failures do not qualify for this preflight retry.
 
 This can recover these transient deadline paths and helps diagnose future failures. It does not establish the historical cause of [#7297](https://github.com/lidge-jun/opencodex/issues/7297).
+
+### Capture SSH diagnostics
+
+When a tunnel keeps failing and the cause in `ocx link status --json` does not explain it, OpenCodex can record what SSH itself reports for a short time. Capture is off by default, and only someone working on the machine whose tunnel you want to inspect can turn it on:
+
+```bash
+ocx link capture start            # 15 minutes; --minutes accepts 1 to 60
+ocx link capture status
+ocx link capture stop
+```
+
+Run it on the Home to capture the tunnels it runs to its Children, or on a Child to capture the tunnel that Child started to its Home. The command needs no running OpenCodex and no admin token. Nothing a Home syncs, and no dashboard or remote request, can start a capture. Running `start` again while a window is open moves its end time and keeps writing to the same file.
+
+While the window is open, the next SSH attempt of each tunnel runs with `LogLevel=DEBUG1` instead of `LogLevel=ERROR`. A tunnel that is already connected keeps its level until it reconnects; on the Home, `ocx link reconnect --link-id <id>` starts a new attempt right away. After `stop`, or when the window ends, nothing more is stored and the next attempt runs with `LogLevel=ERROR` again. Request admission is unchanged, and the extra lines SSH prints at the higher level are kept out of the failure cause that `ocx link status` reports. One exception: a line OpenCodex does not recognize still counts toward that cause, and SSH shows a server's login banner only at the higher level. During a window, a banner containing words such as "Permission denied" can therefore change the reported cause and, with it, the retry delay.
+
+Records go to `link/ssh-capture/ssh-<start time>.jsonl` under the OpenCodex configuration home, one JSON object per line with the time, the tunnel (`home` or `child`), the link ID, the SSH level, a fixed event name and the line text. Before anything is written, each line is matched against a list of known OpenSSH message shapes. Host names, addresses, user names, ports, file paths, keys and fingerprints, proxy commands, environment values and messages from the SSH server become placeholders such as `<host>` and `<port>`. Algorithm and authentication method names are kept only when they are standard OpenSSH names. A line that matches no known shape is stored only as `unrecognized` with a count, never its text. The link ID is OpenCodex's own random identifier; it is kept so you can tell tunnels apart.
+
+Each window writes one file of at most 1 MiB, and a `capture_truncated` record ends a full one. A file is deleted 72 hours after its last write, and at most four files are kept, so `start` deletes the oldest beyond that. Deletion runs when OpenCodex starts, when a tunnel starts, on every `ocx link capture` command, and in a running OpenCodex as soon as a file's 72 hours pass, including files an earlier OpenCodex process wrote. A file whose 72 hours pass while OpenCodex is not running is deleted at the next start or capture command. `stop` leaves the files in place so you can share them; delete them yourself once you no longer need them. The directory is private to your user (directory 0700 and files 0600 on macOS and Linux, a private ACL on Windows), and OpenCodex never writes or reads through a symbolic link there.
 
 ## Security
 
@@ -146,6 +166,7 @@ ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
+ocx link diagnostics [--limit <n>] [--since <iso-time|epoch-ms>] [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
 ocx link check (--link-id <id> | --all) [--no-wait] [--json]
@@ -153,6 +174,9 @@ ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]
 ocx link sync (--link-id <id> | --all) [--no-wait] [--json]
 ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]
 ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]
+ocx link capture start [--minutes <1-60>] [--json]
+ocx link capture stop [--json]
+ocx link capture status [--json]
 ```
 
 `ocx link status` needs the local admin token on a listener that only this machine can reach. When the public listener is bound to a non-loopback address, for example a Hub on `0.0.0.0`, no TCP listener qualifies: the hub management listener is reached through Tailscale Serve, so it refuses the raw admin token for link routes. On macOS and Linux the proxy therefore also opens a private Unix socket, `<OPENCODEX_HOME>/run/control-<port>.sock`, in a directory only your user can enter, and `ocx link status` uses it automatically. The socket answers only `GET /api/link/status` and still requires the admin token. Windows and runtimes older than this change keep the TCP path, where the read returns `403` on such a Hub.
