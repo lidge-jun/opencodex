@@ -5,8 +5,8 @@
  * at a temp directory posing as a user's custom real Codex home; nothing here reaches a real home.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { assertCodexHomeOwned, createdCodexHomeForTests } from "../helpers/codex-home-sandbox";
 import { CODEX_HOME } from "../../src/codex/paths";
@@ -71,10 +71,17 @@ describe("codex-home-sandbox without the preload", () => {
   });
 });
 
-describe("codex-home-sandbox under the preload", () => {
-  test("the preload's own test root is proven by its owner marker", () => {
-    // The preload loaded src/codex/paths first, so the helper created nothing here.
-    expect(createdCodexHomeForTests()).toBeNull();
+describe("codex-home-sandbox in this process", () => {
+  // Valid with or without the preload: whichever branch is in effect is asserted, never skipped.
+  test("this file's own Codex home is proven owned on the branch in effect", () => {
+    const created = createdCodexHomeForTests();
+    if (created !== null) {
+      // No preload: the helper ran before src/codex/paths and owns the home it resolved to.
+      expect(realpathSync.native(CODEX_HOME)).toBe(created);
+    } else {
+      // The preload loaded src/codex/paths first; its test root's owner marker names this process.
+      expect(existsSync(join(dirname(realpathSync.native(CODEX_HOME)), ".opencodex-test-owner.json"))).toBe(true);
+    }
     expect(() => assertCodexHomeOwned(CODEX_HOME)).not.toThrow();
   });
 });
