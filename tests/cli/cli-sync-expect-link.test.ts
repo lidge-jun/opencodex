@@ -5,6 +5,9 @@
  * providers. Every case is in-process and deterministic: config fixtures are written directly, the
  * Home catalog is a stubbed fetch, and both client locks live in the per-test directory.
  */
+// First: CODEX_HOME must be a temp directory before src/codex/paths resolves DEFAULT_CATALOG_PATH,
+// which the shared setup below writes with raw fs calls (tests/helpers/codex-home-sandbox.ts).
+import "../helpers/codex-home-sandbox";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,6 +24,7 @@ import * as shimAutoRestore from "../../src/cli/codex-shim-autorestore";
 import { runCli } from "../../src/cli/root";
 import * as codexSync from "../../src/codex/sync";
 import { DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
+import { assertNotRealCodexHomeUnderTest } from "../../src/lib/test-home-guard";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import type { OcxClientConnectionConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -36,6 +40,8 @@ const TUNNEL = 23461;
 const SENTINEL_CATALOG = JSON.stringify({ models: [{ slug: "sentinel-local-model" }] });
 const HOME_CATALOG = JSON.stringify({ models: [] });
 const realSyncConnectedClient = connectApi.syncConnectedClient;
+// Fail closed at load if the catalog path still resolves into the real Codex home.
+assertNotRealCodexHomeUnderTest(dirname(DEFAULT_CATALOG_PATH));
 
 let root = "";
 let previousHome: string | undefined;
