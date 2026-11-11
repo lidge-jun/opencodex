@@ -6,6 +6,7 @@ import {
   hasConflictingCodexModelRefusalEnvelopes,
   isMalformedResponseFormatRecord,
   isOpenRouterOpaque400EnvelopeRoot,
+  isProviderModerationRefusal,
   isOpenRouterOpaque400Record,
   type CodexAccountModelRefusal,
 } from "../../combos/failover";
@@ -157,12 +158,15 @@ function bareErrorIsRetryable(payload: unknown): boolean {
   };
   const malformedResponseFormat = status === 400 ? isMalformedResponseFormatRecord(rawRecord, message) : undefined;
   const openRouterOpaque400 = status === 400 ? isOpenRouterOpaque400EnvelopeRoot(event) : undefined;
+  // The parsed event is the whole terminal record, so its moderation verdict is not cut short.
+  const providerModerationRefusal = status === 400 || status === 422
+    ? isProviderModerationRefusal(status, JSON.stringify(event), undefined, true) : undefined;
   // A conflicting root and record code hop only when each would hop on its own, so a root hard
   // stop is never hidden behind a retryable record code (and a retryable pair keeps dev's hop).
   return comboFailureDecision(status, message, {
     code: recordCode ?? rootCode, rootCode,
     codexModelRefusal: terminalModelRefusal(status, event),
-    malformedResponseFormat, openRouterOpaque400,
+    malformedResponseFormat, openRouterOpaque400, providerModerationRefusal,
   }) === "hop";
 }
 

@@ -1017,8 +1017,12 @@ function isReflectedValidationText(text: string): boolean {
 /** Opening quote characters and the character that closes each, ASCII and typographic. */
 const QUOTE_PAIRS: Record<string, string> = {
   "\"": "\"", "`": "`",
-  "\u201c": "\u201d", "\u201e": "\u201c", "\u2018": "\u2019", "\u00ab": "\u00bb", "\u2039": "\u203a",
+  "\u201c": "\u201d", "\u201e": "\u201c", "\u2018": "\u2019", "\u201a": "\u2018", "\u00ab": "\u00bb", "\u2039": "\u203a",
+  "\u300c": "\u300d", "\u300e": "\u300f", "\u3010": "\u3011", "\u301d": "\u301e", "\uff02": "\uff02", "\u2033": "\u2033", "\u2036": "\u2036",
 };
+
+/** The classification text the combo path bounds a body to (src/server/responses/core-errors.ts). */
+const MODERATION_EVIDENCE_LIMIT = 500;
 
 /**
  * A moderation phrase echoed inside quotes is a reflected parameter value (Invalid enum value
@@ -1089,23 +1093,40 @@ function namesModerationRefusal(text: string): boolean {
  *
  * It must precede the generic invalid_request_error stop.
  */
+/** Whether the caller's status and structured code leave room for a moderation hop at all. */
+function moderationCodeAllowsHop(status: number, normalizedCode: string): boolean {
+  if (status !== 400 && status !== 422) return false;
+  return !(
+    isCyberPolicyCode(normalizedCode)
+    || isTerminalRefusalCode(normalizedCode)
+    || isNonReplayableUpstreamCode(normalizedCode)
+    // The envelope-root verdict codes (origin, content policy, context length, cancellation) stop
+    // on their own; a moderation phrase beside one cannot hop. A passed invalid_request_error is
+    // usually the error type standing in for an absent code (policy-fallback reads it that way),
+    // so it is not a verdict here; as a parsed envelope root below it still is.
+    || (normalizedCode !== "invalid_request_error" && rootCodeStatesVerdict(normalizedCode))
+  );
+}
+
+/**
+ * The moderation hop for one decision. A caller that read the complete bounded body (the combo
+ * failure reader, the stream preflight) passes its whole-body verdict; the structured code of
+ * this decision can still veto it. Without one, the possibly truncated message decides.
+ */
+function providerModerationHop(status: number, message: string, rawCode: string | null | undefined, wholeBody?: boolean): boolean {
+  if (wholeBody === undefined) return isProviderModerationRefusal(status, message, rawCode);
+  return wholeBody && moderationCodeAllowsHop(status, normalizedFailureCode(rawCode));
+}
+
 export function isProviderModerationRefusal(
   status: number,
   message: string,
   code?: string | null,
+  /** True when `message` is the complete bounded body rather than a possibly cut classification text. */
+  complete = false,
 ): boolean {
-  if (status !== 400 && status !== 422) return false;
   const normalizedCode = normalizedFailureCode(code);
-  if (
-    isCyberPolicyCode(normalizedCode)
-    || isTerminalRefusalCode(normalizedCode)
-    || isNonReplayableUpstreamCode(normalizedCode)
-    // The envelope-root verdict codes (origin, content policy, context length, a generic
-    // invalid_request_error code) stop on their own; a moderation phrase beside one cannot hop.
-    || rootCodeStatesVerdict(normalizedCode)
-  ) {
-    return false;
-  }
+  if (!moderationCodeAllowsHop(status, normalizedCode)) return false;
   // Hard refusals anywhere in the body outrank a moderation verdict, including nested codes,
   // serialized wrappers and safety copy. The terminal refusal path owns those bodies.
   if (message && (HARD_STOP_TOKEN.test(withJsonEscapesDecoded(message)) || isHardPolicyOrOriginRefusal(message)
@@ -1115,6 +1136,11 @@ export function isProviderModerationRefusal(
   if (!message) {
     return normalizedCode === "moderation_refusal" || normalizedCode === "content_filter";
   }
+  // Hop only on evidence seen whole. The combo path classifies at most the first
+  // MODERATION_EVIDENCE_LIMIT characters of a body (normalizeUpstreamErrorText), so a text that
+  // long may be cut, and a hard refusal after the cut would be invisible to the gate above. The
+  // body readers pass the whole body with `complete` instead.
+  if (!complete && message.length >= MODERATION_EVIDENCE_LIMIT) return false;
   if (message.length > 32_768) return false;
 
   let text = message.trim();
@@ -1244,6 +1270,8 @@ export function comboFailureCooldownScope(
     code?: string | number | null;
     malformedResponseFormat?: boolean;
     openRouterOpaque400?: boolean;
+    /** Whole-body moderation verdict from a reader that saw the complete bounded body. */
+    providerModerationRefusal?: boolean;
   },
 ): ComboFailureCooldownScope {
   const rawCode = typeof options?.code === "number" ? String(options.code) : options?.code;
@@ -1263,7 +1291,7 @@ export function comboFailureCooldownScope(
     // A capability gap says the target is healthy and the request did not fit it, which is the
     // same reason every other entry here refuses to cool a target.
     || isResponseFormatCapabilityRefusal(status, message, rawCode)
-    || isProviderModerationRefusal(status, message, rawCode)
+    || providerModerationHop(status, message, rawCode, options?.providerModerationRefusal)
   ) return "none";
   if (isProviderScopedQuotaCap(status, message, rawCode)) return "provider";
   // A rejected or unpaid credential is provider-wide evidence: every target that routes
@@ -1407,6 +1435,8 @@ export function comboFailureDecision(
     verifiedPlanRefusal?: boolean;
     malformedResponseFormat?: boolean;
     openRouterOpaque400?: boolean;
+    /** Whole-body moderation verdict from a reader that saw the complete bounded body. */
+    providerModerationRefusal?: boolean;
   },
 ): ComboFailureDecision {
   const rootRawCode = typeof options?.rootCode === "number" ? String(options.rootCode) : options?.rootCode;
@@ -1433,6 +1463,8 @@ function decideComboFailure(
     verifiedPlanRefusal?: boolean;
     malformedResponseFormat?: boolean;
     openRouterOpaque400?: boolean;
+    /** Whole-body moderation verdict from a reader that saw the complete bounded body. */
+    providerModerationRefusal?: boolean;
   },
 ): ComboFailureDecision {
   if (status === 499) return "stop";
@@ -1521,7 +1553,7 @@ function decideComboFailure(
   // reaches that list and returns terminal before anything can ask whether the next target
   // could have served the request (#4903).
   if (isResponseFormatCapabilityRefusal(status, message, rawCode)) return "hop";
-  if (isProviderModerationRefusal(status, message, rawCode)) return "hop";
+  if (providerModerationHop(status, message, rawCode, options?.providerModerationRefusal)) return "hop";
   if (isAnthropicBillingFailure(status, message, rawCode)) return "hop";
   // Kiro's body validator rejects the request for the identity it was routed under. The account
   // layer rotates logins first; this is the no-alternate case, so the next combo target is the

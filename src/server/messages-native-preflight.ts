@@ -99,6 +99,7 @@ export async function preflightNativeMessagesResponse(
         if (logCtx.terminalSource !== "synthetic" && logCtx.errorCode !== UNDECLARED_TOOL_CALL_ERROR_CODE
           && comboFailureDecision(status, typeof error.message === "string" ? error.message : "", {
           code: typeof error.code === "string" ? error.code : undefined,
+          rootCode: typeof payload.code === "string" ? payload.code : undefined,
         }) === "hop") { failure = error; failureStatus = status; }
         else committed = true;
       } else if (payload.type === "message_stop") terminal = true;

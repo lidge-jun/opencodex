@@ -1270,9 +1270,12 @@ describe("provider moderation refusal", () => {
     const rawBody = JSON.stringify(moderationPayload);
     expect(isProviderModerationRefusal(400, rawBody)).toBe(true);
     for (const message of [rawBody, `Provider error 400: ${rawBody}`, `data: ${rawBody}`]) {
-      expect(comboFailureDecision(400, message)).toBe("hop");
-      expect(comboFailureCooldownScope(400, message)).toBe("none");
+      // The body readers judge the whole body; a wrapped copy is longer than the cut classification text.
+      const providerModerationRefusal = isProviderModerationRefusal(400, message, undefined, true);
+      expect(comboFailureDecision(400, message, { providerModerationRefusal })).toBe("hop");
+      expect(comboFailureCooldownScope(400, message, { providerModerationRefusal })).toBe("none");
     }
+    expect(comboFailureDecision(400, rawBody)).toBe("hop");
   });
 
   test("hops on various provider moderation phrases", () => {
@@ -1485,8 +1488,9 @@ describe("provider moderation refusal", () => {
     // Pass through consumeComboFailure where production truncation occurs
     const response = new Response(raw, { status: 400 });
     const failure = await consumeComboFailure(response);
-    expect(comboFailureDecision(failure.response.status, failure.classificationText, { code: failure.upstreamCode })).toBe("hop");
-    expect(comboFailureCooldownScope(failure.response.status, failure.classificationText, { code: failure.upstreamCode })).toBe("none");
+    expect(failure.providerModerationRefusal).toBe(true);
+    expect(comboFailureDecision(failure.response.status, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal })).toBe("hop");
+    expect(comboFailureCooldownScope(failure.response.status, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal })).toBe("none");
   });
 
   test("malformed JSON restricts recovery to error envelope and rejects non-error message fields", () => {
@@ -1550,8 +1554,9 @@ describe("provider moderation refusal", () => {
     });
     const response = new Response(raw, { status: 400 });
     const failure = await consumeComboFailure(response);
-    expect(comboFailureDecision(failure.response.status, failure.classificationText, { code: failure.upstreamCode })).toBe("hop");
-    expect(comboFailureCooldownScope(failure.response.status, failure.classificationText, { code: failure.upstreamCode })).toBe("none");
+    expect(failure.providerModerationRefusal).toBe(true);
+    expect(comboFailureDecision(failure.response.status, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal })).toBe("hop");
+    expect(comboFailureCooldownScope(failure.response.status, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal })).toBe("none");
   });
 
   test("explicit content_filter code triggers failover even when param names other input field", () => {
@@ -1645,5 +1650,40 @@ describe("provider moderation refusal never outranks a hard refusal", () => {
     const message = body({ code: "moderation_refusal", param: "input", message: "The input was refused by moderation. Categories: harassment." });
     expect(comboFailureDecision(400, message, { code: "moderation_refusal" })).toBe("hop");
     expect(comboFailureCooldownScope(400, message, { code: "moderation_refusal" })).toBe("none");
+  });
+});
+
+describe("provider moderation refusal judged on the whole body", () => {
+  test("a hard refusal past the classification cut still stops the combo", async () => {
+    for (const hard of ["invalid_prompt", "bio_policy", "content_policy_violation", "upstream_no_response"]) {
+      const raw = JSON.stringify({ error: {
+        code: "content_filter",
+        message: "The input was refused by moderation.",
+        meta: { pad: "p".repeat(600), underlying: { code: hard } },
+      } });
+      const failure = await consumeComboFailure(new Response(raw, { status: 400 }));
+      expect(failure.classificationText.length).toBeLessThanOrEqual(500);
+      expect(failure.providerModerationRefusal).toBe(false);
+      const options = { code: failure.upstreamCode, rootCode: failure.upstreamRootCode, providerModerationRefusal: failure.providerModerationRefusal };
+      expect({ hard, decision: comboFailureDecision(400, failure.classificationText, options) }).toEqual({ hard, decision: "stop" });
+      expect(comboFailureCooldownScope(400, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal })).not.toBe("none");
+      // Without the whole-body verdict, a text that may have been cut never hops either.
+      expect(isProviderModerationRefusal(400, raw.slice(0, 500), "content_filter")).toBe(false);
+    }
+  });
+
+  test("CJK and fullwidth quoted echoes are not verdicts", () => {
+    for (const [open, close] of [["\u300c", "\u300d"], ["\u300e", "\u300f"], ["\uff02", "\uff02"], ["\u201a", "\u2018"]]) {
+      const message = JSON.stringify({ error: { type: "invalid_request_error", message: "Invalid value " + open + "refused by moderation" + close + " for field mode" } });
+      expect(isProviderModerationRefusal(400, message)).toBe(false);
+      expect(comboFailureDecision(400, message)).toBe("stop");
+    }
+  });
+
+  test("an error type passed as the code does not veto the canonical moderation refusal", () => {
+    // The policy-fallback path reads error.type when error.code is null.
+    const message = JSON.stringify({ error: { message: "The input was refused by moderation. Categories: harassment.", type: "invalid_request_error", param: null, code: null } });
+    expect(comboFailureDecision(400, message, { code: "invalid_request_error" })).toBe("hop");
+    expect(comboFailureDecision(400, message)).toBe("hop");
   });
 });
