@@ -8,7 +8,7 @@ import { mergeStaticImports } from "./update-review-table";
 const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
   "bin/ocx.mjs": [
     // Pre-mutation mutex admission and session/argument verification.
-    'import { acquireSyncGuard } from "../src/update/sync-update-mutex.mjs";',
+    'import { acquireSyncGuard, staleUpdateMarkerHint } from "../src/update/sync-update-mutex.mjs";',
     'import { isOrchestratedUpdateArgv, parseOrchestratedUpdateArgs, parseOrchestratedChildArgs } from "../src/update/orchestrated-arguments.mjs";',
     'import { createLegacyUpdateSession, createOrchestratedChildSession, decodeOrchestratedExpect } from "../src/update/orchestrated-session.mjs";',
     'import { createUpdatePlanToken } from "../src/update/orchestrated-token.mjs";',
@@ -101,6 +101,8 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     'import { protectOrchestratedWorkerSignals } from "./orchestrated-child.mjs";',
     'import { runPosixInstallerSync } from "./posix-install-supervisor.mjs";',
     'import { runWindowsInstallerSync } from "./npm-install.mjs";',
+    // Formatting only: recovery guidance for a refusal by a witnessless update marker (#8524).
+    'import { staleUpdateMarkerHint } from "./sync-update-mutex.mjs";',
     'import { verifyOrchestratedInstall } from "./orchestrated-tree.mjs";',
     "import { guardedRun, guardedSpawn, guardedSpawnSync } from \"./mutation-guard.mjs\";",
     "import { probeSpawn, probeSpawnSync } from \"./mutation-guard.mjs\";",

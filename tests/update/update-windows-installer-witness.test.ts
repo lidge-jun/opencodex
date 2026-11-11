@@ -1,11 +1,12 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
-import type { ChildProcess } from "node:child_process";
-import { inspectUpdateMarker } from "../../src/update/sync-update-mutex";
+import { spawnSync, type ChildProcess } from "node:child_process";
+import { repoPath } from "../helpers/repo-root";
+import { inspectUpdateMarker, staleUpdateMarkerHint } from "../../src/update/sync-update-mutex";
 import { createOrchestratedChildSession } from "../../src/update/orchestrated-session.mjs";
 import { publishWindowsInstallerPid } from "../../src/update/windows-installer-marker.mjs";
 import { runNpmInstall, setWindowsInstallerSupervisorForTests } from "../../src/update/npm-install.mjs";
@@ -186,4 +187,86 @@ test("the Windows supervisor seam refuses outside a test process", () => {
   } finally {
     if (previous === undefined) delete process.env.OCX_TEST_HOME_GUARD; else process.env.OCX_TEST_HOME_GUARD = previous;
   }
+});
+
+describe("legacy witnessless marker recovery hint (#8524 decision A)", () => {
+  const DEAD = 2_147_483_647; // no host hands out this pid
+  const legacy = { pid: DEAD, phase: "mutating", startedAt: 1_000, fenceUntil: 901_000, terminationUnconfirmed: true };
+
+  test("the inspection that refuses reports a witnessless marker through its detail", () => {
+    const root = home();
+    writeMarker(root, interrupted);
+    const detail: { witnessless?: boolean } = {};
+    expect(inspectUpdateMarker(root, { now: afterFence, platform: "win32", signal: signalWith(new Set()), detail })).toBe("unknown");
+    expect(detail.witnessless).toBe(true);
+    for (const [marker, alive, now] of [
+      [{ ...interrupted, installerPid: SUPERVISOR }, new Set<number>(), afterFence],
+      [interrupted, new Set([LAUNCHER]), afterFence],
+      [interrupted, new Set<number>(), () => 500_000],
+    ] as const) {
+      writeMarker(root, marker);
+      const other: { witnessless?: boolean } = {};
+      inspectUpdateMarker(root, { now, platform: "win32", signal: signalWith(alive), detail: other });
+      expect(other.witnessless).toBeUndefined();
+    }
+    const unprobeable: { witnessless?: boolean } = {};
+    writeMarker(root, interrupted);
+    expect(inspectUpdateMarker(root, { now: afterFence, platform: "win32", signal: signalWith(new Set(), new Set([LAUNCHER])), detail: unprobeable })).toBe("unknown");
+    expect(unprobeable.witnessless).toBeUndefined();
+  });
+
+  test("the hint names the marker and a reversible rename for the platform", () => {
+    const root = home();
+    const windows = staleUpdateMarkerHint(root, "win32").join("\n");
+    expect(windows).toContain(markerPath(root));
+    expect(windows).toContain(`ren "${markerPath(root)}" update-orchestrated.json.stale`);
+    expect(windows).toContain("ocx update");
+    const posix = staleUpdateMarkerHint(root, "linux").join("\n");
+    expect(posix).toContain(`mv -n '${markerPath(root)}' '${markerPath(root)}.stale'`);
+    // Nothing in a pasted command may expand: POSIX quotes a quote; Windows prints no command at all.
+    expect(staleUpdateMarkerHint("/home/o'neil/.opencodex", "linux").join("\n"))
+      .toContain("mv -n '/home/o'\\''neil/.opencodex/update-orchestrated.json'");
+    const expandable = staleUpdateMarkerHint("C:\\Users\\$(evil)\\.opencodex", "win32").join("\n");
+    expect(expandable).not.toContain("ren ");
+    expect(expandable).toContain("rename that file by hand");
+    // PowerShell also closes a string on typographic quotes and globs brackets: no command for those either.
+    for (const home of ["C:\\Users\\a\u201d; calc; \u201cb\\.opencodex", "C:\\Users\\[x]\\.opencodex", "C:\\Users\\a!b\\.opencodex", "C:\\Users\\Jos\u00e9\\.opencodex"]) {
+      expect(staleUpdateMarkerHint(home, "win32").join("\n")).not.toContain("ren ");
+    }
+    // A control character never reaches the terminal or a command.
+    const escaped = staleUpdateMarkerHint("/home/a\u001b]0;x\u0007/.opencodex", "linux").join("\n");
+    expect(escaped).not.toContain("\u001b");
+    expect(escaped).not.toContain("mv -n");
+    // A Windows-shaped marker read on POSIX has no group witness either; it gets the POSIX command.
+    writeMarker(root, { ...interrupted, installerPid: SUPERVISOR });
+    const detail: { witnessless?: boolean } = {};
+    inspectUpdateMarker(root, { now: afterFence, platform: "linux", signal: signalWith(new Set()), detail });
+    expect(detail.witnessless).toBe(true);
+  });
+
+  test("a legacy update session refusal is flagged only when the marker refused it", () => {
+    const root = home();
+    writeMarker(root, legacy);
+    expect(createOrchestratedChildSession({ home: root, verifyIdentity: () => true }).start())
+      .toEqual({ ok: false, error: "update-in-flight", staleMarker: true });
+    writeMarker(root, { ...legacy, fenceUntil: Date.now() + 600_000 });
+    expect(createOrchestratedChildSession({ home: root, verifyIdentity: () => true }).start())
+      .toEqual({ ok: false, error: "update-in-flight" });
+  });
+
+  test("ocx sync refused by a legacy marker prints the reason, then the hint", () => {
+    const root = home();
+    writeMarker(root, legacy);
+    const script = `import {withSyncUpdateGuard} from ${JSON.stringify(repoPath("src/cli/sync-update-guard.ts"))}; process.exit(await withSyncUpdateGuard(async () => 0, ${JSON.stringify(["--json"])}));`;
+    const result = spawnSync(process.execPath, ["--no-env-file", "-e", script], {
+      env: { ...process.env, HOME: root, USERPROFILE: root, CODEX_HOME: join(root, "codex"), OPENCODEX_HOME: root, OCX_TEST_HOME_GUARD: "1" },
+      encoding: "utf8", timeout: 12_000,
+    });
+    expect(result.status).toBe(7);
+    const lines = result.stderr.trim().split("\n");
+    expect(lines[0]).toBe("update-in-flight");
+    expect(lines.slice(1).join("\n")).toContain(markerPath(root));
+    // The JSON document is the sync wire format and stays exactly as before.
+    expect(JSON.parse(result.stdout)).toEqual({ schema: "ocx.sync.fanout/1", home: { state: "skipped", exit: 7 }, fanout: { state: "not-applicable", reason: "update-in-flight" }, children: [] });
+  }, 30_000);
 });

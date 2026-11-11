@@ -203,10 +203,12 @@ export function createOrchestratedChildSession({ home, resultPath, resultCapabil
         return { ok: false, error };
       }
       mutex = acquired;
-      if (inspectUpdateMarker(home) !== "free") {
+      const detail = {};
+      if (inspectUpdateMarker(home, { detail }) !== "free") {
         mutex.release(); mutex = undefined;
         result({ phase: "refused", error: "update-in-flight" }); state = "refused"; closeResult();
-        return { ok: false, error: "update-in-flight" };
+        // staleMarker never enters the result record; it lets the launcher print recovery guidance.
+        return { ok: false, error: "update-in-flight", ...(detail.witnessless ? { staleMarker: true } : {}) };
       }
       try { startedAt = now(); marker("preflight"); }
       catch (error) { mutex.release(); mutex = undefined; throw error; }

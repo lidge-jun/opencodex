@@ -13,7 +13,7 @@ import { probeSpawn, probeSpawnSync } from "../src/update/mutation-guard.mjs";
 import { createSupervisionLatch, inspectDesktopSupervision } from "../src/service/desktop-supervision.mjs";
 import { planDesktopCliHandoff, runDesktopCliHandoff } from "../src/lib/desktop-cli-handoff.mjs";
 import { forwardLauncherSignals } from "../src/lib/launcher-signal-forwarding.mjs";
-import { acquireSyncGuard } from "../src/update/sync-update-mutex.mjs";
+import { acquireSyncGuard, staleUpdateMarkerHint } from "../src/update/sync-update-mutex.mjs";
 import { desktopCliRecordPath } from "../src/lib/desktop-cli-record.mjs";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
 import { probeProxyLiveness } from "../src/update/proxy-liveness-probe.mjs";
@@ -275,7 +275,11 @@ async function runPackageManagerSelfUpdate(manager, child) {
   } else {
     session = createLegacyUpdateSession({ home: configDir() });
     const started = session.start();
-    if (!started.ok) { console.error(`opencodex: ${started.error}`); process.exit(1); }
+    if (!started.ok) {
+      console.error(`opencodex: ${started.error}`);
+      if (started.staleMarker) for (const line of staleUpdateMarkerHint(configDir())) console.error(line);
+      process.exit(1);
+    }
     process.once("exit", () => {
       try { if (enteredMutation) session.finish(childOutcome); else session.finishPreflight(); }
       catch (error) { console.error(`Update outcome write failed: ${error?.message ?? error}`); process.exitCode = 1; }
