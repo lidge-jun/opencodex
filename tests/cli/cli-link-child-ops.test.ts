@@ -222,3 +222,26 @@ describe("contract", () => {
     } finally { out.mockRestore(); }
   });
 });
+
+describe("CodeRabbit 4532654426 / 4532654389: messages an operator can act on", () => {
+  test("a Home not bound to loopback: the message states the limit and offers no dashboard path", async () => {
+    const result = await run(["update", "--link-id", LINK, "--yes"], deps(() => ({ status: 403, body: { error: { code: "admin_loopback_required", message: "x" } } })));
+    expect(result.code).toBe(1);
+    expect(result.stderr[0]).toBe("Error: Child operations from the CLI need a Home bound to loopback; on this Home they are not available, and the dashboard has no controls for them.");
+  });
+
+  test("each exit-5 conflict names its cause", async () => {
+    const cases: Array<[string, string]> = [
+      ["link_not_home_initiated", "This link was started from the Child, so the Home cannot run operations on it."],
+      ["link_operation_in_progress", "Another operation is running on this link; wait for it to finish, then try again."],
+      ["no_eligible_links", "This Home has no links."],
+      ["runtime_role_client", "This machine is a Child; run Child operations on its Home."],
+    ];
+    for (const [code, message] of cases) {
+      const result = await run(["sync", "--link-id", LINK], deps(() => ({ status: 409, body: { error: { code, message: "x" } } })));
+      expect(result.code).toBe(5);
+      expect(result.stderr[0]).toBe("Error: " + message);
+    }
+  });
+});
+

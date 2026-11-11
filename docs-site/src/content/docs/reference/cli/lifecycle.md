@@ -1387,12 +1387,12 @@ These commands start one job on the Home for Home-initiated Children and print i
 
 | Exit | Meaning |
 |---|---|
-| 0 | every item `succeeded` or is `up-to-date`, and every requested restart went out |
+| 0 | every item `succeeded` or is `up-to-date`, and every requested restart went out; with `--no-wait`, the job was accepted and may still be running (read it again for the result) |
 | 6 | an item is `busy`, `offline`, `refused`, `owner-action` or `unsupported`, or succeeded with a reason such as `restart-skipped:link-active` or `post-update-sync-failed` |
 | 1 | an item `failed` or is `uncertain`, an item state this CLI does not know, the job did not finish within its wait, or a Home not bound to loopback |
 | 2 | invalid arguments, for example a restart with `--all` or `update` without `--yes` |
 | 4 | an unknown link, or a Home without Child operations |
-| 5 | another operation holds the link, the Home has no links, or the command ran on a Child |
+| 5 | another operation holds the link, the only link named was started from the Child, the Home has no links, or the command ran on a Child; the error message names which |
 
 The wait does not count time an item spends queued behind another job. Removing a link while a job holds it answers `409 link_operation_in_progress`.
 

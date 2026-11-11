@@ -418,7 +418,7 @@ state:"queued"|"running"|"done", createdAt, finishedAt, items}`, each item
 `sync` is `{state:"synced"|"skipped"|"failed"|"timed-out", reason}` for the pinned sync the item ran;
 `restart` is `{requested:"app-server"|"codex", outcome}` with `outcome` `requested` (sent, not confirmed),
 `unsupported` (Windows or `ocx-child`), `not-run` (the sync before it failed) or `skipped` (a relayed request was in
-flight). Item states are `succeeded`, `up-to-date`, `busy`, `offline`, `refused`, `owner-action`,
+flight). Item states are `queued` and `running` while the job runs (a `--no-wait` document can carry them), then `succeeded`, `up-to-date`, `busy`, `offline`, `refused`, `owner-action`,
 `unsupported`, `failed` and `uncertain`. Reasons are closed tokens such as `legacy-ocx`, `child-initiated`,
 `ssh-failed`, `link-removed`, `link-operation-in-progress`, `restart-skipped:link-active`,
 `restart-result-unknown`, `post-update-sync-failed`, `rolled-back`, `windows-apply` or `launcher-node-missing`;

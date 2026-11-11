@@ -37,8 +37,10 @@ restart withheld because a relayed request was in flight (`restart-skipped:link-
 `ocx link check`, never re-sent blindly. A job still running past its deadline prints the job and exits 1
 (`job_still_running`); time an item spends queued behind another job does not count. Exit 4 means an
 unknown link id, or a Home too old for Child operations (the message says to update the Home); exit 5
-means a conflict: another operation holds the link, the Home has no links, or the command ran on a
-Child (each has its own message). On a Home not bound to loopback the verbs exit 1 and name the dashboard.
+means a conflict: another operation holds the link, the only link named was started from the Child, the
+Home has no links, or the command ran on a Child (each has its own message). On a Home not bound to
+loopback the verbs exit 1: these operations are not available there, and the dashboard has no controls
+for them. With `--no-wait`, exit 0 only means the job was accepted; read it again for the result.
 
 ## Distinguishing "not running" from "failing"
 
@@ -159,8 +161,10 @@ flags, so check `ocx --version` before relying on them.
 
 The Home's own `ocx link sync|restart-codex|update` runs this pinned sync on the Child and reports the
 refusal as an item (`refused`, reason `child-link-mismatch:<reason>`) instead of an exit 5. Their exit 5
-is `link_operation_in_progress`: another job of the Home holds that link, and `ocx link revoke` on it
-answers the same 409 until the job ends.
+is a conflict the error message names: another job holds the link (`link_operation_in_progress`, which `ocx link revoke` on it
+answers the same 409 until the job ends), the only link named was started from the Child
+(`link_not_home_initiated`), the Home has no links, or the command ran on a Child. Read the message before
+retrying.
 
 ## Destructive verbs fail closed
 

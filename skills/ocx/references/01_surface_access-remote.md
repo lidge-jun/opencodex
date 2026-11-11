@@ -723,12 +723,12 @@ State-changing: yes. JSON mode: `payload`.
 | `--json` | boolean | Emit the ocx.link.child-job/1 document (always JSON). |
 
 - Runs a pinned sync --expect-link first to confirm the Child still belongs to this link, then the Child's own ocx update --plan through the served entry, then --yes with --expect-plan and a --not-after 120 s after the plan on the Child's own clock, through the link's pinned SSH trust. npm and pnpm installs apply through their Node launcher; Bun installs plan and apply on their served Bun entry. The target is always this Home's version; the Child refuses a downgrade.
-- Children below 2.97.0 run nothing and report owner-action legacy-ocx; ocx-child and GOAT-managed Children report unsupported or owner-action; Windows Children are refused orchestrated apply (unsupported windows-apply). An update restarts the Child's OpenCodex and ends any turn currently relayed for it, so --yes is required. A pinned sync runs after every update, also after a failed or rolled-back one.
-- Exit 0 all succeeded or up-to-date, 6 partial (including a kept update whose follow-up sync failed), 1 failed, uncertain or an unknown state, 5 another operation holds the link, the Home has no links or the command ran on a Child, 4 the link is unknown or the Home lacks Child operations. On a Home not bound to loopback it exits 1 and names the dashboard.
+- Children below 2.97.0 receive no update command: from 2.93.0 they still get the identity sync, then report owner-action legacy-ocx; ocx-child and GOAT-managed Children report unsupported or owner-action; Windows Children are refused orchestrated apply (unsupported windows-apply). An update restarts the Child's OpenCodex and ends any turn currently relayed for it, so --yes is required. A pinned sync follows a successful, failed or rolled-back apply; an apply whose result is unknown is recorded and neither retried nor resynced, so re-check it with ocx link check.
+- Exit 0 all succeeded or up-to-date (with --no-wait: the job was accepted and may still be running), 6 partial (including a kept update whose follow-up sync failed), 1 failed, uncertain or an unknown state, 5 another operation holds the link, the only link named was started from the Child, the Home has no links or the command ran on a Child, 4 the link is unknown or the Home lacks Child operations. On a Home not bound to loopback it exits 1: these operations are not available there, and the dashboard has no controls for them.
 
 ### `ocx link sync`
 
-Usage: `ocx link sync (--link-id <id> | --all) [--restart-app-server-only | --restart-codex --yes] [--no-wait] [--json]`
+Usage: `ocx link sync (--link-id <id> | --all) [--no-wait] [--json] | ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]`
 
 Run the pinned catalog and settings sync on Home-initiated Children.
 

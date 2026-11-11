@@ -14,10 +14,14 @@ export const LINK_CHECK_POLL_MS = 2_000;
 export const OLD_HOME_MESSAGE = "This Home does not support Child operations; update the Home.";
 export const NO_ELIGIBLE_LINKS_MESSAGE = "This Home has no links.";
 export const RUNTIME_ROLE_CLIENT_MESSAGE = "This machine is a Child; run Child operations on its Home.";
-export const LOOPBACK_REQUIRED_MESSAGE = "Child operations from the CLI need a Home bound to loopback; use the Remote Link page in the dashboard.";
+export const LINK_NOT_HOME_INITIATED_MESSAGE = "This link was started from the Child, so the Home cannot run operations on it.";
+export const LINK_OPERATION_IN_PROGRESS_MESSAGE = "Another operation is running on this link; wait for it to finish, then try again.";
+export const LOOPBACK_REQUIRED_MESSAGE = "Child operations from the CLI need a Home bound to loopback; on this Home they are not available, and the dashboard has no controls for them.";
 const CONFLICT_MESSAGES: Readonly<Record<string, string>> = {
   no_eligible_links: NO_ELIGIBLE_LINKS_MESSAGE,
   runtime_role_client: RUNTIME_ROLE_CLIENT_MESSAGE,
+  link_not_home_initiated: LINK_NOT_HOME_INITIATED_MESSAGE,
+  link_operation_in_progress: LINK_OPERATION_IN_PROGRESS_MESSAGE,
 };
 
 /** How long one item may run once it has started: the sum of its runner's own SSH bounds plus a margin. */
