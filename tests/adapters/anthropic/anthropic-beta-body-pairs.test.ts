@@ -105,3 +105,41 @@ describe("translated Responses thinking isolation", () => {
     });
   }
 });
+
+describe("auto mode server review: dangerous-tool-use beta and safeguards", () => {
+  const REVIEW = "dangerous-tool-use-2026-09-03";
+  const reviewed = Object.freeze({
+    ...source,
+    safeguards: Object.freeze([{ type: "dangerous_tool_use", classifier_context: { v: 1, permission_mode: "auto" } }]),
+  });
+  const buildReviewed = (overrides: Partial<OcxProviderConfig> = {}, callerAnthropicBeta?: string, clientIdentity = undefined as typeof observed) =>
+    buildAnthropicMessagesPassthroughRequest({ ...provider, ...overrides }, "claude-opus-5-5", reviewed, undefined, { callerAnthropicBeta, clientIdentity });
+
+  for (const authMode of ["key", "oauth"] as const) {
+    test(`${authMode}: an observed Claude Code client forwards the beta and its safeguards`, () => {
+      const built = buildReviewed({ authMode }, `${CONTEXT},${REVIEW.toUpperCase()}`, observed);
+      expect(new Headers(built.headers).get("anthropic-beta")?.split(",")).toContain(REVIEW);
+      expect(built.wireBody.safeguards).toBe(reviewed.safeguards);
+      expect(JSON.parse(built.body).safeguards).toEqual(reviewed.safeguards);
+      expect(built.droppedBetas).toBe(false);
+    });
+  }
+  test("a generic caller gets neither the beta nor the field; the drop is named", () => {
+    const built = buildReviewed({}, REVIEW);
+    expect(built.headers).not.toHaveProperty("anthropic-beta");
+    expect(built.wireBody).not.toHaveProperty("safeguards");
+    expect(built.droppedBetaNames).toEqual([REVIEW]);
+    expect(built.droppedUnrecognizedBetas).toBe(0);
+  });
+  test("safeguards without the beta in the final header are dropped", () => {
+    const built = buildReviewed({ authMode: "oauth" }, CONTEXT, observed);
+    expect(built.wireBody).not.toHaveProperty("safeguards");
+    expect(JSON.parse(built.body)).not.toHaveProperty("safeguards");
+    expect(reviewed).toHaveProperty("safeguards");
+  });
+  test("a compatible destination receives neither, even for an observed client", () => {
+    const built = buildReviewed({ baseUrl: "https://compatible.example" }, REVIEW, observed);
+    expect(new Headers(built.headers).has("anthropic-beta")).toBe(false);
+    expect(built.wireBody).not.toHaveProperty("safeguards");
+  });
+});

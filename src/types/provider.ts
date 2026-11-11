@@ -296,6 +296,8 @@ export interface ModelCapabilities extends ReasoningCapabilities {
   deepseekImageFiles?: boolean;
   /** Images a first-party Mistral Chat request may carry for this model; older ones are pruned. */
   mistralMaxImages?: number;
+  /** Exact-model Responses custom-tool support; absent inherits the provider contract. */
+  responsesCustomTools?: boolean;
 }
 
 /**

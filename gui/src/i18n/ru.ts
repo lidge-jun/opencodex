@@ -1,5 +1,6 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -132,6 +133,7 @@ export const ru: Record<TKey, string> = {
   "workflowBudget.saved": "Лимиты рабочих процессов сохранены.",
   ...desktopCompatibilityCopy("ru"),
   ...shellV2Copy("ru"),
+  ...codexCliUpdateCopy("ru"),
   ...modelsV2Copy("ru"),
   ...accountsV2Copy("ru"),
   ...subagentsV2Copy("ru"),
@@ -2695,6 +2697,7 @@ export const ru: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Не удалось загрузить пресет провайдера OpenAI.",
   "codexAuth.openaiPresetUnavailable": "Пресет провайдера OpenAI недоступен.",
   "codexAuth.openProviders": "Открыть провайдеров",
+  "codexAuth.changeAccountMode": "Изменить режим аккаунта",
   "codexAuth.add": "Добавить",
   "codexAuth.credits": "Кредиты",
   "codexAuth.creditsRemaining": "осталось",

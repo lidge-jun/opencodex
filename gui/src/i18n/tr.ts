@@ -1,5 +1,6 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -133,6 +134,7 @@ export const tr: Record<TKey, string> = {
   "workflowBudget.saved": "İş akışı sınırları kaydedildi.",
   ...desktopCompatibilityCopy("tr"),
   ...shellV2Copy("tr"),
+  ...codexCliUpdateCopy("tr"),
   ...modelsV2Copy("tr"),
   ...accountsV2Copy("tr"),
   ...subagentsV2Copy("tr"),
@@ -2733,6 +2735,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Ayar yüklenemedi.",
   "codexAuth.openaiPresetUnavailable": "Ayar kullanılamıyor.",
   "codexAuth.openProviders": "Sağlayıcıları Aç",
+  "codexAuth.changeAccountMode": "Hesap modunu değiştir",
   "codexAuth.add": "Ekle",
   "codexAuth.credits": "Kredi",
   "codexAuth.creditsRemaining": "kalan",

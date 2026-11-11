@@ -1848,6 +1848,13 @@ export interface OcxCodexPoolConfig {
   /** Enable process-local affinity for caller-owned credentials; defaults off. */
   requestOwnedAffinity?: boolean;
   /**
+   * Pool-only policy (#7410); defaults off. When true, automatic Pool resolution serves only
+   * registered, eligible non-main accounts: no ordered or preserved native main, no caller-main
+   * fallback, and a manual main pin is not honoured. An exhausted allowed pool refuses. Explicit
+   * account selectors (including `__main__` and Reserve) and Direct mode stay outside the policy.
+   */
+  poolOnly?: boolean;
+  /**
    * Plan keys ordinary rotation skips, matched case-insensitively against the plan stored on each
    * account. Absent or empty means no policy.
    *

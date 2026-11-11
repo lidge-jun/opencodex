@@ -180,7 +180,7 @@ export function hashBelongsToPage(rawHash: string, page: Page): boolean {
     || (page === "logs" && rawHash === "logs/debug")
     || (page === "startup" && rawHash === "startup/desktop")
     || (page === "usage" && rawHash === "usage/companion")
-    || (page === "codex-set" && (rawHash === "codex-set/prompt" || rawHash === "codex-set/desktop"))
+    || (page === "codex-set" && (rawHash === "codex-set/prompt" || rawHash === "codex-set/desktop" || rawHash === "codex-set/cli"))
     || (page === "models" && (
       (MODELS_TAB_HASHES as readonly string[]).includes(rawHash)
       || rawHash === JEV_AUTO_CREATE_HASH

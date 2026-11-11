@@ -9,9 +9,14 @@ const { latestCodeRabbitReviewForHead } = require("./pr-quality-state.cjs");
 describe("enforce-pr-target workflow", () => {
   const workflowPath = path.join(__dirname, "../workflows/enforce-pr-target.yml");
   const workflow = fs.readFileSync(workflowPath, "utf8");
+  // The triggers live in the PR gates caller since #7654; this file runs as its
+  // local reusable workflow.
+  const caller = fs.readFileSync(path.join(__dirname, "../workflows/pr-gates.yml"), "utf8");
 
   it("uses pull_request_target without checking out PR head code", () => {
-    assert.match(workflow, /pull_request_target:/);
+    assert.match(caller, /^  pull_request_target:/m);
+    assert.match(caller, /uses: \.\/\.github\/workflows\/enforce-pr-target\.yml$/m);
+    assert.match(workflow, /^on:\n  workflow_call:\n/m);
     assert.doesNotMatch(
       workflow,
       /ref:\s*\$\{\{\s*github\.event\.pull_request\.head/,
@@ -50,10 +55,11 @@ describe("enforce-pr-target workflow", () => {
   });
 
   it("uses label events for GUI waivers, hygiene sponsorship, and a trusted CodeRabbit status signal", () => {
+    assert.doesNotMatch(caller, /^  issue_comment:/m);
     assert.doesNotMatch(workflow, /^  issue_comment:/m);
-    assert.match(workflow, /- labeled/);
-    assert.match(workflow, /- unlabeled/);
-    assert.match(workflow, /^  status:/m);
+    assert.match(caller, /types: \[[^\]]*\blabeled\b[^\]]*\]/);
+    assert.match(caller, /types: \[[^\]]*\bunlabeled\b[^\]]*\]/);
+    assert.match(caller, /^  status:/m);
     assert.match(workflow, /github\.event\.context == 'CodeRabbit'/);
     assert.match(workflow, /github\.event\.state == 'success'/);
     assert.match(workflow, /github\.event\.label\.name == 'gui-screenshot-waived'/);
@@ -72,8 +78,10 @@ describe("enforce-pr-target workflow", () => {
     // the workflow definition under a write token. The findings claim runs on
     // every `pull_request_target` event instead (opened/edited/synchronize/
     // ready_for_review).
-    assert.doesNotMatch(workflow, /^  pull_request_review:/m);
-    assert.doesNotMatch(workflow, /^  pull_request_review_comment:/m);
+    for (const text of [workflow, caller]) {
+      assert.doesNotMatch(text, /^  pull_request_review:/m);
+      assert.doesNotMatch(text, /^  pull_request_review_comment:/m);
+    }
   });
 
   it("queries review threads and feeds them to the findings claim check", () => {

@@ -621,6 +621,7 @@ export async function executeResponsesSidecars(
       onFirstOutput: noteSidecarOutput,
       ...(options.forceEmptyResponseId ? { forceEmptyResponseId: true } : {}),
       terminalRefusalAsFailed: inboundWire !== "chat" && inboundWire !== "anthropic",
+      escapeMemoryCitationTags: inboundWire !== "chat" && inboundWire !== "anthropic",
       onCompletedResponse: (response, providerState) => {
         if (!options.abortSignal?.aborted) thinkingRecovery.rememberSuccess(response);
         const served = transportState.replayOAuthCredentialSnapshot;
@@ -734,6 +735,7 @@ export async function executeResponsesSidecars(
       maxSearches: wsPlan.maxSearches,
       forceEmptyResponseId: true,
       terminalRefusalAsFailed: inboundWire !== "chat" && inboundWire !== "anthropic",
+      escapeMemoryCitationTags: inboundWire !== "chat" && inboundWire !== "anthropic",
       abortSignal: options.abortSignal,
       onFirstOutput: noteSidecarOutput,
       onRequestBuilt: request => {

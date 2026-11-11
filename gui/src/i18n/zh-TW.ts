@@ -1,5 +1,6 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -130,6 +131,7 @@ export const zhTW: Record<TKey, string> = {
   "workflowBudget.saved": "工作流程限制已儲存。",
   ...desktopCompatibilityCopy("zh-TW"),
   ...shellV2Copy("zh-TW"),
+  ...codexCliUpdateCopy("zh-TW"),
   ...modelsV2Copy("zh-TW"),
   ...accountsV2Copy("zh-TW"),
   ...subagentsV2Copy("zh-TW"),
@@ -2049,6 +2051,7 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "無法載入 OpenAI 供應商預設。",
   "codexAuth.openaiPresetUnavailable": "OpenAI 供應商預設不可用。",
   "codexAuth.openProviders": "開啟供應商",
+  "codexAuth.changeAccountMode": "變更帳號模式",
   "codexAuth.add": "新增",
   "codexAuth.credits": "額度",
   "codexAuth.creditsRemaining": "剩餘",

@@ -34,7 +34,7 @@ issuing deferred inference warmups. Already dispatched requests retain their cap
 ## Codex home
 
 `src/codex/paths.ts` resolves Codex state from `CODEX_HOME` when set and valid, otherwise from
-`~/.codex`. An unset `CODEX_HOME` falls back to `~/.codex`, including WSL discovery. On WSL,
+`~/.codex`. An unset `CODEX_HOME` falls back to `~/.codex`, including WSL discovery. Native-main credential byte reads share one reader while preserving each caller's plain, bounded, local-bounded, or stable-read behavior; the same module owns the synchronous and asynchronous writers for the native-main login file. On WSL,
 discovery of a Windows Desktop home applies when the Linux `~/.codex` is absent, is not a directory,
 or is a directory holding no Codex state (none of `config.toml`, `auth.json`, `sessions`,
 `history.jsonl`; `defaultCodexHome` in `src/codex/home.ts`). A fresh local home Codex is already using

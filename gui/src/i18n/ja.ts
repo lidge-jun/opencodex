@@ -1,5 +1,6 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -132,6 +133,7 @@ export const ja: Record<TKey, string> = {
   "workflowBudget.saved": "ワークフロー上限を保存しました。",
   ...desktopCompatibilityCopy("ja"),
   ...shellV2Copy("ja"),
+  ...codexCliUpdateCopy("ja"),
   ...modelsV2Copy("ja"),
   ...accountsV2Copy("ja"),
   ...subagentsV2Copy("ja"),
@@ -2603,6 +2605,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "OpenAI プロバイダーのプリセットを読み込めませんでした。",
   "codexAuth.openaiPresetUnavailable": "OpenAI プロバイダーのプリセットを利用できません。",
   "codexAuth.openProviders": "プロバイダーを開く",
+  "codexAuth.changeAccountMode": "アカウントモードを変更",
   "codexAuth.add": "追加",
   "codexAuth.credits": "クレジット",
   "codexAuth.creditsRemaining": "残り",
