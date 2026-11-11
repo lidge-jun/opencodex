@@ -1386,19 +1386,18 @@ describe("the surfaces around the repair (#4236 defects 1f, 1h, 2)", () => {
    * "loaded / not loaded" answer turned one unreadable `launchctl print` into an eviction.
    */
   test("installLaunchd asks the tri-state probe, never launchdJobMatchesPlist", () => {
-    const fn = slice(launchd, "export function installLaunchd(", " * Deps are named for the layer they replace");
+    const fn = slice(launchd, "export function installLaunchd(", "export function restartLaunchdJob(");
     expect(fn).toContain("probe?: typeof probeLaunchdLoadState;");
     expect(fn).not.toContain("launchdJobMatchesPlist");
-    // Refuse before any write, and again before any retry or rollback.
+    // The scripted launchctl tests above cover retry and unknown-outcome behavior.
     expect(fn).toContain('if (verdict.state === "unknown") {');
     expect(fn).toContain("refusing to ${wasInstalled ? \"repair\" : \"install\"}");
-    expect(fn).toContain('verdict.state === "not-loaded" || verdict.state === "loaded-stale"');
     // `startLaunchd` keeps the two-state helper deliberately: it does not evict anything.
     expect(slice(launchd, "export function startLaunchd(", "function stopLaunchd(")).toContain("launchdJobMatchesPlist");
   });
 
   test("the no-op pre-check treats a PATH-only difference as identical (finding 2)", () => {
-    const fn = slice(launchd, "export function installLaunchd(", " * Deps are named for the layer they replace");
+    const fn = slice(launchd, "export function installLaunchd(", "export function restartLaunchdJob(");
     expect(fn).toContain("reusePreviousPlistPathVariable(previousPlist, rendered)");
     // Only against a job proven to run the exec line this install baked.
     expect(fn).toContain('verdict.state === "loaded-current"');

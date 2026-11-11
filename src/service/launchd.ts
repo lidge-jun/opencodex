@@ -1024,6 +1024,7 @@ export function statusLaunchd(deps: { probe?: typeof probeLaunchdLoadState } = {
   return "";
 }
 
+/** Request a stop and remove the plist/recovery files; only missing-file cleanup is benign. */
 export function uninstallLaunchd(deps: { launchctl?: typeof runLaunchctl; plistPath?: string } = {}): void {
   const p = deps.plistPath ?? plistPath();
   // Same reason as `installLaunchd`: HOME isolation does not move this path, so without

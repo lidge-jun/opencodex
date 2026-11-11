@@ -609,6 +609,10 @@ export function setUninstallServiceHooksForTests(hooks: UninstallServiceHooksFor
  */
 export type ServiceUninstallOutcome = "absent" | "removed" | "failed";
 
+/**
+ * Remove installed manager assets, including orphaned launchd recovery files.
+ * Keep install state on removal failure; Windows refusal and unknown probes may throw.
+ */
 export function uninstallServiceDetailed(): ServiceUninstallOutcome {
   const hooks = uninstallServiceHooksForTests;
   (hooks?.assertEnvironment ?? assertServiceEnvironmentMatchesInstall)();
