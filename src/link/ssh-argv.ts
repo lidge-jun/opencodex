@@ -389,7 +389,7 @@ trap 'rm -rf "$dir"' EXIT HUP INT TERM
 launcher=${cmd.launcher}
 node_ok() {
   ( ulimit -c 0; exec "$1" --version ) >/dev/null 2>&1 & np=$!
-  ( sleep 10 & timer=$!; trap 'kill "$timer" 2>/dev/null; wait "$timer" 2>/dev/null; exit' TERM HUP INT; : > "$ready"; wait "$timer" 2>/dev/null; kill -9 "$np" 2>/dev/null ) >/dev/null 2>&1 & nwd=$!
+  ( sleep 10 & ntimer=$!; trap 'kill "$ntimer" 2>/dev/null; wait "$ntimer" 2>/dev/null; exit' TERM HUP INT; : > "$ready"; wait "$ntimer" 2>/dev/null; kill -9 "$np" 2>/dev/null ) >/dev/null 2>&1 & nwd=$!
   while [ ! -f "$ready" ]; do kill -0 "$nwd" 2>/dev/null || break; sleep 0.01 >/dev/null 2>&1; done
   { wait "$np"; nstatus=$?; } 2>/dev/null
   kill "$nwd" 2>/dev/null; wait "$nwd" 2>/dev/null; rm -f "$ready"

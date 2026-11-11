@@ -110,6 +110,25 @@ describe("A4 launcher route on fake package installs", () => {
     expect(applied.node).toBe("--version\n--version\n");
   });
 
+  posix("F4: a Node that hangs on --version is killed by its own watchdog and the plan still runs", () => {
+    const fixture = install(NPM_ROOT);
+    const stuck = join(fixture.home, "prefix", "bin", "node");
+    mkdirSync(join(stuck, ".."), { recursive: true });
+    writeFileSync(stuck, "#!/bin/sh\nif [ \"$1\" = --version ]; then exec sleep 30; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/node.log\"\n", { mode: 0o755 });
+    // The kill path is the subject: the shipped 10 s Node budget is pinned, then shortened to 1 s for the run.
+    const argv = plan();
+    expect(argv[2]!.split("( sleep 10 & ntimer=$!;").length).toBe(2);
+    argv[2] = argv[2]!.replace("( sleep 10 & ntimer=$!;", "( sleep 1 & ntimer=$!;");
+    const started = Date.now();
+    const result = run(fixture, argv);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1000);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(result.code).toBe(0);
+    expect(result.stderr).toContain("ocx-fanout:launcher:unavailable\n");
+    expect(result.bun).toBe(fixture.entry + " update --plan --json --version 2.100.0\n");
+    expect(result.node).toBe("");
+  });
+
   posix("Bun global: plan and apply stay on the served Bun entry", () => {
     const fixture = install(join(".bun", "install", "global", "node_modules", "@bitkyc08", "opencodex"));
     const nodeDir = join(fixture.home, "path-node");
