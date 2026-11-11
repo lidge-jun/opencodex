@@ -28,8 +28,9 @@ import { SidebarNav } from "./components/sidebar-nav";
 import { SectionSwitcher } from "./components/SectionSwitcher";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Notice, Select, ToastNotice, type NoticeTone } from "./ui";
-import { bootstrapApiSession, configureApiTargets, DEVICE_PROOF_CHANGED_EVENT, hasApiSession, hasRememberedDashboardDevice, installApiAuthFetch, logoutApiSession, SESSION_CHANGED_EVENT, SESSION_UNAVAILABLE_EVENT } from "./api";
-import { apiBaseForPlane, ClientStateChangedError, discoverApiTargets, isConnectedRuntime, runtimeRoleFromDocument, standaloneApiTargets, type ApiTargets } from "./api-targets";
+import { bootstrapApiSession, configureApiTargets, DEVICE_PROOF_CHANGED_EVENT, hasApiSession, hasRememberedDashboardDevice, installApiAuthFetch, logoutApiSession, SESSION_CHANGED_EVENT, SESSION_UNAVAILABLE_EVENT, TARGET_CHANGED_EVENT } from "./api";
+import { apiBaseForPlane, apiTargetIdentity, ClientStateChangedError, discoverApiTargets, isConnectedRuntime, runtimeRoleFromDocument, standaloneApiTargets, type ApiTargets } from "./api-targets";
+import { createTargetDiscovery } from "./api-target-lifecycle";
 import { ConnectPairingForm } from "./connect-pairing";
 import { validateRemoteLinkSession } from "./connect-pairing-transport";
 import { type Page } from "./app-routing";
@@ -201,26 +202,38 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const controller = new AbortController();
-    void discoverApiTargets(API_BASE, controller.signal).then(async next => {
-      configureApiTargets(next);
-      setTargets(next);
-      if (next.connected && !hasApiSession("shared")) {
-        await bootstrapApiSession("shared", controller.signal);
-      }
-      if (controller.signal.aborted) return;
-      setSharedSessionReady(hasApiSession("shared"));
-      setTargetError(null);
-      setTargetsSettled(true);
-    }).catch(error => {
-      if (controller.signal.aborted) return;
-      setTargetError(error instanceof ClientStateChangedError ? "client-state-changed" : "unavailable");
-      setTargetsSettled(true);
+    const discovery = createTargetDiscovery({
+      initialBase: API_BASE,
+      discover: discoverApiTargets,
+      configure: configureApiTargets,
+      bootstrap: bootstrapApiSession,
+      hasSession: hasApiSession,
+      onTargets: setTargets,
+      onSessionReady: setSharedSessionReady,
+      onError: setTargetError,
+      onSettled: setTargetsSettled,
+      isClientStateChanged: error => error instanceof ClientStateChangedError,
     });
-    return () => controller.abort();
+    void discovery.refresh();
+    const refresh = () => { void discovery.refresh(); };
+    const visibility = () => { if (document.visibilityState === "visible") refresh(); };
+    window.addEventListener(SESSION_CHANGED_EVENT, refresh);
+    window.addEventListener(DEVICE_PROOF_CHANGED_EVENT, refresh);
+    window.addEventListener(TARGET_CHANGED_EVENT, refresh);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", visibility);
+    return () => {
+      discovery.dispose();
+      window.removeEventListener(SESSION_CHANGED_EVENT, refresh);
+      window.removeEventListener(DEVICE_PROOF_CHANGED_EVENT, refresh);
+      window.removeEventListener(TARGET_CHANGED_EVENT, refresh);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", visibility);
+    };
   }, []);
   const machineBase = apiBaseForPlane("machine", targets);
   const sharedBase = apiBaseForPlane("shared", targets);
+  const sharedTarget = apiTargetIdentity(targets);
 
   useEffect(() => {
     if (!sharedSessionReady) return;
@@ -691,10 +704,10 @@ export default function App() {
                   onReloadCodex={() => { void handleCodexRestart(); }} reloadingCodex={codexRestarting} />}
                 {page === "setup" && <SetupHub apiBase={sharedBase} navigate={navigateToPage} />}
                 {page === "advanced" && <AdvancedHub navigate={navigateToPage} />}
-                {page === "dashboard" && <Dashboard apiBase={sharedBase} readOnly={targets.link !== undefined} connected={targets.connected}
+                {page === "dashboard" && <Dashboard apiBase={sharedBase} targetKey={sharedTarget.key} readOnly={targets.link !== undefined} connected={targets.connected}
                   authenticationPending={targets.connected && !sharedSessionReady} refreshEpoch={sharedSessionEpoch} />}
                 {page === "startup" && <Startup apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
-                {page === "providers" && <Providers apiBase={sharedBase} />}
+                {page === "providers" && <Providers apiBase={sharedBase} targetKey={sharedTarget.key} targetLabel={sharedTarget.label} />}
                 {page === "models" && <Models key={sharedBase} apiBase={sharedBase} restartEpoch={codexRestartEpoch} connected={targets.connected} catalogSyncedAt={targets.catalogSyncedAt} reportRestart={report} />}
                 {page === "subagents" && <Subagents key={sharedBase} apiBase={sharedBase} />}
                 {page === "advisor" && <Advisor key={sharedBase} apiBase={sharedBase} />}
@@ -703,7 +716,7 @@ export default function App() {
                 {page === "storage" && <Storage apiBase={sharedBase} />}
                 {page === "remote" && !remotePairingFormOpen && <RemoteLink key={`${sharedBase}:${sharedSessionEpoch}`} apiBase={sharedBase} sessionReady={sharedSessionReady} pairingRecoveryAvailable={hubPairingAvailable} onRequestPairing={() => setHubPairingOpen(true)} workspaceAvailable={remoteWorkspaceAvailable} onOpenWorkspace={() => navigateToPage("remote-workspace")} />}
                 {page === "remote-workspace" && <RemoteWorkspaceRoute available={remoteWorkspaceAvailable} apiBase={sharedBase} hubOrigin={targets.shared.serverOrigin} onOpenRemoteLink={() => navigateToPage("remote")} />}
-                {page === "codex-set" && <CodexSet apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
+                {page === "codex-set" && <CodexSet apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} targetKey={sharedTarget.key} />}
                 {shellPage === "integrations" && <Integrations apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
               </>
             )}

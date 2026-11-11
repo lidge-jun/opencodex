@@ -2,5 +2,6 @@
   "persistent-dashboard-session.test.ts": "server",
   "persistent-dashboard-admission.test.ts": "server",
   "persistent-dashboard-consent.test.ts": "server",
+  "server-dashboard-trusted-proxy.test.ts": "server",
   "atomic-write-nofollow-streamed.test.ts": "config"
 }

@@ -56,7 +56,12 @@ When the visible catalog is Codex code mode — a freeform unified `exec` and no
 the redirect steers the model INSIDE `exec`: shell, file, search, and fetch are nested
 `tools.<name>(...)` helpers of the JavaScript cell with `text(...)` required for output, and the
 wording never recommends the top-level `shell_command`/`exec_command` bridge code mode does not
-expose; separately listed namespaced tools remain callable as usual. A flat catalog with a bare
+expose; separately listed namespaced tools are called directly, outside `exec`. Cursor can defer
+the Codex client tools, `exec` included, behind its own `GetDynamicTools`/`CallDynamicTool` pair
+(#8132), so code-mode redirects and guidance never claim top-level reach: they add
+`CURSOR_DEFERRED_TOOL_FALLBACK`, which names `CallDynamicTool` with namespace
+`opencodex-responses` and the listed tool name. This removes a false statement; it does not
+register tools at the top level or stop a first native attempt. A flat catalog with a bare
 bridge or a non-freeform unified `exec` keeps the default bridge wording, and a catalog with no
 execution path at all keeps naming the request's actual client/MCP wire names.
 

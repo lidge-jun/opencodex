@@ -249,6 +249,7 @@ Aside 設定檔的變更在這種情況下仍會儲存一件事：確認之後�
 | `GET, POST, DELETE /api/providers/keys` | 列出遮罩供應商金鑰、新增／啟用一個或移除一個 | 400 無效輸入；404 供應商／金鑰缺失 |
 | `PUT /api/providers/keys/active` | 選擇供應商的現用金鑰 | 400 無效輸入；404 供應商／金鑰缺失 |
 | `PUT /api/providers/keys/alias` | 設定或清除供應商金鑰別名 | 400 無效輸入；404 供應商／金鑰缺失 |
+| `PUT /api/providers/keys/pause` | 暫停或恢復單一供應商 API 金鑰。內容為 `{ name, id, paused }`；若暫停現用金鑰，將依環狀順序選取下一個可用金鑰。成功回應包含結果 `activeAccountId`（若無則為 `null`）及 `activeAccountChanged`。 | 400 無效輸入；404 供應商／金鑰缺失 |
 | `GET, POST, PATCH, DELETE /api/keys` | 列出、建立、編輯或刪除 data-plane 許可金鑰 | 400 無效 body/id；404 金鑰缺失 |
 | `PUT /api/oauth/accounts/affinity-reset` | 無需帳戶即可確認 provider 全部對話繫結的重設已儲存。Body `{ provider }`；成功回傳 `affinityResetConfirmed: true`. CLI: `ocx account reset-affinity anthropic --json` (`anthropic2` supported). | 400 invalid body/provider; 503 `affinity_reset_not_persisted`, `retryable: true` |
 
