@@ -130,7 +130,8 @@ Before you rename the marker, make sure no update is running:
    ```
 
 Use the exact path the error prints if `OPENCODEX_HOME` points somewhere else. If that path contains
-characters a shell would expand, the error names the file without a command; rename it by hand. A marker that is
+characters a shell could expand or interpret, or on Windows anything other than plain ASCII, the error names the file
+without a command; rename it by hand. A marker that is
 still inside its fence, or whose recorded process is still running, does not print this guidance.
 In that case, wait or let the running update finish.
 

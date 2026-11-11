@@ -107,7 +107,8 @@ Dosyayı yeniden adlandırmadan önce hiçbir güncellemenin çalışmadığınd
    ```
 
 `OPENCODEX_HOME` başka bir yeri gösteriyorsa hata mesajının yazdığı yolu kullanın. Bu yol bir kabuğun
-genişleteceği karakterler içeriyorsa hata mesajı komut vermeden yalnızca dosyayı adlandırır; dosyayı elle
+genişletebileceği veya yorumlayabileceği karakterler ya da Windows'ta düz ASCII dışında karakterler içeriyorsa hata
+mesajı komut vermeden yalnızca dosyayı adlandırır; dosyayı elle
 yeniden adlandırın. Koruma süresi
 dolmamış ya da kaydedilen süreci hâlâ çalışan bir dosya bu yönergeyi yazdırmaz; bu durumda bekleyin
 veya çalışan güncellemenin bitmesine izin verin.

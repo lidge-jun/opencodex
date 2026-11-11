@@ -229,6 +229,14 @@ describe("legacy witnessless marker recovery hint (#8524 decision A)", () => {
     const expandable = staleUpdateMarkerHint("C:\\Users\\$(evil)\\.opencodex", "win32").join("\n");
     expect(expandable).not.toContain("ren ");
     expect(expandable).toContain("rename that file by hand");
+    // PowerShell also closes a string on typographic quotes and globs brackets: no command for those either.
+    for (const home of ["C:\\Users\\a\u201d; calc; \u201cb\\.opencodex", "C:\\Users\\[x]\\.opencodex", "C:\\Users\\a!b\\.opencodex", "C:\\Users\\Jos\u00e9\\.opencodex"]) {
+      expect(staleUpdateMarkerHint(home, "win32").join("\n")).not.toContain("ren ");
+    }
+    // A control character never reaches the terminal or a command.
+    const escaped = staleUpdateMarkerHint("/home/a\u001b]0;x\u0007/.opencodex", "linux").join("\n");
+    expect(escaped).not.toContain("\u001b");
+    expect(escaped).not.toContain("mv -n");
     // A Windows-shaped marker read on POSIX has no group witness either; it gets the POSIX command.
     writeMarker(root, { ...interrupted, installerPid: SUPERVISOR });
     const detail: { witnessless?: boolean } = {};

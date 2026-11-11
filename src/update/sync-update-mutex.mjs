@@ -108,15 +108,21 @@ export function acquireSyncGuard(home, args) {
  */
 export function staleUpdateMarkerHint(home, platform = process.platform) {
   const path = join(home, "update-orchestrated.json");
+  const windows = platform === "win32";
   // A copy-paste command must not expand anything from the path. POSIX single quotes expand
-  // nothing; cmd.exe and PowerShell disagree on quoting, so a path with an expandable or control
-  // character gets no command at all, only the file to rename.
-  const rename = platform === "win32"
-    ? (/[$`%"\x00-\x1f\x7f]/.test(path) ? null : `ren "${path}" update-orchestrated.json.stale`)
+  // nothing. cmd.exe and PowerShell disagree on quoting (PowerShell also closes a string on
+  // typographic quotes and globs [ ]), so Windows gets a command only for plain printable ASCII
+  // without $ ` % " ! [ ]. A path with a control character gets no command on any platform.
+  const controlFree = !/[\x00-\x1f\x7f-\x9f]/.test(path);
+  const rename = !controlFree ? null : windows
+    ? (/^[\x20-\x7e]+$/.test(path) && !/[$`%"![\]]/.test(path) ? `ren "${path}" update-orchestrated.json.stale` : null)
     : `mv -n ${posixQuote(path)} ${posixQuote(path + ".stale")}`;
+  const shown = path.replace(/[\x00-\x1f\x7f-\x9f]/g, "?");
   return [
-    `The update marker ${path} records an interrupted update whose installer can no longer be checked`,
-    "(OpenCodex 2.100.x and earlier did not record the Windows installer), so it will not clear by itself.",
+    `The update marker ${shown} records an interrupted update whose installer can no longer be checked`,
+    windows
+      ? "(OpenCodex 2.100.x and earlier did not record the Windows installer), so it will not clear by itself."
+      : "(its installer was never recorded), so it will not clear by itself.",
     "If no update is running (no ocx update, no npm, pnpm or bun global install, no OpenCodex installer",
     "PowerShell process running npm-install-job.ps1), rename the marker and run ocx update again:",
     rename === null ? "  rename that file by hand, for example to update-orchestrated.json.stale" : `  ${rename}`,
