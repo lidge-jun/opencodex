@@ -1276,6 +1276,26 @@ describe("TRAE CN ACP regression contract", () => {
     });
   });
 
+  test("background publication retains multiple rosters under ordinary cache pressure", async () => {
+    await withProbeMemory(false, async evictions => {
+      let calls = 0;
+      const open = spyOn(traeClient, "openTraeSession").mockImplementation(async () => ({
+        models: [++calls === 1 ? "first-model" : "second-model"],
+        prompt: async () => undefined, close: async () => undefined,
+      }));
+      const next: OcxConfig = { port: 10100, defaultProvider: "trae-a",
+        providers: { "trae-a": { ...config(), models: [] }, "trae-b": { ...config(), models: [] } } };
+      let rosters: string[][] = [];
+      await refreshTraeCnCatalogSources(next, () => true, async () => {
+        rosters = [getPinnedCached("trae-a")!.map(model => model.id), getPinnedCached("trae-b")!.map(model => model.id)];
+      });
+      expect(rosters).toEqual([["first-model"], ["second-model"]]);
+      expect(open).toHaveBeenCalledTimes(2);
+      expect(evictions()).toBe(1);
+      expect(modelCacheRetainedStoreSnapshot().pinnedBytes).toBe(0);
+    });
+  });
+
   test("background publication cannot replace an intervening newer roster", async () => {
     const rowA = { ...config(), models: [] };
     const rowB = { ...config(), models: [] };
@@ -1285,6 +1305,7 @@ describe("TRAE CN ACP regression contract", () => {
       calls++;
       if (calls === 1) return session(["old-model"]);
       if (calls === 2) {
+        clearModelCache("trae-a");
         const newer = await fetchProviderModelsWithAuth(
           captureProviderGather("trae-a", rowA, refreshingModelsAuthResolver), 0, undefined, refreshingModelsAuthResolver,
         );

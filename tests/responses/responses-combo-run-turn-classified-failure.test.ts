@@ -394,6 +394,46 @@ test("the policy-only original Chat clone is admitted by the replay budget", asy
   expect(json.error?.code).toBe("translation_buffer_limit");
 });
 
+test("Chat combo fallback retains original developer image media", async () => {
+  const cfg = config([
+    { provider: "trae-cn", model: "test-model" },
+    { provider: "capable", model: "accept-model" },
+  ]);
+  cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
+    authMode: "key", models: ["test-model"], liveModels: false };
+  let sent: Record<string, unknown> | undefined;
+  cfg.providers.capable = { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key",
+    authMode: "key", models: ["accept-model"], inputModalities: ["text", "image"],
+    fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sent = JSON.parse(String(init?.body));
+      const chunk = (delta: Record<string, unknown>, finishReason: string | null = null) =>
+        "data: " + JSON.stringify({ id: "chat-fixture", object: "chat.completion.chunk", model: "accept-model",
+          choices: [{ index: 0, delta, finish_reason: finishReason }] }) + "\n\n";
+      return new Response([chunk({ role: "assistant" }), chunk({ content: "accepted" }),
+        chunk({}, "stop"), "data: [DONE]\n\n"].join(""), { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch,
+  };
+  const open = spyOn(traeClient, "openTraeSession");
+  try {
+    const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "chain/classified", stream: false, messages: [
+        { role: "developer", content: [
+          { type: "text", text: "Inspect the attachment" },
+          { type: "image_url", image_url: { url: "https://fixture.invalid/image.png", detail: "high" } },
+        ] },
+        { role: "user", content: "Question" },
+      ] }),
+    }), cfg, { model: "", provider: "" }, {});
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect(open).not.toHaveBeenCalled();
+    const wire = JSON.stringify(sent);
+    expect(wire).toContain("https://fixture.invalid/image.png");
+    expect(wire).toContain('\"detail\":\"high\"');
+    expect(wire.indexOf("Inspect the attachment")).toBe(wire.lastIndexOf("Inspect the attachment"));
+  } finally { open.mockRestore(); }
+});
+
 for (const media of ["image", "video"]) {
   test("Chat policy retry retains original instruction media: " + media, async () => {
     const cfg = config([{ provider: "trae-cn", model: "test-model" }]);
