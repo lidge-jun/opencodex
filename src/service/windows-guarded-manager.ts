@@ -33,6 +33,11 @@ import { bindWindowsStopWrappers } from "./windows-stop-binding";
 import { probeWindowsSchedulerTask, querySchtasks, type WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { windowsWscript } from "./windows-wscript";
 import { windowsTaskRegistrationHealthy, windowsTaskRegistrationRefreshableLegacy } from "./windows-taskxml";
+import { commandLineHasPathToken } from "./windows-command-line-token";
+
+// Re-exported for existing importers; the function lives in a leaf module to keep the binding rule
+// (windows-stop-binding.ts) free of an import cycle with this inspection.
+export { commandLineHasPathToken };
 
 /** Runtime table of one Win32 process; a null parent means the chain is unreadable. */
 export interface WindowsProcessEntry {
@@ -224,26 +229,6 @@ export function currentWindowsTaskUserIds(): readonly string[] | null {
   }
 }
 
-/**
- * True when path appears in commandLine as a COMPLETE token — the same boundary
- * rule the windows-service-wrappers kill list uses, ported so the read-only proof
- * cannot accept a substring hit. A quoted path inside an argument string counts;
- * a suffix or prefix glued to it does not.
- */
-export function commandLineHasPathToken(commandLine: string | null | undefined, path: string): boolean {
-  if (!commandLine || !path) return false;
-  const haystack = commandLine.toLowerCase();
-  const needle = path.toLowerCase();
-  const boundary = (ch: string | undefined): boolean => ch === undefined || /[\s"']/.test(ch);
-  let index = 0;
-  for (;;) {
-    index = haystack.indexOf(needle, index);
-    if (index < 0) return false;
-    const end = index + needle.length;
-    if (boundary(haystack[index - 1]) && boundary(haystack[end])) return true;
-    index = end;
-  }
-}
 
 function resolveWindowsDeps(deps: WindowsGuardedManagerDeps, live: boolean): ResolvedWindowsDeps {
   // "live" is false whenever the caller simulated platform win32 (tests or a future
