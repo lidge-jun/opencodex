@@ -20,4 +20,4 @@ What has shipped since: refusal diagnostics (#7973, option A), in-process comman
 
 ## Decision requested
 
-Approve 030 (recommended: option B as one checked operation shared by `ocx stop` and `ocx service stop`, reusing the Windows guarded-manager binding, with explicit `stopped` / `survived` / `denied` / `unknown` outcomes and no new kill authority beyond this installation's proven wrapper and child). Implementation starts only after that approval and needs a Windows host for the acceptance checks in 040.
+Approve 030 (recommended: option B as one checked operation used by every Windows stop path: `ocx stop` with and without a consent snapshot, `ocx uninstall`, `/api/stop`, `ocx service stop` and the updater's Windows stop; an explicit binding rule including the stray-wrapper case; a new creation-time reader and handle-based terminate; outcomes mapped additively onto `ServiceStopOutcome`, `ocx-stop/1`, `/api/stop` and Desktop). Implementation starts only after that approval and needs a Windows host for the acceptance checks in 040.

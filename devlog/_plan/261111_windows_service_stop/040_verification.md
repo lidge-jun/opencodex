@@ -1,24 +1,28 @@
 # 040 — Verification
 
-## Hermetic (runs on any CI host; injected process table, scheduler and terminate seams)
+## Hermetic (any CI host; existing non-live seams only: injected process table, scheduler probe, WinSW status, terminate primitive; no real schtasks/PowerShell)
 
-- Bind: wrapper with this home's paths bound; a same-name wrapper under another home, a substring-only match, and an unreadable command line under the bound manager (→ unknown, nothing killed).
-- `/end` accepted but wrapper survives → terminate bound wrapper → stopped.
+- Binding: wrapper with this home's paths and a wrapper image bound; same path token under a non-wrapper image not bound; another home's wrapper not bound; substring-only match not bound; stray wrapper with the task not running bound by the stray rule; unreadable command line or creation time under the bound manager → unknown, nothing killed.
+- `/end` accepted, wrapper survives → handle terminate → stopped.
 - Child exits 0 and the wrapper relaunches within the deadline → survived (no unbounded retry).
 - Access denied on `/end` or terminate → denied, no further kills.
-- PID reuse between bind and terminate (start time or digest changed) → that PID untouched.
-- Port still answered by this installation's identity at the deadline → survived; answered by a foreign identity → reported as such, not stopped.
-- Outcome mapping in `ocx stop --json`, `ocx service stop`, and Desktop's stop handling; exit codes; records kept on non-stopped.
+- Creation time changed between bind and terminate (PID reuse) → that PID untouched.
+- Port still answered by this installation's identity → survived; by a foreign identity → stopped + `portHeldByForeign`.
+- ARM64 path (no FFI) → unknown, no kill.
+- Output mapping: `ServiceStopOutcome`, `ocx-stop/1` fields (additive), `/api/stop` codes, Desktop parser unit tests with old and new documents; updater variant refuses without authorization.
+- New test files registered in the layout maps; no capped file grows (file-size ratchet).
 
-## Real Windows device (cannot be proven hermetically; required before merge of the implementation)
+## Real Windows device (required before the implementation merges)
 
 | Case | Why it needs a device |
 |---|---|
-| Registered task, `/end` leaves `wscript.exe` + `cmd.exe` loop alive; checked stop frees the port | Real Task Scheduler instance semantics |
-| Elevated (HighestAvailable) task stopped from an unelevated shell and from unelevated Desktop | Real token/integrity-level access checks → denied path |
+| Registered task, `/end` leaves the `wscript.exe` + `cmd.exe` loop alive; checked stop frees the port | Real Task Scheduler instance semantics |
+| Killing the wrapper after `/end` does not fire restart-on-failure (PT1M × 3) | Scheduler retry behavior |
+| Elevated (HighestAvailable) task stopped from an unelevated shell and from unelevated Desktop | Real access checks → denied; a command line hidden from a non-admin CIM query classifies as unknown or denied consistently |
 | npm Bun runtime vs bundled `ocx.exe` | Different process trees and command lines |
-| Logon/session trigger firing during a stop | Trigger timing |
-| WinSW backend stop | Real SCM behavior |
-| Windows ARM64 (no in-process FFI) | Fallback command-line read and terminate path |
+| Logon/session-unlock trigger during a stop | Trigger timing |
+| WinSW backend stop with `onfailure restart delay="5 sec"` against the 10 s deadline | Real SCM behavior |
+| Slow startup / antivirus interference against the deadline | Timing on real hardware |
+| Windows ARM64 | No FFI: unknown path |
 
-Evidence to collect per case (redacted: no tokens, runtime-port.json contents, environment dumps or full command lines): outcome JSON, whether the port is free afterwards (`Get-NetTCPConnection -LocalPort <port>`), and the surviving process names.
+Evidence per case (redacted: no tokens, runtime-port.json contents, environment dumps or full command lines): outcome JSON, whether the port is free afterwards (`Get-NetTCPConnection -LocalPort <port>`), surviving process image names.

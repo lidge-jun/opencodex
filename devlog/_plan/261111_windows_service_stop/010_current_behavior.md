@@ -2,19 +2,21 @@
 
 ## Wrapper respawn
 
-`buildWindowsServiceScript` (src/service/windows-taskxml.ts) emits a `:loop` that relaunches Bun or `ocx.exe` about five seconds after any child exit other than the protocol exit 42 (src/service/windows-wrapper-exit.ts). The task XML also requests restart-on-failure and logon/session triggers. Killing only the proxy child therefore brings it back without any Task Scheduler involvement.
+`buildWindowsServiceScript` (src/service/windows-taskxml.ts) emits a `:loop` that relaunches Bun or `ocx.exe` about five seconds after any child exit other than the protocol exit 42 (src/service/windows-wrapper-exit.ts). The registered task also carries restart-on-failure (PT1M, 3 attempts) and logon/session-unlock triggers. Killing only the proxy child brings it back without any Task Scheduler involvement.
 
-## `ocx service stop`
+## Who calls which stop
 
-`platformOps("scheduler").stop` is `stopWindows` (src/service/windows-ops.ts): it runs `schtasks /end /tn opencodex-proxy` and swallows every non-benign error. `stopWindowsChecked` exists for the updater and reports only whether `/end` was accepted. Neither observes the wrapper or the child afterwards. The service stop path does not call the wrapper cleanup at all.
+| Caller | Manager stop | Wrapper cleanup | Post-stop check |
+|---|---|---|---|
+| `ocx stop` without a consent snapshot, `ocx uninstall`, dashboard/Desktop `/api/stop` | `stopServiceIfInstalledDetailed` (src/service/orchestration.ts): `stopWindowsChecked` when the task is present, WinSW stop, outcome `absent / stopped / stopped-respawnable / failed / state-unknown` | `killWindowsServiceWrapperProcesses` after the manager stop | `ocx stop` re-polls when the scheduler can respawn and reports `respawned`; `/api/stop` maps `state-unknown` to `service_state_unknown` |
+| `ocx stop` with a consent snapshot (Desktop's approved stop) | `runGuardedManagerStep` (src/cli/stop-approval.ts): revalidates the bound manager, stops it, signals the approved PID when the manager does not cascade (`childNeedsSeparateStop`, true for Task Scheduler and WinSW) | none of its own | `observeGuardedManagerStopped` → `inactive / active / unknown`; reports `manager-still-active` or `respawned` |
+| `ocx service stop` | `platformOps(...).stop` = `stopWindows` (swallows non-benign `/end` errors) | none | `stopTrackedProxyForServiceCommand` then `proxyStillLiveAfterStop` polls ~7 s and exits 1 on a survivor |
+| Updater (Windows restart/reclaim) | `guardedStopWindows` / `guardedStopWinsw` (src/update/guarded-runtime-ops.ts, job-windows-restart.ts) | its own `killWindowsServiceWrapperProcesses` through `guardedKillWindowsWrappers` | its own reclaim checks |
 
-## `ocx stop`
-
-Plain `ocx stop` stops the tracked proxy (identity-checked `readPid` / `findLiveProxy`, src/service/orchestration.ts) and attempts wrapper cleanup through `killWindowsSchedulerWrappers` (src/lib/windows-service-wrappers.ts). That cleanup is best effort by design: it matches this installation's canonical launcher and script paths as complete command-line tokens, but skips processes whose command line it cannot read, runs `Stop-Process -ErrorAction SilentlyContinue`, ignores the PowerShell exit status, and never re-observes.
+So every path can already SEE a survivor (or at least a still-active manager); none can reliably FREE the port, because the wrapper cleanup (`killWindowsSchedulerWrappers`, src/lib/windows-service-wrappers.ts) is best effort: it matches this home's canonical launcher/script paths as complete command-line tokens, skips processes whose command line it cannot read, runs `Stop-Process -ErrorAction SilentlyContinue`, ignores the result and never re-observes.
 
 ## Existing building blocks
 
-- `inspectWindowsGuardedManager` (src/service/windows-guarded-manager.ts) proves a Task Scheduler or WinSW manager owns an approved PID: the registered task must be a recognized OpenCodex layout, running, and an ancestor wrapper must carry this home's canonical paths; WinSW must be this installation's binary with the SCM PID as an ancestor. Unreadable evidence stays unknown.
-- `observeWindowsGuardedManagerStopped` answers `inactive` / `active` / `unknown` after a stop: task not running, no wrapper carrying this home's paths, WinSW not started, and no unreadable wrapper under the former manager.
-- `readProcessCommandLine` now reads command lines in process on Windows x64 (#8487), so wrapper and child identities are readable without CIM in the common case.
-- `confirmServiceServing` with `replacing` (#8487) is the analogous "prove the replacement" check on the restart side.
+- `inspectWindowsGuardedManager` (src/service/windows-guarded-manager.ts) proves a manager owns an approved PID: the registered task must be a recognized OpenCodex layout (`windowsTaskRegistrationHealthy` or the exact legacy shape, via the `winRegistrationOurs` dependency), running, with an ancestor wrapper carrying this home's canonical paths; WinSW must be this installation's binary with the SCM PID as an ancestor. Unreadable evidence stays unknown. A surviving wrapper while the task reads not-running is `unknown("a surviving scheduler wrapper could not be tied to the registered task")`.
+- `observeWindowsGuardedManagerStopped`: task not running, no wrapper carrying this home's paths, WinSW not started, no unreadable wrapper under the former manager.
+- `readProcessCommandLine` reads one PID's command line in process on Windows x64 (#8487). Wrapper enumeration (`windowsProcessList`) still runs `Get-CimInstance Win32_Process`. `WindowsProcessEntry` carries pid, parentPid, name and commandLine, but no process start time.
