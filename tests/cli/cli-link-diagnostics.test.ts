@@ -51,6 +51,18 @@ describe("ocx link diagnostics", () => {
     expect(readdirSync(configDir)).toEqual([]);
   });
 
+  test("a timestamp outside the Date range never breaks either output", async () => {
+    const { configDir, dir, current } = fixture();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(current, line({ event: "owner_lookup", outcome: "match", timestamp: 9_000_000_000_000_000 }));
+    const human = await run([], configDir);
+    expect(human.code).toBe(0);
+    expect(human.stdout).toContain("owner_lookup");
+    const json = await run(["--json"], configDir);
+    expect(json.code).toBe(0);
+    expect(JSON.parse(json.stdout).records).toEqual([{ event: "owner_lookup", outcome: "match" }]);
+  });
+
   test("--json prints the sanitized document and leaves the file untouched", async () => {
     const { configDir, dir, current } = fixture();
     mkdirSync(dir, { recursive: true });

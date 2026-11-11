@@ -62,5 +62,6 @@ export async function runLinkDiagnostics(args: string[], deps: { linkConfigDir?:
   rejectArgs(args, usage);
   const result = await readLinkDiagnostics({ configDir: deps.linkConfigDir, limit, since });
   const document: LinkDiagnosticsDocument = { schema: LINK_DIAGNOSTICS_SCHEMA, path: linkDiagnosticsPath(deps.linkConfigDir), ...result };
-  printData(document, wantsJson, humanLines(document));
+  // The human lines are built only when shown, so nothing in them can fail a --json read.
+  printData(document, wantsJson, wantsJson ? [] : humanLines(document));
 }

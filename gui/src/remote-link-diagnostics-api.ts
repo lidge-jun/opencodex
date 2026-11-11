@@ -15,12 +15,16 @@ export const LINK_DIAGNOSTIC_OUTCOMES = [
 export const LINK_DIAGNOSTIC_STATES = ["idle", "connecting", "connected", "reconnecting", "failed"] as const;
 /** Rows the dashboard asks for; the server caps any limit at 1000. */
 export const LINK_DIAGNOSTICS_PAGE_LIMIT = 100;
+/** The latest time a JavaScript Date can hold; a larger timestamp would throw when formatted. */
+const MAX_DATE_MS = 8_640_000_000_000_000;
 
 export type LinkDiagnosticEvent = typeof LINK_DIAGNOSTIC_EVENTS[number];
 export type LinkDiagnosticOutcome = typeof LINK_DIAGNOSTIC_OUTCOMES[number];
 export type LinkDiagnosticState = typeof LINK_DIAGNOSTIC_STATES[number];
 
 export interface LinkDiagnosticView {
+  /** A row key for this response; records have no identity of their own. */
+  rowKey: string;
   event: LinkDiagnosticEvent;
   outcome: LinkDiagnosticOutcome;
   state?: LinkDiagnosticState;
@@ -55,14 +59,14 @@ function count(value: unknown, min = 0): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= min;
 }
 
-function parseRecord(value: unknown): LinkDiagnosticView | null {
+function parseRecord(value: unknown, index: number): LinkDiagnosticView | null {
   if (!isRecord(value) || !oneOf(LINK_DIAGNOSTIC_EVENTS, value.event) || !oneOf(LINK_DIAGNOSTIC_OUTCOMES, value.outcome)) return null;
-  const record: LinkDiagnosticView = { event: value.event, outcome: value.outcome };
+  const record: LinkDiagnosticView = { rowKey: "r" + index, event: value.event, outcome: value.outcome };
   if (oneOf(LINK_DIAGNOSTIC_STATES, value.previousState)) record.previousState = value.previousState;
   if (oneOf(LINK_DIAGNOSTIC_STATES, value.state)) record.state = value.state;
   if (count(value.attempt)) record.attempt = value.attempt;
   if (count(value.tunnelPort, 1) && value.tunnelPort <= 65_535) record.tunnelPort = value.tunnelPort;
-  if (count(value.timestamp)) record.timestamp = value.timestamp;
+  if (count(value.timestamp) && value.timestamp <= MAX_DATE_MS) record.timestamp = value.timestamp;
   if (count(value.suppressed, 1)) record.suppressed = value.suppressed;
   return record;
 }
@@ -73,7 +77,7 @@ export function parseLinkDiagnostics(value: unknown): LinkDiagnosticsView {
   }
   const files = Array.isArray(value.files) ? value.files.filter(isRecord) : [];
   return {
-    records: value.records.map(parseRecord).filter((record): record is LinkDiagnosticView => record !== null),
+    records: value.records.map((record: unknown, index: number) => parseRecord(record, index)).filter((record): record is LinkDiagnosticView => record !== null),
     matched: value.matched,
     skipped: value.skipped,
     truncated: files.some(file => file.truncated === true),

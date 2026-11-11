@@ -427,7 +427,7 @@ changes. The queue lives in `gui/src/use-model-visibility.ts`; the dashboard pag
 A connected client machine runs `src/client/machine-listener.ts` instead of the standalone server.
 It binds the address the standalone proxy would (`port ?? config.port ?? 10100`) and serves `GET /healthz`,
 `/readyz`, the packaged GUI/SPA routes, and `/api/machine/*`. A link-transport client also relays the link data
-routes to its Home, serves its own read-only `GET /api/link/status` and `GET /api/link/diagnostics` ([Remote Link](remote-link.md#dashboard-admission)),
+routes to its Home, serves its own read-only `GET /api/link/status` and `GET /api/link/diagnostics` ([Remote Link](remote-link.md#dashboard-admission)); the Remote Link page reads diagnostics from that machine plane (`diagnosticsApiBase`), never through the Home relay,
 and relays allowlisted management reads to the Home under `/api/machine/hub-relay/api/*` for a Child dashboard session
 ([Remote Link](remote-link.md#child-management-relay-and-home-codex-settings)). Every other `/api/*` and `/v1/*` path is
 refused before dispatch with a JSON 404 naming the method and path. There is no second management port on such a machine:

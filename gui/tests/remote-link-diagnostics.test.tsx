@@ -55,7 +55,7 @@ const document_ = {
 
 test("the dashboard re-validates records and drops anything outside the allowlist", () => {
   const parsed = parseLinkDiagnostics(document_);
-  expect(parsed.records).toEqual([
+  expect(parsed.records.map(({ rowKey: _rowKey, ...record }) => record)).toEqual([
     { event: "tunnel_transition", outcome: "network", previousState: "connected", state: "reconnecting", attempt: 2, tunnelPort: 43110, timestamp: Date.UTC(2026, 10, 11, 1, 2, 3), suppressed: 4 },
     { event: "owner_lookup", outcome: "match" },
   ]);
@@ -100,4 +100,16 @@ test("an empty file and a failed read each say so", async () => {
   await act(async () => { host.querySelector<HTMLButtonElement>("[data-action='link-diagnostics-refresh']")!.click(); });
   await settle();
   expect(host.querySelector("[data-state='error']")).not.toBeNull();
+});
+
+test("a timestamp outside the Date range renders as missing instead of breaking the page", async () => {
+  expect(parseLinkDiagnostics({ ...document_, records: [{ event: "owner_lookup", outcome: "match", timestamp: 9_000_000_000_000_000 }] }).records)
+    .toEqual([{ rowKey: "r0", event: "owner_lookup", outcome: "match" }]);
+  globalThis.fetch = (async () => response({ ...document_, matched: 1, skipped: 0, records: [{ event: "owner_lookup", outcome: "match", timestamp: 9_000_000_000_000_000 }] })) as typeof fetch;
+  const host = await mount();
+  await act(async () => { host.querySelector<HTMLButtonElement>("[data-action='link-diagnostics-toggle']")!.click(); });
+  await settle();
+  const rows = [...host.querySelectorAll("tbody tr")].map(row => row.textContent ?? "");
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toContain("owner_lookup");
 });

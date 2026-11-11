@@ -95,6 +95,18 @@ describe("readLinkDiagnostics", () => {
     for (const leaked of ["owned", "private", "lnk_", "\\u001b", "\\u0007", "polluted"]) expect(serialized).not.toContain(leaked);
   });
 
+  test("a timestamp outside the JavaScript Date range is dropped and the record kept", async () => {
+    const { configDir, dir, current } = fixture();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(current, line({ event: "owner_lookup", outcome: "match", timestamp: 9_000_000_000_000_000 })
+      + line({ event: "owner_lookup", outcome: "mismatch", timestamp: 8_640_000_000_000_000 }));
+    const result = await readLinkDiagnostics({ configDir });
+    expect(result.records).toEqual([
+      { event: "owner_lookup", outcome: "match" },
+      { event: "owner_lookup", outcome: "mismatch", timestamp: 8_640_000_000_000_000 },
+    ]);
+  });
+
   test("reads only the newest 256 KiB of an oversized file and skips overlong lines", async () => {
     const { configDir, dir, current } = fixture();
     mkdirSync(dir, { recursive: true });

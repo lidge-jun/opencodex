@@ -5,6 +5,8 @@ import { IconRefresh } from "../icons";
 import { useI18n } from "../i18n/shared";
 import { fetchLinkDiagnostics, type LinkDiagnosticView, type LinkDiagnosticsView } from "../remote-link-diagnostics-api";
 
+const MISSING = <span className="text-fg-subtle">—</span>;
+
 type DiagnosticsState = { kind: "idle" } | { kind: "loading" } | { kind: "ready"; view: LinkDiagnosticsView } | { kind: "error" };
 
 const dateFormats = new Map<string, Intl.DateTimeFormat>();
@@ -54,7 +56,6 @@ export function RemoteLinkDiagnostics({ apiBase }: { apiBase: string }): ReactEl
     if (next && state.kind === "idle") void load();
   };
 
-  const missing = <span className="text-fg-subtle">—</span>;
   return (
     <section className="remote-link-panel flex min-w-0 flex-col rounded-[12px] bg-surface p-1 ring-1 ring-line" aria-labelledby="remote-link-diagnostics-title">
       <div className="flex flex-wrap items-center gap-3 px-4 py-3">
@@ -92,19 +93,19 @@ export function RemoteLinkDiagnostics({ apiBase }: { apiBase: string }): ReactEl
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-line">
-                  {state.view.records.map((record, index) => {
+                  {state.view.records.map(record => {
                     const transition = stateText(record);
                     return (
-                      <tr key={index}>
-                        <td className="whitespace-nowrap px-2 py-1 tabular-nums">{record.timestamp !== undefined ? formatTime(locale, record.timestamp) : missing}</td>
+                      <tr key={record.rowKey}>
+                        <td className="whitespace-nowrap px-2 py-1 tabular-nums">{record.timestamp !== undefined ? formatTime(locale, record.timestamp) : MISSING}</td>
                         <td className="px-2 py-1"><code className="font-mono">{record.event}</code></td>
                         <td className="px-2 py-1">
                           <code className="font-mono">{record.outcome}</code>
                           {record.suppressed !== undefined && <span className="ml-2 text-fg-muted">{t("remoteLinkDiagnostics.suppressed", { count: record.suppressed })}</span>}
                         </td>
-                        <td className="px-2 py-1">{transition ? <code className="font-mono">{transition}</code> : missing}</td>
-                        <td className="px-2 py-1 text-right tabular-nums">{record.attempt ?? missing}</td>
-                        <td className="px-2 py-1 text-right tabular-nums">{record.tunnelPort ?? missing}</td>
+                        <td className="px-2 py-1">{transition ? <code className="font-mono">{transition}</code> : MISSING}</td>
+                        <td className="px-2 py-1 text-right tabular-nums">{record.attempt ?? MISSING}</td>
+                        <td className="px-2 py-1 text-right tabular-nums">{record.tunnelPort ?? MISSING}</td>
                       </tr>
                     );
                   })}

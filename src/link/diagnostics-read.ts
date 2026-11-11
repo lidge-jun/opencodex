@@ -22,6 +22,8 @@ export const LINK_DIAGNOSTICS_MAX_LIMIT = 1000;
 const MAX_FILE_BYTES = 256 * 1024;
 /** A written record is well under 1 KiB; anything this long was not written by the sink. */
 const MAX_LINE_BYTES = 4 * 1024;
+/** The latest time a JavaScript Date can hold; a larger timestamp would throw when shown. */
+const MAX_DATE_MS = 8_640_000_000_000_000;
 const FILE_NAMES = ["diagnostics.jsonl.1", "diagnostics.jsonl"] as const;
 
 export type LinkDiagnosticEntry = LinkDiagnosticRecord & { timestamp?: number; suppressed?: number };
@@ -55,7 +57,7 @@ export function sanitizeLinkDiagnosticEntry(value: unknown): LinkDiagnosticEntry
   if (!base) return null;
   const entry: LinkDiagnosticEntry = base;
   const { timestamp, suppressed } = value;
-  if (typeof timestamp === "number" && Number.isSafeInteger(timestamp) && timestamp >= 0) entry.timestamp = timestamp;
+  if (typeof timestamp === "number" && Number.isSafeInteger(timestamp) && timestamp >= 0 && timestamp <= MAX_DATE_MS) entry.timestamp = timestamp;
   if (typeof suppressed === "number" && Number.isSafeInteger(suppressed) && suppressed >= 1) entry.suppressed = suppressed;
   return entry;
 }
