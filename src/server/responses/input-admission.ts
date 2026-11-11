@@ -182,11 +182,14 @@ interface ResolvedContextLimits {
  */
 function adapterContextWindow(provider: OcxProviderConfig, modelId: string): number | null {
   if (provider.adapter !== "devin") return null;
-  const collapsed = collapseDevinModelUid(modelId);
+  // Devin spells the same model dotted in catalog families (`swe-1.7`) and hyphenated
+  // in uids (`swe-1-7`); normalize before either lookup so both spellings resolve.
+  const normalized = modelId.replace(/\./g, "-");
+  const collapsed = collapseDevinModelUid(normalized);
   // A configured window for the collapsed base (operator override or registry seed) still
   // wins over the static table for effort-suffixed ids like swe-2-flash-medium.
   return positive(modelRecordValue(provider.modelContextWindows, collapsed))
-    ?? positive(modelRecordValue(DEVIN_MODEL_CONTEXT_WINDOWS, modelId))
+    ?? positive(modelRecordValue(DEVIN_MODEL_CONTEXT_WINDOWS, normalized))
     ?? positive(modelRecordValue(DEVIN_MODEL_CONTEXT_WINDOWS, collapsed));
 }
 

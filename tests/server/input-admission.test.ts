@@ -429,6 +429,11 @@ describe("devin adapter window fallback", () => {
     expect(resolveInputCeiling(narrower, "devin", "swe-2-flash")).toBe(200_000);
   });
 
+  test("dotted devin ids resolve the hyphenated window", () => {
+    const provider: OcxProviderConfig = { adapter: "devin", baseUrl: "https://devin.test" };
+    expect(resolveInputCeiling(provider, "devin", "swe-1.7")).toBe(262_000);
+  });
+
   test("non-devin adapters stay unresolved", () => {
     const other: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://example.test/v1" };
     expect(resolveInputCeiling(other, "custom", "swe-2-flash")).toBeNull();
