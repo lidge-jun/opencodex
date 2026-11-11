@@ -132,7 +132,7 @@ class TraeAcpClient {
     if (!this.initialized && this.launchStatus) {
       return startupFailure("spawn", { code: this.launchStatus === 127 ? "ENOENT" : "EACCES" });
     }
-    return new TraeAcpError(this.diagnostic() || error.message, error.code);
+    return new TraeAcpError(this.diagnostic() || error.message, error.code, error.usage);
   }
 
   /** Wake every waiter immediately; process reaping is separate from request settlement. */
