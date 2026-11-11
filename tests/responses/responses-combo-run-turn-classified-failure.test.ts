@@ -232,6 +232,29 @@ test("TRAE text-only turns do not resolve an OpenAI helper", async () => {
   } finally { open.mockRestore(); resolver.mockRestore(); }
 });
 
+test("buffered combo binds TRAE error usage before its early failure return", async () => {
+  const usage = { inputTokens: 123, outputTokens: 456, totalTokens: 579 };
+  const cfg = config([{ provider: "trae-cn", model: "test-model" }]);
+  cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
+    authMode: "key", models: ["test-model"], liveModels: false };
+  const open = spyOn(traeClient, "openTraeSession").mockResolvedValue({ models: ["test-model"],
+    prompt: async (_model, _text, emit, _signal, dispatch) => {
+      dispatch?.beforeSend(); dispatch?.onSend();
+      emit({ type: "error", status: 502, errorType: "upstream_error", code: "trae_empty_response",
+        message: "fixture failure", retryable: false, usage });
+    },
+    close: async () => undefined });
+  const logCtx: import("../../src/server/request-log").RequestLogContext = { model: "", provider: "" };
+  try {
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "chain/classified", input: "plain text", stream: false }),
+    }), cfg, logCtx);
+    expect(response.status).toBe(502);
+    expect(logCtx.attempts?.[0]?.usage).toMatchObject(usage);
+  } finally { open.mockRestore(); }
+});
+
 test("TRAE disabled vision refuses images without resolving an OpenAI helper", async () => {
   const sidecarModule = await import("../../src/providers/openai-sidecar");
   const resolver = spyOn(sidecarModule, "resolveFirstUsableOpenAiSidecar");
