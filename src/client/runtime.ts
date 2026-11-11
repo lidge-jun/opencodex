@@ -433,6 +433,8 @@ export async function startClientRuntime(
   const restartController: ClientRestartController = createClientRestartController({
     stopping: () => shuttingDown,
     supervisor: io.restartSupervisor ?? clientRestartSupervisor,
+    connectionChanged: () => clientRestartRollbackAction(state.value, readClientConnectionState()) === "recycle",
+    recycle: () => recycleStandalone(state.value.tokenFingerprint),
     stop: stopServing,
     spawnReplacement: async deadlineAt => {
       const { replacementStartEnvironment } = await import("../server/management/system-restart");

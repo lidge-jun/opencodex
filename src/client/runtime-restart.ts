@@ -8,6 +8,11 @@
  * - Under the desktop app or a viable service supervisor the restart is refused (409
  *   `restart_supervised`) and the runtime keeps serving. The supervisor owns this process and its
  *   port; handing off to it means exiting before anything proves the replacement can start.
+ * - Unless the connection it serves is no longer the durable one (`ocx disconnect`, or a newer
+ *   connect). Then there is nothing to keep, and under every owner the restart hands off to the
+ *   standalone recycle, which exits the way that owner relaunches (desktop 75, service 1) or spawns
+ *   its own replacement. Without this a Home-driven leave over SSH could not finish under the
+ *   desktop app or a service: `ocx restart` refused and the stale client runtime kept serving.
  * - Otherwise the listener drains, a replacement `ocx start` is spawned and must answer within the
  *   budget. Success exits this process. A replacement that exited, or never answered and was then
  *   stopped, leaves this process to bind the port again, start a fresh tunnel supervisor and
@@ -38,6 +43,10 @@ export interface ClientRestartIo {
   stopping?: () => boolean;
   /** Which supervisor owns this process, or null when it starts its own replacement. */
   supervisor(): Promise<ClientRestartSupervisor | null>;
+  /** The durable connection is no longer the one this runtime serves. */
+  connectionChanged?: () => boolean;
+  /** Hand off to what the durable state now calls for; exits the process for its owner to relaunch. */
+  recycle?: () => Promise<void>;
   /** Stop the tunnel supervisor and the listener, giving in-flight requests up to `drainMs`. */
   stop(drainMs: number): Promise<void>;
   /** Start the replacement; resolves once it answers, rejects when none survives. */
@@ -97,6 +106,13 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
     hasHandoff: () => flight !== null,
     async request() {
       if (io.stopping?.()) return { kind: "stopping" };
+      if (io.recycle && io.connectionChanged?.()) {
+        if (flight) return { kind: "accepted", alreadyRestarting: true };
+        const recycle = io.recycle;
+        // Let the 202 reach the CLI before the listener closes.
+        flight = sleep(200).then(recycle).finally(() => { flight = null; });
+        return { kind: "accepted", alreadyRestarting: false };
+      }
       const supervisor = await io.supervisor();
       if (io.stopping?.()) return { kind: "stopping" };
       if (supervisor) return { kind: "supervised", supervisor };

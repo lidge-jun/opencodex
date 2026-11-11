@@ -253,6 +253,30 @@ describe("client restart controller", () => {
     expect(calls).toEqual([]);
   });
 
+  // After `ocx disconnect` (or a newer connect) the served connection is gone, so there is no
+  // old runtime worth keeping: the restart hands off to the recycle, which every owner relaunches.
+  for (const supervisor of ["desktop", "service", null] as const) {
+    test(`a runtime whose connection changed recycles under ${supervisor ?? "no"} supervisor`, async () => {
+      const { io, calls } = fakeIo({
+        supervisor: async () => supervisor,
+        connectionChanged: () => true,
+        recycle: async () => { calls.push("recycle"); },
+      });
+      const controller = createClientRestartController(io);
+      expect(await controller.request()).toEqual({ kind: "accepted", alreadyRestarting: false });
+      expect(controller.hasHandoff()).toBe(true);
+      expect(await controller.request()).toEqual({ kind: "accepted", alreadyRestarting: true });
+      await controller.settled();
+      expect(calls).toEqual(["recycle"]);
+    });
+  }
+
+  test("an unchanged connection under a supervisor is still refused", async () => {
+    const { io, calls } = fakeIo({ supervisor: async () => "service", connectionChanged: () => false, recycle: async () => { calls.push("recycle"); } });
+    expect(await createClientRestartController(io).request()).toEqual({ kind: "supervised", supervisor: "service" });
+    expect(calls).toEqual([]);
+  });
+
   test("a second request while one is in flight joins it", async () => {
     let finish!: () => void;
     let spawns = 0;

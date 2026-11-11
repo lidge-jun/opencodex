@@ -423,7 +423,14 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   disconnect: async deps => {
     const { handleDisconnectCommand } = await import("./connect");
-    return await handleDisconnectCommand(deps.args.slice(1));
+    const code = await handleDisconnectCommand(deps.args.slice(1));
+    if (code !== 0) return code;
+    const { restartRuntimeAfterDisconnect } = await import("./disconnect-runtime");
+    return await restartRuntimeAfterDisconnect({
+      findLive: () => deps.findLiveProxy(),
+      restart: () => deps.handleProxyRestart(deps.handleRestartStartWhenStopped),
+      json: deps.args.includes("--json"),
+    });
   },
   catalog: async deps => {
     const { handleCatalogCommand } = await import("./catalog");
