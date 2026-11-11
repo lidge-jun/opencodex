@@ -2,14 +2,15 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import * as gated from "../../src/link/child-gated-ocx";
 import { observeChild, type ObserveDeps } from "../../src/link/child-observe";
-import { emptyChildObservations, patchChildObservation, withoutCarriedFields } from "../../src/link/child-observations";
+import { emptyChildObservations, patchChildObservation, withoutCarriedFields, type ChildObservation } from "../../src/link/child-observations";
 import { createChildOpsEngine } from "../../src/link/child-ops-engine";
+import type { ChildOpsEnv } from "../../src/link/child-ops-types";
 import type { ObserveOutcome } from "../../src/link/child-observe";
 import { ConfigMutationLockError } from "../../src/config/mutation-lock";
 import type { LinkPeerEntry } from "../../src/link/peer-report";
 import type { ParsedRemoteRuntimeInspection } from "../../src/link/remote-plant";
 import { SshRunnerError, type SshRunResult } from "../../src/link/ssh-runner";
-import type { LinkRecord } from "../../src/link/store";
+import type { LinkRecord, LinkStore } from "../../src/link/store";
 
 const NOW = new Date("2026-11-11T00:00:00.000Z");
 const TOKEN = "AbCdEfGhIjKlMnOpQrStUvWxYz012345_-";
@@ -162,12 +163,31 @@ describe("child ops engine", () => {
     observedAt: now.toISOString(), source: "peer", installedVersion: null, installKind: "ocx-child", runtimeOwner: null, updateRoute: "replant",
     updateReason: "ocx-child", targetVersion: null, updateInFlight: null, catalogPulledAt: null, catalogPulledEtag: null, catalogSyncedEtag: null,
     lastOperation: null, suppressedTarget: null, autoUpdateAttempts: null, pendingUpdateRecovery: null } });
+  /**
+   * wp2's observe-only engine options on wp3's engine (Revision 6 F1): one env per submit whose cache writer never throws,
+   * logging a failure by error name exactly as the route env does.
+   */
+  function observeEngine(deps: { readStore: () => LinkStore; observe: (target: LinkRecord) => Promise<ObserveOutcome>;
+    writeObservation: (linkId: string, patch: Partial<ChildObservation>) => void; now?: () => Date; jobId?: () => string }) {
+    const engine = createChildOpsEngine({ jobId: deps.jobId });
+    const now = deps.now ?? (() => NOW);
+    const env: ChildOpsEnv = { readStore: deps.readStore, runner: { run: async () => { throw new Error("no SSH in observe engine tests"); } },
+      knownHostsFile: "/tmp/known_hosts", wireState: () => "connected", activity: () => null, homeVersion: "2.100.0", now: () => now().getTime(),
+      sleep: async () => {}, observe: deps.observe, readObservation: () => null, catalogEtag: () => null,
+      writeObservation: (linkId, patch) => {
+        try { deps.writeObservation(linkId, patch); } catch (error) {
+          console.warn(`[link] child observation write failed linkId=${linkId} error=${error instanceof Error ? error.name : "unknown"}`);
+        }
+      } };
+    return { ...engine, submit: (request: { op: "observe"; linkIds: readonly string[] | "all"; trigger: "manual" | "auto" }) =>
+      engine.submit({ ...request, restart: "none" }, env) };
+  }
 
   test("runs three items at a time and ends refused for a link removed before its turn", async () => {
     let links = ids.map(id => record({ id }));
     let running = 0, peak = 0;
     const releases: Array<() => void> = [];
-    const engine = createChildOpsEngine({ readStore: () => store(links), now: () => NOW, writeObservation: () => {}, observe: async () => {
+    const engine = observeEngine({ readStore: () => store(links), now: () => NOW, writeObservation: () => {}, observe: async () => {
       running += 1; peak = Math.max(peak, running);
       await new Promise<void>(resolve => releases.push(resolve));
       running -= 1;
@@ -194,7 +214,7 @@ describe("child ops engine", () => {
       runtimeOwner: "service", updateRoute: "orchestrated", updateReason: null, targetVersion: "2.100.0", catalogPulledAt: 5, lastOperation: null,
       suppressedTarget: null, catalogPulledEtag: "\"e\"", catalogSyncedEtag: null, autoUpdateAttempts: null, updateInFlight: true, pendingUpdateRecovery: null };
     let clock = NOW.getTime();
-    const engine = createChildOpsEngine({ readStore: () => store([record({ id: linkId, childKind: "ephemeral" })]), now: () => new Date(clock),
+    const engine = observeEngine({ readStore: () => store([record({ id: linkId, childKind: "ephemeral" })]), now: () => new Date(clock),
       writeObservation: (id, patch) => { clock += 1_000; patchChildObservation(file, id, patch, new Date(clock)); },
       observe: async target => observeChild(target, deps(ran(plan())).value) });
     engine.submit({ op: "observe", linkIds: [linkId], trigger: "manual" });
@@ -206,7 +226,7 @@ describe("child ops engine", () => {
   test("a failed cache write is logged and leaves the item's result", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const engine = createChildOpsEngine({ readStore: () => store([record({ id: ids[0]! })]), now: () => NOW,
+      const engine = observeEngine({ readStore: () => store([record({ id: ids[0]! })]), now: () => NOW,
         writeObservation: () => { throw new ConfigMutationLockError("busy"); }, observe: async () => succeeded(NOW) });
       const submitted = engine.submit({ op: "observe", linkIds: [ids[0]!], trigger: "manual" });
       await engine.settled();
@@ -222,7 +242,7 @@ describe("child ops engine", () => {
     const links = ids.map(id => record({ id }));
     let running = 0, peak = 0;
     const releases: Array<() => void> = [];
-    const engine = createChildOpsEngine({ readStore: () => store(links), now: () => NOW, writeObservation: () => {}, observe: async () => {
+    const engine = observeEngine({ readStore: () => store(links), now: () => NOW, writeObservation: () => {}, observe: async () => {
       running += 1; peak = Math.max(peak, running);
       await new Promise<void>(resolve => releases.push(resolve));
       running -= 1;
@@ -246,7 +266,7 @@ describe("child ops engine", () => {
     const writes: Array<{ linkId: string; jobId: string; state: string }> = [];
     let release!: () => void;
     const held = new Promise<void>(resolve => { release = resolve; });
-    const engine = createChildOpsEngine({ readStore: () => store(links), now: () => NOW, observe: async target => {
+    const engine = observeEngine({ readStore: () => store(links), now: () => NOW, observe: async target => {
       if (target.id === ids[0]) await held;
       return succeeded(NOW);
     }, writeObservation: (linkId, patch) => { if (patch.lastOperation) writes.push({ linkId, jobId: patch.lastOperation.jobId, state: patch.lastOperation.state }); } });
@@ -263,11 +283,11 @@ describe("child ops engine", () => {
   test("submit refusals and retention of at most 32 finished jobs for one hour", async () => {
     let clock = NOW.getTime();
     let counter = 0;
-    const engine = createChildOpsEngine({ readStore: () => store([record({ id: ids[0]! })]), now: () => new Date(clock), writeObservation: () => {},
+    const engine = observeEngine({ readStore: () => store([record({ id: ids[0]! })]), now: () => new Date(clock), writeObservation: () => {},
       observe: async () => succeeded(NOW), jobId: () => "ljob_" + (counter++).toString(16).padStart(16, "0") });
-    expect(engine.submit({ op: "observe", linkIds: [ids[1]!], trigger: "manual" })).toEqual({ ok: false, code: "link_not_found" });
-    const empty = createChildOpsEngine({ readStore: () => store([]), writeObservation: () => {}, observe: async () => succeeded(NOW) });
-    expect(empty.submit({ op: "observe", linkIds: "all", trigger: "manual" })).toEqual({ ok: false, code: "no_eligible_links" });
+    expect(engine.submit({ op: "observe", linkIds: [ids[1]!], trigger: "manual" })).toEqual({ ok: false, code: "link_not_found", linkId: ids[1]! });
+    const empty = observeEngine({ readStore: () => store([]), writeObservation: () => {}, observe: async () => succeeded(NOW) });
+    expect(empty.submit({ op: "observe", linkIds: "all", trigger: "manual" })).toEqual({ ok: false, code: "no_eligible_links", linkId: null });
     for (let index = 0; index < 33; index++) {
       clock += 1_000;
       expect(engine.submit({ op: "observe", linkIds: [ids[0]!], trigger: "manual" }).ok).toBe(true);

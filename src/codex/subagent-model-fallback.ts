@@ -298,7 +298,9 @@ export function isSubagentModelUnavailable(
     // route (canonical openai defaults to pool even when codexAccountMode is omitted).
     if (!candidateAccountId) return true;
     if (isCodexAccountPaused(config, candidateAccountId)) return true;
-    if (!isCodexAccountUsable(config, candidateAccountId, usabilityOptions)) return true;
+    // An account-qualified route is an explicit selector, outside the pool-only policy (#7410).
+    if (!isCodexAccountUsable(config, candidateAccountId, route.codexAccountId !== undefined
+      ? { ...usabilityOptions, explicitAccountSelector: true } : usabilityOptions)) return true;
     if (route.codexAccountId !== undefined) {
       // An account-qualified route is pinned and cannot consume Pool's recovery-probe
       // escape hatch. Honor both account-wide and model-scoped cooldowns so fallback

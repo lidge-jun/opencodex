@@ -1,5 +1,6 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -134,6 +135,7 @@ export const vi: Record<TKey, string> = {
   "workflowBudget.saved": "Đã lưu giới hạn quy trình.",
   ...desktopCompatibilityCopy("vi"),
   ...shellV2Copy("vi"),
+  ...codexCliUpdateCopy("vi"),
   ...modelsV2Copy("vi"),
   ...accountsV2Copy("vi"),
   ...subagentsV2Copy("vi"),
@@ -2730,6 +2732,7 @@ export const vi: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Không thể tải preset của provider OpenAI.",
   "codexAuth.openaiPresetUnavailable": "Preset của provider OpenAI không khả dụng.",
   "codexAuth.openProviders": "Mở Providers",
+  "codexAuth.changeAccountMode": "Đổi chế độ tài khoản",
   "codexAuth.add": "Thêm",
   "codexAuth.credits": "Tín dụng",
   "codexAuth.creditsRemaining": "còn lại",
@@ -4216,7 +4219,7 @@ export const vi: Record<TKey, string> = {
   "models.fastProvider": "Chế độ Fast", "models.fastProviderHint": "Dùng tín dụng sử dụng với giá gấp 2", "models.fastEnabled": "Đã bật chế độ Fast", "models.fastDisabled": "Đã tắt chế độ Fast", "models.fastSaveFailed": "Không thể lưu chế độ Fast",
   "models.newPolicy_inherit": "Kế thừa",
   "models.newPolicy_off": "Tắt",
-  "models.newPolicy_on": "Bật",
+  "models.newPolicy_on": "Bật", "models.newPolicy_admit": "Thêm vào lựa chọn",
   "models.newBadge": "MỚI",
   "models.newCount": "{count} model mới, đang tắt",
   "codexSet.custom.deleteConfirm": "Xoá lớp này? Bạn có thể hoàn tác trong vài giây.",

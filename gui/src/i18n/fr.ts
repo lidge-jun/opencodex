@@ -1,5 +1,6 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -132,6 +133,7 @@ export const fr: Record<TKey, string> = {
   "workflowBudget.saved": "Limites de workflow enregistrées.",
   ...desktopCompatibilityCopy("fr"),
   ...shellV2Copy("fr"),
+  ...codexCliUpdateCopy("fr"),
   ...modelsV2Copy("fr"),
   ...accountsV2Copy("fr"),
   ...subagentsV2Copy("fr"),
@@ -2709,6 +2711,7 @@ export const fr: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Échec du chargement du préréglage du fournisseur OpenAI.",
   "codexAuth.openaiPresetUnavailable": "Le préréglage du fournisseur OpenAI est indisponible.",
   "codexAuth.openProviders": "Ouvrir Fournisseurs",
+  "codexAuth.changeAccountMode": "Changer le mode de compte",
   "codexAuth.add": "Ajouter",
   "codexAuth.credits": "Crédits",
   "codexAuth.creditsRemaining": "restants",
@@ -3856,7 +3859,7 @@ export const fr: Record<TKey, string> = {
   "lab.layer.task_effectiveness": "Efficacité des tâches",
   "models.newPolicyGlobal": "Désactiver les nouveaux modèles par défaut", "models.newPolicyProvider": "Politique des nouveaux modèles",
   "models.fastProvider": "Mode Fast", "models.fastProviderHint": "Consomme des crédits d'utilisation au double du prix", "models.fastEnabled": "Mode Fast activé", "models.fastDisabled": "Mode Fast désactivé", "models.fastSaveFailed": "Impossible d'enregistrer le mode Fast",
-  "models.newPolicy_inherit": "Hériter", "models.newPolicy_off": "Désactivé", "models.newPolicy_on": "Activé", "models.newBadge": "NOUVEAU", "models.newCount": "{count} nouveaux, désactivés",
+  "models.newPolicy_inherit": "Hériter", "models.newPolicy_off": "Désactivé", "models.newPolicy_on": "Activé", "models.newPolicy_admit": "Admettre", "models.newBadge": "NOUVEAU", "models.newCount": "{count} nouveaux, désactivés",
   "models.aliases": "Alias",
   "models.aliasesTable": "Table des alias",
   "models.aliasPrompt": "Alias du fournisseur (laisser vide pour effacer)",

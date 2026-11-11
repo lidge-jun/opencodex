@@ -1,5 +1,6 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -133,6 +134,7 @@ export const de: Record<TKey, string> = {
   "workflowBudget.saved": "Workflow-Limits gespeichert.",
   ...desktopCompatibilityCopy("de"),
   ...shellV2Copy("de"),
+  ...codexCliUpdateCopy("de"),
   ...modelsV2Copy("de"),
   ...accountsV2Copy("de"),
   ...subagentsV2Copy("de"),
@@ -2132,6 +2134,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "OpenAI-Anbieter-Preset konnte nicht geladen werden.",
   "codexAuth.openaiPresetUnavailable": "OpenAI-Anbieter-Preset ist nicht verfügbar.",
   "codexAuth.openProviders": "Anbieter öffnen",
+  "codexAuth.changeAccountMode": "Kontomodus ändern",
   "codexAuth.add": "Hinzufügen",
   "codexAuth.credits": "Credits",
   "codexAuth.creditsRemaining": "verbleibend",
@@ -3867,7 +3870,7 @@ export const de: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "Provider-Tabellen können vorhandene Threads mit openai-Kennung in manchen mobilen Remote-Listen ausblenden. Der Verlauf wird nicht gelöscht. Der Remote-Client muss alle Provider auflisten; dieser Schalter korrigiert dessen Filter nicht.",
   "models.newPolicyGlobal": "Neue Modelle zunächst deaktivieren", "models.newPolicyProvider": "Richtlinie für neue Modelle",
   "models.fastProvider": "Fast-Modus", "models.fastProviderHint": "Verbraucht Nutzungsguthaben zum doppelten Preis", "models.fastEnabled": "Fast-Modus an", "models.fastDisabled": "Fast-Modus aus", "models.fastSaveFailed": "Fast-Modus konnte nicht gespeichert werden",
-  "models.newPolicy_inherit": "Übernehmen", "models.newPolicy_off": "Aus", "models.newPolicy_on": "An", "models.newBadge": "NEU", "models.newCount": "{count} neu, aus",
+  "models.newPolicy_inherit": "Übernehmen", "models.newPolicy_off": "Aus", "models.newPolicy_on": "An", "models.newPolicy_admit": "Aufnehmen", "models.newBadge": "NEU", "models.newCount": "{count} neu, aus",
   "models.aliases": "Aliase",
   "models.aliasesTable": "Alias-Tabelle",
   "models.aliasPrompt": "Anbieter-Alias (leer lassen zum Entfernen)",

@@ -68,6 +68,21 @@ describe("models runtime subcommand dispatch (#3094)", () => {
     expect(await handleModelsRuntimeCommand("definitely-not-a-subcommand", [])).toBeNull();
   });
 
+  test("#8236: new-policy sends admit for a provider, and still refuses an unknown policy", async () => {
+    const bodies: unknown[] = [];
+    const deps = {
+      baseUrl: "http://127.0.0.1:1",
+      fetchImpl: async (_url: string | URL | Request, init?: RequestInit) => {
+        bodies.push(init?.body ? JSON.parse(String(init.body)) : null);
+        return Response.json({ ok: true, policy: "admit", provider: "vendor" });
+      },
+    };
+    expect(await handleModelsRuntimeCommand("new-policy", ["admit", "--provider", "vendor"], deps)).toBe(0);
+    expect(bodies).toEqual([{ policy: "admit", provider: "vendor" }]);
+    expect(await handleModelsRuntimeCommand("new-policy", ["everything"], deps)).not.toBe(0);
+    expect(bodies).toHaveLength(1);
+  });
+
   test("the shared set has no duplicates", () => {
     expect(new Set(MODELS_RUNTIME_SUBCOMMANDS).size).toBe(MODELS_RUNTIME_SUBCOMMANDS.length);
   });

@@ -23,6 +23,7 @@ import {
 } from "./static-model-discovery";
 import { resolveModelPolicy } from "./resolved-model-policy";
 import { mapFill, nestedMapFill, stableUnion } from "./resolved-model-policy-merge";
+import { withAnthropicModelOutputCaps } from "./anthropic-output-caps";
 
 /** Same endpoint modulo surrounding space and trailing slashes — matches `matchBaseUrlChoice`. */
 function isSameEndpoint(a: string, b: string): boolean {
@@ -151,7 +152,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     const destination = registryEntryForProviderDestination(provider);
     const inputModalities = provider.inputModalities === undefined
       ? registryInputModalitiesForDestination(providerName, provider) : undefined;
-    return snapshotVertexEnvironment({
+    return withAnthropicModelOutputCaps(snapshotVertexEnvironment({
       ...provider,
       ...(inputModalities ? { inputModalities } : {}),
       apiKey: usableResolvedApiKey(provider.apiKey),
@@ -167,7 +168,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
       ...(provider.dropResponsesReasoningItems === undefined && destination?.dropResponsesReasoningItems !== undefined
         ? { dropResponsesReasoningItems: destination.dropResponsesReasoningItems }
         : {}),
-    });
+    }));
   }
   const resolvedApiKey = usableResolvedApiKey(provider.apiKey);
   const staticModelCatalog = !providerSupportsLiveModelDiscovery(providerName, provider);
@@ -387,5 +388,5 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(thinkingBudgetModels ? { thinkingBudgetModels } : {}),
   };
   applyDirectReasoningEffortContracts(registryEntry, resolved, provider);
-  return snapshotVertexEnvironment(resolved);
+  return withAnthropicModelOutputCaps(snapshotVertexEnvironment(resolved));
 }

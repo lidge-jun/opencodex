@@ -50,7 +50,7 @@ export interface LinkRouteState {
   compensationFailures?: Map<string, { since: string; reason: "compensation_failed" }>;
   supervisor: import("../../link/supervisor").LinkSupervisor;
   listener: LinkRouteListener;
-  /** Created on the first Child-operations request (link-child-ops-routes.ts). */
+  /** The process-wide engine (sharedChildOpsEngine), cached on first use; a direct test may set its own. */
   childOps?: import("../../link/child-ops-engine").ChildOpsEngine;
   /** The Home catalog revision read on `?children=1`; defaults to the shared production monitor. */
   catalogRevision?: import("../../link/child-catalog-freshness").CatalogRevisionMonitor;

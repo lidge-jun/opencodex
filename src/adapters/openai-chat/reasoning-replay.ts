@@ -2,6 +2,7 @@ import { modelInList, type OcxProviderConfig, type OcxReasoningReplayScopeRef } 
 import { peekReasoningForCall } from "../../responses/reasoning-replay-cache";
 import { jsonStringPartsUtf8Bytes, jsonUtf8Bytes } from "../../lib/json-byte-size";
 import { isTranslatorBudgetExceededError, TranslatorBudgetExceededError } from "../../lib/translator-budget";
+import { isCanonicalMistralChat } from "../../providers/mistral-transport";
 
 type Rec = Record<string, unknown>;
 export const isChatRecord = (value: unknown): value is Rec =>
@@ -58,7 +59,9 @@ export function planNativeChatReasoningReplay(
   maxSerializedBytes = Number.MAX_SAFE_INTEGER,
 ): NativeChatReasoningReplayPlan {
   const policy = chatReasoningReplayPolicy(provider, modelId);
-  if (!policy.preserve || !Array.isArray(messages)
+  // Canonical Mistral Chat rejects `reasoning_content` in history (HTTP 422), and the destination
+  // policy strips it before this plan is applied; replaying here would restore it (#8432).
+  if (!policy.preserve || !Array.isArray(messages) || isCanonicalMistralChat(provider)
       || modelInList(provider.reasoningDetailsModels, modelId)) {
     return { serializedBytes: 0, hasChanges: false, apply: () => messages as unknown[] };
   }

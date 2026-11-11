@@ -398,3 +398,9 @@ that it shows the `desktop-app` owner action.
    GUI parity test's regex is widened for 030's `refusal()` switch, which uses `fail(code, …)`.
 3. **Restart scope** is chosen per click in a dialog; the policy panel's `childCodexRestart` only governs the
    automatic restart (050), so there is no "remember scope" setting.
+
+## Carried from wp3 review (#8513)
+
+- Remote Link guide (English + 7 translations): the restart protection paragraph must say to wait for active Codex
+  turns to finish before a restart, not only pause new requests, because a turn running a tool has no relayed request in
+  flight (CodeRabbit 4533270262).

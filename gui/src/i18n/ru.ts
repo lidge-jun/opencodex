@@ -1,5 +1,6 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -132,6 +133,7 @@ export const ru: Record<TKey, string> = {
   "workflowBudget.saved": "Лимиты рабочих процессов сохранены.",
   ...desktopCompatibilityCopy("ru"),
   ...shellV2Copy("ru"),
+  ...codexCliUpdateCopy("ru"),
   ...modelsV2Copy("ru"),
   ...accountsV2Copy("ru"),
   ...subagentsV2Copy("ru"),
@@ -2695,6 +2697,7 @@ export const ru: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Не удалось загрузить пресет провайдера OpenAI.",
   "codexAuth.openaiPresetUnavailable": "Пресет провайдера OpenAI недоступен.",
   "codexAuth.openProviders": "Открыть провайдеров",
+  "codexAuth.changeAccountMode": "Изменить режим аккаунта",
   "codexAuth.add": "Добавить",
   "codexAuth.credits": "Кредиты",
   "codexAuth.creditsRemaining": "осталось",
@@ -3890,7 +3893,7 @@ export const ru: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "Таблица провайдеров может скрыть существующие диалоги с меткой openai в некоторых мобильных удалённых списках. История не удаляется. Удалённый клиент должен запрашивать все провайдеры; этот переключатель не исправляет его фильтр.",
   "models.newPolicyGlobal": "Добавлять новые модели выключенными", "models.newPolicyProvider": "Политика новых моделей",
   "models.fastProvider": "Режим Fast", "models.fastProviderHint": "Расходует кредиты использования по двойной цене", "models.fastEnabled": "Режим Fast включён", "models.fastDisabled": "Режим Fast выключен", "models.fastSaveFailed": "Не удалось сохранить режим Fast",
-  "models.newPolicy_inherit": "Наследовать", "models.newPolicy_off": "Выкл.", "models.newPolicy_on": "Вкл.", "models.newBadge": "НОВАЯ", "models.newCount": "Новых: {count}, выкл.",
+  "models.newPolicy_inherit": "Наследовать", "models.newPolicy_off": "Выкл.", "models.newPolicy_on": "Вкл.", "models.newPolicy_admit": "Добавлять", "models.newBadge": "НОВАЯ", "models.newCount": "Новых: {count}, выкл.",
   "models.aliases": "Псевдонимы",
   "models.aliasesTable": "Таблица псевдонимов",
   "models.aliasPrompt": "Псевдоним провайдера (оставьте пустым, чтобы очистить)",

@@ -10,7 +10,7 @@ import { CODEX_SETTINGS_DIGEST_PATTERN } from "../link/codex-settings";
 import type { LinkLocalPeer, LinkPeerStatus } from "../link/compatibility";
 import { runLinkEnrollment } from "./link-enrollment";
 import { runLinkCleanup, type LinkCleanupDeps } from "./link-cleanup";
-import { runLinkCheck } from "./link-child-ops";
+import { LINK_CHILD_OPS_USAGE, runLinkCheck, runLinkChildOp } from "./link-child-ops";
 import { validateChildOps, type LinkChildOpsView } from "./link-status-child";
 import { assertSshAlias } from "../link/ssh-argv";
 import { boundHint } from "../link/ssh-runner";
@@ -45,10 +45,12 @@ export const LINK_USAGE = `Usage:
   ocx link reconnect --link-id <id> [--json]
   ocx link cleanup [--link-id <id>] [--json]
   ocx link check (--link-id <id> | --all) [--no-wait] [--json]
+${LINK_CHILD_OPS_USAGE.join("\n")}
 
 Forced revoke skips remote cleanup. Run ocx disconnect on the remote client.
 Cleanup reports each Child's platform with disconnect guidance; it changes nothing.
-Check reads each Home-initiated Child's installed version and update route; it changes no install.`;
+Check reads each Home-initiated Child's installed version and update route; it changes no install.
+Update, sync and restart-codex run on the Child over the link's SSH trust and wait for the job unless --no-wait.`;
 
 /**
  * What `ocx link status` prints: the runtime's status DTO itself, so a field the server adds (like
@@ -405,7 +407,8 @@ export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}):
     else if (command === "reconnect") await runReconnect(args, deps);
     else if (command === "cleanup") await runLinkCleanup(args, deps, LINK_USAGE);
     else if (command === "check") verdictExit = await runLinkCheck(args, deps, linkRequest, LINK_USAGE);
-    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, revoke, reconnect, cleanup, check", LINK_USAGE);
+    else if (command === "update" || command === "sync" || command === "restart-codex") verdictExit = await runLinkChildOp(command, args, deps, linkRequest, LINK_USAGE);
+    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, revoke, reconnect, cleanup, check, update, sync, restart-codex", LINK_USAGE);
   });
   return code === 0 ? verdictExit : code;
 }
