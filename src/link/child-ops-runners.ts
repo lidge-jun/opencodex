@@ -3,6 +3,7 @@ import { classifyUpdateApply, remoteUpdateApplyArgv } from "./child-gated-ocx";
 import { requireRemotePlatform } from "./remote-platform";
 import { SshRunnerError, type SshRunResult } from "./ssh-runner";
 import { classifySyncResult, childSkipHint } from "./sync-fanout-classify";
+import { parseStrictSemver } from "../lib/strict-semver";
 import type { LinkRecord } from "./store";
 import { RESTART_SKIPPED, type ChildJobItem, type ChildOpsEnv, type ChildRestart, type ItemOutcome,
   type ItemRunner } from "./child-ops-types";
@@ -14,6 +15,11 @@ export const APPLY_NOT_AFTER_MS = 120_000;
 /** Less than this left of the window when the apply would be sent ⇒ do not send; the next run re-plans. */
 export const APPLY_MIN_REMAINING_MS = 15_000;
 export const APPLY_GRACE_MS = 120_000;
+/**
+ * The documented bound of an orchestrated apply (ORCHESTRATED_MUTATION_BOUND_MS on the Child). A Child that reports a
+ * larger mutationBoundMs (its contract allows up to an hour) cannot hold the engine's single update place longer.
+ */
+export const APPLY_MUTATION_BOUND_MAX_MS = 900_000;
 export const POST_UPDATE_SYNC_RETRY_MS = 30_000;
 /** Revision 4: how long an uncertain update stays recorded for recovery (070 imports it from here). */
 export const UNCERTAIN_RECOVERY_WINDOW_MS = 3_600_000;
@@ -46,9 +52,20 @@ function linkBusy(record: LinkRecord, env: ChildOpsEnv): boolean {
   return (env.activity(record.id)?.inFlight ?? 1) > 0;
 }
 
+/**
+ * Item hints never embed the SSH alias (up to 253 characters, and already on the item as alias), so each one is a
+ * bounded sentence under the job document's 256-character string limit and is never cut by the engine's cap.
+ */
+export const HINT_SUBJECT = "this Child";
 /** A4 owner action: the npm or pnpm launcher route needs a Node the Child's SSH session can find. */
-function launcherHint(alias: string): string {
-  return `Install Node.js where the npm or pnpm that installed OpenCodex on ${alias} can find it, or update there with ocx update.`;
+export const LAUNCHER_HINT = "Install Node.js where the npm or pnpm that installed OpenCodex on this Child can find it, or update there with ocx update.";
+export const CLOCK_SKEW_HINT = "The clocks of this Home and this Child differ (clock-skew); correct the Child's clock or run the update again.";
+export function syncSkipHint(reason: string | null): string {
+  return childSkipHint(reason, HINT_SUBJECT);
+}
+/** Revision 4 (4529522006): the update stands, but routing may be gone. linkId is always lnk_ plus 16 hex. */
+export function postUpdateSyncHint(linkId: string): string {
+  return `The update stands, but routing may be gone; run ocx link sync --link-id ${linkId} to restore it.`;
 }
 
 async function runPinnedSync(record: LinkRecord, platform: Platform, restart: ChildRestart, env: ChildOpsEnv): Promise<PinnedSyncRun> {
@@ -112,12 +129,12 @@ async function syncWithRestart(record: LinkRecord, platform: Platform, requested
   return { sync: second.sync, restart: { requested, outcome: "requested" }, restartUnknown: true };
 }
 
-export function syncOutcome(sync: SyncResult, alias: string): ItemOutcome {
+export function syncOutcome(sync: SyncResult): ItemOutcome {
   if (sync.state === "synced") return { state: "succeeded", reason: null, sync };
   if (sync.state === "timed-out") return { state: "uncertain", reason: "deadline-exceeded", sync };
   if (sync.state === "skipped") {
     const reason = sync.reason ?? "child-sync-skipped";
-    const hint = childSkipHint(reason, alias);
+    const hint = syncSkipHint(reason);
     if (reason === "child-updating") return { state: "busy", reason, hint, sync };
     if (reason === "child-ocx-lacks-expect-link") return { state: "owner-action", reason, hint, sync };
     if (reason === "child-platform-unsupported") return { state: "unsupported", reason, hint, sync };
@@ -150,7 +167,7 @@ export const runSyncItem: ItemRunner = async (record, job, env) => {
   if (typeof platform !== "string") return platform;
   const { sync, restart, restartUnknown } = await syncWithRestart(record, platform, job.restart, env);
   if (restartUnknown) return { state: "uncertain", reason: RESTART_RESULT_UNKNOWN, sync, restart };
-  const outcome = syncOutcome(sync, record.alias);
+  const outcome = syncOutcome(sync);
   if (restart) outcome.restart = restart;
   // The sync is the job's purpose here; a withheld restart is reported, not a failure (A2).
   if (restart?.outcome === "skipped" && outcome.state === "succeeded") outcome.reason = RESTART_SKIPPED;
@@ -170,7 +187,7 @@ export const runRestartCodexItem: ItemRunner = async (record, job, env) => {
   if (record.childKind === "ephemeral") {
     // ocx-child accepts and ignores the restart flags (F2): sync without them, report unsupported.
     const sync = await pinnedSync(record, platform, "none", env);
-    const outcome = syncOutcome(sync, record.alias);
+    const outcome = syncOutcome(sync);
     return outcome.state === "succeeded" ? { ...refused("ephemeral-restart"), sync } : { ...outcome, restart: { requested, outcome: "not-run" } };
   }
   // A2 / M8: the restart is the purpose of this op, so a busy link runs nothing (no SSH) and reports partial (exit 6).
@@ -178,10 +195,10 @@ export const runRestartCodexItem: ItemRunner = async (record, job, env) => {
   // Revision 4: same two-step path as sync with a restart, so activity is read again just before the restart goes out.
   const { sync, restart, restartUnknown } = await syncWithRestart(record, platform, requested, env);
   if (restartUnknown) return { state: "uncertain", reason: RESTART_RESULT_UNKNOWN, sync, restart };
-  if (restart!.outcome === "unsupported") return syncOutcome(sync, record.alias).state === "succeeded"
-    ? { ...refused("ephemeral-restart"), sync } : { ...syncOutcome(sync, record.alias), restart: { requested, outcome: "not-run" } };
+  if (restart!.outcome === "unsupported") return syncOutcome(sync).state === "succeeded"
+    ? { ...refused("ephemeral-restart"), sync } : { ...syncOutcome(sync), restart: { requested, outcome: "not-run" } };
   if (restart!.outcome === "skipped") return { state: "busy", reason: RESTART_SKIPPED, sync, restart };
-  return { ...syncOutcome(sync, record.alias), restart };
+  return { ...syncOutcome(sync), restart };
 };
 
 export const runUpdateItem: ItemRunner = async (record, job, env) => {
@@ -195,7 +212,7 @@ export const runUpdateItem: ItemRunner = async (record, job, env) => {
   const identityPlatform = await platformOf(record, env);
   if (typeof identityPlatform !== "string") return identityPlatform;
   const identity = await pinnedSync(record, identityPlatform, "none", env);
-  if (identity.state !== "synced") return syncOutcome(identity, record.alias);
+  if (identity.state !== "synced") return syncOutcome(identity);
   // D3: a fresh plan every time. Windows Children are observed too: desktop-request is the one route they can take (H4, A5).
   const observed = await env.observe(record);
   if (observed.observation) env.writeObservation(record.id, withoutCarriedFields(observed.observation));
@@ -211,7 +228,7 @@ export const runUpdateItem: ItemRunner = async (record, job, env) => {
     ? { state: "up-to-date", reason: null, ...(plan.installedVersion ? { fromVersion: plan.installedVersion, toVersion: plan.installedVersion } : {}) }
     : { state: "refused", reason: plan.updateReason ?? "plan-unavailable", ...versions };
   if (plan.updateRoute === "owner-action" || plan.updateRoute === "replant") return { state: "owner-action", reason: plan.updateReason,
-    ...(plan.updateReason === "launcher-node-missing" ? { hint: launcherHint(record.alias) } : {}), ...versions };
+    ...(plan.updateReason === "launcher-node-missing" ? { hint: LAUNCHER_HINT } : {}), ...versions };
   if (plan.updateInFlight) return { state: "busy", reason: "update-in-flight", ...versions };
   const suppressed = env.readObservation(record.id)?.suppressedTarget ?? null;
   if (job.trigger === "auto") {
@@ -244,8 +261,10 @@ export const runUpdateItem: ItemRunner = async (record, job, env) => {
   }
   let result: SshRunResult;
   try {
-    result = await env.runner.run(argv, { timeoutMs: plan.mutationBoundMs + APPLY_GRACE_MS });
+    result = await env.runner.run(argv, { timeoutMs: Math.min(plan.mutationBoundMs, APPLY_MUTATION_BOUND_MAX_MS) + APPLY_GRACE_MS });
   } catch (error) {
+    // A spawn failure sent nothing to the Child (as for the sync path), so there is nothing to recover.
+    if (error instanceof SshRunnerError && error.code === "spawn") return { state: "failed", reason: "ssh-spawn-failed", ...versions };
     // The Child's update keeps running or has finished; only a re-observe can tell (R2 hazard 4).
     // Revision 4 (4529522112, 4529521944): recorded apart from lastOperation, which the next observe replaces; 070
     // re-observes it, never re-applies, and resyncs once the Child reports no update in flight.
@@ -259,11 +278,11 @@ export const runUpdateItem: ItemRunner = async (record, job, env) => {
   const verdictVersions = { ...versions, ...(verdict.fromVersion ? { fromVersion: verdict.fromVersion } : {}),
     ...(verdict.toVersion ? { toVersion: verdict.toVersion } : {}) };
   if (verdict.state === "refused" && verdict.reason === "deadline-passed") return { state: "refused", reason: "deadline-passed",
-    ...(homeClock ? { hint: `The clocks of this Home and ${record.alias} differ (clock-skew); correct the Child's clock or run the update again.` } : {}),
+    ...(homeClock ? { hint: CLOCK_SKEW_HINT } : {}),
     ...verdictVersions };
   if (verdict.state === "up-to-date") return { state: "up-to-date", reason: null, ...verdictVersions };
   if (verdict.state === "owner-action" && verdict.reason === "launcher-node-missing") {
-    return { state: "owner-action", reason: verdict.reason, hint: launcherHint(record.alias), ...verdictVersions };
+    return { state: "owner-action", reason: verdict.reason, hint: LAUNCHER_HINT, ...verdictVersions };
   }
   if (verdict.state === "uncertain") env.writeObservation(record.id, { pendingUpdateRecovery: { target,
     since: iso(env.now()), until: iso(env.now() + UNCERTAIN_RECOVERY_WINDOW_MS) } });
@@ -278,7 +297,9 @@ export const runUpdateItem: ItemRunner = async (record, job, env) => {
     await env.sleep(POST_UPDATE_SYNC_RETRY_MS);
     ({ sync, restart, restartUnknown } = await syncWithRestart(record, "posix", job.restart, env));
   }
-  env.writeObservation(record.id, { installedVersion: target, targetVersion: target, updateRoute: "none",
+  // The Child's own result names the version it now runs; the Home target stands in when that is not a strict version.
+  const installed = verdict.toVersion && verdict.toVersion.length <= 128 && parseStrictSemver(verdict.toVersion) ? verdict.toVersion : target;
+  env.writeObservation(record.id, { installedVersion: installed, targetVersion: target, updateRoute: "none",
     updateReason: "up-to-date", observedAt: iso(env.now()), source: "plan" });
   const extra = { ...verdictVersions, sync, ...(restart ? { restart } : {}) };
   // The update stands in every branch below; only what follows it is reported.
@@ -287,5 +308,5 @@ export const runUpdateItem: ItemRunner = async (record, job, env) => {
     ? { state: "succeeded", reason: restart?.outcome === "skipped" ? RESTART_SKIPPED : null, ...extra }
     // Revision 4 (4529522006): the update stands, but routing may be gone; the CLI exits 6 for this reason (Section 3).
     : { state: "succeeded", reason: "post-update-sync-failed",
-      hint: `${sync.state === "skipped" ? `${childSkipHint(sync.reason, record.alias)} ` : ""}Run ocx link sync --link-id ${record.id} to restore routing.`, ...extra };
+      hint: postUpdateSyncHint(record.id), ...extra };
 };

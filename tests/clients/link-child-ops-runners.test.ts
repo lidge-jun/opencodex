@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { APPLY_GRACE_MS, POST_UPDATE_SYNC_RETRY_MS, runObserveItem, runRestartCodexItem, runSyncItem, runUpdateItem,
+import { APPLY_GRACE_MS, APPLY_MUTATION_BOUND_MAX_MS, CLOCK_SKEW_HINT, LAUNCHER_HINT, POST_UPDATE_SYNC_RETRY_MS, postUpdateSyncHint, runObserveItem, syncSkipHint, runRestartCodexItem, runSyncItem, runUpdateItem,
   UNCERTAIN_RECOVERY_WINDOW_MS } from "../../src/link/child-ops-runners";
 import type { ChildOpsEnv, ChildRestart, ChildTrigger, ItemRunner } from "../../src/link/child-ops-types";
 import type { ChildObservation } from "../../src/link/child-observations";
@@ -339,7 +339,7 @@ describe("update runner", () => {
     ["a refused plan", plan({ updateRoute: "none", updateReason: "refused:downgrade-refused" }), { state: "refused", reason: "refused:downgrade-refused" }],
     ["GOAT", plan({ installKind: "goat", updateRoute: "owner-action", updateReason: "goat" }), { state: "owner-action", reason: "goat" }],
     ["launcher-node-missing", plan({ installKind: "npm", updateRoute: "owner-action", updateReason: "launcher-node-missing" }),
-      { state: "owner-action", reason: "launcher-node-missing", hint: "Install Node.js where the npm or pnpm that installed OpenCodex on child-01 can find it, or update there with ocx update." }],
+      { state: "owner-action", reason: "launcher-node-missing", hint: LAUNCHER_HINT }],
     ["desktop request", plan({ installKind: "desktop-app", updateRoute: "desktop-request", updateReason: "desktop-app-owned" }), { state: "owner-action", reason: "desktop-app" }],
     ["update in flight", plan({ updateInFlight: true }), { state: "busy", reason: "update-in-flight" }],
   ] as const)("%s sends no apply", async (_name, classification, expected) => {
@@ -398,7 +398,7 @@ describe("update runner", () => {
     const answer = applied(10, { ...RESULT, applied: false, healthy: false, restarted: false, toVersion: null, error: "deadline-passed" });
     const homeClock = fakeSsh({ sync: [SYNCED], apply: [answer] });
     expect(await run(runUpdateItem, record(), job("update"), updateEnv(homeClock, observedPlan(plan(), { childNowMs: null })).env))
-      .toMatchObject({ state: "refused", reason: "deadline-passed", hint: "The clocks of this Home and child-01 differ (clock-skew); correct the Child's clock or run the update again." });
+      .toMatchObject({ state: "refused", reason: "deadline-passed", hint: CLOCK_SKEW_HINT });
     const childClock = fakeSsh({ sync: [SYNCED], apply: [answer] });
     const outcome = await run(runUpdateItem, record(), job("update"), updateEnv(childClock, observedPlan(plan())).env);
     expect(outcome).toMatchObject({ state: "refused", reason: "deadline-passed" });
@@ -413,7 +413,7 @@ describe("update runner", () => {
     expect(retry.kinds()).toEqual(["sync", "apply", "sync", "sync"]);
     const failing = fakeSsh({ sync: [SYNCED, DROPPED], apply: [applied(0)] });
     expect(await run(runUpdateItem, record(), job("update"), updateEnv(failing, observedPlan(plan())).env))
-      .toMatchObject({ state: "succeeded", reason: "post-update-sync-failed", hint: "Run ocx link sync --link-id " + LINK + " to restore routing.", sync: { state: "failed", reason: "ssh-failed" } });
+      .toMatchObject({ state: "succeeded", reason: "post-update-sync-failed", hint: postUpdateSyncHint(LINK), sync: { state: "failed", reason: "ssh-failed" } });
   });
 
   test.each([
@@ -424,7 +424,7 @@ describe("update runner", () => {
     ["exit 255 mid-apply", DROPPED, { state: "uncertain", reason: "ssh-failed" }, ["sync", "apply"]],
     ["exit 121 legacy", { code: 121, stdout: "", stderr: "ocx-fanout:child-ocx-lacks-orchestrated-update\n" }, { state: "owner-action", reason: "legacy-ocx" }, ["sync", "apply"]],
     ["exit 121 child-node-unavailable", { code: 121, stdout: "", stderr: "ocx-fanout:selected:2.98.0\nocx-fanout:entry:pair\nocx-fanout:child-node-unavailable\n" },
-      { state: "owner-action", reason: "launcher-node-missing", hint: "Install Node.js where the npm or pnpm that installed OpenCodex on child-01 can find it, or update there with ocx update." }, ["sync", "apply"]],
+      { state: "owner-action", reason: "launcher-node-missing", hint: LAUNCHER_HINT }, ["sync", "apply"]],
     ["exit 127", { code: 127, stdout: "", stderr: "" }, { state: "failed", reason: "child-ocx-not-found" }, ["sync", "apply", "sync"]],
   ] as const)("%s", async (_name, answer, expected, kinds) => {
     const ssh = fakeSsh({ sync: [SYNCED], apply: [answer] });
@@ -451,6 +451,32 @@ describe("update runner", () => {
         until: new Date(NOW + UNCERTAIN_RECOVERY_WINDOW_MS).toISOString() } });
       expect(ssh.kinds().filter(kind => kind === "apply")).toHaveLength(1);
     }
+  });
+
+  test("security L1: a Child reporting a mutation bound above 900 s cannot hold the update place longer", async () => {
+    const ssh = ok();
+    await run(runUpdateItem, record(), job("update"), updateEnv(ssh, observedPlan(plan({ mutationBoundMs: 3_600_000 }))).env);
+    expect(ssh.calls[1]!.timeoutMs).toBe(APPLY_MUTATION_BOUND_MAX_MS + APPLY_GRACE_MS);
+    expect(APPLY_MUTATION_BOUND_MAX_MS + APPLY_GRACE_MS).toBe(1_020_000);
+  });
+
+  test("final L2: an SSH spawn failure on the apply sent nothing: failed, no recovery record, no resync", async () => {
+    const ssh = fakeSsh({ sync: [SYNCED], apply: [new SshRunnerError("spawn", "ssh not found")] });
+    const { env, writes } = updateEnv(ssh, observedPlan(plan()));
+    expect(await run(runUpdateItem, record(), job("update"), env)).toEqual({ state: "failed", reason: "ssh-spawn-failed", fromVersion: "2.98.0", toVersion: "2.100.0" });
+    expect(writes.some(write => "pendingUpdateRecovery" in write)).toBe(false);
+    expect(ssh.kinds()).toEqual(["sync", "apply"]);
+  });
+
+  test("final L3: a succeeded update records the version the Child reports, else the Home target", async () => {
+    const reported = fakeSsh({ sync: [SYNCED], apply: [applied(0, { ...RESULT, toVersion: "2.100.1" })] });
+    const first = updateEnv(reported, observedPlan(plan()));
+    await run(runUpdateItem, record(), job("update"), first.env);
+    expect(first.writes.at(-1)).toMatchObject({ installedVersion: "2.100.1", targetVersion: "2.100.0" });
+    const silent = fakeSsh({ sync: [SYNCED], apply: [applied(0, { ...RESULT, toVersion: null })] });
+    const second = updateEnv(silent, observedPlan(plan()));
+    await run(runUpdateItem, record(), job("update"), second.env);
+    expect(second.writes.at(-1)).toMatchObject({ installedVersion: "2.100.0", targetVersion: "2.100.0" });
   });
 
   test("F8: an apply argv the builder refuses fails before anything is sent and records no recovery", async () => {
@@ -500,3 +526,31 @@ describe("a fake 2.96 Child on the real gated script", () => {
     expect(calls).not.toContain("update");
   });
 });
+
+describe("hints (final L4)", () => {
+  const SKIP_REASONS = [null, "child-ocx-lacks-expect-link", "child-updating", "child-link-mismatch", "child-link-mismatch:pending_operation",
+    "child-link-mismatch:disconnect_pending", "child-link-mismatch:disconnected", "child-link-mismatch:other_link", "child-link-mismatch:other_key",
+    "child-ocx-version-unknown", "child-platform-unsupported", "child-sync-skipped"];
+
+  test("every hint a runner can write fits the job document's 256-character strings", () => {
+    const hints = [...SKIP_REASONS.map(reason => syncSkipHint(reason)), LAUNCHER_HINT, CLOCK_SKEW_HINT, postUpdateSyncHint("lnk_ffffffffffffffff")];
+    for (const hint of hints) {
+      expect(hint.length).toBeLessThanOrEqual(256);
+      expect(hint.endsWith(".")).toBe(true);
+    }
+  });
+
+  test("a 253-character alias never reaches a hint, so nothing is cut", async () => {
+    const alias = "a".repeat(253);
+    for (const answer of [UPDATING, MISMATCH, LACKS_EXPECT_LINK]) {
+      const outcome = await run(runSyncItem, record({ alias }), job("sync"), makeEnv(fakeSsh({ sync: [answer] })).env);
+      expect(outcome.hint).toBeDefined();
+      expect(outcome.hint!.length).toBeLessThanOrEqual(256);
+      expect(outcome.hint).not.toContain(alias);
+    }
+    const failing = fakeSsh({ sync: [SYNCED, DROPPED], apply: [applied(0)] });
+    const updated = await run(runUpdateItem, record({ alias }), job("update"), makeEnv(failing, { observe: async () => observedPlan(plan()) }).env);
+    expect(updated).toMatchObject({ state: "succeeded", reason: "post-update-sync-failed", hint: postUpdateSyncHint(LINK) });
+  });
+});
+

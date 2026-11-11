@@ -203,13 +203,16 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
   const current = readStoreFor(ctx);
   const record = current.links.find(link => link.id === id);
   if (!record) return fail("link_not_found", "The link was not found.", 404);
-  // A queued or running job would keep opening SSH sessions to a Child this removal disconnects.
+  // A queued or running job would keep opening SSH sessions to a Child this removal disconnects, so removal takes the
+  // link's job admission lock before its first teardown await and holds it to the end: a job submitted meanwhile gets
+  // 409 (single link) or a busy item, and a link a job already holds is refused here, before anything is stopped.
   const { childOpsEngineFor } = await import("./link-child-ops-routes");
-  const engine = childOpsEngineFor(state);
-  const held = (): Response | null => engine.activeJob(id)
-    ? fail("link_operation_in_progress", "A Child operation is running on this link; wait for it to finish, then remove the link.", 409) : null;
-  const heldAtStart = held();
-  if (heldAtStart) return heldAtStart;
+  const releaseLink = childOpsEngineFor(state).reserve(id);
+  if (!releaseLink) return fail("link_operation_in_progress", "A Child operation is running on this link; wait for it to finish, then remove the link.", 409);
+  try { return await removeReserved(ctx, state, id, record); } finally { releaseLink(); }
+}
+
+async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id: string, record: LinkStore["links"][number]): Promise<Response> {
   const body = await readManagementJsonBodyOr(ctx.req, {});
   const payload = body === null ? {} : body;
   if (!isRecord(payload)
@@ -221,9 +224,6 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
   }
   const force = payload.force === true;
   const purge = payload.purge === true;
-  // Revision 6 F10: a job may have taken the link while the body was read; check again before anything is stopped.
-  const heldAfterBody = held();
-  if (heldAfterBody) return heldAfterBody;
   const release = state.supervisor.holdLink?.(id);
   try {
     await state.supervisor.stopLink(id);
@@ -258,9 +258,6 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
         return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502, sshRunnerErrorHint(error));
       }
     }
-    // F10: and once more after the remote cleanup awaited, immediately before the key and the record go.
-    const heldBeforeWrite = held();
-    if (heldBeforeWrite) { await restartTunnel(); return heldBeforeWrite; }
     if (!revokeKeyIdempotent(ctx, record.apiKeyId)) return fail("key_revoke_failed", "The link key could not be revoked.", 502);
     let next: LinkStore;
     try {

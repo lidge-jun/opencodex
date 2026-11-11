@@ -291,3 +291,39 @@ describe("child ops engine (wp3)", () => {
     for (const id of ids) expect(engine.activeJob(id)).toBeNull();
   });
 });
+
+describe("link reservation (link removal)", () => {
+  test("a reserved link refuses single-link submits, makes bulk items busy, and frees on release", async () => {
+    const links = [record(ids[0]!), record(ids[1]!)];
+    const { env, writes } = fakeEnv(() => links);
+    const engine = createChildOpsEngine({ runners: { sync: async () => succeeded } });
+    const release = engine.reserve(ids[0]!);
+    expect(release).not.toBeNull();
+    expect(engine.reserve(ids[0]!)).toBeNull();
+    expect(engine.activeJob(ids[0]!)).toBeNull();
+    expect(engine.submit(manual("sync", [ids[0]!]), env)).toEqual({ ok: false, code: "link_operation_in_progress", linkId: ids[0]! });
+    const bulk = submitted(engine, manual("sync", "all"), env);
+    expect(bulk.items[0]).toMatchObject({ state: "busy", reason: "link-operation-in-progress" });
+    await engine.settled();
+    expect(writes.filter(write => write.linkId === ids[0])).toEqual([]);
+    release!();
+    release!();
+    expect(engine.submit(manual("sync", [ids[0]!]), env).ok).toBe(true);
+    await engine.settled();
+  });
+
+  test("a link a job holds cannot be reserved; a late release never frees a job's lock", async () => {
+    const gate = deferred();
+    const { env } = fakeEnv(() => [record(ids[0]!)]);
+    const engine = createChildOpsEngine({ runners: { sync: async () => { await gate.promise; return succeeded; } } });
+    const free = engine.reserve(ids[0]!)!;
+    free();
+    submitted(engine, manual("sync", [ids[0]!]), env);
+    expect(engine.reserve(ids[0]!)).toBeNull();
+    free();
+    expect(engine.submit(manual("sync", [ids[0]!]), env)).toMatchObject({ ok: false, code: "link_operation_in_progress" });
+    gate.resolve();
+    await engine.settled();
+  });
+});
+

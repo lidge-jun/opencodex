@@ -26,6 +26,12 @@ export interface ChildOpsEngine {
   /** A structuredClone snapshot. */
   job(jobId: string): ChildJob | undefined;
   activeJob(linkId: string): ChildJobHold | null;
+  /**
+   * Take the link's admission lock for a non-job holder (link removal). Returns null when a job holds the link;
+   * otherwise a release function. While reserved, a single-link submit answers link_operation_in_progress and a
+   * multi-link item for the link ends busy, exactly as for a link a job holds. Synchronous, like submit.
+   */
+  reserve(linkId: string): (() => void) | null;
   /** Resolves once no job of this engine is queued or running. Tests and shutdown only. */
   settled(): Promise<void>;
 }
@@ -67,6 +73,7 @@ export function createChildOpsEngine(options: ChildOpsEngineOptions = {}): Child
   const pending: Array<{ job: ChildJob; item: ChildJobItem; env: ChildOpsEnv }> = [];
   let active = 0;
   let activeUpdates = 0;
+  let reservations = 0;
 
   const write = (env: ChildOpsEnv, linkId: string, patch: Partial<ChildObservation>): void => {
     try { env.writeObservation(linkId, patch); } catch (error) {
@@ -173,6 +180,18 @@ export function createChildOpsEngine(options: ChildOpsEngineOptions = {}): Child
       const job = jobId ? jobs.get(jobId)?.job : undefined;
       if (!job || job.state === "done") return null;
       return { jobId: job.jobId, op: job.op, state: job.state };
+    },
+    reserve(linkId) {
+      if (locks.has(linkId)) return null;
+      // Never a job id (those start ljob_), so activeJob reads null and no job finish releases it.
+      const token = `reservation:${++reservations}`;
+      locks.set(linkId, token);
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        if (locks.get(linkId) === token) locks.delete(linkId);
+      };
     },
     settled() {
       if (!running()) return Promise.resolve();

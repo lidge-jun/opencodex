@@ -55,7 +55,8 @@ function supervisor(): LinkSupervisor {
     status: () => [{ linkId: HUB, direction: "hub-initiated", state: { kind: "connected", since: 1_762_000_000_000 }, pid: 1 }] };
 }
 
-function harness(options: { links?: LinkRecord[]; runtimeRole?: OcxConfig["runtimeRole"]; gate?: Promise<void>; full?: boolean; onFlush?: () => void } = {}) {
+function harness(options: { links?: LinkRecord[]; runtimeRole?: OcxConfig["runtimeRole"]; gate?: Promise<void>; full?: boolean; onFlush?: () => void;
+  disconnectGate?: Promise<void>; disconnectAnswer?: SshRunResult } = {}) {
   let current: LinkStore = { version: 1, listenerPort: 18181, links: options.links ?? [link(HUB), link(CLIENT, { direction: "client-initiated", hostKeyFingerprint: null })] };
   // Persisted too: the observation cache prunes entries whose link is absent from links.json.
   writeFileSync(join(temp, "ocx", "link", "links.json"), JSON.stringify(current));
@@ -67,7 +68,10 @@ function harness(options: { links?: LinkRecord[]; runtimeRole?: OcxConfig["runti
       if (options.gate) await options.gate;
       const remote = argv.at(-1) ?? "";
       if (remote.includes("'sync'")) return SYNC_ANSWER;
-      if (remote.includes("'disconnect'")) return { code: 0, stdout: "", stderr: "" };
+      if (remote.includes("'disconnect'")) {
+        if (options.disconnectGate) await options.disconnectGate;
+        return options.disconnectAnswer ?? { code: 0, stdout: "", stderr: "" };
+      }
       return PLAN_ANSWER;
     },
     spawnTunnel: () => ({ pid: 1, argv: [], exited: Promise.resolve(0), kill() {} }),
@@ -317,3 +321,64 @@ describe("link child operations routes", () => {
     expect(flushes).toBe(1);
   });
 });
+
+describe("link removal reserves the link (Codex P2, final L1, security L2)", () => {
+  const until = async (check: () => boolean) => {
+    for (let attempt = 0; attempt < 400 && !check(); attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+    if (!check()) throw new Error("condition not reached");
+  };
+
+  test("a job submitted while DELETE awaits the remote disconnect is refused, and DELETE completes", async () => {
+    let open!: () => void;
+    const disconnectGate = new Promise<void>(resolve => { open = resolve; });
+    const h = harness({ disconnectGate });
+    const removal = h.call("/api/link/" + HUB, "DELETE");
+    await until(() => h.sshCalls.some(call => call.includes("'disconnect'")));
+    const single = await h.call("/api/link/children/operations", "POST", { op: "sync", linkIds: [HUB] });
+    expect(single?.status).toBe(409);
+    expect(((await single!.json()) as { error: { code: string } }).error.code).toBe("link_operation_in_progress");
+    const bulk = await h.call("/api/link/children/operations", "POST", { op: "update", linkIds: "all" });
+    expect(bulk?.status).toBe(202);
+    const bulkJob = ((await bulk!.json()) as { job: { items: Array<{ linkId: string; state: string; reason: string | null }> } }).job;
+    expect(bulkJob.items.find(item => item.linkId === HUB)).toMatchObject({ state: "busy", reason: "link-operation-in-progress" });
+    const second = await h.call("/api/link/" + HUB, "DELETE");
+    expect(second?.status).toBe(409);
+    open();
+    const removed = await removal;
+    expect(removed?.status).toBe(200);
+    expect(h.events).toEqual(["revoke", "store"]);
+    expect(h.store.links.map(record => record.id)).toEqual([CLIENT]);
+    // Only the removal's own disconnect reached the Child: the refused jobs sent nothing.
+    expect(h.sshCalls).toHaveLength(1);
+  });
+
+  test("a link a job holds is refused at entry, before any teardown", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>(resolve => { open = resolve; });
+    const h = harness({ gate });
+    const started = await h.call("/api/link/children/operations", "POST", { op: "sync", linkIds: [HUB] });
+    const jobId = ((await started!.json()) as { job: { jobId: string } }).job.jobId;
+    const held = await h.call("/api/link/" + HUB, "DELETE");
+    expect(held?.status).toBe(409);
+    expect(h.events).toEqual([]);
+    expect(h.sshCalls.some(call => call.includes("'disconnect'"))).toBe(false);
+    open();
+    await pollDone(h, jobId);
+  });
+
+  test("the reservation is released when the removal fails", async () => {
+    const h = harness({ disconnectAnswer: { code: 1, stdout: "", stderr: "refused" } });
+    const failed = await h.call("/api/link/" + HUB, "DELETE");
+    expect(failed?.status).toBe(502);
+    expect(h.store.links.map(record => record.id)).toEqual([HUB, CLIENT]);
+    const after = await h.call("/api/link/children/operations", "POST", { op: "sync", linkIds: [HUB] });
+    expect(after?.status).toBe(202);
+    await pollDone(h, ((await after!.json()) as { job: { jobId: string } }).job.jobId);
+    const invalid = await h.call("/api/link/" + HUB, "DELETE", { force: "yes" });
+    expect(invalid?.status).toBe(400);
+    const again = await h.call("/api/link/children/operations", "POST", { op: "sync", linkIds: [HUB] });
+    expect(again?.status).toBe(202);
+    await pollDone(h, ((await again!.json()) as { job: { jobId: string } }).job.jobId);
+  });
+});
+
