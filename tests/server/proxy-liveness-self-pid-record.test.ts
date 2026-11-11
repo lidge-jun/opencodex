@@ -137,7 +137,7 @@ describe("owner scope comparison", () => {
     expect(sameRuntimeOwnerScope({ host: "other" }, own)).toBe(false);
   });
 
-  test("the container key is the root overlay's own writable layer, never a shared id", () => {
+  test("the container key is the root overlay's own randomly named writable layer, never a shared id", () => {
     const docker = "/var/lib/docker/overlay2/" + "a".repeat(64) + "/diff";
     const root = (fstype: string, options: string) => `1001 1000 0:52 / / rw,relatime master:1 - ${fstype} ${fstype} ${options}`;
     // A container joined to another's network bind-mounts that one's hostname; it must not count.
@@ -147,8 +147,16 @@ describe("owner scope comparison", () => {
     expect(rootOverlayUpperdirFromMountinfo(root("ext4", "rw,errors=remount-ro") + "\n")).toBeUndefined();
     expect(rootOverlayUpperdirFromMountinfo(root("fuse.fuse-overlayfs", "rw,user_id=0") + "\n")).toBeUndefined();
     expect(rootOverlayUpperdirFromMountinfo(root("overlay", "rw,lowerdir=/l1") + "\n")).toBeUndefined();
+    const podman = "/var/lib/containers/storage/overlay/" + "c".repeat(64) + "/diff";
+    expect(rootOverlayUpperdirFromMountinfo(root("overlay", `rw,lowerdir=/l,upperdir=${podman},workdir=/w`))).toBe(podman);
+    // Sequence-numbered containerd snapshots repeat on nodes built alike; an overlay host root is
+    // shared by every sandbox using it. Neither proves anything beyond one machine.
+    expect(rootOverlayUpperdirFromMountinfo(root("overlay", "rw,lowerdir=/l,upperdir=/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/42/fs,workdir=/w"))).toBeUndefined();
+    expect(rootOverlayUpperdirFromMountinfo(root("overlay", "rw,lowerdir=/l,upperdir=/media/root-rw/overlay,workdir=/w"))).toBeUndefined();
     // The visible root is the last one mounted.
-    expect(rootOverlayUpperdirFromMountinfo([root("overlay", "rw,upperdir=/old,workdir=/w"), root("overlay", "rw,upperdir=/new,workdir=/w")].join("\n"))).toBe("/new");
+    const older = "/var/lib/docker/overlay2/" + "d".repeat(64) + "/diff";
+    expect(rootOverlayUpperdirFromMountinfo([root("overlay", `rw,upperdir=${older},workdir=/w`), root("overlay", `rw,upperdir=${docker},workdir=/w`)].join("\n"))).toBe(docker);
+    expect(rootOverlayUpperdirFromMountinfo([root("overlay", `rw,upperdir=${older},workdir=/w`), root("overlay", "rw,upperdir=/var/lib/containerd/snapshots/7/fs,workdir=/w")].join("\n"))).toBeUndefined();
   });
 });
 

@@ -751,9 +751,10 @@ A container runs the proxy as PID 1 on every start. After an unclean exit (an OO
 node failure) the state volume can still hold `ocx.pid` and `runtime-port.json` naming PID 1, and
 the next start has to decide whether that owner is gone. It recovers on its own when the record was
 written by the same container in an earlier run, by an OpenCodex version that records where its
-owner runs: the same Docker or Podman container started again (`docker restart`, a restart policy,
-including after a host reboot) when its root filesystem is an overlay (the default `overlay2`
-driver), or a Kubernetes container restarted inside its pod while the node stays up.
+owner runs: a Kubernetes container restarted inside its pod while the node stays up, or the same
+Docker or Podman container started again (`docker restart`, a restart policy, including after a
+host reboot) when its writable layer has a random id, as with Docker's `overlay2` storage driver
+and Podman. Docker's containerd image store numbers its layers instead, so a restart there refuses.
 
 Every other case refuses with `Proxy ownership is unverified; startup refused`, because the old
 owner could still be serving the same volume from another container: a replacement Kubernetes pod,
@@ -762,8 +763,8 @@ written by an older version (the first restart after an upgrade). Confirm that n
 `runtime-port.json` and `ocx.pid` aside once and start again. Run a single writer per state
 volume: a Kubernetes `Deployment` that shares a volume should use `strategy: Recreate` (or
 `maxSurge: 0`) so the old pod stops before the new one starts. Do not share one state volume between
-processes in one network namespace (host networking, sidecars, several WSL distros), or between
-sandboxes restored from one VM snapshot.
+processes in one network namespace (host networking, sidecars, several WSL distros), between
+sandboxes restored from one VM snapshot, or between machines with the same host name.
 
 ## Rollback
 

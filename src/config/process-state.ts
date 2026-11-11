@@ -54,11 +54,14 @@ export function hasPublishedOwnershipRecords(): boolean {
  * - `network` with `boot`, the network namespace within one boot: a container restarted inside
  *   its Kubernetes pod keeps it, because the pod sandbox owns it. Namespace inode numbers repeat
  *   across machines and boots, so the boot id has to match too;
- * - `container`, the writable layer of the overlay mounted at `/` (its `upperdir`): a Docker or
- *   Podman container started again keeps it, across a host reboot as well, and no other container
- *   ever mounts it, not even one sharing its network (`--network container:`) or its pod. A
- *   container id is NOT used: a container joined to another's network sees that one's id in
- *   mountinfo.
+ * - `container`, the writable layer of the overlay mounted at `/` (its `upperdir`), counted only
+ *   when its path carries a random 64-hex layer id (Docker's `overlay2` driver, containers/storage
+ *   for Podman and CRI-O): a container started again keeps it, across a host reboot as well, and
+ *   no other container ever mounts it, not even one sharing its network (`--network container:`)
+ *   or its pod. A layer named by a sequence number (containerd's overlayfs snapshotter, which
+ *   nodes built alike hand out identically) or a host whose own root is an overlay proves nothing
+ *   beyond one machine, so it is not used; nor is a container id, which a container joined to
+ *   another's network sees in mountinfo.
  *
  * A replacement pod, a second container with a fixed `hostname`, or another node matches neither.
  * Processes that share one network namespace (host networking, pod sidecars, WSL distros, which
@@ -86,9 +89,10 @@ function scopeDigest(...parts: string[]): string {
 }
 
 /**
- * The `upperdir` of the overlay mounted at `/`, if the root filesystem is one: a container's own
- * writable layer. The last root mount wins, as it is the one visible. Any other root filesystem
- * (bare host, btrfs/zfs/vfs drivers, fuse-overlayfs) yields nothing.
+ * The `upperdir` of the overlay mounted at `/` when it names a randomly identified writable layer
+ * (a `/<64 hex>/` path segment): a container's own layer, unique across machines. The last root
+ * mount wins, as it is the one visible. Any other root filesystem (bare host, btrfs/zfs/vfs drivers,
+ * fuse-overlayfs, an overlay host root, containerd's sequence-numbered snapshots) yields nothing.
  */
 export function rootOverlayUpperdirFromMountinfo(mountinfo: string): string | undefined {
   let upperdir: string | undefined;
@@ -99,7 +103,7 @@ export function rootOverlayUpperdirFromMountinfo(mountinfo: string): string | un
     if (fields[4] !== "/") continue;
     const [fstype, , superOptions = ""] = line.slice(separator + 3).split(" ");
     const match = fstype === "overlay" ? /(?:^|,)upperdir=([^,]+)/.exec(superOptions) : null;
-    upperdir = match?.[1];
+    upperdir = match && /\/[0-9a-f]{64}\//.test(match[1]) ? match[1] : undefined;
   }
   return upperdir;
 }
