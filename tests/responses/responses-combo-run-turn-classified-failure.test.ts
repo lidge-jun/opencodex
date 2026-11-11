@@ -414,13 +414,63 @@ test("Chat combo fallback retains original developer image media", async () => {
     }) as typeof fetch,
   };
   const open = spyOn(traeClient, "openTraeSession");
+  const request = () => new Request("http://localhost/v1/chat/completions", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "chain/classified", stream: false, messages: [
+      { role: "developer", content: [
+        { type: "text", text: "Inspect the attachment" },
+        { type: "image_url", image_url: { url: "https://fixture.invalid/image.png", detail: "high" } },
+      ] },
+      { role: "user", content: "Question" },
+    ] }),
+  });
+  try {
+    const response = await handleChatCompletions(request(), cfg, { model: "", provider: "" }, {});
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect(open).not.toHaveBeenCalled();
+    const wire = JSON.stringify(sent);
+    expect(wire).toContain("https://fixture.invalid/image.png");
+    expect(wire).toContain('\"detail\":\"high\"');
+    expect(wire).toContain("Inspect the attachment");
+    expect(wire.indexOf("Inspect the attachment")).toBe(wire.lastIndexOf("Inspect the attachment"));
+
+    cfg.combos!["classified-chain"]!.imageInput = "disabled";
+    sent = undefined;
+    const denied = await handleChatCompletions(request(), cfg, { model: "", provider: "" }, {});
+    expect(denied.status).toBe(400);
+    expect(sent).toBeUndefined();
+  } finally { open.mockRestore(); }
+});
+
+test("native Chat combo keeps instruction image media for a bridged Google fallback", async () => {
+  const cfg = config([
+    { provider: "trae-cn", model: "test-model" },
+    { provider: "capable", model: "accept-model" },
+  ]);
+  cfg.protocols = { rollout: { nativeChatCombos: true } };
+  cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
+    authMode: "key", models: ["test-model"], liveModels: false };
+  let sent: Record<string, unknown> | undefined;
+  cfg.providers.capable = { adapter: "google", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key",
+    authMode: "key", models: ["accept-model"], inputModalities: ["text", "image"],
+    fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sent = JSON.parse(String(init?.body));
+      const frame = (value: unknown) => "data: " + JSON.stringify(value) + "\n\n";
+      return new Response([
+        frame({ candidates: [{ content: { role: "model", parts: [{ text: "accepted" }] } }] }),
+        frame({ candidates: [{ finishReason: "STOP" }],
+          usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 } }),
+      ].join(""), { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch,
+  };
+  const open = spyOn(traeClient, "openTraeSession");
   try {
     const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: "chain/classified", stream: false, messages: [
         { role: "developer", content: [
           { type: "text", text: "Inspect the attachment" },
-          { type: "image_url", image_url: { url: "https://fixture.invalid/image.png", detail: "high" } },
+          { type: "image_url", image_url: { url: "data:image/png;base64,aGVsbG8=" } },
         ] },
         { role: "user", content: "Question" },
       ] }),
@@ -428,9 +478,8 @@ test("Chat combo fallback retains original developer image media", async () => {
     expect(response.status, await response.clone().text()).toBe(200);
     expect(open).not.toHaveBeenCalled();
     const wire = JSON.stringify(sent);
-    expect(wire).toContain("https://fixture.invalid/image.png");
-    expect(wire).toContain('\"detail\":\"high\"');
-    expect(wire.indexOf("Inspect the attachment")).toBe(wire.lastIndexOf("Inspect the attachment"));
+    expect(wire).toContain("Inspect the attachment");
+    expect(wire).toContain("aGVsbG8=");
   } finally { open.mockRestore(); }
 });
 

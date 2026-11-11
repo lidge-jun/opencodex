@@ -1296,6 +1296,21 @@ describe("TRAE CN ACP regression contract", () => {
     });
   });
 
+  test("background source exceptions release an earlier roster pin", async () => {
+    const open = pressureSession();
+    const next: OcxConfig = { port: 10100, defaultProvider: "trae-a",
+      providers: { "trae-a": { ...config(), models: [] }, "trae-b": { ...config(), models: [] } } };
+    let checks = 0;
+    await expect(refreshTraeCnCatalogSources(next, () => {
+      if (++checks === 3) throw new Error("fixture current failure");
+      return true;
+    }, async () => undefined)).rejects.toThrow("fixture current failure");
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(getPinnedCached("trae-a")).toBeNull();
+    expect(getPinnedCached("trae-b")).toBeNull();
+    expect(modelCacheRetainedStoreSnapshot().pinnedBytes).toBe(0);
+  });
+
   test("background publication cannot replace an intervening newer roster", async () => {
     const rowA = { ...config(), models: [] };
     const rowB = { ...config(), models: [] };
