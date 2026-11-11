@@ -414,7 +414,7 @@ describe("codex-journal", () => {
       })();
     `);
     expect(linked.status).toBe(0);
-    expect(JSON.parse(linked.stdout)).toMatchObject({ beforeCommit: "process", adopted: true, again: false });
+    expect(JSON.parse(linked.stdout)).toMatchObject({ beforeCommit: "process", adopted: "adopted", again: "owned" });
     const journal = JSON.parse(readFileSync(join(testDir, "opencodex-journal.json"), "utf8"));
     expect(journal.owner).toEqual({ kind: "client", apiKeyId: "link-key" });
     expect(Buffer.from(journal.originalConfig, "base64").toString("utf8")).toBe(original);
@@ -454,10 +454,41 @@ describe("codex-journal", () => {
     `);
     expect(r.status).toBe(0);
     const out = JSON.parse(r.stdout);
-    expect(out.foreign).toBe(false);
+    expect(out.foreign).toBe("foreign");
     expect(out.afterForeign).toEqual({ kind: "client", apiKeyId: "newer-key" });
     expect(out.refused).toBe("client_connection_changed");
     expect(out.afterGuard.kind).toBe("process");
+  });
+
+  // Review round 3: the connection guard and the journal write share the config mutation lock
+  // (taken inside the Codex config lock), so no connection or runtime change can land between them;
+  // and a missing journal is reported as such, never as a completed handover.
+  test("adoption holds the config mutation lock through its guard and reports a missing journal", () => {
+    writeFileSync(join(testDir, "config.toml"), '# original config\nmodel_provider = "openai"\n', "utf8");
+    const ocxHome = join(testDir, "ocx-home");
+    require("node:fs").mkdirSync(ocxHome, { recursive: true });
+    const r = spawnSync(process.execPath, ["--eval", `
+      const { injectCodexConfig } = require("./src/codex/inject");
+      const { adoptJournalForClient } = require("./src/codex/journal");
+      const { prepareConfigMutationDatabasePathForWrite } = require("./src/config/mutation-lock");
+      const { Database } = require("bun:sqlite");
+      const fs = require("fs"), path = require("path");
+      (async () => {
+        const missing = adoptJournalForClient("link-key");
+        await injectCodexConfig(10100, { port: 10100, providers: {}, defaultProvider: "openai" }, { catalogPath: null });
+        let competingWriter = "not-run";
+        const mutationDb = prepareConfigMutationDatabasePathForWrite();
+        const adopted = adoptJournalForClient("link-key", () => {
+          let db;
+          try { db = new Database(mutationDb); db.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE"); competingWriter = "admitted"; db.exec("ROLLBACK"); }
+          catch (error) { competingWriter = /locked|busy/i.test(String(error)) ? "refused" : String(error); }
+          finally { db?.close(); }
+        });
+        console.log(JSON.stringify({ missing, adopted, competingWriter }));
+      })();
+    `], { cwd: repoRoot, env: { ...process.env, CODEX_HOME: testDir, OPENCODEX_HOME: ocxHome }, encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000 });
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ missing: "missing", adopted: "adopted", competingWriter: "refused" });
   });
 
   test("removeJournal refuses unknown journal evidence", () => {

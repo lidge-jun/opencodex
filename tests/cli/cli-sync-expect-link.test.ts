@@ -526,3 +526,20 @@ test("the machine sync route does not return the saved connection", async () => 
   );
   expect(await response?.json()).toEqual({ success: true, catalogWritten: true, cacheSynced: true, injected: false, stale: false });
 });
+
+// Review round 3: the machine API must not call a sync complete when its journal handover failed.
+test("the machine sync route reports a failed journal handover as not complete", async () => {
+  const connection = clientBlock({ transport: "hub" }) as unknown as OcxClientConnectionConfig;
+  const response = await handleMachineApi(
+    new Request("http://127.0.0.1/api/machine/sync", { method: "POST", body: "{}", headers: { "content-type": "application/json" } }),
+    new URL("http://127.0.0.1/api/machine/sync"),
+    connection,
+    {
+      sync: async () => ({ catalogWritten: true, cacheSynced: true, injected: true, stale: false, connection, journalHandoverFailed: true }),
+      disconnect: async () => { throw new Error("unused"); },
+      scheduleStandaloneRecycle: () => {},
+    },
+  );
+  expect(response?.status).toBe(409);
+  expect(await response?.json()).toMatchObject({ success: false, journalHandoverFailed: true });
+});

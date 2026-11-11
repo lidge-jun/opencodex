@@ -1000,7 +1000,11 @@ async function syncConnectedClientUnlocked(
     injected = true;
     // A committed connection re-injected: own the journal too (retries a takeover connect missed),
     // under the same connection guard as the injection, so a stale sync claims nothing.
-    try { adoptJournalForClient(next.apiKeyId, beforeClientWrite); } catch { journalHandoverFailed = true; }
+    try {
+      const adoption = adoptJournalForClient(next.apiKeyId, beforeClientWrite);
+      // No journal or another client's means the routing is not this connection's to keep.
+      if (adoption === "missing" || adoption === "foreign") journalHandoverFailed = true;
+    } catch { journalHandoverFailed = true; }
     if (homeSettings && next.link) {
       const linkId = next.link.linkId;
       const settings = homeSettings;

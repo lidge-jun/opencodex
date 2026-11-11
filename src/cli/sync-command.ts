@@ -91,7 +91,7 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
           process.exitCode = 1;
         }
         if (result.journalHandoverFailed) {
-          console.error("Codex routing was applied, but the Codex journal could not be handed to this connection (the Codex config was busy or changed); a supervised restart could restore native routing. Run 'ocx sync' again.");
+          console.error("Codex routing was applied, but the Codex journal could not be handed to this connection (the Codex config was busy or changed, or the journal is missing or belongs to an earlier connection); a supervised restart could restore native routing. Run 'ocx sync' again; if this repeats, run ocx disconnect and connect again.");
           process.exitCode = 1;
         }
         // OCX-6: a link Child's runtime must have started after the apply it serves under.
