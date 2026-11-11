@@ -131,6 +131,8 @@ export function createClaudeKeychainReader(deps: ClaudeKeychainReaderDeps): Clau
     // A probe holding the slot is waited out (it settles within its own deadline) instead of
     // making this read look like an absent credential; a probe that timed out leaves its child
     // running and the backoff active, so the read then declines exactly as it would under backoff.
+    // Do not wait for that child too: it may be blocked on an unlock prompt indefinitely, and a
+    // second child beside it is what the single slot exists to prevent.
     const started = pendingProbe
       ? pendingProbe.then(() => lookup(READ_ARGS, true, timeoutMs))
       : lookup(READ_ARGS, true, timeoutMs);
