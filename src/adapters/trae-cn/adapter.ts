@@ -104,22 +104,36 @@ export function createTraeCnAdapter(provider: OcxProviderConfig, deps: TraeCnAda
         if (decision && !decision.allowed) throw new SendBudgetExhaustedError();
         permit = decision?.allowed ? decision.permit : undefined;
         const session = await openTraeSession(provider.baseUrl, deps, incoming.abortSignal, provider);
+        let promptFailure: unknown;
         try {
-          await session.prompt(parsed.modelId, replay, event => {
-            if (event.type === "done" || event.type === "incomplete" || event.type === "error") terminal = event;
-            else emit(event);
-          }, incoming.abortSignal, {
-            beforeSend: () => {
-              incoming.beforePhysicalSend?.();
-              if (permit && !permit.use()) throw new SendBudgetExhaustedError();
-            },
-            onSend: () => {
-              emit({ type: "heartbeat", replayUnsafe: true });
-              incoming.onPhysicalSend?.({ ordinal: 1 });
-            },
-          });
+          try {
+            await session.prompt(parsed.modelId, replay, event => {
+              if (event.type === "done" || event.type === "incomplete" || event.type === "error") terminal = event;
+              else emit(event);
+            }, incoming.abortSignal, {
+              beforeSend: () => {
+                incoming.beforePhysicalSend?.();
+                if (permit && !permit.use()) throw new SendBudgetExhaustedError();
+              },
+              onSend: () => {
+                emit({ type: "heartbeat", replayUnsafe: true });
+                incoming.onPhysicalSend?.({ ordinal: 1 });
+              },
+            });
+          } catch (error) {
+            promptFailure = error;
+            throw error;
+          }
         } finally {
-          await session.close();
+          try {
+            await session.close();
+          } catch (error) {
+            const usage = promptFailure instanceof TraeAcpError ? promptFailure.usage : undefined;
+            if (error instanceof TraeAcpError && usage && !error.usage) {
+              throw new TraeAcpError(error.message, error.code, usage);
+            }
+            throw error;
+          }
         }
         if (incoming.abortSignal?.aborted) emitCancelledUsage();
         else if (terminal) emit(terminal);
