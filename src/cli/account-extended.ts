@@ -48,7 +48,7 @@ const EXTENDED_USAGE = `Usage:
   ocx account alias <provider> <id|alias|main> <display-name|-> [--json]
   ocx account priority <provider> <id|alias|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
   ocx account pause <provider> <id|alias|main> [--json]
-  ocx account resume <provider> <id|alias|main> [--json]
+  ocx account resume <provider> <id|alias|main> [--if-healthy] [--json]
   ocx account pause-exhausted <provider> [--json]
   ocx account strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
@@ -817,14 +817,26 @@ function resolveGenericOAuthAccountTarget(accounts: unknown[], requested: string
 /** Pause or resume a Codex, OAuth, or API-key pool account. */
 export async function cmdPause(args: string[], deps: AccountDeps, paused: boolean): Promise<number> {
   const wantsJson = flag(args, "--json");
+  // #8398: an explicit resume the server performs only after an account-bound health read.
+  const ifHealthy = flag(args, "--if-healthy");
   const name = args.shift();
   const requestedId = args.shift();
   const verb = paused ? "pause" : "resume";
   if (!name || !requestedId || args.length) return usage();
+  if (ifHealthy && paused) return usage("Error: --if-healthy applies only to resume");
   const classified = configAndType(deps, name);
   if ("error" in classified) return usage(`Error: ${classified.error}`);
+  if (ifHealthy && classified.type === "api-key") return usage("Error: --if-healthy applies to the openai Codex account pool or an OAuth provider pool");
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
+  const healthGate = ifHealthy ? { ifHealthy: true } : {};
+  // A refused health-gated resume is an answer, not a failure: exit 3 lets a supervisor tell it apart.
+  const refusedResume = (json: Record<string, unknown>, id: string): number | undefined => {
+    if (!ifHealthy || json.code !== "resume_refused" || typeof json.reason !== "string") return undefined;
+    if (wantsJson) console.log(JSON.stringify({ ok: false, provider: name, id, resumed: false, reason: json.reason }, null, 2));
+    else console.log(`${name}: ${requestedId} not resumed: ${json.reason}`);
+    return 3;
+  };
 
   if (classified.type === "oauth") {
     const list = await apiJson(deps, baseUrl, "GET", `/api/oauth/accounts?provider=${encodeURIComponent(name)}`);
@@ -837,8 +849,10 @@ export async function cmdPause(args: string[], deps: AccountDeps, paused: boolea
       provider: name,
       accountId: target.id,
       paused,
+      ...healthGate,
     });
     if (response.status === 0) return proxyUnreachable(response.transportError);
+    if (response.status === 409) { const refused = refusedResume(response.json, target.id); if (refused !== undefined) return refused; }
     if (response.status !== 200) return apiError(response.json, `failed to ${verb} ${requestedId}`, response.status);
 
     if (wantsJson) {
@@ -898,10 +912,11 @@ export async function cmdPause(args: string[], deps: AccountDeps, paused: boolea
   if ("error" in target) return reportCodexAccountTargetError(target);
   const id = target.id;
 
-  const response = await apiJson(deps, baseUrl, "PUT", "/api/codex-auth/accounts/pause", { id, paused });
+  const response = await apiJson(deps, baseUrl, "PUT", "/api/codex-auth/accounts/pause", { id, paused, ...healthGate });
   // Transport sentinel first: status 0 means the proxy never answered, and comparing it to
   // 200 would report an unreachable proxy as a management error.
   if (response.status === 0) return proxyUnreachable(response.transportError);
+  if (response.status === 409) { const refused = refusedResume(response.json, id); if (refused !== undefined) return refused; }
   if (response.status !== 200) return apiError(response.json, `failed to ${verb} ${requestedId}`, response.status);
 
   if (wantsJson) {
