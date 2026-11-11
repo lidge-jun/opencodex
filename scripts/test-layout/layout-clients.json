@@ -5,6 +5,7 @@
   "claude-translated-tool-restrictions.test.ts": "claude-integration",
   "windows-config-root-async-writers.test.ts": "windows",
   "windows-config-root-integration-writers.test.ts": "windows",
+  "windows-cli-config-root-startup.test.ts": "windows",
   "t3code-client-lifecycle.test.ts": "clients",
   "fix-jsonc-cr-comments.test.ts": "lib",
   "fix-jsonc-empty-comma.test.ts": "lib",
@@ -195,5 +196,12 @@
   "link-child-update-launcher.test.ts": "clients",
   "cli-link-child-ops.test.ts": "cli",
   "sync-fanout-select-restart.test.ts": "cli",
-  "sync-command-child-flags.test.ts": "cli"
+  "sync-command-child-flags.test.ts": "cli",
+  "link-ssh-capture.test.ts": "clients",
+  "link-ssh-capture-redact.test.ts": "clients",
+  "link-ssh-capture-tunnels.test.ts": "clients",
+  "cli-link-capture.test.ts": "cli",
+  "link-diagnostics-read.test.ts": "clients",
+  "cli-link-diagnostics.test.ts": "cli",
+  "link-diagnostics-route.test.ts": "server"
 }

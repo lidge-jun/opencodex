@@ -340,9 +340,9 @@ normalized per-request rows after a response. File identity changes, shrinkage, 
 changes, pricing-overlay changes, and local-time-zone changes force a cold rebuild. Ordinary growth
 is treated as an append: the scanner verifies the previous LF and its trailing 64 KiB digest, then
 folds only the suffix into a cloned accumulator and publishes it after validation. Concurrent callers
-share that work. Cold rebuilds scan the whole ledger in fixed-size chunks and yield between bounded
-batches, so memory stays bounded and unrelated management requests remain serviceable even for a
-large existing log. The first read is proportional to ledger size; later refreshes hash the bounded retained window once and parse only the appended suffix, rather than rescanning the whole ledger.
+share that work. Cold rebuilds and append scans read fixed-size chunks, yield between chunks after a full
+chunk or 1,000 rows, and yield between rows once 8 ms have passed, including within the final chunk, then recheck cancellation. This keeps costly normalization and
+aggregation cooperative; one row remains atomic. The first read is proportional to ledger size; later refreshes hash the bounded retained window once and parse only the appended suffix, rather than rescanning the whole ledger. `tests/usage/usage-ledger-scanner.test.ts` covers slow-row scheduling and cancellation.
 The Dashboard polls its 30-day usage independently once per minute, separate from five-second state polls.
 An unchanged retained snapshot reuses its verified region digest only for identical bounds; appends or trimming hash the returned region, preserving same-inode rewrite detection.
 > Decision record: [ADR-0102](decisions/ADR-0102-incremental-stream-accounting.md)

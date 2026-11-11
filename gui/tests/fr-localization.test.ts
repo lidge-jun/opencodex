@@ -25,6 +25,7 @@ function carriesTranslatableWords(value: string): boolean {
 }
 
 const INTENTIONAL_ENGLISH = new Set<TKey>([
+  "remoteLinkDiagnostics.colPort", // "Port" is the same word in French (a network port column).
   "usageV2.remoteLink", // Remote Link is the product name.
   "nav.claude", // Product name.
   "nav.codexSet", // Product name: the sidebar row reads "Codex" in every locale.
