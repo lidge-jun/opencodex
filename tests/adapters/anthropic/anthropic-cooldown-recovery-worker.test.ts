@@ -149,3 +149,47 @@ test("an entitlement 403 is never read for", async () => {
   await runAnthropicCooldownRecoveryProbes(f.config, now);
   expect(counter.reads).toBe(0);
 });
+test("a reset-derived 429 that names no window is never read for", async () => {
+  const routing = f.routing.anthropicRoutingFor("anthropic");
+  const now = Date.now();
+  routing.recordAnthropicAccount429(f.config, f.ids[0], null, now, new Headers({
+    "anthropic-ratelimit-unified-status": "rejected",
+    "anthropic-ratelimit-unified-reset": String(Math.floor((now + 4 * DAY) / 1000)),
+  }));
+  expect(routing.getAnthropicAccountHealthSnapshot(f.ids[0], now)).toMatchObject({ cooldownSource: "reset-derived" });
+  const counter = usage(0, 0);
+  await runAnthropicCooldownRecoveryProbes(f.config, now);
+  expect(counter.reads).toBe(0);
+  expect(dueAnthropicCooldownRecoveryProbes(f.config, now)).toEqual([]);
+});
+
+test("a disabled or API-key instance is never read for", async () => {
+  const id = f.ids[0];
+  coolForDays("anthropic", id, 4);
+  const counter = usage(0, 0);
+  const provider = f.config.providers.anthropic!;
+  provider.disabled = true;
+  await runAnthropicCooldownRecoveryProbes(f.config);
+  provider.disabled = false;
+  const authMode = provider.authMode;
+  provider.authMode = "key" as typeof authMode;
+  await runAnthropicCooldownRecoveryProbes(f.config);
+  provider.authMode = authMode;
+  expect(counter.reads).toBe(0);
+});
+
+test("disabling an instance forgets its earned backoff", async () => {
+  const id = f.ids[0];
+  const start = Date.now();
+  coolForDays("anthropic", id, 4, start);
+  const counter = usage(0, 100);
+  await runAnthropicCooldownRecoveryProbes(f.config, start);
+  expect(counter.reads).toBe(1);
+  expect(dueAnthropicCooldownRecoveryProbes(f.config, Date.now())).toEqual([]);
+  const provider = f.config.providers.anthropic!;
+  provider.disabled = true;
+  expect(dueAnthropicCooldownRecoveryProbes(f.config, Date.now())).toEqual([]);
+  provider.disabled = false;
+  // Same cooldown generation, but the backoff row was pruned while the instance was off.
+  expect(dueAnthropicCooldownRecoveryProbes(f.config, Date.now()).map(probe => probe.accountId)).toEqual([id]);
+});

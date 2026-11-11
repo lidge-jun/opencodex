@@ -52,9 +52,12 @@ export function dueAnthropicCooldownRecoveryProbes(config: OcxConfig, now = Date
     if (!set) continue;
     const routing = anthropicRoutingFor(instance);
     for (const row of set.accounts) {
+      // A paused or signed-out account is refused by the probe before any request; skip it here.
+      if (row.paused === true || row.needsReauth === true) continue;
       const key = attemptKey(instance, row.id);
       const claim = routing.captureAnthropicCooldownRecovery(row.id, now);
-      if (!claim) continue;
+      // A refusal that named no window settles as retained whatever usage shows: never read for it.
+      if (!claim || !claim.namesRejectedWindow) continue;
       live.add(key);
       // A deadline the sweeper reaches first needs no upstream read.
       const until = routing.getAnthropicAccountHealthSnapshot(row.id, now)?.cooldownUntil;
