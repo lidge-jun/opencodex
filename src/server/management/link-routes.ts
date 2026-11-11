@@ -319,6 +319,11 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     }
     // The same opt-in for each Home-initiated tunnel's retry progress and last failure cause.
     if (url.searchParams.get("diagnostics") === "1") attachLinkTunnelDiagnostics(dto, supervisorStates);
+    // The same opt-in for each Home row's Child versions, catalog freshness, activity and operations.
+    if (url.searchParams.get("children") === "1" && dto.role === "home") {
+      const { attachLinkChildOpsForState } = await import("./link-child-ops-routes");
+      attachLinkChildOpsForState(dto, state, store, (ctx.deps.now ?? Date.now)());
+    }
     // A dashboard session also learns why it cannot join as a Child. The admin-token answer stays
     // the exact K16 document that `ocx link status` validates key by key.
     const denial = ctx.principal === "gui-session" ? joinDenied(ctx) : null;
@@ -350,6 +355,11 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     const denied = auth(ctx, "admin");
     if (denied) return denied;
     return issue(ctx);
+  }
+  // Before the reconnect and DELETE matchers, which would read "children" as a link id.
+  if (path.startsWith("/api/link/children/")) {
+    const { handleLinkChildOpsRoutes } = await import("./link-child-ops-routes");
+    return handleLinkChildOpsRoutes(ctx, state);
   }
   const reconnectPath = req.method === "POST" ? /^\/api\/link\/([^/]+)\/reconnect$/.exec(path) : null;
   if (reconnectPath) {

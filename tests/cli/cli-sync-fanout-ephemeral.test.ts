@@ -8,6 +8,12 @@ import * as codexSync from "../../src/codex/sync";
 import * as statusApi from "../../src/cli/sync-link-status";
 import * as processApi from "../../src/cli/sync-fanout-process";
 
+// Decode the shell-quoted SSH command without executing the remote script.
+function parseRemoteCommand(command: string): string[] {
+  const words = command.match(/(?:[^\s'"]+|'[^']*'|"[^"]*")+/g) ?? [];
+  return words.map(word => word.replace(/'([^']*)'|"([^"]*)"/g, (_, single, double) => single ?? double));
+}
+
 /** ocx sync --overwrite-conflict fans out the plain catalog sync to an ephemeral ocx-child. */
 test("ocx sync never forwards overwrite flags to an ephemeral ocx-child link", async () => {
   const temp = mkdtempSync(join(tmpdir(), "ocx-sync-ephemeral-"));
@@ -37,10 +43,14 @@ test("ocx sync never forwards overwrite flags to an ephemeral ocx-child link", a
   try {
     const deps = { args: ["sync", "--json", "--overwrite-conflict", "--overwrite-client", "pi"], findLiveProxy: async () => null } as unknown as CliDispatchDeps;
     expect(await runSyncCommand(deps)).toBe(0);
-    expect(commands.get("full")).toContain("--overwrite-conflict --overwrite-client pi");
+    const full = parseRemoteCommand(commands.get("full")!);
+    expect(full.slice(0, 2)).toEqual(["sh", "-c"]);
+    expect(full.slice(3)).toEqual(["ocx", "sync", "--expect-link", links[0]!.id, "--json", "--overwrite-conflict", "--overwrite-client", "pi"]);
     expect(commands.get("devbox")).toBeDefined();
-    expect(commands.get("devbox")).not.toContain("--overwrite");
-    expect(commands.get("devbox")).not.toContain("child-ephemeral-no-overwrite");
+    const devbox = parseRemoteCommand(commands.get("devbox")!);
+    expect(devbox.slice(0, 2)).toEqual(["sh", "-c"]);
+    expect(devbox.slice(3)).toEqual(["ocx", "sync", "--expect-link", links[1]!.id, "--json"]);
+    expect(devbox[2]).not.toContain("child-ephemeral-no-overwrite");
   } finally {
     sync.mockRestore(); status.mockRestore(); child.mockRestore(); log.mockRestore(); error.mockRestore(); warn.mockRestore();
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;

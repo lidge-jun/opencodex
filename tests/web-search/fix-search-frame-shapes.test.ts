@@ -4,6 +4,29 @@ import { MAX_SIDECAR_DECODED_CHARS, parseSidecarSSE } from "../../src/web-search
 const response = (frames: unknown[]) => new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join(""));
 
 describe("identity transition matrix", () => {
+  test.each([
+    { draft: 0, anonymous: 1, initial: "X", other: "Y", final: "Second.", expected: "Second.Y" },
+    { draft: 1, anonymous: 0, initial: "X", other: "Y", final: "Second.", expected: "YSecond." },
+    { draft: 0, anonymous: 1, initial: "A", other: "B", final: "A2", expected: "A2B" },
+  ])("preserves both known content positions when the link omits its index: %j", async entry => {
+    expect(await parseSidecarSSE(response([
+      { type: "response.output_text.done", item_id: "a", output_index: 0, content_index: entry.draft, text: entry.initial },
+      { type: "response.output_text.done", output_index: 0, content_index: entry.anonymous, text: entry.other },
+      { type: "response.output_text.done", item_id: "a", output_index: 0, text: entry.final },
+      { type: "response.completed" },
+    ]))).toEqual({ text: entry.expected, sources: [] });
+  });
+
+  test("links a unique item-only draft to an anonymous part with a known content index", async () => {
+    expect(await parseSidecarSSE(response([
+      { type: "response.output_text.delta", item_id: "a", delta: "A" },
+      { type: "response.output_text.delta", item_id: "b", delta: "draft" },
+      { type: "response.output_text.done", output_index: 1, content_index: 0, text: "B" },
+      { type: "response.output_text.done", item_id: "b", output_index: 1, text: "B" },
+      { type: "response.completed" },
+    ]))).toEqual({ text: "BA", sources: [] });
+  });
+
   test("emits positioned content-key parts once across promotions and partial finals", async () => {
     for (const kind of ["delta", "done"]) for (const partial of [false, true]) {
       const event = (identity: object, text: string) => ({
@@ -85,15 +108,27 @@ describe("identity transition matrix", () => {
     }
   });
 
-  test("retains a snapshot at a different content index when linking an item", async () => {
+  test.each([false, true])("retains a different content index when the link omits it: %s", async omitted => {
     const result = await parseSidecarSSE(response([
       { type: "response.output_text.delta", item_id: "a", content_index: 1, delta: "A" },
       { type: "response.output_text.delta", item_id: "b", content_index: 1, delta: "draft" },
       { type: "response.output_text.done", output_index: 1, content_index: 0, text: "C" },
-      { type: "response.output_text.done", item_id: "b", output_index: 1, content_index: 1, text: "B" },
+      { type: "response.output_text.done", item_id: "b", output_index: 1, ...(omitted ? {} : { content_index: 1 }), text: "B" },
       { type: "response.completed" },
     ]));
     expect(result.text).toBe("CBA");
+  });
+
+  test("keeps the draft's content index when a linking snapshot omits it", async () => {
+    expect(await parseSidecarSSE(response([
+      { type: "response.output_text.delta", item_id: "a", content_index: 1, delta: "A" },
+      { type: "response.output_text.delta", item_id: "b", content_index: 1, delta: "draft" },
+      { type: "response.output_text.done", output_index: 1, text: "old" },
+      { type: "response.output_text.done", item_id: "b", output_index: 1, text: "B" },
+      { type: "response.output_text.done", item_id: "b", output_index: 1, content_index: 0, text: "C" },
+      { type: "response.output_text.done", item_id: "b", content_index: 1, text: "B" },
+      { type: "response.completed" },
+    ]))).toEqual({ text: "CBA", sources: [] });
   });
 
   test("does not discard an anonymous snapshot on a linking delta alone", async () => {
@@ -509,6 +544,58 @@ describe("sidecar text-done snapshots", () => {
       ] } },
     ]));
     expect(result).toEqual({ text: "First. Second.", sources: [] });
+  });
+
+  test.each([null, undefined, {}, "invalid"])("keeps message position with malformed content: %j", async content => {
+    for (const reverse of [false, true]) {
+      const frames = [
+        { type: "response.output_text.done", item_id: "a", text: "First. " },
+        { type: "response.output_text.done", item_id: "b", text: "draft" },
+      ];
+      if (reverse) frames.reverse();
+      expect(await parseSidecarSSE(response([
+        ...frames,
+        { type: "response.completed", response: { output: [
+          { id: "a", type: "message", content },
+          { id: "b", type: "message", content: [{ type: "output_text", text: "Second." }] },
+        ] } },
+      ]))).toEqual({ text: "First. Second.", sources: [] });
+    }
+  });
+
+  test("orders all streamed content parts of a malformed completed message", async () => {
+    expect(await parseSidecarSSE(response([
+      { type: "response.output_text.done", item_id: "a", content_index: 1, text: "second " },
+      { type: "response.output_text.done", item_id: "a", content_index: 0, text: "First " },
+      { type: "response.output_text.done", item_id: "b", text: "draft" },
+      { type: "response.completed", response: { output: [
+        { id: "a", type: "message", content: null },
+        { id: "b", type: "message", content: [{ type: "output_text", text: "third." }] },
+      ] } },
+    ]))).toEqual({ text: "First second third.", sources: [] });
+  });
+
+  test("does not replace a conflicting streamed output index from a malformed message", async () => {
+    expect(await parseSidecarSSE(response([
+      { type: "response.output_text.done", item_id: "a", output_index: 2, text: "A" },
+      { type: "response.output_text.done", item_id: "b", text: "draft" },
+      { type: "response.completed", response: { output: [
+        { id: "a", type: "message", content: null },
+        { id: "b", type: "message", content: [{ type: "output_text", text: "B" }] },
+      ] } },
+    ]))).toEqual({ text: "BA", sources: [] });
+  });
+
+  test("does not infer message positions from duplicate completed item IDs", async () => {
+    expect(await parseSidecarSSE(response([
+      { type: "response.output_text.done", item_id: "a", text: "A" },
+      { type: "response.output_text.done", item_id: "b", text: "draft" },
+      { type: "response.completed", response: { output: [
+        { id: "a", type: "message", content: null },
+        { id: "b", type: "message", content: [{ type: "output_text", text: "B" }] },
+        { id: "a", type: "message", content: null },
+      ] } },
+    ]))).toEqual({ text: "BA", sources: [] });
   });
 
   test("keeps distinct content indexes without item or output identity", async () => {

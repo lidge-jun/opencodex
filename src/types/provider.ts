@@ -617,6 +617,14 @@ export interface OcxProviderConfig {
    */
   liveModels?: boolean;
   /**
+   * Per-provider live-discovery compatibility (#7910). `skipInvalidRows: true` skips individual
+   * `/models` rows whose id is missing, non-string, empty or otherwise invalid (and non-object
+   * rows) instead of rejecting the whole listing; a listing with no surviving row stays malformed.
+   * Absent or false keeps strict discovery. Unrelated to the top-level `OcxConfig.modelDiscovery`,
+   * which is persisted discovery state rather than provider configuration.
+   */
+  modelDiscovery?: { skipInvalidRows?: boolean };
+  /**
    * Per-provider catalog allowlist. When non-empty, ONLY these model ids are emitted to Codex's
    * catalog and `/v1/models` — live discovery still runs, this just narrows what ships (so a proxy
    * exposing thousands of models, or an aggregator like OpenRouter, doesn't bloat the catalog).
@@ -641,8 +649,11 @@ export interface OcxProviderConfig {
    * visible. Empty/undefined = no opt-in (default behavior). See #1690.
    */
   retainModels?: string[];
-  /** Override for newly discovered models. Absent/"inherit" uses the install policy. */
-  newModelPolicy?: "on" | "off" | "inherit";
+  /**
+   * Override for newly discovered models. Absent/"inherit" uses the install policy. `admit`
+   * appends arrivals to a custom `selectedModels` (never a preset-derived one).
+   */
+  newModelPolicy?: "on" | "off" | "admit" | "inherit";
   /**
    * Model-preset marker for `selectedModels` (#2465). Absent means "all", exactly today's
    * semantics — an existing provider is never narrowed by an upgrade.
@@ -900,6 +911,19 @@ export interface OcxProviderConfig {
    */
   unsupportedHostedTools?: string[];
   /**
+   * Hosted tool declarations this Responses destination rejects only in combination with
+   * client tools, so they are stripped when the same request also declares a `function` or
+   * `custom` tool, or a namespace with members, in `tools`, a client-loaded
+   * `additional_tools` catalog, or a `tool_search_output` result. A request that declares
+   * only hosted tools keeps them.
+   *
+   * This describes a gateway that serves hosted `web_search` alone and function calling
+   * alone, but answers HTTP 400 when one request carries both (#8204). Same vocabulary and
+   * alias expansion as `unsupportedHostedTools`, which stays authoritative: a tool listed
+   * there is removed whether or not client tools are present.
+   */
+  unsupportedHostedToolsWithClientTools?: string[];
+  /**
    * Provider-local repair for Responses gateways whose lifecycle snapshots omit canonical
    * fields or closing events (#893). Disabled by default and applied only to client-facing
    * SSE/JSON; raw inspection state remains authoritative.
@@ -1147,6 +1171,13 @@ export interface OcxProviderConfig {
    * other EOFs remain truncation errors. Absent = strict default behavior.
    */
   anthropicEofTolerance?: boolean;
+  /**
+   * Claude Code's typed Advisor server tool (`advisor_20260301`) on the translated Messages lane.
+   * Absent: forwarded only to an `anthropic`-adapter provider on first-party `api.anthropic.com`.
+   * `true`: an Anthropic-compatible gateway that runs it receives the declaration, its history and
+   * the `advisor-tool-2026-03-01` beta too. `false`: never forwarded, even first-party.
+   */
+  forwardAdvisorTool?: boolean;
   /**
    * Model ids that do NOT accept image inputs. The proxy gives them "eyes" via the vision sidecar:
    * attached images are described by a gpt vision model and replaced with text before the call.

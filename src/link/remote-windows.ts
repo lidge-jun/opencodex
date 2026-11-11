@@ -1,4 +1,5 @@
 import type { RouteClientId } from "./route-intent";
+export const ROUTE_OVERWRITE_MIN_CHILD_VERSION = "2.100.0";
 import { Buffer } from "node:buffer";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 
@@ -8,10 +9,18 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
  */
 export const POWERSHELL_ENCODED_MAX = 8_000;
 
+/** The encoded command would not fit cmd.exe's command line; callers that build gated commands rename it. */
+export class PowerShellCommandTooLongError extends Error {
+  constructor(readonly encodedLength: number) {
+    super(`Remote PowerShell command exceeds the cmd.exe-compatible command-line budget (${encodedLength})`);
+    this.name = "PowerShellCommandTooLongError";
+  }
+}
+
 export function powershellArgv(script: string): string[] {
   // Module preparation otherwise writes a CLIXML progress record to stderr, which Home would see.
   const encoded = Buffer.from("$ProgressPreference='SilentlyContinue'\n" + script, "utf16le").toString("base64");
-  if (encoded.length > POWERSHELL_ENCODED_MAX) throw new Error(`Remote PowerShell command exceeds the cmd.exe-compatible command-line budget (${encoded.length})`);
+  if (encoded.length > POWERSHELL_ENCODED_MAX) throw new PowerShellCommandTooLongError(encoded.length);
   return ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded];
 }
 
@@ -211,20 +220,57 @@ Get-ChildItem -LiteralPath $dir -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{
 `);
 }
 
-/**
- * The first OpenCodex release whose `ocx sync` understands --overwrite-conflict and
- * --overwrite-client; an earlier one ignores both and reports a plain sync as success. The
- * lightweight ocx-child supports neither and never reads route intent.
- */
-export const ROUTE_OVERWRITE_MIN_CHILD_VERSION = "2.100.0";
+export interface WindowsGatedCommand {
+  versionParts: readonly [string, string, string];
+  lacksMarker: "child-ocx-lacks-expect-link" | "child-ocx-lacks-orchestrated-update" | "child-ocx-lacks-overwrite";
+  acceptEphemeral: boolean;
+  /** Prints ocx-fanout:child-now:<epoch-ms> from [DateTimeOffset]::Now (Unix milliseconds do not depend on the offset). */
+  reportClock: boolean;
+  args: readonly string[];
+}
 
-export function windowsPinnedSyncArgv(linkId: string, overwriteConflict = false, overwriteClient?: RouteClientId): string[] {
+/**
+ * The gated Windows command: select a candidate, refuse below the minimum, optionally refuse ocx-child, then run it
+ * contained. OCX_NO_DESKTOP_HANDOFF=1 makes a launcher answer --version and run the command itself. Windows never
+ * sends a restart, so the selected-kind report is not built here. Windows reads no served-runtime census, so the
+ * selected entry is always a binary: the script prints no entry marker and the Home infers "binary", which keeps the
+ * plan probe inside the command-line budget for long preview Home versions.
+ */
+export function windowsGatedOcxArgv(cmd: WindowsGatedCommand): string[] {
+  if (!cmd.versionParts.every(part => /^(0|[1-9][0-9]{0,3})$/.test(part))) throw new Error("invalid gate version");
+  if (!/^child-ocx-lacks-(expect-link|orchestrated-update|overwrite)$/.test(cmd.lacksMarker)) throw new Error("invalid gate marker");
+  const b = cmd.versionParts.map(part => "'" + part + "'").join(",");
+  // -match is case-insensitive; the pattern reads the file name the way [IO.Path]::GetFileName does (either separator).
+  const overwriteEphemeral = cmd.lacksMarker === "child-ocx-lacks-overwrite" ? String.raw`if(([IO.Path]::GetFileName($x)).ToLowerInvariant().StartsWith('ocx-child')){[Console]::Error.WriteLine('ocx-fanout:child-ephemeral-no-overwrite');exit 121};` : "";
+  const ephemeral = cmd.acceptEphemeral || overwriteEphemeral ? "" : String.raw`if($x -match '(^|[\\/])ocx-child[^\\/]*$'){[Console]::Error.WriteLine('ocx-fanout:child-ocx-ephemeral');exit 121};`;
+  const clock = cmd.reportClock ? String.raw`[Console]::Error.WriteLine('ocx-fanout:child-now:'+[DateTimeOffset]::Now.ToUnixTimeMilliseconds());` : "";
+  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: cmd.args }) + OCX_CANDIDATES + String.raw`$env:OCX_NO_DESKTOP_HANDOFF='1'
+foreach($x in ($c|select -Unique)){
+ if(![IO.File]::Exists($x)){continue};` + overwriteEphemeral + String.raw`$v=[OcxJob]::V($x);if($null -eq $v){continue};$v=$v.Trim();if($v.StartsWith('opencodex ')){$v=$v.Substring(10)}
+ $m=[regex]::Match($v,'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$')
+ $bad=(!$m.Success -or $v.Length -gt 128);if(!$bad -and $m.Groups[4].Success){foreach($p in $m.Groups[4].Value.Split('.')){if(!$p -or ($p -match '^\d+$' -and $p.Length -gt 1 -and $p[0] -eq '0')){$bad=$true}}}
+ if($bad){[Console]::Error.WriteLine('ocx-fanout:child-ocx-version-unknown');exit 121}
+ $a=@($m.Groups[1].Value,$m.Groups[2].Value,$m.Groups[3].Value);$b=@(` + b + String.raw`);$cmp=0
+ for($i=0;$i -lt 3;$i++){if($a[$i].Length -ne $b[$i].Length){$cmp=$a[$i].Length-$b[$i].Length;break};$cmp=[string]::CompareOrdinal($a[$i],$b[$i]);if($cmp -ne 0){break}}
+ if($cmp -lt 0 -or ($cmp -eq 0 -and $m.Groups[4].Success)){[Console]::Error.WriteLine('ocx-fanout:` + cmd.lacksMarker + String.raw`');exit 121}
+ ` + ephemeral + String.raw`[Console]::Error.WriteLine('ocx-fanout:selected:'+$v);` + clock + String.raw`[Console]::Out.WriteLine('ocx-fanout:stdout-begin');Invoke-Native $x @($d.args)
+};exit 127
+`);
+}
+
+/** The 2.93.0 sync gate; kept as a named entry because discovery tests import it. */
+export function windowsPinnedSyncArgv(linkId: string): string[] {
+  return windowsGatedOcxArgv({ versionParts: ["2", "93", "0"], lacksMarker: "child-ocx-lacks-expect-link", acceptEphemeral: true,
+    reportClock: false, args: ["sync", "--expect-link", linkId, "--json"] });
+}
+
+export function windowsOverwriteSyncArgv(linkId: string, overwriteConflict = false, overwriteClient?: RouteClientId): string[] {
   // Overwrite needs a Child that honours it: refuse ocx-child and older ocx before syncing.
   const minimum = overwriteConflict ? ROUTE_OVERWRITE_MIN_CHILD_VERSION.split(".").map(part => `'${part}'`).join(",") : "'2','93','0'";
   const lacks = overwriteConflict ? "ocx-fanout:child-ocx-lacks-overwrite" : "ocx-fanout:child-ocx-lacks-expect-link";
   const ephemeral = overwriteConflict ? String.raw`if(([IO.Path]::GetFileName($x)).ToLowerInvariant().StartsWith('ocx-child')){[Console]::Error.WriteLine('ocx-fanout:child-ephemeral-no-overwrite');exit 121};` : "";
-  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: ["sync", "--expect-link", linkId, "--json", ...(overwriteConflict ? ["--overwrite-conflict"] : []), ...(overwriteClient ? ["--overwrite-client", overwriteClient] : [])] }) + OCX_CANDIDATES + String.raw`
-foreach($x in ($c|select -Unique)){
+  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: ["sync", "--expect-link", linkId, "--json", ...(overwriteConflict ? ["--overwrite-conflict"] : []), ...(overwriteClient ? ["--overwrite-client", overwriteClient] : [])] }) + OCX_CANDIDATES + String.raw`$env:OCX_NO_DESKTOP_HANDOFF=1
+foreach($x in $c){
  if(![IO.File]::Exists($x)){continue};` + ephemeral + String.raw`$v=[OcxJob]::V($x);if($null -eq $v){continue};$v=$v.Trim();if($v.StartsWith('opencodex ')){$v=$v.Substring(10)}
  $m=[regex]::Match($v,'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$')
  $bad=(!$m.Success -or $v.Length -gt 128);if(!$bad -and $m.Groups[4].Success){foreach($p in $m.Groups[4].Value.Split('.')){if(!$p -or ($p -match '^\d+$' -and $p.Length -gt 1 -and $p[0] -eq '0')){$bad=$true}}}

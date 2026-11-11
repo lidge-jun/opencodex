@@ -181,7 +181,7 @@ describe("Antigravity effort family reconciliation", () => {
     const rows = [{ provider, id: "older-model" }, ...retainedRows];
     expect(reconcile(config, rows)).toBe(true);
     expect(config.disabledModels).toEqual(["google-antigravity/claude-opus-5-5"]);
-    expect(config.modelDiscovery!.recentArrivals![provider]).toEqual([{ id: base, at: now }]);
+    expect(config.modelDiscovery!.recentArrivals![provider]).toEqual([{ id: base, at: now, disabledByPolicy: true }]);
     expect(reconcile(config, rows)).toBe(false);
   });
 

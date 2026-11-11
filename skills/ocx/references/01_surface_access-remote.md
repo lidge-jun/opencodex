@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 34.
+Declared capabilities: 35.
 
 ### `ocx link probe`
 
@@ -678,3 +678,27 @@ Drives no management route.
 - Fixed data-plane WebSocket /v1/live with the existing audio key carrier and session.update, then session.close. It contacts upstream and may incur provider usage; no microphone, audio upload, tool execution or voice-roundtrip claim.
 - Version1 report distinguishes readiness from confirmed normal close. Socket-open alone is not ready.15s readiness,2s close deadline; stuck/abnormal closure remains unverified/nonzero, with local socket termination.
 - No raw frames/session IDs/encoded credentials are printed. NativeWebSocket redirect refusal is verified separately from HTTP upload behavior.
+
+### `ocx link check`
+
+Usage: `ocx link check (--link-id <id> | --all) [--no-wait] [--json]`
+
+Read each Home-initiated Child's installed version, install kind and update route.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/children/operations` |
+| GET | `/api/link/children/jobs/{jobId}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Link id to check; repeatable, up to 64. |
+| `--all` | boolean | Check every link in the Home's store. |
+| `--no-wait` | boolean | Print the queued job and return without polling it. |
+| `--json` | boolean | Emit the ocx.link.child-job/1 document as JSON (always JSON). |
+
+- Requires loopback admin authority on the Home. Starts one observe job; the CLI polls it every 2 s and prints the final ocx.link.child-job/1 document. Exit 0 when every item succeeded, 6 when an item is busy, offline, refused, owner-action or unsupported, 1 on a failure, 4 when the link is unknown or the Home predates Child operations, 5 on a conflict: the link already has an operation running, --all found no Home-initiated link, or the command ran on a Child.
+- Changes no install on the Child: it runs the gated update --plan, which only computes. An npm Child without a census pair runs it through its ocx shim, so the launcher's ordinary bootstrap (sync-guard bookkeeping, Bun resolution) runs first, as for any pinned sync; the gated script disables the Desktop handoff. Writes the Home's Child observation cache.
+- One SSH call per Child, up to 60 s, three at a time; a POSIX Child older than 2.97.0 costs one more read-only call for its version. Home-initiated links only: client-initiated and ocx-child links are reported without SSH. One operation per link per running Home.

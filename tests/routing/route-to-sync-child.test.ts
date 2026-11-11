@@ -11,10 +11,9 @@ describe("Route-to immediate sync", () => {
   test("the explicit overwrite flag is per request and retains pinned link identity on both platforms", () => {
     const normal = remotePinnedSyncArgv(link.id);
     const forced = remotePinnedSyncArgv(link.id, "posix", true);
-    expect(normal.join(" ")).not.toContain("--overwrite-conflict");
-    expect(forced.join(" ")).toContain('--expect-link "$1" --json --overwrite-conflict');
-    expect(forced.at(-1)).toBe(link.id);
-    expect(remotePinnedSyncArgv(link.id, "posix", true, "aside").join(" ")).toContain("--overwrite-conflict --overwrite-client aside");
+    expect(normal.slice(3)).toEqual(["ocx", "sync", "--expect-link", link.id, "--json"]);
+    expect(forced.slice(3)).toEqual(["ocx", "sync", "--expect-link", link.id, "--json", "--overwrite-conflict"]);
+    expect(remotePinnedSyncArgv(link.id, "posix", true, "aside").slice(3)).toEqual(["ocx", "sync", "--expect-link", link.id, "--json", "--overwrite-conflict", "--overwrite-client", "aside"]);
     const windows = remotePinnedSyncArgv(link.id, "windows", true);
     expect(windows).not.toEqual(remotePinnedSyncArgv(link.id, "windows"));
     expect(parseSyncFanoutFlags(["--overwrite-conflict", "--overwrite-conflict"]).ok).toBe(false);

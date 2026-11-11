@@ -1,4 +1,4 @@
-import { UNDECLARED_TOOL_CALL_MESSAGE, isProxyError, rememberProxyIncomplete, carryProxyIncompleteContext } from "../lib/client-error-body";
+import { UNDECLARED_TOOL_CALL_MESSAGE, isProxyError, rememberProxyIncomplete, rememberPausedTurn, carryProxyIncompleteContext } from "../lib/client-error-body";
 import { anthropicProgressItems } from "../responses/anthropic-progress";
 import type {
   AdapterEvent,
@@ -1386,6 +1386,10 @@ export function bridgeToResponsesSSE(
               if (truncationReasonFor(event.stopReason) && !maxOutputCompletion.completed) {
                 // Upstream stopped before a normal completion. Surface as incomplete so the
                 // client can distinguish a truncated/filtered turn from a finished one.
+                // `pause_turn` also maps to max_output_tokens for the client, but the turn is
+                // paused and expected to continue: record the request-scoped fact so combo
+                // preflight does not read it as an exhausted output budget and replay it.
+                if (event.stopReason?.trim().toLowerCase() === "pause_turn") rememberPausedTurn(proxyIncompleteContext);
                 // #1926 gap 2: bound the window in which a handed-out thought signature is
                 // not yet durable before the turn becomes externally terminal.
                 await awaitThoughtSignatureDurability();
@@ -1418,6 +1422,9 @@ export function bridgeToResponsesSSE(
             }
             case "incomplete": {
               if (isProxyError(event) && event.reason === "adapter_eof") rememberProxyIncomplete(proxyIncompleteContext, "adapter_eof");
+              // Same request-scoped distinction as the `done` case below: the client still sees
+              // max_output_tokens, while combo preflight can tell a paused turn from a real limit.
+              if (event.reason?.trim().toLowerCase() === "pause_turn") rememberPausedTurn(proxyIncompleteContext);
               if (currentMsg) closeCurrentMessage();
               if (currentReasoning) closeCurrentReasoning();
               if (currentRawReasoning) closeCurrentRawReasoning();

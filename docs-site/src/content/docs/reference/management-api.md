@@ -420,6 +420,13 @@ A consumer can derive the same label from its local configuration without resolv
 Changing a literal key or reference changes the label; replacing the secret behind an unchanged
 reference keeps the same logical account. Older unlabeled records cannot be attributed reliably.
 
+Anthropic OAuth pool attempts and rows also record `accountTag`, the `p` plus six lowercase hex
+digits already shown in the logged provider (`anthropic-p2e22d0` has the tag `p2e22d0`). It names
+the pool account that served each attempt, so a failover attempt carries the replacement account's
+tag. It contains no email, account ID, or credential, and it does not change `accountLogLabel` or
+the per-account usage summaries. A provider without that suffix, such as a pool-off translated
+request, has no tag. Older rows and malformed values omit the field.
+
 Key selection is recorded after queued requests have been rebuilt for the current selection.
 When a retry changes keys, `attempts` retains a separate record for the preceding key, including
 reported usage from failed responses. Missing usage remains unreported. Routed adapter terminals
@@ -683,6 +690,7 @@ Labels are read on login/import or refresh, never inferred from quota percentage
 | `GET, POST, DELETE /api/providers/keys` | List masked provider keys, add/activate one, or remove one | 400 invalid input; 404 provider/key missing |
 | `PUT /api/providers/keys/active` | Select a provider's active key | 400 invalid input; 404 provider/key missing |
 | `PUT /api/providers/keys/alias` | Set or clear a provider-key alias | 400 invalid input; 404 provider/key missing |
+| `PUT /api/providers/keys/pause` | Pause or resume one provider API key. Body `{ name, id, paused }`; pausing the active key selects the next usable key in ring order. Success includes the resulting `activeAccountId` (or `null`) and `activeAccountChanged`. | 400 invalid input; 404 provider/key missing |
 | `GET, POST, PATCH, DELETE /api/keys` | List, create, edit, or delete data-plane admission keys | 400 invalid body/id; 404 key missing |
 | `PUT /api/oauth/accounts/affinity-reset` | Confirm a provider-wide session-affinity reset without requiring an account. Body `{ provider }`; success includes `affinityResetConfirmed: true`. CLI: `ocx account reset-affinity anthropic --json` (`anthropic2` supported). | 400 invalid body/provider; 503 `affinity_reset_not_persisted`, `retryable: true` |
 

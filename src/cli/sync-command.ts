@@ -240,7 +240,8 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
           // has nothing to overwrite and refuses the flags.
           const overwrite = link.childKind !== "ephemeral" && deps.args.includes("--overwrite-conflict");
           const result = await runFanoutProcess(buildExecArgv({ alias: link.alias, knownHostsFile: linkKnownHostsPath(), argv: remotePinnedSyncArgv(link.id, platform, overwrite, overwrite ? flags.overwriteClient : undefined) }), { timeoutMs: Math.max(0, deadline - Date.now()) });
-          return { ...classifySyncResult(result), exit: result.code };
+          const { state, reason } = classifySyncResult(result);
+          return { state, reason, exit: result.code };
         } catch (error) {
           if (error instanceof FanoutProcessError) return { state: error.reason === "deadline-exceeded" || error.reason === "termination-unconfirmed" ? "timed-out" : "failed", reason: error.reason, exit: null };
           throw error;

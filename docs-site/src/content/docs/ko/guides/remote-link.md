@@ -124,11 +124,14 @@ ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--purge] [--force --yes] [--json]
 ocx link reconnect --link-id <id> [--json]
+ocx link check (--link-id <id> | --all) [--no-wait] [--json]
 ```
 
 비대화형 실행(TTY 없음)에서는 `--expect-fingerprint`가 필수입니다. 대화형 터미널에서는 옵션을 생략할 수 있지만, 제시된 지문을 명시적으로 확인해야 합니다.
 
 대시보드와 `ocx integrations native <client> on|off`의 native 토글은 Home의 스위치를 바꾸고 해당 클라이언트의 전환(Claude Desktop first-party 전환 포함)을 실행하여 Child 기본값을 유지하며, Home에 대한 route 의도는 기록하지 않습니다. 이전 버전이 저장한 이 네 클라이언트의 Home override는 무시하고 다음 route 변경 때 제거합니다. Child에서 CLI는 거부하고 해당 기기의 Home 명령을 출력합니다. 링크를 폐기하면 그 기기의 override도 정리합니다. Claude Desktop의 first-party 모드는 보존합니다. 켜기 의도는 쓰기 없이 `current`이며, 끄기 의도는 모드 전환을 마칠 때까지 conflict로 표시합니다.
+
+Home에서 `ocx link check (--link-id <id> | --all)`를 실행하면 Home이 추가한 각 Child의 설치 버전, 설치 종류, 업데이트 경로를 읽습니다. 링크의 SSH로 Child의 `ocx update --plan`을 실행하며(Child마다 60초, 동시에 세 대), 이 명령은 계획만 계산하고 아무것도 바꾸지 않습니다. 2.97.0보다 오래된 Child는 `owner-action`(`legacy-ocx`)으로 표시되고, 버전은 macOS와 Linux에서는 읽기 전용 SSH 호출을 한 번 더 해서, Windows에서는 링크로 보고된 버전에서 가져옵니다. Child 쪽에서 연결한 링크와 `ocx-child` Child는 SSH 없이 보고됩니다. `ocx link status --json`은 각 행에 `child` 블록(버전, 버전 차이, 카탈로그 최신 여부, 활동, 마지막 작업)을 추가합니다. 자세한 내용과 종료 코드는 [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity)(영문)를 참고하세요.
 
 ## 관련 가이드
 

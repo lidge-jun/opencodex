@@ -173,9 +173,9 @@ export const PROVIDER_MODEL_CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["models", "new-policy"], summary: "Read or set the policy for newly discovered models.",
-    usage: "ocx models new-policy [on|off] [--provider <name>] [--json]", routes: [{ method: "GET", path: "/api/model-discovery" }, { method: "PUT", path: "/api/model-discovery" }], mutates: true, json: "payload",
+    usage: "ocx models new-policy [on|off|admit] [--provider <name>] [--json]", routes: [{ method: "GET", path: "/api/model-discovery" }, { method: "PUT", path: "/api/model-discovery" }], mutates: true, json: "payload",
     flags: [{ name: "--provider", value: "string", summary: "Scope the read/write to a provider; omitted means global." }, { name: "--json", value: "boolean", summary: "Emit the policy view or receipt." }],
-    details: ["No state operand means read only. Only on/off writes exist; no inherit/clear operand is implemented."],
+    details: ["No state operand means read only. Writes on, off or admit; admit appends new arrivals to a provider's custom selectedModels and never widens a preset-derived selection. No inherit/clear operand is implemented."],
   },
   {
     command: ["models", "new-arrivals"], summary: "Read recent model discoveries.",

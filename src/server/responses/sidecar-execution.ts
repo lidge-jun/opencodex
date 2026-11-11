@@ -11,6 +11,8 @@ import { formatErrorResponse } from "../../bridge";
 import { planWebSearch, buildWebSearchTool, runWithWebSearch } from "../../web-search";
 import { createRegisteredAdvisorPlan } from "./advisor-plan-slot";
 import { ADVISOR_TOOL_NAME, createAdvisorSidecarStep } from "./advisor-slot";
+import { advisorServerToolDestination, withholdAdvisorServerTools } from "../../adapters/anthropic/advisor-tool";
+import { addProtocolEntryReason } from "../../protocols/trace";
 import { buildToolBridgeMaps } from "./collaboration";
 import {
   planImageBridge,
@@ -205,6 +207,14 @@ export async function executeResponsesSidecars(
   if (advisorPlan && !routedCompaction) {
     await advisorPlan.preflightInject(parsed);
   }
+  // The synthetic `advisor` owns the name for the whole turn it joins, so a typed Advisor declaration
+  // is withheld here, not only while the function is on the catalog: a later loop iteration that
+  // drops the synthetic tool must not forward it either (adapters/anthropic/advisor-tool.ts).
+  const withholdShadowedAdvisorTool = () => {
+    if (withholdAdvisorServerTools(parsed) && advisorServerToolDestination(route.provider)) {
+      addProtocolEntryReason(logCtx, "advisor-tool-shadowed-by-proxy-advisor");
+    }
+  };
 
   // Image / web-search sidecars: plan once, then dispatch with runTurn-aware priority.
   // Routed-compaction turns must NOT hit the image bridge: compaction disables tool execution but
@@ -671,6 +681,7 @@ export async function executeResponsesSidecars(
       ...(webSearchAdvisor ? [webSearchAdvisor.tool] : []),
     ];
     if (webSearchAdvisor) {
+      withholdShadowedAdvisorTool();
       requestState.toolBridgeMaps = buildToolBridgeMaps(parsed);
       translatorBudget.chargeRetained(new TextEncoder().encode(ADVISOR_TOOL_NAME).byteLength * 2, {
         kind: "retained_collectors",
@@ -804,6 +815,7 @@ export async function executeResponsesSidecars(
       ...(parsed.context.tools ?? []).filter(t => !t.advisor && t.name !== ADVISOR_TOOL_NAME),
       advisorPlan.tool,
     ];
+    withholdShadowedAdvisorTool();
     // The advisor tool joined AFTER prepare computed the bridge maps; recompute so the tool is
     // declared (undeclared-tool guard, tool_choice mapping, schema repair) on this turn.
     //

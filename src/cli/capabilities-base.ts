@@ -383,10 +383,10 @@ export const CAPABILITIES: readonly Capability[] = [
     command: ["account","resume"],
     summary: "Return a paused account to a Codex, Anthropic, generic OAuth or API-key pool.",
     routes: [{"method":"GET","path":"/api/codex-auth/accounts"},{"method":"PUT","path":"/api/codex-auth/accounts/pause"},{"method":"GET","path":"/api/oauth/accounts"},{"method":"PUT","path":"/api/oauth/accounts/pause"},{"method":"GET","path":"/api/providers/keys"},{"method":"PUT","path":"/api/providers/keys/pause"}],
-    flags: [{"name":"--json","value":"boolean","summary":"Emit the resume result as JSON."}],
+    flags: [{"name":"--if-healthy","value":"boolean","summary":"Resume only after a fresh account-bound health read succeeds; Codex and Anthropic pools."},{"name":"--json","value":"boolean","summary":"Emit the resume result as JSON."}],
     mutates: true,
     json: "envelope",
-    usage: "ocx account resume <provider> <account-id|alias|main> [--json]",
+    usage: "ocx account resume <provider> <account-id|alias|main> [--if-healthy] [--json]",
     details: [],
   },
   {

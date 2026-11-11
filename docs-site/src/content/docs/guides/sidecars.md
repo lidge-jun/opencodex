@@ -292,10 +292,12 @@ See the [Configuration reference](/reference/configuration/server/#sidecars) for
 
 Search responses with malformed optional fields retain valid answer text and citations. Invalid error-message values use a generic failure message. A repeated full-text completion for the same output part replaces its previous snapshot instead of duplicating the answer; distinct output parts remain separate.
 
+A completion that omits a content index cannot merge parts with different known content indexes. If a final message has malformed or missing content, its unique item ID still preserves its output position when recovering streamed text. Conflicting positions and duplicate final item IDs do not provide that ordering evidence.
+
 The OpenAI search and vision sidecars accept CR, LF and CRLF line endings, including mixed endings and CRLF split across network chunks. They read a final completion or failure event even when the server closes the body without a trailing newline. The first terminal event or `[DONE]` ends collection; later frames are ignored even when they share its network chunk. An unfinished response or one stopped by a size limit still reports an error.
 
 When a search answer ends with a Sources list, an unmatched list item stays in the answer instead of being removed as a citation. A title followed by its URL is still consumed as one citation. Non-HTTP URI-like text inside inline code, such as `mode:fast`, stays in the answer; code-formatted HTTP(S) URLs are still citations.
 
-Final response citations supply the title for a URL already seen during streaming. If the final title is missing or invalid, a valid streamed title is retained. Streaming-only sources are kept within the existing source-count, URL, title and byte limits.
+Final response citations supply the title for a URL already seen during streaming. When the final response cites the same URL more than once, the first valid title among those citations is used. If no final title is valid, a valid streamed title is retained. Streaming-only sources are kept within the existing source-count, URL, title and byte limits.
 
 Long search queries and answers are shortened without splitting a UTF-16 surrogate pair, so a single character such as 😀 is never cut in half by the result limits. A sequence of several characters, such as emoji joined with a zero-width joiner, can still be cut between its parts.
