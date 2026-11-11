@@ -102,3 +102,17 @@ test("typed response normalization preserves choices, tools, usage, and existing
   expect(Array.isArray(value.choices[0]!.delta.content)).toBe(true);
   expect(normalizeNativeChatContent(value, provider({ authMode: "oauth" }))).toBe(value);
 });
+
+test("operator reasoning replay cannot restore reasoning_content on canonical Mistral Chat", () => {
+  const target = provider({ preserveReasoningContentModels: [model] });
+  const history = [
+    { role: "user", content: "hi" },
+    { role: "assistant", content: "", reasoning_content: "replayed by the client", tool_calls: [{ id: "call_a", type: "function", function: { name: "f", arguments: "{}" } }] },
+    { role: "tool", tool_call_id: "call_a", content: "ok" },
+    { role: "assistant", content: "", tool_calls: [{ id: "call_b", type: "function", function: { name: "f", arguments: "{}" } }] },
+    { role: "tool", tool_call_id: "call_b", content: "ok" },
+  ];
+  const result = native({ messages: history, tools: [{ type: "function", function: { name: "f", parameters: { type: "object" } } }] }, target);
+  for (const message of result.messages) expect(message).not.toHaveProperty("reasoning_content");
+  expect(history[1]).toHaveProperty("reasoning_content", "replayed by the client");
+});
