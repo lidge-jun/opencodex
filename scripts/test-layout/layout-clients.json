@@ -204,5 +204,7 @@
   "link-diagnostics-read.test.ts": "clients",
   "cli-link-diagnostics.test.ts": "cli",
   "link-diagnostics-route.test.ts": "server",
-  "link-child-policy.test.ts": "clients"
+  "link-child-policy.test.ts": "clients",
+  "link-child-policy.test.ts": "clients",
+  "link-child-ops-scheduler.test.ts": "clients"
 }
