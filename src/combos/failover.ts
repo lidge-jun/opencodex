@@ -376,7 +376,7 @@ export function clearComboTargetCooldowns(comboId?: string, targetKeys?: Iterabl
     targetCooldowns.clearPersisted([...targetKeys].map(key => `${prefix}${key}`));
     return;
   }
-  targetCooldowns.clearPersisted([...targetCooldowns.keys()].filter(key => key.startsWith(prefix)));
+  targetCooldowns.clearPrefixPersisted(prefix);
 }
 
 export type ComboFailureDecision = "hop" | "stop";
