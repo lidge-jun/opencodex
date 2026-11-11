@@ -14,6 +14,8 @@ export interface DisconnectRuntimeDeps {
   >;
   /** `ocx restart`; resolves true once a replacement is verified. */
   restart: () => Promise<boolean>;
+  /** The durable state is still disconnected (no connect landed after this disconnect). */
+  stillDisconnected: () => boolean;
   json: boolean;
   info?: (line: string) => void;
   error?: (line: string) => void;
@@ -29,12 +31,23 @@ export async function restartRuntimeAfterDisconnect(deps: DisconnectRuntimeDeps)
   }
   if (observed.kind !== "live" || observed.live.role !== "client") return 0;
   const live = observed.live;
+  // A connect that landed after this disconnect owns that runtime now; restarting it is not ours.
+  if (!deps.stillDisconnected()) {
+    (deps.json ? error : info)("The running client runtime was left alone: a new connection was made after this disconnect.");
+    return 0;
+  }
   // A --json caller reads one document from stdout; restart progress goes to stderr.
   const originalLog = console.log;
   if (deps.json) console.log = (...args: unknown[]) => console.error(...args);
   let ok = false;
   try { ok = await deps.restart(); } finally { console.log = originalLog; }
   if (ok) {
+    // Report standalone only for what is actually serving now.
+    const after = await deps.observe();
+    if (after.kind === "live" && after.live.role === "client") {
+      error("The restart completed, but the runtime still answers as a client. Check with ocx status and ocx connect status on this machine.");
+      return 1;
+    }
     (deps.json ? error : info)("The client runtime was restarted; this machine now runs standalone OpenCodex.");
     return 0;
   }

@@ -428,9 +428,11 @@ const commandRunners: Record<string, CommandRunner> = {
     if (code !== 0 || deps.args.includes("--orphaned-token")) return code;
     const { restartRuntimeAfterDisconnect } = await import("./disconnect-runtime");
     const { observeProxyLiveness } = await import("../server/proxy-liveness");
+    const { readClientConnectionState } = await import("../client/state");
     return await restartRuntimeAfterDisconnect({
       observe: () => observeProxyLiveness({ attempts: 2 }),
       restart: () => deps.handleProxyRestart(deps.handleRestartStartWhenStopped),
+      stillDisconnected: () => readClientConnectionState().kind === "disconnected",
       json: deps.args.includes("--json"),
     });
   },

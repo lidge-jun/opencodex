@@ -4,12 +4,13 @@ import { restartRuntimeAfterDisconnect, type DisconnectRuntimeDeps } from "../..
 type Observation = Awaited<ReturnType<DisconnectRuntimeDeps["observe"]>>;
 const live = (role?: string): Observation => ({ kind: "live", live: { pid: 4321, ...(role ? { role } : {}) } });
 
-function run(observation: Observation, restartOk: boolean, json = false) {
+function run(observation: Observation, restartOk: boolean, json = false, extra: { stillDisconnected?: () => boolean; after?: Observation } = {}) {
   const out: string[] = [], err: string[] = [];
   let restarts = 0;
   const done = restartRuntimeAfterDisconnect({
-    observe: async () => observation,
+    observe: async () => (restarts > 0 ? extra.after ?? live("standalone") : observation),
     restart: async () => { restarts += 1; return restartOk; },
+    stillDisconnected: extra.stillDisconnected ?? (() => true),
     json,
     info: line => out.push(line),
     error: line => err.push(line),
@@ -46,14 +47,31 @@ describe("ocx disconnect restarts the client runtime it left behind", () => {
     expect(result.err.join("\n")).toContain("ocx restart");
   });
 
+  // Final review: a connect that lands between disconnect and its restart owns the runtime now;
+  // disconnect must leave it alone and never call the machine standalone.
+  test("a connection made after the disconnect leaves its runtime alone", async () => {
+    const result = await run(live("client"), true, false, { stillDisconnected: () => false });
+    expect(result).toMatchObject({ code: 0, restarts: 0, err: [] });
+    expect(result.out.join("\n")).toContain("a new connection was made after this disconnect");
+  });
+
+  test("standalone is reported only when the runtime after the restart is not a client", async () => {
+    const result = await run(live("client"), true, false, { after: live("client") });
+    expect(result.code).toBe(1);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toContain("still answers as a client");
+  });
+
   test("--json keeps stdout to the disconnect document", async () => {
     const logged: unknown[][] = [];
     const original = console.log;
     console.log = (...args: unknown[]) => { logged.push(args); };
     try {
+      let restarted = false;
       const result = await restartRuntimeAfterDisconnect({
-        observe: async () => live("client"),
-        restart: async () => { console.log("restart progress"); return true; },
+        observe: async () => live(restarted ? "standalone" : "client"),
+        restart: async () => { console.log("restart progress"); restarted = true; return true; },
+        stillDisconnected: () => true,
         json: true,
         error: () => {},
       });
