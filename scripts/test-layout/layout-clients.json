@@ -28,6 +28,7 @@
   "link-diagnostics.test.ts": "clients",
   "link-tunnel-history.test.ts": "clients",
   "link-readiness.test.ts": "clients",
+  "link-tunnel-status.test.ts": "clients",
   "gentle-shell-path.test.ts": "clients",
   "gentle-shell-client.test.ts": "clients",
   "droid-managed-reasoning-defaults.test.ts": "clients",
@@ -99,6 +100,7 @@
   "desktop-runtime-identity.test.ts": "clients",
   "desktop-start-at-login-default.test.ts": "clients",
   "desktop-startup-surface.test.ts": "clients",
+  "desktop-telemetry-installer.test.ts": "clients",
   "desktop-update-surface.test.ts": "clients",
   "desktop-tray-availability.test.ts": "clients",
   "desktop-widget-entry.test.ts": "clients",
@@ -177,5 +179,14 @@
   "link-ocx-child-conformance.test.ts": "clients",
   "link-ephemeral-child-discovery.test.ts": "clients",
   "link-enrollment-ephemeral-child.test.ts": "server",
-  "link-ocx-child-e2e.test.ts": "clients"
+  "link-ocx-child-e2e.test.ts": "clients",
+  "link-child-plant-foundations.test.ts": "clients",
+  "link-gated-ocx-argv.test.ts": "clients",
+  "link-child-update-contract.test.ts": "clients",
+  "link-child-observations.test.ts": "clients",
+  "link-child-activity.test.ts": "clients",
+  "link-child-catalog-freshness.test.ts": "clients",
+  "link-child-observe.test.ts": "clients",
+  "link-child-ops-routes.test.ts": "server",
+  "cli-link-check.test.ts": "cli"
 }

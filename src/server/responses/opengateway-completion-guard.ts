@@ -27,6 +27,10 @@ function outputCommits(output: unknown): boolean {
   return !Array.isArray(output) || output.some(item => !isPlainObject(item)
     || (item.type !== "reasoning" && (item.type !== "message" || !Array.isArray(item.content) || item.content.some(partCommits))));
 }
+/** A snapshot's aggregate output_text is output too; anything but absent, null or "" is evidence (#8333). */
+function snapshotTextCommits(snapshot: RecordValue): boolean {
+  return snapshot.output_text != null && snapshot.output_text !== "";
+}
 function wellFormedEmpty(snapshot: unknown): snapshot is RecordValue {
   return isPlainObject(snapshot) && typeof snapshot.id === "string" && snapshot.id.trim().length > 0
     && snapshot.object === "response" && snapshot.status === "completed" && Array.isArray(snapshot.output)
@@ -39,7 +43,7 @@ function eventCommits(event: RecordValue): boolean {
   if (event.replayUnsafe === true) return true;
   switch (event.type) {
     case "response.created": case "response.in_progress": case "response.queued": case "response.heartbeat":
-      return isPlainObject(event.response) && outputCommits(event.response.output);
+      return isPlainObject(event.response) && (outputCommits(event.response.output) || snapshotTextCommits(event.response));
     case "response.output_item.added": case "response.output_item.done": return outputCommits([event.item]);
     case "response.content_part.added": case "response.content_part.done": return partCommits(event.part);
     case "response.output_text.delta": return event.delta !== "";
@@ -150,7 +154,7 @@ async function inspect(response: Response, options: OpenGatewayCompletionGuardOp
         let snapshot: unknown;
         try { snapshot = JSON.parse(decoder.decode(joinSseFrameBytes(held.flatMap(chunk => chunk ? [chunk] : [])))); }
         catch { return terminal(undefined); }
-        if (isPlainObject(snapshot) && (outputCommits(snapshot.output)
+        if (isPlainObject(snapshot) && (outputCommits(snapshot.output) || snapshotTextCommits(snapshot)
           || snapshot.error != null || ["failed", "incomplete", "queued", "in_progress"].includes(String(snapshot.status)))) return pass();
         return terminal(snapshot);
       }
@@ -167,7 +171,7 @@ async function inspect(response: Response, options: OpenGatewayCompletionGuardOp
         if (!isPlainObject(event)) return pass();
         if (event.replayUnsafe === true) return pass();
         if (event.type === "response.completed") {
-          if (isPlainObject(event.response) && outputCommits(event.response.output)) return pass();
+          if (isPlainObject(event.response) && (outputCommits(event.response.output) || snapshotTextCommits(event.response))) return pass();
           return terminal(event.response);
         }
         if (eventCommits(event)) return pass();

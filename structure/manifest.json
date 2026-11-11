@@ -521,9 +521,9 @@
     {
       "path": "data-planes/claude-tool-loading.md",
       "tier": 3,
-      "title": "Append-only Claude Tool Loading",
-      "scope": "Physical-adapter tool-loading projection, preserved catalogs, fallback exclusions and opt-in prerequisites.",
-      "documents": ["src/claude/", "src/server/responses/"]
+      "title": "Claude Tool Loading: Append-only and Chat Dispatcher",
+      "scope": "Physical-adapter tool-loading projections (Responses additional_tools and the Chat use_loaded_tool dispatcher with its response rewrite), preserved catalogs, fallback exclusions and opt-in prerequisites.",
+      "documents": ["src/claude/", "src/server/responses/", "src/types/claude-tool-loading.ts"]
     },
     {
       "path": "data-planes/ollama-inbound.md",
@@ -618,8 +618,8 @@
       "path": "providers/meta-muse.md",
       "tier": 4,
       "title": "Meta Muse Login",
-      "scope": "CLI credential import, approval lifecycle, explicit recovery and account-free login diagnostics.",
-      "documents": ["src/oauth/meta-muse.ts", "src/oauth/meta-muse-keychain.ts", "src/oauth/meta-muse-errors.ts", "src/oauth/login-cli.ts"]
+      "scope": "CLI credential import, approval lifecycle, explicit recovery, account-free login diagnostics and the runtime plan-refusal classification.",
+      "documents": ["src/oauth/meta-muse.ts", "src/oauth/meta-muse-keychain.ts", "src/oauth/meta-muse-errors.ts", "src/oauth/login-cli.ts", "src/providers/meta-muse-plan-refusal.ts"]
     },
     {
       "path": "providers/oauth-reconciliation.md",
@@ -883,6 +883,19 @@
         "src/adapters/",
         "src/chat/",
         "src/responses/"
+      ]
+    },
+    {
+      "path": "providers/hosted-tool-denials.md",
+      "tier": 4,
+      "title": "Hosted-Tool Denials",
+      "scope": "Provider-declared Responses hosted-tool denials, unconditional and conditional on client tools, with their validation and save carry.",
+      "documents": [
+        "src/responses/hosted-tool-policy.ts",
+        "src/adapters/openai-responses/tool-schema.ts",
+        "src/config/schema/leaf-validators.ts",
+        "src/server/auth-cors.ts",
+        "src/server/management/provider-overwrite-carry.ts"
       ]
     },
     {
@@ -1363,6 +1376,12 @@
         "src/local-credentials/",
         "src/server/index/link-management.ts",
         "src/server/management/link-routes.ts",
+        "src/server/management/link-child-ops-routes.ts",
+        "src/cli/link-child-ops.ts",
+        "src/cli/link-status-child.ts",
+        "src/server/index/local-control-listener.ts",
+        "src/lib/local-control-socket.ts",
+        "src/cli/link-local-control.ts",
         "src/server/management/link-enrollment.ts",
         "native/ocx-child/",
         "src/lib/gui-pair-intent.ts",
@@ -1433,7 +1452,25 @@
         "gui/src/hooks/useProviderAccountPools.ts",
         "src/config/account-auto-pause-revisions.ts",
         "src/oauth/api-key-pool-preserve.ts",
-        "gui/src/account-pause-display.ts"
+        "gui/src/account-pause-display.ts",
+        "src/oauth/account-resume-health.ts",
+        "src/codex/account-resume-health.ts"
+      ]
+    },
+    {
+      "path": "telemetry.md",
+      "tier": 5,
+      "title": "Telemetry",
+      "scope": "Anonymous daily usage telemetry contract, consent state, install identity, ledger aggregation, scheduler, management API, CLI, and Cloudflare Worker collector.",
+      "documents": [
+        "src/telemetry/",
+        "src/types/telemetry.ts",
+        "src/server/management/telemetry-routes.ts",
+        "src/cli/telemetry.ts",
+        "src/config/telemetry-carry.ts",
+        "src/server/management/consent-session.ts",
+        "src/server/background-lifecycle.ts",
+        "services/telemetry-collector/"
       ]
     }
   ],

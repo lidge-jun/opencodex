@@ -1,4 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { bridgeToResponsesSSE } from "../../src/bridge";
 import {
   comboStreamPayloadCommitsOutput,
   deferProtocolSafeResetRecovery,
@@ -7,6 +8,8 @@ import {
 import { stageCommitment, type RequestFailureStage } from "../../src/lib/request-failure-model";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../../src/server/sse-frame-buffer";
+import type { AdapterEvent } from "../../src/types";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 const sse = (...payloads: unknown[]): Response => new Response(
   payloads.map(payload => `data: ${JSON.stringify(payload)}\n\n`).join(""),
@@ -51,11 +54,30 @@ const createdPrefix = new TextEncoder().encode(`data: ${JSON.stringify({
 `);
 
 describe("combo stream preflight", () => {
+  test("a required-tool contract failure carrying a tool call is not replayed", async () => {
+    const failed = (output: unknown[], retryable?: boolean) => sse({ type: "response.failed", response: {
+      id: "r1", status: "failed", output,
+      error: { code: "required_tool_contract_unsatisfied", message: "no tool call", ...(retryable === undefined ? {} : { retryable }) },
+    } });
+    const held = [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "held" }] }];
+    expect((await preflightComboStreamResponse(failed(held), { model: "m1", provider: "a" })).kind).toBe("failed");
+    expect((await preflightComboStreamResponse(failed(held, false), { model: "m1", provider: "a" })).kind).toBe("accepted");
+    const call = [{ type: "function_call", call_id: "c1", name: "f", arguments: "{}" }];
+    expect((await preflightComboStreamResponse(failed(call), { model: "m1", provider: "a" })).kind).toBe("accepted");
+    // A tool call on the event's own output counts too, even beside an empty snapshot output.
+    const topLevel = sse({ type: "response.failed", output: call, response: {
+      id: "r1", status: "failed", output: [], error: { code: "required_tool_contract_unsatisfied", message: "no tool call" },
+    } });
+    expect((await preflightComboStreamResponse(topLevel, { model: "m1", provider: "a" })).kind).toBe("accepted");
+  });
+
   test("keeps only lifecycle preamble replayable and treats unknown output conservatively", () => {
     expect(comboStreamPayloadCommitsOutput({ type: "response.created" })).toBe(false);
     expect(comboStreamPayloadCommitsOutput({ type: "response.heartbeat" })).toBe(false);
     expect(comboStreamPayloadCommitsOutput({ type: "response.failed" })).toBe(false);
     expect(comboStreamPayloadCommitsOutput({ type: "response.incomplete" })).toBe(false);
+    expect(comboStreamPayloadCommitsOutput({ type: "response.output_text.delta", delta: "" })).toBe(false);
+    expect(comboStreamPayloadCommitsOutput({ type: "response.output_text.delta" })).toBe(false);
     expect(comboStreamPayloadCommitsOutput({ type: "response.output_text.delta", delta: "x" })).toBe(true);
     expect(comboStreamPayloadCommitsOutput({ type: "response.output_item.added", item: { type: "function_call" } })).toBe(true);
     expect(comboStreamPayloadCommitsOutput({ type: "provider.future_event" })).toBe(true);
@@ -143,7 +165,7 @@ describe("combo stream preflight", () => {
     expect(await result.response.text()).toBe(expected);
   });
 
-  for (const reason of ["max_output_tokens", "content_filter", "future_semantic_reason", "", null])
+  for (const reason of ["content_filter", "future_semantic_reason", "", null])
   test(`does not replay semantic or explicit unknown incomplete reasons (${JSON.stringify(reason)})`, async () => {
     const source = sse(
       { type: "response.created", response: { id: "r1", status: "in_progress" } },
@@ -377,6 +399,203 @@ describe("combo stream preflight", () => {
       expect(result.kind).toBe("accepted");
       expect(await result.response.text()).toBe(expected);
     }
+  });
+
+  test("retries a zero-output opaque OpenRouter numeric 400 without a structured code", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      status: 400,
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+      },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(400);
+  });
+
+  test("retries a zero-output opaque OpenRouter numeric 400 when status is omitted from SSE error", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+      },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(400);
+    const body = await result.response.json();
+    expect(body.error).toMatchObject({
+      message: "Provider returned error",
+      code: 400,
+      metadata: { raw: "ERROR" },
+    });
+  });
+
+  test("treats a zero-output opaque OpenRouter numeric 400 carrying root detail for malformed response_format as terminal", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      detail: "Invalid schema for response_format: 'type' must be 'object'",
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+      },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("a conflicting root and nested code still fails over when each would on its own", async () => {
+    // Neither code is a hard stop, so the conflict alone is no reason to keep a retryable failure.
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      code: "server_error",
+      status: 503,
+      error: { message: "overloaded", code: "server_is_overloaded" },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("failed");
+  });
+
+  test("a conflicting root hard stop keeps a retryable nested code terminal", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      code: "origin_rejected",
+      status: 429,
+      error: { message: "rate limited", code: "rate_limit_exceeded" },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("treats a zero-output opaque OpenRouter numeric 400 carrying root code invalid_request_error as terminal", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      code: "invalid_request_error",
+      status: 400,
+      error: {
+        message: "Provider returned error",
+        code: 400,
+        metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+      },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("retries a zero-output flat opaque OpenRouter numeric 400 SSE frame without status", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      message: "Provider returned error",
+      code: 400,
+      metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(400);
+    const body = await result.response.json();
+    expect(body.error).toMatchObject({
+      message: "Provider returned error",
+      code: 400,
+      metadata: { raw: "ERROR" },
+    });
+  });
+
+  test("retries a zero-output flat opaque OpenRouter numeric 400 SSE frame with explicit status 400", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      status: 400,
+      message: "Provider returned error",
+      code: 400,
+      metadata: { raw: "ERROR", provider_name: "Stealth", is_byok: false },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(400);
+  });
+
+  test("treats a wrapped invalid_request_error with upstream_error as terminal", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      status: 400,
+      error: {
+        type: "upstream_error",
+        message: 'Provider error 400: {"type":"error","error":{"type":"invalid_request_error","message":"tools.0.custom.name: String should match pattern ..."}}',
+      },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("retries a zero-output bare SSE error carrying numeric code 1308", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      error: { code: 1308, message: "Usage limit reached" },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("failed");
+  });
+
+  test("treats a zero-output bare SSE error with HTTP 400 and non-400 numeric code as terminal", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      status: 400,
+      error: {
+        code: 404,
+        type: "upstream_error",
+        message: "Resource not found",
+      },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("a root hop code leaves an opaque wrapper retryable, and a blank root code is no verdict", async () => {
+    // HTTP used to stop on any root code other than "400". The stream never did, so the carrier
+    // -- not the envelope -- decided. These four were the divergence: two hop signals, and the
+    // two ways a root states no code at all.
+    for (const code of ["model_not_found", "input_admission_refused", "", "  "]) {
+      const result = await preflightComboStreamResponse(sse({
+        type: "error",
+        status: 400,
+        code,
+        error: { message: "Provider returned error", code: 400, metadata: { raw: "ERROR" } },
+      }), { model: "m1", provider: "a" });
+
+      expect(result.kind).toBe("failed");
+      expect(result.response.status).toBe(400);
+    }
+  });
+
+  test("a root hard stop keeps a retryable nested record terminal, matching HTTP", async () => {
+    for (const code of ["content_policy_violation", "origin_rejected", "context_length_exceeded"]) {
+      const result = await preflightComboStreamResponse(sse({
+        type: "error",
+        status: 400,
+        code,
+        error: { message: "retryable", code: "model_not_found" },
+      }), { model: "m1", provider: "a" });
+
+      expect(result.kind).toBe("accepted");
+    }
+  });
+
+  test("a bare response.error is not an error event, so the frame commits like any other payload", async () => {
+    // Neither transport reads this carrier: under `type: "error"` it is not an error event, and
+    // HTTP has no error record to classify. Reading it on HTTP alone made one document hop there
+    // and stop here.
+    const result = await preflightComboStreamResponse(sse({
+      type: "error",
+      status: 400,
+      response: { error: { message: "Provider returned error", code: 400, metadata: { raw: "ERROR" } } },
+    }), { model: "m1", provider: "a" });
+
+    expect(result.kind).toBe("accepted");
   });
 
   test("passes a zero-output credential error to the ordinary combo classifier", async () => {
@@ -759,4 +978,155 @@ describe("combo stream preflight", () => {
     })).toBe(true);
   });
 
+  test("converts a zero-output incomplete with max_output_tokens into a retryable failure", async () => {
+    const source = sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      {
+        type: "response.incomplete",
+        response: {
+          id: "r1",
+          status: "incomplete",
+          incomplete_details: { reason: "max_output_tokens" },
+          output: [],
+          usage: { input_tokens: 25, output_tokens: 0, total_tokens: 25 },
+        },
+      },
+    );
+
+    const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" });
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(502);
+    const body = await result.response.json();
+    expect(body).toMatchObject({
+      error: {
+        code: "zero_output_token_limit",
+        message: "Provider reached its output token limit before producing output",
+      },
+      response: {
+        usage: { input_tokens: 25, output_tokens: 0 },
+      },
+    });
+  });
+
+  test("does not retry max_output_tokens when output was already produced", async () => {
+    const source = sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "response.output_text.delta", delta: "partial answer" },
+      {
+        type: "response.incomplete",
+        response: {
+          id: "r1",
+          status: "incomplete",
+          incomplete_details: { reason: "max_output_tokens" },
+        },
+      },
+    );
+
+    const expected = await source.clone().text();
+    const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" });
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.text()).toBe(expected);
+  });
+
+  test("does not replay an empty max_output_tokens incomplete with end_turn false", async () => {
+    const source = sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      {
+        type: "response.incomplete",
+        response: {
+          id: "r1",
+          status: "incomplete",
+          end_turn: false,
+          incomplete_details: { reason: "max_output_tokens" },
+          output: [],
+          usage: { input_tokens: 25, output_tokens: 0, total_tokens: 25 },
+        },
+      },
+    );
+
+    const expected = await source.clone().text();
+    const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" });
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.text()).toBe(expected);
+  });
+
+  test("does not replay an empty max_output_tokens incomplete marked non-retryable", async () => {
+    const source = sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      {
+        type: "response.incomplete",
+        response: {
+          id: "r1",
+          status: "incomplete",
+          incomplete_details: { reason: "max_output_tokens", retryable: false },
+          output: [],
+          usage: { input_tokens: 25, output_tokens: 0, total_tokens: 25 },
+        },
+      },
+    );
+
+    const expected = await source.clone().text();
+    const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" });
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.text()).toBe(expected);
+  });
+
+  test("delivers a translated pause_turn incomplete without replaying it", async () => {
+    // The Anthropic adapter reports `pause_turn` on its `done` event; the bridge normalizes the
+    // client-visible reason to `max_output_tokens`, so only the request context can still tell a
+    // paused long-running turn from a real output limit.
+    const context: RequestLogContext = { model: "m1", provider: "a" };
+    const budget = createTestTranslatorBudget();
+    try {
+      async function* events(): AsyncGenerator<AdapterEvent> {
+        yield { type: "done", stopReason: "pause_turn", usage: { inputTokens: 25, outputTokens: 4, totalTokens: 29 } };
+      }
+      const source = new Response(bridgeToResponsesSSE(
+        events(), "claude-test", undefined, undefined, undefined, undefined, 2_000,
+        { translatorBudget: budget, proxyErrorContext: context },
+      ), { headers: { "content-type": "text/event-stream" } });
+
+      const result = await preflightComboStreamResponse(source, context);
+      expect(result.kind).toBe("accepted");
+      const body = await result.response.text();
+      expect(body).toContain("event: response.incomplete");
+      expect(body).toContain('"reason":"max_output_tokens"');
+      expect(body).toContain('"input_tokens":25');
+      expect(body).toContain('"output_tokens":4');
+    } finally { budget.dispose(); }
+  });
+
+  test("converts a zero-output incomplete with max_output_tokens after empty delta into a retryable failure", async () => {
+    const source = sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "response.output_text.delta", delta: "" },
+      {
+        type: "response.incomplete",
+        response: {
+          id: "r1",
+          status: "incomplete",
+          incomplete_details: { reason: "max_output_tokens" },
+          output: [],
+          usage: { input_tokens: 25, output_tokens: 0, total_tokens: 25 },
+        },
+      },
+    );
+
+    const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" });
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(502);
+    const body = await result.response.json();
+    expect(body).toMatchObject({
+      error: {
+        code: "zero_output_token_limit",
+        message: "Provider reached its output token limit before producing output",
+      },
+      response: {
+        usage: { input_tokens: 25, output_tokens: 0 },
+      },
+    });
+  });
+
 });
+
+

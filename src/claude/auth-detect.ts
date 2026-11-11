@@ -14,6 +14,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { CLAUDE_KEYCHAIN_SERVICE, claudeKeychainReader, isSyncTimeout, type ClaudeKeychainReader } from "../oauth/claude-keychain-read";
 
 export type AuthPresence = "present" | "absent" | "unknown";
 
@@ -34,10 +35,32 @@ export type AuthSourceId =
  */
 export const PROXY_MARKER = "opencodex-proxy";
 
-const KEYCHAIN_SERVICE = "Claude Code-credentials";
+const KEYCHAIN_SERVICE = CLAUDE_KEYCHAIN_SERVICE;
 /** `security` exit code for "the item does not exist" — a real absent, not a failure. */
 const KEYCHAIN_ITEM_NOT_FOUND = 44;
 const KEYCHAIN_TIMEOUT_MS = 1_500;
+
+/**
+ * The metadata probe under the Keychain reader's admission (#8161). Its synchronous timeout still
+ * signals the child, so it does not spawn while a read is blocked or the backoff is active, and its
+ * own timeout starts that backoff: a locked keychain sees at most one such kill per window.
+ */
+export function probeClaudeKeychain(
+  platform: string,
+  reader: Pick<ClaudeKeychainReader, "syncReadBlocked" | "noteSyncTimeout">,
+  run: () => { status: number | null; signal: string | null; error?: Error },
+): AuthPresence {
+  if (platform !== "darwin") return "absent";
+  if (reader.syncReadBlocked()) return "unknown";
+  const result = run();
+  if (result.error || result.signal !== null) {
+    if (isSyncTimeout(result.error ?? { signal: result.signal })) reader.noteSyncTimeout();
+    return "unknown";
+  }
+  if (result.status === 0) return "present";
+  if (result.status === KEYCHAIN_ITEM_NOT_FOUND) return "absent";
+  return "unknown";
+}
 
 export interface AuthSourceResult {
   source: AuthSourceId;
@@ -204,15 +227,10 @@ export function defaultAuthDetectDeps(
       return existsSync(join(configDir, ".credentials.json"));
     },
     keychainProbe() {
-      if (process.platform !== "darwin") return "absent";
-      const result = spawnSync("security", ["find-generic-password", "-s", KEYCHAIN_SERVICE], {
+      return probeClaudeKeychain(process.platform, claudeKeychainReader, () => spawnSync("security", ["find-generic-password", "-s", KEYCHAIN_SERVICE], {
         timeout: KEYCHAIN_TIMEOUT_MS,
         stdio: ["ignore", "ignore", "ignore"],
-      });
-      if (result.error || result.signal !== null) return "unknown";
-      if (result.status === 0) return "present";
-      if (result.status === KEYCHAIN_ITEM_NOT_FOUND) return "absent";
-      return "unknown";
+      }));
     },
     env: () => env,
     ownTokens,

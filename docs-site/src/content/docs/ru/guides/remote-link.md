@@ -85,9 +85,12 @@ ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
+ocx link check (--link-id <id> | --all) [--no-wait] [--json]
 ```
 
 Без интерактивного терминала (TTY) параметр `--expect-fingerprint` обязателен. В интерактивном терминале его можно опустить, если явно подтвердить предложенный отпечаток.
+
+На Home команда `ocx link check (--link-id <id> | --all)` считывает для каждого Child, добавленного с Home, установленную версию, тип установки и путь обновления: она запускает на Child `ocx update --plan` по SSH-соединению связи (60 секунд на Child, не более трёх одновременно), а эта команда только вычисляет план и ничего не меняет. Child старше 2.97.0 получает `owner-action` (`legacy-ocx`); его версия берётся из ещё одного SSH-вызова только для чтения на macOS и Linux или из версии, переданной по связи, на Windows. Связи, начатые со стороны Child, и Child `ocx-child` отображаются без SSH. `ocx link status --json` добавляет к каждой строке блок `child` (версии, расхождение версий, актуальность каталога, активность, последняя операция). Подробности и коды выхода: [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity) (на английском).
 
 ## Связанные руководства
 

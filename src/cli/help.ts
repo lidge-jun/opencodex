@@ -67,7 +67,7 @@ Usage:
                               Open the dashboard or create a single-use remote pairing grant
   ocx hub invite [--json]     Print a ready-to-run \`ocx connect\` line for one more machine
                               (hub only; see \`ocx help hub\` for the one-port topology)
-  ocx link <sub>              Machine links over SSH (port|issue|revoke|status)
+  ocx link <sub>              Machine links over SSH (port|issue|revoke|status|check)
   ocx update [--tag <tag>]    Update opencodex (keeps preview installs on @preview)
   ocx restart                  Stop and restart the proxy
   ocx v2 <sub>                multi_agent_v2 surface (status|on|off|mode|keep-native-v1|threads|mode-hint)
@@ -102,6 +102,7 @@ Usage:
   ocx config [sub]            Validated configuration show/get/set/import/export
   ocx advisor <status|on|off|set|consent>  Advisor sidecar settings and context-sharing consent
   ocx companion <show|set|reset>  Menu-bar and widget companion usage settings
+  ocx telemetry <sub>         Anonymous usage telemetry status, preview, enable, and disable
   ocx lab <sub>               Inspect Lab evidence and control local automation
   ocx codex-provider <sub>    Confirm custom Codex provider routing: status|allow|revoke
   ocx chatgpt <sub>          Experimental app-server shim: launch|restore|status (macOS)

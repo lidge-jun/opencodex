@@ -6,9 +6,26 @@ import { clearGatherRoutedModelsInflight } from "../../codex/catalog/routed-gath
 import { redactSecretString } from "../../lib/redact";
 import type { OcxProviderConfig } from "../../types";
 import { jsonResponse } from "../auth-cors";
+import type { ManagementContext } from "./context";
 
 interface TraeCnProbeDeps extends TraeAcpDeps {
   refreshConnectedClients?: (admit: () => boolean) => Promise<OwnedIntegrationRefreshOutcome[]>;
+}
+
+export async function probeTraeCnProviderFromContext(
+  ctx: ManagementContext, name: string, provider: OcxProviderConfig,
+): Promise<Response> {
+  const { req, config, deps, convergeCodexCatalog } = ctx;
+  return probeTraeCnProvider(name, provider, convergeCodexCatalog, req.signal, {
+    refreshConnectedClients: async admit => {
+      const refresh = deps.refreshOwnedCatalogIntegrations
+        ?? (await import("../../integrations/catalog-refresh")).refreshOwnedCatalogIntegrations;
+      const { loadExportModels } = await import("./model-rows");
+      const { managementInferencePort } = await import("./context");
+      return refresh({ config, port: managementInferencePort(ctx), models: () => loadExportModels(config) },
+        undefined, { refreshOnly: true, admit });
+    },
+  });
 }
 
 /** Probe the signed-in CLI directly; cached or seeded model rows are not connection evidence. */

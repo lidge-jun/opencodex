@@ -152,7 +152,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "link",
-    usage: "ocx link <port|issue|status|revoke|reconnect|cleanup>",
+    usage: "ocx link <port|issue|status|revoke|reconnect|cleanup|check>",
     summary: "Allocate and manage a loopback remote home link.",
     details: [
       "Port: ocx link port [--json]",
@@ -161,7 +161,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "Revoke: ocx link revoke --link-id <id> [--force --yes] [--json]",
       "Reconnect: ocx link reconnect --link-id <id> [--json]",
       "Cleanup: ocx link cleanup [--link-id <id>] [--json]",
-      "Issue, status, revoke, and reconnect use the running proxy's loopback management API and admin token.",
+      "Check: ocx link check (--link-id <id> | --all) [--no-wait] [--json]",
+      "Issue, status, revoke, reconnect, and check use the running proxy's loopback management API and admin token.",
     ],
   },
   {
@@ -833,6 +834,19 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     hidden: true,
     usage: "ocx __gui-update-worker <jobId> [channel] [restart]",
     summary: "Hidden internal: run the GUI update worker.",
+  },
+  {
+    name: "telemetry",
+    usage: "ocx telemetry <status|enable|disable|profile> [--json]",
+    summary: "Inspect or change anonymous daily usage telemetry consent and preview the payload.",
+    details: [
+      "status [--json]   Show effective state, reason, install channel, last sent day, and exact preview payload.",
+      "enable [--json]   Confirm and opt in to anonymous telemetry in an interactive terminal (refused with agent_consent_required or tty_required otherwise).",
+      "disable [--json]  Opt out of anonymous telemetry and delete telemetry-id.json.",
+      "profile [status] [--json]  Show the opt-in public leaderboard profile, the next day it would send, and its ranks.",
+      "profile connect --handle <h> [--name <n>] [--avatar <colour>] [--json]  Create a public profile in an interactive terminal (refused with agent_consent_required or tty_required otherwise).",
+      "profile disconnect [--json]  Delete the public profile and all its data on the server; always permitted.",
+    ],
   },
 ];
 

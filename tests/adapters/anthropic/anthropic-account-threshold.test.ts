@@ -311,3 +311,36 @@ test("management dispatcher exposes the saved override/default/effective DTO wit
   expect(dto.accounts.find((row: { id: string }) => row.id === ids[1])).toMatchObject({ autoSwitchThresholdOverride: null, effectiveAutoSwitchThreshold: 60, autoSwitchThreshold: 60 });
   expect(JSON.stringify(dto)).not.toContain("synthetic");
 });
+
+const FABLE = "claude-fable-5-2";
+function fableQuota(id: string, weekly: number, fable: number, resetAt = Date.now() + 3600_000) {
+  setCachedProviderAccountQuotaForTests("anthropic", id, { weeklyPercent: weekly, weeklyResetAt: resetAt, updatedAt: Date.now(),
+    customWindows: [{ label: "Fable", scope: "model", percent: fable, resetAt, weeklyAllowancePercent: 50 }] });
+}
+test("Fable ranks accounts on weekly headroom while thresholds read the Fable meter itself", async () => {
+  const [a, b, c] = ids;
+  const ranked = config("quota", "weekly"); ranked.anthropicAccountPool!.autoSwitchThreshold = 40;
+  // Fable headroom in weekly points: a min(50*0.4, 90) = 20, b min(50, 30) = 30, c min(50, 10) = 10.
+  fableQuota(a, 10, 60); fableQuota(b, 70, 0); fableQuota(c, 90, 0);
+  expect(resolveAnthropicAccountForSession("fable-rank", ranked, Date.now(), null, FABLE).accountId).toBe(b);
+  // A fresh seat ranks at 50 on the weekly scale, but must not trip a 40% fill-first threshold.
+  for (const id of ids) fableQuota(id, 0, 0);
+  const fill = config("fill-first", "weekly"); fill.anthropicAccountPool!.autoSwitchThreshold = 40;
+  const active = getAccountSet("anthropic")!.activeAccountId!;
+  for (const session of ["fable-fresh-1", "fable-fresh-2"]) {
+    expect(resolveAnthropicAccountForSession(session, fill, Date.now(), null, FABLE).accountId).toBe(active);
+  }
+});
+
+
+test("five-hour ranking keeps five-hour order for fresh Fable seats", async () => {
+  const [a, b, c] = ids; const resetAt = Date.now() + 3600_000;
+  const seat = (id: string, fiveHour: number) => setCachedProviderAccountQuotaForTests("anthropic", id, { fiveHourPercent: fiveHour,
+    weeklyPercent: 0, fiveHourResetAt: resetAt, weeklyResetAt: resetAt, updatedAt: Date.now(),
+    customWindows: [{ label: "Fable", scope: "model", percent: 0, resetAt, weeklyAllowancePercent: 50 }] });
+  seat(a, 95); seat(b, 49); seat(c, 1);
+  const cfg = config("quota", "five-hour");
+  await setActiveAccount("anthropic", a);
+  expect(resolveAnthropicAccountForSession("fable-5h", cfg, Date.now(), null, FABLE).accountId).toBe(c);
+});
+

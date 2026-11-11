@@ -1,7 +1,7 @@
 import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
 import { validRemainingQuotaAccountIds } from "../../codex/account-use-remaining";
 import * as z from "zod/v4";
-import { isAppendOnlyToolLoadingModels } from "../../claude/inbound-tool-loading";
+import { isToolLoadingModelSelectors } from "../../claude/inbound-tool-loading";
 import { accountPauseStateSchema } from "./account-auto-pause";
 import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { compactionRecoverySchema } from "./compaction-recovery";
@@ -29,6 +29,7 @@ import {
   spendSchema,
   chatgptDesktopSchema,
   skillsConfigSchema,
+  telemetryConfigSchema,
   configuredCodexPoolAccountIds,
   apiKeyEntrySchema,
   asideProfileSyncSchema,
@@ -60,6 +61,8 @@ import {
   providerHeadersConfigError,
   providerForwardClientHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
+  thinkingDisplayConfigError,
+  modelThinkingDisplayConfigError,
   credentialPinnedProviderConfigError,
 } from "../provider-validation";
 import {
@@ -120,6 +123,7 @@ export const configSchema = z.object({
   skills: skillsConfigSchema.optional().catch(undefined),
   // Malformed hand edits disable this opt-in exporter. Live writes reject them in diagnostics.ts.
   metricsExport: z.object({ enabled: z.boolean().optional() }).strict().optional().catch(undefined),
+  telemetry: telemetryConfigSchema.optional().catch(undefined),
   // Same contract as metricsExport: a malformed hand edit leaves recovery off; live writes reject it.
   serviceHealthRecovery: z.object({ enabled: z.boolean().optional() }).strict().optional().catch(undefined),
   // Kept raw on purpose: `.catch(undefined)` would turn a mistyped `enabled` into "inherit",
@@ -437,9 +441,12 @@ export const configSchema = z.object({
   if (claudeCode !== undefined && (!claudeCode || typeof claudeCode !== "object" || Array.isArray(claudeCode))) {
     ctx.addIssue({ code: "custom", path: ["claudeCode"], message: "claudeCode must be an object" });
   } else if (claudeCode) {
-    const claude = claudeCode as { desktopProfile?: unknown; desktopModelVisibility?: unknown; desktopMode?: unknown; intercept?: unknown; appendOnlyToolLoadingModels?: unknown };
-    if (claude.appendOnlyToolLoadingModels !== undefined && !isAppendOnlyToolLoadingModels(claude.appendOnlyToolLoadingModels)) {
+    const claude = claudeCode as { desktopProfile?: unknown; desktopModelVisibility?: unknown; desktopMode?: unknown; intercept?: unknown; appendOnlyToolLoadingModels?: unknown; chatToolDispatchModels?: unknown };
+    if (claude.appendOnlyToolLoadingModels !== undefined && !isToolLoadingModelSelectors(claude.appendOnlyToolLoadingModels)) {
       ctx.addIssue({ code: "custom", path: ["claudeCode", "appendOnlyToolLoadingModels"], message: "appendOnlyToolLoadingModels must be up to 128 provider/model selectors (max 512 characters each), optionally ending in a single wildcard" });
+    }
+    if (claude.chatToolDispatchModels !== undefined && !isToolLoadingModelSelectors(claude.chatToolDispatchModels)) {
+      ctx.addIssue({ code: "custom", path: ["claudeCode", "chatToolDispatchModels"], message: "chatToolDispatchModels must be up to 128 provider/model selectors (max 512 characters each), optionally ending in a single wildcard" });
     }
     if (claude.desktopMode !== undefined && claude.desktopMode !== "first-party" && claude.desktopMode !== "gateway") {
       ctx.addIssue({ code: "custom", path: ["claudeCode", "desktopMode"], message: "desktopMode must be \"first-party\" or \"gateway\"" });
@@ -765,6 +772,26 @@ export const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "modelReasoningSummaryDelivery"],
         message: reasoningSummaryDeliveryError,
+      });
+    }
+    const thinkingDisplayError = thinkingDisplayConfigError(
+      (provider as { thinkingDisplay?: unknown }).thinkingDisplay,
+    );
+    if (thinkingDisplayError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "thinkingDisplay"],
+        message: thinkingDisplayError,
+      });
+    }
+    const modelThinkingDisplayError = modelThinkingDisplayConfigError(
+      (provider as { modelThinkingDisplay?: unknown }).modelThinkingDisplay,
+    );
+    if (modelThinkingDisplayError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "modelThinkingDisplay"],
+        message: modelThinkingDisplayError,
       });
     }
     const minMaxOutputError = positiveIntegerConfigError(

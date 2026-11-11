@@ -61,12 +61,12 @@ Home의 프로바이더를 사용할 컴퓨터에서 다음을 진행합니다.
 
 ## Child 제거하기
 
-Child의 **Disconnect**를 선택하고 alias를 확인합니다. Home은 터널을 중지하고 해당 Child의 링크 키를 폐기한 뒤 저장된 링크 기록을 삭제합니다.
+Child의 **Disconnect**를 선택하고 alias를 확인합니다. Home은 터널을 중지하고 해당 Child의 링크 키를 폐기한 뒤 저장된 링크 기록을 삭제합니다. 경량 에이전트(`ocx-child`)로 연결된 Child는 기본적으로 빠른 재연결을 위해 `~/.cache/opencodex/bin/ocx-child` 파일을 남겨두며, 확인 대화상자에서 **심어둔 경량 에이전트 파일까지 원격 컴퓨터에서 함께 삭제**를 선택하거나 `ocx link revoke --link-id <id> --purge`를 실행하면 에이전트 파일까지 함께 삭제합니다. Home은 이 삭제를 `PATH`에 있는 다른 `ocx-child`가 아니라 `~/.cache/opencodex/bin/ocx-child`(Windows에서는 `%LOCALAPPDATA%\opencodex\bin\ocx-child.exe`)에 심어둔 파일로 실행합니다. 그 파일이 없거나 Child가 파일을 삭제했다고 확인하지 않으면 Disconnect는 오류를 보고하고 링크를 그대로 남겨 두므로, 다시 시도하거나 삭제 옵션 없이 연결을 해제하거나 파일을 직접 지울 수 있습니다. `--purge`는 경량 Child에만 적용됩니다. 전체 OpenCodex 설치에서는 Home이 거부하고, Home이 Child 종류를 기록하기 전에 저장된 링크라면 먼저 Child를 확인합니다.
 
 Home에서 Child의 연결 해제 명령을 실행할 수 없으면 **Remove here only**를 선택합니다. 그러면 이 컴퓨터의 터널, 키, 기록만 삭제됩니다. 그 다음 Child에 로그인하여 실행합니다.
 
 ```bash
-ocx disconnect
+ocx disconnect   # 경량 모듈 Child인 경우 ~/.cache/opencodex/bin/ocx-child detach
 ```
 
 자식 연결을 끊으려면 자식에서 `ocx disconnect`를 실행합니다. 이 명령은 클라이언트 터널을 끊고 SSH를 통해 홈에서 링크를 폐기합니다. 홈에서 폐기하지 못하면 다음 문구를 출력합니다: `Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
@@ -79,15 +79,18 @@ Child는 링크를 통해 Home 컴퓨터의 프로바이더와 프로바이더 �
 
 ```text
 ocx link probe <alias> [--json]
-ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
+ocx link add <alias> [--plant] [--expect-fingerprint SHA256:…] [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
-ocx link revoke --link-id <id> [--json]
+ocx link revoke --link-id <id> [--purge] [--force --yes] [--json]
 ocx link reconnect --link-id <id> [--json]
+ocx link check (--link-id <id> | --all) [--no-wait] [--json]
 ```
 
 비대화형 실행(TTY 없음)에서는 `--expect-fingerprint`가 필수입니다. 대화형 터미널에서는 옵션을 생략할 수 있지만, 제시된 지문을 명시적으로 확인해야 합니다.
+
+Home에서 `ocx link check (--link-id <id> | --all)`를 실행하면 Home이 추가한 각 Child의 설치 버전, 설치 종류, 업데이트 경로를 읽습니다. 링크의 SSH로 Child의 `ocx update --plan`을 실행하며(Child마다 60초, 동시에 세 대), 이 명령은 계획만 계산하고 아무것도 바꾸지 않습니다. 2.97.0보다 오래된 Child는 `owner-action`(`legacy-ocx`)으로 표시되고, 버전은 macOS와 Linux에서는 읽기 전용 SSH 호출을 한 번 더 해서, Windows에서는 링크로 보고된 버전에서 가져옵니다. Child 쪽에서 연결한 링크와 `ocx-child` Child는 SSH 없이 보고됩니다. `ocx link status --json`은 각 행에 `child` 블록(버전, 버전 차이, 카탈로그 최신 여부, 활동, 마지막 작업)을 추가합니다. 자세한 내용과 종료 코드는 [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity)(영문)를 참고하세요.
 
 ## 관련 가이드
 

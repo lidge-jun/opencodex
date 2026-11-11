@@ -675,6 +675,47 @@ describe("combo management API", () => {
     });
   });
 
+  test("PUT stores and echoes jevEffortMode only for the client opt-in (#8041)", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+      const targets = [{ provider: "a", model: "m1" }];
+      // A failover save, a JEV save that omits the field and an explicit "decide" never
+      // materialize the default on the wire, in memory or on disk.
+      for (const [id, combo] of [
+        ["plain", { targets }],
+        ["jev-omitted", { strategy: "jev", targets }],
+        ["jev-decide", { strategy: "jev", targets, jevEffortMode: "decide" }],
+      ] as const) {
+        const saved = await comboApi(config, "PUT", "/api/combos", { id, combo });
+        expect(saved?.status).toBe(200);
+        expect((await responseJson(saved)).combo).not.toHaveProperty("jevEffortMode");
+        expect(config.combos?.[id]).not.toHaveProperty("jevEffortMode");
+      }
+      const client = await comboApi(config, "PUT", "/api/combos", {
+        id: "jev-client",
+        combo: { strategy: "jev", targets, jevEffortMode: "client" },
+      });
+      expect(client?.status).toBe(200);
+      expect((await responseJson(client)).combo).toMatchObject({ jevEffortMode: "client" });
+      expect(config.combos?.["jev-client"]).toMatchObject({ jevEffortMode: "client" });
+      const disk = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      expect(disk.combos?.["jev-client"]).toMatchObject({ jevEffortMode: "client" });
+      for (const id of ["plain", "jev-omitted", "jev-decide"]) expect(disk.combos?.[id]).not.toHaveProperty("jevEffortMode");
+      const listed = (await responseJson(await comboApi(config, "GET", "/api/combos"))).combos as Array<Record<string, unknown>>;
+      expect(listed.map(row => [row.id, row.jevEffortMode])).toEqual([
+        ["jev-client", "client"], ["jev-decide", undefined], ["jev-omitted", undefined], ["plain", undefined],
+      ]);
+      // Switching back to "decide" clears the stored key instead of pinning the default.
+      const reset = await comboApi(config, "PUT", "/api/combos", {
+        id: "jev-client",
+        combo: { strategy: "jev", targets, jevEffortMode: "decide" },
+      });
+      expect(reset?.status).toBe(200);
+      expect(config.combos?.["jev-client"]).not.toHaveProperty("jevEffortMode");
+    });
+  });
+
   test("PUT carries lastResort and cooldownWaitPolicy through a dashboard-shaped save (#5691)", async () => {
     await withTempHome(async () => {
       const config = baseConfig({ combos: undefined });

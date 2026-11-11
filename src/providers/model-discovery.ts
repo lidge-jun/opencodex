@@ -1,5 +1,6 @@
 import { extractWorkBuddyModels } from "./workbuddy-models";
 import type { OcxProviderConfig } from "../types";
+import { providerSkipsInvalidModelRows } from "./model-discovery-config";
 import {
   isValidModelDiscoveryModelId,
   MODEL_DISCOVERY_MAX_MODEL_ID_LENGTH,
@@ -31,6 +32,8 @@ export interface ResolvedProviderModelDiscovery {
   spec?: ProviderModelDiscoverySpec;
   maxResponseBytes: number;
   maxModels: number;
+  /** Operator opt-in `providers.<name>.modelDiscovery.skipInvalidRows` (#7910); absent means strict. */
+  skipInvalidRows?: true;
 }
 
 export type ProviderModelsApiItem = Record<string, unknown> & { id: string };
@@ -46,7 +49,7 @@ export type BoundedDiscoveryJsonResult =
   | { ok: false; reason: "response_too_large" | "invalid_json" };
 
 export type ProviderModelItemsResult =
-  | { ok: true; items: ProviderModelsApiItem[]; rawCount: number }
+  | { ok: true; items: ProviderModelsApiItem[]; rawCount: number; skippedInvalidRows?: number }
   | { ok: false; reason: "invalid_shape" | "too_many_models"; diagnostic?: string };
 
 export type ModelEnvelopeRowsResult =
@@ -162,7 +165,7 @@ export function providerModelDiscoverySpecError(spec: ProviderModelDiscoverySpec
 
 export function resolveProviderModelDiscovery(
   providerName: string,
-  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode" | "modelDiscovery">>,
 ): ResolvedProviderModelDiscovery {
   // The dashboard permits a canonical preset to be saved under a different name. Recover its
   // registry-owned discovery policy by transport in that case. The destination helper is limited
@@ -177,6 +180,8 @@ export function resolveProviderModelDiscovery(
     ...(spec ? { spec } : {}),
     maxResponseBytes: positiveIntegerAtMost(spec?.maxResponseBytes, MODEL_DISCOVERY_MAX_RESPONSE_BYTES),
     maxModels: positiveIntegerAtMost(spec?.maxModels, MODEL_DISCOVERY_MAX_MODELS),
+    // Operator configuration, never registry policy: the registry cannot relax row validation.
+    ...(providerSkipsInvalidModelRows(provider) ? { skipInvalidRows: true as const } : {}),
   };
 }
 
@@ -509,6 +514,22 @@ function plainObject(value: unknown): Record<string, unknown> | null {
     ? value as Record<string, unknown>
     : null;
 }
+
+/** Why one envelope row cannot become a model, phrased without any row content. */
+function invalidRowReason(raw: unknown, idField: string): string | undefined {
+  const row = plainObject(raw);
+  if (!row) return "is not an object";
+  const id = row[idField];
+  if (isValidModelDiscoveryModelId(id)) return undefined;
+  return typeof id !== "string" ? "has a non-string id" : !id.trim() ? "has an empty id" : "has an invalid id";
+}
+
+/**
+ * Strict discovery rejects a listing with any invalid row; `skipInvalidRows` (#7910) drops those rows
+ * instead. Every row is still counted against the raw-row ceiling before this runs, and a listing
+ * where invalid rows were skipped but nothing was admitted stays malformed: skipping must never turn
+ * a broken listing into an authoritative empty roster.
+ */
 export function extractProviderModelItems(
   value: unknown,
   discovery: ResolvedProviderModelDiscovery,
@@ -534,12 +555,19 @@ export function extractProviderModelItems(
   const preferred: ProviderModelsApiItem[] = [];
   const seen = new Set<string>();
   const idField = discovery.spec?.idField ?? "id";
+  const skipInvalidRows = discovery.skipInvalidRows === true;
+  let invalidRows = 0;
+  let firstInvalid = "";
   for (const [index, raw] of data.entries()) {
-    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-      return { ok: false, reason: "invalid_shape", diagnostic: `row ${index} is not an object` };
+    const invalid = invalidRowReason(raw, idField);
+    if (invalid !== undefined) {
+      if (invalidRows === 0) firstInvalid = `row ${index} ${invalid}`;
+      invalidRows += 1;
+      continue;
     }
-    const id = (raw as Record<string, unknown>)[idField];
-    if (!isValidModelDiscoveryModelId(id)) return { ok: false, reason: "invalid_shape", diagnostic: `row ${index} has ${typeof id !== "string" ? "a non-string id" : !id.trim() ? "an empty id" : "an invalid id"}` };
+    // A strict listing is already rejected; keep scanning only to count the invalid rows.
+    if (invalidRows > 0 && !skipInvalidRows) continue;
+    const id = (raw as Record<string, unknown>)[idField] as string;
     const prefix = discovery.spec?.stripIdPrefix;
     let finalId = id;
     if (prefix && finalId.startsWith(prefix)) {
@@ -562,5 +590,13 @@ export function extractProviderModelItems(
       ? preferred : items;
     target.push(siblings ? enrichAdmittedModel(item, siblings) : item);
   }
-  return { ok: true, items: [...preferred, ...items], rawCount: data.length };
+  if (invalidRows > 0 && (!skipInvalidRows || items.length + preferred.length === 0)) {
+    return { ok: false, reason: "invalid_shape", diagnostic: `${firstInvalid}; ${invalidRows} of ${data.length} rows invalid` };
+  }
+  return {
+    ok: true,
+    items: [...preferred, ...items],
+    rawCount: data.length,
+    ...(invalidRows > 0 ? { skippedInvalidRows: invalidRows } : {}),
+  };
 }

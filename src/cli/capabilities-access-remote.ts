@@ -165,4 +165,14 @@ export const ACCESS_REMOTE_CAPABILITIES: readonly Capability[] = [
     json: "envelope",
     details: ["Fixed data-plane WebSocket /v1/live with the existing audio key carrier and session.update, then session.close. It contacts upstream and may incur provider usage; no microphone, audio upload, tool execution or voice-roundtrip claim.","Version1 report distinguishes readiness from confirmed normal close. Socket-open alone is not ready.15s readiness,2s close deadline; stuck/abnormal closure remains unverified/nonzero, with local socket termination.","No raw frames/session IDs/encoded credentials are printed. NativeWebSocket redirect refusal is verified separately from HTTP upload behavior."],
   },
+  {
+    command: ["link","check"],
+    usage: "ocx link check (--link-id <id> | --all) [--no-wait] [--json]",
+    summary: "Read each Home-initiated Child's installed version, install kind and update route.",
+    routes: [{"method":"POST","path":"/api/link/children/operations"},{"method":"GET","path":"/api/link/children/jobs/{jobId}"}],
+    flags: [{"name":"--link-id","value":"string","summary":"Link id to check; repeatable, up to 64."},{"name":"--all","value":"boolean","summary":"Check every link in the Home's store."},{"name":"--no-wait","value":"boolean","summary":"Print the queued job and return without polling it."},{"name":"--json","value":"boolean","summary":"Emit the ocx.link.child-job/1 document as JSON (always JSON)."}],
+    mutates: true,
+    json: "payload",
+    details: ["Requires loopback admin authority on the Home. Starts one observe job; the CLI polls it every 2 s and prints the final ocx.link.child-job/1 document. Exit 0 when every item succeeded, 6 when an item is busy, offline, refused, owner-action or unsupported, 1 on a failure, 4 when the link is unknown or the Home predates Child operations, 5 on a conflict: the link already has an operation running, --all found no Home-initiated link, or the command ran on a Child.","Changes no install on the Child: it runs the gated update --plan, which only computes. An npm Child without a census pair runs it through its ocx shim, so the launcher's ordinary bootstrap (sync-guard bookkeeping, Bun resolution) runs first, as for any pinned sync; the gated script disables the Desktop handoff. Writes the Home's Child observation cache.","One SSH call per Child, up to 60 s, three at a time; a POSIX Child older than 2.97.0 costs one more read-only call for its version. Home-initiated links only: client-initiated and ocx-child links are reported without SSH. One operation per link per running Home."],
+  },
 ];

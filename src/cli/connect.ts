@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { DEFAULT_CATALOG_PATH } from "../codex/paths";
 import { codexSupportedReasoningEfforts } from "../codex/catalog/effort";
-import { resolveCodexRuntime } from "../codex/runtime";
+import { resolveCodexRuntime, type ResolvedCodexRuntime } from "../codex/runtime";
 import {
   inspectClientCatalogReadiness,
   type CatalogCompatibilityDeps,
@@ -16,6 +16,7 @@ import {
 } from "../client/connect";
 import { inspectClientRotationRecoveryGate, readClientConnectionState } from "../client/state";
 import { readClientLinkState } from "../client/link-state";
+import { probeLinkTunnelStatus, type LinkTunnelStatus } from "../client/link-tunnel-status";
 import { teardownClientLink } from "../client/link-teardown";
 import { reapOrphanTunnel } from "../client/link-tunnel";
 import { readServiceApiTokenState } from "../lib/service-secrets";
@@ -55,20 +56,22 @@ export interface ClientCommandDeps extends RuntimeApiDeps {
     knownHostsFile?: string;
     timeoutMs?: number;
   };
+  /** Injected in tests; defaults to asking the running Child's /readyz. */
+  probeLinkTunnel?: () => Promise<LinkTunnelStatus>;
 }
 
 export interface ClientCatalogProbeDeps extends CatalogCompatibilityDeps {
   /** Injected in tests; defaults to reading the materialized client catalog off disk. */
   readCatalogBody?: () => string | null;
   /**
-   * A Codex command the caller already resolved, handed over so readiness skips resolving it
+   * The Codex runtime the caller already resolved, handed over so readiness skips resolving it
    * again. General `ocx status` resolves the full runtime for its diagnostics block; the resolver
    * memo is keyed by discovery scope and holds one entry, so a priority-only readiness resolve
    * and the full one miss each other and re-probe the same command with `--version` — up to eight
-   * seconds apiece. Passing the command across adds no cache state, and it cannot disagree with
+   * seconds apiece. Passing the selection across adds no cache state, and it cannot disagree with
    * what status prints because it is the selection status is printing.
    */
-  selectedCodexCommand?: string;
+  selectedCodexRuntime?: ResolvedCodexRuntime;
 }
 
 export const CONNECT_USAGE = `Usage:
@@ -119,6 +122,12 @@ export type ClientConnectionStatus = {
   readiness?: ClientCatalogReadiness["kind"];
   /** Present whenever readiness is not `ready`; names the fault and the way out. */
   readinessReason?: string;
+  /**
+   * A Remote Link Child's tunnel as its running runtime sees it (#8470). `state: "connected"` is
+   * the durable link record; this says whether a request can cross it now. Additive, and only on
+   * `ocx connect status` for `transport: "link"`.
+   */
+  linkTunnel?: LinkTunnelStatus;
 };
 
 function readInstalledCatalogBody(): string | null {
@@ -139,12 +148,14 @@ function readInstalledCatalogBody(): string | null {
  * to the catalog probe: readiness does not consume alternative-runtime diagnostics. The resolver
  * keeps this priority-only cache separate from the full discovery used by `ocx status`.
  *
- * A caller that has already resolved passes its selection in through `selectedCodexCommand` rather
+ * A caller that has already resolved passes its selection in through `selectedCodexRuntime` rather
  * than paying for a second `--version` probe of the command it just resolved.
  */
-function observeLocalCodexEffortLadder(selected?: string): ReadonlySet<string> | null {
-  const command = selected ?? resolveCodexRuntime({ discoverAlternatives: false }).runtime.command;
-  return codexSupportedReasoningEfforts({ commandCandidates: () => [command] });
+function observeLocalCodexEffortLadder(selected?: ResolvedCodexRuntime): ReadonlySet<string> | null {
+  const runtime = selected ?? resolveCodexRuntime({ discoverAlternatives: false }).runtime;
+  // The selection travels with its command so the probe can tell an unresolved sentinel, which may
+  // fall back to the ChatGPT.app CLI on macOS (#8360), from a bare command that actually ran.
+  return codexSupportedReasoningEfforts({ commandCandidates: () => [runtime.command], selectedRuntime: runtime });
 }
 
 /**
@@ -154,8 +165,8 @@ function observeLocalCodexEffortLadder(selected?: string): ReadonlySet<string> |
  * would run its own probe, which is how the two checks could disagree about the ladder within
  * a single `ocx connect`.
  */
-function catalogObserver(deps: ClientCatalogProbeDeps | undefined): CatalogCompatibilityDeps {
-  const selected = deps?.selectedCodexCommand;
+export function catalogObserver(deps: ClientCatalogProbeDeps | undefined): CatalogCompatibilityDeps {
+  const selected = deps?.selectedCodexRuntime;
   return { supportedEfforts: deps?.supportedEfforts ?? (() => observeLocalCodexEffortLadder(selected)) };
 }
 
@@ -340,7 +351,26 @@ export function connectCompletionReport(
   };
 }
 
-function statusLines(status: ClientConnectionStatus): string[] {
+/**
+ * Adds the tunnel verdict (#8470) only for a connected Remote Link Child, the one case with a
+ * runtime verdict to read; a hub client or a disconnected machine is returned untouched, unprobed.
+ */
+export async function withLinkTunnelStatus(
+  status: ClientConnectionStatus,
+  probe: () => Promise<LinkTunnelStatus>,
+): Promise<ClientConnectionStatus> {
+  if (status.state !== "connected" || status.transport !== "link") return status;
+  // An optional diagnostic: a probe that fails must not take the durable status down with it.
+  let linkTunnel: LinkTunnelStatus;
+  try { linkTunnel = await probe(); } catch { linkTunnel = { state: "unknown", reason: "runtime_unreadable" }; }
+  return { ...status, linkTunnel };
+}
+
+function linkTunnelLine(tunnel: LinkTunnelStatus): string {
+  return tunnel.state === "up" ? "Link tunnel: up" : `Link tunnel: ${tunnel.state} (${terminalSafeText(tunnel.reason)})`;
+}
+
+export function clientConnectionStatusLines(status: ClientConnectionStatus): string[] {
   if (status.state !== "connected") {
     return [`Connection: ${status.state}${status.reason ? ` (${status.reason})` : ""}`];
   }
@@ -349,6 +379,8 @@ function statusLines(status: ClientConnectionStatus): string[] {
     // Second line on purpose. The whole of #4207 is that a reader stopped at "connected" and
     // believed the client was usable, so the local verdict has to arrive before the hub detail.
     readinessLine(status),
+    // #8470: the same holds for a link Child whose tunnel is down; say so before the detail.
+    ...(status.linkTunnel ? [linkTunnelLine(status.linkTunnel)] : []),
     `Transport: ${status.transport ?? "hub"}`,
     ...(status.link ? [`Link: ${status.link.linkId} via tunnel port ${status.link.tunnelPort}`] : []),
     `Hub: ${status.serverUrl}`,
@@ -513,8 +545,11 @@ export async function handleConnectCommand(argv: string[], deps: ClientCommandDe
       const args = argv.slice(1);
       const wantsJson = takeFlag(args, "--json");
       rejectArgs(args, CONNECT_USAGE, { redactValues: true });
-      const status = collectClientConnectionStatus(Date.now(), deps.lifecycleLockDeps, deps.catalogProbeDeps ?? {});
-      printData(status, wantsJson, statusLines(status));
+      const status = await withLinkTunnelStatus(
+        collectClientConnectionStatus(Date.now(), deps.lifecycleLockDeps, deps.catalogProbeDeps ?? {}),
+        deps.probeLinkTunnel ?? probeLinkTunnelStatus,
+      );
+      printData(status, wantsJson, clientConnectionStatusLines(status));
       return;
     }
     if (argv[0] === "revoke") {

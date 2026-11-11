@@ -130,8 +130,8 @@ describe("client fingerprint — anthropic OAuth headers", () => {
     expect(headers["X-Stainless-Lang"]).toBe("js");
     expect(headers["X-Stainless-Retry-Count"]).toBe("0");
     expect(headers["X-Stainless-Timeout"]).toBe("600");
-    expect(headers["X-Stainless-Package-Version"]).toBe("0.112.1");
-    expect(headers["X-Stainless-Runtime-Version"]).toBe("v26.3.0");
+    expect(headers["X-Stainless-Package-Version"]).toBe("0.128.0");
+    expect(headers["X-Stainless-Runtime-Version"]).toBe("v26.12.1");
     expect(headers["anthropic-beta"]).toBeDefined();
     expect(headers["X-Claude-Code-Session-Id"]).toMatch(/^[0-9a-f]{8}-/);
     expect(headers["x-client-request-id"]).toMatch(/^[0-9a-f]{8}-/);
@@ -188,3 +188,17 @@ describe("client fingerprint — anthropic OAuth headers", () => {
     expect(headers["User-Agent"]).toBe(CLAUDE_CLI_USER_AGENT);
   });
 });
+
+describe("presented Claude Code version", () => {
+  // Anthropic refuses claude-fable-5-2 below Claude Code 2.1.290 ("Claude Code 2.1.280 does not support this
+  // model"). The identity every OAuth route presents must stay at or above that floor.
+  test("meets the Claude Fable 5.2 minimum and appears in the User-Agent", async () => {
+    const { CLAUDE_CLI_VERSION, CLAUDE_CLI_USER_AGENT } = await import("../../src/providers/claude-cli-identity");
+    const parts = CLAUDE_CLI_VERSION.split(".").map(Number);
+    expect(parts).toHaveLength(3);
+    const [major, minor, patch] = parts as [number, number, number];
+    expect(major * 1_000_000 + minor * 1_000 + patch).toBeGreaterThanOrEqual(2 * 1_000_000 + 1 * 1_000 + 290);
+    expect(CLAUDE_CLI_USER_AGENT).toBe(`claude-cli/${CLAUDE_CLI_VERSION} (external, cli)`);
+  });
+});
+

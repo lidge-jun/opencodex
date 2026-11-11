@@ -5,10 +5,11 @@
  * and never saves on its own. May fetch `/api/provider-presets` once per provider
  * to discover `baseUrlChoices` (e.g. Qwen Cloud endpoint picker).
  *
- * Parent should remount on provider change (`key={item.name}`) so choice-loading
- * state resets cleanly without sync setState-in-effect.
+ * The form is keyed by dashboard target and provider name, so a same-name provider on
+ * another server never inherits this draft. Unsaved drafts are parked in the page-owned
+ * in-memory store; a changed saved baseline requires an explicit keep/use-saved choice.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { baseUrlForChoice, matchChoiceId, resolvedBaseUrlForChoice } from "../../base-url-choice";
 import { readJsonIfOk } from "../../fetch-json";
 import { confirmAction } from "../../action-dialogs";
@@ -26,7 +27,25 @@ import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import { authModeLabel } from "./ProviderRail";
 import { ProviderProtocolPanel } from "./ProviderProtocolPanel";
 import { ProviderKeyPacing, type KeyPacingDraft, type KeyPacingStatus } from "./ProviderKeyPacing";
-import type { WorkspaceItem, ProviderUpdatePatch, ProviderUpdateResult } from "./types";
+import type { WorkspaceItem, ProviderUpdateCallback } from "./types";
+import {
+  createProviderDraftStore,
+  draftRequestPacing,
+  positiveInteger,
+  positiveRpm,
+  providerDraftTargetLabel,
+  providerSettingsDraftFromItem,
+  providerSettingsDirty,
+  providerSettingsFieldsDirty,
+  providerSettingsPacingDirty,
+  providerSettingsDraftSignature,
+  providerSettingsDeltaPatch,
+  providerPacingConflicts,
+  rebaseProviderSettingsDraft,
+  type ProviderDraftStore,
+  type ProviderSettingsDraft,
+} from "../../provider-workspace/target-drafts";
+import { useRenderTargetCapture } from "../../use-render-target-capture";
 
 const ADAPTERS = ["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"] as const;
 const EMPTY_MODELS: string[] = [];
@@ -36,66 +55,83 @@ type PacingRule = { requestsPerMinute?: number; minIntervalMs?: number; maxConcu
 type PacingStatus = { enabled: boolean; queued: number; nextSlotInMs: number; lastStartedAt?: number; lastModelId?: string; keys?: KeyPacingStatus[] };
 type CursorHttpVersion = "http2" | "http1.1";
 
-function effectiveCursorHttpVersion(value: WorkspaceItem["upstreamHttpVersion"]): CursorHttpVersion {
-  return value === "http1.1" || value === "h1" ? "http1.1" : "http2";
+/** One mounted form's token in the draft store; referential identity is the whole point. */
+function createProviderDraftOwner(): symbol {
+  return Symbol("provider-draft-owner");
 }
 
-function numberDraft(value: number | undefined): string { return value === undefined ? "" : String(value); }
-function positiveRpm(value: string): number | undefined {
-  if (!value.trim()) return undefined;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 1 / 60 ? parsed : undefined;
-}
-function positiveInteger(value: string): number | undefined {
-  if (!value.trim()) return undefined;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
-}
-function pacingSignature(value: WorkspaceItem["requestPacing"] | undefined): string {
-  const models = Object.entries(value?.models ?? {})
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([model, rule]) => [model, rule.requestsPerMinute ?? null, rule.minIntervalMs ?? null, rule.maxConcurrentRequests ?? null]);
-  return JSON.stringify([
-    value?.enabled === true,
-    value?.requestsPerMinute ?? null,
-    value?.minIntervalMs ?? null,
-    value?.maxConcurrentRequests ?? null,
-    value?.keySelection ?? "active",
-    [value?.keys?.requestsPerMinute ?? null, value?.keys?.minIntervalMs ?? null, value?.keys?.maxConcurrentRequests ?? null],
-    models,
-  ]);
-}
-
-export default function ProviderSettings({
-  item, availableModels = EMPTY_MODELS, apiBase, onUpdateProvider, onDirtyChange, onRegisterSave,
-}: {
+type ProviderSettingsProps = {
   item: WorkspaceItem;
   availableModels?: string[];
   /** When set, load endpoint choices for catalog providers that expose baseUrlChoices. */
   apiBase?: string;
-  onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<ProviderUpdateResult>;
+  /** Identity of the dashboard server this form edits; drafts are scoped to it. */
+  targetKey?: string;
+  /** Nonsecret label for the logical target; never a credential or machine key id. */
+  targetLabel?: string;
+  /** Page-owned in-memory store so drafts survive a target switch. */
+  draftStore?: ProviderDraftStore;
+  onUpdateProvider?: ProviderUpdateCallback;
   onDirtyChange?: (dirty: boolean) => void;
   /** Lets parent dialogs trigger the same save path as the sticky bar. */
   onRegisterSave?: (save: (() => Promise<boolean>) | null) => void;
-}) {
+  /** Lets the leave dialog use this form's owner-checked discard. */
+  onRegisterDiscard?: (discard: (() => void) | null) => void;
+};
+
+/**
+ * Target-scoped wrapper. A provider name is only unique within one dashboard server, so
+ * changing the target remounts the form: the new target reads its own draft (or its saved
+ * values), and the previous target's draft stays parked in the store for its return.
+ */
+export default function ProviderSettings(props: ProviderSettingsProps) {
+  const targetKey = props.targetKey ?? "";
+  const localStore = useMemo(() => props.draftStore ?? createProviderDraftStore(), [props.draftStore]);
+  return (
+    <ProviderSettingsForm
+      key={`${targetKey}\u0000${props.item.name}`}
+      {...props}
+      targetKey={targetKey}
+      draftStore={localStore}
+    />
+  );
+}
+
+function ProviderSettingsForm({
+  item, availableModels = EMPTY_MODELS, apiBase, targetKey, targetLabel, draftStore, onUpdateProvider, onDirtyChange, onRegisterSave, onRegisterDiscard,
+}: ProviderSettingsProps & { targetKey: string; draftStore: ProviderDraftStore }) {
   const t = useT();
-  const initialAuth = String(item.authMode ?? (item.keyOptional ? "local" : "key"));
+  // This mount's identity in the draft store. Created once per mount, so a newer
+  // mount for the same target supersedes an older one.
+  const [draftOwner] = useState(createProviderDraftOwner);
+  const authorityRef = useRef(0);
+  const [initial] = useState(() => {
+    const base = providerSettingsDraftFromItem(item);
+    const restored = draftStore.claim(targetKey, item.name, draftOwner, { draft: base, baseline: base });
+    return {
+      draft: restored.draft,
+      baseline: restored.baseline,
+    };
+  });
   const liveModelDiscoverySupported = providerSupportsLiveModelDiscovery(item.name, item);
-  const savedLiveModels = liveModelDiscoverySupported ? item.liveModels !== false : false;
-  const savedCursorHttpVersion = effectiveCursorHttpVersion(item.upstreamHttpVersion);
-  const [adapter, setAdapter] = useState(item.adapter);
-  const [baseUrl, setBaseUrl] = useState(item.baseUrl);
-  const [project, setProject] = useState(item.project ?? "");
-  const [location, setLocation] = useState(item.location ?? "");
-  const [defaultModel, setDefaultModel] = useState(item.defaultModel ?? "");
-  const [authMode, setAuthMode] = useState(initialAuth);
-  const [apiKeyTransport, setApiKeyTransport] = useState(item.apiKeyTransport ?? "x-api-key");
-  const [note, setNote] = useState(item.note ?? "");
-  const [allowPrivateNetwork, setAllowPrivateNetwork] = useState(item.allowPrivateNetwork ?? false);
-  const [preserveReasoningReplay, setPreserveReasoningReplay] = useState(item.preserveResponsesReasoningContent === true);
-  const [liveModels, setLiveModels] = useState(savedLiveModels);
-  const [cursorHttpVersion, setCursorHttpVersion] = useState<CursorHttpVersion>(savedCursorHttpVersion);
+  const [adapter, setAdapter] = useState(initial.draft.adapter);
+  const [baseUrl, setBaseUrl] = useState(initial.draft.baseUrl);
+  const [project, setProject] = useState(initial.draft.project);
+  const [location, setLocation] = useState(initial.draft.location);
+  const [defaultModel, setDefaultModel] = useState(initial.draft.defaultModel);
+  const [authMode, setAuthMode] = useState(initial.draft.authMode);
+  const [apiKeyTransport, setApiKeyTransport] = useState(initial.draft.apiKeyTransport);
+  const [note, setNote] = useState(initial.draft.note);
+  const [allowPrivateNetwork, setAllowPrivateNetwork] = useState(initial.draft.allowPrivateNetwork);
+  const [preserveReasoningReplay, setPreserveReasoningReplay] = useState(initial.draft.preserveReasoningReplay);
+  const [liveModels, setLiveModels] = useState(initial.draft.liveModels);
+  const [cursorHttpVersion, setCursorHttpVersion] = useState<CursorHttpVersion>(initial.draft.cursorHttpVersion);
+  const [baseline, setBaseline] = useState<ProviderSettingsDraft>(initial.baseline);
   const [saving, setSaving] = useState(false);
+  // This form's render owns the target for every save it starts, including a mode change
+  // confirmed after a dialog. A module target change that has not re-rendered the form
+  // cannot retarget the save.
+  const formCapture = useRenderTargetCapture(apiBase ?? "", targetKey);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [accountMode, setAccountMode] = useState<"pool" | "direct">(item.codexAccountMode ?? "pool");
   const [modeSaving, setModeSaving] = useState(false);
@@ -104,57 +140,105 @@ export default function ProviderSettings({
   // "" is the same-origin dashboard and must load like any other server base.
   const [choicesStatus, setChoicesStatus] = useState<ChoicesStatus>(apiBase !== undefined ? "loading" : "idle");
   const [endpointChoice, setEndpointChoice] = useState(() => "custom");
-  const [pacingEnabled, setPacingEnabled] = useState(item.requestPacing?.enabled === true);
-  const [keyPacing, setKeyPacing] = useState<KeyPacingDraft>({ keySelection: item.requestPacing?.keySelection, keys: item.requestPacing?.keys });
-  const [pacingRpm, setPacingRpm] = useState(() => numberDraft(item.requestPacing?.requestsPerMinute));
-  const [pacingDelay, setPacingDelay] = useState(() => numberDraft(item.requestPacing?.minIntervalMs));
-  const [pacingConcurrency, setPacingConcurrency] = useState(() => numberDraft(item.requestPacing?.maxConcurrentRequests));
-  const [pacingModels, setPacingModels] = useState<Record<string, PacingRule>>(() => ({ ...(item.requestPacing?.models ?? {}) }));
+  const [pacingEnabled, setPacingEnabled] = useState(initial.draft.pacingEnabled);
+  const [keyPacing, setKeyPacing] = useState<KeyPacingDraft>(initial.draft.keyPacing);
+  const [pacingRpm, setPacingRpm] = useState(initial.draft.pacingRpm);
+  const [pacingDelay, setPacingDelay] = useState(initial.draft.pacingDelay);
+  const [pacingConcurrency, setPacingConcurrency] = useState(initial.draft.pacingConcurrency);
+  const [pacingModels, setPacingModels] = useState<Record<string, PacingRule>>(() => ({ ...initial.draft.pacingModels }));
   const [pacingModelId, setPacingModelId] = useState("");
   const [pacingModelRpm, setPacingModelRpm] = useState("");
   const [pacingModelDelay, setPacingModelDelay] = useState("");
   const [pacingModelConcurrency, setPacingModelConcurrency] = useState("");
   const [pacingStatus, setPacingStatus] = useState<PacingStatus | null>(null);
 
-  /* eslint-disable react-hooks/set-state-in-effect -- intentional form reset when saved provider fields change */
-  useEffect(() => {
-    setAdapter(item.adapter);
-    setBaseUrl(item.baseUrl);
-    setProject(item.project ?? "");
-    setLocation(item.location ?? "");
-    setDefaultModel(item.defaultModel ?? "");
-    setAuthMode(String(item.authMode ?? (item.keyOptional ? "local" : "key")));
-    setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
-    setNote(item.note ?? "");
-    setAllowPrivateNetwork(item.allowPrivateNetwork ?? false);
-    setPreserveReasoningReplay(item.preserveResponsesReasoningContent === true);
-    setLiveModels(savedLiveModels);
-    setCursorHttpVersion(savedCursorHttpVersion);
-    setPacingEnabled(item.requestPacing?.enabled === true);
-    setKeyPacing({ keySelection: item.requestPacing?.keySelection, keys: item.requestPacing?.keys });
-    setPacingRpm(numberDraft(item.requestPacing?.requestsPerMinute));
-    setPacingDelay(numberDraft(item.requestPacing?.minIntervalMs));
-    setPacingConcurrency(numberDraft(item.requestPacing?.maxConcurrentRequests));
-    setPacingModels({ ...(item.requestPacing?.models ?? {}) });
-    setMsg(null);
-    setModeMsg(null);
-    queueMicrotask(() => setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl)));
-  }, [item.adapter, item.baseUrl, item.project, item.location, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, item.preserveResponsesReasoningContent, savedLiveModels, savedCursorHttpVersion, item.requestPacing, baseUrlChoices]);
-  /* eslint-enable react-hooks/set-state-in-effect */
+  const draft = useMemo<ProviderSettingsDraft>(() => ({
+    adapter, baseUrl, project, location, defaultModel, authMode, apiKeyTransport, note,
+    allowPrivateNetwork, preserveReasoningReplay, liveModels, cursorHttpVersion,
+    pacingEnabled, keyPacing, pacingRpm, pacingDelay, pacingConcurrency, pacingModels,
+  }), [adapter, allowPrivateNetwork, apiKeyTransport, authMode, baseUrl, cursorHttpVersion, defaultModel,
+    keyPacing, liveModels, location, note, pacingConcurrency, pacingDelay, pacingEnabled, pacingModels, pacingRpm,
+    preserveReasoningReplay, project]);
 
-  // Account mode syncs on its own: a mode PATCH refresh must not reset an in-progress
-  // draft, so it is deliberately kept out of the form-reset effect above.
-  /* eslint-disable react-hooks/set-state-in-effect -- intentional split from the form reset */
+  const applyDraft = (next: ProviderSettingsDraft) => {
+    setAdapter(next.adapter);
+    setBaseUrl(next.baseUrl);
+    setProject(next.project);
+    setLocation(next.location);
+    setDefaultModel(next.defaultModel);
+    setAuthMode(next.authMode);
+    setApiKeyTransport(next.apiKeyTransport);
+    setNote(next.note);
+    setAllowPrivateNetwork(next.allowPrivateNetwork);
+    setPreserveReasoningReplay(next.preserveReasoningReplay);
+    setLiveModels(next.liveModels);
+    setCursorHttpVersion(next.cursorHttpVersion);
+    setPacingEnabled(next.pacingEnabled);
+    setKeyPacing({ ...next.keyPacing, ...(next.keyPacing.keys ? { keys: { ...next.keyPacing.keys } } : {}) });
+    setPacingRpm(next.pacingRpm);
+    setPacingDelay(next.pacingDelay);
+    setPacingConcurrency(next.pacingConcurrency);
+    setPacingModels(Object.fromEntries(Object.entries(next.pacingModels).map(([model, rule]) => [model, { ...rule }])));
+  };
+
+  const fieldsDirty = providerSettingsFieldsDirty(draft, item);
+  const pacingDirty = providerSettingsPacingDirty(draft, item);
+  const draftSignature = providerSettingsDraftSignature(draft);
+  const baselineSignature = providerSettingsDraftSignature(baseline);
+  /** A real user edit, as distinct from saved values arriving under an untouched form. */
+  const edited = draftSignature !== baselineSignature;
+  /** The bar follows the saved item until its refresh lands, even after a confirmed save. */
+  const dirty = edited || fieldsDirty || pacingDirty;
+  const baselineChanged = providerSettingsDirty(baseline, item);
+  const pacingConflictPaths = providerPacingConflicts(baseline, draft, item.requestPacing);
+  /** Saved values moved under a dirty draft; the user must choose a side. */
+  const conflict = (edited && baselineChanged) || pacingConflictPaths.length > 0;
+  const targetKeyRef = useRef(targetKey);
+  const baseUrlRef = useRef(baseUrl);
+  const draftRef = useRef(draft);
+  useLayoutEffect(() => {
+    targetKeyRef.current = targetKey;
+    baseUrlRef.current = baseUrl;
+    draftRef.current = draft;
+  });
+
+  // Adopt saved values while rendering: the React pattern for a prop-driven reset.
+  // A clean form follows the saved item in the same commit, and a dirty draft keeps
+  // what the user typed, so the conflict banner can ask which side wins.
+  const savedDraft = providerSettingsDraftFromItem(item);
+  const savedSignature = providerSettingsDraftSignature(savedDraft);
+  const [syncedSignature, setSyncedSignature] = useState(savedSignature);
+  if (syncedSignature !== savedSignature) {
+    setSyncedSignature(savedSignature);
+    if (!edited) {
+      applyDraft(savedDraft);
+      setBaseline(savedDraft);
+      setEndpointChoice(matchChoiceId(baseUrlChoices, savedDraft.baseUrl));
+      setMsg(null);
+      setModeMsg(null);
+    }
+  }
+
+  // Park this target's draft (or clear it once it matches the saved values). Memory only:
+  // credentials must never be persisted by the dashboard without an explicit request.
   useEffect(() => {
-    setAccountMode(item.codexAccountMode ?? "pool");
-  }, [item.codexAccountMode]);
-  /* eslint-enable react-hooks/set-state-in-effect */
+    draftStore.writeOwned(targetKey, item.name, draftOwner, { draft, baseline });
+  }, [baseline, draft, draftOwner, draftStore, edited, item.name, targetKey]);
+
+  // Account mode is adopted separately from the settings fields above: a mode PATCH
+  // refresh must not reset an in-progress draft, and the same render-phase pattern
+  // keeps the select on the saved value without a second render.
+  const savedAccountMode = item.codexAccountMode ?? "pool";
+  const [syncedAccountMode, setSyncedAccountMode] = useState(savedAccountMode);
+  if (syncedAccountMode !== savedAccountMode) {
+    setSyncedAccountMode(savedAccountMode);
+    setAccountMode(savedAccountMode);
+  }
 
   useEffect(() => {
     if (apiBase === undefined) return;
     let cancelled = false;
     const providerId = item.name;
-    const savedBaseUrl = item.baseUrl;
     fetch(`${apiBase}/api/provider-presets`)
       .then(r => readJsonIfOk<{ providers?: CatalogPreset[] }>(r))
       .then((d) => {
@@ -168,7 +252,7 @@ export default function ProviderSettings({
         const choices = preset?.baseUrlChoices;
         setBaseUrlChoices(choices);
         setChoicesStatus("ready");
-        setEndpointChoice(matchChoiceId(choices, savedBaseUrl));
+        setEndpointChoice(matchChoiceId(choices, baseUrlRef.current));
       })
       .catch(() => {
         if (cancelled) return;
@@ -176,9 +260,7 @@ export default function ProviderSettings({
         setChoicesStatus("error");
       });
     return () => { cancelled = true; };
-    // Remount via key={item.name}; capture savedBaseUrl once per mount/fetch.
-    // oxlint-disable-next-line react/react-compiler -- existing exhaustive-deps exception is intentional
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- item.baseUrl sync is handled by the form-reset effect
+    // Remount per target/provider; the current draft base URL picks the endpoint choice.
   }, [apiBase, item.name]);
 
   useEffect(() => {
@@ -201,33 +283,10 @@ export default function ProviderSettings({
     return () => { active = false; stop(); };
   }, [apiBase, item.name]);
 
-  const pacingDraft = useMemo(() => ({
-    enabled: pacingEnabled,
-    ...keyPacing,
-    ...(positiveRpm(pacingRpm) !== undefined ? { requestsPerMinute: positiveRpm(pacingRpm) } : {}),
-    ...(positiveInteger(pacingDelay) !== undefined ? { minIntervalMs: positiveInteger(pacingDelay) } : {}),
-    ...(positiveInteger(pacingConcurrency) !== undefined ? { maxConcurrentRequests: positiveInteger(pacingConcurrency) } : {}),
-    ...(Object.keys(pacingModels).length > 0 ? { models: pacingModels } : {}),
-  }), [keyPacing, pacingConcurrency, pacingDelay, pacingEnabled, pacingModels, pacingRpm]);
-
   const supportsReasoningReplay = !isCatalogProviderId(item.name)
     && canConfigureResponsesReasoningReplay({ adapter, baseUrl, authMode });
-  const reasoningReplayDirty = supportsReasoningReplay && preserveReasoningReplay !== (item.preserveResponsesReasoningContent === true);
   const vertexSettings = isVertexProvider(item) && (item.name === "google-vertex" || adapter.trim() === "google");
-  const dirty = reasoningReplayDirty || adapter.trim() !== item.adapter
-    || baseUrl.trim() !== item.baseUrl
-    || (vertexSettings && (project.trim() !== (item.project ?? "") || location.trim() !== (item.location ?? "")))
-    || defaultModel.trim() !== (item.defaultModel ?? "")
-    || authMode !== String(item.authMode ?? (item.keyOptional ? "local" : "key"))
-    || (adapter.trim() === "anthropic" && authMode === "key" && apiKeyTransport !== (item.apiKeyTransport ?? "x-api-key"))
-    || note.trim() !== (item.note ?? "")
-    || allowPrivateNetwork !== (item.allowPrivateNetwork ?? false)
-    || liveModels !== savedLiveModels
-    || (adapter.trim() === "cursor" && cursorHttpVersion !== savedCursorHttpVersion);
-  const pacingDirty = pacingSignature(pacingDraft) !== pacingSignature(item.requestPacing);
-  const formDirty = dirty || pacingDirty;
-
-  useEffect(() => { onDirtyChange?.(formDirty); return () => onDirtyChange?.(false); }, [formDirty, onDirtyChange]);
+  useEffect(() => { onDirtyChange?.(dirty); return () => onDirtyChange?.(false); }, [dirty, onDirtyChange]);
 
   const modelOptions = useMemo(() => {
     const set = new Set(availableModels);
@@ -254,6 +313,12 @@ export default function ProviderSettings({
   const save = async (): Promise<boolean> => {
     if (!onUpdateProvider) { setMsg({ ok: false, text: t("pws.updatesUnavailable") }); return false; }
     if (modeSaving) return false;
+    if (conflict) { setMsg({ ok: false, text: t("pws.draftConflictResolveFirst") }); return false; }
+    const saveTarget = targetKey;
+    const saveProvider = item.name;
+    const saveAuthority = authorityRef.current;
+    const submittedSignature = providerSettingsDraftSignature(draft);
+    const pacingDraft = draftRequestPacing(draft);
     const nextBaseUrl = hasEndpointPicker
       ? resolvedBaseUrlForChoice(baseUrlChoices, endpointChoice, baseUrl)
       : baseUrl.trim();
@@ -261,8 +326,15 @@ export default function ProviderSettings({
     setSaving(true);
     setMsg(null);
     try {
-      if (pacingConcurrency.trim() !== "" && positiveInteger(pacingConcurrency) === undefined) {
+      const rpmInvalid = pacingRpm.trim() !== "" && (positiveRpm(pacingRpm) === undefined || Number(pacingRpm) > 60_000);
+      const delayInvalid = pacingDelay.trim() !== ""
+        && (positiveInteger(pacingDelay) === undefined || Number(pacingDelay) > 3_600_000);
+      const concurrencyInvalid = pacingConcurrency.trim() !== "" && positiveInteger(pacingConcurrency) === undefined;
+      if (concurrencyInvalid) {
         setMsg({ ok: false, text: t("pws.pacingCapInvalid") }); return false;
+      }
+      if (rpmInvalid || delayInvalid) {
+        setMsg({ ok: false, text: t("pws.pacingValueInvalid") }); return false;
       }
       if (Object.entries(keyPacing.keys ?? {}).some(([field, value]) =>
         !Number.isFinite(value) || value <= 0
@@ -274,36 +346,41 @@ export default function ProviderSettings({
       if (pacingEnabled && !pacingDraft.requestsPerMinute && !pacingDraft.minIntervalMs && !pacingDraft.maxConcurrentRequests && !pacingDraft.models && !pacingDraft.keys && pacingDraft.keySelection !== "round-robin") {
         setMsg({ ok: false, text: t("pws.pacingRuleRequired") }); return false;
       }
-      const pacingOnly = pacingDirty && !dirty;
-      const patch: ProviderUpdatePatch = pacingOnly
-        ? { requestPacing: pacingDraft }
-        : {
-            adapter: adapter.trim(),
-            baseUrl: nextBaseUrl,
-            defaultModel: defaultModel.trim(),
-            authMode,
-            note: note.trim(),
-            allowPrivateNetwork,
-            ...(pacingDirty ? { requestPacing: pacingDraft } : {}),
-          };
-      if (!pacingOnly) {
-        if (vertexSettings && project.trim() !== (item.project ?? "")) patch.project = project.trim();
-        if (vertexSettings && location.trim() !== (item.location ?? "")) patch.location = location.trim();
-        // Keep omitted legacy values omitted unless the user actually changes this toggle.
-        // Otherwise an unrelated settings save manufactures `liveModels: true` provenance.
-        if (liveModelDiscoverySupported && liveModels !== (item.liveModels !== false)) patch.liveModels = liveModels;
-        if (reasoningReplayDirty) patch.preserveResponsesReasoningContent = preserveReasoningReplay;
-        if (adapter.trim() === "cursor" && cursorHttpVersion !== savedCursorHttpVersion) {
-          patch.upstreamHttpVersion = cursorHttpVersion === "http1.1" ? "http1.1" : null;
-        }
-        if (supportsApiKeyTransport) patch.apiKeyTransport = apiKeyTransport;
-        else if (item.apiKeyTransport !== undefined) patch.apiKeyTransport = "";
+      const { patch } = providerSettingsDeltaPatch(draft, baseline, item, nextBaseUrl);
+      if (Object.keys(patch).length === 0) {
+        setBaseline(draft);
+        draftStore.clear(saveTarget, saveProvider);
+        setMsg({ ok: true, text: t("pws.settingsSaved") });
+        return true;
       }
-      const res = await onUpdateProvider(item.name, patch);
+      const res = await onUpdateProvider(item.name, patch, formCapture);
+      if (authorityRef.current !== saveAuthority) return res.ok;
+      // The save belongs to the target that started it. If the dashboard moved while the
+      // request was in flight, its result must not be announced or applied on the new target.
+      if (targetKeyRef.current !== saveTarget) {
+        if (res.ok) {
+          const stored = draftStore.read(saveTarget, saveProvider);
+          if (stored && providerSettingsDraftSignature(stored.draft) !== submittedSignature) {
+            draftStore.writeOwned(saveTarget, saveProvider, draftOwner, { draft: stored.draft, baseline: draft });
+          } else {
+            draftStore.writeOwned(saveTarget, saveProvider, draftOwner, { draft, baseline: draft });
+          }
+        }
+        return res.ok;
+      }
       setMsg(res.ok ? { ok: true, text: t("pws.settingsSaved") } : { ok: false, text: res.error || t("prov.saveFailed") });
+      if (res.ok) {
+        const currentDraft = draftRef.current;
+        setBaseline(draft);
+        if (providerSettingsDraftSignature(currentDraft) === submittedSignature) {
+          draftStore.writeOwned(saveTarget, saveProvider, draftOwner, { draft, baseline: draft });
+        } else {
+          draftStore.writeOwned(saveTarget, saveProvider, draftOwner, { draft: currentDraft, baseline: draft });
+        }
+      }
       return res.ok;
     } finally {
-      setSaving(false);
+      if (targetKeyRef.current === saveTarget) setSaving(false);
     }
   };
 
@@ -317,13 +394,15 @@ export default function ProviderSettings({
     return () => onRegisterSave(null);
   }, [onRegisterSave]);
 
-  const applyAccountMode = async (next: "pool" | "direct") => {
+  const applyAccountMode = async (next: "pool" | "direct", capture = formCapture) => {
     if (modeSaving || saving || next === accountMode) return;
     if (!onUpdateProvider) { setModeMsg({ ok: false, text: t("pws.updatesUnavailable") }); return; }
+    const modeTarget = targetKey;
     setModeSaving(true);
     setModeMsg(null);
     try {
-      const res = await onUpdateProvider("openai", { codexAccountMode: next });
+      const res = await onUpdateProvider("openai", { codexAccountMode: next }, capture);
+      if (targetKeyRef.current !== modeTarget) return;
       if (res.ok) {
         setAccountMode(next);
         setModeMsg({ ok: true, text: t("pws.accountModeSaved") });
@@ -346,22 +425,39 @@ export default function ProviderSettings({
   const requestAccountMode = async (next: "pool" | "direct") => {
     // A refusal leaves `accountMode` unchanged, and the Select only ever shows that state,
     // so the declined option never appears chosen.
-    if (await confirmAction({ message: t("pws.accountModeConfirm") })) await applyAccountMode(next);
+    // Capture before the dialog: the confirmation belongs to the target that opened it.
+    const capture = formCapture;
+    if (await confirmAction({ message: t("pws.accountModeConfirm") })) await applyAccountMode(next, capture);
   };
 
   const discard = () => {
-    setAdapter(item.adapter); setBaseUrl(item.baseUrl); setProject(item.project ?? ""); setLocation(item.location ?? "");
-    setDefaultModel(item.defaultModel ?? ""); setAuthMode(initialAuth);
-    setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
-    setNote(item.note ?? ""); setAllowPrivateNetwork(item.allowPrivateNetwork ?? false); setLiveModels(savedLiveModels);
-    setPreserveReasoningReplay(item.preserveResponsesReasoningContent === true);
-    setCursorHttpVersion(savedCursorHttpVersion); setMsg(null);
-    setPacingEnabled(item.requestPacing?.enabled === true); setPacingRpm(numberDraft(item.requestPacing?.requestsPerMinute));
-    setKeyPacing({ keySelection: item.requestPacing?.keySelection, keys: item.requestPacing?.keys });
-    setPacingDelay(numberDraft(item.requestPacing?.minIntervalMs));
-    setPacingConcurrency(numberDraft(item.requestPacing?.maxConcurrentRequests));
-    setPacingModels({ ...(item.requestPacing?.models ?? {}) });
-    setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl));
+    const next = providerSettingsDraftFromItem(item);
+    applyDraft(next);
+    setBaseline(next);
+    setMsg(null);
+    authorityRef.current += 1;
+    draftStore.clearOwned(targetKey, item.name, draftOwner);
+    draftStore.claim(targetKey, item.name, draftOwner, { draft: next, baseline: next });
+    setEndpointChoice(matchChoiceId(baseUrlChoices, next.baseUrl));
+  };
+
+  const discardRef = useRef(discard);
+  useEffect(() => { discardRef.current = discard; });
+  useEffect(() => {
+    if (!onRegisterDiscard) return;
+    onRegisterDiscard(() => discardRef.current());
+    return () => onRegisterDiscard(null);
+  }, [onRegisterDiscard]);
+
+  /** Explicit conflict resolution: keep the saved values, or rebase the draft onto them. */
+  const useSavedValues = () => discard();
+  const keepDraft = () => {
+    const latest = providerSettingsDraftFromItem(item);
+    const rebased = rebaseProviderSettingsDraft(baseline, draft, latest);
+    applyDraft(rebased);
+    setBaseline(latest);
+    setEndpointChoice(matchChoiceId(baseUrlChoices, rebased.baseUrl));
+    setMsg(null);
   };
 
   const endpointLabel = (id: string, fallback: string) => {
@@ -378,8 +474,10 @@ export default function ProviderSettings({
     const rpm = positiveRpm(pacingModelRpm);
     const delay = positiveInteger(pacingModelDelay);
     const cap = positiveInteger(pacingModelConcurrency);
-    if (pacingModelConcurrency.trim() !== "" && cap === undefined) {
-      setMsg({ ok: false, text: t("pws.pacingCapInvalid") });
+    if ((pacingModelRpm.trim() !== "" && (rpm === undefined || Number(pacingModelRpm) > 60_000))
+      || (pacingModelDelay.trim() !== "" && (delay === undefined || Number(pacingModelDelay) > 3_600_000))
+      || (pacingModelConcurrency.trim() !== "" && cap === undefined)) {
+      setMsg({ ok: false, text: pacingModelConcurrency.trim() !== "" && cap === undefined ? t("pws.pacingCapInvalid") : t("pws.pacingValueInvalid") });
       return;
     }
     if (!modelId || (rpm === undefined && delay === undefined && cap === undefined)) return;
@@ -582,12 +680,27 @@ export default function ProviderSettings({
           rule.maxConcurrentRequests !== undefined ? `${rule.maxConcurrentRequests} ${t("pws.pacingCapUnit")}` : undefined,
         ].filter(part => part !== undefined).join(" · ")}</span><button type="button" className="btn btn-ghost btn-sm" onClick={() => setPacingModels(current => Object.fromEntries(Object.entries(current).filter(([id]) => id !== model)))} aria-label={t("pws.pacingRemoveModel", { model })}>{t("pws.pacingRemove")}</button></div>)}</div>}
       </section>
-      {formDirty && (
+      {conflict && (
+        <div className="pwi-settings-conflict" role="alert">
+          <p>{t("pws.draftConflict")}</p>
+          {pacingConflictPaths.length > 0 && (
+            <div className="pwi-settings-conflict-fields">
+              <p>{t("pws.draftConflictFields")}</p>
+              <ul>{pacingConflictPaths.map(path => <li key={path}><code>{path}</code></li>)}</ul>
+            </div>
+          )}
+          <div className="pwi-settings-sticky-bar-actions">
+            <button type="button" className="btn btn-ghost btn-sm" onClick={useSavedValues} disabled={saving}>{t("pws.draftConflictUseSaved")}</button>
+            <button type="button" className="btn btn-primary btn-sm" onClick={keepDraft} disabled={saving}>{t("pws.draftConflictKeepDraft")}</button>
+          </div>
+        </div>
+      )}
+      {dirty && (
         <div className="pwi-settings-sticky-bar">
-          <span className="muted">{t("pws.settingsUnsavedBar")}</span>
+          <span className="muted">{t("pws.settingsUnsavedBar")} <span className="pwi-settings-target">{t("pws.draftTarget", { target: targetLabel ?? providerDraftTargetLabel(targetKey) })}</span></span>
           <div className="pwi-settings-sticky-bar-actions">
             <button type="button" className="btn btn-ghost btn-sm" onClick={discard} disabled={saving}>{t("pws.discardSettings")}</button>
-            <button type="button" className="btn btn-primary btn-sm" onClick={() => void save()} disabled={saving || modeSaving}>{saving ? t("pws.saving") : t("pws.saveSettings")}</button>
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => void save()} disabled={saving || modeSaving || conflict}>{saving ? t("pws.saving") : t("pws.saveSettings")}</button>
           </div>
         </div>
       )}

@@ -5,6 +5,10 @@ description: プロバイダー エントリ、認証、エンドポイント、
 
 プロバイダーは、opencodex に、モデルが存在する場所、モデルが通信するワイヤー アダプター、およびリクエストの認証方法を伝えます。
 
+## Mistral のリクエストごとの画像数
+
+Mistral の画像数制限と `mistralMaxImages` の設定は[英語の正規リファレンス](/reference/configuration/providers/#mistral-images-per-request)を参照してください。リミッターに届いた `image_url` 要素の画像参照が欠落、空、または文字列でない場合、送信用コピー内でテキストに置き換えられ、画像数の上限を消費しません。変換される Responses リクエストでは、有効な URL もファイル ID もない `input_image` をパーサーが省略します。メッセージやツール出力のブロック内で、空でない `file_id` があり空でない `image_url` がない場合、メディアガードが Mistral への送信前にリクエストを拒否します。ガードが検査しない再生済みの `agent_message` 内では、パーサーが代わりに `[image: <file id>]` テキストマーカーを出力し、通常のテキストとして送信され画像数の上限を消費しません。リミッターは `image_url` または `image_url.url` の空でない文字列のみを数え、URL の構文や到達可能性は検証しません。他の送信先の動作は変わりません。
+
 ## カスタムプロバイダーのコンテキスト
 
 モデルのウィンドウが未報告・未設定の場合、Azure メタデータ、モデル ID による同梱ベンダー／集約メタデータ、有効な Context cap、128k の順で補完します。報告値と設定値は小さい方を使い、Context cap は引き続き上限となります。組み込みプロバイダーは変更しません。完全一致を優先し、大文字小文字やドット／ハイフンの別表記は曖昧でない場合だけ認めます。推定は Codex の圧縮予算や Claude を含むクライアントのカタログに反映されますが、ルーティングの実測能力とは区別します。同名モデルでも中継サービスの容量は保証されません。必要に応じて modelContextWindows または Context cap を設定してください。自動的な cap の有効化やモデルへの試験リクエストは行いません。OpenAI API の値は Codex サブスクリプションの上限ではありません。
@@ -117,6 +121,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `defaultModel?` | `string` |このプロバイダーが明示的なモデルなしで選択された場合に使用されるモデル。 |
 | `models?` | `string[]` | 初期／フォールバックモデル一覧。`liveModels: false` で `models` が空でなければ、その後に `retainModels` を追加します。`models` が空または省略されている場合は、設定済みの `defaultModel`、`retainModels` の順に初期一覧を作り、重複 ID は最初の出現だけを残します。 |
 | `liveModels?` | `boolean` |開始/同期時にライブ カタログをフェッチします (デフォルトは `true`)。カスタムプロバイダーは `${baseUrl}/models` を使用します。組み込みはレジストリ URL とフィルターを使用する場合があります。 |
+| `modelDiscovery?` | `{ skipInvalidRows?: boolean }` | `/models` の一覧に不正な行を含むゲートウェイ向けのライブ検出互換設定です。既定では不正な行が 1 つでもあると一覧全体を拒否し、警告に最初の不正な行と不正な行の数を示します。`skipInvalidRows: true` の場合、オブジェクトでない行や id が欠落・非文字列・空・その他不正な行をスキップし、スキップした数だけを一度警告します (行の内容は出しません)。サイズと行数の上限は受信したすべての行を数え、重複排除・プロバイダーフィルター・id プレフィックス除去は残った行に適用されます。行をスキップして 1 行も残らない場合は、空のカタログとして扱わず一覧を拒否します。同じ宛先への保存で省略すると保持され、別の宛先へ移すと破棄されます。トップレベルの `modelDiscovery` (新モデルポリシーの状態) とは別物です。 |
 | `selectedModels?` | `string[]` |検出後のカタログ許可リスト。空でない場合は、それらの ID のみが公開されます。空または省略すると、検出されたすべてのモデルが公開されます。 |
 | `modelDisplayNames?` | `Record<string, string>` | このプロバイダーの正確なネイティブモデル ID をキーにした、永続的な表示専用ラベルです。大文字と小文字は区別されます。ラベルはプロバイダーカタログのメタデータより優先され、認証、アダプター、ルーティング、課金、上流リクエストには影響しません。例外として、直接の `provider/model` セレクターが既知の ID、エイリアス、`retainModels` のいずれにも一致しない場合（ライブ一覧がまだ取得されていない間など）、エンコード形が一致するキーをネイティブ ID として送信します。マップは検出上限と同じ 2,000 件までです。 |
 | `contextWindow?` | `number` | アップストリームのメタデータが無い場合に使うプロバイダー全体のコンテキスト値。メタデータがある場合は上限として働き、より小さいライブ値をそのまま残します。Models ダッシュボードでは `providerContextCaps` とは別に設定します。 |
@@ -161,7 +166,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `promptCacheKey?` | `boolean` | `openai-chat` のプロバイダー全体で `prompt_cache_key` の転送を有効にします。アダプターは受け取ったキーを転送し生成しませんが、Claude Messages 変換では `metadata.user_id`、またはメタデータがなければモデル・システム・ツールの組み合わせから導出します。プリセットが指定しない限り既定は無効です。Mistral は[プロンプトキャッシュ契約](https://docs.mistral.ai/studio/conversations/advanced/prompt-caching)に従い有効で、明示的な `false` で無効になります。上流が対応を明記する場合のみ有効にしてください。厳格なゲートウェイは未知のフィールドを HTTP 400 で拒否する場合があります。 |
 | `retryOn429?` | `{ enabled?: boolean; attempts?: number; intervalMs?: number; maxIntervalMs?: number; respectRetryAfter?: boolean }` | API キーのプロバイダーのみ（`authMode: "key"`）。未設定なら無効ですが、正規の OpenCode Go と Command Code、および正規の Mistral の `openai-chat` は例外で、再送 6 回、間隔 10 秒、上限 60 秒のポリシーを使います。オブジェクトを指定すると有効になり、`enabled: false` はこの既定ポリシーも無効にします。ストリーム開始前の HTTP 429 で `Retry-After` または固定間隔を待ち、キーの切り替え前に同じキーで同じリクエストを再送します。テキストターンの回復、Responses passthrough、画像・動画ブリッジ、web-search サイドカー、ターミナル継続が対象で、独自の `runTurn` は対象外です。`attempts` は最初の 429 後の同一キー再送回数（総送信数 = `attempts` + 1）で、リクエスト全体で共有します。使い切ると同一キーの再送だけが止まり、通常のキー切り替えか最終エラー処理に進みます。キー認証の passthrough では切り替えがなく、そのまま 429 を返します。正規の Mistral Chat で明示的な上流の待機時間が許容上限を超えると、同一キー再送を止めて元の `Retry-After` を返しますが、別のプールキーが処理できる場合があります。他のプロバイダーでは待機時間を上限で切り詰めます。Mistral は認証情報とモデルごとに期限を共有します。`requestPacing.enabled: false` または `retryOn429.respectRetryAfter: false` で無効になります。再試行時刻のない 429 で分単位の予算不足が検証されると、控えめな 60 秒の回復待機後、プローブを 1 回実行し、成功すれば通常のトラフィックを再開します。正常なトラフィックから次のトークン消費は予測しません。公表された許容量を使い、既知の月間枠の枯渇は除外し、正確なリセット時刻を保証せず、履歴の圧縮も起動しません。Codex 自体は 429 を再試行しません。オブジェクトの既定値：`enabled: true`、`attempts: 3`、`intervalMs: 5000`、`maxIntervalMs: 60000`（待機の上限、設定の最大値は 600000）、`respectRetryAfter: true`。 |
 | `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | キー認証の `openai-chat` および `openai-responses` プロバイダーのみ。`authMode: "forward"` のプロバイダー（ChatGPT アカウントプール）はこのオプションを読まず、既定の再試行段数を維持します。ストリーム開始前に上流から返される一時的なステータス（500、502、503、504、520、521、522）に対するオプトインの再試行です。設定がなければ無効で、オブジェクトを指定すると `enabled: false` でない限り有効になります。最初の Responses リクエスト、ターミナルガード継続、ネイティブの `/v1/chat/completions`、および 429／アカウント回復時の再取得が対象です。`attempts` は最初の送信を含め、1 回のリクエストで許可される上流への送信総数です（1～10、デフォルトは 3）。接続リセット回復と共有するリクエスト単位の単一予算であるため、`3` を指定した場合、プロバイダーに到達する実リクエストは最大 3 回です。待機には 400 ms を基準とする固定式の指数バックオフを使用し、上限は 5 秒で、`Retry-After` に従います。レート制限を扱う `retryOn429` とは別の機能であり、ストリーム開始後の失敗は再送されません。 各 Combo ターゲットでは、事前予約した初回送信もそのターゲットの設定総数に含まれます。`attempts: 1` は 1 回だけ送信し、予約を返却して余裕を作ったり、共有上限を広げたりしません。送信前のローカル拒否やキャンセルでは未使用の予約を解放します。 |
-| `retryOnReset?` | `{ enabled?: boolean; replacements?: number }` | ネイティブ `openai-responses` プロバイダー（`authMode: "forward"` を含む）と、上流ヘッダー受信前の汎用 Responses 変換経路に適用されます。呼び出し側が何も観測しないまま失敗した送信を、オプトインで置き換えます。設定がなければ無効で、オブジェクトを指定すると `enabled: false` でない限り有効になります。レスポンスヘッダーが届く前に接続が切れた場合と、ヘッダー後に SSE 本文が制御イベントだけを運んだまま切れた場合の両方が対象です。canonical ChatGPT upstream WebSocket で create フレームの送信後、Responses イベントが届く前にソケットが閉じたかエラーになった場合も同じく対象で、その置き換えは HTTP で送信します。置き換えるのは自己完結したリクエストだけで、`store: false`、完全な `input`、`previous_response_id` / `conversation` / `stream_id` がないこと、クライアントが実行するツールのみ、が条件です。`replacements` は、すべてのレッグとすべてのコンボ子リクエストを合わせて 1 つの論理リクエストが行える置き換え送信の回数です（1..2、デフォルトは 1）。レッグ単位の再試行回数でも送信予算でもないため、置き換え送信もそのレッグがすでに持つ送信許容量に収まる必要があります。すでに出力やツール呼び出しを送ったリクエストは、この値に関わらず置き換えません。元の送信がすでに開始されていた場合は置き換えた推論も課金される可能性があるため、既定では無効です。 汎用変換経路では、初回送信と再構築後の送信のどちらも、同じ許可と送信予算でヘッダー受信前の接続リセットを置き換えます。アダプター独自のトランスポートと、上流ヘッダー受信後の変換ストリーム障害は対象外です。 |
+| `retryOnReset?` | `{ enabled?: boolean; replacements?: number }` | ネイティブ `openai-responses` プロバイダー（`authMode: "forward"` を含む）と、上流ヘッダー受信前の汎用 Responses 変換経路に適用されます。呼び出し側が何も観測しないまま失敗した送信を、オプトインで置き換えます。設定がなければ無効で、オブジェクトを指定すると `enabled: false` でない限り有効になります。レスポンスヘッダーが届く前に接続が切れた場合と、ヘッダー後に SSE 本文が制御イベントだけを運んだまま切れた場合の両方が対象です。canonical ChatGPT upstream WebSocket で create フレームの送信後、Responses イベントが届く前にソケットが閉じたかエラーになった場合も同じく対象で、その置き換えは HTTP で送信します。置き換えるのは自己完結したリクエストだけで、`store: false`、完全な `input`、`previous_response_id` / `conversation` / `stream_id` がないこと、クライアントが実行するツールのみ、が条件です。このプロキシが自身のリプレイ状態から展開済みの `previous_response_id` を持つ連鎖ターンは、送信前にその ID が取り除かれるため対象になります。リセットが置き換えられなかった場合は、その理由（`ambiguous-no-policy`、`ambiguous-request-not-replayable`、`ambiguous-allowance-spent`）がサービスログに記録されます。`replacements` は、すべてのレッグとすべてのコンボ子リクエストを合わせて 1 つの論理リクエストが行える置き換え送信の回数です（1..2、デフォルトは 1）。レッグ単位の再試行回数でも送信予算でもないため、置き換え送信もそのレッグがすでに持つ送信許容量に収まる必要があります。すでに出力やツール呼び出しを送ったリクエストは、この値に関わらず置き換えません。元の送信がすでに開始されていた場合は置き換えた推論も課金される可能性があるため、既定では無効です。 汎用変換経路では、初回送信と再構築後の送信のどちらも、同じ許可と送信予算でヘッダー受信前の接続リセットを置き換えます。アダプター独自のトランスポートと、上流ヘッダー受信後の変換ストリーム障害は対象外です。 |
 | `autoToolChoiceOnlyModels?` | `string[]` | `tool_choice` が `auto` または `none` のみを受け入れるモデル。強制的な選択は格下げされます。 |
 | `preserveReasoningContentModels?` | `string[]` |チャット履歴に以前のアシスタント `reasoning_content` が必要なモデル。ダッシュボードから保存しても、保存済みのリスト（`[]` を含む）は保持されます。`PATCH /api/providers?name=<provider>` は配列、または消去するための `null` を受け付けます。 アダプター、ベース URL、または認証モードを変えて別の宛先に移す保存では保持されません（下の節を参照）。 |
 | `reasoningDetailsModels?` | `string[]` | thinking を構造化された `reasoning_details` 配列で返すモデル（`reasoning_split` 使用の MiniMax M シリーズ）。ストリーム差分は累積スナップショットとして prefix-diff され、保持された reasoning は `reasoning_content` 文字列ではなく `reasoning_details` 配列としてリプレイされます。 |
@@ -189,17 +194,17 @@ API キープロバイダーは、リテラルキーまたは環境参照を保�
 
 ### プロバイダーの保存で保持されるもの
 
-既存のプロバイダー名で `POST /api/providers` を送ると、保存済みの行はリクエストから組み立てた行で置き換えられます。ダッシュボードの追加・編集フォームはすべてのフィールドを送れないため、リクエストが省略した保存済みフィールドの一部は保存時に引き継がれます。そのうち次の 11 つは、特定のアップストリームの挙動を記録するものです：`preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`。
+既存のプロバイダー名で `POST /api/providers` を送ると、保存済みの行はリクエストから組み立てた行で置き換えられます。ダッシュボードの追加・編集フォームはすべてのフィールドを送れないため、リクエストが省略した保存済みフィールドの一部は保存時に引き継がれます。そのうち次の 14 個は、特定のアップストリームの挙動を記録するものです：`preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`, `unsupportedHostedTools`, `unsupportedHostedToolsWithClientTools`, `forwardAdvisorTool`。
 
-| 保存 | 11 つの設定 | 保存済みの `apiKeyPool` |
+| 保存 | 14 個の設定 | 保存済みの `apiKeyPool` |
 | --- | --- | --- |
 | 同じ宛先、フィールド省略 | 保存済みの値を保持（明示的な `[]` や `false` を含む） | 保持 |
 | 新しい宛先、フィールド省略 | 保持しない。新しい宛先のレジストリ既定値が適用されることがあります | 保持しない |
 | リクエストでフィールドを送信 | リクエストの値 | リクエストの値 |
 
-宛先とは、アダプター、ベース URL（スキームとホストは大文字小文字を区別せず、末尾のスラッシュは無視）、そしてリクエストが指定した場合は認証モードです。別の宛先へ移すと、以前のアップストリームを表す 10 つの設定と、そのために発行されたキーのプールは引き継がれません。保存時に古い行の残りを新しい行へマージすることはありません。
+宛先とは、アダプター、ベース URL（スキームとホストは大文字小文字を区別せず、末尾のスラッシュは無視）、そしてリクエストが指定した場合は認証モードです。別の宛先へ移すと、以前のアップストリームを表す 14 個の設定と、そのために発行されたキーのプールは引き継がれません。保存時に古い行の残りを新しい行へマージすることはありません。
 
-`PATCH /api/providers?name=<provider>` は指定したフィールドだけを変更し、宛先に関係なくほかの保存済みフィールドはすべて保持します。10 つの設定をすべて受け付け、`null` で消去します。2 つの推論リストでは、空の配列は削除されず明示的なオプトアウトとして保存されます。
+`PATCH /api/providers?name=<provider>` は指定したフィールドだけを変更し、宛先に関係なくほかの保存済みフィールドはすべて保持します。14 個の設定をすべて受け付け、`null` で消去します。2 つの推論リストでは、空の配列は削除されず明示的なオプトアウトとして保存されます。
 
 ## プロバイダーによるアウトバウンドの安全性診断
 
@@ -505,7 +510,9 @@ Vercel AI Gateway は、1 つのモデルを複数の基盤となる推論プロ
 適用済みの上書きとまだ一致する場合にのみ、元のネイティブ名が復元されます。外部で変更された表示名にも既存のネイティブメタデータ正規化が適用されます。
 例えば Astra (`gpt-6-astra`) では、固定されたネイティブ名と異なる名前は引き続きその固定名に置き換えられます。
 表示名の上書きによってモデル ID、メタデータ（機能を含む）、順序、ルーティングされたコンボのエイリアス、アカウント修飾付きの行は変更されません。
-このローカルカタログの上書きは、HTTP のモデル一覧や仮想 `*-pro` 行の表示名には適用されません。
+`GET /api/models` もプレフィックスなしのネイティブ行に空でない上書き名を返すため、クライアントのエクスポートと `ocx opencode` はその名前を使います。
+OpenCode は `sol (native)` のように既存の接尾辞を保持します。`ocx opencode` を再起動するか、管理対象の連携を更新すると生成設定に反映されます。
+上書きがない場合の表示名、`/v1/models`、仮想 `*-pro` 行は変わりません。
 
 プレビュー GPT-5.6 フォールバック エントリは同じメカニズムを使用します。 OpenAI API キー プリセットは、ベース ID と Pro ID にコンテキスト `1050000` と最大入力 `922000` をシードします。 OpenRouter は、コンテキスト `1050000` を持つ `openai/gpt-5.6-sol`、`openai/gpt-5.6-terra`、および `openai/gpt-5.6-luna` をシードします。ネイティブのプール/ダイレクトのウィンドウは[予約 OpenAI プロバイダーのポリシー](/reference/configuration/providers/#reserved-openai-providers)に従います。同期されたカタログは、`xhigh` を区別しつつ、`max` をアドバタイズします。
 

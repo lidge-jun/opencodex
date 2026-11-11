@@ -264,6 +264,7 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 | `GET, POST, DELETE /api/providers/keys` | 마스킹된 provider key를 나열, 추가/활성화, 또는 제거합니다 | 400 잘못된 입력; 404 provider/key 없음 |
 | `PUT /api/providers/keys/active` | provider의 활성 key를 선택합니다 | 400 잘못된 입력; 404 provider/key 없음 |
 | `PUT /api/providers/keys/alias` | provider-key alias를 설정하거나 지웁니다 | 400 잘못된 입력; 404 provider/key 없음 |
+| `PUT /api/providers/keys/pause` | provider API key 하나를 일시 중지하거나 재개합니다. Body `{ name, id, paused }`. 활성 key를 일시 중지하면 ring order에서 다음 사용 가능한 key를 선택합니다. 성공 응답에는 결과 `activeAccountId`(없으면 `null`)와 `activeAccountChanged`가 포함됩니다. | 400 잘못된 입력; 404 provider/key 없음 |
 | `GET, POST, PATCH, DELETE /api/keys` | 데이터 평면 admission key를 나열, 생성, 수정, 또는 삭제합니다 | 400 잘못된 본문/id; 404 key 없음 |
 | `PUT /api/oauth/accounts/affinity-reset` | 계정 없이 provider 전체의 대화 연결 초기화 저장을 확인합니다. Body `{ provider }`; 성공 시 `affinityResetConfirmed: true`. CLI: `ocx account reset-affinity anthropic --json` (`anthropic2` supported). | 400 invalid body/provider; 503 `affinity_reset_not_persisted`, `retryable: true` |
 
