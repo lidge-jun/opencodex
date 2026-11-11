@@ -1443,6 +1443,11 @@ is one of `auth`, `hostkey`, `forward`, `remote_forward_conflict`, `timeout`, `n
 empty after a Home restart. `GET /api/link/status` includes the field only when asked with
 `?diagnostics=1`, because an older `ocx link status` rejects fields it does not know.
 
+That history survives a restart only in the bounded diagnostics file.
+`ocx link diagnostics [--limit <n>] [--since <iso-time|epoch-ms>] [--json]` reads it on the
+computer that wrote it, Home or Child, without a running proxy and without writing anything; see
+[Remote Link](/guides/remote-link/#retryable-503-diagnostics).
+
 After `ocx sync` applies the Home's settings on a Child, it restarts the Child's client runtime when
 that runtime started before `lastApplyAt`, using the same restart as `ocx restart`. A runtime that
 already started after the apply is left alone, on a full `ocx` Child nothing is started when no client runtime is

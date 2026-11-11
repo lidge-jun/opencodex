@@ -12,6 +12,7 @@ import { Button } from "@/components/ui-v2/button";
 import { Banner, PageHeader, StateBadge } from "../components/v2-startup/primitives";
 import { LinkIntro, LinkStatus, LinkSwitchRow, Monogram, RoleCard } from "../components/v2-startup/remote-link-parts";
 import { RemoteLinkDisconnectDialog } from "./RemoteLinkDialogs";
+import { RemoteLinkDiagnostics } from "./RemoteLinkDiagnostics";
 import { LinkErrorNotice, RemoteLinkSheet, type LinkActionErrorView } from "./RemoteLinkSheet";
 import "../styles-remote-link.css";
 
@@ -564,6 +565,7 @@ export default function RemoteLink({ apiBase, sessionReady, pairingRecoveryAvail
         </section>
       )}
       {(status?.role === "child" || statusRows.length > 0) && <FallbackPanel apiBase={apiBase} section="devices" readOnly={status?.role === "child"} />}
+      <RemoteLinkDiagnostics apiBase={apiBase} />
 
       <RemoteLinkSheet
         sheetRef={sheetRef}

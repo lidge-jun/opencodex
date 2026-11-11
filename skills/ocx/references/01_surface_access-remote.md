@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 41.
+Declared capabilities: 42.
 
 ### `ocx link probe`
 
@@ -104,6 +104,26 @@ State-changing: no. JSON mode: `payload`.
 | `--json` | boolean | Emit the K16 status payload as JSON. |
 
 - Reads live listener/tunnel metadata; when no proxy is found, falls back to the local link store. Always emits JSON.
+
+### `ocx link diagnostics`
+
+Usage: `ocx link diagnostics [--limit <n>] [--since <iso-time|epoch-ms>] [--json]`
+
+Read this computer's bounded Remote Link diagnostics file.
+
+State-changing: no. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--limit` | number | Newest records to show, 1-1000; default 200. |
+| `--since` | string | Only records at or after this ISO time or epoch-millisecond timestamp. |
+| `--json` | boolean | Emit the ocx.link.diagnostics/1 document as JSON. |
+
+- Reads <configDir>/link/diagnostics.jsonl and its backup diagnostics.jsonl.1 directly, oldest first, without the proxy or a management route. Never creates, hardens or writes a file, and skips the Codex-shim repair preflight.
+- Reads only regular files (never through a symlink, FIFO or symlinked link directory), at most the newest 256 KiB of each. Every line is re-checked against the writer's allowlist: tunnel and relay event/outcome/state words, generated UUIDs, numbers and timestamps. Lines that fail are counted in skipped, never printed.
+- Exit 0 including when nothing is recorded yet, which prints the file path. The dashboard reads the same records through GET /api/link/diagnostics.
 
 ### `ocx link revoke`
 
