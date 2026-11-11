@@ -510,6 +510,34 @@ describe("codex-journal", () => {
     expect(JSON.parse(r.stdout)).toEqual({ success: true, adoption: "missing", verdicts: [false, false, false, true] });
   });
 
+  // Review round 5: only a confirmed absence is safe. A journal that passes the ownership check but
+  // cannot be read on the handover's own read must fail the handover, never read as "missing".
+  test("an unreadable journal on the handover read fails instead of reading as missing", () => {
+    writeFileSync(join(testDir, "config.toml"), '# original config\nmodel_provider = "openai"\n', "utf8");
+    const r = runScript(testDir, `
+      const { spyOn } = require("bun:test");
+      const { injectCodexConfig } = require("./src/codex/inject");
+      const owner = require("./src/codex/codex-home-owner");
+      const { adoptJournalForClient } = require("./src/codex/journal");
+      (async () => {
+        await injectCodexConfig(10100, { port: 10100, providers: {}, defaultProvider: "openai" }, { catalogPath: null });
+        const real = owner.readCodexHomeJournal;
+        let calls = 0;
+        spyOn(owner, "readCodexHomeJournal").mockImplementation(path => (++calls === 2 ? { kind: "unknown" } : real(path)));
+        let outcome;
+        try { outcome = adoptJournalForClient("link-key"); } catch (error) { outcome = "threw"; }
+        const fs = require("fs"), path = require("path");
+        const kind = JSON.parse(fs.readFileSync(path.join(process.env.CODEX_HOME, "opencodex-journal.json"), "utf8")).owner.kind;
+        console.log(JSON.stringify({ outcome, calls, kind }));
+      })();
+    `);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.calls).toBeGreaterThanOrEqual(2);
+    expect(out.outcome).toBe("threw");
+    expect(out.kind).toBe("process");
+  });
+
   test("removeJournal refuses unknown journal evidence", () => {
     const journalPath = join(testDir, "opencodex-journal.json");
     writeFileSync(journalPath, "{}", "utf8");

@@ -524,8 +524,11 @@ export function adoptJournalForClient(apiKeyId: string, beforeWrite: () => void 
   const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, undefined, (handle): JournalAdoption => {
     assertCodexHomeOwner(CODEX_HOME);
     beginCodexWriteSection(handle);
-    const journal = readJournal();
-    if (!journal) return "missing";
+    // Only a confirmed absence is safe; an unreadable journal may still hold a restorable owner.
+    const inspection = readCodexHomeJournal(JOURNAL_PATH);
+    if (inspection.kind === "unknown") throw new CodexHomeOwnerRefusal("owner-unknown");
+    if (inspection.kind === "missing") return "missing";
+    const journal = inspection.journal as unknown as Journal;
     if (journal.owner?.kind === "client") return journal.owner.apiKeyId === apiKeyId ? "owned" : "foreign";
     // Codex lock, then the mutation lock (the injection's order): guard and write as one step.
     return withConfigMutationLockSync(() => {
