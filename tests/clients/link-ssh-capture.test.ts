@@ -134,6 +134,25 @@ describe("ssh capture window", () => {
   });
 });
 
+describe("ssh capture window extension", () => {
+  test("a tunnel spawned before an extension keeps recording until the extended expiry, and not after it", async () => {
+    const { linkDirectory, dir } = fixture();
+    let now = T0;
+    startSshCapture({ linkDirectory, now: T0, minutes: 1 });
+    const opener = createSshCaptureOpener({ linkDirectory, now: () => now });
+    const spawn = opener("home", LINK)!;
+    now = T0 + 30_000;
+    startSshCapture({ linkDirectory, now, minutes: 2 });
+    now = T0 + 70_000; // past the original 1:00 expiry, inside the extended 2:30 one
+    spawn.stderrLine("Host key verification failed.");
+    await opener.flush();
+    now = T0 + 151_000; // past the extended expiry
+    spawn.stderrLine("Host key verification failed.");
+    await opener.flush();
+    expect(records(join(dir, "ssh-" + T0 + ".jsonl")).map(record => record.at)).toEqual([T0 + 70_000]);
+  });
+});
+
 describe("ssh capture retention", () => {
   test("files are deleted once retention passes after their last write, by status, start and the spawn path", () => {
     const { linkDirectory, dir } = fixture();

@@ -418,11 +418,22 @@ export function createSshCaptureOpener(options: SshCaptureOpenerOptions): SshCap
     if (at - lastPrune >= PRUNE_INTERVAL_MS || at < lastPrune) { lastPrune = at; prune(); }
     const control = readSshCaptureControl(dir, at);
     if (!control) return null;
+    // The window this spawn started in; an extension by a later `start` keeps the same startedAt and
+    // moves expiresAt, so once the cached expiry passes it is re-read (at most once a second).
+    let current = control;
+    let lastRefresh = Number.NEGATIVE_INFINITY;
+    const refresh = (): void => {
+      const at = now();
+      if (at < current.expiresAt || (at - lastRefresh < 1_000 && at >= lastRefresh)) return;
+      lastRefresh = at;
+      const fresh = readSshCaptureControl(dir, at);
+      if (fresh && fresh.startedAt === current.startedAt) current = fresh;
+    };
     return {
       logLevel: SSH_CAPTURE_LOG_LEVEL,
       stderrLine(line: string): boolean {
         const sanitized = sanitizeSshLine(line);
-        try { push(control, tunnel, linkId, sanitized); } catch { /* Storage never changes classification. */ }
+        try { refresh(); push(current, tunnel, linkId, sanitized); } catch { /* Storage never changes classification. */ }
         return sanitized.classify;
       },
     };
