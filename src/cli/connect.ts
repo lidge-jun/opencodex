@@ -77,7 +77,7 @@ export interface ClientCatalogProbeDeps extends CatalogCompatibilityDeps {
 
 export const CONNECT_USAGE = `Usage:
   ocx connect --link --key-stdin --tunnel-port <port> --link-id <id>
-      [--clients codex,claude] [--catalog-timeout <seconds>] [--no-sync]
+      [--clients <id,...>] [--catalog-timeout <seconds>] [--no-sync]
   ocx connect <url> [--management-url <url>]
       (--pairing-code-stdin | --admin-token-stdin)
       [--clients codex,claude] [--management-transport direct|relay]
@@ -85,7 +85,8 @@ export const CONNECT_USAGE = `Usage:
   ocx connect status [--json]
   ocx connect rotate (--pairing-code-stdin | --admin-token-stdin)
       [--json]
-  ocx connect revoke --admin-token-stdin [--json]`;
+  ocx connect revoke --admin-token-stdin [--json]
+  Link client ids: ${ROUTE_CLIENT_IDS.join(", ")}`;
 
 export const DISCONNECT_USAGE = `Usage:
   ocx disconnect [--keep-catalog] [--recover-config --yes] [--json]
