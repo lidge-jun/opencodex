@@ -1080,8 +1080,11 @@ async function syncConnectedClientUnlocked(
       journalOwner: { kind: "client", apiKeyId: next.apiKeyId }, beforeClientWrite: beforeCodexWrite,
     });
     if (!result.success || result.status === "skipped") throw new Error(result.message);
-    injected = true;
-    if (homeSettings && next.link) {
+    injected = result.configApplied !== false;
+    // An external provider can preserve config.toml without applying even the same Home digest.
+    // Withdraw any previous receipt under the current connection fence before reporting parity.
+    if (!injected && next.link) withClientWrite(clearHomeCodexSettingsRecord);
+    if (injected && homeSettings && next.link) {
       const linkId = next.link.linkId;
       const settings = homeSettings;
       try {

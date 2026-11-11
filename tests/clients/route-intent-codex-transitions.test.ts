@@ -22,6 +22,9 @@ function scenario(body: string, initialCodex?: boolean | "absent") {
       import { setLocalRouteIntentOff } from './src/integrations/route-intent';
       import { acquireConfigWriteLock, releaseConfigWriteLock } from './src/codex/config-write-lock';
       import { journalOwner } from './src/codex/journal';
+      import { readHomeCodexSettingsRecord } from './src/client/link-home';
+      import { linkChildParityReport } from './src/client/link-parity-reporter';
+      import { readRouteIntentReceipt } from './src/integrations/route-intent';
       const home = process.env.HOME;
       const configPath = join(process.env.CODEX_HOME, 'config.toml');
       const journalPath = join(process.env.CODEX_HOME, 'opencodex-journal.json');
@@ -34,7 +37,7 @@ function scenario(body: string, initialCodex?: boolean | "absent") {
       else if (${typeof initialCodex === "boolean"}) local.clientIntegrations = {...local.clientIntegrations, codex:${JSON.stringify(initialCodex === true)}};
       saveConfig(local);
       const rawNativeBefore = JSON.parse(readFileSync(join(process.env.OPENCODEX_HOME,'config.json'),'utf8'));
-      let codexEnabled = true, modelId = 'fixture/first';
+      let codexEnabled = true, modelId = 'fixture/first', settingsAvailable = false;
       const document = () => ({version:1, home:{name:'fixture-home',version:'1'},
         clients:Object.fromEntries(ROUTE_CLIENT_IDS.map(id=>[id,{enabled:id==='pi'||id==='codex'&&codexEnabled}])),
         sources:Object.fromEntries(ROUTE_CLIENT_IDS.map(id=>[id,'default']))});
@@ -44,6 +47,8 @@ function scenario(body: string, initialCodex?: boolean | "absent") {
           status:'ready',protocol:1,minimumClientProtocol:1,managementUrl:'http://127.0.0.1:22001'});
         if(url.endsWith('/v1/catalog')) return Response.json({models:[]});
         if(url.endsWith('/route-intent')) return Response.json(document());
+        if(url.endsWith('/codex-settings') && settingsAvailable) return Response.json({version:1,home:{name:'fixture-home',version:'1'},
+          settings:{fastMode:true,multiAgentMode:null,webSearchSidecarEnabled:false,subagentDefaults:null}});
         if(url.endsWith('/v1/models')) return Response.json({data:[{id:modelId}]});
         return new Response(null,{status:404});
       };
@@ -66,6 +71,36 @@ function scenario(body: string, initialCodex?: boolean | "absent") {
     return JSON.parse(child.stdout.trim().split("\n").at(-1)!);
   } finally { removeTreeWithRetry(home); }
 }
+
+test("external Codex provider withdraws the same-digest apply record while other routes sync", () => {
+  const result = scenario(`
+    settingsAvailable=true;
+    const first=await syncConnectedClient({},deps);
+    const prior=readHomeCodexSettingsRecord(connection.link.linkId);
+    const external='model_provider = "outside"\\n[model_providers.outside]\\nbase_url = "https://example.test/v1"\\n';
+    writeFileSync(configPath,external);
+    modelId='fixture/second';
+    const synced=await syncConnectedClient({},deps);
+    const record=readHomeCodexSettingsRecord(connection.link.linkId);
+    const report=linkChildParityReport(connection,'2026-10-21T00:00:00.000Z',record,1);
+    const receipt=readRouteIntentReceipt();
+    console.log(JSON.stringify({firstInjected:first.injected,prior,config:readFileSync(configPath,'utf8'),external,
+      injected:synced.injected,appliedRecord:synced.appliedRecord,record,report,
+      codex:receipt.outcomes.find(row=>row.client==='codex'),pi:receipt.outcomes.find(row=>row.client==='pi'),
+      piModels:readFileSync(piPath,'utf8')}));
+  `);
+  expect(result.firstInjected).toBe(true);
+  expect(result.prior.document.settings.fastMode).toBe(true);
+  expect(result.config).toBe(result.external);
+  expect(result.injected).toBe(false);
+  expect(result.appliedRecord).toBeUndefined();
+  expect(result.record).toBeNull();
+  expect(result.report.appliedCodexSettingsDigest).toBeNull();
+  expect(result.report.lastApplyAt).toBeNull();
+  expect(result.codex.outcome).toBe('conflict');
+  expect(result.pi.outcome).toBe('current');
+  expect(result.piModels).toContain('fixture/second');
+}, SPAWN_BUDGET_MS);
 
 for (const initial of ["absent", false, true] as const) {
   test(`disconnect restores native Codex intent after repeated Home sync (initial: ${String(initial)})`, () => {
