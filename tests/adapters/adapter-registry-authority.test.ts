@@ -1260,6 +1260,22 @@ describe("TRAE CN ACP regression contract", () => {
     expect(getPinnedCached("trae-cn")).toBeNull();
   });
 
+  test("background publication pins the authoritative roster after ordinary cache eviction", async () => {
+    await withProbeMemory(false, async evictions => {
+      const open = pressureSession();
+      const row = { ...config(), models: ["configured-fallback"] };
+      const next: OcxConfig = { port: 10100, defaultProvider: "trae-cn", providers: { "trae-cn": row } };
+      let published = false;
+      await refreshTraeCnCatalogSources(next, () => true, async () => {
+        published = getPinnedCached("trae-cn")?.some(model => model.id === "new-probed-model") === true;
+      });
+      expect(published).toBe(true);
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(evictions()).toBe(1);
+      expect(modelCacheRetainedStoreSnapshot().pinnedBytes).toBe(0);
+    });
+  });
+
   for (const stopped of [false, true]) {
     test("background CLI refresh does not hold management admission; stopped=" + stopped, async () => {
       let entered!: () => void;
