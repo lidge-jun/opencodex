@@ -1952,6 +1952,7 @@ export const tr: Record<TKey, string> = {
   "pws.currentAccountUsage": "Geçerli hesabın kullanımı",
   "pws.quotaUnsupported": "Bu hesap için kota sorgulama desteklenmiyor.",
   "pws.quotaUnobserved": "Henüz kullanım gözlemi yok.",
+  "pws.quotaLastRead": "Son okuma",
   "pws.quotaCheckCompleted": "Kota kontrolü tamamlandı",
   "pws.modelBreakdown": "Model dağılımı",
   "pws.col.model": "Model",

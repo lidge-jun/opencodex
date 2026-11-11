@@ -3162,6 +3162,7 @@ export const ko: Record<TKey, string> = {
   "pws.currentAccountUsage": "현재 계정 사용량",
   "pws.quotaUnsupported": "이 계정은 할당량 조회를 지원하지 않습니다.",
   "pws.quotaUnobserved": "아직 관측된 사용량이 없습니다.",
+  "pws.quotaLastRead": "마지막 조회",
   "pws.quotaCheckCompleted": "할당량 확인 완료",
   "pws.modelBreakdown": "모델별 사용량",
   "pws.col.model": "모델",

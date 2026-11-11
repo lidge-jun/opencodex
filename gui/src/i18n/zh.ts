@@ -3135,6 +3135,7 @@ export const zh: Record<TKey, string> = {
   "pws.currentAccountUsage": "当前账户用量",
   "pws.quotaUnsupported": "此账户不支持查询配额。",
   "pws.quotaUnobserved": "尚未观测到用量。",
+  "pws.quotaLastRead": "上次读取",
   "pws.quotaCheckCompleted": "配额检查完成",
   "pws.modelBreakdown": "模型用量明细",
   "pws.col.model": "模型",

@@ -1966,6 +1966,7 @@ export const en = {
   "pws.currentAccountUsage": "Current account usage",
   "pws.quotaUnsupported": "Quota lookup is not supported for this account.",
   "pws.quotaUnobserved": "No usage observation yet.",
+  "pws.quotaLastRead": "Last read",
   "pws.quotaCheckCompleted": "Quota check completed",
   "pws.modelBreakdown": "Model breakdown",
   "pws.col.model": "Model",

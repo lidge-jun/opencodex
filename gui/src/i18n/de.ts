@@ -3115,6 +3115,7 @@ export const de: Record<TKey, string> = {
   "pws.currentAccountUsage": "Nutzung des aktuellen Kontos",
   "pws.quotaUnsupported": "Für dieses Konto ist keine Kontingentabfrage verfügbar.",
   "pws.quotaUnobserved": "Noch keine Nutzungsdaten beobachtet.",
+  "pws.quotaLastRead": "Zuletzt gelesen",
   "pws.quotaCheckCompleted": "Kontingentprüfung abgeschlossen",
   "pws.modelBreakdown": "Modellaufschlüsselung",
   "pws.col.model": "Modell",

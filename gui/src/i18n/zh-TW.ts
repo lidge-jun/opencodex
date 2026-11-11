@@ -1629,6 +1629,7 @@ export const zhTW: Record<TKey, string> = {
   "pws.currentAccountUsage": "目前帳戶用量",
   "pws.quotaUnsupported": "此帳戶不支援查詢配額。",
   "pws.quotaUnobserved": "尚未觀測到用量。",
+  "pws.quotaLastRead": "上次讀取",
   "pws.quotaCheckCompleted": "配額檢查完成",
   "pws.modelBreakdown": "模型用量明細",
   "pws.col.model": "模型",

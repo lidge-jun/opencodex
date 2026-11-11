@@ -1950,6 +1950,7 @@ export const pt: Record<TKey, string> = {
   "pws.currentAccountUsage": "Uso da conta atual",
   "pws.quotaUnsupported": "A consulta de cota não é compatível com esta conta.",
   "pws.quotaUnobserved": "Nenhuma observação de uso ainda.",
+  "pws.quotaLastRead": "Última leitura",
   "pws.quotaCheckCompleted": "Verificação de cota concluída",
   "pws.modelBreakdown": "Detalhamento por modelo",
   "pws.col.model": "Modelo",

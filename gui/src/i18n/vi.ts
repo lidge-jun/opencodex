@@ -1937,6 +1937,7 @@ export const vi: Record<TKey, string> = {
   "pws.currentAccountUsage": "Mức sử dụng tài khoản hiện tại",
   "pws.quotaUnsupported": "Tra cứu hạn mức không được hỗ trợ cho tài khoản này.",
   "pws.quotaUnobserved": "Chưa có dữ liệu sử dụng nào được ghi nhận.",
+  "pws.quotaLastRead": "Lần đọc gần nhất",
   "pws.quotaCheckCompleted": "Đã hoàn thành kiểm tra hạn mức",
   "pws.modelBreakdown": "Chi tiết theo model",
   "pws.col.model": "Model",
