@@ -9,6 +9,7 @@
  * 1. Probe registration (task, WinSW; 2 s caps). An unreadable answer is unknown with
  *    nothing changed. With nothing registered, one enumeration (5 s) looks for a stray
  *    wrapper of a deleted task; unreadable, or nothing found, is absent.
+ *    With a task registered or a stray sweep running, the Schedule host PID is read (2 s).
  *    Admission runs here, after the probe and before anything changes.
  * 2. Bind (src/service/windows-stop-binding.ts) and open an exit watch per wrapper.
  * 3. Ask the manager: schtasks /end (2 s); WinSW a non-waiting stop (2 s) and an SCM poll

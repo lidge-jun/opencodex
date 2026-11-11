@@ -32,7 +32,13 @@ trusted system directory with a cap. The ARM64 terminate is one trusted PowerShe
 re-reads `Get-Process -Id` StartTime, compares it with the bound time within 1 s (UTC), calls
 `Kill()` on the same `Process` object and reads the exit back. `Kill()` opens its own handle by PID, so
 a window between the in-script check and the kill remains; that window and the 1 s tolerance are
-the accepted residuals of the fallback. Only integers reach a script.
+the accepted residuals of the fallback. Only integers reach a script: a fractional timeout is
+floored to whole milliseconds, and one that floors to 0 spawns nothing.
+
+With no ARM64 device run, 050 ships ARM64 with the strict variant (kill nothing, report `unknown`).
+`terminateWindowsProcessBound` does not enforce that: on win32 without the native API it runs the
+fallback script. The caller's terminate adapter gates strict itself; see
+`devlog/_plan/261111_windows_service_stop/060_implementation.md`.
 
 ## Binding rule
 
@@ -51,12 +57,13 @@ deepest first and carry pid, creation time, image and a SHA-256 digest of the co
 ## Part A and Part B
 
 `src/service/windows-checked-stop.ts` is Part A, `stopWindowsServiceChecked(deps, options)`. Every
-external effect is injected, and every step runs under a cap that races a timer and rechecks the
-elapsed time on the injected clock. It probes registration (2 s each). An unreadable answer is
-`unknown` with nothing changed. With nothing registered it enumerates once for a stray wrapper of a
-deleted task; an unreadable table or no wrapper is `absent`. Admission then compares the caller's
-deadline with the worst case still to come and returns `unverified-budget` without changing
-anything when it does not fit. It binds, ends the task (`schtasks /end`, 2 s) or stops WinSW (a
+external effect is injected. It probes registration (2 s each). An unreadable answer is `unknown`
+with nothing changed. With nothing registered it enumerates once for a stray wrapper of a deleted
+task; an unreadable table or no wrapper is `absent`. With a task registered or a stray sweep
+running, it reads the Schedule host PID (2 s). Admission then compares the time left on the
+caller's deadline, which already excludes these first steps, with the worst case still to come,
+and returns `unverified-budget` without changing anything when it does not fit. It binds, ends
+the task (`schtasks /end`, 2 s) or stops WinSW (a
 2 s stop command and an SCM poll capped at `<stoptimeout>` + 2 s), terminates bound survivors
 deepest first, waits on the bind-time watches (terminates and wait share 3 s), and reads the
 manager state once (1 s). Denied stops every further step. A cap overrun is `unknown`. A wrapper or
@@ -64,6 +71,13 @@ manager still running is `survived` (`unbound-wrapper` when the survivor was nev
 is `survived` while the proxy is still alive after the service reports stopped. The authorizer
 variant `guardedStopWindowsServiceChecked` runs its authorizer at entry and before each terminate and
 reports a refusal as `WindowsCheckedStopRefusedError` with what had already happened.
+
+Each step that asks the machine runs under a cap that races a timer and rechecks the elapsed time
+on the injected clock. Opening the bind-time watches and the authorizer are not capped. The
+authorizer runs inside the shared 3 s terminate-and-wait window, so its time comes out of that
+window, and an authorizer that never returns hangs Part A; its caller bounds it. Part A has no
+overall cap either, so a caller with a tighter bound than the sum of the caps (the `/api/stop`
+route's 4 s sweep and 6 s Part A in 030) needs an outer race or smaller caps.
 
 `src/service/windows-stop-confirm.ts` is Part B, `confirmWindowsStopFreed(deps)`, run after the caller's
 graceful child stop. The port must stay free for a 6 s hold, measured between sample starts,

@@ -43,10 +43,20 @@ Contract doc: `structure/ops/windows-checked-stop.md`.
 - **Unbound wrappers with nothing registered.** Binding finds no bound wrapper but an unbound one is alive. The result is `survived` / `unbound-wrapper`, not `absent`, matching 040's bullet; the 030 "absent" definition reads as "nothing bound" alone. Nothing is changed either way.
 - **Unreadable candidates with nothing registered.** An unreadable wrapper image above the child counts only while a manager is registered. A hand-started proxy under an elevated shell would otherwise lose the stop it gets today. A matching wrapper without a creation time stays `unknown` even with nothing registered.
 - **Snapshot type.** The snapshot type is `WindowsStopProcessEntry`, which is `WindowsProcessEntry` plus `startTime`, in the evidence module. `windowsProcessList` and the guarded inspection stay untouched until PR2 switches them.
+- **The Schedule PID is read before admission.** Part A reads the Task Scheduler host PID from the SCM (cap 2 s) right after the registration probe, before admission, whenever a task is registered or a stray sweep runs. 030's tables do not list this read. Admission measures the time left on the caller's deadline, so the read's actual elapsed time is already taken out of what admission sees, the same way the step 1 stray enumeration is.
+- **Not every effect is capped.** The registration probes, enumeration, Schedule PID, `/end`, WinSW stop and poll, terminates, manager state and `proxyAlive` run under caps. `openWatch` and the authorizer do not. `openWatch` is one `OpenProcess` per wrapper with no wait in it. The authorizer runs before each terminate, inside the shared 3 s terminate-and-wait window, so a slow authorizer eats that window: the next terminate gets less time, and an authorizer that never returns hangs Part A. PR2's authorizer (the updater's `mutationGate` check) has to be bounded by its caller.
+- **Fractional timeouts.** A cap derived from the deadline (`windowEnd - now`) is fractional on the real clock. The spawned terminate fallback floors it to whole milliseconds before building the script and calling `execFile`, and spawns nothing when it floors to 0, because `execFile` reads a 0 timeout as "no timeout".
+
+## ARM64 decision for PR2
+
+050 requires an ARM64 device run before the bounded fallback ships; without one, ARM64 ships the strict variant (report `unknown`, kill nothing). No ARM64 device run exists, so PR2 ships the strict variant. PR1 still contains the fallback script, and `terminateWindowsProcessBound` reaches it on its own: on win32 without the FFI primitive (ARM64, or an x64 whose DLL load failed) it runs the PowerShell script. PR2's terminate adapter therefore has to gate strict itself, for example by answering `unavailable` whenever `windowsProcessNative()` is null, and must not call `terminateWindowsProcessBound` there. Without a native API `openWindowsProcessWatch` already answers `unavailable`, so the wait reports `unknown` rather than proving an exit.
+
+## Notes for PR2
+
+- **The route's caps.** 030 caps the `/api/stop` route's stray sweep at 4 s and its receipt-less Part A at 6 s. `stopWindowsServiceChecked` has no overall cap: its own caps add up to more (the stray path alone has a 5 s enumeration), and it never returns before its steps do. The route needs an outer race on its deadline that answers `service_state_unknown` on overrun, or cap overrides passed in, such as a 4 s enumeration for the sweep.
 
 ## Open questions
 
 - Is the closing-sample accounting acceptable, or should the hold be measured differently, for example by shortening the final enumeration to 4.5 s to keep 030's totals?
 - Should a WinSW-only stop also sweep a stray scheduler wrapper (that would add an enumeration and 3 s to the WinSW row)?
-- ARM64 ships the bounded fallback here. 050 requires an ARM64 device run before release, or else the strict variant. PR2 needs that decision before the fallback is reachable.
 - `GetLastError` after a failed `OpenProcess` through Bun FFI separates "gone" from "denied". If the runtime clobbers it, the answer degrades to "unavailable" (`unknown`). The live x64 test in `tests/windows/windows-process-evidence.test.ts` checks this on the Windows CI lane.

@@ -4,8 +4,9 @@
  * One deadline governs the whole stop. Admission runs after Part A's registration probe
  * and before anything changes: it adds up the worst case of every step still to come and
  * refuses (unverified-budget, nothing changed) when the time left cannot hold it. Every
- * step after admission has a cap, and these constants are those caps, so an admitted stop
- * cannot overrun its deadline and the graceful child exit wait is never shortened.
+ * step after admission that waits on the machine has a cap, and these constants are those
+ * caps. Opening the bind-time watches and the caller's authorizer are not capped; the
+ * authorizer runs inside the terminateAndWait window and is bounded by its caller.
  *
  * Pure arithmetic; the callers own the clock.
  */
