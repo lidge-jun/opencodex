@@ -943,7 +943,8 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
       probe = null;
       setState(IDLE);
     }
-    setState(reduceTunnel(state, { type: "tick", now: now() }, random, policy));
+    // A tick changes state only when the outage limit fails the link, so its cause is the timeout.
+    setState(reduceTunnel(state, { type: "tick", now: now() }, random, policy), "timeout");
     // An adopted tunnel is never killed. Failed identity or socket-owner proof keeps it
     // unprobed and unable to promote, even when the process stays alive after a timeout.
     if (state.kind === "failed" && !state.inFlight && adopted !== null) setState({ ...state, inFlight: true });

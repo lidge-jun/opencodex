@@ -18,6 +18,7 @@ import type { SshChild, SshRunner } from "../../src/link/ssh-runner";
 import { buildTunnelArgv } from "../../src/link/ssh-argv";
 import { relayLinkDataRequest } from "../../src/client/link-relay";
 import type { LinkDiagnosticRecord } from "../../src/link/diagnostics";
+import { FAILED_AFTER_MS } from "../../src/link/tunnel-state";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -1421,6 +1422,23 @@ describe("Child tunnel transitions in the diagnostics file (#7297)", () => {
     for (const record of seen) expect(record.tunnelPort).toBe(sidecar().tunnelPort);
     // Fixed metadata only: no argv, stderr, alias or link id ever reaches the sink.
     for (const record of seen) for (const key of Object.keys(record)) expect(ALLOWED.has(key)).toBe(true);
+  });
+
+  test("a link that stays down past the outage limit records timeout", async () => {
+    // ssh stays up but the keyed probe never succeeds (the Home is down): the tick that fails the
+    // link at FAILED_AFTER_MS must say timeout, as the Home does, not fall back to spawned.
+    const records: LinkDiagnosticRecord[] = [];
+    const h = supervisorHarness({ diagnostic: record => { records.push(record); } });
+    h.view.readyz = "refused";
+    try {
+      await h.start();
+      expect(h.state()).toBe("connecting");
+      await h.step(FAILED_AFTER_MS);
+      expect(h.state()).toBe("failed");
+    } finally { await h.close(); }
+    expect(transitions(records).find(record => record.state === "failed")).toMatchObject({
+      outcome: "timeout", previousState: "connecting", state: "failed",
+    });
   });
 
   test("a spawn that cannot start records spawn_failed", async () => {
