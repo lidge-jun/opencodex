@@ -51,7 +51,7 @@ describe("ocx link policy", () => {
     const d = deps(() => ({ body: { policy: { ...DEFAULTS, catalogFanout: "manual", updates: "off" }, warning: "policy-file-invalid" } }));
     const result = await run([], d);
     expect(result.code).toBe(0);
-    expect(result.stdout.at(-1)).toBe("The policy file is invalid; automatic catalog fan-out and updates are off until you save a policy.");
+    expect(result.stdout.at(-1)).toBe("The policy file is invalid; automatic catalog fan-out and updates are off. To turn them back on, pass --catalog-fanout auto and an --updates mode; a setting you do not name stays off.");
   });
 
   test.each([

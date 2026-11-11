@@ -102,9 +102,9 @@ ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wai
 
 ### 目錄自動分發與 Child 政策
 
-目錄分發預設為開啟。當 Home 的目錄變更時（目錄自動重新整理回報變更，或每 5 分鐘一次的檢查發現在儀表板或管理 API 中所做的編輯），Home 會等待 60 秒讓編輯穩定下來（距第一次變更最多 5 分鐘）。之後不需要你做任何操作，它會在背景為每台符合條件的 Child 開啟一個 SSH 工作階段，執行與 `ocx link sync` 相同的固定 `ocx sync --expect-link`，且不重新啟動。符合條件的 Child 是：由 Home 發起的連結、通道已連線、沒有其他操作在執行，而且此 Home 在那裡最後一次執行的同步早於這次變更；只下載過目錄的 Child 仍視為落後。正在中繼模型請求的 Child，只有在其 Codex 設定已經與 Home 一致時才會同步，因為套用變更後的設定會重新啟動它的 OpenCodex 用戶端執行環境；否則會在它閒置後再同步。同步失敗會在 5 分鐘後重試，間隔逐次加倍，最長 6 小時；低於 2.93.0 的 Child 在回報其他版本之前不會重試。這些工作與其他工作顯示方式相同，帶有 `trigger: "auto"`。沒有連結的 Home 不會執行其中任何部分。
+目錄分發預設為開啟。當 Home 的目錄變更時（目錄自動重新整理回報變更，或每 5 分鐘一次的檢查發現在儀表板或管理 API 中所做的編輯），Home 會等待 60 秒讓編輯穩定下來（距第一次變更最多 5 分鐘）。之後不需要你做任何操作，它會在背景為每台符合條件的 Child 開啟一個 SSH 工作階段，執行與 `ocx link sync` 相同的固定 `ocx sync --expect-link`；除非你啟用（見下文 `childCodexRestart`），否則不會重新啟動 Codex。符合條件的 Child 是：由 Home 發起的連結、通道已連線、沒有其他操作在執行，而且此 Home 在那裡最後一次執行的同步早於這次變更；只下載過目錄的 Child 仍視為落後。正在中繼模型請求的 Child，只有在其 Codex 設定已經與 Home 一致、且套用這些設定後其 OpenCodex 用戶端執行環境已經重新啟動過時才會同步，否則同步會重新啟動該執行環境；否則會在它閒置後再同步。同步失敗會在 5 分鐘後重試，間隔逐次加倍，最長 6 小時；低於 2.93.0 的 Child 在回報其他版本之前不會重試。這些工作與其他工作顯示方式相同，帶有 `trigger: "auto"`。沒有連結的 Home 不會執行其中任何部分。
 
-分發修正的是 Child 的目錄檔案。Child 上已經在執行的 Codex app-server 會繼續使用已載入的清單，直到重新啟動：請使用 `ocx link restart-codex` 或 `ocx sync --restart-children`，或以 `ocx link policy --child-codex-restart app-server-when-idle` 讓 Home 重新啟動 app-server；Home 只會在同步執行時仍然閒置的 Child 上這麼做。
+分發修正的是 Child 的目錄檔案。Child 上已經在執行的 Codex app-server 會繼續使用已載入的清單，直到重新啟動：請使用 `ocx link restart-codex --link-id <id> --yes` 或 `ocx sync --restart-children`，或以 `ocx link policy --child-codex-restart app-server-when-idle` 讓 Home 重新啟動 app-server；Home 只會在同步執行時仍然閒置的 Child 上這麼做。該設定從下一次自動同步起生效；目錄已是最新的 Child 不會被同步，因此也不會被重新啟動，請手動重新啟動它。
 
 政策儲存在 Home 的 `<configDir>/link/child-policy.json` 中，不會寫入 `config.json`：
 
@@ -124,7 +124,7 @@ ocx link policy --child-codex-restart app-server-when-idle
 ocx link policy --updates off --idle-after-minutes 20 --json
 ```
 
-`GET` 和 `PUT /api/link/children/policy` 讀取和變更相同的設定（迴路介面上的管理權杖，或儀表板工作階段）；`PUT` 只傳送要變更的設定。如果檔案損毀或包含未知的值，目錄自動分發和更新都會關閉，而且 `ocx link policy` 會提示這一點，直到你重新儲存政策。Home 從不自行改寫該檔案。
+`GET` 和 `PUT /api/link/children/policy` 讀取和變更相同的設定（迴路介面上的管理權杖，或儀表板工作階段）；`PUT` 只傳送要變更的設定。如果檔案損毀或包含未知的值，目錄自動分發和更新都會關閉，而且 `ocx link policy` 會提示這一點。儲存會清除警告，但未指定的設定仍保持關閉，請明確開啟，例如 `ocx link policy --catalog-fanout auto --updates auto-when-idle`。Home 從不自行改寫該檔案。
 
 不要連結不屬於你的機器：Home 會用你的 SSH 金鑰在那裡執行指令。
 

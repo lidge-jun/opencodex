@@ -379,15 +379,15 @@ there, and the dashboard has no controls for them. While a job holds a link, `oc
 
 On a Home with links, a Home catalog change reaches each eligible Child without anyone running
 `ocx sync`: about 60 s after the change settles, the Home runs the same pinned sync as `ocx link sync`
-(no restart) on every connected, Home-initiated Child whose last Home-run sync predates the change. A
-busy Child is synced only when its Codex settings already match the Home; failures back off from 5
+(no Codex restart unless `childCodexRestart` enables one) on every connected, Home-initiated Child whose last Home-run sync predates the change. A
+busy Child is synced only when its Codex settings already match the Home and its runtime restarted after that apply; failures back off from 5
 minutes to 6 hours. Automatic jobs show `trigger: "auto"` in the job document.
 
 `ocx link policy` (no flags) reads the knobs: `catalogFanout` (`auto` default, or `manual`),
 `childCodexRestart` (`never` default, or `app-server-when-idle`), `updates` (`auto-when-idle`
 default, `notify`, `off`) and `idleAfterMs` (`--idle-after-minutes <1-60>`, default 10). Changing the
 Child policy needs the operator's request; reading it does not. A `warning: "policy-file-invalid"`
-means fan-out and updates are off until the operator saves a policy. The fan-out fixes the Child's
+means fan-out and updates are off; a save keeps unnamed settings off, so re-enabling needs `--catalog-fanout auto` and an `--updates` mode. The fan-out fixes the Child's
 catalog file; a Codex app-server already running there keeps its old list until restarted.
 
 ## Key rotation is a two-step commit

@@ -278,6 +278,6 @@ export async function runLinkPolicy(args: string[], deps: LinkCliDeps, request: 
   printData(read, json, [
     `catalog fan-out: ${read.policy.catalogFanout}`, `Child Codex restart: ${read.policy.childCodexRestart}`,
     `updates: ${read.policy.updates}`, `idle after: ${read.policy.idleAfterMs / 60_000} min`,
-    ...(read.warning ? ["The policy file is invalid; automatic catalog fan-out and updates are off until you save a policy."] : []),
+    ...(read.warning ? ["The policy file is invalid; automatic catalog fan-out and updates are off. To turn them back on, pass --catalog-fanout auto and an --updates mode; a setting you do not name stays off."] : []),
   ]);
 }

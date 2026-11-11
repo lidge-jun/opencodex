@@ -238,6 +238,6 @@ export const ACCESS_REMOTE_CAPABILITIES: readonly Capability[] = [
       { name: "--child-codex-restart", value: "string", summary: "never (default) or app-server-when-idle." }, { name: "--idle-after-minutes", value: "number", summary: "Minutes without a relayed model request before a Child counts as idle; default 10." },
       { name: "--json", value: "boolean", summary: "Emit {policy, warning} as JSON." }],
     mutates: true, json: "payload",
-    details: ["Without flags it reads the policy; with flags it changes only those knobs. Stored in <configDir>/link/child-policy.json on the Home, never in config.json. An invalid file turns automatic catalog fan-out and updates off until a policy is saved.", "Catalog fan-out syncs Home-initiated Children 60 s after a Home catalog change; it restarts Codex on a Child only with app-server-when-idle, and only while that Child is idle. A Home without links runs none of it."],
+    details: ["Without flags it reads the policy; with flags it changes only those knobs. Stored in <configDir>/link/child-policy.json on the Home, never in config.json. An invalid file turns automatic catalog fan-out and updates off; saving merges onto that, so pass --catalog-fanout auto and an --updates mode to turn them back on.", "Catalog fan-out syncs Home-initiated Children 60 s after a Home catalog change; it restarts Codex on a Child only with app-server-when-idle, and only while that Child is idle. A Home without links runs none of it."],
   },
 ];

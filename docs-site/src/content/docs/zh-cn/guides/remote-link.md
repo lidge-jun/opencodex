@@ -102,9 +102,9 @@ ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wai
 
 ### 目录自动分发与子机策略
 
-目录分发默认开启。当 Home 的目录发生变化时（目录自动刷新报告了变化，或每 5 分钟一次的检查发现了在仪表盘或管理 API 中所做的编辑），Home 会等待 60 秒让编辑稳定下来（距第一次变化最多 5 分钟）。之后无需你进行任何操作，它会在后台为每台符合条件的子机打开一个 SSH 会话，运行与 `ocx link sync` 相同的固定 `ocx sync --expect-link`，且不重启。符合条件的子机是：由 Home 发起的链接、隧道已连接、没有其他操作在运行，并且此 Home 在那里最后一次运行的同步早于这次变化；只下载过目录的子机仍被视为落后。正在中继模型请求的子机，只有在其 Codex 设置已经与 Home 一致时才会同步，因为应用变化后的设置会重启它的 OpenCodex 客户端运行时；否则会在它空闲后再同步。同步失败会在 5 分钟后重试，间隔逐次翻倍，最长 6 小时；低于 2.93.0 的子机在报告其他版本之前不会重试。这些任务与其他任务显示方式相同，带有 `trigger: "auto"`。没有链接的 Home 不会运行其中任何部分。
+目录分发默认开启。当 Home 的目录发生变化时（目录自动刷新报告了变化，或每 5 分钟一次的检查发现了在仪表盘或管理 API 中所做的编辑），Home 会等待 60 秒让编辑稳定下来（距第一次变化最多 5 分钟）。之后无需你进行任何操作，它会在后台为每台符合条件的子机打开一个 SSH 会话，运行与 `ocx link sync` 相同的固定 `ocx sync --expect-link`；除非你启用（见下文 `childCodexRestart`），否则不会重启 Codex。符合条件的子机是：由 Home 发起的链接、隧道已连接、没有其他操作在运行，并且此 Home 在那里最后一次运行的同步早于这次变化；只下载过目录的子机仍被视为落后。正在中继模型请求的子机，只有在其 Codex 设置已经与 Home 一致、且应用这些设置后其 OpenCodex 客户端运行时已经重启过时才会同步，否则同步会重启该运行时；否则会在它空闲后再同步。同步失败会在 5 分钟后重试，间隔逐次翻倍，最长 6 小时；低于 2.93.0 的子机在报告其他版本之前不会重试。这些任务与其他任务显示方式相同，带有 `trigger: "auto"`。没有链接的 Home 不会运行其中任何部分。
 
-分发修复的是子机的目录文件。子机上已经在运行的 Codex app-server 会继续使用已加载的列表，直到重启：请使用 `ocx link restart-codex` 或 `ocx sync --restart-children`，或者用 `ocx link policy --child-codex-restart app-server-when-idle` 让 Home 重启 app-server；Home 只会在同步运行时仍然空闲的子机上这样做。
+分发修复的是子机的目录文件。子机上已经在运行的 Codex app-server 会继续使用已加载的列表，直到重启：请使用 `ocx link restart-codex --link-id <id> --yes` 或 `ocx sync --restart-children`，或者用 `ocx link policy --child-codex-restart app-server-when-idle` 让 Home 重启 app-server；Home 只会在同步运行时仍然空闲的子机上这样做。该设置从下一次自动同步起生效；目录已是最新的子机不会被同步，因此也不会被重启，请手动重启它。
 
 策略保存在 Home 的 `<configDir>/link/child-policy.json` 中，不会写入 `config.json`：
 
@@ -124,7 +124,7 @@ ocx link policy --child-codex-restart app-server-when-idle
 ocx link policy --updates off --idle-after-minutes 20 --json
 ```
 
-`GET` 和 `PUT /api/link/children/policy` 读取和修改相同的设置（环回上的管理令牌，或仪表盘会话）；`PUT` 只发送要修改的设置。如果文件损坏或包含未知取值，目录自动分发和更新都会关闭，并且 `ocx link policy` 会提示这一点，直到你重新保存策略。Home 从不自行改写该文件。
+`GET` 和 `PUT /api/link/children/policy` 读取和修改相同的设置（环回上的管理令牌，或仪表盘会话）；`PUT` 只发送要修改的设置。如果文件损坏或包含未知取值，目录自动分发和更新都会关闭，并且 `ocx link policy` 会提示这一点。保存会清除警告，但未指定的设置仍保持关闭，请显式开启，例如 `ocx link policy --catalog-fanout auto --updates auto-when-idle`。Home 从不自行改写该文件。
 
 不要链接不属于你的机器：Home 会用你的 SSH 密钥在那里运行命令。
 

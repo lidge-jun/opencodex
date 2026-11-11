@@ -1396,7 +1396,6 @@ ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]
 ocx link sync (--link-id <id> | --all) [--no-wait] [--json]
 ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]
 ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]
-ocx link policy [--updates off|notify|auto-when-idle] [--catalog-fanout auto|manual] [--child-codex-restart never|app-server-when-idle] [--idle-after-minutes <1-60>] [--json]
 ```
 
 These commands start one job on the Home for Home-initiated Children and print it as an `ocx.link.child-job/1` document: `{schema, jobId, op, trigger, restart, state, createdAt, finishedAt, items}`. Each item carries `linkId`, `alias`, `state`, `reason`, `startedAt` and `finishedAt`, and where they apply `hint`, `fromVersion`, `toVersion`, `sync` (`{state, reason}`) and `restart` (`{requested, outcome}`, where `outcome` is `requested`, `unsupported`, `not-run` or `skipped`). What each command runs on the Child, the version floors and the Windows and `ocx-child` limits are in [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home). A restart names exactly one link; `update`, `restart-codex` and `--restart-codex` need `--yes`.
@@ -1412,7 +1411,13 @@ These commands start one job on the Home for Home-initiated Children and print i
 
 The wait does not count time an item spends queued behind another job. Removing a link while a job holds it answers `409 link_operation_in_progress`.
 
-`ocx link policy` reads the Home's Child policy and, with flags, changes only the settings named: `--catalog-fanout auto|manual`, `--child-codex-restart never|app-server-when-idle`, `--updates off|notify|auto-when-idle` and `--idle-after-minutes <1-60>`. It prints one line per setting, or `{policy, warning}` with `--json`; `warning` is `policy-file-invalid` when the file is damaged, and automatic catalog fan-out and updates stay off until a policy is saved. Catalog fan-out is on by default: after a Home catalog change the Home syncs eligible Children over SSH on its own. See [Automatic catalog fan-out and the Child policy](/guides/remote-link/#automatic-catalog-fan-out-and-the-child-policy). Exit codes: 0, 2 for invalid arguments, 4 for a Home without this command, 5 when run on a Child, 1 for a Home not bound to loopback or an invalid answer.
+## Child policy from the Home
+
+```text
+ocx link policy [--updates off|notify|auto-when-idle] [--catalog-fanout auto|manual] [--child-codex-restart never|app-server-when-idle] [--idle-after-minutes <1-60>] [--json]
+```
+
+`ocx link policy` starts no job and prints no `ocx.link.child-job/1` document. It reads the Home's Child policy and, with flags, changes only the settings named: `--catalog-fanout auto|manual`, `--child-codex-restart never|app-server-when-idle`, `--updates off|notify|auto-when-idle` and `--idle-after-minutes <1-60>`. It prints one line per setting, or `{policy, warning}` with `--json`; `warning` is `policy-file-invalid` when the file is damaged, and automatic catalog fan-out and updates stay off; a save keeps every setting it does not name off, so pass `--catalog-fanout auto` and an `--updates` mode to turn them back on. Catalog fan-out is on by default: after a Home catalog change the Home syncs eligible Children over SSH on its own. See [Automatic catalog fan-out and the Child policy](/guides/remote-link/#automatic-catalog-fan-out-and-the-child-policy). Exit codes: 0 on success, 2 for invalid arguments, 4 for a Home without this command, 5 for a conflict answer (`runtime_role_client` from a runtime that is a Child), and 1 for a Home not bound to loopback, an invalid answer, or a run on a Remote Link Child, which refuses the request before sending it.
 
 ## Remote Link SSH capture
 
