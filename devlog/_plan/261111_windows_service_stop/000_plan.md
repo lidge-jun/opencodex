@@ -1,6 +1,6 @@
 # 000 — Windows service stop that frees the port (#7771 Option B): design
 
-Status: design only, awaiting owner approval. Nothing here is implemented.
+Status: approved (030, bounded ARM64 fallback). Implementation is split into three pull requests (060); the primitives and the two operations land first, unwired.
 
 ## Problem
 
@@ -17,6 +17,7 @@ What has shipped since: refusal diagnostics (#7973, option A), in-process comman
 | 030 | Recommended design: one checked Windows stop |
 | 040 | Verification: unit, hermetic integration, and real Windows device |
 | 050 | Risks, compatibility and rollout |
+| 060 | Implementation slices and where the code differs from 030 |
 
 ## Decision requested
 
