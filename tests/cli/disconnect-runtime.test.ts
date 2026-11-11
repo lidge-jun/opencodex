@@ -5,6 +5,8 @@ import { codexProxyStartEnv } from "../../src/cli/codex-launcher";
 import { opencodeProxyStartEnv } from "../../src/cli/opencode";
 import { restartOwnerEvidence } from "../../src/client/runtime-restart";
 import { clientRuntimeRecord } from "../../src/client/runtime";
+import { runtimeOwnerScope } from "../../src/config/process-state";
+import { observeProxyLiveness } from "../../src/server/proxy-liveness";
 import { requestBoundSystemRestart } from "../../src/cli/system-restart-client";
 import { runProxyRestart, type ProxyRestartIo } from "../../src/cli/tray-proxy";
 import { createLocalAttestationProof, createLocalAttestationSecret, LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER } from "../../src/lib/local-management-attestation";
@@ -323,3 +325,43 @@ describe("a disconnect restart bound to the captured runtime generation", () => 
     expect(w.posts).toEqual([]);
   });
 });
+
+// The merge with dev #8562 (#8552): observeProxyLiveness skips a runtime record that names this
+// process's own PID from an earlier lifetime. Such a stale record can still carry a restartOwner.
+// The disconnect step decides from the liveness observation first, so a stale record never reaches
+// the capture or a restart. Everything is injected: no network, no real port, no real home.
+describe("a stale runtime record from an earlier lifetime of this PID never drives the disconnect restart", () => {
+  for (const published of [false, true]) {
+    test("this process " + (published ? "has" : "has not") + " published its own records", async () => {
+      const ownScope = runtimeOwnerScope();
+      const stale = { pid: process.pid, port: 54321, hostname: "127.0.0.1", attestationSecret: createLocalAttestationSecret(), restartOwner: "service-manager", ownerScope: ownScope };
+      const refused = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+      const observe = () => observeProxyLiveness({
+        attempts: 1,
+        fetchFn: (async () => { throw refused; }) as unknown as typeof fetch,
+        readPidFn: () => null,
+        readRuntimeFn: () => stale,
+        configFn: () => ({ port: 54321, hostname: "127.0.0.1" }),
+        bindProofFn: async () => true,
+        readCommandLineFn: () => "bun ocx start",
+        ownProcessFn: () => ({ pid: process.pid, publishedOwnership: published, scope: ownScope }),
+        sleepFn: async () => {},
+      });
+      const seen = await observe();
+      expect(seen.kind).toBe(published ? "unknown" : "absent");
+      let captures = 0, restarts = 0;
+      const code = await restartRuntimeAfterDisconnect({
+        observe,
+        capture: () => { captures += 1; return stale; },
+        connectionState: () => ({ kind: "disconnected" }),
+        restart: async () => { restarts += 1; return { ok: true }; },
+        json: false, info: () => {}, error: () => {},
+      });
+      expect({ captures, restarts }).toEqual({ captures: 0, restarts: 0 });
+      // An earlier lifetime proven stale reads as nothing running (origin/dev's exit 0); one this
+      // process cannot rule out stays inconclusive and fails closed (exit 1), still without a request.
+      expect(code).toBe(published ? 1 : 0);
+    });
+  }
+});
+
