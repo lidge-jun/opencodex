@@ -192,7 +192,7 @@ export function writeJournal(options: WriteJournalOptions = {}, hooks: AtomicWri
   // Ownership is decided HERE, from the bytes about to be journaled — never taken
   // on the caller's word. A caller that says "native" about injected content would
   // otherwise make opencodex's own routing the user's permanent "original".
-  if (hasInjectedCodexRouting(config)) { adoptJournalForClient(options.owner, hooks); return; }
+  if (hasInjectedCodexRouting(config)) return;
   // The caller's verdict only authorizes REPLACEMENT. It is weaker evidence than
   // the check above (it may describe bytes read a moment earlier), so an
   // unclassified call creates a first snapshot but never overwrites one.
@@ -201,7 +201,7 @@ export function writeJournal(options: WriteJournalOptions = {}, hooks: AtomicWri
     throw new CodexHomeOwnerRefusal("owner-unknown");
   }
   const previous = inspection.kind === "read" ? inspection.journal as unknown as Journal : null;
-  if (previous && options.currentStateIsNative !== true) { adoptJournalForClient(options.owner, hooks); return; }
+  if (previous && options.currentStateIsNative !== true) return;
   const profile = existsSync(CODEX_PROFILE_PATH)
     ? readFileSync(CODEX_PROFILE_PATH, "utf-8")
     : null;
@@ -217,23 +217,6 @@ export function writeJournal(options: WriteJournalOptions = {}, hooks: AtomicWri
     timestamp: new Date().toISOString(),
   };
   atomicWriteFile(JOURNAL_PATH, JSON.stringify(journal), undefined, hooks);
-}
-
-/**
- * A committing client injection takes over a journal another owner wrote, keeping its original
- * snapshot. Routing is the client's from here on; left with a standalone process as owner, the
- * first start after that process exited (a supervisor relaunch after `ocx connect --link` and
- * `ocx restart`) read it as a crashed session and restored native Codex under the new link.
- */
-function adoptJournalForClient(owner: WriteJournalOptions["owner"], hooks: AtomicWriteHooks): void {
-  if (owner?.kind !== "client") return;
-  const inspection = readCodexHomeJournal(JOURNAL_PATH);
-  if (inspection.kind === "unknown") throw new CodexHomeOwnerRefusal("owner-unknown");
-  if (inspection.kind !== "read") return;
-  const previous = inspection.journal as unknown as Journal;
-  if (previous.owner?.kind === "client" && previous.owner.apiKeyId === owner.apiKeyId) return;
-  const adopted: Journal = { ...previous, owner: { kind: "client", apiKeyId: owner.apiKeyId } };
-  atomicWriteFile(JOURNAL_PATH, JSON.stringify(adopted), undefined, hooks);
 }
 
 export interface InjectedJournalOwnership {
@@ -509,6 +492,31 @@ export interface ReconcileJournalOptions {
    * startup does not restore native config in the seconds before its own sync re-injects.
    */
   adoptUpdateHandover?: boolean;
+}
+
+/**
+ * Called by `connectClient` right after its connection commits, when its injection ran: the
+ * client takes over a journal another owner wrote (a standalone proxy's injection it re-injected
+ * over), keeping the original snapshot. Before the commit the journal stays its writer's, so a
+ * runtime starting mid-connect sees a live process owner and leaves it alone. Without the takeover
+ * the first start after that process exited (a supervisor relaunch after `ocx connect --link` and
+ * `ocx restart`) read it as a crashed session and restored native Codex under the new link.
+ * Returns whether it changed the owner.
+ */
+export function adoptJournalForClient(apiKeyId: string): boolean {
+  if (codexHomeIsAbsent(CODEX_HOME)) return false;
+  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, undefined, handle => {
+    assertCodexHomeOwner(CODEX_HOME);
+    beginCodexWriteSection(handle);
+    const journal = readJournal();
+    if (!journal) return false;
+    if (journal.owner?.kind === "client" && journal.owner.apiKeyId === apiKeyId) return false;
+    const adopted = JSON.stringify({ ...journal, owner: { kind: "client", apiKeyId } });
+    publishCodexArtifact(JOURNAL_PATH, handle, (path, hooks) => atomicWriteFile(path, adopted, undefined, hooks));
+    return true;
+  });
+  if (!locked.ok) throw new Error(locked.error === "unsafe" ? configWriteLockFailureMessage(locked) : "the Codex config lock is busy");
+  return locked.value;
 }
 
 export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean {

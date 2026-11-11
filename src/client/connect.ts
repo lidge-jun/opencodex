@@ -28,6 +28,7 @@ import {
   type CodexRoutingTarget,
 } from "../codex/inject";
 import {
+  adoptJournalForClient,
   journalOwner,
   restoreJournalState,
 } from "../codex/journal";
@@ -783,6 +784,12 @@ async function connectClientUnlocked(
       commitClientConnection(connection);
       committed = true;
     }), deps.lifecycleLockDeps);
+    // Only now does the routing belong to this connection: take over a journal another owner wrote
+    // (src/codex/journal.ts adoptJournalForClient). A failure keeps the connection; sync retries.
+    if (injectionCommitted) {
+      try { adoptJournalForClient(apiKeyId); }
+      catch { console.warn("Warning: the Codex journal could not be handed to this connection; run 'ocx sync' so a supervised restart keeps Codex routing."); }
+    }
     // Recorded only when the injection that applied it ran (not with --no-sync). The connection is
     // already committed, so a failed record write must not reach the rollback below: it is a
     // warning, and `ocx status` reports no recorded apply until `ocx sync` writes one.
@@ -977,6 +984,8 @@ async function syncConnectedClientUnlocked(
     });
     if (!result.success || result.status === "skipped") throw new Error(result.message);
     injected = true;
+    // A committed connection re-injected: own the journal too (retries a takeover connect missed).
+    try { adoptJournalForClient(next.apiKeyId); } catch { /* the journal keeps its owner; the next sync retries */ }
     if (homeSettings && next.link) {
       const linkId = next.link.linkId;
       const settings = homeSettings;

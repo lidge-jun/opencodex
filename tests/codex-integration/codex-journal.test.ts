@@ -391,22 +391,31 @@ describe("codex-journal", () => {
   // re-injects for the client, but the journal stayed the standalone process's. Once that process
   // exited into its supervisor (desktop exit 75, service exit 1), the supervisor's fresh start saw a
   // dead process owner and restored native Codex and the old catalog under the new link.
-  test("a client injection over a standalone injection takes the journal, so a supervised restart keeps it", () => {
+  // A Remote Link Child linked while a standalone proxy had routing injected: `ocx connect --link`
+  // re-injects for the client. The journal must stay the live standalone's until the connection
+  // commits (a runtime starting mid-connect then skips it), and become the client's right after, or
+  // the supervisor's relaunch reads a dead process owner and restores native Codex under the link.
+  test("a client injection leaves the journal to its owner until connect commits and adopts it", () => {
     const original = '# original config\nmodel_provider = "openai"\n';
     writeFileSync(join(testDir, "config.toml"), original, "utf8");
     const linked = runScript(testDir, `
       const { injectCodexConfig } = require("./src/codex/inject");
+      const { adoptJournalForClient } = require("./src/codex/journal");
+      const fs = require("fs"), path = require("path");
+      const owner = () => JSON.parse(fs.readFileSync(path.join(process.env.CODEX_HOME, "opencodex-journal.json"), "utf8")).owner;
       (async () => {
         const config = { port: 10100, providers: {}, defaultProvider: "openai" };
-        const standalone = await injectCodexConfig(10100, config, { catalogPath: null });
-        const client = await injectCodexConfig(10100, config, { catalogPath: null, journalOwner: { kind: "client", apiKeyId: "link-key" } });
-        console.log(JSON.stringify({ standalone: standalone.success, client: client.success }));
+        await injectCodexConfig(10100, config, { catalogPath: null });
+        await injectCodexConfig(10100, config, { catalogPath: null, journalOwner: { kind: "client", apiKeyId: "link-key" } });
+        const beforeCommit = owner();
+        const adopted = adoptJournalForClient("link-key");
+        const again = adoptJournalForClient("link-key");
+        console.log(JSON.stringify({ beforeCommit: beforeCommit.kind, adopted, again, pid: process.pid }));
       })();
     `);
     expect(linked.status).toBe(0);
-    expect(JSON.parse(linked.stdout)).toEqual({ standalone: true, client: true });
-    const journalPath = join(testDir, "opencodex-journal.json");
-    const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+    expect(JSON.parse(linked.stdout)).toMatchObject({ beforeCommit: "process", adopted: true, again: false });
+    const journal = JSON.parse(readFileSync(join(testDir, "opencodex-journal.json"), "utf8"));
     expect(journal.owner).toEqual({ kind: "client", apiKeyId: "link-key" });
     expect(Buffer.from(journal.originalConfig, "base64").toString("utf8")).toBe(original);
     const routed = readFileSync(join(testDir, "config.toml"), "utf8");

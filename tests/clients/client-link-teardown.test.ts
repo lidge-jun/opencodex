@@ -1,12 +1,14 @@
 import { expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { JOURNAL_PATH } from "../../src/codex/journal";
+import { injectCodexConfig } from "../../src/codex/inject";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { handleDisconnectCommand } from "../../src/cli/connect";
 import { connectClient } from "../../src/client/connect";
 import { teardownClientLink } from "../../src/client/link-teardown";
 import { clientLinkStatePath, writeClientLinkState } from "../../src/client/link-state";
 import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
-import { DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
+import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
 import { createTempHome } from "../helpers/temp-home";
 
 const linkId = "lnk_0123456789abcdef";
@@ -257,6 +259,41 @@ test("a desktop-remote folder with no state or receipt is named, with the way to
     expect(output).toContain("holds no Claude Desktop remote state or disconnect receipt");
     expect(output).toContain("Move that folder aside, then run ocx disconnect again");
   } finally {
+    home.remove();
+  }
+});
+
+test("connect --link over a standalone injection hands the Codex journal to the committed client", async () => {
+  const home = createTempHome("ocx-client-link-journal-");
+  try {
+    const config = getDefaultConfig();
+    config.port = 10100;
+    saveConfig(config);
+    // The Codex paths are fixed at import from the preload's sandboxed CODEX_HOME.
+    writeFileSync(CODEX_CONFIG_PATH, "model_provider = \"openai\"\n");
+    // The standalone proxy's own injection, journaled to this (live) process.
+    const standalone = await injectCodexConfig(10100, { ...config, syncResumeHistory: false }, { catalogPath: null });
+    expect(standalone.success).toBe(true);
+    const journalPath = JOURNAL_PATH;
+    expect(JSON.parse(readFileSync(journalPath, "utf8")).owner.kind).toBe("process");
+    await connectClient({
+      serverUrl: "http://127.0.0.1:34567",
+      managementUrl: "http://127.0.0.1:34567",
+      managementTransport: "direct",
+      transport: "link",
+      link: { tunnelPort: 34567, linkId },
+      credential: { kind: "link", apiKeyId: "key-1", key },
+      selectedClients: ["codex"],
+    }, {
+      fetchImpl: async input => String(input).endsWith("/readyz")
+        ? Response.json({ status: "ready", protocol: 1, minimumClientProtocol: 1, managementUrl: "http://127.0.0.1:34567" })
+        : Response.json({ models: [] }),
+      catalogCompatibility: { supportedEfforts: () => new Set() },
+      lifecycleLockDeps: { lockPath: home.path("lifecycle.sqlite") },
+    });
+    expect(JSON.parse(readFileSync(journalPath, "utf8")).owner).toEqual({ kind: "client", apiKeyId: "key-1" });
+  } finally {
+    for (const created of [JOURNAL_PATH, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, DEFAULT_CATALOG_PATH]) rmSync(created, { force: true });
     home.remove();
   }
 });
