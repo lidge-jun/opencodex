@@ -1169,6 +1169,13 @@ export interface OcxProviderConfig {
    */
   anthropicEofTolerance?: boolean;
   /**
+   * Claude Code's typed Advisor server tool (`advisor_20260301`) on the translated Messages lane.
+   * Absent: forwarded only to an `anthropic`-adapter provider on first-party `api.anthropic.com`.
+   * `true`: an Anthropic-compatible gateway that runs it receives the declaration, its history and
+   * the `advisor-tool-2026-03-01` beta too. `false`: never forwarded, even first-party.
+   */
+  forwardAdvisorTool?: boolean;
+  /**
    * Model ids that do NOT accept image inputs. The proxy gives them "eyes" via the vision sidecar:
    * attached images are described by a gpt vision model and replaced with text before the call.
    */

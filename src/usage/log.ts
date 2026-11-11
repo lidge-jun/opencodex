@@ -94,6 +94,11 @@ export function isCodexPoolAccountLogLabel(value: unknown): value is "main" | `p
   return value === "main" || (typeof value === "string" && CODEX_ACCOUNT_LOG_LABEL_RE.test(value));
 }
 
+/** Anthropic pool account tag (#8383): exactly the `p<hex6>` label of its logged provider, nothing else. */
+export function isAnthropicAccountTag(value: unknown): value is `p${string}` {
+  return typeof value === "string" && CODEX_ACCOUNT_LOG_LABEL_RE.test(value);
+}
+
 /** Request-time upstream credential class, never a credential or account identifier. */
 export type UsageCredentialSource = "grok-oauth" | "xai-api-key";
 
@@ -171,6 +176,8 @@ export interface PersistedUsageAttempt {
   locallyAnswered?: boolean;
   /** Stable non-PII identity for the Codex pool account that served this attempt. */
   accountLogLabel?: CodexUsageAccountLogLabel;
+  /** Anthropic pool account that served this attempt: the p-label of its provider (#8383). */
+  accountTag?: `p${string}`;
   inputTokenEstimate?: number;
   usage?: OcxUsage;
   totalTokens?: number;
@@ -325,6 +332,8 @@ export interface PersistedUsageEntry {
   inboundProtocol?: "responses" | "chat" | "messages";
   /** Stable non-PII identity for Codex Pool usage; absent for Direct/non-Codex traffic. */
   accountLogLabel?: CodexUsageAccountLogLabel;
+  /** Anthropic pool account of the row's provider (#8383); never read by account summaries. */
+  accountTag?: `p${string}`;
   /** Best-effort chat/session correlation for Logs grouping (#330). */
   conversationId?: string;
   resolvedModel?: string;
@@ -792,6 +801,7 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
     ...(isCodexUsageAccountLogLabel(attempt.accountLogLabel)
       ? { accountLogLabel: attempt.accountLogLabel }
       : {}),
+    ...(isAnthropicAccountTag(attempt.accountTag) ? { accountTag: attempt.accountTag } : {}),
     ...(isNonNegativeFiniteNumber(attempt.inputTokenEstimate)
       ? { inputTokenEstimate: attempt.inputTokenEstimate }
       : {}),
@@ -1056,6 +1066,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(isCodexUsageAccountLogLabel(entry.accountLogLabel)
       ? { accountLogLabel: entry.accountLogLabel }
       : {}),
+    ...(isAnthropicAccountTag(entry.accountTag) ? { accountTag: entry.accountTag } : {}),
     ...(typeof entry.conversationId === "string" && entry.conversationId.trim()
       ? { conversationId: entry.conversationId.trim().slice(0, 128) }
       : {}),

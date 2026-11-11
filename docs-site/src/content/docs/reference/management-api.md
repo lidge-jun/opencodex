@@ -420,6 +420,13 @@ A consumer can derive the same label from its local configuration without resolv
 Changing a literal key or reference changes the label; replacing the secret behind an unchanged
 reference keeps the same logical account. Older unlabeled records cannot be attributed reliably.
 
+Anthropic OAuth pool attempts and rows also record `accountTag`, the `p` plus six lowercase hex
+digits already shown in the logged provider (`anthropic-p2e22d0` has the tag `p2e22d0`). It names
+the pool account that served each attempt, so a failover attempt carries the replacement account's
+tag. It contains no email, account ID, or credential, and it does not change `accountLogLabel` or
+the per-account usage summaries. A provider without that suffix, such as a pool-off translated
+request, has no tag. Older rows and malformed values omit the field.
+
 Key selection is recorded after queued requests have been rebuilt for the current selection.
 When a retry changes keys, `attempts` retains a separate record for the preceding key, including
 reported usage from failed responses. Missing usage remains unreported. Routed adapter terminals

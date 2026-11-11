@@ -54,6 +54,9 @@ function mergeRosterRows<T extends QuotaRow>(rows: T[], previous: T[]): T[] {
     ...row,
     quotaPending: prior.get(row.id)?.quotaPending ?? false,
     quotaUnavailable: prior.get(row.id)?.quotaMode === row.quotaMode ? prior.get(row.id)?.quotaUnavailable ?? false : false,
+    // #8397: the roster read carries no read time; keep the last reading's reason and time.
+    quotaReadAt: prior.get(row.id)?.quotaMode === row.quotaMode ? prior.get(row.id)?.quotaReadAt : undefined,
+    quotaUnknownReason: prior.get(row.id)?.quotaMode === row.quotaMode ? prior.get(row.id)?.quotaUnknownReason : undefined,
     quotaFailure: row.quotaMode === "probe" && prior.get(row.id)?.quotaMode === row.quotaMode && prior.get(row.id)?.quotaUnavailable
       ? parseQuotaFailureCode(prior.get(row.id)?.quotaFailure) : undefined,
   } : row);
@@ -66,7 +69,8 @@ function mergeLateQuotaRows<T extends QuotaRow>(rows: T[], enriched: T[]): T[] {
     const incoming = byId.get(row.id);
     if (!incoming || incoming.quotaMode !== row.quotaMode) return row;
     const quota = mergeQuotaRows([incoming], [row], true)[0];
-    return { ...row, quota: quota.quota, quotaPending: quota.quotaPending, quotaUnavailable: quota.quotaUnavailable, quotaFailure: quota.quotaFailure };
+    return { ...row, quota: quota.quota, quotaPending: quota.quotaPending, quotaUnavailable: quota.quotaUnavailable, quotaFailure: quota.quotaFailure,
+      quotaReadAt: quota.quotaReadAt, quotaUnknownReason: quota.quotaUnknownReason };
   });
 }
 

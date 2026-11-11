@@ -387,7 +387,7 @@ describe("credential-scoped key quota", () => {
     const rows = await fetchProviderApiKeyQuotas(config, "openrouter");
     expect(rows.map(row => row.quota?.customWindows?.[0]?.percent)).toEqual([10, 75]);
     expect(rows.every(row => row.isCurrent())).toBe(true);
-    expect(Object.keys(rows[0]!)).toEqual(["keyId", "quota"]);
+    expect(Object.keys(rows[0]!)).toEqual(["keyId", "quota", "readAt"]);
     expect(JSON.stringify(rows)).not.toContain("fixture-key");
     expect(JSON.stringify(rows)).not.toContain("isCurrent");
     expect(JSON.stringify(config)).toBe(before);

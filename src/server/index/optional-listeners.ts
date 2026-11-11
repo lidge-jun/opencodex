@@ -21,6 +21,8 @@ import { saveConfigPreservingClaudeCode } from "../../config/live-reconcile";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { startJevQuotaActivation } from "../../combos/jev-quota-activation";
 import { createLocalControlListener } from "./local-control-listener";
+import { createCatalogPullRecorder, type CatalogPull, type CatalogPullRecorder } from "../../link/child-catalog-freshness";
+import type { LinkActivitySnapshot } from "../../link/child-activity";
 export { LINK_INGRESS_HOSTNAME } from "./link-listener";
 import type { ServerIngress } from "./serve-options";
 
@@ -42,6 +44,11 @@ export interface OptionalListenerSet<T> {
   onAuthenticatedCatalog(listener: (apiKeyId: string) => void): () => void;
   notifyAuthenticatedCatalog(apiKeyId: string): void;
   peerObservation(linkId: string): import("../../link/peer-report").LinkPeerEntry;
+  linkActivity(linkId: string, now: number): LinkActivitySnapshot;
+  /** The last relayed catalog pull of a link in this process; null before start or before any pull. */
+  catalogPull(linkId: string): CatalogPull | null;
+  /** Write every catalog pull still held in memory; a failed write is logged and kept for the next attempt. */
+  flushCatalogPulls(): void;
   status(): LinkListenerStatus;
   linkStatus(): LinkListenerStatus;
   linkSupervisor(): LinkSupervisor;
@@ -86,6 +93,8 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
   });
   let unregisterSupervisorAdmission: (() => void) | undefined;
   let supervisorStop: (() => Promise<void>) | undefined;
+  let catalogPulls: CatalogPullRecorder | undefined;
+  let unregisterCatalogPulls: (() => void) | undefined;
 
   return {
     ensureClaudeIntercept: () => claudeIntercept.ensure(),
@@ -106,6 +115,9 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
     onAuthenticatedCatalog: listener => linkListener.onAuthenticatedCatalog(listener),
     notifyAuthenticatedCatalog: apiKeyId => linkListener.notifyAuthenticatedCatalog(apiKeyId),
     peerObservation: linkId => linkListener.peerObservation(linkId),
+    linkActivity: (linkId, now) => linkListener.linkActivity(linkId, now),
+    catalogPull: linkId => catalogPulls?.pulled(linkId) ?? null,
+    flushCatalogPulls: () => { catalogPulls?.flush(); },
     status: () => linkListener.status(),
     linkStatus: () => linkListener.status(),
     linkSupervisor: () => supervisor,
@@ -124,6 +136,9 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
         },
       });
       unregisterSupervisorAdmission ??= linkListener.onAuthenticatedCatalog(apiKeyId => supervisor.notifyAuthenticatedRequest?.(apiKeyId));
+      // Only the hub-link relay fires this, so a Home without links records nothing.
+      catalogPulls ??= createCatalogPullRecorder({ storePath: linkDeps.storePath });
+      unregisterCatalogPulls ??= linkListener.onCatalogServed(served => catalogPulls!.record(served));
       if (linkListenerOwnsTarget(linkListener.status())) {
         supervisor.start();
       }
@@ -166,6 +181,9 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
       try { await claudeIntercept.stop(); } catch (error) { failure ??= error; }
       unregisterSupervisorAdmission?.();
       unregisterSupervisorAdmission = undefined;
+      unregisterCatalogPulls?.();
+      unregisterCatalogPulls = undefined;
+      catalogPulls?.flush();
       stopJevQuotaActivation?.();
       stopJevQuotaActivation = undefined;
       if (failure) throw failure;

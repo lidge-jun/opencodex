@@ -85,9 +85,12 @@ ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
+ocx link check (--link-id <id> | --all) [--no-wait] [--json]
 ```
 
 Sans terminal interactif (TTY), `--expect-fingerprint` est obligatoire. Dans un terminal interactif, vous pouvez l’omettre si vous confirmez explicitement l’empreinte proposée.
+
+Sur le Home, `ocx link check (--link-id <id> | --all)` lit pour chaque enfant lancé par le Home sa version installée, son type d’installation et sa voie de mise à jour : il exécute `ocx update --plan` de l’enfant par SSH (60 secondes par enfant, trois à la fois), qui calcule un plan sans rien modifier. Un enfant antérieur à 2.97.0 renvoie `owner-action` (`legacy-ocx`) ; sa version vient d’un appel SSH en lecture seule de plus sur macOS et Linux, ou de la version qu’il a annoncée par le lien sous Windows. Les liens ouverts depuis l’enfant et les enfants `ocx-child` sont signalés sans SSH. `ocx link status --json` ajoute alors un bloc `child` à chaque ligne (versions, écart de version, fraîcheur du catalogue, activité, dernière opération). Détails et codes de sortie : [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity) (en anglais).
 
 ## Guides associés
 
