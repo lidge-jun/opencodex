@@ -424,10 +424,12 @@ const commandRunners: Record<string, CommandRunner> = {
   disconnect: async deps => {
     const { handleDisconnectCommand } = await import("./connect");
     const code = await handleDisconnectCommand(deps.args.slice(1));
-    if (code !== 0) return code;
+    // Token recovery refuses any live client runtime and leaves nothing to restart.
+    if (code !== 0 || deps.args.includes("--orphaned-token")) return code;
     const { restartRuntimeAfterDisconnect } = await import("./disconnect-runtime");
+    const { observeProxyLiveness } = await import("../server/proxy-liveness");
     return await restartRuntimeAfterDisconnect({
-      findLive: () => deps.findLiveProxy(),
+      observe: () => observeProxyLiveness({ attempts: 2 }),
       restart: () => deps.handleProxyRestart(deps.handleRestartStartWhenStopped),
       json: deps.args.includes("--json"),
     });
