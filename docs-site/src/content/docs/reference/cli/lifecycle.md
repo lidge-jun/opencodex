@@ -626,7 +626,7 @@ skipped as `child-busy`. The Child's pinned sync may still restart its own OpenC
 after applying changed Home settings. If the Home times out and stops its local SSH process, a remote
 sync already running may continue on the Child.
 
-If an update is in flight or the shared update/sync mutex cannot be determined, sync changes nothing, reports `update-in-flight`, and exits 7. If another sync holds the mutex, it reports `sync-in-progress` and exits 1; a Home counts that Child as failed and exits 6 when its own sync succeeded. With `--json`, either refusal prints one result document with the Home skipped and the refusal reason in `fanout.reason`.
+If an update is in flight or the shared update/sync mutex cannot be determined, sync changes nothing, reports `update-in-flight`, and exits 7. When a marker left by an interrupted update in OpenCodex 2.100.x or earlier causes the refusal, stderr also names the marker and its recovery; see [Update Failed](/troubleshooting/update-failed/#if-every-update-and-sync-says-update-in-flight). If another sync holds the mutex, it reports `sync-in-progress` and exits 1; a Home counts that Child as failed and exits 6 when its own sync succeeded. With `--json`, either refusal prints one result document with the Home skipped and the refusal reason in `fanout.reason`.
 
 An explicitly requested restart also runs after a successful committed `config.toml` change, even if the catalog and cache bytes are unchanged. A configuration-only no-op, refusal, preflight, or rolled-back write does not trigger it. Without a restart flag, sync never automatically restarts Codex.
 
