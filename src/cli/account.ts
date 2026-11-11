@@ -57,7 +57,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account preserve-signed-in openai [on|off|status] [--apply-to-bound] [--json]
   ocx account priority <provider> <account-id|alias|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
   ocx account pause <provider> <account-id|alias|main> [--json]
-  ocx account resume <provider> <account-id|alias|main> [--json]
+  ocx account resume <provider> <account-id|alias|main> [--if-healthy] [--json]
   ocx account reset-affinity <anthropic|anthropic2> [--json]
   ocx account pause-exhausted <provider> [--json]
   ocx account strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>] [--json]

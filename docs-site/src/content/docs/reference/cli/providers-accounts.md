@@ -928,7 +928,24 @@ refresh remain available even when its original credential source was not record
 ```bash
 ocx account pause google-antigravity <account-id-or-alias>
 ocx account resume google-antigravity <account-id-or-alias>
+ocx account resume anthropic <account-id-or-alias> --if-healthy
 ```
+
+#### Resume if healthy
+
+An unattended supervisor can run `ocx account resume <provider> <account-id-or-alias> --if-healthy`.
+It resumes the account only after a fresh read of that account's own usage succeeds: the WHAM quota
+read for a Codex pool account, or the usage read with the stored token for an Anthropic OAuth
+account. A pause that [auto-pause](/reference/configuration/providers/#auto-pause-permanently-refused-accounts)
+recorded as `oauth_organization_disabled` or `account_permission_denied` is never resumed this way.
+An Anthropic token that has expired is not refreshed for the check: the command reports
+`credential_expired`, and a new login is the way back. Other OAuth providers and the main Codex
+account report `health_check_unsupported`; API-key pools reject the flag. A refused resume exits with
+code 3 and prints the reason, or `{ "ok": false, "resumed": false, "reason": ... }` with `--json`.
+
+An explicit login or reauthentication of a paused OAuth or Codex pool account clears a pause that
+auto-pause recorded, because that evidence described the credential the login replaced. A pause set by
+hand stays until `ocx account resume`.
 
 ### `ocx account clear-cooldown <openai|anthropic> <id|alias|main> [--json]`
 
