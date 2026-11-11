@@ -322,9 +322,12 @@ relinked in between, the sync changes nothing and exits 5 with a JSON `phase` li
 ([04_failure_semantics.md](04_failure_semantics.md#a-pinned-sync-that-refuses-exit-5)).
 
 On the Home, `ocx sync` fans out only after it commits a current catalog. Use `--local-only`
-to suppress propagation and `--json` to inspect Home and Child results. Fan-out never asks a Child
-to restart a Codex app or app-server; use GOAT or `ocx sync --restart-codex` on that Child. Its
-pinned sync can still restart its own OpenCodex client runtime after applying changed Home settings.
+to suppress propagation, `--json` to inspect Home and Child results, and `--child <linkId>`
+(repeatable) to fan out only to those links (the others read `not-selected`). Fan-out asks a Child to
+restart Codex only with `--restart-children` (app-servers) or `--restart-children=codex --yes`: each
+Child is synced first, and its restart, never its sync, is skipped while it relays a model request
+(`restart-skipped:link-active`), on Windows and on `ocx-child`, with exit 6. A Child held by a Child
+operation is skipped as `child-busy`. Its pinned sync can still restart its own OpenCodex client runtime after applying changed Home settings.
 A Child sync already running can continue after the Home times out its local SSH process.
 
 ### Checking Children from the Home (`ocx link check`)
