@@ -416,7 +416,14 @@ export function createSshCaptureOpener(options: SshCaptureOpenerOptions): SshCap
       last.record.count = (last.record.count ?? 1) + 1;
       return;
     }
-    if (queue.length >= QUEUE_MAX) { dropped += 1; return; }
+    if (queue.length >= QUEUE_MAX) {
+      // A flood of debug lines must not push out the line that explains a failure: an error-level
+      // line takes the place of the oldest queued debug or verbose record, counted as dropped.
+      const evict = line.level === "error" ? queue.findIndex(item => item.record.level !== "error") : -1;
+      dropped += 1;
+      if (evict === -1) return;
+      queue.splice(evict, 1);
+    }
     const record: CaptureRecord = { at, tunnel, ...(id ? { linkId: id } : {}), level: line.level, event: line.event,
       ...(line.text !== undefined ? { text: line.text } : {}) };
     queue.push({ startedAt: control.startedAt, record });
