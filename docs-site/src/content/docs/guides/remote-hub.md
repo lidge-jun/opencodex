@@ -745,6 +745,23 @@ both named volumes and a synthetic catalog survive replacement. This check does 
 real provider account, OAuth callback, custom mount migration, or every CPU architecture; perform
 the authenticated routed-response check above for your deployment.
 
+### Restarts after an unclean exit
+
+A container runs the proxy as PID 1 on every start. After an unclean exit (an OOM kill, a crash, a
+node failure) the state volume can still hold `ocx.pid` and `runtime-port.json` naming PID 1, and
+the next start has to decide whether that owner is gone. It recovers on its own when the record was
+written by the same container in an earlier run: a container restarted in place (`docker restart`
+of the same container, or a Kubernetes container restart inside its pod) on the same machine, by
+an OpenCodex version that records where its owner runs.
+
+Every other case refuses with `Proxy ownership is unverified; startup refused`, because the old
+owner could still be serving the same volume from another container: a replacement Kubernetes pod,
+a recreated Compose container, another node, or a record written by an older version (the first
+restart after an upgrade). Confirm that nothing else serves this state directory, then move
+`runtime-port.json` and `ocx.pid` aside once and start again. Run a single writer per state
+volume: a Kubernetes `Deployment` that shares a volume should use `strategy: Recreate` (or
+`maxSurge: 0`) so the old pod stops before the new one starts.
+
 ## Rollback
 
 Inspect existing Serve mappings before changing them. `tailscale serve reset` removes every mapping

@@ -35,7 +35,6 @@ import {
 import * as windowsAcl from "../../src/lib/windows-secret-acl";
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../../src/lib/windows-elevation";
 import { AtomicWriteResidualTempError, atomicWriteFile, atomicWriteFileAsync, hardenConfigDir, hardenExistingSecret, renameAtomicFile, saveConfig } from "../../src/config";
-import { runtimeHostIdentity } from "../../src/config/process-state";
 import { nextAtomicTempSequence } from "../../src/config/atomic-write";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import {
@@ -3123,8 +3122,8 @@ describe("opencodex config defaults", () => {
     const attestationSecret = "A".repeat(43);
     writeRuntimePort({ pid: 1234, port: 58195, hostname: "0.0.0.0", attestationSecret });
 
-    expect(readRuntimePort()).toEqual({ pid: 1234, port: 58195, hostname: "0.0.0.0", attestationSecret, hostIdentity: runtimeHostIdentity() });
-    expect(readRuntimePort(1234)).toEqual({ pid: 1234, port: 58195, hostname: "0.0.0.0", attestationSecret, hostIdentity: runtimeHostIdentity() });
+    expect(readRuntimePort()).toEqual({ pid: 1234, port: 58195, hostname: "0.0.0.0", attestationSecret });
+    expect(readRuntimePort(1234)).toEqual({ pid: 1234, port: 58195, hostname: "0.0.0.0", attestationSecret });
     expect(readRuntimePort(9999)).toBeNull();
   });
 

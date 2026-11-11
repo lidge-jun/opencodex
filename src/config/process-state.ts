@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readlinkSync, unlinkSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { isLocalAttestationSecret } from "../lib/local-management-attestation";
@@ -32,9 +32,10 @@ function ensureProcessStateDir(): void {
 /**
  * Whether this process has written `ocx.pid` or `runtime-port.json` in its own lifetime (#8552).
  *
- * Set before the write and never cleared: a record this process wrote and later removed still
- * means its PID once named a live owner of this home, so it can never be told apart from an
- * earlier lifetime of the same PID number.
+ * Set before the write, deliberately even when the write then throws, and never cleared: a record
+ * this process wrote (or may have written) and later removed still means its PID once named a live
+ * owner of this home, so it can never be told apart from an earlier lifetime of the same PID number.
+ * Moving the assignment after the write would let a failed write fail open.
  */
 let publishedOwnershipRecords = false;
 
@@ -43,14 +44,78 @@ export function hasPublishedOwnershipRecords(): boolean {
 }
 
 /**
- * Which host name a runtime record was written under, without storing the name itself (#8552).
+ * Where the owner of a runtime record ran, as digests that store none of their inputs (#8552).
  *
  * Every container runs the proxy as PID 1, so a PID alone cannot say whether a record came from
- * this container's previous lifetime or from another pod serving the same state volume. A
- * restarted container keeps its pod's host name; a replacement pod does not.
+ * this container's previous run or from another container serving the same state volume. On
+ * Linux, `host` covers the host name and boot id, and at least one of two stronger facts must
+ * also match ({@link sameRuntimeOwnerScope}):
+ *
+ * - `network`, the network namespace: a container restarted inside its Kubernetes pod keeps it,
+ *   because the pod sandbox owns it;
+ * - `container`, the Docker/Podman container (or CRI-O pod sandbox) id read from mountinfo: a
+ *   restarted container keeps it, and one id never runs twice at the same time.
+ *
+ * A replacement pod, a second container with a fixed `hostname`, another node, or a WSL distro
+ * sharing a Windows home matches neither. Elsewhere the PID space is the whole machine and the host
+ * name suffices. Linux evidence that cannot be read yields a per-process value that matches no
+ * other lifetime, so the self-record proof fails closed.
  */
-export function runtimeHostIdentity(): string {
-  return createHash("sha256").update(hostname()).digest("hex").slice(0, 32);
+export interface RuntimeOwnerScope {
+  host: string;
+  network?: string;
+  container?: string;
+}
+
+let cachedRuntimeOwnerScope: RuntimeOwnerScope | undefined;
+
+export function runtimeOwnerScope(): RuntimeOwnerScope {
+  cachedRuntimeOwnerScope ??= computeRuntimeOwnerScope();
+  return cachedRuntimeOwnerScope;
+}
+
+function scopeDigest(...parts: string[]): string {
+  return createHash("sha256").update(parts.join("\0")).digest("hex").slice(0, 32);
+}
+
+const MOUNTINFO_CONTAINER_ID = /\/(?:containers|overlay-containers)\/([0-9a-f]{64})\/(?:userdata\/)?(?:resolv\.conf|hostname|hosts)(?:\s|$)/m;
+
+/** The container id Docker or Podman bind-mounts `/etc/hostname` and friends from, if any. */
+export function containerIdFromMountinfo(mountinfo: string): string | undefined {
+  return MOUNTINFO_CONTAINER_ID.exec(mountinfo)?.[1];
+}
+
+function readOptional(read: () => string): string | undefined {
+  try { return read(); } catch { return undefined; }
+}
+
+function computeRuntimeOwnerScope(): RuntimeOwnerScope {
+  if (process.platform !== "linux") return { host: scopeDigest(process.platform, hostname()) };
+  const boot = readOptional(() => readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim());
+  const network = readOptional(() => readlinkSync("/proc/self/ns/net"));
+  const container = readOptional(() => containerIdFromMountinfo(readFileSync("/proc/self/mountinfo", "utf8")) ?? "");
+  const scope: RuntimeOwnerScope = { host: "" };
+  if (network && /^net:\[\d+\]$/.test(network)) scope.network = scopeDigest("net", network);
+  if (container) scope.container = scopeDigest("container", container);
+  scope.host = boot && /^[0-9a-f-]{36}$/.test(boot) && (scope.network || scope.container)
+    ? scopeDigest("linux", hostname(), boot)
+    : scopeDigest("unverifiable", randomUUID());
+  return scope;
+}
+
+/**
+ * Whether a recorded owner scope proves the record was written where this process runs. Only an
+ * exact, well-formed match counts; anything else (absent, malformed, partial) is "no".
+ */
+export function sameRuntimeOwnerScope(recorded: unknown, own: RuntimeOwnerScope): boolean {
+  if (!recorded || typeof recorded !== "object" || Array.isArray(recorded)) return false;
+  const record = recorded as Record<string, unknown>;
+  if (typeof record.host !== "string" || record.host !== own.host) return false;
+  if (own.network === undefined && own.container === undefined) {
+    return record.network === undefined && record.container === undefined;
+  }
+  return (own.network !== undefined && record.network === own.network)
+    || (own.container !== undefined && record.container === own.container);
 }
 
 export function writePid(pid: number): void {
@@ -76,11 +141,12 @@ export type RuntimePortState = {
    */
   siblingOfPort?: number;
   /**
-   * {@link runtimeHostIdentity} of the writer, stamped by {@link writeRuntimePort}. Not validated
-   * here: a malformed value must not hide a live owner from status, stop or liveness, and the one
-   * reader that uses it (`observeProxyLiveness`) accepts only an exact match.
+   * {@link runtimeOwnerScope} of the owner, stamped by {@link writeRuntimePort} when this process
+   * writes its own record. Not validated here: a malformed value must not hide a live owner from
+   * status, stop or liveness, and the one reader that uses it (`observeProxyLiveness`) accepts
+   * only an exact match ({@link sameRuntimeOwnerScope}).
    */
-  hostIdentity?: string;
+  ownerScope?: RuntimeOwnerScope;
 };
 
 export function isValidRuntimePortState(value: unknown): value is RuntimePortState {
@@ -104,7 +170,11 @@ export function isValidRuntimePortState(value: unknown): value is RuntimePortSta
 export function writeRuntimePort(state: RuntimePortState): void {
   ensureProcessStateDir();
   publishedOwnershipRecords = true;
-  atomicWriteFile(getRuntimePortPath(), JSON.stringify({ ...state, hostIdentity: runtimeHostIdentity() }, null, 2) + "\n");
+  // Only the owner can say where it runs; a record written on another process's behalf keeps
+  // whatever identity it already carried.
+  const ownerScope = state.pid === process.pid ? runtimeOwnerScope() : state.ownerScope;
+  const record = { ...state, ...(ownerScope === undefined ? {} : { ownerScope }) };
+  atomicWriteFile(getRuntimePortPath(), JSON.stringify(record, null, 2) + "\n");
   // The record proves this home's owner only to a reader that knows where it lives.
   // One pointer in the shared registry makes the record findable from every home;
   // it is best-effort because ownership never depends on the registry write landing.
