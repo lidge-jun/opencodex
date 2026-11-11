@@ -42,6 +42,7 @@ export async function refreshTraeCnCatalogSources(
         config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS, providerContextCap(config, name), refreshingModelsAuthResolver);
       if (!current()) return;
       if (after && gathered.outcome.state === "authoritative") {
+        if (observeModelCacheRevision(name) !== gathered.contentRevision) return;
         const release = pinCachedModels(name, gathered.models, Date.now(), captureModelCacheGeneration(name));
         if (!release) return;
         retained.push({ name, release, contentRevision: observeModelCacheRevision(name) });
