@@ -804,6 +804,23 @@ describe("TRAE CN ACP regression contract", () => {
       .toMatchObject({ input_tokens: 123, output_tokens: 456, total_tokens: 579 });
   });
 
+  test("malformed update refusal retains usage from an already received prompt reply", async () => {
+    const usage = { inputTokens: 123, outputTokens: 456, totalTokens: 579 };
+    const fixture = traeFixture(request => {
+      if (request.method !== "session/prompt") return false;
+      fixture.send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn", usage } });
+      fixture.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: {
+        sessionUpdate: "agent_message_chunk", content: { type: "image", data: "fixture" },
+      } } });
+      return true;
+    });
+    const events: AdapterEvent[] = [];
+    await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "trae_acp_protocol_error", usage });
+    expect(buildResponseJSON(events, "test-model").usage)
+      .toMatchObject({ input_tokens: 123, output_tokens: 456, total_tokens: 579 });
+  });
+
   test("shutdown remains bounded when the process and its pipe never close", async () => {
     const fixture = traeFixture(request => request.method === "session/prompt");
     fixture.child.kill = () => true;
@@ -1386,6 +1403,30 @@ describe("TRAE CN ACP regression contract", () => {
       0, undefined, resolver);
     expect(observed.models.map(model => model.id)).toContain("new-model");
     expect(observed.models.map(model => model.id)).not.toContain("old-model");
+  });
+
+  test("queued discovery cannot borrow a replacement cache generation", async () => {
+    const row = { ...config(), models: [] };
+    let entered!: () => void;
+    const firstCloseStarted = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const releaseFirstClose = new Promise<void>(resolve => { release = resolve; });
+    const open = spyOn(traeClient, "openTraeSession").mockResolvedValue({ models: ["old-model"],
+      prompt: async () => undefined, close: async () => { entered(); await releaseFirstClose; } });
+    const first = fetchProviderModelsWithAuth(
+      captureProviderGather("trae-cn", row, refreshingModelsAuthResolver), 0, undefined, refreshingModelsAuthResolver,
+    );
+    await firstCloseStarted;
+    const second = fetchProviderModelsWithAuth(
+      captureProviderGather("trae-cn", row, refreshingModelsAuthResolver), 0, undefined, refreshingModelsAuthResolver,
+    );
+    clearModelCache("trae-cn");
+    release();
+    const [older, queued] = await Promise.all([first, second]);
+    expect(older.outcome.state).toBe("degraded");
+    expect(queued.outcome.state).toBe("degraded");
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(getPinnedCached("trae-cn")).toBeNull();
   });
 
   test("background publication cannot replace an intervening newer roster", async () => {
