@@ -744,8 +744,8 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     for (const [path, env] of [
       // ocx claude builds its proxy's environment in claudeProxyStartEnv (also read by the restart's
       // owner classification) and spawns with it.
-      ["src/cli/claude.ts", 'return withProcessRuntimeProvenance(withoutSiblingMarker({ ...base, OCX_SERVICE: "1" }));'],
-      ["src/cli/claude.ts", "env: claudeProxyStartEnv(),"],
+      ["src/cli/claude.ts", 'return withoutSiblingMarker({ ...base, OCX_SERVICE: "1" });'],
+      ["src/cli/claude.ts", "env: withProcessRuntimeProvenance(claudeProxyStartEnv()),"],
       ["src/cli/opencode.ts", opencodeStartEnv],
       ["src/cli/minimax.ts", opencodeStartEnv],
       ["src/update/job-pinned-start.ts", "const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);"],
