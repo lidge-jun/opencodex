@@ -31,7 +31,8 @@ Observed-auth gathers and management admission use only cached evidence; only re
 probes may launch the CLI. Automatic refresh prepares CLI-owned evidence in its independent background
 source phase, then pins every authoritative gather result through catalog convergence and connected-client
 refresh before releasing the publication leases. The pin does not depend on the ordinary cache entry surviving
-shared-memory eviction. This keeps a zero-TTL roster authoritative for the full publication
+shared-memory eviction. Every captured content revision is revalidated before the synchronous pin sequence;
+an intervening discovery retires that publication round instead of restoring its older roster. This keeps a zero-TTL roster authoritative for the full publication
 round without launching ACP twice. Cold or stalled discovery cannot delay unrelated management responses. Lost-generation discovery rereads the current
 cache before attaching its revision. Relative PATH, user-local fallback entries and the original CLI home resolve before the child changes its cwd.
 Windows home fallback discovery uses the same native-before-launcher order as PATH, including `traecli.cmd`.

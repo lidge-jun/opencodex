@@ -29,7 +29,7 @@ export async function refreshTraeCnCatalogSources(
 ): Promise<void> {
   const { fetchProviderModelsWithAuth, refreshingModelsAuthResolver } = await import("./provider-models");
   const { captureProviderGather } = await import("./gather-capture");
-  const refreshed: Array<{ name: string; generation: string; models: CatalogModel[] }> = [];
+  const refreshed: Array<{ name: string; generation: string; contentRevision: string; models: CatalogModel[] }> = [];
   for (const [name, provider] of Object.entries(config.providers)) {
     if (!current()) return;
     if (provider.adapter !== "trae-cn" || provider.disabled || provider.liveModels === false) continue;
@@ -37,10 +37,12 @@ export async function refreshTraeCnCatalogSources(
       config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS, providerContextCap(config, name), refreshingModelsAuthResolver);
     if (!current()) return;
     if (gathered.outcome.state === "authoritative") {
-      refreshed.push({ name, models: gathered.models, generation: captureModelCacheGeneration(name) });
+      refreshed.push({ name, models: gathered.models, generation: captureModelCacheGeneration(name),
+        contentRevision: gathered.contentRevision });
     }
   }
   if (!after || refreshed.length === 0 || !current()) return;
+  if (refreshed.some(roster => observeModelCacheRevision(roster.name) !== roster.contentRevision)) return;
   const releases: Array<() => void> = [];
   for (const roster of refreshed) {
     const release = pinCachedModels(roster.name, roster.models, Date.now(), roster.generation);
