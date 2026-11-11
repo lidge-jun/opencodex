@@ -34,7 +34,9 @@ and `tests/responses/responses-combo-exhausted-error.test.ts`.
 model called a function the request never offered (`The model called a function that was not
 offered in tools.`). The match is anchored to that sentence inside a bounded envelope walk —
 closed code/type/param sets, competing diagnostic carriers and a contradicting root message all
-fail closed — so quoted or reflected occurrences cannot impersonate the verdict. Like the other
+fail closed — so quoted or reflected occurrences cannot impersonate the verdict. `consumeComboFailure`
+classifies the intact bounded body and passes the verdict through `unofferedToolCallRefusal`, because
+the 500-character display prefix would leave a long envelope unparseable. Like the other
 pre-output 400 hops it advances the combo without cooling the target: the model hallucinated the
 call on this target, the request itself fit, and the refusal arrives before any output commits.
 

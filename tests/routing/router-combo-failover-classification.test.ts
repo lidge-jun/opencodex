@@ -1290,6 +1290,10 @@ describe("unoffered tool-call refusal", () => {
       JSON.stringify({ error: { message: verdict, type: "upstream_error", code: null }, details: { code: "cyber_policy" } }),
       // A contradicting root message keeps the root authoritative.
       JSON.stringify({ message: "different failure", type: "upstream_error", error: { message: verdict, type: "upstream_error", code: null } }),
+      // A carrier-prefixed root message is peeled and its contents must still support the
+      // verdict; `Provider error 400:` alone does not launder a contradiction.
+      JSON.stringify({ message: "Provider error 400: Invalid value for tools", type: "upstream_error", error: { message: verdict, type: "upstream_error", code: null } }),
+      JSON.stringify({ message: "data: {\"error\":{\"message\":\"different failure\"}}", type: "upstream_error", error: { message: verdict, type: "upstream_error", code: null } }),
       // Codes and types outside the closed sets stay terminal. (`permission_denied` and
       // `rate_limit_exceeded` would hop through their own structured-code rules regardless of
       // the message, so they cannot pin this classifier shut.)
@@ -1304,5 +1308,35 @@ describe("unoffered tool-call refusal", () => {
     expect(comboFailureDecision(422, reported)).toBe("stop");
     expect(comboFailureDecision(400, verdict, { code: "unsupported_value" })).toBe("stop");
     expect(comboFailureDecision(400, reported, { code: "rate_limit_exceeded" })).toBe("stop");
+  });
+
+  test("a long refusal envelope still hops: the intact bounded body is classified, not the display prefix", async () => {
+    // Padding past the 500-char display limit must not turn a valid verdict into truncated,
+    // unparseable JSON. consumeComboFailure classifies body.text separately and hands the
+    // verdict to both decisions while classificationText stays the display prefix.
+    const padding = "x".repeat(600);
+    const longBody = JSON.stringify({
+      id: `chatcmpl-${padding}`,
+      error: { message: `Provider error 400: ${verdict}`, type: "upstream_error", code: null },
+    });
+    expect(longBody.length).toBeGreaterThan(500);
+    const failure = await consumeComboFailure(new Response(longBody, {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }));
+    expect(failure.classificationText.length).toBeLessThanOrEqual(500);
+    expect(failure.unofferedToolCallRefusal).toBe(true);
+    expect(comboFailureDecision(400, failure.classificationText, {
+      code: failure.upstreamCode,
+      unofferedToolCallRefusal: failure.unofferedToolCallRefusal,
+    })).toBe("hop");
+    expect(comboFailureCooldownScope(400, failure.classificationText, {
+      code: failure.upstreamCode,
+      unofferedToolCallRefusal: failure.unofferedToolCallRefusal,
+    })).toBe("none");
+    // Without the intact-body verdict the truncated text fails closed, as before.
+    expect(comboFailureDecision(400, failure.classificationText, {
+      code: failure.upstreamCode,
+    })).toBe("stop");
   });
 });
