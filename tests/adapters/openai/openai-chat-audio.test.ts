@@ -101,6 +101,64 @@ test("developer inline audio retains the instruction slot and uses a user audio 
     && JSON.stringify(message.content).includes("input_audio"))).toBe(false);
 });
 
+test("interleaved instructions and recordings preserve their adjacent groups", () => {
+  const messages = wire([
+    user("First"),
+    assistantWithCalls([{ id: "call_1", name: "lookup" }]),
+    { role: "developer", content: [
+      { type: "text", text: "Translate the first recording" },
+      { type: "audio", data: "YXVkaW8=", format: "wav", text: "[audio: wav]" },
+      { type: "text", text: "Translate the second recording" },
+      { type: "audio", data: "bW9yZQ==", format: "wav", text: "[audio: wav]" },
+    ], timestamp: 0 },
+    toolResult("call_1", "lookup", "result"),
+    user("Continue"),
+  ]);
+  expect(messages).toEqual([
+    { role: "user", content: "First" },
+    { role: "assistant", content: "", tool_calls: [{ id: "call_1", type: "function", function: { name: "lookup", arguments: "{}" } }] },
+    { role: "tool", tool_call_id: "call_1", content: "result" },
+    { role: "system", content: [{ type: "text", text: "Translate the first recording" }] },
+    { role: "user", content: [{ type: "input_audio", input_audio: { data: "YXVkaW8=", format: "wav" } }] },
+    { role: "system", content: [{ type: "text", text: "Translate the second recording" }] },
+    { role: "user", content: [{ type: "input_audio", input_audio: { data: "bW9yZQ==", format: "wav" } }] },
+    { role: "user", content: "Continue" },
+  ]);
+});
+
+test("a default-role developer image uses a user carrier after its instruction text", () => {
+  const parsed = parseRequest({ model: "gpt-vision", instructions: "Base", input: [
+    { role: "user", content: "First" },
+    { role: "developer", content: [
+      { type: "input_text", text: "Inspect this image" },
+      { type: "input_image", image_url: "data:image/png;base64,aGVsbG8=", detail: "high" },
+    ] },
+    { role: "user", content: "Continue" },
+  ] });
+  const messages = JSON.parse(createOpenAIChatAdapter(provider).buildRequest(parsed).body).messages;
+  expect(messages).toEqual([
+    { role: "system", content: "Base" },
+    { role: "user", content: "First" },
+    { role: "system", content: [{ type: "text", text: "Inspect this image" }] },
+    { role: "user", content: [
+      { type: "image_url", image_url: { url: "data:image/png;base64,aGVsbG8=", detail: "high" } },
+    ] },
+    { role: "user", content: "Continue" },
+  ]);
+});
+
+test("a default-role developer document uses a user carrier after its instruction text", () => {
+  const file = { type: "input_file", filename: "spec.pdf", file_data: "data:application/pdf;base64,JVBERi0xLjQ=" };
+  const parsed = parseRequest({ model: "gpt-files", input: [{ role: "developer", content: [
+    { type: "input_text", text: "Read this document" }, file,
+  ] }] });
+  const messages = JSON.parse(createOpenAIChatAdapter(provider).buildRequest(parsed).body).messages;
+  expect(messages).toEqual([
+    { role: "system", content: [{ type: "text", text: "Read this document" }] },
+    { role: "user", content: [{ type: "file", file: { filename: file.filename, file_data: file.file_data } }] },
+  ]);
+});
+
 test("single-leading instructions keep audio and image bytes in one ordered user carrier", () => {
   const parsed = parseRequest({ model: "gpt-audio", instructions: "Base", input: [
     { role: "user", content: "First" },

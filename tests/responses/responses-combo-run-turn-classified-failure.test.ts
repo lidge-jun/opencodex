@@ -159,6 +159,8 @@ test("TRAE reuses a credentialed OpenAI sidecar for ordinary user images", async
   const describer = spyOn(vision, "describeImage").mockResolvedValue({ text: "caption from OpenAI fixture", elapsedMs: 1 });
   const cfg = config([{ provider: "trae-cn", model: "test-model" }]);
   cfg.defaultProvider = "trae-cn";
+  cfg.providers.openai = { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+    authMode: "forward", codexAccountMode: "direct" };
   cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
     authMode: "key", models: ["test-model"], liveModels: false };
   cfg.visionSidecar = { enabled: true, backend: "openai" };
@@ -174,8 +176,81 @@ test("TRAE reuses a credentialed OpenAI sidecar for ordinary user images", async
     }), cfg, { model: "", provider: "" });
     expect(response.status, await response.clone().text()).toBe(200);
     expect(resolver).toHaveBeenCalledTimes(1); expect(describer).toHaveBeenCalledTimes(1);
+    expect(resolver.mock.calls[0]?.[0]).toHaveLength(1);
     expect(prompts.join("\n")).toContain("caption from OpenAI fixture");
   } finally { open.mockRestore(); describer.mockRestore(); resolver.mockRestore(); }
+});
+
+test("TRAE releases a resolved helper probe when image admission is refused", async () => {
+  let released = 0;
+  const sidecarModule = await import("../../src/providers/openai-sidecar");
+  const resolver = spyOn(sidecarModule, "resolveFirstUsableOpenAiSidecar").mockResolvedValue({
+    providerName: "openai", provider: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex" },
+    accountMode: "pool", authContext: { kind: "pool", accountId: "fixture" }, headers: new Headers(),
+    releaseProbeLease: () => { released++; },
+  });
+  const plannerModule = await import("../../src/vision/plan");
+  const planner = spyOn(plannerModule, "planVisionSidecar").mockReturnValue(undefined);
+  const cfg = config([{ provider: "trae-cn", model: "test-model" }]);
+  cfg.defaultProvider = "trae-cn";
+  cfg.providers.openai = { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+    authMode: "forward", codexAccountMode: "pool" };
+  cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
+    authMode: "key", models: ["test-model"], liveModels: false };
+  cfg.visionSidecar = { enabled: true, backend: "openai" };
+  const open = spyOn(traeClient, "openTraeSession");
+  try {
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "trae-cn/test-model", stream: false,
+        input: [{ role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" }] }] }),
+    }), cfg, { model: "", provider: "" });
+    expect(response.status).toBe(400);
+    expect(released).toBe(1); expect(open).not.toHaveBeenCalled(); expect(resolver.mock.calls[0]?.[0]).toHaveLength(1);
+  } finally { open.mockRestore(); resolver.mockRestore(); planner.mockRestore(); }
+});
+
+test("TRAE text-only turns do not resolve an OpenAI helper", async () => {
+  const sidecarModule = await import("../../src/providers/openai-sidecar");
+  const resolver = spyOn(sidecarModule, "resolveFirstUsableOpenAiSidecar");
+  const cfg = config([{ provider: "trae-cn", model: "test-model" }]);
+  cfg.defaultProvider = "trae-cn";
+  cfg.providers.openai = { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+    authMode: "forward", codexAccountMode: "direct" };
+  cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
+    authMode: "key", models: ["test-model"], liveModels: false };
+  const open = spyOn(traeClient, "openTraeSession").mockResolvedValue({ models: ["test-model"],
+    prompt: async (_model, _text, emit) => { emit({ type: "text_delta", text: "answered" }); emit({ type: "done" }); },
+    close: async () => undefined });
+  try {
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "trae-cn/test-model", input: "plain text", stream: false }),
+    }), cfg, { model: "", provider: "" });
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect(resolver).not.toHaveBeenCalled();
+  } finally { open.mockRestore(); resolver.mockRestore(); }
+});
+
+test("TRAE disabled vision refuses images without resolving an OpenAI helper", async () => {
+  const sidecarModule = await import("../../src/providers/openai-sidecar");
+  const resolver = spyOn(sidecarModule, "resolveFirstUsableOpenAiSidecar");
+  const cfg = config([{ provider: "trae-cn", model: "test-model" }]);
+  cfg.defaultProvider = "trae-cn";
+  cfg.providers.openai = { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+    authMode: "forward", codexAccountMode: "direct" };
+  cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
+    authMode: "key", models: ["test-model"], liveModels: false };
+  cfg.visionSidecar = { enabled: false, backend: "openai" };
+  const open = spyOn(traeClient, "openTraeSession");
+  try {
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "trae-cn/test-model", stream: false,
+        input: [{ role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" }] }] }),
+    }), cfg, { model: "", provider: "" });
+    expect(response.status).toBe(400); expect(resolver).not.toHaveBeenCalled(); expect(open).not.toHaveBeenCalled();
+  } finally { open.mockRestore(); resolver.mockRestore(); }
 });
 
 test("TRAE rejects agent and tool-result images before any vision request", async () => {
@@ -393,7 +468,7 @@ for (const media of ["image", "video"]) {
       if (media === "image") {
         expect(sent.reasoning_effort).toBe("high");
         expect(wire).toContain('"detail":"high"');
-        expect(sent.messages!.some(message => message.role === "system" && Array.isArray(message.content)
+        expect(sent.messages!.some(message => message.role === "user" && Array.isArray(message.content)
           && message.content.some(part => part.type === "image_url"))).toBe(true);
         expect(sent.messages!.at(-1)?.content).toBe("Question");
       } else {

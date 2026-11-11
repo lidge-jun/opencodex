@@ -1241,6 +1241,25 @@ describe("TRAE CN ACP regression contract", () => {
     expect(admittedRosters).toEqual([null, ["test-model"]]);
   });
 
+  test("background discovery retains authoritative roster evidence through TTL-zero convergence", async () => {
+    const fixture = traeFixture();
+    const open = spyOn(traeClient, "openTraeSession").mockResolvedValue({ models: ["fresh-roster"],
+      prompt: async () => undefined, close: async () => undefined });
+    const row = { ...config(), models: [] };
+    const next: OcxConfig = { port: 10100, defaultProvider: "trae-cn", modelCacheTtlMs: 0, providers: { "trae-cn": row } };
+    let pinned = false;
+    await refreshTraeCnCatalogSources(next, () => true, async () => {
+      pinned = getPinnedCached("trae-cn")?.some(model => model.id === "fresh-roster") === true;
+      const resolver = observedModelsAuthResolver(null, []);
+      const gathered = await fetchProviderModelsWithAuth(captureProviderGather("trae-cn", row, resolver), 0, undefined, resolver);
+      expect(gathered.outcome.state).toBe("authoritative");
+      expect(gathered.models.some(model => model.id === "fresh-roster")).toBe(true);
+    });
+    expect(pinned).toBe(true);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(getPinnedCached("trae-cn")).toBeNull();
+  });
+
   for (const stopped of [false, true]) {
     test("background CLI refresh does not hold management admission; stopped=" + stopped, async () => {
       let entered!: () => void;
