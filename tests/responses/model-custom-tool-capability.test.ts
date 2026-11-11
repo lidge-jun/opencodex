@@ -245,4 +245,25 @@ describe("native compact uses the exact-model capability", () => {
     expect(sent.tools).toEqual([expect.objectContaining({ type: toolType, name: "apply_patch" })]);
     await response.text();
   });
+
+  test("native compact projects only the custom-tool flag, never a modelAdapters wire", async () => {
+    let sent: Record<string, unknown> = {};
+    const nativeItem = { type: "compaction", encrypted_content: "official-native-blob-fixture" };
+    globalThis.fetch = (async (_url, init) => {
+      sent = JSON.parse(String(init?.body));
+      return Response.json({ object: "response.compaction", output: [nativeItem] });
+    }) as typeof fetch;
+    const official: OcxProviderConfig = {
+      adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authMode: "key",
+      apiKey: "fixture-key", modelAdapters: { "gpt-5.4": "openai-chat" },
+    };
+    const config = { ...getDefaultConfig(), defaultProvider: "openai-apikey", providers: { "openai-apikey": official } };
+    const response = await handleResponsesCompact(compactionRequest(baseCompactionBody({
+      model: "openai-apikey/gpt-5.4",
+      input: [nativeItem, { type: "message", role: "user", content: [{ type: "input_text", text: "next" }] }, { type: "compaction_trigger" }],
+    })), config, { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect((sent.input as unknown[])[0]).toEqual(nativeItem);
+  });
 });

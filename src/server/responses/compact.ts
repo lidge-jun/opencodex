@@ -178,7 +178,7 @@ import {
   DecompressedBodyTooLargeError,
   UnsupportedContentEncodingError,
 } from "../request-decompress";
-import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
+import { projectCapturedCustomToolPolicy, resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
 import { hasKeyPoolFailover, rotateProviderTransportOn429, selectProactiveApiKeyTransport, transientRetryPolicyFor } from "../../providers/key-failover";
 import { transientSendCapFor } from "./request-send-budget";
 import { distributedKeyPhysicalFetch, recordDistributedResponseFailure } from "../../providers/api-key-response-ownership";
@@ -1194,9 +1194,8 @@ export async function handleResponsesCompact(
       sendAuthCtx: CodexAuthContext,
       onPhysicalDispatch?: () => void,
     ): Promise<Response> => {
-      sendProvider = resolveWireProtocolOverride(
-        route.providerName, route.modelId, sendProvider, "responses", route.staticPolicy,
-      );
+      // Only the captured custom-tool contract: native compact keeps the provider's own wire.
+      sendProvider = projectCapturedCustomToolPolicy(sendProvider, route.staticPolicy);
       // A gateway send carries only its own transport headers, whatever recovery handed in.
       // An account-change scrub that removed the turn state from the send headers still applies.
       let wireHeaders = gatewayTransport ? new Headers(gatewayTransport.headers) : sendHeaders;
@@ -1275,9 +1274,7 @@ export async function handleResponsesCompact(
                   if (!current?.apiKey && isProviderApiKeyPaused(config.providers[route.providerName])) throw new ProviderApiKeyPausedError();
                   throw new Error("Provider key selection is no longer available for compact");
                 }
-                current = resolveWireProtocolOverride(
-                  route.providerName, route.modelId, current, "responses", route.staticPolicy,
-                );
+                current = projectCapturedCustomToolPolicy(current, route.staticPolicy);
                 const rebuilt = new Headers(sendHeaders);
                 for (const name of Object.keys(sendProvider.headers ?? {})) rebuilt.delete(name);
                 for (const [name, value] of Object.entries(current.headers ?? {})) rebuilt.set(name, value);
