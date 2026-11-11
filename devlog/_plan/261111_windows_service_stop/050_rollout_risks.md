@@ -21,6 +21,6 @@
 
 1. Implement the creation-time reader and handle terminate with hermetic tests.
 2. Implement part A and part B and wire every call site from 030 (ocx stop both paths, ocx uninstall, /api/stop, ocx service stop, service uninstall/remove, prepareServiceInstall, the updater), including the guarded `bound-stray` state.
-3. Run the device matrix (040) on Windows 11 x64 (npm and bundled) and one elevated-task setup; attach redacted evidence.
+3. Run the device matrix (040) on Windows 11 x64 (npm and bundled), one elevated-task setup, and one Windows 11 ARM64 device for the chosen ARM64 variant; attach redacted evidence. If no ARM64 device is available, the owner must explicitly defer that case, and ARM64 then ships with the strict variant (report `unknown`, kill nothing) until it is run.
 4. Desktop text for the additive fields in the same release.
 5. Consider C for newly generated wrappers afterwards.

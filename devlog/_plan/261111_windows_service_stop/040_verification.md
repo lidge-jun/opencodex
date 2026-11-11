@@ -10,7 +10,9 @@
 - Access denied on `/end` or terminate → denied, no further kills.
 - Creation time changed between bind and terminate (PID reuse) → that PID untouched.
 - Port still answered by this installation's identity → survived; by a foreign identity → stopped + `portHeldByForeign`.
-- Order: wrappers end in part A, the child then stops through the caller's graceful path, and only then does part B check the port; `/api/stop` runs part A only.
+- Order: wrappers end in part A, the child then stops through the caller's graceful path, and only then does part B check the port. A receipt-backed `/api/stop` whose receipt records part A `stopped`/`absent` for the current manager runs neither part A nor part B; a receipt without that record gets today's route behavior; a route without a receipt and risk `none` runs part A only (part B belongs to the caller).
+- `portHeldByForeign` after part B: install and backend switch stop before publishing assets or starting the service.
+- With no registered task, an orphaned wrapper (parent gone) is not bound → `unbound-wrapper`.
 - `ocx service uninstall` and `prepareServiceInstall` end a looping wrapper before deleting or replacing the task.
 - A wrapper that matches image and path but fails lineage is not terminated → survived with `unbound-wrapper`.
 - ARM64 fallback (if approved): CIM creation time bind, in-script StartTime recheck, `Kill()` on the same object.
