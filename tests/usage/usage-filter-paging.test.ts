@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -264,6 +264,47 @@ describe("filtered usage index paging contract", () => {
     expect(offsets).toEqual(expected);
     // 5,000 matches at two labels alternating: two full pages, then a partial, then the terminator.
     expect(pages).toEqual([CANDIDATE_PAGE_SIZE, CANDIDATE_PAGE_SIZE, 1_000, 0]);
+  });
+
+  test("a read never pages past its snapshot while a concurrent refresh appends rows", async () => {
+    // Each page is its own transaction, so another request can append rows to the same
+    // generation while this read is still paging. The snapshot's indexed offset is where the
+    // next unindexed row starts: a candidate at that offset belongs to rows appended after the
+    // snapshot, and the row reader would reject it as content_changed on every retry.
+    const rows = Array.from({ length: 4_500 }, (_, index) => ({
+      ...syntheticRow(index),
+      requestId: `snapshot-${index}`,
+      provider: "openai",
+    } as PersistedUsageEntry));
+    writeRows(rows);
+    await getFilteredUsageAggregate({});
+    let snapshotRows = rows.length;
+    for (const query of [
+      { provider: null, model: null, apiKeyId: null },
+      { provider: "openai", model: null, apiKeyId: null },
+    ]) {
+      const snapshotBytes = statSync(ledgerPath()).size;
+      const read = await filterIndexModule.readUsageFilterCandidates(query);
+      expect(read).not.toBeNull();
+      try {
+        const offsets = [...read!.nextPage()];
+        appendFileSync(ledgerPath(), Array.from({ length: 5 }, (_, index) =>
+          `${JSON.stringify({ ...syntheticRow(index), requestId: `late-${query.provider}-${index}`, provider: "openai" })}\n`).join(""));
+        resetUsageAggregateCacheForTests();
+        await getFilteredUsageAggregate(query);
+        for (;;) {
+          const page = read!.nextPage();
+          if (page.length === 0) break;
+          offsets.push(...page);
+        }
+        expect({ provider: query.provider, beyond: offsets.filter(offset => offset >= snapshotBytes) })
+          .toEqual({ provider: query.provider, beyond: [] });
+        expect(offsets.length).toBe(snapshotRows);
+        snapshotRows += 5;
+      } finally {
+        read!.close();
+      }
+    }
   });
 
   test("a page is never longer than the page size", async () => {

@@ -1272,11 +1272,15 @@ function candidateBranches(
     rowClauses.push("r.timestamp >= ? AND r.timestamp <= ?");
     rowValues.push(query.window.since, query.window.until);
   }
-  if (query.afterOffset !== undefined) {
+  // A paged read starts every branch cursor at the append offset instead (see candidatePager): a
+  // second lower bound on the same column makes SQLite seek from afterOffset on every page.
+  if (query.afterOffset !== undefined && !paged) {
     rowClauses.push("r.byte_offset >= ?");
     rowValues.push(query.afterOffset);
   }
-  rowClauses.push("r.byte_offset <= ?");
+  // The indexed offset is where the next unindexed row starts. Pages run in separate
+  // transactions, so a concurrent refresh can index a row at exactly that offset mid-read.
+  rowClauses.push("r.byte_offset < ?");
   rowValues.push(snapshot.indexedOffset);
   const alternativeSql = clientAlternatives
     .map(alternative => alternative.clauses.length > 0 ? `(${alternative.clauses.join(" AND ")})` : "")
@@ -1316,7 +1320,7 @@ function candidateBranches(
   return [
     {
       label: `attribution ${attrIndex}`,
-      sql: `SELECT DISTINCT a.byte_offset AS byteOffset FROM usage_attributions a INDEXED BY ${attrIndex} WHERE a.generation = ? AND ${attrClauses.join(" AND ")} AND a.byte_offset <= ? AND EXISTS (SELECT 1 FROM usage_rows r WHERE r.generation = a.generation AND r.byte_offset = a.byte_offset AND ${rowSql})${paged ? " AND a.byte_offset > ?" : ""}`,
+      sql: `SELECT DISTINCT a.byte_offset AS byteOffset FROM usage_attributions a INDEXED BY ${attrIndex} WHERE a.generation = ? AND ${attrClauses.join(" AND ")} AND a.byte_offset < ? AND EXISTS (SELECT 1 FROM usage_rows r WHERE r.generation = a.generation AND r.byte_offset = a.byte_offset AND ${rowSql})${paged ? " AND a.byte_offset > ?" : ""}`,
       values: [
         snapshot.generation,
         ...attrValues,
@@ -1386,6 +1390,8 @@ function candidatePager(
   snapshot: UsageFilterIndexSnapshot,
   query: UsageFilterIndexQuery,
 ): Pick<UsageFilterCandidateRead, "candidateRows" | "nextPage"> {
+  // An append read starts at its offset; the cursor is exclusive, so start one byte before it.
+  const startCursor = (query.afterOffset ?? 0) - 1;
   const branches = candidatePageStatements(query, snapshot).map(branch => ({
     statement: db.query(branch.sql),
     values: branch.values,
@@ -1394,10 +1400,10 @@ function candidatePager(
     /** Read position in `pending`; advancing it keeps draining linear instead of shifting. */
     head: 0,
     /** The last offset this branch fetched; each branch bounds its own next fetch by it. */
-    fetchCursor: -1,
+    fetchCursor: startCursor,
     exhausted: false,
   }));
-  let cursor = -1;
+  let cursor = startCursor;
   const pager = {
     candidateRows: 0,
     /**
