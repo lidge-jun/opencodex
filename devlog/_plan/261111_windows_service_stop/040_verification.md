@@ -27,7 +27,7 @@
 - WinSW: a non-waiting stop plus an SCM poll capped at `<stoptimeout>` + 2 s; an overrun → `unknown` and nothing further; registration probes capped at 2 s, an unreadable `schtasks` answer stays `unknown`.
 - The final enumeration runs after the 6 s hold; an unreadable result or a wrapper absent at bind → non-success; `ocx service stop` defers the teardown through a receipt and keeps it when part B fails; when the receipt claim fails and the teardown is owned, it sends no child stop and reports the failure; a wrapper that appears after part A is caught by part B before any teardown.
 - The child exit ladder in sequence: an answered POST, a timed-out exit wait, then the forced kill (`taskkill` 5 s + `waitForExit` 5 s) all fit the admitted budget.
-- Caps that are new: `taskkill` in the forced fallback times out at 5 s; orphan discovery at 3 s (overrun refuses); `revertSystemEnv` at 1 s; inherited-receipt probes counted as 1.5 s × N at admission.
+- Caps that are new: `taskkill` in the forced fallback times out at 5 s; orphan discovery at 3 s (overrun refuses); `revertSystemEnv` at 1 s; inherited-receipt probes counted as 3 s × N at admission (two hosts per probe); the measured worst case of `restoreSharedClientStateAfterStop` fits the reserve; a receipt without a part A record makes the route re-run part A within its 6 s cap.
 - Admission runs after the registration probe: `absent` is never refused for budget.
 - A wrapper relaunched after bind (port still free during the hold) is caught by the final enumeration → survived.
 - Updater call sites, including the one in `preparePort`, abort on a non-`stopped` part A.
