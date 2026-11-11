@@ -1207,7 +1207,7 @@
   "provider-egress-fetch.test.ts": "responses", "provider-egress-management-validation.test.ts": "server",
   "provider-egress-outbound.test.ts": "providers", "provider-egress.test.ts": "lib",
   "provider-id-rewrite.test.ts": "providers", "provider-key-store.test.ts": "providers",
-  "provider-live-models.test.ts": "providers", "provider-model-aliases.test.ts": "providers",
+  "provider-live-models.test.ts": "providers", "provider-model-aliases.test.ts": "providers", "provider-alias-template.test.ts": "providers",
   "provider-model-discovery-contract.test.ts": "providers", "provider-outbound-private-network.test.ts": "providers",
   "provider-outbound.test.ts": "providers", "provider-runtime-fetch.test.ts": "providers",
   "provider-tls-profile.test.ts": "providers", "provider-payload.test.ts": "gui",
@@ -1666,5 +1666,7 @@
   "link-child-ops-engine.test.ts": "clients",
   "link-child-ops-runners.test.ts": "clients",
   "link-child-update-launcher.test.ts": "clients",
-  "cli-link-child-ops.test.ts": "cli"
+  "cli-link-child-ops.test.ts": "cli",
+  "sync-fanout-select-restart.test.ts": "cli",
+  "sync-command-child-flags.test.ts": "cli"
 }

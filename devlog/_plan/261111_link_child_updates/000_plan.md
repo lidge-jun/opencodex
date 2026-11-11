@@ -263,6 +263,7 @@ file or symbol; later phases MODIFY it.
 | file | `child-ops-types.ts`: `ChildJob`, `ChildJobItem`, `ChildItemState`, `ChildOpsEnv`, `ItemRunner`, `ItemOutcome` | `src/link/child-ops-types.ts` | 030 (moves the job types out of 020's engine) |
 | file | `child-ops-engine.ts`: `createChildOpsEngine`, `sharedChildOpsEngine`, `resetSharedChildOpsEngineForTests` (030); methods `submit(request, env)` (030; 020 shipped `submit(request)`), `job` (`ChildJob \| undefined`), `activeJob`, `whenDone` (050), `settled` | `src/link/child-ops-engine.ts` | 020 (030, 050 extend) |
 | file | `child-ops-runners.ts`: `runSyncItem`, `runRestartCodexItem`, `runUpdateItem`, `pinnedSync` | `src/link/child-ops-runners.ts` | 030 |
+| file | `sync-then-restart.ts`: `syncThenRestart`, `pinnedSyncRanNothing`, `RESTART_RESULT_UNKNOWN` (moved from `child-ops-runners.ts`, which re-exports the constant); the one "sync then guarded restart" sequence for the runners and `ocx sync --restart-children` | `src/link/sync-then-restart.ts` | 040 (extracted from 030's `syncWithRestart`) |
 | file | `child-ops-scheduler.ts`: `createChildOpsScheduler`, `createLinkBackoff` (shared by 050 and 070) | `src/link/child-ops-scheduler.ts` | 050 |
 | file | `child-policy.ts`, `child-ops-host.ts` (`startChildOpsHost`) | `src/link/` | 050 |
 | file | `child-update-sweep.ts` | `src/link/child-update-sweep.ts` | 070 |

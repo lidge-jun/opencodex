@@ -1271,6 +1271,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
                 config,
                 provider,
                 knownModelIdsForProvider(m.provider, provider, config),
+                m.provider,
               ).get(m.id)
             : undefined;
           const effectiveId = !isCombo && !fastModelId && effective
