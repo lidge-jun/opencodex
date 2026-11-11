@@ -6,6 +6,9 @@ function isRec(value: unknown): value is Rec {
 
 export const CONTEXT_MANAGEMENT_BETA = "context-management-2025-06-27";
 export const THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01";
+/** Claude Code auto mode: server-side review of tool calls; the review context rides in the
+ * top-level `safeguards` field and the verdicts come back in `message_delta.delta.safeguard_results`. */
+export const DANGEROUS_TOOL_USE_BETA = "dangerous-tool-use-2026-09-03";
 
 interface BetaBodyPair {
   beta: string;
@@ -22,6 +25,9 @@ export const ANTHROPIC_BETA_BODY_PAIRS: readonly BetaBodyPair[] = [
   {
     beta: CONTEXT_MANAGEMENT_BETA, path: ["context_management"], nativeClientOnly: true,
     forWire: contextManagementForWire,
+  },
+  {
+    beta: DANGEROUS_TOOL_USE_BETA, path: ["safeguards"], nativeClientOnly: true,
   },
   {
     beta: THINKING_BINDING_BETA, path: ["thinking", "block_binding"], nativeClientOnly: false,

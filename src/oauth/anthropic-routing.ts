@@ -274,6 +274,8 @@ export type AnthropicCooldownRecoveryClaim = Readonly<{
   accountId: string;
   cooldownGeneration: number;
   claimedAt: number;
+  /** False for a reset-derived refusal that named no window: a usage read can only retain it. */
+  namesRejectedWindow: boolean;
 }>;
 
 export type AnthropicCooldownRecoverySettlement = "cleared" | "retained" | "superseded";
@@ -434,8 +436,9 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     now = Date.now(),
   ): AnthropicCooldownRecoveryClaim | null {
     const entry = upstreamHealth.get(accountId);
-    if (!entry || entry.cooldownUntil <= now || recoverableQuotaWindows(entry) === null) return null;
-    return { instance, accountId, cooldownGeneration: entry.cooldownGeneration, claimedAt: now };
+    const windows = entry && entry.cooldownUntil > now ? recoverableQuotaWindows(entry) : null;
+    if (!entry || windows === null) return null;
+    return { instance, accountId, cooldownGeneration: entry.cooldownGeneration, claimedAt: now, namesRejectedWindow: windows.length > 0 };
   }
 
   /**

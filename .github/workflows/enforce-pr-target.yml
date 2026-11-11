@@ -1,20 +1,16 @@
 name: Enforce PR target branch
 
+# Called by pr-gates.yml (#7654) for every pull_request_target event it
+# subscribes to (opened, reopened, edited, labeled, unlabeled, ready_for_review,
+# synchronize) and for every `status` event. CodeRabbit publishes a legacy commit
+# status named `CodeRabbit` on the reviewed head SHA; `status` and
+# pull_request_target workflows are loaded only from the default branch, and this
+# local reusable workflow loads from that same commit, so a PR cannot suppress or
+# rewrite this signal path. The status is only a wake-up signal; resolve-pr below
+# filters it and the gate re-reads live reviews before any write. The `github`
+# context here is the caller's event.
 on:
-  pull_request_target:
-    types:
-      - opened
-      - reopened
-      - edited
-      - labeled
-      - unlabeled
-      - ready_for_review
-      - synchronize
-  # CodeRabbit publishes a legacy commit status named `CodeRabbit` on the
-  # reviewed head SHA. `status` workflows are loaded only from the default
-  # branch, so a PR cannot suppress or rewrite this signal path. The status is
-  # only a wake-up signal; the gate re-reads live reviews before any write.
-  status:
+  workflow_call:
 
 # pull-requests:write covers title/comment/label updates.
 # contents:write is required for convertPullRequestToDraft /

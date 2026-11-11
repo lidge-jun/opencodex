@@ -5,6 +5,7 @@ import { atomicWriteFile, getConfigDir, getConfigPath, mutatePersistedConfig, re
 import { readAlivePid, readRuntimePort } from "../config/process-state";
 import { getCodexHome } from "./paths";
 import { advanceCodexCredentialMutationEpoch } from "./credential-mutation-epoch";
+import { readNativeMainAuthBytes } from "./native-main-auth-file";
 import { assertPlainLocalPath, ORCA_ACCOUNT_DIRECTORY, parseOrcaAuth, readBoundedLocalFile, readOrcaAuthSource, sameLocalPath } from "./orca-auth-source";
 
 export class OrcaImportError extends Error {
@@ -101,7 +102,15 @@ function prepare(sourceDir: string, registryPath: string) {
       recoverable.set(credential.chatgptAccountId, { id, credential });
     }
   }
-  const mainRaw = optionalFile(join(getCodexHome(), "auth.json"));
+  let mainRaw: string | undefined;
+  const mainAuthPath = join(getCodexHome(), "auth.json");
+  try {
+    mainRaw = readNativeMainAuthBytes(mainAuthPath, "local-bounded", 4 * 1024 * 1024).toString("utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new OrcaImportError("A target or main credential file is unreadable; import refused.");
+    }
+  }
   if (mainRaw !== undefined) {
     const main = object(JSON.parse(mainRaw));
     if (main.tokens !== undefined) {

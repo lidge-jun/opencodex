@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -132,6 +134,8 @@ export const ko: Record<TKey, string> = {
   "workflowBudget.saved": "워크플로 한도를 저장했습니다.",
   ...desktopCompatibilityCopy("ko"),
   ...shellV2Copy("ko"),
+  ...codexCliUpdateCopy("ko"),
+  ...remoteLinkDiagnosticsCopy("ko"),
   ...modelsV2Copy("ko"),
   ...accountsV2Copy("ko"),
   ...subagentsV2Copy("ko"),
@@ -285,6 +289,8 @@ export const ko: Record<TKey, string> = {
   "advisor.modelsEmpty": "선택할 모델이 없습니다. 공급자와 모델을 활성화한 뒤 다시 시도하세요.",
   "advisor.effort": "추론 강도",
   "advisor.policy": "정책",
+  "advisor.questionOnly": "워커의 질문만 전송",
+  "advisor.questionOnlyNote": "워커의 질문(최대 2000자를 유지하며, 초과하면 잘림 안내 추가)과 고정된 자문 지침만 전송합니다. 대화 기록, 도구 결과, 작업 맥락은 자동으로 첨부하지 않습니다. 워커가 필요한 배경을 질문에 포함해야 합니다. 자동 자문은 일시 중지되며 기존 횟수 제한은 유지됩니다.",
   "advisor.policy.manual": "수동 — Worker가 요청할 때만",
   "advisor.policy.preflight": "Preflight — 방향 증거가 생기면 자동 상담 시도",
   "advisor.policy.adaptive": "적응형 — 초기 탐색 및 수정 실패 시 상담",
@@ -2176,6 +2182,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "OpenAI 공급자 프리셋을 불러오지 못했습니다.",
   "codexAuth.openaiPresetUnavailable": "OpenAI 공급자 프리셋을 사용할 수 없습니다.",
   "codexAuth.openProviders": "프로바이더 열기",
+  "codexAuth.changeAccountMode": "계정 모드 변경",
   "codexAuth.add": "추가",
   "codexAuth.credits": "크레딧",
   "codexAuth.creditsRemaining": "남음",
@@ -3162,6 +3169,7 @@ export const ko: Record<TKey, string> = {
   "pws.currentAccountUsage": "현재 계정 사용량",
   "pws.quotaUnsupported": "이 계정은 할당량 조회를 지원하지 않습니다.",
   "pws.quotaUnobserved": "아직 관측된 사용량이 없습니다.",
+  "pws.quotaLastRead": "마지막 조회",
   "pws.quotaCheckCompleted": "할당량 확인 완료",
   "pws.modelBreakdown": "모델별 사용량",
   "pws.col.model": "모델",
@@ -3739,6 +3747,11 @@ export const ko: Record<TKey, string> = {
   "claudeDesktop.useAsDefault": "{family} 기본 모델로 사용",
   "claudeDesktop.moveTo": "이동 위치",
   "claudeDesktop.move": "이동",
+  "claudeDesktop.removeUnavailable": "제거",
+  "claudeDesktop.removeAllUnavailable": "사용 불가 모델 제거 ({n})",
+  "claudeDesktop.removeUnavailableHint": "이 배정과 별칭을 지웁니다. 저장하면 변경이 남고, 저장 후 적용하면 Claude Desktop에도 반영됩니다.",
+  "claudeDesktop.removeUnavailableTierHint": "한 등급의 기본값은 사용 가능해야 하므로, 이 등급의 다른 사용 불가 모델 {n}개도 함께 제거합니다. 저장하면 변경이 남고, 저장 후 적용하면 Claude Desktop에도 반영됩니다.",
+  "claudeDesktop.removedUnavailable": "사용 불가 모델 {n}개를 제거했습니다. 저장하면 변경이 남고, 저장 후 적용하면 Claude Desktop에 반영됩니다.",
   "claudeDesktop.status.applied": "Desktop에 적용됨",
   "claudeDesktop.status.stale": "Desktop 설정이 최신 상태가 아님 — 재적용 필요",
   "claudeDesktop.status.notApplied": "미적용",
@@ -3883,7 +3896,7 @@ export const ko: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "제공자 테이블 방식에서는 일부 모바일 원격 목록에 기존 openai 태그 스레드가 보이지 않을 수 있습니다. 기록이 삭제된 것은 아닙니다. 원격 클라이언트가 모든 제공자를 조회해야 하며, 이 스위치는 해당 목록 필터를 수정하지 않습니다.",
   "models.newPolicyGlobal": "새 모델을 비활성화 상태로 추가", "models.newPolicyProvider": "새 모델 정책",
   "models.fastProvider": "Fast 모드", "models.fastProviderHint": "사용 크레딧을 2배 가격으로 소모합니다", "models.fastEnabled": "Fast 모드를 켰습니다", "models.fastDisabled": "Fast 모드를 껐습니다", "models.fastSaveFailed": "Fast 모드를 저장하지 못했습니다",
-  "models.newPolicy_inherit": "상속", "models.newPolicy_off": "끔", "models.newPolicy_on": "켬", "models.newBadge": "신규", "models.newCount": "신규 {count}개, 꺼짐",
+  "models.newPolicy_inherit": "상속", "models.newPolicy_off": "끔", "models.newPolicy_on": "켬", "models.newPolicy_admit": "선택에 추가", "models.newBadge": "신규", "models.newCount": "신규 {count}개, 꺼짐",
   "models.aliases": "별칭",
   "models.aliasesTable": "별칭 표",
   "models.aliasPrompt": "공급자 별칭 (비우면 해제)",

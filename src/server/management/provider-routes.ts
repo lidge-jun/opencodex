@@ -154,7 +154,7 @@ type ProviderPatchApplication =
       headersTouched: boolean;
     };
 
-const PROVIDER_ALIAS_OVERLAY_FIELDS = ["alias", "modelAliases", "defaultAliases"] as const;
+const PROVIDER_ALIAS_OVERLAY_FIELDS = ["alias", "modelAliases", "defaultAliases", "aliasTemplate"] as const;
 type ProviderAliasOverlayField = typeof PROVIDER_ALIAS_OVERLAY_FIELDS[number];
 
 /**
@@ -925,6 +925,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       allowPrivateNetwork: p.allowPrivateNetwork === true,
       preserveResponsesReasoningContent: p.preserveResponsesReasoningContent,
       promoteAdditionalTools: p.promoteAdditionalTools,
+      forwardAdvisorTool: p.forwardAdvisorTool,
       liveModels: p.liveModels !== false,
       requestPacing: p.requestPacing,
       models: p.models ?? [],

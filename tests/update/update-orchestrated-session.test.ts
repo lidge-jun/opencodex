@@ -48,13 +48,15 @@ test.skipIf(process.platform === "win32")("Bun pnpm supervises a mutation's rema
 }, 10000);
 
 test.each([
-  { pid: 2147483647, phase: "mutating", startedAt: 1, installerPid: process.pid },
-  { pid: 2147483647, phase: "failed", startedAt: 1, terminationUnconfirmed: true },
-])("prior installer marker refuses and remains untouched: %j", marker => {
+  // A live recorded installer refuses as in flight.
+  [{ pid: 2147483647, phase: "mutating", startedAt: 1, installerPid: process.pid }, {}],
+  // An unconfirmed installer with no witness refuses too, flagged so the launcher can name the marker (#8524).
+  [{ pid: 2147483647, phase: "failed", startedAt: 1, terminationUnconfirmed: true }, { staleMarker: true }],
+] as const)("prior installer marker refuses and remains untouched: %j", (marker, flag) => {
   const f = fixture(), path = join(f.home, "update-orchestrated.json");
   const original = JSON.stringify(marker); writeFileSync(path, original);
   const session = createOrchestratedChildSession({ ...f, verifyIdentity: () => true });
-  expect(session.start()).toEqual({ ok: false, error: "update-in-flight" });
+  expect(session.start()).toEqual({ ok: false, error: "update-in-flight", ...flag });
   expect(readFileSync(path, "utf8")).toBe(original);
 });
 

@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -132,6 +134,8 @@ export const ru: Record<TKey, string> = {
   "workflowBudget.saved": "Лимиты рабочих процессов сохранены.",
   ...desktopCompatibilityCopy("ru"),
   ...shellV2Copy("ru"),
+  ...codexCliUpdateCopy("ru"),
+  ...remoteLinkDiagnosticsCopy("ru"),
   ...modelsV2Copy("ru"),
   ...accountsV2Copy("ru"),
   ...subagentsV2Copy("ru"),
@@ -285,6 +289,8 @@ export const ru: Record<TKey, string> = {
   "advisor.modelsEmpty": "Нет доступных моделей. Включите провайдера и модель и повторите попытку.",
   "advisor.effort": "Интенсивность рассуждений",
   "advisor.policy": "Политика",
+  "advisor.questionOnly": "Отправлять только вопрос исполнителя",
+  "advisor.questionOnlyNote": "Отправляются только вопрос исполнителя (до 2000 сохранённых символов с уведомлением при усечении) и фиксированная инструкция советнику. История, результаты инструментов и контекст задачи не добавляются. Исполнитель должен включить необходимые сведения. Автоматические консультации приостановлены; прежние ограничения числа вызовов сохраняются.",
   "advisor.policy.manual": "Вручную — только по запросу воркера",
   "advisor.policy.preflight": "Preflight — автоматическая попытка при появлении ориентационного свидетельства",
   "advisor.policy.adaptive": "Адаптивно — начальная проверка и неудачное исправление",
@@ -1925,6 +1931,7 @@ export const ru: Record<TKey, string> = {
   "pws.currentAccountUsage": "Использование текущего аккаунта",
   "pws.quotaUnsupported": "Запрос квоты для этого аккаунта не поддерживается.",
   "pws.quotaUnobserved": "Данных о наблюдаемом использовании пока нет.",
+  "pws.quotaLastRead": "Последнее чтение",
   "pws.quotaCheckCompleted": "Проверка квоты завершена",
   "pws.modelBreakdown": "Разбивка по моделям",
   "pws.col.model": "Модель",
@@ -2694,6 +2701,7 @@ export const ru: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Не удалось загрузить пресет провайдера OpenAI.",
   "codexAuth.openaiPresetUnavailable": "Пресет провайдера OpenAI недоступен.",
   "codexAuth.openProviders": "Открыть провайдеров",
+  "codexAuth.changeAccountMode": "Изменить режим аккаунта",
   "codexAuth.add": "Добавить",
   "codexAuth.credits": "Кредиты",
   "codexAuth.creditsRemaining": "осталось",
@@ -3491,6 +3499,11 @@ export const ru: Record<TKey, string> = {
   "claudeDesktop.useAsDefault": "Сделать по умолчанию для {family}",
   "claudeDesktop.moveTo": "Переместить в",
   "claudeDesktop.move": "Переместить",
+  "claudeDesktop.removeUnavailable": "Удалить",
+  "claudeDesktop.removeAllUnavailable": "Удалить недоступные ({n})",
+  "claudeDesktop.removeUnavailableHint": "Удаляет это назначение и его псевдоним. «Сохранить» сохраняет изменение; «Сохранить и применить» также обновляет Claude Desktop.",
+  "claudeDesktop.removeUnavailableTierHint": "Также удаляет другие недоступные модели этого уровня ({n}), потому что модель уровня по умолчанию должна быть доступна. «Сохранить» сохраняет изменение; «Сохранить и применить» также обновляет Claude Desktop.",
+  "claudeDesktop.removedUnavailable": "Удалено недоступных моделей: {n}. «Сохранить» сохраняет изменение, «Сохранить и применить» обновляет Claude Desktop.",
   "claudeDesktop.status.applied": "Применено к Desktop",
   "claudeDesktop.status.stale": "Конфигурация Desktop устарела — примените заново",
   "claudeDesktop.status.notApplied": "Не применено",
@@ -3884,7 +3897,7 @@ export const ru: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "Таблица провайдеров может скрыть существующие диалоги с меткой openai в некоторых мобильных удалённых списках. История не удаляется. Удалённый клиент должен запрашивать все провайдеры; этот переключатель не исправляет его фильтр.",
   "models.newPolicyGlobal": "Добавлять новые модели выключенными", "models.newPolicyProvider": "Политика новых моделей",
   "models.fastProvider": "Режим Fast", "models.fastProviderHint": "Расходует кредиты использования по двойной цене", "models.fastEnabled": "Режим Fast включён", "models.fastDisabled": "Режим Fast выключен", "models.fastSaveFailed": "Не удалось сохранить режим Fast",
-  "models.newPolicy_inherit": "Наследовать", "models.newPolicy_off": "Выкл.", "models.newPolicy_on": "Вкл.", "models.newBadge": "НОВАЯ", "models.newCount": "Новых: {count}, выкл.",
+  "models.newPolicy_inherit": "Наследовать", "models.newPolicy_off": "Выкл.", "models.newPolicy_on": "Вкл.", "models.newPolicy_admit": "Добавлять", "models.newBadge": "НОВАЯ", "models.newCount": "Новых: {count}, выкл.",
   "models.aliases": "Псевдонимы",
   "models.aliasesTable": "Таблица псевдонимов",
   "models.aliasPrompt": "Псевдоним провайдера (оставьте пустым, чтобы очистить)",

@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -134,6 +136,8 @@ export const vi: Record<TKey, string> = {
   "workflowBudget.saved": "Đã lưu giới hạn quy trình.",
   ...desktopCompatibilityCopy("vi"),
   ...shellV2Copy("vi"),
+  ...codexCliUpdateCopy("vi"),
+  ...remoteLinkDiagnosticsCopy("vi"),
   ...modelsV2Copy("vi"),
   ...accountsV2Copy("vi"),
   ...subagentsV2Copy("vi"),
@@ -284,6 +288,8 @@ export const vi: Record<TKey, string> = {
   "advisor.modelsEmpty": "Không có mô hình để chọn. Bật nhà cung cấp và mô hình rồi thử lại.",
   "advisor.effort": "Mức suy luận",
   "advisor.policy": "Chính sách",
+  "advisor.questionOnly": "Chỉ gửi câu hỏi của worker",
+  "advisor.questionOnlyNote": "Chỉ gửi câu hỏi của worker (giữ tối đa 2000 ký tự, kèm thông báo nếu bị cắt ngắn) cùng chỉ dẫn cố định cho cố vấn. Không tự động đính kèm lịch sử, kết quả công cụ hay ngữ cảnh tác vụ. Worker phải bổ sung thông tin nền cần thiết. Tư vấn tự động tạm dừng; các giới hạn lượt tư vấn hiện có vẫn áp dụng.",
   "advisor.policy.manual": "Thủ công — chỉ khi worker yêu cầu",
   "advisor.policy.preflight": "Preflight — tự động thử tư vấn khi có bằng chứng định hướng",
   "advisor.policy.adaptive": "Thích ứng — khảo sát ban đầu và sửa lỗi thất bại",
@@ -1937,6 +1943,7 @@ export const vi: Record<TKey, string> = {
   "pws.currentAccountUsage": "Mức sử dụng tài khoản hiện tại",
   "pws.quotaUnsupported": "Tra cứu hạn mức không được hỗ trợ cho tài khoản này.",
   "pws.quotaUnobserved": "Chưa có dữ liệu sử dụng nào được ghi nhận.",
+  "pws.quotaLastRead": "Lần đọc gần nhất",
   "pws.quotaCheckCompleted": "Đã hoàn thành kiểm tra hạn mức",
   "pws.modelBreakdown": "Chi tiết theo model",
   "pws.col.model": "Model",
@@ -2729,6 +2736,7 @@ export const vi: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Không thể tải preset của provider OpenAI.",
   "codexAuth.openaiPresetUnavailable": "Preset của provider OpenAI không khả dụng.",
   "codexAuth.openProviders": "Mở Providers",
+  "codexAuth.changeAccountMode": "Đổi chế độ tài khoản",
   "codexAuth.add": "Thêm",
   "codexAuth.credits": "Tín dụng",
   "codexAuth.creditsRemaining": "còn lại",
@@ -3730,6 +3738,11 @@ export const vi: Record<TKey, string> = {
   "claudeDesktop.useAsDefault": "Sử dụng làm mặc định cho {family}",
   "claudeDesktop.moveTo": "Chuyển đến",
   "claudeDesktop.move": "Di chuyển",
+  "claudeDesktop.removeUnavailable": "Gỡ",
+  "claudeDesktop.removeAllUnavailable": "Gỡ mô hình không khả dụng ({n})",
+  "claudeDesktop.removeUnavailableHint": "Gỡ phân công này và bí danh của nó. Lưu giữ thay đổi; Lưu và áp dụng cũng cập nhật Claude Desktop.",
+  "claudeDesktop.removeUnavailableTierHint": "Đồng thời gỡ {n} mô hình không khả dụng khác trong tầng này, vì mặc định của một tầng phải khả dụng. Lưu giữ thay đổi; Lưu và áp dụng cũng cập nhật Claude Desktop.",
+  "claudeDesktop.removedUnavailable": "Đã gỡ {n} mô hình không khả dụng. Lưu để giữ thay đổi, hoặc Lưu và áp dụng để cập nhật Claude Desktop.",
   "claudeDesktop.status.applied": "Đã áp dụng cho Desktop",
   "claudeDesktop.status.stale": "Cấu hình Desktop chưa cập nhật — hãy áp dụng lại",
   "claudeDesktop.status.notApplied": "Chưa được áp dụng",
@@ -4210,7 +4223,7 @@ export const vi: Record<TKey, string> = {
   "models.fastProvider": "Chế độ Fast", "models.fastProviderHint": "Dùng tín dụng sử dụng với giá gấp 2", "models.fastEnabled": "Đã bật chế độ Fast", "models.fastDisabled": "Đã tắt chế độ Fast", "models.fastSaveFailed": "Không thể lưu chế độ Fast",
   "models.newPolicy_inherit": "Kế thừa",
   "models.newPolicy_off": "Tắt",
-  "models.newPolicy_on": "Bật",
+  "models.newPolicy_on": "Bật", "models.newPolicy_admit": "Thêm vào lựa chọn",
   "models.newBadge": "MỚI",
   "models.newCount": "{count} model mới, đang tắt",
   "codexSet.custom.deleteConfirm": "Xoá lớp này? Bạn có thể hoàn tác trong vài giây.",

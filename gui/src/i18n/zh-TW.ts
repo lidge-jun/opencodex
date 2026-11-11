@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -130,6 +132,8 @@ export const zhTW: Record<TKey, string> = {
   "workflowBudget.saved": "工作流程限制已儲存。",
   ...desktopCompatibilityCopy("zh-TW"),
   ...shellV2Copy("zh-TW"),
+  ...codexCliUpdateCopy("zh-TW"),
+  ...remoteLinkDiagnosticsCopy("zh-TW"),
   ...modelsV2Copy("zh-TW"),
   ...accountsV2Copy("zh-TW"),
   ...subagentsV2Copy("zh-TW"),
@@ -277,6 +281,8 @@ export const zhTW: Record<TKey, string> = {
   "advisor.modelsEmpty": "沒有可選模型。請啟用供應商與模型後重試。",
   "advisor.effort": "推理強度",
   "advisor.policy": "策略",
+  "advisor.questionOnly": "僅傳送主模型的問題",
+  "advisor.questionOnlyNote": "僅傳送主模型填寫的問題（最多保留 2000 字元，超出時附加截斷提示）和固定顧問指令，不自動附加對話歷史、工具結果或任務上下文。主模型需要自行補充必要背景。自動諮詢暫停，現有諮詢次數限制仍然生效。",
   "advisor.policy.manual": "手動 — 僅在 Worker 主動請求時",
   "advisor.policy.preflight": "Preflight — 出現方向性證據後自動嘗試諮詢",
   "advisor.policy.adaptive": "自適應 — 初始探查與修復失敗時諮詢",
@@ -1629,6 +1635,7 @@ export const zhTW: Record<TKey, string> = {
   "pws.currentAccountUsage": "目前帳戶用量",
   "pws.quotaUnsupported": "此帳戶不支援查詢配額。",
   "pws.quotaUnobserved": "尚未觀測到用量。",
+  "pws.quotaLastRead": "上次讀取",
   "pws.quotaCheckCompleted": "配額檢查完成",
   "pws.modelBreakdown": "模型用量明細",
   "pws.col.model": "模型",
@@ -2048,6 +2055,7 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "無法載入 OpenAI 供應商預設。",
   "codexAuth.openaiPresetUnavailable": "OpenAI 供應商預設不可用。",
   "codexAuth.openProviders": "開啟供應商",
+  "codexAuth.changeAccountMode": "變更帳號模式",
   "codexAuth.add": "新增",
   "codexAuth.credits": "額度",
   "codexAuth.creditsRemaining": "剩餘",
@@ -2884,6 +2892,11 @@ export const zhTW: Record<TKey, string> = {
   "claudeDesktop.useAsDefault": "設為 {family} 預設模型",
   "claudeDesktop.moveTo": "移動到",
   "claudeDesktop.move": "移動",
+  "claudeDesktop.removeUnavailable": "移除",
+  "claudeDesktop.removeAllUnavailable": "移除不可用模型 ({n})",
+  "claudeDesktop.removeUnavailableHint": "移除此指派及其別名。「儲存」會保留變更；「儲存並套用」也會更新 Claude Desktop。",
+  "claudeDesktop.removeUnavailableTierHint": "由於某一層級的預設模型必須可用，也會移除該層級中另外 {n} 個不可用模型。「儲存」會保留變更；「儲存並套用」也會更新 Claude Desktop。",
+  "claudeDesktop.removedUnavailable": "已移除 {n} 個不可用模型。「儲存」保留變更，「儲存並套用」更新 Claude Desktop。",
   "claudeDesktop.status.applied": "已套用到 Desktop",
   "claudeDesktop.status.stale": "Desktop 設定尚未更新 — 需重新套用",
   "claudeDesktop.status.notApplied": "未套用",
@@ -3847,7 +3860,7 @@ export const zhTW: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "供應商表路由可能使既有的 openai 標記對話在部分行動版遠端清單中隱藏。歷程並未刪除。遠端用戶端必須列出所有供應商；此開關不會修正用戶端的清單篩選器。",
   "models.newPolicyGlobal": "新模型預設停用", "models.newPolicyProvider": "新模型策略",
   "models.fastProvider": "Fast 模式", "models.fastProviderHint": "以 2 倍價格消耗用量額度", "models.fastEnabled": "已開啟 Fast 模式", "models.fastDisabled": "已關閉 Fast 模式", "models.fastSaveFailed": "無法儲存 Fast 模式",
-  "models.newPolicy_inherit": "繼承", "models.newPolicy_off": "關閉", "models.newPolicy_on": "開啟", "models.newBadge": "新增", "models.newCount": "{count} 個新增，已關閉",
+  "models.newPolicy_inherit": "繼承", "models.newPolicy_off": "關閉", "models.newPolicy_on": "開啟", "models.newPolicy_admit": "加入選擇", "models.newBadge": "新增", "models.newCount": "{count} 個新增，已關閉",
   "models.aliases": "別名",
   "models.aliasesTable": "別名表",
   "models.aliasPrompt": "供應商別名（留空即清除）",
