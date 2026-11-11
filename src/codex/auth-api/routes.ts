@@ -28,6 +28,7 @@ import { getRuntimeConfig, saveRuntimeConfig, configuredPoolAccount } from "./ru
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
 import { getEffectiveCodexAutoSwitchThreshold, isCodexAccountAutoSwitchThresholdKey, parseCodexAutoSwitchThreshold, setCodexAccountAutoSwitchThresholdOverride } from "../account-auto-switch";
 import { withCodexAccountPauseGroup } from "./account-pause-group";
+import { PERMANENT_PAUSE_REASONS } from "../../oauth/account-resume-health";
 
 export async function handleCodexAuthAPI(
   req: Request,
@@ -122,10 +123,19 @@ export async function handleCodexAuthAPI(
         : verdict && (!isCodexAccountPaused(runtimeConfig, id) || runtimeConfig.codexAccountPauseState?.[id]?.revision !== verdict.pauseRevision)
           ? "account_changed" : undefined;
       if (refusal) return jsonResponse({ error: `account was not resumed: ${refusal}`, code: "resume_refused", reason: refusal, id }, 409);
+      // Not paused when checked: a no-op that never enters the pause group.
+      if (!verdict) return jsonResponse({ ok: true, id, paused: false, unchanged: true, activeCodexAccountId: getEffectiveActiveCodexAccountId(runtimeConfig) ?? null });
     }
 
     const paused = body.paused;
     return withCodexAccountPauseGroup(runtimeConfig, id, accountIds => {
+      // A linked account resumes with the named one, so a permanent reason on any of them refuses (#8398).
+      if (body.ifHealthy === true && accountIds.some(accountId => {
+        const reason = runtimeConfig.codexAccountPauseState?.[accountId]?.details?.reason;
+        return reason !== undefined && PERMANENT_PAUSE_REASONS.has(reason);
+      })) {
+        return jsonResponse({ error: "account was not resumed: pause_not_remote_clearable", code: "resume_refused", reason: "pause_not_remote_clearable", id }, 409);
+      }
       // Publish every exclusion before reconciling: a duplicate must never become the fallback.
       for (const accountId of accountIds) setCodexAccountPaused(runtimeConfig, accountId, paused);
       if (paused) {

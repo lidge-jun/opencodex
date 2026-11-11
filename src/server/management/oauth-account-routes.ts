@@ -668,7 +668,15 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         return jsonResponse({ error: `account was not resumed: ${verdict.reason}`, code: "resume_refused", reason: verdict.reason,
           provider, accountId: body.accountId }, 409);
       }
-      if (verdict) resumeGuard = { generation: verdict.generation, pauseRevision: verdict.pauseRevision };
+      if (!verdict) {
+        // Not paused when checked: write nothing, so a pause that lands meanwhile is never cleared unchecked.
+        const { getAccountSet } = await import("../../oauth/store");
+        const set = getAccountSet(provider);
+        if (!set?.accounts.some(account => account.id === body.accountId)) return jsonResponse({ error: "account not found" }, 404);
+        return jsonResponse({ ok: true, provider, accountId: body.accountId, paused: false, unchanged: true,
+          activeAccountId: set.activeAccountId, activeAccountChanged: false });
+      }
+      resumeGuard = { generation: verdict.generation, pauseRevision: verdict.pauseRevision };
     }
     const result = await setAccountPaused(provider, body.accountId, body.paused, undefined, resumeGuard);
     if (result.status === "not-found") return jsonResponse({ error: "account not found" }, 404);

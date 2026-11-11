@@ -1325,7 +1325,11 @@ export async function saveAccountCredential(
   provider: string,
   accountId: string,
   cred: OAuthCredentials,
-  opts: { assertBeforePersist?: () => void; rotateLoginId?: boolean } = {},
+  /**
+   * `clearAutomaticPause`: only an operator's explicit reauthentication of this account may clear a
+   * pause auto-pause recorded (#8398); other writers (Kiro's pre-login identity binding) leave it.
+   */
+  opts: { assertBeforePersist?: () => void; rotateLoginId?: boolean; clearAutomaticPause?: boolean } = {},
 ): Promise<boolean> {
   if (isAnthropicInstanceId(provider)) assertAnthropicCredentialSource(provider, cred);
   const safe = normalizeCredential(cred);
@@ -1346,7 +1350,7 @@ export async function saveAccountCredential(
     delete account.needsReauth;
     delete account.needsReauthReason;
     delete account.refreshAttentionGeneration;
-    if (clearAutomaticPauseForLogin(set, account)) pauseCleared = true;
+    if (opts.clearAutomaticPause === true && clearAutomaticPauseForLogin(set, account)) pauseCleared = true;
     // A pause that found no usable fallback leaves the active id on a paused row. Once this
     // reauthentication makes an unpaused account usable, hand the selection to it.
     const active = set.accounts.find(a => a.id === set.activeAccountId);

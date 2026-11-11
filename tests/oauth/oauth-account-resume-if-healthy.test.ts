@@ -164,8 +164,8 @@ describe("explicit login clears only an automatic pause (#8398)", () => {
 
   test("a reauthentication of one slot clears an automatic pause and keeps an operator pause", async () => {
     writeAuth([automatic, active, { id: "cccc3333", access: "t3", paused: true, email: "third@example.com", accountId: "acct-3" }]);
-    await saveAccountCredential("anthropic", "aaaa1111", { access: "t1-new", refresh: "r1-new", expires: FAR, email: "other@example.com", accountId: "acct-9", source: "oauth" } as never);
-    await saveAccountCredential("anthropic", "cccc3333", { access: "t3-new", refresh: "r3-new", expires: FAR, email: "third@example.com", accountId: "acct-3", source: "oauth" } as never);
+    await saveAccountCredential("anthropic", "aaaa1111", { access: "t1-new", refresh: "r1-new", expires: FAR, email: "other@example.com", accountId: "acct-9", source: "oauth" } as never, { clearAutomaticPause: true });
+    await saveAccountCredential("anthropic", "cccc3333", { access: "t3-new", refresh: "r3-new", expires: FAR, email: "third@example.com", accountId: "acct-3", source: "oauth" } as never, { clearAutomaticPause: true });
     expect(row("aaaa1111")?.paused).toBeUndefined();
     expect(row("aaaa1111")?.pauseDetails).toBeUndefined();
     expect(row("cccc3333")?.paused).toBe(true);
@@ -185,5 +185,25 @@ describe("routing learns about a login that cleared a pause (#8398)", () => {
       await saveAccountCredential("anthropic", "aaaa1111", { access: "t1-other", refresh: "r1-other", expires: FAR, email: "first@example.com", accountId: "acct-1", source: "oauth" } as never);
       expect(seen).toEqual(["anthropic"]);
     } finally { unsubscribe(); }
+  });
+});
+
+describe("only an explicit reauthentication clears an automatic pause (#8398 review)", () => {
+  test("a credential write without the reauthentication flag (Kiro pre-login binding) keeps the pause", async () => {
+    writeAuth([automatic, active]);
+    await saveAccountCredential("anthropic", "aaaa1111", { access: "t1-bound", refresh: "r1-bound", expires: FAR, email: "first@example.com", accountId: "acct-1", source: "oauth" } as never);
+    expect(row("aaaa1111")?.paused).toBe(true);
+    expect(row("aaaa1111")?.pauseDetails?.reason).toBe("subscription_expired");
+  });
+
+  test("an account that is not paused when checked is answered without a write", async () => {
+    writeAuth([automatic, active]);
+    stubUsage(200);
+    const before = row("bbbb2222")?.pauseRevision;
+    const result = await resume({ provider: "anthropic", accountId: "bbbb2222", paused: false, ifHealthy: true });
+    expect(result.status).toBe(200);
+    expect(result.json).toMatchObject({ ok: true, unchanged: true, paused: false });
+    expect(row("bbbb2222")?.pauseRevision).toBe(before);
+    expect(usageCalls).toEqual([]);
   });
 });

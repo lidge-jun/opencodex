@@ -100,3 +100,31 @@ describe("Codex resume --if-healthy (#8398)", () => {
     expect(loadConfig().pausedCodexAccountIds).toEqual(expect.arrayContaining(["pool-paused", MAIN_CODEX_ACCOUNT_ID]));
   });
 });
+
+describe("Codex resume --if-healthy across linked accounts (#8398 review)", () => {
+  test("a permanent reason on a linked account refuses the whole resume", async () => {
+    setup({ reason: "subscription_expired", pausedAt: 1 });
+    const config = loadConfig();
+    config.codexAccounts = [...(config.codexAccounts ?? []), { id: "pool-twin", email: "paused@example.test", isMain: false }];
+    config.pausedCodexAccountIds = [...(config.pausedCodexAccountIds ?? []), "pool-twin"];
+    config.codexAccountPauseState = { ...config.codexAccountPauseState, "pool-twin": { revision: "rev-twin", details: { reason: "oauth_organization_disabled", pausedAt: 1 } } };
+    saveConfig(config);
+    saveCodexAccountCredential("pool-twin", { accessToken: "access-twin", refreshToken: "refresh-twin", expiresAt: Date.now() + 60 * 60_000, chatgptAccountId: "acct-pool-paused" });
+    stubWham(200);
+    const result = await resume({ id: "pool-paused", paused: false, ifHealthy: true });
+    expect(result.status).toBe(409);
+    expect(result.json).toMatchObject({ code: "resume_refused", reason: "pause_not_remote_clearable" });
+    expect(loadConfig().pausedCodexAccountIds).toEqual(expect.arrayContaining(["pool-paused", "pool-twin"]));
+  });
+
+  test("an account that is not paused when checked is a no-op", async () => {
+    setup({ reason: "subscription_expired", pausedAt: 1 });
+    stubWham(200);
+    const before = loadConfig().codexAccountPauseState?.["pool-live"];
+    const result = await resume({ id: "pool-live", paused: false, ifHealthy: true });
+    expect(result.status).toBe(200);
+    expect(result.json).toMatchObject({ ok: true, unchanged: true });
+    expect(loadConfig().codexAccountPauseState?.["pool-live"]).toEqual(before);
+    expect(whamCalls).toEqual([]);
+  });
+});
