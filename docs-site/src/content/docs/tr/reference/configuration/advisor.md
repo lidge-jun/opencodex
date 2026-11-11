@@ -60,11 +60,17 @@ Bir danışma şunları gönderebilir:
 
 Yapılandırılmış danışman sağlayıcısı, worker sağlayıcısından farklı olabilir.
 
+Danışmalar hem çağıranın yakalanan API anahtarı model kapsamına, ücretli combo onayına ve cihaz yedekleme sınırlarına, hem de Advisor'ın kendi kabul anahtarının ana makine sınırlarına uyar: ayarlıysa `OPENCODEX_API_AUTH_TOKEN` veya bu proxy'nin kabul ettiği hizmet belirteci dosyası, aksi halde yapılandırılmış ilk API anahtarı. Anahtar sırası yalnızca bu son durumda önemlidir: Advisor modeline ulaşabilen bir anahtarı başa koyun, aksi halde her danışma kullanılamaz. Bir ortam veya hizmet belirteci ayarlıysa danışmayı o belirteç belirler. Bu kurallar combo seçimlerine, iç içe karar modellerine ve yeniden denemelere de uygulanır. Bunları karşılayamayan bir danışma, worker'a kullanılamıyor bildirimi döndürür.
+
+Örneğin `allowMeteredComboTargets: false` olan bir `laptop` anahtarı Advisor üzerinden ücretli combo hedeflerine harcama yapamaz ve `fallback.devices.laptop.provider: false` Advisor'ın sağlayıcı yedekleme adımlarını da engeller. Anahtarsız bir loopback çağıranı yine de combo'nun `allowMeteredTargets: true` onayına ihtiyaç duyar. Her iki anahtar da `allowMeteredComboTargets: true` ayarlarsa ve combo `allowMeteredTargets: true` ayarlarsa, Advisor ücretli hedefleri genel bir bağlamanın loopback dinleyicisi üzerinden de kullanabilir. Sunucu çağıran politikasını isteği doğruladığı anda, gövde kapasitesini beklemeden veya gövdeyi okumadan önce yakalar; sonraki anahtar veya yedekleme düzenlemeleri o danışmayı genişletemez. Bu, yönlendirilmiş görsel yardımcıları, compact isteklerini ve karar modellerini ve bir WebSocket turundaki her aday yeniden denemesini de kapsar. Her yeni WebSocket turu kendi politikasını yakalar.
+
 OpenCodex bu isteme sağlayıcı API anahtarlarını, Authorization başlıklarını, OAuth belirteçlerini, yalnızca arka uca ait yapılandırma sırlarını, süreç ortamını veya gizli düşünce zincirini koymaz. Şifreli sağlayıcıya özel akıl yürütmeyi çözüp iletmez. **Görev içeriği sırlardan arındırılmaz.** Göreve yapıştırılan bir anahtar, araçların okuduğu dosyadaki bir sır veya bir aracın ya da günlüğün yazdırdığı belirteç gönderilebilir. OpenCodex genel bir DLP çalıştırmaz.
 
 ## Yetki
 
 Elle danışma, worker'ın kendisinin yaptığı `advisor` çağrısının araç sonucudur. Sonuç bir JSON nesnesidir. `advice` alanı danışman modelinin metnidir. `status` alanını çalışma zamanı yazar.
+
+fetch tabanlı web arama turlarında arama döngüsü, yalnızca geçerli `tool_choice` izin veriyorsa sentetik `advisor` aracını sunar ve elle danışma çağrılarını yakalar. `allowed_tools` seçimini `web_search` ile sınırlamak, elle danışmaya izin vermez. Barındırılan aramayı etkinleştirmek bu araç izinlerini genişletmez.
 
 Otomatik tavsiyenin alıntılanmış JSON içeriği ayrı bir user rolü danışma mesajında taşınır. Developer mesajında yalnızca sabit çalışma zamanı yönergesi kalır; danışmanın ürettiği metin developer/system içeriğine girmez. OpenAI Chat ve Anthropic bunu sahte araç çağrısı olmadan destekler. JSON alıntılama yapısal kaçışı ve alan sahteciliğini önler; doğal dildeki saldırılara karşı kusursuz yalıtım sağlamaz. Özel bir protokol tavsiyeyi kullanıcı isteğinden daha açık ayırabilir. Her istekte en fazla üç danışma ve dört worker sürdürmesi vardır. Danışma sınırında advisor aracı kaldırılır; yinelenen çağrıya sınır sonucu ile yalnızca bir son sürdürme verilir. Sonraki çağrı yeni gönderim yapılmadan 502 advisor_continuation_limit ile biter. Boş tamamlama tekrarları da aynı sınırı paylaşır.
 

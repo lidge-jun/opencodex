@@ -760,7 +760,7 @@ describe("native main 401 refresh and replay", () => {
       }
       // One failure is one line, and it names the refusal rather than reprinting the envelope.
       // The raw body is multi-line JSON; a log built from it spread a single 401 over the screen.
-      const comboLine = warnings.find(line => line.startsWith("[combo] codexfirst: openai/"));
+      const comboLine = warnings.find(line => line.startsWith("[combo] combo 1: target 1 (openai)"));
       expect(comboLine).toBeDefined();
       expect(comboLine).not.toContain("\n");
       expect(comboLine).not.toContain("{");

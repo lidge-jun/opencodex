@@ -438,7 +438,9 @@ describe("operator pins on the actual request wire", () => {
   test("native Chat without pins caps spawned children and preserves unqualified caller spelling", async () => {
     const c = config({ reasoningEfforts: ["low"], reasoningEffortMap: { max: "enabled" } }, { effortCap: "low", subagentEffortCap: "low" });
     expect((await request(c, "chat", { reasoning_effort: "ultra" }, { "x-openai-subagent": "collab_spawn" })).reasoning_effort).toBe("low");
-    expect((await request(c, "chat", { reasoning_effort: "ultra" })).reasoning_effort).toBe("ultra");
+    // `ultra` is never a Chat wire value: it folds like the translated path, here through the max alias (#8254).
+    expect((await request(c, "chat", { reasoning_effort: "ultra" })).reasoning_effort).toBe("enabled");
+    expect((await request(c, "chat", { reasoning_effort: "high" })).reasoning_effort).toBe("high");
     expect(Object.hasOwn(await request(c, "chat", { reasoning_effort: undefined }), "reasoning_effort")).toBe(false);
   });
 

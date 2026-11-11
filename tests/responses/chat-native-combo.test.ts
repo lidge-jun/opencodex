@@ -26,8 +26,11 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import {
   ADVISOR_ADMISSION_SCOPE_HEADER,
+  ADVISOR_ADMISSION_POLICY_HEADER,
+  registerAdvisorAdmissionPolicy,
   encodeAdvisorAdmissionScope,
 } from "../../src/server/advisor-admission-scope";
+import { captureAdmissionPolicy } from "../../src/server/capture-admission-policy";
 import {
   ADVISOR_INTERNAL_CAPABILITY_HEADER,
   internalCallCapability,
@@ -47,6 +50,7 @@ let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 let releaseSpendHome: (() => void) | undefined;
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
+const policyRegistrations: Array<ReturnType<typeof registerAdvisorAdmissionPolicy>> = [];
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
@@ -64,6 +68,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  for (const registration of policyRegistrations.splice(0)) registration.release();
   releaseSpendHome?.();
   releaseSpendHome = undefined;
   for (const server of servers.splice(0)) await server.stop(true);
@@ -537,10 +542,15 @@ describe("advisor-inherited admission scope on native combos", () => {
     return config;
   }
 
-  const advisorHeaders = (scope: { providers: string[]; models: string[] }) => ({
-    [ADVISOR_INTERNAL_CAPABILITY_HEADER]: internalCallCapability(),
-    [ADVISOR_ADMISSION_SCOPE_HEADER]: encodeAdvisorAdmissionScope(scope),
-  });
+  const advisorHeaders = (scope: { providers: string[]; models: string[] }) => {
+    const registration = registerAdvisorAdmissionPolicy(captureAdmissionPolicy({}, undefined, scope));
+    policyRegistrations.push(registration);
+    return {
+      [ADVISOR_INTERNAL_CAPABILITY_HEADER]: internalCallCapability(),
+      [ADVISOR_ADMISSION_SCOPE_HEADER]: encodeAdvisorAdmissionScope(scope),
+      [ADVISOR_ADMISSION_POLICY_HEADER]: registration.token,
+    };
+  };
 
   test("a native-eligible failover target outside the inherited scope is never dispatched", async () => {
     const a = upstream(() => Response.json({ error: { message: "fixture outage" } }, { status: 503 }));

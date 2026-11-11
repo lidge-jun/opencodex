@@ -1,0 +1,112 @@
+/* v2 styles for the Usage page. Imported by design/theme.css into the `bridge`
+   layer, after bridge.css: above every v1 sheet, below Tailwind utilities. Prefer
+   Tailwind classes in the components; keep this file for what utilities cannot say. */
+
+/* ---- cold load: the skeleton takes the report's shape (4 stats, chart, table) ---- */
+.usage-v2-skeleton {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.usage-v2-skeleton .data-surface-skeleton__row,
+.usage-v2-skeleton .data-surface-skeleton__block { min-height: 104px; }
+.usage-v2-skeleton .data-surface-skeleton__row:nth-of-type(n + 5) { grid-column: 1 / -1; }
+.usage-v2-skeleton .data-surface-skeleton__row:nth-of-type(5) .data-surface-skeleton__block { min-height: 300px; }
+.usage-v2-skeleton .data-surface-skeleton__row:nth-of-type(6) .data-surface-skeleton__block { min-height: 220px; }
+.usage-v2-skeleton .data-surface-skeleton__block {
+  border: 0;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+@media (max-width: 760px) {
+  .usage-v2-skeleton { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ---- toolbar ---------------------------------------------------------------- */
+.usage-v2 .usage-segmented { flex: 0 0 auto; }
+.usage-v2 .usage-segmented-btn { font-size: 13px; }
+.usage-v2 .usage-segmented-btn.active { font-weight: 500; }
+.usage-v2 .usage-range-toggle[aria-expanded="true"] .usage-range-chevron { transform: rotate(90deg); }
+.usage-v2 .usage-range-fields { gap: 10px; }
+
+/* ---- breakdown tables: sit flush inside their section card -------------------- */
+.usage-v2 .usw-section .tbl-wrap.usage-v2-tbl {
+  margin-inline: -12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+}
+.usage-v2-tbl .tbl { font-size: 13px; }
+.usage-v2-tbl .tbl thead th {
+  padding: 8px 12px;
+  color: var(--ocx-fg-subtle);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.usage-v2-tbl .tbl tbody td {
+  padding: 10px 12px;
+  border-bottom-color: var(--ocx-line);
+  color: var(--ocx-fg-muted);
+}
+.usage-v2-tbl .tbl td.num { font-family: var(--font-code); font-size: 12.5px; color: var(--ocx-fg); }
+.usage-v2-tbl .tbl th.num { font-family: inherit; }
+/* Sections are cards now; the v1 rule between stacked sections would double their edge. */
+.usage-v2 .usw-section-block + .usw-section-block { margin-top: 0; padding-top: 0; border-top: 0; }
+.usage-v2-tbl .tbl tbody tr:hover td { background: var(--ocx-surface-2); }
+/* The sticky header and the pinned identity columns repaint the card they sit in. */
+.usage-v2 .usw-section .tbl-wrap.usage-v2-tbl thead th {
+  background: var(--ocx-surface);
+  box-shadow: 0 -12px 0 var(--ocx-surface), inset 0 -1px 0 var(--ocx-line);
+}
+.usage-v2-tbl .tbl.usage-models-tbl th:nth-child(-n + 2),
+.usage-v2-tbl .tbl.usage-models-tbl td:nth-child(-n + 2) { background: var(--ocx-surface); }
+.usage-v2-tbl .tbl.usage-models-tbl tbody tr:hover td:nth-child(-n + 2) { background: var(--ocx-surface-2); }
+.usage-v2-tbl .tbl.usage-models-tbl tbody td:nth-child(2) { box-shadow: inset -1px 0 0 var(--ocx-line); }
+.usage-v2-tbl .usage-cost-note { margin-top: 2px; font-family: var(--font-ui); font-size: 11px; color: var(--ocx-fg-subtle); }
+
+/* ---- menu bar & widget tab ---------------------------------------------------- */
+.usage-companion-panel { padding-top: 0; }
+.usage-companion-panel .usage-companion-chart svg { height: auto; max-height: 240px; }
+.usage-companion-panel .usage-companion-axis { stroke: var(--ocx-line-strong); }
+.usage-companion-panel .usage-companion-axis-label { fill: var(--ocx-fg-subtle); font-size: 11px; }
+.usage-companion-panel .usage-companion-legend-item { color: var(--ocx-fg-muted); font-size: 12px; }
+.usage-companion-panel :is(.usage-companion-chart-skeleton, .usage-companion-chart-state) {
+  border: 0;
+  border-radius: 8px;
+}
+.usage-companion-panel .usage-companion-chart-state { justify-content: center; font-size: 13px; color: var(--ocx-fg-muted); }
+.usage-companion-panel .usage-companion-model-group + .usage-companion-model-group { border-top-color: var(--ocx-line); }
+.usage-companion-panel .usage-companion-model-group-header { background: var(--ocx-surface); }
+.usage-companion-panel .usage-companion-model-chip { border-color: var(--ocx-line-strong); color: var(--ocx-fg-subtle); }
+.usage-companion-panel .usage-companion-model-row code { font-size: 12.5px; }
+.usage-companion-panel .usage-companion-install-guide > summary { list-style-position: inside; }
+
+/* ---- chart tooltips--------------------------------------------------------- */
+:is(.daybar-tip, .heatmap-tip).chart-overlay {
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ocx-raised);
+  color: var(--ocx-fg);
+  box-shadow: 0 0 0 1px var(--ocx-line-strong), var(--ocx-shadow-md);
+  font-size: 12px;
+}
+.daybar-tip .daybar-tip-date,
+.heatmap-tip .heatmap-tip-date { margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--ocx-fg); }
+.daybar-tip .daybar-tip-row { justify-content: space-between; gap: 12px; font-size: 12px; }
+.daybar-tip .daybar-tip-name { color: var(--ocx-fg-muted); }
+.daybar-tip .daybar-tip-val { color: var(--ocx-fg); font-variant-numeric: tabular-nums; }
+
+/* ---- calendar heatmap: one neutral ramp, not a second accent colour ------------ */
+.usage-v2-heatmap { --hm-cell: 12px; --hm-gap: 3px; }
+.usage-v2-heatmap .heatmap-cell { border-radius: 3px; }
+.usage-v2-heatmap .heatmap-cell-0 { background: var(--ocx-surface-2); }
+.usage-v2-heatmap .heatmap-cell-1 { background: color-mix(in oklab, var(--ocx-fg) 22%, var(--ocx-surface)); }
+.usage-v2-heatmap .heatmap-cell-2 { background: color-mix(in oklab, var(--ocx-fg) 42%, var(--ocx-surface)); }
+.usage-v2-heatmap .heatmap-cell-3 { background: color-mix(in oklab, var(--ocx-fg) 66%, var(--ocx-surface)); }
+.usage-v2-heatmap .heatmap-cell-4 { background: var(--ocx-fg); }
+.usage-v2-heatmap :is(.heatmap-months, .heatmap-days, .heatmap-legend) { color: var(--ocx-fg-subtle); }
+.usage-v2-heatmap .heatmap-days { background: var(--ocx-surface); }
+.usage-v2-heatmap .heatmap-grid button.heatmap-cell:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 1px; }

@@ -13,6 +13,7 @@ mod exit;
 mod first_run;
 mod formatting;
 mod identity;
+mod installer_telemetry;
 mod logging;
 mod login_autostart;
 // The judgment is portable so Linux CI runs its fixture parity tests; only macOS reads launchd.
@@ -56,6 +57,8 @@ mod runtime_stop;
 mod sidecar;
 mod startup;
 mod supervisor;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod traffic_lights;
 mod tray;
 mod tray_availability;
 mod updater;
@@ -405,14 +408,16 @@ pub fn run() {
             // zoom the window through `plugin:window` commands granted by
             // `capabilities/dashboard-titlebar.json`. Windows and Linux keep the native title
             // bar — the shell ships no min/max/close widgets of its own — while the sidebar-top
-            // layout applies unchanged.
+            // layout applies unchanged. The vertical inset depends on the macOS release, whose
+            // button metrics changed in 26 (`traffic_lights.rs`).
             #[cfg(target_os = "macos")]
             let builder = builder
                 .title_bar_style(tauri::TitleBarStyle::Overlay)
                 .hidden_title(true)
                 .min_inner_size(360.0, 320.0)
                 .traffic_light_position(tauri::Position::Logical(tauri::LogicalPosition::new(
-                    18.0, 22.0,
+                    traffic_lights::X,
+                    traffic_lights::y_for(traffic_lights::macos_major()),
                 )));
             let window = builder.build()?;
             window::configure(&window);

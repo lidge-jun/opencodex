@@ -629,3 +629,33 @@ test("a mismatched bootstrap response/server origin clears every in-memory sessi
   expect(seenKeys).toEqual(["ocx_session_stale", null]);
   expect(sessionStorage.getItem(LEGACY_TOKEN_KEY)).toBeNull();
 });
+
+test("only successful key and link inventory mutations emit a source inventory event", async () => {
+  let events = 0;
+  window.addEventListener("opencodex:usage-source-inventory-changed", () => { events++; });
+  await installMockAuthFetch((async (input: RequestInfo | URL) => {
+    const url = String(input);
+    return new Response(null, { status: url.includes("fail=1") ? 403 : 200 });
+  }) as typeof fetch);
+  for (const [path, method] of [["/api/keys", "POST"], ["/api/keys/rotate/commit", "POST"], ["/api/link/apply", "POST"], ["/api/link/lnk_a", "DELETE"]]) {
+    await fetch(path!, { method });
+  }
+  expect(events).toBe(4);
+  await fetch("/api/keys?fail=1", { method: "DELETE" });
+  await fetch("/api/keys/reveal", { method: "POST" });
+  await fetch("/api/link/probe", { method: "POST" });
+  await fetch("/api/keys", { method: "GET" });
+  expect(events).toBe(4);
+});
+
+test("a missing event constructor does not turn a successful key mutation into failure", async () => {
+  await installMockAuthFetch((async () => new Response(null, { status: 200 })) as typeof fetch);
+  const descriptor = Object.getOwnPropertyDescriptor(window, "CustomEvent");
+  try {
+    Object.defineProperty(window, "CustomEvent", { configurable: true, value: undefined });
+    expect((await fetch("/api/keys", { method: "POST" })).status).toBe(200);
+  } finally {
+    if (descriptor) Object.defineProperty(window, "CustomEvent", descriptor);
+    else Reflect.deleteProperty(window, "CustomEvent");
+  }
+});

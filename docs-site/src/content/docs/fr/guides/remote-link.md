@@ -85,9 +85,22 @@ ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
+ocx link check (--link-id <id> | --all) [--no-wait] [--json]
+ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]
+ocx link sync (--link-id <id> | --all) [--no-wait] [--json]
+ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]
+ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]
 ```
 
 Sans terminal interactif (TTY), `--expect-fingerprint` est obligatoire. Dans un terminal interactif, vous pouvez l’omettre si vous confirmez explicitement l’empreinte proposée.
+
+Sur le Home, `ocx link check (--link-id <id> | --all)` lit pour chaque enfant lancé par le Home sa version installée, son type d’installation et sa voie de mise à jour : il exécute `ocx update --plan` de l’enfant par SSH (60 secondes par enfant, trois à la fois), qui calcule un plan sans rien modifier. Un enfant antérieur à 2.97.0 renvoie `owner-action` (`legacy-ocx`) ; sa version vient d’un appel SSH en lecture seule de plus sur macOS et Linux, ou de la version qu’il a annoncée par le lien sous Windows. Les liens ouverts depuis l’enfant et les enfants `ocx-child` sont signalés sans SSH. `ocx link status --json` ajoute alors un bloc `child` à chaque ligne (versions, écart de version, fraîcheur du catalogue, activité, dernière opération). Détails et codes de sortie : [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity) (en anglais).
+
+### Opérer les enfants depuis le Home
+
+`ocx link sync`, `ocx link restart-codex` et `ocx link update` s’exécutent sur les enfants lancés par le Home via la connexion SSH du lien et affichent la tâche en JSON. `sync` exécute le `ocx sync --expect-link` épinglé (enfant 2.93.0 ou plus récent). `restart-codex` synchronise, puis redémarre les app-servers Codex de l’enfant pour qu’un Codex en cours charge le catalogue actuel ; `--scope codex` relance aussi l’application de bureau. Un redémarrage vise un seul lien ; `restart-codex` et `--restart-codex` exigent `--yes`, tandis que `ocx link sync --link-id <id> --restart-app-server-only` redémarre les app-servers sans confirmation. Le redémarrage est ignoré (`restart-skipped:link-active`) tant que le Home relaie une requête de modèle pour cet enfant. Pour un enfant antérieur à 2.69, une requête non diffusée en flux n’est visible qu’au début de sa réponse. `update --yes` met l’OpenCodex de l’enfant à la version de ce Home, jamais à une autre, avec le propre outil de mise à jour de l’enfant (enfant 2.97.0 ou plus récent ; npm et pnpm passent par leur lanceur Node, si bien que `ocx link check` y exécute aussi `node --version` en lecture seule), un enfant à la fois, puis resynchronise après une application réussie, échouée ou annulée ; une application au résultat inconnu n’est ni relancée ni resynchronisée, vérifiez-la avec `ocx link check`. La mise à jour interrompt les requêtes relayées pour cet enfant. Les enfants Windows ne prennent en charge que `sync`, et les enfants `ocx-child` signalent redémarrages et mises à jour comme non pris en charge. La CLI exige un Home lié à loopback ; sur tout autre Home, ces opérations ne sont pas disponibles, et le tableau de bord ne les propose pas. Détails et codes de sortie : [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home) (en anglais). Cette protection est au mieux : une requête qui démarre entre la vérification et le redémarrage peut encore être interrompue ; suspendez les nouvelles requêtes sur cet enfant si ses tours doivent être préservés. `ocx sync --restart-children` (ou `--restart-children=codex --yes`) applique la même règle lors de la propagation d’une synchronisation du Home, à tous les enfants ou à ceux désignés par `--child <linkId>` : chaque enfant est synchronisé, et seul son redémarrage est sauté (`restart-skipped:link-active`) tant qu’une requête relayée est en cours.
+
+Ne liez pas une machine qui ne vous appartient pas : le Home y exécute des commandes avec votre clé SSH.
 
 ## Guides associés
 

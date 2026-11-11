@@ -17,6 +17,40 @@ function eofResponse(wire: string, fragmented = false): Response {
 
 const prefix = 'data: {"type":"response.output_text.delta","delta":"draft"}\n\n';
 
+describe("Responses sidecar terminal boundary", () => {
+  for (const terminal of [
+    'data: {"type":"response.completed"}\n\n',
+    'data: {"type":"response.done"}\n\n',
+    "data: [DONE]\n\n",
+  ]) {
+    for (const fragmented of [false, true]) {
+      test(`ignores later events after ${terminal.trim()} (${fragmented ? "fragmented" : "one chunk"})`, async () => {
+        const wire = prefix + terminal + 'data: {"type":"response.output_text.delta","delta":"unexpected"}\n\n' +
+          'data: {"type":"response.failed","error":{"message":"late failure"}}\n\n';
+        expect(await parseSidecarSSE(eofResponse(wire, fragmented))).toEqual({ text: "draft", sources: [] });
+      });
+    }
+  }
+
+  for (const fragmented of [false, true]) {
+    test(`a failure cannot acquire a later response's final output (${fragmented ? "fragmented" : "one chunk"})`, async () => {
+      const wire = prefix + 'data: {"type":"response.failed","error":{"message":"stopped"}}\n\n' +
+        `data: ${JSON.stringify({ type: "response.completed", response: { output: [
+          { type: "message", content: [{ type: "output_text", text: "Later response" }] },
+        ] } })}\n\n`;
+      expect(await parseSidecarSSE(eofResponse(wire, fragmented))).toEqual({
+        text: "draft", sources: [], error: "stopped",
+      });
+    });
+
+    test(`text after completion cannot consume the decoded budget (${fragmented ? "fragmented" : "one chunk"})`, async () => {
+      const wire = prefix + 'data: {"type":"response.completed"}\n\n' +
+        `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "x".repeat(MAX_SIDECAR_DECODED_CHARS) })}\n\n`;
+      expect(await parseSidecarSSE(eofResponse(wire, fragmented))).toEqual({ text: "draft", sources: [] });
+    });
+  }
+});
+
 describe("Responses sidecar final data line at EOF", () => {
   test.each(["response.completed", "response.done"])("accepts an unterminated %s with authoritative text and sources", async type => {
     const final = { type, response: { output: [{ type: "message", content: [{
@@ -80,5 +114,63 @@ describe("Responses sidecar final data line at EOF", () => {
       },
     });
     await expect(parseSidecarSSE(new Response(body))).rejects.toThrow("transport stopped");
+  });
+});
+
+describe("Responses sidecar SSE line endings", () => {
+  for (const [name, endings] of [
+    ["LF", ["\n"]],
+    ["CRLF", ["\r\n"]],
+    ["CR", ["\r"]],
+    ["mixed", ["\r", "\n", "\r\n"]],
+  ] as const) {
+    test.each([["one chunk", false], ["single-byte chunks", true]] as const)(`${name} preserves deltas and citations (%s)`, async (_chunking, fragmented) => {
+      const lines = [
+        ": heartbeat",
+        "event: response.output_text.delta",
+        'data:{"type":"response.output_text.delta","delta":"검색 "}',
+        "",
+        'data: {"type":"response.output_text.delta","delta":"😀"}',
+        "",
+        `data: ${JSON.stringify({ type: "response.output_text.annotation.added", annotation: {
+          type: "url_citation", url: "https://example.com/result", title: "Source",
+        } })}`,
+        "",
+        "data: [DONE]",
+      ];
+      const wire = lines.map((line, index) => line + endings[index % endings.length]).join("");
+      expect(await parseSidecarSSE(eofResponse(wire, fragmented))).toEqual({
+        text: "검색 😀", sources: [{ url: "https://example.com/result", title: "Source" }],
+      });
+    });
+  }
+
+  test("preserves a CR-delimited terminal failure and earlier partial text", async () => {
+    const wire = prefix.replaceAll("\n", "\r") +
+      'data: {"type":"response.failed","error":{"message":"search stopped"}}\r\r';
+    expect(await parseSidecarSSE(eofResponse(wire))).toEqual({
+      text: "draft", sources: [], error: "search stopped",
+    });
+  });
+
+  test("CR-delimited text without a terminal event remains incomplete", async () => {
+    expect(await parseSidecarSSE(eofResponse(prefix.replaceAll("\n", "\r")))).toEqual({
+      text: "draft", sources: [], error: "sidecar stream ended before terminal event",
+    });
+  });
+
+  test("a CR-delimited terminal event cancels without waiting for EOF", async () => {
+    let cancelled = false;
+    let sent = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent) throw new Error("read past terminal event");
+        sent = true;
+        controller.enqueue(new TextEncoder().encode('data: {"type":"response.completed"}\r\r'));
+      },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 });
+    expect(await parseSidecarSSE(new Response(body))).toEqual({ text: "", sources: [] });
+    expect(cancelled).toBe(true);
   });
 });

@@ -221,4 +221,28 @@ describe("native compact uses the exact-model capability", () => {
     expect(sent.tools).toEqual([expect.objectContaining({ type: "custom", name: "apply_patch" })]);
     await response.text();
   });
+
+  test.each([
+    [false, ["function_call", "function_call_output"], "function"],
+    [undefined, ["custom_tool_call", "custom_tool_call_output"], "custom"],
+  ] as const)("a model with no declaration keeps the provider contract (%s) on native compact", async (providerValue, items, toolType) => {
+    let sent: Record<string, unknown> = {};
+    globalThis.fetch = (async (_url, init) => {
+      sent = JSON.parse(String(init?.body));
+      return Response.json({ status: "completed", output: [{ type: "compaction", encrypted_content: "opaque-fixture" }] });
+    }) as typeof fetch;
+    const plain: OcxProviderConfig = {
+      adapter: "openai-responses", baseUrl: "https://plain.example/v1", authMode: "key",
+      supportsNativeCompactEndpoint: true, apiKey: "fixture-key",
+      ...(providerValue === undefined ? {} : { supportsResponsesCustomTools: providerValue }),
+    };
+    const config = { ...getDefaultConfig(), defaultProvider: "plain", providers: { plain } };
+    const response = await handleResponsesCompact(
+      compactionRequest(baseCompactionBody(rawBody("plain/plain-wire"))), config, { model: "", provider: "" },
+    );
+    expect(response.status).toBe(200);
+    expect((sent.input as Array<{ type: string }>).map(item => item.type)).toEqual([...items]);
+    expect(sent.tools).toEqual([expect.objectContaining({ type: toolType, name: "apply_patch" })]);
+    await response.text();
+  });
 });

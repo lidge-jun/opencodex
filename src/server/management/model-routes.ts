@@ -82,7 +82,8 @@ function readDefaultReasoningEffort(raw: unknown, efforts: string[] | undefined)
 import type { CatalogModel } from "../../codex/catalog";
 import { accountBoundNativeOpenAiSlugsBySelector, catalogModelSlug, configuredNativeAliasSlugs, disabledNativeSlugs, invalidateCodexModelsCache, nativeModelRows, shouldIncludeAccountBoundNativeOpenAi, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import { CatalogGatherBusyError } from "../../codex/catalog/provider-fetch";
-import { clearModelCache, getProviderLiveModelCount } from "../../codex/model-cache";
+import { clearModelCache, getProviderLiveModelCount, getStaleCached } from "../../codex/model-cache";
+import { antigravityFamilyDisabled, projectAntigravitySelectedModels } from "../../providers/antigravity-effort-families";
 import { NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-models";
 
 import {
@@ -114,9 +115,10 @@ import { withModelCostRowReplacement } from "../../config/live-reconcile";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
-import { encodedModelIdCollides, routedSlug, slugEquals } from "../../providers/slug-codec";
+import { encodedModelIdCollides, routedSlug, slugEquals, slugEquivalenceKey } from "../../providers/slug-codec";
 import { knownModelIdsForProvider } from "../../router";
-import { effectiveModelAliases, MODEL_ALIAS_PATTERN } from "../../providers/default-aliases";
+import { effectiveModelAliases, MODEL_ALIAS_PATTERN, templateAliasPlan } from "../../providers/default-aliases";
+import { aliasTemplateError } from "../../providers/alias-template";
 import { isValidModelDiscoveryModelId } from "../../providers/model-discovery-limits";
 import { commitProviderPatch } from "./provider-patch-transaction";
 import { ConfigWritePublishedError } from "../../config/persist-unlocked";
@@ -193,6 +195,33 @@ function summarizeExportedModels(client: ExportClientId, document: unknown): { m
   return EXPORT_CLIENTS[client].summarize(document);
 }
 
+/**
+ * What a recent arrival looks like in the picker (#8236), by the same rules the catalog applies:
+ * a disabled slug hides it, and a non-empty provider selection shows only what it names.
+ * `auto-disabled` means the `off` policy disabled it (or a row from before that was recorded),
+ * `disabled` that someone else did; `not-selected` that the selection leaves it out.
+ * `rows` is the provider's cached discovery, read passively: an Antigravity base inherits the
+ * disable of its known tiers and is selected through any of them, exactly as
+ * `filterCatalogVisibleModels` decides. Without cached rows those family rules have nothing to read.
+ */
+function arrivalState(
+  config: OcxConfig,
+  provider: string,
+  row: { id: string; disabledByPolicy?: boolean },
+  rows: readonly CatalogModel[],
+): "enabled" | "auto-disabled" | "disabled" | "not-selected" {
+  if ((config.disabledModels ?? []).some(slug => slugEquals(slug, provider, row.id))) {
+    return row.disabledByPolicy === false ? "disabled" : "auto-disabled";
+  }
+  const candidate = rows.find(model => model.provider === provider && model.id === row.id) ?? { provider, id: row.id };
+  if (antigravityFamilyDisabled(config, candidate, rows)) return "disabled";
+  const selected = config.providers[provider]?.selectedModels ?? [];
+  if (selected.length === 0) return "enabled";
+  const keys = new Set(projectAntigravitySelectedModels(provider, selected, rows)
+    .map(id => slugEquivalenceKey(routedSlug(provider, id))));
+  return keys.has(slugEquivalenceKey(routedSlug(provider, row.id))) ? "enabled" : "not-selected";
+}
+
 export async function handleModelRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
   // A handler persists the exact config object passed in. Production defaults to
@@ -216,14 +245,10 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     const providers = Object.fromEntries(Object.entries(config.providers).map(([name, provider]) => [
       name, provider.newModelPolicy ?? "inherit",
     ]));
-    const recentArrivals = Object.fromEntries(Object.entries(config.modelDiscovery?.recentArrivals ?? {}).map(([name, rows]) => [
-      name,
-      rows.map(row => ({
-        ...row,
-        state: (config.disabledModels ?? []).some(slug => slugEquals(slug, name, row.id))
-          ? "auto-disabled" : "enabled",
-      })),
-    ]));
+    const recentArrivals = Object.fromEntries(Object.entries(config.modelDiscovery?.recentArrivals ?? {}).map(([name, rows]) => {
+      const cached = getStaleCached(name) ?? [];
+      return [name, rows.map(row => ({ ...row, state: arrivalState(config, name, row, cached) }))];
+    }));
     const baselineCounts = Object.fromEntries(Object.entries(config.modelDiscovery?.knownModels ?? {}).map(([name, baseline]) => [
       name, baseline.ids.length,
     ]));
@@ -235,7 +260,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   if (url.pathname === "/api/model-discovery" && req.method === "PUT") {
     let body: { policy?: unknown; provider?: unknown };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
-    if (body.policy !== "on" && body.policy !== "off") return jsonResponse({ error: "policy must be on or off" }, 400);
+    if (body.policy !== "on" && body.policy !== "off" && body.policy !== "admit") {
+      return jsonResponse({ error: "policy must be on, off or admit" }, 400);
+    }
     const provider = typeof body.provider === "string" && body.provider.trim() ? body.provider.trim() : null;
     let baselineBootstrapped = false;
     if (provider) {
@@ -277,18 +304,20 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
 
   if (url.pathname === "/api/aliases" && req.method === "GET") {
     const providers: Record<string, string> = {};
-    const models: Record<string, Record<string, { alias: string; source: "user" | "builtin"; stale?: boolean }>> = {};
+    const models: Record<string, Record<string, { alias: string; source: "user" | "builtin" | "template"; stale?: boolean }>> = {};
     for (const [name, provider] of Object.entries(config.providers)) {
       if (provider.alias) providers[name] = provider.alias;
       const known = knownModelIdsForProvider(name, provider, config);
       const knownSet = new Set(known);
-      const rows: Record<string, { alias: string; source: "user" | "builtin"; stale?: boolean }> = {};
-      for (const [id, value] of effectiveModelAliases(config, provider, new Set([...known, ...Object.keys(provider.modelAliases ?? {})]))) {
+      const rows: Record<string, { alias: string; source: "user" | "builtin" | "template"; stale?: boolean }> = {};
+      for (const [id, value] of effectiveModelAliases(config, provider, new Set([...known, ...Object.keys(provider.modelAliases ?? {})]), name)) {
         rows[id] = { ...value, ...(!knownSet.has(id) ? { stale: true } : {}) };
       }
       if (Object.keys(rows).length) models[name] = rows;
     }
-    return jsonResponse({ providers, models, defaults: {
+    const templates = Object.fromEntries(Object.entries(config.providers)
+      .filter(([, provider]) => typeof provider.aliasTemplate === "string").map(([name, provider]) => [name, provider.aliasTemplate]));
+    return jsonResponse({ providers, models, templates, defaults: {
       global: config.defaultModelAliases ?? false,
       providers: Object.fromEntries(Object.entries(config.providers).filter(([, p]) => p.defaultAliases !== undefined).map(([n, p]) => [n, p.defaultAliases])),
     } });
@@ -302,8 +331,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     // this guard the alias route matched `name = "keys"`, found no such provider, and returned
     // 404 for every key-pool rename.
     if (name === "keys") return null;
-    const provider = config.providers[name];
-    if (!provider) return jsonResponse({ error: `provider '${name}' not found` }, 404, req, config);
+    // Own keys only: `__proto__` or `constructor` would otherwise resolve to Object.prototype.
+    if (!hasOwnProvider(config.providers, name)) return jsonResponse({ error: `provider '${name}' not found` }, 404, req, config);
+    const provider = config.providers[name]!;
     let raw: unknown;
     try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (!isPlainRecord(raw) || (raw.alias !== null && typeof raw.alias !== "string")) return jsonResponse({ error: "alias must be a string or null" }, 400, req, config);
@@ -321,12 +351,44 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     return jsonResponse({ ok: true, provider: name, alias, catalogRefresh });
   }
 
+  // #7705: the opt-in template is stored as text and derived at resolution time; this route only
+  // validates, saves and previews it. The preview is the same plan routing uses, bounded.
+  const aliasTemplateMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/alias-template$/);
+  if (aliasTemplateMatch && req.method === "PUT") {
+    const name = decodeURIComponent(aliasTemplateMatch[1]!);
+    if (name === "keys") return null;
+    // Own keys only: `__proto__` or `constructor` would otherwise resolve to Object.prototype.
+    if (!hasOwnProvider(config.providers, name)) return jsonResponse({ error: `provider '${name}' not found` }, 404, req, config);
+    const provider = config.providers[name]!;
+    let raw: unknown;
+    try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(raw) || (raw.template !== null && typeof raw.template !== "string")) {
+      return jsonResponse({ error: "template must be a string or null" }, 400, req, config);
+    }
+    const template = typeof raw.template === "string" ? raw.template.trim() : null;
+    const problem = template === null ? null : aliasTemplateError(template);
+    if (problem) return jsonResponse({ error: problem }, 400, req, config);
+    if (template) provider.aliasTemplate = template; else delete provider.aliasTemplate;
+    persistConfig(config);
+    const catalogRefresh = await convergeCodexCatalog();
+    if (!template) return jsonResponse({ ok: true, provider: name, template: null, catalogRefresh });
+    const known = knownModelIdsForProvider(name, provider, config);
+    const existing = effectiveModelAliases(config, { ...provider, aliasTemplate: undefined }, known, name);
+    const plan = templateAliasPlan(config, provider, name, known, existing);
+    return jsonResponse({
+      ok: true, provider: name, template,
+      preview: { generated: plan.accepted.size, skipped: plan.skipped.slice(0, 50), skippedTotal: plan.skipped.length },
+      catalogRefresh,
+    });
+  }
+
   const modelAliasMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/model-aliases$/);
   if (modelAliasMatch && req.method === "PUT") {
     const name = decodeURIComponent(modelAliasMatch[1]!);
     if (name === "keys") return null;
-    const provider = config.providers[name];
-    if (!provider) return jsonResponse({ error: `provider '${name}' not found` }, 404, req, config);
+    // Own keys only: `__proto__` or `constructor` would otherwise resolve to Object.prototype.
+    if (!hasOwnProvider(config.providers, name)) return jsonResponse({ error: `provider '${name}' not found` }, 404, req, config);
+    const provider = config.providers[name]!;
     let raw: unknown;
     try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (!isPlainRecord(raw) || (raw.set !== undefined && !isPlainRecord(raw.set)) || (raw.remove !== undefined && !Array.isArray(raw.remove))) return jsonResponse({ error: "invalid model alias update" }, 400, req, config);
@@ -355,9 +417,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (!isPlainRecord(raw) || typeof raw.enabled !== "boolean" || (raw.provider !== undefined && typeof raw.provider !== "string")) return jsonResponse({ error: "enabled must be boolean" }, 400, req, config);
     if (typeof raw.provider === "string") {
-      const provider = config.providers[raw.provider];
-      if (!provider) return jsonResponse({ error: `provider '${raw.provider}' not found` }, 404, req, config);
-      provider.defaultAliases = raw.enabled;
+      // Own keys only, as in the alias routes above.
+      if (!hasOwnProvider(config.providers, raw.provider)) return jsonResponse({ error: `provider '${raw.provider}' not found` }, 404, req, config);
+      config.providers[raw.provider]!.defaultAliases = raw.enabled;
     } else config.defaultModelAliases = raw.enabled;
     persistConfig(config);
     const catalogRefresh = await convergeCodexCatalog();

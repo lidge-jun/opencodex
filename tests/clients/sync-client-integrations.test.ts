@@ -609,13 +609,12 @@ describe("ocx sync refreshes an already-owned MCode integration", () => {
     expect(store.listOperations("mcode").map(row => row.kind)).toEqual(["apply"]);
   });
 
-  test("does not recreate the client home or config when MCode was removed", async () => {
+  test("leaves a removed MCode alone without recreating its home or reporting a failure", async () => {
     expect(applyIntegration(input(oldModels)).ok).toBe(true);
     removeTreeWithRetry(INTEGRATION_CLIENTS.mcode.detectDir(env, home));
 
-    const outcome = await refreshOwnedIntegration(input(newModels));
-    expect(outcome?.ok).toBe(false);
-    expect(outcome?.reason).toContain("mcode is not installed");
+    expect(await refreshOwnedIntegration(input(newModels))).toBeNull();
+    expect(store.readRecords().mcode?.clientId).toBe("mcode");
     expect(existsSync(INTEGRATION_CLIENTS.mcode.detectDir(env, home))).toBe(false);
     expect(store.listOperations("mcode").map(row => row.kind)).toEqual(["apply"]);
   });
@@ -814,9 +813,14 @@ describe("owned Pi/Aside catalogs follow filtered model selections", () => {
     const detectDir = INTEGRATION_CLIENTS[clientId].detectDir(env, home);
     removeTreeWithRetry(detectDir);
     const outcomes = await refreshOwnedCatalogIntegrations(input(filteredModels));
-    expect(outcomes).toHaveLength(1);
-    expect(outcomes[0]).toMatchObject({ client: clientId, ok: false });
-    expect(outcomes[0]?.reason).toContain(`${clientId} is not installed`);
+    // A removed file client is left alone, not reported: a warning on every model toggle
+    // for a client the user uninstalled is noise. Aside keeps its per-profile report.
+    if (clientId === "pi") expect(outcomes).toEqual([]);
+    else {
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0]).toMatchObject({ client: clientId, ok: false });
+      expect(outcomes[0]?.reason).toContain(`${clientId} is not installed`);
+    }
     expect(existsSync(detectDir)).toBe(false);
     expect(store.readRecords()[clientId]).toEqual(recordBefore);
     expect(store.listOperations(clientId).map(row => row.kind)).toEqual(["apply"]);
@@ -904,9 +908,9 @@ describe("owned Pi/Aside catalogs follow filtered model selections", () => {
 });
 
 test("the direct ocx sync command refreshes owned clients including OpenCode and Kilo and server-owned Aside", async () => {
-  const src = await Bun.file(new URL("../../src/cli/dispatch.ts", import.meta.url)).text();
-  const start = src.indexOf("sync: async deps =>");
-  const command = src.slice(start, src.indexOf("v2: async deps =>", start));
+  const src = await Bun.file(new URL("../../src/cli/sync-command.ts", import.meta.url)).text();
+  const start = src.indexOf("export async function runSyncCommand");
+  const command = src.slice(start, src.indexOf("async function handleConnectedSyncCatalogWrite", start));
   expect(command).toContain("refreshOwnedCatalogIntegrations");
   // Command Code joined this fan-out with its integration: a sync must refresh its
   // provider block too, or the client keeps a stale catalog until the next apply.

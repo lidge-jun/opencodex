@@ -5,9 +5,30 @@ import { fileURLToPath } from "node:url";
 import { createScanner, LanguageVariant, SyntaxKind } from "typescript/unstable/ast";
 import { fetchWithHeaderTimeout, providerFetch, sendWithConnectionPolicy, storedPoolReplayDispatchNotifier } from "../../src/server/responses/fetch-helpers";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
+import { createPhysicalSendReporter, createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import { errorDestinationLabel, SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
+import { physicalSendAccounting } from "../../src/server/responses/deferred-send-reporter";
 
 const repoRoot = resolveRepoRoot();
 const helperPath = resolve(repoRoot, "src/server/responses/fetch-helpers.ts");
+
+test("deferred accounting rejects reuse before counting an already consumed reservation", () => {
+  const budget = createRequestExecutionBudget();
+  const reservation = budget.reserveDispatch({ sendClass: "initial", targetKey: "fixture", countedExternally: true });
+  if (!reservation.allowed) throw new Error("fixture reservation was refused");
+  const accounting = physicalSendAccounting(createPhysicalSendReporter(budget, () => ({ poolId: "fixture" }), reservation.permit), {
+    permit: reservation.permit, destination: () => errorDestinationLabel("https://fixture.example/v1"),
+  });
+  try {
+    accounting.onPhysicalDispatch!();
+    accounting.report(1);
+    expect(budget.used).toBe(1);
+    expect(() => accounting.onPhysicalDispatch!()).toThrow(SendBudgetExhaustedError);
+    accounting.report(1);
+    expect(budget.used).toBe(1);
+  } finally { accounting.report.close?.(); reservation.permit.release(); }
+  expect(budget.used).toBe(1);
+});
 
 test("an unpaced physical send does not yield after its caller's credential validation", async () => {
   const order: string[] = [];
@@ -201,6 +222,8 @@ describe("Responses fetch-helper import boundary", () => {
       // Import-free plugin rewrite slot (src/plugins/upstream-hooks.ts).
       "../../plugins/upstream-hooks",
       "../../providers/request-pacing",
+      // Turn-state handle redemption at the send (src/server/turn-state-handles.ts); node: built-ins only.
+      "../turn-state-handles",
       // Opt-in request-body codec at the final send (#7247); runtime imports are node: built-ins only.
       "./request-compression",
       "./ws-upstream",

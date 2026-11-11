@@ -42,7 +42,7 @@ export function stainlessArchName(arch: string = process.arch): string {
   return arch ? `other:${arch}` : "unknown";
 }
 
-// ── Claude Code CLI (matches Claude Code 2.1.280 / @anthropic-ai/sdk 0.112.1) ──
+// ── Claude Code CLI (matches Claude Code 2.1.321 / @anthropic-ai/sdk 0.128.0) ──
 export const CLAUDE_CODE_HEADERS: Record<string, string> = {
   "X-App": "cli",
   "anthropic-dangerous-direct-browser-access": "true",
@@ -88,7 +88,8 @@ const ANTIGRAVITY_IDE_PLATFORM = "windows/amd64";
  * Must be the IDE client family (`antigravity/ide/...`): Cloud Code Assist backend gates
  * newer agent models (e.g. `gemini-3.7-flash`) by User-Agent and answers 404 NOT_FOUND to
  * CLI-shaped UAs even with a valid OAuth token. Only `antigravity/ide/<ver>` unlocks them.
- * The one exception is Gemini 4 Argon, which CCA serves ONLY to the CLI family; see
+ * The exception is the Gemini 4 generation (Argon, Carbon), which CCA serves ONLY to the CLI
+ * family; see
  * `antigravityCliUserAgent`.
  * A `GOOGLE_ANTIGRAVITY_USER_AGENT` override (set by the caller) takes precedence upstream.
  */
@@ -109,9 +110,10 @@ const ANTIGRAVITY_CLI_PLATFORM = "darwin/arm64";
  * `antigravity/cli/${version} (os_type=${osType}; arch=${arch}; aidev_client; auth_method=oauth)`.
  *
  * Verified 2026-10-14 against live CCA: `gemini-4-argon-{low,medium,high}` answer only to this
- * family and return 404 "Requested entity was not found" to the IDE UA above, while
+ * family and return 404 "Requested entity was not found" to the IDE UA above (2026-11-11:
+ * `gemini-4-carbon-*` behaves the same), while
  * `gemini-3.7-flash-tiered` and `gemini-3.1-pro-low` 404 under this one. So it is used ONLY for
- * Argon requests, model discovery and the quota summary (whose Argon group is likewise CLI-only),
+ * Gemini 4 requests, model discovery and the quota summary (whose Argon group is likewise CLI-only),
  * never as a general replacement for the IDE UA.
  *
  * `GOOGLE_ANTIGRAVITY_USER_AGENT` deliberately does not apply here: that override names the IDE

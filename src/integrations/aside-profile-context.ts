@@ -74,7 +74,7 @@ function storeGuard(anchor: string, target: string): () => void {
   const identities = new Map<string, string>();
   const inspect = (path: string, directory: boolean): boolean => {
     try {
-      const stat = lstatSync(path);
+      const stat = lstatSync(path, { bigint: true });
       if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile()) || (!directory && stat.nlink > 1)) storeUnsafe();
       if (directory) {
         const identity = `${realpathSync(path)}:${stat.dev}:${stat.ino}`;

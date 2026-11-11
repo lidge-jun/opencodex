@@ -60,11 +60,17 @@ description: 独立专家咨询，支持 manual、preflight 与基于证据的 a
 
 所配置的顾问 provider 可能与 Worker 的 provider 不同。
 
+咨询同时遵守调用方捕获的 API key 模型范围、付费 combo 同意和设备 fallback 限制，以及 Advisor 自身准入密钥的主机限制：设置时为 `OPENCODEX_API_AUTH_TOKEN` 或本代理接受的服务 token 文件，否则为第一个配置的 API key。只有在最后这种情况下密钥顺序才有影响：请把能访问 Advisor 模型的密钥放在第一位，否则每次咨询都不可用。设置了环境或服务 token 时，由该 token 决定咨询。这些规则同样适用于 combo 选择、嵌套决策模型和重试。无法满足这些规则的咨询会向 worker 返回不可用通知。
+
+例如，`allowMeteredComboTargets: false` 的 `laptop` 密钥无法通过 Advisor 在计费 combo 目标上花费，`fallback.devices.laptop.provider: false` 也会阻止 Advisor 的 provider fallback 跳转。没有密钥的 loopback 调用方仍需要 combo 的 `allowMeteredTargets: true` 选择加入。当两个密钥都设置 `allowMeteredComboTargets: true` 且 combo 设置 `allowMeteredTargets: true` 时，即使经由公共绑定的 loopback 监听器，Advisor 也可以使用计费目标。服务器在验证请求时捕获调用方策略，早于等待正文容量或读取正文；之后的密钥或 fallback 编辑无法扩大该次咨询。这也覆盖路由的视觉辅助、compact 请求及其决策模型，以及 WebSocket 轮次内的每次候选重试。每个新的 WebSocket 轮次会捕获自己的策略。
+
 OpenCodex 不会把 provider API key、Authorization 头、OAuth token、仅后端使用的配置密钥、进程环境或隐藏的思维链写进该提示，也不会解密或转发加密的 provider 私有推理。**任务内容不做通用脱敏。** 贴进任务的密钥、工具读到的文件里的秘密、工具或日志打印出的 token 都可能被发送。OpenCodex 不运行通用 DLP。
 
 ## 权威
 
 手动建议是 Worker 自己发出的 `advisor` 调用所对应的工具结果。结果是一个 JSON 对象。`advice` 是顾问模型的文本。`status` 由运行时写入。
+
+基于 fetch 的 Web 搜索轮次中，只有实际生效的 `tool_choice` 允许合成 `advisor` 工具时，搜索循环才会提供该工具并拦截手动咨询调用。将 `allowed_tools` 限制为 `web_search` 不允许手动咨询顾问。启用托管搜索不会扩大此工具权限范围。
 
 自动建议的 JSON 内容放在独立的 user-role 建议消息中。developer 消息只保留固定的运行时传输说明，顾问生成的文本不会进入 developer/system 内容；OpenAI Chat 和 Anthropic 均可传递它，无需伪造工具调用。JSON 转义能防止结构突破和字段伪造，但不能保证模型忽略自然语言中的恶意指令。专门的咨询结果协议可进一步区分建议与用户请求。每个请求最多进行 3 次咨询和 4 次 Advisor worker 续写。咨询额度耗尽后移除 advisor 工具，重复调用只允许一次携带上限结果的最终续写；再次调用会以 502 advisor_continuation_limit 结束，不再发送隐藏的 worker 请求。空完成重试共享此上限。
 

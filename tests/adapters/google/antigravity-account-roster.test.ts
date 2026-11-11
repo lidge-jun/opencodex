@@ -231,7 +231,7 @@ describe("model routing fails closed on a proven roster omission (#7500)", () =>
     record("acct-46b", ROSTER_46);
     record("acct-paused", ROSTER_55);
     expect(routeAntigravityModel(config(true), PROVIDER, "acct-46", "claude-opus-5-5"))
-      .toEqual({ kind: "refuse", message: antigravityModelUnlistedMessage("claude-opus-5-5") });
+      .toEqual({ kind: "refuse", message: antigravityModelUnlistedMessage() });
   });
 
   test("without proactive failover the selected account is not moved; the request is refused", () => {
@@ -240,14 +240,14 @@ describe("model routing fails closed on a proven roster omission (#7500)", () =>
     record("acct-55", ROSTER_55);
     for (const enabled of [undefined, false]) {
       expect(routeAntigravityModel(config(enabled), PROVIDER, "acct-46", "claude-opus-5-5"))
-        .toEqual({ kind: "refuse", message: antigravitySelectedAccountUnlistedMessage("claude-opus-5-5") });
+        .toEqual({ kind: "refuse", message: antigravitySelectedAccountUnlistedMessage() });
       expect(antigravityModelRefusal(config(enabled), PROVIDER, "acct-46", "claude-opus-5-5"))
-        .toBe(antigravitySelectedAccountUnlistedMessage("claude-opus-5-5"));
+        .toBe(antigravitySelectedAccountUnlistedMessage());
     }
     // With failover on, an omitting account that still resolved means the replacement failed;
     // the refusal must not advise enabling a setting that is already on.
     expect(antigravityModelRefusal(config(true), PROVIDER, "acct-46", "claude-opus-5-5"))
-      .toBe(antigravityReplacementUnavailableMessage("claude-opus-5-5"));
+      .toBe(antigravityReplacementUnavailableMessage());
     expect(antigravityModelRefusal(config(true), PROVIDER, "acct-55", "claude-opus-5-5")).toBeNull();
   });
 

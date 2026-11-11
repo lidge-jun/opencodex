@@ -178,3 +178,89 @@ test("Desktop saved:false partial success does not reconcile agent definitions",
     spy.mockRestore();
   }
 });
+
+
+async function toggleClaude(enabled: boolean, save: (config: OcxConfig) => void = () => { persist(); }) {
+  const url = new URL("http://127.0.0.1:10100/api/native-integrations/claude");
+  const response = await handleManagementAPI(new Request(url, {
+    method: "PUT",
+    headers: { Host: url.host, "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  }), url, config, {
+    fetchAllModels: async () => [],
+    claudeAgentConfigDir: claudeDir,
+    saveConfigPreservingClaudeCode: save,
+    ensureClaudeIntercept: async () => ({ ok: true, state: { proxyPort: 10200, caCertPath: join(root, "ca.pem"), pickerProxyPort: null } }),
+  }, "admin-token", undefined, { trustedLoopback: true });
+  expect(response).not.toBeNull();
+  return { status: response!.status, body: await response!.json() as Record<string, unknown> };
+}
+
+test("turning the Claude integration off prunes only marker-owned definitions (#7968)", async () => {
+  injectClaudeAgentDefs(config, {}, claudeDir);
+  expectRegistered();
+  const user = seedExistingAgents()["ocx-user.md"];
+  const result = await toggleClaude(false);
+  expect(result).toMatchObject({ status: 200, body: { ok: true, changed: true, desiredEnabled: false } });
+  expect(agentFiles()).toEqual({ "ocx-user.md": user });
+});
+
+test("a repeated off removes definitions an older version left behind", async () => {
+  config.claudeCode = { ...config.claudeCode, enabled: false };
+  persist();
+  // Left behind while disabled by a version that never pruned on disable.
+  writeFileSync(join(claudeDir, "agents", agentFile), "<!-- generated-by: opencodex -->\nstale roster\n");
+  const result = await toggleClaude(false);
+  expect(result).toMatchObject({ status: 200, body: { ok: true, changed: false } });
+  expect(agentFiles()).toEqual({});
+});
+
+test("turning the integration on fetches no models and leaves the roster to launch-time sync", async () => {
+  config.claudeCode = { ...config.claudeCode, enabled: false };
+  persist();
+  let fetched = 0;
+  const url = new URL("http://127.0.0.1:10100/api/native-integrations/claude");
+  const response = await handleManagementAPI(new Request(url, {
+    method: "PUT", headers: { Host: url.host, "Content-Type": "application/json" }, body: JSON.stringify({ enabled: true }),
+  }), url, config, {
+    fetchAllModels: async () => { fetched++; return []; },
+    claudeAgentConfigDir: claudeDir,
+    saveConfigPreservingClaudeCode: () => { persist(); },
+    ensureClaudeIntercept: async () => ({ ok: true, state: { proxyPort: 10200, caCertPath: join(root, "ca.pem"), pickerProxyPort: null } }),
+  }, "admin-token", undefined, { trustedLoopback: true });
+  expect(response?.status).toBe(200);
+  expect(fetched).toBe(0);
+});
+
+test("a failed save leaves the shared config on, so a retry neither prunes nor reports success", async () => {
+  injectClaudeAgentDefs(config, {}, claudeDir);
+  config.claudeCode = { ...config.claudeCode, enabled: true };
+  persist();
+  const before = agentFiles();
+  const busy = Object.assign(new Error("config busy"), {
+    code: "CONFIG_MUTATION_LOCK_UNAVAILABLE", cause: { code: "SQLITE_BUSY" },
+  });
+  const failingSave = () => { throw busy; };
+  const refused = await toggleClaude(false, failingSave);
+  expect(refused).toMatchObject({ status: 409, body: { reason: "config_busy" } });
+  expect(config.claudeCode?.enabled).toBe(true);
+  expect(agentFiles()).toEqual(before);
+  // The same object again: still a real transition, not the repeated-OFF shortcut.
+  const retry = await toggleClaude(false);
+  expect(retry).toMatchObject({ status: 200, body: { changed: true } });
+  expect(agentFiles()).toEqual({});
+});
+
+test("a save that published before failing keeps the new value, so a later On is a real transition", async () => {
+  const { ConfigWritePublishedError } = await import("../../src/config/persist-unlocked");
+  injectClaudeAgentDefs(config, {}, claudeDir);
+  config.claudeCode = { ...config.claudeCode, enabled: true };
+  persist();
+  const publishedThenFailed = () => { persist(); throw new ConfigWritePublishedError(new Error("bookkeeping")); };
+  await toggleClaude(false, publishedThenFailed).catch(() => null);
+  expect(config.claudeCode?.enabled).toBe(false);
+  expect(JSON.parse(readFileSync(join(root, "config.json"), "utf8")).claudeCode.enabled).toBe(false);
+  const on = await toggleClaude(true);
+  expect(on).toMatchObject({ status: 200, body: { changed: true } });
+  expect(config.claudeCode?.enabled).toBe(true);
+});

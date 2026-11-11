@@ -1,6 +1,7 @@
 import { withCodexAccountLogLabel } from "../account-label";
+import { isCodexAccountPaused, setCodexAccountPaused } from "../account-pause";
 import { getCodexAccountCredential, markCodexAccountValidated, readCodexAccountRecord, saveCodexAccountCredential, CodexCredentialRefreshLockTimeoutError, CodexCredentialRefreshBusyError, CodexCredentialRefreshStaleError } from "../account-store";
-import { clearAccountQuota, isCodexQuotaExhausted, isValidWhamHistoryObservation, parseUsageQuota, setAccountQuotaFromParsed } from "../quota";
+import { clearAccountQuota, isCodexQuotaExhausted, parseUsageQuota, poolWhamPolicyObservation, setAccountQuotaFromParsed } from "../quota";
 import type { StoredAccountQuota, WhamUsageResponse } from "../quota";
 import { ConfigMutationLockError, withConfigMutationLockSync } from "../../config";
 import { appendDefaultCodexAccountNamespace, codexAccountPickerEnabled } from "../account-namespaces";
@@ -278,7 +279,7 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                   email = data.email?.trim() || email;
                   plan = nonEmptyPlan(data.plan_type) ?? plan;
                   quota = parseUsageQuota(data);
-                  policyQuota = isValidWhamHistoryObservation(data) ? quota : null;
+                  policyQuota = poolWhamPolicyObservation(data, quota);
                 }
               } catch { /* wham fetch is non-blocking */ }
               // Reauth must refresh the same ChatGPT identity already bound to this pool slot.
@@ -404,6 +405,11 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                   isMain: false,
                 }, accounts);
                 latestConfig.codexAccounts = accounts;
+                // A successful login replaced the credential an automatic pause described (#8398);
+                // an operator pause carries no details and stays.
+                if (isCodexAccountPaused(latestConfig, accountId) && latestConfig.codexAccountPauseState?.[accountId]?.details) {
+                  setCodexAccountPaused(latestConfig, accountId, false);
+                }
                 saveRuntimeConfig(config, latestConfig);
               } else {
                 const addedAccount = withCodexAccountLogLabel({ id: accountId, email, plan, isMain: false }, accounts);

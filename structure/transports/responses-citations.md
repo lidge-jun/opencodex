@@ -22,3 +22,5 @@ The same final compact body builder applies the captured exact-model custom-tool
 destination-specific citation projection. A custom-tool history compatibility refusal returns
 HTTP 400 before network dispatch and releases host admission without recording a transport failure.
 `tests/responses/model-custom-tool-capability.test.ts` covers lowering and collision refusal.
+
+The separate [Responses include normalization](responses-wire-shapes.md) is gated to xAI and Meta; it does not change this projection or its destination boundary.

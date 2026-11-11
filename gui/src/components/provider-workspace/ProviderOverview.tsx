@@ -1,3 +1,4 @@
+import { anthropicInstanceRowShapeMatches, isAnthropicInstanceId } from "../../../../src/providers/anthropic-instance-id";
 /**
  * ProviderOverview — 2-column layout: left (CONNECTION + Auth summary) / right
  * (STATS + Notes). Phase 030 of workspace design parity.
@@ -6,18 +7,19 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { readJsonOrThrow } from "../../fetch-json";
 import { useT, useI18n } from "../../i18n/shared";
 import { IconAlert, IconCheck } from "../../icons";
-import { binProviderStatus, type WorkspaceItem } from "../../provider-workspace/catalog";
+import { binProviderStatus, usesUnverifiedVertexCredentials, type WorkspaceItem } from "../../provider-workspace/catalog";
 import { formatRequestCount, formatTokenCount } from "../../provider-workspace/usage";
 import { modelVisible } from "../../model-visibility";
 import { discoveryFailureLabel, type ModelRow } from "../../pages/models-shared";
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
 import type { AccountQuotaReading, ProviderUsageTotals } from "./types";
 import { authModeLabel } from "./ProviderRail";
-import type { ProviderUpdatePatch, ProviderUpdateResult } from "./types";
+import type { ProviderUpdateCallback } from "./types";
 import ProviderCurrentQuota from "./ProviderCurrentQuota";
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import ProviderSponsor from "./ProviderSponsor";
 import ProviderCompletionTest, { type CompletionProbeStatus } from "./ProviderCompletionTest";
+import { useProviderProbeState, type ProviderProbeController } from "./use-provider-probe-state";
 
 type ConnectionTestResult = {
   applicable?: boolean;
@@ -35,9 +37,9 @@ type ConnectionTestState = {
 };
 
 export default function ProviderOverview({
-  item, preset, usageTotals, quotaReport, currentQuotaReading, onRefreshQuota, oauthEmail, oauth,
-  apiBase, connectionIdentity, availableModels = [], selectedModels, modelRows, modelRowsReady = false,
-  modelsLoading = false, modelsLoadFailed = false, onRetryModels, onOpenModelsTab, onOpenModels, onOpenConnect,
+  item, preset, usageTotals, quotaReport, currentQuotaReading, onRefreshQuota, oauthEmail, currentAccountLabel, oauth,
+  apiBase, connectionIdentity, probeController, availableModels = [], selectedModels, modelRows, modelRowsReady = false,
+  modelsLoading = false, modelsLoadFailed = false, onRetryModels, onOpenAccounts, onOpenModelsTab, onOpenModels, onOpenConnect,
   onEditSettings, onViewUsage, onUpdateProvider,
   onCreateJevAuto,
   onReauthenticate, onCancelLogin, reauthBusy = false,
@@ -49,9 +51,11 @@ export default function ProviderOverview({
   currentQuotaReading?: AccountQuotaReading;
   onRefreshQuota?: () => Promise<boolean>;
   oauthEmail?: string;
+  currentAccountLabel?: string;
   /** Login state for OAuth summaries that carry no email (e.g. Cursor/Kimi). */
   oauth?: { loggedIn?: boolean; needsReauth?: boolean };
   apiBase?: string;
+  probeController?: ProviderProbeController;
   availableModels?: string[];
   selectedModels?: string[];
   modelRows?: ModelRow[] | null;
@@ -59,6 +63,7 @@ export default function ProviderOverview({
   modelsLoading?: boolean;
   modelsLoadFailed?: boolean;
   onRetryModels?: () => void;
+  onOpenAccounts?: () => void;
   onOpenModelsTab?: () => void;
   onOpenModels?: () => void;
   onOpenConnect?: () => void;
@@ -67,7 +72,7 @@ export default function ProviderOverview({
   onEditSettings?: () => void;
   onViewUsage?: () => void;
   onCreateJevAuto?: () => void;
-  onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<ProviderUpdateResult>;
+  onUpdateProvider?: ProviderUpdateCallback;
   onReauthenticate?: () => void;
   onCancelLogin?: () => void;
   reauthBusy?: boolean;
@@ -75,36 +80,26 @@ export default function ProviderOverview({
   const t = useT();
   const { locale } = useI18n();
   const status = binProviderStatus(item);
+  const vertexUnverified = usesUnverifiedVertexCredentials(item);
   const needsAttention = Boolean(item.activeNeedsReauth) || oauth?.needsReauth === true;
   const needsOAuthLogin = item.authMode === "oauth" && oauth?.loggedIn === false;
   const effectiveStatus = item.disabled === true
     ? "disabled"
+    : vertexUnverified && !needsAttention ? "unverified"
     : needsAttention || needsOAuthLogin || status === "needs-setup"
       ? "needs-setup"
       : "ready";
   const statusText = effectiveStatus === "ready"
     ? t("pws.status.ready")
+    : effectiveStatus === "unverified" ? t("pws.vertexUnverified")
     : effectiveStatus === "needs-setup"
-      ? (needsAttention ? t("pws.status.needsAttention") : t("pws.status.needsSetup"))
+      ? (needsAttention ? t("pws.status.needsAttention") : vertexUnverified ? t("pws.vertexUnverified") : t("pws.status.needsSetup"))
       : t("prov.disabledBadge");
   const requests = usageTotals?.requests;
   const tokens = usageTotals?.totalTokens;
-  const connectionProbeKey = JSON.stringify([
-    apiBase ?? null,
-    item.name,
-    item.adapter,
-    item.baseUrl,
-    item.authMode ?? null,
-    item.apiKeyTransport ?? null,
-    item.liveModels ?? null,
-    item.disabled === true,
-    item.hasApiKey === true,
-    item.hasHeaders === true,
-    item.allowPrivateNetwork === true,
-    item.keyOptional === true,
-    item.activeNeedsReauth === true,
-    connectionIdentity ?? null,
-  ]);
+  const fallbackProbeController = useProviderProbeState(item, apiBase, connectionIdentity, availableModels);
+  const activeProbe = probeController ?? fallbackProbeController;
+  const { connectionProbeKey, completionModels, selectedModel: probeSelectedModel, completionProbe, reverifyModel } = activeProbe;
   const [connectionTest, setConnectionTest] = useState<ConnectionTestState | null>(null);
   const connectionAbortRef = useRef<{ key: string; controller: AbortController } | null>(null);
   const testingConnection = connectionTest?.key === connectionProbeKey && connectionTest.testing;
@@ -115,32 +110,6 @@ export default function ProviderOverview({
       ...(item.defaultModel ? [item.defaultModel] : []),
     ]),
   ];
-  const completionModels = [
-    ...new Set([
-      ...(item.models ?? []),
-      ...availableModels,
-      ...(item.defaultModel ? [item.defaultModel] : []),
-    ]),
-  ];
-  const [seenProbeKey, setSeenProbeKey] = useState(connectionProbeKey);
-  const [probeEpoch, setProbeEpoch] = useState(0);
-  const [completionProbe, setCompletionProbe] = useState<{
-    epoch: number;
-    model: string;
-    status: CompletionProbeStatus;
-  } | null>(null);
-  if (seenProbeKey !== connectionProbeKey) {
-    setSeenProbeKey(connectionProbeKey);
-    setProbeEpoch(epoch => epoch + 1);
-    if (completionProbe !== null) setCompletionProbe(null);
-  } else if (
-    completionProbe !== null
-    && (completionProbe.epoch !== probeEpoch
-      || (completionProbe.model !== "" && !completionModels.includes(completionProbe.model)))
-  ) {
-    setProbeEpoch(epoch => epoch + 1);
-    setCompletionProbe(null);
-  }
 
   useEffect(() => {
     return () => {
@@ -203,7 +172,7 @@ export default function ProviderOverview({
       ? "needs-attention"
       : needsOAuthLogin
         ? "needs-login"
-        : effectiveStatus === "needs-setup"
+        : effectiveStatus === "needs-setup" || effectiveStatus === "unverified"
           ? "needs-setup"
           : "saved";
   const providerStepText = providerStepState === "disabled"
@@ -213,7 +182,7 @@ export default function ProviderOverview({
       : providerStepState === "needs-login"
         ? t("pws.firstResponse.providerNeedsLogin")
         : providerStepState === "needs-setup"
-          ? t("pws.firstResponse.providerNeedsSetup")
+          ? t(vertexUnverified ? "pws.vertexSavedUnverified" : "pws.firstResponse.providerNeedsSetup")
           : t("pws.firstResponse.providerSaved");
 
   const providerRows = (modelRows ?? []).filter(row => row.provider === item.name);
@@ -268,6 +237,7 @@ export default function ProviderOverview({
                 ? t("pws.firstResponse.modelsConfigured", { count: configuredModels.length || availableModels.length })
                 : t("pws.firstResponse.modelsEmpty");
   const probeStepState: CompletionProbeStatus = completionProbe?.status ?? "untested";
+  const reverifyPending = probeStepState === "untested" && reverifyModel !== null;
   const probeStepText = probeStepState === "testing"
     ? t("pws.testing")
     : probeStepState === "ok"
@@ -276,8 +246,13 @@ export default function ProviderOverview({
         ? t("pws.firstResponse.probeFailed", { model: completionProbe?.model ?? "" })
         : probeStepState === "not-applicable"
           ? t("pws.completion.notApplicable")
-          : t("pws.firstResponse.probeUntested");
+          : reverifyPending
+            ? t("pws.firstResponse.probeReverify", { model: reverifyModel })
+            : t("pws.firstResponse.probeUntested");
+  const displayEmail = isAnthropicInstanceId(item.name) && anthropicInstanceRowShapeMatches(item.name, item) ? undefined : oauthEmail;
+  const currentClaudeAccount = isAnthropicInstanceId(item.name) && anthropicInstanceRowShapeMatches(item.name, item) ? currentAccountLabel : undefined;
   const openModelsAction = onOpenModelsTab ?? onOpenModels;
+  const fixCredentialsAction = onOpenAccounts ?? onEditSettings;
 
   return (
     <>
@@ -302,8 +277,11 @@ export default function ProviderOverview({
           </div>
           <div className="pws-kv-row">
             <dt>{t("pws.cell.auth")}</dt>
-            <dd>{oauthEmail ? `${authModeLabel(item, t)} · ${oauthEmail}` : authModeLabel(item, t)}</dd>
+            <dd>{displayEmail ? `${authModeLabel(item, t)} · ${displayEmail}` : authModeLabel(item, t)}</dd>
           </div>
+          {currentClaudeAccount && <div className="pws-kv-row">
+            <dt>{t("pws.accountCurrent")}</dt><dd>{currentClaudeAccount}</dd>
+          </div>}
           <div className="pws-kv-row">
             <dt>{t("modal.defaultModel")}</dt>
             <dd>{item.defaultModel ?? <span className="muted">—</span>}</dd>
@@ -347,17 +325,31 @@ export default function ProviderOverview({
               </button>
             )}
           </div>
-          <div className="pws-first-response-row" data-first-response-step="probe" data-step-state={probeStepState}>
+          <div
+            className="pws-first-response-row"
+            data-first-response-step="probe"
+            data-step-state={probeStepState}
+            {...(reverifyPending ? { "data-reverify-pending": "true" } : {})}
+          >
             <span className="pws-first-response-label">{t("pws.firstResponse.stepProbe")}</span>
             <span className={
               probeStepState === "ok"
                 ? "pws-status-ok"
-                : probeStepState === "failed"
+                : probeStepState === "failed" || reverifyPending
                   ? "pws-status-warn"
                   : "muted"
             }>
               {probeStepText}
             </span>
+          </div>
+          <div className="pws-first-response-row" data-first-response-step="disconnect" data-step-state="info">
+            <span className="pws-first-response-label">{t("pws.firstResponse.stepDisconnect")}</span>
+            <span className="muted">{t("pws.firstResponse.disconnectNote", { provider: item.name })}</span>
+            {onOpenConnect && (
+              <button type="button" className="link-btn" onClick={onOpenConnect}>
+                {t("pws.firstResponse.openConnect")}
+              </button>
+            )}
           </div>
         </div>
         {apiBase !== undefined && (
@@ -379,11 +371,35 @@ export default function ProviderOverview({
                 {connectionText}
               </span>
             )}
+            {connectionResult && connectionState === "failed" && fixCredentialsAction && (
+              <button
+                type="button"
+                className="link-btn"
+                data-connection-recovery-action="fix-connection"
+                onClick={fixCredentialsAction}
+              >
+                {t(onOpenAccounts ? "pws.completion.recovery.fixAuth" : "pws.completion.recovery.fixSettings")}
+              </button>
+            )}
           </div>
         )}
-        {apiBase !== undefined && <ProviderCompletionTest key={connectionProbeKey} apiBase={apiBase} provider={item.name}
-          models={completionModels}
-          onStatusChange={next => setCompletionProbe({ epoch: probeEpoch, ...next })} />}
+        {apiBase !== undefined && (
+          <ProviderCompletionTest
+            key={item.name}
+            apiBase={apiBase}
+            provider={item.name}
+            probeKey={connectionProbeKey}
+            models={completionModels}
+            selectedModel={probeSelectedModel}
+            onSelectedModelChange={activeProbe.selectModel}
+            initialResult={completionProbe?.result ?? null}
+            initialError={completionProbe?.error ?? null}
+            onStatusChange={activeProbe.reportStatus}
+            onFixCredentials={fixCredentialsAction}
+            onFixSettings={onEditSettings}
+            onFixModels={openModelsAction}
+          />
+        )}
         {onEditSettings && (
           <button type="button" className="link-btn pws-edit-settings-link" onClick={onEditSettings}>
             {t("pws.editSettings")}
@@ -438,11 +454,11 @@ export default function ProviderOverview({
               {item.authMode === "forward"
                 ? t("pws.passthrough")
                 : item.authMode === "oauth"
-                  ? (oauthEmail
-                    ? t("pws.loggedInAs", { email: oauthEmail })
-                    : oauth?.loggedIn
+                  ? (displayEmail
+                    ? t("pws.loggedInAs", { email: displayEmail })
+                    : oauth?.loggedIn === true
                       ? t("pws.loggedInTitle")
-                      : t("pws.notLoggedIn"))
+                      : oauth?.loggedIn === false ? t("pws.notLoggedIn") : t("startup.unverified"))
                   : item.hasApiKey
                     ? t("pws.apiKeyConfigured")
                     : authModeLabel(item, t)}
@@ -489,7 +505,7 @@ export default function ProviderOverview({
 
 function NotesSection({ item, onUpdateProvider }: {
   item: WorkspaceItem;
-  onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<ProviderUpdateResult>;
+  onUpdateProvider?: ProviderUpdateCallback;
 }) {
   const t = useT();
   const [editing, setEditing] = useState(false);

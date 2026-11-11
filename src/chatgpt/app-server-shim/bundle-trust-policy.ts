@@ -28,6 +28,11 @@ export function bundleTrustStat(path: string): ReturnType<BundleTrustDeps["stat"
 
 type FilesystemTrustDeps = Omit<BundleTrustDeps, "codesign">;
 
+/** The inline bundle root is code: protect its file and directory entry like the bundle. */
+export function untrustedLauncherFilesystemReason(path: string, deps: FilesystemTrustDeps, existing = true): string | null {
+  return (existing ? ownedSafely(deps, path, "file") : null) ?? untrustedAncestorReason(path, deps);
+}
+
 function ownedSafely(deps: FilesystemTrustDeps, path: string, kind: "file" | "directory"): string | null {
   const s = deps.stat(path);
   if (!s) return "is missing";

@@ -1,6 +1,8 @@
 import { baseProviderLabel } from "../providers/label";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
 import { usageDisplayTotalTokens } from "./totals";
+import { usageApp, type UsageApp, type UsageAppSummary } from "./app-breakdown";
+import { isLegacyCodexUsage, matchesUsageSource, snapshotConfiguredKeyIds, type UsageSourceFilter } from "./source-filter";
 import type { UsageTimeWindow } from "./time-range";
 import { isUnresolvedRequestedModel, usageModelPriceOptions } from "./model-identity";
 import {
@@ -209,7 +211,19 @@ export interface UsageSummary {
   days: UsageDay[];
   models: UsageModel[];
   providers: UsageProvider[];
+  apps: UsageAppSummary[];
   accounts: UsageAccount[];
+  sourceFilter?: UsageSourceFilter;
+  legacyUnclassifiedRequests?: number;
+}
+
+export interface UsageSummaryFilterInput {
+  provider?: string | null;
+  model?: string | null;
+  apiKeyId?: string | null;
+  sourceFilter?: UsageSourceFilter;
+  /** Internal snapshot, never a client-supplied list or part of the response echo. */
+  configuredApiKeyIds?: readonly string[];
 }
 
 /**
@@ -765,7 +779,9 @@ interface UsagePartition {
   dayStart: number;
   surface: UsagePartitionSurface;
   oldestTimestamp: number | null;
+  legacyUnclassifiedRequests: number;
   totals: UsageSummaryTotals;
+  apps: Map<UsageApp, UsageSummaryTotals>;
   models: Map<string, UsageModelAccumulator>;
   providers?: Map<string, UsageModelAccumulator>;
   accounts: Map<string, UsageAccountAccumulator>;
@@ -782,12 +798,22 @@ interface NormalizedUsageFilter {
   provider: string | null;
   model: string | null;
   apiKeyId: string | null;
+  sourceFilter?: UsageSourceFilter;
+  configuredApiKeyIds?: readonly string[];
+  configuredApiKeyIdSet?: ReadonlySet<string>;
 }
 
 export interface UsageSummaryAccumulator {
   add(entry: PersistedUsageEntry): void;
   /** Return a mutation-independent snapshot that may continue accepting rows. */
   clone(): UsageSummaryAccumulator;
+  /**
+   * Widen the reported ledger span with rows this accumulator was never fed.
+   *
+   * A filtered query backed by a candidate index only reads the rows that match, so the span
+   * it would derive from those rows is narrower than the ledger it describes.
+   */
+  noteLedgerSpan(start: number | null, end: number | null): void;
   summarize(
     range: UsageRange,
     now: number,
@@ -811,6 +837,12 @@ function statusFromRequestFacts(facts: number): UsageStatus {
   if ((statuses & (REQUEST_UNREPORTED | REQUEST_UNSUPPORTED)) !== 0) return "unreported";
   if ((statuses & REQUEST_ESTIMATED) !== 0) return "estimated";
   return (statuses & REQUEST_REPORTED) !== 0 ? "reported" : "unreported";
+}
+
+/** A usage-less local or unsent attempt cannot make a request's usage unknown. */
+function attemptStatusFact(attempt: NonNullable<PersistedUsageEntry["attempts"]>[number]): number {
+  return attempt.usage || (attempt.sendCount !== 0 && attempt.locallyAnswered !== true)
+    ? requestStatusFact(attempt.usageStatus) : 0;
 }
 
 function blankRequestCounts(): UsageRequestCounts {
@@ -1058,6 +1090,7 @@ function projectedEntryForFilter(
   filter: NormalizedUsageFilter,
 ): { entry: PersistedUsageEntry; comboOverlap: boolean } | null {
   if (filter.apiKeyId !== null && entry.apiKeyId !== filter.apiKeyId) return null;
+  if (filter.sourceFilter && !matchesUsageSource(entry, filter.sourceFilter, filter.configuredApiKeyIdSet)) return null;
   if (!entry.attempts?.length) {
     const identity = usageModelIdentity(entry.provider, entry.model, entry.resolvedModel);
     return filterMatchesAttribution(filter, entry.provider, identity.model)
@@ -1069,6 +1102,7 @@ function projectedEntryForFilter(
     return filterMatchesAttribution(filter, attempt.provider, identity.model);
   });
   if (attempts.length === 0) return null;
+  const projectedStatus = attempts.length !== entry.attempts.length;
   const { usage: _parentUsage, totalTokens: _parentTotalTokens, spend: parentSpend, ...withoutParentUsage } = entry;
   return {
     entry: {
@@ -1078,6 +1112,7 @@ function projectedEntryForFilter(
       // reporting a full-request send count against a partial row.
       ...(parentSpend && attempts.length === entry.attempts.length ? { spend: parentSpend } : {}),
       attempts,
+      ...(projectedStatus ? { usageStatus: statusFromRequestFacts(attempts.reduce((facts, attempt) => facts | attemptStatusFact(attempt), 0)) } : {}),
       ...projectedComboUsage(attempts),
     },
     comboOverlap: entry.attempts.length > 1,
@@ -1285,23 +1320,44 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
   private estimatedRetainedBytes = ESTIMATED_ACCUMULATOR_BASE_BYTES;
 
   constructor(options?: {
-    filter?: { provider?: string | null; model?: string | null; apiKeyId?: string | null };
+    filter?: UsageSummaryFilterInput;
     mode?: UsageAccumulatorMode;
     window?: UsageTimeWindow;
   }) {
     const provider = normalizeFilterValue(options?.filter?.provider);
     const model = normalizeFilterValue(options?.filter?.model);
     const apiKeyId = normalizeExactFilterValue(options?.filter?.apiKeyId);
-    this.filter = provider === null && model === null && apiKeyId === null
+    const inputSource = options?.filter?.sourceFilter;
+    const sourceFilter = inputSource ? { client: inputSource.client, device: { ...inputSource.device } } : undefined;
+    const configuredApiKeyIds = options?.filter?.configuredApiKeyIds
+      ? snapshotConfiguredKeyIds(options.filter.configuredApiKeyIds) : undefined;
+    if (sourceFilter?.device.kind === "unconfigured" && !configuredApiKeyIds) {
+      throw new Error("configured key snapshot required");
+    }
+    this.filter = provider === null && model === null && apiKeyId === null && !sourceFilter
       ? null
-      : { provider, model, apiKeyId };
+      : { provider, model, apiKeyId, ...(sourceFilter ? { sourceFilter } : {}),
+        ...(configuredApiKeyIds ? { configuredApiKeyIds, configuredApiKeyIdSet: new Set(configuredApiKeyIds) } : {}) };
     this.mode = options?.mode ?? "exact";
     this.window = options?.window ? Object.freeze({ ...options.window }) : undefined;
     this.requestIds = this.mode === "exact" ? new Map() : null;
+    if (configuredApiKeyIds) {
+      // Account conservatively for the array, set, and serialized retained cache identity.
+      this.estimatedRetainedBytes += configuredApiKeyIds.reduce((bytes, id) => bytes + 128 + id.length * 8, 0);
+    }
   }
 
   get snapshotWindow(): { start: number | null; end: number | null } {
     return { start: this.snapshotStart, end: this.snapshotEnd };
+  }
+
+  noteLedgerSpan(start: number | null, end: number | null): void {
+    if (start !== null && Number.isFinite(start)) {
+      this.snapshotStart = this.snapshotStart === null ? start : Math.min(this.snapshotStart, start);
+    }
+    if (end !== null && Number.isFinite(end)) {
+      this.snapshotEnd = this.snapshotEnd === null ? end : Math.max(this.snapshotEnd, end);
+    }
   }
 
   get estimatedBytes(): number {
@@ -1338,6 +1394,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
       cloned.partitions.set(key, {
         ...partition,
         totals: { ...partition.totals },
+        apps: new Map([...partition.apps].map(([client, totals]) => [client, { ...totals }])),
         models,
         ...(providers ? { providers } : {}),
         accounts,
@@ -1371,7 +1428,9 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
         dayStart,
         surface,
         oldestTimestamp: null,
+        legacyUnclassifiedRequests: 0,
         totals: blankTotals(),
+        apps: new Map(),
         models: new Map(),
         ...(this.mode === "row-unique" ? { providers: new Map() } : {}),
         accounts: new Map(),
@@ -1546,7 +1605,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     return label;
   }
 
-  add(sourceEntry: PersistedUsageEntry): void {
+  private noteSnapshot(sourceEntry: PersistedUsageEntry): void {
     if (Number.isFinite(sourceEntry.timestamp)) {
       this.snapshotStart = this.snapshotStart === null
         ? sourceEntry.timestamp
@@ -1555,13 +1614,19 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
         ? sourceEntry.timestamp
         : Math.max(this.snapshotEnd, sourceEntry.timestamp);
     }
+  }
+
+  add(sourceEntry: PersistedUsageEntry): void {
+    if (!this.filter?.sourceFilter) this.noteSnapshot(sourceEntry);
     if (this.window && (!Number.isFinite(sourceEntry.timestamp)
       || sourceEntry.timestamp < this.window.since || sourceEntry.timestamp > this.window.until)) return;
     const projected = this.filter ? projectedEntryForFilter(sourceEntry, this.filter) : { entry: sourceEntry, comboOverlap: false };
     if (!projected) return;
+    if (this.filter?.sourceFilter) this.noteSnapshot(sourceEntry);
     this.comboOverlap ||= projected.comboOverlap;
     const entry = projected.entry;
     const partition = this.partitionFor(entry);
+    if (this.filter?.sourceFilter && isLegacyCodexUsage(entry)) partition.legacyUnclassifiedRequests += 1;
     const costInfo = computeEntryCost(entry);
     bumpStatus(partition.totals, entry.usageStatus);
     partition.totals.attemptCount += entry.attempts?.length ?? 1;
@@ -1570,6 +1635,16 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     addCacheProvenanceTotals(partition.totals, entry);
     addThroughputTotals(partition.totals, entry);
     addEstimatedCost(partition.totals, entry, costInfo);
+    const client = usageApp(entry.client);
+    let app = partition.apps.get(client);
+    if (!app) {
+      app = blankTotals();
+      partition.apps.set(client, app);
+      this.estimatedRetainedBytes += ESTIMATED_BREAKDOWN_BYTES;
+    }
+    bumpStatus(app, entry.usageStatus);
+    addTokens(app, entry);
+    addEstimatedCost(app, entry, costInfo);
 
     const requestKey = this.mode === "exact" ? this.requestKey(entry.requestId) : null;
     const attributions = usageAttributions(entry);
@@ -1582,7 +1657,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
         ? costInfo.attemptEstimates?.[index] ?? null
         : costInfo.estimate;
       const ordinal = this.nextOrdinal++;
-      const facts = requestStatusFact(attribution.usageStatus)
+      const facts = (entry.attempts?.length ? attemptStatusFact(entry.attempts[index]!) : requestStatusFact(attribution.usageStatus))
         | (estimate ? REQUEST_PRICED : spentNothing(entry.attempts?.[index]) ? 0 : REQUEST_UNPRICED);
       const modelKey = this.addModelAttribution(partition, attribution, estimate, ordinal);
       modelFacts.set(modelKey, (modelFacts.get(modelKey) ?? 0) | facts);
@@ -1630,15 +1705,23 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     const totals = blankTotals();
     const models = new Map<string, UsageModelAccumulator>();
     const providers = new Map<string, UsageModelAccumulator>();
+    const apps = new Map<UsageApp, UsageSummaryTotals>();
     const accounts = new Map<string, UsageAccountAccumulator>();
     const dayAccumulators = new Map<string, UsageDayAccumulator>();
     const modelOverlaps: UsageModelOverlap[] = [];
     let oldestTimestamp: number | null = null;
+    let legacyUnclassifiedRequests = 0;
 
     for (const partition of this.partitions.values()) {
       if (!usageSurfaceMatches(partition.surface, surface)) continue;
       if (!this.window && since !== null && partition.dayStart < since) continue;
+      legacyUnclassifiedRequests += partition.legacyUnclassifiedRequests;
       mergeTotals(totals, partition.totals);
+      for (const [client, app] of partition.apps) {
+        const combined = apps.get(client) ?? blankTotals();
+        mergeTotals(combined, app);
+        apps.set(client, combined);
+      }
       mergeModelMaps(models, partition.models);
       if (partition.providers) mergeModelMaps(providers, partition.providers);
       modelOverlaps.push(...partition.modelOverlaps.values());
@@ -1712,7 +1795,12 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
       days,
       models: buildUsageModels(models, totals.totalTokens, modelOverlaps),
       providers: buildUsageProviders(this.mode === "row-unique" ? providers : models, totals.totalTokens),
+      apps: [...apps].map(([client, app]) => ({ client, requests: app.requests, measuredRequests: app.measuredRequests,
+        totalTokens: app.totalTokens, ...(app.pricedRequests ? { estimatedCostUsd: app.estimatedCostUsd } : {}), pricedRequests: app.pricedRequests,
+        unpricedRequests: app.unpricedRequests + app.unmeteredRequests, shareRatio: totals.totalTokens === 0 ? 0 : Math.min(1, app.totalTokens / totals.totalTokens) })),
       accounts: buildUsageAccounts(accounts),
+      ...(this.filter?.sourceFilter ? { sourceFilter: { client: this.filter.sourceFilter.client,
+        device: { ...this.filter.sourceFilter.device } }, legacyUnclassifiedRequests } : {}),
     };
     if (!this.filter) return summary;
     const matches = (provider: string, model: string): boolean =>
@@ -1742,7 +1830,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
 }
 
 export function createUsageSummaryAccumulator(options?: {
-  filter?: { provider?: string | null; model?: string | null; apiKeyId?: string | null };
+  filter?: UsageSummaryFilterInput;
   mode?: UsageAccumulatorMode;
   window?: UsageTimeWindow;
 }): UsageSummaryAccumulator {
@@ -1790,15 +1878,16 @@ function normalizeExactFilterValue(input: string | null | undefined): string | n
  */
 export function projectUsageSummary<T extends UsageSummary>(
   summary: T,
-  filter: { provider?: string | null; model?: string | null; apiKeyId?: string | null },
+  filter: UsageSummaryFilterInput,
   entries?: PersistedUsageEntry[],
 ): T & { filter?: UsageFilterEcho } {
   const provider = normalizeFilterValue(filter.provider);
   const model = normalizeFilterValue(filter.model);
   const apiKeyId = normalizeExactFilterValue(filter.apiKeyId);
-  if (provider === null && model === null && apiKeyId === null) return summary;
+  if (provider === null && model === null && apiKeyId === null && !filter.sourceFilter) return summary;
   const accumulator = createUsageSummaryAccumulator({
-    filter: { provider, model, apiKeyId },
+    filter: { provider, model, apiKeyId, ...(filter.sourceFilter ? { sourceFilter: filter.sourceFilter } : {}),
+      ...(filter.configuredApiKeyIds ? { configuredApiKeyIds: filter.configuredApiKeyIds } : {}) },
     ...(summary.customWindow && summary.since !== null && summary.until !== undefined
       ? { window: { since: summary.since, until: summary.until } } : {}),
   });
@@ -1810,7 +1899,9 @@ export function projectUsageSummary<T extends UsageSummary>(
     days: projected.days,
     models: projected.models,
     providers: projected.providers,
+    apps: projected.apps,
     accounts: projected.accounts,
+    ...(projected.sourceFilter ? { sourceFilter: projected.sourceFilter, legacyUnclassifiedRequests: projected.legacyUnclassifiedRequests } : {}),
     filter: projected.filter,
   };
 }

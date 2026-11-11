@@ -4,6 +4,13 @@ import { isWirePinnedModel, MODEL_ADAPTER_OVERRIDE_ALLOWED, pinnedWireAdapter } 
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { type InboundWire, providerModelWireDefault } from "../providers/registry";
 import type { ResolvedModelPolicy } from "../providers/resolved-model-policy";
+import { GCP_CREDENTIAL_MARKER_PREFIX } from "../providers/api-key-resolve";
+
+function selectWire(provider: OcxProviderConfig, adapter: string): OcxProviderConfig {
+  const stripMarker = adapter !== "google" && provider.apiKey?.startsWith(GCP_CREDENTIAL_MARKER_PREFIX);
+  if (adapter === provider.adapter && !stripMarker) return provider;
+  return { ...provider, adapter, ...(stripMarker ? { apiKey: undefined } : {}) };
+}
 
 /**
  * Resolve the wire a single model should use: a hard pin first, then a configured
@@ -28,23 +35,21 @@ export function resolveWireProtocolOverride(
   // RouteResult policy is recaptured for the original inbound protocol whenever routing selects
   // or replaces a destination, so every downstream rebuild consumes the same adapter authority.
   if (staticPolicy) {
-    const adapter = staticPolicy.model.adapter;
+    const wired = selectWire(providerConfig, staticPolicy.model.adapter);
+    // The captured route policy owns the exact-model custom-tool contract: it already folds the
+    // provider value under any model declaration, so a refreshed transport cannot add or keep a
+    // capability the captured route did not resolve.
     const supportsResponsesCustomTools = staticPolicy.model.supportsResponsesCustomTools;
-    if (adapter === providerConfig.adapter
-      && supportsResponsesCustomTools === providerConfig.supportsResponsesCustomTools) return providerConfig;
+    if (supportsResponsesCustomTools === wired.supportsResponsesCustomTools) return wired;
     if (supportsResponsesCustomTools === undefined) {
-      const { supportsResponsesCustomTools: _discardedLiveCapability, ...capturedProvider } = providerConfig;
-      return { ...capturedProvider, adapter };
+      const { supportsResponsesCustomTools: _discardedLiveCapability, ...captured } = wired;
+      return captured;
     }
-    return {
-      ...providerConfig,
-      adapter,
-      supportsResponsesCustomTools,
-    };
+    return { ...wired, supportsResponsesCustomTools };
   }
   const pinned = pinnedWireAdapter(providerName, modelId, providerConfig);
   if (pinned && providerConfig.adapter !== pinned) {
-    return { ...providerConfig, adapter: pinned };
+    return selectWire(providerConfig, pinned);
   }
   // Re-check the allow-list here, not just in the config validator: the file may have
   // been hand-edited, or written by a build that allowed more values.
@@ -61,9 +66,9 @@ export function resolveWireProtocolOverride(
     // A forward provider hands the caller's own credential upstream; the chat adapter
     // only ever sends provider.apiKey, so switching wires here would drop the auth.
     && !isCanonicalOpenAiForwardProvider(providerConfig)) {
-    return { ...providerConfig, adapter: requested };
+    return selectWire(providerConfig, requested);
   }
-  return providerConfig;
+  return selectWire(providerConfig, providerConfig.adapter);
 }
 
 /** Build the provider adapter for a resolved provider config. */

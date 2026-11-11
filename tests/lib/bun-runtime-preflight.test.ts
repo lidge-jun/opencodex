@@ -23,7 +23,9 @@ function refusal(run: () => void, reason: RuntimePreflightReason): void {
     expect(error).toBeInstanceOf(RuntimePreflightError);
     expect(error).toMatchObject({ code: "OCX_RUNTIME_PREFLIGHT_FAILED", reason });
     expect((error as Error).message).toContain("OPENCODEX_BUN_PATH");
-    expect((error as Error).message).toContain("npm install -g @bitkyc08/opencodex");
+    // #8361: the repair command must permit bun's postinstall, or npm 12 leaves the
+    // bundled runtime as its placeholder and the retry fails the same way.
+    expect((error as Error).message).toContain("npm install -g --allow-scripts=bun @bitkyc08/opencodex");
   }
 }
 function child(result: Partial<ReturnType<typeof spawnSync>>): typeof spawnSync {
@@ -171,16 +173,42 @@ describe("selected Bun write preflight", () => {
   test("a replacement empty root with a different inode survives refusal", () => {
     const parent = temporary();
     const root = join(parent, "replaced");
-    let originalIno = 0;
+    let originalIno = 0n;
     refusal(() => assertSelectedRuntimeWritable(runtime, root, {
       ...windows, rootWasAbsent: true, spawnSync: (() => {
-        originalIno = lstatSync(root).ino;
+        originalIno = lstatSync(root, { bigint: true }).ino;
         renameSync(root, join(parent, "old")); mkdirSync(root);
         return { status: 1, stdout: "nonce:create" };
       }) as typeof spawnSync,
     }), "create");
-    expect(lstatSync(root).ino).not.toBe(originalIno);
+    // NTFS file IDs exceed 2^53; as numbers, adjacent IDs compare equal.
+    expect(lstatSync(root, { bigint: true }).ino).not.toBe(originalIno);
     expect(readdirSync(root)).toEqual([]);
+  });
+
+  test("a replacement probe whose file ID differs only above 2^53 is never removed", () => {
+    const root = temporary();
+    const probe = join(root, ".ocx-runtime-probe-nonce");
+    let replaced = false;
+    let removals = 0;
+    // Adjacent IDs above 2^53 collapse to one Number: the owned probe and its replacement.
+    const lstat = ((path: string, options?: { bigint?: boolean }) => {
+      const real = lstatSync(path, { bigint: true });
+      const ino = path === probe ? (replaced ? 2n ** 53n : 2n ** 53n + 1n) : real.ino;
+      return {
+        dev: options?.bigint ? real.dev : Number(real.dev), ino: options?.bigint ? ino : Number(ino),
+        isDirectory: () => real.isDirectory(), isSymbolicLink: () => real.isSymbolicLink(),
+      };
+    }) as RuntimePreflightFs["lstatSync"];
+    refusal(() => assertSelectedRuntimeWritable(standalone, root, {
+      ...windows, fs: { ...fs, lstatSync: lstat, rmdirSync: path => {
+        if (removals++ > 0) { rmdirSync(path); return; }
+        renameSync(path, join(root, "owned-probe")); mkdirSync(path); replaced = true;
+        throw new Error("denied once");
+      } },
+    }), "remove");
+    expect(existsSync(probe)).toBe(true);
+    expect(removals).toBe(1);
   });
 
   test("refusal never inspects emptiness or deletes the config root", () => {

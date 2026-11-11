@@ -32,6 +32,7 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | 웹 검색 사이드카 옵션입니다. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | 이미지 설명 사이드카 옵션입니다. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Codex `image_gen`용 독립형 Images 릴레이 옵션입니다. |
+| `telemetry?` | `OcxTelemetryConfig` | 사용자 고지 후 기본 켜짐 | 익명 일일 사용 텔레메트리 동의 상태(`decision`, `decidedAt`, `noticeShownAt`)입니다. 사람이 고지를 보거나 동의하기 전에는 아무것도 전송하지 않습니다. `OCX_TELEMETRY=0` 또는 `DO_NOT_TRACK=1`로 재정의할 수 있습니다. [Telemetry (`telemetry`)](#telemetry-telemetry) 및 [텔레메트리 및 개인정보](/ko/guides/telemetry/)를 참고하세요. |
 
 오래된 개발 빌드가 백업 지원이 생기기 전에 resume-history 메타데이터를 바꿨다면, native-provider 복구를 강제로 수행하려면 `ocx recover-history --legacy-openai --yes`를 실행합니다.
 이 명령은 정상적인 dedicated-provider history를 포함해 사용자 메시지가 있는 모든 `opencodex` row를 재태깅합니다. 실행하기 전에 lifecycle reference의 전체 범위 경고를 확인하세요.
@@ -141,6 +142,35 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 :::caution[Forwarded loopback is unauthenticated]
 일반 `ssh -L`은 로컬 루프백에서만 수신하므로 기본 비인증 바인드에는 안전합니다. `ssh -g -L`, 광범위한 컨테이너 퍼블리싱, 또는 클라이언트 쪽을 `0.0.0.0`에 노출하는 포워딩 모드는 사용하지 마십시오. 확신이 없으면 `ssh -L 127.0.0.1:20100:localhost:10100`처럼 명시적으로 바인드합니다.
 :::
+
+## Telemetry (`telemetry`)
+
+익명 일일 사용 텔레메트리는 사람이 고지 안내(GUI 팝업 또는 대화형 터미널 프롬프트)를 확인한 뒤에만 기본으로 켜집니다. `config.json`의 `telemetry` 블록은 이 동의 상태를 기록합니다.
+
+```json
+{
+  "telemetry": {
+    "decision": "accepted",
+    "decidedAt": "2026-11-07T09:00:00.000Z",
+    "noticeShownAt": "2026-11-07T09:00:00.000Z"
+  }
+}
+```
+
+| 키 | 형식 | 기본값 | 설명 |
+| --- | --- | --- | --- |
+| `telemetry.decision?` | `"accepted" \| "declined"` | 미설정 (미결정) | 사용자의 명시적 선택입니다. `"declined"`는 텔레메트리를 끄고 `<OPENCODEX_HOME>/telemetry-id.json`을 즉시 삭제하며, `"accepted"`는 일일 보고서를 활성화합니다. |
+| `telemetry.decidedAt?` | `string` (ISO 8601) | 미설정 | `decision`이 기록된 UTC 시각입니다. `decidedAt ?? noticeShownAt`의 UTC 날짜보다 strictly 이후인 완료된 UTC 달력 날짜(`day > formatUtcDay(decidedAt ?? noticeShownAt)`)만 전송하며, 동의 당일과 이전 날짜는 절대 전송하지 않습니다. |
+| `telemetry.noticeShownAt?` | `string` (ISO 8601) | 미설정 | 웹 대시보드나 대화형 터미널에서 사람이 고지를 확인한 UTC 시각입니다. `decision`이 미설정일 때는 `noticeShownAt`이 있어야만 전송되며(`default-on`), 없으면 `awaiting-notice` 상태로 유지됩니다. |
+
+수집 서버 엔드포인트(`https://telemetry.opencodex.me/v1/events`)는 코드 상수이며 `config.json`에서 변경할 수 없습니다.
+
+두 환경 변수는 저장된 `config.json`을 수정하지 않고 즉시 텔레메트리를 비활성화합니다(프록시 시작 시나 스케줄러 틱에서 감지되면 `<OPENCODEX_HOME>/telemetry-state.json`에 오늘 UTC 날짜를 `ineligibleThroughDay`로 기록하고 `<OPENCODEX_HOME>/telemetry-id.json`을 삭제하므로, 이후 환경 변수를 제거해도 해당 날짜는 전송되지 않으며 새 ID가 생성됩니다).
+
+- `OCX_TELEMETRY=0` (대소문자 구분 없이 `false`, `off`, `no`도 허용)
+- `DO_NOT_TRACK=1` (대소문자 구분 없이 `true`, `yes`도 허용)
+
+`ocx config set telemetry`와 `ocx config unset telemetry`는 거부되며, `ocx config import`도 모든 호출자에 대해 가져온 `telemetry` 블록을 무시하고 기존 동의 상태를 그대로 유지합니다. 대신 `ocx telemetry enable`(대화형 터미널 필수, 고지문과 확인 프롬프트 표시 후 기록하며 아닐 경우 `agent_consent_required` / `tty_required`로 종료), `ocx telemetry disable`, `ocx telemetry status [--json]` 또는 대시보드 **Proxy details** 토글을 사용하세요. 전체 페이로드 스키마와 보관 정책은 [텔레메트리 및 개인정보](/ko/guides/telemetry/)를 참고하세요.
 
 ## Storage cleanup
 

@@ -1,4 +1,15 @@
-import { isTerminalShortWindow } from "../../src/codex/quota-types";
+import { hasElapsedShortWindow, isTerminalShortWindow } from "../../src/codex/quota-types";
+
+export interface QuotaWindowReading {
+  label: string;
+  /** Presentation-only text; identity stays in label. */
+  displayLabel?: string;
+  percent: number;
+  resetAt?: number;
+  modelId?: string;
+  /** Share of the weekly limit this model family may use ("up to 50% of your weekly limit"). */
+  weeklyAllowancePercent?: number;
+}
 
 export interface AccountQuota {
   workbuddyCredits?: import("../../src/providers/workbuddy-credit-balance").WorkBuddyCreditBalance;
@@ -14,7 +25,15 @@ export interface AccountQuota {
   shortObservedAt?: number;
   shortWindowSeconds?: number;
   monthlyResetAt?: number;
-  customWindows?: { label: string; percent: number; resetAt?: number; modelId?: string }[];
+  customWindows?: QuotaWindowReading[];
+  /**
+   * Display-only readings: an Anthropic model limit upstream reports as not binding right now.
+   * Only the quota bars render them; summary headlines, tray rows and urgency sorting never read
+   * this field, matching the server, where routing reads only `customWindows`.
+   */
+  displayWindows?: QuotaWindowReading[];
+  /** Display-only budgets whose entitlement upstream did not report; never a usage percentage. */
+  unknownBudgetWindows?: { label: string; resetAt?: number }[];
   creditsUsd?: {
     used: number;
     limit: number;
@@ -66,7 +85,7 @@ export function normalizeQuotaForPlan(quota: AccountQuota | null, plan: string |
  * Evaluates governing quota windows based on the account's plan:
  * - For 30-day only plans (e.g. Free/Go), only the monthly window governs.
  * - For standard plans, weekly and monthly windows govern.
- * - A known five-hour / short window refines a known governing long-window score.
+ * - A known five-hour / short window refines a known governing long-window score until its valid reset elapses.
  * - If no long window has been observed, an active terminal short burst (at 100%) acts as exhausted (100).
  * - Unknown or unprimed quota returns `null` so callers do not spuriously trigger threshold actions.
  */
@@ -104,6 +123,7 @@ export function computeCodexUsageScore(
       ? 100
       : null;
   }
-  const values = finite(shortPercent) ? [...knownLong, shortPercent] : knownLong;
+  const values = finite(shortPercent) && !hasElapsedShortWindow(quota.fiveHourResetAt ?? quota.shortResetAt, now)
+    ? [...knownLong, shortPercent] : knownLong;
   return values.length ? Math.max(...values) : null;
 }

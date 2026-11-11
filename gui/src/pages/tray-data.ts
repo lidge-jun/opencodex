@@ -54,20 +54,24 @@ function exhausted(quota: Record<string, unknown>, plan: string | undefined): bo
   return windows.some(value => typeof value === 'number' && Number.isFinite(value) && value >= 100);
 }
 
-export function parseAccounts(value: unknown): TrayAccount[] {
+export function parseAccounts(value: unknown, kind?: TraySwitchKind | null, ordinal?: (index: number) => string): TrayAccount[] {
   const body = object(value);
   const rows = body.accounts ?? body.keys;
   if (!Array.isArray(rows)) throw new Error('Invalid account roster');
-  return rows.map(raw => {
+  return rows.map((raw, index) => {
     const row = object(raw);
     if (typeof row.id !== 'string') throw new Error('Invalid account identifier');
-    const email = typeof row.email === 'string' ? maskEmail(row.email) : undefined;
-    const label = [row.alias, row.label, email, row.logLabel, row.id].find(item => typeof item === 'string' && item.length) as string;
+    const email = kind === 'oauth' ? undefined : typeof row.email === 'string' ? maskEmail(row.email) : undefined;
+    const label = kind === 'oauth'
+      ? [row.alias, row.maskedLabel].find(item => typeof item === 'string' && item.trim()) as string | undefined
+      : [row.alias, row.label, email, row.logLabel, row.id].find(item => typeof item === 'string' && item.trim()) as string;
+    const displayLabel = label?.trim() || (kind === 'oauth' ? ordinal?.(index + 1) : undefined);
+    if (!displayLabel) throw new Error('Missing account label');
     const quota = row.quotaUnavailable === true || row.quotaMode === 'unsupported' || !row.quota ? null : object(row.quota) as unknown as AccountQuota;
     const plan = typeof row.plan === 'string' ? row.plan : undefined;
     const activeId = body.activeAccountId ?? body.activeId ?? body.activeCodexAccountId;
     const active = typeof activeId === 'string' ? activeId === row.id : row.active === true;
-    return { id: row.id, label, email, plan, unavailable: row.quotaUnavailable === true, active, ...switchState(row, active), exhausted: quota !== null && exhausted(object(row.quota), plan), status: typeof object(row.health).status === 'string' ? object(row.health).status as string : undefined, quotaFailure: typeof row.quotaFailure === 'string' ? row.quotaFailure : undefined, quota: normalizeQuotaForPlan(quota, plan) };
+    return { id: row.id, label: displayLabel, email, plan, unavailable: row.quotaUnavailable === true, active, ...switchState(row, active), exhausted: quota !== null && exhausted(object(row.quota), plan), status: typeof object(row.health).status === 'string' ? object(row.health).status as string : undefined, quotaFailure: typeof row.quotaFailure === 'string' ? row.quotaFailure : undefined, quota: normalizeQuotaForPlan(quota, plan) };
   });
 }
 
@@ -104,12 +108,13 @@ export function quotaWindows(quota: AccountQuota | null) {
     { id: 'quota.monthlyLimit', key: 'quota.monthlyLimit' as const, percent: quota.monthlyPercent, reset: quota.monthlyResetAt },
     // A provider-named window is identified by its own label; the de-duplication below is what
     // keeps that unique, including against the fixed keys above.
-    ...(Array.isArray(quota.customWindows) ? quota.customWindows.filter(w => w && typeof w.label === 'string').map(w => ({ id: w.label, label: w.label, modelId: w.modelId, percent: w.percent, reset: w.resetAt })) : []),
+    ...(Array.isArray(quota.customWindows) ? quota.customWindows.filter(w => w && typeof w.label === 'string').map(w => ({ id: w.label, label: w.label, ...(typeof w.displayLabel === 'string' && w.displayLabel.trim() ? { displayLabel: w.displayLabel } : {}), modelId: w.modelId, percent: w.percent, reset: w.resetAt })) : []),
+    ...(Array.isArray(quota.unknownBudgetWindows) ? quota.unknownBudgetWindows.filter(w => w && typeof w.label === 'string').map(w => ({ id: w.label, label: w.label, percent: undefined, reset: w.resetAt, unknownBudget: true as const })) : []),
   ];
-  // A window is listed only when it reports a percentage (zero included) or a reset time. Plans
+  // Ordinary windows are listed only when they report a percentage (zero included) or a reset time. Plans
   // differ in which windows they have: a weekly-only account has no 5-hour window, and showing a
   // dash row for it reads as "unknown usage" rather than "not part of this plan".
-  const kept = windows.filter(w => finite(w.percent) || resetTimestamp(w.reset) !== null);
+  const kept = windows.filter(w => finite(w.percent) || resetTimestamp(w.reset) !== null || ('unknownBudget' in w && w.unknownBudget === true));
   // A provider is free to report two custom windows under one label. The row identity has to
   // stay unique anyway, or React reconciles two different windows onto the same row.
   const seen = new Map<string, number>();

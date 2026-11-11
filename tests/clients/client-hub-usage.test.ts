@@ -24,6 +24,19 @@ test("hub usage sends only the data key, preserves query and incomplete metadata
   expect(result).toMatchObject({ scope: "client", usageIncomplete: true });
 });
 
+test("client-filtered hub usage requires a matching safe scope echo", async () => {
+  const query = new URLSearchParams("client=codex");
+  for (const sourceFilter of [undefined, { client: "claude_code", scope: "authenticated-key" }, { client: "codex", scope: "all" }]) {
+    await expect(fetchHubUsage("https://hub.example.test", "client-key", query, {
+      fetchImpl: (async () => Response.json({ ...report(), sourceFilter })) as typeof fetch,
+    })).rejects.toThrow();
+  }
+  const result = await fetchHubUsage("https://hub.example.test", "client-key", query, {
+    fetchImpl: (async () => Response.json({ ...report(), sourceFilter: { client: "codex", scope: "authenticated-key" } })) as typeof fetch,
+  });
+  expect(result.sourceFilter).toEqual({ client: "codex", scope: "authenticated-key" });
+});
+
 test.each([401, 403, 404, 500])("hub usage reports HTTP %i without a fallback request", async status => {
   let calls = 0;
   await expect(fetchHubUsage("https://hub.example.test", "client-key", new URLSearchParams(), {
