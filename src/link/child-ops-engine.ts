@@ -32,6 +32,8 @@ export interface ChildOpsEngine {
    * multi-link item for the link ends busy, exactly as for a link a job holds. Synchronous, like submit.
    */
   reserve(linkId: string): (() => void) | null;
+  /** Resolves with a clone of the finished job, or null when the id is unknown or already pruned (wp5 scheduler). */
+  whenDone(jobId: string): Promise<ChildJob | null>;
   /** Resolves once no job of this engine is queued or running. Tests and shutdown only. */
   settled(): Promise<void>;
 }
@@ -69,6 +71,8 @@ export function createChildOpsEngine(options: ChildOpsEngineOptions = {}): Child
   const jobs = new Map<string, { job: ChildJob; env: ChildOpsEnv }>();
   const locks = new Map<string, string>();           // linkId -> jobId
   const idle = new Set<() => void>();
+  // A running job is never pruned (prune drops done jobs only), so every waiter is resolved by finishJob.
+  const waiters = new Map<string, Array<(job: ChildJob) => void>>();
   // One engine-wide FIFO: the bound is on SSH sessions from this Home, not per job.
   const pending: Array<{ job: ChildJob; item: ChildJobItem; env: ChildOpsEnv }> = [];
   let active = 0;
@@ -101,6 +105,8 @@ export function createChildOpsEngine(options: ChildOpsEngineOptions = {}): Child
     if (job.state === "done" || job.items.some(item => item.state === "queued" || item.state === "running")) return;
     job.state = "done";
     job.finishedAt = iso(env);
+    const resolvers = waiters.get(job.jobId);
+    if (resolvers) { waiters.delete(job.jobId); for (const resolve of resolvers) resolve(structuredClone(job)); }
     if (!running()) { for (const resolve of idle) resolve(); idle.clear(); }
   };
   const runItem = async (job: ChildJob, item: ChildJobItem, env: ChildOpsEnv): Promise<void> => {
@@ -192,6 +198,16 @@ export function createChildOpsEngine(options: ChildOpsEngineOptions = {}): Child
         released = true;
         if (locks.get(linkId) === token) locks.delete(linkId);
       };
+    },
+    whenDone(jobId) {
+      const entry = jobs.get(jobId);
+      if (!entry) return Promise.resolve(null);
+      if (entry.job.state === "done") return Promise.resolve(structuredClone(entry.job));
+      return new Promise<ChildJob | null>(resolve => {
+        const list = waiters.get(jobId) ?? [];
+        list.push(resolve);
+        waiters.set(jobId, list);
+      });
     },
     settled() {
       if (!running()) return Promise.resolve();

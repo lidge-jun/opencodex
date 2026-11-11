@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { AtomicWriteHooks } from "../config/atomic-write";
 import { existsSync, lstatSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { atomicWriteFile } from "../config";
+import { atomicWriteFile, withConfigMutationLockSync } from "../config";
 import { assertCodexHomeOwner, codexHomeIsAbsent, CODEX_HOME_JOURNAL_FILE, CodexHomeOwnerRefusal, opencodexHomeForInjection, readCodexHomeJournal, type CodexHomeOwnerRefusalReason } from "./codex-home-owner";
 import { hasInjectedCodexRouting } from "./injected-marker";
 import { configWriteLockFailureMessage, withConfigWriteLockHeld } from "./config-write-lock";
@@ -492,6 +492,54 @@ export interface ReconcileJournalOptions {
    * startup does not restore native config in the seconds before its own sync re-injects.
    */
   adoptUpdateHandover?: boolean;
+}
+
+/**
+ * Called by `connectClient` right after its connection commits, when its injection ran: the
+ * client takes over a journal another owner wrote (a standalone proxy's injection it re-injected
+ * over), keeping the original snapshot. Before the commit the journal stays its writer's, so a
+ * runtime starting mid-connect sees a live process owner and leaves it alone. Without the takeover
+ * the first start after that process exited (a supervisor relaunch after `ocx connect --link` and
+ * `ocx restart`) read it as a crashed session and restored native Codex under the new link.
+ * Only a process-written journal is taken: another client's journal belongs to a later connection
+ * (a stale sync must never claim it), and `beforeWrite` re-runs the caller's connection guard under
+ * the Codex config lock and the config mutation lock together with the write, so a connection that
+ * changed since its injection writes nothing and none can change before the write lands.
+ * Outcomes: `adopted`, `owned` (already this client's), `missing` (no journal), `foreign` (another
+ * client's journal, left alone; see {@link journalHandoverIncomplete}).
+ */
+export type JournalAdoption = "adopted" | "owned" | "missing" | "foreign";
+
+/**
+ * Whether routing is still at risk after a handover. No journal (external providers leave none)
+ * gives startup recovery nothing to restore; only another client's journal is restored over this
+ * connection on the next start.
+ */
+export function journalHandoverIncomplete(adoption: JournalAdoption): boolean {
+  return adoption === "foreign";
+}
+
+export function adoptJournalForClient(apiKeyId: string, beforeWrite: () => void = () => {}): JournalAdoption {
+  if (codexHomeIsAbsent(CODEX_HOME)) return "missing";
+  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, undefined, (handle): JournalAdoption => {
+    assertCodexHomeOwner(CODEX_HOME);
+    beginCodexWriteSection(handle);
+    // Only a confirmed absence is safe; an unreadable journal may still hold a restorable owner.
+    const inspection = readCodexHomeJournal(JOURNAL_PATH);
+    if (inspection.kind === "unknown") throw new CodexHomeOwnerRefusal("owner-unknown");
+    if (inspection.kind === "missing") return "missing";
+    const journal = inspection.journal as unknown as Journal;
+    if (journal.owner?.kind === "client") return journal.owner.apiKeyId === apiKeyId ? "owned" : "foreign";
+    // Codex lock, then the mutation lock (the injection's order): guard and write as one step.
+    return withConfigMutationLockSync(() => {
+      beforeWrite();
+      const adopted = JSON.stringify({ ...journal, owner: { kind: "client", apiKeyId } });
+      publishCodexArtifact(JOURNAL_PATH, handle, (path, hooks) => atomicWriteFile(path, adopted, undefined, hooks));
+      return "adopted" as const;
+    });
+  });
+  if (!locked.ok) throw new Error(locked.error === "unsafe" ? configWriteLockFailureMessage(locked) : "the Codex config lock is busy");
+  return locked.value;
 }
 
 export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean {

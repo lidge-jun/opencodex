@@ -303,6 +303,23 @@ describe("Home enrollment of a standalone Child", () => {
     expect(h.state.confirmedHosts?.has("child")).toBe(true);
   });
 
+  // The refusal names the failed condition and the command that fixes it; a phase name alone
+  // left a Home operator guessing whether the Child was still linked, stale, old or misbound.
+  for (const [name, step, output, hint] of [
+    ["config still linked", "config", result('{"port":10100,"runtimeRole":"client"}'), "still linked to a Home (config runtimeRole client). On the Child run: ocx disconnect, then ocx restart"],
+    ["config Hub", "config", result('{"port":10100,"runtimeRole":"hub"}'), "is a Hub (config runtimeRole hub). On the Child run: ocx hub disable"],
+    ["stale client runtime", "before", health("client"), "still serves a client runtime (/healthz role client on port 10100). On the Child run: ocx restart"],
+    ["Hub runtime", "before", health("hub"), "serves a Hub runtime (/healthz role hub on port 10100). On the Child run: ocx hub disable, then ocx restart"],
+    ["no restart capability", "before", health("standalone", null), "advertises no restart capability v1 on port 10100. Update OpenCodex on the Child, then run: ocx restart"],
+    ["port mismatch", "before", http({ service: "opencodex", pid: 4321, port: 10101, role: "standalone", restartCapability: "v1" }), "answers as port 10101 but its config port is 10100. On the Child run: ocx restart"],
+    ["nothing answering", "before", result("", 7), "No OpenCodex answered /healthz on the Child's port 10100. On the Child run: ocx start (or ocx service start)"],
+  ] as const) test(`${name} refusal names the condition and the fix`, async () => {
+    const h = harness(); h.confirmed(); h.overrides[step] = () => output;
+    const payload = await denied(await h.call("apply", { alias: "child" }), "child_restart_unsupported", 409);
+    expect(payload.error.hint).toContain(hint);
+    expect(Array.from(payload.error.hint as string).length).toBeLessThanOrEqual(160);
+  });
+
   test("measured 3400ms SSH latency allows 28600ms commands and separate restart/relay budgets", async () => {
     const h = harness();
     h.overrides.probe = call => {
