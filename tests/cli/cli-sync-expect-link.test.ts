@@ -251,6 +251,36 @@ describe("ocx sync --expect-link / --expect-hub-key", () => {
     }
   });
 
+  // Final review: a failed handover must not be followed by the automatic post-apply restart,
+  // which on a Child with an earlier connection's journal would undo the routing just applied.
+  test("a failed journal handover skips the post-apply runtime restart", async () => {
+    writeClient({ transport: "link" });
+    const current = readClientConnectionState();
+    if (current.kind !== "connected") throw new Error("fixture must be connected");
+    const appliedAt = "2026-10-21T01:00:00.000Z";
+    const record = { linkId: LINK_ID, fetchedAt: appliedAt, appliedAt, document: {
+      version: 1 as const, home: { name: "fixture", version: "2.97.0" },
+      settings: { fastMode: true, multiAgentMode: "v1" as const, webSearchSidecarEnabled: false, subagentDefaults: null },
+    } };
+    const restart = spyOn(applyRestart, "restartRuntimeAfterApply").mockResolvedValue({ kind: "restarted" });
+    const connected = spyOn(connectApi, "syncConnectedClient").mockResolvedValue({ catalogWritten: false, cacheSynced: false, injected: true, stale: false, connection: current.value, appliedRecord: record, journalHandoverFailed: true });
+    const shim = spyOn(shimAutoRestore, "runCodexShimAutoRestoreAsync").mockResolvedValue(undefined);
+    const errors: string[] = [];
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    const error = spyOn(console, "error").mockImplementation((...parts) => { errors.push(parts.map(String).join(" ")); });
+    try {
+      process.exitCode = 0;
+      const args = ["sync"];
+      const code = await dispatchCommand({ kind: "command", command: "sync", args }, { args } as unknown as CliDispatchDeps);
+      expect(code).toBe(1);
+      expect(restart).not.toHaveBeenCalled();
+      expect(errors.join("\n")).toContain("the client runtime was not restarted");
+    } finally {
+      process.exitCode = 0;
+      restart.mockRestore(); connected.mockRestore(); shim.mockRestore(); log.mockRestore(); error.mockRestore();
+    }
+  });
+
   async function runSync(args: string[]) {
     let discoveries = 0;
     const errors: string[] = [];

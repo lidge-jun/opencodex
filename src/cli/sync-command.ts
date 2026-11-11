@@ -91,11 +91,12 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
           process.exitCode = 1;
         }
         if (result.journalHandoverFailed) {
-          console.error("Codex routing was applied, but the Codex journal could not be handed to this connection (the Codex config was busy or changed, or the journal belongs to an earlier connection); the next OpenCodex restart could restore native routing. Run 'ocx sync' again; if it repeats, run 'ocx sync --restart-codex' after that restart.");
+          console.error("Codex routing was applied, but the Codex journal could not be handed to this connection (the Codex config was busy or changed, or the journal belongs to an earlier connection), so the client runtime was not restarted: the next OpenCodex restart could restore native routing. Run 'ocx sync' again; if it repeats, run 'ocx sync --restart-codex' after that restart.");
           process.exitCode = 1;
         }
         // OCX-6: a link Child's runtime must have started after the apply it serves under.
-        if (link && result.appliedRecord) {
+        // Not after a failed handover: that restart is the one that would undo this routing.
+        if (link && result.appliedRecord && !result.journalHandoverFailed) {
           const { applyRestartMessage, restartRuntimeAfterApply } = await import("./link-apply-restart");
           const { sameClientConnectionOwner } = await import("../client/state");
           const applied = result.connection;
