@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 34.
+Declared capabilities: 38.
 
 ### `ocx link probe`
 
@@ -676,3 +676,103 @@ Drives no management route.
 - Fixed data-plane WebSocket /v1/live with the existing audio key carrier and session.update, then session.close. It contacts upstream and may incur provider usage; no microphone, audio upload, tool execution or voice-roundtrip claim.
 - Version1 report distinguishes readiness from confirmed normal close. Socket-open alone is not ready.15s readiness,2s close deadline; stuck/abnormal closure remains unverified/nonzero, with local socket termination.
 - No raw frames/session IDs/encoded credentials are printed. NativeWebSocket redirect refusal is verified separately from HTTP upload behavior.
+
+### `ocx link check`
+
+Usage: `ocx link check (--link-id <id> | --all) [--no-wait] [--json]`
+
+Read each Home-initiated Child's installed version, install kind and update route.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/children/operations` |
+| GET | `/api/link/children/jobs/{jobId}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Link id to check; repeatable, up to 64. |
+| `--all` | boolean | Check every link in the Home's store. |
+| `--no-wait` | boolean | Print the queued job and return without polling it. |
+| `--json` | boolean | Emit the ocx.link.child-job/1 document as JSON (always JSON). |
+
+- Requires loopback admin authority on the Home. Starts one observe job; the CLI polls it every 2 s and prints the final ocx.link.child-job/1 document. Exit 0 when every item succeeded, 6 when an item is busy, offline, refused, owner-action or unsupported, 1 on a failure, 4 when the link is unknown or the Home predates Child operations, 5 on a conflict: the link already has an operation running, the Home has no links, or the command ran on a Child.
+- Changes no install on the Child: it runs the gated update --plan, which only computes. An npm Child without a census pair runs it through its ocx shim, so the launcher's ordinary bootstrap (sync-guard bookkeeping, Bun resolution) runs first, as for any pinned sync; the gated script disables the Desktop handoff. On an npm or pnpm Child served through its census pair it also runs node --version (bounded to 10 s, read-only) to report whether the package launcher can apply an update. Writes the Home's Child observation cache.
+- One SSH call per Child, up to 60 s, three at a time; a POSIX Child older than 2.97.0 costs one more read-only call for its version. Home-initiated links only: client-initiated and ocx-child links are reported without SSH. One operation per link per running Home.
+
+### `ocx link update`
+
+Usage: `ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]`
+
+Update a Home-initiated Child's OpenCodex to this Home's version.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/children/operations` |
+| GET | `/api/link/children/jobs/{jobId}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Home-initiated link to update; repeatable, up to 64. |
+| `--all` | boolean | Every link in the Home's store, one Child at a time; Child-initiated links report unsupported. |
+| `--yes` | boolean | Confirms that each updated Child's OpenCodex restarts and its relayed turns end. |
+| `--no-wait` | boolean | Print the queued job and return. |
+| `--json` | boolean | Emit the ocx.link.child-job/1 document (always JSON). |
+
+- Runs a pinned sync --expect-link first to confirm the Child still belongs to this link, then the Child's own ocx update --plan through the served entry, then --yes with --expect-plan and a --not-after 120 s after the plan on the Child's own clock, through the link's pinned SSH trust. npm and pnpm installs apply through their Node launcher; Bun installs plan and apply on their served Bun entry. The target is always this Home's version; the Child refuses a downgrade.
+- Children below 2.97.0 receive no update command: from 2.93.0 they still get the identity sync, then report owner-action legacy-ocx; ocx-child and GOAT-managed Children report unsupported or owner-action; Windows Children are refused orchestrated apply (unsupported windows-apply). An update restarts the Child's OpenCodex and ends any turn currently relayed for it, so --yes is required. A pinned sync follows a successful, failed or rolled-back apply; an apply whose result is unknown is recorded and neither retried nor resynced, so re-check it with ocx link check.
+- Exit 0 all succeeded or up-to-date (with --no-wait: the job was accepted and may still be running), 6 partial (including a kept update whose follow-up sync failed), 1 failed, uncertain or an unknown state, 5 another operation holds the link, the only link named was started from the Child, the Home has no links or the command ran on a Child, 4 the link is unknown or the Home lacks Child operations. On a Home not bound to loopback it exits 1: these operations are not available there, and the dashboard has no controls for them.
+
+### `ocx link sync`
+
+Usage: `ocx link sync (--link-id <id> | --all) [--no-wait] [--json] | ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]`
+
+Run the pinned catalog and settings sync on Home-initiated Children.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/children/operations` |
+| GET | `/api/link/children/jobs/{jobId}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Home-initiated link to sync; repeatable, up to 64, exactly one with a restart. |
+| `--all` | boolean | Every link in the Home's store, three at a time; refused with a restart. |
+| `--restart-app-server-only` | boolean | Also restart the Child's Codex app-servers after the sync writes. |
+| `--restart-codex` | boolean | Also quit and relaunch the Child's Codex desktop app; ends live turns. |
+| `--yes` | boolean | Confirms --restart-codex. |
+| `--no-wait` | boolean | Print the queued job and return. |
+| `--json` | boolean | Emit the ocx.link.child-job/1 document (always JSON). |
+
+- The same sync --expect-link the ocx sync fan-out runs, gated at 2.93.0. Restart flags are refused on Windows and ignored by ocx-child; the item reports restart unsupported.
+- A restart needs one --link-id (--all is refused) and --restart-codex needs --yes. The sync runs first; the restart then goes out as a second pinned sync and is withheld (restart skipped, reason restart-skipped:link-active) while a relayed model request for that Child is in flight. A restarting call whose result is unknown ends uncertain (restart-result-unknown).
+- Exit codes as for ocx link update; a withheld or unconfirmed restart exits 6 or 1.
+
+### `ocx link restart-codex`
+
+Usage: `ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]`
+
+Restart Codex on one Home-initiated Child so it reloads the catalog.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/children/operations` |
+| GET | `/api/link/children/jobs/{jobId}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Home-initiated link. |
+| `--scope` | string | app-server (default) or codex (also relaunches the desktop app). |
+| `--yes` | boolean | Confirms that running Codex turns on the Child end. |
+| `--no-wait` | boolean | Print the queued job and return. |
+| `--json` | boolean | Emit the ocx.link.child-job/1 document (always JSON). |
+
+- A pinned sync, then a second pinned sync with the restart flag; works on full Children from 2.93.0. app-server scope leaves the Codex desktop app's own app-server running. While a relayed model request for that Child is in flight nothing is sent and the item is busy (restart-skipped:link-active).
+- Refused on Windows Children (unsupported windows-restart) and reported unsupported for ocx-child. The codex scope needs a logged-in GUI session on the Child; its outcome is requested, not confirmed. Exit codes as for ocx link update.

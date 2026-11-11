@@ -1,5 +1,5 @@
 /** `ocx account` — list and switch provider credentials (issue #180). */
-import { apiKeyQuotaText } from "./account-key-quota";
+import { apiKeyQuotaText, quotaUnknownReasonText } from "./account-key-quota";
 import { redactSecretArgs } from "./secret-args";
 import { emptyAccountNextAction, recoveryAccountLabel } from "./account-next-actions";
 import { loadConfig } from "../config";
@@ -57,7 +57,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account preserve-signed-in openai [on|off|status] [--apply-to-bound] [--json]
   ocx account priority <provider> <account-id|alias|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
   ocx account pause <provider> <account-id|alias|main> [--json]
-  ocx account resume <provider> <account-id|alias|main> [--json]
+  ocx account resume <provider> <account-id|alias|main> [--if-healthy] [--json]
   ocx account reset-affinity <anthropic|anthropic2> [--json]
   ocx account pause-exhausted <provider> [--json]
   ocx account strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>] [--json]
@@ -151,7 +151,7 @@ function quotaText(row: AccountRow): string {
   if (row.type === "api-key") return apiKeyQuotaText(row);
   if (row.quotaUnavailable) return row.quotaFailure ? `unavailable (${row.quotaFailure})` : "unavailable";
   const quota = row.quota;
-  if (!quota) return "-";
+  if (!quota) return row.quotaUnknownReason ? `UNKNOWN (${quotaUnknownReasonText(row.quotaUnknownReason)})` : "-";
   const parts: string[] = [];
   // Two spellings reach this DTO: the per-account provider probe reports `fiveHourPercent`,
   // while the Codex pool reports the same idea as `shortPercent`.

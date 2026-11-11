@@ -203,6 +203,16 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
   const current = readStoreFor(ctx);
   const record = current.links.find(link => link.id === id);
   if (!record) return fail("link_not_found", "The link was not found.", 404);
+  // A queued or running job would keep opening SSH sessions to a Child this removal disconnects, so removal takes the
+  // link's job admission lock before its first teardown await and holds it to the end: a job submitted meanwhile gets
+  // 409 (single link) or a busy item, and a link a job already holds is refused here, before anything is stopped.
+  const { childOpsEngineFor } = await import("./link-child-ops-routes");
+  const releaseLink = childOpsEngineFor(state).reserve(id);
+  if (!releaseLink) return fail("link_operation_in_progress", "A Child operation is running on this link; wait for it to finish, then remove the link.", 409);
+  try { return await removeReserved(ctx, state, id, record); } finally { releaseLink(); }
+}
+
+async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id: string, record: LinkStore["links"][number]): Promise<Response> {
   const body = await readManagementJsonBodyOr(ctx.req, {});
   const payload = body === null ? {} : body;
   if (!isRecord(payload)
@@ -312,6 +322,11 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     }
     // The same opt-in for each Home-initiated tunnel's retry progress and last failure cause.
     if (url.searchParams.get("diagnostics") === "1") attachLinkTunnelDiagnostics(dto, supervisorStates);
+    // The same opt-in for each Home row's Child versions, catalog freshness, activity and operations.
+    if (url.searchParams.get("children") === "1" && dto.role === "home") {
+      const { attachLinkChildOpsForState } = await import("./link-child-ops-routes");
+      attachLinkChildOpsForState(dto, state, store, (ctx.deps.now ?? Date.now)());
+    }
     // A dashboard session also learns why it cannot join as a Child. The admin-token answer stays
     // the exact K16 document that `ocx link status` validates key by key.
     const denial = ctx.principal === "gui-session" ? joinDenied(ctx) : null;
@@ -343,6 +358,11 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     const denied = auth(ctx, "admin");
     if (denied) return denied;
     return issue(ctx);
+  }
+  // Before the reconnect and DELETE matchers, which would read "children" as a link id.
+  if (path.startsWith("/api/link/children/")) {
+    const { handleLinkChildOpsRoutes } = await import("./link-child-ops-routes");
+    return handleLinkChildOpsRoutes(ctx, state);
   }
   const reconnectPath = req.method === "POST" ? /^\/api\/link\/([^/]+)\/reconnect$/.exec(path) : null;
   if (reconnectPath) {

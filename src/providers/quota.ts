@@ -16,7 +16,7 @@ import {
   kiroUsageContextForAccount,
 } from "./kiro-usage";
 import { mapQuotaRoster, readProviderApiKeyQuotas, type ProviderApiKeyQuota } from "./quota-key-accounts";
-import { mistralUnknownBudgetWindows } from "../quota/window-mapping";
+import { mistralUnknownBudgetWindows } from "./quota-mistral-budget";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isPassiveRead } from "../lib/passive-read";
 import type { ProviderQuota, QuotaFailureCode } from "./quota-types";

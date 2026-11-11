@@ -1363,7 +1363,38 @@ starts and then once a minute; the Home keeps reports in memory only, so after a
 fields read `null` until the next report. A Child whose runtime started before `lastApplyAt` is
 running an older runtime than its last apply.
 
+With a Home and CLI that support it, each row also carries a `child` block: the Child's running and
+installed versions, its version skew against the Home, its update route, whether it last downloaded the
+Home's current catalog, whether a relayed model request is running, and the last operation. Installed
+version and update route come from `ocx link check (--link-id <id> | --all) [--no-wait] [--json]`, which
+runs the Child's `ocx update --plan` over SSH for each Home-initiated link (60 seconds per Child, three at
+a time) and changes no install. A POSIX Child older than 2.97.0 gets one more read-only SSH call for its
+version; a Windows Child that old reports the version it sent over the link. The fields are described in
+[Home and Child versions](/guides/remote-link/#child-install-catalog-and-activity).
+
 Lightweight `ocx-child` Child hosts run `ocx-child sync [--expect-link <id>] [--json]`, `ocx-child status [--json]` (while `ocx link status --json` remains on the Home), and `ocx-child disconnect` / `ocx-child detach`: on an attached `ocx-child` host (which runs without a system service manager), a successful `ocx-child sync` starts `ocx-child serve` if no relay is running even when settings are unchanged, rolls it over when `runtimeStartedAt < lastApplyAt`, and posts a best-effort parity report on non-stale syncs. `ocx-child sync` accepts `--restart-codex` / `--restart-app-server-only` for flag compatibility without restarting Codex processes (restart the Codex desktop app and long-lived `app-server` processes separately if needed), and `ocx-child disconnect` / `ocx-child detach` restores `~/.codex` files offline and stops `ocx-child serve` with zero background daemon left running. Only one `ocx-child` install may manage a given `CODEX_HOME` at a time: lifecycle commands lock `CODEX_HOME/.ocx-child.lock` (kept permanently) and record the owning `OPENCODEX_HOME` in `CODEX_HOME/.ocx-child-owner.json` until `ocx-child detach` completes, so an `ocx-child attach` or `sync` from a different `OPENCODEX_HOME` sharing that `CODEX_HOME` exits nonzero without changing any file and names the owning home to detach first.
+
+## Child operations from the Home
+
+```text
+ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]
+ocx link sync (--link-id <id> | --all) [--no-wait] [--json]
+ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]
+ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]
+```
+
+These commands start one job on the Home for Home-initiated Children and print it as an `ocx.link.child-job/1` document: `{schema, jobId, op, trigger, restart, state, createdAt, finishedAt, items}`. Each item carries `linkId`, `alias`, `state`, `reason`, `startedAt` and `finishedAt`, and where they apply `hint`, `fromVersion`, `toVersion`, `sync` (`{state, reason}`) and `restart` (`{requested, outcome}`, where `outcome` is `requested`, `unsupported`, `not-run` or `skipped`). What each command runs on the Child, the version floors and the Windows and `ocx-child` limits are in [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home). A restart names exactly one link; `update`, `restart-codex` and `--restart-codex` need `--yes`.
+
+| Exit | Meaning |
+|---|---|
+| 0 | every item `succeeded` or is `up-to-date`, and every requested restart went out; with `--no-wait`, the job was accepted and may still be running (read it again for the result) |
+| 6 | an item is `busy`, `offline`, `refused`, `owner-action` or `unsupported`, or succeeded with a reason such as `restart-skipped:link-active` or `post-update-sync-failed` |
+| 1 | an item `failed` or is `uncertain`, an item state this CLI does not know, the job did not finish within its wait, or a Home not bound to loopback |
+| 2 | invalid arguments, for example a restart with `--all` or `update` without `--yes` |
+| 4 | an unknown link, or a Home without Child operations |
+| 5 | another operation holds the link, the only link named was started from the Child, the Home has no links, or the command ran on a Child; the error message names which |
+
+The wait does not count time an item spends queued behind another job. Removing a link while a job holds it answers `409 link_operation_in_progress`.
 
 ## Remote Link Child attestations
 
@@ -1429,6 +1460,8 @@ See [Hub observation and recovery](/guides/remote-workspace/#inspect-the-hub-wit
 ## Remote Hub client lifecycle
 
 Use `ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync`, and `ocx connect rotate --pairing-code-stdin`. The initial catalog download fails after five seconds without incoming bytes, but active transfers may run longer; use `--catalog-timeout <seconds>` (1–120) to override that inactivity window. `ocx disconnect` restores local state offline and does not revoke the hub key. While connected only, `ocx connect revoke --admin-token-stdin` revokes the persisted `apiKeyId`; after disconnect use the hub's **Connect → API Keys** page. Secrets are stdin-only and never belong in argv.
+
+On a Remote Link Child, `ocx connect status` also prints a `Link tunnel:` line (`up`, `down (<reason>)` or `unknown (<reason>)`) read from the running Child's `/readyz`, and `--json` adds `linkTunnel`. `Connection: connected` still means only that the machine is linked; see the [Remote Link guide](/guides/remote-link/).
 
 ## Setup port validation
 

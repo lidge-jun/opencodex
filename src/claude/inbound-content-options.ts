@@ -1,4 +1,5 @@
 import { markProxyError } from "../lib/client-error-body";
+import { ADVISOR_SERVER_TOOL_NAME, advisorReplayBlock, isAdvisorCallInput, isAdvisorResultContent, isAdvisorServerToolType } from "../adapters/anthropic/advisor-tool";
 import { isClaudeWebSearchToolName } from "./outbound";
 import { AnthropicRequestError, isRec, type Rec } from "./inbound-records";
 
@@ -99,17 +100,23 @@ export function toolsToResponses(tools: unknown): Rec[] | undefined {
 }
 
 /**
- * The caller's typed Anthropic web tools (`web_search_*`, `web_fetch_*`), as declared. The
- * Responses body has no slot for them — web_search becomes the hosted sidecar tool above and
- * web_fetch is dropped — so an Anthropic destination receives them out of body, unchanged.
+ * The caller's typed Anthropic server tools (`web_search_*`, `web_fetch_*`, `advisor_*`), as
+ * declared. The Responses body has no slot for them — web_search becomes the hosted sidecar tool
+ * above, web_fetch and the Advisor are dropped — so an Anthropic destination receives them out of
+ * body, unchanged (`planAnthropicServerTools` picks which ones per destination).
  */
 export function declaredAnthropicServerTools(raw: unknown): Rec[] | undefined {
   if (!isRec(raw) || !Array.isArray(raw.tools)) return undefined;
-  const tools = raw.tools.filter((t): t is Rec => isRec(t) && typeof t.type === "string" && /^web_(search|fetch)_\d+$/.test(t.type));
+  const tools = raw.tools.filter((t): t is Rec => isRec(t) && typeof t.type === "string"
+    && (/^web_(search|fetch)_\d+$/.test(t.type) || isAdvisorServerToolType(t.type)));
   return tools.length > 0 ? tools : undefined;
 }
 
-/** A declared tool the translated body drops and no out-of-body lane carries (bash_*, text_editor_*, ...). */
+/**
+ * A declared tool the translated body drops and no out-of-body lane carries (bash_*, text_editor_*, ...).
+ * The Advisor rides the out-of-body lane and is optional: a destination without it simply runs the
+ * turn unadvised, so it never makes a translated child native-only.
+ */
 export function hasNativeOnlyTool(raw: Rec): boolean {
   return Array.isArray(raw.tools)
     && raw.tools.some(tool => !toolsToResponses([tool]) && !declaredAnthropicServerTools({ tools: [tool] }));
@@ -129,18 +136,24 @@ function replayableServerRun(run: readonly Rec[]): boolean {
     if (block.type === "server_tool_use") {
       const { id, name, input } = block;
       if (typeof id !== "string" || !id.startsWith("srvtoolu_") || pending.has(id) || completed.has(id)
-        || (name !== "web_search" && name !== "web_fetch") || !isRec(input)) return false;
-      const prototype = Object.getPrototypeOf(input);
-      const required = input[name === "web_search" ? "query" : "url"];
-      if ((prototype !== Object.prototype && prototype !== null)
-        || typeof required !== "string" || required.trim().length === 0) return false;
+        || (name !== "web_search" && name !== "web_fetch" && name !== ADVISOR_SERVER_TOOL_NAME) || !isRec(input)) return false;
+      if (name === ADVISOR_SERVER_TOOL_NAME) {
+        // Anthropic documents the Advisor's input as always empty.
+        if (!isAdvisorCallInput(input)) return false;
+      } else {
+        const prototype = Object.getPrototypeOf(input);
+        const required = input[name === "web_search" ? "query" : "url"];
+        if ((prototype !== Object.prototype && prototype !== null)
+          || typeof required !== "string" || required.trim().length === 0) return false;
+      }
       pending.set(id, block);
     } else {
       const id = block.tool_use_id;
       if (typeof id !== "string") return false;
       const call = pending.get(id);
-      if (!call || block.type !== `${call.name}_tool_result`
-        || (Array.isArray(block.content) && !block.content.every(h => isRec(h) && typeof h.encrypted_content === "string"))) return false;
+      if (!call || block.type !== `${call.name}_tool_result`) return false;
+      if (call.name === ADVISOR_SERVER_TOOL_NAME ? !isAdvisorResultContent(block.content)
+        : Array.isArray(block.content) && !block.content.every(h => isRec(h) && typeof h.encrypted_content === "string")) return false;
       pending.delete(id);
       completed.add(id);
     }
@@ -150,7 +163,7 @@ function replayableServerRun(run: readonly Rec[]): boolean {
 
 /**
  * Completed Anthropic server-tool exchanges (`server_tool_use` + `web_search_tool_result` /
- * `web_fetch_tool_result`) in the caller's assistant history. The Responses body drops them, so
+ * `web_fetch_tool_result` / `advisor_tool_result`) in the caller's assistant history. The Responses body drops them, so
  * an Anthropic destination re-inserts them out of body, keyed by the block that follows each run
  * in its message: `call:<tool_use id>`, `text:<text>`, `thinking:<signature>` or
  * `redacted:<data>`, all of which survive translation. An anchor that occurs more than once in the
@@ -169,9 +182,11 @@ export function replayedAnthropicServerBlocks(raw: unknown): Map<string, Rec[]> 
     if (!Array.isArray(message.content)) continue;
     let run: Rec[] = [];
     for (const block of message.content.filter(isRec)) {
-      if (block.type === "server_tool_use" || block.type === "web_search_tool_result" || block.type === "web_fetch_tool_result") {
-        // The caller's breakpoints are dropped on this lane, as for the declared tools above.
-        run.push({ ...block, cache_control: undefined });
+      if (block.type === "server_tool_use" || block.type === "web_search_tool_result" || block.type === "web_fetch_tool_result"
+        || block.type === "advisor_tool_result") {
+        // The caller's breakpoints are dropped on this lane, as for the declared tools above; an
+        // Advisor block keeps only its documented fields.
+        run.push(advisorReplayBlock(block) ?? { ...block, cache_control: undefined });
         continue;
       }
       const anchor = block.type === "tool_use" ? `call:${String(block.id)}`

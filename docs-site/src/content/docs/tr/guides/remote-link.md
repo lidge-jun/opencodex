@@ -85,9 +85,22 @@ ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
+ocx link check (--link-id <id> | --all) [--no-wait] [--json]
+ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]
+ocx link sync (--link-id <id> | --all) [--no-wait] [--json]
+ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]
+ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]
 ```
 
 TTY olmayan kullanımda `--expect-fingerprint` zorunludur. Etkileşimli bir terminalde sunulan parmak izini açıkça onaylayarak bu seçeneği atlayabilirsiniz.
+
+Home üzerinde `ocx link check (--link-id <id> | --all)`, Home'un eklediği her Child için kurulu sürümü, kurulum türünü ve güncelleme yolunu okur: bağlantının SSH oturumu üzerinden Child'ın `ocx update --plan` komutunu çalıştırır (Child başına 60 saniye, aynı anda üç tane); bu komut yalnızca bir plan hesaplar, hiçbir şeyi değiştirmez. 2.97.0'dan eski bir Child `owner-action` (`legacy-ocx`) olarak görünür; sürümü macOS ve Linux'ta salt okunur bir SSH çağrısıyla daha, Windows'ta ise bağlantı üzerinden bildirdiği sürümden alınır. Child tarafından başlatılan bağlantılar ve `ocx-child` Child'ları SSH olmadan raporlanır. `ocx link status --json` her satıra bir `child` bloğu (sürümler, sürüm farkı, katalog güncelliği, etkinlik, son işlem) ekler. Ayrıntılar ve çıkış kodları: [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity) (İngilizce).
+
+### Child'ları Home'dan yönetmek
+
+`ocx link sync`, `ocx link restart-codex` ve `ocx link update`, Home'un eklediği Child'larda bağlantının SSH bağlantısı üzerinden çalışır ve işi JSON olarak yazdırır. `sync`, sabitlenmiş `ocx sync --expect-link` komutunu çalıştırır (Child 2.93.0 veya üstü). `restart-codex` önce eşitler, ardından çalışan Codex'in güncel kataloğu yüklemesi için Child'daki Codex app-server süreçlerini yeniden başlatır; `--scope codex` masaüstü uygulamasını da yeniden açar. Yeniden başlatma tek bir bağlantıyı hedefler; `restart-codex` ve `--restart-codex` için `--yes` gerekir, `ocx link sync --link-id <id> --restart-app-server-only` ise app-server süreçlerini onay istemeden yeniden başlatır. Home o Child için bir model isteği aktarırken yeniden başlatma atlanır (`restart-skipped:link-active`). 2.69'dan eski bir Child'da akış olmayan bir istek ancak yanıtı başladığında görülür. `update --yes`, Child'ın kendi güncelleyicisiyle Child'ın OpenCodex sürümünü bu Home'un sürümüne getirir, asla başka bir sürüme değil (Child 2.97.0 veya üstü; npm ve pnpm kurulumları Node başlatıcısı üzerinden güncellenir, bu yüzden `ocx link check` orada salt okunur `node --version` da çalıştırır). Her seferinde bir Child güncellenir; başarılı, başarısız veya geri alınmış bir uygulamadan sonra yeniden eşitlenir. Sonucu bilinmeyen bir uygulama tekrarlanmaz ve eşitlenmez; `ocx link check` ile denetleyin. O Child için aktarılan istekler sona erer. Windows Child'ları yalnızca `sync` destekler; `ocx-child` Child'ları yeniden başlatmayı ve güncellemeyi desteklenmiyor olarak bildirir. CLI, loopback'e bağlı bir Home gerektirir; başka bir Home'da bu işlemler kullanılamaz ve panoda da bu işlemler yoktur. Ayrıntılar ve çıkış kodları: [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home) (İngilizce). Bu koruma en iyi çaba esaslıdır: kontrol ile yeniden başlatma arasında başlayan bir istek yine de sonlandırılabilir; turların korunması gerekiyorsa o Child'da yeni istekleri duraklatın.
+
+Size ait olmayan bir makineyi bağlamayın: Home orada sizin SSH anahtarınızla komut çalıştırır.
 
 ## İlgili kılavuzlar
 

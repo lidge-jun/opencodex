@@ -85,9 +85,22 @@ ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
+ocx link check (--link-id <id> | --all) [--no-wait] [--json]
+ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]
+ocx link sync (--link-id <id> | --all) [--no-wait] [--json]
+ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]
+ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]
 ```
 
 非互動式終端（非 TTY）必須提供 `--expect-fingerprint`。互動式終端中可省略此參數，但必須明確確認提供的指紋。
+
+在 Home 上，`ocx link check (--link-id <id> | --all)` 會讀取每個由 Home 新增的 Child 的已安裝版本、安裝類型和更新途徑：它透過連結的 SSH 連線在 Child 上執行 `ocx update --plan`（每台 Child 60 秒，同時最多三台），該命令只計算更新計畫，不會做任何修改。早於 2.97.0 的 Child 會顯示為 `owner-action`（`legacy-ocx`），其版本在 macOS 和 Linux 上透過再一次唯讀 SSH 呼叫取得，在 Windows 上則取自 Child 透過連結回報的版本。由 Child 發起的連結和 `ocx-child` Child 不經 SSH 直接回報。`ocx link status --json` 會為每一列加上 `child` 區塊（版本、版本差異、目錄是否最新、活動狀態、最近一次操作）。詳情與結束代碼請見 [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity)（英文）。
+
+### 從 Home 操作 Child
+
+`ocx link sync`、`ocx link restart-codex` 和 `ocx link update` 會透過連結的 SSH 連線在由 Home 新增的 Child 上執行，並以 JSON 輸出工作。`sync` 執行固定的 `ocx sync --expect-link`（Child 需為 2.93.0 或更新版本）。`restart-codex` 會先同步，再重新啟動 Child 上的 Codex app-server，讓執行中的 Codex 載入目前的目錄；`--scope codex` 也會重新啟動桌面應用程式。重新啟動只能指定一個連結；`restart-codex` 和 `--restart-codex` 需要 `--yes`，而 `ocx link sync --link-id <id> --restart-app-server-only` 不需確認即可重新啟動 app-server。當 Home 正在為該 Child 中繼模型請求時，會略過重新啟動（`restart-skipped:link-active`）。對於早於 2.69 的 Child，非串流請求要到回應開始後才看得到。`update --yes` 會使用 Child 自己的更新程式，把 Child 的 OpenCodex 更新到這個 Home 的版本，絕不會更新到其他版本（Child 需為 2.97.0 或更新版本；npm 和 pnpm 安裝透過其 Node 啟動器套用更新，因此 `ocx link check` 也會在那裡以唯讀方式執行 `node --version`）。一次更新一台 Child，套用成功、失敗或回復後會再次同步；結果未知的套用不會重試也不會同步，請用 `ocx link check` 檢查。正在為該 Child 中繼的請求會中斷。Windows Child 只支援 `sync`，`ocx-child` Child 會將重新啟動和更新回報為不支援。CLI 需要繫結到 loopback 的 Home；在其他 Home 上無法執行這些操作，儀表板也不提供這些操作。詳情與結束代碼請見 [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home)（英文）。 此保護僅為盡力而為：在檢查與重新啟動之間開始的請求仍可能被結束，因此需要保留回合時，請先暫停該 Child 上的新請求。
+
+不要連結不屬於你的機器：Home 會用你的 SSH 金鑰在那裡執行指令。
 
 ## 相關指南
 

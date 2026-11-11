@@ -327,6 +327,51 @@ to restart a Codex app or app-server; use GOAT or `ocx sync --restart-codex` on 
 pinned sync can still restart its own OpenCodex client runtime after applying changed Home settings.
 A Child sync already running can continue after the Home times out its local SSH process.
 
+### Checking Children from the Home (`ocx link check`)
+
+`ocx link check --link-id <id>` (repeatable) or `ocx link check --all` runs one observe job on the
+Home: one SSH call per Home-initiated Child, up to 60 s, three at a time. It runs the Child's gated
+`ocx update --plan`, which only computes, so it changes no install. A POSIX Child older than 2.97.0
+answers with a refusal and costs one more read-only call for its version (item `owner-action`,
+reason `legacy-ocx`); a Windows Child that old reports the version it sent over the link instead.
+Client-initiated links and `ocx-child` Children are reported without SSH. The command polls the job
+every 2 s and prints the final `ocx.link.child-job/1` document
+([02_json_shapes.md](02_json_shapes.md#remote-link-child-block-and-job-document)); `--no-wait` prints the
+queued job. One operation runs per link on a running Home: a single-link request for a link another job
+holds answers 409, and in a multi-link job that link's item ends `busy` (`link-operation-in-progress`).
+
+`ocx link status` asks the Home for each row's `child` block: installed and running versions, the
+update route from the last check, whether the Child last pulled the Home's current catalog, and whether
+a relayed model request is running. An older Home omits the block.
+
+### Operating Children from the Home (`ocx link sync|restart-codex|update`)
+
+Three more verbs run on Home-initiated Children over the same pinned SSH trust and print the same
+`ocx.link.child-job/1` document as `check`. Pick the smallest one that fixes what the operator sees:
+
+- `ocx link sync --link-id <id>` (repeatable, or `--all`) runs the pinned `sync --expect-link` the
+  `ocx sync` fan-out runs, from 2.93.0. Use it when a Child's catalog or settings are behind.
+- `ocx link restart-codex --link-id <id> --yes` restarts the Child's Codex app-servers so a running
+  Codex reloads the catalog (the about-258k context symptom); `--scope codex` also quits and relaunches the
+  desktop app. `ocx link sync --link-id <id> --restart-app-server-only` does the sync and the restart together;
+  `--restart-codex` there needs `--yes`. A restart names exactly one link; `--all` is refused.
+- `ocx link update --link-id <id> --yes` (or `--all --yes`) updates the Child's OpenCodex to the Home's
+  version through the Child's own updater, one Child at a time, then resyncs. It needs a Child at
+  2.97.0 or later; older Children report `owner-action` `legacy-ocx` and receive no update command.
+
+`--yes` confirms that running work on the Child ends: a restart ends the Codex turns there, and an update
+restarts the Child's OpenCodex and ends the turns relayed for it. Never pass `--yes` or run
+`ocx link update --all` on your own initiative; ask the operator first, because an update cannot be
+taken back from the Home. A restart is withheld while the Home is relaying a model request for that
+Child (`restart-skipped:link-active`, exit 6); try again when the Child is idle. A Child older than 2.69
+is seen as busy only once its response starts for a non-streaming request, so a restart sent while such
+a request is still running can end it.
+
+Windows Children take `sync` only: restarts are `unsupported` (`windows-restart`) and orchestrated updates
+`unsupported` (`windows-apply`). `ocx-child` Children report restart and update `unsupported`. The CLI
+verbs need a Home bound to loopback; on any other Home they exit 1, these operations are not available
+there, and the dashboard has no controls for them. While a job holds a link, `ocx link revoke` on it is refused with 409 `link_operation_in_progress` (it does not wait); while a revoke runs, a job for that link is refused the same way, or its item ends `busy`.
+
 ## Key rotation is a two-step commit
 
 Starting a rotation issues the new key while **the old key stays valid**. The dashboard

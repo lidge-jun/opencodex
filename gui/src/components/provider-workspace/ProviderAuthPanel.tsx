@@ -683,7 +683,8 @@ export default function ProviderAuthPanel({
                         />
                       )}
                       <ProviderAccountQuota quotaMode={account.quotaMode} quota={account.quota}
-                        quotaUnavailable={account.quotaUnavailable} quotaPending={account.quotaPending} quotaFailure={account.quotaFailure} />
+                        quotaUnavailable={account.quotaUnavailable} quotaPending={account.quotaPending} quotaFailure={account.quotaFailure}
+                        quotaReadAt={account.quotaReadAt} />
                     </div>
                   </li>
                   );
@@ -797,7 +798,8 @@ export default function ProviderAuthPanel({
                     </div>
                     <div className="pwi-auth-acct-quota">
                       <ProviderAccountQuota quotaMode={entry.quotaMode} quota={entry.quota}
-                        quotaUnavailable={entry.quotaUnavailable} quotaPending={entry.quotaPending} quotaFailure={entry.quotaFailure} />
+                        quotaUnavailable={entry.quotaUnavailable} quotaPending={entry.quotaPending} quotaFailure={entry.quotaFailure}
+                        quotaReadAt={entry.quotaReadAt} />
                     </div>
                   </li>
                 );})}

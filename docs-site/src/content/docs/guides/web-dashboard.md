@@ -37,13 +37,48 @@ password manager can offer to save and autofill it. The dashboard itself still k
 in memory and does not write it to `localStorage` or `sessionStorage`; whether it is saved is entirely
 the browser or password manager's decision.
 
-**Remember this device** is off by default. On a direct HTTPS dashboard (or local loopback), it exchanges the admin token for a server-issued HttpOnly, SameSite=Strict device cookie plus a separate device proof stored in this site's localStorage. HTTPS cookies are Secure and host-only. Neither the cookie nor the proof is the admin token, and neither works alone. Cookies are shared across ports of the same hostname; the origin-scoped proof binds the remembered device to this dashboard origin. Still prefer a dedicated hostname. The admin token is never written to localStorage or sessionStorage. If browser storage is unavailable or cannot save the proof, Remember reports unavailable. On a standalone dashboard behind a TLS-terminating reverse proxy, OpenCodex sees a plain HTTP request, so it refuses Remember for that address; the sign-in dialog says so and turns the option off, and signing in without Remember still works. A trusted Hub management listener is the exception and can still remember devices.
+**Remember this device** is off by default. On a direct HTTPS dashboard (or local loopback), it exchanges the admin token for a server-issued HttpOnly, SameSite=Strict device cookie plus a separate device proof stored in this site's localStorage. HTTPS cookies are Secure and host-only. Neither the cookie nor the proof is the admin token, and neither works alone. Cookies are shared across ports of the same hostname; the origin-scoped proof binds the remembered device to this dashboard origin. Still prefer a dedicated hostname. The admin token is never written to localStorage or sessionStorage. If browser storage is unavailable or cannot save the proof, Remember reports unavailable. On a standalone dashboard behind a TLS-terminating reverse proxy, OpenCodex sees a plain HTTP request, so by default it refuses Remember for that address; the sign-in dialog says so and turns the option off, and signing in without Remember still works. To allow it, name that one proxy with `dashboardTrustedProxy` (see [Remember behind a reverse proxy](#remember-behind-a-reverse-proxy)). A trusted Hub management listener can also remember devices.
 
 The private dashboard-sessions.json stores hashes of the cookie, proof, admin credential and browser identity, the server origin and a fixed 30-day expiry. Relaunching the Safari home-screen app resumes a short-lived GUI session while that device record is valid. Remembered sessions cannot approve consent actions: GitHub stars, reset-credit consumption, prompt-layer edits, Meta Muse sign-in, desktop compatibility changes or quota validation. Use a fresh local or paired session for those actions. Cross-origin/relayed dashboards and remote plaintext HTTP do not support Remember. Expiry, a browser identity change, or rotating the admin token and restarting the server requires sign-in again.
 
 Successful **Forget this device** in the sidebar or mobile action bar (and session logout) immediately revokes the record and all sessions resumed from it, and removes the browser proof. Failed logout keeps the proof so you can retry. The server syncs the record contents before publishing the change; directory-entry durability after a crash is best effort. Older remembered bearer-token keys are removed without being read or migrated. Use only on a device you trust. This does not make Safari offer password AutoFill.
 
 An already-issued session that is otherwise valid can still **Forget this device** after a browser User-Agent change; ordinary access and resumption continue to require the original browser identity.
+
+### Remember behind a reverse proxy
+
+This is opt-in and applies to a standalone instance only. Tell OpenCodex the exact origin the browser
+uses and the addresses the proxy connects from:
+
+```json
+"dashboardTrustedProxy": {
+  "origin": "https://ocx.example.com",
+  "proxyAddresses": ["192.168.1.20"],
+  "trustHeaders": ["x-forwarded-proto"]
+}
+```
+
+- `origin` must be one exact `https://` origin. An `http://` origin, a wildcard, a path or
+  credentials are refused.
+- `proxyAddresses` are the proxy's own IP addresses as this machine sees them (`127.0.0.1` when the
+  proxy runs on the same host). Ranges, wildcards and host names are refused. A request from any
+  other address is never treated as proxied, whatever headers it carries.
+- By default the browser's host is read from `Host`, so the proxy must pass the original `Host`
+  through (Caddy does by default). List `x-forwarded-host` in `trustHeaders` to read it from
+  `X-Forwarded-Host` instead, and `x-forwarded-proto` to also require `X-Forwarded-Proto: https`.
+- An `X-Forwarded-Host` or `X-Forwarded-Proto` value that contradicts the configured origin, or that
+  lists more than one hop, refuses the request even when that header is not trusted.
+- If the origin carries a non-default port and you trust `x-forwarded-host`, the proxy must forward
+  the port as well (in nginx, `$http_host` rather than `$host`); otherwise the request is refused.
+- If the same proxy also answers plain HTTP for this host, trust `x-forwarded-proto` so a plaintext
+  request is refused instead of being treated as the HTTPS origin.
+- The setting is honored only on a non-loopback bind, where the admin token is required. A Hub
+  ignores it and uses its management listener instead.
+
+Remember still needs the admin token; a client certificate checked by the proxy grants nothing on its
+own. The Origin checks, the 30-day expiry, Forget and the consent restrictions above are unchanged.
+`ocx config set` refuses a malformed value with the reason, and a malformed hand edit disables the
+setting. Restart OpenCodex after changing it.
 
 ### Finding the admin token
 
@@ -192,7 +227,7 @@ usage in the report.
 
 ### Filtering request logs
 
-Request details prefer a recognized upstream failure cause over generic proxy-error copy. Physical sends are always shown when valid; missing or invalid accounting shows **Unavailable**, not zero. **Retries** counts sends after the first only when one fully settled, consistent attempt is recorded. Multi-attempt, unresolved, inconsistent, or lossy-normalized records omit retries instead of inventing them. Unknown persisted causes use the status-based headline without raw attribution. **Upstream reason** shows a classified provider condition (for example rate limited, quota or credits exhausted, context window exceeded, location not supported, account verification required, or model unavailable), and **Failure detail** shows text written by the proxy, such as a stall timeout or byte-cap limit; new rows do not store the provider's own error text. Older `usage.jsonl` files may still contain it, but the dashboard drops it when reading them.
+Request details prefer a recognized upstream failure cause over generic proxy-error copy. Physical sends are always shown when valid; missing or invalid accounting shows **Unavailable**, not zero. **Retries** counts sends after the first only when one fully settled, consistent attempt is recorded. Multi-attempt, unresolved, inconsistent, or lossy-normalized records omit retries instead of inventing them. Unknown persisted causes use the status-based headline without raw attribution. **Upstream reason** shows a classified provider condition (for example rate limited, quota or credits exhausted, context window exceeded, location not supported, account verification required, or model unavailable), and **Failure detail** shows text written by the proxy, such as a stall timeout or byte-cap limit. When the provider names a published error class or finish reason (for example Gemini or Vertex `INVALID_ARGUMENT`, or `MALFORMED_FUNCTION_CALL`), Failure detail also shows that token; new rows do not store the provider's own error text. Older `usage.jsonl` files may still contain it, but the dashboard drops it when reading them.
 
 A proxy replay refusal keeps HTTP 429 and error code `upstream_reset_replay_refused`, but
 its request and attempt failure cause is `transport-ambiguous`, with resend permission
