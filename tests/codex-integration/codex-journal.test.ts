@@ -387,6 +387,40 @@ describe("codex-journal", () => {
     expect(existsSync(journalPath)).toBe(false);
   });
 
+  // A Remote Link Child linked while a standalone proxy had routing injected: `ocx connect --link`
+  // re-injects for the client, but the journal stayed the standalone process's. Once that process
+  // exited into its supervisor (desktop exit 75, service exit 1), the supervisor's fresh start saw a
+  // dead process owner and restored native Codex and the old catalog under the new link.
+  test("a client injection over a standalone injection takes the journal, so a supervised restart keeps it", () => {
+    const original = '# original config\nmodel_provider = "openai"\n';
+    writeFileSync(join(testDir, "config.toml"), original, "utf8");
+    const linked = runScript(testDir, `
+      const { injectCodexConfig } = require("./src/codex/inject");
+      (async () => {
+        const config = { port: 10100, providers: {}, defaultProvider: "openai" };
+        const standalone = await injectCodexConfig(10100, config, { catalogPath: null });
+        const client = await injectCodexConfig(10100, config, { catalogPath: null, journalOwner: { kind: "client", apiKeyId: "link-key" } });
+        console.log(JSON.stringify({ standalone: standalone.success, client: client.success }));
+      })();
+    `);
+    expect(linked.status).toBe(0);
+    expect(JSON.parse(linked.stdout)).toEqual({ standalone: true, client: true });
+    const journalPath = join(testDir, "opencodex-journal.json");
+    const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+    expect(journal.owner).toEqual({ kind: "client", apiKeyId: "link-key" });
+    expect(Buffer.from(journal.originalConfig, "base64").toString("utf8")).toBe(original);
+    const routed = readFileSync(join(testDir, "config.toml"), "utf8");
+
+    // The supervisor's start: the injecting process is gone, the link is the committed client.
+    const restarted = runScript(testDir, `
+      const { reconcileJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify({ restored: reconcileJournal({ activeClientApiKeyId: "link-key" }) }));
+    `);
+    expect(restarted.status).toBe(0);
+    expect(JSON.parse(restarted.stdout).restored).toBe(false);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(routed);
+  });
+
   test("removeJournal refuses unknown journal evidence", () => {
     const journalPath = join(testDir, "opencodex-journal.json");
     writeFileSync(journalPath, "{}", "utf8");

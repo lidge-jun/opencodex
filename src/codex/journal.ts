@@ -192,7 +192,7 @@ export function writeJournal(options: WriteJournalOptions = {}, hooks: AtomicWri
   // Ownership is decided HERE, from the bytes about to be journaled — never taken
   // on the caller's word. A caller that says "native" about injected content would
   // otherwise make opencodex's own routing the user's permanent "original".
-  if (hasInjectedCodexRouting(config)) return;
+  if (hasInjectedCodexRouting(config)) { adoptJournalForClient(options.owner, hooks); return; }
   // The caller's verdict only authorizes REPLACEMENT. It is weaker evidence than
   // the check above (it may describe bytes read a moment earlier), so an
   // unclassified call creates a first snapshot but never overwrites one.
@@ -201,7 +201,7 @@ export function writeJournal(options: WriteJournalOptions = {}, hooks: AtomicWri
     throw new CodexHomeOwnerRefusal("owner-unknown");
   }
   const previous = inspection.kind === "read" ? inspection.journal as unknown as Journal : null;
-  if (previous && options.currentStateIsNative !== true) return;
+  if (previous && options.currentStateIsNative !== true) { adoptJournalForClient(options.owner, hooks); return; }
   const profile = existsSync(CODEX_PROFILE_PATH)
     ? readFileSync(CODEX_PROFILE_PATH, "utf-8")
     : null;
@@ -217,6 +217,23 @@ export function writeJournal(options: WriteJournalOptions = {}, hooks: AtomicWri
     timestamp: new Date().toISOString(),
   };
   atomicWriteFile(JOURNAL_PATH, JSON.stringify(journal), undefined, hooks);
+}
+
+/**
+ * A committing client injection takes over a journal another owner wrote, keeping its original
+ * snapshot. Routing is the client's from here on; left with a standalone process as owner, the
+ * first start after that process exited (a supervisor relaunch after `ocx connect --link` and
+ * `ocx restart`) read it as a crashed session and restored native Codex under the new link.
+ */
+function adoptJournalForClient(owner: WriteJournalOptions["owner"], hooks: AtomicWriteHooks): void {
+  if (owner?.kind !== "client") return;
+  const inspection = readCodexHomeJournal(JOURNAL_PATH);
+  if (inspection.kind === "unknown") throw new CodexHomeOwnerRefusal("owner-unknown");
+  if (inspection.kind !== "read") return;
+  const previous = inspection.journal as unknown as Journal;
+  if (previous.owner?.kind === "client" && previous.owner.apiKeyId === owner.apiKeyId) return;
+  const adopted: Journal = { ...previous, owner: { kind: "client", apiKeyId: owner.apiKeyId } };
+  atomicWriteFile(JOURNAL_PATH, JSON.stringify(adopted), undefined, hooks);
 }
 
 export interface InjectedJournalOwnership {
