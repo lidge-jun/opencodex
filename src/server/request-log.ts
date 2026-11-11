@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { normalizeRecordedClient, type UsageClient } from "../usage/client";
-import { stampApiKeyAccountLabel, usesApiKeyAccount } from "../providers/label";
+import { anthropicAccountTagField, stampApiKeyAccountLabel, usesApiKeyAccount } from "../providers/label";
 import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
 export { sealRequestAttemptIdentity };
@@ -47,6 +47,7 @@ import {
   isKnownTransportPhase,
   isKnownUsageSurface,
   isCodexUsageAccountLogLabel,
+  isAnthropicAccountTag,
   isLogicalRequestId,
   isValidReasoningWireValue,
   normalizeClaudeCompatibilityUsageLog,
@@ -338,6 +339,8 @@ export interface RequestLogEntry extends UpstreamErrorDiagnostics {
    *  since both leave it undefined. */
   inboundProtocol?: "responses" | "chat" | "messages";
   accountLogLabel?: string;
+  /** Anthropic pool account of `provider` (#8383): its p-label, beside the unchanged `accountLogLabel`. */
+  accountTag?: `p${string}`;
   /** Best-effort chat/session correlation for Logs grouping (#330). */
   conversationId?: string;
   requestedModel?: string;
@@ -491,7 +494,8 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
   const protocolTrace = parseProtocolTraceV1(entry.protocolTrace);
   // projectErrorDetail bounds the tier fields (top-level and per attempt) itself, so this stays safe
   // for a row that did not come through the disk reader; attempts are copied before it edits them.
-  const attempts = Array.isArray(entry.attempts) ? entry.attempts.map(attempt => ({ ...attempt })) : entry.attempts;
+  const attempts = Array.isArray(entry.attempts) ? entry.attempts.map(({ accountTag, ...attempt }) => ({ ...attempt,
+    ...(isAnthropicAccountTag(accountTag) ? { accountTag } : {}) })) : entry.attempts;
   return projectErrorDetail({
     requestId: entry.requestId,
     ...(isLogicalRequestId(entry.logicalRequestId) ? { logicalRequestId: entry.logicalRequestId } : {}),
@@ -507,6 +511,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(isCodexUsageAccountLogLabel(entry.accountLogLabel)
       ? { accountLogLabel: entry.accountLogLabel }
       : {}),
+    ...(isAnthropicAccountTag(entry.accountTag) ? { accountTag: entry.accountTag } : {}),
     ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
     ...(entry.requestedAlias ? { requestedAlias: entry.requestedAlias } : {}),
     ...(entry.shadowCallRewrittenFrom
@@ -705,6 +710,7 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(isCodexUsageAccountLogLabel(entry.accountLogLabel)
         ? { accountLogLabel: entry.accountLogLabel }
         : {}),
+      ...(isAnthropicAccountTag(entry.accountTag) ? { accountTag: entry.accountTag } : {}),
       ...(entry.conversationId ? { conversationId: entry.conversationId } : {}),
       ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
       ...(entry.servedModel ? { servedModel: entry.servedModel } : {}),
@@ -1585,6 +1591,7 @@ function writeFinalRequestLog(
     ...(isCodexUsageAccountLogLabel(logCtx.accountLogLabel)
       ? { accountLogLabel: logCtx.accountLogLabel }
       : {}),
+    ...anthropicAccountTagField(isCombo ? undefined : logCtx.provider),
     ...(logCtx.conversationId ? { conversationId: logCtx.conversationId } : {}),
     ...(logCtx.requestedModel ? { requestedModel: logCtx.requestedModel } : {}),
     ...(logCtx.requestedAlias ? { requestedAlias: logCtx.requestedAlias } : {}),
