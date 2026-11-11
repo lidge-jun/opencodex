@@ -153,6 +153,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   thinkingBudgetModels: "list",
   escapeBuiltinToolNames: "none",
   anthropicEofTolerance: "none",
+  forwardAdvisorTool: "none",
   noVisionModels: "list",
   googleMode: "none",
   googleToolSchemaPolicy: "none",

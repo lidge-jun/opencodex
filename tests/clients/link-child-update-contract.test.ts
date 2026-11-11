@@ -67,6 +67,28 @@ describe("oracle: every plan buildOrchestratedPlan can emit parses", () => {
     const bun = parsedPlan(buildOrchestratedPlan(base));
     expect(classifyChildUpdatePlan(bun, { ...ctx, entry: "pair" })).toMatchObject({ updateRoute: "orchestrated" });
   });
+
+  test("A4 launcher rows for an npm or pnpm pair", () => {
+    for (const installer of ["npm", "pnpm"] as const) {
+      const plan = parsedPlan(buildOrchestratedPlan({ ...base, installer }));
+      expect(classifyChildUpdatePlan(plan, { ...ctx, entry: "pair", launcher: "available" })).toMatchObject({ installKind: installer, updateRoute: "orchestrated", updateReason: null });
+      expect(classifyChildUpdatePlan(plan, { ...ctx, entry: "pair", launcher: "unavailable" })).toMatchObject({ installKind: installer, updateRoute: "owner-action", updateReason: "launcher-node-missing" });
+      expect(classifyChildUpdatePlan(plan, { ...ctx, entry: "pair", launcher: null })).toMatchObject({ installKind: installer, updateRoute: "owner-action", updateReason: "launcher-bypassed" });
+    }
+    // installer bun ignores the launcher report: it plans and applies on the served Bun entry.
+    const bun = parsedPlan(buildOrchestratedPlan(base));
+    expect(classifyChildUpdatePlan(bun, { ...ctx, entry: "pair", launcher: "unavailable" })).toMatchObject({ installKind: "bun", updateRoute: "orchestrated", updateReason: null });
+  });
+
+  test("the plan probe passes the launcher report into the classifier", () => {
+    const plan = buildOrchestratedPlan({ ...base, installer: "npm" });
+    const probe = (launcher: string) => classifyUpdatePlanProbe({ code: 0, stdout: "ocx-fanout:stdout-begin\n" + JSON.stringify(plan) + "\n",
+      stderr: "ocx-fanout:selected:2.97.0\nocx-fanout:entry:pair\n" + launcher }, { homeVersion: "2.100.0", desktopUpdateRequest: false });
+    expect(probe("ocx-fanout:launcher:available\n")).toMatchObject({ kind: "plan", classification: { updateRoute: "orchestrated" } });
+    expect(probe("ocx-fanout:launcher:unavailable\n")).toMatchObject({ kind: "plan", classification: { updateRoute: "owner-action", updateReason: "launcher-node-missing" } });
+    expect(probe("ocx-fanout:launcher:exec\n")).toMatchObject({ kind: "plan", classification: { updateRoute: "owner-action", updateReason: "launcher-bypassed" } });
+    expect(probe("")).toMatchObject({ kind: "plan", classification: { updateReason: "launcher-bypassed" } });
+  });
 });
 
 describe("oracle: every result shape parses and maps", () => {

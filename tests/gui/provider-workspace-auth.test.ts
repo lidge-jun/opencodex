@@ -5,6 +5,10 @@ import {
 } from "../../gui/src/provider-workspace/auth";
 import type { WorkspaceItem } from "../../gui/src/provider-workspace/catalog";
 import type { TFn } from "../../gui/src/i18n";
+import { createElement } from "../../gui/node_modules/react";
+import { renderToStaticMarkup } from "../../gui/node_modules/react-dom/server";
+import { DICTS, I18nContext } from "../../gui/src/i18n/shared";
+import ProviderAccountQuota from "../../gui/src/components/provider-workspace/ProviderAccountQuota";
 
 function provider(name: string, overrides: Partial<WorkspaceItem> = {}): WorkspaceItem {
   return {
@@ -286,5 +290,34 @@ describe("workspace account integration seam", () => {
     expect(panel).not.toContain("copyDoctor");
     expect(pool).toContain("const showDoctorCopy = !embedded;");
     expect(pool).toContain("onCopyDoctor={showDoctorCopy ? copyDoctor : undefined}");
+  });
+});
+
+describe("API-key balance reading (#8397)", () => {
+  const render = (props: Parameters<typeof ProviderAccountQuota>[0]) => {
+    const t: TFn = (key, vars) => Object.entries(vars ?? {}).reduce((text, [name, value]) => text.replace(`{${name}}`, String(value)), DICTS.en[key]);
+    return renderToStaticMarkup(createElement(I18nContext.Provider, { value: { locale: "en", setLocale: () => {}, t } },
+      createElement(ProviderAccountQuota, props)));
+  };
+
+  test("a failed read shows the failure and when the balance was last read, never a zero value", () => {
+    const markup = render({ quotaMode: "probe", quota: null, quotaUnavailable: true, quotaFailure: "timeout",
+      quotaUnknownReason: "read_failed", quotaReadAt: Date.now() - 180_000 });
+    expect(markup).toContain("The quota request timed out.");
+    expect(markup).toContain("Last read: 3m ago");
+    expect(markup).not.toMatch(/\b0%/);
+  });
+
+  test("an unsupported key shows no read time", () => {
+    const markup = render({ quotaMode: "unsupported", quotaUnknownReason: "no_balance_source" });
+    expect(markup).toContain('data-quota-state="unsupported"');
+    expect(markup).not.toContain("Last read");
+  });
+
+  test("every locale translates the last-read label", () => {
+    for (const [locale, catalog] of Object.entries(DICTS)) {
+      expect(catalog["pws.quotaLastRead"], locale).toBeTruthy();
+      if (locale !== "en") expect(catalog["pws.quotaLastRead"], locale).not.toBe(DICTS.en["pws.quotaLastRead"]);
+    }
   });
 });

@@ -616,7 +616,7 @@ State-changing: yes. JSON mode: `payload`.
 
 ### `ocx models new-policy`
 
-Usage: `ocx models new-policy [on|off] [--provider <name>] [--json]`
+Usage: `ocx models new-policy [on|off|admit] [--provider <name>] [--json]`
 
 Read or set the policy for newly discovered models.
 
@@ -632,7 +632,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--provider` | string | Scope the read/write to a provider; omitted means global. |
 | `--json` | boolean | Emit the policy view or receipt. |
 
-- No state operand means read only. Only on/off writes exist; no inherit/clear operand is implemented.
+- No state operand means read only. Writes on, off or admit; admit appends new arrivals to a provider's custom selectedModels and never widens a preset-derived selection. No inherit/clear operand is implemented.
 
 ### `ocx models new-arrivals`
 

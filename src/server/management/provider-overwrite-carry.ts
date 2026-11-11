@@ -63,6 +63,9 @@ export const PROVIDER_COMPAT_CARRY_FIELDS = [
   // forward a tool the dropped unconditional list had denied.
   "unsupportedHostedTools",
   "unsupportedHostedToolsWithClientTools",
+  // Whether this gateway runs Claude Code's Advisor server tool (#8448): a fact about the upstream,
+  // so a move to another gateway must not keep forwarding it there.
+  "forwardAdvisorTool",
   ...RETRY_POLICY_FIELDS,
 ] as const satisfies readonly (keyof OcxProviderConfig)[];
 
@@ -193,6 +196,7 @@ export function providerCompatFieldConfigError(provider: Record<string, unknown>
   if (preserveResponses !== undefined && typeof preserveResponses !== "boolean") return "preserveResponsesReasoningContent must be a boolean";
   const promoteAdditionalTools = provider.promoteAdditionalTools;
   if (promoteAdditionalTools !== undefined && typeof promoteAdditionalTools !== "boolean") return "promoteAdditionalTools must be a boolean";
+  if (provider.forwardAdvisorTool !== undefined && typeof provider.forwardAdvisorTool !== "boolean") return "forwardAdvisorTool must be a boolean";
   const wire = provider.reasoningWireFormat;
   if (wire !== undefined && !PROVIDER_REASONING_WIRE_FORMATS.includes(wire as never)) {
     return `reasoningWireFormat must be one of: ${PROVIDER_REASONING_WIRE_FORMATS.join(", ")}`;
@@ -256,6 +260,13 @@ export function applyProviderCompatPatchFields(
     if (value === null) delete next.promoteAdditionalTools;
     else if (typeof value === "boolean") next.promoteAdditionalTools = value;
     else return { error: "promoteAdditionalTools must be a boolean" };
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "forwardAdvisorTool")) {
+    const value = rawBody.forwardAdvisorTool;
+    if (value === null) delete next.forwardAdvisorTool;
+    else if (typeof value === "boolean") next.forwardAdvisorTool = value;
+    else return { error: "forwardAdvisorTool must be a boolean" };
     touched = true;
   }
   if (Object.hasOwn(rawBody, "inferContextWindow")) {
