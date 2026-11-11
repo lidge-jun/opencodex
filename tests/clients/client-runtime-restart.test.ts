@@ -7,7 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "bun";
@@ -20,7 +20,13 @@ import { codexProxyStartEnv } from "../../src/cli/codex-launcher";
 import { spyOn } from "bun:test";
 import { deriveLaunchdServiceDiagnostic, deriveSystemdServiceDiagnostic, deriveWindowsServiceDiagnostic } from "../../src/service/diagnostics";
 import * as serviceChildOwnership from "../../src/service/service-child-ownership";
-import { clientRuntimeRecord } from "../../src/client/runtime";
+import { clientRuntimeRecord, standaloneRecycleEnv } from "../../src/client/runtime";
+import { replacementStartEnvironment } from "../../src/server/management/system-restart";
+import { SUPERVISOR_MARKER_ENVS } from "../../src/lib/supervisor-markers";
+import { DESKTOP_SUPERVISED_ENV } from "../../src/lib/system-restart-contract";
+import { SERVICE_MANAGED_ENV } from "../../src/service/state";
+import { WINDOWS_WRAPPER_PROTOCOL_ENV } from "../../src/service/windows-wrapper-exit";
+import { repoPath } from "../helpers/repo-root";
 import { restartRuntimeAfterDisconnect } from "../../src/cli/disconnect-runtime";
 import { restartRuntimeAfterApply } from "../../src/cli/link-apply-restart";
 import {
@@ -614,3 +620,68 @@ describe("rollback after a failed replacement", () => {
     expect(clientRestartRollbackAction(link, { kind: "connected", value: { ...link, link: { ...link.link, linkId: `lnk_${"c".repeat(16)}` } } })).toBe("recycle");
   });
 });
+
+// Final review round 7: a marker proves only that a process was started with it. Shells a
+// manager-owned runtime hands to tools inherit its environment, so a companion started from one
+// would record a manager that does not own it. Every detached launch strips the markers.
+describe("supervisor markers never reach a process their supervisor did not launch", () => {
+  test("one list, matching the constants that define each marker", () => {
+    expect([...SUPERVISOR_MARKER_ENVS].sort()).toEqual([DESKTOP_SUPERVISED_ENV, SERVICE_MANAGED_ENV, WINDOWS_WRAPPER_PROTOCOL_ENV].sort());
+  });
+
+  const companions = [
+    ["ocx claude", (base: NodeJS.ProcessEnv) => claudeProxyStartEnv(base)],
+    ["ocx codex", (base: NodeJS.ProcessEnv) => codexProxyStartEnv(base) as NodeJS.ProcessEnv],
+    ["ocx opencode", (base: NodeJS.ProcessEnv) => opencodeProxyStartEnv(base) as NodeJS.ProcessEnv],
+  ] as const;
+  for (const [name, launch] of companions) {
+    for (const marker of SUPERVISOR_MARKER_ENVS) {
+      test(name + " started from a shell carrying " + marker + ": no marker, no owner, disconnect leaves it", async () => {
+        const env = launch({ PATH: "/usr/bin", OCX_SERVICE: "1", [marker]: "1" });
+        for (const other of SUPERVISOR_MARKER_ENVS) expect(env[other]).toBeUndefined();
+        const owner = restartOwnerEvidence({ desktop: false, env });
+        expect(owner).toBeNull();
+        const record = clientRuntimeRecord(4321, 10100, createLocalAttestationSecret(), owner);
+        expect(record.restartOwner).toBeUndefined();
+        let restarts = 0;
+        const code = await restartRuntimeAfterDisconnect({
+          observe: async () => ({ kind: "live", live: { pid: 4321, port: 10100, role: "client" } }),
+          capture: () => ({ ...record, attestationSecret: record.attestationSecret! }),
+          connectionState: () => ({ kind: "disconnected" }),
+          restart: async () => { restarts += 1; return { ok: true }; },
+          json: false, info: () => {}, error: () => {},
+        });
+        expect({ code, restarts }).toEqual({ code: 0, restarts: 0 });
+      });
+    }
+  }
+
+  test("the standalone recycle and the restart replacement strip every marker", () => {
+    const saved = Object.fromEntries(SUPERVISOR_MARKER_ENVS.map(name => [name, process.env[name]]));
+    for (const name of SUPERVISOR_MARKER_ENVS) process.env[name] = "1";
+    try {
+      const recycle = standaloneRecycleEnv(process.env, "fp");
+      const replacement = replacementStartEnvironment(true);
+      for (const name of SUPERVISOR_MARKER_ENVS) {
+        expect(recycle[name]).toBeUndefined();
+        expect(replacement[name]).toBeUndefined();
+      }
+    } finally {
+      for (const name of SUPERVISOR_MARKER_ENVS) { if (saved[name] === undefined) delete process.env[name]; else process.env[name] = saved[name]; }
+    }
+  });
+
+  // The other launch sites build their environment inline; each must pass it through the helper.
+  test.each([
+    ["src/cli/index.ts", "function detachedStartEnvironment(): NodeJS.ProcessEnv {\n  const env: NodeJS.ProcessEnv = withoutSupervisorMarkers(withoutSiblingMarker(process.env));"],
+    ["src/cli/index.ts", "env: withProcessRuntimeProvenance(withoutSupervisorMarkers(withoutSiblingMarker(process.env))),"],
+    ["src/update/index.ts", "const env = mutation.controlEnvironment(withoutSupervisorMarkers(withoutSiblingMarker(process.env)));"],
+    ["src/adapters/cursor/native-exec-shell.ts", "backgroundShellRuntime.spawn(args.command, { cwd, shell: true, env: withoutSupervisorMarkers(process.env) });"],
+    ["src/adapters/cursor/native-exec-desktop.ts", "env: withoutSupervisorMarkers(config.env ? { ...process.env, ...config.env } : process.env),"],
+    ["src/update/job-pinned-start.ts", "const env: NodeJS.ProcessEnv = withoutSupervisorMarkers(withoutSiblingMarker(process.env));"],
+    ["bin/ocx.mjs", `for (const name of ${JSON.stringify(SUPERVISOR_MARKER_ENVS).replaceAll(",", ", ")}) delete env[name];`],
+  ] as const)("%s strips the markers where it launches", (path, line) => {
+    expect(readFileSync(repoPath(path), "utf8")).toContain(line);
+  });
+});
+

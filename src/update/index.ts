@@ -42,6 +42,7 @@ import {
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-update-plan.mjs";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { withoutSiblingMarker } from "../codex/sibling-start";
+import { withoutSupervisorMarkers } from "../lib/supervisor-markers";
 import { packageVersion } from "../lib/package-version";
 import { isStandaloneModuleUrl } from "../lib/standalone";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
@@ -691,7 +692,7 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
     }
     if (!postUpdateLauncherUsable || !existsSync(postUpdateLauncher)) return false;
     // An ordinary owner: a stray sibling marker would otherwise mark it before any probe.
-    const env = mutation.controlEnvironment(withoutSiblingMarker(process.env));
+    const env = mutation.controlEnvironment(withoutSupervisorMarkers(withoutSiblingMarker(process.env)));
     delete env.OCX_SERVICE;
     const runtimeEnv = withProcessRuntimeProvenance(env);
     if (!homePolicy.authorizeMutation("runtime")) return "refused";

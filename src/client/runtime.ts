@@ -33,6 +33,7 @@ import { withClientLifecycleSync } from "./lifecycle-lock";
 import { clientConnectionEnded, clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, restartOwnerEvidence, type ClientRestartController, type RestartOwner } from "./runtime-restart";
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
 import { restoreLinkClientRouting } from "./stop-routing";
+import { SUPERVISOR_MARKER_ENVS } from "../lib/supervisor-markers";
 import { markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } from "./sync-runtime";
 
 let activeServer: Server<unknown> | null = null;
@@ -123,10 +124,8 @@ export function standaloneRecycleEnv(
   const childEnv = { ...env };
   // A detached replacement is nobody's child: not the desktop app's, not a service's, not a Windows
   // wrapper's. It must carry no supervisor marker it would otherwise misread as its own.
-  delete childEnv[DESKTOP_SUPERVISED_ENV];
+  for (const name of SUPERVISOR_MARKER_ENVS) delete childEnv[name];
   delete childEnv.OCX_SERVICE;
-  delete childEnv.OCX_SERVICE_MANAGED;
-  delete childEnv.OCX_WINDOWS_WRAPPER_PROTOCOL;
   const admissionToken = childEnv.OPENCODEX_API_AUTH_TOKEN?.trim();
   if (admissionToken && serviceApiTokenFingerprint(admissionToken) !== disconnectedTokenFingerprint) {
     // A surviving env token shadows OCX_API_TOKEN_FILE entirely, so nothing below can

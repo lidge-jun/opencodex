@@ -37,6 +37,7 @@ import { desktopProfileWireAlias, legacyDesktopProfileWireAlias } from "../claud
 import { inspectDesktopFirstParty } from "../claude/desktop-first-party";
 import { isClaudeInterceptProxyUrl, type ClaudeInterceptSettingsState } from "../claude/intercept/settings";
 import { withoutSiblingMarker } from "../codex/sibling-start";
+import { withoutSupervisorMarkers } from "../lib/supervisor-markers";
 
 /**
  * The environment of the detached `ocx start` that `ocx claude` launches (the spawn adds the runtime
@@ -45,7 +46,7 @@ import { withoutSiblingMarker } from "../codex/sibling-start";
  * a manager-launched process (src/client/runtime-restart.ts classifyClientRestartSupervisor).
  */
 export function claudeProxyStartEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return withoutSiblingMarker({ ...base, OCX_SERVICE: "1" });
+  return withoutSupervisorMarkers(withoutSiblingMarker({ ...base, OCX_SERVICE: "1" }));
 }
 
 export interface ClaudeLaunchEnv {

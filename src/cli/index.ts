@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
-import { serviceStayOutExitCode, WINDOWS_WRAPPER_PROTOCOL_ENV } from "../service/windows-wrapper-exit";
+import { serviceStayOutExitCode } from "../service/windows-wrapper-exit";
 import { isSupervisedServiceChild, serviceChildOwnershipDecisionForClassifiedChild } from "../service/service-child-ownership";
-import { SERVICE_MANAGED_ENV } from "../service/state";
+import { withoutSupervisorMarkers } from "../lib/supervisor-markers";
 import { raiseWindowsProxyPriority } from "../service/windows-process-priority";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
@@ -806,15 +806,13 @@ async function handleStart(options: { block?: boolean } = {}) {
 }
 
 function detachedStartEnvironment(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);
+  const env: NodeJS.ProcessEnv = withoutSupervisorMarkers(withoutSiblingMarker(process.env));
   // Only a real service wrapper may claim supervision. A detached ensure/tray child is an
   // ordinary owner, never a sibling: while live it maintains routing, and on exit restores it.
   // The supervisor markers ride along whenever this runs inside a service child's
   // environment, so they must leave with OCX_SERVICE — otherwise the child would
   // answer the ownership gate as a managed job it is not.
   delete env.OCX_SERVICE;
-  delete env[SERVICE_MANAGED_ENV];
-  delete env[WINDOWS_WRAPPER_PROTOCOL_ENV];
   return withProcessRuntimeProvenance(env);
 }
 
@@ -1979,7 +1977,7 @@ process.exit(await dispatchCommand(head, {
       detached: true,
       stdio: "ignore",
       windowsHide: true,
-      env: withProcessRuntimeProvenance(withoutSiblingMarker(process.env)),
+      env: withProcessRuntimeProvenance(withoutSupervisorMarkers(withoutSiblingMarker(process.env))),
     });
     child.unref();
   },
