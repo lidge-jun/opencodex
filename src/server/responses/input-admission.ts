@@ -188,7 +188,8 @@ function adapterContextWindow(provider: OcxProviderConfig, modelId: string): num
   const collapsed = collapseDevinModelUid(normalized);
   // A configured window for the collapsed base (operator override or registry seed) still
   // wins over the static table for effort-suffixed ids like swe-2-flash-medium.
-  return positive(modelRecordValue(provider.modelContextWindows, collapsed))
+  return positive(modelRecordValue(provider.modelContextWindows, normalized))
+    ?? positive(modelRecordValue(provider.modelContextWindows, collapsed))
     ?? positive(modelRecordValue(DEVIN_MODEL_CONTEXT_WINDOWS, normalized))
     ?? positive(modelRecordValue(DEVIN_MODEL_CONTEXT_WINDOWS, collapsed));
 }
@@ -226,7 +227,10 @@ function resolveContextLimits(
 
   const window = canonicalNativeBare ? (native ?? generatedNativeWindow(modelId, configured, nativeContextCap)) : (configured ?? adapterContextWindow(provider, modelId));
   // modelMaxInputTokens is an input-only cap, so it can only tighten the window.
-  const configuredMaxInput = positive(modelRecordValue(provider.modelMaxInputTokens, modelId));
+  const configuredMaxInput = positive(modelRecordValue(provider.modelMaxInputTokens, modelId))
+    ?? (provider.adapter === "devin"
+      ? positive(modelRecordValue(provider.modelMaxInputTokens, modelId.replace(/\./g, "-")))
+      : null);
   const limits = [window, configuredMaxInput, nativeMaxInput].filter((v): v is number => v !== null);
   return { window, ceiling: limits.length === 0 ? null : Math.min(...limits) };
 }
