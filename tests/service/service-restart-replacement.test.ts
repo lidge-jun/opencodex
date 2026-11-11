@@ -110,6 +110,25 @@ describe("restart replacement report", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  test("a thrown restart answered by the old runtime reports at once instead of polling", async () => {
+    // Most restart failures refuse before stopping anything, so the old runtime answering is
+    // final; waiting out the 20 s (45 s on Windows) budget only delayed the error.
+    const out = capture();
+    let identified = 0;
+    let slept = 0;
+    try {
+      await reportServiceServing("restarted", {
+        port: 10100, hostname: "127.0.0.1", replacing: 4242,
+        identify: async () => { identified += 1; return { pid: 4242 }; },
+        sleep: async ms => { slept += ms; }, now: () => 0, timeoutMs: 45_000,
+      }, new Error("service is not installed"));
+    } finally { out.restore(); }
+    expect(identified).toBe(1);
+    expect(slept).toBe(0);
+    expect(out.text()).toContain("still answering on port 10100; it was kept, not replaced");
+    expect(process.exitCode).toBe(1);
+  });
+
   test("a thrown restart with a new runtime answering names the new runtime", async () => {
     const out = capture();
     try {

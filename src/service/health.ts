@@ -49,6 +49,11 @@ const defaultIdentify: ServingIdentity = async (port, hostname) => {
   return identity ? { pid: identity.pid } : null;
 };
 
+/** The pid a restart must replace, or null when there is nothing valid to compare against. */
+function replacedPid(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
 /**
  * The pid of the proxy answering on the installed service port right now, or null when nothing
  * answers or the answer names no pid. `ocx service restart` reads it before restarting so the
@@ -95,6 +100,12 @@ export async function confirmServiceServing(
     hostname?: string;
     probe?: (port: number, hostname: string) => Promise<boolean>;
     replacing?: number | null;
+    /**
+     * Stop at the first answer from the replaced pid instead of waiting for a replacement. A
+     * restart that already threw usually refused before touching anything, so the old runtime
+     * answering is the final answer and polling the whole budget only delays the error.
+     */
+    settleOnReplaced?: boolean;
     identify?: ServingIdentity;
     sleep?: (ms: number) => Promise<void>;
     now?: () => number;
@@ -105,9 +116,7 @@ export async function confirmServiceServing(
   const hostname = deps.hostname ?? loadConfig().hostname ?? "127.0.0.1";
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
-  const replacing = typeof deps.replacing === "number" && Number.isSafeInteger(deps.replacing) && deps.replacing > 0
-    ? deps.replacing
-    : null;
+  const replacing = replacedPid(deps.replacing);
   let staleRuntimePid: number | undefined;
   let runtimePid: number | undefined;
   const identify = deps.identify ?? defaultIdentify;
@@ -124,6 +133,7 @@ export async function confirmServiceServing(
   let waited = false;
   for (;;) {
     if (await probe(port, hostname)) return serving();
+    if (deps.settleOnReplaced && staleRuntimePid !== undefined) return { ok: false, port, staleRuntimePid };
     if (now() >= deadline) break;
     await sleep(500);
     waited = true;
@@ -181,13 +191,15 @@ export async function reportServiceServing(
   // judgement about elapsed time (#3009).
   const now = deps.now ?? Date.now;
   const startedAt = now();
-  const serving = await confirmServiceServing({ ...deps, timeoutMs: healthBudgetMs });
+  const serving = await confirmServiceServing({
+    ...deps, timeoutMs: healthBudgetMs, settleOnReplaced: precedingFailure !== undefined,
+  });
   const waitedMs = Math.max(0, now() - startedAt);
   const failureDetail = precedingFailure === undefined
     ? null
     : precedingFailure instanceof Error ? precedingFailure.message : String(precedingFailure);
   const operation = SERVICE_OPERATION_NOUN[verb];
-  const replacing = typeof deps.replacing === "number" && deps.replacing > 0 ? deps.replacing : null;
+  const replacing = replacedPid(deps.replacing);
   const staleRuntimePid = serving.ok ? undefined : serving.staleRuntimePid;
   if (failureDetail !== null) {
     // Serving or not, the operation did not complete, so neither branch may print a
