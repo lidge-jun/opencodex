@@ -1195,7 +1195,7 @@
   "plan.test.ts": "images", "platform-dialog-guard.test.ts": "gui",
   "policy-execution.test.ts": "routing", "pool-kernel-generic-sweep.test.ts": "oauth",
   "port-reclaim.test.ts": "server", "ports.test.ts": "server",
-  "pr-readiness-reattest.test.ts": "ci-workflows", "prime-client.test.ts": "clients",
+  "pr-gates-workflow.test.ts": "ci-workflows", "pr-readiness-reattest.test.ts": "ci-workflows", "prime-client.test.ts": "clients",
   "private-sqlite-path.test.ts": "lib", "privacy-mask-account.test.ts": "lib", "privacy-scan-asset-names.test.ts": "ci-workflows",
   "privacy-scan-meta-key.test.ts": "ci-workflows", "privacy-scan-ssh-endpoint.test.ts": "ci-workflows",
   "probe-lease-dispatch-wiring.test.ts": "routing", "probe-lease.test.ts": "routing",
