@@ -437,6 +437,9 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "DELETE", path: "/api/link/{id}", module: "server/management/link-routes", mutates: true, mechanism: "regex" },
   { method: "POST", path: "/api/link/{id}/reconnect", module: "server/management/link-routes", mutates: true, mechanism: "regex" },
   { method: "POST", path: "/api/link/issue", module: "server/management/link-routes", mutates: true },
+  // server/management/link-child-ops-routes (reached through link-routes)
+  { method: "POST", path: "/api/link/children/operations", module: "server/management/link-child-ops-routes", mutates: true },
+  { method: "GET", path: "/api/link/children/jobs/{jobId}", module: "server/management/link-child-ops-routes", mutates: false, mechanism: "regex" },
   // server/management/remote-workspace-routes
   { method: "GET", path: "/api/remote-workspace", module: "server/management/remote-workspace-routes", mutates: false },
   { method: "GET", path: "/api/remote-workspace/runtimes", module: "server/management/remote-workspace-routes", mutates: false },

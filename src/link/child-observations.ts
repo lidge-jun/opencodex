@@ -187,15 +187,19 @@ export function updateChildObservations(mutate: (file: ChildObservationsFile) =>
 }
 
 /**
- * Merge a patch into one Child's entry and stamp observedAt with now. A Child never observed before starts as an
- * unknown "inspect" record with every field null, so an operation summary can be stored before the first observe.
+ * Merge a patch into one Child's entry and stamp observedAt with now. A patch of carried fields only (a catalog pull,
+ * an operation summary) keeps an existing entry's observedAt, so install facts never read fresher than they are.
+ * A Child never observed before starts as an unknown "inspect" record with every field null, so an operation summary
+ * can be stored before the first observe; that new entry is stamped.
  */
 export function patchChildObservation(file: ChildObservationsFile, linkId: string, patch: Partial<ChildObservation>, now: Date): void {
-  const base: ChildObservation = file.children[linkId] ?? {
+  const existing = file.children[linkId];
+  const base: ChildObservation = existing ?? {
     observedAt: now.toISOString(), source: "inspect", installedVersion: null, installKind: "unknown", runtimeOwner: null,
     updateRoute: "none", updateReason: null, targetVersion: null, catalogPulledAt: null, lastOperation: null, suppressedTarget: null,
     catalogPulledEtag: null, catalogSyncedEtag: null, autoUpdateAttempts: null, updateInFlight: null, pendingUpdateRecovery: null,
   };
-  file.children[linkId] = { ...base, ...patch, observedAt: now.toISOString() };
+  const carriedOnly = Object.keys(patch).every(key => (CARRIED_OBSERVATION_FIELDS as readonly string[]).includes(key));
+  file.children[linkId] = { ...base, ...patch, observedAt: carriedOnly && existing ? base.observedAt : now.toISOString() };
 }
 

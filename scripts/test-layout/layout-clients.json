@@ -183,5 +183,10 @@
   "link-child-plant-foundations.test.ts": "clients",
   "link-gated-ocx-argv.test.ts": "clients",
   "link-child-update-contract.test.ts": "clients",
-  "link-child-observations.test.ts": "clients"
+  "link-child-observations.test.ts": "clients",
+  "link-child-activity.test.ts": "clients",
+  "link-child-catalog-freshness.test.ts": "clients",
+  "link-child-observe.test.ts": "clients",
+  "link-child-ops-routes.test.ts": "server",
+  "cli-link-check.test.ts": "cli"
 }

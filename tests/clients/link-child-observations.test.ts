@@ -77,6 +77,19 @@ describe("tolerant reader", () => {
     patchChildObservation(state, B, { installKind: "npm" }, new Date("2026-11-12T00:00:00.000Z"));
     expect(state.children[B]).toMatchObject({ installKind: "npm", installedVersion: null, lastOperation: null, updateInFlight: null, observedAt: "2026-11-12T00:00:00.000Z" });
   });
+
+  test("a carried-only patch keeps observedAt", () => {
+    const state = emptyChildObservations();
+    state.children[A] = observation();
+    const summary = { op: "observe" as const, jobId: "ljob_0123456789abcdef", state: "succeeded", reason: null, finishedAt: "2026-11-13T00:00:00.000Z" };
+    patchChildObservation(state, A, { lastOperation: summary }, new Date("2026-11-13T00:00:00.000Z"));
+    expect(state.children[A]).toEqual(observation({ lastOperation: summary }));
+    patchChildObservation(state, A, { catalogPulledAt: 1_800_000_000_000, catalogPulledEtag: "\"etag-2\"" }, new Date("2026-11-14T00:00:00.000Z"));
+    expect(state.children[A]).toEqual(observation({ lastOperation: summary, catalogPulledAt: 1_800_000_000_000, catalogPulledEtag: "\"etag-2\"" }));
+    // A new entry is still stamped, even by a carried-only patch.
+    patchChildObservation(state, B, { lastOperation: summary }, new Date("2026-11-15T00:00:00.000Z"));
+    expect(state.children[B]).toMatchObject({ source: "inspect", updateRoute: "none", lastOperation: summary, observedAt: "2026-11-15T00:00:00.000Z" });
+  });
 });
 
 describe("writer", () => {
@@ -95,6 +108,16 @@ describe("writer", () => {
     const path = childObservationsPath(dir);
     writeFileSync(path, file({ [A]: observation(), [B]: observation() }));
     expect(Object.keys(updateChildObservations(() => {}, { path, storePath: linkStorePath(dir) }).children).sort()).toEqual([A, B]);
+  });
+
+  test("missing links.json prunes every entry", () => {
+    const dir = configDir(); writeLinks(dir, [A, B]);
+    const path = childObservationsPath(dir);
+    writeFileSync(path, file({ [A]: observation(), [B]: observation() }));
+    // readLinkStore answers a missing path with an empty store, unlike a damaged one.
+    const written = updateChildObservations(() => {}, { path, storePath: join(dir, "link", "absent-links.json") });
+    expect(written.children).toEqual({});
+    expect(readChildObservations(path).children).toEqual({});
   });
 
   test("maxEntries bounds the file", () => {
