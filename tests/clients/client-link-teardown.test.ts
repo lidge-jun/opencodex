@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { handleDisconnectCommand } from "../../src/cli/connect";
 import { connectClient } from "../../src/client/connect";
@@ -201,6 +201,61 @@ test("a catalog changed after connect names what was found and --keep-catalog", 
     expect(output).toContain("client_catalog_ownership_changed");
     expect(output).toContain("matches neither the catalog this connection wrote nor the one recorded before it connected");
     expect(output).toContain("ocx disconnect --keep-catalog");
+  } finally {
+    home.remove();
+  }
+});
+
+test("a desktop-remote folder with no state or receipt is named, with the way to clear it", async () => {
+  const home = createTempHome("ocx-client-link-desktop-store-");
+  try {
+    const config = getDefaultConfig();
+    config.port = 10100;
+    saveConfig(config);
+    mkdirSync(home.codexHome, { recursive: true });
+    writeFileSync(home.path(".codex", "config.toml"), "model_provider = \"openai\"\n");
+    await connectClient({
+      serverUrl: "http://127.0.0.1:34567",
+      managementUrl: "http://127.0.0.1:34567",
+      managementTransport: "direct",
+      transport: "link",
+      link: { tunnelPort: 34567, linkId },
+      credential: { kind: "link", apiKeyId: "key-1", key },
+      selectedClients: ["codex"],
+      noSync: true,
+    }, {
+      fetchImpl: async input => String(input).endsWith("/readyz")
+        ? Response.json({ status: "ready", protocol: 1, minimumClientProtocol: 1, managementUrl: "http://127.0.0.1:34567" })
+        : Response.json({ models: [] }),
+      catalogCompatibility: { supportedEfforts: () => new Set() },
+      lifecycleLockDeps: { lockPath: home.path("lifecycle.sqlite") },
+    });
+    // Seen on a Child: someone renamed the receipt, leaving the folder with nothing OpenCodex reads.
+    mkdirSync(home.path("desktop-remote"), { recursive: true });
+    writeFileSync(home.path("desktop-remote", "disconnect.json.stale-20261108"), "{}");
+    const logs = spyOn(console, "log").mockImplementation(() => {});
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    let exit = -1;
+    let output = "";
+    try {
+      exit = await handleDisconnectCommand([], {
+        lifecycleLockDeps: { lockPath: home.path("lifecycle.sqlite") },
+        linkTeardownDeps: {
+          reapOrphanTunnel: async () => ({ tunnel: "absent" }),
+          runner: { run: async () => ({ code: 1, stdout: "", stderr: "" }) },
+          knownHostsFile,
+        },
+      });
+      output = errors.mock.calls.flat().join("\n");
+    } finally {
+      logs.mockRestore();
+      errors.mockRestore();
+    }
+    expect(exit).not.toBe(0);
+    expect(output).toContain("desktop_lifecycle_unsafe");
+    expect(output).toContain(realpathSync.native(home.path("desktop-remote")));
+    expect(output).toContain("holds no Claude Desktop remote state or disconnect receipt");
+    expect(output).toContain("Move that folder aside, then run ocx disconnect again");
   } finally {
     home.remove();
   }
