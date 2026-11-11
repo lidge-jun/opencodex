@@ -19,9 +19,10 @@
 - Guarded path: a stray wrapper bound by the rule is `bound-stray` and reaches part A; an unbindable one stays approval-changed.
 - Output mapping per path: `ServiceStopOutcome`, `ocx-stop/1` (no new outcome/proxy enum values; additive fields only), `/api/stop` codes, Desktop parser unit tests with old and new documents; updater variant refuses without authorization at entry and before each terminate.
 - Plain `ocx stop`: part A `denied`, `survived` and `unknown` each send no `/api/stop` POST, set `ownershipBlocked`, skip the shared restore, and record `outcome: failed`, `proxy: unknown`, `sharedTeardown: skipped`.
-- Budget, with injected clocks: every guarded step at its cap still fits 27 s with default settings; a larger `shutdownTimeoutMs` keeps the full drain and ends in `unverified-budget` with no shared teardown, never past the deadline; part B never gets less than its 6 s floor.
+- `absent`: no registered task or WinSW service and no bound wrapper → `ServiceStopOutcome` `absent`, no "Service manager stopped.", the POST is sent, part B does not run (no 6 s hold); the same with an unreadable process list → still `absent`, and plain `ocx stop` still stops the proxy.
+- Budget, with injected clocks: admission refuses with `unverified-budget` and changes nothing (no `/end`, terminate or POST) when the remaining time is below the worst case still to come; once admitted, every step at its cap ends before the deadline; the graceful exit wait is never shortened; part B never gets less than 6 s; `--deadline-ms` from both Desktop paths is honored, and a missing flag means 60 s; macOS/Linux ignore it.
+- `/api/stop` without a receipt: part A (4 s cap) plus the measured worst case of `performStopTeardown` answers within 10 s.
 - A wrapper relaunched after bind (port still free during the hold) is caught by the final enumeration → survived.
-- `/api/stop` without a receipt and risk `none` answers within its 6 s part A cap; an overrun answers `service_state_unknown`.
 - Updater call sites, including the one in `preparePort`, abort on a non-`stopped` part A.
 - New test files registered in the layout maps; no capped file grows (file-size ratchet).
 
