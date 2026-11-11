@@ -4,15 +4,16 @@ import { closeSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
 import { withoutSiblingMarker } from "../codex/sibling-start";
-import { withoutSupervisorMarkers } from "../lib/supervisor-markers";
 import type { UpdateMutationAuthorizer } from "./mutation-guard.mjs";
 
 /** The guard runs after log-file setup, immediately before creating the pinned runtime. */
 export function spawnWorkerPinnedStart(cmd: { bin: string; args: string[]; display: string },
   authorizeMutation: UpdateMutationAuthorizer, report: (line: string) => void, formatError: (error: unknown) => string): ChildProcess {
   // An ordinary owner: a stray sibling marker would otherwise mark it before any probe.
-  const env: NodeJS.ProcessEnv = withoutSupervisorMarkers(withoutSiblingMarker(process.env));
+  const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);
   delete env.OCX_SERVICE;
+  // Not launched by a supervisor: none of its markers (src/lib/supervisor-markers.ts) may ride along.
+  for (const name of ["OCX_DESKTOP_SUPERVISED", "OCX_SERVICE_MANAGED", "OCX_WINDOWS_WRAPPER_PROTOCOL"]) delete env[name];
   report(`$ ${cmd.display}`);
   let stdio: "ignore" | [ "ignore", number, number ] = "ignore";
   let logFd: number | undefined;

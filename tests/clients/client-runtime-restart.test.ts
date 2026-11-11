@@ -675,10 +675,11 @@ describe("supervisor markers never reach a process their supervisor did not laun
   test.each([
     ["src/cli/index.ts", "function detachedStartEnvironment(): NodeJS.ProcessEnv {\n  const env: NodeJS.ProcessEnv = withoutSupervisorMarkers(withoutSiblingMarker(process.env));"],
     ["src/cli/index.ts", "env: withProcessRuntimeProvenance(withoutSupervisorMarkers(withoutSiblingMarker(process.env))),"],
-    ["src/update/index.ts", "const env = mutation.controlEnvironment(withoutSupervisorMarkers(withoutSiblingMarker(process.env)));"],
+    // The update bodies run under their tests' dependency injection, so they delete the list inline.
+    ["src/update/index.ts", `for (const name of ${JSON.stringify(SUPERVISOR_MARKER_ENVS).replaceAll(",", ", ")}) delete env[name];`],
     ["src/adapters/cursor/native-exec-shell.ts", "backgroundShellRuntime.spawn(args.command, { cwd, shell: true, env: withoutSupervisorMarkers(process.env) });"],
     ["src/adapters/cursor/native-exec-desktop.ts", "env: withoutSupervisorMarkers(config.env ? { ...process.env, ...config.env } : process.env),"],
-    ["src/update/job-pinned-start.ts", "const env: NodeJS.ProcessEnv = withoutSupervisorMarkers(withoutSiblingMarker(process.env));"],
+    ["src/update/job-pinned-start.ts", `for (const name of ${JSON.stringify(SUPERVISOR_MARKER_ENVS).replaceAll(",", ", ")}) delete env[name];`],
     ["bin/ocx.mjs", `for (const name of ${JSON.stringify(SUPERVISOR_MARKER_ENVS).replaceAll(",", ", ")}) delete env[name];`],
   ] as const)("%s strips the markers where it launches", (path, line) => {
     expect(readFileSync(repoPath(path), "utf8")).toContain(line);

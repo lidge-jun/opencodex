@@ -746,8 +746,8 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
       ["src/cli/claude.ts", "env: withProcessRuntimeProvenance(claudeProxyStartEnv()),"],
       ["src/cli/opencode.ts", opencodeStartEnv],
       ["src/cli/minimax.ts", opencodeStartEnv],
-      ["src/update/job-pinned-start.ts", "const env: NodeJS.ProcessEnv = withoutSupervisorMarkers(withoutSiblingMarker(process.env));"],
-      ["src/update/index.ts", "const env = mutation.controlEnvironment(withoutSupervisorMarkers(withoutSiblingMarker(process.env)));"],
+      ["src/update/job-pinned-start.ts", "const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);"],
+      ["src/update/index.ts", "const env = mutation.controlEnvironment(withoutSiblingMarker(process.env));"],
     ] as const) {
       expect(readFileSync(repoPath(path), "utf8"), path).toContain(env);
     }
