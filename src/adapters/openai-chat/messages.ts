@@ -286,10 +286,8 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
             if (p.type === "video") return { type: "text", text: VIDEO_UNSUPPORTED_MARKER };
             return { type: "text", text: (p as OcxTextContent).text };
           });
-          // A translated Chat instruction with media remains an instruction on this wire.
-          // Demoting it would discard the role even when the attachment itself is preserved.
           chatMsg = {
-            role: msg.role === "developer" ? developerWireRole : "user",
+            role: msg.role === "developer" ? (leadingSystemTemplate ? "user" : developerWireRole) : "user",
             content: chatParts,
           };
           if (provider.singleLeadingSystemMessage === true && chatMsg.role !== "user") {

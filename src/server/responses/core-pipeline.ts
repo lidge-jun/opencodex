@@ -27,6 +27,7 @@ import { formatErrorResponse } from "../../bridge";
 import { InvalidRetainedCompactionSummary, prepareCompactionRetention } from "./compaction-retention";
 import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
 import { responsesHasUnsupportedInputMedia } from "../../adapters/trae-cn/input-media";
+import { planVisionSidecar, shouldResolveOpenAiVisionSidecar } from "../../vision";
 import { markResponseNonReplayable } from "../../lib/upstream-retry";
 
 /** Compose request phases while retaining the original admission-finally ownership. */
@@ -55,8 +56,15 @@ export async function handleResponsesInner(
         || requestState.parsed.context.messages.some(message => message.role === "developer"
           && Array.isArray(message.content) && message.content.some(part => part.type === "image"));
       const unsupportedTraeMedia = transportState.runTurnAdapter.name === "trae-cn"
-        && (options.chatUnsupportedInstructionMedia || options.responsesUnsupportedInputMedia
-          || responsesHasUnsupportedInputMedia(requestState.parsed._rawBody));
+        && (() => {
+          const captionUserImages = planVisionSidecar(config, requestState.route.provider, requestState.route.modelId,
+            requestState.parsed, undefined, { providerName: requestState.route.providerName }) !== undefined
+            || shouldResolveOpenAiVisionSidecar(config, requestState.route.provider, requestState.route.modelId,
+              requestState.parsed, requestState.route.providerName);
+          return options.chatUnsupportedInstructionMedia
+            || options.responsesUnsupportedInputMedia && !captionUserImages
+            || responsesHasUnsupportedInputMedia(requestState.parsed._rawBody, { captionUserImages });
+        })();
       if (instructionImage || options.responsesFileImage || unsupportedTraeMedia) {
         const message = transportState.runTurnAdapter.name === "trae-cn"
           ? "TRAE CN ACP supports text conversations only; media, documents and tool replay are not supported."

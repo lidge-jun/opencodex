@@ -97,6 +97,113 @@ async function respond(cfg: OcxConfig, stream: boolean) {
   return { status: response.status, text: await response.text() };
 }
 
+test("TRAE user images reach the routed vision sidecar instead of the pre-dispatch refusal", async () => {
+  const routed = await import("../../src/vision/routed-describe");
+  const describer = spyOn(routed, "describeImageRouted").mockResolvedValue({ text: "caption from fixture", elapsedMs: 1 });
+  const cfg = config([{ provider: "trae-cn", model: "test-model" }]);
+  cfg.defaultProvider = "trae-cn";
+  cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
+    authMode: "key", models: ["test-model"], liveModels: false, noVisionModels: ["test-model"] };
+  cfg.providers.vision = { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key",
+    authMode: "key", models: ["vision-model"], inputModalities: ["text", "image"] };
+  cfg.visionSidecar = { enabled: true, backend: "routed", model: "vision/vision-model" };
+  const prompts: string[] = [];
+  const open = spyOn(traeClient, "openTraeSession").mockResolvedValue({ models: ["test-model"],
+    prompt: async (_model, text, emit) => { prompts.push(text); emit({ type: "text_delta", text: "described" }); emit({ type: "done" }); },
+    close: async () => undefined });
+  try {
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "trae-cn/test-model", stream: false,
+        input: [{ role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" }] }] }),
+    }), cfg, { model: "", provider: "" });
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect(open).toHaveBeenCalledTimes(1); expect(prompts.join("\n")).toContain("caption from fixture");
+    expect(prompts.join("\n")).not.toContain("aGVsbG8=");
+  } finally { open.mockRestore(); describer.mockRestore(); }
+});
+
+test("Chat policy retry preserves normalized effort and instruction positions", async () => {
+  const { restoreChatInstructionMedia } = await import("../../src/server/responses/chat-policy-media");
+  const { chatToResponsesBody } = await import("../../src/protocols/codecs/chat");
+  const original = { model: "policy/daily--high", stream: false, messages: [
+    { role: "user", content: "earlier question" },
+    { role: "assistant", content: "earlier answer" },
+    { role: "system", content: "first later instruction" },
+    { role: "developer", content: [{ type: "text", text: "later instruction" },
+      { type: "image_url", image_url: { url: "https://fixture.invalid/later.png" } }] },
+    { role: "developer", content: "final later instruction" },
+    { role: "user", content: "current question" },
+  ] };
+  const projected = chatToResponsesBody(original);
+  const restored = restoreChatInstructionMedia(projected, original);
+  const input = restored.input as Array<{ role: string; content: Array<{ type: string; text?: string }> }>;
+  expect(input.map(item => item.role)).toEqual(["user", "assistant", "developer", "developer", "developer", "user"]);
+  expect(input[3]?.content?.some(part => part.type === "input_image")).toBe(true);
+  expect(input[3]?.content?.filter(part => part.type === "input_text")).toHaveLength(1);
+  const settings = { ...projected, model: "policy/daily", reasoning: { effort: "high" }, input: restored.input };
+  expect(settings.reasoning).toEqual({ effort: "high" });
+  expect(settings.model).toBe("policy/daily");
+
+  const leadingOriginal = { model: "policy/daily", messages: [
+    { role: "system", content: [{ type: "text", text: "leading media" },
+      { type: "image_url", image_url: { url: "https://fixture.invalid/leading.png" } }] },
+    { role: "user", content: "question" },
+  ] };
+  const leading = restoreChatInstructionMedia(chatToResponsesBody(leadingOriginal), leadingOriginal);
+  expect((leading.input as Array<{ role: string }>).map(item => item.role)).toEqual(["developer", "user"]);
+  expect(leading.instructions).toBeUndefined();
+
+  const toolOriginal = { model: "policy/daily", messages: [
+    { role: "user", content: "question" },
+    { role: "assistant", tool_calls: [{ id: "call_1", type: "function", function: { name: "lookup", arguments: "{}" } }] },
+    { role: "developer", content: "wait for the result" },
+    { role: "developer", content: [{ type: "text", text: "inspect this" },
+      { type: "image_url", image_url: { url: "https://fixture.invalid/tool.png" } }] },
+    { role: "tool", tool_call_id: "call_1", content: "result" },
+    { role: "user", content: "next question" },
+  ] };
+  const tool = restoreChatInstructionMedia(chatToResponsesBody(toolOriginal), toolOriginal);
+  expect((tool.input as Array<{ role?: string; type: string }>).map(item => item.role ?? item.type)).toEqual([
+    "user", "function_call", "function_call_output", "developer", "developer", "user",
+  ]);
+});
+
+test("an effort-decorated non-policy Chat request does not retain an original-body clone", async () => {
+  const upstream = Bun.serve({ port: 0, fetch: () => new Response([
+    `data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: "assistant", content: "accepted" } }] })}\n\n`,
+    `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`,
+    "data: [DONE]\n\n",
+  ].join(""), { headers: { "content-type": "text/event-stream" } }) });
+  const cfg = config([]);
+  cfg.defaultProvider = "capable"; cfg.cursorEffortRows = true;
+  cfg.providers.capable = { adapter: "openai-chat", baseUrl: `${upstream.url}v1`, apiKey: "fixture-key",
+    authMode: "key", models: ["accept-model"], allowPrivateNetwork: true };
+  try {
+    const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "capable/accept-model--high", stream: false,
+        messages: [{ role: "user", content: "x".repeat(17 * 1024 * 1024) }] }),
+    }), cfg, { model: "", provider: "" }, {});
+    expect(response.status, await response.clone().text()).toBe(200);
+  } finally { await upstream.stop(true); }
+});
+
+test("the policy-only original Chat clone is admitted by the replay budget", async () => {
+  const cfg = config([]); cfg.defaultProvider = "trae-cn";
+  cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
+    authMode: "key", models: ["test-model"], liveModels: false };
+  cfg.routingProfiles = { daily: { candidates: [{ provider: "trae-cn", model: "test-model" }] } };
+  const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "policy/daily", stream: false,
+      messages: [{ role: "user", content: "x".repeat(17 * 1024 * 1024) }] }),
+  }), cfg, { model: "", provider: "" }, {});
+  expect(response.status).toBe(413);
+  const json = await response.json() as { error?: { code?: string } };
+  expect(json.error?.code).toBe("translation_buffer_limit");
+});
+
 for (const media of ["image", "video"]) {
   test("Chat policy retry retains original instruction media: " + media, async () => {
     const cfg = config([{ provider: "trae-cn", model: "test-model" }]);
@@ -108,14 +215,22 @@ for (const media of ["image", "video"]) {
     cfg.routingProfiles = { daily: { candidates: [
       { provider: "trae-cn", model: "test-model" }, { provider: "capable", model: "accept-model" },
     ] } };
+    cfg.cursorEffortRows = true;
     const requests: RequestInit[] = [];
-    cfg.providers.capable.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    cfg.providers.capable.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       requests.push(init!);
-      const streamed = Boolean(JSON.parse(String(init?.body)).stream);
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const streamed = media === "video"
+        ? new URL(url).pathname.endsWith(":streamGenerateContent")
+        : Boolean(JSON.parse(String(init?.body)).stream);
       if (media === "video") {
-        if (!streamed) return Response.json({ candidates: [{ content: { parts: [{ text: "accepted" }] }, finishReason: "STOP" }] });
-        return new Response("data: " + JSON.stringify({ candidates: [{ content: { parts: [{ text: "accepted" }] }, finishReason: "STOP" }] }) + "\n\n",
-          { headers: { "content-type": "text/event-stream" } });
+        if (!streamed) return Response.json({ candidates: [{ content: { role: "model", parts: [{ text: "accepted" }] }, finishReason: "STOP" }],
+          usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 } });
+          const frame = (value: unknown) => "data: " + JSON.stringify(value) + "\n\n";
+          return new Response([
+            frame({ candidates: [{ content: { role: "model", parts: [{ text: "accepted" }] } }] }),
+            frame({ candidates: [{ finishReason: "STOP" }], usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 } }),
+          ].join(""), { headers: { "content-type": "text/event-stream" } });
       }
       if (!streamed) return Response.json({ id: "chat-fixture", object: "chat.completion", model: "accept-model",
         choices: [{ index: 0, message: { role: "assistant", content: "accepted" }, finish_reason: "stop" }],
@@ -132,21 +247,37 @@ for (const media of ["image", "video"]) {
           message: "TRAE CN ACP supports text conversations only; media, documents and tool replay are not supported.", retryable: false });
       }, close: async () => undefined });
     const attachment = media === "image"
-      ? { type: "image_url", image_url: { url: "https://fixture.invalid/image.png" } }
+      ? { type: "image_url", image_url: { url: "https://fixture.invalid/image.png", detail: "high" } }
       : { type: "video_url", video_url: { url: "data:video/mp4;base64,AAAAIGZ0eXBpc29t" } };
     const messages = [
+      { role: "system", content: "Leading instruction" },
+      { role: "user", content: "Earlier question" },
+      { role: "assistant", content: "Earlier answer" },
+      { role: "developer", content: "First later instruction" },
       { role: "system", content: [{ type: "text", text: "Inspect the attachment" }, attachment] },
+      { role: "developer", content: "Final later instruction" },
       { role: "user", content: "Question" },
     ];
     try {
       const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: "policy/daily", stream: false, messages }),
-      }), cfg, { model: "", provider: "" });
+        body: JSON.stringify({ model: "policy/daily--high", reasoning_effort: "low", stream: false, messages }),
+      }), cfg, { model: "", provider: "" }, {});
       expect(response.status, await response.clone().text()).toBe(200);
       expect(requests).toHaveLength(1);
-      const sent = JSON.parse(String(requests[0]?.body)) as { messages?: Array<{ role?: string; content?: Array<{ type: string }> }> };
+      const sent = JSON.parse(String(requests[0]?.body)) as {
+        reasoning_effort?: string;
+        messages?: Array<{ role?: string; content?: Array<{ type: string }> }>;
+      };
+      const wire = JSON.stringify(sent);
+      const chronology = ["Earlier answer", "First later instruction", "Inspect the attachment", "Final later instruction", "Question"];
+      const positions = chronology.map(text => wire.indexOf(text));
+      expect(positions.every(position => position >= 0)).toBe(true);
+      expect(positions).toEqual([...positions].sort((left, right) => left - right));
+      expect(wire.indexOf("Inspect the attachment")).toBe(wire.lastIndexOf("Inspect the attachment"));
       if (media === "image") {
+        expect(sent.reasoning_effort).toBe("high");
+        expect(wire).toContain('"detail":"high"');
         expect(sent.messages!.some(message => message.role === "system" && Array.isArray(message.content)
           && message.content.some(part => part.type === "image_url"))).toBe(true);
         expect(sent.messages!.at(-1)?.content).toBe("Question");

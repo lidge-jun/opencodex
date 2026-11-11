@@ -19,6 +19,16 @@ deferred reminders. This behavior previously covered only OpenCode Go and
 roles, and Claude trailing-notice option are unchanged; cache hits are not guaranteed.
 Tests: `tests/adapters/openai/openai-chat-system-order.test.ts` and `tests/adapters/openai/openai-chat-developer-position.test.ts`.
 
+Policy-candidate replay uses the same inbound Chat projection with instruction-media preservation enabled only for that retry.
+Leading media instructions stay ahead of the first conversation turn; later instructions retain their order, including
+several consecutive instructions and the existing deferred tool-result boundary. Text and attachment parts are emitted once,
+while the normalized effort and other retry settings remain authoritative. Ordinary Chat projection is unchanged.
+`tests/responses/responses-combo-run-turn-classified-failure.test.ts` exercises the real Chat policy retry for OpenAI image
+and Google video targets.
+Structured instructions with image/audio/document parts keep their image detail and use the same leading-system template
+role rule as text-only instructions, so pinned templates receive a chronological `user` turn rather than an invalid late
+`system` or `developer` role. `tests/adapters/openai/openai-chat-qwen38-leading-system.test.ts` covers the structured image.
+
 The role that slot carries is a separate decision, and the setting that makes it is tri-state.
 `foldDeveloperRoleToSystem` unset sends `system`, `true` sends `system`, and `false` sends
 `developer`. Unset means nothing has been recorded about the destination; `true` records an

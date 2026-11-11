@@ -15,15 +15,16 @@ function hasUnsupportedInstructions(body: unknown, field: "input" | "messages"):
         || !TEXT_PART_TYPES.has(part.type) || typeof part.text !== "string")));
 }
 
-/** Reject media that parsing would erase from instruction or native agent-message inputs. */
-/** Reject typed media before Responses projection can substitute text markers or drop references. */
-export function responsesHasUnsupportedInputMedia(body: unknown): boolean {
+/** Reject media that cannot survive Responses projection; user images may be captioned first. */
+export function responsesHasUnsupportedInputMedia(body: unknown, options: { captionUserImages?: boolean } = {}): boolean {
   return hasUnsupportedInstructions(body, "input")
     || (record(body) && Array.isArray(body.input) && body.input.some(item =>
       record(item) && (item.type === "agent_message"
         || ((item.type === undefined || item.type === "message") && item.role === "user"))
       && Array.isArray(item.content)
-      && item.content.some(part => record(part) && typeof part.type === "string" && MEDIA_PART_TYPES.has(part.type))));
+      && item.content.some(part => record(part) && typeof part.type === "string"
+        && MEDIA_PART_TYPES.has(part.type)
+        && !(options.captionUserImages === true && part.type === "input_image" && item.role === "user"))));
 }
 
 /** Inspect Chat instructions before their non-text parts disappear during Responses projection. */

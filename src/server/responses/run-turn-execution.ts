@@ -61,6 +61,7 @@ import { unboundPoolSpendRefusalMessage } from "../workflow-refusal";
 import { claudeUsagePreflight } from "../../adapters/claude-cli/usage-admission";
 import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
 import { responsesHasUnsupportedInputMedia } from "../../adapters/trae-cn/input-media";
+import { planVisionSidecar, shouldResolveOpenAiVisionSidecar } from "../../vision";
 
 // LOCAL PATCH (runturn-websearch): top-level fields route binding or the
 // adapter itself may write during a turn. Iteration-local `turnParsed` objects
@@ -185,8 +186,14 @@ export async function executeResponsesRunTurn(
   if (transportState.runTurnAdapter.name === "claude-cli" || transportState.runTurnAdapter.name === "trae-cn") {
     if (options.chatInstructionImage || options.responsesInstructionImage || responsesHasInstructionImage(parsed._rawBody)
       || (transportState.runTurnAdapter.name === "trae-cn"
-        && (options.chatUnsupportedInstructionMedia || options.responsesUnsupportedInputMedia
-          || responsesHasUnsupportedInputMedia(parsed._rawBody)))
+        && (() => {
+          const captionUserImages = planVisionSidecar(config, route.provider, route.modelId, parsed, sidecarState.openAiSidecar,
+            { providerName: route.providerName }) !== undefined
+            || shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed, route.providerName);
+          return options.chatUnsupportedInstructionMedia
+            || options.responsesUnsupportedInputMedia && !captionUserImages
+            || responsesHasUnsupportedInputMedia(parsed._rawBody, { captionUserImages });
+        })())
       || parsed.context.messages.some(message => message.role === "developer"
         && Array.isArray(message.content) && message.content.some(part => part.type === "image"))) {
       cancelResponseCompletion();

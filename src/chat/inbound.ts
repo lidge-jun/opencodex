@@ -459,6 +459,8 @@ export interface ChatResponsesProjectionOptions {
    * Every other route keeps the plaintext projection.
    */
   acceptAnthropicReasoningSignatures?: boolean;
+  /** Preserve instruction attachments when a policy retry can select a media-capable target. */
+  preserveInstructionMedia?: boolean;
 }
 
 export function chatCompletionsToResponsesBody(raw: unknown, options: ChatResponsesProjectionOptions = {}): Rec {
@@ -483,10 +485,21 @@ export function chatCompletionsToResponsesBody(raw: unknown, options: ChatRespon
   // Anthropic and Google mappers synthesize a missing result — so an instruction that arrives
   // inside an open batch waits for the batch to drain instead of splitting it.
   const awaitingToolResult = new Set<string>();
-  const heldInstructions: string[] = [];
+  const heldInstructions: Array<{ text: string } | { content: Rec[] }> = [];
   const releaseHeldInstructions = (): void => {
     if (heldInstructions.length === 0) return;
-    input.push(developerInstructionItem(heldInstructions.join("\n\n")));
+    let text: string[] = [];
+    const releaseText = (): void => {
+      if (text.length > 0) input.push(developerInstructionItem(text.join("\n\n")));
+      text = [];
+    };
+    for (const instruction of heldInstructions) {
+      if ("content" in instruction) {
+        releaseText();
+        input.push({ type: "message", role: "developer", content: instruction.content });
+      } else text.push(instruction.text);
+    }
+    releaseText();
     heldInstructions.length = 0;
   };
   // A user or assistant turn ends any open tool batch, so held text rejoins the timeline
@@ -503,19 +516,31 @@ export function chatCompletionsToResponsesBody(raw: unknown, options: ChatRespon
     switch (role) {
       case "system":
       case "developer": {
+        const preserveMedia = options.preserveInstructionMedia === true && Array.isArray(msg.content)
+          && msg.content.some(part => isRec(part) && (imageUrlFromPart(part) || videoFromPart(part) || fileFromPart(part)));
         // A leading block is this request's instructions and keeps that treatment: it is the
         // prompt head, and hoisting it is what the upstream prefix cache wants.
         if (input.length === 0) {
-          pushSystemText(systemParts, msg.content);
+          if (preserveMedia) {
+            const blocks = userContentToBlocks(msg.content);
+            if (blocks.length > 0) input.push({ type: "message", role: "developer", content: blocks });
+          } else pushSystemText(systemParts, msg.content);
           break;
         }
         // Past the first turn the slot carries meaning. `U1 -> A1 -> D2 -> U2` says D2 applies
         // to U2 and not to U1, and folding it into `instructions` moved it ahead of both while
         // rewriting the prompt head on every turn that carried one. The outbound adapter has
         // preserved this slot since #4161; the position was already gone by the time it ran.
+        if (preserveMedia) {
+          const blocks = userContentToBlocks(msg.content);
+          if (blocks.length === 0) break;
+          if (awaitingToolResult.size > 0) heldInstructions.push({ content: blocks });
+          else input.push({ type: "message", role: "developer", content: blocks });
+          break;
+        }
         const text = contentToText(msg.content).trim();
         if (!text) break;
-        if (awaitingToolResult.size > 0) heldInstructions.push(text);
+        if (awaitingToolResult.size > 0) heldInstructions.push({ text });
         else input.push(developerInstructionItem(text));
         break;
       }

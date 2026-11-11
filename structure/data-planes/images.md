@@ -18,6 +18,12 @@ file-backed image references in messages, agent messages or tool results before 
 dispatch. Other provider routes retain their own image handling; a usable image URL takes
 precedence over a file ID. `tests/providers/claude-cli-client-http.test.ts` covers this boundary.
 
+TRAE CN retains its pre-dispatch refusal for instruction media, native agent-message media, video, documents and tool replay.
+An ordinary user image may instead proceed when the selected route has a usable routed or OpenAI vision-preprocessing plan;
+the sidecar replaces it with a description before ACP dispatch. This exception does not advertise native ACP image support or
+bypass the other media refusals. `tests/responses/responses-combo-run-turn-classified-failure.test.ts` covers routed captioning
+and the remaining direct and combo refusals.
+
 Mistral's registry entry in `src/providers/registry/entries-extended.ts` declares `zai-glm-5-3` native input as text-only, so registry enrichment enrolls that model in the enabled vision sidecar for existing configurations: the catalog advertises image attachments and request preprocessing sends GLM descriptions. Native Mistral vision models and explicit operator modalities retain precedence (`tests/vision/mistral-vision-sidecar.test.ts`).
 
 A registry entry can also declare `inputModalities` for the whole provider. It covers ids the per-model maps do not list, such as models from live discovery, and a per-model declaration still wins. AI Stupid Level declares text, so an image for one of its pinned models is described or stripped instead of being sent to the router (`tests/providers/aistupidlevel-provider.test.ts`).

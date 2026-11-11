@@ -112,6 +112,8 @@ import { parseSyntheticRowId } from "./fast-row";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, isCodexReserveHelperUnsupported } from "../codex/loopback-target";
 import { applyDroidReasoningDefault, droidReasoningDefault, DROID_DEFAULT_EFFORT_HEADER } from "./droid-reasoning-default";
+import { isShadowSourceModel } from "../lib/shadow-call";
+import { jsonUtf8Bytes } from "../lib/json-byte-size";
 
 type Rec = Record<string, unknown>;
 
@@ -402,6 +404,7 @@ async function handleChatCompletionsWithBudget(
 
   let internalBody: Rec;
   let directConversation: ChatIrConversation | undefined;
+  let policyOriginalInboundBody: Rec | undefined;
   try {
     // Validate the full Chat boundary after routing. Native Chat keeps `chatBody` as
     // its wire source; this Responses projection is used only by the fallback path.
@@ -431,6 +434,16 @@ async function handleChatCompletionsWithBudget(
         ...(isRec(internalBody.reasoning) ? internalBody.reasoning : {}),
         effort: effortRow.effort,
       };
+    }
+    const intercept = config.shadowCallIntercept;
+    const mayRetryPolicy = settledRoute?.routeKind === "policy"
+      || Boolean(intercept?.enabled && intercept.model
+        && isShadowSourceModel(requestedModel, intercept.sourceModels));
+    if (mayRetryPolicy) {
+      // Policy retries need the pre-projection conversation, but ordinary Chat requests do not.
+      // Admit the serialized clone before allocating it and retain its charge with this request.
+      translatorBudget.chargeRetained(jsonUtf8Bytes(chatBody), { kind: "request_copies" });
+      policyOriginalInboundBody = structuredClone(chatBody);
     }
   } catch (err) {
     const overflow = isTranslatorBudgetExceededError(err);
@@ -578,7 +591,7 @@ async function handleChatCompletionsWithBudget(
     abortSignal: req.signal,
     // Body is Responses-shaped by now, but the client spoke Chat Completions.
     inboundWire: "chat",
-    policyOriginalInboundBody: structuredClone(chatBody),
+    policyOriginalInboundBody,
     chatInstructionImage: chatHasInstructionImage(chatBody),
     chatUnsupportedInstructionMedia: chatHasUnsupportedInstructionMedia(chatBody),
     chatRawReasoningVisible: rawReasoningVisible,

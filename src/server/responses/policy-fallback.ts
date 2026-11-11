@@ -220,9 +220,12 @@ export async function handleResponsesWithPolicyFallback(
         // Recovery and other core preparation may mutate the parsed body in place. Keep an
         // immutable snapshot of the original wire body so a retry cannot serialize those
         // mutations. Object-identity metadata is re-established by each attempt, not serialized.
-        rawBody = options.inboundWire === "chat" && options.policyOriginalInboundBody !== undefined
-          ? restoreChatInstructionMedia(chatToResponsesBody(options.policyOriginalInboundBody), options.policyOriginalInboundBody)
-          : structuredClone(body as Record<string, unknown>);
+        if (options.inboundWire === "chat" && options.policyOriginalInboundBody !== undefined) {
+          const restored = restoreChatInstructionMedia(
+            chatToResponsesBody(options.policyOriginalInboundBody), options.policyOriginalInboundBody,
+          );
+          rawBody = { ...body, input: restored.input, instructions: restored.instructions };
+        } else rawBody = structuredClone(body as Record<string, unknown>);
       }
     },
     onStoredPool401ReplayDispatched: () => {
