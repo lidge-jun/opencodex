@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -82,6 +82,21 @@ describe("standalone recycle environment", () => {
 });
 
 describe("standalone recycle", () => {
+  // recycleStandalone removes this process's pid and runtime records and flushes link diagnostics
+  // in the OpenCodex home; every case runs against a temp home this process created.
+  let recycleHome = "";
+  let previousRecycleHome: string | undefined;
+  beforeEach(() => {
+    previousRecycleHome = process.env.OPENCODEX_HOME;
+    recycleHome = mkdtempSync(join(tmpdir(), "ocx-recycle-home-"));
+    process.env.OPENCODEX_HOME = recycleHome;
+  });
+  afterEach(() => {
+    if (previousRecycleHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousRecycleHome;
+    removeTreeWithRetry(recycleHome);
+  });
+
   async function withServiceMarker<T>(value: string | undefined, run: () => Promise<T>): Promise<T> {
     const previous = process.env.OCX_SERVICE;
     if (value === undefined) delete process.env.OCX_SERVICE;

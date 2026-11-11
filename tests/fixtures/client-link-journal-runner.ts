@@ -17,6 +17,16 @@ const { handleDisconnectCommand } = await import("../../src/cli/connect");
 const { CODEX_CONFIG_PATH, DEFAULT_CATALOG_PATH } = await import("../../src/codex/paths");
 const { JOURNAL_PATH } = await import("../../src/codex/journal");
 
+// Prove by path that every Codex and OpenCodex path this child writes is inside the temp home the
+// parent created and passed as HOME; refuse before the first write otherwise.
+const { realpathSync } = await import("node:fs");
+const { dirname: parentOf, relative, isAbsolute } = await import("node:path");
+const ownedRoot = realpathSync.native(process.env.HOME!);
+const inside = (path: string) => { const rel = relative(ownedRoot, realpathSync.native(path)); return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel); };
+for (const path of [parentOf(CODEX_CONFIG_PATH), parentOf(DEFAULT_CATALOG_PATH), parentOf(JOURNAL_PATH), home]) {
+  if (!inside(path)) throw new Error(`refusing to run: ${path} is not inside the owned test home ${ownedRoot}`);
+}
+
 const linkId = "lnk_0123456789abcdef";
 const key = `ocx_data_${"a".repeat(40)}`;
 const lifecycleLockDeps = { lockPath: join(home, "lifecycle.sqlite") };

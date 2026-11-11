@@ -1,6 +1,6 @@
 import { describe, expect, test, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -17,9 +17,11 @@ const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta
 setDefaultTimeout(SPAWN_BUDGET_MS);
 
 function runScript(codexHome: string, script: string): { stdout: string; stderr: string; status: number } {
+  mkdirSync(join(codexHome, "ocx-home"), { recursive: true });
   const result = spawnSync(process.execPath, ["--eval", script], {
     cwd: repoRoot,
-    env: { ...process.env, CODEX_HOME: codexHome },
+    // OPENCODEX_HOME too: adoption and injection take the config mutation lock in that home.
+    env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: join(codexHome, "ocx-home") },
     encoding: "utf8",
     timeout: SPAWN_BUDGET_MS - 5_000,
   });

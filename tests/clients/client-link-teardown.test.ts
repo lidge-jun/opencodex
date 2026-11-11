@@ -1,4 +1,7 @@
+// First: in-process connectClient writes the catalog through src/codex/paths, fixed at import.
+import { assertCodexHomeOwned } from "../helpers/codex-home-sandbox";
 import { expect, spyOn, test } from "bun:test";
+import { CODEX_HOME } from "../../src/codex/paths";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { handleDisconnectCommand } from "../../src/cli/connect";
@@ -8,6 +11,8 @@ import { clientLinkStatePath, writeClientLinkState } from "../../src/client/link
 import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
 import { createTempHome } from "../helpers/temp-home";
 import { fixturePath, repoPath } from "../helpers/repo-root";
+
+assertCodexHomeOwned(CODEX_HOME);
 
 const linkId = "lnk_0123456789abcdef";
 const key = `ocx_data_${"a".repeat(40)}`;
@@ -220,6 +225,7 @@ async function runJournalScenario(scenario: "catalog-changed" | "standalone-hand
   try {
     const codex = home.path("codex");
     mkdirSync(codex, { recursive: true });
+    mkdirSync(home.path("ocx"), { recursive: true });
     const child = Bun.spawn([process.execPath, fixturePath("client-link-journal-runner.ts")], {
       cwd: repoPath(), stdin: new Blob([scenario]), stdout: "pipe", stderr: "pipe",
       env: { ...process.env, HOME: home.root, USERPROFILE: home.root, OPENCODEX_HOME: home.path("ocx"), CODEX_HOME: codex, OCX_SERVICE: "", OCX_SERVICE_MANAGED: "0" },
