@@ -1683,5 +1683,6 @@
   "catalog-auto-refresh-link-fanout.test.ts": "codex-integration",
   "link-child-ops-no-timer.test.ts": "lab",
   "link-child-policy-routes.test.ts": "server",
-  "cli-link-policy.test.ts": "cli"
+  "cli-link-policy.test.ts": "cli",
+  "link-child-catalog-oracle.test.ts": "e2e-style"
 }
