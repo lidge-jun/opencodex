@@ -788,6 +788,22 @@ describe("TRAE CN ACP regression contract", () => {
     });
   }
 
+  test("tool refusal retains usage from an already received prompt reply", async () => {
+    const usage = { inputTokens: 123, outputTokens: 456, totalTokens: 579 };
+    const fixture = traeFixture(request => {
+      if (request.method !== "session/prompt") return false;
+      fixture.send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn", usage } });
+      fixture.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session",
+        update: { sessionUpdate: "tool_call" } } });
+      return true;
+    });
+    const events: AdapterEvent[] = [];
+    await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "trae_tool_call_unsupported", usage });
+    expect(buildResponseJSON(events, "test-model").usage)
+      .toMatchObject({ input_tokens: 123, output_tokens: 456, total_tokens: 579 });
+  });
+
   test("shutdown remains bounded when the process and its pipe never close", async () => {
     const fixture = traeFixture(request => request.method === "session/prompt");
     fixture.child.kill = () => true;
@@ -1333,6 +1349,43 @@ describe("TRAE CN ACP regression contract", () => {
     expect(observed.models.map(model => model.id)).toContain("new-model");
     expect(observed.models.map(model => model.id)).not.toContain("old-model");
     expect(getPinnedCached("trae-cn")).toBeNull();
+  });
+
+  test("concurrent refreshing discovery publishes in serialized session order", async () => {
+    const row = { ...config(), models: [] };
+    let calls = 0;
+    let entered!: () => void;
+    const firstCloseStarted = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const releaseFirstClose = new Promise<void>(resolve => { release = resolve; });
+    const session = (models: string[], close: () => Promise<void>) => ({
+      models, prompt: async () => undefined, close,
+    });
+    const open = spyOn(traeClient, "openTraeSession").mockImplementation(async () => {
+      calls++;
+      return calls === 1
+        ? session(["old-model"], async () => { entered(); await releaseFirstClose; })
+        : session(["new-model"], async () => undefined);
+    });
+    const first = fetchProviderModelsWithAuth(
+      captureProviderGather("trae-cn", row, refreshingModelsAuthResolver), 0, undefined, refreshingModelsAuthResolver,
+    );
+    await firstCloseStarted;
+    const second = fetchProviderModelsWithAuth(
+      captureProviderGather("trae-cn", row, refreshingModelsAuthResolver), 0, undefined, refreshingModelsAuthResolver,
+    );
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(open).toHaveBeenCalledTimes(1);
+    release();
+    const [older, newer] = await Promise.all([first, second]);
+    expect(older.models.map(model => model.id)).toContain("old-model");
+    expect(newer.models.map(model => model.id)).toContain("new-model");
+    expect(open).toHaveBeenCalledTimes(2);
+    const resolver = observedModelsAuthResolver(null, []);
+    const observed = await fetchProviderModelsWithAuth(captureProviderGather("trae-cn", row, resolver),
+      0, undefined, resolver);
+    expect(observed.models.map(model => model.id)).toContain("new-model");
+    expect(observed.models.map(model => model.id)).not.toContain("old-model");
   });
 
   test("background publication cannot replace an intervening newer roster", async () => {
