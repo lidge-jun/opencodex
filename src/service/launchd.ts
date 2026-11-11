@@ -708,7 +708,7 @@ export function installLaunchd(deps: {
   if (!wasInstalled) {
     for (const path of [`${p}.prev`, pendingPath]) unlinkLaunchdOwnedFile(path);
   }
-  if (previousPlist !== null && !wasPending) {
+  if (!wasPending) {
     // Best-effort: a backup we could not write must not stop the repair, but it is the
     // only thing that makes the rollback below able to restore bytes rather than guesses.
     //
@@ -716,11 +716,14 @@ export function installLaunchd(deps: {
     // login, so a backup ending in `.plist` would be a second registration of the same
     // Label fighting the real one for the port.
     //
-    // A backup we could not write must not leave an older run's `.prev` behind either: the
-    // pending marker below makes the next repair roll back to whatever `.prev` holds.
-    try { writeServiceDefinitionFile(`${p}.prev`, previousPlist, "utf8"); } catch {
-      try { unlinkLaunchdOwnedFile(`${p}.prev`); } catch { /* rollback then has no backup */ }
+    // Without this run's backup (no readable previous plist, or a failed write), an older
+    // run's `.prev` must not survive: the pending marker below makes a later repair roll back
+    // to whatever `.prev` holds. Removing it is not best-effort; failing here touches nothing.
+    let backedUp = false;
+    if (previousPlist !== null) {
+      try { writeServiceDefinitionFile(`${p}.prev`, previousPlist, "utf8"); backedUp = true; } catch { /* below */ }
     }
+    if (!backedUp) unlinkLaunchdOwnedFile(`${p}.prev`);
   }
   // Persist before replacing the plist or touching launchd, so interruption cannot make
   // the next repair treat unconfirmed bytes as loaded or overwrite the recovery copy.

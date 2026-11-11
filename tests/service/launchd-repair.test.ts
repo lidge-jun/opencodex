@@ -273,7 +273,8 @@ describe("installLaunchd: repair must not be an outage (#4236 defect 1)", () => 
     expect(existsSync(`${plistPath}.pending`)).toBe(true);
   });
 
-  test("a backup that cannot be written removes an older run's backup", () => {
+  // A read-only file only fails the write for a non-root POSIX user.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a backup that cannot be written removes an older run's backup", () => {
     const plistPath = fixturePlist();
     const legacy = renderedPlist().replace(/\s*<key>ProcessType<\/key><string>Interactive<\/string>/, "");
     writeFileSync(plistPath, legacy);
@@ -289,6 +290,22 @@ describe("installLaunchd: repair must not be an outage (#4236 defect 1)", () => 
     // run's bytes must not be what it finds.
     expect(existsSync(`${plistPath}.pending`)).toBe(true);
     expect(existsSync(`${plistPath}.prev`)).toBe(false);
+  });
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable installed plist does not keep an older run's backup", () => {
+    const plistPath = fixturePlist();
+    writeFileSync(plistPath, renderedPlist());
+    writeFileSync(`${plistPath}.prev`, "stale backup from an older run");
+    // Installed but unreadable: there is no previous definition to back up this run.
+    chmodSync(plistPath, 0o000);
+    const { launchctl } = recordingLaunchctl({ bootstrap: [ok()] });
+    try {
+      try { installLaunchd({ launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} }); }
+      catch { /* the unreadable plist may also refuse the rewrite; the backup is what matters */ }
+      expect(existsSync(`${plistPath}.prev`)).toBe(false);
+    } finally {
+      chmodSync(plistPath, 0o600);
+    }
   });
 
   test("policy repair retries a refused bootstrap even when the old command matches", () => {

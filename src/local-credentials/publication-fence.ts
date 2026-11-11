@@ -50,7 +50,11 @@ export function withCredentialPublicationFence<T>(home: string, fn: () => T, wai
   try { return fn(); } finally { release(); }
 }
 
-/** Await a peer without using SQLite's blocking busy handler on the serving thread. */
+/**
+ * Await a peer without using SQLite's blocking busy handler on the serving thread. Unlike that
+ * handler, a failed attempt does not keep SQLite's PENDING lock, so a continuous stream of shared
+ * readers can hold a writer off until its deadline; the writer then fails closed with SQLITE_BUSY.
+ */
 export async function withCredentialPublicationFenceAsync<T>(home: string, fn: () => Promise<T>): Promise<T> {
   const deadline = performance.now() + CREDENTIAL_FENCE_WRITER_WAIT_MS;
   let retryDelayMs = 25;
