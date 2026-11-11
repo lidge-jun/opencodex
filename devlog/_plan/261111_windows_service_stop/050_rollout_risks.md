@@ -18,7 +18,7 @@
 ## Rollout
 
 1. Implement the creation-time reader and handle terminate with hermetic tests.
-2. Implement `stopWindowsServiceChecked` and wire all four callers from 030, including the updater variant.
+2. Implement part A and part B and wire every call site from 030 (ocx stop both paths, ocx uninstall, /api/stop, ocx service stop, service uninstall/remove, prepareServiceInstall, the updater), including the guarded `bound-stray` state.
 3. Run the device matrix (040) on Windows 11 x64 (npm and bundled) and one elevated-task setup; attach redacted evidence.
 4. Desktop text for the additive fields in the same release.
 5. Consider C for newly generated wrappers afterwards.

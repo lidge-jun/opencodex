@@ -5,7 +5,8 @@
 The proxy child is stopped by each caller AFTER the service stop, and `/api/stop` runs inside the very proxy that holds the port. A port check inside the service operation would therefore always time out. The design is split:
 
 - Part A, `stopWindowsServiceChecked()` (async; the current `stopServiceIfInstalledDetailed` and the guarded `stopManager` slot become async on Windows): stop the manager, terminate bound wrappers, then wait until the manager is inactive and no bound wrapper is alive. Returns `stopped` / `survived` / `denied` / `unknown` for the manager and wrappers only.
-- Part B, `confirmWindowsStopFreed()`, run by the caller after its graceful child stop: the port is free and stays free for the hold, and a remaining listener is classified as ours or foreign. Part B replaces `proxyStillLiveAfterStop` in `ocx service stop`, the `schedulerCanRespawn` re-poll in `ocx stop`, and the guarded path's `settle` / `managerState` observation.
+- Part B, `confirmWindowsStopFreed()`, run by the caller after its graceful child stop: the port is free and stays free for the hold, and a remaining listener is classified as ours or foreign. Part B replaces `proxyStillLiveAfterStop` in `ocx service stop`, the `schedulerCanRespawn` re-poll in `ocx stop`, and the respawn-window check in `ocx uninstall` (src/cli/index.ts, uninstall-plan.ts), which today run only on `stopped-respawnable`; on Windows they run part B unconditionally after a part A `stopped`. On the guarded path part B is added after the existing `settle`, which keeps its approved-PID exit check (`waitExit`) and the probe of the approved endpoint; there "the port" is the approved endpoint.
+- A part A outcome other than `stopped` aborts before anything destructive: `ocx service uninstall` / `remove` and `prepareServiceInstall` refuse with the outcome and reason before deleting or replacing the task (today uninstall only warns and continues), `ocx uninstall` keeps client configuration, and the updater aborts before replacing files.
 
 ## Where it sits
 
@@ -16,7 +17,7 @@ Part A replaces, on Windows only, the "manager stop + best-effort wrapper kill" 
 - `ocx service stop` calls part A instead of `stopWindows`, stops the tracked proxy as today, then runs part B.
 - `ocx service uninstall` / `remove` call part A before deleting the task (today they call `stopWindows` and kill no wrappers, so a looping wrapper can outlive its task, #764), then part B.
 - `prepareServiceInstall` (service install and backend switch) calls part A instead of its manager stop + wrapper kill, then its existing tracked-proxy stop, then part B.
-- `/api/stop` runs part A only. Part B belongs to the parent `ocx stop` that holds the receipt, since the route cannot observe its own post-exit window; the existing `respawnable_service` refusal for a caller without a receipt stays.
+- `/api/stop`: when the caller presents a valid receipt, the parent `ocx stop` has already run part A, so the route skips part A (no second enumeration, `/end` or wait inside the proxy) and only performs its graceful shutdown; part B belongs to the parent, since the route cannot observe its own post-exit window. Without a receipt the existing `respawnable_service` refusal stays. This keeps the route well inside the parent's 10 s POST abort, after which the parent falls back to a forced kill.
 - The updater's `stopWindowsServiceWrappersBestEffort` moves to part A in the same change (Task Scheduler backend; for the native WinSW backend it keeps today's behavior of stopping WinSW without a wrapper kill, because WinSW has no `:loop` wrapper), through an authorizer-gated variant (`guardedStopWindowsServiceChecked(authorize)`) that runs the authorizer once at entry and again before each terminate, as the existing `mutationGate` does, so an update cannot race a respawned runtime either. The updater keeps its own reclaim checks.
 
 Desktop reaches it only through the consented `ocx stop` child; the #5443 boundary is unchanged and Desktop never elevates.
@@ -27,18 +28,22 @@ A process is bound, and only a bound process may be terminated, when ALL hold:
 
 1. Image name is `wscript.exe`, `cscript.exe` or `cmd.exe` (wrapper). The proxy child is identified for observation and lineage only; it is never a terminate target of this operation.
 2. Its command line contains this home's canonical launcher VBS or service script path as a complete token.
-3. Lineage: it is an ancestor of the identity-checked child (`readPid()` identity), or a descendant of a wrapper that satisfies 1–2, or its parent is gone (a parent PID whose creation time is later than the wrapper's counts as gone), is another bound wrapper, or is the Task Scheduler service host, proven by matching the Schedule service's process ID from the SCM (after `/end` the launcher `wscript.exe` usually still has it as parent). A wrapper that matches 1–2 but fails lineage (for example a launcher started by hand) is not terminated and makes the outcome `survived` with reason `unbound-wrapper` if it is still alive at the end of part A. For the stray-wrapper case (#764, task not running) this binds the launcher and, as its descendant, the `cmd.exe` running the `:loop`; ending either stops the relaunch.
+3. Lineage: it is an ancestor of the identity-checked child (`readPid()` identity), or a descendant of a BOUND wrapper, or its parent is gone (a parent PID whose creation time is later than the wrapper's counts as gone), is another bound wrapper, or is the Task Scheduler service host, proven by matching the Schedule service's process ID from the SCM (after `/end` the launcher `wscript.exe` usually still has it as parent). A wrapper that matches 1–2 but fails lineage (for example a launcher started by hand from a shell) is not terminated, and neither is its `cmd.exe` child (not a descendant of a bound wrapper); the outcome is `survived` with reason `unbound-wrapper` if either is still alive at the end of part A, and the output names the manual step. Ending a hand-started copy is left to the operator by design. For the stray-wrapper case (#764, task not running) this binds the launcher and, as its descendant, the `cmd.exe` running the `:loop`; ending either stops the relaunch.
 4. A creation time was read for it at bind time.
 
 This is narrower than today's cleanup, which uses the path token alone with any image name and skips unreadable command lines silently. A candidate under the bound manager whose command line or creation time is unreadable makes the outcome `unknown`; it is never skipped and never killed.
 
+## Guarded (consent) path and the stray wrapper
+
+Today `inspectWindowsSchedulerManager` answers `unknown` when the task is not running but a wrapper survives, and `runApprovedStop` turns that into `approval-changed` before any manager step, which is #7771's Desktop symptom. The guarded inspection adopts the same binding rule: a not-running registered OpenCodex task plus wrappers bound by the rule above (path token, wrapper image, lineage to the identity-checked approved PID, creation time) is a provable manager state `bound-stray`, which reaches part A. Anything the rule cannot bind stays `unknown` → `approval-changed`, and Desktop shows the existing refusal with the new `unbound-wrapper` / `evidence-unreadable` reason.
+
 ## Termination primitive
 
-New work, named explicitly (x64):
+New work, named explicitly (x64): the creation-time reader, the handle terminate, and reading the Schedule service's PID from the SCM (`QueryServiceStatusEx`) for the parent proof. Making part A async changes the return type of `stopServiceIfInstalledDetailed` and the `stopManager` slot on every platform, so all their callers change in the same PR.
 
 - A Windows process creation-time reader (`GetProcessTimes`), added to `WindowsProcessEntry` as `startTime`.
 - A handle-based terminate: `OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION)`, read the creation time on THAT handle, compare with the bound value, then `TerminateProcess` on the same handle, then close it. No gap between check and kill for PID reuse. Implemented with Bun FFI from `resolveTrustedWindowsSystemDirectory()` (same loading rules as #8487).
-- Windows ARM64 (no FFI), recommended: keep today's capability with a weaker but bounded fallback rather than regress. Bind on the CIM `CreationDate` (a reader exists at src/codex/app-server-processes.ts), then in ONE trusted PowerShell script re-read the process's `StartTime` through `Get-Process -Id`, compare, and call `.Kill()` on the same `Process` object, reading the result back. The window between the CIM read and the check is closed; the remaining window between the in-script check and `Kill()` is accepted and documented. The alternative, reporting `unknown` and killing nothing on ARM64, is listed in 050 as a regression the owner may prefer.
+- Windows ARM64 (no FFI), recommended: keep today's capability with a weaker but bounded fallback rather than regress. Bind on the CIM `CreationDate` (a reader exists at src/codex/app-server-processes.ts), then in ONE trusted PowerShell script re-read the process's `StartTime` through `Get-Process -Id`, compare, and call `.Kill()` on the same `Process` object, reading the result back. `Process.Kill()` opens its own handle by PID, so a window between the in-script check and the kill remains; the CIM `CreationDate` and `StartTime` comparison uses a 1 s tolerance in UTC. Both are accepted residuals of the fallback and documented. The alternative, reporting `unknown` and killing nothing on ARM64, is listed in 050 as a regression the owner may prefer.
 
 ## Steps
 
@@ -48,6 +53,15 @@ Part A:
 
 3. Terminate bound wrapper survivors through the handle primitive (`cmd.exe` running the loop first, then the launcher). The proxy child is NOT terminated here: it stops through the existing graceful path (`stopProxy` / `stopWithDeferral` / `signalApproved`) with its drain, the #7423 teardown-deferral receipt, and the rule that a received refusal (409, `ProxyOwnershipRefusedError`) forbids a forced stop. It is force-killed only where today's code already forces after a graceful timeout, never after a refusal. This operation gives no new kill authority over the child.
 4. Wait until `observeWindowsGuardedManagerStopped` = inactive and no bound wrapper is alive (part A deadline: 5 s, starting after the manager stop returns).
+
+## Time budget per caller (worst case)
+
+| Caller | Part A | Child stop | Part B | Bound to fit |
+|---|---|---|---|---|
+| `ocx stop` (Desktop consented) | bind + `/end` + terminate + 5 s | `/api/stop` graceful drain (`shutdownTimeoutMs` + 3 s), route skips part A | 12 s | Desktop's 30 s whole-stop limit: part A 8 s (one CIM enumeration up front, then process handles only during the wait) + drain 8 s (default `shutdownTimeoutMs` 5 s + 3 s) + part B 12 s = 28 s. With a configured `shutdownTimeoutMs` above 7 s, part B gets only the remaining time, never less than one 6 s relaunch period; if even that does not fit, the stop reports `survived` with reason `unverified-budget` rather than overrun |
+| `/api/stop` route | skipped with a receipt | its own drain | none | parent's 10 s POST abort |
+| `ocx service stop`, `ocx uninstall`, service uninstall, install/switch | 8 s | tracked-proxy stop | 12 s | interactive, no fixed external limit |
+| updater | 8 s | its own | its own reclaim | update job budget |
 
 Part B (caller, after its graceful child stop):
 
