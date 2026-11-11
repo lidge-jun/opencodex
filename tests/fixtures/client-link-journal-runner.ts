@@ -5,8 +5,22 @@
  * a scenario that writes them directly runs here, in a child whose CODEX_HOME and OPENCODEX_HOME the
  * parent test set to its own temp directory before anything was imported. Prints one JSON result.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+
+// First, before any source module loads or anything is written: the parent test creates the temp
+// home, writes a one-time token into it and hands the same token over. A direct run (a developer's
+// real HOME, no token, or a token the home does not carry) stops here.
+{
+  const token = process.env.OCX_FIXTURE_TOKEN;
+  const marker = process.env.HOME ? join(process.env.HOME, ".ocx-fixture-token") : "";
+  let carried: string | null = null;
+  try { carried = marker && existsSync(marker) ? readFileSync(marker, "utf8") : null; } catch { carried = null; }
+  if (!token || carried !== token) {
+    console.error("client-link-journal-runner.ts is a test fixture; run it through tests/clients/client-link-teardown.test.ts.");
+    process.exit(2);
+  }
+}
 
 const scenario = readFileSync(0, "utf8").trim() as "catalog-changed" | "standalone-handover" | "foreign-journal";
 const home = process.env.OPENCODEX_HOME!;

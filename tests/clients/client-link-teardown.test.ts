@@ -2,7 +2,8 @@
 import { assertCodexHomeOwned } from "../helpers/codex-home-sandbox";
 import { expect, spyOn, test } from "bun:test";
 import { CODEX_HOME } from "../../src/codex/paths";
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { handleDisconnectCommand } from "../../src/cli/connect";
 import { connectClient } from "../../src/client/connect";
@@ -11,6 +12,9 @@ import { clientLinkStatePath, writeClientLinkState } from "../../src/client/link
 import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
 import { createTempHome } from "../helpers/temp-home";
 import { fixturePath, repoPath } from "../helpers/repo-root";
+import { randomUUID } from "node:crypto";
+
+const FIXTURE_TOKEN_FILE = ".ocx-fixture-token";
 
 assertCodexHomeOwned(CODEX_HOME);
 
@@ -226,9 +230,12 @@ async function runJournalScenario(scenario: "catalog-changed" | "standalone-hand
     const codex = home.path("codex");
     mkdirSync(codex, { recursive: true });
     mkdirSync(home.path("ocx"), { recursive: true });
+    // The runner writes only into a home that carries the one-time token this process hands it.
+    const token = randomUUID();
+    writeFileSync(home.path(FIXTURE_TOKEN_FILE), token);
     const child = Bun.spawn([process.execPath, fixturePath("client-link-journal-runner.ts")], {
       cwd: repoPath(), stdin: new Blob([scenario]), stdout: "pipe", stderr: "pipe",
-      env: { ...process.env, HOME: home.root, USERPROFILE: home.root, OPENCODEX_HOME: home.path("ocx"), CODEX_HOME: codex, OCX_SERVICE: "", OCX_SERVICE_MANAGED: "0" },
+      env: { ...process.env, HOME: home.root, USERPROFILE: home.root, OPENCODEX_HOME: home.path("ocx"), CODEX_HOME: codex, OCX_SERVICE: "", OCX_SERVICE_MANAGED: "0", OCX_FIXTURE_TOKEN: token },
     });
     const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     expect(exit, stderr).toBe(0);
@@ -263,3 +270,32 @@ test("connect over an earlier connection's Codex journal warns with the recovery
   expect(result.warnings.join("\n")).toContain("ocx sync --restart-codex");
 });
 
+
+// Coordinator review round 4: run by hand, with HOME pointing at a real home, the runner must
+// refuse before any write. A temp folder stands in for that home and is asserted untouched.
+test("the journal runner refuses a home its parent did not create, and writes nothing", async () => {
+  const home = createTempHome("ocx-client-link-runner-direct-");
+  try {
+    const realLike = home.path("real-home");
+    mkdirSync(join(realLike, ".codex"), { recursive: true });
+    mkdirSync(join(realLike, ".opencodex"), { recursive: true });
+    writeFileSync(join(realLike, ".codex", "config.toml"), "model_provider = \"real\"\n");
+    writeFileSync(join(realLike, ".opencodex", "config.json"), "{\"real\":true}");
+    for (const token of [undefined, "forged-token"]) {
+      const child = Bun.spawn([process.execPath, fixturePath("client-link-journal-runner.ts")], {
+        cwd: repoPath(), stdin: new Blob(["standalone-handover"]), stdout: "pipe", stderr: "pipe",
+        env: { PATH: process.env.PATH ?? "", HOME: realLike, OPENCODEX_HOME: join(realLike, ".opencodex"), CODEX_HOME: join(realLike, ".codex"), ...(token ? { OCX_FIXTURE_TOKEN: token } : {}) },
+      });
+      const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect(exit).not.toBe(0);
+      expect(stdout).toBe("");
+      expect(stderr.trim().split("\n")).toEqual(["client-link-journal-runner.ts is a test fixture; run it through tests/clients/client-link-teardown.test.ts."]);
+    }
+    expect(readdirSync(join(realLike, ".codex"))).toEqual(["config.toml"]);
+    expect(readFileSync(join(realLike, ".codex", "config.toml"), "utf8")).toBe("model_provider = \"real\"\n");
+    expect(readdirSync(join(realLike, ".opencodex"))).toEqual(["config.json"]);
+    expect(readFileSync(join(realLike, ".opencodex", "config.json"), "utf8")).toBe("{\"real\":true}");
+  } finally {
+    home.remove();
+  }
+});
