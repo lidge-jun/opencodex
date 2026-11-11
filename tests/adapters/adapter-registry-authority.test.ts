@@ -397,6 +397,18 @@ describe("TRAE CN ACP regression contract", () => {
     });
   }
 
+  test("user file references remain refused when inline document bytes are also present", async () => {
+    const fixture = traeFixture();
+    const parsed = parseResponsesRequest({ model: "test-model", input: [{ role: "user", content: [
+      { type: "input_file", file_id: "fixture-user-file",
+        file_data: "data:application/pdf;base64,JVBERi0xLjQK", filename: "fixture.pdf" },
+    ] }] });
+    const events: AdapterEvent[] = [];
+    await createTraeCnAdapter(config(), fixture.deps).runTurn!(parsed, traeMeta(), event => events.push(event));
+    expect(events).toMatchObject([{ type: "error", status: 400, code: "unsupported_input_modality" }]);
+    expect(fixture.options()).toBeUndefined(); expect(fixture.requests).toEqual([]);
+  });
+
   for (const stop of ["cancelled", "end_turn"]) {
     test("client abort after a parsed ACP reply retains usage: stop=" + stop, async () => {
       const controller = new AbortController();

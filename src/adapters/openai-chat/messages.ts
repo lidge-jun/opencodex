@@ -286,11 +286,10 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
             if (p.type === "video") return { type: "text", text: VIDEO_UNSUPPORTED_MARKER };
             return { type: "text", text: (p as OcxTextContent).text };
           });
-          // A developer message with images keeps the user-compatible shape it has always had on
-          // this wire. One carrying only a document has no such precedent, and demoting it would
-          // undo the role this adapter just finished preserving.
+          // A translated Chat instruction with media remains an instruction on this wire.
+          // Demoting it would discard the role even when the attachment itself is preserved.
           chatMsg = {
-            role: msg.role === "developer" && !hasImages && !hasAudio ? developerWireRole : "user",
+            role: msg.role === "developer" ? developerWireRole : "user",
             content: chatParts,
           };
           if (provider.singleLeadingSystemMessage === true && chatMsg.role !== "user") {

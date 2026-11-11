@@ -97,6 +97,67 @@ async function respond(cfg: OcxConfig, stream: boolean) {
   return { status: response.status, text: await response.text() };
 }
 
+for (const media of ["image", "video"]) {
+  test("Chat policy retry retains original instruction media: " + media, async () => {
+    const cfg = config([{ provider: "trae-cn", model: "test-model" }]);
+    cfg.defaultProvider = "trae-cn";
+    cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
+      authMode: "key", models: ["test-model"], liveModels: false };
+    cfg.providers.capable = { adapter: media === "video" ? "google" : "openai-chat", baseUrl: "https://fixture.invalid/v1",
+      apiKey: "fixture-key", authMode: "key", models: ["accept-model"], inputModalities: ["text", "image", "video"] };
+    cfg.routingProfiles = { daily: { candidates: [
+      { provider: "trae-cn", model: "test-model" }, { provider: "capable", model: "accept-model" },
+    ] } };
+    const requests: RequestInit[] = [];
+    cfg.providers.capable.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(init!);
+      const streamed = Boolean(JSON.parse(String(init?.body)).stream);
+      if (media === "video") {
+        if (!streamed) return Response.json({ candidates: [{ content: { parts: [{ text: "accepted" }] }, finishReason: "STOP" }] });
+        return new Response("data: " + JSON.stringify({ candidates: [{ content: { parts: [{ text: "accepted" }] }, finishReason: "STOP" }] }) + "\n\n",
+          { headers: { "content-type": "text/event-stream" } });
+      }
+      if (!streamed) return Response.json({ id: "chat-fixture", object: "chat.completion", model: "accept-model",
+        choices: [{ index: 0, message: { role: "assistant", content: "accepted" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+      const chunk = (delta: Record<string, unknown>, finishReason: string | null = null) =>
+        "data: " + JSON.stringify({ id: "chat-fixture", object: "chat.completion.chunk", model: "accept-model",
+          choices: [{ index: 0, delta, finish_reason: finishReason }] }) + "\n\n";
+      return new Response([chunk({ role: "assistant" }), chunk({ content: "accepted" }), chunk({}, "stop"), "data: [DONE]\n\n"].join(""),
+        { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const open = spyOn(traeClient, "openTraeSession").mockResolvedValue({ models: ["test-model"],
+      prompt: async (_model, _text, emit) => {
+        emit({ type: "error", status: 400, errorType: "invalid_request_error", code: "unsupported_input_modality",
+          message: "TRAE CN ACP supports text conversations only; media, documents and tool replay are not supported.", retryable: false });
+      }, close: async () => undefined });
+    const attachment = media === "image"
+      ? { type: "image_url", image_url: { url: "https://fixture.invalid/image.png" } }
+      : { type: "video_url", video_url: { url: "data:video/mp4;base64,AAAAIGZ0eXBpc29t" } };
+    const messages = [
+      { role: "system", content: [{ type: "text", text: "Inspect the attachment" }, attachment] },
+      { role: "user", content: "Question" },
+    ];
+    try {
+      const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "policy/daily", stream: false, messages }),
+      }), cfg, { model: "", provider: "" });
+      expect(response.status, await response.clone().text()).toBe(200);
+      expect(requests).toHaveLength(1);
+      const sent = JSON.parse(String(requests[0]?.body)) as { messages?: Array<{ role?: string; content?: Array<{ type: string }> }> };
+      if (media === "image") {
+        expect(sent.messages!.some(message => message.role === "system" && Array.isArray(message.content)
+          && message.content.some(part => part.type === "image_url"))).toBe(true);
+        expect(sent.messages!.at(-1)?.content).toBe("Question");
+      } else {
+        expect(JSON.stringify(sent)).toContain("inline_data");
+        expect(JSON.stringify(sent)).toContain("video/mp4");
+      }
+    } finally { open.mockRestore(); }
+  });
+}
+
 for (const media of ["image", "video"]) for (const wire of ["responses", "chat"]) for (const combo of [false, true]) {
   test("TRAE instruction media are refused at HTTP ingress: media=" + media + ", wire=" + wire + ", combo=" + combo, async () => {
     const cfg = config([{ provider: "trae-cn", model: "test-model" }]);

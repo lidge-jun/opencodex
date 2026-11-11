@@ -16,10 +16,13 @@ function hasUnsupportedInstructions(body: unknown, field: "input" | "messages"):
 }
 
 /** Reject media that parsing would erase from instruction or native agent-message inputs. */
+/** Reject typed media before Responses projection can substitute text markers or drop references. */
 export function responsesHasUnsupportedInputMedia(body: unknown): boolean {
   return hasUnsupportedInstructions(body, "input")
     || (record(body) && Array.isArray(body.input) && body.input.some(item =>
-      record(item) && item.type === "agent_message" && Array.isArray(item.content)
+      record(item) && (item.type === "agent_message"
+        || ((item.type === undefined || item.type === "message") && item.role === "user"))
+      && Array.isArray(item.content)
       && item.content.some(part => record(part) && typeof part.type === "string" && MEDIA_PART_TYPES.has(part.type))));
 }
 

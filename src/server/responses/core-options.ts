@@ -163,6 +163,8 @@ export interface HandleResponsesOptions {
   onRequestBodyRead?: () => void;
   /** Internal handoff for retry wrappers that must reuse the already-accounted request body. */
   onRequestBodyParsed?: (body: unknown) => void;
+  /** Original inbound body available only to policy candidate retry projection. */
+  policyOriginalInboundBody?: unknown;
   forceEmptyResponseId?: boolean;
   /** Internal, connection-owned control channel; never reconstructed from headers. */
   nativeControl?: NativeResponseControl;

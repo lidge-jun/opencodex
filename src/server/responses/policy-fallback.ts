@@ -18,6 +18,8 @@ import { isPolicyCandidateRefusal, isMandatoryToolChoiceRefusal, mandatoryToolCh
 import { fallbackTriggerForStatus, guardFallbackHop } from "../../routing/fallback-policy";
 import { captureAdmissionPolicy } from "../capture-admission-policy";
 import { upstreamCodeForComboFailure } from "../../bridge/errors";
+import { chatToResponsesBody } from "../../protocols/codecs/chat";
+import { restoreChatInstructionMedia } from "./chat-policy-media";
 
 type CoreHandler = typeof handleResponsesCore;
 type CoreOptions = Parameters<CoreHandler>[3];
@@ -218,7 +220,9 @@ export async function handleResponsesWithPolicyFallback(
         // Recovery and other core preparation may mutate the parsed body in place. Keep an
         // immutable snapshot of the original wire body so a retry cannot serialize those
         // mutations. Object-identity metadata is re-established by each attempt, not serialized.
-        rawBody = structuredClone(body as Record<string, unknown>);
+        rawBody = options.inboundWire === "chat" && options.policyOriginalInboundBody !== undefined
+          ? restoreChatInstructionMedia(chatToResponsesBody(options.policyOriginalInboundBody), options.policyOriginalInboundBody)
+          : structuredClone(body as Record<string, unknown>);
       }
     },
     onStoredPool401ReplayDispatched: () => {

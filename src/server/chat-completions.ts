@@ -578,6 +578,7 @@ async function handleChatCompletionsWithBudget(
     abortSignal: req.signal,
     // Body is Responses-shaped by now, but the client spoke Chat Completions.
     inboundWire: "chat",
+    policyOriginalInboundBody: structuredClone(chatBody),
     chatInstructionImage: chatHasInstructionImage(chatBody),
     chatUnsupportedInstructionMedia: chatHasUnsupportedInstructionMedia(chatBody),
     chatRawReasoningVisible: rawReasoningVisible,
