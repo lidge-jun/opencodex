@@ -34,8 +34,8 @@ role rule as text-only instructions, so pinned templates receive a chronological
 `system` or `developer` role. `tests/adapters/openai/openai-chat-qwen38-leading-system.test.ts` covers the structured image.
 Inline audio never moves into a `system`/`developer` content part: its instruction text retains the original slot and the
 audio follows in a user-compatible carrier after any pending tool result. `tests/adapters/openai/openai-chat-audio.test.ts`
-covers the default folded role and this tool-result boundary. Default developer images and documents use the same user
-carrier rule. Contiguous text and attachment groups retain their source order, so interleaved instructions and recordings
+covers the default folded role and this tool-result boundary. Default developer images and documents keep their instruction
+text and attachments together in one user carrier. Contiguous text and audio groups retain their source order, so interleaved instructions and recordings
 remain adjacent instead of being regrouped by content type.
 With `singleLeadingSystemMessage`, only text contributes to the merged instruction; every audio, image and document part moves
 to one user carrier in original relative order, also after the pending tool result. A combined audio/image regression covers it.

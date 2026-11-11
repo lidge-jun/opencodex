@@ -224,7 +224,8 @@ export async function handleResponsesWithPolicyFallback(
           const restored = restoreChatInstructionMedia(
             chatToResponsesBody(options.chatReplayOriginalInboundBody), options.chatReplayOriginalInboundBody,
           );
-          rawBody = { ...body, input: restored.input, instructions: restored.instructions };
+          rawBody = { ...structuredClone(body as Record<string, unknown>),
+            input: restored.input, instructions: restored.instructions };
         } else rawBody = structuredClone(body as Record<string, unknown>);
       }
     },

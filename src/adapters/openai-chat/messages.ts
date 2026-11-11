@@ -232,9 +232,10 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
         const parts = typeof msg.content === "string" ? undefined : msg.content as OcxContentPart[];
         const hasImages = parts?.some(p => p.type === "image") ?? false;
         const hasAudio = parts?.some(p => p.type === "audio") ?? false;
+        const hasDocuments = parts?.some(p => p.type === "document") ?? false;
         // A document has a structured counterpart on this wire, so it needs the parts array for
         // the same reason an image does: flattening it to a string would drop the bytes.
-        const hasStructured = hasImages || hasAudio || (parts?.some(p => p.type === "document") ?? false);
+        const hasStructured = hasImages || hasAudio || hasDocuments;
         let chatMsg: Record<string, unknown>;
         if (msg.role === "developer" && !hasStructured) {
           const text = typeof msg.content === "string"
@@ -298,6 +299,10 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
               const attachments = chatParts.filter(part => part.type !== "text");
               if (text.length > 0) destination.push({ role: developerWireRole, content: text });
               if (attachments.length > 0) destination.push({ role: "user", content: attachments });
+            } else if (hasImages || hasDocuments) {
+              // Keep rich instruction text attached to the image/file it describes. Every part is
+              // valid under user, while system/developer roles accept only the text subset.
+              destination.push(chatMsg);
             } else {
               // Images, audio and files are user-content-only on the Chat wire. Split only at
               // role boundaries so interleaved instruction/attachment groups retain their order.
