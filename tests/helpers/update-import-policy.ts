@@ -282,7 +282,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     // Pre-mutation home creation and read-only marker inspection.
     'import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync } from "node:fs";',
     // Read-only construction of admission and marker paths.
-    'import { dirname, join } from "node:path";',
+    'import { dirname, join, posix, win32 } from "node:path";',
     // Pre-mutation admission lease and read-only lease inspection.
     'import { acquireOwnershipMutationLease, inspectOwnershipMutationLease, ownershipMutationLeasePath } from "../service/ownership-mutation-lease.mjs";',
     // Read-only construction of ownership lease paths.
