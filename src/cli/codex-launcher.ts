@@ -38,7 +38,6 @@ import { attestCodexRuntime, codexCredentialDestinationIsTrusted, resolveCodexLa
 import { codexCommandCanBypass, CODEX_UNVERIFIED_SHIM } from "./codex-launch-command";
 import { codexTokenArgsAreSafe, codexTokenEnvironmentIsSafe } from "./codex-launch-policy";
 import { codexTokenWithheldDiagnostic, type CodexTokenRefusal, type CodexTokenRefusalReporter } from "./codex-launch-diagnostics";
-import { COMPANION_PROXY_ENV } from "../service/companion-proxy";
 
 export interface CodexLaunchEnv {
   [key: string]: string | undefined;
@@ -110,13 +109,13 @@ export function codexLaunchPlan(routingKind: CodexRoutingKind): CodexLaunchPlan 
   }
 }
 
-/** Env the detached `ocx start` child inherits (service-owned admission ladder); the companion marker tells a restart no manager owns it. */
+/** Env the detached `ocx start` child inherits (service-owned admission ladder). */
 export function codexProxyStartEnv(base: CodexLaunchEnv = process.env): CodexLaunchEnv {
   const stripped = withoutSiblingMarker(base) as CodexLaunchEnv;
   const withTokenFile = stripped.OPENCODEX_API_AUTH_TOKEN?.trim()
     ? stripped
     : { ...stripped, OCX_API_TOKEN_FILE: serviceApiTokenFilePath() };
-  return { ...withTokenFile, OCX_SERVICE: "1", [COMPANION_PROXY_ENV]: "codex" } as CodexLaunchEnv;
+  return { ...withTokenFile, OCX_SERVICE: "1" } as CodexLaunchEnv;
 }
 
 export type CodexProxyEnsureDeps = {
