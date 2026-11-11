@@ -424,7 +424,7 @@ describe("Desktop CLI start and restart guidance", () => {
   test("duplicate start guidance names the verified Desktop target", () => {
     const probes: Array<number | undefined> = [];
     expect(duplicateRuntimeMessage(4242, 19999, deps => { probes.push(deps?.targetPid); return DESKTOP; }))
-      .toBe(`OpenCodex Desktop supervises the running proxy (pid 4242, ${DESKTOP.app}, port 19999). Use the running proxy, or quit OpenCodex before starting it from this CLI.`);
+      .toBe(`OpenCodex Desktop supervises the running proxy (pid 4242, ${DESKTOP.app}, port 19999). Use the running proxy (restart it with 'ocx restart', re-point Codex with 'ocx sync'), or quit OpenCodex before starting it from this CLI.`);
     expect(probes).toEqual([4242]);
     for (const evidence of [...NON_DESKTOP, { ...DESKTOP, runtimePid: 9999 }]) {
       expect(duplicateRuntimeMessage(4242, 19999, () => evidence))

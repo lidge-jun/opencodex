@@ -36,7 +36,7 @@ export function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: f
     } else if (code === "restart_supervised_service") {
       console.error("Restart not performed; the running client runtime was kept. Its background service owns it: run `ocx service restart`.");
     } else if (code === "restart_supervised_desktop") {
-      console.error("Restart not performed; the running client runtime was kept. The OpenCodex desktop app owns it: restart it from the app.");
+      console.error("Restart not performed; the running client runtime was kept. The OpenCodex desktop app owns it while its connection is current: use Quit in the OpenCodex tray menu, then reopen it. After `ocx disconnect`, `ocx restart` hands it to the app.");
     } else {
       console.error("Proxy restart request could not be confirmed; no fallback stop/start was attempted. Run `ocx status` to inspect ownership and runtime state.");
     }

@@ -198,7 +198,7 @@ describe("ocx restart against a client runtime", () => {
     }
     expect(lines).toEqual([
       "Restart not performed; the running client runtime was kept. Its background service owns it: run `ocx service restart`.",
-      "Restart not performed; the running client runtime was kept. The OpenCodex desktop app owns it: restart it from the app.",
+      "Restart not performed; the running client runtime was kept. The OpenCodex desktop app owns it while its connection is current: use Quit in the OpenCodex tray menu, then reopen it. After `ocx disconnect`, `ocx restart` hands it to the app.",
     ]);
   });
 });
