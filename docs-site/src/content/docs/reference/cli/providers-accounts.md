@@ -962,6 +962,13 @@ The command reports success even when no cooldown is active, with `cleared: fals
 an Anthropic cooldown also advances the account generation so an older in-flight quota probe cannot
 restore the cleared state or publish stale quota-derived eligibility afterward.
 
+An Anthropic 429 quota cooldown that names its rejected usage windows also lifts on its own. For
+enabled OAuth instances, the proxy re-reads the account's usage on its background sweep (about once a
+minute, backing off to every ten minutes while the window stays spent) and returns the account to
+selection as soon as every rejected window shows headroom, for example after a reset spent in the
+Claude app or a plan upgrade. A 429 that carries only `Retry-After`, with no window to re-read, keeps
+its cooldown until that deadline. `clear-cooldown` remains the manual override for both.
+
 ### `ocx account refresh <provider> [--json]`
 
 For the Codex pool, use `ocx account refresh openai [--json]`. It force-refreshes account quotas and

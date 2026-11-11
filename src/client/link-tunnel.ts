@@ -23,6 +23,7 @@ import {
 import { isLinkPort } from "../link/ports";
 import { inspectIpv4LoopbackListener, type LoopbackOwnerLookupResult } from "../server/port-reclaim";
 import type { LinkDiagnosticSink } from "../link/diagnostics";
+import { createTunnelHistoryBook, exitCause, type TunnelCause } from "../link/tunnel-history";
 import { isLinkConnection, readClientConnectionState } from "./state";
 import { clientLinkStatePath, readClientLinkState, type ClientLinkState } from "./link-state";
 import type { LinkTunnelGate, LinkAdmissionResult } from "./link-relay";
@@ -167,6 +168,8 @@ export interface ClientTunnelPidfile {
 }
 
 const STOP_TIMEOUT_MS = 5_000;
+/** A Child supervises one tunnel; its history needs one fixed key, never the link id. */
+const CHILD_TUNNEL_HISTORY_KEY = "child";
 const REAP_POLL_MS = 100;
 const TIMER_MS = 1_000;
 /** Consecutive unreadable reads before the supervisor acts on them. */
@@ -607,6 +610,20 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   /** Minted on every transition into connected from the process-wide sequence (relay-auth.ts). */
   let connection: string | undefined;
   let state: TunnelState = IDLE;
+  /**
+   * Child tunnel transitions go to the same bounded diagnostics file as the Home's, with the same
+   * fixed causes (#7297). The port is remembered past stop, which clears the live port first.
+   */
+  let lastTunnelPort: number | undefined;
+  // The record is built at the transition but delivered after the current synchronous step, so a
+  // sink that re-enters the supervisor (stop, status) never runs in the middle of a transition.
+  const transitionSink = deps.diagnostic;
+  const history = createTunnelHistoryBook({
+    diagnostic: transitionSink
+      ? record => queueMicrotask(() => { try { transitionSink(record); } catch { /* best effort */ } })
+      : undefined,
+    tunnelPort: () => lastTunnelPort,
+  });
   let linkId: string | null = null;
   let failure: ClientLinkSupervisorStatus | undefined;
   let tickFlight: Promise<void> | undefined;
@@ -689,9 +706,12 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
     for (const settle of [...waiters]) settle(ready);
   };
 
-  const setState = (next: TunnelState): void => {
+  const setState = (next: TunnelState, cause: TunnelCause | null = null): void => {
+    const before = state;
     if (next.kind === "connected" && state.kind !== "connected") connection = nextLinkConnectionGeneration();
     state = next;
+    // Records only a real change and swallows sink errors; diagnostics never steer the lifecycle.
+    history.observe(CHILD_TUNNEL_HISTORY_KEY, before, next, cause, now());
     settleWaiters();
   };
 
@@ -750,7 +770,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   };
 
   const onExit = (stderrClass: StderrClass): void => {
-    setState(reduceTunnel(state, { type: "exit", now: now(), stderrClass }, random, policy));
+    setState(reduceTunnel(state, { type: "exit", now: now(), stderrClass }, random, policy), exitCause(stderrClass));
   };
 
   const spawn = (sidecar: ClientLinkState): void => {
@@ -766,13 +786,16 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
       }, deps);
     } catch {
       // A due retry that cannot start counts as a failed retry, so the backoff keeps its step.
-      setState(failedSpawnTunnel(state, "forward", timestamp, policy));
+      lastTunnelPort = sidecar.tunnelPort;
+      setState(failedSpawnTunnel(state, "forward", timestamp, policy), "spawn_failed");
       deps.warn?.("client link tunnel could not be started");
       return;
     }
     invalidateOwnerProof();
     linkId = sidecar.linkId;
     tunnelPort = sidecar.tunnelPort;
+    lastTunnelPort = sidecar.tunnelPort;
+    history.spawned(CHILD_TUNNEL_HISTORY_KEY);
     probe = null;
     probeFailures = 0;
     nextProbeAt = timestamp;
@@ -871,6 +894,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
       invalidateOwnerProof();
       linkId = afterReap.sidecar.linkId;
       tunnelPort = afterReap.sidecar.tunnelPort;
+      lastTunnelPort = afterReap.sidecar.tunnelPort;
       nextProbeAt = now();
       setState({ kind: "connecting", since: now() });
       return;
@@ -919,7 +943,8 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
       probe = null;
       setState(IDLE);
     }
-    setState(reduceTunnel(state, { type: "tick", now: now() }, random, policy));
+    // A tick changes state only when the outage limit fails the link, so its cause is the timeout.
+    setState(reduceTunnel(state, { type: "tick", now: now() }, random, policy), "timeout");
     // An adopted tunnel is never killed. Failed identity or socket-owner proof keeps it
     // unprobed and unable to promote, even when the process stays alive after a timeout.
     if (state.kind === "failed" && !state.inFlight && adopted !== null) setState({ ...state, inFlight: true });

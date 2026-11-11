@@ -2782,6 +2782,7 @@ export const en = {
   "codexAuth.openaiPresetLoadFailed": "Failed to load the OpenAI provider preset.",
   "codexAuth.openaiPresetUnavailable": "OpenAI provider preset is unavailable.",
   "codexAuth.openProviders": "Open Providers",
+  "codexAuth.changeAccountMode": "Change account mode",
   "codexAuth.add": "Add",
   "codexAuth.credits": "Credits",
   "codexAuth.creditsRemaining": "remaining",

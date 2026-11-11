@@ -176,12 +176,16 @@ export function createOrchestratedChildSession({ home, resultPath, resultCapabil
   const result = value => { if (resultFd !== undefined) publishResult(resultFd, value); };
   const closeResult = () => { if (resultFd !== undefined) { const fd = resultFd; resultFd = undefined; closeSync(fd); } };
   let state = "new", mutex, startedAt, untrackedPending = false, retainFence = false;
-  const marker = (phase, preserveInstaller = false, terminationUnconfirmed = false, retainFence = false) => {
+  const marker = (phase, preserveInstaller = false, terminationUnconfirmed = false, retainFence = false, dropWindowsWitness = false) => {
     let installer = {};
     if (preserveInstaller) {
       const current = JSON.parse(readFileSync(markerPath, "utf8"));
       if (current.pid !== pid || current.startedAt !== startedAt) throw new Error("orchestrated marker changed");
-      if (current.installerPid !== undefined) installer.installerPid = current.installerPid;
+      // A Windows supervisor pid (no POSIX group beside it) only witnesses an unconfirmed installer;
+      // once its exit is confirmed it is dropped so a later run in this session can record its own.
+      if (current.installerPid !== undefined && !(dropWindowsWitness && current.installerPgid === undefined)) {
+        installer.installerPid = current.installerPid;
+      }
       if (current.installerPgid !== undefined) installer.installerPgid = current.installerPgid;
     }
     atomicJson(markerPath, { pid, phase, startedAt, ...installer,
@@ -241,7 +245,7 @@ export function createOrchestratedChildSession({ home, resultPath, resultCapabil
     },
     confirmInstallerExit() {
       if (state !== "mutating" || !untrackedPending) throw new Error("no untracked installer");
-      marker("mutating", true); untrackedPending = false;
+      marker("mutating", true, false, false, true); untrackedPending = false;
     },
     retainInstallerFence() {
       if (state !== "mutating") throw new Error("orchestrated session is not mutating");

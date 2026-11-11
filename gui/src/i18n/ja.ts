@@ -2603,6 +2603,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "OpenAI プロバイダーのプリセットを読み込めませんでした。",
   "codexAuth.openaiPresetUnavailable": "OpenAI プロバイダーのプリセットを利用できません。",
   "codexAuth.openProviders": "プロバイダーを開く",
+  "codexAuth.changeAccountMode": "アカウントモードを変更",
   "codexAuth.add": "追加",
   "codexAuth.credits": "クレジット",
   "codexAuth.creditsRemaining": "残り",

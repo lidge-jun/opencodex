@@ -2733,6 +2733,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Ayar yüklenemedi.",
   "codexAuth.openaiPresetUnavailable": "Ayar kullanılamıyor.",
   "codexAuth.openProviders": "Sağlayıcıları Aç",
+  "codexAuth.changeAccountMode": "Hesap modunu değiştir",
   "codexAuth.add": "Ekle",
   "codexAuth.credits": "Kredi",
   "codexAuth.creditsRemaining": "kalan",
