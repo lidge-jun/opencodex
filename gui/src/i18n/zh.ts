@@ -2149,6 +2149,7 @@ export const zh: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "无法加载 OpenAI 提供方预设。",
   "codexAuth.openaiPresetUnavailable": "OpenAI 提供方预设不可用。",
   "codexAuth.openProviders": "打开提供商",
+  "codexAuth.changeAccountMode": "更改账号模式",
   "codexAuth.add": "添加",
   "codexAuth.credits": "额度",
   "codexAuth.creditsRemaining": "剩余",

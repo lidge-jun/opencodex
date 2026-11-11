@@ -716,6 +716,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
             accountsFocusProvider={accountsFocus.provider}
             settingsFocusToken={settingsFocus.token}
             settingsFocusProvider={settingsFocus.provider}
+            settingsFocusField={settingsFocus.field}
             switchingAccountId={switchingAccounts[item.name]?.accountId ?? null}
             pausingAccountId={pausingAccounts[item.name]?.accountId ?? null}
             busyProvider={busy}

@@ -2049,6 +2049,7 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "無法載入 OpenAI 供應商預設。",
   "codexAuth.openaiPresetUnavailable": "OpenAI 供應商預設不可用。",
   "codexAuth.openProviders": "開啟供應商",
+  "codexAuth.changeAccountMode": "變更帳號模式",
   "codexAuth.add": "新增",
   "codexAuth.credits": "額度",
   "codexAuth.creditsRemaining": "剩餘",

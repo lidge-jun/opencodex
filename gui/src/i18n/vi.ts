@@ -2730,6 +2730,7 @@ export const vi: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Không thể tải preset của provider OpenAI.",
   "codexAuth.openaiPresetUnavailable": "Preset của provider OpenAI không khả dụng.",
   "codexAuth.openProviders": "Mở Providers",
+  "codexAuth.changeAccountMode": "Đổi chế độ tài khoản",
   "codexAuth.add": "Thêm",
   "codexAuth.credits": "Tín dụng",
   "codexAuth.creditsRemaining": "còn lại",
