@@ -398,8 +398,11 @@ export async function scanUsageLedgerCooperatively(
         lineLength = 0;
         cursor = newline + 1;
         // Bytes do not bound normalization/aggregation time on a busy host. Let
-        // network callbacks and cancellation run even within the final chunk.
-        if (linesSinceYield >= 1_000 || performance.now() - lastYieldAt >= MAX_SCAN_SLICE_MS) {
+        // network callbacks, timers and cancellation run even within the final chunk.
+        // Only elapsed time triggers this yield: a row count here would yield several
+        // times per chunk of cheap rows and slow a cold scan (the chunk boundary below
+        // keeps the row limit). setTimeout, unlike setImmediate, lets due timers run.
+        if (performance.now() - lastYieldAt >= MAX_SCAN_SLICE_MS) {
           await new Promise<void>(resolve => setTimeout(resolve, 0));
           throwIfAborted(options.signal);
           lastYieldAt = performance.now();

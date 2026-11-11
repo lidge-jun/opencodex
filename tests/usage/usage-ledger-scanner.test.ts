@@ -181,6 +181,10 @@ describe("usage ledger cooperative scanner", () => {
       expect(visitedAtTimer).toBeLessThan(rows.length);
       expect(result.parsedRows).toBe(rows.length);
       expect(result.processedThroughBytes).toBe(Buffer.byteLength(rows.join("")));
+      // Pausing between rows must not change the checkpoint a scan publishes.
+      clock.mockRestore();
+      const unpaused = await scanUsageLedgerCooperatively({ onEntry() {} });
+      expect(result.processedThroughDigest).toBe(unpaused.processedThroughDigest);
     } finally {
       clearTimeout(timer);
       clock.mockRestore();
