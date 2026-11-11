@@ -61,3 +61,25 @@ test("#7705: an invalid template or unknown provider is refused without a write"
   expect(c.providers.alpha!.aliasTemplate).toBeUndefined();
   expect((await request(c, "/api/providers/nobody/alias-template", { template: "{modelBasename}" }))?.status).toBe(404);
 });
+
+test("provider alias routes treat inherited object keys as unknown providers", async () => {
+  const c = config();
+  const routes: Array<[string, unknown]> = [
+    ["alias-template", { template: "{modelBasename}-x" }],
+    ["alias", { alias: "proto" }],
+    ["model-aliases", { set: { m1: "proto-one" } }],
+  ];
+  try {
+    for (const name of ["__proto__", "constructor", "toString"]) {
+      for (const [route, body] of routes) {
+        expect((await request(c, `/api/providers/${name}/${route}`, body))?.status).toBe(404);
+      }
+    }
+    const probe = {} as Record<string, unknown>;
+    expect(probe.aliasTemplate).toBeUndefined();
+    expect(probe.alias).toBeUndefined();
+    expect(probe.modelAliases).toBeUndefined();
+  } finally {
+    for (const key of ["aliasTemplate", "alias", "modelAliases"]) delete (Object.prototype as Record<string, unknown>)[key];
+  }
+});

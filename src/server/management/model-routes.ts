@@ -305,8 +305,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     // this guard the alias route matched `name = "keys"`, found no such provider, and returned
     // 404 for every key-pool rename.
     if (name === "keys") return null;
-    const provider = config.providers[name];
-    if (!provider) return jsonResponse({ error: `provider '${name}' not found` }, 404, req, config);
+    // Own keys only: `__proto__` or `constructor` would otherwise resolve to Object.prototype.
+    if (!hasOwnProvider(config.providers, name)) return jsonResponse({ error: `provider '${name}' not found` }, 404, req, config);
+    const provider = config.providers[name]!;
     let raw: unknown;
     try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (!isPlainRecord(raw) || (raw.alias !== null && typeof raw.alias !== "string")) return jsonResponse({ error: "alias must be a string or null" }, 400, req, config);
@@ -330,8 +331,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   if (aliasTemplateMatch && req.method === "PUT") {
     const name = decodeURIComponent(aliasTemplateMatch[1]!);
     if (name === "keys") return null;
-    const provider = config.providers[name];
-    if (!provider) return jsonResponse({ error: `provider '${name}' not found` }, 404, req, config);
+    // Own keys only: `__proto__` or `constructor` would otherwise resolve to Object.prototype.
+    if (!hasOwnProvider(config.providers, name)) return jsonResponse({ error: `provider '${name}' not found` }, 404, req, config);
+    const provider = config.providers[name]!;
     let raw: unknown;
     try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (!isPlainRecord(raw) || (raw.template !== null && typeof raw.template !== "string")) {
@@ -358,8 +360,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   if (modelAliasMatch && req.method === "PUT") {
     const name = decodeURIComponent(modelAliasMatch[1]!);
     if (name === "keys") return null;
-    const provider = config.providers[name];
-    if (!provider) return jsonResponse({ error: `provider '${name}' not found` }, 404, req, config);
+    // Own keys only: `__proto__` or `constructor` would otherwise resolve to Object.prototype.
+    if (!hasOwnProvider(config.providers, name)) return jsonResponse({ error: `provider '${name}' not found` }, 404, req, config);
+    const provider = config.providers[name]!;
     let raw: unknown;
     try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (!isPlainRecord(raw) || (raw.set !== undefined && !isPlainRecord(raw.set)) || (raw.remove !== undefined && !Array.isArray(raw.remove))) return jsonResponse({ error: "invalid model alias update" }, 400, req, config);
