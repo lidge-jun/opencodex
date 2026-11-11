@@ -1925,6 +1925,7 @@ export const ru: Record<TKey, string> = {
   "pws.currentAccountUsage": "Использование текущего аккаунта",
   "pws.quotaUnsupported": "Запрос квоты для этого аккаунта не поддерживается.",
   "pws.quotaUnobserved": "Данных о наблюдаемом использовании пока нет.",
+  "pws.quotaLastRead": "Последнее чтение",
   "pws.quotaCheckCompleted": "Проверка квоты завершена",
   "pws.modelBreakdown": "Разбивка по моделям",
   "pws.col.model": "Модель",

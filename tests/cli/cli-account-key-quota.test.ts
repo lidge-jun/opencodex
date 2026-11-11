@@ -257,3 +257,67 @@ test("quota key rows keep the pause flag and only known pause details", () => {
   expect(rows[2]!.paused).toBe(false);
 });
 
+test("#8397 unsupported keys say why the balance is unknown and carry no value", async () => {
+  const fixture = config(); fixture.providers.openrouter.baseUrl = "https://example.invalid";
+  const deps = handlerDeps(fixture);
+  const cheap = await (await deps.fetchImpl!("http://localhost:10100/api/providers/keys?name=openrouter")).json();
+  expect(cheap.keys.map((key: { quotaUnknownReason?: string }) => key.quotaUnknownReason)).toEqual(["no_balance_source", "no_balance_source"]);
+  expect(await cmdAccount(["list", "openrouter", "--quota", "--json"], deps)).toBe(0);
+  for (const account of JSON.parse(logs.pop()!).accounts) {
+    expect(account).toMatchObject({ quotaMode: "unsupported", quotaUnknownReason: "no_balance_source" });
+    expect(Object.hasOwn(account, "quota")).toBe(false);
+    expect(Object.hasOwn(account, "quotaReadAt")).toBe(false);
+  }
+  expect(await cmdAccount(["list", "openrouter", "--quota"], deps)).toBe(0);
+  const text = logs.join("\n");
+  expect(text).toContain("balance UNKNOWN (no balance source)");
+  expect(text).not.toMatch(/\b0%/);
+});
+
+test("#8397 probe rows report when the balance was read, and read_failed when the read failed", async () => {
+  const fixture = config();
+  const before = Date.now();
+  const quotaSpy = spyOn(quotaApi, "fetchProviderApiKeyQuotas").mockImplementation((c, name, force) =>
+    readProviderApiKeyQuotas(c, name, force ?? false, async provider => provider.apiKey === "fixture-first"
+      ? { kind: "quota", quota: { updatedAt: Date.now(), monthlyPercent: 0 } }
+      : { kind: "unavailable" }));
+  try {
+    const deps = handlerDeps(fixture);
+    expect(await cmdAccount(["list", "openrouter", "--quota", "--json"], deps)).toBe(0);
+    const [ok, failed] = JSON.parse(logs.pop()!).accounts;
+    expect(ok.quota.monthlyPercent).toBe(0);
+    expect(ok.quotaReadAt).toBeGreaterThanOrEqual(before);
+    expect(Object.hasOwn(ok, "quotaUnknownReason")).toBe(false);
+    expect(failed).toMatchObject({ quota: null, quotaUnavailable: true, quotaUnknownReason: "read_failed" });
+    expect(failed.quotaReadAt).toBeGreaterThanOrEqual(before);
+    expect(await cmdAccount(["list", "openrouter", "--quota"], deps)).toBe(0);
+    const text = logs.join("\n");
+    expect(text).toContain("probe: mo 0%; read just now");
+    expect(text).toContain("probe: unavailable; balance UNKNOWN (read failed); read just now");
+  } finally { quotaSpy.mockRestore(); }
+});
+
+test("#8397 human text gives the reason and the age of the last read; unknown reasons are dropped", () => {
+  const now = Date.now();
+  const rows = projectApiKeyQuotaRows(body([
+    row({ quotaMode: "unsupported", quotaUnknownReason: "no_balance_source" }),
+    row({ quota: { updatedAt: now - 180_000, monthlyPercent: 12 }, quotaReadAt: now - 180_000 }),
+    row({ quota: null, quotaUnavailable: true, quotaFailure: "timeout", quotaUnknownReason: "read_failed", quotaReadAt: now - 2 * 3_600_000 }),
+    row({ quotaMode: "passive", quotaUnknownReason: "passive_not_observed" }),
+    row({ quotaMode: "unsupported", quotaUnknownReason: "reason_from_a_newer_proxy" }),
+    row({ quota: null, quotaUnavailable: true, quotaUnknownReason: "not_read" }),
+  ]), "openrouter").rows;
+  expect(rows[0]).toMatchObject({ quotaUnknownReason: "no_balance_source" });
+  expect(rows[1]).toMatchObject({ quotaReadAt: now - 180_000 });
+  expect(rows[4]!.quotaUnknownReason).toBeUndefined();
+  const lines = formatAccountTable(rows, true).split("\n");
+  expect(lines[1]).toContain("unsupported: balance UNKNOWN (no balance source)");
+  expect(lines[2]).toContain("probe: mo 12%; read 3 min ago");
+  expect(lines[3]).toContain("probe: unavailable (timeout); balance UNKNOWN (read failed); read 2 h ago");
+  expect(lines[4]).toContain("passive: balance UNKNOWN (not observed yet)");
+  expect(lines[5]).toContain("unsupported: balance UNKNOWN (no balance source)");
+  expect(lines[6]).toContain("probe: unavailable; balance UNKNOWN (not read)");
+  for (const line of [lines[1], lines[3], lines[4], lines[5], lines[6]]) expect(line).not.toMatch(/\b0%|USD 0/);
+  expect(() => projectApiKeyQuotaRows(body([row({ quotaReadAt: "yesterday" })]), "openrouter")).toThrow("Malformed");
+});
+

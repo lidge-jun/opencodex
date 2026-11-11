@@ -1939,6 +1939,7 @@ export const fr: Record<TKey, string> = {
   "pws.currentAccountUsage": "Utilisation du compte actuel",
   "pws.quotaUnsupported": "La consultation du quota n’est pas prise en charge pour ce compte.",
   "pws.quotaUnobserved": "Aucune utilisation observée pour le moment.",
+  "pws.quotaLastRead": "Dernière lecture",
   "pws.quotaCheckCompleted": "Vérification du quota terminée",
   "pws.modelBreakdown": "Répartition par modèle",
   "pws.col.model": "Modèle",

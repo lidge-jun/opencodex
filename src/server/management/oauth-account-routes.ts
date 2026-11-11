@@ -564,7 +564,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       ...(provider === "anthropic2" ? { provider } : {}), activeAccountId: projected.activeAccountId,
       accounts: projected.accounts.map(account => {
         const row = byId.get(account.id);
-        if (!row) return account;
+        // #8397: a passive provider with no observation for this account yet says so.
+        if (!row) return passiveQuota ? { ...account, quotaUnknownReason: "passive_not_observed" } : account;
         if (config.providers[provider] !== quotaProvider || row.isCurrent?.() === false) {
           return { ...account, quota: null, quotaUnavailable: true };
         }
@@ -1123,7 +1124,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const listed = listProviderApiKeys(config, name);
       const provider = config.providers[name];
       const quotaMode = provider ? providerApiKeyQuotaMode(name, provider) : "unsupported";
-      return { ...listed, keys: listed.keys.map(key => ({ ...key, quotaMode })) };
+      // #8397: say why a balance is unknown; a destination without a reader has no balance source.
+      return { ...listed, keys: listed.keys.map(key => ({ ...key, quotaMode,
+        ...(quotaMode === "unsupported" ? { quotaUnknownReason: "no_balance_source" as const } : {}) })) };
     };
     const initial = projectKeys();
     if (url.searchParams.get("quota") !== "1" || !initial.keys.some(key => key.quotaMode === "probe")) {
@@ -1137,9 +1140,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       keys: current.keys.map(key => {
         const row = byId.get(key.id);
         if (!row || key.quotaMode !== "probe") return key;
-        if (!row.isCurrent()) return { ...key, quota: null, quotaUnavailable: true };
+        if (!row.isCurrent()) return { ...key, quota: null, quotaUnavailable: true, quotaUnknownReason: "not_read" };
+        const readAt = row.readAt === undefined ? {} : { quotaReadAt: row.readAt };
         // Internal identity/epoch checks never enter the JSON DTO.
-        return { ...key, quota: row.quota, quotaUnavailable: row.unavailable === true };
+        return { ...key, quota: row.quota, quotaUnavailable: row.unavailable === true, ...readAt,
+          ...(row.unavailable ? { quotaUnknownReason: row.readAt === undefined ? "not_read" : "read_failed" } : {}) };
       }),
     });
   }

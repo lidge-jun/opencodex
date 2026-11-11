@@ -234,7 +234,7 @@ never active-key mutation or the provider-wide cache. Response projection rechec
 and exposes only quota/availability fields, not its internal identity guard. Passive observations
 retain their original timestamp and never trigger inference or token renewal. Unsupported,
 unobserved, failed and measured-zero readings remain distinct; multiple keys are not summed
-because they may share one upstream balance.
+because they may share one upstream balance. Unknown readings carry the closed `quotaUnknownReason` from `src/providers/quota-types.ts` (`no_balance_source`, `passive_not_observed`, `read_failed`, `not_read`), and key probe rows carry `quotaReadAt` from the per-key cache entry's read time, omitted when no read happened. Both fields are additive: older clients ignore them and the CLI drops reasons it does not know, so an unknown balance is never projected as zero (#8397).
 
 Provider details use one account-quota reading renderer for Overview, Usage and Accounts/API
 keys. Current-account usage sits below usage statistics; a known-mode active row is authoritative

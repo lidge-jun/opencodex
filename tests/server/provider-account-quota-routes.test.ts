@@ -248,5 +248,6 @@ test("passive account refresh reports unobserved without sending a quota request
   expect(body.accounts[0].quotaMode).toBe("passive");
   expect(body.accounts[0].quota).toBeUndefined();
   expect(body.accounts[0].quotaUnavailable).toBeUndefined();
+  expect(body.accounts[0].quotaUnknownReason).toBe("passive_not_observed");
   expect(requests).toBe(0);
 });

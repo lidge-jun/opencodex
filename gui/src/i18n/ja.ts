@@ -3786,6 +3786,7 @@ export const ja: Record<TKey, string> = {
   "pws.currentAccountUsage": "現在のアカウントの使用量",
   "pws.quotaUnsupported": "このアカウントは割り当て量の照会に対応していません。",
   "pws.quotaUnobserved": "使用量はまだ観測されていません。",
+  "pws.quotaLastRead": "最終読み取り",
   "pws.quotaCheckCompleted": "割り当て量の確認が完了しました",
   "pws.modelBreakdown": "Model breakdown",
   "pws.col.model": "Model",

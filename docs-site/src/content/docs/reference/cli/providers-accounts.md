@@ -768,6 +768,21 @@ zero is retained. Malformed consumed fields or a returned key row without
 quota-mode evidence fail rather than fabricate support. An empty pool remains
 valid. Keys remain masked.
 
+When a balance is unknown, the row says why in `quotaUnknownReason`:
+`no_balance_source` (OpenCodex has no balance reader for this destination),
+`passive_not_observed` (a passive provider has not observed usage yet),
+`read_failed` (a reader exists and its last read failed), or `not_read` (a
+reader exists but no read was made, for example on a paused key). Probe rows
+also carry `quotaReadAt`, the time of the last read in epoch milliseconds,
+whether it succeeded or failed. Only destinations with a balance reader
+(`quotaMode: "probe"`, such as OpenRouter, DeepSeek, Ollama Cloud, Moonshot,
+Venice and Abliteration) ever show a value. Human output reads, for example,
+`unsupported: balance UNKNOWN (no balance source)` or `probe: mo 12%; read 3
+min ago`, and never prints zero for an unknown balance. Older CLIs ignore both
+fields, and a reason this CLI does not recognize is dropped. Passive OAuth
+accounts with no observation yet carry `passive_not_observed` too, shown as
+`UNKNOWN (not observed yet)`.
+
 Google Antigravity rows carry the same `Gem` / `Cla` windows as the provider-level quota, computed
 from that account's own credential and Cloud Code Assist project id. The per-account probe always
 talks to Google's Cloud Code Assist host through the pinned outbound transport, regardless of a
