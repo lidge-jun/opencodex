@@ -1,0 +1,23 @@
+# 000 — Windows service stop that frees the port (#7771 Option B): design
+
+Status: design only, awaiting owner approval. Nothing here is implemented.
+
+## Problem
+
+On Windows with the Task Scheduler backend, neither `ocx stop` nor `ocx service stop` can prove that the proxy port is free afterwards. `schtasks /end` ends the task instance but often leaves the wrapper (`wscript.exe` running the launcher VBS, then `cmd.exe` running the service script) alive, and the wrapper's `:loop` relaunches the proxy about five seconds later. Desktop then sits at `taking-over`, a second `ocx start` loses the port, and an update can race a respawned runtime. Issue #7771 tracks this; its 2026-10-28 design comment proposed options A (diagnostics), B (one checked stop) and C (a cooperative wrapper handshake) and recommended A first, then B.
+
+What has shipped since: refusal diagnostics (#7973, option A), in-process command-line reads so the guarded takeover can verify the bundled runtime (#8487), and `ocx service restart` no longer reporting success while the old runtime answers (#8487). The port-freeing stop is what remains.
+
+## Documents
+
+| Doc | Content |
+|---|---|
+| 010 | Current stop paths, source-backed |
+| 020 | Options and how they compare |
+| 030 | Recommended design: one checked Windows stop |
+| 040 | Verification: unit, hermetic integration, and real Windows device |
+| 050 | Risks, compatibility and rollout |
+
+## Decision requested
+
+Approve 030 (recommended: option B as one checked operation shared by `ocx stop` and `ocx service stop`, reusing the Windows guarded-manager binding, with explicit `stopped` / `survived` / `denied` / `unknown` outcomes and no new kill authority beyond this installation's proven wrapper and child). Implementation starts only after that approval and needs a Windows host for the acceptance checks in 040.
