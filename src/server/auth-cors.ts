@@ -1231,6 +1231,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   thinkingBudgetModels: "editor",
   escapeBuiltinToolNames: "editor",
   anthropicEofTolerance: "editor",
+  forwardAdvisorTool: "editor",
   noVisionModels: "editor",
   googleMode: "editor",
   project: "editor",
