@@ -66,6 +66,12 @@ disabled ACP client capabilities do not sandbox CLI-side hooks or unlisted vendo
 `src/server/management/trae-cn-provider-probe.ts` opens and closes a direct ACP session for the
 connection test and replaces the unchanged generation's cached roster after success. It requests
 catalog convergence and refreshes previously connected clients through the owned integration writer.
+The successfully probed roster is pinned in the shared model cache until both operations finish.
+Shared-budget admission can demote reclaimable continuation state before retaining that roster;
+the pin is bounded by the model-cache owner's 8 MiB/16-entry cap and released on every outcome.
+An authority clear still revokes the roster while its detached bytes remain accounted until release.
+If admission is refused, the probe reports `rosterRetentionPending` and an admission failure without
+starting another CLI session or claiming roster publication.
 The response separates connectivity from catalog/client publication and notes the running Codex
 session restart requirement. Invalidation before the cache write reports `rosterReplaced: false`
 and asks for another test. Invalidation after that write does not undo the historical `true` result.

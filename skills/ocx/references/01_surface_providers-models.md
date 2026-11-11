@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 50.
+Declared capabilities: 53.
 
 ### `ocx models price`
 
@@ -860,6 +860,56 @@ State-changing: yes. JSON mode: `payload`.
 |---|---|---|
 | `--provider` | string | Limit the toggle to one provider. |
 | `--json` | boolean | Emit the alias settings receipt. |
+
+### `ocx alias template set`
+
+Usage: `ocx alias template set <provider> <template> [--json]`
+
+Set a provider's opt-in alias template for models without an alias.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/providers/{provider}/alias-template` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the receipt with the generated and skipped preview. |
+
+- Only the literal {providerAlias} and {modelBasename} placeholders are allowed, and {modelBasename} is required. Aliases are derived when models resolve and never written to config. Manual and built-in aliases win; a generated name that collides with anything already claimed is skipped, never renamed.
+
+### `ocx alias template rm`
+
+Usage: `ocx alias template rm <provider> [--json]`
+
+Remove a provider's alias template; its generated aliases disappear at once.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/providers/{provider}/alias-template` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the receipt. |
+
+### `ocx alias template show`
+
+Usage: `ocx alias template show [<provider>] [--json]`
+
+Read configured alias templates.
+
+State-changing: no. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/aliases` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the template map, or one provider's template. |
 
 ### `ocx provider pacing`
 

@@ -90,6 +90,16 @@ describe("tolerant reader", () => {
     patchChildObservation(state, B, { lastOperation: summary }, new Date("2026-11-15T00:00:00.000Z"));
     expect(state.children[B]).toMatchObject({ source: "inspect", updateRoute: "none", lastOperation: summary, observedAt: "2026-11-15T00:00:00.000Z" });
   });
+
+  test("an operation reason from the sync classifier survives the round trip (wp3: child-link-mismatch:other_link)", () => {
+    const state = emptyChildObservations();
+    state.children[A] = observation();
+    for (const reason of ["child-link-mismatch:other_link", "child-link-mismatch:disconnect_pending", "restart-skipped:link-active"]) {
+      const summary = { op: "sync" as const, jobId: "ljob_0123456789abcdef", state: "refused", reason, finishedAt: "2026-11-13T00:00:00.000Z" };
+      patchChildObservation(state, A, { lastOperation: summary }, new Date("2026-11-13T00:00:00.000Z"));
+      expect(parseChildObservations(JSON.stringify(state)).children[A]).toEqual(observation({ lastOperation: summary }));
+    }
+  });
 });
 
 describe("writer", () => {

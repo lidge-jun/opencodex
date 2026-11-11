@@ -261,13 +261,13 @@ file or symbol; later phases MODIFY it.
 | file | `child-catalog-freshness.ts`: `createCatalogPullRecorder`, `createCatalogRevisionMonitor`, `catalogVerdict`; the shared monitor is `sharedCatalogRevisionMonitor()` | `src/link/child-catalog-freshness.ts` | 020 (050 adds the shared monitor) |
 | function | `observeChild(record, deps: ObserveDeps): Promise<ObserveOutcome>`; `ObserveOutcome.probe` carries the plan classification and the Child clock | `src/link/child-observe.ts` | 020 |
 | file | `child-ops-types.ts`: `ChildJob`, `ChildJobItem`, `ChildItemState`, `ChildOpsEnv`, `ItemRunner`, `ItemOutcome` | `src/link/child-ops-types.ts` | 030 (moves the job types out of 020's engine) |
-| file | `child-ops-engine.ts`: `createChildOpsEngine`, `sharedChildOpsEngine`; methods `submit`, `job` (`ChildJob \| undefined`), `activeJob`, `whenDone` (050), `settled` | `src/link/child-ops-engine.ts` | 020 (030, 050 extend) |
+| file | `child-ops-engine.ts`: `createChildOpsEngine`, `sharedChildOpsEngine`, `resetSharedChildOpsEngineForTests` (030); methods `submit(request, env)` (030; 020 shipped `submit(request)`), `job` (`ChildJob \| undefined`), `activeJob`, `whenDone` (050), `settled` | `src/link/child-ops-engine.ts` | 020 (030, 050 extend) |
 | file | `child-ops-runners.ts`: `runSyncItem`, `runRestartCodexItem`, `runUpdateItem`, `pinnedSync` | `src/link/child-ops-runners.ts` | 030 |
 | file | `child-ops-scheduler.ts`: `createChildOpsScheduler`, `createLinkBackoff` (shared by 050 and 070) | `src/link/child-ops-scheduler.ts` | 050 |
 | file | `child-policy.ts`, `child-ops-host.ts` (`startChildOpsHost`) | `src/link/` | 050 |
 | file | `child-update-sweep.ts` | `src/link/child-update-sweep.ts` | 070 |
-| file | `link-child-ops-routes.ts`: `handleLinkChildOpsRoutes`, `childOpsEngineFor`, `childOpsEnvFor`, `parseOperation`, `attachLinkChildOpsForState` | `src/server/management/link-child-ops-routes.ts` | 020 (030, 050 extend) |
-| file | `link-child-ops.ts`: `runLinkCheck` (020), `validateChildJob` (020, tolerant from 030), `runLinkChildOp` (030), `ocx link policy` (050) | `src/cli/link-child-ops.ts` | 020 |
+| file | `link-child-ops-routes.ts`: `handleLinkChildOpsRoutes`, `childOpsEngineFor` (`(ctx, state)` in 020, `(state)` from 030), `childOpsEnvFor`, `parseOperation`, `attachLinkChildOpsForState`, `catalogRevisionForRoutes` | `src/server/management/link-child-ops-routes.ts` | 020 (030, 050 extend) |
+| file | `link-child-ops.ts`: `runLinkCheck` (020), `validateChildJob` (020, tolerant since 020; 030 keeps `restart.requested`), `linkCheckExitCode` (020; 030 adds partial successes), `runLinkChildOp` (030), `ocx link policy` (050) | `src/cli/link-child-ops.ts` | 020 |
 | file | `link-status-child.ts`: `validateChildOps` | `src/cli/link-status-child.ts` | 020 |
 | route | `POST /api/link/children/operations`, `GET /api/link/children/jobs/{jobId}`, `GET/PUT /api/link/children/policy`; the registry, capabilities and docs spell the parameter `{jobId}` | route-registry.ts | 020, 050 |
 | error code | `invalid_body`, `link_not_found`, `link_not_home_initiated`, `link_operation_in_progress`, `no_eligible_links`, `invalid_job_id`, `job_not_found`, `policy_write_failed` | management routes | 020, 030, 050 |

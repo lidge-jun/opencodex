@@ -1,5 +1,5 @@
 import { openTraeSession, type TraeAcpDeps } from "../../adapters/trae-cn/client";
-import { captureModelCacheGeneration, clearModelCache, isModelCacheGenerationCurrent, markProviderDiscoveryOk, setCached } from "../../codex/model-cache";
+import { captureModelCacheGeneration, clearModelCache, isModelCacheGenerationCurrent, markProviderDiscoveryOk, pinCachedModels } from "../../codex/model-cache";
 import type { CatalogDisposition } from "../../codex/convergence-types";
 import type { OwnedIntegrationRefreshOutcome } from "../../integrations/owned-refresh";
 import { clearGatherRoutedModelsInflight } from "../../codex/catalog/routed-gather";
@@ -40,32 +40,44 @@ export async function probeTraeCnProvider(
     await session.close();
     let catalogRefresh: CatalogDisposition = { status: "skipped", reason: "stale", retryable: true };
     let rosterReplaced = false;
+    let rosterRetentionPending = false;
     let clientIntegrations: OwnedIntegrationRefreshOutcome[] = [];
     let clientRefreshPending = false;
     if (isModelCacheGenerationCurrent(name, generation)) {
       clearModelCache(name);
-      setCached(name, session.models.map(id => ({ id, provider: name, inputModalities: ["text"], supportsVerbosity: false })),
-        Date.now(), captureModelCacheGeneration(name));
-      rosterReplaced = true;
-      markProviderDiscoveryOk(name, session.models.length);
-      clearGatherRoutedModelsInflight();
       const publishedGeneration = captureModelCacheGeneration(name);
-      try { catalogRefresh = await converge(); } catch {
-        catalogRefresh = { status: "failed", reason: "internal", phase: "commit", retryable: true, partialWrite: false };
-      }
-      const admit = () => isModelCacheGenerationCurrent(name, publishedGeneration);
-      if (deps.refreshConnectedClients) {
-        if (!admit()) clientRefreshPending = true;
-        else try {
-          clientIntegrations = await deps.refreshConnectedClients(admit);
-          clientRefreshPending = !admit() || clientIntegrations.some(result => !result.ok);
-        } catch { clientRefreshPending = true; }
+      const releaseRoster = pinCachedModels(name,
+        session.models.map(id => ({ id, provider: name, inputModalities: ["text"], supportsVerbosity: false })),
+        Date.now(), publishedGeneration);
+      if (releaseRoster) {
+        try {
+          rosterReplaced = true;
+          markProviderDiscoveryOk(name, session.models.length);
+          clearGatherRoutedModelsInflight();
+          try { catalogRefresh = await converge(); } catch {
+            catalogRefresh = { status: "failed", reason: "internal", phase: "commit", retryable: true, partialWrite: false };
+          }
+          const admit = () => isModelCacheGenerationCurrent(name, publishedGeneration);
+          if (deps.refreshConnectedClients) {
+            if (!admit()) clientRefreshPending = true;
+            else try {
+              clientIntegrations = await deps.refreshConnectedClients(admit);
+              clientRefreshPending = !admit() || clientIntegrations.some(result => !result.ok);
+            } catch { clientRefreshPending = true; }
+          }
+        } finally { releaseRoster(); }
+      } else if (isModelCacheGenerationCurrent(name, publishedGeneration)) {
+        rosterRetentionPending = true;
+        clientRefreshPending = true;
+        catalogRefresh = { status: "failed", reason: "admission", phase: "gather", retryable: true, partialWrite: false };
       }
     }
     const published = catalogRefresh.status === "committed" && !catalogRefresh.degraded;
     const staleProbe = !rosterReplaced;
-    return jsonResponse({ ok: true, models: session.models.length, latencyMs: Date.now() - started, rosterReplaced, catalogRefresh, clientIntegrations, clientRefreshPending,
-      message: `Connected. ${session.models.length} models. ${staleProbe
+    return jsonResponse({ ok: true, models: session.models.length, latencyMs: Date.now() - started, rosterReplaced, rosterRetentionPending, catalogRefresh, clientIntegrations, clientRefreshPending,
+      message: `Connected. ${session.models.length} models. ${rosterRetentionPending
+        ? "The model roster could not fit the memory budget; retry Test connection after active requests finish."
+        : staleProbe
         ? "The provider changed during the probe; this roster was not published. Run Test connection again."
         : published && !clientRefreshPending
         ? "Catalog refreshed; restart running Codex sessions to load it."

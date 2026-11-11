@@ -9,13 +9,14 @@
  */
 import type { CatalogModel } from "./catalog";
 import type { GenerationContext } from "../lib/state-store-sweeper";
-import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
+import { admitAppOwnedPinnedBytes, enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
 import { clearLiveCursorRosterState } from "../adapters/cursor/catalog";
 
 /** Default freshness window. Matches Codex's own 5-min models cache so the two stay in step. */
 export const DEFAULT_MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface CacheEntry {
+  provider: string;
   models: CatalogModel[];
   fetchedAt: number;
   sizeBytes: number;
@@ -55,11 +56,16 @@ let cacheBytes = 0;
 let oldestCachedProvider: string | undefined;
 let oldestCachedAt: number | null = null;
 const modelCacheEncoder = new TextEncoder();
+export const MODEL_CACHE_MAX_PINNED_BYTES = 8 * 1024 * 1024;
+const MODEL_CACHE_MAX_PINNED_ENTRIES = 16;
+const pinnedCacheEntries = new Set<CacheEntry>();
+let pinnedCacheBytes = 0;
 
 function recomputeOldestCachedProvider(): void {
   oldestCachedProvider = undefined;
   oldestCachedAt = null;
   for (const [provider, entry] of cache) {
+    if (pinnedCacheEntries.has(entry)) continue;
     if (oldestCachedAt !== null && entry.fetchedAt >= oldestCachedAt) continue;
     oldestCachedProvider = provider;
     oldestCachedAt = entry.fetchedAt;
@@ -199,6 +205,12 @@ export function getStaleCached(provider: string, authorityIdentity?: string): Ca
   return entry.models;
 }
 
+/** A publication lease is current evidence until release, independently of the ordinary TTL. */
+export function getPinnedCached(provider: string): CatalogModel[] | null {
+  const entry = cache.get(provider);
+  return entry && pinnedCacheEntries.has(entry) ? entry.models : null;
+}
+
 /** Selector decoding may use unscoped rows, but scoped rows need current authority. */
 export function getRoutingCached(
   provider: string, resolveAuthority: () => string | undefined,
@@ -265,19 +277,54 @@ export function setCached(
   authorityIdentity?: string,
 ): boolean {
   if (generation !== undefined && !isModelCacheGenerationCurrent(provider, generation)) return false;
-  deleteCachedProvider(provider);
-  const sizeBytes = modelCacheEncoder.encode(provider).byteLength
+  storeCached(provider, models, now, authorityIdentity);
+  return true;
+}
+
+function modelCacheSizeBytes(provider: string, models: CatalogModel[]): number {
+  return modelCacheEncoder.encode(provider).byteLength
     + modelCacheEncoder.encode(JSON.stringify(models)).byteLength;
-  cache.set(provider, { models, fetchedAt: now, sizeBytes, ...(authorityIdentity ? { authorityIdentity } : {}) });
+}
+
+function storeCached(
+  provider: string, models: CatalogModel[], now: number, authorityIdentity?: string, pinned = false,
+  sizeBytes = modelCacheSizeBytes(provider, models),
+): CacheEntry {
+  deleteCachedProvider(provider);
+  const entry: CacheEntry = { provider, models, fetchedAt: now, sizeBytes, ...(authorityIdentity ? { authorityIdentity } : {}) };
+  cache.set(provider, entry);
+  if (pinned) {
+    pinnedCacheEntries.add(entry);
+    pinnedCacheBytes += sizeBytes;
+  }
   cacheBytes += sizeBytes;
-  if (oldestCachedAt === null || now < oldestCachedAt) {
+  if (!pinned && (oldestCachedAt === null || now < oldestCachedAt)) {
     oldestCachedProvider = provider;
     oldestCachedAt = now;
   }
   enforceAppOwnedMemoryBudget();
   // Published and accepted, so anything derived from this provider's rows is now out of date.
   bumpProviderCacheRevision(provider);
-  return true;
+  return entry;
+}
+
+/** Keep a probed roster through publication, with bounded shared-budget admission and release. */
+export function pinCachedModels(
+  provider: string, models: CatalogModel[], now: number, generation: string,
+): (() => void) | null {
+  if (!isModelCacheGenerationCurrent(provider, generation)) return null;
+  const sizeBytes = modelCacheSizeBytes(provider, models);
+  if (pinnedCacheEntries.size >= MODEL_CACHE_MAX_PINNED_ENTRIES
+    || pinnedCacheBytes + sizeBytes > MODEL_CACHE_MAX_PINNED_BYTES
+    || !admitAppOwnedPinnedBytes(sizeBytes)
+    || !isModelCacheGenerationCurrent(provider, generation)) return null;
+  const entry = storeCached(provider, models, now, undefined, true, sizeBytes);
+  return () => {
+    if (!pinnedCacheEntries.delete(entry)) return;
+    pinnedCacheBytes -= entry.sizeBytes;
+    recomputeOldestCachedProvider();
+    enforceAppOwnedMemoryBudget();
+  };
 }
 
 /** Drop one provider's cache (or all) so the next resolve forces a live re-fetch. */
@@ -359,11 +406,17 @@ export function reconcileModelCacheGeneration(context: GenerationContext): numbe
 }
 
 export function modelCacheRetainedStoreSnapshot(): RetainedStoreSnapshot {
+  let cachedPinnedBytes = 0;
+  let detachedPinnedCount = 0;
+  for (const entry of pinnedCacheEntries) {
+    if (cache.get(entry.provider) === entry) cachedPinnedBytes += entry.sizeBytes;
+    else detachedPinnedCount += 1;
+  }
   return {
-    count: cache.size,
-    bytes: cacheBytes,
-    evictableBytes: cacheBytes,
-    pinnedBytes: 0,
+    count: cache.size + detachedPinnedCount,
+    bytes: cacheBytes + pinnedCacheBytes - cachedPinnedBytes,
+    evictableBytes: cacheBytes - cachedPinnedBytes,
+    pinnedBytes: pinnedCacheBytes,
     oldestAt: oldestCachedAt,
   };
 }

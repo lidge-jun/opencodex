@@ -154,7 +154,7 @@ type ProviderPatchApplication =
       headersTouched: boolean;
     };
 
-const PROVIDER_ALIAS_OVERLAY_FIELDS = ["alias", "modelAliases", "defaultAliases"] as const;
+const PROVIDER_ALIAS_OVERLAY_FIELDS = ["alias", "modelAliases", "defaultAliases", "aliasTemplate"] as const;
 type ProviderAliasOverlayField = typeof PROVIDER_ALIAS_OVERLAY_FIELDS[number];
 
 /**

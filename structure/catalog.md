@@ -198,10 +198,10 @@ Nothing in the catalog validates Codex's own root `model` pin against this expos
 `readConfiguredDefaultModel` in `src/codex/catalog/parsing.ts` reads the pin, and `ocx doctor`
 reports it (see [Runtime](runtime.md)).
 
-Provider live-model lists are cached with a configured TTL (`src/codex/model-cache.ts`). Adding,
-deleting, or editing a provider's shape clears that per-provider cache; a disabled-only change
-deliberately does not, because a disabled provider is already excluded from the catalog gather
-instead. Codex's own `models_cache.json` is a different cache, invalidated by catalog refresh.
+Provider live-model lists are cached with a configured TTL (`src/codex/model-cache.ts`). Adding, deleting, or editing a provider's shape clears that cache; a disabled-only change does not, because disabled providers are excluded from the gather.
+Codex's own `models_cache.json` is a different cache, invalidated by catalog refresh. Explicit probe publication can pin shared-budget-admitted rows within an 8 MiB/16-entry owner cap.
+Budget eviction skips pinned rows; authority clearing removes them from lookup while detached payload stays counted until the idempotent release.
+TRAE uses the lease through convergence and client refresh, ahead of the ordinary TTL until release; admission refusal reports pending retention without another discovery attempt ([TRAE contract](providers/trae-cn.md)).
 Account-scoped discovery transports remain bound to the credential snapshot that supplied the
 token. Devin discovery uses the allowlisted tenant API base URL from that same snapshot rather
 than pairing a durable account key with the provider registry's default host. The same holds for

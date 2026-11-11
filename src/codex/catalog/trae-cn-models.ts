@@ -4,6 +4,7 @@ import {
   captureModelCacheGeneration,
   DEFAULT_MODEL_CACHE_TTL_MS,
   getFreshCached,
+  getPinnedCached,
   getStaleCached,
   isModelCacheGenerationCurrent,
   isModelsFetchCoolingDown,
@@ -51,7 +52,7 @@ export async function fetchTraeCnProviderModels(
     markProviderDiscoveryFailed(name, { reason: "blocked" });
     return observed(configured, "degraded");
   }
-  const fresh = getFreshCached(name, ttlMs, Date.now());
+  const fresh = getPinnedCached(name) ?? getFreshCached(name, ttlMs, Date.now());
   if (fresh) return observed(fresh, "authoritative");
   const stale = getStaleCached(name);
   // Observed gathers cannot bind the CLI's live sign-in to their captured auth snapshot.

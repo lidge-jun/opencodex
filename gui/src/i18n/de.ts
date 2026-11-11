@@ -2986,7 +2986,7 @@ export const de: Record<TKey, string> = {
   "modal.freeTierTitle": "Kostenloser Tarif",
   "modal.subscriptionCliTitle": "Abo-CLI, kein API-Schlüssel",
   "modal.subscriptionCliWarning": "Dieser Anbieter verwendet keinen API-Schlüssel. Er steuert die offizielle, auf diesem Rechner angemeldete Claude Code CLI ({cmd}) und rechnet über dieses Claude-Abonnement ab. OpenCodex speichert dafür keinen Schlüssel, und ein hier eingegebener Schlüssel wird nie verwendet. Für die Abrechnung per API-Schlüssel füge stattdessen {apiProvider} hinzu.",
-  "modal.traeCnCliWarning": "Verwendet die angemeldete offizielle TRAE CN CLI ({cmd}). Installieren Sie zuerst die CLI und melden Sie sich an; ein API-Schlüssel ist nicht erforderlich. Text- und Reasoning-Streams werden unterstützt, Client-Tools, Bilder und Audio hingegen nicht.",
+  "modal.traeCnCliWarning": "Verwendet die angemeldete offizielle TRAE CN CLI ({cmd}). Installieren Sie zuerst die CLI auf dem Proxy-Host und melden Sie sich dort an; ein API-Schlüssel ist nicht erforderlich. Text- und Reasoning-Streams werden unterstützt, Client-Tools, Bilder und Audio hingegen nicht.",
   "modal.freeTierDefault": "Kein API-Schlüssel nötig. Funktioniert sofort.",
   "modal.tab.accounts": "Konten",
   "modal.tab.free": "Kostenlos",

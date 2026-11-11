@@ -17,7 +17,8 @@ The `trae-cn` preset uses the signed-in official TRAE CN CLI through
 }
 ```
 
-- **Prerequisites:** Install and sign in to [TRAE CN](https://www.trae.cn/) and its official CLI.
+- **Prerequisites:** Install and sign in to [TRAE CN](https://www.trae.cn/) and its official CLI
+  on the host running the OpenCodex proxy. A remote dashboard uses that host's CLI session.
   The CLI owns authentication and token refresh; the provider needs no API key.
   OpenCodex preserves the default `~/.trae` CLI directory while isolating HOME. Set `TRAE_HOME`
   before starting OpenCodex to select a different signed-in CLI directory.
@@ -29,6 +30,8 @@ The `trae-cn` preset uses the signed-in official TRAE CN CLI through
   After switching CLI accounts, enable live discovery and run **Test connection**. It
   replaces the roster and refreshes Codex and connected clients. It reports pending or failed
   publication separately; restart running Codex sessions after publication.
+  The probed roster stays available while publishing under memory pressure. If it cannot fit
+  the memory budget, the probe reports pending retention; retry after active requests finish.
   A probe overtaken before updating the model cache asks you to retry. Disk-only edits require
   reloading provider configuration and testing again.
 - **Transport:** Each turn opens a fresh ACP session for the selected model and streams text and reasoning.

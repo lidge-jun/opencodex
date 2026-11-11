@@ -3033,7 +3033,7 @@ export const ko: Record<TKey, string> = {
   "modal.freeTierTitle": "무료 티어",
   "modal.subscriptionCliTitle": "API 키가 아닌 구독 CLI 방식",
   "modal.subscriptionCliWarning": "이 프로바이더는 API 키를 쓰지 않습니다. 이 컴퓨터에 로그인된 공식 Claude Code CLI({cmd})를 실행하고, 요금은 그 Claude 구독 계정에 청구됩니다. OpenCodex는 이 프로바이더의 키를 저장하지 않으며, 여기에 입력한 키는 쓰이지 않습니다. API 키로 과금하려면 대신 {apiProvider}를 추가하세요.",
-  "modal.traeCnCliWarning": "로그인된 공식 TRAE CN CLI({cmd})를 사용합니다. 먼저 CLI를 설치하고 로그인하세요. API 키는 필요하지 않습니다. 텍스트 및 추론 스트리밍을 지원하며 클라이언트 도구, 이미지, 오디오는 지원하지 않습니다.",
+  "modal.traeCnCliWarning": "로그인된 공식 TRAE CN CLI({cmd})를 사용합니다. 먼저 프록시 호스트에 CLI를 설치하고 해당 호스트에서 로그인하세요. API 키는 필요하지 않습니다. 텍스트 및 추론 스트리밍을 지원하며 클라이언트 도구, 이미지, 오디오는 지원하지 않습니다.",
   "modal.freeTierDefault": "API 키가 필요 없습니다. 바로 사용할 수 있습니다.",
   "modal.tab.accounts": "계정",
   "modal.tab.free": "무료",
