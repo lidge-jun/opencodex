@@ -147,7 +147,7 @@ released history remains reachable through tags. No repository setting change or
 deploy is implied by this documentation.
 
 Service lifecycle evidence includes the legacy CLI entrypoint `src/cli.ts` as well as the
-service implementation and desktop packaging paths.
+service implementation and desktop packaging paths. `validate-dispatch` in `release.yml` checks it with the CI evidence before any packaging job starts, and `verify-npm` and `publish` recheck it; a missing run fails with the `gh workflow run service-lifecycle.yml --ref dev -f source_sha=<sha>` command.
 
 > Decision record: [ADR-0080](../decisions/ADR-0080-github-pages.md)
 
