@@ -43,6 +43,7 @@ import { effectiveGoogleMode, getProviderRegistryEntry, providerCodexAccountMode
 import { providerConfigSeed } from "../providers/derive";
 import { anthropicOAuthInstanceConfigError } from "../config/schema/anthropic-account-pool";
 import { accountAutoPausePolicySchema } from "../config/schema/account-auto-pause";
+import { normalizeProxyAddress, parseDashboardTrustedProxy } from "../config/dashboard-trusted-proxy";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { openRouterRoutingConfigError } from "../providers/openrouter-routing";
 import { modelAutoCompactTokenLimitsConfigError } from "../providers/auto-compact-budget";
@@ -65,6 +66,59 @@ export function markTrustedHubManagementRequest(req: Request): void {
 
 export function inheritTrustedHubManagementRequest(source: Request, target: Request): void {
   if (trustedHubManagementRequests.has(source)) trustedHubManagementRequests.add(target);
+  const peer = dashboardProxyPeers.get(source);
+  if (peer !== undefined) dashboardProxyPeers.set(target, peer);
+}
+
+// #8338: the kernel-observed peer of a public-listener request, recorded by the serve layer the
+// same way as the hub mark above. No header can create or change it.
+const dashboardProxyPeers = new WeakMap<Request, string>();
+
+export function markDashboardProxyPeer(req: Request, address: string | undefined): void {
+  const normalized = address ? normalizeProxyAddress(address) : null;
+  if (normalized) dashboardProxyPeers.set(req, normalized);
+}
+
+/** One forwarded value: undefined when absent, null when empty or a multi-hop list. */
+function singleForwardedValue(req: Request, name: string): string | null | undefined {
+  const value = req.headers.get(name);
+  if (value === null) return undefined;
+  const trimmed = value.trim();
+  return trimmed && !trimmed.includes(",") ? trimmed : null;
+}
+
+function forwardedAuthorityHost(value: string): string | null {
+  try {
+    const url = new URL(`https://${value}`);
+    return url.username || url.password || url.pathname !== "/" || url.search || url.hash ? null : url.host;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The configured dashboard origin when, and only when, the configured proxy delivered this request
+ * (#8338). The peer must be one of `proxyAddresses`; the browser host comes from Host, or from
+ * X-Forwarded-Host when that header is trusted; X-Forwarded-Proto must say https when trusted. A
+ * forwarded host or scheme that contradicts the configured origin refuses even when that header is
+ * not trusted, so a forged value can never pass silently. Standalone with remote auth only: a
+ * loopback bind must never hand local trust to whatever the proxy forwards.
+ */
+export function dashboardProxyOrigin(req: Request, config: OcxConfig): string | null {
+  if (config.dashboardTrustedProxy === undefined) return null;
+  const peer = dashboardProxyPeers.get(req);
+  if (peer === undefined) return null;
+  if ((config.runtimeRole ?? "standalone") !== "standalone" || !isApiAuthRequired(config)) return null;
+  const settings = parseDashboardTrustedProxy(config.dashboardTrustedProxy);
+  if (typeof settings === "string" || !settings.addresses.has(peer)) return null;
+  const forwardedHost = singleForwardedValue(req, "X-Forwarded-Host");
+  const forwardedProto = singleForwardedValue(req, "X-Forwarded-Proto");
+  if (forwardedHost === null || forwardedProto === null) return null;
+  if (forwardedHost !== undefined && forwardedAuthorityHost(forwardedHost) !== settings.host) return null;
+  if (forwardedProto !== undefined && forwardedProto.toLowerCase() !== "https") return null;
+  if (settings.trust.has("x-forwarded-proto") && forwardedProto === undefined) return null;
+  const authority = settings.trust.has("x-forwarded-host") ? forwardedHost : req.headers.get("Host");
+  return authority && forwardedAuthorityHost(authority) === settings.host ? settings.origin : null;
 }
 
 export function setCorsOrigin(port: number): void { _corsOrigin = `http://localhost:${port}`; }
@@ -152,6 +206,9 @@ function comparableOrigin(value: string): string | null {
 }
 
 export function managementRequestOrigin(req: Request, config: OcxConfig): string | null {
+  // #8338: a request the configured dashboard proxy delivered speaks for the configured origin.
+  const proxied = dashboardProxyOrigin(req, config);
+  if (proxied) return proxied;
   const host = req.headers.get("Host");
   const parsedHost = parseHttpHost(host);
   if (!host || !parsedHost) return null;
@@ -1078,6 +1135,7 @@ type ProviderConfigFieldPolicy = "editor" | "redacted" | "runtime";
 const PROVIDER_CONFIG_FIELD_POLICY = {
   alias: "editor",
   modelAliases: "editor",
+  aliasTemplate: "editor",
   modelDisplayNames: "editor",
   defaultAliases: "editor",
   adapter: "editor",

@@ -1,5 +1,6 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -132,6 +133,7 @@ export const ja: Record<TKey, string> = {
   "workflowBudget.saved": "ワークフロー上限を保存しました。",
   ...desktopCompatibilityCopy("ja"),
   ...shellV2Copy("ja"),
+  ...codexCliUpdateCopy("ja"),
   ...modelsV2Copy("ja"),
   ...accountsV2Copy("ja"),
   ...subagentsV2Copy("ja"),
@@ -2603,6 +2605,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "OpenAI プロバイダーのプリセットを読み込めませんでした。",
   "codexAuth.openaiPresetUnavailable": "OpenAI プロバイダーのプリセットを利用できません。",
   "codexAuth.openProviders": "プロバイダーを開く",
+  "codexAuth.changeAccountMode": "アカウントモードを変更",
   "codexAuth.add": "追加",
   "codexAuth.credits": "クレジット",
   "codexAuth.creditsRemaining": "残り",
@@ -3889,7 +3892,7 @@ export const ja: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "プロバイダーテーブル方式では、一部のモバイルリモート一覧で既存の openai タグ付きスレッドが表示されない場合があります。履歴は削除されていません。リモートクライアントは全プロバイダーを一覧取得する必要があり、このスイッチはそのフィルターを修正しません。",
   "models.newPolicyGlobal": "新しいモデルを無効で追加", "models.newPolicyProvider": "新しいモデルのポリシー",
   "models.fastProvider": "Fast モード", "models.fastProviderHint": "使用クレジットを 2 倍の料金で消費します", "models.fastEnabled": "Fast モードをオンにしました", "models.fastDisabled": "Fast モードをオフにしました", "models.fastSaveFailed": "Fast モードを保存できませんでした",
-  "models.newPolicy_inherit": "継承", "models.newPolicy_off": "オフ", "models.newPolicy_on": "オン", "models.newBadge": "新着", "models.newCount": "新着 {count} 件、オフ",
+  "models.newPolicy_inherit": "継承", "models.newPolicy_off": "オフ", "models.newPolicy_on": "オン", "models.newPolicy_admit": "選択に追加", "models.newBadge": "新着", "models.newCount": "新着 {count} 件、オフ",
   "models.aliases": "エイリアス",
   "models.aliasesTable": "エイリアス一覧",
   "models.aliasPrompt": "プロバイダーのエイリアス（空にすると解除）",

@@ -1,5 +1,6 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -134,6 +135,7 @@ export const pt: Record<TKey, string> = {
   "workflowBudget.saved": "Limites de fluxo de trabalho salvos.",
   ...desktopCompatibilityCopy("pt"),
   ...shellV2Copy("pt"),
+  ...codexCliUpdateCopy("pt"),
   ...modelsV2Copy("pt"),
   ...accountsV2Copy("pt"),
   ...subagentsV2Copy("pt"),
@@ -2754,6 +2756,7 @@ export const pt: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Falha ao carregar o preset do provedor OpenAI.",
   "codexAuth.openaiPresetUnavailable": "O preset do provedor OpenAI não está disponível.",
   "codexAuth.openProviders": "Abrir Provedores",
+  "codexAuth.changeAccountMode": "Alterar modo de conta",
   "codexAuth.add": "Adicionar",
   "codexAuth.credits": "Créditos",
   "codexAuth.creditsRemaining": "restantes",
@@ -3906,7 +3909,7 @@ export const pt: Record<TKey, string> = {
   "models.fastSaveFailed": "Não foi possível salvar o modo Fast",
   "models.newPolicy_inherit": "Herdar",
   "models.newPolicy_off": "Desativado",
-  "models.newPolicy_on": "Ativado",
+  "models.newPolicy_on": "Ativado", "models.newPolicy_admit": "Admitir",
   "models.newBadge": "NOVO",
   "models.newCount": "{count} novos, desativados",
   "models.aliases": "Aliases",

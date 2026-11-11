@@ -52,7 +52,8 @@ export interface ChildObservationsFile {
 }
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
-const REASON = /^[a-z][a-z0-9:-]{0,79}$/;
+// Underscores: the sync classifier's reasons carry the Child's own mismatch token (child-link-mismatch:other_link).
+const REASON = /^[a-z][a-z0-9:_-]{0,79}$/;
 const STATE = /^[a-z][a-z0-9-]{0,63}$/;
 const OPAQUE_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 const SOURCES: ReadonlySet<string> = new Set(["plan", "inspect", "peer"]);

@@ -391,6 +391,8 @@ export interface ImageBridgeDeps {
   forceEmptyResponseId?: boolean;
   /** Responses inbound only: deliver a non-retryable upstream refusal as `response.failed`. */
   terminalRefusalAsFailed?: boolean;
+  /** False for Chat/Messages inbound: their clients never parse `<oai-mem-citation>`, so text stays raw. */
+  escapeMemoryCitationTags?: boolean;
 }
 
 /**
@@ -1221,6 +1223,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       ...(deps.clientToolCatalogRestriction ? { ...deps.clientToolCatalogRestriction, enforceDeclaredToolNames: false } : {}),
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       ...(deps.terminalRefusalAsFailed ? { terminalRefusalAsFailed: true } : {}),
+      ...(deps.escapeMemoryCitationTags === false ? { escapeMemoryCitationTags: false } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       chatRawReasoningVisible: deps.chatRawReasoningVisible,
       hideRawReasoning: parsed.options.hideRawReasoning,

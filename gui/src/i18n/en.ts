@@ -1,5 +1,6 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -134,6 +135,7 @@ export const en = {
   "workflowBudget.saved": "Workflow limits saved.",
   ...desktopCompatibilityCopy("en"),
   ...shellV2Copy("en"),
+  ...codexCliUpdateCopy("en"),
   ...modelsV2Copy("en"),
   ...accountsV2Copy("en"),
   ...subagentsV2Copy("en"),
@@ -2782,6 +2784,7 @@ export const en = {
   "codexAuth.openaiPresetLoadFailed": "Failed to load the OpenAI provider preset.",
   "codexAuth.openaiPresetUnavailable": "OpenAI provider preset is unavailable.",
   "codexAuth.openProviders": "Open Providers",
+  "codexAuth.changeAccountMode": "Change account mode",
   "codexAuth.add": "Add",
   "codexAuth.credits": "Credits",
   "codexAuth.creditsRemaining": "remaining",
@@ -3946,7 +3949,7 @@ export const en = {
 
   "models.newPolicyGlobal": "New models start disabled", "models.newPolicyProvider": "New model policy",
   "models.fastProvider": "Fast mode", "models.fastProviderHint": "Uses usage credits at 2x price", "models.fastEnabled": "Fast mode on", "models.fastDisabled": "Fast mode off", "models.fastSaveFailed": "Could not save Fast mode",
-  "models.newPolicy_inherit": "Inherit", "models.newPolicy_off": "Off", "models.newPolicy_on": "On",
+  "models.newPolicy_inherit": "Inherit", "models.newPolicy_off": "Off", "models.newPolicy_on": "On", "models.newPolicy_admit": "Admit",
   "models.newBadge": "NEW", "models.newCount": "{count} new, off",
   "models.aliases": "Aliases",
   "models.aliasesTable": "Alias table",

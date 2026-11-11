@@ -1087,7 +1087,7 @@ describe("the surfaces around the repair (#4236 defects 1f, 1h, 2)", () => {
     expect(branch).toContain("try {");
     expect(branch).toContain("await repairService({ verb, supervisionLatch });");
     expect(branch).toContain("} catch (error) {");
-    expect(branch).toContain('await reportServiceServing(verb === "restart" ? "restarted" : "repaired", {}, repairError);');
+    expect(branch).toContain('await reportServiceServing(verb === "restart" ? "restarted" : "repaired", { replacing }, repairError);');
     // ONE outcome (#4914). The failure text has to reach the report, because printing it in
     // the catch and then letting the report print its success line stated both outcomes for
     // the same run — and the checkmark was the false half.

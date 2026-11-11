@@ -1,5 +1,6 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -130,6 +131,7 @@ export const zhTW: Record<TKey, string> = {
   "workflowBudget.saved": "工作流程限制已儲存。",
   ...desktopCompatibilityCopy("zh-TW"),
   ...shellV2Copy("zh-TW"),
+  ...codexCliUpdateCopy("zh-TW"),
   ...modelsV2Copy("zh-TW"),
   ...accountsV2Copy("zh-TW"),
   ...subagentsV2Copy("zh-TW"),
@@ -2049,6 +2051,7 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "無法載入 OpenAI 供應商預設。",
   "codexAuth.openaiPresetUnavailable": "OpenAI 供應商預設不可用。",
   "codexAuth.openProviders": "開啟供應商",
+  "codexAuth.changeAccountMode": "變更帳號模式",
   "codexAuth.add": "新增",
   "codexAuth.credits": "額度",
   "codexAuth.creditsRemaining": "剩餘",
@@ -3853,7 +3856,7 @@ export const zhTW: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "供應商表路由可能使既有的 openai 標記對話在部分行動版遠端清單中隱藏。歷程並未刪除。遠端用戶端必須列出所有供應商；此開關不會修正用戶端的清單篩選器。",
   "models.newPolicyGlobal": "新模型預設停用", "models.newPolicyProvider": "新模型策略",
   "models.fastProvider": "Fast 模式", "models.fastProviderHint": "以 2 倍價格消耗用量額度", "models.fastEnabled": "已開啟 Fast 模式", "models.fastDisabled": "已關閉 Fast 模式", "models.fastSaveFailed": "無法儲存 Fast 模式",
-  "models.newPolicy_inherit": "繼承", "models.newPolicy_off": "關閉", "models.newPolicy_on": "開啟", "models.newBadge": "新增", "models.newCount": "{count} 個新增，已關閉",
+  "models.newPolicy_inherit": "繼承", "models.newPolicy_off": "關閉", "models.newPolicy_on": "開啟", "models.newPolicy_admit": "加入選擇", "models.newBadge": "新增", "models.newCount": "{count} 個新增，已關閉",
   "models.aliases": "別名",
   "models.aliasesTable": "別名表",
   "models.aliasPrompt": "供應商別名（留空即清除）",

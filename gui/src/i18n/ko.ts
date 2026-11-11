@@ -1,5 +1,6 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -132,6 +133,7 @@ export const ko: Record<TKey, string> = {
   "workflowBudget.saved": "워크플로 한도를 저장했습니다.",
   ...desktopCompatibilityCopy("ko"),
   ...shellV2Copy("ko"),
+  ...codexCliUpdateCopy("ko"),
   ...modelsV2Copy("ko"),
   ...accountsV2Copy("ko"),
   ...subagentsV2Copy("ko"),
@@ -2176,6 +2178,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "OpenAI 공급자 프리셋을 불러오지 못했습니다.",
   "codexAuth.openaiPresetUnavailable": "OpenAI 공급자 프리셋을 사용할 수 없습니다.",
   "codexAuth.openProviders": "프로바이더 열기",
+  "codexAuth.changeAccountMode": "계정 모드 변경",
   "codexAuth.add": "추가",
   "codexAuth.credits": "크레딧",
   "codexAuth.creditsRemaining": "남음",
@@ -3889,7 +3892,7 @@ export const ko: Record<TKey, string> = {
   "dash.codexRemoteHistoryHint": "제공자 테이블 방식에서는 일부 모바일 원격 목록에 기존 openai 태그 스레드가 보이지 않을 수 있습니다. 기록이 삭제된 것은 아닙니다. 원격 클라이언트가 모든 제공자를 조회해야 하며, 이 스위치는 해당 목록 필터를 수정하지 않습니다.",
   "models.newPolicyGlobal": "새 모델을 비활성화 상태로 추가", "models.newPolicyProvider": "새 모델 정책",
   "models.fastProvider": "Fast 모드", "models.fastProviderHint": "사용 크레딧을 2배 가격으로 소모합니다", "models.fastEnabled": "Fast 모드를 켰습니다", "models.fastDisabled": "Fast 모드를 껐습니다", "models.fastSaveFailed": "Fast 모드를 저장하지 못했습니다",
-  "models.newPolicy_inherit": "상속", "models.newPolicy_off": "끔", "models.newPolicy_on": "켬", "models.newBadge": "신규", "models.newCount": "신규 {count}개, 꺼짐",
+  "models.newPolicy_inherit": "상속", "models.newPolicy_off": "끔", "models.newPolicy_on": "켬", "models.newPolicy_admit": "선택에 추가", "models.newBadge": "신규", "models.newCount": "신규 {count}개, 꺼짐",
   "models.aliases": "별칭",
   "models.aliasesTable": "별칭 표",
   "models.aliasPrompt": "공급자 별칭 (비우면 해제)",

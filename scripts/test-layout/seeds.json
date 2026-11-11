@@ -116,7 +116,7 @@
         "^cline-(?:client|writer)(?:-|[.])",
         "^opencode-kilo-",
         "^(?:desktop|omp|pi|prime|remote)-",
-        "^sync-(?!fanout(?:-process)?\\.test\\.ts$|link-status\\.test\\.ts$|command-fanout\\.test\\.ts$)",
+        "^sync-(?!fanout(?:-process|-select-restart)?\\.test\\.ts$|link-status\\.test\\.ts$|command-(?:fanout|child-flags)\\.test\\.ts$)",
         "^command-code-client(?:-|[.])"
       ]
     },
