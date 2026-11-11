@@ -837,6 +837,29 @@ On macOS, launchd instead uses the package-local Bun and CLI paths selected duri
 repair. This prevents a mutable PATH shim from receiving the service API token and configured proxy
 environment on a later restart. After upgrading a version-manager installation, run
 `ocx service repair` to refresh those paths before restarting the service.
+
+The macOS agent uses launchd's `Interactive` resource policy because Codex and dashboard requests
+depend on its responsiveness. This avoids the default daemon CPU and I/O throttling under load.
+After upgrading an existing installation, `ocx service repair` applies this policy as well.
+
+If launchd refuses the changed definition and its state can be checked, repair reports failure
+and attempts to restore the previous definition; a job still serving the expected command is left
+running with the previous plist back on disk. A matching command alone cannot confirm the new policy.
+If the initial launchd probe cannot check state, repair refuses before writing a new plist or backup.
+If state becomes uncheckable after bootstrap, repair keeps the new plist and any backup without another eviction:
+a refused bootstrap throws, while an accepted bootstrap reports an unverified reload with a warning.
+Inspect the job with `launchctl print gui/$(id -u)/com.opencodex.proxy` before retrying repair.
+An unconfirmed definition remains pending across repairs, including after a token change. Registration
+is retried only when the initial launchd probe is checkable; a GUI login session may be required.
+Repair preserves any original backup successfully created until bootstrap is accepted and the probe
+confirms the matching job. Backup creation is best-effort; a fresh installation has no prior definition.
+Identical disk bytes and command alone cannot make a pending repair a no-op. Fresh installation
+removes orphaned recovery files, and full uninstall removes them even when the plist is absent.
+Fresh-install recovery cleanup, pending-marker removal and uninstall cleanup ignore only already-missing
+files; another error in these steps reports failure without deleting install state. After a verified
+repair has written install state, removing the `.prev` backup is best-effort; failure there does not
+change the repair's reported success.
+
 Launchd restarts the proxy after a crash or failed restart handoff, but leaves it stopped when
 the service deliberately exits cleanly because the desktop app owns the runtime. Run
 `ocx service repair` once to apply this behavior to a service installed by an older version.

@@ -214,6 +214,12 @@ Windows 任务计划程序安装使用普通进程优先级（`Priority=4`）。
 
 在 macOS 上，launchd 则改用安装或修复时选定的包内 Bun 与 CLI 路径。这可防止可变的 PATH shim 在后续重启时获得服务 API 令牌和已配置的代理环境。升级版本管理器安装后，请在重启服务前运行 `ocx service repair` 刷新这些路径。
 
+macOS 代理使用 `ProcessType=Interactive`，以避免默认 daemon 类别的 CPU 和 I/O 限制，保持负载下的健康检查响应。升级现有安装后，请运行 `ocx service repair`，同时应用此策略。
+
+若定义的加载尚未确认，即使令牌发生变化，该状态也会保留到下次修复。仅在最初的 launchd 状态探测可用时才重试注册；可能需要图形登录会话。成功创建的原始备份会保留到 bootstrap 被接受且探测确认任务匹配。备份创建是尽力而为的；新安装没有先前的定义。
+
+若最初的 launchd 状态探测不可用，repair 会在写入新 plist 或备份之前拒绝操作。若更改后定义的 bootstrap 被拒绝且状态可检查，repair 会尝试恢复先前定义。若 bootstrap 后状态变得不可检查，则不会再次移除任务或回滚：bootstrap 被接受时会警告重载尚未验证，被拒绝时则失败。重试前请运行 `launchctl print gui/$(id -u)/com.opencodex.proxy` 检查任务。新安装会移除孤立的恢复文件，完整卸载也会在 plist 不存在时移除它们。新安装的恢复文件清理、待确认标记删除及卸载清理仅忽略文件已不存在的情况。这些步骤的其他错误会报告失败，且不会删除安装状态。经过验证的修复写入安装状态后，`.prev` 备份的删除是尽力而为的；该删除失败不会改变修复成功的结果。
+
 在此变更之前安装的定义仍带有旧的带版本路径，无法自行迁移——一旦旧可执行文件被删除，就没有 opencodex 代码运行来修复它。升级后请运行一次 `ocx service repair`。之后 Linux 服务启动会跟随启动器；macOS 的 repair 会把新的包路径写入 launchd 定义。外部升级不会替换已在运行的代理：当已安装的 CLI 比运行中的代理更新时，运行 `ocx service restart` 让新构建提供服务。在 macOS 上，此处的 `repair` 并不够：定义没有变化，而不改变任何内容的 repair 不会重新加载任何内容。反之若代理更新，请按 [`ocx status`](#ocx-status---json) 中的说明检查 CLI 安装与 `PATH`。
 
 | 子命令 | 操作 |

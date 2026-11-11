@@ -1094,6 +1094,7 @@
   "native-model-toggle.test.ts": "codex-integration", "native-profile-api.test.ts": "codex-integration",
   "native-profile-crash-boundaries.test.ts": "codex-integration",
   "native-profile-drain-server.test.ts": "codex-integration", "native-profile-manager.test.ts": "codex-integration",
+  "native-profile-healthz.test.ts": "codex-integration",
   "native-profile-processes.test.ts": "codex-integration", "native-profile-recovery.test.ts": "codex-integration",
   "native-profile-route-security.test.ts": "codex-integration",
   "native-profile-stage-lifecycle.test.ts": "codex-integration",
@@ -1633,7 +1634,7 @@
   "link-apply-restart.test.ts": "cli", "link-child-parity.test.ts": "server", "restart-replacement-not-ready.test.ts": "server",
   "hermes-profiles.test.ts": "clients", "hermes-profile-routes.test.ts": "clients"
   ,"cli-sync-expect-link.test.ts": "cli"
-  ,"local-credentials.test.ts": "cli", "local-credential-generation.test.ts": "config", "link-connection-generation.test.ts": "clients"
+  ,"local-credentials.test.ts": "cli", "local-credential-generation.test.ts": "config", "local-credential-fence.test.ts": "config", "link-connection-generation.test.ts": "clients"
   ,"request-log-error-detail.test.ts": "usage", "provider-failure-detail.test.ts": "usage", "upstream-condition.test.ts": "lib", "client-retry-after.test.ts": "lib", "client-retry-after-sites.test.ts": "server", "upstream-error-detail-boundaries.test.ts": "server", "request-log-identity-bounds.test.ts": "usage", "safe-response-headers.test.ts": "server", "turn-state-handles.test.ts": "server", "turn-state-handles-e2e.test.ts": "server", "client-error-body.test.ts": "lib", "chat-error-body-normalization.test.ts": "responses", "chat-error-collector-verdicts.test.ts": "responses", "server-chat-error-body-evidence.test.ts": "server"
 ,"messages-error-normalization.test.ts": "claude-integration", "messages-header-normalization.test.ts": "claude-integration", "messages-lane-errors.test.ts": "claude-integration"
 ,"messages-error-contracts.test.ts": "claude-integration", "messages-overflow-verdicts.test.ts": "claude-integration", "messages-review-regressions.test.ts": "claude-integration", "messages-proxy-refusals.test.ts": "claude-integration", "messages-overflow-native.test.ts": "claude-integration", "messages-overflow-builtin.test.ts": "claude-integration", "messages-overflow-translated.test.ts": "claude-integration", "messages-overflow-stream.test.ts": "claude-integration", "messages-overflow-collectors.test.ts": "claude-integration", "messages-success-media-types.test.ts": "claude-integration", "messages-native-stream-parity.test.ts": "claude-integration", "messages-overflow-baseline-contract.test.ts": "claude-integration",

@@ -354,6 +354,12 @@ kullanır. Bu, değiştirilebilir bir PATH shim'inin sonraki bir yeniden başlat
 ve yapılandırılmış proxy ortamını almasını engeller. Sürüm yöneticili bir kurulumu yükselttikten sonra,
 servisi yeniden başlatmadan önce bu yolları tazelemek için `ocx service repair` komutunu çalıştırın.
 
+macOS aracısı, varsayılan daemon sınıfının CPU ve I/O kısıtlamalarından kaçınmak ve yük altında sağlık denetimlerine yanıt verebilmek için `ProcessType=Interactive` kullanır. Mevcut bir kurulumu yükselttikten sonra bu politikayı da uygulamak için `ocx service repair` çalıştırın.
+
+Yüklenmesi doğrulanmamış bir tanım, belirteç değişse bile sonraki onarıma kadar beklemede kalır. Kayıt yalnızca ilk launchd durum denetimi yapılabiliyorsa yeniden denenir; grafik oturum açılması gerekebilir. Başarıyla oluşturulmuş ilk yedek, bootstrap kabul edilip eşleşen iş doğrulanana kadar korunur. Yedekleme eldeki imkânlarla yapılır; yeni kurulumun önceki tanımı yoktur.
+
+İlk launchd durum denetimi yapılamıyorsa repair, yeni plist veya yedek yazmadan işlemi reddeder. Değişen tanımın bootstrap işlemi reddedilir ve durum denetlenebiliyorsa önceki tanımı geri yükleme denenir. Bootstrap sonrasında durum denetlenemez hale gelirse yeniden çıkarma veya geri yükleme yapılmaz: kabul edilen bootstrap doğrulanmamış yeniden yükleme uyarısı verir, reddedilen ise başarısız olur. Yeniden denemeden önce `launchctl print gui/$(id -u)/com.opencodex.proxy` ile inceleyin. Yeni kurulum sahipsiz kurtarma dosyalarını, tam kaldırma ise plist olmasa da bu dosyaları siler. Yeni kurulumun kurtarma dosyası temizliği, bekleme işaretçisi silme ve kaldırma temizliği yalnızca zaten bulunmayan dosyaları yok sayar. Bu adımlardaki diğer hatalar başarısızlık olarak bildirilir ve kurulum durumu silinmez. Doğrulanmış onarım kurulum durumunu yazdıktan sonra `.prev` yedeğinin silinmesi eldeki imkânlarla yapılır; bu silme hatası onarımın başarılı sonucunu değiştirmez.
+
 Bu değişiklikten önce kurulan tanımlar hâlâ eski sürümlü yolları taşır ve kendilerini taşıyamaz —
 eski yürütülebilir dosya silindiğinde, onu düzeltecek hiçbir opencodex kodu çalışmaz. Yükseltmeden
 sonra bir kez `ocx service repair` çalıştırın. Bundan sonra Linux servis başlatmaları başlatıcıyı
