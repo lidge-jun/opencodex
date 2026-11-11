@@ -25,6 +25,7 @@
     "graceful-max-output-tokens.test.ts": "responses",
     "graceful-max-output-tokens-exclusions.test.ts": "responses",
     "windows-config-root-async-writers.test.ts": "windows",
+    "windows-config-root-integration-writers.test.ts": "windows",
     "windows-atomic-write-acl-rearm.test.ts": "windows",
   "advisor-web-search.test.ts": "advisor",
   "codex-launcher-endpoint.test.ts": "codex-integration",
