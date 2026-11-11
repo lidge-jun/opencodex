@@ -225,7 +225,7 @@ The `hub-link` socket is HTTP-only and default-denies all but the fixed data rou
 usage, and `GET /readyz`; every `Upgrade` header, management, GUI, session, health, and unknown
 `/v1/*` route is rejected before dispatch. Its `opencodex-link.invalid` policy admits only configured
 key ids recorded by `links.json`, never the environment token. Context relays rebuild that policy for their post-body admission check, so key revocation stops an in-flight request before dispatch. `ensureStarted()` is single-flight,
-final deletion closes the listener, and `src/server/index/optional-listeners.ts` runs supervisor teardown before closing this listener and the Claude intercept pair.
+final deletion closes the listener, and `src/server/index/optional-listeners.ts` stops the Child-ops host ([remote link](remote-link.md)) and runs supervisor teardown before closing this listener and the Claude intercept pair.
 ### Claude intercept pair
 
 Intercept CA startup and token creation in `src/claude/intercept/runtime.ts` follow the [config-directory hardening barrier](config.md#opencodex-home-and-live-process-state). Each synchronous writer requires settled overlapping work, including retained ancestor children, within one ACL deadline; `ETIMEDOUT` refuses startup without entering the CA lease-contention retry. Persistent picker preparation, cleanup leases, leaf/profile publication and model snapshots re-enter independently after OS trust or discovery awaits.

@@ -554,3 +554,32 @@ describe("hints (final L4)", () => {
   });
 });
 
+
+describe("automatic restart needs the idle window (050 Revision 6)", () => {
+  test("idle when queued, active when its item starts: the sync runs, the restart is withheld", async () => {
+    const ssh = fakeSsh({ sync: [SYNCED], restart: [SYNCED] });
+    let reads = 0;
+    // Nothing in flight, last data end inside the idle window at item start; idle again by the time the restart would go.
+    const activity = () => (reads++ === 0 ? { idle: false, inFlight: 0 } : { idle: true, inFlight: 0 });
+    expect(await run(runSyncItem, record(), job("sync", "app-server", "auto"), makeEnv(ssh, { activity }).env))
+      .toEqual({ state: "succeeded", reason: "restart-skipped:link-active", sync: { state: "synced", reason: null }, restart: { requested: "app-server", outcome: "skipped" } });
+    expect(ssh.kinds()).toEqual(["sync"]);
+  });
+
+  test("an automatic restart is withheld when the link stops being idle during the sync; a manual one only needs nothing in flight", async () => {
+    let idle = true;
+    const auto = fakeSsh({ sync: [SYNCED], restart: [SYNCED] });
+    const original = auto.runner.run;
+    auto.runner.run = async (argv, options) => { const result = await original(argv, options); idle = false; return result; };
+    expect(await run(runSyncItem, record(), job("sync", "app-server", "auto"), makeEnv(auto, { activity: () => ({ idle, inFlight: 0 }) }).env))
+      .toMatchObject({ state: "succeeded", reason: "restart-skipped:link-active", restart: { outcome: "skipped" } });
+    expect(auto.kinds()).toEqual(["sync"]);
+    const manual = fakeSsh({ sync: [SYNCED], restart: [SYNCED] });
+    expect(await run(runSyncItem, record(), job("sync", "app-server"), makeEnv(manual, { activity: () => ({ idle: false, inFlight: 0 }) }).env))
+      .toMatchObject({ state: "succeeded", reason: null, restart: { outcome: "requested" } });
+    expect(manual.kinds()).toEqual(["sync", "restart"]);
+    const autoIdle = fakeSsh({ sync: [SYNCED], restart: [SYNCED] });
+    expect(await run(runSyncItem, record(), job("sync", "app-server", "auto"), makeEnv(autoIdle).env)).toMatchObject({ restart: { outcome: "requested" } });
+    expect(autoIdle.kinds()).toEqual(["sync", "restart"]);
+  });
+});

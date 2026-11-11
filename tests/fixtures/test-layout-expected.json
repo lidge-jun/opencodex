@@ -1679,5 +1679,12 @@
   "link-ssh-capture.test.ts": "clients",
   "link-ssh-capture-redact.test.ts": "clients",
   "link-ssh-capture-tunnels.test.ts": "clients",
-  "cli-link-capture.test.ts": "cli"
+  "cli-link-capture.test.ts": "cli",
+  "link-child-policy.test.ts": "clients",
+  "link-child-ops-scheduler.test.ts": "clients",
+  "catalog-auto-refresh-link-fanout.test.ts": "codex-integration",
+  "link-child-ops-no-timer.test.ts": "lab",
+  "link-child-policy-routes.test.ts": "server",
+  "cli-link-policy.test.ts": "cli",
+  "link-child-catalog-oracle.test.ts": "e2e-style"
 }
