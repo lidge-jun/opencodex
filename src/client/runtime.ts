@@ -30,7 +30,7 @@ import { clientLinkStatePath, isChildInitiatedLink, recordChildInitiatedLink } f
 import { startMachineListener, type MachineListenerDeps } from "./machine-listener";
 import { isLinkConnection, readClientConnectionState } from "./state";
 import { withClientLifecycleSync } from "./lifecycle-lock";
-import { clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, type ClientRestartController } from "./runtime-restart";
+import { clientConnectionEnded, clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, type ClientRestartController } from "./runtime-restart";
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
 import { restoreLinkClientRouting } from "./stop-routing";
 import { markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } from "./sync-runtime";
@@ -433,7 +433,7 @@ export async function startClientRuntime(
   const restartController: ClientRestartController = createClientRestartController({
     stopping: () => shuttingDown,
     supervisor: io.restartSupervisor ?? clientRestartSupervisor,
-    connectionChanged: () => clientRestartRollbackAction(state.value, readClientConnectionState()) === "recycle",
+    connectionChanged: () => clientConnectionEnded(state.value, readClientConnectionState()),
     recycle: () => recycleStandalone(state.value.tokenFingerprint),
     stop: stopServing,
     spawnReplacement: async deadlineAt => {

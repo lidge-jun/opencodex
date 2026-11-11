@@ -108,9 +108,10 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
       if (io.stopping?.()) return { kind: "stopping" };
       if (io.recycle && io.connectionChanged?.()) {
         if (flight) return { kind: "accepted", alreadyRestarting: true };
-        const recycle = io.recycle;
-        // Let the 202 reach the CLI before the listener closes.
-        flight = sleep(200).then(recycle).finally(() => { flight = null; });
+        const recycle = io.recycle, changed = io.connectionChanged;
+        // Let the 202 reach the CLI before the listener closes, then confirm the connection is
+        // still ended: a connect that committed meanwhile keeps this runtime (the CLI reports kept).
+        flight = sleep(200).then(async () => { if (changed()) await recycle(); }).finally(() => { flight = null; });
         return { kind: "accepted", alreadyRestarting: false };
       }
       const supervisor = await io.supervisor();
@@ -148,4 +149,14 @@ export function clientRestartRollbackAction(
     && current.value.link?.linkId === served.link?.linkId
     ? "resume"
     : "recycle";
+}
+
+/**
+ * Whether the served connection has provably ended: the durable state is disconnected, or names a
+ * different connection. Unreadable or mismatched state is not proof, so a supervised restart keeps
+ * refusing on it instead of exiting a runtime whose link may still work.
+ */
+export function clientConnectionEnded(served: OcxClientConnectionConfig, current: ClientConnectionState): boolean {
+  if (current.kind === "disconnected") return true;
+  return current.kind === "connected" && clientRestartRollbackAction(served, current) === "recycle";
 }

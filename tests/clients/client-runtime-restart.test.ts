@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "bun";
 import { startMachineListener } from "../../src/client/machine-listener";
-import { clientRestartRollbackAction, createClientRestartController, type ClientRestartAdmission, type ClientRestartIo } from "../../src/client/runtime-restart";
+import { clientConnectionEnded, clientRestartRollbackAction, createClientRestartController, type ClientRestartAdmission, type ClientRestartIo } from "../../src/client/runtime-restart";
 import {
   createLocalAttestationChallenge,
   createLocalAttestationSecret,
@@ -277,6 +277,16 @@ describe("client restart controller", () => {
     expect(calls).toEqual([]);
   });
 
+  test("a connection that is current again by the time the recycle would run keeps this runtime", async () => {
+    const verdicts = [true, false];
+    const { io, calls } = fakeIo({ supervisor: async () => "desktop", connectionChanged: () => verdicts.shift() ?? false, recycle: async () => { calls.push("recycle"); } });
+    const controller = createClientRestartController(io);
+    expect(await controller.request()).toEqual({ kind: "accepted", alreadyRestarting: false });
+    await controller.settled();
+    expect(calls).toEqual([]);
+    expect(controller.hasHandoff()).toBe(false);
+  });
+
   test("a second request while one is in flight joins it", async () => {
     let finish!: () => void;
     let spawns = 0;
@@ -293,6 +303,16 @@ describe("client restart controller", () => {
 
 describe("rollback after a failed replacement", () => {
   const link = { ...connection, transport: "link" as const, link: { linkId: `lnk_${"b".repeat(16)}`, tunnelPort: 23457 } };
+  // Only a proven end of the served connection may recycle a supervised runtime; an unreadable or
+  // mismatched config is not one, and recycling on it could take down a link that still works.
+  test("a supervised restart treats only a disconnect or a different connection as ended", () => {
+    expect(clientConnectionEnded(link, { kind: "disconnected" } as never)).toBe(true);
+    expect(clientConnectionEnded(link, { kind: "connected", value: { ...link, connectedAt: "2026-10-21T00:00:00.000Z" } })).toBe(true);
+    expect(clientConnectionEnded(link, { kind: "connected", value: { ...link, link: { ...link.link, linkId: `lnk_${"c".repeat(16)}` } } })).toBe(true);
+    expect(clientConnectionEnded(link, { kind: "connected", value: { ...link, catalogSyncedAt: "2026-10-21T00:00:00.000Z" } })).toBe(false);
+    expect(clientConnectionEnded(link, { kind: "invalid", reason: "config.json is missing or unreadable" } as never)).toBe(false);
+    expect(clientConnectionEnded(link, { kind: "mismatched", reason: "x" } as never)).toBe(false);
+  });
   test("serves the same connection again only while it is still the durable one", () => {
     expect(clientRestartRollbackAction(link, { kind: "connected", value: { ...link, catalogSyncedAt: "2026-10-21T00:00:00.000Z" } })).toBe("resume");
     expect(clientRestartRollbackAction(link, { kind: "disconnected" } as never)).toBe("recycle");
