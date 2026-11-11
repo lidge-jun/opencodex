@@ -59,7 +59,8 @@ Malformed stdout produces fixed protocol diagnostics, never the shared JSONL par
 Byte-limit failures retain `trae_stdout_limit`; startup failures retain a stage and allowlisted errno.
 POSIX launch exits 126/127 before initialization report safe startup codes via the private control pipe.
 Prompt completion closes the bounded update stream once, without a new promise reaction per chunk.
-Client cancellation emits no provider error; an upstream cancellation without client abort emits
+Client cancellation emits no provider error; received usage survives cleanup cancellation in a
+`client_cancelled` incomplete outcome and is bound before a closed client stream can drop it. An upstream cancellation without client abort emits
 an incomplete event with usage. Explicit output-token limits are refused before startup.
 A successful `session/set_model` acknowledgement supersedes prior setup model notifications.
 The reader then validates subsequent model changes against the selected id, before or during prompt dispatch.

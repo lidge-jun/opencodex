@@ -84,6 +84,12 @@ export function createTraeCnAdapter(provider: OcxProviderConfig, deps: TraeCnAda
       const producer = incoming.sendBudget?.beginSpendProducer?.();
       let permit: SingleUseDispatchPermit | undefined;
       let terminal: Extract<AdapterEvent, { type: "done" | "incomplete" | "error" }> | undefined;
+      let cancelledUsageEmitted = false;
+      const emitCancelledUsage = () => {
+        if (!terminal?.usage || cancelledUsageEmitted) return;
+        cancelledUsageEmitted = true;
+        emit({ type: "incomplete", reason: "client_cancelled", usage: terminal.usage, retryable: false });
+      };
       try {
         const replay = replayText(parsed);
         const decision = incoming.sendBudget?.reserveDispatch({ sendClass: "initial", targetKey: `trae-cn|${parsed.modelId}` });
@@ -107,9 +113,10 @@ export function createTraeCnAdapter(provider: OcxProviderConfig, deps: TraeCnAda
         } finally {
           await session.close();
         }
-        if (terminal && !incoming.abortSignal?.aborted) emit(terminal);
+        if (incoming.abortSignal?.aborted) emitCancelledUsage();
+        else if (terminal) emit(terminal);
       } catch (error) {
-        if (incoming.abortSignal?.aborted) return;
+        if (incoming.abortSignal?.aborted) { emitCancelledUsage(); return; }
         if (error instanceof SendBudgetExhaustedError || error instanceof SpendLedgerFileRefusedError) throw error;
         emit({ ...errorEvent(error), ...(terminal?.usage ? { usage: terminal.usage } : {}) });
       } finally {

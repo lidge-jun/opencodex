@@ -45,7 +45,8 @@ The `trae-cn` preset uses the signed-in official TRAE CN CLI through
   Permission requests fail with `trae_client_request_unsupported`; internal tool notifications fail
   with `trae_tool_call_unsupported`. An empty `end_turn` fails with `trae_empty_response`; `max_tokens` without text stays incomplete.
   These completions and refusals retain usage. OpenCodex does not replay a dispatched TRAE prompt on another provider.
-  Client cancellation is silent; cancellation initiated by the CLI returns an incomplete turn.
+  Client cancellation emits no provider error and preserves already-received usage for accounting.
+  Cancellation initiated by the CLI returns an incomplete turn.
   Unsafe local spend-ledger files produce the shared `spend_ledger_storage_unavailable`/503
   diagnostic; follow its local-storage recovery instructions before retrying.
   Requests with an output-token limit fail with `unsupported_max_output_tokens` because this

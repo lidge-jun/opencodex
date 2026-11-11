@@ -301,6 +301,10 @@ export async function executeResponsesRunTurn(
       let sentKeyBinding: KeyBinding | undefined;
       const emit = (event: AdapterEvent) => {
         if (event.type === "error" && sentKeyBinding) failedKeyBindings.set(event, sentKeyBinding);
+        // A cancelled stream may have stopped draining; keep its latest attempt's reported usage.
+        if (event.type === "incomplete" && event.reason === "client_cancelled" && event.usage && attemptSeq === runTurnAttemptSeq) {
+          transportState.bindKeyUsageFromBridge(event.usage);
+        }
         options.onCompactionRecoveryAdapterEvent?.(event);
         targetQueue.push(event);
       };
