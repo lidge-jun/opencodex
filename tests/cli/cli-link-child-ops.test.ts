@@ -216,9 +216,9 @@ describe("contract", () => {
     const out = spyOn(console, "log").mockImplementation(() => {});
     try {
       expect(await runCapabilities(["--json"])).toBe(0);
-      const document = JSON.parse(String(out.mock.calls[0]![0])) as { contracts: string[]; commands: Array<{ command: string[] }> };
+      const document = JSON.parse(String(out.mock.calls[0]![0])) as { contracts: string[]; capabilities: Array<{ command: string[] }> };
       expect(document.contracts).toContain("link.child-ops/1");
-      for (const verb of ["update", "sync", "restart-codex"]) expect(document.commands.some(entry => entry.command.join(" ") === "link " + verb)).toBe(true);
+      for (const verb of ["update", "sync", "restart-codex"]) expect(document.capabilities.some(entry => entry.command.join(" ") === "link " + verb)).toBe(true);
     } finally { out.mockRestore(); }
   });
 });
