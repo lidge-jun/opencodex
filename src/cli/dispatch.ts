@@ -1,4 +1,4 @@
-import type { ProxyRestartStartOutcome } from "./tray-proxy";
+import type { ProxyRestartIo, ProxyRestartStartOutcome } from "./tray-proxy";
 import type { RestartSupervisor } from "./restart-failure";
 /**
  * Registry-driven command dispatch (Phase 3 of the CLI deepening).
@@ -60,7 +60,7 @@ export interface CliDispatchDeps {
   handleTrayProxyStart: (existingIsSuccess?: boolean) => Promise<boolean>;
   handleTrayProxyRestart: () => Promise<void>;
   handleRestartStartWhenStopped: (recoveringLiveRestart?: boolean) => Promise<ProxyRestartStartOutcome>;
-  handleProxyRestart: (startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>, onSupervised?: (supervisor: RestartSupervisor) => void) => Promise<boolean>;
+  handleProxyRestart: (startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>, onSupervised?: (supervisor: RestartSupervisor) => void, bindIo?: (io: ProxyRestartIo) => ProxyRestartIo) => Promise<boolean>;
   handleUninstall: () => Promise<void>;
   handleStatus: () => Promise<void>;
   handleRecoverHistory: () => Promise<void>;
@@ -426,12 +426,12 @@ const commandRunners: Record<string, CommandRunner> = {
     const code = await handleDisconnectCommand(deps.args.slice(1));
     // Token recovery refuses any live client runtime and leaves nothing to restart.
     if (code !== 0 || deps.args.includes("--orphaned-token")) return code;
-    const { restartRuntimeAfterDisconnect } = await import("./disconnect-runtime");
+    const { bindRestartToPid, restartRuntimeAfterDisconnect } = await import("./disconnect-runtime");
     const { observeProxyLiveness } = await import("../server/proxy-liveness");
     const { readClientConnectionState } = await import("../client/state");
     return await restartRuntimeAfterDisconnect({
       observe: () => observeProxyLiveness({ attempts: 2 }),
-      restart: () => deps.handleProxyRestart(deps.handleRestartStartWhenStopped),
+      restart: expectedPid => deps.handleProxyRestart(deps.handleRestartStartWhenStopped, undefined, io => bindRestartToPid(io, expectedPid)),
       stillDisconnected: () => readClientConnectionState().kind === "disconnected",
       json: deps.args.includes("--json"),
     });

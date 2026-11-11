@@ -89,6 +89,7 @@ import {
   restartStartOutcome,
   waitForProxyReplacement,
   runTrayProxyStart,
+  type ProxyRestartIo,
   type ProxyRestartLive,
   type ProxyRestartStartOutcome,
 } from "./tray-proxy";
@@ -958,9 +959,11 @@ const PROXY_RESTART_OBSERVE_MS = MEMORY_DRAIN_RESTART_MS + REPLACEMENT_READY_TIM
 /** Reserve confirmation time within the shared restart deadline. */
 async function handleProxyRestart(
   startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>, onSupervised?: (supervisor: RestartSupervisor) => void,
+  bindIo: (io: ProxyRestartIo) => ProxyRestartIo = io => io,
 ): Promise<boolean> {
   const deadlineAt = Date.now() + PROXY_RESTART_OBSERVE_MS;
-  const result = await runDesktopAwareProxyRestart({
+  // A caller may bind the restart to one target (ocx disconnect: src/cli/disconnect-runtime.ts).
+  const restartIo = bindIo({
     findLive: () => discoverStableProxyForRestart({
       findLive: () => findLiveProxy({ deadlineAt, attempts: 2, acceptPackageTreeFenced: true }),
       expired: () => Date.now() >= deadlineAt,
@@ -978,6 +981,7 @@ async function handleProxyRestart(
       findLive: () => findLiveProxy({ deadlineAt: end, attempts: 2, acceptPackageTreeFenced: true }), expired: () => Date.now() >= end,
     })),
   });
+  const result = await runDesktopAwareProxyRestart({ ...restartIo });
   if (!result.ok && result.phase === "request" && result.error instanceof UpdateRestartRequired) {
     const candidate = result.error.candidate();
     console.log(`🔄 Running proxy ${candidate.target.version} is older than this CLI (${candidate.cliVersion}); restarting it from the current installation...`);
