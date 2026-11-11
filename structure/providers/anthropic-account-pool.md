@@ -104,13 +104,13 @@ instance. Legacy named exports mean the primary pool. Model routes widen only
 within that instance's roster. Pure protocol/model transformations remain shared.
 Pause, policy and selection notifications affect only the matching existing state.
 
-`src/oauth/anthropic-model-quota.ts`, `src/oauth/anthropic-rate-limit-policy.ts`
-and `src/providers/quota/anthropic-cooldown-recovery.ts` expose corresponding
-instance-bound owners. Family leases, admission pauses and probe generations
-include the instance and account. Clear/removal fences prevent an older claim from
-becoming current after the same account ID is re-added.
-`src/lib/state-store-registrations.ts` sweeps and reconciles existing instance
-buckets without starting dormant pools.
+`src/oauth/anthropic-model-quota.ts`, `src/oauth/anthropic-rate-limit-policy.ts` and `src/providers/quota/anthropic-cooldown-recovery.ts`
+expose corresponding instance-bound owners. Family leases, admission pauses and probe generations include the instance and
+account. Clear/removal fences prevent an older claim from becoming current after the same account ID is re-added.
+`src/lib/state-store-registrations.ts` sweeps and reconciles existing instance buckets without starting dormant pools. On that
+sweep `src/providers/quota/anthropic-cooldown-recovery-worker.ts` forces the usage read that lifts a claimable 429 quota cooldown
+(#6989) on enabled OAuth instances only; a windowless `Retry-After` cooldown is unclaimable and waits for its deadline. Retained
+reads back off per account (one sweep, doubling to ten minutes); a newer refusal resets it; a deadline due first is never read for.
 
 Responses and native Messages retain the configured instance and authorized
 target through preparation, retries and continuations. Named Pool 2 OAuth routes
@@ -198,15 +198,21 @@ and malformed shared measurements cannot revive legacy data and make family enum
 incomplete. Shared finite measurements are used regardless of the binding `is_active` flag;
 a non-boolean flag also makes enumeration incomplete. When legacy `five_hour` is explicitly
 null, only a finite session marked active creates a five-hour meter. Inactive shared usage
-is valid routing and cooldown recovery evidence. Scoped rows retain active-only semantics;
-unknown kinds or model families preserve usable shared windows without claiming a complete
+is valid routing and cooldown recovery evidence. Scoped rows retain active-only semantics
+for routing; an inactive scoped row is published only as `displayWindows`, which quota
+display renders and routing, exhaustion, cooldown recovery, pool assembly and reset ordering
+never read, so Fable shows whether or not it binds, regardless of plan name. The GUI keeps them in
+`AccountQuota.displayWindows` (a routed label wins); only `gui/src/components/QuotaBars.tsx`
+draws them, marked not in effect (`gui/tests/quota-display-only-window.test.tsx`).
+Unknown kinds or model families preserve usable shared windows without claiming a complete
 family enumeration. An authoritative inactive family row can retire a previous
 passive family refusal; an incomplete enumeration cannot. Shared cooldown recovery
 still requires finite headroom for each rejected window, never an invented zero.
 `weekly_scoped_shares[]` names, by raw `limits` index, the share of the weekly limit a
-selected scoped row may consume (Fable: "up to 50% of your weekly limit"); the window carries
-it as `weeklyAllowancePercent`. It is read from upstream and never inferred from a plan, and a
-share that points at no selected scoped row, falls outside (0, 100] or conflicts is ignored.
+recognized scoped row, routed or display-only, may consume (Fable: "up to 50% of your weekly
+limit"); the window carries it as `weeklyAllowancePercent`, shown under the bar label, whose
+value stays the family's own `percent`. It is read from upstream and never inferred from a
+plan; a share pointing at no recognized scoped row, outside (0, 100] or conflicting is ignored.
 `tests/providers/provider-anthropic-usage-windows.test.ts` covers source precedence, scoped
 admission, raw precision, pool projection, weekly shares and legacy compatibility.
 
@@ -221,7 +227,7 @@ flight on the credential actually dispatched, and publishes only while the insta
 quota epoch, configured row, account incarnation and login identity are unchanged.
 `captureProviderAccountQuotaEpoch(instance)` and the cache keys in
 `src/providers/quota/account-cache.ts` are per instance, so clearing Pool 2 quota never
-invalidates the primary pool.
+invalidates the primary pool. With the pool on and two or more accounts, `fetchAnthropicQuota` (`src/providers/quota/vendor-probes-oauth.ts`) reports a display-only estimate via `aggregateCodexPoolCapacity`: seats weigh 1, inactive seats use their last-good row (no extra probes), paused, reauth or stale seats count as incomplete coverage. Every Anthropic report is current only while the pool switch and each seat's id, paused and reauth state are unchanged; pool off or one account keeps the active report. Quota reset detection observes the active seat's own reading (`observedQuotaFor`), never the estimate, which has no reset times (`tests/providers/provider-anthropic-pool-capacity.test.ts`).
 
 A probe that yields no quota names one closed `quotaFailure` code from
 `src/providers/quota/failure-codes.ts`: `account_unavailable` when no usable credential could

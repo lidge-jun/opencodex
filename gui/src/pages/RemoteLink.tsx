@@ -12,6 +12,7 @@ import { Button } from "@/components/ui-v2/button";
 import { Banner, PageHeader, StateBadge } from "../components/v2-startup/primitives";
 import { LinkIntro, LinkStatus, LinkSwitchRow, Monogram, RoleCard } from "../components/v2-startup/remote-link-parts";
 import { RemoteLinkDisconnectDialog } from "./RemoteLinkDialogs";
+import { RemoteLinkDiagnostics } from "./RemoteLinkDiagnostics";
 import { LinkErrorNotice, RemoteLinkSheet, type LinkActionErrorView } from "./RemoteLinkSheet";
 import "../styles-remote-link.css";
 
@@ -20,6 +21,8 @@ type RemoteLinkUiState = "off" | "role-select" | "adding-child" | "confirming-ho
 
 export interface RemoteLinkProps {
   apiBase: string;
+  /** Base for this computer's own diagnostics; on a connected Child the machine plane, never the Home relay. */
+  diagnosticsApiBase?: string;
   sessionReady: boolean;
   pairingRecoveryAvailable?: boolean;
   onRequestPairing?: () => void;
@@ -136,7 +139,7 @@ function paritySynced(homeDigest: string | null, childDigest: string | null): bo
 
 function linkActionError(error: unknown): LinkActionErrorView { return { key: errorKey(error), hint: error instanceof LinkApiError ? error.hint : null }; }
 
-export default function RemoteLink({ apiBase, sessionReady, pairingRecoveryAvailable = false, onRequestPairing, workspaceAvailable = false, onOpenWorkspace, onChildReady = reloadDashboard, restartWait }: RemoteLinkProps): ReactElement {
+export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sessionReady, pairingRecoveryAvailable = false, onRequestPairing, workspaceAvailable = false, onOpenWorkspace, onChildReady = reloadDashboard, restartWait }: RemoteLinkProps): ReactElement {
   const t = useT();
   const [uiState, setUiState] = useState<RemoteLinkUiState>("off");
   const [role, setRole] = useState<RemoteLinkRole>("home");
@@ -564,6 +567,7 @@ export default function RemoteLink({ apiBase, sessionReady, pairingRecoveryAvail
         </section>
       )}
       {(status?.role === "child" || statusRows.length > 0) && <FallbackPanel apiBase={apiBase} section="devices" readOnly={status?.role === "child"} />}
+      <RemoteLinkDiagnostics apiBase={diagnosticsApiBase} />
 
       <RemoteLinkSheet
         sheetRef={sheetRef}

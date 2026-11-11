@@ -90,7 +90,7 @@ import {
   providerRedirectError,
 } from "../../lib/provider-outbound";
 import { redactSecretString } from "../../lib/redact";
-import { invalidModelDiscoveryHint } from "../../providers/model-discovery-diagnostic";
+import { invalidModelDiscoveryHint, shouldWarnSkippedModelRows } from "../../providers/model-discovery-diagnostic";
 import {
   extractProviderModelItems,
   isRegistryModelDiscoveryUrl,
@@ -862,10 +862,17 @@ export async function fetchProviderModelsWithAuth(
       };
       if (shouldLog) {
         console.warn(
-          `[opencodex] Provider model discovery for "${name}" ${diagnostic[extracted.reason]} [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}]${extracted.reason === "invalid_shape" ? invalidModelDiscoveryHint("diagnostic" in extracted ? extracted.diagnostic : undefined) : "."}`,
+          `[opencodex] Provider model discovery for "${name}" ${diagnostic[extracted.reason]} [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}]${extracted.reason === "invalid_shape" ? invalidModelDiscoveryHint("diagnostic" in extracted ? extracted.diagnostic : undefined, discovery.skipInvalidRows === true) : "."}`,
         );
       }
       return observed(models, "degraded");
+    }
+    // The operator opted into skipping invalid rows (#7910): say how many, once, never which.
+    const skippedInvalidRows = "skippedInvalidRows" in extracted ? extracted.skippedInvalidRows ?? 0 : 0;
+    if (shouldWarnSkippedModelRows(name, skippedInvalidRows, extracted.rawCount)) {
+      console.warn(
+        `[opencodex] Provider model discovery for "${name}" skipped ${skippedInvalidRows} invalid of ${extracted.rawCount} rows (modelDiscovery.skipInvalidRows) [status=${res.status}, urlClass=${urlClass}].`,
+      );
     }
     const items = extracted.items;
     // Ollama Cloud enrichment: /v1/models carries no per-model context or capability metadata,

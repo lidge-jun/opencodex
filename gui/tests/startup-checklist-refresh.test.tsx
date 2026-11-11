@@ -33,9 +33,14 @@ afterEach(async () => {
   }
 });
 
-const stale = { status: "at-risk", diagnosticStale: true, routingKind: "opencodex-local", desktop: { owned: true }, protection: "none" };
+// Browser readings: the step follows the background service or shim.
+const stale = { status: "at-risk", diagnosticStale: true, routingKind: "opencodex-local", protection: "none", platform: "darwin" };
 const protectedHealth = { ...stale, status: "protected", diagnosticStale: false, protection: "service" };
-const disabledHealth = { ...stale, diagnosticStale: false, desktop: { owned: true, loginState: "disabled" } };
+const disabledHealth = { ...stale, diagnosticStale: false };
+// Desktop readings: the step follows the app's Start at Login.
+const desktopStale = { ...stale, desktop: { owned: true, loginEnabled: true, loginState: "enabled", running: true, viable: true } };
+const desktopOn = { ...desktopStale, status: "protected", diagnosticStale: false, protection: "desktop" };
+const desktopOff = { ...desktopStale, diagnosticStale: false, desktop: { owned: true, loginEnabled: false, loginState: "disabled", running: true, viable: false } };
 
 async function render(apiBase: string): Promise<HTMLElement> {
   const host = document.createElement("div");
@@ -54,7 +59,7 @@ function pages(apiBase: string) {
 }
 
 function rows(host: HTMLElement): HTMLElement[] {
-  return [...host.querySelectorAll("li")].filter(row => row.textContent?.includes("Start automatically"));
+  return [...host.querySelectorAll<HTMLElement>('li[data-step="autostart"]')];
 }
 
 test("a failed stale refresh stops polling", async () => {
@@ -114,17 +119,29 @@ test("shared consumers do not overlap refreshes and unmount aborts the request",
   expect(refreshSignal?.aborted).toBe(true);
 });
 
-for (const [label, fresh, expected] of [["protected", protectedHealth, "done"], ["disabled", disabledHealth, "todo"]] as const) {
+const refreshCases = [
+  ["protected", stale, protectedHealth, "done", "Start automatically", "Keep opencodex"],
+  ["disabled", stale, disabledHealth, "todo", "Start automatically", "Keep opencodex"],
+  ["Desktop login on", desktopStale, desktopOn, "done", "Turn on Start at Login", "make sure Start at Login is checked"],
+  ["Desktop login off", desktopStale, desktopOff, "todo", "Turn on Start at Login", "make sure Start at Login is checked"],
+] as const;
+
+for (const [label, first, fresh, expected, title, hint] of refreshCases) {
   test(`both checklists refresh stale startup health to ${label}`, async () => {
     let reads = 0;
     globalThis.fetch = (async (input: RequestInfo | URL) => {
-      if (String(input).includes("/api/startup-health")) return Response.json(++reads === 1 ? stale : fresh);
+      if (String(input).includes("/api/startup-health")) return Response.json(++reads === 1 ? first : fresh);
       return Response.json({});
     }) as typeof fetch;
-    const host = await render(`http://checklist-${label}`);
+    const host = await render(`http://checklist-${label.replaceAll(" ", "-")}`);
     expect(rows(host)).toHaveLength(2);
-    expect(rows(host)[0].textContent).not.toContain("Keep opencodex");
+    expect(rows(host)[0].textContent).toContain(title);
+    // A stale reading is unknown: no tick and no "To do". Only the Desktop step keeps its hint,
+    // so an unverified Start at Login still says where to check it.
+    expect(rows(host)[0].textContent?.includes(hint)).toBe(first === desktopStale);
+    expect(rows(host)[0].textContent).not.toContain("✓");
     expect(rows(host)[1].textContent).not.toContain("To do");
+    expect(rows(host)[1].textContent).not.toContain("Done");
     expect(reads).toBe(1);
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 2200)); });
     expect(reads).toBe(2);
@@ -132,7 +149,7 @@ for (const [label, fresh, expected] of [["protected", protectedHealth, "done"], 
       expect(rows(host)[0].textContent).toContain("✓");
       expect(rows(host)[1].textContent).toContain("Done");
     } else {
-      expect(rows(host)[0].textContent).toContain("Keep opencodex");
+      expect(rows(host)[0].textContent).toContain(hint);
       expect(rows(host)[1].textContent).toContain("To do");
     }
   });

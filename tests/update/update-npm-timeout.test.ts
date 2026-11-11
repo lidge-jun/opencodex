@@ -1,4 +1,3 @@
-import { pathToFileURL } from "node:url";
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +7,7 @@ import { launcherUsableAfterNpmUpdate, transactionalNpmUpdateAsync, UPDATE_OWNER
 import { npmInvocation } from "../../src/update/npm-invocation.mjs";
 import { runNpmInstall } from "../../src/update/npm-install.mjs";
 import { fixturePath, repoPath } from "../helpers/repo-root";
+import { importUpdateModuleCopy } from "../helpers/update-module-data-url";
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "ocx-npm-timeout-é-업데이트-"));
@@ -37,7 +37,7 @@ async function readyTimeoutRunner(root: string, receipt: string): Promise<typeof
   const helperLine = 'const helper = join(dirname(fileURLToPath(import.meta.url)), "npm-install-job.ps1");';
   expect(runnerSource.split(helperLine)).toHaveLength(2);
   const instrumented = runnerSource.replace(helperLine, `const helper = ${JSON.stringify(helper)};`);
-  return (await import("data:text/javascript;base64," + Buffer.from(instrumented.replaceAll('"./mutation-guard.mjs"', JSON.stringify(pathToFileURL(repoPath("src/update/mutation-guard.mjs")).href))).toString("base64"))).runNpmInstall;
+  return (await importUpdateModuleCopy<{ runNpmInstall: typeof runNpmInstall }>(instrumented)).runNpmInstall;
 }
 
 test("timeout preserves ETIMEDOUT and permits recovery through the untouched launcher", async () => {

@@ -1,8 +1,8 @@
-import { recordUpstreamValidationDetail } from "../request-log-failure-detail";
+import { recordUpstreamProviderErrorDetail } from "../request-log-failure-detail";
 import { clientFacingModelText } from "../../lib/error-destination";
 import { responsesSpendTarget } from "./request-spend-target";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
-import { markProxyError, carryProxyError } from "../../lib/client-error-body";
+import { markProxyError, carryProxyError, isProxyError } from "../../lib/client-error-body";
 import { codexAdapterBuildRefusal } from "./passthrough-build-error";
 import { createAutoPauseRefreshErrorMapper, recoverAutoPausedAccount } from "./account-auto-pause-recovery";
 import { wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
@@ -96,13 +96,12 @@ import {
   attemptOpaqueBlobRecovery,
   consoleGoUploadRejectionBody,
   CONSOLE_GO_UPLOAD_RETRY_DELAY_MS,
-  reasoningEffortRejectionText,
+  refusedReasoningEffortDowngrade,
   anthropicFastRefused,
 } from "./core-opaque-recovery";
 import { createAnthropicThinkingRecovery } from "./anthropic-thinking-recovery";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { isTransientConsoleGoUploadRejection } from "../../providers/opencode-zen-rate-limit";
-import { planReasoningEffortDowngrade } from "../../providers/reasoning-metadata";
 import { formatAdapterUpstreamFailure } from "./adapter-failure-message";
 import { consumeComboFailure } from "./core-combo-failure";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse, lateAttributionLimitResponse } from "./context-overflow";
@@ -613,9 +612,8 @@ export async function prepareAdapterExchange(
     const consoleGoUploadRetryGuard: { attempted: boolean } = { attempted: false };
     let oauth401ReplayAttempted = transportState.oauth401ReplayAttempted;
     let antigravityAuthRotationAttempted = false;
-    // At most one reasoning-effort downgrade per request. This sits outside the recovery loop
-    // below for the same reason the two guards above do: a guard declared inside it is reset by
-    // every `continue recovery`, which would let one turn walk the whole ladder down.
+    // Direct requests get one reasoning-effort downgrade. Combo candidates may walk down the
+    // published ladder one refused rung at a time; the request send budget bounds those retries.
     const reasoningEffortDowngradeGuard: { attempted: boolean } = { attempted: false };
     // At most one Anthropic fast-mode downgrade per request, for the same reason.
     const anthropicFastDowngradeGuard: { attempted: boolean } = { attempted: false };
@@ -663,20 +661,19 @@ export async function prepareAdapterExchange(
           const authRefusal = options.abortSignal?.aborted ? undefined : codexAdapterBuildRefusal(err, admissionState.authCtx, route.codexAccountNamespace, () => { cleanupUpstreamAbort(); upstream.abort(); });
           if (authRefusal) return { failed: authRefusal };
           // A rotated credential that cannot be shaped keeps the refusal it was meant to
-          // replace. The image-tier rebuild is different: the request itself failed to shape,
-          // and its established 413/400 build-error contract stays authoritative.
-          if (preserveFailureResponse && recovery !== "image-413" && !options.abortSignal?.aborted) {
+          // replace. The image-tier and reasoning-effort rebuilds are different: the request itself
+          // failed to shape, and their established build-error contracts stay authoritative.
+          if (preserveFailureResponse && recovery !== "image-413" && recovery !== "reasoning-effort-downgrade" && !options.abortSignal?.aborted) {
             return { failed: preserveFailureResponse };
           }
           // A rotated/rebuilt adapter build failure is a request-shaping error, not an
-          // upstream connect failure: tear the abort link down and map it as 400. A
-          // translator-budget refusal keeps its established 413 here as well — adapters
-          // can throw it while sizing generated content (e.g. Ollama late-tool
-          // attribution), not only parseRequest/buildToolBridgeMaps.
+          // upstream connect failure: tear the abort link down and map it as 400.
           cleanupUpstreamAbort();
           upstream.abort();
           if (options.abortSignal?.aborted) return { failed: clientCancelledResponse() };
-          if (err instanceof OllamaLateAttributionBudgetError) return { failed: lateAttributionLimitResponse() };
+          if (err instanceof OllamaLateAttributionBudgetError) {
+            return { failed: lateAttributionLimitResponse() };
+          }
           if (isTranslatorBudgetExceededError(err)) {
             return { failed: formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
               code: "translation_buffer_limit",
@@ -847,7 +844,7 @@ export async function prepareAdapterExchange(
           releaseCodexAuthContextProbeLease(admissionState.authCtx);
           return { failed: codexRefusal };
         }
-        if (preserveFailureResponse && !replacementAdmitted && !options.abortSignal?.aborted)
+        if (preserveFailureResponse && (recovery !== "reasoning-effort-downgrade" || err instanceof SendBudgetExhaustedError) && !replacementAdmitted && !options.abortSignal?.aborted)
           return { failed: preserveFailureResponse };
         cleanupUpstreamAbort();
         upstream.abort();
@@ -1826,33 +1823,26 @@ export async function prepareAdapterExchange(
           continue recovery;
         }
       }
-      // Reasoning-effort downgrade, mirroring the passthroughRecovery loop above: learn the
-      // refused rung, then replay once at the next published one.
-      if (!reasoningEffortDowngradeGuard.attempted) {
-        const rejectionText = await reasoningEffortRejectionText(
-          upstreamResponse,
-          reasoningEffortDowngradeGuard.attempted,
-          upstream.signal,
-        );
-        const downgrade = rejectionText === undefined
-          ? undefined
-          : planReasoningEffortDowngrade({
-              provider: route.provider,
-              modelId: parsed.modelId,
-              requested: parsed.options.reasoning,
-              rejectionText,
-            });
-        if (downgrade) {
-          reasoningEffortDowngradeGuard.attempted = true;
-          parsed.options.reasoning = downgrade.effort;
-          // The same-target cache keys on parsed identity, so a mutated effort needs a token bump.
-          invalidateSameTargetRequest();
-          try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-          const result = await rebuildAndRefetch("reasoning-effort-downgrade");
-          if ("failed" in result) return result.failed;
-          upstreamResponse = result;
-          continue recovery;
+      // Learn a refused rung and retry at the next published one. Direct requests are limited
+      // to one repair; combo candidates may continue down the finite ladder within the send budget.
+      const downgrade = await refusedReasoningEffortDowngrade(upstreamResponse, upstream.signal, reasoningEffortDowngradeGuard,
+        options.comboAttempt, { provider: route.provider, modelId: parsed.modelId, requested: parsed.options.reasoning });
+      if (downgrade) {
+        reasoningEffortDowngradeGuard.attempted = true;
+        parsed.options.reasoning = downgrade.effort;
+        // The same-target cache keys on parsed identity, so a mutated effort needs a token bump.
+        invalidateSameTargetRequest();
+        // A combo keeps the refusal, so an unfunded rung still reaches combo failover as the original 400.
+        const refusal = options.comboAttempt ? await retainFailureResponse() : undefined;
+        if (!refusal) try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        const result = await rebuildAndRefetch("reasoning-effort-downgrade", undefined, refusal);
+        if ("failed" in result) {
+          if (result.failed !== refusal) return result.failed;
+          break recovery;
         }
+        if (refusal) try { void refusal.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        upstreamResponse = result;
+        continue recovery;
       }
       break;
     }
@@ -1864,7 +1854,7 @@ export async function prepareAdapterExchange(
         // `response.body` itself with the abort signal threaded through, and the combo
         // contract is that this body's getter is touched exactly once. A guard here would be
         // a second `.body` access for no gain, since the bounded reader owns settlement.
-        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, Date.now(), logCtx)
+        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, Date.now(), logCtx, !isProxyError(upstreamResponse))
           .finally(cleanupUpstreamAbort);
         options.onConsumedComboFailure?.(failure);
         return failure.response;
@@ -1879,7 +1869,8 @@ export async function prepareAdapterExchange(
       } finally {
         cleanupUpstreamAbort();
       }
-      recordUpstreamValidationDetail(logCtx, upstreamResponse.status, errorText);
+      // The provider's own body (not a proxy-normalized one) may name its closed error class (#8446).
+      if (!isProxyError(upstreamResponse)) recordUpstreamProviderErrorDetail(logCtx, upstreamResponse.status, errorText, upstreamResponse);
       if (upstreamResponse.status === 413) {
         if (options.clientModelLabel) projectLocalModelRefusalLog(logCtx, options.clientModelLabel);
         return clientRequestedStream

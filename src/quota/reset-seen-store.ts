@@ -307,6 +307,7 @@ export function swapLastObservedWindows(
   accountTag: string,
   windows: ReadonlyArray<QuotaWindowObservation>,
   retainAbsentShortWindow = false,
+  retainUnknownWindows: ReadonlyArray<{ window: string; resetAt: number }> = [],
 ): ReadonlyArray<QuotaWindowObservation> | undefined {
   hydrate();
   const key = observedKey(scope, accountTag);
@@ -324,6 +325,14 @@ export function swapLastObservedWindows(
   if (retainAbsentShortWindow && !next.some(window => window.window === "5h")) {
     const short = previous?.find(window => window.window === "5h");
     if (short) next.push({ ...short });
+  }
+  // An explicitly unknown budget is not a new measurement. Carry its last measured baseline
+  // only when the reported deadline still identifies the same window; a moved deadline is a
+  // different window and starts a fresh baseline instead of firing a false reset.
+  for (const unknown of retainUnknownWindows) {
+    if (next.some(window => window.window === unknown.window)) continue;
+    const prior = previous?.find(window => window.window === unknown.window && window.resetAt === unknown.resetAt);
+    if (prior) next.push({ ...prior });
   }
   observed.set(key, next);
   if (observed.size > MAX_OBSERVED_SCOPES) {
