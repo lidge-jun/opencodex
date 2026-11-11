@@ -511,7 +511,7 @@ for (const media of ["image", "video"]) {
     const cfg = config([{ provider: "trae-cn", model: "test-model" }]);
     cfg.defaultProvider = "trae-cn";
     cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
-      authMode: "key", models: ["test-model"], liveModels: false };
+      authMode: "key", models: ["test-model"], liveModels: false, pinnedReasoningEffort: "low" };
     cfg.providers.capable = { adapter: media === "video" ? "google" : "openai-chat", baseUrl: "https://fixture.invalid/v1",
       apiKey: "fixture-key", authMode: "key", models: ["accept-model"], inputModalities: ["text", "image", "video"] };
     cfg.routingProfiles = { daily: { candidates: [

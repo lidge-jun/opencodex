@@ -139,8 +139,8 @@ test("a default-role developer image uses a user carrier after its instruction t
   expect(messages).toEqual([
     { role: "system", content: "Base" },
     { role: "user", content: "First" },
-    { role: "system", content: [{ type: "text", text: "Inspect this image" }] },
     { role: "user", content: [
+      { type: "text", text: "Inspect this image" },
       { type: "image_url", image_url: { url: "data:image/png;base64,aGVsbG8=", detail: "high" } },
     ] },
     { role: "user", content: "Continue" },
@@ -154,8 +154,10 @@ test("a default-role developer document uses a user carrier after its instructio
   ] }] });
   const messages = JSON.parse(createOpenAIChatAdapter(provider).buildRequest(parsed).body).messages;
   expect(messages).toEqual([
-    { role: "system", content: [{ type: "text", text: "Read this document" }] },
-    { role: "user", content: [{ type: "file", file: { filename: file.filename, file_data: file.file_data } }] },
+    { role: "user", content: [
+      { type: "text", text: "Read this document" },
+      { type: "file", file: { filename: file.filename, file_data: file.file_data } },
+    ] },
   ]);
 });
 
