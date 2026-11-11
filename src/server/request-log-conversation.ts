@@ -248,8 +248,8 @@ export function conversationIdFromClaudeMetadata(
   metadata: { user_id?: unknown } | null | undefined,
 ): string | undefined {
   if (!metadata || typeof metadata.user_id !== "string") return undefined;
-  // Too long to persist: skip parsing a blob normalizeLogConversationId rejects anyway.
-  if (metadata.user_id.trim().length > LOG_CONVERSATION_ID_INPUT_MAX) return undefined;
+  // No length guard before stripping tk: an oversized tk still leaves a valid session id,
+  // which also gates Claude routing identity (claude-messages.ts claudeNativeSessionId).
   return normalizeLogConversationId(claudeSessionUserId(metadata.user_id));
 }
 
