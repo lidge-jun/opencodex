@@ -273,6 +273,28 @@ describe("client restart controller", () => {
 
   // Final review: the recycle hands off to the supervisor only when supervision is viable, so it
   // receives the same verdict (isServiceViable included) the refusal path uses.
+  // Coordinator review round 2: the connection recheck must be the last step before the recycle,
+  // after the asynchronous supervisor lookup. The hook holds that lookup open while the connection
+  // becomes current again; the recycle must not run.
+  test("a connection current again during the supervisor lookup keeps this runtime", async () => {
+    let ended = true;
+    let releaseLookup!: (value: "desktop") => void;
+    let lookups = 0;
+    const recycled: unknown[] = [];
+    const { io } = fakeIo({
+      connectionChanged: () => ended,
+      supervisor: () => { lookups += 1; return new Promise(resolve => { releaseLookup = resolve; }); },
+      recycle: async verdict => { recycled.push(verdict); },
+    });
+    const controller = createClientRestartController(io);
+    expect(await controller.request()).toEqual({ kind: "accepted", alreadyRestarting: false });
+    while (lookups === 0) await Promise.resolve();
+    ended = false;
+    releaseLookup("desktop");
+    await controller.settled();
+    expect(recycled).toEqual([]);
+  });
+
   test("the recycle receives the supervisor verdict", async () => {
     for (const supervisor of ["desktop", "service", null] as const) {
       const seen: unknown[] = [];

@@ -114,7 +114,11 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
         const recycle = io.recycle, changed = io.connectionChanged;
         // Let the 202 reach the CLI before the listener closes, then confirm the connection is
         // still ended: a connect that committed meanwhile keeps this runtime (the CLI reports kept).
-        flight = sleep(200).then(async () => { if (changed()) await recycle(await io.supervisor()); }).finally(() => { flight = null; });
+        // The recheck is the last step before the recycle, after the (asynchronous) supervisor lookup.
+        flight = sleep(200).then(async () => {
+          const supervisor = await io.supervisor();
+          if (changed()) await recycle(supervisor);
+        }).finally(() => { flight = null; });
         return { kind: "accepted", alreadyRestarting: false };
       }
       const supervisor = await io.supervisor();
