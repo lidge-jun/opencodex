@@ -212,7 +212,9 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
       const hint = record(error.body.error) && typeof error.body.error.hint === "string" ? error.body.error.hint : "";
       const message = phase ? "Remote Link failed during " + phase + (hint ? ": " + hint : "") : error.message;
       const recovery = ephemeralFlow ? RECOVERY_EPHEMERAL : RECOVERY_FULL;
-      if (phase || error.body.residual === true) throw new Error(message + (error.body.residual === true ? ". " + recovery : ""));
+      // The machine-readable code rides along so a script can branch without parsing prose.
+      const codeSuffix = phase && typeof code === "string" ? " (code " + code + ")" : "";
+      if (phase || error.body.residual === true) throw new Error(message + (error.body.residual === true ? ". " + recovery : "") + codeSuffix);
     }
     throw error;
   } finally {
