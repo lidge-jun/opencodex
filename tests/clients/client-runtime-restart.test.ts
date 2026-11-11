@@ -6,16 +6,17 @@
  * replacement, and a replacement that does not come up leaves the old runtime serving.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "bun";
 import { startMachineListener } from "../../src/client/machine-listener";
-import { classifyClientRestartSupervisor, clientConnectionEnded, clientRestartRollbackAction, createClientRestartController, type ClientRestartAdmission, type ClientRestartIo } from "../../src/client/runtime-restart";
-import { readClientConnectionStateWithEvidence } from "../../src/client/state";
-import * as configModule from "../../src/config";
+import { classifyClientRestartSupervisor, clientConnectionEnded, clientRestartRollbackAction, createClientRestartController, restartOwnerProven, type ClientRestartAdmission, type ClientRestartIo } from "../../src/client/runtime-restart";
+import { readClientConnectionState, readClientConnectionStateWithEvidence } from "../../src/client/state";
 import { claudeProxyStartEnv } from "../../src/cli/claude";
 import { opencodeProxyStartEnv } from "../../src/cli/opencode";
+import { codexProxyStartEnv } from "../../src/cli/codex-launcher";
 import { spyOn } from "bun:test";
 import { deriveLaunchdServiceDiagnostic, deriveSystemdServiceDiagnostic, deriveWindowsServiceDiagnostic } from "../../src/service/diagnostics";
 import {
@@ -315,8 +316,6 @@ describe("client restart controller", () => {
     ["service", false, "supervised", []],
     ["service-unproven", true, "supervised", []],
     ["service-unproven", false, "supervised", []],
-    ["owner-unproven", true, "supervised", []],
-    ["owner-unproven", false, "supervised", []],
     [null, true, "accepted", ["recycle:none"]],
     [null, false, "accepted", ["stop:20000", "spawn:71000", "exit:0"]],
   ] as const)("decision table: supervisor %s, connection ended %s", async (supervisor, ended, kind, expectedCalls) => {
@@ -378,6 +377,20 @@ describe("client restart controller", () => {
     await controller.settled();
     expect(spawns).toBe(1);
   });
+
+  test("a supervisor verdict that changes between the admission and the recycle lookups is honoured", async () => {
+    // Admitted with no supervisor, then unproven at the second lookup: kept, no recycle.
+    const turned = [null, "service-unproven"] as const;
+    let i = 0;
+    const late = fakeIo({ supervisor: async () => turned[Math.min(i++, 1)] ?? null, connectionChanged: () => true, recycle: async () => { late.calls.push("recycle"); } });
+    const controller = createClientRestartController(late.io);
+    expect(await controller.request()).toEqual({ kind: "accepted", alreadyRestarting: false });
+    await controller.settled();
+    expect(late.calls.filter(call => call === "recycle")).toEqual([]);
+    const early = fakeIo({ supervisor: async () => "service-unproven", connectionChanged: () => true, recycle: async () => { early.calls.push("recycle"); } });
+    expect(await createClientRestartController(early.io).request()).toEqual({ kind: "supervised", supervisor: "service-unproven" });
+    expect(early.calls).toEqual([]);
+  });
 });
 
 describe("who supervises a client restart (real service diagnostics)", () => {
@@ -401,25 +414,6 @@ describe("who supervises a client restart (real service diagnostics)", () => {
     expect(classifyClientRestartSupervisor({ desktop: false, env: { OCX_SERVICE_MANAGED: "1" }, diagnose: () => unknown })).toBe("service-unproven");
   });
 
-  // Final review round 2: ocx claude and ocx opencode start their own proxies with OCX_SERVICE=1;
-  // through their real launch environments, with no service installed, nothing supervises them.
-  const notInstalled = deriveSystemdServiceDiagnostic({ installed: false, enabled: false, running: false, stale: false, diagnostics: "test" });
-  const installedDisabled = systemd(false, false);
-  test.each([
-    ["ocx claude", () => claudeProxyStartEnv({ PATH: "/usr/bin" })],
-    ["ocx opencode", () => opencodeProxyStartEnv({ PATH: "/usr/bin" })],
-  ] as const)("a %s companion with no service installed is not supervised", (_name, env) => {
-    expect(env().OCX_SERVICE).toBe("1");
-    expect(classifyClientRestartSupervisor({ desktop: false, env: env(), diagnose: () => notInstalled })).toBeNull();
-  });
-
-  test.each([
-    ["ocx claude", () => claudeProxyStartEnv({ PATH: "/usr/bin" })],
-    ["ocx opencode", () => opencodeProxyStartEnv({ PATH: "/usr/bin" })],
-  ] as const)("a bare OCX_SERVICE=1 (%s environment) while a service is installed is owner-unproven", (_name, env) => {
-    expect(classifyClientRestartSupervisor({ desktop: false, env: env(), diagnose: () => installedDisabled })).toBe("owner-unproven");
-  });
-
   test("the Windows wrapper's marker counts as manager-launched", () => {
     expect(classifyClientRestartSupervisor({ desktop: false, env: { OCX_SERVICE: "1", OCX_WINDOWS_WRAPPER_PROTOCOL: "1" }, diagnose: () => systemd(true, true) })).toBe("service");
   });
@@ -434,6 +428,62 @@ describe("who supervises a client restart (real service diagnostics)", () => {
 
   test("the desktop app wins", () => {
     expect(classifyClientRestartSupervisor({ desktop: true, env: owned, diagnose: () => systemd(false, true) })).toBe("desktop");
+  });
+});
+
+// Final review round 4 (scope split): a runtime whose only supervisor evidence is a bare
+// OCX_SERVICE=1 (a legacy service child, or the proxy of ocx claude, ocx codex or ocx opencode)
+// keeps origin/dev's `ocx restart` decision exactly. The oracle is written from the merge base
+// b1148220574917c8: src/client/runtime-restart.ts:114-119 (desktop, else no OCX_SERVICE -> none,
+// else isServiceViable() ? "service" : none) and :98-106 (a supervisor refuses, none restarts with
+// a replacement; no ended-connection branch).
+describe("a bare OCX_SERVICE=1 keeps origin/dev's ocx restart decision", () => {
+  const devSupervisor = (env: NodeJS.ProcessEnv, viable: boolean) => (env.OCX_SERVICE !== "1" ? null : viable ? "service" : null);
+  const bareEnvs = [
+    ["a legacy service child", () => ({ OCX_SERVICE: "1", PATH: "/usr/bin" }) as NodeJS.ProcessEnv],
+    ["ocx claude's proxy", () => claudeProxyStartEnv({ PATH: "/usr/bin" })],
+    ["ocx codex's proxy", () => codexProxyStartEnv({ PATH: "/usr/bin" }) as NodeJS.ProcessEnv],
+    ["ocx opencode's proxy", () => opencodeProxyStartEnv({ PATH: "/usr/bin" })],
+  ] as const;
+  const anyDiagnostic = [
+    deriveSystemdServiceDiagnostic({ installed: false, enabled: false, running: false, stale: false, diagnostics: "test" }),
+    deriveSystemdServiceDiagnostic({ installed: true, enabled: false, running: false, stale: false, diagnostics: "test" }),
+    deriveSystemdServiceDiagnostic({ installed: true, enabled: true, running: true, stale: false, diagnostics: "test" }),
+  ];
+  for (const [name, env] of bareEnvs) {
+    for (const viable of [true, false]) {
+      test(`${name}, service viable ${viable}, connection ended or not: the same admission as origin/dev`, async () => {
+        expect(env().OCX_SERVICE).toBe("1");
+        expect(restartOwnerProven({ desktop: false, env: env() })).toBe(false);
+        for (const diagnostic of anyDiagnostic) {
+          const supervisor = classifyClientRestartSupervisor({ desktop: false, env: env(), diagnose: () => diagnostic, legacyServiceViable: () => viable });
+          expect(supervisor).toBe(devSupervisor(env(), viable));
+          for (const ended of [true, false]) {
+            const recycled: unknown[] = [];
+            const { io, calls } = fakeIo({
+              supervisor: async () => supervisor,
+              ownerProven: () => restartOwnerProven({ desktop: false, env: env() }),
+              connectionChanged: () => ended,
+              recycle: async verdict => { recycled.push(verdict); },
+            });
+            const controller = createClientRestartController(io);
+            const admission = await controller.request();
+            await controller.settled();
+            // origin/dev: a supervisor refuses; none runs the replacement restart. Never the recycle.
+            expect(admission).toEqual(viable ? { kind: "supervised", supervisor: "service" } : { kind: "accepted", alreadyRestarting: false });
+            expect(calls).toEqual(viable ? [] : ["stop:20000", "spawn:71000", "exit:0"]);
+            expect(recycled).toEqual([]);
+          }
+        }
+      });
+    }
+  }
+
+  test("positive evidence opens the ended-connection recycle: desktop, a manager's marker, or no OCX_SERVICE", () => {
+    expect(restartOwnerProven({ desktop: true, env: { OCX_SERVICE: "1" } })).toBe(true);
+    expect(restartOwnerProven({ desktop: false, env: { OCX_SERVICE: "1", OCX_SERVICE_MANAGED: "1" } })).toBe(true);
+    expect(restartOwnerProven({ desktop: false, env: { OCX_SERVICE: "1", OCX_WINDOWS_WRAPPER_PROTOCOL: "1" } })).toBe(true);
+    expect(restartOwnerProven({ desktop: false, env: {} })).toBe(true);
   });
 });
 
@@ -463,24 +513,22 @@ describe("connection-ended evidence from the real state reader", () => {
     expect(clientConnectionEnded(link, state)).toBe(false);
   });
 
-  // ...and the verdict comes from one snapshot: a connect committed after the file was read cannot
-  // pair the old bytes with a validation of the new ones. The hook commits at the second read.
-  test("a connection committed between reads never yields disconnected from a stale read", () => {
-    writeFileSync(join(root, "config.json"), JSON.stringify({ port: 0, providers: {}, defaultProvider: "openai" }));
-    const realDiagnostics = configModule.readConfigDiagnostics;
-    let committed = false;
-    const hook = spyOn(configModule, "readConfigDiagnostics").mockImplementation((options?: Parameters<typeof realDiagnostics>[0]) => {
-      if (!committed) {
-        committed = true;
-        writeFileSync(join(root, "config.json"), JSON.stringify({ port: 0, providers: {}, defaultProvider: "openai", runtimeRole: "client", client: link }));
-      }
-      return realDiagnostics(options);
-    });
+  // ...and the verdict comes from one read of config.json, so a connect that commits meanwhile cannot
+  // pair old bytes with a validation of new ones. Counted at the file system: the older two-read
+  // reader shows the count detects a second read.
+  test("the verdict comes from exactly one read of config.json", () => {
+    const path = join(root, "config.json");
+    const reads = spyOn(fs, "readFileSync");
+    const count = (read: () => unknown) => {
+      reads.mockClear();
+      read();
+      return reads.mock.calls.filter(([target]) => String(target) === path).length;
+    };
     try {
-      const state = readClientConnectionStateWithEvidence();
-      expect(committed && state.kind === "disconnected").toBe(false);
+      expect(count(readClientConnectionState)).toBe(2);
+      expect(count(readClientConnectionStateWithEvidence)).toBe(1);
     } finally {
-      hook.mockRestore();
+      reads.mockRestore();
     }
   });
 

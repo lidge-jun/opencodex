@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { bindRestartToRuntime, restartRuntimeAfterDisconnect, type DisconnectRuntimeDeps, type RuntimeGeneration } from "../../src/cli/disconnect-runtime";
+import { claudeProxyStartEnv } from "../../src/cli/claude";
+import { codexProxyStartEnv } from "../../src/cli/codex-launcher";
+import { opencodeProxyStartEnv } from "../../src/cli/opencode";
+import { restartOwnerProven } from "../../src/client/runtime-restart";
+import { clientRuntimeRecord } from "../../src/client/runtime";
 import { requestBoundSystemRestart } from "../../src/cli/system-restart-client";
 import { runProxyRestart, type ProxyRestartIo } from "../../src/cli/tray-proxy";
 import { createLocalAttestationProof, createLocalAttestationSecret, LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER } from "../../src/lib/local-management-attestation";
@@ -180,13 +185,31 @@ describe("ocx disconnect restarts the client runtime it left behind", () => {
     expect(text).not.toContain("Run on this machine: ocx restart");
   });
 
-  test("a restart refused because its owner is unproven names both possible owners", async () => {
-    const result = await run(live("client"), false, false, { after: live("client"), refusedBy: "owner-unproven" });
-    expect(result.code).toBe(1);
-    const text = result.err.join("\n");
-    expect(text).toContain("ocx service repair");
-    expect(text).toContain("ocx claude or ocx opencode");
-    expect(text).not.toContain("Run on this machine: ocx restart");
+  // Final review round 4 (scope split): origin/dev's `ocx disconnect` restarted nothing
+  // (b1148220574917c8 src/cli/dispatch.ts disconnect: handleDisconnectCommand's code only). A
+  // runtime whose only supervisor evidence is a bare OCX_SERVICE=1 is still left that way: its
+  // record, built by the production record builder and ownership check, says so, and the step
+  // returns the disconnect's own 0 without restarting it or reading anything further.
+  test.each([
+    ["a legacy service child", () => ({ OCX_SERVICE: "1", PATH: "/usr/bin" }) as NodeJS.ProcessEnv],
+    ["ocx claude's proxy", () => claudeProxyStartEnv({ PATH: "/usr/bin" })],
+    ["ocx codex's proxy", () => codexProxyStartEnv({ PATH: "/usr/bin" }) as NodeJS.ProcessEnv],
+    ["ocx opencode's proxy", () => opencodeProxyStartEnv({ PATH: "/usr/bin" })],
+  ] as const)("%s is left as origin/dev's disconnect left it: exit 0, nothing restarted", async (_name, env) => {
+    const record = clientRuntimeRecord(4321, 10100, generation.attestationSecret, restartOwnerProven({ desktop: false, env: env() }));
+    expect(record.restartOwnerUnproven).toBe(true);
+    for (const state of [{ kind: "disconnected" }, { kind: "connected" }, { kind: "invalid", reason: "x" }] as State[]) {
+      const result = await run(live("client"), true, false, { capture: { ...generation, ...record, attestationSecret: generation.attestationSecret }, state });
+      expect(result).toMatchObject({ code: 0, restarts: 0, out: [], err: [] });
+    }
+  });
+
+  test("a runtime with positive owner evidence publishes no such mark and is restarted", async () => {
+    for (const env of [{}, { OCX_SERVICE: "1", OCX_SERVICE_MANAGED: "1" }] as NodeJS.ProcessEnv[]) {
+      const record = clientRuntimeRecord(4321, 10100, generation.attestationSecret, restartOwnerProven({ desktop: false, env }));
+      expect(record.restartOwnerUnproven).toBeUndefined();
+    }
+    expect(clientRuntimeRecord(4321, 10100, generation.attestationSecret, restartOwnerProven({ desktop: true, env: { OCX_SERVICE: "1" } })).restartOwnerUnproven).toBeUndefined();
   });
 
   // P3: after a completed restart, an unreadable state must not also claim nothing was restarted.

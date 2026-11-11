@@ -19,6 +19,8 @@ export interface RuntimeGeneration {
   port: number;
   hostname?: string;
   attestationSecret: string;
+  /** The runtime published no positive evidence of its owner (a bare OCX_SERVICE=1). */
+  restartOwnerUnproven?: true;
 }
 
 export type DisconnectClientState =
@@ -40,7 +42,7 @@ export interface DisconnectRuntimeDeps {
    * `ocx restart` bound to this generation (see {@link bindRestartToRuntime}). `refusedBy` names a
    * supervisor that refused it: an owning service manager whose relaunch could not be proven.
    */
-  restart: (target: RuntimeGeneration) => Promise<{ ok: boolean; refusedBy?: "service-unproven" | "owner-unproven" }>;
+  restart: (target: RuntimeGeneration) => Promise<{ ok: boolean; refusedBy?: "service-unproven" }>;
   json: boolean;
   info?: (line: string) => void;
   error?: (line: string) => void;
@@ -70,7 +72,7 @@ export function bindRestartToRuntime(
 
 /** What is known about the runtime answering when the advice is given. */
 export type AnsweringRuntime =
-  | { kind: "captured"; pid: number | null; refusedBy?: "service-unproven" | "owner-unproven" }
+  | { kind: "captured"; pid: number | null; refusedBy?: "service-unproven" }
   | { kind: "different"; pid: number | null }
   | { kind: "unknown" }
   | { kind: "none" };
@@ -89,9 +91,7 @@ export function recoveryAdvice(state: DisconnectClientState, answering: Answerin
     return `The client state is ${state.kind} (${state.reason}). Inspect it with ocx connect status and ocx status, fix the client state, then run ocx disconnect again.`;
   }
   switch (answering.kind) {
-    case "captured": return answering.refusedBy === "owner-unproven"
-      ? `The client runtime${answering.pid ? ` (pid ${answering.pid})` : ""} still serves the old connection, and its owner could not be proven: it is either a service registered before the service manager\'s marker existed or a proxy started by ocx claude or ocx opencode. If it is the service, run ocx service repair and then ocx service restart; if it is a companion, end that ocx claude or ocx opencode session and start it again.`
-      : answering.refusedBy
+    case "captured": return answering.refusedBy
       ? `The client runtime${answering.pid ? ` (pid ${answering.pid})` : ""} still serves the old connection, and its service manager did not allow a restart from here. Restart it through the manager: ocx service restart (check ocx service status).`
       : `The client runtime${answering.pid ? ` (pid ${answering.pid})` : ""} still serves the old connection. Run on this machine: ocx restart`;
     case "different": return `A different client runtime${answering.pid ? ` (pid ${answering.pid})` : ""} answers now, so it was not restarted; inspect it with ocx status and ocx connect status before restarting anything.`;
@@ -122,6 +122,10 @@ export async function restartRuntimeAfterDisconnect(deps: DisconnectRuntimeDeps)
   if (client && !target) {
     return fail(`Disconnected, but this machine could not identify the running client runtime${client.pid ? ` (pid ${client.pid})` : ""}: its runtime record is missing or names another process, so it was not restarted.`, { kind: "unknown" });
   }
+  // A runtime with no positive evidence of its owner (a bare OCX_SERVICE=1: a legacy service child
+  // or a companion proxy) is left exactly as origin/dev's `ocx disconnect` left it: not restarted,
+  // and the disconnect's own exit code (0) stands.
+  if (target?.restartOwnerUnproven) return 0;
   const before = deps.connectionState();
   if (before.kind !== "disconnected") {
     error(`Disconnect finished, but the client runtime was not restarted. ${recoveryAdvice(before, { kind: "unknown" })}`);
@@ -132,7 +136,7 @@ export async function restartRuntimeAfterDisconnect(deps: DisconnectRuntimeDeps)
   const originalLog = console.log;
   if (deps.json) console.log = (...args: unknown[]) => console.error(...args);
   let ok = false;
-  let refusedBy: "service-unproven" | "owner-unproven" | undefined;
+  let refusedBy: "service-unproven" | undefined;
   try { ({ ok, refusedBy } = await deps.restart(target)); } finally { console.log = originalLog; }
   const after = await deps.observe();
   if (after.kind === "live" && after.live.role !== "client") {

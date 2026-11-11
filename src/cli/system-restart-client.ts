@@ -226,14 +226,14 @@ export async function requestBoundSystemRestart(
  * A client runtime under the desktop app or a service answers 409 `restart_supervised` and keeps
  * serving (OCX-6). Read that small body and return the validated supervisor, or null.
  */
-async function supervisedRefusal(response: Response): Promise<"service" | "desktop" | "service-unproven" | "owner-unproven" | null> {
+async function supervisedRefusal(response: Response): Promise<"service" | "desktop" | "service-unproven" | null> {
   try {
     const read = await readBoundedResponseBytes(response, { maxBytes: 1024, signal: AbortSignal.timeout(SYSTEM_RESTART_REQUEST_TIMEOUT_MS) });
     if (read.oversized) return null;
     const body = JSON.parse(new TextDecoder().decode(read.bytes)) as { error?: { code?: unknown; supervisor?: unknown } } | null;
     if (body?.error?.code !== RESTART_SUPERVISED_ERROR) return null;
     const supervisor = body.error.supervisor;
-    return supervisor === "service" || supervisor === "desktop" || supervisor === "service-unproven" || supervisor === "owner-unproven" ? supervisor : null;
+    return supervisor === "service" || supervisor === "desktop" || supervisor === "service-unproven" ? supervisor : null;
   } catch {
     return null;
   }

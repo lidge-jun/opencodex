@@ -33,15 +33,15 @@ import { sameClientConnectionOwner, type readClientConnectionState } from "./sta
 type ClientConnectionState = ReturnType<typeof readClientConnectionState>;
 
 /**
- * `service-unproven`: a service manager launched and owns this process (OCX_SERVICE or
- * OCX_SERVICE_MANAGED), but its relaunch cannot be proven (for example a systemd unit started by
- * hand while disabled). Neither exiting for it nor detaching from it is safe, so the restart is refused.
+ * `service-unproven`: a service manager's marker shows it launched and owns this process, but its
+ * relaunch cannot be proven (for example a systemd unit started by hand while disabled). Neither
+ * exiting for it nor detaching from it is safe, so the restart is refused.
  */
-export type ClientRestartSupervisor = "service" | "desktop" | "service-unproven" | "owner-unproven";
+export type ClientRestartSupervisor = "service" | "desktop" | "service-unproven";
 
 /** Verdicts that keep the runtime: an owner exists, but exiting for it or detaching is not proven safe. */
-export function restartRefusedByOwner(supervisor: ClientRestartSupervisor | null): supervisor is "service-unproven" | "owner-unproven" {
-  return supervisor === "service-unproven" || supervisor === "owner-unproven";
+export function restartRefusedByOwner(supervisor: ClientRestartSupervisor | null): supervisor is "service-unproven" {
+  return supervisor === "service-unproven";
 }
 
 export type ClientRestartAdmission =
@@ -56,6 +56,11 @@ export interface ClientRestartIo {
   supervisor(): Promise<ClientRestartSupervisor | null>;
   /** The durable connection is no longer the one this runtime serves. */
   connectionChanged?: () => boolean;
+  /**
+   * Positive evidence of who owns this process ({@link restartOwnerProven}). Without it the
+   * ended-connection recycle is never reached and the restart is origin/dev's.
+   */
+  ownerProven?: () => boolean;
   /**
    * Hand off to what the durable state now calls for; exits the process for its owner to relaunch.
    * Receives the same supervisor verdict as the refusal path (a service only when it is viable).
@@ -120,7 +125,9 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
     hasHandoff: () => flight !== null,
     async request() {
       if (io.stopping?.()) return { kind: "stopping" };
-      if (io.recycle && io.connectionChanged?.()) {
+      // Only positive ownership evidence opens the ended-connection recycle; without it (a bare
+      // OCX_SERVICE=1) the request takes origin/dev's path below.
+      if (io.recycle && (io.ownerProven?.() ?? true) && io.connectionChanged?.()) {
         if (flight) return { kind: "accepted", alreadyRestarting: true };
         // An owner that cannot be proven to relaunch this process keeps it, connection ended or not.
         const owner = await io.supervisor();
@@ -154,31 +161,41 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
 /** Production supervision check: the desktop app, then a service that will really relaunch us. */
 export async function clientRestartSupervisor(): Promise<ClientRestartSupervisor | null> {
   const { diagnoseService } = await import("../service/diagnostics");
-  return classifyClientRestartSupervisor({ desktop: isDesktopSupervised(), env: process.env, diagnose: diagnoseService });
+  const { isServiceViable } = await import("../service/orchestration");
+  return classifyClientRestartSupervisor({ desktop: isDesktopSupervised(), env: process.env, diagnose: diagnoseService, legacyServiceViable: isServiceViable });
 }
 
 /**
- * Ownership and relaunch are separate facts. A manager owns this process when it launched it
- * (OCX_SERVICE or OCX_SERVICE_MANAGED); only an owned process whose service diagnostic is viable
- * may exit for the manager to relaunch it. Owned but not viable is `service-unproven` and keeps
- * the runtime; only a process no manager owns may start a detached replacement.
+ * Positive evidence of who owns this process: the desktop app, a service manager's marker
+ * (isSupervisedServiceChild), or no OCX_SERVICE at all (every service OpenCodex registers sets it).
+ * A bare OCX_SERVICE=1 is none of these: a service registered before the manager marker existed
+ * and the proxies of ocx claude, ocx codex and ocx opencode all carry it.
+ */
+export function restartOwnerProven(input: { desktop: boolean; env: NodeJS.ProcessEnv; managed?: (env: NodeJS.ProcessEnv) => boolean }): boolean {
+  return input.desktop || input.env.OCX_SERVICE !== "1" || (input.managed ?? isSupervisedServiceChild)(input.env);
+}
+
+/**
+ * Ownership and relaunch are separate facts. With a manager's marker, only a service diagnostic
+ * that is viable and running lets this process exit for the manager to relaunch it; otherwise it is
+ * `service-unproven` and keeps the runtime. A bare OCX_SERVICE=1 keeps origin/dev's decision
+ * unchanged (b1148220574917c8 src/client/runtime-restart.ts:114-119): a viable service, else none.
  */
 export function classifyClientRestartSupervisor(input: {
   desktop: boolean;
   env: NodeJS.ProcessEnv;
-  diagnose: () => { installed: boolean; viable: boolean; running: boolean };
+  diagnose: () => { viable: boolean; running: boolean };
+  /** origin/dev's check for a bare OCX_SERVICE=1: src/service/orchestration.ts isServiceViable. */
+  legacyServiceViable: () => boolean;
   /** Manager-launched evidence; defaults to src/service/service-child-ownership.ts. */
   managed?: (env: NodeJS.ProcessEnv) => boolean;
 }): ClientRestartSupervisor | null {
   if (input.desktop) return "desktop";
   // The managed marker (launchd, systemd, WinSW), the Windows wrapper's protocol marker, or a
-  // legacy Windows wrapper parent. A bare OCX_SERVICE=1 is also what ocx claude and ocx opencode
-  // give their own proxies, so it alone proves no manager.
+  // legacy Windows wrapper parent.
   if (!(input.managed ?? isSupervisedServiceChild)(input.env)) {
     if (input.env.OCX_SERVICE !== "1") return null;
-    // Bare marker: a companion when no service is installed; with one installed it may also be a
-    // service registered before the managed marker existed, which nothing here can tell apart.
-    return input.diagnose().installed ? "owner-unproven" : null;
+    return input.legacyServiceViable() ? "service" : null;
   }
   // Relaunch needs positive evidence: viable AND running (launchd's viable also covers an
   // unknown load state for its other callers; running there means loaded).

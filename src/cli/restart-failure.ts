@@ -1,6 +1,6 @@
 import type { ProxyRestartResult } from "./tray-proxy";
 
-export type RestartSupervisor = "desktop" | "service" | "service-unproven" | "owner-unproven";
+export type RestartSupervisor = "desktop" | "service" | "service-unproven";
 
 /** Only the bound client's explicit refusal establishes a supervisor for sync. */
 export function supervisedRestartRefusal(result: ProxyRestartResult): RestartSupervisor | null {
@@ -8,7 +8,6 @@ export function supervisedRestartRefusal(result: ProxyRestartResult): RestartSup
   if (result.error.message === "restart_supervised_desktop") return "desktop";
   if (result.error.message === "restart_supervised_service") return "service";
   if (result.error.message === "restart_supervised_service-unproven") return "service-unproven";
-  if (result.error.message === "restart_supervised_owner-unproven") return "owner-unproven";
   return null;
 }
 
@@ -39,8 +38,6 @@ export function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: f
       console.error("Restart not performed; the running client runtime was kept. Its background service owns it: run `ocx service restart`.");
     } else if (code === "restart_supervised_service-unproven") {
       console.error("Restart not performed; the running client runtime was kept. A service manager started it (systemd opencodex-proxy.service, launchd com.opencodex.proxy or the Windows OpenCodex service), but it is not enabled or its relaunch could not be verified: restart it through the manager with 'ocx service restart', or check 'ocx service status'.");
-    } else if (code === "restart_supervised_owner-unproven") {
-      console.error("Restart not performed; the running client runtime was kept. It was started with OCX_SERVICE=1 but without the service manager's marker while a service is installed, so it is either a service registered before that marker existed or a proxy started by ocx claude or ocx opencode. If it is the service, run 'ocx service repair' and then 'ocx service restart'; if it is a companion, end that ocx claude or ocx opencode session and start it again.");
     } else if (code === "restart_supervised_desktop") {
       console.error("Restart not performed; the running client runtime was kept. The OpenCodex desktop app owns it while its connection is current: use Quit in the OpenCodex tray menu, then reopen it. After `ocx disconnect`, `ocx restart` hands it to the app.");
     } else {

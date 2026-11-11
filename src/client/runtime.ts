@@ -30,7 +30,7 @@ import { clientLinkStatePath, isChildInitiatedLink, recordChildInitiatedLink } f
 import { startMachineListener, type MachineListenerDeps } from "./machine-listener";
 import { isLinkConnection, readClientConnectionState, readClientConnectionStateWithEvidence } from "./state";
 import { withClientLifecycleSync } from "./lifecycle-lock";
-import { clientConnectionEnded, clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, type ClientRestartController } from "./runtime-restart";
+import { clientConnectionEnded, clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, restartOwnerProven, type ClientRestartController } from "./runtime-restart";
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
 import { restoreLinkClientRouting } from "./stop-routing";
 import { markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } from "./sync-runtime";
@@ -101,10 +101,18 @@ export function clientRuntimeRecord(
   pid: number,
   port: number,
   attestationSecret: string = createLocalAttestationSecret(),
+  ownerEvidence: boolean = ownerProven(),
 ): RuntimePortState {
   let command: string[] | undefined;
   try { command = currentServingCommand(); } catch { /* no reliable relaunch identity; update admission fails closed */ }
-  return { pid, port, hostname: "127.0.0.1", attestationSecret, ...(command ? { command } : {}), ...siblingRuntimeField(), ...(clientStopping ? { clientStopping: true as const } : {}) };
+  return { pid, port, hostname: "127.0.0.1", attestationSecret, ...(command ? { command } : {}), ...siblingRuntimeField(), ...(clientStopping ? { clientStopping: true as const } : {}), ...(ownerEvidence ? {} : { restartOwnerUnproven: true as const }) };
+}
+
+/** Evaluated once: the launch environment and parent of this process do not change. */
+let ownerProvenMemo: boolean | undefined;
+function ownerProven(): boolean {
+  ownerProvenMemo ??= restartOwnerProven({ desktop: isDesktopSupervised(), env: process.env });
+  return ownerProvenMemo;
 }
 
 export function standaloneRecycleEnv(
@@ -441,6 +449,7 @@ export async function startClientRuntime(
     stopping: () => shuttingDown,
     supervisor: io.restartSupervisor ?? clientRestartSupervisor,
     connectionChanged: () => clientConnectionEnded(state.value, readClientConnectionStateWithEvidence()),
+    ownerProven,
     recycle: supervisor => recycleStandalone(state.value.tokenFingerprint, {
       isDesktopSupervised: () => supervisor === "desktop",
       serviceSupervised: () => supervisor === "service",
