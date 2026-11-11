@@ -1966,6 +1966,7 @@ export const en = {
   "pws.currentAccountUsage": "Current account usage",
   "pws.quotaUnsupported": "Quota lookup is not supported for this account.",
   "pws.quotaUnobserved": "No usage observation yet.",
+  "pws.quotaLastRead": "Last read",
   "pws.quotaCheckCompleted": "Quota check completed",
   "pws.modelBreakdown": "Model breakdown",
   "pws.col.model": "Model",
@@ -3945,7 +3946,7 @@ export const en = {
 
   "models.newPolicyGlobal": "New models start disabled", "models.newPolicyProvider": "New model policy",
   "models.fastProvider": "Fast mode", "models.fastProviderHint": "Uses usage credits at 2x price", "models.fastEnabled": "Fast mode on", "models.fastDisabled": "Fast mode off", "models.fastSaveFailed": "Could not save Fast mode",
-  "models.newPolicy_inherit": "Inherit", "models.newPolicy_off": "Off", "models.newPolicy_on": "On",
+  "models.newPolicy_inherit": "Inherit", "models.newPolicy_off": "Off", "models.newPolicy_on": "On", "models.newPolicy_admit": "Admit",
   "models.newBadge": "NEW", "models.newCount": "{count} new, off",
   "models.aliases": "Aliases",
   "models.aliasesTable": "Alias table",

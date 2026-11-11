@@ -581,7 +581,7 @@ test("a failure cause never carries message text, paths or identifiers (#1784)",
 test("the route inventory retains every convergence path after separating subagent routes", () => {
   const counts = Object.fromEntries([
     ["provider-routes.ts", 8],
-    ["model-routes.ts", 15],
+    ["model-routes.ts", 16],
     ["combo-routes.ts", 2],
     ["agent-settings-routes.ts", 1],
     ["subagent-model-routes.ts", 1],
@@ -601,7 +601,7 @@ test("the route inventory retains every convergence path after separating subage
   }));
   expect(counts).toEqual({
     "provider-routes.ts": 8,
-    "model-routes.ts": 15,
+    "model-routes.ts": 16,
     "combo-routes.ts": 2,
     "agent-settings-routes.ts": 1,
     "subagent-model-routes.ts": 1,
@@ -619,9 +619,10 @@ test("both model-discovery write paths converge the Codex catalog", () => {
   expect(acknowledge.match(/await convergeCodexCatalog\(\)/g)?.length).toBe(1);
 });
 
-test("all three alias write routes converge the Codex catalog", () => {
+test("all four alias write routes converge the Codex catalog", () => {
   const source = readFileSync(repoPath("src", "server", "management", "model-routes.ts"), "utf8");
-  for (const marker of ["providerAliasMatch && req.method", "modelAliasMatch && req.method", 'url.pathname === "/api/default-aliases"']) {
+  // The fourth is the #7705 alias-template route: a template changes which aliases the catalog shows.
+  for (const marker of ["providerAliasMatch && req.method", "aliasTemplateMatch && req.method", "modelAliasMatch && req.method", 'url.pathname === "/api/default-aliases"']) {
     const start = source.indexOf(marker);
     expect(start).toBeGreaterThan(-1);
     expect(source.slice(start, source.indexOf("\n  if (", start + 1))).toContain("await convergeCodexCatalog()");

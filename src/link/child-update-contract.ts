@@ -114,8 +114,12 @@ export function parseChildUpdateResult(payload: string): ContractParse<ChildUpda
 
 const GOAT_PATHS = ["/.local/share/goat/opencodex/", "\\.local\\share\\goat\\opencodex\\"];
 
-/** First matching row wins (010 "classifyChildUpdatePlan"). */
-export function classifyChildUpdatePlan(plan: ChildUpdatePlan, ctx: { homeVersion: string; desktopUpdateRequest: boolean; entry: "pair" | "binary" | null }): PlanClassification {
+/**
+ * First matching row wins (010 "classifyChildUpdatePlan"). launcher (A4) is the plan probe's report of a Node that can
+ * run the package launcher; absent or null means no report. Only an npm or pnpm plan read through a census pair uses it.
+ */
+export function classifyChildUpdatePlan(plan: ChildUpdatePlan, ctx: { homeVersion: string; desktopUpdateRequest: boolean; entry: "pair" | "binary" | null;
+  launcher?: "available" | "unavailable" | null }): PlanClassification {
   const row = (installKind: InstallKind, updateRoute: UpdateRoute, updateReason: string | null): PlanClassification => ({
     installKind, updateRoute, updateReason, installedVersion: plan.currentVersion === "unknown" ? null : plan.currentVersion,
     targetVersion: plan.targetVersion, runtimeOwner: plan.runtimeOwner, planToken: plan.planToken, updateInFlight: plan.updateInFlight,
@@ -126,7 +130,12 @@ export function classifyChildUpdatePlan(plan: ChildUpdatePlan, ctx: { homeVersio
   if (plan.installer === "unknown" && GOAT_PATHS.some(marker => path.includes(marker))) return row("goat", "owner-action", "goat");
   if (plan.reason === "up-to-date") return row(installer, "none", "up-to-date");
   if (plan.canApply && plan.targetVersion !== ctx.homeVersion) return row(installer, "none", "target-mismatch");
-  if (plan.canApply && (plan.installer === "npm" || plan.installer === "pnpm") && ctx.entry === "pair") return row(installer, "owner-action", "launcher-bypassed");
+  if (plan.canApply && (plan.installer === "npm" || plan.installer === "pnpm") && ctx.entry === "pair") {
+    // A4: the apply goes through <node> <root>/bin/ocx.mjs, so it needs the Node the plan probe found.
+    if (ctx.launcher === "available") return row(installer, "orchestrated", null);
+    if (ctx.launcher === "unavailable") return row(installer, "owner-action", "launcher-node-missing");
+    return row(installer, "owner-action", "launcher-bypassed");
+  }
   if (plan.canApply) return row(installer, "orchestrated", null);
   if (plan.reason === "desktop-app-owned") return row("desktop-app", ctx.desktopUpdateRequest ? "desktop-request" : "owner-action", "desktop-app-owned");
   if (plan.reason === "mise-managed") return row("mise", "owner-action", "mise-managed");

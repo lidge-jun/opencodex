@@ -320,7 +320,7 @@ predictions. Explicit provider/model price overrides still take precedence.
 
 ## Provider namespace aliases
 
-Providers can expose a built-in shorthand, such as `agy` for `google-antigravity`. A configured provider name or explicit alias claims that shorthand case-insensitively; a different provider's built-in shorthand is then suppressed in both catalog names and alias routing. For example, configuring a provider named `agy` keeps Google's models under `google-antigravity/<model>`, while `agy/<model>` selects the configured provider. Canonical provider names still require an exact case match, and unrecognized prefixes retain the existing model-routing fallback.
+Providers can expose a built-in shorthand, such as `agy` for `google-antigravity`. A configured provider name or explicit alias claims that shorthand case-insensitively; a different provider's built-in shorthand is then suppressed in both catalog names and alias routing. For example, configuring a provider named `agy` keeps Google's models under `google-antigravity/<model>`, while `agy/<model>` selects the configured provider. Canonical provider names still require an exact case match, and unrecognized prefixes retain the existing model-routing fallback. An opt-in per-provider `aliasTemplate` can name models that have no alias; see [Model alias templates](/guides/model-routing/#model-alias-templates).
 
 ## Provider entries (`OcxProviderConfig`)
 
@@ -434,6 +434,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `noVisionModels?` | `string[]` | Text-only models sent through the vision sidecar; matching tolerates an Ollama `:size` tag. |
 | `escapeBuiltinToolNames?` | `boolean` | Escape built-in tool names for Anthropic-compatible gateways and restore them in returned calls. |
 | `anthropicEofTolerance?` | `boolean` | Let an Anthropic-compatible gateway complete a stream that ends before `message_stop`, only when visible text or a complete JSON-object tool input was received. Off by default. |
+| `forwardAdvisorTool?` | `boolean` | Claude Code's typed Advisor server tool (`advisor_20260301`) on the translated Messages path. Omitted: only an `anthropic`-adapter provider on first-party `https://api.anthropic.com` receives the declaration, the client's completed Advisor exchanges and the `advisor-tool-2026-03-01` beta. `true`: an Anthropic-compatible gateway that runs the Advisor receives them too. `false`: never forwarded, including first-party. Other destinations drop the declaration and the turn runs without advice. An active OpenCodex Advisor owns the `advisor` name for its turns. See [Anthropic's Advisor tool on translated routes](/guides/claude-code/#anthropics-advisor-tool-on-translated-routes). A same-destination save keeps an omitted value and a destination move drops it; `PATCH` accepts a boolean or `null` to clear it. |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google transport/auth mode. Default `ai-studio`. |
 | `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | Google only. Omitted/`compatible` preserves the compatible tool schema and existing non-direct 400 repair. `reject-lossy` rejects initial schema loss or an indeterminate bounded comparison before dispatch and withholds a Vertex or Cloud Code Assist repair that would open constraints. Direct AI Studio never performs that repair. |
 | `directGeminiWireRenames?` | `boolean` | Google only. Applies in AI Studio mode, including custom Google-compatible URLs. Omitted or `true` keeps the `-tiered` wire rename for Gemini Flash ids (`gemini-3.7-flash` -> `gemini-3.7-flash-tiered`); `false` sends the requested bare ids to the wire unchanged. Vertex and canonical keyed OpenCode Zen routes preserve the requested model ID regardless of this setting; Cloud Code Assist routing is unchanged. Set `false` when the configured upstream still serves the bare ids. |
@@ -517,24 +518,23 @@ and `modelContextWindows` for that exact id when needed. Unknown ids are not gue
 
 ### What a provider save keeps
 
-`POST /api/providers` with the name of an existing provider replaces the stored row with one built from the request. The dashboard's add/edit form cannot send every field, so the save keeps some stored fields the request omits. Thirteen of them record how one upstream behaves: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`, `unsupportedHostedTools` and `unsupportedHostedToolsWithClientTools`.
+`POST /api/providers` with the name of an existing provider replaces the stored row with one built from the request. The dashboard's add/edit form cannot send every field, so the save keeps some stored fields the request omits. Fourteen of them record how one upstream behaves: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`, `unsupportedHostedTools`, `unsupportedHostedToolsWithClientTools` and `forwardAdvisorTool`.
 
-| Save | The thirteen settings | Stored `apiKeyPool` |
+| Save | The fourteen settings | Stored `apiKeyPool` |
 | --- | --- | --- |
 | Same destination, field omitted | Stored value kept, including an explicit `[]` or `false` | Kept |
 | New destination, field omitted | Not kept; registry defaults for the new destination may apply | Not kept |
 | Field sent in the request | The request's value | The request's value |
 
-The destination is the adapter, the base URL (scheme and host compared without regard to case, trailing slashes ignored) and, when the request names one, the auth mode. Moving a provider to another destination drops the thirteen settings because they describe the previous upstream, and drops the key pool because its keys were issued for it. A save never merges the rest of the old row into the new one. The provider-level `modelDiscovery` block follows the same destination rule: a same-destination save that omits it keeps it, and a move drops it.
+The destination is the adapter, the base URL (scheme and host compared without regard to case, trailing slashes ignored) and, when the request names one, the auth mode. Moving a provider to another destination drops the fourteen settings because they describe the previous upstream, and drops the key pool because its keys were issued for it. A save never merges the rest of the old row into the new one. The provider-level `modelDiscovery` block follows the same destination rule: a same-destination save that omits it keeps it, and a move drops it.
 
 `hideRawReasoning` is an operator display policy, so a save of the same provider name keeps its stored value whenever the request omits it, including after a destination move. A value sent in the request wins, including `false`.
 
 The optional `inferContextWindow` setting also survives same-name saves that omit it, including destination moves. Its read, update, and clear behavior is described under [Context windows on custom providers](#context-windows-on-custom-providers).
 
-`PATCH /api/providers?name=<provider>` changes only the fields it names and keeps every other stored field, whatever the destination. It accepts all thirteen settings; `null` clears one. It also accepts `modelDiscovery`, where `null` or `{}` clears it. It also accepts a boolean `hideRawReasoning` or `null` to clear it. For the two reasoning lists an empty array is stored as an explicit opt-out rather than removed.
+`PATCH /api/providers?name=<provider>` changes only the fields it names and keeps every other stored field, whatever the destination. It accepts all fourteen settings; `null` clears one. It also accepts `modelDiscovery`, where `null` or `{}` clears it. It also accepts a boolean `hideRawReasoning` or `null` to clear it. For the two reasoning lists an empty array is stored as an explicit opt-out rather than removed.
 
-With `webSearchBridge` enabled, a search continuation stays bound to the API-key selection that
-served the first request. Changing the selected key, its reference or resolved value, authentication
+With `webSearchBridge` enabled, a search continuation stays bound to the API-key selection that served the first request. Changing the selected key, its reference or resolved value, authentication
 mode, or base URL during search or provider pacing ends the turn with a bridge error before another
 provider request is sent. Changing away and back also ends that continuation. Start a new turn to
 use the new selection. Selection changes before the first provider send retain normal reselection.
@@ -1993,6 +1993,7 @@ log line without account identifiers or upstream error text.
 `ocx account list <provider>` shows the pause reason. The dashboard's Paused badge exposes
 the reason and time. Use `ocx account resume <provider> <account-id-or-alias>` to clear the
 reason and allow selection again. On an API-key row, clicking Resume also activates the key.
-This policy never resumes an account automatically.
+This policy never resumes an account automatically; an explicit login clears a pause it recorded, and
+[`resume --if-healthy`](/reference/cli/providers-accounts/#resume-if-healthy) resumes after a health read.
 
 For a custom Ark Kimi Responses provider, set `arkKimiResponsesModels` to an array of exact upstream model or endpoint IDs that reject encrypted-output includes and orphan reasoning replay. It is unset by default; use the upstream ID, not the display alias.

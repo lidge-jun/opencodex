@@ -17,6 +17,7 @@
   "client-retry-after-sites.test.ts": "server",
   "upstream-error-detail-boundaries.test.ts": "server",
   "request-log-identity-bounds.test.ts": "usage",
+  "request-log-anthropic-account-tag.test.ts": "usage",
   "safe-response-headers.test.ts": "server",
   "turn-state-handles.test.ts": "server",
   "turn-state-handles-e2e.test.ts": "server",

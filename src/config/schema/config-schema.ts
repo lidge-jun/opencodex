@@ -1,3 +1,4 @@
+import { dashboardTrustedProxySchema } from "../dashboard-trusted-proxy";
 import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
 import { validRemainingQuotaAccountIds } from "../../codex/account-use-remaining";
 import * as z from "zod/v4";
@@ -116,6 +117,9 @@ export const configSchema = z.object({
   // Malformed optional remote blocks disable only remote GUI behavior. Live
   // candidates are rejected explicitly by remoteGuiConfigError below.
   hub: hubConfigSchema.optional().catch(undefined),
+  // #8338: a malformed hand edit disables only the trusted-proxy opt-in (Remember then stays direct
+  // HTTPS or loopback only); live writes get the exact reason from diagnostics.ts.
+  dashboardTrustedProxy: dashboardTrustedProxySchema.optional().catch(undefined),
   remoteGui: remoteGuiConfigSchema.optional().catch(undefined),
   // A malformed privacy block must never be read as "unmask": .catch(undefined) drops it and
   // emailMaskingEnabled then falls back to masked, which is also what an absent block means.

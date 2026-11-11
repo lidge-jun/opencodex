@@ -188,5 +188,11 @@
   "link-child-catalog-freshness.test.ts": "clients",
   "link-child-observe.test.ts": "clients",
   "link-child-ops-routes.test.ts": "server",
-  "cli-link-check.test.ts": "cli"
+  "cli-link-check.test.ts": "cli",
+  "link-child-ops-engine.test.ts": "clients",
+  "link-child-ops-runners.test.ts": "clients",
+  "link-child-update-launcher.test.ts": "clients",
+  "cli-link-child-ops.test.ts": "cli",
+  "sync-fanout-select-restart.test.ts": "cli",
+  "sync-command-child-flags.test.ts": "cli"
 }

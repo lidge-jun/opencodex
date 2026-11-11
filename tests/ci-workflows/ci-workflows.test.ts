@@ -312,7 +312,7 @@ describe("GitHub Actions hardening", () => {
     } | undefined;
     expect(macosControlJob?.name).toBe("macos control");
     expect(macosControlJob?.needs).toBe("changes");
-    expect(macosControlJob?.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')");
+    expect(macosControlJob?.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && github.event.inputs.lane == 'macos-control'");
     expect(macosControlJob?.["runs-on"]).toBe("macos-latest");
     expect(macosControlJob?.strategy).toBeUndefined();
     const macosControlSteps = macosControlJob?.steps ?? [];
@@ -737,9 +737,9 @@ describe("GitHub Actions hardening", () => {
     const packageJson = JSON.parse(await readText("package.json")) as { scripts?: Record<string, string> };
     expect(packageJson.scripts?.prepublishOnly).toContain("bun run audit:high");
     expect(workflow).toContain("npm run prepublishOnly");
-    expect(count(workflow, 'node .github/scripts/release-evidence.cjs check "$SOURCE_SHA"')).toBe(2);
-    expect(count(workflow, 'node .github/scripts/release-evidence.cjs service-range "$SOURCE_SHA" "$baseline"')).toBe(2);
-    expect(count(workflow, 'node .github/scripts/release-evidence.cjs service "$SOURCE_SHA"')).toBe(2);
+    expect(count(workflow, 'node .github/scripts/release-evidence.cjs check "$SOURCE_SHA"')).toBe(3);
+    expect(count(workflow, 'node .github/scripts/release-evidence.cjs service-range "$SOURCE_SHA" "$baseline"')).toBe(3);
+    expect(count(workflow, 'node .github/scripts/release-evidence.cjs service "$SOURCE_SHA"')).toBe(3);
 
     // Dry-run first by default; tokenless trusted publishing only.
     expect(workflow).toMatch(/dry-run:[\s\S]*?default: true/);
