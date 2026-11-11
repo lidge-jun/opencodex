@@ -134,6 +134,20 @@ function run(scenario: Scenario): Outcome {
 }
 
 describe("disconnect after Codex edited config.toml (O9)", () => {
+  test("putting the web_search line back keeps every other byte of a mixed CRLF/LF file", () => {
+    const mixed = 'model_provider = "openai"\r\n[notice]\nhide_full_access_warning = true\r\n[projects."/srv/work/project"]\ntrust_level = "trusted"\n';
+    const out = run({ config: mixed, replacedWebSearch: 'web_search = "live"' });
+    expect(out.error).toBeNull();
+    expect(out.config).toBe('model_provider = "openai"\r\nweb_search = "live"\r\n[notice]\nhide_full_access_warning = true\r\n[projects."/srv/work/project"]\ntrust_level = "trusted"\n');
+  }, SPAWN_BUDGET_MS);
+
+  test("putting the web_search line back lands after a root multiline value, not inside it", () => {
+    const config = 'model_provider = "openai"\ndeveloper_instructions = """\nfirst\n\nsecond\n"""\n' + CODEX_LINES;
+    const out = run({ config, replacedWebSearch: 'web_search = "live"' });
+    expect(out.error).toBeNull();
+    expect(out.config).toBe('model_provider = "openai"\ndeveloper_instructions = """\nfirst\n\nsecond\n"""\nweb_search = "live"\n' + CODEX_LINES);
+  }, SPAWN_BUDGET_MS);
+
   test("a web_search line OpenCodex set aside is put back, alone, and the disconnect completes", () => {
     // While routed, OpenCodex removed the person's own root web_search line and journaled it.
     const out = run({ config: ROUTING_GONE, replacedWebSearch: 'web_search = "live"' });

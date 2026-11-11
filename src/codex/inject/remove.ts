@@ -198,18 +198,21 @@ export function remainingOpencodexConfigKeys(rawContent: string): string[] {
  * there is nothing to put back. The caller must re-check the result for OpenCodex settings.
  */
 export function withReplacedWebSearchRestored(rawContent: string): string | null {
-  const line = journaledReplacedRootWebSearch();
+  const line = journaledReplacedRootWebSearch()?.replace(/\r?\n$/, "");
   if (!line || rootAssignmentKey(line) !== "web_search") return null;
-  const eol = dominantEol(rawContent);
-  const { bom, lines, rootEnd } = rootSourceLines(applyEol(rawContent, "\n"));
+  // Work on the file's own lines and endings: a mixed CRLF/LF file keeps every existing byte.
+  const { bom, lines, rootEnd } = rootSourceLines(rawContent);
   if (lines.slice(0, rootEnd).some(entry => entry.structural && rootAssignmentKey(entry.text) === "web_search")) return null;
   // Insert after the last non-blank root line, so a blank separator before the first table stays put.
   let at = rootEnd;
   while (at > 0 && lines[at - 1]!.structural && lines[at - 1]!.text.trim() === "") at -= 1;
-  const inserted = { text: line.trim(), eol: "\n" as const, structural: true };
-  if (at > 0 && lines[at - 1]!.eol === "") lines[at - 1] = { ...lines[at - 1]!, eol: "\n" };
-  const next = [...lines.slice(0, at), inserted, ...lines.slice(at)];
-  return applyEol(bom + sourceText(next), eol);
+  const before = at > 0 ? lines[at - 1]! : null;
+  // The new line takes the ending of the line it follows; only a final line with no ending gains one.
+  const eol = before?.eol || (dominantEol(rawContent) === "\r\n" ? "\r\n" as const : "\n" as const);
+  const next = [...lines];
+  if (before && before.eol === "") next[at - 1] = { ...before, eol };
+  next.splice(at, 0, { text: line, eol, structural: true });
+  return bom + sourceText(next);
 }
 
 
