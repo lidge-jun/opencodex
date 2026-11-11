@@ -8,6 +8,7 @@ import type { LinkRecord } from "./store";
 import { RESTART_SKIPPED, type ChildJobItem, type ChildOpsEnv, type ChildRestart, type ItemOutcome,
   type ItemRunner } from "./child-ops-types";
 import { withoutCarriedFields } from "./child-observations";
+import { pinnedSyncRanNothing, RESTART_RESULT_UNKNOWN, syncThenRestart } from "./sync-then-restart";
 
 export const SYNC_TIMEOUT_MS = 180_000;
 /** The --not-after window, counted on the Child's clock from the plan probe (M9). */
@@ -23,8 +24,6 @@ export const APPLY_MUTATION_BOUND_MAX_MS = 900_000;
 export const POST_UPDATE_SYNC_RETRY_MS = 30_000;
 /** Revision 4: how long an uncertain update stays recorded for recovery (070 imports it from here). */
 export const UNCERTAIN_RECOVERY_WINDOW_MS = 3_600_000;
-/** Revision 6 F2: a restarting sync that may have run but whose result is unknown. */
-export const RESTART_RESULT_UNKNOWN = "restart-result-unknown";
 const iso = (ms: number): string => new Date(ms).toISOString();
 type Platform = "posix" | "windows";
 type SyncResult = NonNullable<ChildJobItem["sync"]>;
@@ -94,11 +93,7 @@ async function runPinnedSync(record: LinkRecord, platform: Platform, restart: Ch
   const sync: SyncResult = classifySyncResult(result, { expectSelectedKind: restart !== "none" });
   // Only a synced Home-run sync proves the Child applied the catalog; a GET of /v1/catalog proves only a fetch.
   if (sync.state === "synced" && etag !== null) env.writeObservation(record.id, { catalogSyncedEtag: etag });
-  // F2: the gate refused before selecting an ocx (121, 125, 126, 127 without the selection marker), or the Child's sync
-  // declined (skipped). A dropped channel (255), a failure after selection or a timeout may have restarted Codex.
-  const selected = /^ocx-fanout:selected:/m.test(result.stderr);
-  const notRun = sync.state === "skipped" || (sync.state === "failed" && !selected && [121, 125, 126, 127].includes(result.code));
-  return { sync, notRun };
+  return { sync, notRun: pinnedSyncRanNothing(sync, result) };
 }
 
 /** The pinned sync --expect-link of one Child, with an optional restart flag (D13). */
@@ -107,26 +102,16 @@ export async function pinnedSync(record: LinkRecord, platform: Platform, restart
 }
 
 /**
- * The pinned sync with an optional restart that obeys A2: unsupported where it cannot run, withheld while busy.
- * Revision 4 (4529521916): the catalog sync runs first without a restart; activity is read after it; the restart then
- * goes out as a second pinned sync, which is close to a no-op sync. The gap between the activity read and the restart is
- * one SSH round trip instead of a whole sync (up to SYNC_TIMEOUT_MS). It cannot be closed from the Home: the restart
- * executes on the Child, and holding a relayed request at the Home would not save a turn whose app-server is restarting.
+ * The pinned sync with an optional restart that obeys A2: unsupported where it cannot run, withheld while busy. The
+ * sequence lives in sync-then-restart.ts, shared with ocx sync --restart-children.
  */
 async function syncWithRestart(record: LinkRecord, platform: Platform, requested: ChildRestart,
   env: ChildOpsEnv): Promise<{ sync: SyncResult; restart?: RestartReport; restartUnknown?: true }> {
-  if (requested === "none") return { sync: await pinnedSync(record, platform, "none", env) };
-  const sync = await pinnedSync(record, platform, "none", env);
-  if (platform !== "posix" || record.childKind === "ephemeral") return { sync, restart: { requested, outcome: "unsupported" } };
-  if (sync.state !== "synced") return { sync, restart: { requested, outcome: "not-run" } };
-  if (linkBusy(record, env)) return { sync, restart: { requested, outcome: "skipped" } };
-  const second = await runPinnedSync(record, platform, requested, env);
-  // 4529521993: a record without childKind can still select ocx-child, which ignores the flag (010 selected-kind marker).
-  if (second.sync.executable === "ocx-child") return { sync, restart: { requested, outcome: "unsupported" } };
-  if (second.sync.state === "synced") return { sync, restart: { requested, outcome: "requested" } };
-  if (second.notRun) return { sync, restart: { requested, outcome: "not-run" } };
-  // F2: the restart was sent and its result is unknown; the item reports the second sync beside it.
-  return { sync: second.sync, restart: { requested, outcome: "requested" }, restartUnknown: true };
+  const { sync, restart, restartUnknown } = await syncThenRestart({ requested, platform, childKind: record.childKind,
+    runPinned: next => runPinnedSync(record, platform, next, env),
+    // linkBusy's rule: unknown (null) counts as in flight.
+    readActivity: async () => env.activity(record.id) });
+  return { sync, ...(restart ? { restart } : {}), ...(restartUnknown ? { restartUnknown } : {}) };
 }
 
 export function syncOutcome(sync: SyncResult): ItemOutcome {

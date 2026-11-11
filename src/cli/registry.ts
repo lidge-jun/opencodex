@@ -188,11 +188,11 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "sync",
-    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only]",
+    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only] [--child <linkId>]... [--restart-children[=app-server] | --restart-children=codex --yes]",
     summary: "Fetch provider models and inject them into Codex config.",
     details: [
       "A current Home catalog fans out to linked Children; --local-only disables fan-out and --json emits the result. Partial fan-out exits 6.",
-      "Fan-out never requests a Codex app or app-server restart on a Child; use GOAT or ocx sync --restart-codex on the Child. The Child's pinned sync may restart its OpenCodex client runtime after applying changed Home settings.",
+      "--child <linkId> (repeatable) limits fan-out to those links; the others report not-selected. A Child held by a Child operation is skipped as child-busy. Fan-out requests no Codex restart on a Child unless --restart-children[=app-server] or --restart-children=codex --yes is given; the Home then skips the restart, never the sync, for a Child with a model request in flight (restart-skipped:link-active), on Windows Children, and on ocx-child, and exits 6. The Child's pinned sync may restart its OpenCodex client runtime after applying changed Home settings.",
       "After writing the catalog, warns if long-lived Codex app-server processes are still running.",
       "An update in flight or an unavailable update/sync mutex refuses without changes: update-in-flight, exit 7. Another sync reports sync-in-progress, exit 1.",
       "--restart-codex restarts the app-servers AND fully quits and relaunches the Codex desktop app on macOS, Linux and Windows, after catalog/cache writes or a committed configuration change. It ends live conversations.",
