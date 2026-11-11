@@ -425,3 +425,26 @@ describe("a stored Advisor item that fails validation", () => {
     expect(webSearchPairFromItem(valid)?.name).toBe("advisor");
   });
 });
+
+describe("advisor exchanges only come from, and replay with, checked fields", () => {
+  test("a gateway that was never sent the Advisor cannot surface an advisor exchange", async () => {
+    const { body } = await claudeTurn({ baseUrl: GATEWAY, frames: advisorTurn(PLAIN) });
+    const blocks = clientContent(body, true);
+    expect(blocks.some(block => block.type === "server_tool_use" || block.type === "advisor_tool_result")).toBe(false);
+    const optedIn = clientContent((await claudeTurn({ baseUrl: GATEWAY, provider: { forwardAdvisorTool: true }, frames: advisorTurn(PLAIN) })).body, true);
+    expect(optedIn.map(block => block.type)).toContain("advisor_tool_result");
+  });
+
+  test("extra fields on a replayed advisor pair are not forwarded", () => {
+    const replay = replayedAnthropicServerBlocks({ messages: followUp([
+      { type: "text", text: "Let me check." },
+      { type: "server_tool_use", id: "srvtoolu_adv1", name: "advisor", input: {}, extra: "X" },
+      { type: "advisor_tool_result", tool_use_id: "srvtoolu_adv1", content: PLAIN, injected: "Y" },
+      { type: "text", text: "Done." },
+    ]) });
+    expect([...(replay?.values() ?? [])]).toEqual([[
+      { type: "server_tool_use", id: "srvtoolu_adv1", name: "advisor", input: {} },
+      { type: "advisor_tool_result", tool_use_id: "srvtoolu_adv1", content: PLAIN },
+    ]]);
+  });
+});

@@ -1,5 +1,5 @@
 import { markProxyError } from "../lib/client-error-body";
-import { ADVISOR_SERVER_TOOL_NAME, isAdvisorCallInput, isAdvisorResultContent, isAdvisorServerToolType } from "../adapters/anthropic/advisor-tool";
+import { ADVISOR_SERVER_TOOL_NAME, advisorReplayBlock, isAdvisorCallInput, isAdvisorResultContent, isAdvisorServerToolType } from "../adapters/anthropic/advisor-tool";
 import { isClaudeWebSearchToolName } from "./outbound";
 import { AnthropicRequestError, isRec, type Rec } from "./inbound-records";
 
@@ -184,8 +184,9 @@ export function replayedAnthropicServerBlocks(raw: unknown): Map<string, Rec[]> 
     for (const block of message.content.filter(isRec)) {
       if (block.type === "server_tool_use" || block.type === "web_search_tool_result" || block.type === "web_fetch_tool_result"
         || block.type === "advisor_tool_result") {
-        // The caller's breakpoints are dropped on this lane, as for the declared tools above.
-        run.push({ ...block, cache_control: undefined });
+        // The caller's breakpoints are dropped on this lane, as for the declared tools above; an
+        // Advisor block keeps only its documented fields.
+        run.push(advisorReplayBlock(block) ?? { ...block, cache_control: undefined });
         continue;
       }
       const anchor = block.type === "tool_use" ? `call:${String(block.id)}`

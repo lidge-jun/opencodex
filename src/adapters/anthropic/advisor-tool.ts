@@ -73,6 +73,20 @@ export function isAdvisorResultContent(content: unknown): boolean {
     || (fields.optional.includes(key) && typeof content[key] === "string"));
 }
 
+/**
+ * A replayed Advisor block rebuilt from the fields Anthropic documents, so nothing a client added to
+ * its history rides along; undefined for any other block, which the caller copies as before.
+ */
+export function advisorReplayBlock(block: Rec): Rec | undefined {
+  if (block.type === "server_tool_use" && block.name === ADVISOR_SERVER_TOOL_NAME) {
+    return { type: "server_tool_use", id: block.id, name: ADVISOR_SERVER_TOOL_NAME, input: block.input };
+  }
+  if (block.type === "advisor_tool_result") {
+    return { type: "advisor_tool_result", tool_use_id: block.tool_use_id, content: block.content };
+  }
+  return undefined;
+}
+
 /** Whether a declared catalog or replay run names the Advisor. */
 export function hasAdvisorDeclaration(tools: readonly Rec[] | undefined): boolean {
   return tools?.some(tool => isAdvisorServerToolType(tool.type)) === true;

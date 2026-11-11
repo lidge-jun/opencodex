@@ -41,7 +41,7 @@ import { resolveReasoningCapabilities } from "../providers/reasoning-capabilitie
 import { declaresThinkingToggleWire, reasoningControlsAreUnsupported } from "./reasoning-controls";
 import { applyAgentRouterLanguageFraming, isAgentRouterEndpoint } from "./agentrouter";
 import { anthropicCacheWrite1hTokens, resolveAnthropicCacheRetention, type AnthropicCacheRetention } from "./anthropic/cache-retention";
-import { advisorServerExchange, planAnthropicServerTools } from "./anthropic/advisor-tool";
+import { advisorServerExchange, advisorServerToolDestination, planAnthropicServerTools } from "./anthropic/advisor-tool";
 import { claudeFamilyVersion, rejectsCombinedSampling, rejectsForcedToolChoice, rejectsSamplingParameters, supportsExplicitThinkingDisable, usesAdaptiveThinking, usesBetweenToolsFloor } from "./anthropic-model-contract";
 
 /** Map a user content part to an Anthropic content block (text or image source). */
@@ -1460,7 +1460,10 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 }
                 if (block.type === "advisor_tool_result") {
                   // The Advisor rides the same lane: both blocks verbatim, keyed by the upstream srvtoolu_ id.
-                  const exchange = advisorServerExchange(serverSearch, block as Record<string, unknown>);
+                  // Only a destination that receives the Advisor may surface one, so a gateway never sent
+                  // it cannot plant an exchange that a later first-party turn would replay.
+                  const exchange = advisorServerToolDestination(provider)
+                    ? advisorServerExchange(serverSearch, block as Record<string, unknown>) : undefined;
                   if (!exchange) break;
                   yield { type: "web_search_call_begin", id: exchange.blocks.use.id as string };
                   yield { type: "web_search_call_end", id: exchange.blocks.use.id as string, queries: [],
