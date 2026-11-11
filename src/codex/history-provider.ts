@@ -490,6 +490,29 @@ export function preflightCodexHistoryInjection(
   }
 }
 
+/**
+ * Read-only: does this store hold an `openai`-tagged thread Codex has already paginated (#8191)?
+ * For a transition whose preflight scans no rows (client compaction relabels nothing) but which
+ * still makes `opencodex` the default provider. Null when the store cannot be read.
+ */
+export function hasPaginatedOpenaiThreads(stateDbPath?: string): boolean | null {
+  let db: Database | undefined;
+  try {
+    const resolvedPath = stateDbPath ?? resolveCodexStateDbPath();
+    if (!existsSync(resolvedPath)) return false;
+    db = openCodexStateForPreflight(resolvedPath);
+    const columns = db.query<{ name: string }, []>("PRAGMA table_info(threads)").all();
+    if (!columns.some(column => column.name === "history_mode")) return false;
+    return db.query<{ hit: number }, []>(
+      "SELECT 1 AS hit FROM threads WHERE model_provider = 'openai' AND history_mode = 'paginated' LIMIT 1",
+    ).get() !== null;
+  } catch {
+    return null;
+  } finally {
+    db?.close();
+  }
+}
+
 function integrityFailureResult(error: CodexHistoryIntegrityError): CodexHistorySyncResult {
   return {
     rows: error.progress.rows,

@@ -82,6 +82,11 @@ export function passiveCodexVersion(): string | null {
 /** The first Codex that refuses to resume a thread under another provider (codex-cli 0.166.0-alpha). */
 export const CODEX_PROVIDER_LOCKED_SINCE = "0.166.0-alpha.0";
 
+/** True when the known Codex refuses to resume a thread under another provider. */
+export function codexLocksResumeProvider(codexVersion?: string | null): boolean {
+  return Boolean(codexVersion) && compareCodexVersions(codexVersion!, CODEX_PROVIDER_LOCKED_SINCE) >= 0;
+}
+
 /**
  * Named next actions for a home where the retained override cannot work any more. Each is a
  * configuration key the operator already owns; none touches the threads.
@@ -115,7 +120,7 @@ export function applyPaginatedOpenaiCompat(
   }
   // Checked before every other branch: on 0.166+ neither the retained override, an admission
   // token nor a user-owned root line keeps an openai-tagged thread resumable under opencodex.
-  if (codexVersion && compareCodexVersions(codexVersion, CODEX_PROVIDER_LOCKED_SINCE) >= 0) {
+  if (codexVersion && codexLocksResumeProvider(codexVersion)) {
     return {
       refusal: HISTORY_PAGINATED_OPENAI_PROVIDER_LOCKED,
       content,
