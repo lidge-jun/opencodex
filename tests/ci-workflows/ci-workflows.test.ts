@@ -312,7 +312,7 @@ describe("GitHub Actions hardening", () => {
     } | undefined;
     expect(macosControlJob?.name).toBe("macos control");
     expect(macosControlJob?.needs).toBe("changes");
-    expect(macosControlJob?.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')");
+    expect(macosControlJob?.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && github.event.inputs.lane == 'macos-control'");
     expect(macosControlJob?.["runs-on"]).toBe("macos-latest");
     expect(macosControlJob?.strategy).toBeUndefined();
     const macosControlSteps = macosControlJob?.steps ?? [];
