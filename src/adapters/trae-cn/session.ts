@@ -373,7 +373,19 @@ export async function openTraeSession(
             const frame = await client.nextUpdate();
             if (!frame) break;
             if (frame.kind !== "update" || frame.sessionId !== sessionId) continue;
-            for (const event of traePromptEvents(sessionId, frame.update)) {
+            let promptEvents: AdapterEvent[];
+            try {
+              promptEvents = traePromptEvents(sessionId, frame.update);
+            } catch {
+              const usage = completionReceived ? traeUsage(receivedCompletion) : undefined;
+              emit({ type: "error", message: "TRAE CN ACP ended with an invalid protocol response.",
+                code: "trae_acp_protocol_error", status: 502, errorType: "upstream_error", retryable: false,
+                ...(usage ? { usage } : {}) });
+              client.write({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
+              await client.close();
+              return;
+            }
+            for (const event of promptEvents) {
               if (event.type === "error") {
                 const usage = completionReceived ? traeUsage(receivedCompletion) : undefined;
                 emit({ ...event, ...(usage ? { usage } : {}) });

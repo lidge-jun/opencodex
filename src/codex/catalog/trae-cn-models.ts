@@ -100,12 +100,13 @@ export async function fetchTraeCnProviderModels(
   // Observed gathers cannot bind the CLI's live sign-in to their captured auth snapshot.
   if (!allowDiscovery) return observed(stale ?? configured, "degraded");
   if (isModelsFetchCoolingDown(name)) return observed(stale ?? configured, "degraded");
+  const generation = captureModelCacheGeneration(name);
   return withDiscoveryTurn(name, async () => {
+    if (!isModelCacheGenerationCurrent(name, generation)) return observed(configured, "degraded");
     const lockedFresh = getPinnedCached(name) ?? getFreshCached(name, ttlMs, Date.now());
     if (lockedFresh) return observed(lockedFresh, "authoritative");
     const lockedStale = getStaleCached(name);
     if (isModelsFetchCoolingDown(name)) return observed(lockedStale ?? configured, "degraded");
-    const generation = captureModelCacheGeneration(name);
     const currentFallback = (): ProviderModelsResult => observed(getStaleCached(name) ?? configured, "degraded");
     try {
       const session = await openTraeSession(provider.baseUrl, { timeoutMs: 15_000 }, undefined, provider);

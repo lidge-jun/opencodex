@@ -12,7 +12,8 @@ The vendor does not document the discovery fields or
 guarantee their account scope. The JSON-RPC reader bounds frames, update queues, stderr,
 and request time; cancellation and cleanup terminate the child. Text and thought chunks retain their
 distinct adapter events. Tool input/replay and non-text media are rejected, permission requests are
-denied and terminate the session. Tool notifications fail with `trae_tool_call_unsupported`; only a
+denied and terminate the session. Tool notifications fail with `trae_tool_call_unsupported`; tool and malformed-update
+refusals retain usage already received in the prompt reply. Only a
 normal `end_turn` completion without text fails with `trae_empty_response`. An outputless `max_tokens`
 completion retains its truncation verdict and maps to an incomplete Responses result. ACP
 `max_turn_requests` emits an incomplete turn with that limit reason and retains partial text and usage.
@@ -29,7 +30,8 @@ user home plus `.trae`, before HOME isolation. Provider `proxy`/`noProxy` overri
 are refused before CLI startup, including explicit direct routing.
 Observed-auth gathers and management admission use only cached evidence; only refreshing gathers and explicit connection
 probes may launch the CLI. Automatic refresh prepares CLI-owned evidence in its independent background
-source phase. Discovery sessions are serialized per provider, so a slow older session cannot overwrite a newer roster.
+source phase. Discovery sessions are serialized per provider; each gather binds cache generation before queueing and
+revalidates it after waiting, so a slow older or replaced provider snapshot cannot overwrite a newer roster.
 The source phase revalidates the gather's content revision before pinning each authoritative result and discovering the next provider. Those pins survive
 through catalog convergence and connected-client refresh before release, so later ordinary cache eviction cannot
 discard an earlier roster. Every pinned content revision is revalidated before publication;
