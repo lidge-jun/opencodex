@@ -196,8 +196,9 @@ const RULES: readonly Rule[] = [
   rule("auth.too_many", "error", /^(?:Received disconnect from .+: )?Too many authentication failures(?: \[preauth\])?$/, fixed("Too many authentication failures")),
   rule("connect.failed", "error", /^ssh: connect to host .+ port \d{1,5}: (.+)$/, m => "ssh: connect to host <host> port <port>: " + reason(m[1])),
   rule("connect.resolve_failed", "error", /^ssh: Could not resolve hostname .+?: (.+)$/, m => "ssh: Could not resolve hostname <host>: " + reason(m[1])),
-  // ssh logs the next four at INFO before exiting, so LogLevel=ERROR never shows them; they must not
-  // change the exit class while capture runs at DEBUG1.
+  // Rules marked "verbose" here are lines ssh logs at INFO or VERBOSE (logdie, logit, verbose_f), so
+  // LogLevel=ERROR never shows them and they must not change the exit class while capture runs at
+  // DEBUG1. "Connection ... closed by remote host." is written by quit_message at every level.
   rule("connect.closed_by", "verbose", /^Connection closed by .+ port \d{1,5}$/, fixed("Connection closed by <address> port <port>")),
   rule("connect.closed_remote", "error", /^Connection (?:to .+ )?closed by remote host\.?$/, fixed("Connection closed by remote host.")),
   rule("connect.reset_by", "verbose", /^Connection reset by .+ port \d{1,5}$/, fixed("Connection reset by <address> port <port>")),
