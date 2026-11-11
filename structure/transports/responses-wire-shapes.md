@@ -235,7 +235,7 @@ outside any item and is read directly by the undeclared-tool guard.
 The restorable map is narrowed by `tool_choice` the same way `authorizedAliases` narrows the
 namespace layer: upstream still receives the whole aliased catalog, but a tool the caller
 disabled for the turn cannot be restored back into an executable client name.
-Arguments, user text, and schema property names are never rewritten.
+Arguments, user text, and schema property names are never rewritten. Mixed-model Responses providers resolve native custom-tool support through the exact final wire model's `modelCapabilities.responsesCustomTools` declaration before adapter construction. An absent model declaration inherits provider `supportsResponsesCustomTools` (operator value or registry default); when neither is set the legacy native passthrough stays. Native compact applies only this resolved flag (`projectCapturedCustomToolPolicy`) and keeps the provider's own wire, so a `modelAdapters` override cannot rewrite a native compaction blob. `src/server/adapter-resolve.ts` projects the resolved value onto the call-local provider used by HTTP, WebSocket, continuation, retry, rotation, fallback and combo rebuilds, so no saved provider object is mutated and no model-name family is inferred. The native compact path in `src/server/responses/compact.ts` applies the same lowering and final validation to complete custom call/result history before its direct send; portable compaction already uses the ordinary adapter path.
 > Decision record: [ADR-0042](../decisions/ADR-0042-responses-http-sse.md)
 
 > Decision record: [ADR-0043](../decisions/ADR-0043-responses-http-sse.md)
