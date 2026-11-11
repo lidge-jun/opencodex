@@ -1626,6 +1626,12 @@ describe("provider moderation refusal never outranks a hard refusal", () => {
     ["an echoed value whose quote holds an apostrophe", body({ message: "Invalid enum value 'it's refused by moderation' for field mode" }), undefined, undefined],
     ["an echoed value in backticks", body({ message: "Unknown tool name `refused by moderation` in tools[0]" }), undefined, undefined],
     ["a JSON-escaped nested hard code", '{"error":{"code":"content_filter","message":"refused by moderation","inner":{"code":"\\u0062io_policy"}}}', "content_filter", undefined],
+    // The policy-fallback path passes only error.code; the parsed root still speaks.
+    ...(["context_length_exceeded", "invalid_request_error", "client_closed_request", "client_cancelled"] as const).map(root =>
+      [`a ${root} root read from the body when only the nested code is passed`, body({ code: "content_filter", message: "The input was refused by moderation." }, { code: root }), "content_filter", undefined] as [string, string, string | undefined, string | undefined]),
+    ["an echoed value in curly double quotes", body({ message: "Invalid value: \u201cblocked by moderation\u201d for messages[0].content", param: "messages[0].content" }), undefined, undefined],
+    ["an echoed value in guillemets", body({ message: "Invalid value: \u00abblocked by moderation\u00bb for messages[0].content", param: "messages[0].content" }), undefined, undefined],
+    ["an echoed value in curly single quotes holding an apostrophe", body({ message: "Invalid value: \u2018it\u2019s refused by moderation\u2019 for mode" }), undefined, undefined],
   ];
   for (const [label, message, code, rootCode] of cases) {
     test(label, () => {

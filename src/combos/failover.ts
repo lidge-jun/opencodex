@@ -1014,6 +1014,12 @@ function isReflectedValidationText(text: string): boolean {
   );
 }
 
+/** Opening quote characters and the character that closes each, ASCII and typographic. */
+const QUOTE_PAIRS: Record<string, string> = {
+  "\"": "\"", "`": "`",
+  "\u201c": "\u201d", "\u201e": "\u201c", "\u2018": "\u2019", "\u00ab": "\u00bb", "\u2039": "\u203a",
+};
+
 /**
  * A moderation phrase echoed inside quotes is a reflected parameter value (Invalid enum value
  * 'blocked by moderation'), not a verdict, so verdict evidence must appear in prose. One pass
@@ -1029,15 +1035,17 @@ function unquotedProse(text: string): string {
       i += 1;
       continue;
     }
-    // An apostrophe between letters ("it's") is literal both outside and inside a quote.
-    const inWordApostrophe = ch === "'" && i > 0 && /[A-Za-z]/.test(text[i - 1]!) && /[A-Za-z]/.test(text[i + 1] ?? "");
+    // An apostrophe between letters ("it's", "it\u2019s") is literal both outside and inside a quote.
+    const inWordApostrophe = (ch === "'" || ch === "\u2019") && i > 0
+      && /[A-Za-z]/.test(text[i - 1]!) && /[A-Za-z]/.test(text[i + 1] ?? "");
     if (quote) {
       if (ch === quote && !inWordApostrophe) quote = null;
       out += " ";
       continue;
     }
-    if (ch === "\"" || ch === "`" || (ch === "'" && !inWordApostrophe)) {
-      quote = ch;
+    const closing = ch === "'" ? (inWordApostrophe ? undefined : "'") : QUOTE_PAIRS[ch];
+    if (closing !== undefined) {
+      quote = closing;
       out += " ";
       continue;
     }
@@ -1186,6 +1194,9 @@ export function isProviderModerationRefusal(
         moderationCodeSeen = true;
       }
     }
+    // A root verdict code stops on its own even when the caller passed only the nested code
+    // (the policy-fallback path reads error.code alone), so read the parsed root here too.
+    if (rootCode !== "" && rootCodeStatesVerdict(rootCode)) return false;
 
     const errorObjectModerationCode = errCode === "moderation_refusal" || errCode === "content_filter";
     if (typeof e.param === "string" && e.param) {
