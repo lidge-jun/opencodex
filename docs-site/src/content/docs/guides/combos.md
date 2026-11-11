@@ -173,6 +173,22 @@ each request starts with Anthropic. A retryable Anthropic failure moves that req
 retryable OpenAI failure can move it to Google. A terminal error stops immediately instead of
 trying the remaining targets.
 
+A provider's HTTP 400 response can still be target-specific. OpenRouter's opaque provider wrapper
+(`Provider returned error` with numeric `code: 400`, no `type`, and `metadata.raw: "ERROR"`) is
+treated as target-local and allows the combo to try the next target without cooling the failed one.
+Typed uncoded 400s, known malformed `response_format` schema errors, and an envelope whose root
+states its own terminal code remain terminal; a root that states a hop signal of its own
+(`model_not_found`, `insufficient_quota`, `usage_limit_exceeded`, `free_rate_limited`,
+`input_admission_refused` or `unsupported_input_modality`) adds no new verdict, and an empty
+code is treated as no code. Recognized target incompatibilities described later in this guide
+still advance.
+
+A streamed error event that carries no status of its own but an integral numeric `code` between
+400 and 599 is judged with that code as its HTTP status, so it gets the same decision and cooldown
+as the matching HTTP response. Before output starts, a generic streamed 400, 409, 413 or 422 therefore
+stops the combo as it does over HTTP, a 401, 402 or 403 cools the provider, and a recognized context
+overflow still advances.
+
 ### Round-robin: smooth weighted batches
 
 `round-robin` uses smooth weighted round-robin. A larger target weight gives that target a larger
@@ -685,7 +701,7 @@ provider, see [Fallback off](/guides/fallback-off/).
 | Confirmed context-window overflow before output, including HTTP 400 | Try the next untried eligible target without cooling this target; another model may have a larger window. Exhaustion returns the first confirmed HTTP 400 context-length error; a context refusal sent with another status still advances but is not retained. |
 | Client cancellation (499), `origin_rejected`, cyber-policy refusal, or other invalid request | Stop and return the error; another target would not make the request valid. |
 | Exact HTTP 400 saying a model is not supported when using Codex with a ChatGPT account | Try the next declared target before output commitment. The message must be the whole refusal in `detail`, `error.message`, or bare text; competing `detail` and `error` envelopes stay terminal. This does not quarantine the account or cool every model on the provider. |
-| Structured HTTP 400 rejecting optional `user`, an unsupported reasoning effort, model-scoped image input, or input media the route cannot read (`unsupported_input_modality`) | Hop before output commitment without cooling; see request-local target compatibility below. |
+| Structured HTTP 400 rejecting optional `user`, an unsupported reasoning effort, model-scoped image input, or input media the route cannot read (`unsupported_input_modality`) | For an effort refusal, try the next lower published rung on the same target while the send budget allows; if no rung works, hop before output commitment without cooling if the refusal matches a recognized compatibility shape, otherwise stay terminal. Other listed mismatches hop without cooling; see request-local target compatibility below. |
 | First tool call of a Responses turn run by an in-process adapter (`runTurn`) that the current request did not declare, before any output or replay-unsafe side effect | Cool the target and hop with the same tool catalog. After visible output or a replay-unsafe side effect the refusal is final. Chat Completions and Anthropic Messages requests are unchanged. |
 | Any other unclassified error | Stop and return the error. |
 
@@ -832,7 +848,7 @@ OpenCodex also commits the current target instead of growing memory without a bo
 
 When routing Claude Code to the canonical ChatGPT Codex backend, OpenCodex removes the unsupported top-level `user` metadata field without changing the session/cache key, input messages, tool schemas, or safety identifiers. Public Responses API and noncanonical forward gateways keep that field.
 
-A combo can also advance after an intact HTTP 400 `invalid_request_error` that specifically rejects `user`, reports `unsupported_value` for `reasoning.effort`/`reasoning_effort`, or reports `param: input` with an exact model-scoped `does not support image inputs` rejection. A route that refuses the request's media with code `unsupported_input_modality`, such as image input sent to a CLI provider route without a verified multimodal contract, advances the same way. This is a mismatch for that request, not evidence that the target is unhealthy, so it records no cooldown. This compatibility recovery does not silently change `none` into a different effort or broaden this exception to arbitrary invalid requests. Policy refusals, cancellation and already-committed output remain non-replayable. A single-target request still returns an unresolved upstream rejection.
+A combo can also advance after an intact HTTP 400 `invalid_request_error` that specifically rejects `user`, reports `unsupported_value` for `reasoning.effort`/`reasoning_effort`, or reports `param: input` with an exact model-scoped `does not support image inputs` rejection, and after the exact vendor envelope `{"code":"invalid-argument","error":"Invalid reasoning effort."}`. When a combo target refuses the requested reasoning effort, the combo first retries that target at the next lower published effort rung, one rung per refusal and within the shared send budget; this applies to any recognized effort refusal. If no lower rung succeeds, a refusal in one of the shapes above advances to another target without cooling the rejected one, keeping that target's original 400 when the next rung has no send left; other effort refusals stay terminal. A route that refuses the request's media with code `unsupported_input_modality`, such as image input sent to a CLI provider route without a verified multimodal contract, advances the same way. These are mismatches for this request, not evidence that the target is unhealthy. Direct requests retain their single effort-downgrade repair. Compatibility recovery does not silently change `none` into a different effort or broaden the combo hop to arbitrary invalid requests. Policy refusals, cancellation and already-committed output remain non-replayable. A single-target request still returns an unresolved upstream rejection.
 
 ## Tool calls stay on one target
 
@@ -1067,6 +1083,9 @@ it has already been attempted for this request, or an encrypted v2 task excludes
 provider state and recent upstream errors. When no target was attempted, the error message lists
 why each target was skipped, for example
 `No available targets for combo (2 targets; target 1 (openai): quota exhausted; target 2 (anthropic): cooldown)`. The client error names targets by position and provider only; the service log records the target's position and provider when it fails or when the proxy waits out its cooldown.
+When a cooling target sets the earliest recovery, the response carries it in `Retry-After` and the
+message names the same wait, for example `(retry in ~2m)`, so a client that hides the header still
+shows it. The Claude Messages listener adds the same wait to its fixed combo sentence.
 For cooldowns, follow an observed `Retry-After` value first;
 Codex reset headers also take precedence over `cooldownMs`.
 If neither upstream signal is usable, the configured `cooldownMs` applies, or the upstream fallback applies

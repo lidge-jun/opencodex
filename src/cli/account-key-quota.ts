@@ -1,5 +1,5 @@
 /** Public API-key quota projection; private probe identity stays on the server. */
-import { parseQuotaFailureCode, type AccountQuotaFields, type ProviderQuota, type ProviderQuotaWindow, type ProviderQuotaCreditsUsd } from "../providers/quota-types";
+import { parseQuotaFailureCode, parseQuotaUnknownReason, type AccountQuotaFields, type ProviderQuota, type ProviderQuotaWindow, type ProviderQuotaCreditsUsd, type QuotaUnknownReason } from "../providers/quota-types";
 import { terminalSafeText } from "./runtime-api";
 import type { AccountRow, FamilyRows } from "./account-api";
 import { accountPauseDetailsSchema } from "../config/schema/account-auto-pause";
@@ -98,6 +98,11 @@ export function projectApiKeyQuotaRows(value: unknown, provider: string): Family
       if (!failure) throw new Error("Malformed API-key quota response.");
       if (unavailable === true) fields.quotaFailure = failure;
     }
+    // #8397: a reason a newer proxy adds is dropped, not fatal; a non-string is malformed.
+    const unknownReason = parseQuotaUnknownReason(optionalString(row, "quotaUnknownReason"));
+    if (unknownReason) fields.quotaUnknownReason = unknownReason;
+    // Display-only: a malformed read time is dropped like an unknown reason, not fatal to the listing.
+    if (typeof row.quotaReadAt === "number" && Number.isFinite(row.quotaReadAt) && row.quotaReadAt >= 0) fields.quotaReadAt = row.quotaReadAt;
     const masked = optionalString(row, "masked");
     return { provider, type: "api-key", id, label: optionalString(row, "label") ?? masked,
       masked, active: optionalBoolean(row, "active") ?? id === activeId,
@@ -107,13 +112,37 @@ export function projectApiKeyQuotaRows(value: unknown, provider: string): Family
   return { rows, activeId, status: 200 };
 }
 
+const UNKNOWN_REASON_TEXT: Record<QuotaUnknownReason, string> = {
+  no_balance_source: "no balance source",
+  passive_not_observed: "not observed yet",
+  read_failed: "read failed",
+  not_read: "not read",
+  not_reported: "provider reported none",
+};
+export function quotaUnknownReasonText(reason: QuotaUnknownReason): string {
+  return UNKNOWN_REASON_TEXT[reason];
+}
+
+/** "read 3 min ago"; a clock skewed into the future reads as just now. */
+function readAgeText(readAt: number | undefined, now = Date.now()): string {
+  if (readAt === undefined) return "";
+  const minutes = Math.floor(Math.max(0, now - readAt) / 60_000);
+  if (minutes < 1) return "; read just now";
+  if (minutes < 60) return `; read ${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 48 ? `; read ${hours} h ago` : `; read ${Math.floor(hours / 24)} d ago`;
+}
+
 export function apiKeyQuotaText(row: AccountRow): string {
   const mode = row.quotaMode;
   if (!mode) return "unverified";
-  if (mode === "unsupported") return "unsupported";
-  if (row.quotaUnavailable) return `${mode}: unavailable${row.quotaFailure ? ` (${row.quotaFailure})` : ""}`;
+  // Without a reader there is no balance source, whichever proxy version answered.
+  if (mode === "unsupported") return `unsupported: balance UNKNOWN (${quotaUnknownReasonText("no_balance_source")})`;
+  const read = readAgeText(row.quotaReadAt);
+  const unknown = row.quotaUnknownReason ? `; balance UNKNOWN (${quotaUnknownReasonText(row.quotaUnknownReason)})` : "";
+  if (row.quotaUnavailable) return `${mode}: unavailable${row.quotaFailure ? ` (${row.quotaFailure})` : ""}${unknown}${read}`;
   const quota = row.quota;
-  if (!quota) return `${mode}: not measured`;
+  if (!quota) return unknown ? `${mode}: ${unknown.slice(2)}${read}` : `${mode}: not measured${read}`;
   const parts: string[] = [];
   for (const [label, percent] of [["5h", quota.fiveHourPercent], ["wk", quota.weeklyPercent], ["mo", quota.monthlyPercent]] as const) {
     if (percent !== undefined) parts.push(`${label} ${percent}%`);
@@ -137,5 +166,5 @@ export function apiKeyQuotaText(row: AccountRow): string {
     parts.push(`USD ${c.used}/${c.unlimited ? "unlimited" : c.limit} used; ${c.remaining} remaining (${c.percent}%)`);
   }
   if (quota.kiroCreditsUsed !== undefined || quota.kiroCreditsLimit !== undefined) parts.push(`credits ${quota.kiroCreditsUsed ?? "?"}/${quota.kiroCreditsLimit ?? "?"}`);
-  return `${mode}: ${parts.join("; ") || "not measured"}`;
+  return `${mode}: ${parts.join("; ") || "not measured"}${read}`;
 }

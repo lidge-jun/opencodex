@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+  claudeSessionUserId,
   conversationIdFromClaudeCacheKey,
   conversationIdFromClaudeMetadata,
   conversationIdFromResponsesRequest,
@@ -258,6 +259,13 @@ describe("conversationIdFromClaudeMetadata", () => {
     for (const raw of ['{"tk":"only"}', '{ "session_id": "s" }', '["tk"]', "not json"]) {
       expect(conversationIdFromClaudeMetadata({ user_id: raw })).toBe(digest32(raw));
     }
+    // Logs search with any turn's user_id finds the session; older raw-keyed rows still match.
+    expect(matchesLogConversationId(digest32(session), turn("turn-3"))).toBe(true);
+    expect(matchesLogConversationId(digest32(turn("turn-3")), turn("turn-3"))).toBe(true);
+    // An oversized id is never persisted, but its cache key still drops tk.
+    const huge = JSON.stringify({ session_id: "s", tk: "t", pad: "x".repeat(5000) });
+    expect(conversationIdFromClaudeMetadata({ user_id: huge })).toBeUndefined();
+    expect(JSON.parse(claudeSessionUserId(huge))).not.toHaveProperty("tk");
   });
 });
 

@@ -77,6 +77,8 @@ function yamlRefusalReason(
   return `${configPath} uses YAML source opencodex cannot patch without risking unrelated comments or formatting, so ${outcome}`;
 }
 import { withIntegrationWriterLock, type IntegrationWriterLockSeams } from "./writer-lock";
+import { withConfigDirHardeningSettled } from "../config/paths";
+import { WindowsSecretAclSettleTimeoutError } from "../lib/windows-secret-acl";
 
 /**
  * Owned by the planner so a plan can report a refusal without depending on the writer, and
@@ -953,14 +955,19 @@ function withClientLocks(
   const run = async (heldStoreLock: string | null): Promise<WriteOutcome> => {
     const refused = await options?.revalidate?.(frozen);
     if (refused) return refused;
-    // A profile can appear while revalidation awaits. Acquire its lock and
-    // repeat the validation before observing or mutating its document.
-    const required = storeLockFile(frozen);
-    if (required !== null && required !== heldStoreLock) {
-      return withIntegrationWriterLock(required, () => run(required), options?.lockSeams, ".lock");
-    }
-    // No await between the last store probe and the synchronous transaction.
-    return operation();
+    let required: string | null = null;
+    const outcome = await settledTransaction(frozen, () => {
+      // A profile can appear while revalidation or ACL admission awaits. Acquire its lock and
+      // repeat the validation before observing or mutating its document. The probe sits inside
+      // the admitted callback: no await between the last store probe and the transaction.
+      required = storeLockFile(frozen);
+      if (required !== null && required !== heldStoreLock) return null;
+      return operation();
+    });
+    if (outcome !== null) return outcome;
+    const lock = required as string | null;
+    if (lock === null) throw new Error("integration store lock probe returned no lock to acquire");
+    return withIntegrationWriterLock(lock, () => run(lock), options?.lockSeams, ".lock");
   };
   return withIntegrationWriterLock(frozen.resolvedPaths.configPath, () => {
     // Decide only after the outer lock has actually been acquired.
@@ -968,6 +975,30 @@ function withClientLocks(
     return storeLock === null ? run(null)
       : withIntegrationWriterLock(storeLock, () => run(storeLock), options?.lockSeams, ".lock");
   }, options?.lockSeams, suffix);
+}
+
+/**
+ * Run one synchronous integration transaction after overlapping config-root ACL work (#7815).
+ *
+ * The transaction writes ownership records, the journal and snapshots under the integrations
+ * store with required ACLs. On Windows a config load can leave the optional config-root harden
+ * in flight, and its inheritance work can drop a grant this transaction just applied. The store
+ * root is the admission directory: settlement covers its ancestors, so the config-root flight is
+ * waited for. An admission that times out never entered the transaction and is refused without a
+ * write; a timeout thrown from inside the transaction keeps the transaction's own handling.
+ */
+async function settledTransaction<T>(frozen: FrozenIntegrationInput, transaction: () => T): Promise<T | WriteRefused> {
+  let entered = false;
+  try {
+    return await withConfigDirHardeningSettled(frozen.store.root, () => {
+      entered = true;
+      return transaction();
+    });
+  } catch (error) {
+    if (entered || !(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
+    return refuse(frozen.clientId, "write_failed", "unsafe",
+      "The opencodex config directory was still being secured, so nothing was written. Try again in a moment.");
+  }
 }
 
 async function coordinatedWrite(
@@ -984,14 +1015,16 @@ async function coordinatedWrite(
     ?? staleModelNameRefusal(bound, input.config, operationKind) ?? operation(bound);
   if (!spec.writerLock) {
     const refused = await options?.revalidate?.(frozen);
-    return refused ?? guarded(frozen);
+    return refused ?? settledTransaction(frozen, () => guarded(frozen));
   }
 
   // An absent client home is not created merely to acquire a sibling lock.
   if (frozen.io.statKind(frozen.resolvedPaths.detectDir) !== "dir") {
     const refused = await options?.revalidate?.(frozen);
     if (refused) return refused;
-    if (frozen.io.statKind(frozen.resolvedPaths.detectDir) !== "dir") return guarded(frozen);
+    const absent = await settledTransaction(frozen, () =>
+      frozen.io.statKind(frozen.resolvedPaths.detectDir) !== "dir" ? guarded(frozen) : null);
+    if (absent !== null) return absent;
   }
   return withClientLocks(
     frozen,
@@ -1042,7 +1075,7 @@ export async function restoreIntegrationCoordinated(
     ?? restoreIntegration({ ...frozen, opId: input.opId, confirmDrift: input.confirmDrift });
   if (!spec.writerLock) {
     const refused = await options?.revalidate?.(frozen);
-    return refused ?? run();
+    return refused ?? settledTransaction(frozen, run);
   }
   if (frozen.io.statKind(frozen.resolvedPaths.detectDir) !== "dir") {
     return refuse(

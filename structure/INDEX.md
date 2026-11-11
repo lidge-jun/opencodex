@@ -66,7 +66,7 @@ The wire surfaces a client actually talks to.
 | [`data-planes/images.md`](data-planes/images.md) | Standalone image generation/edit relay and local hosted Responses image display. |
 | [`data-planes/search.md`](data-planes/search.md) | Hosted search relay and exact account selectors. |
 | [`data-planes/inbound-compat.md`](data-planes/inbound-compat.md) | Chat Completions inbound, Anthropic-shaped clients, and JSON-upstream streaming clients. |
-| [`data-planes/claude-tool-loading.md`](data-planes/claude-tool-loading.md) | Physical-adapter tool-loading projection, preserved catalogs, fallback exclusions and opt-in prerequisites. |
+| [`data-planes/claude-tool-loading.md`](data-planes/claude-tool-loading.md) | Physical-adapter tool-loading projections (Responses additional_tools and the Chat use_loaded_tool dispatcher with its response rewrite), preserved catalogs, fallback exclusions and opt-in prerequisites. |
 | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) | Ollama-shaped version/tags/show/chat/generate routes translated onto Chat Completions, their admission, native error shape and final request-log ownership. |
 | [`data-planes/error-detail.md`](data-planes/error-detail.md) | Closed error codes, upstream condition classification, numeric quota reset, closed failure detail, service tier and model identity bounds on request-log rows; response metadata header normalization and the client Retry-After format. Chat client error envelopes, literal tables, proxy-authored message provenance, collector verdicts and internal evidence channels; fixed undeclared-tool refusals, producer-owned incomplete-event origins and constructor-bounded destination labels, branded original client selectors, bounded combo exclusions and fixed retry-evidence diagnostics. Original model labels on synthetic terminal envelopes and compact/Messages ingress handoffs. Messages error envelopes, construction-registered fixed local-refusal guidance, sliced outcome comparisons and baseline client recovery outcomes across special codes and catch returns, non-2xx passthrough envelopes and unchanged 2xx passthrough bodies and original collector evidence and error-event identity, overflow/native-stream golden parity and normalized Anthropic response headers with full-fraction reset dates and success media types. |
 | [`data-planes/chat-reasoning-details.md`](data-planes/chat-reasoning-details.md) | The reasoning_details carrier that lets Chat Completions clients round-trip signed Anthropic thinking across tool steps (#7429). |
@@ -95,6 +95,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 | [`providers-and-adapters.md`](providers-and-adapters.md) | Provider and adapter selection, the adapter inventory, live model discovery, and the hosted-search continuation bridge. |
 | [`providers/opengateway.md`](providers/opengateway.md) | Preset discovery, paired Responses tool-result projection and bounded empty-completion recovery. |
 | [`providers/jev-decision.md`](providers/jev-decision.md) | JEV Combo decision methods (TypeSafe, self-hosted System One rows, opencodex models), the decision request path, dashboard surfaces, and the content-free statistics projection. |
+| [`providers/anthropic-output-caps.md`](providers/anthropic-output-caps.md) | Routed omitted-output caps for adapter:anthropic rows keyed by Claude model id, precedence and unknown-id fallback. |
 | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) | Exact billing refusal evidence, immutable physical credential ownership, pacing provenance and bounded pre-output key recovery. |
 | [`providers/workbuddy.md`](providers/workbuddy.md) | Browser login, account-bound refresh and catalogs, fixed-origin Chat transport, tool continuity and display-only credit balances. |
 | [`providers/dsh-account.md`](providers/dsh-account.md) | Explicit read-only DSH credential import, verified account identity, disabled refresh, pinned inference and probe destinations, and authoritative-empty quota. |
@@ -113,6 +114,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 | [`providers/lm-studio-chat.md`](providers/lm-studio-chat.md) | Preset-scoped single-leading-system normalization, configuration and editor policy. |
 | [`providers/mistral-chat.md`](providers/mistral-chat.md) | Canonical Mistral request-field projection, native effort clamping and typed-content normalization. |
 | [`providers/chat-compat.md`](providers/chat-compat.md) | Cross-vendor Chat Completions behavior: reasoning, tool results, structured output, parallel tools. |
+| [`providers/hosted-tool-denials.md`](providers/hosted-tool-denials.md) | Provider-declared Responses hosted-tool denials, unconditional and conditional on client tools, with their validation and save carry. |
 | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md) | Explicit response-only block completion, ordered safe-call delivery and terminal ownership. |
 | [`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) | Standalone MiMo bare-block recovery into declared freeform calls, separate from identified-wrapper reconciliation. |
 | [`providers/chat-required-tool-results.md`](providers/chat-required-tool-results.md) | Translated Chat terminal guard that fails a clean completion missing a mandatory client tool call. |
@@ -231,6 +233,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/adapters/openai-responses/opengateway-input.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
 | `src/adapters/openai-responses/passthrough.ts` | [`transports/responses-citations.md`](transports/responses-citations.md)<br>[`providers/opengateway.md`](providers/opengateway.md)<br>[`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/adapters/openai-responses/request-strips.ts` | [`transports/responses-citations.md`](transports/responses-citations.md) |
+| `src/adapters/openai-responses/tool-schema.ts` | [`providers/hosted-tool-denials.md`](providers/hosted-tool-denials.md) |
 | `src/adapters/openai-responses/transport.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/adapters/unique-tool-call-ids.ts` | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md) |
 | `src/adapters/workbuddy-schema.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
@@ -256,7 +259,9 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/cli/desktop-runtime-guidance.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/cli/ensure-desktop-cold-start.ts` | [`desktop-recovery.md`](desktop-recovery.md) |
 | `src/cli/link-apply-restart.ts` | [`remote-link.md`](remote-link.md) |
+| `src/cli/link-child-ops.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/link-local-control.ts` | [`remote-link.md`](remote-link.md) |
+| `src/cli/link-status-child.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/models-runtime.ts` | [`pricing.md`](pricing.md) |
 | `src/cli/status-codex-settings.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/status-link.ts` | [`remote-link.md`](remote-link.md) |
@@ -275,6 +280,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`codex-home.md`](codex-home.md)<br>[`codex-prompts.md`](codex-prompts.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`subagent-capacity.md`](subagent-capacity.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`providers/openai-tiers.md`](providers/openai-tiers.md)<br>[`providers/openai-accounts.md`](providers/openai-accounts.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/codex-desktop.md`](clients/codex-desktop.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/codex/account-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/codex/account-preservation.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
+| `src/codex/account-resume-health.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/codex/affinity-debug.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/codex/app-server-processes.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/auth-api/account-preservation.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
@@ -337,7 +343,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/config/persisted-mutation.ts` | [`runtime.md`](runtime.md) |
 | `src/config/schema/account-auto-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/config/schema/config-schema.ts` | [`transports/max-output-completion.md`](transports/max-output-completion.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
-| `src/config/schema/leaf-validators.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`pricing.md`](pricing.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
+| `src/config/schema/leaf-validators.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`providers/hosted-tool-denials.md`](providers/hosted-tool-denials.md)<br>[`pricing.md`](pricing.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
 | `src/config/telemetry-carry.ts` | [`telemetry.md`](telemetry.md) |
 | `src/generated/` | [`runtime.md`](runtime.md) |
 | `src/github/` | [`runtime.md`](runtime.md) |
@@ -376,6 +382,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/oauth/` | [`providers/generic-account-pool.md`](providers/generic-account-pool.md)<br>[`runtime.md`](runtime.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers/anthropic-account-thresholds.md`](providers/anthropic-account-thresholds.md)<br>[`providers/oauth-reconciliation.md`](providers/oauth-reconciliation.md)<br>[`providers/antigravity-account-import.md`](providers/antigravity-account-import.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md)<br>[`providers/oauth-code-display-login.md`](providers/oauth-code-display-login.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md) |
 | `src/oauth/account-auto-pause-policy.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/oauth/account-auto-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
+| `src/oauth/account-resume-health.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/oauth/api-key-pool-preserve.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/oauth/dsh.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
 | `src/oauth/generic-account-failover.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
@@ -394,6 +401,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/providers/anthropic-billing-ownership.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |
 | `src/providers/anthropic-billing-recovery.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |
 | `src/providers/anthropic-billing-refusal.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |
+| `src/providers/anthropic-output-caps.ts` | [`providers/anthropic-output-caps.md`](providers/anthropic-output-caps.md) |
 | `src/providers/antigravity-quota-identity.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
 | `src/providers/api-key-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/providers/cc-switch-import-bytes.ts` | [`cli-management.md`](cli-management.md) |
@@ -406,6 +414,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/providers/quota-decision-publication.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
 | `src/providers/quota-decision-snapshot.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
 | `src/providers/quota/anthropic-account-quota.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
+| `src/providers/quota/anthropic-cooldown-recovery-worker.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
 | `src/providers/quota/dsh-account.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
 | `src/providers/quota/workbuddy.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/providers/request-pacing.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |
@@ -419,6 +428,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/remote/` | [`runtime.md`](runtime.md)<br>[`fallback-policy.md`](fallback-policy.md) |
 | `src/remote/hub-usage.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/responses/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/kiro.md`](providers/kiro.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md) |
+| `src/responses/hosted-tool-policy.ts` | [`providers/hosted-tool-denials.md`](providers/hosted-tool-denials.md) |
 | `src/responses/reasoning-replay-cache.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/responses/turn-membership.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
 | `src/router.ts` | [`runtime.md`](runtime.md) |
@@ -431,7 +441,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/anthropic-rate-limit-headers.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/server/audio-dictation.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/audio-live.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
-| `src/server/auth-cors.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`providers/lm-studio-chat.md`](providers/lm-studio-chat.md) |
+| `src/server/auth-cors.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`providers/lm-studio-chat.md`](providers/lm-studio-chat.md)<br>[`providers/hosted-tool-denials.md`](providers/hosted-tool-denials.md) |
 | `src/server/background-lifecycle.ts` | [`telemetry.md`](telemetry.md) |
 | `src/server/capture-admission-policy.ts` | [`advisor.md`](advisor.md) |
 | `src/server/claude-messages.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md)<br>[`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
@@ -455,10 +465,12 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/management/codex-cli-update-routes.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/server/management/companion-routes.ts` | [`desktop-shell.md`](desktop-shell.md) |
 | `src/server/management/consent-session.ts` | [`telemetry.md`](telemetry.md) |
+| `src/server/management/link-child-ops-routes.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/management/link-enrollment.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/management/link-routes.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/management/logs-usage-routes.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/management/model-routes.ts` | [`pricing.md`](pricing.md) |
+| `src/server/management/provider-overwrite-carry.ts` | [`providers/hosted-tool-denials.md`](providers/hosted-tool-denials.md) |
 | `src/server/management/quota-pool-routes.ts` | [`quota-pool.md`](quota-pool.md) |
 | `src/server/management/telemetry-routes.ts` | [`telemetry.md`](telemetry.md) |
 | `src/server/management/usage-aggregate-cache.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
@@ -478,6 +490,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/responses/adapter-delivery.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`transports/max-output-completion.md`](transports/max-output-completion.md) |
 | `src/server/responses/adapter-dispatch.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
 | `src/server/responses/advisor-plan-slot.ts` | [`advisor.md`](advisor.md) |
+| `src/server/responses/advisor-question.ts` | [`advisor.md`](advisor.md) |
 | `src/server/responses/advisor-slot.ts` | [`advisor.md`](advisor.md) |
 | `src/server/responses/anthropic-thinking-recovery.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/server/responses/codex-ws-pool.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
@@ -526,6 +539,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/types/` | [`providers/generic-account-pool.md`](providers/generic-account-pool.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/lm-studio-chat.md`](providers/lm-studio-chat.md)<br>[`fallback-policy.md`](fallback-policy.md) |
 | `src/types/account-auto-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/types/admission-policy.ts` | [`advisor.md`](advisor.md) |
+| `src/types/claude-tool-loading.ts` | [`data-planes/claude-tool-loading.md`](data-planes/claude-tool-loading.md) |
 | `src/types/config.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`config.md`](config.md)<br>[`transports/max-output-completion.md`](transports/max-output-completion.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
 | `src/types/provider.ts` | [`pricing.md`](pricing.md) |
 | `src/types/telemetry.ts` | [`telemetry.md`](telemetry.md) |

@@ -91,7 +91,9 @@ transport; it does not infer subscription attribution from the inbound protocol.
   keep their existing behavior. This does not add Mistral signature replay.
 - Canonical key-auth Mistral Chat (`https://api.mistral.ai/v1`) maps `max_completion_tokens` to
   `max_tokens` while keeping an explicit non-null `max_tokens`, and drops `user`, `store`, `thinking`,
-  `include_reasoning`, `reasoning` and `top_k`. Its preset folds developer messages to system by
+  `include_reasoning`, `reasoning` and `top_k`. It also drops `reasoning_content` from every message in the
+  history, which reasoning-capable Chat clients replay and Mistral rejects with HTTP 422, and no
+  reasoning replay restores it on that destination. Its preset folds developer messages to system by
   default; an explicit `foldDeveloperRoleToSystem: false` overrides this. Native Chat also follows
   the configured model effort ladder: an unsupported `medium` becomes `low` for the bundled
   DeepSeek/GLM ladders. Mistral Large 4 keeps its supported `medium` rung.
@@ -783,7 +785,11 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   guard. Tool availability, execution policy, and approval/sandbox behavior are unchanged.
   In code mode — a freeform unified `exec` and no bare shell bridge — the redirect points inside `exec`, where
   shell, file, search, and fetch are nested `tools.<name>(...)` helpers of the JavaScript cell,
-  and never recommends the top-level shell bridge code mode does not expose. A flat catalog that
+  and never recommends the top-level shell bridge code mode does not expose. Cursor can defer the
+  Codex tools, `exec` included, behind its own `GetDynamicTools`/`CallDynamicTool` pair, so
+  code-mode guidance tells the model to call `CallDynamicTool` with namespace
+  `opencodex-responses` and the listed tool name when a listed tool is missing from its top-level
+  list. A model can still try a Cursor-native tool first; that attempt is denied as before. A flat catalog that
   carries `shell_command`/`exec_command` or a non-freeform unified `exec` keeps the bridge wording;
   a catalog that carries neither — an orchestrator client exposing only its own Responses tools,
   for example — is redirected to the request's actual wire names, so the model is pointed at a

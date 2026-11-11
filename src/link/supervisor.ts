@@ -5,6 +5,7 @@ import { linkDir, linkKnownHostsPath, linkStorePath } from "./paths";
 import { buildTunnelArgv } from "./ssh-argv";
 import { nextLinkConnectionGeneration } from "./relay-auth";
 import { createSshRunner, type SshChild, type SshRunner } from "./ssh-runner";
+import { defaultSshCaptureOpener, openSshCapture, retainSshCapture, type SshCaptureOpener } from "./ssh-capture";
 import type { LinkDiagnosticSink } from "./diagnostics";
 import { createTunnelHistoryBook, exitCause, type TunnelCause, type TunnelHistory } from "./tunnel-history";
 import {
@@ -84,6 +85,8 @@ export interface LinkSupervisorDeps {
   diagnostic?: LinkDiagnosticSink;
   /** Bounded drain of `diagnostic` at stop. */
   flushDiagnostics?: () => Promise<void>;
+  /** Opt-in SSH capture (src/link/ssh-capture.ts); defaults to the one for this link directory. */
+  sshCapture?: SshCaptureOpener;
 }
 
 const TIMER_MS = 1_000;
@@ -159,6 +162,9 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     }
   });
   const warn = deps.warn ?? ((message: string) => console.warn(message));
+  const sshCapture = deps.sshCapture ?? defaultSshCaptureOpener(storeDir);
+  // Runs at server start even with no links, so an earlier process's capture files still expire.
+  if (!deps.sshCapture) retainSshCapture(storeDir);
 
   let store: LinkStore = emptyLinkStore();
   let started = false;
@@ -265,14 +271,17 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     }
     let argv: string[];
     try {
+      // Off unless the operator opened a capture window on this machine; then only the level changes.
+      const capture = openSshCapture(sshCapture, "home", record.id);
       argv = buildTunnelArgv({
         alias: record.alias,
         direction: "R",
         bindPort: record.tunnelPort,
         targetPort: store.listenerPort,
         knownHostsFile: linkKnownHostsPath(),
+        ...(capture ? { logLevel: capture.logLevel } : {}),
       });
-      const child = runner.spawnTunnel(argv);
+      const child = capture ? runner.spawnTunnel(argv, { stderrLine: capture.stderrLine }) : runner.spawnTunnel(argv);
       const generation = (generations.get(record.id) ?? 0) + 1;
       generations.set(record.id, generation);
       connectionNames.set(record.id, nextLinkConnectionGeneration());

@@ -1,4 +1,14 @@
-import { codexAccountModelRefusal, codexAccountModelRefusalPayload, hasConflictingCodexModelRefusalEnvelopes, type CodexAccountModelRefusal } from "../../combos/failover";
+import {
+  codexAccountModelRefusal,
+  codexAccountModelRefusalPayload,
+  envelopeErrorRecord,
+  envelopeRecordCode,
+  hasConflictingCodexModelRefusalEnvelopes,
+  isMalformedResponseFormatRecord,
+  isOpenRouterOpaque400EnvelopeRoot,
+  isOpenRouterOpaque400Record,
+  type CodexAccountModelRefusal,
+} from "../../combos/failover";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import { comboFailureDecision } from "../../combos";
 import { httpStatusFromTerminalError } from "../../lib/errors";
@@ -77,10 +87,26 @@ function bareErrorStatus(payload: unknown): number | undefined {
         ? Number(value)
         : undefined)
     .find(value => value !== undefined && value >= 400 && value <= 599);
-  const code = typeof error.code === "string"
-    ? error.code
-    : typeof event.code === "string" ? event.code : null;
+  const rawCode = error.code ?? event.code;
+  const code = typeof rawCode === "string"
+    ? rawCode
+    : typeof rawCode === "number" && Number.isFinite(rawCode)
+      ? String(rawCode)
+      : null;
   if (explicitStatus === undefined && code === "invalid_request_error") return 400;
+  // Status is the record's own evidence; whether that record speaks for the envelope is the
+  // decision's question, so a root hard stop still reports 400 instead of inventing a 5xx.
+  if (explicitStatus === undefined && isOpenRouterOpaque400Record(envelopeErrorRecord(event))) {
+    return 400;
+  }
+  // OpenRouter-style envelopes carry the HTTP status as a bare numeric `code` (e.g. `code: 400`)
+  // with no separate status field. `httpStatusFromTerminalError` only understands symbolic codes,
+  // so without this the opaque 400 stringifies to "400", reads as unknown, and falls back to 502 —
+  // which cools the target on the generic 5xx path instead of taking the intended no-cool hop.
+  if (explicitStatus === undefined
+    && typeof rawCode === "number" && Number.isInteger(rawCode) && rawCode >= 400 && rawCode <= 599) {
+    return rawCode;
+  }
   return explicitStatus ?? httpStatusFromTerminalError({
     type: typeof error.type === "string" && error.type !== "error" ? error.type : undefined,
     code,
@@ -116,18 +142,27 @@ function bareErrorIsRetryable(payload: unknown): boolean {
     return false;
   }
   const event = payload as Record<string, unknown>;
-  const nested = event.error;
-  const error = nested && typeof nested === "object" && !Array.isArray(nested)
-    ? nested as Record<string, unknown>
-    : event;
-  const code = typeof error.code === "string"
-    ? error.code
-    : typeof event.code === "string" ? event.code : null;
+  // The record selection, the opaque verdict and the code conflict rule are shared with the HTTP
+  // consumer; only the carrier (one parsed frame here, one body there) differs.
+  const record = envelopeErrorRecord(event);
+  const error = record ?? event;
+  const rootCode = envelopeRecordCode(event);
+  const recordCode = envelopeRecordCode(record);
   const message = typeof error.message === "string"
     ? error.message
     : typeof event.message === "string" ? event.message : "";
+  const rawRecord = {
+    ...(error as Record<string, unknown>),
+    ...(typeof event.detail === "string" ? { detail: event.detail } : {}),
+  };
+  const malformedResponseFormat = status === 400 ? isMalformedResponseFormatRecord(rawRecord, message) : undefined;
+  const openRouterOpaque400 = status === 400 ? isOpenRouterOpaque400EnvelopeRoot(event) : undefined;
+  // A conflicting root and record code hop only when each would hop on its own, so a root hard
+  // stop is never hidden behind a retryable record code (and a retryable pair keeps dev's hop).
   return comboFailureDecision(status, message, {
-    code, codexModelRefusal: terminalModelRefusal(status, event),
+    code: recordCode ?? rootCode, rootCode,
+    codexModelRefusal: terminalModelRefusal(status, event),
+    malformedResponseFormat, openRouterOpaque400,
   }) === "hop";
 }
 
@@ -307,6 +342,12 @@ function failedTerminalResponse(
     ? nestedError as Record<string, unknown>
     : topLevelError && typeof topLevelError === "object" && !Array.isArray(topLevelError)
       ? topLevelError as Record<string, unknown>
+    : isOpenRouterOpaque400Record(terminalPayload)
+      ? {
+        message: terminalPayload.message,
+        code: terminalPayload.code,
+        metadata: terminalPayload.metadata,
+      }
     : {
       // A caller-validated flat error can carry its identity beside type:error.
       // Retain it when that caller established a 400, rather than discarding the
@@ -314,7 +355,11 @@ function failedTerminalResponse(
       type: terminalPayload.type === "error" && logCtx.terminalHttpStatus === 400
         ? "invalid_request_error" : "upstream_error",
       code: terminalPayload.type === "error" && logCtx.terminalHttpStatus === 400
-        ? (typeof terminalPayload.code === "string" ? terminalPayload.code : null)
+        ? (typeof terminalPayload.code === "string"
+            ? terminalPayload.code
+            : typeof terminalPayload.code === "number" && Number.isFinite(terminalPayload.code)
+              ? String(terminalPayload.code)
+              : null)
         : ((terminalPayload.type === "response.incomplete" || terminalPayload.status === "incomplete")
           && (terminalResponse.incomplete_details as { reason?: unknown } | undefined)?.reason === "max_output_tokens"
             ? "zero_output_token_limit" : "upstream_server_error"),
@@ -332,6 +377,7 @@ function failedTerminalResponse(
   const usage = terminalResponse.usage;
   return new Response(JSON.stringify({
     error,
+    ...(typeof terminalPayload.detail === "string" ? { detail: terminalPayload.detail } : {}),
     // The combo classifier needs only the error and optional usage. Do not carry
     // response ids, provider metadata, or future terminal fields into the client
     // error envelope merely because they shared the terminal snapshot.

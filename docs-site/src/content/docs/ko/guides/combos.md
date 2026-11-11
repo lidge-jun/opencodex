@@ -84,6 +84,8 @@ alias는 클라이언트가 요청하는 공개 이름만 바꿉니다. 콤보�
 
 각 요청은 Anthropic에서 시작합니다. Anthropic에서 재시도 가능한 실패가 나면 그 요청은 OpenAI로 넘어갑니다. OpenAI에서도 재시도 가능한 실패가 나면 Google로 넘어갈 수 있습니다. 종결 오류가 나면 남은 대상은 더 시도하지 않고 즉시 멈춥니다.
 
+제공자의 HTTP 400 응답도 대상별 오류일 수 있습니다. OpenRouter의 불투명 제공자 래퍼(숫자 `code: 400`, `type` 없음, `metadata.raw: "ERROR"`를 포함하는 `Provider returned error`)는 대상 로컬로 처리되어 실패한 대상을 쿨다운하지 않고 콤보가 다음 대상을 시도할 수 있도록 합니다. 타입이 지정된 비코드 400, 알려진 잘못된 형식의 `response_format` 스키마 오류, 그리고 루트가 자체 종결 코드를 명시하는 봉투는 계속 종결 오류로 유지됩니다. 루트가 자체 홉 신호(`model_not_found`, `insufficient_quota`, `usage_limit_exceeded`, `free_rate_limited`, `input_admission_refused` 또는 `unsupported_input_modality`)를 명시하더라도 새로운 판정이 추가되지 않으며, 빈 코드는 코드가 없는 것으로 처리됩니다. 이 가이드의 뒷부분에 설명된 인식된 대상 비호환성은 계속 진행됩니다.
+
 ### 라운드 로빈: 부드러운 가중 배치
 
 `round-robin`은 smooth weighted round-robin을 사용합니다. 대상 가중치가 클수록 시간에 따라 더 큰 비중을 가져가지만, 그 몫이 한꺼번에 긴 덩어리로 몰리지는 않습니다. `stickyLimit`은 선택된 대상에 몇 번의 성공 요청을 붙여 둘지 정합니다.
@@ -135,7 +137,7 @@ ocx combo set balanced \
 | 클라이언트 취소(499), `origin_rejected`, cyber-policy refusal, 또는 기타 invalid request | 멈추고 오류를 반환합니다. 다른 대상을 써도 요청이 유효해지지 않기 때문입니다. |
 | 출력 전 확인된 컨텍스트 초과 오류(HTTP 400 포함) | 쿨다운 없이 다음 미시도 적격 대상을 시도합니다. 모두 실패하면 처음 확인된 HTTP 400 컨텍스트 오류를 반환합니다(다른 상태 코드의 컨텍스트 거부도 다음 대상으로 넘어가지만 보관되지 않습니다). |
 | ChatGPT 계정으로 Codex를 사용할 때 해당 모델을 지원하지 않는다는 정확한 HTTP 400 거부 | 출력이 시작되기 전에 다음 설정 대상으로 넘어갑니다. 거부 문장 전체가 `detail`, `error.message` 또는 일반 텍스트에 있어야 하며, `detail`과 `error`가 충돌하면 중단합니다. 이 사유만으로 계정을 재인증 상태로 바꾸거나 공급자의 모든 모델에 쿨다운을 걸지는 않습니다. |
-| `user`를 명시적으로 거부하거나, `reasoning.effort`/`reasoning_effort`의 지원되지 않는 값, 모델별 이미지 입력 거부(`param: input`) 또는 경로가 읽을 수 없는 입력 미디어 거부(`unsupported_input_modality`)를 나타내는 구조화된 HTTP 400 | 출력 시작 전에 쿨다운 기록 없이 다음 적격 대상으로 넘어갑니다. 선택적 매개변수 호환성을 참조하세요. |
+| `user`를 명시적으로 거부하거나, `reasoning.effort`/`reasoning_effort`의 지원되지 않는 값, 모델별 이미지 입력 거부(`param: input`) 또는 경로가 읽을 수 없는 입력 미디어 거부(`unsupported_input_modality`)를 나타내는 구조화된 HTTP 400 | 추론 노력 거부의 경우 전송 예산이 허용하는 동안 동일한 대상에서 다음으로 낮은 게시된 단계를 시도합니다. 작동하는 단계가 없으면 거부가 인지된 호환성 형태와 일치할 경우 출력 확정 전에 쿨다운 없이 다음 대상으로 넘어가며, 그렇지 않으면 종료됩니다. 기타 나열된 불일치는 쿨다운 없이 넘어갑니다. 선택적 매개변수 호환성을 참조하세요. |
 | 인프로세스 어댑터(`runTurn`)가 실행하는 Responses 턴에서 현재 요청이 선언하지 않은 첫 도구 호출(출력이나 재전송 불가 부작용 이전) | 대상을 쿨다운하고 같은 도구 카탈로그로 다음 대상으로 넘어갑니다. 출력이 보였거나 재전송 불가 부작용이 생긴 뒤에는 거부가 그대로 확정됩니다. Chat Completions와 Anthropic Messages 요청은 바뀌지 않습니다. |
 | 그 밖의 분류되지 않은 오류 | 멈추고 오류를 반환합니다. |
 
@@ -291,7 +293,7 @@ opencodex 인스턴스에 기록했는지 확인하세요.
 
 ## 선택적 매개변수 호환성
 
-일반적인 400 오류는 종료되지만, `user`를 명시적으로 거부하거나 `reasoning.effort`/`reasoning_effort`의 지원되지 않는 값, 모델별 이미지 입력 거부(`param: input`) 또는 경로가 읽을 수 없는 입력 미디어 거부(`unsupported_input_modality`)를 나타내는 구조화된 오류는 출력 시작 전에 다음 적격 대상으로 넘어갈 수 있습니다. 이 경우 쿨다운을 기록하지 않습니다. 보안 정책 거부, 취소 및 이미 시작된 출력은 재실행하지 않습니다.
+일반적인 400 오류는 종료되지만, OpenRouter의 불투명 제공자 래퍼(숫자 `code: 400`, `type` 없음, `metadata.raw: "ERROR"`를 포함하는 `Provider returned error`) 또는 `user`를 명시적으로 거부하거나 `reasoning.effort`/`reasoning_effort`의 지원되지 않는 값, 모델별 이미지 입력 거부(`param: input`) 또는 경로가 읽을 수 없는 입력 미디어 거부(`unsupported_input_modality`)를 나타내는 구조화된 오류 및 정확한 벤더 엔벨로프 `{"code":"invalid-argument","error":"Invalid reasoning effort."}`의 경우 출력 확정 전에 다음 적격 대상으로 넘어갈 수 있습니다. 콤보 대상이 요청된 추론 노력을 거부하면, 콤보는 먼저 해당 대상에 대해 공유 전송 예산 내에서 거부당 한 단계씩 다음으로 낮은 게시된 노력 단계로 재시도합니다. 이는 인식된 모든 노력 거부에 적용됩니다. 더 낮은 단계가 모두 성공하지 못하면 위의 형태 중 하나에 해당하는 거부는 거부된 대상을 냉각하지 않고 다른 대상으로 넘어가며, 다음 단계에 남은 전송이 없을 때 해당 대상의 원래 400을 유지합니다. 기타 노력 거부는 종료 상태로 유지됩니다. `unsupported_input_modality` 코드로 요청의 미디어를 거부하는 경로도 동일하게 진행됩니다. 이는 이 요청에 대한 불일치일 뿐 대상이 비정상이라는 증거가 아닙니다. 직접 요청은 단일 노력 다운그레이드 복구를 유지합니다. 호환성 복구는 `none`을 다른 노력으로 자동으로 변경하거나 임의의 잘못된 요청으로 콤보 홉을 넓히지 않습니다. 보안 정책 거부, 취소 및 이미 시작된 출력은 재실행하지 않습니다. 단일 대상 요청은 여전히 해결되지 않은 업스트림 거부를 반환합니다.
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
 

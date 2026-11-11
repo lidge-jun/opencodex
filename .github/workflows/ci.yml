@@ -871,10 +871,10 @@ jobs:
     # (123090589363) batch 93/93 before this cap cancelled them, with no failing
     # tests. The cap stays 20: the suite needs another shard, not a longer wait,
     # and a wedged shard (#4956) is still cut off as early as before. Four suite
-    # shards + control + widget/bundle request six macOS jobs for five runner
-    # slots: one queues, and each run pays one extra shard's setup overhead.
-    # The full-membership control runs the same bounded batches without sharding
-    # on explicit dispatch.
+    # shards + widget/bundle request five macOS jobs for five runner slots; each
+    # run pays one extra shard's setup overhead. The full-membership control runs
+    # the same bounded batches without sharding, only on a lane=macos-control
+    # dispatch.
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -940,10 +940,13 @@ jobs:
   macos-control:
     name: macos control
     needs: changes
-    # Diagnostic-only lanes stay off the ordinary release gates: list every lane
-    # that should run this job, so a new lane defaults to skipping the diagnostic.
+    # Diagnostic-only: it runs on an explicit lane=macos-control dispatch and nowhere
+    # else, so a new lane defaults to skipping it. It used to ride lane=all as well,
+    # where it reran the whole suite that the four macOS shards had already passed
+    # on the same commit, on one worker, for 50-60 minutes, and every release waited
+    # for it. Dispatch it on its own when a sharding-sensitive defect is suspected.
     if: >-
-      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && github.event.inputs.lane == 'macos-control'
     runs-on: macos-latest
     # Unsharded full-membership control, one worker in sequential fresh batches.
     # Long-lived Bun isolate pools repeatedly wedged while synchronously reaping
@@ -1852,8 +1855,9 @@ jobs:
             dispatch=requested
             windows=requested
           elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            # Mirror the diagnostic job allowlist; release-gates requests neither suite.
-            if [ -z "$LANE" ] || [ "$LANE" = "all" ] || [ "$LANE" = "macos-control" ]; then
+            # Mirror the diagnostic job allowlist: only lane=macos-control requests the
+            # unsharded control; release-gates requests neither suite.
+            if [ "$LANE" = "macos-control" ]; then
               dispatch=requested
             fi
             # Only the default/all lane requests the Windows suite shards.

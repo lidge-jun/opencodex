@@ -10,7 +10,7 @@ import { knownModelIdentity } from "../lib/model-identity";
  * upstreamError, which internal classifiers and status heuristics read and which never reaches a row.
  * Only proxy-composed text may be passed here.
  */
-import { boundedFailureDetail, type FailureDetail, type FailureDetailCode } from "../lib/failure-detail";
+import { boundedFailureDetail, providerErrorTypeOf, providerFailureDetailOf, type FailureDetail, type FailureDetailCode } from "../lib/failure-detail";
 
 export type { FailureDetail };
 
@@ -94,4 +94,62 @@ export function recordUpstreamValidationDetail(logCtx: { failureDetail?: Failure
   const nested = record.error !== null && typeof record.error === "object" && !Array.isArray(record.error)
     ? record.error as Record<string, unknown> : undefined;
   logCtx.failureDetail = boundedFailureDetail({ code: "provider_error", type: nested?.type ?? record.type, validation });
+}
+
+/**
+ * Capture the closed provider error class from a raw upstream error body (#8446): the envelope
+ * `type` (Anthropic/OpenAI) or Google's `error.status`, the latter also as the first element of a
+ * streamed JSON array. Validation pairs keep their existing capture and win when present. Only
+ * callers holding the provider's own body may use this; a body this proxy formatted is not evidence.
+ * An adapter transport that rewrote the body (normalizeUpstreamHttpErrorResponse) attached the class
+ * it read from the original to `response`, which is preferred.
+ */
+export function recordUpstreamProviderErrorDetail(
+  logCtx: { failureDetail?: FailureDetail },
+  status: number,
+  payload: unknown,
+  response?: object,
+): void {
+  if (status < 400 || status >= 600) return;
+  const before = logCtx.failureDetail;
+  recordUpstreamValidationDetail(logCtx, status, payload);
+  if (logCtx.failureDetail !== before) { providerDetails.set(logCtx, logCtx.failureDetail!); return; }
+  let type = response ? providerFailureDetailOf(response)?.type : undefined;
+  if (type === undefined) {
+    let parsed = payload;
+    if (typeof payload === "string") {
+      if (payload.length > 256 * 1024) return;
+      try { parsed = JSON.parse(payload); } catch { return; }
+    }
+    type = providerErrorTypeOf(parsed);
+  }
+  if (type === undefined) return;
+  const detail: FailureDetail = { code: "provider_error", type };
+  logCtx.failureDetail = detail;
+  providerDetails.set(logCtx, detail);
+}
+
+/** The provider detail each context last recorded, so a later success can retract exactly that one. */
+const providerDetails = new WeakMap<object, FailureDetail>();
+
+/**
+ * Request-log side of every adapter event (the parse seam in request-transport.ts). An error event an
+ * adapter tagged with closed provider facts records them as a provider_error detail; a later `done` on
+ * the same request (a retry or replay that succeeded) retracts a detail this path recorded, so a
+ * successful row never names a provider failure it recovered from.
+ */
+export function observeProviderFailureEvent(logCtx: { failureDetail?: FailureDetail }, event: { type: string }): void {
+  if (event.type === "done") {
+    const recorded = providerDetails.get(logCtx);
+    if (recorded !== undefined && logCtx.failureDetail === recorded) delete logCtx.failureDetail;
+    providerDetails.delete(logCtx);
+    return;
+  }
+  if (event.type !== "error") return;
+  const facts = providerFailureDetailOf(event);
+  if (!facts) return;
+  const detail = boundedFailureDetail({ code: "provider_error", ...facts });
+  if (!detail) return;
+  logCtx.failureDetail = detail;
+  providerDetails.set(logCtx, detail);
 }

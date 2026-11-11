@@ -17,6 +17,7 @@ import type { OcxConfig } from "../../src/types";
 import { saveConfig } from "../../src/config";
 import { clearKeyCooldowns, selectProactiveApiKey } from "../../src/providers/key-failover";
 import { providerWindowObservations } from "../../src/quota/window-mapping";
+import { mistralUnknownBudgetWindows } from "../../src/providers/quota-mistral-budget";
 import { detectQuotaResets } from "../../src/quota/reset-detector";
 import { ensureQuotaPoolIdentity } from "../../src/quota-pool/identity";
 import { readQuotaPool } from "../../src/quota-pool/assemble";
@@ -470,5 +471,23 @@ describe("Mistral display-only authority", () => {
     // Other providers keep their own pool evidence untouched, including DeepSeek's balance row.
     expect(result.pool.providers.find(row => row.provider === "deepseek")?.pooled.windows.map(row => row.id)).toEqual(["custom:API balance ($10.00)"]);
     expect(result.pool.providers.find(row => row.provider === "openrouter")?.pooled.windows.length).toBeGreaterThan(0);
+  });
+});
+
+describe("Mistral unknown-budget window selection", () => {
+  test("keeps only recognized budgets with a positive, finite reset clock", () => {
+    expect(mistralUnknownBudgetWindows({ unknownBudgetWindows: [
+      { label: "API budget", resetAt: 1_800_000_000 },
+      { label: "Vibe budget (TEAM)", resetAt: 1_800_000_100 },
+      { label: "Vibe budget (ENTERPRISE)", resetAt: 1_800_000_200 },
+      { label: "API budget", resetAt: 0 },
+      { label: "API budget", resetAt: Number.POSITIVE_INFINITY },
+      { label: "API budget" },
+      { label: "Other budget", resetAt: 1_800_000_300 },
+    ] })).toEqual([
+      { window: "custom:API budget", resetAt: 1_800_000_000 },
+      { window: "custom:Vibe budget", resetAt: 1_800_000_100 },
+    ]);
+    expect(mistralUnknownBudgetWindows({})).toEqual([]);
   });
 });

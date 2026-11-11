@@ -3,16 +3,28 @@
 import { guardedSpawn, guardedSpawnSync, materializeMutationData } from "./mutation-guard.mjs";
 import { dirname, join, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
+import { publishWindowsInstallerPid } from "./windows-installer-marker.mjs";
+import { isTestHomeGuardArmed } from "./test-home-guard.mjs";
 
 const JOIN_MS = 10000;
 const failure = message => ({ status: null, processTreeExited: false, error: { code: "EINSTALLJOIN", message } });
 
+let windowsSupervisorSeamsForTests = null;
+/**
+ * Test seam: drive the Windows supervisor branch with a fake platform and supervisor launcher. A
+ * fake launcher skips guardedSpawn, so the seam refuses outside a test process.
+ */
+export function setWindowsInstallerSupervisorForTests(seams) {
+  if (seams !== null && !isTestHomeGuardArmed()) throw Error("the Windows installer supervisor seam is test-only");
+  windowsSupervisorSeamsForTests = seams;
+}
+
 /** Bridge synchronous pnpm transactions to the same Windows Job Object barrier. */
-export function runWindowsInstallerSync(invocation, { env = process.env, cwd, timeoutMs = 180000, authorizeMutation = () => false } = {}) {
+export function runWindowsInstallerSync(invocation, { env = process.env, cwd, timeoutMs = 180000, authorizeMutation = () => false, markerPath } = {}) {
   const moduleUrl = import.meta.url;
-  const script = `import {readFileSync} from 'node:fs';import {runNpmInstall} from ${JSON.stringify(moduleUrl)};const input=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify(await runNpmInstall(input.invocation,{timeoutMs:input.timeoutMs,authorizeMutation:()=>true})));`;
+  const script = `import {readFileSync} from 'node:fs';import {runNpmInstall} from ${JSON.stringify(moduleUrl)};const input=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify(await runNpmInstall(input.invocation,{timeoutMs:input.timeoutMs,markerPath:input.markerPath,authorizeMutation:()=>true})));`;
   const result = guardedSpawnSync(authorizeMutation, "package", process.execPath, ["--input-type=module", "-e", script], {
-    input: JSON.stringify({ invocation, timeoutMs }), env, cwd, encoding: "utf8", windowsHide: true, stdio: ["pipe", "pipe", "inherit"],
+    input: JSON.stringify({ invocation, timeoutMs, markerPath }), env, cwd, encoding: "utf8", windowsHide: true, stdio: ["pipe", "pipe", "inherit"],
   });
   try {
     const value = JSON.parse(result.stdout);
@@ -25,11 +37,12 @@ function quoteWindowsArg(value) {
   return '"' + value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, "$1$1") + '"';
 }
 
-export async function runNpmInstall(invocation, { env = process.env, timeoutMs = 180000, authorizeMutation = () => false } = {}) {
+export async function runNpmInstall(invocation, { env = process.env, timeoutMs = 180000, authorizeMutation = () => false, markerPath } = {}) {
   invocation = materializeMutationData(invocation);
   env = materializeMutationData(env);
   if (!invocation) return { status: 1, processTreeExited: true, error: { code: "ENOENT", message: "npm invocation unavailable" } };
-  if (process.platform === "win32") {
+  const seams = windowsSupervisorSeamsForTests;
+  if ((seams?.platform ?? process.platform) === "win32") {
     // The PowerShell helper assigns npm to a kill-on-close Job Object before it
     // resumes the suspended process, then terminates the job on timeout and
     // waits for the job to become empty. An unconfirmed join retains the stage.
@@ -43,13 +56,26 @@ export async function runNpmInstall(invocation, { env = process.env, timeoutMs =
     const supervisor = win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     const helper = join(dirname(fileURLToPath(import.meta.url)), "npm-install-job.ps1");
     return new Promise(resolve => {
-      const child = guardedSpawn(authorizeMutation, "package", supervisor, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper], {
-        env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
+      const supervisorArgs = ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper];
+      const supervisorOptions = { env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] };
+      const child = seams?.launch ? seams.launch(supervisor, supervisorArgs, supervisorOptions) : guardedSpawn(authorizeMutation, "package", supervisor, supervisorArgs, {
+        ...supervisorOptions,
       });
       let output = "";
       let invalid = false;
       let spawned = false;
       let completed = false;
+      // Record the supervisor pid before it receives its request: the supervisor creates no installer
+      // until stdin closes, so a launcher killed after this point leaves a marker whose witness is
+      // the supervisor itself (#8524). "unrecorded" means nothing could be published and no
+      // installer will start; "live" means an earlier supervisor still runs and keeps its witness.
+      let witness = null;
+      if (markerPath !== undefined) {
+        try {
+          if (!Number.isSafeInteger(child.pid) || child.pid <= 0) throw Error("installer supervisor has no pid");
+          publishWindowsInstallerPid(markerPath, child.pid);
+        } catch (error) { witness = error?.code === "EINSTALLWITNESS" ? "live" : "unrecorded"; }
+      }
       const complete = result => {
         if (completed) return;
         completed = true;
@@ -57,6 +83,9 @@ export async function runNpmInstall(invocation, { env = process.env, timeoutMs =
         child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
         resolve(result);
       };
+      const completeUnstarted = () => complete(witness === "live"
+        ? { status: null, processTreeExited: false, error: { code: "EINSTALLJOIN", message: "an earlier installer supervisor is still running; installer not started" } }
+        : { status: 1, processTreeExited: true, error: { code: "EINSTALLJOIN", message: "installer supervisor pid could not be recorded; installer not started" } });
       const watchdog = setTimeout(() => {
         child.kill();
         complete(failure(`npm supervisor exceeded ${timeoutMs} ms install budget and exit-confirmation budget; stage retained`));
@@ -69,10 +98,12 @@ export async function runNpmInstall(invocation, { env = process.env, timeoutMs =
         else output += chunk.toString("utf8");
       });
       child.on("error", error => {
+        if (witness !== null) { if (!spawned) completeUnstarted(); return; }
         complete({ status: null, processTreeExited: !spawned, error: { code: error.code, message: error.message } });
       });
       child.on("close", status => {
         clearTimeout(watchdog);
+        if (witness !== null) { completeUnstarted(); return; }
         try {
           const result = JSON.parse(output);
           if (invalid || status !== 0 || typeof result.processTreeExited !== "boolean"
@@ -81,6 +112,12 @@ export async function runNpmInstall(invocation, { env = process.env, timeoutMs =
         } catch { complete(failure("npm supervisor did not confirm process-tree exit; stage retained")); }
       });
       child.stdin.on("error", () => { /* close/result decides whether the helper ran */ });
+      if (witness !== null) {
+        // No request: the supervisor never creates the job or the installer.
+        child.stdin.end();
+        child.kill();
+        return;
+      }
       const args = invocation.options?.windowsVerbatimArguments ? invocation.args.join(" ") : invocation.args.map(quoteWindowsArg).join(" ");
       child.stdin.end(JSON.stringify({ file: invocation.file, commandLine: quoteWindowsArg(invocation.file) + " " + args,
         cwd: process.cwd(), timeoutMs, joinMs: JOIN_MS }));

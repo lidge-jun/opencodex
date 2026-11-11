@@ -85,9 +85,22 @@ ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
+ocx link check (--link-id <id> | --all) [--no-wait] [--json]
+ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]
+ocx link sync (--link-id <id> | --all) [--no-wait] [--json]
+ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]
+ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]
 ```
 
 Без интерактивного терминала (TTY) параметр `--expect-fingerprint` обязателен. В интерактивном терминале его можно опустить, если явно подтвердить предложенный отпечаток.
+
+На Home команда `ocx link check (--link-id <id> | --all)` считывает для каждого Child, добавленного с Home, установленную версию, тип установки и путь обновления: она запускает на Child `ocx update --plan` по SSH-соединению связи (60 секунд на Child, не более трёх одновременно), а эта команда только вычисляет план и ничего не меняет. Child старше 2.97.0 получает `owner-action` (`legacy-ocx`); его версия берётся из ещё одного SSH-вызова только для чтения на macOS и Linux или из версии, переданной по связи, на Windows. Связи, начатые со стороны Child, и Child `ocx-child` отображаются без SSH. `ocx link status --json` добавляет к каждой строке блок `child` (версии, расхождение версий, актуальность каталога, активность, последняя операция). Подробности и коды выхода: [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity) (на английском).
+
+### Управление Child с Home
+
+`ocx link sync`, `ocx link restart-codex` и `ocx link update` выполняются на Child, добавленных с Home, через SSH-соединение ссылки и выводят задание в формате JSON. `sync` запускает закреплённый `ocx sync --expect-link` (Child версии 2.93.0 или новее). `restart-codex` выполняет синхронизацию, а затем перезапускает app-server Codex на Child, чтобы работающий Codex загрузил текущий каталог; `--scope codex` также перезапускает настольное приложение. Перезапуск указывает ровно одну ссылку; `restart-codex` и `--restart-codex` требуют `--yes`, а `ocx link sync --link-id <id> --restart-app-server-only` перезапускает app-server без подтверждения. Перезапуск пропускается (`restart-skipped:link-active`), пока Home ретранслирует запрос к модели для этого Child. У Child старше 2.69 непотоковый запрос виден только с начала ответа. `update --yes` обновляет OpenCodex на Child до версии этого Home, и ни до какой другой, собственным механизмом обновления Child (Child версии 2.97.0 или новее; установки npm и pnpm обновляются через свой Node-лаунчер, поэтому `ocx link check` там также выполняет `node --version` только для чтения), по одному Child за раз, и снова синхронизирует после успешного, неудачного или откатанного применения; применение с неизвестным результатом не повторяется и не синхронизируется, проверьте его через `ocx link check`. Запросы, ретранслируемые для этого Child, прерываются. Child на Windows поддерживают только `sync`, а Child `ocx-child` сообщают, что перезапуск и обновление не поддерживаются. CLI требует Home, привязанный к loopback; на любом другом Home эти операции недоступны, и в панели управления их нет. Подробности и коды выхода: [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home) (на английском). Эта защита работает по возможности: запрос, начавшийся между проверкой и перезапуском, всё равно может быть прерван, поэтому приостановите новые запросы на этом Child, если его ходы нужно сохранить. `ocx sync --restart-children` (или `--restart-children=codex --yes`) применяет то же правило при рассылке синхронизации Home — ко всем Child или к указанным через `--child <linkId>`: каждый Child синхронизируется, а пропускается только его перезапуск (`restart-skipped:link-active`), пока выполняется ретранслируемый запрос.
+
+Не связывайте машину, которая вам не принадлежит: Home выполняет на ней команды с вашим SSH-ключом.
 
 ## Связанные руководства
 

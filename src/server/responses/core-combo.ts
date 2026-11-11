@@ -1432,8 +1432,11 @@ export async function executeComboResponses(
       : isPolicyCandidateRefusal(failure.response) ? "hop"
       : comboFailureDecision(failure.response.status, failure.classificationText, {
         code: failure.upstreamCode,
+        rootCode: failure.upstreamRootCode,
         codexModelRefusal: failure.codexModelRefusal,
         verifiedPlanRefusal: failure.verifiedPlanRefusal,
+        malformedResponseFormat: failure.malformedResponseFormat,
+        openRouterOpaque400: failure.openRouterOpaque400,
         // The adapter the failed leg actually resolved: a configured `kiro` provider can route a
         // model through another wire via `modelAdapters`, and an unresolved leg grants no hop.
         failedAdapter: childLog.providerAdapter,
@@ -1510,6 +1513,8 @@ export async function executeComboResponses(
     const attemptedTargets = pick.attempted;
     const failureCooldownScope = isPolicyCandidateRefusal(failure.response) ? "none" : comboFailureCooldownScope(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
+      malformedResponseFormat: failure.malformedResponseFormat,
+      openRouterOpaque400: failure.openRouterOpaque400,
     });
     const failedTargetKey = targetKey(pick.target);
     let failedTargetCooldownRecorded = false;
