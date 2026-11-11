@@ -12,6 +12,7 @@ import type { TranslatorBudget } from "../../lib/translator-budget";
 import { prepareResponsesRequest } from "./request-prepare";
 import { prepareResponsesTransport } from "./request-transport";
 import { prepareResponsesSidecarAuth, resolveResponsesOpenAiSidecar } from "./request-sidecar-auth";
+import { shouldResolveOpenAiVisionSidecar } from "../../vision";
 import { createResponsesEffects } from "./response-effects";
 import { createResponsesSendBudget } from "./request-send-budget";
 import { executePassthroughResponse } from "./passthrough-execution";
@@ -68,11 +69,14 @@ export async function handleResponsesInner(
     let sidecarState: Awaited<ReturnType<typeof prepareResponsesSidecarAuth>> | undefined;
     if (unsupportedTraeReplayMedia) return traeMediaRefusal(logCtx);
     if (transportState.runTurnAdapter.name === "trae-cn") {
-      const openAiSidecar = await resolveResponsesOpenAiSidecar(requestContext, requestState, transportState, true);
+      const needsVision = shouldResolveOpenAiVisionSidecar(config, requestState.route.provider,
+        requestState.route.modelId, requestState.parsed, requestState.route.providerName);
+      const openAiSidecar = await resolveResponsesOpenAiSidecar(requestContext, requestState, transportState, needsVision);
       const needsCaption = options.responsesUnsupportedInputMedia
         || responsesHasUnsupportedInputMedia(requestState.parsed._rawBody);
       if (needsCaption && planVisionSidecar(config, requestState.route.provider, requestState.route.modelId,
         requestState.parsed, openAiSidecar, { providerName: requestState.route.providerName }) === undefined) {
+        openAiSidecar?.releaseProbeLease?.();
         return traeMediaRefusal(logCtx);
       }
       sidecarState = await prepareResponsesSidecarAuth(requestContext, requestState, transportState, openAiSidecar);

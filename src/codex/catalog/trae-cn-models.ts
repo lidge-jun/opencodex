@@ -12,6 +12,7 @@ import {
   markProviderDiscoveryFailed,
   markProviderDiscoveryOk,
   observeModelCacheRevision,
+  pinCachedModels,
   setCached,
 } from "../model-cache";
 import { applyProviderConfigHints } from "./model-hints";
@@ -24,14 +25,36 @@ import { providerContextCap } from "../../providers/context-cap";
 /** Prepare CLI-owned evidence in the background source phase, independently of management admission. */
 export async function refreshTraeCnCatalogSources(
   config: Readonly<OcxConfig>, current: () => boolean = () => true,
+  after?: () => Promise<unknown>,
 ): Promise<void> {
   const { fetchProviderModelsWithAuth, refreshingModelsAuthResolver } = await import("./provider-models");
   const { captureProviderGather } = await import("./gather-capture");
+  const refreshed: Array<{ name: string; generation: string; models: NonNullable<ReturnType<typeof getStaleCached>> }> = [];
   for (const [name, provider] of Object.entries(config.providers)) {
     if (!current()) return;
     if (provider.adapter !== "trae-cn" || provider.disabled || provider.liveModels === false) continue;
-    await fetchProviderModelsWithAuth(captureProviderGather(name, provider, refreshingModelsAuthResolver),
+    const gathered = await fetchProviderModelsWithAuth(captureProviderGather(name, provider, refreshingModelsAuthResolver),
       config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS, providerContextCap(config, name), refreshingModelsAuthResolver);
+    if (!current()) return;
+    const models = getStaleCached(name);
+    if (gathered.outcome.state === "authoritative" && models) {
+      refreshed.push({ name, models, generation: captureModelCacheGeneration(name) });
+    }
+  }
+  if (!after || refreshed.length === 0 || !current()) return;
+  const releases: Array<() => void> = [];
+  for (const roster of refreshed) {
+    const release = pinCachedModels(roster.name, roster.models, Date.now(), roster.generation);
+    if (!release) {
+      for (const acquired of releases.reverse()) acquired();
+      return;
+    }
+    releases.push(release);
+  }
+  try {
+    await after();
+  } finally {
+    for (const release of releases.reverse()) release();
   }
 }
 

@@ -25,7 +25,8 @@ not dispatchability. The sidecar replaces that image with a description before A
 before vision preparation, while rebuilt `web_search` results remain eligible for the existing no-search-plan cleanup.
 TRAE resolves the optional OpenAI helper once, before image admission, and reuses that same result for preprocessing. Replay
 refusals precede credential resolution and no image is stripped or described when no dispatchable plan exists; a text-only
-request does not require a vision plan. The credentialed and credential-free OpenAI cases and the resolver's single invocation
+request does not resolve a vision helper. A refusal returns any acquired helper probe lease before completing, while a disabled
+or ineligible vision configuration acquires none. The credentialed and credential-free OpenAI cases and the resolver's single invocation
 are pinned beside the other media regressions.
 `tests/responses/responses-combo-run-turn-classified-failure.test.ts` covers these boundaries and verifies that refused agent
 and tool-result images trigger no vision request or ACP session.

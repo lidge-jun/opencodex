@@ -286,40 +286,35 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
             if (p.type === "video") return { type: "text", text: VIDEO_UNSUPPORTED_MARKER };
             return { type: "text", text: (p as OcxTextContent).text };
           });
-          chatMsg = {
-            role: msg.role === "developer" && !(provider.singleLeadingSystemMessage === true && hasAudio)
-              ? (leadingSystemTemplate ? "user" : developerWireRole) : "user",
-            content: chatParts,
-          };
-          if (msg.role === "developer" && (hasAudio || chatMsg.role !== "user")
-            && (hasAudio || provider.singleLeadingSystemMessage === true)) {
-            if (provider.singleLeadingSystemMessage === true) {
-              const instruction = { role: developerWireRole, content: chatParts.filter(p => p.type === "text") };
-              if (instruction.content.length > 0) {
-                (pendingToolCalls.length > 0 ? deferredBarrierMessages : out).push(instruction);
-              }
-              chatMsg = { role: "user", content: chatParts.filter(p => p.type !== "text") };
-            } else if (hasAudio) {
-              const audioParts = chatParts.filter(p => p.type === "input_audio");
-              const instructionParts = chatParts.filter(p => p.type !== "input_audio");
-              // Inline audio is user-content-only on this wire. Keep its instruction text in the
-              // original slot, then carry the attachment in a user message after the tool barrier.
-              chatMsg = { role: "user", content: audioParts };
-              if (instructionParts.length > 0) {
-                const instruction = { role: leadingSystemTemplate ? "user" : developerWireRole,
-                  content: instructionParts.filter(p => p.type === "text") };
-                instruction.content = [...instruction.content, ...instructionParts.filter(p => p.type !== "text")];
-                if (instruction.content.length > 0) {
-                  (pendingToolCalls.length > 0 ? deferredBarrierMessages : out).push(instruction);
-                }
-              }
+          chatMsg = { role: "user", content: chatParts };
+          if (msg.role === "developer") {
+            const destination = pendingToolCalls.length > 0 ? deferredBarrierMessages : out;
+            if (leadingSystemTemplate) {
+              // This template accepts rich user content in place, but rejects every late system
+              // or developer message. Keep text and attachments together in the original slot.
+              destination.push(chatMsg);
+            } else if (provider.singleLeadingSystemMessage === true) {
+              const text = chatParts.filter(part => part.type === "text");
+              const attachments = chatParts.filter(part => part.type !== "text");
+              if (text.length > 0) destination.push({ role: developerWireRole, content: text });
+              if (attachments.length > 0) destination.push({ role: "user", content: attachments });
             } else {
-              const instruction = { role: developerWireRole, content: chatParts.filter(p => p.type === "text") };
-              if (instruction.content.length > 0) {
-                (pendingToolCalls.length > 0 ? deferredBarrierMessages : out).push(instruction);
+              // Images, audio and files are user-content-only on the Chat wire. Split only at
+              // role boundaries so interleaved instruction/attachment groups retain their order.
+              let role: "system" | "developer" | "user" | undefined;
+              let content: unknown[] = [];
+              for (const part of chatParts) {
+                const nextRole = part.type === "text" ? developerWireRole : "user";
+                if (role !== undefined && nextRole !== role) {
+                  destination.push({ role, content });
+                  content = [];
+                }
+                role = nextRole;
+                content.push(part);
               }
-              chatMsg = { role: "user", content: chatParts.filter(p => p.type !== "text") };
+              if (role !== undefined) destination.push({ role, content });
             }
+            break;
           }
         }
         if (pendingToolCalls.length > 0) deferredBarrierMessages.push(chatMsg);
