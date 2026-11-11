@@ -1,6 +1,7 @@
 import type { LinkRecord, LinkStore } from "../link/store";
 import type { LinkStatusPayload } from "./link";
 import { LinkStatusError } from "./sync-link-status";
+import { childSkipHint } from "../link/sync-fanout-classify";
 
 export { classifySyncResult, classifyVersionProbe, parseOcxVersion, REMOTE_LINK_SYNC_MESSAGE,
   STALE_REMOTE_CATALOG_MESSAGE, type ChildVerdict } from "../link/sync-fanout-classify";
@@ -9,17 +10,6 @@ export const SYNC_FANOUT_PARTIAL_EXIT = 6;
 export type HomeResult = { state: "synced" | "stale" | "skipped" | "failed"; exit: number };
 export type ChildResult = { linkId: string; alias: string; state: "synced" | "skipped" | "failed" | "timed-out"; reason: string | null; exit: number | null; hint?: string };
 export type FanoutDocument = { schema: "ocx.sync.fanout/1"; home: HomeResult; fanout: { state: "ran" | "disabled" | "not-applicable" | "failed"; reason: string | null }; children: ChildResult[] };
-
-function childSkipHint(reason: string | null, alias: string): string {
-  if (reason === "child-ocx-lacks-expect-link") return `Update OpenCodex on ${alias} to >= 2.93.0 using the installer that owns its selected ocx. For Desktop on headless Windows, use Check for Updates in the signed-in Desktop tray.`;
-  if (reason === "child-updating") return "Wait for the Child update to finish, then retry sync.";
-  if (reason === "child-link-mismatch:pending_operation" || reason === "child-link-mismatch:disconnect_pending") return "Wait for the Child's link operation to finish, then check its link and retry sync.";
-  if (reason === "child-link-mismatch:disconnected" || reason === "child-link-mismatch:other_link") return "Please re-link this Child to this Home, then retry sync.";
-  if (reason?.startsWith("child-link-mismatch")) return "Check the Child's Remote Link connection and re-link it to this Home if needed, then retry sync.";
-  if (reason === "child-ocx-version-unknown") return "Check the Child's selected OpenCodex installation and version, then retry sync.";
-  if (reason === "child-platform-unsupported") return "Check the Child's platform and Remote Link setup before retrying sync.";
-  return "Check the Child's sync status and retry sync.";
-}
 
 export async function runHomeFanout(deps: {
   home: HomeResult; catalogCurrent: boolean; localOnly?: boolean; applicable?: boolean;
