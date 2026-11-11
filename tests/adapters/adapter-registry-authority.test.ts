@@ -1311,6 +1311,30 @@ describe("TRAE CN ACP regression contract", () => {
     expect(modelCacheRetainedStoreSnapshot().pinnedBytes).toBe(0);
   });
 
+  test("background publication cannot pin a roster replaced after gather", async () => {
+    const open = spyOn(traeClient, "openTraeSession").mockResolvedValue({ models: ["old-model"],
+      prompt: async () => undefined, close: async () => undefined });
+    const row = { ...config(), models: [] };
+    const next: OcxConfig = { port: 10100, defaultProvider: "trae-cn", providers: { "trae-cn": row } };
+    let checks = 0;
+    let published = false;
+    await refreshTraeCnCatalogSources(next, () => {
+      if (++checks === 2) {
+        setCached("trae-cn", [{ id: "new-model", provider: "trae-cn" }], Date.now(),
+          captureModelCacheGeneration("trae-cn"));
+      }
+      return true;
+    }, async () => { published = true; });
+    const resolver = observedModelsAuthResolver(null, []);
+    const observed = await fetchProviderModelsWithAuth(captureProviderGather("trae-cn", row, resolver),
+      0, undefined, resolver);
+    expect(published).toBe(false);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(observed.models.map(model => model.id)).toContain("new-model");
+    expect(observed.models.map(model => model.id)).not.toContain("old-model");
+    expect(getPinnedCached("trae-cn")).toBeNull();
+  });
+
   test("background publication cannot replace an intervening newer roster", async () => {
     const rowA = { ...config(), models: [] };
     const rowB = { ...config(), models: [] };
