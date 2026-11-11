@@ -112,27 +112,38 @@ function createLineTap(tap: (line: string) => boolean) {
   let pending = "";
   let kept = "";
   let keptBytes = 0;
-  const offer = (line: string): void => {
-    const text = line.endsWith("\r") ? line.slice(0, -1) : line;
+  // When a line is longer than TAP_LINE_MAX_CHARS it is offered in pieces; every later piece takes the
+  // first piece's decision, so the rest of a debug1: line can never reach the classifier.
+  let inherited: boolean | undefined;
+  const decide = (text: string): boolean => {
     let keep = true;
     try { keep = tap(text); } catch { /* A failing tap keeps the line, as an untapped stream would. */ }
+    return keep;
+  };
+  const offer = (line: string, complete: boolean): void => {
+    const text = line.endsWith("\r") ? line.slice(0, -1) : line;
+    const keep = inherited ?? decide(text);
+    inherited = complete ? undefined : keep;
     if (!keep) return;
     kept += `${text}\n`;
     keptBytes += Buffer.byteLength(text) + 1;
   };
   const split = (): void => {
     for (let index = pending.indexOf("\n"); index !== -1; index = pending.indexOf("\n")) {
-      offer(pending.slice(0, index));
+      offer(pending.slice(0, index), true);
       pending = pending.slice(index + 1);
     }
     while (pending.length > TAP_LINE_MAX_CHARS) {
-      offer(pending.slice(0, TAP_LINE_MAX_CHARS));
+      offer(pending.slice(0, TAP_LINE_MAX_CHARS), false);
       pending = pending.slice(TAP_LINE_MAX_CHARS);
     }
   };
   return {
     push(bytes: Uint8Array): number { pending += decoder.decode(bytes, { stream: true }); split(); return keptBytes; },
-    end(): string { pending += decoder.decode(); split(); if (pending) offer(pending); pending = ""; return kept; },
+    end(): { text: string; bytes: number } {
+      pending += decoder.decode(); split(); if (pending) offer(pending, true); pending = "";
+      return { text: kept, bytes: keptBytes };
+    },
   };
 }
 
@@ -170,7 +181,15 @@ async function readOutput(stream: ReadableStream<Uint8Array>, maxBytes: number, 
     signal?.removeEventListener("abort", cancel);
     reader.releaseLock();
   }
-  if (lines) return lines.end();
+  if (lines) {
+    // The last line may arrive without a newline; it counts against the cap like any other.
+    const { text, bytes } = lines.end();
+    if (bytes > maxBytes) {
+      kill?.();
+      throw new SshRunnerError("output_limit", `ssh output exceeded ${maxBytes} bytes`);
+    }
+    return text;
+  }
   const bytes = new Uint8Array(total);
   let offset = 0;
   for (const chunk of chunks) {

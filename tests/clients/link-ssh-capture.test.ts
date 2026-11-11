@@ -132,6 +132,34 @@ describe("ssh capture window", () => {
     expect(tail.filter(record => record.event === "capture_truncated")).toHaveLength(1);
     expect(tail.some(record => record.event === "hostkey.verification_failed")).toBe(false);
   });
+
+  test("a file already at the threshold gets its one marker, and a later process never appends after a marker", async () => {
+    const { linkDirectory, dir } = fixture();
+    startSshCapture({ linkDirectory, now: T0 });
+    const path = join(dir, "ssh-" + T0 + ".jsonl");
+    writeFileSync(path, " ".repeat(SSH_CAPTURE_FILE_MAX_BYTES - 100) + "\n", { mode: 0o600 });
+    for (let round = 0; round < 2; round++) {
+      // A fresh opener per round stands for a fresh process: it has no memory of a full session.
+      const opener = createSshCaptureOpener({ linkDirectory, now: () => T0 });
+      opener("home", LINK)!.stderrLine("Host key verification failed.");
+      await opener.flush();
+    }
+    const markers = readFileSync(path, "utf8").split("\n").filter(line => line.includes("capture_truncated"));
+    expect(markers).toHaveLength(1);
+    expect(statSync(path).size).toBeLessThanOrEqual(SSH_CAPTURE_FILE_MAX_BYTES);
+  });
+
+  test("a file that already ends with a marker takes nothing more, even well under the cap", async () => {
+    const { linkDirectory, dir } = fixture();
+    startSshCapture({ linkDirectory, now: T0 });
+    const path = join(dir, "ssh-" + T0 + ".jsonl");
+    const ended = JSON.stringify({ at: T0, event: "capture_truncated" }) + "\n";
+    writeFileSync(path, ended, { mode: 0o600 });
+    const opener = createSshCaptureOpener({ linkDirectory, now: () => T0 });
+    opener("home", LINK)!.stderrLine("Host key verification failed.");
+    await opener.flush();
+    expect(readFileSync(path, "utf8")).toBe(ended);
+  });
 });
 
 describe("ssh capture window extension", () => {

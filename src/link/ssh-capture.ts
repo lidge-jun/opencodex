@@ -43,6 +43,7 @@ const CAPTURE_FILE = /^ssh-(\d{13})\.jsonl$/;
 const CONTROL_MAX_BYTES = 512;
 const QUEUE_MAX = 512;
 const TRUNCATION_RESERVE_BYTES = 128;
+const TRUNCATION_EVENT = '"event":"capture_truncated"';
 const PRUNE_INTERVAL_MS = 60_000;
 
 export type SshCaptureTunnel = "home" | "child";
@@ -286,13 +287,24 @@ async function appendCapture(dir: string, name: string, lines: readonly string[]
   const path = join(dir, name);
   let file: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    const flags = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+    const flags = constants.O_RDWR | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK;
     file = await open(path, flags, 0o600);
     const current = await file.stat();
     if (!current.isFile() || current.nlink !== 1) return "refused";
     if (windows) await hardenSecretPathAsync(path, { required: true });
     else await file.chmod(0o600);
-    if (current.size >= SSH_CAPTURE_FILE_MAX_BYTES - TRUNCATION_RESERVE_BYTES) return "full";
+    // A marker ends the file for every process, not only the one that wrote it.
+    if (current.size > 0) {
+      const length = Math.min(current.size, TRUNCATION_RESERVE_BYTES);
+      const tail = Buffer.alloc(length);
+      await file.read(tail, 0, length, current.size - length);
+      if (tail.toString("utf8").includes(TRUNCATION_EVENT)) return "full";
+    }
+    if (current.size >= SSH_CAPTURE_FILE_MAX_BYTES - TRUNCATION_RESERVE_BYTES) {
+      // Reached without a marker (lines that filled it exactly): end it with the one marker that fits.
+      if (current.size + Buffer.byteLength(truncatedLine) <= SSH_CAPTURE_FILE_MAX_BYTES) await file.write(truncatedLine);
+      return "full";
+    }
     let size = current.size;
     let data = "";
     let full = false;

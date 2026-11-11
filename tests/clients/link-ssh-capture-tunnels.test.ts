@@ -168,11 +168,14 @@ describe("Home -R tunnel and SSH capture", () => {
 
 describe("ssh runner stderr tap", () => {
   const big = "debug1: channel 1: free: port listener, nchannels 2\n".repeat(4_000);
-  const spawnWith = (text: string, kills: string[]) => (() => {
+  const spawnWith = (text: string | string[], kills: string[]) => (() => {
     const exit = deferred<number>();
     return {
       pid: 900, stdout: new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } }),
-      stderr: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(text)); controller.close(); } }),
+      stderr: new ReadableStream<Uint8Array>({ start(controller) {
+        for (const chunk of typeof text === "string" ? [text] : text) controller.enqueue(new TextEncoder().encode(chunk));
+        controller.close();
+      } }),
       exited: exit.promise, kill(signal?: string) { kills.push(signal ?? "SIGTERM"); exit.resolve(143); },
     };
   }) as unknown as typeof Bun.spawn;
@@ -192,6 +195,26 @@ describe("ssh runner stderr tap", () => {
     expect(await child.stderr!).toBe("Host key verification failed.\npartial\n");
     expect(kills).toEqual([]);
     expect(seen).toHaveLength(4_002);
+  });
+
+  test("pieces of one overlong line inherit the first piece's decision: a debug1 line never classifies", async () => {
+    const kills: string[] = [];
+    const seen: string[] = [];
+    // Delivered in chunks, so the runner has to split the line before it sees its newline.
+    const chunks = ["debug1: " + "a".repeat(20_000), " Permission denied (publickey).", "\nHost key verification failed.\n"];
+    const child = createSshRunner({ spawn: spawnWith(chunks, kills) })
+      .spawnTunnel(["ssh"], { stderrLine: line => { seen.push(line); return !line.startsWith("debug1: "); } });
+    expect(await child.stderr!).toBe("Host key verification failed.\n");
+    // Only the first piece and the next line reach the tap; the continuation inherits "not kept".
+    expect(seen).toHaveLength(2);
+    expect(seen[0]!.startsWith("debug1: ")).toBe(true);
+  });
+
+  test("a final unterminated kept line still counts against the cap", async () => {
+    const kills: string[] = [];
+    const text = ("x".repeat(1_000) + "\n").repeat(63) + "y".repeat(5_000);
+    const child = createSshRunner({ spawn: spawnWith(text, kills) }).spawnTunnel(["ssh"], { stderrLine: () => true });
+    await expect(child.stderr!).rejects.toThrow("ssh output exceeded");
   });
 });
 
