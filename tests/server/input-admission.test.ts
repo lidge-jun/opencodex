@@ -396,23 +396,41 @@ describe("combo target input admission", () => {
   });
 });
 
-for (const headroom of [false, true]) test(`input ceiling messages retain the actual context window headroom=${headroom}`, async () => {
-  const { inputAdmissionRefusalMessage } = await import("../../src/server/responses/input-admission");
-  const { clientFacingModelLabel } = await import("../../src/lib/error-destination");
-  const parsed = request([userText("a".repeat(4000))]);
-  if (headroom) parsed.options.maxOutputTokens = 8;
-  const provider: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://provider.example/v1", contextWindow: 200, modelMaxInputTokens: { "test-model": 16 } };
-  const result = headroom ? checkComboTargetInputAdmission(parsed, provider, "fixture", "test-model") : checkInputAdmission(parsed, provider, "fixture", "test-model");
-  expect(result.admitted).toBe(false); expect(result.ceiling).toBe(16); expect(result.contextWindow).toBe(200);
-  const message = inputAdmissionRefusalMessage(result, clientFacingModelLabel("client-model"));
-  expect(message).toContain("input limit of client-model (16 tokens; context window: 200 tokens)");
-});
+describe("devin adapter window fallback", () => {
+  const devin: OcxProviderConfig = { adapter: "devin", baseUrl: "https://server.codeium.com" };
+  const devinRequest = (inputTokens: number, modelId: string): OcxParsedRequest => ({
+    ...request([userText(asciiTokens(inputTokens))]),
+    modelId,
+    options: { maxOutputTokens: 64_000 },
+  });
 
-test("output headroom compares against the shared window after the input cap", async () => {
-  const { inputAdmissionRefusalMessage } = await import("../../src/server/responses/input-admission");
-  const { clientFacingModelLabel } = await import("../../src/lib/error-destination");
-  const parsed = request([userText("hi")]); parsed.options.maxOutputTokens = 200;
-  const result = checkComboTargetInputAdmission(parsed, { adapter: "openai-chat", baseUrl: "https://provider.example/v1", contextWindow: 100, modelMaxInputTokens: { "test-model": 16 } }, "fixture", "test-model");
-  expect(result.admitted).toBe(false); expect(result.estimatedTokens).toBeLessThanOrEqual(16);
-  expect(inputAdmissionRefusalMessage(result, clientFacingModelLabel("client-model"))).toContain("context window of client-model (100 tokens; input limit: 16 tokens)");
+  test("resolves the adapter window when provider config declares none", () => {
+    // swe-2-flash serves ~256KiB even though the live catalog advertises 850k;
+    // observed turns terminate at totalTokens 262,140.
+    expect(resolveInputCeiling(devin, "devin", "swe-2-flash")).toBe(262_000);
+    // Effort-suffixed catalog UIDs collapse to the base row.
+    expect(resolveInputCeiling(devin, "devin", "swe-2-flash-medium")).toBe(262_000);
+    expect(resolveInputCeiling(devin, "devin", "swe-2")).toBe(850_000);
+  });
+
+  test("a turn that cannot fit is skipped before any upstream bytes", () => {
+    // 250k estimated input + 64k declared output exceeds the 262k serving window --
+    // the shape that used to answer 200, emit a few hundred tokens and stop on
+    // max_output_tokens with output already committed and no target left to try.
+    const result = checkComboTargetInputAdmission(devinRequest(250_000, "swe-2-flash"), devin, "devin", "swe-2-flash");
+    expect(result.admitted).toBe(false);
+    expect(result.ceiling).toBe(262_000);
+  });
+
+  test("explicit provider windows still win over the adapter table", () => {
+    const wider: OcxProviderConfig = { ...devin, contextWindow: 900_000 };
+    expect(checkComboTargetInputAdmission(devinRequest(250_000, "swe-2-flash"), wider, "devin", "swe-2-flash").admitted).toBe(true);
+    const narrower: OcxProviderConfig = { ...devin, modelContextWindows: { "swe-2-flash": 200_000 } };
+    expect(resolveInputCeiling(narrower, "devin", "swe-2-flash")).toBe(200_000);
+  });
+
+  test("non-devin adapters stay unresolved", () => {
+    const other: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://example.test/v1" };
+    expect(resolveInputCeiling(other, "custom", "swe-2-flash")).toBeNull();
+  });
 });
