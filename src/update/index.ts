@@ -178,7 +178,7 @@ export function runOwnedPnpm(
       const env = pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(target.env));
       if (process.platform === "win32") {
         session.noteUntrackedInstaller();
-        const result = runWindowsInstallerSync({ file: target.bin, args: target.args, options: target.options }, { cwd, env, authorizeMutation });
+        const result = runWindowsInstallerSync({ file: target.bin, args: target.args, options: target.options }, { cwd, env, authorizeMutation, markerPath });
         if (result.processTreeExited && Number.isInteger(result.status)) session.confirmInstallerExit();
         else { session.retainInstallerFence(); return { ...result, processTreeExited: false }; }
         return result;
@@ -1007,6 +1007,7 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
       session.noteUntrackedInstaller();
       const supervised = runWindowsInstallerSync({ file: target.bin, args: target.args, options: target.options }, {
         env: mutation.unprivilegedEnvironment(), authorizeMutation: homePolicy.authorizeMutation,
+        markerPath: join(getConfigDir(), "update-orchestrated.json"),
       });
       if (supervised.processTreeExited === true && Number.isInteger(supervised.status)) session.confirmInstallerExit();
       else session.retainInstallerFence();

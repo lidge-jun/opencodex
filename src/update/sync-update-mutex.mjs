@@ -110,7 +110,9 @@ function inspectOwnershipLease(home) {
   } catch { return "unknown"; }
 }
 
-export function inspectUpdateMarker(home, { now = Date.now } = {}) {
+export function inspectUpdateMarker(home, { now = Date.now, platform = process.platform, signal } = {}) {
+  const probe = signal ?? (id => process.kill(id, 0));
+  const windows = platform === "win32";
   const path = join(home, "update-orchestrated.json");
   let found = false;
   let fd;
@@ -141,15 +143,22 @@ export function inspectUpdateMarker(home, { now = Date.now } = {}) {
     if (!terminal) ids.push(marker.pid);
     for (const key of ["installerPid", "installerPgid"]) {
       if (marker[key] === undefined) continue;
-      if (!Number.isSafeInteger(marker[key]) || marker[key] <= 0 || (key === "installerPgid" && process.platform === "win32")) return "unknown";
+      if (!Number.isSafeInteger(marker[key]) || marker[key] <= 0 || (key === "installerPgid" && windows)) return "unknown";
+      // On Windows installerPid names the Job Object supervisor and witnesses only an installer whose
+      // exit was not confirmed (#8524). A confirmed one needs no witness, and probing a stale pid
+      // that Windows has already reused would report a finished update as still in flight.
+      if (key === "installerPid" && windows && marker.terminationUnconfirmed !== true) continue;
       ids.push(key === "installerPgid" ? -marker[key] : marker[key]);
     }
     let unknown = false;
     for (const id of ids) {
-      try { process.kill(id, 0); return "active"; }
+      try { probe(id); return "active"; }
       catch (error) { if (error?.code !== "ESRCH") unknown = true; }
     }
-    return unknown || (marker.terminationUnconfirmed && marker.installerPgid === undefined) ? "unknown" : "free";
+    // An unconfirmed installer is free only once its process-tree witness is gone: the POSIX group,
+    // or on Windows the supervisor whose exit closes the kill-on-close job.
+    const witness = windows ? marker.installerPid : marker.installerPgid;
+    return unknown || (marker.terminationUnconfirmed && witness === undefined) ? "unknown" : "free";
   } catch (error) { return !found && error?.code === "ENOENT" ? "free" : "unknown"; }
   finally { if (fd !== undefined) closeSync(fd); }
 }
