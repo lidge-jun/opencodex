@@ -279,16 +279,17 @@ describe("client restart controller", () => {
   test("a connection current again during the supervisor lookup keeps this runtime", async () => {
     let ended = true;
     let releaseLookup!: (value: "desktop") => void;
-    let lookups = 0;
+    let lookupEntered!: () => void;
+    const entered = new Promise<void>(resolve => { lookupEntered = resolve; });
     const recycled: unknown[] = [];
     const { io } = fakeIo({
       connectionChanged: () => ended,
-      supervisor: () => { lookups += 1; return new Promise(resolve => { releaseLookup = resolve; }); },
+      supervisor: () => { lookupEntered(); return new Promise(resolve => { releaseLookup = resolve; }); },
       recycle: async verdict => { recycled.push(verdict); },
     });
     const controller = createClientRestartController(io);
     expect(await controller.request()).toEqual({ kind: "accepted", alreadyRestarting: false });
-    while (lookups === 0) await Promise.resolve();
+    await entered;
     ended = false;
     releaseLookup("desktop");
     await controller.settled();
