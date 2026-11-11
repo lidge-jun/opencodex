@@ -1049,7 +1049,7 @@ The proxy translates every Anthropic Messages API request into the Codex Respons
 | User `tool_result` | `function_call_output` (`is_error` → `[tool error]` prefix) |
 | `tool_reference` in a tool result | Text `Tool loaded: <tool_name>` in the paired result by default. The [append-only opt-in](#preserve-cache-prefixes-when-client-tools-load) may place a currently declared deferred function at its successful client discovery result on an eligible final Responses route; a reference alone never grants a tool or enables server-side search |
 | `thinking` / `redacted_thinking` replay | `reasoning` items with bounded `ocxr1` envelopes for signatures and redacted payloads |
-| Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`). On a route to `api.anthropic.com`, the typed `web_search_*` and `web_fetch_*` declarations are also sent to Anthropic as declared and run server-side, unless the web-search sidecar supplies `web_search` itself. A search or fetch with a matching call and complete input comes back to the client as its `server_tool_use` block and its `web_search_tool_result` or `web_fetch_tool_result`, verbatim. Orphan results are dropped without synthesizing a call, while the surrounding text is preserved. When the client sends a complete pair back in its history, the next `api.anthropic.com` request carries it in place only if the following block uniquely identifies its original turn. Repeated anchors, unmatched or duplicate call/result ids, malformed call input, or a result appearing before its call drop the exchange. Call input must be an object with a nonempty search query or fetch URL string; other destinations never see the exchange Hosted search with `allowed_domains`, `blocked_domains` or `user_location` is omitted on translated Responses/Chat routes; forcing omitted search returns 400. Valid `defer_loading` function definitions remain callable as ordinary functions. See [translation limits](#search-restrictions-and-deferred-tools-on-translated-routes). |
+| Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`). On a route to `api.anthropic.com`, the typed `web_search_*` and `web_fetch_*` declarations are also sent to Anthropic as declared and run server-side, unless the web-search sidecar supplies `web_search` itself. A search or fetch with a matching call and complete input comes back to the client as its `server_tool_use` block and its `web_search_tool_result` or `web_fetch_tool_result`, verbatim. Orphan results are dropped without synthesizing a call, while the surrounding text is preserved. When the client sends a complete pair back in its history, the next `api.anthropic.com` request carries it in place only if the following block uniquely identifies its original turn. Repeated anchors, unmatched or duplicate call/result ids, malformed call input, or a result appearing before its call drop the exchange. Call input must be an object with a nonempty search query or fetch URL string; other destinations never see the exchange. The typed `advisor_*` declaration follows [its own destination rules](#anthropics-advisor-tool-on-translated-routes). Hosted search with `allowed_domains`, `blocked_domains` or `user_location` is omitted on translated Responses/Chat routes; forcing omitted search returns 400. Valid `defer_loading` function definitions remain callable as ordinary functions. See [translation limits](#search-restrictions-and-deferred-tools-on-translated-routes). |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, named function→`{type:"function",name}`, hosted WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
@@ -1078,6 +1078,39 @@ translated combo routes. This eager-loading degradation does not itself cause co
 rejection. Enforce mode still rejects unsupported top-level deferral, schema-less deferred tools,
 server-executed discovery and unsupported discovery history. Eligible direct Responses routes
 can use the [append-only opt-in](#preserve-cache-prefixes-when-client-tools-load).
+
+### Anthropic's Advisor tool on translated routes
+
+Recent Claude Code builds declare Anthropic's Advisor server tool (`advisor_20260301`) with the
+`advisor-tool-2026-03-01` beta. Anthropic runs the advisor model server-side inside the same
+request and returns a `server_tool_use` block named `advisor` followed by an
+`advisor_tool_result`. On the translated path OpenCodex handles it this way:
+
+- An `anthropic`-adapter provider on first-party `https://api.anthropic.com` receives the
+  declaration as sent and the beta header. An Anthropic-compatible gateway receives them only when
+  its provider sets [`forwardAdvisorTool: true`](/reference/configuration/providers/), because a
+  gateway without the Advisor would reject every Claude Code request that declares it.
+  `forwardAdvisorTool: false` turns it off for first-party Anthropic too.
+- Every other destination, including GPT, Gemini and gateways without the opt-in, drops the
+  declaration and runs the turn without advice. An Advisor declaration never blocks a combo child
+  or a fallback.
+- When the OpenCodex [Advisor](/reference/configuration/advisor/) is active for a turn, its own
+  `advisor` tool owns the name and the declared tool is not forwarded. The request log records
+  the protocol reason `advisor-tool-shadowed-by-proxy-advisor`.
+- A declaration whose `model` the caller's API key scope does not admit is not forwarded, and the
+  request log records `advisor-tool-outside-model-scope`. The managed native Messages lane
+  refuses such a request instead.
+- The `server_tool_use` and `advisor_tool_result` blocks reach Claude Code unchanged, with their
+  `srvtoolu_` ids, for streaming and non-streaming requests. That covers the plaintext
+  `advisor_result`, the encrypted `advisor_redacted_result` and `advisor_tool_result_error`.
+  OpenCodex does not read, rewrite or log the encrypted content.
+- When Claude Code sends a completed exchange back in its history, the next request to a
+  destination that receives the declaration carries it in place, with the beta. The call input
+  must be an empty object and the result one of the three documented variants; anything else is
+  dropped, as it is for every other destination.
+- An Advisor call still pending when Anthropic ends the response with `pause_turn` is not
+  surfaced or resumed. The resend still carries the declaration and the beta, so the model can
+  consult again.
 
 ### Unicode-property patterns in tool schemas
 

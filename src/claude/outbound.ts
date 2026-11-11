@@ -3,6 +3,7 @@ import { ownedAnthropicErrorPayload, messagesOverflowPresentation } from "../lib
 import { proxyMessagePresentation, markProxyError, hasProxyErrorMessage, hasProxyIncomplete } from "../lib/client-error-body";
 import { admitMessagesFailure, collectMessagesFailure, type MessagesFailureVerdictSink } from "./failure-verdict";
 import { anthropicProgressEnvelope, isAnthropicProgressMirror } from "../responses/anthropic-progress";
+import { ADVISOR_SERVER_TOOL_NAME, isAdvisorCallInput, isAdvisorResultContent } from "../adapters/anthropic/advisor-tool";
 /**
  * Claude Code outbound: internal /v1/responses output -> Anthropic Messages API shapes.
  *
@@ -284,7 +285,8 @@ export function sanitizeWebSearchInput(input: unknown): Rec {
  * input (query/queries) and the web_search_tool_result content (hits, or the error
  * object when the search failed). An item carrying `anthropic_blocks` came from Anthropic's
  * own server-side call and maps back to those blocks verbatim (`srvtoolu_` id,
- * `encrypted_content`, web_fetch), so the client can replay them on its next turn.
+ * `encrypted_content`, web_fetch, the Advisor's `advisor_tool_result`), so the client can replay
+ * them on its next turn.
  * Shared by the SSE, JSON and direct translation paths.
  */
 export function webSearchPairFromItem(item: Rec): {
@@ -294,7 +296,8 @@ export function webSearchPairFromItem(item: Rec): {
   const completed = item.status !== "failed";
   const { use, result } = isRec(item.anthropic_blocks) ? item.anthropic_blocks : {};
   if (isRec(use) && isRec(result) && typeof use.id === "string" && isRec(use.input)
-    && (use.name === "web_search" || use.name === "web_fetch")
+    && (use.name === "web_search" || use.name === "web_fetch"
+      || (use.name === ADVISOR_SERVER_TOOL_NAME && isAdvisorCallInput(use.input) && isAdvisorResultContent(result.content)))
     && result.tool_use_id === use.id && result.type === `${use.name}_tool_result`) {
     return { id: use.id, name: use.name, resultType: result.type, input: use.input, resultContent: result.content, completed };
   }
