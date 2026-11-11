@@ -34,7 +34,7 @@
   "fix-jsonc-cr-comments.test.ts": "lib",
   "definite-overflow-verdict.test.ts": "lib",
   "fix-jsonc-empty-comma.test.ts": "lib",
-  "web-search-eof.test.ts": "web-search",
+  "web-search-eof.test.ts": "web-search", "web-search-memory-citation.test.ts": "web-search",
   "fix-search-frame-shapes.test.ts": "web-search",
   "fix-search-orphan-source.test.ts": "web-search",
   "fix-search-unicode-clamp.test.ts": "web-search",
