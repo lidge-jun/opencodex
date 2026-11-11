@@ -51,6 +51,7 @@ Usage:
   ocx disconnect              Restore local state and clear the hub connection
   ocx sync [--local-only] [--json] [--restart-codex]  Sync models and linked Children
                               --expect-link <id> | --expect-hub-key <id>: only from that Home/hub key (exit 5 otherwise)
+                              --child <id>: only those Children; --restart-children[=app-server | =codex --yes]: restart their Codex
   ocx sync-cache [--restart-codex]
                               Refresh Codex's model cache from the active catalog
   ocx catalog pull <https-url> Install a validated remote catalog and refresh the Codex cache
