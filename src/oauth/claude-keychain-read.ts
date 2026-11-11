@@ -128,7 +128,13 @@ export function createClaudeKeychainReader(deps: ClaudeKeychainReaderDeps): Clau
   function readAsync(): Promise<string | null> {
     if (deps.platform !== "darwin") return Promise.resolve(null);
     if (pendingRead) return pendingRead;
-    const read = lookup(READ_ARGS, true, timeoutMs).then(outcome => {
+    // A probe holding the slot is waited out (it settles within its own deadline) instead of
+    // making this read look like an absent credential; a probe that timed out leaves its child
+    // running and the backoff active, so the read then declines exactly as it would under backoff.
+    const started = pendingProbe
+      ? pendingProbe.then(() => lookup(READ_ARGS, true, timeoutMs))
+      : lookup(READ_ARGS, true, timeoutMs);
+    const read = started.then(outcome => {
       pendingRead = undefined;
       if (outcome?.code !== 0 || !outcome.stdout) return null;
       return outcome.stdout.toString("utf8").trim() || null;

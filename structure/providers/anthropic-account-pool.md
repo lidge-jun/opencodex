@@ -332,7 +332,7 @@ conflicting authenticated UUIDs refuse persistence. Generic display metadata is 
 
 The refresh owner captures login ID, token generation and identity metadata before observation.
 It rechecks them, pause/removal and selection revision after observation and inside serialized persistence.
-The CLI generation is re-read by an awaited `claudeCredentialGenerationCurrent` just before the writer is entered (the read is async and cannot run in the synchronous predicate); the predicate gets its result and fails closed on a missing, unreadable, near-expiry or different generation. Superseding writes win. An unresolved full rotation leaves the row and
+The CLI generation is re-read by an awaited `claudeCredentialGenerationCurrent`: once after observation, and for adoption again inside the serialized writer through `afterPrePersistRead`, so a rotation while the writer was queued is caught (the read is async, so the synchronous predicate only consumes its result and fails closed on a missing, unreadable, near-expiry or different generation). A read that arrives while a metadata probe holds the Keychain slot waits for that probe instead of reading as absent. Superseding writes win. An unresolved full rotation leaves the row and
 pending intent intact, without replaying a possibly consumed refresh or setting reauthentication
 solely from the identity failure. A proven different account may use its own stored refresh only
 when no pending intent blocks it. Intent cleanup follows successful durable adoption.

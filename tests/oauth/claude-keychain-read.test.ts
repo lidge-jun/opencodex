@@ -284,10 +284,17 @@ describe("Claude Keychain metadata probe is asynchronous and shares the read's a
 
     const probed = h.reader.probe();
     expect(h.children).toHaveLength(2);
-    expect(await h.reader.readAsync()).toBeNull();
+    // A read that arrives during a probe waits for it instead of reading as absent.
+    const queued = h.reader.readAsync();
+    await Promise.resolve();
     expect(h.children).toHaveLength(2);
     h.children[1]!.emit("close", 0, null);
     expect(await probed).toBe("present");
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(h.children).toHaveLength(3);
+    h.children[2]!.stdout.emit("data", Buffer.from("secret-after-probe\n"));
+    h.children[2]!.emit("close", 0, null);
+    expect(await queued).toBe("secret-after-probe");
   });
 
   test("a timed-out probe child that is still blocked keeps every later lookup from spawning", async () => {

@@ -48,14 +48,15 @@ export async function newerClaudeCredentialForInstance(
 }
 
 /**
- * Fresh re-read of the Claude CLI credential for a write that depends on it, taken immediately
- * before the serialized store writer is entered. The read is asynchronous (a Keychain lookup must
- * never be killed, #8161), so it cannot run inside the writer's synchronous ownership predicate.
- * Fails closed: a missing, unreadable, near-expiry or different generation is not current.
+ * Fresh re-read of the Claude CLI credential for a write that depends on it. Adoption awaits it
+ * inside the serialized writer (afterPrePersistRead) so a rotation while the writer was queued is
+ * caught; the read is asynchronous (a Keychain lookup must never be killed, #8161), so the writer's
+ * synchronous ownership predicate only consumes its result. Fails closed: a missing, unreadable,
+ * near-expiry or different generation is not current.
  */
-export async function claudeCredentialGenerationCurrent(diskGeneration: string): Promise<boolean> {
+export async function claudeCredentialGenerationCurrent(diskGeneration: string, now: () => number = Date.now): Promise<boolean> {
   const disk = await detectClaudeCodeTokenAsync();
-  return disk !== null && disk.expires > Date.now() + REFRESH_SKEW_MS && credentialGeneration(disk) === diskGeneration;
+  return disk !== null && disk.expires > now() + REFRESH_SKEW_MS && credentialGeneration(disk) === diskGeneration;
 }
 
 /**

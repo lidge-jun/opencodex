@@ -268,9 +268,9 @@ decides at each launch:
 | It cannot tell (unreadable keychain, corrupt file) | Assumes subscription and prints a warning — it never moves a paying subscriber onto the proxy on a failed read |
 
 A locked macOS keychain counts as "cannot tell". opencodex waits up to 1.5 seconds for the
-keychain to answer, never cancels the unlock prompt, and does not ask the keychain again for
-60 seconds after a lookup times out, so one locked keychain shows one prompt rather than one per
-launch or settings refresh.
+keychain to answer, never cancels the unlock prompt, and a running proxy does not ask the keychain
+again for 60 seconds after a lookup times out, so dashboard refreshes do not stack prompts. Each
+new `ocx claude` process asks once on its own.
 
 This is recomputed every launch, not remembered, so logging in or out is picked up on the
 next `ocx claude` with nothing to reconfigure.

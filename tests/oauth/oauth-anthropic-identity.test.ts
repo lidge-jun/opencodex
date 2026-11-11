@@ -257,9 +257,8 @@ test("explicit import enriches legacy shared-token slot without changing its id 
   expect(getAccountCredential("anthropic", id)!.anthropicIdentity).toEqual(proof("synthetic-old"));
 });
 
-// A CLI credential change is caught by the awaited re-read just before persistence (below); the
-// Keychain read is asynchronous, so it no longer runs inside the serialized writer (#8161).
-for (const mutation of ["login", "identity", "pause"] as const) {
+// A CLI credential change while the writer is queued is caught by the awaited re-read inside it.
+for (const mutation of ["login", "identity", "pause", "disk"] as const) {
   test(`serialized adoption guard catches queued ${mutation} after the profile recheck`, async () => {
     const { id, credential } = await seed(); disk();
     const intent = writeOAuthRefreshIntent("anthropic", id, credentialGeneration(credential));
@@ -278,6 +277,7 @@ for (const mutation of ["login", "identity", "pause"] as const) {
       if (mutation === "login") row.loginId = "00000000-0000-4000-8000-000000000002";
       if (mutation === "identity") row.credential.accountId = "synthetic-owner-changed";
       if (mutation === "pause") row.paused = true;
+      if (mutation === "disk") disk("synthetic-newer-disk", "synthetic-newer-refresh");
     });
     try {
       await writerEntered.promise;
@@ -528,7 +528,7 @@ test("different CLI account can clear an obsolete intent after durable same-acco
 });
 
 
-test("adoption reads the CLI generation at observation and again just before persistence, never inside it", async () => {
+test("adoption reads the CLI generation only at observation and inside persistence", async () => {
   const { id, credential } = await seed(); disk();
   const originalDetect = localTokens.detectClaudeCodeTokenAsync;
   const reads: boolean[] = [];
@@ -542,7 +542,6 @@ test("adoption reads the CLI generation at observation and again just before per
       resolveIdentity: async access => proof(access),
       afterPrePersistRead: () => { insidePersistence = true; },
     })).resolves.toBe("synthetic-other");
-    // The Keychain read is asynchronous, so it must not run under the store writer (#8161).
-    expect(reads).toEqual([false, false]);
+    expect(reads).toEqual([false, true]);
   } finally { detect.mockRestore(); }
 });

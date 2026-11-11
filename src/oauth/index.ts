@@ -865,8 +865,12 @@ export async function refreshAnthropicAccountWithLock(
     const generation = credentialGeneration(stored);
     let pendingIntent = readOAuthRefreshIntent(provider, accountId);
     const observed = await newerClaudeCredentialForInstance(provider, stored, now(), deps.signal, deps.resolveIdentity);
-    // The CLI credential is re-read here, before the serialized writer, because the read is async.
-    const diskVerified = observed.kind === "absent" ? undefined : await claudeCredentialGenerationCurrent(observed.diskGeneration);
+    // A write that depends on the CLI credential re-reads it: the non-adopting checks below run
+    // now, and adoption re-reads again inside the serialized writer (afterPrePersistRead), so a CLI
+    // rotation while the writer was queued is still caught. The read is async and never kills the
+    // Keychain child (#8161); the writer's predicate only consumes its result.
+    let diskVerified = observed.kind === "absent" || observed.kind === "adopt"
+      ? undefined : await claudeCredentialGenerationCurrent(observed.diskGeneration, now);
     const assertOwner = (store: AuthStore, checkDisk = true) => {
       if (observed.kind !== "absent" && deps.signal?.aborted) throw new OAuthTokenRefreshStaleError();
       if (!owns(store, checkDisk ? diskVerified : undefined)) {
@@ -876,9 +880,13 @@ export async function refreshAnthropicAccountWithLock(
     };
     assertOwner({ [provider]: getAccountSet(provider)! }, observed.kind !== "adopt");
     if (observed.kind === "adopt") {
+      const diskGeneration = observed.diskGeneration;
       const outcome = await mergeAccountCredential(provider, accountId, observed.credential, {
         expectedGeneration: generation,
-        afterPrePersistRead: deps.afterPrePersistRead,
+        afterPrePersistRead: async () => {
+          await deps.afterPrePersistRead?.();
+          diskVerified = await claudeCredentialGenerationCurrent(diskGeneration, now);
+        },
         assertOwnership: assertOwner,
       });
       // A superseding write did not adopt our candidate. Its pending intent remains owned by it.
