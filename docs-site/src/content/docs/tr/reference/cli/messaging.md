@@ -15,9 +15,17 @@ stdio app-server başlatır. Kayıtlı konuşmaların canlı olduğu doğrulanma
 yanıtı işlenmiş veya yanıtlanmış anlamına gelmez. Kurulum ve sınırlar için
 [İngilizce MCP başvurusuna](/reference/cli/messaging/#mcp-queue-host) bakın.
 
-`--allow-reply-read` seçeneği ayrıca `codex_read_reply` aracını açar ve kayıtlı
+`--allow-reply-read` seçeneği ayrıca `codex_read_reply` ve süre sınırlı
+`codex_wait_reply` araçlarını açar ve kayıtlı
 konuşmanın son yanıt metnini MCP istemcisine aktarabilir. Varsayılan olarak kapalıdır.
 Aynı turda bulunmak tek bir girdiye özel yanıt sahipliği anlamına gelmez.
+Bekleme yalnızca kayıtlı veriyi okur; yüklü olmayan hedefi devam ettirmez.
+İşin sürmesi gerekiyorsa kullanıcı konuşmayı yerel Codex istemcisinde açar/devam
+ettirir. Bekleme bütçesi en fazla 20 saniyedir; yardımcı süreç kapatılıp geri
+alınana kadar paylaşılan yuva meşgul kalabilir. Bir anlık görüntü yalnızca tüm
+okumaları son tarihten önce tamamlandıysa başarılı sayılır; sonradan biten
+yardımcı kapatma bunu geçersiz kılmaz, son tarihten sonra tamamlanan okumalar ise
+kullanılmaz. Mesaj gönderme ve yanıt bekleme ayrı çağrılardır.
 [Ayrıntılar ve sınırlar](/reference/cli/messaging/#opt-in-stored-turn-replies).
 
 ## Keşfetme ve gönderme

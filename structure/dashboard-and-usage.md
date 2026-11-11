@@ -536,19 +536,19 @@ write when an existing baseline is forgotten: `src/quota/reset-observer.ts` runs
 (`src/server/background-lifecycle.ts`) whose tick is a no-op until the section is enabled, so
 enabling it takes effect without a restart.
 
-- `src/quota/window-mapping.ts` maps provider and Codex quota snapshots to one neutral window list,
-  and `src/quota/reset-detector.ts` compares two consecutive observations of a window and emits at
-  most one reset event, classified as scheduled or surprise.
-- `src/quota/reset-observer.ts` is the only place a snapshot becomes a delivered notification. It
-  never throws into the quota write that triggered it. `src/codex/quota.ts` and
-  `src/providers/quota.ts` reach it only through a lazy import, because both are statically
-  reachable from `src/server/responses/core.ts` and a static edge would load the subsystem into
-  every install.
-- `src/quota/reset-seen-store.ts` keeps a durable already-notified ledger. The observer claims a
-  reset there before dispatch, so a reset is attempted at most once, across restarts and racing
-  observers; a failed delivery is not retried. `src/quota/reset-sinks.ts` delivers to a webhook or
-  a local command; each sink is best-effort and isolated from the other.
-- `src/quota/reset-poller.ts` is an opt-in idle refresh (default 15 minutes, floor 10). Without it,
+- `src/quota/window-mapping.ts` maps provider and Codex quota snapshots to one neutral window list, and
+  `src/quota/reset-detector.ts` emits at most one reset per window, scheduled or surprise; Mistral's `retainUnknownWindows` keeps a baseline through an unknown window only while a deadline identifies it. The selection of those Mistral windows lives in `src/providers/quota-mistral-budget.ts`, not under `src/quota/`, because `src/providers/quota.ts` imports it statically on the core path.
+- `src/quota/reset-observer.ts` is the only place a snapshot becomes a delivered notification, and it
+  never throws into the quota write that triggered it. `src/codex/quota.ts` and `src/providers/quota.ts`
+  reach it only through a lazy import, because both are statically reachable from `src/server/responses/core.ts`.
+  A probe-bound report may carry a private credential digest (`keyReportCredentialIds` in
+  `src/providers/quota/report-cache.ts`); only opted-in producers (today Mistral) bind it, reset identity
+  uses it instead of `apiKeyPoolEntryId`, and cached rows re-validate against the current credential and
+  destination; passive reads use literal or environment keys without publishing evidence and withhold keychain-backed rows. Others keep identity byte for byte.
+- `src/quota/reset-seen-store.ts` keeps a durable already-notified ledger; the observer claims a reset there
+  before dispatch, so each reset is attempted at most once across restarts and racing observers, and a failed
+  delivery is not retried. `src/quota/reset-sinks.ts` delivers to a webhook or local command, each best-effort and isolated.
+- `src/quota/reset-poller.ts` is an opt-in idle refresh (default 15 min, floor 10). Without it,
   quota reports are fetched only when the dashboard or CLI asks, and an overnight reset goes
   unobserved. `src/quota/reset-activation.ts` installs the sink independently of the poller, so
   `pollSeconds: 0` observes live traffic only.

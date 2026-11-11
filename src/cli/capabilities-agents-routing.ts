@@ -28,11 +28,11 @@ export const AGENT_ROUTING_CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["message", "mcp"], usage: "ocx message mcp --codex <absolute-cli-path> --codex-home <absolute-existing-home> [--allow-reply-read] [--allow-resume --resume-socket <absolute-existing-unix-socket> --resume-permissions <profile-id>]",
-    summary: "Serve MCP tools for stored Codex metadata, queued text, opt-in stored-turn reply reads and guarded existing-server resume preflight.",
+    summary: "Serve MCP tools for stored Codex metadata, queued text, opt-in stored-turn reply reads, bounded waits and guarded existing-server resume preflight.",
     routes: [], mutates: true, json: "none",
     flags: [{ name: "--codex", value: "string", required: true, summary: "Explicit local Codex CLI executable." },
       { name: "--codex-home", value: "string", required: true, summary: "Explicit existing Codex home; no creation or login." },
-      { name: "--allow-reply-read", value: "boolean", summary: "Explicitly expose stored final-turn text through codex_read_reply; disabled by default." },
+      { name: "--allow-reply-read", value: "boolean", summary: "Explicitly expose stored final-turn text through codex_read_reply and codex_wait_reply; disabled by default." },
       { name: "--allow-resume", value: "boolean", summary: "Expose existing-thread resume preflight; requires --resume-socket and --resume-permissions. Execution is blocked pending native atomic resume support." },
       { name: "--resume-socket", value: "string", summary: "Existing trusted local Unix App Server socket; requires --allow-resume, --resume-permissions and matching Codex home." },
       { name: "--resume-permissions", value: "string", summary: "Host-selected native profile for resume preflight; does not bypass the atomicity refusal or preserve saved permissions automatically." }],

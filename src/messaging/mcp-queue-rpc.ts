@@ -11,7 +11,7 @@ export type QueueRpcResult = { status: "response"; result: Record<string, unknow
 
 /** Execute only explicit stored-thread RPCs; bodies never enter argv or diagnostics. */
 export async function queueMcpRpc(options: QueueMcpOptions, method: "thread/list" | "thread/queue/add" | "thread/items/list" | "thread/items/read" | "thread/turns/list",
-  params: Record<string, unknown>, signal?: AbortSignal): Promise<QueueRpcResult> {
+  params: Record<string, unknown>, signal?: AbortSignal, onOutcomeBeforeCleanup?: () => void): Promise<QueueRpcResult> {
   const reads = ["thread/items/list", "thread/items/read", "thread/turns/list"];
   if (!["thread/list", "thread/queue/add", ...reads].includes(method) || (reads.includes(method) && !options.allowReplyRead)) {
     return { status: "not_sent", error: { code: "queue_mcp_method_not_allowed" } };
@@ -46,6 +46,7 @@ export async function queueMcpRpc(options: QueueMcpOptions, method: "thread/list
       const finish = (value: QueueRpcResult): void => {
         if (outcome) return;
         outcome = value;
+        onOutcomeBeforeCleanup?.();
         clearTimeout(deadline);
         child.stdin.end();
         termTimer = setTimeout(() => stopGroup("SIGTERM"), 300);

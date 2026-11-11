@@ -85,9 +85,12 @@ ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
+ocx link check (--link-id <id> | --all) [--no-wait] [--json]
 ```
 
 非交互式终端（非 TTY）必须提供 `--expect-fingerprint`。交互式终端中可省略该参数，但必须明确确认所提供的指纹。
+
+在 Home 上，`ocx link check (--link-id <id> | --all)` 会读取每个由 Home 添加的子机的已安装版本、安装类型和更新途径：它通过链接的 SSH 连接在子机上运行 `ocx update --plan`（每台子机 60 秒，同时最多三台），该命令只计算更新计划，不做任何修改。早于 2.97.0 的子机显示为 `owner-action`（`legacy-ocx`），其版本在 macOS 和 Linux 上通过再一次只读 SSH 调用获取，在 Windows 上取自子机通过链接上报的版本。由子机发起的链接和 `ocx-child` 子机不经 SSH 直接报告。`ocx link status --json` 会为每一行添加 `child` 块（版本、版本差异、目录是否最新、活动情况、最近一次操作）。详情和退出码见 [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity)（英文）。
 
 ## 相关指南
 

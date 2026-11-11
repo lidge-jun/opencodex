@@ -10,11 +10,13 @@ options. Service diagnostics follow the [producer bounds](../ops/service-logging
 
 ## Context-window refusals
 
-`isDefiniteContextOverflow` in `src/combos/failover.ts` reads bounded innermost provider messages.
+`isDefiniteContextOverflow` in `src/lib/context-overflow-verdict.ts` (re-exported by
+`src/combos/failover.ts`) reads bounded innermost provider messages.
 OpenAI context-length wording keeps its substring match; Anthropic `prompt is too long: N tokens > M maximum`,
-Bedrock `input is too long for requested model` and `Please reduce the length of the messages or completion`
-count only at the start of the leaf message, so a validation error or SDK wrapper that echoes them is not
-evidence. Parameter validation (`invalid_value`/`invalid_type`, a `param` outside the conversation and token
+Bedrock `input is too long for requested model`, provider messages confirming the conversation/input has reached or passed its model context limit, a prompt that is too long for the model's context window, a window/length/limit that is full, exhausted, at its limit or has been exceeded, and `Please reduce the length of the messages or completion`
+count only in the innermost provider message (the anchored verdicts need the provider message to start with them, while the explicit too-long/context-window wording may appear inside it), so a validation error or SDK wrapper that echoes them is not
+evidence. A negator that governs the overflow wording denies it, and capacity prose about the service keeps its
+cooldown instead of authorizing a hop. Structured error messages and bounded string-valued JSON `error` fields can carry the leaf message. Parameter validation (`invalid_value`/`invalid_type`, a `param` outside the conversation and token
 budget fields, `Invalid '<x>'`, Pydantic `input_value=`) never counts. This shared detector grants a
 target-local hop before the generic HTTP 400 stop, without recording a cooldown. Code-only evidence
 beside unrelated prose, malformed envelopes and arbitrary shorten-parameter requests stay terminal.
@@ -129,7 +131,9 @@ reader and buffers only until one of these boundaries:
 
 SSE selection uses the [exact internal media-type match](inventory.md#internal-response-media-types).
 Explicit non-SSE types pass through unread, including parameters or longer subtypes containing the
-event-stream token. A caller can still opt into inspecting a response without a content type.
+event-stream token. A caller can still opt into inspecting a response without a content type. Non-streaming
+JSON from a native (non-runTurn) child is therefore never inspected here: an empty `max_output_tokens`
+limit in such a body is returned to the client unchanged, and only SSE and runTurn children fail over on it.
 
 Native post-header reset recovery shares that boundary, because it is asking the same question about
 the same bytes. With `replayReadErrors`, a read error that arrives while the preflight is still
@@ -147,10 +151,20 @@ is not a prelude: it commits.
   target is committed and cross-target replay is forbidden;
 - a `response.failed` terminal arrives first, in which case the terminal is converted back through
   the ordinary bounded combo-failure classifier and may advance to the next declared target;
-- a zero-output `response.incomplete` with no reason, `adapter_eof`, `missing_terminal_event`, or
-  `upstream_stall_timeout` follows the same failure path; explicit semantic or unknown reasons stay terminal;
+- a zero-output `response.incomplete` with no reason, `adapter_eof`, `missing_terminal_event`,
+  `upstream_stall_timeout`, or an empty-output `max_output_tokens` limit follows the same failure path.
+  The `max_output_tokens` arm needs the evidence `classifyZeroOutputTokenLimit` requires in
+  `src/adapters/run-turn-queue.ts`: `end_turn` must not be `false` and
+  `incomplete_details.retryable` must not be `false`. A translated Anthropic `pause_turn` also
+  reaches the wire as `incomplete/max_output_tokens`, so `src/bridge/sse.ts` records it on the
+  request context (`src/lib/client-error-body.ts`) and this preflight keeps it on its target while
+  the client keeps the same reason and usage. Other explicit semantic or unknown reasons stay
+  terminal;
 - a top-level `error` arrives before output, in which case unknown, rate-limit, and server failures
   may advance while errors explicitly classified as non-retryable 4xx remain committed;
+  a bare error with no status field of its own but an integral numeric `code` in 400..599 takes
+  that code as its HTTP status (`bareErrorStatus`), so it gets the same decision and cooldown scope
+  as the same HTTP response; non-integral, out-of-range and string codes keep the symbolic mapping;
 - another completed/incomplete terminal or the aggregate preflight byte or retained-chunk cap is reached,
   in which case the current target is committed conservatively.
 

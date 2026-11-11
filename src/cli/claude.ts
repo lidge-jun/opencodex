@@ -377,21 +377,26 @@ export function buildClaudeEnv(
   if (config.claudeCode?.alwaysEnableEffort === true) {
     setDefault("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT", "1");
   }
-  // Tool-search deferral (#4838). Claude Code disables MCP tool deferral whenever
-  // ANTHROPIC_BASE_URL is not a first-party Anthropic host — keyed on the host, not
-  // the model — so every routed session inlines all MCP tool schemas. Its own log
-  // line states the precondition: "Set ENABLE_TOOL_SEARCH=true (or auto / auto:N)
-  // if your proxy forwards tool_reference blocks."
+  // Tool-search deferral (#4838, #7963). Claude Code v2.1.304 and later turn tool
+  // search ON by default behind an ANTHROPIC_BASE_URL gateway, so MCP tools are
+  // deferred and requests carry defer_loading fields and tool_reference blocks.
+  // Earlier versions kept it off behind a gateway unless ENABLE_TOOL_SEARCH was
+  // true / auto / auto:N (code.claude.com/docs/en/mcp#tool-search-through-a-gateway).
   //
-  // We forward them on the native Anthropic passthrough route only. A translated
-  // route cannot honour the shape: deferred tools still carry input_schema on the
-  // wire (deferral is a server-side context optimisation, not a smaller request),
-  // toolsToResponses drops the tool_search server tool and ignores defer_loading,
-  // and compatibility.ts lists tool_search/tool_reference/deferred_tools as
-  // unsupported. Turning it on there leaves the routed provider holding every
-  // schema while Claude Code stops counting them and stops compacting, which is
-  // worse than the problem. So this stays opt-in per config rather than
-  // unconditional, and setDefault keeps an operator's own export.
+  // The native Anthropic passthrough route forwards those fields. A translated
+  // route cannot honour them server-side: deferred tools still carry input_schema
+  // on the wire (deferral is a server-side context optimisation, not a smaller
+  // request), toolsToResponses drops the tool_search server tool and ignores
+  // defer_loading, and compatibility.ts lists tool_search/tool_reference/
+  // deferred_tools as unsupported. On a translated Chat route each client
+  // ToolSearch load also changes the tool list and the catalog nudge, so the next
+  // request re-misses the provider's prompt cache (#7963);
+  // claudeCode.appendOnlyToolLoadingModels covers verified Responses destinations
+  // and claudeCode.chatToolDispatchModels verified direct Chat routes.
+  //
+  // We inject only when claudeCode.toolSearch is set, so an unset value leaves the
+  // client's own version default in place, and setDefault keeps an operator's own
+  // export (ENABLE_TOOL_SEARCH=false restores upfront loading).
   setDefault("ENABLE_TOOL_SEARCH", claudeToolSearchEnv(config.claudeCode?.toolSearch));
   const maxCtx = config.claudeCode?.maxContextTokens;
   if (typeof maxCtx === "number" && Number.isFinite(maxCtx) && maxCtx > 0) {

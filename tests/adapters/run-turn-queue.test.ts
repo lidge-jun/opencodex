@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  classifyZeroOutputTokenLimit,
   COALESCE_MAX_CHUNK_LENGTH,
   createAdapterEventQueue,
   DEFAULT_MAX_BACKLOG_CODE_UNITS,
@@ -475,6 +476,140 @@ describe("run-turn adapter event preflight", () => {
     expect(await collect(preflight.stream)).toEqual([{ type: "error", message: "stop" }]);
     expect(cancelled).toBe(1);
   });
+
+  test("buffers reasoning events until first content event", async () => {
+    const thinking: AdapterEvent = { type: "thinking_delta", thinking: "pondering" };
+    const content: AdapterEvent = text("answer");
+    const values = [heartbeat, thinking, content, done];
+    const preflight = await preflightAdapterEvents(events(values));
+    expect(preflight.error).toBeUndefined();
+    expect(preflight.empty).toBe(false);
+    expect(await collect(preflight.stream)).toEqual(values);
+  });
+
+  test("reasoning followed by max_output_tokens terminal fails over via zero-output classifier", async () => {
+    const thinking: AdapterEvent = { type: "thinking_delta", thinking: "pondering" };
+    const limitTerminal: AdapterEvent = {
+      type: "incomplete",
+      reason: "max_output_tokens",
+      usage: { inputTokens: 50, outputTokens: 100, totalTokens: 150 },
+    };
+    const preflight = await preflightAdapterEvents(
+      events([heartbeat, thinking, limitTerminal]),
+      classifyZeroOutputTokenLimit,
+    );
+    expect(preflight.error).toEqual({
+      type: "error",
+      status: 502,
+      errorType: "upstream_error",
+      code: "zero_output_token_limit",
+      message: "Provider reached its output token limit before producing output",
+      usage: { inputTokens: 50, outputTokens: 100, totalTokens: 150 },
+    });
+    expect(preflight.empty).toBe(false);
+    expect(await collect(preflight.stream)).toEqual([heartbeat, thinking, preflight.error]);
+  });
+
+  test("reasoning followed by done length stopReason fails over via zero-output classifier", async () => {
+    const thinking: AdapterEvent = { type: "thinking_delta", thinking: "pondering" };
+    const doneLimit: AdapterEvent = {
+      type: "done",
+      stopReason: "length",
+      usage: { inputTokens: 50, outputTokens: 100, totalTokens: 150 },
+    };
+    const preflight = await preflightAdapterEvents(
+      events([heartbeat, thinking, doneLimit]),
+      classifyZeroOutputTokenLimit,
+    );
+    expect(preflight.error?.code).toBe("zero_output_token_limit");
+  });
+
+  test("returns on first reasoning event promptly when no classifier or compaction is set", async () => {
+    let continuedAfterThinking = false;
+    async function* source(): AsyncGenerator<AdapterEvent> {
+      yield heartbeat;
+      yield { type: "thinking_delta", thinking: "pondering" };
+      continuedAfterThinking = true;
+      yield text("answer");
+      yield done;
+    }
+    const preflight = await preflightAdapterEvents(source());
+    expect(preflight.error).toBeUndefined();
+    expect(preflight.empty).toBe(false);
+    expect(continuedAfterThinking).toBe(false);
+    expect(await collect(preflight.stream)).toEqual([
+      heartbeat,
+      { type: "thinking_delta", thinking: "pondering" },
+      text("answer"),
+      done,
+    ]);
+    expect(continuedAfterThinking).toBe(true);
+  });
+
+  test("retains at most PREFLIGHT_HEARTBEAT_RETAIN_LIMIT heartbeats when reasoning precedes many heartbeats, preserving replayUnsafe", async () => {
+    const thinking: AdapterEvent = { type: "thinking_delta", thinking: "pondering" };
+    const unsafeHeartbeat: AdapterEvent = { type: "heartbeat", replayUnsafe: true };
+    const plainHeartbeats: AdapterEvent[] = Array.from({ length: 19 }, () => ({ type: "heartbeat" }));
+    const values = [thinking, unsafeHeartbeat, ...plainHeartbeats, done];
+
+    const preflight = await preflightAdapterEvents(events(values), classifyZeroOutputTokenLimit);
+    expect(preflight.replayUnsafe).toBe(true);
+    const collected = await collect(preflight.stream);
+    // 1 thinking + 16 retained heartbeats + 1 done = 18 total
+    expect(collected).toHaveLength(18);
+    expect(collected[0]).toEqual(thinking);
+    expect(collected.at(-1)).toEqual(done);
+    // Every retained heartbeat must have replayUnsafe: true latched
+    const heartbeats = collected.slice(1, -1);
+    expect(heartbeats).toHaveLength(16);
+    expect(heartbeats.every(h => h.type === "heartbeat" && h.replayUnsafe === true)).toBe(true);
+  });
+
+  test("heartbeat-only stream EOF is reported as empty: true, preserving replayUnsafe latch", async () => {
+    const unsafeHeartbeat: AdapterEvent = { type: "heartbeat", replayUnsafe: true };
+    const preflight = await preflightAdapterEvents(events([heartbeat, unsafeHeartbeat]));
+    expect(preflight.empty).toBe(true);
+    expect(preflight.replayUnsafe).toBe(true);
+  });
+
+  test("reasoning-only stream EOF is reported as empty: false", async () => {
+    const thinking: AdapterEvent = { type: "thinking_delta", thinking: "pondering" };
+    const preflight = await preflightAdapterEvents(events([heartbeat, thinking]));
+    expect(preflight.empty).toBe(false);
+    expect(preflight.replayUnsafe).toBe(false);
+  });
+
+  test("reasoning trickling past maxReasoningHoldMs commits the target and streams buffered reasoning", async () => {
+    let continuedAfterHold = false;
+    async function* tricklingSource(): AsyncGenerator<AdapterEvent> {
+      yield heartbeat;
+      yield { type: "thinking_delta", thinking: "first thought" };
+      await new Promise(resolve => setTimeout(resolve, 60));
+      continuedAfterHold = true;
+      yield { type: "thinking_delta", thinking: "second thought" };
+      yield text("answer");
+      yield done;
+    }
+
+    const preflight = await preflightAdapterEvents(
+      tricklingSource(),
+      classifyZeroOutputTokenLimit,
+      { maxReasoningHoldMs: 20 },
+    );
+    expect(preflight.error).toBeUndefined();
+    expect(preflight.empty).toBe(false);
+    expect(preflight.replayUnsafe).toBe(false);
+
+    const collected = await collect(preflight.stream);
+    expect(collected).toEqual([
+      heartbeat,
+      { type: "thinking_delta", thinking: "first thought" },
+      { type: "thinking_delta", thinking: "second thought" },
+      text("answer"),
+      done,
+    ]);
+    expect(continuedAfterHold).toBe(true);
+  });
 });
 
 describe("run-turn adapter event queue retained-payload budgets", () => {
@@ -644,5 +779,92 @@ describe("run-turn adapter event queue retained-payload budgets", () => {
         .toThrow("maxEventCodeUnits must be a positive safe integer");
     }
     expect(DEFAULT_MAX_EVENT_CODE_UNITS).toBeLessThan(DEFAULT_MAX_BACKLOG_CODE_UNITS);
+  });
+});
+
+describe("classifyZeroOutputTokenLimit", () => {
+  test("classifies incomplete with max_output_tokens as retryable zero-output error", () => {
+    const event: AdapterEvent = {
+      type: "incomplete",
+      reason: "max_output_tokens",
+      usage: { inputTokens: 42, outputTokens: 0, totalTokens: 42 },
+    };
+    expect(classifyZeroOutputTokenLimit(event)).toEqual({
+      type: "error",
+      status: 502,
+      errorType: "upstream_error",
+      code: "zero_output_token_limit",
+      message: "Provider reached its output token limit before producing output",
+      usage: { inputTokens: 42, outputTokens: 0, totalTokens: 42 },
+    });
+  });
+
+  test("classifies done with max_tokens, length, or max_output_tokens as zero-output error", () => {
+    for (const stopReason of ["max_tokens", "length", "max_output_tokens"]) {
+      const event: AdapterEvent = {
+        type: "done",
+        stopReason,
+        usage: { inputTokens: 50, outputTokens: 0, totalTokens: 50 },
+      };
+      expect(classifyZeroOutputTokenLimit(event)).toEqual({
+        type: "error",
+        status: 502,
+        errorType: "upstream_error",
+        code: "zero_output_token_limit",
+        message: "Provider reached its output token limit before producing output",
+        usage: { inputTokens: 50, outputTokens: 0, totalTokens: 50 },
+      });
+    }
+  });
+
+  test("ignores incomplete with non-token-limit reasons", () => {
+    expect(classifyZeroOutputTokenLimit({ type: "incomplete", reason: "content_filter" })).toBeUndefined();
+    expect(classifyZeroOutputTokenLimit({ type: "incomplete", reason: "cancelled" })).toBeUndefined();
+  });
+
+  test("ignores done with normal stop reasons or continuation pauses", () => {
+    expect(classifyZeroOutputTokenLimit({ type: "done", stopReason: "stop" })).toBeUndefined();
+    expect(classifyZeroOutputTokenLimit({ type: "done", stopReason: "end_turn" })).toBeUndefined();
+    expect(classifyZeroOutputTokenLimit({ type: "done", stopReason: "pause_turn" })).toBeUndefined();
+    expect(classifyZeroOutputTokenLimit({ type: "done", stopReason: "PAUSE_TURN" })).toBeUndefined();
+    expect(classifyZeroOutputTokenLimit({ type: "done" })).toBeUndefined();
+  });
+
+  test("ignores non-replayable terminals: retryable=false, endTurn=false, providerState, or compactionEncryptedContent", () => {
+    expect(classifyZeroOutputTokenLimit({
+      type: "incomplete",
+      reason: "max_output_tokens",
+      retryable: false,
+    })).toBeUndefined();
+
+    expect(classifyZeroOutputTokenLimit({
+      type: "incomplete",
+      reason: "max_output_tokens",
+      endTurn: false,
+    })).toBeUndefined();
+
+    expect(classifyZeroOutputTokenLimit({
+      type: "incomplete",
+      reason: "max_output_tokens",
+      providerState: { cursor: "opaque" },
+    })).toBeUndefined();
+
+    expect(classifyZeroOutputTokenLimit({
+      type: "done",
+      stopReason: "max_tokens",
+      endTurn: false,
+    })).toBeUndefined();
+
+    expect(classifyZeroOutputTokenLimit({
+      type: "done",
+      stopReason: "max_tokens",
+      providerState: { cursor: "opaque" },
+    })).toBeUndefined();
+
+    expect(classifyZeroOutputTokenLimit({
+      type: "done",
+      stopReason: "max_tokens",
+      compactionEncryptedContent: "encrypted_blob",
+    })).toBeUndefined();
   });
 });

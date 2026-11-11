@@ -60,6 +60,20 @@ export function carryProxyIncompleteContext<T extends object>(source: object, ta
   proxyIncompletes.set(target, reasons);
   return target;
 }
+/**
+ * A translated `done` whose adapter stop reason was Anthropic's `pause_turn`.
+ *
+ * The bridge still reports that turn to the client as `incomplete/max_output_tokens`, the reason the
+ * wire has always carried there, so the wire cannot distinguish a paused long-running turn the client
+ * is expected to continue from an exhausted output budget. This request-scoped fact carries the
+ * difference without adding or changing a client-visible field: combo stream preflight reads it so a
+ * paused turn is neither replayed on another target nor read as a zero-output token limit.
+ */
+const pausedTurns = new WeakSet<object>();
+export function rememberPausedTurn(context: object): void { pausedTurns.add(context); }
+export function isPausedTurn(context: object | undefined): boolean {
+  return context !== undefined && pausedTurns.has(context);
+}
 const CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
   ["context_length_exceeded", CLIENT_ERROR_CONTRACTS.context_overflow],
   ["upstream_incomplete", CLIENT_ERROR_CONTRACTS.stream_incomplete],
@@ -182,6 +196,7 @@ export function rememberProxyErrorMessage(context: object, message: string, fiel
 }
 export function carryProxyErrorContext(source: object, target: object): void {
   carryProxyIncompleteContext(source, target);
+  if (pausedTurns.has(source)) pausedTurns.add(target);
   let messages = proxyMessages.get(source);
   if (!messages) { messages = new Map(); proxyMessages.set(source, messages); }
   proxyMessages.set(target, messages);

@@ -5,7 +5,10 @@ import {
   hasShrinkableOpenAIChatImages,
   normalizeOpenAIChatImages,
   OPENAI_CHAT_IMAGE_BASE64_BUDGET,
+  upscaledImageSize,
+  upscaleUndersizedOpenAIChatImages,
 } from "../../../src/adapters/openai-chat-images";
+import { IMAGE_NORMALIZE_CONCURRENCY } from "../../../src/adapters/anthropic-image-normalize";
 import {
   getNormalizeStatsForTests,
   resetNormalizeStateForTests,
@@ -142,6 +145,11 @@ function parsedWith(messages: OcxMessage[]): OcxParsedRequest {
     stream: false,
     options: {},
   } as unknown as OcxParsedRequest;
+}
+
+/** An already-built Chat Completions user message with one inline image, as the upscaler sees it. */
+function wireImageMessage(url: string): Record<string, unknown> {
+  return { role: "user", content: [{ type: "image_url", image_url: { url } }] };
 }
 
 /** A user turn holding `text` plus one image per URL, in canonical (pre-wire) form. */
@@ -482,4 +490,75 @@ test("oversized image async construction preserves current JSON schema downgrade
   expect(built instanceof Promise).toBe(true);
   const request = await built;
   expect(JSON.parse(request.body as string).response_format).toEqual({ type: "json_object" });
+});
+
+// Venice rejects a request carrying any image under 64x64 with a 400. A wide screenshot
+// floored by budget normalization (320x25) then breaks every later turn of the session.
+describe("openai-chat minimum image edge", () => {
+  const venice: OcxProviderConfig = {
+    adapter: "openai-chat",
+    baseUrl: "https://api.venice.ai/api/v1",
+    apiKey: "sk-test",
+    authMode: "key",
+  };
+
+  test("a Venice image below 64px is upscaled with its aspect ratio kept", async () => {
+    const strip = await realPngB64(320, 25);
+    const built = createOpenAIChatAdapter(venice).buildRequest(parsedWith([imageMessage([dataUrl(strip)])]));
+    expect(built).toBeInstanceOf(Promise);
+    const parts = imageParts(wireMessages((await (built as Promise<{ body: string }>)).body));
+    expect(parts).toHaveLength(1);
+    const sent = parts[0]?.image_url?.url ?? "";
+    expect(sent.startsWith("data:image/png;base64,")).toBe(true);
+    expect(sniffImageDimensions(sent.split(",")[1] ?? "")).toEqual({ width: 820, height: 64 });
+  });
+
+  test("a Venice image already at the minimum keeps its exact bytes", async () => {
+    const ok = await realPngB64(64, 64);
+    const request = createOpenAIChatAdapter(venice).buildRequest(parsedWith([imageMessage([dataUrl(ok)])]));
+    expect(request).not.toBeInstanceOf(Promise);
+    expect(imageParts(wireMessages((request as { body: string }).body))[0]?.image_url?.url).toBe(dataUrl(ok));
+  });
+
+  test("providers without a declared minimum keep small images unchanged", async () => {
+    const strip = await realPngB64(320, 25);
+    const request = createOpenAIChatAdapter(provider).buildRequest(parsedWith([imageMessage([dataUrl(strip)])]));
+    expect(request).not.toBeInstanceOf(Promise);
+    expect(imageParts(wireMessages((request as { body: string }).body))[0]?.image_url?.url).toBe(dataUrl(strip));
+  });
+
+  test("a cancellation during the last resize rejects instead of sending", async () => {
+    const strip = await realPngB64(320, 25);
+    const messages = [wireImageMessage(dataUrl(strip))];
+    const controller = new AbortController();
+    const upscale = async () => {
+      controller.abort(new Error("client disconnected"));
+      return { data: strip, mediaType: "image/png" };
+    };
+    await expect(upscaleUndersizedOpenAIChatImages(messages, 64, { upscale, abortSignal: controller.signal }))
+      .rejects.toThrow("client disconnected");
+  });
+
+  test("concurrent upscales stay within the shared decode bound", async () => {
+    const strip = await realPngB64(320, 25);
+    let active = 0;
+    let peak = 0;
+    const upscale = async () => {
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      active--;
+      return { data: strip, mediaType: "image/png" };
+    };
+    const calls = Array.from({ length: IMAGE_NORMALIZE_CONCURRENCY + 3 }, () =>
+      upscaleUndersizedOpenAIChatImages([wireImageMessage(dataUrl(strip))], 64, { upscale }));
+    await Promise.all(calls);
+    expect(peak).toBeGreaterThan(0);
+    expect(peak).toBeLessThanOrEqual(IMAGE_NORMALIZE_CONCURRENCY);
+  });
+
+  test("extreme strips clamp the long edge", () => {
+    expect(upscaledImageSize(10_000, 2, 64)).toEqual({ width: 4096, height: 64 });
+    expect(upscaledImageSize(64, 64, 64)).toBeNull();
+  });
 });

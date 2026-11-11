@@ -184,7 +184,7 @@ Drives no management route.
 
 Usage: `ocx message mcp --codex <absolute-cli-path> --codex-home <absolute-existing-home> [--allow-reply-read] [--allow-resume --resume-socket <absolute-existing-unix-socket> --resume-permissions <profile-id>]`
 
-Serve MCP tools for stored Codex metadata, queued text, opt-in stored-turn reply reads and guarded existing-server resume preflight.
+Serve MCP tools for stored Codex metadata, queued text, opt-in stored-turn reply reads, bounded waits and guarded existing-server resume preflight.
 
 State-changing: yes. JSON mode: `none`.
 
@@ -194,7 +194,7 @@ Drives no management route.
 |---|---|---|
 | `--codex` | string | Explicit local Codex CLI executable. |
 | `--codex-home` | string | Explicit existing Codex home; no creation or login. |
-| `--allow-reply-read` | boolean | Explicitly expose stored final-turn text through codex_read_reply; disabled by default. |
+| `--allow-reply-read` | boolean | Explicitly expose stored final-turn text through codex_read_reply and codex_wait_reply; disabled by default. |
 | `--allow-resume` | boolean | Expose existing-thread resume preflight; requires --resume-socket and --resume-permissions. Execution is blocked pending native atomic resume support. |
 | `--resume-socket` | string | Existing trusted local Unix App Server socket; requires --allow-resume, --resume-permissions and matching Codex home. |
 | `--resume-permissions` | string | Host-selected native profile for resume preflight; does not bypass the atomicity refusal or preserve saved permissions automatically. |

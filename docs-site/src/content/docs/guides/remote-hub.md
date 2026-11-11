@@ -482,6 +482,11 @@ above already sets it. A whole-array set replaces the array, so when the hub alr
 run the line `invite` prints — it carries the existing ones plus the new origin. `ocx config get
 corsAllowOrigins` shows what is there now.
 
+`invite` picks the origin from the config file, but a running hub checks it against the config it
+is running with: `hub.managementPublicOrigin` is applied only at start, and a `corsAllowOrigins` edit
+may not reach the running hub until it restarts. After changing either, restart the hub before
+inviting; `ocx config set` prints a reminder for both keys and for `hub.managementIngress`.
+
 `ocx hub invite --json` emits `{ code, expiresAt, dataUrl, managementUrl, command }` with `expiresAt`
 as ISO 8601. The code is a secret: single-use, five-minute lifetime, rate-limited at the hub, and not
 to be persisted, logged, or pasted into an issue. `--clients codex,claude` picks which client configs
@@ -768,6 +773,12 @@ For a service rollback, stop the branch service and repair the prior release aga
   loopback browser origin, so an origin-bound grant could never match. Nothing was minted. Run the
   `ocx config set corsAllowOrigins` line the error prints, with the joining machine's proxy port.
   See [Inviting another machine](#inviting-another-machine).
+- **`ocx hub invite` says `Minting a pairing code failed (origin-refused)`:** the running hub refused
+  the browser origin the invite names. It admits only the `hub.managementPublicOrigin` and
+  `corsAllowOrigins` it is running with, which can predate a recent `ocx config set`. Restart the hub
+  (the error prints the restart command for this install) and invite again. `(rate-limited)` means
+  the hub is limiting new codes (eight a minute, and a cap on unused ones); wait for earlier codes to
+  be used or expire (five minutes), then invite again. `(rejected)` is any other refusal.
 - **`ocx hub invite` says the advertised data origin would be this machine's own loopback:** the
   bind is loopback-only or a wildcard and `hub.dataPublicOrigin` is unset, so there is no address
   to advertise and nothing guesses a tailnet or LAN one. Nothing was minted. Set

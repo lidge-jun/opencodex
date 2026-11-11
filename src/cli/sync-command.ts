@@ -217,7 +217,9 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
         }
         try {
           const result = await runFanoutProcess(buildExecArgv({ alias: link.alias, knownHostsFile: linkKnownHostsPath(), argv: remotePinnedSyncArgv(link.id, platform) }), { timeoutMs: Math.max(0, deadline - Date.now()) });
-          return { ...classifySyncResult(result), exit: result.code };
+          // Pick the public fields: a verdict key that ocx.sync.fanout/1 does not define never reaches the document.
+          const { state, reason } = classifySyncResult(result);
+          return { state, reason, exit: result.code };
         } catch (error) {
           if (error instanceof FanoutProcessError) return { state: error.reason === "deadline-exceeded" || error.reason === "termination-unconfirmed" ? "timed-out" : "failed", reason: error.reason, exit: null };
           throw error;
