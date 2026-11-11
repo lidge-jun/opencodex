@@ -117,6 +117,7 @@ export type {
   OcxSearchConfig,
   OcxVisionSidecarConfig,
   OcxWebSearchSidecarConfig,
+  OcxClaudeCodeToolLoadingConfig,
 } from "./types/config";
 
 export type {

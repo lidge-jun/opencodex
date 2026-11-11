@@ -27,6 +27,7 @@ import { isPassiveRead } from "../lib/passive-read";
 import { redactSecretString } from "../lib/redact";
 import { isValidProviderName } from "./provider-name";
 import { MODEL_ALIAS_PATTERN } from "../providers/default-aliases";
+import { aliasTemplateError } from "../providers/alias-template";
 import { MODEL_DISCOVERY_MAX_MODELS } from "../providers/model-discovery-limits";
 import { getProviderRegistryEntry, providerMatchesRegistryTransport, registryModelServiceTierCapabilityApplies } from "../providers/registry";
 import { providerFastSwitchOff } from "../providers/fast-opt-in";
@@ -1032,7 +1033,13 @@ export function sanitizeAliasesForLoad(raw: unknown, warn: (message: string) => 
   const comboAliases = new Set(Object.values((root.combos as Record<string, { alias?: unknown }> | undefined) ?? {})
     .map(combo => typeof combo?.alias === "string" ? combo.alias.toLowerCase() : "").filter(Boolean));
   const accountNamespaces = new Set(Object.keys((root.codexAccountNamespaces as Record<string, unknown> | undefined) ?? {}).map(name => name.toLowerCase()));
-  for (const provider of Object.values(providers)) {
+  for (const [providerName, provider] of Object.entries(providers)) {
+    // #7705: a hand-edited template that would not validate loses only itself, not the config.
+    if (provider.aliasTemplate !== undefined
+      && (typeof provider.aliasTemplate !== "string" || aliasTemplateError(provider.aliasTemplate) !== null)) {
+      warn(`Ignoring invalid alias template for provider ${providerName} in config.json`);
+      delete provider.aliasTemplate;
+    }
     const alias = provider.alias;
     if (typeof alias !== "string" || !isValidProviderName(alias)
       || providerNames.has(alias.toLowerCase()) || claimedProviders.has(alias.toLowerCase())

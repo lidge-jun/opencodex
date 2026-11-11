@@ -1,4 +1,4 @@
-import { recordUpstreamValidationDetail } from "./request-log-failure-detail";
+import { recordUpstreamProviderErrorDetail } from "./request-log-failure-detail";
 import { normalizeNativeChatContent } from "../adapters/openai-chat/native-content";
 import { attachComboFailureEvidence, ownedChatErrorPayload, type ClientErrorContract } from "../lib/client-error-body";
 import type { FailureVerdictSink } from "../chat/failure-verdict";
@@ -754,7 +754,7 @@ export async function runNativeChatAttempt(
     let upstreamMessage: string | undefined;
     try {
       const parsedError = JSON.parse(bodyText) as Rec;
-      recordUpstreamValidationDetail(logCtx, response.status, parsedError);
+      recordUpstreamProviderErrorDetail(logCtx, response.status, parsedError);
       const nested = isRec(parsedError.error) ? parsedError.error : undefined;
       const details = nested ?? parsedError;
       if (typeof details.type === "string") upstreamType = details.type;

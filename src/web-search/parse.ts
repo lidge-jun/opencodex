@@ -315,13 +315,32 @@ export const MAX_SIDECAR_RESPONSE_BYTES = 64 * 1024;
 export const MAX_SIDECAR_STREAM_BYTES = MAX_SIDECAR_RESPONSE_BYTES * 16;
 export const MAX_SIDECAR_DECODED_CHARS = 64 * 1024;
 
-/** Push a `url_citation` annotation as a source, de-duplicated by URL. */
+/**
+ * Push a `url_citation` annotation as a source, de-duplicated by URL. A repeated URL whose kept
+ * entry has no usable title takes the first later valid title (#8351), in place and within the
+ * same source caps; an entry that already has a title keeps it.
+ */
 function collectAnnotation(ann: AnnotationLike | undefined, sources: WebSearchSource[], seen: Set<string>): void {
-  if (!ann || ann.type !== "url_citation" || typeof ann.url !== "string" || seen.has(ann.url)) return;
+  if (!ann || ann.type !== "url_citation" || typeof ann.url !== "string") return;
+  if (seen.has(ann.url)) {
+    fillMissingTitle(sources, ann.url, ann.title);
+    return;
+  }
   if (appendSafeWebSearchSource(sources, {
     url: ann.url,
     ...(ann.title !== undefined ? { title: ann.title } : {}),
   })) seen.add(ann.url);
+}
+
+function fillMissingTitle(sources: WebSearchSource[], url: string, title: unknown): void {
+  if (title === undefined) return;
+  const index = sources.findIndex(source => source.url === url);
+  if (index < 0 || sources[index]!.title !== undefined) return;
+  const candidate = sources.map((source, at) => at === index ? { url, title } : source);
+  // Re-run the shared checks: an invalid title is dropped, and a title that would push the
+  // list past its byte cap drops a source, so either outcome leaves the list unchanged.
+  const checked = safeWebSearchSources(candidate);
+  if (checked.length === sources.length && checked[index]!.title !== undefined) sources[index] = checked[index]!;
 }
 
 /**

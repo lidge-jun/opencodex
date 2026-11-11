@@ -234,7 +234,7 @@ never active-key mutation or the provider-wide cache. Response projection rechec
 and exposes only quota/availability fields, not its internal identity guard. Passive observations
 retain their original timestamp and never trigger inference or token renewal. Unsupported,
 unobserved, failed and measured-zero readings remain distinct; multiple keys are not summed
-because they may share one upstream balance.
+because they may share one upstream balance. Unknown readings carry the closed `quotaUnknownReason` from `src/providers/quota-types.ts` (`no_balance_source`, `passive_not_observed`, `read_failed`, `not_read`, `not_reported` for a successful read the provider reported as empty), and key probe rows carry `quotaReadAt` from the per-key cache entry's read time, omitted when no read happened. Both fields are additive: older clients ignore them and the CLI drops reasons it does not know, so an unknown balance is never projected as zero (#8397).
 
 Provider details use one account-quota reading renderer for Overview, Usage and Accounts/API
 keys. Current-account usage sits below usage statistics; a known-mode active row is authoritative
@@ -537,7 +537,7 @@ write when an existing baseline is forgotten: `src/quota/reset-observer.ts` runs
 enabling it takes effect without a restart.
 
 - `src/quota/window-mapping.ts` maps provider and Codex quota snapshots to one neutral window list, and
-  `src/quota/reset-detector.ts` emits at most one reset per window, scheduled or surprise; Mistral's `retainUnknownWindows` keeps a baseline through an unknown window only while a deadline identifies it.
+  `src/quota/reset-detector.ts` emits at most one reset per window, scheduled or surprise; Mistral's `retainUnknownWindows` keeps a baseline through an unknown window only while a deadline identifies it. The selection of those Mistral windows lives in `src/providers/quota-mistral-budget.ts`, not under `src/quota/`, because `src/providers/quota.ts` imports it statically on the core path.
 - `src/quota/reset-observer.ts` is the only place a snapshot becomes a delivered notification, and it
   never throws into the quota write that triggered it. `src/codex/quota.ts` and `src/providers/quota.ts`
   reach it only through a lazy import, because both are statically reachable from `src/server/responses/core.ts`.

@@ -158,3 +158,15 @@ filtered HEAD reads, whose empty body cannot confirm the scope. Requests without
 newly scoped by that rule. `src/server/hub-usage.ts` binds a client-filtered data-plane read to its authenticated
 key and emits a safe scope echo; `src/remote/hub-usage.ts` projects it without key IDs, and
 `src/client/hub-client.ts` rejects a missing or mismatched echo.
+
+## Anthropic pool account tag
+
+Anthropic pool attempts carry no `accountLogLabel`; the pool folds the account into the logged
+provider (`anthropic-p<hex6>`, `formatAnthropicProviderForLog`). `anthropicAccountTag` in
+`src/providers/label.ts` exposes that same suffix as a separate `accountTag` field and mints no
+new identifier. `sealRequestAttemptIdentity` (`src/server/request-log-account-rotation.ts`)
+derives it from the attempt's frozen provider, so a failover split carries the next account's
+tag; the row's tag comes from the row's provider in `src/server/request-log.ts`. `src/usage/log.ts`
+and the request-log hydration keep only `p` plus six lowercase hex digits and drop anything else.
+Per-account summaries still key on `accountLogLabel` and ignore the tag
+(`tests/usage/request-log-anthropic-account-tag.test.ts`).

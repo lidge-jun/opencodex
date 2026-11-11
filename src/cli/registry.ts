@@ -152,7 +152,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "link",
-    usage: "ocx link <port|issue|status|revoke|reconnect|cleanup>",
+    usage: "ocx link <port|issue|status|revoke|reconnect|cleanup|check|update|sync|restart-codex>",
     summary: "Allocate and manage a loopback remote home link.",
     details: [
       "Port: ocx link port [--json]",
@@ -161,7 +161,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "Revoke: ocx link revoke --link-id <id> [--force --yes] [--json]",
       "Reconnect: ocx link reconnect --link-id <id> [--json]",
       "Cleanup: ocx link cleanup [--link-id <id>] [--json]",
-      "Issue, status, revoke, and reconnect use the running proxy's loopback management API and admin token.",
+      "Check: ocx link check (--link-id <id> | --all) [--no-wait] [--json]",
+      "Update: ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]",
+      "Sync: ocx link sync (--link-id <id> | --all) [--no-wait] [--json]",
+      "Sync with a restart: ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]",
+      "Restart Codex: ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]",
+      "Issue, status, revoke, reconnect, check, update, sync and restart-codex use the running proxy's loopback management API and admin token; update, sync and restart-codex act only on Home-initiated links.",
     ],
   },
   {

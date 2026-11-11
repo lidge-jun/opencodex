@@ -85,9 +85,22 @@ ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
+ocx link check (--link-id <id> | --all) [--no-wait] [--json]
+ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]
+ocx link sync (--link-id <id> | --all) [--no-wait] [--json]
+ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]
+ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]
 ```
 
 対話型端末（TTY）でない場合、`--expect-fingerprint` は必須です。対話型端末では省略できますが、提示されたフィンガープリントを明示的に承認する必要があります。
+
+Home で `ocx link check (--link-id <id> | --all)` を実行すると、Home から追加した各 Child のインストール済みバージョン、インストール種別、更新経路を読み取ります。リンクの SSH 経由で Child の `ocx update --plan` を実行し（Child ごとに 60 秒、同時に 3 台まで）、計画を計算するだけで何も変更しません。2.97.0 より古い Child は `owner-action`（`legacy-ocx`）となり、バージョンは macOS と Linux では読み取り専用の SSH 呼び出しをもう 1 回行って、Windows ではリンク経由で報告されたバージョンから取得します。Child 側から接続したリンクと `ocx-child` の Child は SSH なしで報告されます。`ocx link status --json` は各行に `child` ブロック（バージョン、バージョン差、カタログの鮮度、アクティビティ、直近の操作）を追加します。詳細と終了コードは [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity)（英語）を参照してください。
+
+### Home から Child を操作する
+
+`ocx link sync`、`ocx link restart-codex`、`ocx link update` は、Home から追加した Child に対してリンクの SSH 接続経由で実行され、ジョブを JSON で出力します。`sync` は固定された `ocx sync --expect-link` を実行します（Child は 2.93.0 以降）。`restart-codex` は同期してから Child の Codex app-server を再起動し、実行中の Codex に現在のカタログを読み込ませます。`--scope codex` はデスクトップアプリも再起動します。再起動は 1 つのリンクだけを指定します。`restart-codex` と `--restart-codex` には `--yes` が必要ですが、`ocx link sync --link-id <id> --restart-app-server-only` は確認なしで app-server を再起動します。Home がその Child のモデルリクエストを中継している間は再起動を見送ります（`restart-skipped:link-active`）。2.69 より古い Child では、ストリーミングでないリクエストは応答が始まるまで検出されません。`update --yes` は Child 自身の更新機構で Child の OpenCodex をこの Home のバージョンに更新し、他のバージョンにはしません（Child は 2.97.0 以降。npm と pnpm は Node ランチャー経由で適用するため、`ocx link check` もそこで読み取り専用の `node --version` を実行します）。1 台ずつ処理し、適用が成功、失敗、ロールバックした後に再同期します。結果が不明な適用は再実行も再同期もしないため、`ocx link check` で確認してください。その Child に中継中のリクエストは終了します。Windows の Child は `sync` のみに対応し、`ocx-child` の Child は再起動と更新を非対応として報告します。CLI にはループバックにバインドされた Home が必要です。それ以外の Home ではこれらの操作は使えず、ダッシュボードにもその操作はありません。詳細と終了コードは [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home)（英語）を参照してください。 この保護はベストエフォートです。確認から再起動までの間に始まったリクエストは終了することがあるため、ターンを残す必要がある場合はその Child で新しいリクエストを止めてください。
+
+自分が所有していないマシンをリンクしないでください。Home はあなたの SSH 鍵でそのマシン上のコマンドを実行します。
 
 ## 関連ガイド
 
