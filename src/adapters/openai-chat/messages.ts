@@ -287,12 +287,19 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
             return { type: "text", text: (p as OcxTextContent).text };
           });
           chatMsg = {
-            role: msg.role === "developer" ? (leadingSystemTemplate ? "user" : developerWireRole) : "user",
+            role: msg.role === "developer" && !(provider.singleLeadingSystemMessage === true && hasAudio)
+              ? (leadingSystemTemplate ? "user" : developerWireRole) : "user",
             content: chatParts,
           };
-          if (msg.role === "developer" && chatMsg.role !== "user"
+          if (msg.role === "developer" && (hasAudio || chatMsg.role !== "user")
             && (hasAudio || provider.singleLeadingSystemMessage === true)) {
-            if (hasAudio) {
+            if (provider.singleLeadingSystemMessage === true) {
+              const instruction = { role: developerWireRole, content: chatParts.filter(p => p.type === "text") };
+              if (instruction.content.length > 0) {
+                (pendingToolCalls.length > 0 ? deferredBarrierMessages : out).push(instruction);
+              }
+              chatMsg = { role: "user", content: chatParts.filter(p => p.type !== "text") };
+            } else if (hasAudio) {
               const audioParts = chatParts.filter(p => p.type === "input_audio");
               const instructionParts = chatParts.filter(p => p.type !== "input_audio");
               // Inline audio is user-content-only on this wire. Keep its instruction text in the
@@ -301,8 +308,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
               if (instructionParts.length > 0) {
                 const instruction = { role: leadingSystemTemplate ? "user" : developerWireRole,
                   content: instructionParts.filter(p => p.type === "text") };
-                const attachments = instructionParts.filter(p => p.type !== "text");
-                if (attachments.length > 0) instruction.content = [...instruction.content, ...attachments];
+                instruction.content = [...instruction.content, ...instructionParts.filter(p => p.type !== "text")];
                 if (instruction.content.length > 0) {
                   (pendingToolCalls.length > 0 ? deferredBarrierMessages : out).push(instruction);
                 }

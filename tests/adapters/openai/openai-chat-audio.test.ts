@@ -101,6 +101,33 @@ test("developer inline audio retains the instruction slot and uses a user audio 
     && JSON.stringify(message.content).includes("input_audio"))).toBe(false);
 });
 
+test("single-leading instructions keep audio and image bytes in one ordered user carrier", () => {
+  const parsed = parseRequest({ model: "gpt-audio", instructions: "Base", input: [
+    { role: "user", content: "First" },
+    { type: "function_call", call_id: "call_1", name: "lookup", arguments: "{}" },
+    { role: "developer", content: [
+      { type: "input_text", text: "Listen and inspect" },
+      { type: "input_audio", audio_url: "data:audio/wav;base64,YXVkaW8=", format: "wav" },
+      { type: "input_image", image_url: "data:image/png;base64,aGVsbG8=", detail: "high" },
+    ] },
+    { type: "function_call_output", call_id: "call_1", output: "result" },
+    { role: "user", content: "Continue" },
+  ] });
+  const messages = JSON.parse(createOpenAIChatAdapter({ adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1",
+    singleLeadingSystemMessage: true }).buildRequest(parsed).body).messages as Array<Record<string, unknown>>;
+  expect(messages).toEqual([
+    { role: "system", content: "Base\n\nListen and inspect" },
+    { role: "user", content: "First" },
+    { role: "assistant", content: "", tool_calls: [{ id: "call_1", type: "function", function: { name: "lookup", arguments: "{}" } }] },
+    { role: "tool", tool_call_id: "call_1", content: "result" },
+    { role: "user", content: [
+      { type: "input_audio", input_audio: { data: "YXVkaW8=", format: "wav" } },
+      { type: "image_url", image_url: { url: "data:image/png;base64,aGVsbG8=", detail: "high" } },
+    ] },
+    { role: "user", content: "Continue" },
+  ]);
+});
+
 test("tool-result audio rides a follow-up user message after the tool round", () => {
   const messages = wire([
     user("play the clip"),

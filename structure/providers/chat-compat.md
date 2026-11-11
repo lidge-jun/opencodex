@@ -31,6 +31,8 @@ role rule as text-only instructions, so pinned templates receive a chronological
 Inline audio never moves into a `system`/`developer` content part: its instruction text retains the original slot and the
 audio follows in a user-compatible carrier after any pending tool result. `tests/adapters/openai/openai-chat-audio.test.ts`
 covers the default folded role and this tool-result boundary.
+With `singleLeadingSystemMessage`, only text contributes to the merged instruction; every audio, image and document part moves
+to one user carrier in original relative order, also after the pending tool result. A combined audio/image regression covers it.
 
 The role that slot carries is a separate decision, and the setting that makes it is tri-state.
 `foldDeveloperRoleToSystem` unset sends `system`, `true` sends `system`, and `false` sends
