@@ -64,7 +64,7 @@ describe("ocx disconnect restarts the client runtime it left behind", () => {
   // Coordinator review round 3: any state but disconnected stops the leave before the Home's own
   // \`ocx restart\`, which would interrupt a connection that just landed or act on unreadable state.
   test.each([
-    ["connected", { kind: "connected" } as State, "a new connection was made on this machine after this disconnect"],
+    ["connected", { kind: "connected" } as State, "A new connection is in use on this machine"],
     ["invalid", { kind: "invalid", reason: "config.json is missing or unreadable" } as State, "client state is invalid (config.json is missing or unreadable)"],
     ["mismatched", { kind: "mismatched", reason: "runtimeRole=client is present without config.json.client" } as State, "client state is mismatched (runtimeRole=client is present without config.json.client)"],
   ])("a %s state after disconnect exits 1 and restarts nothing", async (_name, state, message) => {
@@ -80,13 +80,13 @@ describe("ocx disconnect restarts the client runtime it left behind", () => {
   ])("%s with a connected state exits 1", async (_name, observation) => {
     const result = await run(observation, true, false, { state: { kind: "connected" } });
     expect(result).toMatchObject({ code: 1, restarts: 0, out: [] });
-    expect(result.err.join("\n")).toContain("a new connection was made on this machine after this disconnect");
+    expect(result.err.join("\n")).toContain("A new connection is in use on this machine");
   });
 
   test("a connection that lands during the restart turns the standalone result into exit 1", async () => {
     const result = await run(live("client"), true, false, { states: [{ kind: "disconnected" }, { kind: "connected" }] });
     expect(result).toMatchObject({ code: 1, restarts: 1, out: [] });
-    expect(result.err.join("\n")).toContain("a new connection was made on this machine after this disconnect");
+    expect(result.err.join("\n")).toContain("A new connection is in use on this machine");
   });
 
   // Coordinator review round 4: when a client still answers after a refused or failed restart,
@@ -96,7 +96,7 @@ describe("ocx disconnect restarts the client runtime it left behind", () => {
     const result = await run(live("client"), false, false, { after: live("client", 5555), captureAfter: newer, states: [{ kind: "disconnected" }, { kind: "connected" }] });
     expect(result.code).toBe(1);
     const text = result.err.join("\n");
-    expect(text).toContain("a new connection is in use on this machine");
+    expect(text).toContain("A new connection is in use on this machine");
     expect(text).toContain("ocx status");
     expect(text).not.toContain("Run on this machine: ocx restart");
   });
@@ -105,7 +105,7 @@ describe("ocx disconnect restarts the client runtime it left behind", () => {
     const result = await run(live("client"), false, false, { after: live("client", 5555), captureAfter: newer });
     expect(result.code).toBe(1);
     const text = result.err.join("\n");
-    expect(text).toContain("a different client runtime (pid 5555) answers now");
+    expect(text).toContain("A different client runtime (pid 5555) answers now");
     expect(text).not.toContain("Run on this machine: ocx restart");
   });
 
@@ -119,8 +119,8 @@ describe("ocx disconnect restarts the client runtime it left behind", () => {
   test("nothing answering after the restart while a new connection exists reports that connection", async () => {
     const result = await run(live("client"), true, false, { after: { kind: "absent", live: null }, states: [{ kind: "disconnected" }, { kind: "connected" }] });
     expect(result.code).toBe(1);
-    expect(result.err.join("\n")).toContain("a new connection is in use on this machine");
-    expect(result.err.join("\n")).not.toContain("could not confirm a standalone runtime");
+    expect(result.err.join("\n")).toContain("A new connection is in use on this machine");
+    expect(result.err.join("\n")).not.toMatch(/ocx restart/);
   });
 
   test.each([
@@ -131,6 +131,43 @@ describe("ocx disconnect restarts the client runtime it left behind", () => {
     expect(result.code).toBe(1);
     expect(result.out).toEqual([]);
     expect(result.err.join("\n")).toContain("could not confirm a standalone runtime");
+  });
+
+  // Coordinator review round 5: the early exits (inconclusive liveness, uncapturable record) read the
+  // state too, and a connection that landed gets inspection advice, never a restart.
+  test.each([
+    ["inconclusive liveness", { kind: "unknown", live: null } as Observation, undefined],
+    ["an uncapturable client runtime", live("client"), null],
+  ] as const)("%s with a connection that landed advises inspection, not a restart", async (_name, observation, capture) => {
+    const result = await run(observation, true, false, { state: { kind: "connected" }, ...(capture === null ? { capture: null } : {}) });
+    expect(result).toMatchObject({ code: 1, restarts: 0 });
+    const text = result.err.join("\n");
+    expect(text).toContain("A new connection is in use on this machine");
+    expect(text).toContain("ocx status");
+    expect(text).not.toMatch(/ocx restart/);
+  });
+
+  // One rule for every exit-1 branch: a plain restart is advised only while the state is
+  // disconnected and the captured runtime still answers (or nothing answers at all).
+  test("no exit-1 branch advises a restart while a connection is in use or the state is unreadable", async () => {
+    const states: State[] = [{ kind: "connected" }, { kind: "invalid", reason: "unreadable" }, { kind: "mismatched", reason: "mixed" }];
+    const newer: RuntimeGeneration = { pid: 5555, port: 10100, attestationSecret: createLocalAttestationSecret() };
+    const branches: Array<Parameters<typeof run>> = [];
+    for (const state of states) {
+      branches.push([{ kind: "unknown", live: null }, true, false, { state }]);
+      branches.push([live("client"), true, false, { state, capture: null }]);
+      branches.push([live("client"), true, false, { state }]);
+      branches.push([{ kind: "absent", live: null }, true, false, { state }]);
+      branches.push([live("standalone"), true, false, { state }]);
+      for (const after of [live("client"), live("client", 5555), { kind: "absent", live: null } as Observation, { kind: "unknown", live: null } as Observation, live("standalone", 9999)]) {
+        for (const ok of [true, false]) branches.push([live("client"), ok, false, { states: [{ kind: "disconnected" }, state], after, captureAfter: newer }]);
+      }
+    }
+    for (const args of branches) {
+      const result = await run(...args);
+      expect(result.code).toBe(1);
+      expect(result.err.join("\n")).not.toMatch(/ocx restart/);
+    }
   });
 
   test("--json keeps stdout to the disconnect document", async () => {

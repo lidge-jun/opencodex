@@ -65,71 +65,86 @@ export function bindRestartToRuntime(
   };
 }
 
-/** The message for a state that is not disconnected, or null when it is. */
-function notDisconnected(state: DisconnectClientState): string | null {
-  if (state.kind === "disconnected") return null;
-  if (state.kind === "connected") return "Disconnect finished, but a new connection was made on this machine after this disconnect; its client runtime was left alone. If this machine should leave its Home, run ocx disconnect again.";
-  return `Disconnect finished, but the client state is ${state.kind} (${state.reason}), so the client runtime was not restarted. Inspect it with ocx connect status, fix the client state, then run ocx disconnect again.`;
-}
+/** What is known about the runtime answering when the advice is given. */
+export type AnsweringRuntime =
+  | { kind: "captured"; pid: number | null }
+  | { kind: "different"; pid: number | null }
+  | { kind: "unknown" }
+  | { kind: "none" };
 
-/** After a restart: a connection that appeared meanwhile is in use; never advise restarting it. */
-function afterRestartState(state: Exclude<DisconnectClientState, { kind: "disconnected" }>): string {
-  return state.kind === "connected" ? "Disconnect finished, but a new connection is in use on this machine, so its client runtime was not restarted. Inspect it with ocx status and ocx connect status; do not restart it unless this machine should leave its Home (then run ocx disconnect again)." : notDisconnected(state)!;
+/**
+ * The only source of recovery advice for every exit-1 outcome of this step. A plain
+ * `ocx restart` is advised only while the state read now is disconnected and either the captured
+ * runtime is still the one answering, or nothing answers at all (a start, nothing to interrupt).
+ * Any other state gets what was seen and `ocx status` inspection, never a restart.
+ */
+export function recoveryAdvice(state: DisconnectClientState, answering: AnsweringRuntime): string {
+  if (state.kind === "connected") {
+    return "A new connection is in use on this machine; inspect it with ocx status and ocx connect status and do not restart it. If this machine should leave its Home, run ocx disconnect again.";
+  }
+  if (state.kind !== "disconnected") {
+    return `The client state is ${state.kind} (${state.reason}); nothing was restarted. Inspect it with ocx connect status and ocx status, fix the client state, then run ocx disconnect again.`;
+  }
+  switch (answering.kind) {
+    case "captured": return `The client runtime${answering.pid ? ` (pid ${answering.pid})` : ""} still serves the old connection. Run on this machine: ocx restart`;
+    case "different": return `A different client runtime${answering.pid ? ` (pid ${answering.pid})` : ""} answers now, so it was not restarted; inspect it with ocx status and ocx connect status before restarting anything.`;
+    case "unknown": return "Which runtime answers could not be determined; inspect with ocx status and ocx connect status, and restart a client runtime only while ocx connect status reports disconnected.";
+    case "none": return "No runtime answers; start one with ocx restart (or the desktop app or ocx service start, whichever owns it).";
+  }
 }
 
 /**
- * Exit 0 only when the durable state is disconnected (read after the observation and again before
- * exit 0) and no client runtime is left: none answered, a non-client runtime answered, or the
- * restart left a live non-client runtime. Everything else exits 1 with what was seen and what to run.
+ * Exit 0 only when no client runtime remains and the state is disconnected: read once after the
+ * observation when no runtime or a non-client runtime answered, and again after a restart. Every
+ * exit-1 outcome is a headline plus {@link recoveryAdvice} computed from the state read at that point.
  */
 export async function restartRuntimeAfterDisconnect(deps: DisconnectRuntimeDeps): Promise<number> {
   const info = deps.info ?? (line => console.log(line));
   const error = deps.error ?? (line => console.error(line));
+  const fail = (headline: string, answering: AnsweringRuntime): number => {
+    error(`${headline} ${recoveryAdvice(deps.connectionState(), answering)}`);
+    return 1;
+  };
   const observed = await deps.observe();
   if (observed.kind === "unknown") {
-    error("Disconnected, but this machine could not confirm whether the client runtime stopped: a recorded OpenCodex process did not answer. Check with ocx status; if it still serves as a client, run on this machine: ocx restart");
-    return 1;
+    return fail("Disconnected, but this machine could not confirm whether the client runtime stopped: a recorded OpenCodex process did not answer.", { kind: "unknown" });
   }
   const client = observed.kind === "live" && observed.live.role === "client" ? observed.live : null;
   // Captured before the state is read: a runtime a later connect starts is a later generation.
   const target = client ? deps.capture(client) : null;
   if (client && !target) {
-    error(`Disconnected, but this machine could not identify the running client runtime${client.pid ? ` (pid ${client.pid})` : ""}: its runtime record is missing or names another process. It was not restarted. Check with ocx status, then run on this machine: ocx restart`);
+    return fail(`Disconnected, but this machine could not identify the running client runtime${client.pid ? ` (pid ${client.pid})` : ""}: its runtime record is missing or names another process, so it was not restarted.`, { kind: "unknown" });
+  }
+  const before = deps.connectionState();
+  if (before.kind !== "disconnected") {
+    error(`Disconnect finished, but the client runtime was not restarted. ${recoveryAdvice(before, { kind: "unknown" })}`);
     return 1;
   }
-  const before = notDisconnected(deps.connectionState());
-  if (before) { error(before); return 1; }
   if (!client || !target) return 0;
   // A --json caller reads one document from stdout; restart progress goes to stderr.
   const originalLog = console.log;
   if (deps.json) console.log = (...args: unknown[]) => console.error(...args);
   let ok = false;
   try { ok = await deps.restart(target); } finally { console.log = originalLog; }
-  // Standalone is claimed only for what actually serves now: a live runtime that is not a client.
   const after = await deps.observe();
   if (after.kind === "live" && after.live.role !== "client") {
-    const late = notDisconnected(deps.connectionState());
-    if (late) { error(late); return 1; }
+    const late = deps.connectionState();
+    if (late.kind !== "disconnected") {
+      error(`The client runtime was restarted, but the client state changed meanwhile. ${recoveryAdvice(late, { kind: "unknown" })}`);
+      return 1;
+    }
     (deps.json ? error : info)("The client runtime was restarted; this machine now runs standalone OpenCodex.");
     return 0;
   }
   if (after.kind === "live") {
-    // A client still answers. Say what is true before advising anything: a restart is recommended
-    // only while the captured runtime is the one answering and the state is still disconnected.
-    const state = deps.connectionState();
-    if (state.kind !== "disconnected") { error(afterRestartState(state)); return 1; }
     const answering = deps.capture(after.live);
-    if (!answering || answering.attestationSecret !== target.attestationSecret) {
-      error(`Disconnected, but a different client runtime${after.live.pid ? ` (pid ${after.live.pid})` : ""} answers now, so it was not restarted. Inspect it with ocx status and ocx connect status before restarting anything.`);
-      return 1;
+    const who: AnsweringRuntime = !answering ? { kind: "unknown" }
+      : answering.attestationSecret === target.attestationSecret ? { kind: "captured", pid: after.live.pid }
+      : { kind: "different", pid: after.live.pid };
+    if (ok && who.kind === "captured") {
+      return fail("The restart completed, but the runtime still answers as a client.", { kind: "unknown" });
     }
-    error(ok
-      ? "The restart completed, but the runtime still answers as a client. Check with ocx status and ocx connect status on this machine."
-      : `Disconnected, but the client runtime${client.pid ? ` (pid ${client.pid})` : ""} still serves the old connection. Run on this machine: ocx restart`);
-    return 1;
+    return fail(ok ? "The restart completed, but a client runtime answers." : "Disconnected, but the restart did not complete.", who);
   }
-  const state = deps.connectionState();
-  if (state.kind !== "disconnected") { error(afterRestartState(state)); return 1; }
-  error("Disconnected, but this machine could not confirm a standalone runtime afterwards (none answered, or the probe could not decide). Check with ocx status; start one with ocx restart (or the desktop app or ocx service start, whichever owns it).");
-  return 1;
+  return fail("Disconnected, but this machine could not confirm a standalone runtime afterwards.", after.kind === "absent" ? { kind: "none" } : { kind: "unknown" });
 }
