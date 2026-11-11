@@ -246,6 +246,31 @@ describe("native compact uses the exact-model capability", () => {
     await response.text();
   });
 
+  test("with no declaration native compact sends every custom tool and its history unchanged", async () => {
+    let sent: Record<string, unknown> = {};
+    globalThis.fetch = (async (_url, init) => {
+      sent = JSON.parse(String(init?.body));
+      return Response.json({ status: "completed", output: [{ type: "compaction", encrypted_content: "opaque-fixture" }] });
+    }) as typeof fetch;
+    const plain: OcxProviderConfig = {
+      adapter: "openai-responses", baseUrl: "https://plain.example/v1", authMode: "key",
+      supportsNativeCompactEndpoint: true, apiKey: "fixture-key",
+    };
+    const config = { ...getDefaultConfig(), defaultProvider: "plain", providers: { plain } };
+    const response = await handleResponsesCompact(compactionRequest(baseCompactionBody({
+      model: "plain/plain-wire",
+      input: [
+        { type: "custom_tool_call", call_id: "e1", name: "exec", input: "ls" },
+        { type: "custom_tool_call_output", call_id: "e1", output: "ok" },
+      ],
+      tools: [{ type: "custom", name: "exec", format: { type: "text" } }],
+    })), config, { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect((sent.input as Array<{ type: string }>).map(item => item.type)).toEqual(["custom_tool_call", "custom_tool_call_output"]);
+    expect(sent.tools).toEqual([expect.objectContaining({ type: "custom", name: "exec" })]);
+  });
+
   test("native compact projects only the custom-tool flag, never a modelAdapters wire", async () => {
     let sent: Record<string, unknown> = {};
     const nativeItem = { type: "compaction", encrypted_content: "official-native-blob-fixture" };

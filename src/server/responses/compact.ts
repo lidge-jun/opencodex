@@ -1234,7 +1234,9 @@ export async function handleResponsesCompact(
         // A queued key selection can refresh the destination; project only for this send.
         replayBody = isOpenAiOperatedResponsesDestination(sendProvider)
           ? repairUrlCitationAnnotations(replayBody) : stripCanonicalOnlyInputItems(stripCanonicalOnlyTopLevelFields(replayBody));
-        if (!isCanonicalOpenAiForwardProvider(sendProvider)) {
+        // Only an explicit `false` lowers custom tools here; with no declaration, native compact
+        // forwards every custom tool and its history exactly as before this capability existed.
+        if (sendProvider.supportsResponsesCustomTools === false && !isCanonicalOpenAiForwardProvider(sendProvider)) {
           replayBody = rewriteRoutedCustomToolsForUpstream(
             replayBody, sendProvider.supportsResponsesCustomTools,
           ).body as typeof replayBody;

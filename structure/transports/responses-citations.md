@@ -19,7 +19,8 @@ compact repair, while `tests/responses/responses-url-citation-title-repair.test.
 HTTP/WS projection, helper independence and input immutability.
 
 The same final compact body builder applies the captured exact-model custom-tool policy after
-destination-specific citation projection. A custom-tool history compatibility refusal returns
+destination-specific citation projection, and only for an explicit `false`: with no declaration
+the compact body keeps every custom tool and its history unchanged. A custom-tool history compatibility refusal returns
 HTTP 400 before network dispatch and releases host admission without recording a transport failure.
 `tests/responses/model-custom-tool-capability.test.ts` covers lowering and collision refusal.
 

@@ -610,7 +610,7 @@ provider-level per-model maps the runtime already reads (`modelContextWindows`,
 `modelCapabilities.<modelId>.inputModalities`, `modelCapabilities.<modelId>.responsesCustomTools`, `modelReasoningEfforts`,
 `modelDefaultReasoningEfforts`), so an edited row keeps its discovery provenance instead of
 being replaced by a custom model. `inputModalities` accepts `text`, `image`, and `audio`;
-`responsesCustomTools` accepts a boolean or `null` to inherit the provider setting. It is an API-only axis: the dashboard's model settings Restore clears the context window, modalities and reasoning settings but leaves `responsesCustomTools`, so clear it with `responsesCustomTools: null`. `reasoningEfforts` must be a subset of the efforts the runtime knows. Unknown request fields
+`responsesCustomTools` accepts a boolean or `null` to inherit the provider setting. The dashboard has no control for it: its model settings Restore clears the context window, modalities and reasoning settings but leaves `responsesCustomTools`, so clear it with `responsesCustomTools: null` or `ocx models set <provider/model> --reset`, which clears every axis including this one. `reasoningEfforts` must be a subset of the efforts the runtime knows. Unknown request fields
 are rejected by name. `modelId` must be exact, without surrounding whitespace, control
 characters, excessive length, or a reserved object-property name. `contextWindow` must be
 `null` or a positive safe integer.
