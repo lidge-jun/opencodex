@@ -68,6 +68,10 @@ uses and the addresses the proxy connects from:
   `X-Forwarded-Host` instead, and `x-forwarded-proto` to also require `X-Forwarded-Proto: https`.
 - An `X-Forwarded-Host` or `X-Forwarded-Proto` value that contradicts the configured origin, or that
   lists more than one hop, refuses the request even when that header is not trusted.
+- If the origin carries a non-default port and you trust `x-forwarded-host`, the proxy must forward
+  the port as well (in nginx, `$http_host` rather than `$host`); otherwise the request is refused.
+- If the same proxy also answers plain HTTP for this host, trust `x-forwarded-proto` so a plaintext
+  request is refused instead of being treated as the HTTPS origin.
 - The setting is honored only on a non-loopback bind, where the admin token is required. A Hub
   ignores it and uses its management listener instead.
 

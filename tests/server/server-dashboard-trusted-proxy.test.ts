@@ -163,6 +163,7 @@ describe("configuration", () => {
   const invalid: Array<[string, unknown]> = [
     ["http origin", { origin: "http://ocx.example.test", proxyAddresses: [PROXY] }],
     ["wildcard origin", { origin: "https://*.example.test", proxyAddresses: [PROXY] }],
+    ["percent-encoded wildcard origin", { origin: "https://%2A.example.test", proxyAddresses: [PROXY] }],
     ["origin with a path", { origin: "https://ocx.example.test/dash", proxyAddresses: [PROXY] }],
     ["no proxy address", { origin: PUBLIC, proxyAddresses: [] }],
     ["address range", { origin: PUBLIC, proxyAddresses: ["192.0.2.0/24"] }],

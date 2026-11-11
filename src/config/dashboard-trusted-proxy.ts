@@ -47,6 +47,8 @@ export function parseDashboardTrustedProxy(value: unknown): DashboardTrustedProx
   if (typeof origin !== "string" || origin.includes("*")) return "origin must be one exact https origin (no wildcards)";
   let parsed: URL;
   try { parsed = new URL(origin); } catch { return "origin must be one exact https origin (no wildcards)"; }
+  // The URL parser decodes %2A, so the raw-string check alone would let an encoded wildcard through.
+  if (parsed.hostname.includes("*")) return "origin must be one exact https origin (no wildcards)";
   if (parsed.protocol !== "https:") return "origin must use https";
   if (parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash || !parsed.hostname) {
     return "origin must be an origin without credentials, path, query, or fragment";
