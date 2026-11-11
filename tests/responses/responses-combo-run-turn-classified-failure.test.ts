@@ -42,6 +42,7 @@ mock.module("../../src/server/adapter-resolve", () => ({
 }));
 
 const { handleResponses } = await import("../../src/server/responses");
+const { handleChatCompletions } = await import("../../src/server/chat-completions");
 const traeClient = await import("../../src/adapters/trae-cn/client");
 const { formatErrorResponse } = await import("../../src/bridge");
 const { SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE } = await import("../../src/lib/errors");
@@ -92,6 +93,40 @@ async function respond(cfg: OcxConfig, stream: boolean) {
     body: JSON.stringify({ model: "chain/classified", input: "describe this", stream }),
   }), cfg, { model: "", provider: "" });
   return { status: response.status, text: await response.text() };
+}
+
+for (const wire of ["responses", "chat"]) for (const combo of [false, true]) {
+  test("TRAE instruction images are refused at HTTP ingress: wire=" + wire + ", combo=" + combo, async () => {
+    const cfg = config([{ provider: "trae-cn", model: "test-model" }, { provider: "fallback", model: MODEL }]);
+    cfg.defaultProvider = "trae-cn";
+    cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
+      authMode: "key", models: ["test-model"], liveModels: false };
+    const open = spyOn(traeClient, "openTraeSession").mockResolvedValue({ models: ["test-model"],
+      prompt: async (_model, _text, emit) => { emit({ type: "text_delta", text: "attachment was lost" }); emit({ type: "done" }); },
+      close: async () => undefined,
+    });
+    const model = combo ? "chain/classified" : "trae-cn/test-model";
+    const image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a/nkAAAAASUVORK5CYII=";
+    const body = wire === "responses" ? { model, stream: false, input: [
+      { role: "system", content: [{ type: "input_text", text: "Describe the attachment" }, { type: "input_image", image_url: image }] },
+      { role: "user", content: "Question" },
+    ] } : { model, stream: false, messages: [
+      { role: "system", content: [{ type: "text", text: "Describe the attachment" }, { type: "image_url", image_url: { url: image } }] },
+      { role: "user", content: "Question" },
+    ] };
+    try {
+      const request = new Request("http://localhost/v1/" + (wire === "responses" ? "responses" : "chat/completions"), {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      });
+      const response = await (wire === "responses" ? handleResponses : handleChatCompletions)(request, cfg, { model: "", provider: "" });
+      expect(response.status).toBe(400);
+      const refused = await response.json() as { error: { code: string; type: string; message: string } };
+      expect(refused.error).toMatchObject({ type: "invalid_request_error",
+        code: wire === "responses" && !combo ? "unsupported_input_modality" : "invalid_request_error" });
+      expect(refused.error.message).toContain("TRAE CN ACP supports text conversations only");
+      expect(open).not.toHaveBeenCalled(); expect(fallbackCalls).toBe(0);
+    } finally { open.mockRestore(); }
+  });
 }
 
 test("cancelled runTurn streams retain received usage after the consumer stops draining", async () => {

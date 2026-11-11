@@ -382,7 +382,7 @@ export async function openTraeSession(
             return;
           }
           if (stop === "cancelled") {
-            if (!signal?.aborted) emit({ type: "incomplete", reason: "upstream_cancelled", retryable: false,
+            emit({ type: "incomplete", reason: "upstream_cancelled", retryable: false,
               message: "TRAE CN cancelled the turn.", ...(usage ? { usage } : {}) });
             return;
           }

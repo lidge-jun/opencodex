@@ -3,7 +3,9 @@
 `src/adapters/trae-cn/` runs the official CLI's ACP server for manually configured `trae-cn` adapters.
 The directory row is inert and unverified; it advertises no canonical preset or live discovery.
 TRAE owns login and refresh; OpenCodex stores no TRAE token. A fresh session supplies the CLI-reported
-model roster and one selected-model turn. The vendor does not document the discovery fields or
+model roster and one selected-model turn. Original instruction-image and file-image evidence is
+rejected before normalized instructions can lose their attachments, including Responses and Chat combo delivery.
+The vendor does not document the discovery fields or
 guarantee their account scope. The JSON-RPC reader bounds frames, update queues, stderr,
 and request time; cancellation and cleanup terminate the child. Text and thought chunks retain their
 distinct adapter events. Tool input/replay and non-text media are rejected, permission requests are
@@ -62,7 +64,8 @@ Malformed stdout produces fixed protocol diagnostics, never the shared JSONL par
 Byte-limit failures retain `trae_stdout_limit`; startup failures retain a stage and allowlisted errno.
 POSIX launch exits 126/127 before initialization report safe startup codes via the private control pipe.
 Prompt completion closes the bounded update stream once, without a new promise reaction per chunk.
-Client cancellation emits no provider error; received usage survives cleanup cancellation in a
+Client cancellation emits no provider error; a parsed ACP cancelled reply still forwards its usage
+when it races with client abort. Received usage survives cleanup cancellation in a
 `client_cancelled` incomplete outcome and is bound before a closed client stream can drop it. An upstream cancellation without client abort emits
 an incomplete event with usage. Explicit output-token limits are refused before startup.
 A successful `session/set_model` acknowledgement supersedes prior setup model notifications.

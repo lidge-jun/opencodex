@@ -181,7 +181,7 @@ export async function executeResponsesRunTurn(
   };
   // Publish the known subscription pause before headers or a CLI turn, preserving its reset
   // across both Responses and translated Chat instead of presenting a retryable generic 502.
-  if (transportState.runTurnAdapter.name === "claude-cli") {
+  if (transportState.runTurnAdapter.name === "claude-cli" || transportState.runTurnAdapter.name === "trae-cn") {
     if (options.chatInstructionImage || options.responsesInstructionImage || responsesHasInstructionImage(parsed._rawBody)
       || parsed.context.messages.some(message => message.role === "developer"
         && Array.isArray(message.content) && message.content.some(part => part.type === "image"))) {
@@ -189,11 +189,15 @@ export async function executeResponsesRunTurn(
       releaseSearchProbeLease();
       const refusal = new Response(JSON.stringify({ error: {
         type: "invalid_request_error", code: "unsupported_input_modality", param: null,
-        message: "Claude Code CLI does not support images in developer instructions.",
+        message: transportState.runTurnAdapter.name === "trae-cn"
+          ? "TRAE CN ACP supports text conversations only; media, documents and tool replay are not supported."
+          : "Claude Code CLI does not support images in developer instructions.",
       } }), { status: 400, headers: { "Content-Type": "application/json" } });
       markResponseNonReplayable(refusal);
       return refusal;
     }
+  }
+  if (transportState.runTurnAdapter.name === "claude-cli") {
     let usage: Awaited<ReturnType<typeof claudeUsagePreflight>>;
     try {
       usage = await claudeUsagePreflight(parsed.modelId);

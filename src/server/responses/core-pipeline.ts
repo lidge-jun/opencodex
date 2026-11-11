@@ -48,14 +48,16 @@ export async function handleResponsesInner(
     if (requestState instanceof Response) return requestState;
     const transportState = await prepareResponsesTransport(requestContext, admissionState, requestState);
     if (transportState instanceof Response) return markProxyError(transportState);
-    if (transportState.runTurnAdapter.name === "claude-cli") {
+    if (transportState.runTurnAdapter.name === "claude-cli" || transportState.runTurnAdapter.name === "trae-cn") {
       const instructionImage = options.chatInstructionImage || options.responsesInstructionImage
         || responsesHasInstructionImage(requestState.parsed._rawBody)
         || requestState.parsed.context.messages.some(message => message.role === "developer"
           && Array.isArray(message.content) && message.content.some(part => part.type === "image"));
       if (instructionImage || options.responsesFileImage) {
-        const message = instructionImage ? "Claude Code CLI does not support images in developer instructions."
-          : "Claude Code CLI does not support file-backed image references.";
+        const message = transportState.runTurnAdapter.name === "trae-cn"
+          ? "TRAE CN ACP supports text conversations only; media, documents and tool replay are not supported."
+          : instructionImage ? "Claude Code CLI does not support images in developer instructions."
+            : "Claude Code CLI does not support file-backed image references.";
         const response = new Response(JSON.stringify({ error: {
           type: "invalid_request_error", code: "unsupported_input_modality", param: null,
           message,

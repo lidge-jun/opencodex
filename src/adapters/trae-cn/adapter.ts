@@ -6,6 +6,7 @@ import type { AdapterRequest, ProviderAdapter } from "../base";
 import { requiresToolCall } from "../../types";
 import { buildSystemPrompt, formatMessageForHistory } from "../coding-agent/protocol";
 import { openTraeSession, TraeAcpError, type TraeAcpDeps } from "./client";
+import { responsesHasFileImage, responsesHasInstructionImage } from "../claude-cli/instruction-images";
 
 export type TraeCnAdapterDeps = TraeAcpDeps;
 
@@ -43,7 +44,8 @@ function validateInput(parsed: OcxParsedRequest): { message: string; code: strin
   if (parsed.context.tools?.length) {
     return { message: "TRAE CN ACP does not currently expose client tools.", code: "unsupported_client_tools" };
   }
-  if (parsed.context.messages.some(message =>
+  if (responsesHasInstructionImage(parsed._rawBody) || responsesHasFileImage(parsed._rawBody)
+    || parsed.context.messages.some(message =>
     (Array.isArray(message.content) && message.content.some(part => part.type !== "text" && part.type !== "thinking"))
     || message.role === "toolResult")) {
     return { message: "TRAE CN ACP supports text conversations only; media, documents and tool replay are not supported.", code: "unsupported_input_modality" };

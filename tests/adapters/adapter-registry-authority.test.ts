@@ -14,6 +14,8 @@ import { buildCatalogEntries } from "../../src/codex/catalog";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../../src/bridge";
 import { resolveTraeCli, traeCnChildEnv } from "../../src/adapters/trae-cn/profile";
 import { parseTraeAcpMessage, parseTraeModels, traeSessionId } from "../../src/adapters/trae-cn/protocol";
+import * as traeProtocol from "../../src/adapters/trae-cn/protocol";
+import { parseRequest as parseResponsesRequest } from "../../src/responses/parser";
 import { fetchProviderModels, fetchProviderModelsWithAuth, observedModelsAuthResolver, refreshingModelsAuthResolver } from "../../src/codex/catalog/provider-models";
 import { captureProviderGather } from "../../src/codex/catalog/gather-capture";
 import { captureModelCacheGeneration, clearModelCache, getFreshCached, observeModelCacheRevision, setCached } from "../../src/codex/model-cache";
@@ -356,6 +358,48 @@ describe("TRAE CN ACP regression contract", () => {
       expect(observed).toEqual([usage]);
       expect(json.status).toBe("incomplete");
       expect(json.usage).toMatchObject({ input_tokens: 123, output_tokens: 456, total_tokens: 579 });
+    });
+  }
+
+  for (const image of ["https://fixture.invalid/image.png", "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a/nkAAAAASUVORK5CYII="]) {
+    test("original Responses system images are refused before CLI startup: " + image.split(":")[0], async () => {
+      const fixture = traeFixture();
+      const parsed = parseResponsesRequest({ model: "test-model", input: [
+        { role: "system", content: [{ type: "input_text", text: "Describe the attached image" }, { type: "input_image", image_url: image }] },
+        { role: "user", content: "Question" },
+      ] });
+      const events: AdapterEvent[] = [];
+      await createTraeCnAdapter(config(), fixture.deps).runTurn!(parsed, traeMeta(), event => events.push(event));
+      expect(events).toMatchObject([{ type: "error", status: 400, code: "unsupported_input_modality" }]);
+      expect(fixture.options()).toBeUndefined(); expect(fixture.requests).toEqual([]);
+    });
+  }
+
+  for (const stop of ["cancelled", "end_turn"]) {
+    test("client abort after a parsed ACP reply retains usage: stop=" + stop, async () => {
+      const controller = new AbortController();
+      const usage = { inputTokens: 123, outputTokens: 456, totalTokens: 579 };
+      const fixture = traeFixture(request => {
+        if (request.method !== "session/prompt") return false;
+        fixture.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session",
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "received" } } } });
+        fixture.send({ jsonrpc: "2.0", id: request.id, result: { stopReason: stop, usage } });
+        return true;
+      });
+      const readUsage = traeProtocol.traeUsage;
+      spyOn(traeProtocol, "traeUsage").mockImplementation(result => {
+        const received = readUsage(result); controller.abort(); return received;
+      });
+      const budget = fakeSendBudget();
+      const meta = traeMeta({ abortSignal: controller.signal, sendBudget: budget.budget });
+      const events: AdapterEvent[] = [];
+      await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), meta, event => events.push(event));
+      expect(events.at(-1)).toMatchObject({ type: "incomplete", reason: "client_cancelled", usage });
+      expect(events.some(event => event.type === "error")).toBe(false);
+      expect(budget.state).toEqual({ used: 1, refunded: 0, closed: 1 });
+      expect(fixture.child.killed).toBe(true);
+      expect(buildResponseJSON(events, "test-model", { translatorBudget: meta.translatorBudget }).usage)
+        .toMatchObject({ input_tokens: 123, output_tokens: 456, total_tokens: 579 });
     });
   }
 
