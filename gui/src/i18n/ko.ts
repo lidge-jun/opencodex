@@ -2176,6 +2176,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "OpenAI 공급자 프리셋을 불러오지 못했습니다.",
   "codexAuth.openaiPresetUnavailable": "OpenAI 공급자 프리셋을 사용할 수 없습니다.",
   "codexAuth.openProviders": "프로바이더 열기",
+  "codexAuth.changeAccountMode": "계정 모드 변경",
   "codexAuth.add": "추가",
   "codexAuth.credits": "크레딧",
   "codexAuth.creditsRemaining": "남음",

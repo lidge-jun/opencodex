@@ -520,7 +520,9 @@ const [maBusy, setMaBusy] = useState(false);
           if (statusData.job.status === "failed") return { job: statusData.job, reconnecting: false as const };
           if (targetVersion) {
             try {
-              const healthRes = await fetch(`${apiBase}/healthz`, { cache: "no-store", signal });
+              // The management health route answers on every dashboard ingress; a hub's management
+              // ingress denies /healthz (#8506). A 401 after the restart is renewed by api.ts.
+              const healthRes = await fetch(`${apiBase}/api/system/health`, { cache: "no-store", signal });
               const healthData = await requireJson<HealthData>(healthRes);
               if (healthData.version === targetVersion) {
                 return { job: statusData.job, reconnecting: false as const, reload: true as const };
