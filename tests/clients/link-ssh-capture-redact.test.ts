@@ -170,6 +170,15 @@ describe("ssh capture redaction", () => {
       { debug: ["debug1: Entering interactive session.", "Timeout, server 127.0.0.1 not responding."],
         error: [] },
       { debug: ["debug1: Connection established.", "Disconnected from 127.0.0.1 port 2222"], error: [] },
+      // kex.c logs these two identification reasons with verbose_f; the read:/write: ones use error_f.
+      { debug: ["debug1: Connection established.", "kex_exchange_identification: Connection closed by remote host"], error: [] },
+      { debug: ["debug1: Connection established.", "kex_exchange_identification: banner line contains invalid characters"], error: [] },
+      { debug: ["debug1: Connection established.", "kex_exchange_identification: read: Connection reset by peer"],
+        error: ["kex_exchange_identification: read: Connection reset by peer"] },
+      // logdie paths in packet.c and sshconnect.c log at INFO whatever level the macro names.
+      { debug: ["debug1: Entering interactive session.", "ssh_dispatch_run_fatal: Connection to 127.0.0.1 port 2222: Broken pipe"], error: [] },
+      { debug: ["debug1: Entering interactive session.", "ssh_dispatch_run_fatal: Connection to 127.0.0.1 port 2222: Operation timed out"], error: [] },
+      { debug: ["debug1: Connecting to 127.0.0.1 [127.0.0.1] port 2222.", "Connection to 127.0.0.1 port 2222 timed out"], error: [] },
     ];
     for (const { debug, error } of transcripts) {
       const filtered = debug.filter(sshLineClassifies).join("\n");
