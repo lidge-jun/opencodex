@@ -12,13 +12,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "bun";
 import { startMachineListener } from "../../src/client/machine-listener";
-import { classifyClientRestartSupervisor, clientConnectionEnded, clientRestartRollbackAction, createClientRestartController, restartOwnerProven, type ClientRestartAdmission, type ClientRestartIo } from "../../src/client/runtime-restart";
+import { classifyClientRestartSupervisor, clientConnectionEnded, clientRestartRollbackAction, createClientRestartController, restartOwnerEvidence, restartOwnerProven, type ClientRestartAdmission, type ClientRestartIo } from "../../src/client/runtime-restart";
 import { readClientConnectionState, readClientConnectionStateWithEvidence } from "../../src/client/state";
 import { claudeProxyStartEnv } from "../../src/cli/claude";
 import { opencodeProxyStartEnv } from "../../src/cli/opencode";
 import { codexProxyStartEnv } from "../../src/cli/codex-launcher";
 import { spyOn } from "bun:test";
 import { deriveLaunchdServiceDiagnostic, deriveSystemdServiceDiagnostic, deriveWindowsServiceDiagnostic } from "../../src/service/diagnostics";
+import * as serviceChildOwnership from "../../src/service/service-child-ownership";
+import { clientRuntimeRecord } from "../../src/client/runtime";
+import { restartRuntimeAfterDisconnect } from "../../src/cli/disconnect-runtime";
+import { restartRuntimeAfterApply } from "../../src/cli/link-apply-restart";
 import {
   createLocalAttestationChallenge,
   createLocalAttestationSecret,
@@ -484,6 +488,57 @@ describe("a bare OCX_SERVICE=1 keeps origin/dev's ocx restart decision", () => {
     expect(restartOwnerProven({ desktop: false, env: { OCX_SERVICE: "1", OCX_SERVICE_MANAGED: "1" } })).toBe(true);
     expect(restartOwnerProven({ desktop: false, env: { OCX_SERVICE: "1", OCX_WINDOWS_WRAPPER_PROTOCOL: "1" } })).toBe(true);
     expect(restartOwnerProven({ desktop: false, env: {} })).toBe(true);
+  });
+
+  // Final review round 6: a markerless legacy Windows registration (only OCX_SERVICE=1; its parent is
+  // this install's Task Scheduler wrapper) is recognised by the real parent-command-line derivation,
+  // but that is inference, not a current manager marker. It stays on origin/dev's path for restart,
+  // disconnect and sync. The production default is routed through the real Windows derivation with
+  // faked process data, so the branch is reached on any host.
+  test("a markerless legacy Windows service child stays on origin/dev's path: restart, disconnect, sync", async () => {
+    const wrapper = "C:\\Users\\u\\.opencodex\\service\\opencodex-service.cmd";
+    const windowsParent = { platform: "win32" as const, parentPid: () => 4242, processCommandLine: () => `cmd.exe /d /c "${wrapper}"`, serviceHostPaths: () => [wrapper] };
+    const env = { OCX_SERVICE: "1", PATH: "C:\\Windows" } as NodeJS.ProcessEnv;
+    const real = serviceChildOwnership.isSupervisedServiceChild;
+    expect(real(env, windowsParent)).toBe(true);
+    const spy = spyOn(serviceChildOwnership, "isSupervisedServiceChild").mockImplementation(e => real(e, windowsParent));
+    try {
+      // Recorded with no owner, and classified as origin/dev classifies a bare flag (task disabled: not viable).
+      const owner = restartOwnerEvidence({ desktop: false, env });
+      expect(owner).toBeNull();
+      const supervisor = classifyClientRestartSupervisor({ desktop: false, env, diagnose: () => ({ viable: false, running: true }), legacyServiceViable: () => false });
+      expect(supervisor).toBeNull();
+      // ocx restart: origin/dev's replacement restart, never the recycle.
+      const { io, calls } = fakeIo({ supervisor: async () => supervisor, ownerProven: () => restartOwnerProven({ desktop: false, env }), connectionChanged: () => true, recycle: async () => { calls.push("recycle"); } });
+      const controller = createClientRestartController(io);
+      expect(await controller.request()).toEqual({ kind: "accepted", alreadyRestarting: false });
+      await controller.settled();
+      expect(calls).toEqual(["stop:20000", "spawn:71000", "exit:0"]);
+      // ocx disconnect: the record states no owner, so no restart request and exit 0.
+      const record = clientRuntimeRecord(4321, 10100, createLocalAttestationSecret(), owner);
+      expect(record.restartOwner).toBeUndefined();
+      let restarts = 0;
+      const code = await restartRuntimeAfterDisconnect({
+        observe: async () => ({ kind: "live", live: { pid: 4321, port: 10100, role: "client" } }),
+        capture: () => ({ ...record, attestationSecret: record.attestationSecret! }),
+        connectionState: () => ({ kind: "disconnected" }),
+        restart: async () => { restarts += 1; return { ok: true }; },
+        json: false, info: () => {}, error: () => {},
+      });
+      expect({ code, restarts }).toEqual({ code: 0, restarts: 0 });
+      // ocx sync: restarted as on origin/dev, not reported as a service deferral.
+      const syncController = createClientRestartController({ ...fakeIo({ supervisor: async () => supervisor, ownerProven: () => restartOwnerProven({ desktop: false, env }), connectionChanged: () => false }).io });
+      const outcome = await restartRuntimeAfterApply({ linkId: "lnk_x", fetchedAt: "2026-11-11T00:00:00.000Z", appliedAt: "2026-11-11T00:00:00.000Z", document: {} } as never, {
+        findLive: async () => ({ pid: 4321, port: 10100, source: "runtime", role: "client" }) as never,
+        readStartedAt: async () => 0,
+        restart: async (_start, onSupervised) => { const admission = await syncController.request(); await syncController.settled(); if (admission.kind === "supervised") { onSupervised(admission.supervisor); return false; } return admission.kind === "accepted"; },
+        recoveryStart: async () => ({ status: "skipped" }),
+        connectionUnchanged: () => true,
+      });
+      expect(outcome).toEqual({ kind: "restarted" });
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

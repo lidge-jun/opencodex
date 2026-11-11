@@ -27,7 +27,7 @@ import {
   isDesktopSupervised,
 } from "../lib/system-restart-contract";
 import type { OcxClientConnectionConfig } from "../types";
-import { isSupervisedServiceChild } from "../service/service-child-ownership";
+import { isMarkedSupervisedServiceChild } from "../service/service-child-ownership";
 import { sameClientConnectionOwner, type readClientConnectionState } from "./state";
 
 type ClientConnectionState = ReturnType<typeof readClientConnectionState>;
@@ -167,7 +167,9 @@ export async function clientRestartSupervisor(): Promise<ClientRestartSupervisor
 
 /**
  * Positive evidence of who owns this process: the desktop app, a service manager's marker
- * (isSupervisedServiceChild), or no OCX_SERVICE at all (every service OpenCodex registers sets it).
+ * (OCX_SERVICE_MANAGED or the Windows wrapper's protocol marker, read from the environment only),
+ * or no OCX_SERVICE at all (every service OpenCodex registers sets it). No inference: a legacy
+ * Windows service recognised only from its parent's command line counts as a bare OCX_SERVICE=1.
  * A bare OCX_SERVICE=1 is none of these: a service registered before the manager marker existed
  * and the proxies of ocx claude, ocx codex and ocx opencode all carry it.
  */
@@ -182,7 +184,7 @@ export const RESTART_OWNERS: readonly RestartOwner[] = ["desktop", "service-mana
 /** The classified owner from positive evidence, or null for a bare OCX_SERVICE=1 ({@link restartOwnerProven}). */
 export function restartOwnerEvidence(input: { desktop: boolean; env: NodeJS.ProcessEnv; managed?: (env: NodeJS.ProcessEnv) => boolean }): RestartOwner | null {
   if (input.desktop) return "desktop";
-  if ((input.managed ?? isSupervisedServiceChild)(input.env)) return "service-manager";
+  if ((input.managed ?? isMarkedSupervisedServiceChild)(input.env)) return "service-manager";
   return input.env.OCX_SERVICE !== "1" ? "none" : null;
 }
 
@@ -198,13 +200,12 @@ export function classifyClientRestartSupervisor(input: {
   diagnose: () => { viable: boolean; running: boolean };
   /** origin/dev's check for a bare OCX_SERVICE=1: src/service/orchestration.ts isServiceViable. */
   legacyServiceViable: () => boolean;
-  /** Manager-launched evidence; defaults to src/service/service-child-ownership.ts. */
+  /** Manager-launched evidence; defaults to the current markers only (isMarkedSupervisedServiceChild). */
   managed?: (env: NodeJS.ProcessEnv) => boolean;
 }): ClientRestartSupervisor | null {
   if (input.desktop) return "desktop";
-  // The managed marker (launchd, systemd, WinSW), the Windows wrapper's protocol marker, or a
-  // legacy Windows wrapper parent.
-  if (!(input.managed ?? isSupervisedServiceChild)(input.env)) {
+  // The managed marker (launchd, systemd, WinSW) or the Windows wrapper's protocol marker.
+  if (!(input.managed ?? isMarkedSupervisedServiceChild)(input.env)) {
     if (input.env.OCX_SERVICE !== "1") return null;
     return input.legacyServiceViable() ? "service" : null;
   }
