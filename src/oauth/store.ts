@@ -650,12 +650,13 @@ function newAccountId(cred: OAuthCredentials): string {
  * An operator pause carries no details and stays. Eligibility changed, so the selection revision
  * moves with a fresh pause revision, which also retires any auto-pause proposal captured before.
  */
-function clearAutomaticPauseForLogin(set: ProviderAccountSet, account: ProviderAccount): void {
-  if (account.paused !== true || !account.pauseDetails) return;
+function clearAutomaticPauseForLogin(set: ProviderAccountSet, account: ProviderAccount): boolean {
+  if (account.paused !== true || !account.pauseDetails) return false;
   delete account.paused;
   delete account.pauseDetails;
   account.pauseRevision = randomUUID();
   set.selectionRevision = randomUUID();
+  return true;
 }
 
 function distinctAccountId(cred: OAuthCredentials, accounts: readonly ProviderAccount[]): string {
@@ -960,7 +961,10 @@ export async function saveCredentialWithReceipt(
   if (isAnthropicInstanceId(provider)) assertAnthropicCredentialSource(provider, cred);
   const safe = normalizeCredential(cred);
   if (!safe) return null;
+  // A login that clears an automatic pause publishes it once the write commits (#8398).
+  let pauseCleared = false;
   const receipt = await mutateStore(store => {
+    pauseCleared = false;
     if (provider === "anthropic2") assertAnthropicInstanceLoginConfig(loadConfig(), provider);
     if (isAnthropicInstanceId(provider)) assertNoCrossAnthropicRegistration(store, provider, safe);
     const set = store[provider];
@@ -987,7 +991,7 @@ export async function saveCredentialWithReceipt(
         delete existing.needsReauth;
         delete existing.needsReauthReason;
         delete existing.refreshAttentionGeneration;
-        clearAutomaticPauseForLogin(set, existing);
+        if (clearAutomaticPauseForLogin(set, existing)) pauseCleared = true;
         accountId = existing.id;
       } else {
         const id = distinctAccountId(safe, set.accounts);
@@ -1010,7 +1014,7 @@ export async function saveCredentialWithReceipt(
         delete existing.needsReauth;
         delete existing.needsReauthReason;
         delete existing.refreshAttentionGeneration;
-        clearAutomaticPauseForLogin(set, existing);
+        if (clearAutomaticPauseForLogin(set, existing)) pauseCleared = true;
         if (existing.paused !== true) set.activeAccountId = existing.id;
         accountId = existing.id;
       } else {
@@ -1030,7 +1034,7 @@ export async function saveCredentialWithReceipt(
           delete active.needsReauth;
           delete active.needsReauthReason;
           delete active.refreshAttentionGeneration;
-          clearAutomaticPauseForLogin(set, active);
+          if (clearAutomaticPauseForLogin(set, active)) pauseCleared = true;
           accountId = active.id;
         } else {
           const id = distinctAccountId(safe, set.accounts);
@@ -1052,7 +1056,7 @@ export async function saveCredentialWithReceipt(
         delete active.needsReauth;
         delete active.needsReauthReason;
         delete active.refreshAttentionGeneration;
-        clearAutomaticPauseForLogin(set, active);
+        if (clearAutomaticPauseForLogin(set, active)) pauseCleared = true;
         accountId = active.id;
       } else {
         const id = distinctAccountId(safe, set.accounts);
@@ -1086,6 +1090,7 @@ export async function saveCredentialWithReceipt(
       receipt.selectionRevision = store[provider]?.selectionRevision;
     },
   });
+  if (pauseCleared) publishOAuthAccountPauseChange(provider);
   // An explicit login retires that account's failover evidence: a cooldown recorded
   // against the old grant must not hold out the fresh credential. Dynamic import
   // keeps the store free of a static edge into the failover module, which reads the
@@ -1326,8 +1331,10 @@ export async function saveAccountCredential(
   const safe = normalizeCredential(cred);
   if (!safe) return false;
   let written = false;
+  let pauseCleared = false;
   await mutateStore(store => {
     written = false;
+    pauseCleared = false;
     if (provider === "anthropic2") assertAnthropicInstanceLoginConfig(loadConfig(), provider);
     if (isAnthropicInstanceId(provider)) assertNoCrossAnthropicRegistration(store, provider, safe);
     const set = store[provider];
@@ -1339,7 +1346,7 @@ export async function saveAccountCredential(
     delete account.needsReauth;
     delete account.needsReauthReason;
     delete account.refreshAttentionGeneration;
-    clearAutomaticPauseForLogin(set, account);
+    if (clearAutomaticPauseForLogin(set, account)) pauseCleared = true;
     // A pause that found no usable fallback leaves the active id on a paused row. Once this
     // reauthentication makes an unpaused account usable, hand the selection to it.
     const active = set.accounts.find(a => a.id === set.activeAccountId);
@@ -1348,6 +1355,7 @@ export async function saveAccountCredential(
       set.selectionRevision = randomUUID();
     }
   }, [provider, accountId, safe], { assertBeforePersist: registrationPersistGuard(provider, opts.assertBeforePersist) });
+  if (pauseCleared) publishOAuthAccountPauseChange(provider);
   return written;
 }
 

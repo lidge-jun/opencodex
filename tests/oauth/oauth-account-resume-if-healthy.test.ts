@@ -171,3 +171,19 @@ describe("explicit login clears only an automatic pause (#8398)", () => {
     expect(row("cccc3333")?.paused).toBe(true);
   });
 });
+
+describe("routing learns about a login that cleared a pause (#8398)", () => {
+  test("a cleared automatic pause is published; a kept operator pause is not", async () => {
+    const { subscribeOAuthAccountPauseChanges } = await import("../../src/lib/account-selection-events");
+    const seen: string[] = [];
+    const unsubscribe = subscribeOAuthAccountPauseChanges(provider => { seen.push(provider); });
+    try {
+      writeAuth([automatic, active]);
+      await saveCredentialWithReceipt("anthropic", { access: "t1-new", refresh: "r1-new", expires: FAR, email: "first@example.com", accountId: "acct-1", source: "oauth" } as never);
+      expect(seen).toEqual(["anthropic"]);
+      writeAuth([{ ...automatic, reason: undefined }, active]);
+      await saveAccountCredential("anthropic", "aaaa1111", { access: "t1-other", refresh: "r1-other", expires: FAR, email: "first@example.com", accountId: "acct-1", source: "oauth" } as never);
+      expect(seen).toEqual(["anthropic"]);
+    } finally { unsubscribe(); }
+  });
+});
