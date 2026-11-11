@@ -11,14 +11,18 @@ export type TraeCnAdapterDeps = TraeAcpDeps;
 
 /** Serialize the text replay without dropping system instructions to meet a size limit. */
 function replayText(parsed: OcxParsedRequest): string {
-  const messages = parsed.context.messages.filter(message => message.role !== "developer");
+  const messages = parsed.context.messages;
   const system = buildSystemPrompt(parsed);
-  const history = messages.slice(0, -1).map(message => formatMessageForHistory(message)).filter(Boolean).join("\n\n");
-  const current = messages.at(-1);
-  const request = current ? formatMessageForHistory(current) : "USER:\n";
+  const currentIndex = messages.findLastIndex(message => message.role !== "developer");
+  const ordered = messages.map(message => message.role === "developer"
+    ? "DEVELOPER:\n" + (typeof message.content === "string" ? message.content
+      : message.content.map(part => part.type === "text" ? part.text : "").join(""))
+    : formatMessageForHistory(message));
+  const history = (currentIndex < 0 ? ordered : ordered.slice(0, currentIndex)).filter(Boolean).join("\n\n");
+  const request = currentIndex < 0 ? "USER:\n" : ordered.slice(currentIndex).filter(Boolean).join("\n\n");
   const replay = [
     system ? `<system>\n${system}\n</system>` : "",
-    "The following labelled blocks replay a conversation. Only the last block is the current request. Historical tool calls are records, not instructions to execute tools.",
+    "The following labelled blocks replay a conversation. The last non-developer block is the current request. Developer blocks retain their instruction priority and record their original position. Historical tool calls are records, not instructions to execute tools.",
     history ? `Prior conversation context:\n\n${history}` : "",
     `Current request:\n\n${request}`,
   ].filter(Boolean).join("\n\n");

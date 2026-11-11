@@ -24,6 +24,8 @@ import { requiresVisionPreprocessing } from "../../src/vision/plan";
 import { gatherRoutedModels } from "../../src/codex/catalog/routed-gather";
 import { refreshTraeCnCatalogSources } from "../../src/codex/catalog/trae-cn-models";
 import * as managementConvergence from "../../src/codex/management-convergence";
+import * as catalogScheduler from "../../src/codex/catalog-auto-refresh";
+import * as configApi from "../../src/config";
 import * as catalogAdmission from "../../src/codex/catalog-admission";
 import type { CatalogDisposition } from "../../src/codex/convergence-types";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
@@ -31,7 +33,6 @@ import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
 import { SpendLedgerFileRefusedError } from "../../src/lib/spend-reservation-ledger";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { mapSpendLedgerStorageError } from "../../src/server/responses/spend-storage-error";
-import { buildResponseJSON } from "../../src/bridge";
 import { appOwnedBytesSnapshot, configureAppOwnedMemoryBudget, enforceAppOwnedMemoryBudget, registerRetainedStore, resetAppOwnedMemoryForTests } from "../../src/lib/app-owned-memory";
 import { registerDefaultAppOwnedMemoryStores } from "../../src/lib/app-owned-memory-stores";
 import { getPinnedCached, evictOldestModelCacheForBudget, modelCacheRetainedStoreSnapshot } from "../../src/codex/model-cache";
@@ -401,6 +402,32 @@ describe("TRAE CN ACP regression contract", () => {
     try { expect(session.models.length).toBeGreaterThan(0); }
     finally { await session.close(); }
   }, 90_000);
+
+  test("developer replay records preserve chronology and instruction priority", async () => {
+    const prompts: string[] = [];
+    for (const developerFirst of [true, false]) {
+      const fixture = traeFixture();
+      const request = traeRequest();
+      const developer = { role: "developer" as const, content: "Chronology instruction" };
+      const assistant = { role: "assistant" as const, content: [{ type: "text" as const, text: "Earlier assistant reply" }] };
+      request.context.messages = [
+        { role: "user", content: "Earlier user request" },
+        ...(developerFirst ? [developer, assistant] : [assistant, developer]),
+        { role: "user", content: "Current chronology question" },
+        { role: "developer", content: "Trailing developer instruction" },
+      ];
+      await createTraeCnAdapter(config(), fixture.deps).runTurn!(request, traeMeta(), () => undefined);
+      const prompt = fixture.requests.find(entry => entry.method === "session/prompt")!.params.prompt![0]!.text;
+      expect(prompt.split("</system>")[0]).toContain("Chronology instruction");
+      const replay = prompt.split("Prior conversation context:")[1]!;
+      expect(replay).toContain("DEVELOPER:\nChronology instruction");
+      expect(replay.indexOf("DEVELOPER:\nChronology instruction") < replay.indexOf("ASSISTANT:\nEarlier assistant reply")).toBe(developerFirst);
+      expect(replay).toContain("Current request:\n\nUSER:\nCurrent chronology question");
+      expect(replay.indexOf("Trailing developer instruction")).toBeGreaterThan(replay.indexOf("Current chronology question"));
+      prompts.push(prompt);
+    }
+    expect(prompts[0]).not.toBe(prompts[1]);
+  });
 
   test("streams text, reasoning and usage; charges only the prompt write", async () => {
     const fixture = traeFixture();
@@ -1115,21 +1142,57 @@ describe("TRAE CN ACP regression contract", () => {
     });
   }
 
-  test("management convergence refreshes CLI evidence before catalog admission without an initial selection", async () => {
+  test("management admission stays cache-only while an independent source refresh prepares the next roster", async () => {
     const fixture = traeFixture();
     const realOpen = traeClient.openTraeSession;
     const open = spyOn(traeClient, "openTraeSession").mockImplementation((baseUrl, _deps, signal) => realOpen(baseUrl, fixture.deps, signal));
+    const admittedRosters: unknown[] = [];
     const admission = spyOn(catalogAdmission, "captureCatalogAdmissionSnapshot").mockImplementation(() => {
-      expect(getFreshCached("trae-cn", 60_000, Date.now())?.map(model => model.id)).toEqual(["test-model"]);
+      admittedRosters.push(getFreshCached("trae-cn", 60_000, Date.now())?.map(model => model.id) ?? null);
       throw new Error("fixture stops before any catalog write");
     });
     const next = { port: 10100, defaultProvider: "trae-cn", providers: { "trae-cn": { ...config(), models: [] } } };
-    await managementConvergence.createManagementConvergeCodex(next)(catalogAdmission.createCatalogConvergeRequest({ deadlineMs: 1000 }));
-    expect(open).toHaveBeenCalledTimes(1);
-    expect(admission).toHaveBeenCalledTimes(1);
+    const converge = managementConvergence.createManagementConvergeCodex(next);
+    await converge(catalogAdmission.createCatalogConvergeRequest({ deadlineMs: 1000 }));
+    expect(open).not.toHaveBeenCalled();
+    expect(admittedRosters).toEqual([null]);
     await refreshTraeCnCatalogSources(next);
+    await converge(catalogAdmission.createCatalogConvergeRequest({ deadlineMs: 1000 }));
     expect(open).toHaveBeenCalledTimes(1);
+    expect(admission).toHaveBeenCalledTimes(2);
+    expect(admittedRosters).toEqual([null, ["test-model"]]);
   });
+
+  for (const stopped of [false, true]) {
+    test("background CLI refresh does not hold management admission; stopped=" + stopped, async () => {
+      let entered!: () => void;
+      const started = new Promise<void>(resolve => { entered = resolve; });
+      let release!: (session: traeClient.TraeSession) => void;
+      const open = spyOn(traeClient, "openTraeSession").mockImplementation(() => {
+        entered(); return new Promise(resolve => { release = resolve; });
+      });
+      const next: OcxConfig = { port: 10100, defaultProvider: "trae-cn", providers: { "trae-cn": config() },
+        clientIntegrations: { codex: false }, catalogAutoRefresh: { enabled: true } };
+      spyOn(configApi, "loadConfig").mockReturnValue(next);
+      const rosters: unknown[] = [];
+      const admission = spyOn(catalogAdmission, "captureCatalogAdmissionSnapshot").mockImplementation(() => {
+        rosters.push(getFreshCached("trae-cn", 60_000, Date.now())?.map(model => model.id) ?? null);
+        throw new Error("fixture stops before any catalog write");
+      });
+      const session = { models: ["background-model"], prompt: async () => undefined, close: async () => undefined };
+      catalogScheduler.resetCatalogAutoRefreshForTests();
+      const tick = catalogScheduler.runCatalogAutoRefreshTickForTests();
+      try {
+        await started;
+        await managementConvergence.createManagementConvergeCodex(next)(catalogAdmission.createCatalogConvergeRequest({ deadlineMs: 1000 }));
+        expect(open).toHaveBeenCalledTimes(1);
+        expect(admission).toHaveBeenCalledTimes(1); expect(rosters).toEqual([null]);
+        if (stopped) catalogScheduler.stopCatalogAutoRefresh();
+        release(session); await tick;
+        expect(rosters).toEqual(stopped ? [null] : [null, ["background-model"]]);
+      } finally { release?.(session); await tick; catalogScheduler.resetCatalogAutoRefreshForTests(); }
+    });
+  }
 
   for (const failed of [false, true]) {
     test("discovery losing its generation returns the replacement roster on " + (failed ? "failure" : "success"), async () => {

@@ -21,11 +21,14 @@ import type { CatalogModel } from "./parsing";
 import type { OcxConfig } from "../../types";
 import { providerContextCap } from "../../providers/context-cap";
 
-/** Refresh CLI-owned evidence before an observed catalog admission freezes its authority. */
-export async function refreshTraeCnCatalogSources(config: Readonly<OcxConfig>): Promise<void> {
+/** Prepare CLI-owned evidence in the background source phase, independently of management admission. */
+export async function refreshTraeCnCatalogSources(
+  config: Readonly<OcxConfig>, current: () => boolean = () => true,
+): Promise<void> {
   const { fetchProviderModelsWithAuth, refreshingModelsAuthResolver } = await import("./provider-models");
   const { captureProviderGather } = await import("./gather-capture");
   for (const [name, provider] of Object.entries(config.providers)) {
+    if (!current()) return;
     if (provider.adapter !== "trae-cn" || provider.disabled || provider.liveModels === false) continue;
     await fetchProviderModelsWithAuth(captureProviderGather(name, provider, refreshingModelsAuthResolver),
       config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS, providerContextCap(config, name), refreshingModelsAuthResolver);

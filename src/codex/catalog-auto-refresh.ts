@@ -243,6 +243,18 @@ async function tick(): Promise<void> {
     // Codex sources read Codex credentials and probe its binary; only a managed client needs them.
     if (codexManaged) await refreshCatalogAutoRefreshSources(config, () => entryGeneration === generation);
     if (entryGeneration !== generation) return;
+    // CLI discovery belongs to the background source phase, before any catalog lock.
+    // Management callers meanwhile converge immediately from existing cached evidence.
+    if (Object.values(config.providers).some(provider =>
+      provider.adapter === "trae-cn" && !provider.disabled && provider.liveModels !== false)) {
+      const { refreshTraeCnCatalogSources } = await import("./catalog/trae-cn-models");
+      try {
+        await refreshTraeCnCatalogSources(config, () => entryGeneration === generation);
+      } catch {
+        // Source failure still permits publication from the last confirmed roster.
+      }
+    }
+    if (entryGeneration !== generation) return;
     const [{ createManagementConvergeCodex }, { createCatalogConvergeRequest }] = await Promise.all([
       import("./management-convergence"),
       import("./catalog-admission"),

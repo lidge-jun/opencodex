@@ -22,9 +22,9 @@ limit before per-model overrides; only sidecar publication can advertise image a
 The CLI inherits an absolute `TRAE_HOME` when selected by the operator, otherwise the original
 user home plus `.trae`, before HOME isolation. Provider `proxy`/`noProxy` overrides
 are refused before CLI startup, including explicit direct routing.
-Observed-auth gathers use only cached evidence; only refreshing gathers and explicit connection
-probes may launch the CLI. Management convergence refreshes CLI-owned evidence before catalog
-admission, so a cold automatic tick can populate it. Lost-generation discovery rereads the current
+Observed-auth gathers and management admission use only cached evidence; only refreshing gathers and explicit connection
+probes may launch the CLI. Automatic refresh prepares CLI-owned evidence in its independent background
+source phase, then converges; cold or stalled discovery cannot delay unrelated management responses. Lost-generation discovery rereads the current
 cache before attaching its revision. Relative PATH, user-local fallback entries and the original CLI home resolve before the child changes its cwd.
 Windows home fallback discovery uses the same native-before-launcher order as PATH, including `traecli.cmd`.
 Custom catalog rows and combo members receive the wire modality/verbosity ceiling before optional sidecar publication.
@@ -52,6 +52,8 @@ also emits a replay-unsafe heartbeat at that write, so combo preflight cannot re
 after an empty result or another post-dispatch failure. Startup failures and unavailable models
 return unused reservations and keep their existing routing policy.
 Local spend-ledger file refusals propagate to the shared local-storage 503 mapping, with producer cleanup, before ACP error classification.
+Developer replay blocks retain their chronological positions, including trailing instructions after
+the current request, while the system prompt preserves their instruction priority.
 Replay over 1,000,000 UTF-16 code units is
 rejected before startup. Unexpected EOF diagnostics retain bounded, redacted stderr after process
 cleanup, including stderr that arrives after stdout closes. Once stderr exceeds 8192 characters,

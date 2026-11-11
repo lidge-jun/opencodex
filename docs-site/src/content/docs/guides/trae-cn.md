@@ -30,7 +30,8 @@ OpenCodex does not read desktop tokens, private IDE endpoints, or Ferry.
   does not document these discovery fields or guarantee their account scope.
   Successful discovery is cached by the normal provider catalog mechanism, with the last good
   catalog and explicitly configured models as degraded fallbacks.
-  Read-only catalog gathers use cached evidence; they never start the CLI or refresh its sign-in.
+  Read-only catalog gathers and management admission use cached evidence; they never start the CLI or refresh its sign-in.
+  The automatic refresh worker prepares CLI evidence before its next catalog convergence, so a slow CLI does not delay unrelated management responses.
   Set `liveModels: false` for a static allowlist; **Test connection** then returns not applicable.
   After switching CLI accounts, enable live discovery and run **Test connection**. It
   replaces the roster and refreshes Codex and connected clients. It reports pending or failed
