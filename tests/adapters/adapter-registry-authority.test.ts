@@ -361,6 +361,23 @@ describe("TRAE CN ACP regression contract", () => {
     });
   }
 
+  test("client cancellation retains usage from a thrown prompt failure", async () => {
+    const controller = new AbortController();
+    const usage = { inputTokens: 123, outputTokens: 456, totalTokens: 579 };
+    spyOn(traeClient, "openTraeSession").mockResolvedValue({
+      models: ["test-model"],
+      prompt: async (_model, _text, _emit, _signal, dispatch) => {
+        dispatch?.beforeSend(); dispatch?.onSend();
+        throw new traeClient.TraeAcpError("fixture prompt failure", "trae_acp_error", usage);
+      },
+      close: async () => { controller.abort(); },
+    });
+    const events: AdapterEvent[] = [];
+    await createTraeCnAdapter(config()).runTurn!(traeRequest(), traeMeta({ abortSignal: controller.signal }),
+      event => events.push(event));
+    expect(events.at(-1)).toMatchObject({ type: "incomplete", reason: "client_cancelled", usage });
+  });
+
   for (const attachment of [
     { type: "input_image", image_url: "https://fixture.invalid/image.png" },
     { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a/nkAAAAASUVORK5CYII=" },
@@ -920,6 +937,33 @@ describe("TRAE CN ACP regression contract", () => {
     expect(events.some(event => event.type === "done")).toBe(false);
     expect(buildResponseJSON(events, "test-model").usage)
       .toMatchObject({ input_tokens: 123, output_tokens: 456, total_tokens: 579 });
+  });
+
+  test("inner EOF cleanup timeout preserves received usage", async () => {
+    const usage = { inputTokens: 123, outputTokens: 456, totalTokens: 579 };
+    const fixture = traeFixture((request, child) => {
+      if (request.method !== "session/prompt") return false;
+      fixture.send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn", usage } });
+      child.stdout!.end();
+      return true;
+    });
+    fixture.child.kill = () => true;
+    const events: AdapterEvent[] = [];
+    await createTraeCnAdapter(config(), { ...fixture.deps, home: testHome.root, cwd: testHome.root })
+      .runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "trae_shutdown_timeout", usage });
+    expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
+  test("dispatch-budget refusal outranks cleanup timeout", async () => {
+    spyOn(traeClient, "openTraeSession").mockResolvedValue({
+      models: ["test-model"],
+      prompt: async (_model, _text, _emit, _signal, dispatch) => { dispatch?.beforeSend(); },
+      close: async () => { throw new traeClient.TraeAcpError("fixture cleanup", "trae_shutdown_timeout"); },
+    });
+    const budget = fakeSendBudget({ useAllowed: false });
+    await expect(createTraeCnAdapter(config()).runTurn!(traeRequest(), traeMeta({ sendBudget: budget.budget }),
+      () => undefined)).rejects.toBeInstanceOf(SendBudgetExhaustedError);
   });
 
   for (const stopReason of ["end_turn", "max_tokens", "max_turn_requests", "fixture_unknown_stop"]) {
