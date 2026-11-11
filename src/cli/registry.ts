@@ -152,7 +152,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "link",
-    usage: "ocx link <port|issue|status|revoke|reconnect|cleanup>",
+    usage: "ocx link <port|issue|status|revoke|reconnect|cleanup|check|update|sync|restart-codex>",
     summary: "Allocate and manage a loopback remote home link.",
     details: [
       "Port: ocx link port [--json]",
@@ -161,7 +161,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "Revoke: ocx link revoke --link-id <id> [--force --yes] [--json]",
       "Reconnect: ocx link reconnect --link-id <id> [--json]",
       "Cleanup: ocx link cleanup [--link-id <id>] [--json]",
-      "Issue, status, revoke, and reconnect use the running proxy's loopback management API and admin token.",
+      "Check: ocx link check (--link-id <id> | --all) [--no-wait] [--json]",
+      "Update: ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]",
+      "Sync: ocx link sync (--link-id <id> | --all) [--no-wait] [--json]",
+      "Sync with a restart: ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]",
+      "Restart Codex: ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]",
+      "Issue, status, revoke, reconnect, check, update, sync and restart-codex use the running proxy's loopback management API and admin token; update, sync and restart-codex act only on Home-initiated links.",
     ],
   },
   {
@@ -183,11 +188,11 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "sync",
-    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only]",
+    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only] [--child <linkId>]... [--restart-children[=app-server] | --restart-children=codex --yes]",
     summary: "Fetch provider models and inject them into Codex config.",
     details: [
       "A current Home catalog fans out to linked Children; --local-only disables fan-out and --json emits the result. Partial fan-out exits 6.",
-      "Fan-out never requests a Codex app or app-server restart on a Child; use GOAT or ocx sync --restart-codex on the Child. The Child's pinned sync may restart its OpenCodex client runtime after applying changed Home settings.",
+      "--child <linkId> (repeatable) limits fan-out to those links; the others report not-selected. A Child held by a Child operation is skipped as child-busy. Fan-out requests no Codex restart on a Child unless --restart-children[=app-server] or --restart-children=codex --yes is given; the Home then skips the restart, never the sync, for a Child with a model request in flight (restart-skipped:link-active), on Windows Children, and on ocx-child, and exits 6. The Child's pinned sync may restart its OpenCodex client runtime after applying changed Home settings.",
       "After writing the catalog, warns if long-lived Codex app-server processes are still running.",
       "An update in flight or an unavailable update/sync mutex refuses without changes: update-in-flight, exit 7. Another sync reports sync-in-progress, exit 1.",
       "--restart-codex restarts the app-servers AND fully quits and relaunches the Codex desktop app on macOS, Linux and Windows, after catalog/cache writes or a committed configuration change. It ends live conversations.",

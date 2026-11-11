@@ -154,7 +154,7 @@ type ProviderPatchApplication =
       headersTouched: boolean;
     };
 
-const PROVIDER_ALIAS_OVERLAY_FIELDS = ["alias", "modelAliases", "defaultAliases"] as const;
+const PROVIDER_ALIAS_OVERLAY_FIELDS = ["alias", "modelAliases", "defaultAliases", "aliasTemplate"] as const;
 type ProviderAliasOverlayField = typeof PROVIDER_ALIAS_OVERLAY_FIELDS[number];
 
 /**
@@ -721,23 +721,25 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
-  if (Object.hasOwn(rawBody, "unsupportedHostedTools")) {
-    const value = rawBody.unsupportedHostedTools;
+  // The conditional list (#8204) shares the unconditional list's vocabulary and clearing rules.
+  for (const field of ["unsupportedHostedTools", "unsupportedHostedToolsWithClientTools"] as const) {
+    if (!Object.hasOwn(rawBody, field)) continue;
+    const value = rawBody[field];
     if (value === null) {
-      delete next.unsupportedHostedTools;
+      delete next[field];
     } else {
-      const error = nonBlankStringArrayConfigError(value, "unsupportedHostedTools");
+      const error = nonBlankStringArrayConfigError(value, field);
       if (error) return { error };
       const tools = normalizeNonBlankStringArray(value as string[]);
       const unknownTool = tools.find(tool => !DECLARABLE_HOSTED_TOOL_TYPES.has(tool));
       if (unknownTool !== undefined) {
         return {
-          error: `unsupportedHostedTools must name only hosted tool types: `
+          error: `${field} must name only hosted tool types: `
             + `${[...DECLARABLE_HOSTED_TOOL_TYPES].join(", ")}`,
         };
       }
-      if (tools.length > 0) next.unsupportedHostedTools = tools;
-      else delete next.unsupportedHostedTools;
+      if (tools.length > 0) next[field] = tools;
+      else delete next[field];
     }
     touched = true;
   }
@@ -923,6 +925,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       allowPrivateNetwork: p.allowPrivateNetwork === true,
       preserveResponsesReasoningContent: p.preserveResponsesReasoningContent,
       promoteAdditionalTools: p.promoteAdditionalTools,
+      forwardAdvisorTool: p.forwardAdvisorTool,
       liveModels: p.liveModels !== false,
       requestPacing: p.requestPacing,
       models: p.models ?? [],
@@ -939,6 +942,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       noStructuredOutputModels: p.noStructuredOutputModels,
       noJsonSchemaModels: p.noJsonSchemaModels,
       unsupportedHostedTools: p.unsupportedHostedTools,
+      unsupportedHostedToolsWithClientTools: p.unsupportedHostedToolsWithClientTools,
       retainModels: p.retainModels,
       omitReasoningEffortWithToolsModels: p.omitReasoningEffortWithToolsModels,
       upstreamHttpVersion: p.upstreamHttpVersion,
@@ -1800,7 +1804,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
           latencyMs,
           error: extracted.reason === "too_many_models"
             ? `upstream /models exceeded the ${discovery.maxModels}-row model limit`
-            : `upstream /models returned an unexpected shape${invalidModelDiscoveryHint("diagnostic" in extracted && typeof extracted.diagnostic === "string" ? extracted.diagnostic : undefined)}`,
+            : `upstream /models returned an unexpected shape${invalidModelDiscoveryHint("diagnostic" in extracted && typeof extracted.diagnostic === "string" ? extracted.diagnostic : undefined, discovery.skipInvalidRows === true)}`,
         });
       }
       const models = ccaModels?.length ?? ("items" in extracted! ? extracted!.items.length : extracted!.rows.length);
@@ -1808,7 +1812,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         ok: true,
         latencyMs,
         models,
-        message: `Connected — ${models} model${models === 1 ? "" : "s"} available.`,
+        message: `Connected — ${models} model${models === 1 ? "" : "s"} available${extracted && "skippedInvalidRows" in extracted && extracted.skippedInvalidRows ? ` (${extracted.skippedInvalidRows} invalid row${extracted.skippedInvalidRows === 1 ? "" : "s"} skipped)` : ""}.`,
       });
     } catch (err) {
       return jsonResponse({

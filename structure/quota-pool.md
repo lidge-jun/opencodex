@@ -45,7 +45,8 @@ every caller, and reads only caches other paths filled:
   `pooled` windows only where account rows do not serve the configured provider: a provider with
   no account rows (an API-key provider's credits, for example) or a per-account provider configured
   with an API key (see [Pooled windows](#pooled-windows)). An in-band observed report is `header`,
-  any other report is `measured`.
+  any other report is `measured`. Credential-bound reports are withheld when their current owner
+  cannot be verified passively, including keychain references.
 
 `tests/server/quota-pool-relay.test.ts` reads the route on the Home, over the link relay and over
 the hub relay against a pool account with an expired token and an empty provider-report cache. It

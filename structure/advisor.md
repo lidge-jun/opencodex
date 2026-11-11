@@ -78,6 +78,23 @@ multi-call pairing, overlap and lifecycle release.
   `tests/advisor/advisor-web-search.test.ts` covers the accounting and independent allowances.
 - Turns claimed by the image/video sidecar loops keep the advisor tool un-injected; preflight still applies.
 
+## Claude Code's typed Advisor server tool
+
+Claude Code also declares Anthropic's own Advisor server tool (`advisor_YYYYMMDD`, beta
+`advisor-tool-2026-03-01`), which Anthropic runs server-side under the same wire name `advisor`.
+The two never share a turn. When this sidecar injects its synthetic tool,
+`src/server/responses/sidecar-execution.ts` removes the declaration for the whole turn, so a later
+web-search iteration without the synthetic tool cannot forward it either, and records the protocol
+reason `advisor-tool-shadowed-by-proxy-advisor` for a destination that would otherwise receive it.
+`planAnthropicServerTools` (`src/adapters/anthropic/advisor-tool.ts`) also withholds the completed
+Advisor history and the beta while a function tool named `advisor` owns the name, the same rule that
+keeps the web-search sidecar's `web_search` ahead of a typed search. With
+this sidecar off, the declaration reaches first-party Anthropic, or a gateway with
+`forwardAdvisorTool: true`, and its blocks round-trip to the client. Destination, replay and scope
+rules are in [providers and adapters](providers-and-adapters.md);
+`tests/claude-integration/claude-translated-advisor-tool.test.ts` covers both sides of the precedence
+through the Responses core.
+
 ## Recursion fence (server-owned authority)
 
 The consultation executor calls the proxy's own `/v1/chat/completions` on loopback and presents

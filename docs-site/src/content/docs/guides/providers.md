@@ -55,7 +55,7 @@ reset is expected to recover as `+N% pool capacity`. **Incomplete coverage** mea
 accounts could not safely contribute to the estimate, for example because their plan or quota is
 unknown, their reading is stale, or the account is paused or needs reauthentication.
 
-Business Premium seats reported as `self_serve_business_prolite` count as five Standard-seat units in this estimate. This display weight does not select accounts or create a five-hour window when the upstream reports only weekly usage. The calibration follows the [official Business usage limits](https://help.openai.com/en/articles/12003714-chatgpt-business-models-and-limits), checked 2026-10-20; unknown plans continue to count at the baseline with the unknown-plan count disclosed.
+Business Premium seats reported as `self_serve_business_prolite` count as five Standard-seat units in this estimate. This display weight does not select accounts or create a five-hour window when the upstream reports only weekly usage. The calibration follows the [official Business usage limits](https://help.openai.com/en/articles/12003714-chatgpt-business-models-and-limits), checked 2026-10-20; unknown plans continue to count at the baseline with the unknown-plan count disclosed. An enabled Anthropic OAuth account pool with two or more accounts gets the same kind of estimate, every routable account weighted equally: inactive accounts use their last measured reading (no extra usage requests), paused, reauthenticating or stale accounts count as incomplete coverage, and with the pool off or one account the row shows the active account's own reading as before.
 
 A **partial window coverage** warning means some included accounts reported one quota window but
 not another. The overview keeps those windows separate and marks each affected window incomplete
@@ -65,9 +65,9 @@ This estimate is display-only. It does not change account selection, session aff
 switching, cooldowns, or any other routing decision. Use the [Codex Auth account pool](/guides/web-dashboard/#codex-auth-and-account-pools)
 for the individual account state and routing controls.
 
-Shipped v1 configs migrate automatically to marker 2 and one option-aware row. The original config
-is retained once at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore it with
-`cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`.
+Shipped v1 configs migrate automatically to marker 2 and one option-aware row. The original config is retained once at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore it with `cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`.
+
+[Claude OAuth client-version errors](/guides/claude-code/#claude-oauth-client-version-errors)
 
 ## Claude Opus 5.5 progress updates
 
@@ -152,7 +152,13 @@ chance of reuse, but does not guarantee a cache hit or remove token-throughput l
 
 Mistral uses one API-key provider for both Studio and Vibe keys. Key types and plan allowances
 are described in [Mistral's API-key documentation](https://docs.mistral.ai/admin/identity-access/api-keys);
-the proxy does not infer a subscription tier from the key. For every model, explicit upstream
+the proxy does not infer a subscription tier from the key. At `https://api.mistral.ai/v1`, the dashboard
+reads API and Vibe budgets from `/v1/billing/budget` and the plan from `/v1/billing/subscription`,
+using the inference credential and egress. Measured windows show usage, total and recognized plan name.
+Budgets are display-only: they do not rank keys, route or pause traffic, or enter the quota pool.
+Missing, malformed or non-positive budgets, malformed currencies and out-of-range percentages are unknown;
+unknown plan names are omitted. Fresh last-good readings survive 402, 408, 429, 5xx and transport failures,
+but 401, 403 and other non-retryable client refusals suppress them. For every model, explicit upstream
 `Retry-After` deadlines are shared between calls on the same credential and model. A 429
 without a retry time can activate a conservative 60-second recovery wait when valid minute
 counters show exhausted capacity, or the refused query's measured cost exceeds the remaining

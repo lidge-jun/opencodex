@@ -1,4 +1,6 @@
 {
+  "claude-translated-advisor-tool.test.ts": "claude-integration",
+  "management-provider-forward-advisor-tool.test.ts": "server",
   "local-control-socket.test.ts": "server",
   "config-concurrent-inbound-body.test.ts": "config",
   "inbound-body-admission.test.ts": "server",
