@@ -255,7 +255,7 @@ function CodexCliUpdatePanel({ apiBase }: { apiBase: string }) {
 
 export default function CodexCliUpdate({ apiBase, connected = false }: { apiBase: string; connected?: boolean }) {
   const t = useT();
-  // A connected Child's machine listener refuses /api/codex/*, and its shared base is the Home: the
+  // A connected Child's machine listener refuses the Codex update routes, and its shared base is the Home: the
   // wrong machine. Updates run only on the dashboard of the computer that owns the installation.
   if (connected || isConnectedRuntime()) {
     return (
