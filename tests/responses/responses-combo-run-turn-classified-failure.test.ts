@@ -124,6 +124,10 @@ test("TRAE user images reach the routed vision sidecar instead of the pre-dispat
 });
 
 test("TRAE does not treat a credential-free OpenAI preference as a dispatchable vision plan", async () => {
+  const sidecarModule = await import("../../src/providers/openai-sidecar");
+  const resolver = spyOn(sidecarModule, "resolveFirstUsableOpenAiSidecar").mockResolvedValue(undefined);
+  const plannerModule = await import("../../src/vision/plan");
+  const planner = spyOn(plannerModule, "planVisionSidecar").mockReturnValue(undefined);
   const routed = await import("../../src/vision/routed-describe");
   const describer = spyOn(routed, "describeImageRouted");
   const cfg = config([{ provider: "trae-cn", model: "test-model" }]);
@@ -141,7 +145,37 @@ test("TRAE does not treat a credential-free OpenAI preference as a dispatchable 
     expect(response.status).toBe(400);
     expect((await response.json() as { error: { code: string } }).error.code).toBe("unsupported_input_modality");
     expect(describer).not.toHaveBeenCalled(); expect(open).not.toHaveBeenCalled();
-  } finally { open.mockRestore(); describer.mockRestore(); }
+    expect(resolver).toHaveBeenCalledTimes(1);
+  } finally { open.mockRestore(); describer.mockRestore(); resolver.mockRestore(); planner.mockRestore(); }
+});
+
+test("TRAE reuses a credentialed OpenAI sidecar for ordinary user images", async () => {
+  const sidecarModule = await import("../../src/providers/openai-sidecar");
+  const resolver = spyOn(sidecarModule, "resolveFirstUsableOpenAiSidecar").mockResolvedValue({
+    providerName: "openai", provider: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex" },
+    accountMode: "direct", authContext: { kind: "main", accountId: null }, headers: new Headers(),
+  });
+  const vision = await import("../../src/vision/describe");
+  const describer = spyOn(vision, "describeImage").mockResolvedValue({ text: "caption from OpenAI fixture", elapsedMs: 1 });
+  const cfg = config([{ provider: "trae-cn", model: "test-model" }]);
+  cfg.defaultProvider = "trae-cn";
+  cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
+    authMode: "key", models: ["test-model"], liveModels: false };
+  cfg.visionSidecar = { enabled: true, backend: "openai" };
+  const prompts: string[] = [];
+  const open = spyOn(traeClient, "openTraeSession").mockResolvedValue({ models: ["test-model"],
+    prompt: async (_model, text, emit) => { prompts.push(text); emit({ type: "text_delta", text: "described" }); emit({ type: "done" }); },
+    close: async () => undefined });
+  try {
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "trae-cn/test-model", stream: false,
+        input: [{ role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" }] }] }),
+    }), cfg, { model: "", provider: "" });
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect(resolver).toHaveBeenCalledTimes(1); expect(describer).toHaveBeenCalledTimes(1);
+    expect(prompts.join("\n")).toContain("caption from OpenAI fixture");
+  } finally { open.mockRestore(); describer.mockRestore(); resolver.mockRestore(); }
 });
 
 test("TRAE rejects agent and tool-result images before any vision request", async () => {

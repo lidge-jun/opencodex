@@ -11,7 +11,7 @@ import type {
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { prepareResponsesRequest } from "./request-prepare";
 import { prepareResponsesTransport } from "./request-transport";
-import { prepareResponsesSidecarAuth } from "./request-sidecar-auth";
+import { prepareResponsesSidecarAuth, resolveResponsesOpenAiSidecar } from "./request-sidecar-auth";
 import { createResponsesEffects } from "./response-effects";
 import { createResponsesSendBudget } from "./request-send-budget";
 import { executePassthroughResponse } from "./passthrough-execution";
@@ -29,6 +29,16 @@ import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruct
 import { responsesHasUnsupportedInputMedia, responsesHasUnsupportedToolMedia } from "../../adapters/trae-cn/input-media";
 import { planVisionSidecar } from "../../vision";
 import { markResponseNonReplayable } from "../../lib/upstream-retry";
+
+function traeMediaRefusal(logCtx: RequestLogContext): Response {
+  const message = "TRAE CN ACP supports text conversations only; media, documents and tool replay are not supported.";
+  const response = new Response(JSON.stringify({ error: {
+    type: "invalid_request_error", code: "unsupported_input_modality", param: null, message,
+  } }), { status: 400, headers: { "Content-Type": "application/json" } });
+  rememberProxyErrorMessage(logCtx, message, { status: 400, type: "invalid_request_error", code: "unsupported_input_modality" });
+  markProxyError(response);
+  return response;
+}
 
 /** Compose request phases while retaining the original admission-finally ownership. */
 export async function handleResponsesInner(
@@ -50,6 +60,23 @@ export async function handleResponsesInner(
     if (requestState instanceof Response) return requestState;
     const transportState = await prepareResponsesTransport(requestContext, admissionState, requestState);
     if (transportState instanceof Response) return markProxyError(transportState);
+    const unsupportedTraeReplayMedia = transportState.runTurnAdapter.name === "trae-cn"
+      && (options.chatUnsupportedInstructionMedia || options.responsesInstructionImage || options.responsesFileImage
+        || responsesHasInstructionImage(requestState.parsed._rawBody)
+        || responsesHasUnsupportedInputMedia(requestState.parsed._rawBody, { captionUserImages: true })
+        || responsesHasUnsupportedToolMedia(requestState.parsed._rawBody));
+    let sidecarState: Awaited<ReturnType<typeof prepareResponsesSidecarAuth>> | undefined;
+    if (unsupportedTraeReplayMedia) return traeMediaRefusal(logCtx);
+    if (transportState.runTurnAdapter.name === "trae-cn") {
+      const openAiSidecar = await resolveResponsesOpenAiSidecar(requestContext, requestState, transportState, true);
+      const needsCaption = options.responsesUnsupportedInputMedia
+        || responsesHasUnsupportedInputMedia(requestState.parsed._rawBody);
+      if (needsCaption && planVisionSidecar(config, requestState.route.provider, requestState.route.modelId,
+        requestState.parsed, openAiSidecar, { providerName: requestState.route.providerName }) === undefined) {
+        return traeMediaRefusal(logCtx);
+      }
+      sidecarState = await prepareResponsesSidecarAuth(requestContext, requestState, transportState, openAiSidecar);
+    }
     if (transportState.runTurnAdapter.name === "claude-cli" || transportState.runTurnAdapter.name === "trae-cn") {
       const instructionImage = options.chatInstructionImage || options.responsesInstructionImage
         || responsesHasInstructionImage(requestState.parsed._rawBody)
@@ -58,16 +85,15 @@ export async function handleResponsesInner(
       const unsupportedTraeMedia = transportState.runTurnAdapter.name === "trae-cn"
         && (() => {
           const captionUserImages = planVisionSidecar(config, requestState.route.provider, requestState.route.modelId,
-            requestState.parsed, undefined, { providerName: requestState.route.providerName }) !== undefined;
+            requestState.parsed, sidecarState?.openAiSidecar, { providerName: requestState.route.providerName }) !== undefined;
           return options.chatUnsupportedInstructionMedia
             || options.responsesUnsupportedInputMedia && !captionUserImages
-            || responsesHasUnsupportedToolMedia(requestState.parsed._rawBody)
             || responsesHasUnsupportedInputMedia(requestState.parsed._rawBody, { captionUserImages });
         })();
       if (instructionImage || options.responsesFileImage || unsupportedTraeMedia) {
-        const message = transportState.runTurnAdapter.name === "trae-cn"
-          ? "TRAE CN ACP supports text conversations only; media, documents and tool replay are not supported."
-          : instructionImage ? "Claude Code CLI does not support images in developer instructions."
+        if (transportState.runTurnAdapter.name === "trae-cn") return traeMediaRefusal(logCtx);
+        const message = transportState.runTurnAdapter.name === "claude-cli" && instructionImage
+          ? "Claude Code CLI does not support images in developer instructions."
             : "Claude Code CLI does not support file-backed image references.";
         const response = new Response(JSON.stringify({ error: {
           type: "invalid_request_error", code: "unsupported_input_modality", param: null,
@@ -87,7 +113,7 @@ export async function handleResponsesInner(
         options.translatorBudget, options.abortSignal ?? req.signal);
     }
     const execute = async (): Promise<Response> => {
-      const sidecarState = await prepareResponsesSidecarAuth(requestContext, requestState, transportState);
+      sidecarState ??= await prepareResponsesSidecarAuth(requestContext, requestState, transportState);
       if (sidecarState instanceof Response) return markProxyError(sidecarState);
       const responseEffects = createResponsesEffects(
         requestContext,

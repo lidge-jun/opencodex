@@ -18,13 +18,14 @@ function hasUnsupportedInstructions(body: unknown, field: "input" | "messages"):
 /** Reject media that cannot survive Responses projection; user images may be captioned first. */
 export function responsesHasUnsupportedInputMedia(body: unknown, options: { captionUserImages?: boolean } = {}): boolean {
   if (hasUnsupportedInstructions(body, "input")) return true;
-  if (!record(body) || !Array.isArray(body.input)) return false;
+  if (!record(body) || !Array.isArray(body.input) || body.input.length === 0) return false;
+  const ordinaryUserMessage = (item: Record<string, unknown>): boolean =>
+    (item.type === undefined || item.type === "message") && item.role === "user";
   const messageMedia = body.input.some(item => record(item)
-    && (item.type === "agent_message" || ((item.type === undefined || item.type === "message") && item.role === "user"))
+    && (item.type === "agent_message" || ordinaryUserMessage(item))
     && Array.isArray(item.content) && item.content.some(part => record(part) && typeof part.type === "string"
       && MEDIA_PART_TYPES.has(part.type)
-      && !(options.captionUserImages === true && part.type === "input_image" && item.role === "user"
-        && (item.type === undefined || item.type === "message"))));
+      && !(options.captionUserImages === true && part.type === "input_image" && ordinaryUserMessage(item))));
   const toolMedia = body.input.some(item => record(item)
     && (item.type === "function_call_output" || item.type === "custom_tool_call_output")
     && Array.isArray(item.output) && item.output.some(part => record(part) && typeof part.type === "string"
