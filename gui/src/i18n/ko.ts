@@ -1,6 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -134,6 +135,7 @@ export const ko: Record<TKey, string> = {
   ...desktopCompatibilityCopy("ko"),
   ...shellV2Copy("ko"),
   ...codexCliUpdateCopy("ko"),
+  ...remoteLinkDiagnosticsCopy("ko"),
   ...modelsV2Copy("ko"),
   ...accountsV2Copy("ko"),
   ...subagentsV2Copy("ko"),

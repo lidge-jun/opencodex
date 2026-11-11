@@ -152,12 +152,13 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "link",
-    usage: "ocx link <port|issue|status|revoke|reconnect|cleanup|check|update|sync|restart-codex|capture>",
+    usage: "ocx link <port|issue|status|diagnostics|revoke|reconnect|cleanup|check|update|sync|restart-codex|capture>",
     summary: "Allocate and manage a loopback remote home link.",
     details: [
       "Port: ocx link port [--json]",
       "Issue: ocx link issue --alias <alias> --tunnel-port <port> [--json]",
       "Status: ocx link status [--json]",
+      "Diagnostics: ocx link diagnostics [--limit <n>] [--since <iso-time|epoch-ms>] [--json]",
       "Revoke: ocx link revoke --link-id <id> [--force --yes] [--json]",
       "Reconnect: ocx link reconnect --link-id <id> [--json]",
       "Cleanup: ocx link cleanup [--link-id <id>] [--json]",
@@ -169,6 +170,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "Capture: ocx link capture <start [--minutes <1-60>]|stop|status> [--json]",
       "Issue, status, revoke, reconnect, check, update, sync and restart-codex use the running proxy's loopback management API and admin token; update, sync and restart-codex act only on Home-initiated links.",
       "Capture is a local file operation on this machine; it needs no running proxy, works on a Home and a Child, and no sync or remote input can start it.",
+      "Diagnostics reads this computer's link diagnostics file directly and needs no running proxy.",
     ],
   },
   {

@@ -21,6 +21,7 @@ import { clientLinkTunnelStatus } from "../../client/link-tunnel";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
+import { linkDiagnosticsResponse } from "./link-diagnostics-route";
 import { type IssuedApiKey } from "./oauth-account-routes";
 import { acceptSystemRestart, resolveListenPort } from "./system-restart";
 
@@ -291,6 +292,14 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     const state = suppliedState ?? stateFor(ctx);
     if (!state) return fail("link_unavailable", "The link lifecycle is unavailable.", 503);
     return handleJoin(ctx, state);
+  }
+  // A file read that needs no link lifecycle, so a runtime whose link supervisor is unavailable
+  // still shows what its tunnels recorded. Same authority as GET /api/link/status. A connected
+  // Child serves the same read from src/client/machine-listener.ts.
+  if (url.pathname === "/api/link/diagnostics" && req.method === "GET") {
+    const denied = auth(ctx, "either");
+    if (denied) return denied;
+    return linkDiagnosticsResponse(url);
   }
   const state = suppliedState ?? stateFor(ctx);
   if (!state) return fail("link_unavailable", "The link lifecycle is unavailable.", 503);

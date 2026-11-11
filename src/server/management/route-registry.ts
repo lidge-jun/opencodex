@@ -429,6 +429,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/storage/codex-logs/unprotect", module: "server/management/storage-log-guard-routes", mutates: true },
   // server/management/link-routes
   { method: "GET", path: "/api/link/status", module: "server/management/link-routes", mutates: false },
+  { method: "GET", path: "/api/link/diagnostics", module: "server/management/link-routes", mutates: false, exempt: { reason: "local-transport", why: "ocx link diagnostics reads the same bounded diagnostics file directly through src/link/diagnostics-read.ts and needs no running proxy; the route serves the dashboard's read-only view of it." } },
   { method: "GET", path: "/api/link/candidates", module: "server/management/link-routes", mutates: false, exempt: { reason: "session-only", why: "SSH candidates are a dashboard surface: a paired session, or on a standalone runtime the current loopback dashboard session on trusted loopback ingress; admin-token and Tailscale identity sessions are refused." } },
   { method: "POST", path: "/api/link/probe", module: "server/management/link-routes", mutates: true },
   { method: "POST", path: "/api/link/confirm-host", module: "server/management/link-routes", mutates: true },
