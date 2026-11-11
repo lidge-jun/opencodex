@@ -1607,3 +1607,32 @@ describe("provider moderation refusal", () => {
   });
 });
 
+
+describe("provider moderation refusal never outranks a hard refusal", () => {
+  const body = (error: Record<string, unknown>, root: Record<string, unknown> = {}) =>
+    JSON.stringify({ ...root, error: { type: "invalid_request_error", ...error } });
+  const cases: Array<[string, string, string | undefined, string | undefined]> = [
+    ["invalid_prompt with content-policy prose", body({ code: "invalid_prompt", message: "The response was filtered due to the prompt triggering Azure OpenAI's content management policy." }), "invalid_prompt", undefined],
+    ["bio_policy with moderation prose", body({ code: "bio_policy", message: "The input was refused by moderation. Categories: biology." }), "bio_policy", undefined],
+    ["misalignment code with moderation prose", body({ code: "misalignment_policy_violation", message: "The input was flagged by moderation." }), "misalignment_policy_violation", undefined],
+    ["content_filter code with safety-system prose", body({ code: "content_filter", message: "This request was blocked by our safety systems." }), "content_filter", undefined],
+    ["plain moderation text that also carries safety copy", "The input was refused by moderation. We've limited access to this content for safety reasons.", undefined, undefined],
+    ["terminal root code over a nested moderation code", body({ code: "content_filter", message: "The input was refused by moderation." }, { code: "invalid_prompt" }), "content_filter", "invalid_prompt"],
+    ["nested hard code beside a moderation code", body({ code: "content_filter", message: "Blocked.", innererror: { code: "bio_policy" } }), "content_filter", undefined],
+    ["unstripped gateway prefix with a non-replayable root", 'Gateway error 400: {"code":"upstream_no_response","error":{"code":"content_filter"}}', "content_filter", undefined],
+    ["validation error that merely names moderation categories", body({ message: "Invalid metadata value: moderation categories: harassment" }), undefined, undefined],
+  ];
+  for (const [label, message, code, rootCode] of cases) {
+    test(label, () => {
+      expect(isProviderModerationRefusal(400, message, code)).toBe(false);
+      expect(comboFailureDecision(400, message, { code, rootCode })).toBe("stop");
+      expect(comboFailureCooldownScope(400, message, { code })).not.toBe("none");
+    });
+  }
+
+  test("the reported moderation refusal still hops without cooling the target", () => {
+    const message = body({ code: "moderation_refusal", param: "input", message: "The input was refused by moderation. Categories: harassment." });
+    expect(comboFailureDecision(400, message, { code: "moderation_refusal" })).toBe("hop");
+    expect(comboFailureCooldownScope(400, message, { code: "moderation_refusal" })).toBe("none");
+  });
+});

@@ -1,5 +1,5 @@
 import { parseResetCooldownMs } from "../codex/routing";
-import { classifyError, isCyberPolicyCode, isCyberPolicyMessage, isTerminalRefusalCode } from "../lib/errors";
+import { classifyError, isCyberPolicyCode, isCyberPolicyMessage, isTerminalRefusalCode, safetyRefusalCodeFromMessage } from "../lib/errors";
 import { isHardPolicyOrOriginRefusal } from "../lib/hard-refusal";
 import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
 import { isAnthropicBillingFailure } from "../providers/anthropic-billing-refusal";
@@ -1015,49 +1015,34 @@ function isReflectedValidationText(text: string): boolean {
 }
 
 /**
- * A moderation phrase echoed inside quotes is a reflected parameter value (`Invalid enum value
- * 'blocked by moderation'`), not a verdict. Track quote state so verdict evidence must appear
- * in prose; an apostrophe inside a word ("don't") is literal text, not a quote delimiter.
+ * A moderation phrase echoed inside quotes is a reflected parameter value (Invalid enum value
+ * 'blocked by moderation'), not a verdict, so verdict evidence must appear in prose. One pass
+ * blanks every quoted span; an apostrophe inside a word ("don't") is literal text, not a quote.
  */
-function isInsideQuotedSpan(text: string, end: number): boolean {
-  let inSingle = false;
-  let inDouble = false;
-  for (let i = 0; i < end; i += 1) {
-    const ch = text[i];
+function unquotedProse(text: string): string {
+  let out = "";
+  let quote: "'" | "\"" | null = null;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i]!;
     if (ch === "\\") {
+      out += quote ? "  " : ch + (text[i + 1] ?? "");
       i += 1;
       continue;
     }
-    if (inDouble) {
-      if (ch === "\"") inDouble = false;
+    if (quote) {
+      if (ch === quote) quote = null;
+      out += " ";
       continue;
     }
-    if (inSingle) {
-      if (ch === "'") inSingle = false;
+    if (ch === "\"" || (ch === "'" && !(i > 0 && /[A-Za-z]/.test(text[i - 1]!) && /[A-Za-z]/.test(text[i + 1] ?? "")))) {
+      quote = ch;
+      out += " ";
       continue;
     }
-    if (ch === "\"") {
-      inDouble = true;
-      continue;
-    }
-    if (
-      ch === "'"
-      && !(i > 0 && i + 1 < text.length && /[A-Za-z]/.test(text[i - 1]) && /[A-Za-z]/.test(text[i + 1]))
-    ) {
-      inSingle = true;
-    }
+    out += ch;
   }
-  return inSingle || inDouble;
-}
-
-function hasUnquotedOccurrence(text: string, needle: string): boolean {
-  let from = 0;
-  for (;;) {
-    const idx = text.indexOf(needle, from);
-    if (idx === -1) return false;
-    if (!isInsideQuotedSpan(text, idx)) return true;
-    from = idx + 1;
-  }
+  // An unterminated quote leaves its tail blanked, matching the old "inside a quote" verdict.
+  return out;
 }
 
 const MODERATION_REFUSAL_VERDICT_PHRASES = [
@@ -1067,13 +1052,20 @@ const MODERATION_REFUSAL_VERDICT_PHRASES = [
   "content management policy",
 ];
 
+/**
+ * Any hard-refusal or non-replayable code anywhere in the text, structured or serialized. A
+ * moderation verdict never outranks one: the client must not retry these, and a body that
+ * carries both is not evidence that another target may serve the request.
+ */
+const HARD_STOP_TOKEN =
+  /\b(?:cyber_policy|origin_rejected|bio_policy|misalignment_policy_violation|invalid_prompt|upstream_no_response|upstream_closed_before_response|upstream_reset_replay_refused)\b/i;
+
 function namesModerationRefusal(text: string): boolean {
   if (isReflectedValidationText(text)) return false;
-  const lower = text.toLowerCase();
-  for (const phrase of MODERATION_REFUSAL_VERDICT_PHRASES) {
-    if (hasUnquotedOccurrence(lower, phrase)) return true;
-  }
-  return hasUnquotedOccurrence(lower, "moderation") && hasUnquotedOccurrence(lower, "categories:");
+  // Only an explicit verdict phrase counts. A validation error can name moderation categories
+  // ("Invalid metadata value: moderation categories: harassment") without any refusal.
+  const prose = unquotedProse(text.toLowerCase());
+  return MODERATION_REFUSAL_VERDICT_PHRASES.some(phrase => prose.includes(phrase));
 }
 
 /**
@@ -1091,9 +1083,16 @@ export function isProviderModerationRefusal(
   const normalizedCode = normalizedFailureCode(code);
   if (
     isCyberPolicyCode(normalizedCode)
+    || isTerminalRefusalCode(normalizedCode)
     || isNonReplayableUpstreamCode(normalizedCode)
     || normalizedCode === "origin_rejected"
   ) {
+    return false;
+  }
+  // Hard refusals anywhere in the body outrank a moderation verdict, including nested codes,
+  // serialized wrappers and safety copy. The terminal refusal path owns those bodies.
+  if (message && (HARD_STOP_TOKEN.test(message) || isHardPolicyOrOriginRefusal(message)
+    || safetyRefusalCodeFromMessage(message) !== undefined)) {
     return false;
   }
   if (!message) {
@@ -1106,9 +1105,10 @@ export function isProviderModerationRefusal(
   let moderationCodeSeen = normalizedCode === "moderation_refusal" || normalizedCode === "content_filter";
 
   for (let depth = 0; depth < 3; depth += 1) {
-    if (text.startsWith("Provider error 400: ") || text.startsWith("Provider error 422: ")) {
-      text = text.slice(text.indexOf(": ") + 2).trim();
-    }
+    // The same wrapper prefixes the hard-refusal parser strips (src/lib/hard-refusal.ts).
+    const prefix = ["Provider error 400: ", "Provider error 422: ", "Provider error: ", "Gateway error 400: ", "Gateway error: "]
+      .find(candidate => text.startsWith(candidate));
+    if (prefix) text = text.slice(prefix.length).trim();
     if (text.startsWith("data:") && !text.includes("\n")) {
       text = text.slice("data:".length).trim();
     }
