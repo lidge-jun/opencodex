@@ -1,4 +1,4 @@
-import { recordUpstreamValidationDetail } from "./request-log-failure-detail";
+import { recordUpstreamProviderErrorDetail } from "./request-log-failure-detail";
 import { normalizeNativeChatContent } from "../adapters/openai-chat/native-content";
 import { attachComboFailureEvidence, ownedChatErrorPayload, type ClientErrorContract } from "../lib/client-error-body";
 import type { FailureVerdictSink } from "../chat/failure-verdict";
@@ -68,6 +68,7 @@ import { fastPolicyForModel } from "../providers/service-tier";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import { stampApiKeyAccountLabel } from "../providers/label";
 import { distributedKeyPhysicalFetch, distributedKeyResponseOwner } from "../providers/api-key-response-ownership";
+import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../providers/api-key-pause";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
 import type { OcxProviderTransport } from "../providers/xai-transport";
 import type { RouteResult } from "../router";
@@ -359,8 +360,12 @@ export async function runNativeChatAttempt(
   try {
     const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);
     if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
+    if (isProviderApiKeyPaused(route.provider)) throw new ProviderApiKeyPausedError();
   } catch (error) {
     cleanupAbort(); upstream.abort();
+    if (error instanceof ProviderApiKeyPausedError) {
+      return failLocal(403, error.message, "permission_error");
+    }
     if (!(error instanceof RequestPacingQueueOverloadError)) throw error;
     const refusal = failLocal(429, error.message, "rate_limit_error");
     const advice = formatClientRetryAfter(error.retryAfterSeconds);
@@ -526,6 +531,7 @@ export async function runNativeChatAttempt(
                   if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
                 }
                 if (!current || !isNativeChatRouteEligible({ ...route, provider: current }, execution.chatBody, config)) {
+                  if (!current && isProviderApiKeyPaused(config.providers[route.providerName])) throw new ProviderApiKeyPausedError();
                   throw new Error("Provider key selection is no longer available for native Chat");
                 }
                 activeProvider = current;
@@ -699,6 +705,9 @@ export async function runNativeChatAttempt(
     upstream.abort();
     if (req.signal.aborted) return failLocal(499, "Client cancelled request", "client_cancelled");
     const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
+    if (sendError instanceof ProviderApiKeyPausedError) {
+      return failLocal(403, sendError.message, "permission_error");
+    }
     if (sendError instanceof RequestPacingQueueOverloadError) {
       const refusal = failLocal(429, sendError.message, "rate_limit_error");
       const advice = formatClientRetryAfter(sendError.retryAfterSeconds);
@@ -745,7 +754,7 @@ export async function runNativeChatAttempt(
     let upstreamMessage: string | undefined;
     try {
       const parsedError = JSON.parse(bodyText) as Rec;
-      recordUpstreamValidationDetail(logCtx, response.status, parsedError);
+      recordUpstreamProviderErrorDetail(logCtx, response.status, parsedError);
       const nested = isRec(parsedError.error) ? parsedError.error : undefined;
       const details = nested ?? parsedError;
       if (typeof details.type === "string") upstreamType = details.type;

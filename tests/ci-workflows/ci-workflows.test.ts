@@ -312,7 +312,7 @@ describe("GitHub Actions hardening", () => {
     } | undefined;
     expect(macosControlJob?.name).toBe("macos control");
     expect(macosControlJob?.needs).toBe("changes");
-    expect(macosControlJob?.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')");
+    expect(macosControlJob?.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && github.event.inputs.lane == 'macos-control'");
     expect(macosControlJob?.["runs-on"]).toBe("macos-latest");
     expect(macosControlJob?.strategy).toBeUndefined();
     const macosControlSteps = macosControlJob?.steps ?? [];
@@ -725,7 +725,8 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("pull-requests: read");
     expect(workflow).toContain("id-token: write");
     expect(workflow).toContain("cancel-in-progress: false");
-    expect(workflow).toContain("timeout-minutes: 15");
+    // The publish job bounds its two post-publish registry waits (about 20 minutes each, ~55 worst case).
+    expect(workflow).toContain("timeout-minutes: 75");
 
     // The exact-SHA CI gate already includes the three hosted keyring legs. The
     // release workflow must not duplicate the Linux bootstrap and drift from CI.
@@ -736,9 +737,9 @@ describe("GitHub Actions hardening", () => {
     const packageJson = JSON.parse(await readText("package.json")) as { scripts?: Record<string, string> };
     expect(packageJson.scripts?.prepublishOnly).toContain("bun run audit:high");
     expect(workflow).toContain("npm run prepublishOnly");
-    expect(count(workflow, 'node .github/scripts/release-evidence.cjs check "$SOURCE_SHA"')).toBe(2);
-    expect(count(workflow, 'node .github/scripts/release-evidence.cjs service-range "$SOURCE_SHA" "$baseline"')).toBe(2);
-    expect(count(workflow, 'node .github/scripts/release-evidence.cjs service "$SOURCE_SHA"')).toBe(2);
+    expect(count(workflow, 'node .github/scripts/release-evidence.cjs check "$SOURCE_SHA"')).toBe(3);
+    expect(count(workflow, 'node .github/scripts/release-evidence.cjs service-range "$SOURCE_SHA" "$baseline"')).toBe(3);
+    expect(count(workflow, 'node .github/scripts/release-evidence.cjs service "$SOURCE_SHA"')).toBe(3);
 
     // Dry-run first by default; tokenless trusted publishing only.
     expect(workflow).toMatch(/dry-run:[\s\S]*?default: true/);
@@ -5382,8 +5383,9 @@ test.skipIf(process.platform === "win32")("release shell recovers only unverifie
   const scenarios = [
     { mode: "match", dry: false, status: 0, receipt: true, verification: "verified", reads: 1 },
     { mode: "delayed", dry: false, status: 0, receipt: true, verification: "verified", reads: 3 },
-    { mode: "unavailable", dry: false, status: 0, receipt: true, verification: "pending", reads: 6 },
-    { mode: "timeout", dry: false, status: 0, receipt: true, verification: "pending", reads: 6 },
+    // npm took ~15 minutes to serve 2.100.1, so the smoke waits 40 x 30 s before reporting pending.
+    { mode: "unavailable", dry: false, status: 0, receipt: true, verification: "pending", reads: 40 },
+    { mode: "timeout", dry: false, status: 0, receipt: true, verification: "pending", reads: 40 },
     { mode: "wrong", dry: false, status: 1, receipt: true, verification: "", reads: 1 },
     { mode: "empty", dry: false, status: 1, receipt: true, verification: "", reads: 1 },
     { mode: "dist-failure", dry: false, status: 0, receipt: true, verification: "verified", reads: 1 },
@@ -5453,7 +5455,7 @@ test.skipIf(process.platform === "win32")("release shell recovers only unverifie
       if (scenario.verification === "pending") {
         expect(stdout).toContain("::warning::npm publish succeeded");
         expect(readFileSync(summary, "utf8")).toContain("registry verification pending");
-        expect(log.filter(line => line === "sleep 5")).toHaveLength(5);
+        expect(log.filter(line => line === "sleep 30")).toHaveLength(39);
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }

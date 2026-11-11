@@ -8,7 +8,7 @@ import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import type { ResponsesCompletionPolicy } from "./completion-policy";
 import { linkAbortSignal, runTurnAdapterSseResponses } from "./core-lifetime";
-import { createAdapterEventQueue, preflightAdapterEvents, type AdapterEventPreflight } from "../../adapters/run-turn-queue";
+import { createAdapterEventQueue, preflightAdapterEvents, classifyZeroOutputTokenLimit, isContentEvent, DEFAULT_MAX_REASONING_HOLD_MS, type AdapterEventPreflight } from "../../adapters/run-turn-queue";
 import {
   bindRouteReasoningReplayScope,
   adapterNeedsForcedContinuation,
@@ -283,6 +283,7 @@ export async function executeResponsesRunTurn(
     const failedKeys = new Set<string>();
     const keyAttemptLimit = route.provider.apiKeyPool?.length ?? 0;
     let lastKeyFailure: Extract<AdapterEvent, { type: "error" }> | undefined;
+    let authRecoveryRefusal: Response | undefined;
     let runTurnAttemptSeq = 0;
     const runTurnAttempt = async (
       targetQueue: AdapterEventQueue,
@@ -389,8 +390,13 @@ export async function executeResponsesRunTurn(
           Object.assign(parsed, routeState);
         }
       } catch (err) {
-        const storageRefusal = mapSpendLedgerStorageError(err, logCtx);
-        emit(storageRefusal ? { type: "error", ...storageRefusal } : err instanceof RequestPacingQueueOverloadError
+        if (err instanceof OAuthAccountPausedError) {
+          const message = publicOAuthAuthenticationErrorMessage(err);
+          authRecoveryRefusal ??= formatErrorResponse(403, "permission_error", message);
+          emit({ type: "error", status: 403, errorType: "permission_error", message });
+        } else {
+          const storageRefusal = mapSpendLedgerStorageError(err, logCtx);
+          emit(storageRefusal ? { type: "error", ...storageRefusal } : err instanceof RequestPacingQueueOverloadError
           ? {
               type: "error",
               status: 429,
@@ -414,6 +420,7 @@ export async function executeResponsesRunTurn(
                 type: "error",
                 message: err instanceof Error ? err.message : String(err),
               });
+        }
       } finally {
         if (attemptSeq === 1) options.comboInitialSend?.permit.release();
         devinProducers.delete(producerAbort);
@@ -492,7 +499,6 @@ export async function executeResponsesRunTurn(
     // selected; the turn then moves to a surviving stored account, or, with none, the client
     // gets the login instruction instead of an opaque upstream 401.
     let oauth401ReplayAttempted = false;
-    let authRecoveryRefusal: Response | undefined;
     const refuseLocalAuthRecovery = (error: Extract<AdapterEvent, { type: "error" }>, cause: unknown): boolean => {
       const cancelled = runTurnAbort.signal.aborted;
       if (!cancelled && !(cause instanceof OAuthTokenRefreshBusyError) && !(cause instanceof OAuthAccountPausedError)) return false;
@@ -775,6 +781,11 @@ export async function executeResponsesRunTurn(
     const classifyUndeclaredFirstTool = (
       event: AdapterEvent,
     ): Extract<AdapterEvent, { type: "error" }> | undefined => {
+      // Called only at the first meaningful event; preflight protects side effects.
+      const zeroOutputLimit = options.comboAttempt
+        ? classifyZeroOutputTokenLimit(event, { allowCompactionWithContent: routedCompaction })
+        : undefined;
+      if (zeroOutputLimit) return zeroOutputLimit;
       // This tool is declared to the adapter by the private search loop.
       if (wsPlan && event.type === "tool_call_start" && event.name === WEB_SEARCH_TOOL_NAME) return undefined;
       const emptyCatalogRefusal = emptyToolCatalogRefusal(event, clientToolCatalog);
@@ -822,17 +833,19 @@ export async function executeResponsesRunTurn(
         ? Date.now() + (resolveStallTimeoutSec(stallTimeoutSec) || DEFAULT_STALL_TIMEOUT_SEC) * 1_000
         : undefined;
       if (runTurnFailoverArmed()) {
-        // Preflight holds only heartbeats and the first meaningful event. A first-event 429 can be
-        // replayed transparently; after any output reaches the bridge, a later error stays terminal.
+        // Preflight holds heartbeats, pre-output reasoning up to the reasoning hold bound,
+        // and the first meaningful event. A first-event 429 or zero-output token-limit terminal
+        // can be replayed transparently; after any output reaches the bridge or the reasoning
+        // hold expires, a later error stays terminal.
         eventSource = await preflightRunTurnFailover(eventSource, wsFirstParsed, preflightDeadlineAt);
-        if (authRecoveryRefusal) {
-          cancelResponseCompletion();
-          runTurnAbort.abort();
-          queue.close();
-          cleanupRunTurnAbort();
-          releaseSearchProbeLease();
-          return authRecoveryRefusal;
-        }
+      }
+      if (authRecoveryRefusal) {
+        cancelResponseCompletion();
+        runTurnAbort.abort();
+        queue.close();
+        cleanupRunTurnAbort();
+        releaseSearchProbeLease();
+        return authRecoveryRefusal;
       }
       if (grokDevinPreflight) {
         const preflight = await preflightAdapterEvents(eventSource, undefined, {
@@ -844,9 +857,14 @@ export async function executeResponsesRunTurn(
       }
       if (options.comboAttempt) {
         const preflight = await preflightAdapterEvents(
-          eventSource, classifyUndeclaredFirstTool, { honorReady: false },
+          eventSource, classifyUndeclaredFirstTool, {
+            honorReady: false,
+            bufferCompaction: routedCompaction,
+            maxReasoningHoldMs: DEFAULT_MAX_REASONING_HOLD_MS,
+          },
         );
         if (preflight.error || preflight.empty) {
+          if (preflight.error?.usage) transportState.bindKeyUsageFromBridge(preflight.error.usage);
           runTurnAbort.abort();
           queue.close();
           const classified = adapterFailureFromEvent(preflight.error ?? {
@@ -982,14 +1000,14 @@ export async function executeResponsesRunTurn(
       for await (const event of await preflightRunTurnFailover(
         (async function* () { yield* firstAttemptEvents; })(),
       )) runTurnEvents.push(event);
-      if (authRecoveryRefusal) {
-        cancelResponseCompletion();
-        runTurnAbort.abort();
-        queue.close();
-        cleanupRunTurnAbort();
-        releaseSearchProbeLease();
-        return authRecoveryRefusal;
-      }
+    }
+    if (authRecoveryRefusal) {
+      cancelResponseCompletion();
+      runTurnAbort.abort();
+      queue.close();
+      cleanupRunTurnAbort();
+      releaseSearchProbeLease();
+      return authRecoveryRefusal;
     }
     if (grokDevinPreflight) {
       const preflight = await preflightAdapterEvents(
@@ -1052,15 +1070,21 @@ export async function executeResponsesRunTurn(
         const firstMeaningfulIndex = events.findIndex(event => event.type !== "heartbeat");
         const firstMeaningful = firstMeaningfulIndex === -1 ? undefined : events[firstMeaningfulIndex];
         // Same boundary as the streaming preflight: a replay-unsafe heartbeat means the adapter
-        // already ran a local side effect, so an undeclared tool call after it keeps the bridge's
+        // already ran a local side effect, so an undeclared tool call or error after it keeps the bridge's
         // fail-closed refusal instead of becoming a hop that sends the turn to another target.
-        const replayUnsafe = events
-          .slice(0, firstMeaningfulIndex === -1 ? events.length : firstMeaningfulIndex)
-          .some(event => event.type === "heartbeat" && event.replayUnsafe === true);
-        const classifiedError = firstMeaningful && !replayUnsafe
-          ? classifyUndeclaredFirstTool(firstMeaningful)
+        // Fail closed: any replay-unsafe heartbeat anywhere in the buffered turn disables replaying
+        // undeclared tools or zero-output token-limit terminals.
+        const replayUnsafe = events.some(event => event.type === "heartbeat" && event.replayUnsafe === true);
+        const sawContent = events.some(isContentEvent);
+        const terminalEvent = [...events].reverse().find(event => event.type === "done" || event.type === "incomplete");
+        const zeroOutputLimit = (!sawContent || routedCompaction) && terminalEvent
+          ? classifyZeroOutputTokenLimit(terminalEvent, { allowCompactionWithContent: routedCompaction })
+          : undefined;
+        const classifiedError = !replayUnsafe
+          ? (zeroOutputLimit ?? (firstMeaningful ? classifyUndeclaredFirstTool(firstMeaningful) : undefined))
           : undefined;
         if (!firstMeaningful || firstMeaningful.type === "error" || classifiedError) {
+          if (classifiedError?.usage) transportState.bindKeyUsageFromBridge(classifiedError.usage);
           const classified = adapterFailureFromEvent(classifiedError ?? (firstMeaningful?.type === "error"
             ? firstMeaningful
             : { type: "error", status: 502, message: "Adapter ended before producing a response" }));
@@ -1117,10 +1141,12 @@ export async function executeResponsesRunTurn(
         commitReasoningReplayServingRoute();
       }
       notifyResponseComplete(json);
-      return new Response(JSON.stringify(json), {
+      const response = new Response(JSON.stringify(json), {
         status: (json.error as OcxErrorPayload | undefined)?.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE ? 503 : 200,
         headers: { "Content-Type": "application/json" },
       });
+      runTurnAdapterSseResponses.add(response);
+      return response;
     } catch (error) {
       if (!isTranslatorBudgetExceededError(error)) throw error;
       runTurnAbort.abort();

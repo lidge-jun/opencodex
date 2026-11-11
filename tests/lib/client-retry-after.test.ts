@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatClientRetryAfter, MAX_CLIENT_RETRY_AFTER_SECONDS } from "../../src/lib/client-retry-after";
+import { appendClientRetryIn, formatClientRetryAfter, formatClientRetryIn, MAX_CLIENT_RETRY_AFTER_SECONDS } from "../../src/lib/client-retry-after";
 
 const now = Date.parse("2026-11-02T00:00:00Z");
 
@@ -51,6 +51,45 @@ describe("formatClientRetryAfter", () => {
       "2026-11-02T00:00:30Z", "Mon, 02 Nov 2026 00:00:30 GMT extra", "9".repeat(200), null, undefined,
       -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(formatClientRetryAfter(value as string | number | null | undefined, now)).toBeUndefined();
+    }
+  });
+});
+
+describe("formatClientRetryIn", () => {
+  test("seconds, minutes, hours and days pick the largest readable unit", () => {
+    expect(formatClientRetryIn("1", now)).toBe("1s");
+    expect(formatClientRetryIn("45", now)).toBe("45s");
+    expect(formatClientRetryIn("60", now)).toBe("1m");
+    expect(formatClientRetryIn("119", now)).toBe("2m");
+    expect(formatClientRetryIn("3600", now)).toBe("1h");
+    expect(formatClientRetryIn("3660", now)).toBe("2h");
+    expect(formatClientRetryIn("86400", now)).toBe("1d");
+    expect(formatClientRetryIn("90000", now)).toBe("2d");
+  });
+
+  test("HTTP dates and clamped delays use the same ceiling as the header advice", () => {
+    expect(formatClientRetryIn("Mon, 02 Nov 2026 00:00:30 GMT", now)).toBe("30s");
+    expect(formatClientRetryIn("Tue, 10 Nov 2026 00:00:00 GMT", now)).toBe("8d");
+    expect(formatClientRetryIn(1e30, now)).toBe("8d");
+    expect(formatClientRetryIn("0", now)).toBe("1s");
+  });
+
+  test("unusable advice stays absent", () => {
+    for (const value of ["", "-1", "NaN", "must-not-echo", null, undefined]) {
+      expect(formatClientRetryIn(value as string | number | null | undefined, now)).toBeUndefined();
+    }
+  });
+});
+
+describe("appendClientRetryIn", () => {
+  test("the wait goes before a trailing period, or at the end without one", () => {
+    expect(appendClientRetryIn("No available targets for combo", "120", now)).toBe("No available targets for combo (retry in ~2m)");
+    expect(appendClientRetryIn("Review cooldowns before retrying.", "45", now)).toBe("Review cooldowns before retrying (retry in ~45s).");
+  });
+
+  test("unusable advice leaves the sentence byte-identical", () => {
+    for (const value of ["", "-1", "must-not-echo", null, undefined]) {
+      expect(appendClientRetryIn("Review cooldowns before retrying.", value, now)).toBe("Review cooldowns before retrying.");
     }
   });
 });

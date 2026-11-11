@@ -33,6 +33,7 @@ const SALVAGEABLE_OPTIONAL_FIELDS: ReadonlyArray<readonly [string, string]> = [
   ["claudeCode", "desktopProfile"],
   ["claudeCode", "desktopModelVisibility"],
   ["claudeCode", "appendOnlyToolLoadingModels"],
+  ["claudeCode", "chatToolDispatchModels"],
 ];
 
 function isSalvageableConfigPath(section: string, id: string): boolean {

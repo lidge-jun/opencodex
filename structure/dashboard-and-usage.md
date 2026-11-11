@@ -234,7 +234,7 @@ never active-key mutation or the provider-wide cache. Response projection rechec
 and exposes only quota/availability fields, not its internal identity guard. Passive observations
 retain their original timestamp and never trigger inference or token renewal. Unsupported,
 unobserved, failed and measured-zero readings remain distinct; multiple keys are not summed
-because they may share one upstream balance.
+because they may share one upstream balance. Unknown readings carry the closed `quotaUnknownReason` from `src/providers/quota-types.ts` (`no_balance_source`, `passive_not_observed`, `read_failed`, `not_read`, `not_reported` for a successful read the provider reported as empty), and key probe rows carry `quotaReadAt` from the per-key cache entry's read time, omitted when no read happened. Both fields are additive: older clients ignore them and the CLI drops reasons it does not know, so an unknown balance is never projected as zero (#8397).
 
 Provider details use one account-quota reading renderer for Overview, Usage and Accounts/API
 keys. Current-account usage sits below usage statistics; a known-mode active row is authoritative
@@ -536,19 +536,19 @@ write when an existing baseline is forgotten: `src/quota/reset-observer.ts` runs
 (`src/server/background-lifecycle.ts`) whose tick is a no-op until the section is enabled, so
 enabling it takes effect without a restart.
 
-- `src/quota/window-mapping.ts` maps provider and Codex quota snapshots to one neutral window list,
-  and `src/quota/reset-detector.ts` compares two consecutive observations of a window and emits at
-  most one reset event, classified as scheduled or surprise.
-- `src/quota/reset-observer.ts` is the only place a snapshot becomes a delivered notification. It
-  never throws into the quota write that triggered it. `src/codex/quota.ts` and
-  `src/providers/quota.ts` reach it only through a lazy import, because both are statically
-  reachable from `src/server/responses/core.ts` and a static edge would load the subsystem into
-  every install.
-- `src/quota/reset-seen-store.ts` keeps a durable already-notified ledger. The observer claims a
-  reset there before dispatch, so a reset is attempted at most once, across restarts and racing
-  observers; a failed delivery is not retried. `src/quota/reset-sinks.ts` delivers to a webhook or
-  a local command; each sink is best-effort and isolated from the other.
-- `src/quota/reset-poller.ts` is an opt-in idle refresh (default 15 minutes, floor 10). Without it,
+- `src/quota/window-mapping.ts` maps provider and Codex quota snapshots to one neutral window list, and
+  `src/quota/reset-detector.ts` emits at most one reset per window, scheduled or surprise; Mistral's `retainUnknownWindows` keeps a baseline through an unknown window only while a deadline identifies it. The selection of those Mistral windows lives in `src/providers/quota-mistral-budget.ts`, not under `src/quota/`, because `src/providers/quota.ts` imports it statically on the core path.
+- `src/quota/reset-observer.ts` is the only place a snapshot becomes a delivered notification, and it
+  never throws into the quota write that triggered it. `src/codex/quota.ts` and `src/providers/quota.ts`
+  reach it only through a lazy import, because both are statically reachable from `src/server/responses/core.ts`.
+  A probe-bound report may carry a private credential digest (`keyReportCredentialIds` in
+  `src/providers/quota/report-cache.ts`); only opted-in producers (today Mistral) bind it, reset identity
+  uses it instead of `apiKeyPoolEntryId`, and cached rows re-validate against the current credential and
+  destination; passive reads use literal or environment keys without publishing evidence and withhold keychain-backed rows. Others keep identity byte for byte.
+- `src/quota/reset-seen-store.ts` keeps a durable already-notified ledger; the observer claims a reset there
+  before dispatch, so each reset is attempted at most once across restarts and racing observers, and a failed
+  delivery is not retried. `src/quota/reset-sinks.ts` delivers to a webhook or local command, each best-effort and isolated.
+- `src/quota/reset-poller.ts` is an opt-in idle refresh (default 15 min, floor 10). Without it,
   quota reports are fetched only when the dashboard or CLI asks, and an overnight reset goes
   unobserved. `src/quota/reset-activation.ts` installs the sink independently of the poller, so
   `pollSeconds: 0` observes live traffic only.
@@ -569,7 +569,7 @@ re-validated on read; the Logs list shows it as a text badge, the detail dialog 
 `src/server/request-log-filter.ts` owns the `/api/logs` query filters including `protocolMode`; its single-pass query applies provider, conversation, model, account, protocol mode and status before `tail`, then reports the pre-pagination count alongside the offset/limit page. `src/server/request-log-filter.ts` accepts the full provider/model label shown by `ocx logs` and bare model IDs, including IDs containing slashes. Qualified failover matches bind provider/model from the same attempt; matching occurs before the row cap and pagination.
 [Protocol Paths](data-planes/protocol-paths.md) owns its derivation.
 
-Conversation searches in the dashboard, `/api/logs` and `ocx logs filter --conversation` accept `codex://threads/<id>` links up to 512 characters, including query/fragment metadata, trailing slashes and surrounding whitespace. The server matcher in `src/server/request-log-conversation.ts` and its browser mirror in `gui/src/log-conversation-id.ts` try both the extracted single-segment id and the original trimmed query, preserving raw-id and whole-literal-URI digest matching. The prefix is case-insensitive; the id retains its case. Malformed or longer links remain plain queries subject to the existing 4096-character digest-input bound. Persistence is unchanged.
+Conversation searches in the dashboard, `/api/logs` and `ocx logs filter --conversation` accept `codex://threads/<id>` links up to 512 characters, including query/fragment metadata, trailing slashes and surrounding whitespace. The server matcher in `src/server/request-log-conversation.ts` and its browser mirror in `gui/src/log-conversation-id.ts` try both the extracted single-segment id and the original trimmed query, preserving raw-id and whole-literal-URI digest matching. The prefix is case-insensitive; the id retains its case. Malformed or longer links remain plain queries subject to the existing 4096-character digest-input bound. A pasted Claude Code `metadata.user_id` adds one more candidate, the JSON object without its per-turn `tk` (`claudeSessionUserId`), because the Messages inbound stores the session under that form; any turn's `user_id` therefore finds the whole session, and the raw candidate still matches rows logged before `tk` was stripped. A query over 4096 characters is not parsed, and `conversationIdFromClaudeMetadata` skips a `user_id` over that bound before parsing, while the inbound cache key still drops `tk` at any length. Persistence is unchanged.
 Rows may also carry `genStartMs` and `lastOutputMs`, an observed request-relative pair recorded by `src/server/request-log-generation-window.ts` from the Responses and Anthropic SSE taps: the first output item or content block (reasoning included) to the last output delta. They are proxy observation times, not provider-internal token timing, and `src/usage/log.ts` keeps them only as a pair of nonnegative finite values with `lastOutputMs >= genStartMs`. `decodeTokPerSecondResult` in `src/server/management/shared.ts` prefers that window when the pair is valid and otherwise falls back to the post-TTFT window (`durationMs - firstOutputMs`); both keep the one-second minimum, the `ttft_missing` / `decode_window_too_short` unavailable reasons and `estimated: true`, so a short measured window is still an estimate rather than a provider decode benchmark. The end-to-end tok/s column is unchanged, attempts carry no generation window of their own, and the request-history view does not present one. Successful decode DTOs additionally expose `timingBasis: "generation-window" | "legacy-post-visible-output"`, derived at read time only. Logs labels the method “Generation window” or “After visible output” in the list and attempt table and uses “Output rate during generation (est.)” or “Output rate after first visible output (est.)” in request details. Missing or unfamiliar bases show “Timing unknown” and “Output rate (est.; timing method unknown)” in details rather than inferring a method. The detail grid shows a full-width muted caption explaining the method only when the decode rate is available. Both numerators include reported reasoning output tokens, so the two estimates are not directly comparable. Historical JSONL and end-to-end rates are unchanged.
 
 Request-history selectors longer than 130 characters persist as a prefix plus a digest of the complete

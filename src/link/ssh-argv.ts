@@ -19,7 +19,7 @@
  */
 
 import { isAbsolute } from "node:path";
-import { POWERSHELL_ENCODED_MAX, windowsOcxArgv, windowsPinnedSyncArgv } from "./remote-windows";
+import { POWERSHELL_ENCODED_MAX, PowerShellCommandTooLongError, windowsGatedOcxArgv, windowsOcxArgv } from "./remote-windows";
 
 export type TunnelDirection = "R" | "L";
 
@@ -141,40 +141,47 @@ export const REMOTE_COMMAND_NOT_FOUND = 127;
 export const REMOTE_PLATFORM_UNSUPPORTED = 125;
 
 /**
- * The remote sh script for every ocx call. `quoteRemote` single-quotes it, so the login shell
- * passes it through untouched and `$HOME`/`$PATH` expand in the remote `sh`; the arguments reach
- * ocx as `"$@"` without another round of parsing. After an ephemeral ocx-child, the install that
- * last started serving this home comes first (#8359): every `ocx start` that binds records its own
- * relaunch argv at the front of `serving-runtimes.json` (src/config/serving-runtimes.ts), `[ocx]`
- * for a compiled binary or `[bun, cli/index.ts]` for a package install. Only the first entry's
- * `command`, one or two absolute paths without quotes or backslashes, is read; any other shape
- * falls through. Desktop binaries then precede PATH candidates; each candidate must run --version
- * successfully. A missing runnable ocx exits 127.
- */
-/**
- * Reads the first \`command\` of \`serving-runtimes.json\` (#8359): one or two absolute paths without
- * quotes or backslashes, printed one per line, from a file of at most 64 KiB. Any other shape fails.
+ * Reads the first record's \`command\` of \`serving-runtimes.json\` (#8359): one or two absolute paths
+ * without quotes or backslashes, printed one per line, from a file of at most 64 KiB. The file must
+ * be the complete document in the layout its only writer produces (\`JSON.stringify(_, null, 2)\` in
+ * src/config/serving-runtimes.ts): a first record without \`command\` never borrows a later record's,
+ * and a file cut off anywhere before its closing brace prints nothing. Any other shape fails, and an
+ * unreadable file or a missing awk fails without writing to stderr.
  * Shared by the ocx discovery, pinned sync and runtime inspection scripts.
  */
 export const REMOTE_SERVED_RUNTIME = `served_runtime() {
-  [ -f "$1" ] || return 1
-  [ "$(wc -c < "$1" 2>/dev/null)" -le 65536 ] 2>/dev/null || return 1
+  # The count below reports wc's status, never dd's: a missing dd or an unreadable file ends here,
+  # and a dd that fails anyway counts zero bytes, which is refused like an oversized census.
+  [ -f "$1" ] && [ -r "$1" ] && command -v dd >/dev/null 2>&1 || return 1
+  served_size=$( { dd if="$1" bs=65537 count=1 2>/dev/null | wc -c; } 2>/dev/null ) || return 1
+  [ "$served_size" -gt 0 ] 2>/dev/null && [ "$served_size" -le 65536 ] 2>/dev/null || return 1
   awk '
-    !open { if ($0 ~ /"command": \\[$/) open = 1; next }
-    $0 ~ /^ *\\],?$/ { closed = 1; exit }
-    {
-      line = $0; sub(/^ +/, "", line); sub(/,$/, "", line)
-      if (line !~ /^"\\/[^"\\\\]*"$/ || ++count > 2) { bad = 1; exit }
-      print substr(line, 2, length(line) - 2)
+    { prev = last; last = $0 }
+    bad || done { next }
+    NR == 1 { if ($0 != "{") bad = 1; next }
+    NR == 2 { if ($0 != "  \\"runtimes\\": [") bad = 1; next }
+    NR == 3 { if ($0 != "    {") bad = 1; next }
+    inside {
+      if ($0 == "      ]" || $0 == "      ],") { inside = 0; closed = 1; next }
+      line = $0; sub(/,$/, "", line)
+      if (line !~ /^        "\\/[^"\\\\]*"$/ || ++count > 2) { bad = 1; next }
+      path[count] = substr(line, 10, length(line) - 10); next
     }
-    END { if (bad || !closed || !count) exit 1 }
-  ' "$1"
+    $0 == "      \\"command\\": [" { if (closed) bad = 1; else inside = 1; next }
+    $0 == "    }" || $0 == "    }," { done = 1 }
+    END {
+      if (bad || !done || !closed || !count || prev != "  ]" || last != "}") exit 1
+      for (i = 1; i <= count; i++) print path[i]
+    }
+  ' "$1" 2>/dev/null
 }
 `;
 
 /**
  * Tries the served install with \`attempt\`, which must read \`$served_bin\` and honour \`$ocx_entry\`:
  * a compiled binary runs alone, and a package pair runs as \`bun <entry>\` only while the entry exists.
+ * The unquoted \`OCX_SERVED\` heredoc is safe only because \`served_runtime\` prints paths without
+ * quotes, backslashes or newlines; relaxing that character class would let a path expand or split.
  */
 export function remoteServedRuntimeAttempt(attempt: string): string {
   return `served_bin= served_entry=
@@ -192,6 +199,17 @@ OCX_SERVED
 fi`;
 }
 
+/**
+ * The remote sh script for every ocx call. `quoteRemote` single-quotes it, so the login shell
+ * passes it through untouched and `$HOME`/`$PATH` expand in the remote `sh`; the arguments reach
+ * ocx as `"$@"` without another round of parsing. After an ephemeral ocx-child, the install that
+ * last started serving this home comes first, whatever its version (#8359): every `ocx start` that binds records its own
+ * relaunch argv at the front of `serving-runtimes.json` (src/config/serving-runtimes.ts), `[ocx]`
+ * for a compiled binary or `[bun, cli/index.ts]` for a package install. Only the first entry's
+ * `command`, one or two absolute paths without quotes or backslashes, is read; any other shape
+ * falls through. Desktop binaries then precede PATH candidates; each candidate must run --version
+ * successfully. A missing runnable ocx exits 127.
+ */
 const REMOTE_OCX_CANDIDATES = `ocx_entry=
 ${REMOTE_SERVED_RUNTIME}run_ocx_child() {
   for candidate in "$HOME/.local/bin/ocx-child" "$HOME/.cache/opencodex/bin/ocx-child"; do
@@ -304,12 +322,87 @@ export function quoteRemote(argv: readonly string[]): string {
   }).join(" ");
 }
 
-const REMOTE_PINNED_SYNC_SCRIPT = `export PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+/** Minimum served ocx for a gated command. Closed set: the literals are spliced into awk and PowerShell. */
+export type GatedMinVersion = "2.93.0" | "2.97.0";
+export type GatedLacksMarker = "child-ocx-lacks-expect-link" | "child-ocx-lacks-orchestrated-update";
+export interface GatedOcxCommand {
+  minVersion: GatedMinVersion;
+  lacksMarker: GatedLacksMarker;
+  /** false: a selected ocx-child exits 121 with ocx-fanout:child-ocx-ephemeral before args run. */
+  acceptEphemeral: boolean;
+  /** true: print ocx-fanout:entry:pair|binary on stderr right after the selection marker. */
+  reportEntry: boolean;
+  /** true: print ocx-fanout:child-now:<epoch-ms> (the Child's own clock) after the entry marker. Plan probe only. */
+  reportClock: boolean;
+  /** With acceptEphemeral, print ocx-fanout:selected-kind:ocx-child when the selected candidate is ocx-child.
+   *  Set only by remotePinnedSyncArgv when a restart is requested (ocx-child ignores the restart flags). */
+  reportSelectedKind?: boolean;
+  /**
+   * A4: what the script does with the Node launcher of a package install whose census pair sits under node_modules.
+   * "none": nothing. "report": print ocx-fanout:launcher:available|unavailable (the plan probe; never exits for it).
+   * "apply": exec <node> <root>/bin/ocx.mjs with the arguments, or exit 121 child-node-unavailable when no Node answers.
+   * A closed union spliced as a literal; only the Home's parsed plan (installer npm or pnpm) chooses "apply".
+   */
+  launcher: "none" | "report" | "apply";
+  args: readonly string[];
+}
+export const GATED_VERSION_PARTS: Readonly<Record<GatedMinVersion, readonly [string, string, string]>> = {
+  "2.93.0": ["2", "93", "0"], "2.97.0": ["2", "97", "0"],
+};
+const LACKS_MARKERS: ReadonlySet<string> = new Set(["child-ocx-lacks-expect-link", "child-ocx-lacks-orchestrated-update"]);
+export const LINK_ID_PATTERN = /^lnk_[0-9a-f]{16}$/;
+
+function assertGated(cmd: GatedOcxCommand): readonly [string, string, string] {
+  const parts = Object.hasOwn(GATED_VERSION_PARTS, cmd.minVersion) ? GATED_VERSION_PARTS[cmd.minVersion] : undefined;
+  if (!parts || !LACKS_MARKERS.has(cmd.lacksMarker)) throw new LinkSshArgumentError("invalid gated ocx command");
+  if (cmd.args.length === 0 || cmd.args.some(arg => arg.includes("\0"))) throw new LinkSshArgumentError("invalid gated ocx arguments");
+  if (cmd.launcher !== "none" && cmd.launcher !== "report" && cmd.launcher !== "apply") throw new LinkSshArgumentError("invalid gated ocx launcher");
+  return parts;
+}
+
+/**
+ * The pinned script for one gate: select a candidate, read its version inside the remote script, refuse below the
+ * minimum, then exec it with "$@". OCX_NO_DESKTOP_HANDOFF=1 makes a package launcher answer --version for itself and
+ * run the command itself, so a Desktop handoff can never pass the gate on behalf of an older launcher.
+ * With launcher "report" or "apply" and a census pair under node_modules that ships bin/ocx.mjs, the script looks for a
+ * Node that answers --version within 10 s (the npm prefix's bin/node first, then PATH) before the temp dir is removed.
+ */
+function remoteGatedScript(cmd: GatedOcxCommand): string {
+  const [major, minor, patch] = assertGated(cmd);
+  const ephemeral = cmd.acceptEphemeral ? "" : `
+  case "\${c##*/}" in ocx-child*) printf '%s\\n' 'ocx-fanout:child-ocx-ephemeral' >&2; exit 121;; esac`;
+  // Only a pinned sync that carries a restart asks for this, so the plain sync's stderr stays exact.
+  const kind = cmd.acceptEphemeral && cmd.reportSelectedKind ? `
+  case "\${c##*/}" in ocx-child*) printf '%s\\n' 'ocx-fanout:selected-kind:ocx-child' >&2;; esac` : "";
+  const entry = cmd.reportEntry ? `
+  if [ -n "$ocx_entry" ]; then printf '%s\\n' 'ocx-fanout:entry:pair' >&2; else printf '%s\\n' 'ocx-fanout:entry:binary' >&2; fi` : "";
+  // Seconds resolution is enough for a 120 s window; a date(1) that prints nothing numeric prints no marker.
+  const clock = cmd.reportClock ? `
+  now=$(date +%s 2>/dev/null); case "$now" in ''|*[!0-9]*) ;; *) printf 'ocx-fanout:child-now:%s000\\n' "$now" >&2;; esac` : "";
+  return `export PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+export OCX_NO_DESKTOP_HANDOFF=1
 case "$(uname -s 2>/dev/null)" in Windows*|MSYS*|MINGW*|CYGWIN*) exit ${REMOTE_PLATFORM_UNSUPPORTED};; esac
 umask 077
 dir=$(mktemp -d "\${TMPDIR:-/tmp}/ocx-fanout.XXXXXXXX") || exit 127
 tmp=$dir/version; ready=$dir/ready
 trap 'rm -rf "$dir"' EXIT HUP INT TERM
+launcher=${cmd.launcher}
+node_ok() {
+  ( ulimit -c 0; exec "$1" --version ) >/dev/null 2>&1 & np=$!
+  ( sleep 10 & ntimer=$!; trap 'kill "$ntimer" 2>/dev/null; wait "$ntimer" 2>/dev/null; exit' TERM HUP INT; : > "$ready"; wait "$ntimer" 2>/dev/null; kill -9 "$np" 2>/dev/null ) >/dev/null 2>&1 & nwd=$!
+  while [ ! -f "$ready" ]; do kill -0 "$nwd" 2>/dev/null || break; sleep 0.01 >/dev/null 2>&1; done
+  { wait "$np"; nstatus=$?; } 2>/dev/null
+  kill "$nwd" 2>/dev/null; wait "$nwd" 2>/dev/null; rm -f "$ready"
+  [ "$nstatus" -eq 0 ]
+}
+find_launcher_node() {
+  node_bin=
+  case "$1" in */lib/node_modules/@bitkyc08/opencodex)
+    n=\${1%/lib/node_modules/@bitkyc08/opencodex}/bin/node
+    if [ -x "$n" ] && node_ok "$n"; then node_bin=$n; return 0; fi;; esac
+  n=$(command -v node 2>/dev/null) && [ -x "$n" ] && node_ok "$n" && node_bin=$n
+  return 0
+}
 try_ocx() {
   c=$1; shift
   [ -x "$c" ] || return
@@ -335,22 +428,65 @@ try_ocx() {
       dash=index(v,"-"); if(dash) { pre=substr(v,dash+1); v=substr(v,1,dash-1); if(!idlist(pre,1)) {result=2; next} }
       if(split(v,a,/\\./)!=3) { result=2; next }
       for(i=1;i<=3;i++) if(a[i] !~ /^(0|[1-9][0-9]*)$/) { result=2; next }
-      c=cmp(a[1],"2"); if(!c)c=cmp(a[2],"93"); if(!c)c=cmp(a[3],"0"); if(c<0 || (!c && dash))result=1
+      c=cmp(a[1],"${major}"); if(!c)c=cmp(a[2],"${minor}"); if(!c)c=cmp(a[3],"${patch}"); if(c<0 || (!c && dash))result=1
     }
     NR>1 {result=2}
     END {exit result}
   ' 2>/dev/null
   status=$?
-  if [ "$status" -eq 1 ]; then printf '%s\\n' 'ocx-fanout:child-ocx-lacks-expect-link' >&2; exit 121; fi
-  if [ "$status" -ne 0 ]; then printf '%s\\n' 'ocx-fanout:child-ocx-version-unknown' >&2; exit 121; fi
+  if [ "$status" -eq 1 ]; then printf '%s\\n' 'ocx-fanout:${cmd.lacksMarker}' >&2; exit 121; fi
+  if [ "$status" -ne 0 ]; then printf '%s\\n' 'ocx-fanout:child-ocx-version-unknown' >&2; exit 121; fi${ephemeral}
+  root=; [ -n "$ocx_entry" ] && root=\${ocx_entry%/src/cli/index.ts}
+  case "$root" in */node_modules/*) [ -f "$root/bin/ocx.mjs" ] || root=;; *) root=;; esac
+  node_bin=; if [ -n "$root" ] && [ "$launcher" != none ]; then find_launcher_node "$root"; fi
   rm -rf "$dir"; trap - EXIT HUP INT TERM
-  printf 'ocx-fanout:selected:%s\\n' "$version" >&2
+  printf 'ocx-fanout:selected:%s\\n' "$version" >&2${kind}${entry}${clock}
+  if [ -n "$root" ] && [ "$launcher" = report ]; then
+    if [ -n "$node_bin" ]; then printf '%s\\n' 'ocx-fanout:launcher:available' >&2
+    else printf '%s\\n' 'ocx-fanout:launcher:unavailable' >&2; fi
+  fi
+  if [ -n "$root" ] && [ "$launcher" = apply ]; then
+    [ -n "$node_bin" ] || { printf '%s\\n' 'ocx-fanout:child-node-unavailable' >&2; exit 121; }
+    printf '%s\\n' 'ocx-fanout:launcher:exec' >&2
+    printf '%s\\n' 'ocx-fanout:stdout-begin'
+    unset OCX_UPDATE_ORCHESTRATED_CHILD
+    exec "$node_bin" "$root/bin/ocx.mjs" "$@"
+  fi
   printf '%s\\n' 'ocx-fanout:stdout-begin'
-  exec "$c" \${ocx_entry:+"$ocx_entry"} sync --expect-link "$1" --json
+  exec "$c" \${ocx_entry:+"$ocx_entry"} "$@"
 }
 ${REMOTE_OCX_CANDIDATES}
 exit ${REMOTE_COMMAND_NOT_FOUND}`;
-
-export function remotePinnedSyncArgv(linkId: string, platform: "posix" | "windows" = "posix"): string[] {
-  return platform === "windows" ? windowsPinnedSyncArgv(linkId) : ["sh", "-c", REMOTE_PINNED_SYNC_SCRIPT, "ocx", linkId];
 }
+
+export function remoteGatedOcxArgv(cmd: GatedOcxCommand, platform: "posix" | "windows" = "posix"): string[] {
+  const versionParts = assertGated(cmd);
+  if (platform === "windows") {
+    // A dropped channel kills the orchestrating parent with the Job, so no Windows apply is ever built (D20).
+    // Only a plan is ever built for Windows: an update spelled without --plan (or a future mutating flag) is refused.
+    if (cmd.args[0] === "update" && (!cmd.args.includes("--plan") || cmd.args.includes("--yes"))) throw new LinkSshArgumentError("unsupported:windows-apply");
+    try {
+      return windowsGatedOcxArgv({ ...cmd, versionParts });
+    } catch (error) {
+      if (error instanceof PowerShellCommandTooLongError) throw new LinkSshArgumentError("windows-command-too-long");
+      throw error;
+    }
+  }
+  return ["sh", "-c", remoteGatedScript(cmd), "ocx", ...cmd.args];
+}
+
+export type ChildRestartRequest = "app-server" | "codex";
+export interface PinnedSyncOptions { restart?: ChildRestartRequest }
+const RESTART_FLAG: Readonly<Record<ChildRestartRequest, string>> = { "app-server": "--restart-app-server-only", codex: "--restart-codex" };
+
+export function remotePinnedSyncArgv(linkId: string, platform: "posix" | "windows" = "posix", opts: PinnedSyncOptions = {}): string[] {
+  if (!LINK_ID_PATTERN.test(linkId)) throw new LinkSshArgumentError("invalid link id");
+  if (opts.restart !== undefined && !Object.hasOwn(RESTART_FLAG, opts.restart)) throw new LinkSshArgumentError("invalid restart request");
+  // D20: the Home never sends a restart to a Windows Child.
+  if (opts.restart !== undefined && platform === "windows") throw new LinkSshArgumentError("unsupported:windows-restart");
+  const restart = opts.restart === undefined ? [] : [RESTART_FLAG[opts.restart]];
+  return remoteGatedOcxArgv({ minVersion: "2.93.0", lacksMarker: "child-ocx-lacks-expect-link", acceptEphemeral: true,
+    reportEntry: false, reportClock: false, reportSelectedKind: restart.length > 0, launcher: "none",
+    args: ["sync", "--expect-link", linkId, "--json", ...restart] }, platform);
+}
+
