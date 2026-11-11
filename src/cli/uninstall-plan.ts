@@ -24,22 +24,32 @@ export type UninstallObservation = {
   /** Service removal outcome, or null when the step threw. */
   serviceRemoval: "absent" | "removed" | "failed" | null;
   /**
-   * For a Task Scheduler backend: was the restart window verified AFTER removal?
+   * Was the restart window verified AFTER removal? Needed after an older CLI's
+   * `stopped-respawnable` and, on Windows, after every `stopped`: there it is Part B of the
+   * checked stop (#7771), which proves the port stays free and no wrapper came back.
    *
    * Deleting the registration does not prove an already-running `:loop` wrapper died —
-   * killing it is best-effort (#764). `ocx stop` polls across the window; uninstall has
-   * to do the same before it may take shared config down.
+   * `ocx stop` confirms across the window; uninstall has to do the same before it may take
+   * shared config down (#764).
    */
   respawnWindowVerified: boolean;
 };
 
-export function sharedTeardownAuthorized(o: UninstallObservation): boolean {
+/** Whether the restart window must be verified before shared config may come down. */
+export function respawnWindowRequired(
+  o: Pick<UninstallObservation, "serviceStop">,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return o.serviceStop === "stopped-respawnable" || (platform === "win32" && o.serviceStop === "stopped");
+}
+
+export function sharedTeardownAuthorized(o: UninstallObservation, platform: NodeJS.Platform = process.platform): boolean {
   if (o.serviceStop === null) return false;
   // "absent" and a clean stop are the only service states that prove nothing is managing
   // the proxy.
   if (o.serviceStop === "failed" || o.serviceStop === "state-unknown") return false;
   // Removing the registration is not the same as proving the running wrapper is gone.
-  if (o.serviceStop === "stopped-respawnable" && !o.respawnWindowVerified) return false;
+  if (respawnWindowRequired(o, platform) && !o.respawnWindowVerified) return false;
   if (o.serviceRemoval === null || o.serviceRemoval === "failed") return false;
   return o.proxyProvenDown;
 }

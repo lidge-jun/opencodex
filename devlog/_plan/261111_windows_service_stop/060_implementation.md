@@ -55,6 +55,21 @@ Contract doc: `structure/ops/windows-checked-stop.md`.
 
 - **The route's caps.** 030 caps the `/api/stop` route's stray sweep at 4 s and its receipt-less Part A at 6 s. `stopWindowsServiceChecked` has no overall cap: its own caps add up to more (the stray path alone has a 5 s enumeration), and it never returns before its steps do. The route needs an outer race on its deadline that answers `service_state_unknown` on overrun, or cap overrides passed in, such as a 4 s enumeration for the sweep.
 
+## Where PR2 differs from 030
+
+PR2 wires every caller listed above; `structure/ops/windows-checked-stop.md` ("Callers") is the contract. Points where the wiring makes a decision 030 leaves open, or departs from it:
+
+- **Route caps.** The outer race lives in `runWindowsServiceStopPartA({ capMs })`: an overrun answers `unknown` at once, and from then on the live `/end` and WinSW stop are gated off and the authorizer refuses every terminate, so nothing changes after the answer. A step that already started (a `/end` in flight) still completes.
+- **The receipt record is checked against registration only.** The route skips Part A when the record's managers match a fresh registration probe (2 s each). It does not re-enumerate the recorded wrapper set; that would be the second enumeration 030 rules out.
+- **The ancestry guard (r2 review).** The binding rule excludes the stopper but not its ancestors, so interactive callers refuse a Part A whose stopper descends from this home's wrapper. `/api/stop` and the updater opt out because both run beneath that wrapper by design. The check reads the bind snapshot (or the guarded snapshot), so it costs no extra enumeration.
+- **The guarded evidence snapshot (r1 review).** The guarded inspection reads `windowsProcessSnapshot` and the Schedule PID once per inspection instead of the CIM-only `windowsProcessList`, and `stopManager` binds on the revalidation's copy. A CIM-only table would make the x64 terminate answer `reused` and Part A report a live wrapper as exited.
+- **Absent counts as a pass for the updater and for install.** 040 says call sites abort on a non-`stopped` outcome. `absent` (nothing registered, nothing bound) has nothing that could relaunch the proxy, so the updater, install and switch continue on it, as `ocx stop` does. Refusing it would block every update on a machine whose recorded service was deleted.
+- **`ocx service stop` on Part A failure** refuses before the receipt and the child stop, the same rule as plain `ocx stop`, so it never restores under a wrapper that can relaunch the proxy.
+- **Part B's foreign result** fails install and switch (030) but not `ocx stop`, `ocx service stop` or uninstall, which only need our processes gone.
+- **Not capped here.** The guarded path's own pre-steps (`runResolve`, the tracked-record check, the two inspections and their 5 s snapshot) run before admission and are measured, as 030 says. `proveLiveProxyOwnedByHome` is not capped separately; orphan discovery's `findLiveProxy` is capped at 3 s, and a missed orphan is caught by Part B. `revertSystemEnv` returns at once off macOS, so its 1 s cap holds on Windows without a change. `restoreSharedClientStateAfterStop` and `performStopTeardown` were not measured on a device; 040 keeps those measurements.
+- **The manager-state read.** `schtasks /query /fo CSV` first, `Get-ScheduledTask` within the same 1 s cap when the status word is localized. On a slow or non-English machine that can overrun and report `unknown`; the 040 device run decides whether the cap needs to grow.
+- **ARM64 ships strict** as recorded above; `windowsStopTerminate` enforces it whenever the native API is missing.
+
 ## Open questions
 
 - Is the closing-sample accounting acceptable, or should the hold be measured differently, for example by shortening the final enumeration to 4.5 s to keep 030's totals?

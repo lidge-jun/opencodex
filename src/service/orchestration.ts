@@ -9,14 +9,16 @@ import { isProcessAlive, stopProxy } from "../lib/process-control";
 import { randomUUID } from "node:crypto";
 import { startWinswService, stopWinswService, statusWinswRaw, uninstallWinswService, winswStatusSummary, type WinswStatus } from "../lib/winsw";
 import { diagnoseService } from "./diagnostics";
-import type { ServiceDiagnostic } from "./diagnostics";
 import { assertServiceEnvironmentMatchesInstall } from "./guards";
 import { runLaunchctl, launchdEvictionTargets, launchctlBootoutBenign, probeLaunchdLoadState, installLaunchd, startLaunchd, stopLaunchd, statusLaunchd, uninstallLaunchd } from "./launchd";
 import { assertSchedulerRegistrationBeforeStart } from "./repair";
 import { SERVICE_MANAGED_ENV, TASK, plistPath, removeServiceInstallStateRecords, writeServiceInstallState } from "./state";
 import type { ServiceBackend } from "./state";
 import { unitPath, isSystemd, installSystemd, startSystemd, stopSystemd, statusSystemd, uninstallSystemd, systemdServiceInstallCleanupOps } from "./systemd";
-import { writeWindowsSchedulerAssets, stageWindowsSchedulerRegistrationXml, removeWindowsSchedulerRegistrationStage, registerFreshWindowsSchedulerTask, recordWindowsSchedulerOwnership, removeNativeWindowsServiceForScheduler, commitWindowsInstall, commitWindowsNativeInstall, type WindowsServiceInstallDeps, startWindows, isWindowsSchedulerEndBenign, stopWindows, stopWindowsChecked, statusWindows, statusWindowsXml, killWindowsServiceWrapperProcesses, uninstallWindows, classifyWindowsServiceStop } from "./windows-ops";
+import { writeWindowsSchedulerAssets, stageWindowsSchedulerRegistrationXml, removeWindowsSchedulerRegistrationStage, registerFreshWindowsSchedulerTask, recordWindowsSchedulerOwnership, removeNativeWindowsServiceForScheduler, commitWindowsInstall, commitWindowsNativeInstall, type WindowsServiceInstallDeps, startWindows, isWindowsSchedulerEndBenign, stopWindows, statusWindows, statusWindowsXml, uninstallWindows } from "./windows-ops";
+import type { WindowsCheckedStopResult } from "./windows-checked-stop";
+import type { WindowsStopConfirmResult } from "./windows-stop-confirm";
+import { confirmWindowsServiceStop, describeWindowsPartA, describeWindowsPartB, runWindowsServiceStopPartA, serviceStopOutcomeFromWindows, windowsServiceStopPort, windowsStopAdmission, windowsStopRemainingMs, type WindowsPartARequest } from "./windows-service-stop";
 import { schtasks, probeWindowsSchedulerTask, rollbackWindowsSchedulerTaskOwnedByAttempt, settleDelay } from "./windows-scheduler";
 import type { WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { windowsTaskRegistrationOwnedByAttempt, windowsTaskRegistrationHealthy } from "./windows-taskxml";
@@ -191,12 +193,20 @@ export async function proxyStillLiveAfterStop(deps: {
   }
 }
 
-async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult> {
+/** How the tracked proxy is stopped: the deferral receipt and the Windows port wait. */
+export interface TrackedProxyStopIo {
+  /** ocx service stop on Windows: the claimed receipt, so the proxy defers its teardown. */
+  deferSharedTeardownNonce?: string;
+  /** Part B follows and owns the port wait (030), so stopProxy skips its own. */
+  skipPortWait?: boolean;
+}
+
+async function stopTrackedProxyIfRunning(io: TrackedProxyStopIo = {}): Promise<TrackedProxyCleanupResult> {
   let stopped = false;
   const pid = readPid();
   const trackedKillPid = verifiedKillTarget(pid);
   if (trackedKillPid !== null && isProcessAlive(trackedKillPid)) {
-    await stopProxy(trackedKillPid);
+    await stopProxy(trackedKillPid, io);
     removePid(trackedKillPid);
     removeRuntimePort(trackedKillPid);
     stopped = true;
@@ -214,7 +224,7 @@ async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult> {
   });
   const liveKillPid = verifiedKillTarget(live?.pid);
   if (liveKillPid !== null) {
-    await stopProxy(liveKillPid);
+    await stopProxy(liveKillPid, io);
     removePid(liveKillPid);
     removeRuntimePort(liveKillPid);
     stopped = true;
@@ -224,9 +234,9 @@ async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult> {
   return "none";
 }
 
-export async function stopTrackedProxyForServiceCommand(): Promise<TrackedProxyCleanupResult> {
+export async function stopTrackedProxyForServiceCommand(io: TrackedProxyStopIo = {}): Promise<TrackedProxyCleanupResult> {
   try {
-    return await stopTrackedProxyIfRunning();
+    return await stopTrackedProxyIfRunning(io);
   } catch (err) {
     console.error(`⚠️  Failed to stop proxy: ${err instanceof Error ? err.message : String(err)}`);
     return "none";
@@ -236,13 +246,14 @@ export async function stopTrackedProxyForServiceCommand(): Promise<TrackedProxyC
 export interface ServiceInstallPreparationDeps extends RuntimePreflightDeps {
   inspectSupervision?: SupervisionInspector;
   supervisionLatch?: SupervisionLatch;
-  diagnose?: () => ServiceDiagnostic;
   managerOps?: (backend: ServiceBackend) => ServiceInstallCleanupOps | null;
   /**
-   * Task Scheduler only: ends surviving launcher/wrapper processes of THIS
-   * installation. Scoped to canonical script/launcher tokens, never a bare PID.
+   * Windows: Part A of the checked stop (#7771) for every registered manager and the
+   * bound wrappers of this home. Replaces the manager stops plus the best-effort sweep.
    */
-  killServiceWrappers?: () => void;
+  windowsPartA?: (request: WindowsPartARequest) => Promise<WindowsCheckedStopResult>;
+  /** Windows: Part B after the tracked-proxy stop; the port must be free and stay free. */
+  windowsPartB?: (request: { port: number; remainingMs: number }) => Promise<WindowsStopConfirmResult>;
   stopTrackedProxy?: () => Promise<unknown>;
   platform?: NodeJS.Platform;
 }
@@ -258,43 +269,43 @@ export async function prepareServiceInstall(
 ): Promise<void> {
   const latch = deps.supervisionLatch ?? createSupervisionLatch();
   assertNoDesktopSupervision(deps.inspectSupervision, latch);
-  const diagnostic = (deps.diagnose ?? diagnoseService)();
   const platform = deps.platform ?? process.platform;
+  if (platform === "win32") {
+    // Part A stops whichever managers are registered (both on a conflicting install) and
+    // ends the bound wrappers, or refuses with nothing deleted or replaced (#7771). It
+    // also covers a registration deleted mid-uninstall that left a detached wrapper
+    // looping: with nothing registered it binds no orphan, and an unbound survivor
+    // refuses instead of being killed by path alone.
+    const partA = await (deps.windowsPartA ?? runWindowsServiceStopPartA)({
+      admission: windowsStopAdmission({ orphanDiscovery: true }),
+    });
+    if (partA.outcome !== "stopped" && partA.outcome !== "absent") {
+      throw new Error(`The installed Windows service could not be proven stopped (${partA.outcome}); nothing was replaced. ${describeWindowsPartA(partA)}`);
+    }
+    // Part B owns the port wait after a stopped manager (030 "Time budget").
+    await (deps.stopTrackedProxy ?? (() => stopTrackedProxyIfRunning({ skipPortWait: partA.outcome === "stopped" })))();
+    if (partA.outcome === "stopped") {
+      const partB = await (deps.windowsPartB ?? confirmWindowsServiceStop)({
+        port: windowsServiceStopPort(),
+        remainingMs: windowsStopRemainingMs(),
+      });
+      if (partB.outcome !== "freed") {
+        throw new Error(`The service port is not free after the stop; nothing was published or started. ${describeWindowsPartB(partB)}`);
+      }
+    }
+    return;
+  }
   const resolveOps = deps.managerOps ?? platformServiceInstallCleanupOps;
   const backends: ServiceBackend[] = [];
   const addBackend = (backend: ServiceBackend) => {
     if (!backends.includes(backend)) backends.push(backend);
   };
-
-  if (platform === "win32") {
-    // The recorded backend owns the old installation and must be stopped first.
-    // A conflicting diagnostic means both managers exist, so stop both even when
-    // the requested backend happens to match the recorded one.
-    if (diagnostic.backend === "scheduler" || diagnostic.backend === "native") {
-      addBackend(diagnostic.backend);
-      if (diagnostic.conflict) addBackend(diagnostic.backend === "scheduler" ? "native" : "scheduler");
-    }
-    addBackend(requestedBackend);
-  } else {
-    addBackend(requestedBackend);
-  }
+  addBackend(requestedBackend);
 
   for (const backend of backends) {
     const manager = resolveOps(backend);
     if (!manager) throw new Error(`Background service manager is unavailable for ${backend}.`);
     if (manager.status() !== null) manager.stop();
-  }
-  if (platform === "win32") {
-    // `schtasks /end` ends the task instance but leaves the cmd `:loop` wrapper
-    // alive to respawn the proxy mid-install — the same survivor
-    // `ocx stop` kills via killWindowsServiceWrapperProcesses. Run it
-    // after every manager has been asked to stop and before the tracked-proxy
-    // kill so a child respawned in that gap is still caught below. It also runs
-    // when no manager stop happened: a registration deleted mid-uninstall can
-    // leave the detached wrapper looping. A manager stop that refused propagates
-    // above before this runs, so the respawner of a still-running service is
-    // never killed.
-    (deps.killServiceWrappers ?? killWindowsServiceWrapperProcesses)();
   }
   await (deps.stopTrackedProxy ?? stopTrackedProxyIfRunning)();
 }
@@ -514,11 +525,12 @@ export function installedServiceRespawnRisk(
  * install (#3008).
  */
 /**
- * `stopped-respawnable` is Task Scheduler specifically: `schtasks /end` ends the task
+ * `stopped-respawnable` was Task Scheduler specifically: `schtasks /end` ends the task
  * instance while the `cmd :loop` wrapper survives and respawns its child seconds later
- * (#764). Only that backend needs the restart-window wait — launchd, systemd and WinSW
- * are down when they report stopped, and making them pay a seven-second poll would be a
- * regression in every ordinary `ocx stop`.
+ * (#764). Since the checked Windows stop (#7771) no current backend returns it: Windows
+ * reports `stopped` only after Part A ended the manager and every bound wrapper, and its
+ * callers then run Part B unconditionally. The value stays for documents and receipts
+ * written by older CLIs, which callers still read.
  */
 /**
  * `state-unknown` is kept apart from `failed` because the remedies differ. A manager that
@@ -528,46 +540,41 @@ export function installedServiceRespawnRisk(
  */
 export type ServiceStopOutcome = "absent" | "stopped" | "stopped-respawnable" | "failed" | "state-unknown";
 
-export function stopServiceIfInstalledDetailed(): ServiceStopOutcome {
+/** The outcome plus, on Windows, the Part A result behind it (reason, bound wrappers). */
+export interface ServiceStopReport {
+  outcome: ServiceStopOutcome;
+  windows: WindowsCheckedStopResult | null;
+}
+
+/**
+ * Stop whatever manager is installed. On Windows this is Part A of the checked stop
+ * (#7771): both backends are probed, the registered managers stopped and the bound
+ * wrappers ended and waited for, with admission against the caller's deadline. The proxy
+ * child is left to the caller's graceful stop, and the caller runs Part B after it.
+ */
+export async function stopServiceIfInstalledReport(
+  request: WindowsPartARequest = {},
+  platform: NodeJS.Platform = process.platform,
+): Promise<ServiceStopReport> {
   assertServiceEnvironmentMatchesInstall();
-  if (process.platform === "darwin") {
+  if (platform === "darwin") {
     if (existsSync(plistPath())) {
-      try { stopLaunchd(); return "stopped"; } catch { return "failed"; }
+      try { stopLaunchd(); return { outcome: "stopped", windows: null }; } catch { return { outcome: "failed", windows: null }; }
     }
-  } else if (process.platform === "win32") {
-    // Query BOTH backends regardless of state: a failed switch or stale state can leave
-    // two managers installed, and either one would respawn the proxy after `ocx stop`.
-    let stopped = false;
-    let failed = false;
-    let schedulerStopped = false;
-    let stateUnknown = false;
-    // `probeWindowsSchedulerTask` is tri-state on purpose: a query that THROWS is not the
-    // same as a task that is absent, and treating it as absent lets a live scheduler
-    // survive a "successful" stop.
-    const probe = probeWindowsSchedulerTask();
-    if (probe.status === "present") {
-      if (stopWindowsChecked()) { stopped = true; schedulerStopped = true; }
-      else failed = true;
-    } else if (probe.status === "unknown") {
-      // Not "failed": nothing refused to stop. The query itself could not answer, which is
-      // a different problem with a different fix.
-      stateUnknown = true;
-    }
-    if (statusWinswRaw() !== "nonexistent") {
-      try { stopWinswService(); stopped = true; } catch { failed = true; }
-    }
-    // `schtasks /end` ends the task instance but the cmd `:loop` wrapper survives and
-    // respawns its child seconds later (issue #764), resurrecting the proxy during a
-    // stop or a tray restart. Kill the launcher/wrapper processes outright.
-    killWindowsServiceWrapperProcesses();
-    // A failure on either backend wins: the other one stopping does not make the live one
-    // safe to update over.
-    const outcome = classifyWindowsServiceStop({ stopped, failed, schedulerStopped, stateUnknown });
-    if (outcome !== "absent") return outcome;
-  } else if (process.platform === "linux" && isSystemd() && existsSync(unitPath())) {
-    try { stopSystemd(); return "stopped"; } catch { return "failed"; }
+  } else if (platform === "win32") {
+    // Both backends are probed regardless of state (a failed switch can leave two), an
+    // unreadable probe is state-unknown and never absence, and a wrapper that survives
+    // `schtasks /end` is ended through the binding rule instead of a path-only sweep.
+    const windows = await runWindowsServiceStopPartA(request);
+    return { outcome: serviceStopOutcomeFromWindows(windows), windows };
+  } else if (platform === "linux" && isSystemd() && existsSync(unitPath())) {
+    try { stopSystemd(); return { outcome: "stopped", windows: null }; } catch { return { outcome: "failed", windows: null }; }
   }
-  return "absent";
+  return { outcome: "absent", windows: null };
+}
+
+export async function stopServiceIfInstalledDetailed(request: WindowsPartARequest = {}): Promise<ServiceStopOutcome> {
+  return (await stopServiceIfInstalledReport(request)).outcome;
 }
 
 /** Delete install-state files; stale state would make `ocx update` "reinstall" a service that no longer exists. */

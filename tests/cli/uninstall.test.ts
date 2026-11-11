@@ -51,7 +51,7 @@ describe("full uninstall command", () => {
     expect(exit).toBeGreaterThan(refusal);
     // Nothing before the check: every step that stops, removes or rewrites anything comes after the exit.
     expect(body.slice(0, refusal).split("\n").filter(line => line.trim() && !line.trim().startsWith("//"))).toEqual(["async function handleUninstall() {"]);
-    for (const step of ["await runStep(", "stopServiceIfInstalledDetailed", "uninstallServiceDetailed", "restoreNativeCodexAsync", "revertSystemEnv", "uninstallCodexShimAsync", "removeOwnedConfigAfterDesktopCleanup"]) {
+    for (const step of ["await runStep(", "stopServiceForUninstall", "uninstallServiceDetailed", "restoreNativeCodexAsync", "revertSystemEnv", "uninstallCodexShimAsync", "removeOwnedConfigAfterDesktopCleanup"]) {
       expect(body.indexOf(step)).toBeGreaterThan(exit);
     }
   });
@@ -220,7 +220,9 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
     // stopServiceIfInstalled returns false for "not installed", "refused to stop" and
     // "state could not be read" alike, so this step reported "not installed" for a manager
     // that might still be running (#3008).
-    expect(fn).toContain("stopServiceIfInstalledDetailed()");
+    // #7771: through the stop wiring, which is stopServiceIfInstalledDetailed off Windows and
+    // Part A of the checked stop on Windows; both return the detailed outcome.
+    expect(fn).toContain("const outcome = await stopServiceForUninstall();");
     expect(fn).not.toContain("stopServiceIfInstalled()");
     expect(fn).toContain('if (outcome === "absent") return false;');
     expect(fn).toContain('if (outcome === "failed")');
@@ -239,7 +241,9 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
     expect(fn).toContain("respawnWindowVerified: false,");
     expect(fn).toContain("observed.serviceStop = outcome;");
     expect(fn).toContain("observed.serviceRemoval = outcome;");
-    expect(fn).toContain('if (observed.serviceStop === "stopped-respawnable")');
+    // A legacy respawnable stop and, on Windows, every stopped one (Part B, #7771).
+    expect(fn).toContain("if (respawnWindowRequired(observed)) {");
+    expect(fn).toContain("await verifyUninstallStopWindow();");
     expect(fn).toContain("observed.respawnWindowVerified = true;");
     const gateAt = fn.indexOf("if (sharedTeardownAuthorized(observed)) {");
     expect(gateAt).toBeLessThan(fn.indexOf("native Codex restored", gateAt));

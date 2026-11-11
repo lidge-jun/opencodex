@@ -1,92 +1,103 @@
 import { describe, expect, test } from "bun:test";
-import { prepareServiceInstall } from "../../src/service";
+import { installServiceSafely, prepareServiceInstall } from "../../src/service";
+import { partAResult, partBResult } from "../helpers/windows-stop-caller-fixtures";
 
+// #7771: on Windows, install and backend switch stop the old installation through the checked
+// stop. Part A ends the managers and the bound wrappers (or refuses with nothing replaced),
+// the tracked proxy stops next, and Part B must find the port free before anything is
+// published or started.
 describe("service install preparation wrapper cleanup", () => {
-  test("install preparation kills surviving scheduler wrappers before the tracked proxy stop", async () => {
-    // The defect: `schtasks /end` ends the task instance but the detached cmd
-    // `:loop` wrapper survives and respawns its child seconds later — landing
-    // after the one-shot tracked-proxy kill and holding the install port. Model
-    // the respawner: while the wrapper lives, a stopped proxy comes back.
+  test("install preparation ends the respawning wrapper (Part A) before the tracked proxy stop", async () => {
+    // The defect: schtasks /end ends the task instance but the detached cmd :loop wrapper
+    // survives and respawns its child seconds later, landing after the one-shot tracked-proxy
+    // kill and holding the install port. Model the respawner: while it lives, a stopped proxy
+    // comes back.
     const calls: string[] = [];
     let wrapperAlive = true;
     let respawned = false;
     await prepareServiceInstall("scheduler", {
       platform: "win32",
-      diagnose: () => ({ supported: true, installed: true, enabled: true, running: true, viable: true, startable: true, stale: false, conflict: false, backend: "scheduler", summary: "test" }),
-      managerOps: () => ({
-        status: () => "present",
-        // `schtasks /end` ends the task instance; it cannot reach the detached wrapper.
-        stop: () => { calls.push("stop:scheduler"); },
-      }),
-      killServiceWrappers: () => { calls.push("kill:wrappers"); wrapperAlive = false; },
+      windowsPartA: async () => { calls.push("partA"); wrapperAlive = false; return partAResult("stopped"); },
+      windowsPartB: async () => { calls.push("partB"); return partBResult("freed"); },
       stopTrackedProxy: async () => {
         calls.push("stop:standalone");
         if (wrapperAlive) respawned = true;
       },
     });
-    expect(calls).toEqual(["stop:scheduler", "kill:wrappers", "stop:standalone"]);
+    expect(calls).toEqual(["partA", "stop:standalone", "partB"]);
     expect(respawned).toBe(false);
   });
 
-  test("install preparation kills stray scheduler wrappers even when no manager stop runs", async () => {
-    // A registration deleted mid-uninstall leaves no task for `schtasks /end`, but
-    // the detached wrapper may still be looping: it must not respawn the old proxy
-    // onto the port the fresh install is about to claim.
-    let killed = false;
-    const calls: string[] = [];
-    await prepareServiceInstall("scheduler", {
-      platform: "win32",
-      diagnose: () => ({ supported: true, installed: false, enabled: false, running: false, viable: false, startable: false, stale: false, conflict: false, backend: null, summary: "test" }),
-      managerOps: () => ({
-        status: () => null,
-        stop: () => { calls.push("stop:scheduler"); throw new Error("no task to stop"); },
-      }),
-      killServiceWrappers: () => { calls.push("kill:wrappers"); killed = true; },
-      stopTrackedProxy: async () => { calls.push("stop:standalone"); },
-    });
-    expect(killed).toBe(true);
-    expect(calls).toEqual(["kill:wrappers", "stop:standalone"]);
-  });
-
-  test("a manager that refuses to stop aborts install preparation before the wrapper kill", async () => {
-    // Propagating the refusal is the fail-closed contract — and killing the wrapper
-    // of a service whose task is still running would break that surviving service.
+  test("a stray wrapper of a deleted task that cannot be bound refuses instead of being killed by path", async () => {
+    // With nothing registered an orphaned wrapper is never bound (unbound-wrapper): the install
+    // stops and names the manual step rather than replacing assets under a live loop.
     const calls: string[] = [];
     await expect(prepareServiceInstall("scheduler", {
       platform: "win32",
-      diagnose: () => ({ supported: true, installed: true, enabled: true, running: true, viable: true, startable: true, stale: false, conflict: false, backend: "scheduler", summary: "test" }),
-      managerOps: () => ({
-        status: () => "present",
-        stop: () => { calls.push("stop:scheduler"); throw new Error("end refused"); },
-      }),
-      killServiceWrappers: () => { calls.push("kill:wrappers"); },
+      windowsPartA: async () => partAResult("survived", { reason: "unbound-wrapper", registration: { scheduler: "absent", winsw: "nonexistent" } }),
       stopTrackedProxy: async () => { calls.push("stop:standalone"); },
-    })).rejects.toThrow("end refused");
-    expect(calls).toEqual(["stop:scheduler"]);
+    })).rejects.toThrow(/could not be proven stopped \(survived\)[\s\S]*could not be tied to the service/);
+    expect(calls).toEqual([]);
   });
 
-  test("non-Windows install preparation never invokes the scheduler wrapper kill", async () => {
-    let killed = 0;
+  test("a manager that refuses to stop aborts install preparation before anything else", async () => {
+    const calls: string[] = [];
+    await expect(prepareServiceInstall("scheduler", {
+      platform: "win32",
+      windowsPartA: async () => { calls.push("partA"); return partAResult("denied"); },
+      windowsPartB: async () => { calls.push("partB"); return partBResult("freed"); },
+      stopTrackedProxy: async () => { calls.push("stop:standalone"); },
+    })).rejects.toThrow("could not be proven stopped (denied)");
+    expect(calls).toEqual(["partA"]);
+  });
+
+  test("install and backend switch stop when another program holds the port, naming it", async () => {
+    for (const backend of ["scheduler", "native"] as const) {
+      let installed = false;
+      await expect(installServiceSafely(backend, () => { installed = true; }, {
+        platform: "win32",
+        windowsPartA: async () => partAResult("stopped"),
+        windowsPartB: async () => partBResult("port-held-by-foreign"),
+        stopTrackedProxy: async () => {},
+      })).rejects.toThrow(/nothing was published or started\. Another program \(PID 777\) holds port 10100/);
+      expect(installed).toBe(false);
+    }
+    await expect(prepareServiceInstall("scheduler", {
+      platform: "win32", windowsPartA: async () => partAResult("stopped"),
+      windowsPartB: async () => partBResult("survived"), stopTrackedProxy: async () => {},
+    })).rejects.toThrow("nothing was published or started");
+  });
+
+  test("nothing registered: no Part B and no hold", async () => {
+    const calls: string[] = [];
+    await prepareServiceInstall("scheduler", {
+      platform: "win32",
+      windowsPartA: async () => { calls.push("partA"); return partAResult("absent"); },
+      windowsPartB: async () => { calls.push("partB"); return partBResult("freed"); },
+      stopTrackedProxy: async () => { calls.push("stop:standalone"); },
+    });
+    expect(calls).toEqual(["partA", "stop:standalone"]);
+  });
+
+  test("non-Windows install preparation never reaches the checked Windows stop", async () => {
+    let partA = 0;
     await prepareServiceInstall("scheduler", {
       platform: "linux",
       managerOps: () => ({ status: () => "present", stop: () => {} }),
-      killServiceWrappers: () => { killed++; },
+      windowsPartA: async () => { partA++; return partAResult("stopped"); },
       stopTrackedProxy: async () => {},
     });
-    expect(killed).toBe(0);
+    expect(partA).toBe(0);
   });
 
-  test("live Desktop supervision refuses install preparation before the wrapper kill", async () => {
-    // The pre-mutation supervision refusal verified here stays ahead of every
-    // cleanup step: a desktop-owned runtime keeps its respawner until the
-    // operator quits Desktop and retries.
+  test("live Desktop supervision refuses install preparation before the checked stop", async () => {
+    // The pre-mutation supervision refusal stays ahead of every cleanup step: a desktop-owned
+    // runtime keeps its respawner until the operator quits Desktop and retries.
     const calls: string[] = [];
     await expect(prepareServiceInstall("scheduler", {
       platform: "win32",
       inspectSupervision: () => ({ kind: "desktop", runtimePid: 4242, supervisorPid: 4200, app: "opencodex-desktop", proxy: "ocx" }),
-      diagnose: () => { calls.push("diagnose"); return { supported: true, installed: true, enabled: true, running: true, viable: true, startable: true, stale: false, conflict: false, backend: "scheduler", summary: "test" }; },
-      managerOps: () => { calls.push("manager"); return { status: () => "present", stop: () => {} }; },
-      killServiceWrappers: () => { calls.push("kill:wrappers"); },
+      windowsPartA: async () => { calls.push("partA"); return partAResult("stopped"); },
       stopTrackedProxy: async () => { calls.push("stop:standalone"); },
     })).rejects.toThrow(/OpenCodex Desktop supervises the running proxy/);
     expect(calls).toEqual([]);

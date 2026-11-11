@@ -79,7 +79,7 @@ import {
   quarantinePendingTeardown,
 } from "../config/pending-teardown";
 import { collectStatus, detectMissingCodexCatalogPath, hubStatusLines, missingCodexCatalogLines, remoteHubBannerLine, remoteHubStatusLines, runtimeSupervisorLine, statusDeadProxyLines, statusProxyUp, statusUnusedProxyLines } from "./status";
-import { endpointsToProve, everyEndpointProvenDownAsync, sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
+import { endpointsToProve, everyEndpointProvenDownAsync, respawnWindowRequired, sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
 import { takeFlag } from "./runtime-api";
 import { parseStartOptions, StartArgsError } from "./start-args";
 
@@ -124,12 +124,12 @@ import {
   type GuardedStopSnapshot,
   type StopApproval,
 } from "./stop-approval";
-import { inspectGuardedManagerTarget, observeGuardedManagerStopped } from "../service/guarded-manager-target";
 import { summarizeStopRun, type StopOutcome, type StopRunRecord } from "./stop-report";
+import { confirmGuardedFreed, inspectGuardedTarget, noServiceStop, observeGuardedStopped, orphanDiscoveryCap, stopGuardedManager, stopServiceForOcxStop, stopServiceForUninstall, stopWindowFailed, verifyUninstallStopWindow, windowsChildStopHeld, windowsPartAHolds, windowsPartAReceiptRecord, windowsPartBDue } from "./stop-windows-checked";
 import { runCli } from "./root";
 import { isProcessAlive, ProxyOwnershipRefusedError, refusalNextStep, stopProxy } from "../lib/process-control";
 import { startupDataPlaneToken } from "../lib/service-secrets";
-import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, proxyStillLiveAfterStop, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatePaths, serviceStatusSummary, stopServiceIfInstalledDetailed, uninstallServiceIfInstalled, uninstallServiceDetailed } from "../service";
+import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatePaths, serviceStatusSummary, uninstallServiceIfInstalled, uninstallServiceDetailed } from "../service";
 import { acquireOwnershipMutationLease } from "../service/ownership-mutation-lease.mjs";
 import { formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
 import { injectSystemEnv, reconcileShellHook, revertSystemEnv, uninstallShellHook } from "../server/system-env";
@@ -1028,7 +1028,7 @@ async function handleStop(approval?: StopApproval) {
         catch { return null; }
       },
       describeTrackedRuntimeTarget,
-      () => inspectGuardedManagerTarget(approval.pid, approval.port),
+      () => inspectGuardedTarget(approval.pid, approval.port),
       snapshot => handleStopUnlocked(snapshot),
     );
   }
@@ -1148,7 +1148,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     if (teardownNonce || stoppingSibling) return;
     if (connectedClientSkip) return;
     try {
-      teardownNonce = claimPendingTeardown(endpoint, endpointSource, process.pid, handoverRequested ? "update-restart" : undefined).nonce;
+      teardownNonce = claimPendingTeardown(endpoint, endpointSource, process.pid, handoverRequested ? "update-restart" : undefined, windowsPartAReceiptRecord()).nonce;
     } catch (err) {
       // Without a receipt the proxy performs its own teardown, which is the pre-#3008
       // behaviour: correct for every backend that cannot respawn, and merely early for
@@ -1175,6 +1175,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
       // Only an exact endpoint may direct the request; the configured fallback is a guess
       // good enough to record an obligation against, not to POST a stop to.
       runtimeEndpoint: exact ?? undefined,
+      skipPortWait: windowsPartBDue(), // #7771: Part B owns the Windows port wait after a checked stop.
     });
     // A valid receipt means the proxy deferred shared teardown to this process. If the
     // receipt could not be written, the proxy restores it itself and the caller must not
@@ -1192,22 +1193,23 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   try {
     const serviceStop = snapshot
       ? (guardedStep = await runGuardedManagerStep(snapshot, {
-          revalidateManager: () => inspectGuardedManagerTarget(snapshot.approval.pid, snapshot.approval.port),
+          revalidateManager: () => inspectGuardedTarget(snapshot.approval.pid, snapshot.approval.port),
           stopManager: () => {
             if (approvedEndpoint) claimTeardown(approvedEndpoint, "exact");
-            return stopServiceIfInstalledDetailed();
+            return stopGuardedManager({ approvedPort: snapshot.approval.port, receiptNonce: () => teardownNonce, inheritedReceipts: inheritedTeardowns.length });
           },
           signalApproved: () => stopWithDeferral(snapshot.approval.pid, approvedEndpoint),
           settle: () => settleApprovedTarget(snapshot.approval),
-          managerState: () => observeGuardedManagerStopped(snapshot.manager),
+          confirmFreed: () => confirmGuardedFreed(record),
+          managerState: () => observeGuardedStopped(snapshot.manager),
         })).service
       // A sibling never runs under a service manager: an installed one belongs to the live owner,
       // and its ownership check would fail this stop and skip the stale-record purge below.
       // #7423: a manager stop takes the proxy down itself, so a handover claims its receipt first.
-      : stoppingSibling || connectedClientAlreadyStopped ? "absent" : (claimHandoverBeforeManager(), stopServiceIfInstalledDetailed());
+      : stoppingSibling || connectedClientAlreadyStopped ? noServiceStop() : (claimHandoverBeforeManager(), await stopServiceForOcxStop({ receiptNonce: () => teardownNonce, inheritedReceipts: inheritedTeardowns.length }));
     record.service = serviceStop;
     stoppedService = serviceStop === "stopped" || serviceStop === "stopped-respawnable";
-    schedulerCanRespawn = serviceStop === "stopped-respawnable";
+    schedulerCanRespawn = serviceStop === "stopped-respawnable" || windowsPartBDue();
     // No "won't respawn" claim here: a stopped Task Scheduler can still respawn through
     // its wrapper, which the verification below is what actually settles.
     if (stoppedService) console.log("🛑 Service manager stopped.");
@@ -1225,6 +1227,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
       console.error("❌ The Windows Task Scheduler state could not be read, so this stop cannot tell whether a wrapper would respawn the proxy.");
       console.error("   Run 'ocx service status' to see the query error, repair Task Scheduler access, then retry.");
     }
+    ownershipBlocked = windowsPartAHolds(record) || ownershipBlocked; // #7771: no POST and no shared teardown.
   } catch (err) {
     record.service = "error";
     if (isServiceOwnershipError(err)) {
@@ -1239,7 +1242,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
 
   if (snapshot) {
     if (guardedStep?.effect === "approval-changed") {
-      return approvalChanged(guardedStep.detail);
+      return approvalChanged(guardedStep.detail, guardedStep.stopReason);
     }
     if (guardedStep?.effect === "manager-still-active") {
       return managerStillActive(record.service, record);
@@ -1255,7 +1258,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
       record.proxy = "unknown";
       console.error("The approved runtime could not be verified after the guarded stop step.");
     }
-  } else {
+  } else if (windowsChildStopHeld()) { /* #7771: Part A did not prove the manager stopped, so no POST. */ } else {
   const pid = readPid();
   if (pid) {
     try {
@@ -1296,7 +1299,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     const staleRuntimePid = readRuntimePort()?.pid ?? null;
     // Orphan recovery: a live proxy can outlive its pid file (crash, manual delete,
     // corrupt file). Identity-checked liveness still finds it via the runtime record.
-    const live = await findLiveProxy({ acceptPackageTreeFenced: true });
+    const live = await findLiveProxy({ acceptPackageTreeFenced: true, ...orphanDiscoveryCap() });
     if (siblingStopFoundOwner(siblingOfPort, live)) {
       record.proxy = "not-running";
       console.log(`The sibling instance is already gone; the proxy on port ${siblingOfPort} was left running.`);
@@ -1357,21 +1360,13 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   // Environment ownership is independent from service ownership. Roll back current-home
   // variables (the helper refuses foreign markers on its own) unless a sibling never set them.
   if (!stoppingSibling) { try { revertSystemEnv(); } catch { /* best-effort */ } }
-  // A stopped Windows scheduler is not a proven-down proxy. `killWindowsSchedulerWrappers`
-  // is explicitly best-effort and the `:loop` wrapper respawns its child after ~5s, so an
-  // immediate probe can see a dead interval and an update can start replacing files right
-  // before the proxy comes back. Poll across the restart window before this stop is allowed
-  // to report anything but failure (#3008) — and ONLY for that backend, since making every
-  // launchd and systemd stop wait seven seconds would be a regression in ordinary use.
+  // A stopped Windows service is not a proven-down proxy: the `:loop` wrapper relaunches its
+  // child about 5 s later, so an immediate probe can see a dead interval (#764, #3008). On
+  // Windows Part B of the checked stop (#7771) holds the port free across that window and
+  // re-enumerates the wrappers; only then may the stop report anything but failure. launchd
+  // and systemd are down when they say so and pay no wait.
   if (schedulerCanRespawn && !ownershipBlocked) {
-    const survivor = await proxyStillLiveAfterStop({ canRespawn: true });
-    if (survivor) {
-      stopFailed = true;
-      record.proxy = "respawned";
-      console.error(`❌ A proxy is still listening on port ${survivor.port} after the service stop; it is being respawned.`);
-      console.error("   Skipping shared teardown: restoring client config while the proxy runs leaves both pointing at each other.");
-      ownershipBlocked = true;
-    }
+    if (await stopWindowFailed(record)) { stopFailed = true; ownershipBlocked = true; }
   }
   // Recovering somebody else's abandoned obligation is not the same act as finishing this
   // run's own. This run stopped a proxy and verified the result; the inherited case has no
@@ -1523,7 +1518,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   };
   const summary = summarizeStopRun(record, signals);
   if (snapshot && !stopFailed) {
-    return guardFinalStopSummary(record, () => observeGuardedManagerStopped(snapshot.manager),
+    return guardFinalStopSummary(record, () => observeGuardedStopped(snapshot.manager),
       () => ({ ok: !stopFailed, summary }));
   }
   return { ok: !stopFailed, summary };
@@ -1569,8 +1564,8 @@ async function handleUninstall() {
     serviceRemoval: null,
     respawnWindowVerified: false,
   };
-  await runStep("service stopped", () => {
-    const outcome = stopServiceIfInstalledDetailed();
+  await runStep("service stopped", async () => {
+    const outcome = await stopServiceForUninstall();
     observed.serviceStop = outcome;
     if (outcome === "absent") return false;
     if (outcome === "failed") {
@@ -1626,10 +1621,9 @@ async function handleUninstall() {
   // Only Task Scheduler can respawn through a surviving wrapper, and removing the
   // registration does not prove the running one died. Poll the same window `ocx stop` does
   // before shared config is allowed down (#764, #3008).
-  if (observed.serviceStop === "stopped-respawnable") {
+  if (respawnWindowRequired(observed)) {
     await runStep("respawn window verified", async () => {
-      const survivor = await proxyStillLiveAfterStop({ canRespawn: true });
-      if (survivor) throw new Error(`a proxy is still listening on port ${survivor.port} after the service was removed; it is being respawned`);
+      await verifyUninstallStopWindow(); // Windows: Part B (#7771); otherwise the legacy re-poll.
       // A null from that poll is not proof either: its identity probe returns null on a
       // timeout, so a respawned-but-unresponsive proxy looks the same as none. Require the
       // tri-state probe to say dead on every candidate before calling the window verified.

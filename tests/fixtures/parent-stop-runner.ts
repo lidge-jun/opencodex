@@ -51,6 +51,9 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   noRuntimeRecord?: boolean;
   /** Like the real readPid, report no PID once the process is gone (a manager stop exited it). */
   deadPidReadsNull?: boolean;
+  /** #7771: simulate win32 and answer Part A (and Part B) of the checked Windows stop. */
+  windowsPartA?: "stopped" | "absent" | "survived" | "denied" | "unknown" | "unverified-budget";
+  windowsPartB?: "freed" | "survived" | "port-held-by-foreign" | "unconfirmed" | "unknown";
 };
 if (options.proxyProbePort) {
   // Deliberately bypass every fixture mock for the real proxy-environment regression.
@@ -97,7 +100,9 @@ mock.module("../../src/client/lifecycle-lock", () => ({ ...lifecycle,
 }));
 const endpoint = { hostname: "127.0.0.1", port: 10100 };
 const fakePid = 4242;
-const calls = { killed: 0, native: 0, grok: 0, cleared: 0, exited: 0, service: 0, lifecycle: 0 };
+const calls = { killed: 0, native: 0, grok: 0, cleared: 0, exited: 0, service: 0, lifecycle: 0, partB: 0 };
+/** The Part A record each stop POST's receipt carried when the POST was sent (#7771). */
+const postPartA: unknown[] = [];
 let receiptBlocker: import("bun:sqlite").Database | undefined;
 const { Database } = await import("bun:sqlite");
 const { prepareConfigMutationDatabasePathForWrite } = await import("../../src/config");
@@ -137,7 +142,7 @@ const receipts = await import("../../src/config/pending-teardown");
 process.on("exit", () => {
   receiptBlocker?.close();
   writeFileSync(join(home, "parent-stop-result.json"), JSON.stringify({
-    calls, urls, probes, transports, unexpectedIo, nonce,
+    calls, urls, probes, transports, unexpectedIo, nonce, postPartA,
     receiptExists: nonce !== undefined && existsSync(receipts.pendingTeardownPathFor(nonce)),
   }));
 });
@@ -261,6 +266,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   }
   if (!url.startsWith("http://127.0.0.1:10100/api/stop")) return unexpected(`fetch(${url})`);
   urls.push(url);
+  postPartA.push(receipts.pendingTeardownPartA(new URL(url).searchParams.get("teardownNonce")));
   transports.push(viaDirect ? "direct" : "global");
   if (options.connectDuringPost) writeHubConnection();
   const body = options.serverTeardown && !options.apiFailure
@@ -290,6 +296,15 @@ mock.module("../../src/server/direct-local-http", () => ({ ...direct,
 }));
 
 process.argv = [process.execPath, "ocx", "stop", ...(options.json ? ["--json"] : [])];
+if (options.windowsPartA) {
+  // The stop wiring acts for win32 while the host stays untouched: Part A and Part B answer here.
+  (await import("../../src/cli/stop-windows-checked")).resetOcxWindowsStopForTests("win32");
+  const { partAResult, partBResult } = await import("../helpers/windows-stop-caller-fixtures");
+  (await import("../../src/service/windows-service-stop")).setWindowsServiceStopHooksForTests({
+    partA: async () => { calls.service++; return partAResult(options.windowsPartA!); },
+    partB: async () => { calls.partB++; return partBResult(options.windowsPartB ?? "freed"); },
+  });
+}
 if (options.handover) process.env.OCX_UPDATE_TEARDOWN_HANDOVER = "1";
 if (options.exitCleanup) {
   delete process.env.OCX_SERVICE;

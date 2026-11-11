@@ -61,6 +61,11 @@ export interface GracefulStopIo {
    * endpoint the stop never contacted — and recovery probes exactly that endpoint.
    */
   runtimeEndpoint?: { hostname: string; port: number };
+  /**
+   * Windows checked stop (#7771): Part B confirms the port after this stop returns and
+   * owns the wait, so the 15 s waitForStoppedPort here is skipped (030 "Time budget").
+   */
+  skipPortWait?: boolean;
 }
 
 /**
@@ -319,7 +324,7 @@ function drainDeadlineMs(): number {
 /** Graceful-first stop: management-API drain, then the platform kill ladder. */
 export async function stopProxy(pid: number, io: GracefulStopIo = {}): Promise<boolean> {
   if (!isProcessAlive(pid)) return false;
-  const runtime = io.runtimeEndpoint ?? readRuntimePort(pid);
+  const runtime = io.skipPortWait ? null : io.runtimeEndpoint ?? readRuntimePort(pid);
   const { result: graceful, refusal } = await stopProxyGracefullyDetailed(pid, io);
   if (graceful === "refused") {
     // The proxy refused on purpose. Forcing would strip shared config while whatever owns
@@ -367,6 +372,9 @@ async function waitForStoppedPort(
   }
 }
 
+/** taskkill in the forced fallback; it had no timeout before #7771. */
+export const FORCED_TASKKILL_TIMEOUT_MS = 5_000;
+
 export function killProxy(pid: number, mayTerminate?: () => boolean): void {
   if (!isProcessAlive(pid)) return;
   const authorize = () => {
@@ -381,7 +389,8 @@ export function killProxy(pid: number, mayTerminate?: () => boolean): void {
     const args = ["/PID", String(pid), "/T", "/F"];
     authorize();
     try {
-      execFileSync(taskkill, args, { stdio: "pipe", windowsHide: true });
+      // Capped (#7771): the checked stop's budget counts the forced kill at 5 s.
+      execFileSync(taskkill, args, { stdio: "pipe", windowsHide: true, timeout: FORCED_TASKKILL_TIMEOUT_MS });
     } catch (err) {
       if (isProcessAlive(pid)) throw err;
     }
