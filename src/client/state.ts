@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import {
   getConfigDir,
@@ -80,6 +80,18 @@ function rawTopLevelConfig(): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The client state with evidence required for "disconnected": a saved config.json that records
+ * no client. A missing config.json reads as the default configuration (disconnected) above, which
+ * proves nothing about a connection a running process still serves, so here it is invalid.
+ * Used wherever "disconnected" authorizes a restart, a recycle or a successful exit.
+ */
+export function readClientConnectionStateWithEvidence(): ClientConnectionState {
+  const state = readClientConnectionState();
+  if (state.kind === "disconnected" && !existsSync(getConfigPath())) return { kind: "invalid", reason: "config.json is missing" };
+  return state;
 }
 
 export function readClientConnectionState(): ClientConnectionState {
