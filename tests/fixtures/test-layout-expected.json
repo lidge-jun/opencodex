@@ -1681,5 +1681,6 @@
   "link-child-policy.test.ts": "clients",
   "link-child-ops-scheduler.test.ts": "clients",
   "catalog-auto-refresh-link-fanout.test.ts": "codex-integration",
-  "link-child-ops-no-timer.test.ts": "lab"
+  "link-child-ops-no-timer.test.ts": "lab",
+  "link-child-policy-routes.test.ts": "server"
 }
