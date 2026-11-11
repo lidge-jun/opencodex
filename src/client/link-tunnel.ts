@@ -9,7 +9,7 @@ import { getConfigPath } from "../config/paths";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { linkDir, linkKnownHostsPath } from "../link/paths";
 import { buildTunnelArgv } from "../link/ssh-argv";
-import { defaultSshCaptureOpener, openSshCapture, type SshCaptureOpener } from "../link/ssh-capture";
+import { defaultSshCaptureOpener, openSshCapture, retainSshCapture, type SshCaptureOpener } from "../link/ssh-capture";
 import { createSshRunner, type SshChild, type SshRunner } from "../link/ssh-runner";
 import {
   CLIENT_TUNNEL_RETRY_POLICY,
@@ -601,6 +601,8 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   });
   const clearSupervisorTimer = deps.clearTimer
     ?? ((timer: ReturnType<typeof setTimeout>) => clearInterval(timer as unknown as ReturnType<typeof setInterval>));
+  // Capture files an earlier process wrote are deleted on time even if this one never spawns.
+  if (!deps.sshCapture) retainSshCapture(linkDir(deps.configDir));
   let timer: ReturnType<typeof setTimeout> | undefined;
   let started = false;
   let stopping = false;

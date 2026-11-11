@@ -329,6 +329,8 @@ export interface SshCaptureOpenerOptions {
 export interface SshCaptureOpenerWithFlush extends SshCaptureOpener {
   /** Wait for queued records; tests and shutdown only. */
   flush(): Promise<void>;
+  /** Apply retention now and arm deletion for the earliest remaining file; runs at process start. */
+  retain(): void;
 }
 
 /**
@@ -347,14 +349,21 @@ export function createSshCaptureOpener(options: SshCaptureOpenerOptions): SshCap
   let lastPrune = Number.NEGATIVE_INFINITY;
   let retentionTimer: ReturnType<typeof setTimeout> | undefined;
 
+  // Retention must not depend on the process that wrote a file staying alive: every prune, in any
+  // process, re-arms one unref'd timer for the earliest remaining file's expiry (#7297).
   const prune = (): void => {
-    try { pruneSshCapture(dir, now()); } catch { /* Retention runs again at the next spawn or command. */ }
-  };
-  const armRetention = (): void => {
-    if (retentionTimer !== undefined) clearTimer(retentionTimer);
-    retentionTimer = setTimer(() => { retentionTimer = undefined; prune(); }, SSH_CAPTURE_RETENTION_MS + 1_000);
+    let earliest = Number.POSITIVE_INFINITY;
+    try {
+      pruneSshCapture(dir, now());
+      for (const file of listCaptureFiles(dir)) earliest = Math.min(earliest, file.mtimeMs);
+    } catch { /* Retention runs again at the next spawn, command or process start. */ }
+    if (retentionTimer !== undefined) { clearTimer(retentionTimer); retentionTimer = undefined; }
+    if (!Number.isFinite(earliest)) return;
+    const delay = Math.max(0, Math.ceil(earliest + SSH_CAPTURE_RETENTION_MS - now())) + 1_000;
+    retentionTimer = setTimer(() => { retentionTimer = undefined; prune(); }, Math.min(delay, SSH_CAPTURE_RETENTION_MS + 1_000));
     (retentionTimer as { unref?: () => void } | undefined)?.unref?.();
   };
+  const armRetention = prune;
 
   const drain = async (): Promise<void> => {
     while (queue.length) {
@@ -419,6 +428,11 @@ export function createSshCaptureOpener(options: SshCaptureOpenerOptions): SshCap
     };
   }) as SshCaptureOpenerWithFlush;
   opener.flush = async () => { while (flight) await flight; };
+  opener.retain = () => {
+    if (!lstatOrNull(dir)) return;
+    lastPrune = now();
+    prune();
+  };
   return opener;
 }
 
@@ -426,12 +440,24 @@ const defaultOpeners = new Map<string, SshCaptureOpenerWithFlush>();
 
 /** One opener (and one writer queue) per link directory for the life of the process. */
 export function defaultSshCaptureOpener(linkDirectory: string): SshCaptureOpener {
+  return defaultOpenerFor(linkDirectory);
+}
+
+function defaultOpenerFor(linkDirectory: string): SshCaptureOpenerWithFlush {
   let opener = defaultOpeners.get(linkDirectory);
   if (!opener) {
     opener = createSshCaptureOpener({ linkDirectory });
     defaultOpeners.set(linkDirectory, opener);
   }
   return opener;
+}
+
+/**
+ * Apply retention at process start, before any tunnel spawns, so files a previous process wrote are
+ * deleted on time even when this process never spawns a tunnel or writes a capture.
+ */
+export function retainSshCapture(linkDirectory: string): void {
+  try { defaultOpenerFor(linkDirectory).retain(); } catch { /* Capture never blocks startup. */ }
 }
 
 /** Open capture for one spawn. Any failure means "off": capture can never stop a tunnel from starting. */

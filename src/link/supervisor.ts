@@ -5,7 +5,7 @@ import { linkDir, linkKnownHostsPath, linkStorePath } from "./paths";
 import { buildTunnelArgv } from "./ssh-argv";
 import { nextLinkConnectionGeneration } from "./relay-auth";
 import { createSshRunner, type SshChild, type SshRunner } from "./ssh-runner";
-import { defaultSshCaptureOpener, openSshCapture, type SshCaptureOpener } from "./ssh-capture";
+import { defaultSshCaptureOpener, openSshCapture, retainSshCapture, type SshCaptureOpener } from "./ssh-capture";
 import type { LinkDiagnosticSink } from "./diagnostics";
 import { createTunnelHistoryBook, exitCause, type TunnelCause, type TunnelHistory } from "./tunnel-history";
 import {
@@ -163,6 +163,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   });
   const warn = deps.warn ?? ((message: string) => console.warn(message));
   const sshCapture = deps.sshCapture ?? defaultSshCaptureOpener(storeDir);
+  // Runs at server start even with no links, so an earlier process's capture files still expire.
+  if (!deps.sshCapture) retainSshCapture(storeDir);
 
   let store: LinkStore = emptyLinkStore();
   let started = false;

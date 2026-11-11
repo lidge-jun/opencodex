@@ -172,11 +172,41 @@ describe("ssh capture retention", () => {
     await opener.flush();
     const path = join(dir, "ssh-" + T0 + ".jsonl");
     expect(existsSync(path)).toBe(true);
-    expect(timers.at(-1)!.ms).toBe(SSH_CAPTURE_RETENTION_MS + 1_000);
+    // Armed for the file's own expiry (last write plus retention, one second late), never longer
+    // than one retention period even when the file's clock runs ahead of this one.
+    expect(timers.at(-1)!.ms).toBe(Math.min(Math.ceil(statSync(path).mtimeMs + SSH_CAPTURE_RETENTION_MS - T0) + 1_000, SSH_CAPTURE_RETENTION_MS + 1_000));
     utimesSync(path, new Date(T0), new Date(T0));
     now = T0 + SSH_CAPTURE_RETENTION_MS + 1_000;
     timers.at(-1)!.callback();
     expect(existsSync(path)).toBe(false);
+  });
+
+  test("after a restart, a process that never writes still deletes the file once retention passes", async () => {
+    const { linkDirectory, dir } = fixture();
+    startSshCapture({ linkDirectory, now: T0 });
+    const writer = createSshCaptureOpener({ linkDirectory, now: () => T0, setTimer: () => 0 as unknown as ReturnType<typeof setTimeout>, clearTimer: () => {} });
+    writer("home", LINK)!.stderrLine("Host key verification failed.");
+    await writer.flush();
+    stopSshCapture(linkDirectory, T0);
+    const path = join(dir, "ssh-" + T0 + ".jsonl");
+    utimesSync(path, new Date(T0), new Date(T0));
+    for (const entry of ["startup", "spawn"] as const) {
+      // The writing process is gone; a new one starts an hour later and writes nothing.
+      let now = T0 + 3_600_000;
+      const timers: Array<{ callback: () => void; ms: number }> = [];
+      const restarted = createSshCaptureOpener({ linkDirectory, now: () => now,
+        setTimer: (callback, ms) => { timers.push({ callback, ms }); return timers.length as unknown as ReturnType<typeof setTimeout>; },
+        clearTimer: () => {} });
+      if (entry === "startup") restarted.retain();
+      else expect(restarted("home", LINK)).toBeNull();
+      expect(existsSync(path)).toBe(true);
+      expect(timers.at(-1)?.ms).toBe(SSH_CAPTURE_RETENTION_MS - 3_600_000 + 1_000);
+      if (entry === "spawn") {
+        now = T0 + SSH_CAPTURE_RETENTION_MS + 1_000;
+        timers.at(-1)!.callback();
+        expect(existsSync(path)).toBe(false);
+      }
+    }
   });
 
   test("start keeps at most four files, deleting the oldest first", () => {

@@ -161,6 +161,15 @@ describe("ssh capture redaction", () => {
       { debug: ["debug1: Server host key: ssh-ed25519 SHA256:abc", "No ED25519 host key is known for h and you have requested strict checking.",
         "Host key verification failed."],
       error: ["No ED25519 host key is known for h and you have requested strict checking.", "Host key verification failed."] },
+      // Recorded from OpenSSH 10.3p1 against a server that sent its banner and closed: at
+      // LogLevel=ERROR ssh printed nothing; the close and reset lines are logged at INFO.
+      { debug: ["OpenSSH_10.3p1, LibreSSL 3.3.6", "debug1: Connecting to 127.0.0.1 [127.0.0.1] port 2222.",
+        "debug1: Connection established.", "debug1: Local version string SSH-2.0-OpenSSH_10.3", "Connection closed by 127.0.0.1 port 2222"],
+      error: [] },
+      { debug: ["debug1: Connection established.", "Connection reset by 127.0.0.1 port 2222"], error: [] },
+      { debug: ["debug1: Entering interactive session.", "Timeout, server 127.0.0.1 not responding."],
+        error: [] },
+      { debug: ["debug1: Connection established.", "Disconnected from 127.0.0.1 port 2222"], error: [] },
     ];
     for (const { debug, error } of transcripts) {
       const filtered = debug.filter(sshLineClassifies).join("\n");

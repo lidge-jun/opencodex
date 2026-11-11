@@ -793,7 +793,7 @@ Drives no management route.
 | `--json` | boolean | Emit the capture status as JSON. |
 
 - A local file operation under <OPENCODEX_HOME>/link/ssh-capture/ on a Home or a Child; it needs no running proxy and no admin token, and no sync, management route or remote input can start it. While the window is open, the next ssh attempt of each Home (-R) or Child (-L) tunnel runs with LogLevel=DEBUG1; an already connected tunnel keeps its level until it reconnects.
-- Every stderr line passes an allowlist of OpenSSH line shapes before it is stored: host names, addresses, users, ports, paths, keys, fingerprints, commands and server messages become fixed placeholders and an unknown line is stored only as the category unrecognized. One file per window, at most 1 MiB, deleted 72 h after its last write; at most four files are kept, the oldest deleted first. Admission, retries and the tunnel's failure classification are unchanged.
+- Every stderr line passes an allowlist of OpenSSH line shapes before it is stored: host names, addresses, users, ports, paths, keys, fingerprints, commands and server messages become fixed placeholders and an unknown line is stored only as the category unrecognized. One file per window, at most 1 MiB, deleted 72 h after its last write; at most four files are kept, the oldest deleted first. Admission is unchanged and lines ssh prints only above LogLevel=ERROR are kept out of the failure classification; an unrecognized line such as a server banner still counts and can change the reported cause.
 
 ### `ocx link capture stop`
 
