@@ -11,14 +11,16 @@
 import type { HomeCodexSettingsRecord } from "../client/link-home";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import type { ProxyRestartStartOutcome } from "./tray-proxy";
-import type { RestartSupervisor } from "./restart-failure";
+import { OWNER_UNPROVEN_RECOVERY, type RestartSupervisor } from "./restart-failure";
 
 export type ApplyRestartOutcome =
   | { kind: "current" }
   | { kind: "not-running" }
   | { kind: "connection-changed" }
   | { kind: "restarted" }
-  | { kind: "deferred-supervisor"; supervisor: RestartSupervisor }
+  | { kind: "deferred-supervisor"; supervisor: Exclude<RestartSupervisor, "owner-unproven"> }
+  /** Kept by a runtime whose owner cannot be proven: no owner will restart it, so the apply is not in effect. */
+  | { kind: "owner-unproven" }
   | { kind: "failed" };
 
 export interface ApplyRestartDeps {
@@ -60,8 +62,14 @@ export async function restartRuntimeAfterApply(record: HomeCodexSettingsRecord, 
   const ok = await deps.restart(async recovering => recovering
     ? deps.recoveryStart(true)
     : { status: "skipped" }, value => { supervisor = value; });
-  if (!ok && supervisor) return { kind: "deferred-supervisor", supervisor };
+  const refusedBy = supervisor as RestartSupervisor | undefined;
+  if (!ok && refusedBy) return refusedBy === "owner-unproven" ? { kind: "owner-unproven" } : { kind: "deferred-supervisor", supervisor: refusedBy };
   return ok ? { kind: "restarted" } : { kind: "failed" };
+}
+
+/** `ocx sync` exits 1 for these: the applied settings are not in effect and no owner will fix that. */
+export function applyRestartFailed(outcome: ApplyRestartOutcome): boolean {
+  return outcome.kind === "failed" || outcome.kind === "connection-changed" || outcome.kind === "owner-unproven";
 }
 
 /** One line for each outcome, printed by `ocx sync`. */
@@ -74,6 +82,7 @@ export function applyRestartMessage(outcome: ApplyRestartOutcome): string {
     case "deferred-supervisor": return outcome.supervisor === "desktop"
       ? "Client runtime restart deferred; the settings take effect when OpenCodex Desktop restarts it. Use Quit in the OpenCodex tray menu, then reopen OpenCodex."
       : "Client runtime restart deferred; the settings take effect when the background service restarts it. Run `ocx service restart`.";
+    case "owner-unproven": return `The Home's settings were applied, but the client runtime was not restarted and keeps serving with the previous ones; they take effect when it starts again. ${OWNER_UNPROVEN_RECOVERY}`;
     case "failed": return "The client runtime restart did not complete; the previous runtime keeps serving. If a background service or the desktop app owns it, restart it there; otherwise retry with 'ocx restart' or 'ocx sync'.";
   }
 }

@@ -19,6 +19,14 @@ export function deferSupervisedRestart(result: ProxyRestartResult, notify: (supe
   return true;
 }
 
+/**
+ * What is left to do for a client runtime whose owner cannot be proven (a bare OCX_SERVICE=1:
+ * a service registered before v2.49 or a proxy an older ocx claude or ocx opencode started).
+ * Ending a companion's session does not end its detached proxy; `ocx stop` does, through the
+ * runtime the pid file and runtime record name. `ocx disconnect` does this step itself.
+ */
+export const OWNER_UNPROVEN_RECOVERY = "Its owner cannot be proven: it carries OCX_SERVICE=1 without a service manager's marker or the marker ocx claude and ocx opencode now set, so it is either a service installed before v2.49 or a proxy an older ocx claude or ocx opencode started. Stop it with 'ocx stop', check that 'ocx status' reports no proxy running, then start OpenCodex with 'ocx start' (or 'ocx service start' if a service should own it).";
+
 export const INCOMPLETE_INSTALL_RECOVERY = "If the installer already exited or failed, run `ocx status`, stop any running proxy through its owner (`ocx stop`, or its service or desktop app), then reinstall with the same package manager and start it again (see https://opencodex.me/troubleshooting/update-failed/).";
 
 export function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: false }>): void {
@@ -40,7 +48,7 @@ export function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: f
     } else if (code === "restart_supervised_service-unproven") {
       console.error("Restart not performed; the running client runtime was kept. A service manager started it (systemd opencodex-proxy.service, launchd com.opencodex.proxy or the Windows OpenCodex service), but it is not enabled or its relaunch could not be verified: restart it through the manager with 'ocx service restart', or check 'ocx service status'.");
     } else if (code === "restart_supervised_owner-unproven") {
-      console.error("Restart not performed; the running client runtime was kept. It was started with OCX_SERVICE=1 but without the service manager's marker while a service is installed, so it is either a service registered before that marker existed or a proxy started by ocx claude or ocx opencode. If it is the service, run 'ocx service repair' and then 'ocx service restart'; if it is a companion, end that ocx claude or ocx opencode session and start it again.");
+      console.error(`Restart not performed; the running client runtime was kept. ${OWNER_UNPROVEN_RECOVERY}`);
     } else if (code === "restart_supervised_desktop") {
       console.error("Restart not performed; the running client runtime was kept. The OpenCodex desktop app owns it while its connection is current: use Quit in the OpenCodex tray menu, then reopen it. After `ocx disconnect`, `ocx restart` hands it to the app.");
     } else {

@@ -97,7 +97,7 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
         // OCX-6: a link Child's runtime must have started after the apply it serves under.
         // Not after a failed handover: that restart is the one that would undo this routing.
         if (link && result.appliedRecord && !result.journalHandoverFailed) {
-          const { applyRestartMessage, restartRuntimeAfterApply } = await import("./link-apply-restart");
+          const { applyRestartFailed, applyRestartMessage, restartRuntimeAfterApply } = await import("./link-apply-restart");
           const { sameClientConnectionOwner } = await import("../client/state");
           const applied = result.connection;
           const outcome = await restartRuntimeAfterApply(result.appliedRecord, {
@@ -110,7 +110,7 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
             },
           });
           const message = applyRestartMessage(outcome);
-          if (outcome.kind === "failed" || outcome.kind === "connection-changed") {
+          if (applyRestartFailed(outcome)) {
             console.error(message);
             process.exitCode = 1;
           } else {

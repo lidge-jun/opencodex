@@ -427,7 +427,7 @@ const commandRunners: Record<string, CommandRunner> = {
     const code = await handleDisconnectCommand(deps.args.slice(1));
     // Token recovery refuses any live client runtime and leaves nothing to restart.
     if (code !== 0 || deps.args.includes("--orphaned-token")) return code;
-    const { bindRestartToRuntime, restartRuntimeAfterDisconnect } = await import("./disconnect-runtime");
+    const { attestRuntimeGeneration, bindRestartToRuntime, restartRuntimeAfterDisconnect, stopCapturedRuntime } = await import("./disconnect-runtime");
     const { observeProxyLiveness } = await import("../server/proxy-liveness");
     const { readClientConnectionStateWithEvidence } = await import("../client/state");
     const { readRuntimePort } = await import("../config/process-state");
@@ -451,6 +451,15 @@ const commandRunners: Record<string, CommandRunner> = {
             requestBoundSystemRestart(previous as Parameters<typeof requestBoundSystemRestart>[0], deadlineAt, { readRuntime: readRuntime as typeof readRuntimePort })));
         return { ok, ...(refusedBy ? { refusedBy } : {}) };
       },
+      stopCaptured: async target => {
+        const { isProcessAlive, killProxy } = await import("../lib/process-control");
+        return await stopCapturedRuntime(target, {
+          attest: attestRuntimeGeneration, terminate: killProxy, alive: isProcessAlive,
+          stillTarget: () => readRuntimePort(target.pid)?.attestationSecret === target.attestationSecret,
+        });
+      },
+      // The captured runtime was running and its exit was observed: recover it like a vanished restart.
+      start: () => deps.handleRestartStartWhenStopped(true),
       json: deps.args.includes("--json"),
     });
   },
