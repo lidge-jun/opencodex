@@ -23,6 +23,7 @@ import { chatConversationToIr, chatIrRouteEvidence, withDirectChatConversation, 
 import { antigravityDirectDeclineReason } from "./antigravity-direct-eligibility";
 import { normalizeChatImageParts } from "../chat/image-parts";
 import { chatHasInstructionImage } from "../adapters/claude-cli/instruction-images";
+import { chatHasUnsupportedInstructionMedia } from "../adapters/trae-cn/input-media";
 import {
   chatCompletionsErrorResponse,
   collectChatCompletion,
@@ -578,6 +579,7 @@ async function handleChatCompletionsWithBudget(
     // Body is Responses-shaped by now, but the client spoke Chat Completions.
     inboundWire: "chat",
     chatInstructionImage: chatHasInstructionImage(chatBody),
+    chatUnsupportedInstructionMedia: chatHasUnsupportedInstructionMedia(chatBody),
     chatRawReasoningVisible: rawReasoningVisible,
     // A Chat caller may send an explicit empty `tools` array — a deny-all declaration the
     // translation drops along with the whole catalog. Carried separately so the

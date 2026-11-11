@@ -43,6 +43,8 @@ mock.module("../../src/server/adapter-resolve", () => ({
 
 const { handleResponses } = await import("../../src/server/responses");
 const { handleChatCompletions } = await import("../../src/server/chat-completions");
+const { handleResponses: responsesCore } = await import("../../src/server/responses/core");
+const { handleResponsesWithPolicyFallback } = await import("../../src/server/responses/policy-fallback");
 const traeClient = await import("../../src/adapters/trae-cn/client");
 const { formatErrorResponse } = await import("../../src/bridge");
 const { SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE } = await import("../../src/lib/errors");
@@ -95,9 +97,9 @@ async function respond(cfg: OcxConfig, stream: boolean) {
   return { status: response.status, text: await response.text() };
 }
 
-for (const wire of ["responses", "chat"]) for (const combo of [false, true]) {
-  test("TRAE instruction images are refused at HTTP ingress: wire=" + wire + ", combo=" + combo, async () => {
-    const cfg = config([{ provider: "trae-cn", model: "test-model" }, { provider: "fallback", model: MODEL }]);
+for (const media of ["image", "video"]) for (const wire of ["responses", "chat"]) for (const combo of [false, true]) {
+  test("TRAE instruction media are refused at HTTP ingress: media=" + media + ", wire=" + wire + ", combo=" + combo, async () => {
+    const cfg = config([{ provider: "trae-cn", model: "test-model" }]);
     cfg.defaultProvider = "trae-cn";
     cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
       authMode: "key", models: ["test-model"], liveModels: false };
@@ -107,11 +109,14 @@ for (const wire of ["responses", "chat"]) for (const combo of [false, true]) {
     });
     const model = combo ? "chain/classified" : "trae-cn/test-model";
     const image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a/nkAAAAASUVORK5CYII=";
+    const attachment = wire === "responses"
+      ? media === "image" ? { type: "input_image", image_url: image } : { type: "input_video", video_url: "https://fixture.invalid/clip.mp4" }
+      : media === "image" ? { type: "image_url", image_url: { url: image } } : { type: "video_url", video_url: { url: "https://fixture.invalid/clip.mp4" } };
     const body = wire === "responses" ? { model, stream: false, input: [
-      { role: "system", content: [{ type: "input_text", text: "Describe the attachment" }, { type: "input_image", image_url: image }] },
+      { role: "system", content: [{ type: "input_text", text: "Describe the attachment" }, attachment] },
       { role: "user", content: "Question" },
     ] } : { model, stream: false, messages: [
-      { role: "system", content: [{ type: "text", text: "Describe the attachment" }, { type: "image_url", image_url: { url: image } }] },
+      { role: "system", content: [{ type: "text", text: "Describe the attachment" }, attachment] },
       { role: "user", content: "Question" },
     ] };
     try {
@@ -125,6 +130,74 @@ for (const wire of ["responses", "chat"]) for (const combo of [false, true]) {
         code: wire === "responses" && !combo ? "unsupported_input_modality" : "invalid_request_error" });
       expect(refused.error.message).toContain("TRAE CN ACP supports text conversations only");
       expect(open).not.toHaveBeenCalled(); expect(fallbackCalls).toBe(0);
+    } finally { open.mockRestore(); }
+  });
+}
+
+test("policy can select another eligible target after a pre-dispatch TRAE media refusal", async () => {
+  const cfg = config([{ provider: "trae-cn", model: "test-model" }]);
+  cfg.defaultProvider = "trae-cn";
+  cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
+    authMode: "key", models: ["test-model"], liveModels: false };
+  cfg.providers.capable = { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key",
+    authMode: "key", models: ["accept-model"], inputModalities: ["text", "image"] };
+  const trace = { version: 1 as const, decisionId: "trae-media-policy", createdAt: 1, requestedModel: "policy/daily",
+    routeKind: "policy" as const, profile: { id: "daily", revision: "fixture" }, requirements: [],
+    candidates: [
+      { provider: "trae-cn", model: "test-model", eligible: true, exclusions: [], score: { total: 1, components: {} } },
+      { provider: "capable", model: "accept-model", eligible: true, exclusions: [], score: { total: 0.5, components: {} } },
+    ], selected: { candidateIndex: 0, provider: "trae-cn", model: "test-model", reason: "highest-score" } };
+  const input = [{ role: "system", content: [{ type: "input_image", image_url: "https://fixture.invalid/image.png" }] },
+    { role: "user", content: "Question" }];
+  const open = spyOn(traeClient, "openTraeSession").mockRejectedValue(new Error("fixture must not start CLI"));
+  let calls = 0;
+  try {
+    const response = await handleResponsesWithPolicyFallback(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "policy/daily", input, stream: false }),
+    }), cfg, {}, {}, { runCore: async (req, next, context, options) => {
+      const body = await req.json() as Record<string, unknown>;
+      options.onRequestBodyParsed?.(body); calls++;
+      if (calls === 1) {
+        const concrete = new Request(req.url, { method: "POST", headers: req.headers,
+          body: JSON.stringify({ ...body, model: "trae-cn/test-model" }) });
+        const refused = await responsesCore(concrete, next, context, options);
+        context.routeDecision = trace; context.requestedModel = "policy/daily";
+        return refused;
+      }
+      expect(body.model).toBe("capable/accept-model"); expect(body.input).toEqual(input);
+      return Response.json({ status: "completed" });
+    } });
+    expect(response.status).toBe(200); expect(calls).toBe(2); expect(open).not.toHaveBeenCalled();
+    await response.text();
+  } finally { open.mockRestore(); }
+});
+
+for (const wire of ["responses", "chat"]) {
+  test("TRAE preserves supported text instruction aliases: wire=" + wire, async () => {
+    const cfg = config([{ provider: "trae-cn", model: "test-model" }]);
+    cfg.defaultProvider = "trae-cn";
+    cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
+      authMode: "key", models: ["test-model"], liveModels: false };
+    const prompts: string[] = [];
+    const open = spyOn(traeClient, "openTraeSession").mockResolvedValue({ models: ["test-model"],
+      prompt: async (_model, text, emit) => { prompts.push(text); emit({ type: "text_delta", text: "accepted" }); emit({ type: "done" }); },
+      close: async () => undefined,
+    });
+    const content: unknown[] = [{ type: "text", text: "Plain alias" }, { type: "input_text", text: "Input alias" }];
+    if (wire === "chat") content.push({ type: "output_text", text: "Output alias" }, "String instruction");
+    const body = { model: "trae-cn/test-model", stream: false,
+      [wire === "responses" ? "input" : "messages"]: [{ role: "system", content }, { role: "user", content: "Question" }] };
+    try {
+      const request = new Request("http://localhost/v1/" + (wire === "responses" ? "responses" : "chat/completions"), {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      });
+      const response = await (wire === "responses" ? handleResponses : handleChatCompletions)(request, cfg, { model: "", provider: "" });
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(open).toHaveBeenCalledTimes(1); expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toContain("Plain alias"); expect(prompts[0]).toContain("Input alias");
+      if (wire === "chat") { expect(prompts[0]).toContain("Output alias"); expect(prompts[0]).toContain("String instruction"); }
     } finally { open.mockRestore(); }
   });
 }

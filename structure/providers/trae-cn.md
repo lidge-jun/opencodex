@@ -3,8 +3,11 @@
 `src/adapters/trae-cn/` runs the official CLI's ACP server for manually configured `trae-cn` adapters.
 The directory row is inert and unverified; it advertises no canonical preset or live discovery.
 TRAE owns login and refresh; OpenCodex stores no TRAE token. A fresh session supplies the CLI-reported
-model roster and one selected-model turn. Original instruction-image and file-image evidence is
-rejected before normalized instructions can lose their attachments, including Responses and Chat combo delivery.
+model roster and one selected-model turn. `src/adapters/trae-cn/input-media.ts` checks original
+system/developer content and native agent-message media before normalization loses their attachments.
+Value-free Responses/Chat facts survive preprocessing and combo delivery; supported text aliases stay valid.
+Pre-dispatch media refusals remain target-local, so eligible policy/combo fallback may proceed without
+replaying a sent prompt. The dispatch heartbeat still seals turns that reached the vendor CLI.
 The vendor does not document the discovery fields or
 guarantee their account scope. The JSON-RPC reader bounds frames, update queues, stderr,
 and request time; cancellation and cleanup terminate the child. Text and thought chunks retain their

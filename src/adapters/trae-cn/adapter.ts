@@ -6,7 +6,8 @@ import type { AdapterRequest, ProviderAdapter } from "../base";
 import { requiresToolCall } from "../../types";
 import { buildSystemPrompt, formatMessageForHistory } from "../coding-agent/protocol";
 import { openTraeSession, TraeAcpError, type TraeAcpDeps } from "./client";
-import { responsesHasFileImage, responsesHasInstructionImage } from "../claude-cli/instruction-images";
+import { responsesHasFileImage } from "../claude-cli/instruction-images";
+import { responsesHasUnsupportedInputMedia } from "./input-media";
 
 export type TraeCnAdapterDeps = TraeAcpDeps;
 
@@ -44,7 +45,7 @@ function validateInput(parsed: OcxParsedRequest): { message: string; code: strin
   if (parsed.context.tools?.length) {
     return { message: "TRAE CN ACP does not currently expose client tools.", code: "unsupported_client_tools" };
   }
-  if (responsesHasInstructionImage(parsed._rawBody) || responsesHasFileImage(parsed._rawBody)
+  if (responsesHasUnsupportedInputMedia(parsed._rawBody) || responsesHasFileImage(parsed._rawBody)
     || parsed.context.messages.some(message =>
     (Array.isArray(message.content) && message.content.some(part => part.type !== "text" && part.type !== "thinking"))
     || message.role === "toolResult")) {

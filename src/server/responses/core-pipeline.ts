@@ -26,6 +26,7 @@ import { releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
 import { formatErrorResponse } from "../../bridge";
 import { InvalidRetainedCompactionSummary, prepareCompactionRetention } from "./compaction-retention";
 import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
+import { responsesHasUnsupportedInputMedia } from "../../adapters/trae-cn/input-media";
 import { markResponseNonReplayable } from "../../lib/upstream-retry";
 
 /** Compose request phases while retaining the original admission-finally ownership. */
@@ -53,7 +54,10 @@ export async function handleResponsesInner(
         || responsesHasInstructionImage(requestState.parsed._rawBody)
         || requestState.parsed.context.messages.some(message => message.role === "developer"
           && Array.isArray(message.content) && message.content.some(part => part.type === "image"));
-      if (instructionImage || options.responsesFileImage) {
+      const unsupportedTraeMedia = transportState.runTurnAdapter.name === "trae-cn"
+        && (options.chatUnsupportedInstructionMedia || options.responsesUnsupportedInputMedia
+          || responsesHasUnsupportedInputMedia(requestState.parsed._rawBody));
+      if (instructionImage || options.responsesFileImage || unsupportedTraeMedia) {
         const message = transportState.runTurnAdapter.name === "trae-cn"
           ? "TRAE CN ACP supports text conversations only; media, documents and tool replay are not supported."
           : instructionImage ? "Claude Code CLI does not support images in developer instructions."
@@ -64,7 +68,7 @@ export async function handleResponsesInner(
         } }), { status: 400, headers: { "Content-Type": "application/json" } });
         rememberProxyErrorMessage(logCtx, message, { status: 400, type: "invalid_request_error", code: "unsupported_input_modality" });
         markProxyError(response);
-        markResponseNonReplayable(response);
+        if (transportState.runTurnAdapter.name === "claude-cli") markResponseNonReplayable(response);
         return response;
       }
     }

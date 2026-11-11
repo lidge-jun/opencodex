@@ -60,6 +60,7 @@ import { orderDevinMessagesOutput } from "../../claude/devin-output-order";
 import { unboundPoolSpendRefusalMessage } from "../workflow-refusal";
 import { claudeUsagePreflight } from "../../adapters/claude-cli/usage-admission";
 import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
+import { responsesHasUnsupportedInputMedia } from "../../adapters/trae-cn/input-media";
 
 // LOCAL PATCH (runturn-websearch): top-level fields route binding or the
 // adapter itself may write during a turn. Iteration-local `turnParsed` objects
@@ -183,6 +184,9 @@ export async function executeResponsesRunTurn(
   // across both Responses and translated Chat instead of presenting a retryable generic 502.
   if (transportState.runTurnAdapter.name === "claude-cli" || transportState.runTurnAdapter.name === "trae-cn") {
     if (options.chatInstructionImage || options.responsesInstructionImage || responsesHasInstructionImage(parsed._rawBody)
+      || (transportState.runTurnAdapter.name === "trae-cn"
+        && (options.chatUnsupportedInstructionMedia || options.responsesUnsupportedInputMedia
+          || responsesHasUnsupportedInputMedia(parsed._rawBody)))
       || parsed.context.messages.some(message => message.role === "developer"
         && Array.isArray(message.content) && message.content.some(part => part.type === "image"))) {
       cancelResponseCompletion();
@@ -193,7 +197,7 @@ export async function executeResponsesRunTurn(
           ? "TRAE CN ACP supports text conversations only; media, documents and tool replay are not supported."
           : "Claude Code CLI does not support images in developer instructions.",
       } }), { status: 400, headers: { "Content-Type": "application/json" } });
-      markResponseNonReplayable(refusal);
+      if (transportState.runTurnAdapter.name === "claude-cli") markResponseNonReplayable(refusal);
       return refusal;
     }
   }

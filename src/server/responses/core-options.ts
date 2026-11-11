@@ -307,8 +307,12 @@ export interface HandleResponsesOptions {
   chatRawReasoningVisible?: boolean;
   /** Value-free fact retained before Chat instruction content is projected to text. */
   chatInstructionImage?: boolean;
+  /** Original Chat instruction content unsupported by the text-only TRAE adapter. */
+  chatUnsupportedInstructionMedia?: boolean;
   /** Original Responses instruction image, retained across preprocessing and combo replay. */
   responsesInstructionImage?: boolean;
+  /** Unsupported instruction/agent media retained before Responses parsing and combo replay. */
+  responsesUnsupportedInputMedia?: boolean;
   /** File-backed Responses image retained before parsing and replay. */
   responsesFileImage?: boolean;
   /** Set only by the Chat or Messages ingress on an eligible Antigravity route; see {@link DirectRequestOption}. */

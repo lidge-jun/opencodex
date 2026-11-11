@@ -361,12 +361,34 @@ describe("TRAE CN ACP regression contract", () => {
     });
   }
 
-  for (const image of ["https://fixture.invalid/image.png", "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a/nkAAAAASUVORK5CYII="]) {
-    test("original Responses system images are refused before CLI startup: " + image.split(":")[0], async () => {
+  for (const attachment of [
+    { type: "input_image", image_url: "https://fixture.invalid/image.png" },
+    { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a/nkAAAAASUVORK5CYII=" },
+    { type: "input_video", video_url: "https://fixture.invalid/clip.mp4" },
+    { type: "input_audio", audio_url: "https://fixture.invalid/audio.wav", format: "wav" },
+    { type: "input_file", file_id: "fixture-file" },
+  ]) {
+    test("original Responses instruction media are refused before CLI startup: " + attachment.type, async () => {
       const fixture = traeFixture();
       const parsed = parseResponsesRequest({ model: "test-model", input: [
-        { role: "system", content: [{ type: "input_text", text: "Describe the attached image" }, { type: "input_image", image_url: image }] },
+        { role: "system", content: [{ type: "input_text", text: "Describe the attachment" }, attachment] },
         { role: "user", content: "Question" },
+      ] });
+      const events: AdapterEvent[] = [];
+      await createTraeCnAdapter(config(), fixture.deps).runTurn!(parsed, traeMeta(), event => events.push(event));
+      expect(events).toMatchObject([{ type: "error", status: 400, code: "unsupported_input_modality" }]);
+      expect(fixture.options()).toBeUndefined(); expect(fixture.requests).toEqual([]);
+    });
+  }
+
+  for (const attachment of [
+    { type: "input_file", file_id: "fixture-agent-file" },
+    { type: "input_audio", audio_url: "https://fixture.invalid/agent.wav", format: "wav" },
+  ]) {
+    test("agent-message media references are refused before dispatch: " + attachment.type, async () => {
+      const fixture = traeFixture();
+      const parsed = parseResponsesRequest({ model: "test-model", input: [
+        { type: "agent_message", content: [attachment] }, { role: "user", content: "Question" },
       ] });
       const events: AdapterEvent[] = [];
       await createTraeCnAdapter(config(), fixture.deps).runTurn!(parsed, traeMeta(), event => events.push(event));

@@ -7,7 +7,8 @@ The experimental `trae-cn` adapter can be configured manually through `custom`. 
 entry is reference-only; canonical promotion awaits a maintenance owner, vendor discovery and
 forwarding evidence, and security review. It uses the signed-in official CLI through `traecli acp serve`.
 OpenCodex does not read desktop tokens, private IDE endpoints, or Ferry.
-Images in system or developer instructions are also refused before CLI startup, including Chat and combo requests.
+Non-text parts in system or developer instructions are refused before CLI startup, including images, videos, audio and file references in Responses, Chat and combo requests.
+File and audio references in native agent messages are refused too. A routing policy or combo may choose another eligible provider after a pre-dispatch refusal; an already dispatched TRAE prompt is never replayed for fallback.
 
 ```json
 {
