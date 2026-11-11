@@ -10,13 +10,13 @@ type State = ReturnType<DisconnectRuntimeDeps["connectionState"]>;
 const live = (role?: string, pid = 4321): Observation => ({ kind: "live", live: { pid, port: 10100, ...(role ? { role } : {}) } });
 const generation: RuntimeGeneration = { pid: 4321, port: 10100, hostname: "127.0.0.1", attestationSecret: createLocalAttestationSecret() };
 
-function run(observation: Observation, restartOk: boolean, json = false, extra: { state?: State; states?: State[]; after?: Observation; capture?: RuntimeGeneration | null } = {}) {
+function run(observation: Observation, restartOk: boolean, json = false, extra: { state?: State; states?: State[]; after?: Observation; capture?: RuntimeGeneration | null; captureAfter?: RuntimeGeneration | null } = {}) {
   const out: string[] = [], err: string[] = [];
   let restarts = 0;
   const bound: RuntimeGeneration[] = [];
   const done = restartRuntimeAfterDisconnect({
     observe: async () => (restarts > 0 ? extra.after ?? live("standalone", 9999) : observation),
-    capture: () => (extra.capture === undefined ? generation : extra.capture),
+    capture: () => (restarts > 0 && extra.captureAfter !== undefined ? extra.captureAfter : extra.capture === undefined ? generation : extra.capture),
     connectionState: () => extra.states?.shift() ?? extra.state ?? { kind: "disconnected" },
     restart: async target => { restarts += 1; bound.push(target); return restartOk; },
     json,
@@ -87,6 +87,40 @@ describe("ocx disconnect restarts the client runtime it left behind", () => {
     const result = await run(live("client"), true, false, { states: [{ kind: "disconnected" }, { kind: "connected" }] });
     expect(result).toMatchObject({ code: 1, restarts: 1, out: [] });
     expect(result.err.join("\n")).toContain("a new connection was made on this machine after this disconnect");
+  });
+
+  // Coordinator review round 4: when a client still answers after a refused or failed restart,
+  // say what is true; recommend a plain ocx restart only when the captured runtime still answers.
+  const newer: RuntimeGeneration = { pid: 5555, port: 10100, attestationSecret: createLocalAttestationSecret() };
+  test("a new connection in use after a refused restart is reported, with no restart advice", async () => {
+    const result = await run(live("client"), false, false, { after: live("client", 5555), captureAfter: newer, states: [{ kind: "disconnected" }, { kind: "connected" }] });
+    expect(result.code).toBe(1);
+    const text = result.err.join("\n");
+    expect(text).toContain("a new connection is in use on this machine");
+    expect(text).toContain("ocx status");
+    expect(text).not.toContain("Run on this machine: ocx restart");
+  });
+
+  test("a different client runtime with the state still disconnected is reported for inspection", async () => {
+    const result = await run(live("client"), false, false, { after: live("client", 5555), captureAfter: newer });
+    expect(result.code).toBe(1);
+    const text = result.err.join("\n");
+    expect(text).toContain("a different client runtime (pid 5555) answers now");
+    expect(text).not.toContain("Run on this machine: ocx restart");
+  });
+
+  test("an unreadable state after a refused restart says what to check", async () => {
+    const result = await run(live("client"), false, false, { after: live("client", 5555), captureAfter: newer, states: [{ kind: "disconnected" }, { kind: "invalid", reason: "config.json is missing or unreadable" }] });
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain("client state is invalid (config.json is missing or unreadable)");
+    expect(result.err.join("\n")).not.toContain("Run on this machine: ocx restart");
+  });
+
+  test("nothing answering after the restart while a new connection exists reports that connection", async () => {
+    const result = await run(live("client"), true, false, { after: { kind: "absent", live: null }, states: [{ kind: "disconnected" }, { kind: "connected" }] });
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain("a new connection is in use on this machine");
+    expect(result.err.join("\n")).not.toContain("could not confirm a standalone runtime");
   });
 
   test.each([
