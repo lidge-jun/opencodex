@@ -72,22 +72,30 @@ export interface CitationMarkerFilter {
  */
 const MEMORY_CITATION_OPEN = "<oai-mem-citation>";
 const MEMORY_CITATION_CLOSE = "</oai-mem-citation>";
-const MEMORY_CITATION_TAG = /<\/?(oai-mem-citation)>/g;
+const MEMORY_CITATION_MENTION = /<(\/?oai-mem-citation>)/g;
 
 /**
- * Body shape of a REAL memory-citation block: a complete `<citation_entries>` list. The ids block
- * that usually follows (`<rollout_ids>`, or `<thread_ids>`) is optional, matching the client's
- * `parse_memory_citation` (`codex-rs/memories/read/src/citations.rs`), which accepts a block
- * without it.
+ * Body shape of a REAL memory-citation block: it opens with a complete `<citation_entries>` list, or
+ * with a complete ids list (`<rollout_ids>` or `<thread_ids>`) when the entries are absent. That matches
+ * the client's `parse_memory_citation` (`codex-rs/memories/read/src/citations.rs`), which accepts a block
+ * carrying either list and rejects one carrying neither.
  *
  * This is what separates a block the client should render from a mention of the tag name inside
  * ordinary prose. Escaping both would break the real feature: the client would print the tags
  * instead of the citation list, and the turn's memory references would silently disappear.
  */
-const MEMORY_CITATION_BODY = /<citation_entries>[\s\S]*<\/citation_entries>/;
+const MEMORY_CITATION_BODY_ELEMENTS: ReadonlyArray<readonly [open: string, close: string]> = [
+  ["<citation_entries>", "</citation_entries>"],
+  ["<rollout_ids>", "</rollout_ids>"],
+  ["<thread_ids>", "</thread_ids>"],
+];
 
-/** First element of a real block's body, used to decide from a short lookahead. */
-const MEMORY_CITATION_BODY_OPEN = "<citation_entries>";
+/** First index at or after `from` (below `limit`) that is not whitespace. */
+function skipWhitespace(text: string, from: number, limit: number): number {
+  let at = from;
+  while (at < limit && /\s/.test(text[at]!)) at++;
+  return at;
+}
 
 /**
  * Longest candidate block, in UTF-16 code units (JavaScript string length), that the streaming
@@ -105,11 +113,12 @@ const MAX_MEMORY_CITATION_HOLD = 16_384;
  */
 function bodyCouldBeReal(afterOpen: string): boolean {
   const trimmed = afterOpen.replace(/^\s+/, "");
-  return MEMORY_CITATION_BODY_OPEN.startsWith(trimmed) || trimmed.startsWith(MEMORY_CITATION_BODY_OPEN);
+  return MEMORY_CITATION_BODY_ELEMENTS.some(([open]) => open.startsWith(trimmed) || trimmed.startsWith(open));
 }
 
 function isMemoryCitationBlock(body: string): boolean {
-  return MEMORY_CITATION_BODY.test(body);
+  const trimmed = body.replace(/^\s+/, "");
+  return MEMORY_CITATION_BODY_ELEMENTS.some(([open, close]) => trimmed.startsWith(open) && trimmed.includes(close, open.length));
 }
 
 /**
@@ -120,11 +129,21 @@ function isMemoryCitationBlock(body: string): boolean {
  * anchored at the mention rather than at the block. The adjacency check is what makes the mention
  * provably a mention.
  */
-function opensRealBlock(text: string, openAt: number): number | undefined {
+function opensRealBlock(text: string, openAt: number, closeCache?: { at: number }): number | undefined {
   const afterOpen = openAt + MEMORY_CITATION_OPEN.length;
-  const bodyStart = afterOpen + (text.slice(afterOpen).match(/^\s*/)?.[0].length ?? 0);
-  if (!text.startsWith(MEMORY_CITATION_BODY_OPEN, bodyStart)) return undefined;
-  const close = text.indexOf(MEMORY_CITATION_CLOSE, bodyStart);
+  const bodyStart = skipWhitespace(text, afterOpen, Math.min(text.length, openAt + MAX_MEMORY_CITATION_HOLD));
+  if (!MEMORY_CITATION_BODY_ELEMENTS.some(([open]) => text.startsWith(open, bodyStart))) return undefined;
+  // Callers scanning one string for several opening tags share the next closing tag, so prose with
+  // many unclosed candidates costs one forward search instead of one per tag (-2: not searched yet).
+  let close: number;
+  if (closeCache) {
+    if (closeCache.at === -2 || (closeCache.at !== -1 && closeCache.at < bodyStart)) {
+      closeCache.at = text.indexOf(MEMORY_CITATION_CLOSE, bodyStart);
+    }
+    close = closeCache.at;
+  } else {
+    close = text.indexOf(MEMORY_CITATION_CLOSE, bodyStart);
+  }
   if (close === -1) return undefined;
   // The streaming escaper holds at most MAX_MEMORY_CITATION_HOLD of a candidate, so a block larger
   // than that is a mention in BOTH forms; one size rule keeps deltas and `output_text.done` equal.
@@ -151,11 +170,12 @@ export function escapeMemoryCitationMentions(text: string): string {
   // mention and gets escaped, tags included. Matching runs over the ORIGINAL string as one pass
   // (appendReplacement), because `String.replace` would re-scan the text we just escaped.
   const blocks: Array<{ start: number; end: number }> = [];
+  const closeCache = { at: -2 };
   let searchFrom = 0;
   for (;;) {
     const open = text.indexOf(MEMORY_CITATION_OPEN, searchFrom);
     if (open === -1) break;
-    const end = opensRealBlock(text, open);
+    const end = opensRealBlock(text, open, closeCache);
     if (end !== undefined) {
       blocks.push({ start: open, end });
       searchFrom = end;
@@ -163,23 +183,8 @@ export function escapeMemoryCitationMentions(text: string): string {
       searchFrom = open + MEMORY_CITATION_OPEN.length;
     }
   }
-  const escapedMentions = (segment: string): string => {
-    let out = "";
-    let i = 0;
-    for (;;) {
-      const open = segment.indexOf(MEMORY_CITATION_OPEN, i);
-      const close = segment.indexOf(MEMORY_CITATION_CLOSE, i);
-      const next = open === -1 ? close : close === -1 ? open : Math.min(open, close);
-      if (next === -1) {
-        out += segment.slice(i);
-        return out;
-      }
-      out += segment.slice(i, next);
-      const tag = open !== -1 && open === next ? MEMORY_CITATION_OPEN : MEMORY_CITATION_CLOSE;
-      out += `&lt;${tag.slice(1)}`;
-      i = next + tag.length;
-    }
-  };
+  // Outside claimed blocks every tag is a mention; one linear regex pass escapes them all.
+  const escapedMentions = (segment: string): string => segment.replace(MEMORY_CITATION_MENTION, "&lt;$1");
   if (blocks.length === 0) return escapedMentions(text);
   let out = "";
   let cursor = 0;
@@ -237,7 +242,10 @@ export function createMemoryCitationEscaper(): MemoryCitationEscaper {
           break;
         }
         out += input.slice(i, next);
-        const tail = input.slice(next);
+        // Look no further than one hold limit ahead: a real block never exceeds it, and slicing the
+        // whole remainder for every tag would make one large delta of many tags quadratic.
+        const tail = input.slice(next, next + MAX_MEMORY_CITATION_HOLD + 1);
+        const remaining = input.length - next;
         if (tail.startsWith(MEMORY_CITATION_CLOSE)) {
           // A close tag outside a claimed block is prose.
           out += escapeClose;
@@ -268,7 +276,7 @@ export function createMemoryCitationEscaper(): MemoryCitationEscaper {
           i = next + end;
           continue;
         }
-        if (!tail.includes(MEMORY_CITATION_CLOSE, MEMORY_CITATION_OPEN.length) && tail.length <= MAX_MEMORY_CITATION_HOLD) {
+        if (!tail.includes(MEMORY_CITATION_CLOSE, MEMORY_CITATION_OPEN.length) && remaining <= MAX_MEMORY_CITATION_HOLD) {
           // The block may still close; hold it whole.
           held = tail;
           return out;

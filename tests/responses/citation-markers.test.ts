@@ -358,6 +358,36 @@ describe("non-citation directive spans pass through (#6039)", () => {
     expect(messageText(json)).toBe(`quoted &lt;oai-mem-citation> prose\n${REAL_BLOCK}`);
   });
 
+  test("a block carrying only an ids list is real too, as the client accepts it", async () => {
+    for (const ids of ["rollout_ids", "thread_ids"]) {
+      const block = `<oai-mem-citation>
+<${ids}>
+0123
+</${ids}>
+</oai-mem-citation>`;
+      const text = `answer
+${block}`;
+      expect(escapeMemoryCitationMentions(text)).toBe(text);
+      expect(streamed([...text])).toBe(text);
+    }
+    // Neither list: still a mention.
+    expect(escapeMemoryCitationMentions("<oai-mem-citation><notes>x</notes></oai-mem-citation>"))
+      .toBe("&lt;oai-mem-citation><notes>x</notes>&lt;/oai-mem-citation>");
+  });
+
+  test("many unclosed candidates stay linear in both forms", () => {
+    const text = "<oai-mem-citation><citation_entries>x ".repeat(80_000) + "</oai-mem-citation>";
+    const started = performance.now();
+    const whole = escapeMemoryCitationMentions(text);
+    const escaper = createMemoryCitationEscaper();
+    const pieces = text.match(/[\s\S]{1,200000}/g)!;
+    const stream = pieces.map(piece => escaper.push(piece)).join("") + escapeMemoryCitationMentions(escaper.pending());
+    expect(stream).toBe(whole);
+    expect(whole.startsWith("&lt;oai-mem-citation><citation_entries>x ")).toBe(true);
+    // The earlier quadratic scan took about 13 s on this 3 MB input; the bounded one takes well under a second.
+    expect(performance.now() - started).toBeLessThan(4_000);
+  });
+
   test("a real block without an ids list still counts as real, as the client parses it", async () => {
     const entriesOnly = "<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[x]\n</citation_entries>\n</oai-mem-citation>";
     const text = `answer\n${entriesOnly}`;
