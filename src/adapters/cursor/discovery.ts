@@ -286,6 +286,23 @@ export function cursorNeedsExternalToolContinuation(modelId: string): boolean {
   return wire === "composer-2.5" || wire === "composer-2.5-fast";
 }
 
+/**
+ * Models whose tool results are replayed as model-visible root text: every external-continuation
+ * model, plus the Auto router (wire `default`, any routing level), which still continues with a
+ * bare resumeAction.
+ *
+ * Auto builds its prompt from `rootPromptMessagesJson`; with the result only on `turns[]` it
+ * asked to run the same successful command again instead of answering (#8538). Replaying it once
+ * taught Auto to echo the `[Tool Result]` envelope as chat (#2317), so everything gated on this
+ * predicate also arms the mid-stream envelope strip and next-turn remint (src/adapters/cursor.ts).
+ * Checkpoint retention keeps {@link cursorNeedsExternalToolContinuation}: Auto's checkpoint still
+ * carries the pending tool state that full replay does not rebuild.
+ */
+export function cursorReplaysToolResultInRoot(modelId: string): boolean {
+  if (cursorNeedsExternalToolContinuation(modelId)) return true;
+  return stripCursorEffortSuffix(cursorCodexToWireModelId(modelId).trim().toLowerCase()) === CURSOR_AUTO_WIRE_MODEL_ID;
+}
+
 function stripCursorEffortSuffix(wireModelId: string): string {
   const suffixes = [...CANONICAL_EFFORT_SUFFIXES].sort((a, b) => b.length - a.length);
   for (const suffix of suffixes) {

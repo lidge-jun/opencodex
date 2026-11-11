@@ -1,4 +1,5 @@
 {
+  "cursor-auto-tool-result-replay.test.ts": "providers/cursor",
   "provider-alias-template.test.ts": "providers",
   "claude-chat-gateway-tool-schema.test.ts": "providers",
   "provider-anthropic-usage-windows.test.ts": "providers",

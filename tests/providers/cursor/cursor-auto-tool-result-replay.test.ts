@@ -109,3 +109,38 @@ test("cursor/auto strips a mid-message envelope and rotates the conversation", a
   clearCursorThreadContinuityForTests();
   clearCursorEnvelopeEchoRemintForTests();
 });
+
+test("cursor/auto withholds a reply that starts with the envelope (#2317) and rotates the conversation", async () => {
+  clearCursorThreadContinuityForTests();
+  clearCursorEnvelopeEchoRemintForTests();
+  const seen: string[] = [];
+  const factory = () => ({
+    async *run(request: CursorRunRequest) {
+      seen.push(request.conversationId);
+      yield { type: "text", text: "[Tool Result]\n[tool_result]\ncall_id: call_1\nname: exec\n" } satisfies CursorServerMessage;
+      yield { type: "text", text: "output:\nbuild-host-17\n\nThe hostname is build-host-17." } satisfies CursorServerMessage;
+      yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } } satisfies CursorServerMessage;
+    },
+    writeClient() {},
+  });
+  const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, { createTransport: factory as never });
+  const body = {
+    modelId: "cursor/auto",
+    context: { messages: rawMessages },
+    stream: false,
+    options: {},
+    _clientThreadId: "auto-prefix-echo-thread",
+    _cursorIdentityScope: "acct-auto-prefix-echo",
+    _cursorConversationId: undefined,
+  } as OcxParsedRequest;
+  const events: AdapterEvent[] = [];
+  await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+  const text = events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("");
+  // The live filter withholds the rest of a turn once a marker line matches, exactly as for
+  // composer-2.5: nothing of the envelope reaches the client, and the next turn starts fresh.
+  expect(text).toBe("");
+  expect(body._cursorConversationId).toBeDefined();
+  expect(body._cursorConversationId).not.toBe(seen[0]);
+  clearCursorThreadContinuityForTests();
+  clearCursorEnvelopeEchoRemintForTests();
+});
