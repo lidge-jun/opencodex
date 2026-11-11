@@ -15,7 +15,7 @@ import {
   type DesktopDisconnectReceipt, type DesktopRemoteOwner, type DesktopStoreResult,
 } from "../claude/desktop-remote-store";
 import {
-  withClientLifecycle, withClientLifecycleSync,
+  withClientDisconnectAttempt, withClientLifecycle, withClientLifecycleSync,
   type ClientLifecycleHeld, type ClientLifecycleLockDeps,
 } from "./lifecycle-lock";
 import { invalidateCodexModelsCache, invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
@@ -1088,27 +1088,46 @@ function restoreConnectedCodex(connection: OcxClientConnectionConfig): void {
 /**
  * Abort a disconnect that failed before its commit point.
  *
- * Until `desktop_restored` the receipt records intent only: the Claude Desktop store, the catalog,
- * the service token and the connection are untouched, so removing it returns the Child to a
- * plain connected state. Left in place it made every client start refuse with
- * client_disconnect_pending until someone moved the folder aside by hand. This also clears a
- * receipt an older release left stuck at `prepared`.
+ * Until `desktop_restored` the receipt records intent only, so removing it returns the Child to a plain
+ * connected state; left in place it made every client start refuse with client_disconnect_pending
+ * until someone moved the folder aside by hand. A receipt this attempt wrote is removed outright:
+ * D excludes other disconnects and every Desktop writer refuses while it exists. A receipt an
+ * earlier run left (including one stuck by an older release) is removed only while the Desktop
+ * store shows no restore has started; that run may have stopped inside the Desktop restore before
+ * it could record desktop_restored, and then the receipt is the gate a retry needs.
  */
 function abortPreparedDisconnect(
-  receipt: DesktopDisconnectReceipt,
+  prepared: { receipt: DesktopDisconnectReceipt; created: boolean },
   error: unknown,
   deps: Pick<ClientConnectDeps, "lifecycleLockDeps">,
 ): Error {
   const base = error instanceof Error ? error.message : String(error);
+  let outcome: "removed" | "desktop_started";
   try {
-    withClientLifecycleSync(held => withConfigMutationLockSync(() => removeDesktopDisconnectReceipt(held, receipt)), deps.lifecycleLockDeps);
-    return new Error(`${base}. The disconnect was rolled back: this Child is still connected and its runtime can start.`, { cause: error });
+    outcome = withClientLifecycleSync(held => withConfigMutationLockSync(() => {
+      if (!prepared.created && !UNTOUCHED_DESKTOP.has(inspectRemoteDesktopStore(prepared.receipt.owner).kind)) return "desktop_started" as const;
+      removeDesktopDisconnectReceipt(held, prepared.receipt);
+      return "removed" as const;
+    }), deps.lifecycleLockDeps);
   } catch {
     return new Error(`${base}. The disconnect receipt could not be rolled back; run ocx disconnect again to finish it or roll it back.`, { cause: error });
   }
+  return new Error(outcome === "removed"
+    ? `${base}. The disconnect was rolled back: this Child is still connected and its runtime can start.`
+    : `${base}. A Claude Desktop restore had already started under this disconnect, so its receipt was kept; once the cause above is fixed, run ocx disconnect again to finish it.`, { cause: error });
 }
 
+/** Desktop store states an interrupted disconnect cannot have produced: no restore has begun. */
+const UNTOUCHED_DESKTOP: ReadonlySet<string> = new Set(["absent", "active", "legacy_current_connection"]);
+
 export async function disconnectClient(
+  options: Parameters<typeof disconnectClientAttempt>[0] = {},
+  deps: Pick<ClientConnectDeps, "lifecycleLockDeps"> = {},
+): ReturnType<typeof disconnectClientAttempt> {
+  return withClientDisconnectAttempt(() => disconnectClientAttempt(options, deps), deps.lifecycleLockDeps);
+}
+
+async function disconnectClientAttempt(
   options: { keepCatalog?: boolean; expectedOwner?: DesktopRemoteOwner } = {},
   deps: Pick<ClientConnectDeps, "lifecycleLockDeps"> = {},
 ): Promise<{
@@ -1128,6 +1147,7 @@ export async function disconnectClient(
       throw new Error("client_disconnect_expected_owner_changed");
     }
     let receipt = previous;
+    let created = false;
     let connection: OcxClientConnectionConfig | null = null;
     if (state.kind === "connected") {
       connection = state.value;
@@ -1148,19 +1168,20 @@ export async function disconnectClient(
         preflightDisconnectCatalog(connection, keepCatalog);
         receipt = { version: 1, owner: desktopOwner(connection), tokenFingerprint: connection.tokenFingerprint, keepCatalog, phase: "prepared" };
         writeDesktopDisconnectReceipt(held, previous, receipt);
+        created = true;
       }
     } else if (state.kind !== "disconnected" || !receipt || !disconnectAtLeast(receipt, "clearing_connection")) {
       throw new Error("disconnect refused: no recoverable connected state; if this is not a Hub and no admission secret or installed service uses the token, inspect it and use ocx disconnect --orphaned-token --yes");
     }
     if (!receipt || receipt.keepCatalog !== keepCatalog) throw new Error("client_disconnect_options_changed");
-    return { receipt, connection };
+    return { receipt, connection, created };
   }), deps.lifecycleLockDeps);
 
   // The prepared receipt blocks even a sync queued for its actual N/C injection commit.
   // Codex-only restore MUST stay outside L; it never invokes Desktop cleanup.
   if (prepared.connection && !disconnectAtLeast(prepared.receipt, "desktop_restored")) {
     try { restoreConnectedCodex(prepared.connection); }
-    catch (error) { throw abortPreparedDisconnect(prepared.receipt, error, deps); }
+    catch (error) { throw abortPreparedDisconnect(prepared, error, deps); }
   }
 
   return withClientLifecycleSync(held => withConfigMutationLockSync(() => {

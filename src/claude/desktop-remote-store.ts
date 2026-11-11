@@ -2,7 +2,7 @@ import { existsSync, rmdirSync } from "node:fs";
 import { join } from "node:path";
 import { readConfigDiagnostics, withConfigMutationLockSync } from "../config";
 import { assertClientLifecycleHeld, type ClientLifecycleHeld } from "../client/lifecycle-lock";
-import { readServiceApiTokenState, serviceApiTokenFingerprint } from "../lib/service-secrets";
+import { readServiceApiTokenState, serviceApiTokenBackupPath, serviceApiTokenFingerprint } from "../lib/service-secrets";
 import { assertDesktop3pModelsValid } from "./desktop-3p-guard";
 import { profilePath } from "./desktop-3p-library";
 import type { Desktop3pConfigMode, Desktop3pModelEntry } from "./desktop-3p";
@@ -56,7 +56,7 @@ function recordedGenerations(io: StoreIO, owner: DesktopRemoteOwner): string[] {
  */
 export type DesktopStoreInspectReason =
   | "root_without_state" | "store_unreadable" | "store_other_connection" | "library_unreadable"
-  | "profile_missing" | "profile_edited" | "profile_ambiguous" | "unknown";
+  | "profile_missing" | "profile_edited" | "profile_ambiguous" | "token_unreadable" | "connection_changed" | "unknown";
 
 export function inspectRemoteDesktopStore(owner: DesktopRemoteOwner): {
   kind: "absent" | "active" | "pending" | "restored" | "legacy_current_connection" | "conflict" | "unsafe";
@@ -93,8 +93,11 @@ export function inspectRemoteDesktopStore(owner: DesktopRemoteOwner): {
       return { kind: bundle.state.phase === "restored" ? "restored" : "active" };
     }
     if (existsSync(bundle.paths.root) && !receipt(io)) return { kind: "unsafe", reason: "root_without_state", path: bundle.paths.root };
+    site = { reason: "token_unreadable", path: serviceApiTokenBackupPath() };
+    const generations = serviceGenerations();
     site = { reason: "profile_ambiguous", path: bundle.paths.library };
-    const legacy = locateLegacy(io, owner, serviceGenerations());
+    const legacy = locateLegacy(io, owner, generations);
+    site = { reason: "connection_changed" };
     if (legacy) currentConnection(owner);
     return { kind: legacy ? "legacy_current_connection" : "absent" };
   } catch (error) {

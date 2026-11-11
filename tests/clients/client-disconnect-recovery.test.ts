@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot } from "../helpers/repo-root";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { remainingOpencodexConfigKeys } from "../../src/codex/inject/remove";
 
 /**
  * O8 and O9: a Child whose ocx disconnect was refused by the Codex journal restore.
@@ -21,15 +22,16 @@ const ORIGINAL = 'model_provider = "openai"\n';
 const BASE_URL = "http://127.0.0.1:10100/v1";
 const INJECTED = ORIGINAL + "# Auto-injected by opencodex (undo: ocx restore)\nopenai_base_url = \"" + BASE_URL + "\"\n";
 // What Codex wrote on the field machine after injection: a trusted project and notice flags.
-const CODEX_LINES = '\n[notice]\nhide_full_access_warning = true\n\n[projects."/Users/someone/work"]\ntrust_level = "trusted"\n';
+const CODEX_LINES = '\n[notice]\nhide_full_access_warning = true\n\n[projects."/srv/work/project"]\ntrust_level = "trusted"\n';
 const ROUTING_GONE = ORIGINAL + CODEX_LINES;
 // Codex dropped our marker comment but kept the value: still OpenCodex routing.
 const ROUTING_KEPT = ORIGINAL + "openai_base_url = \"" + BASE_URL + "\"\n" + CODEX_LINES;
 
-type Scenario = { config: string; stuckReceipt?: boolean };
+type Scenario = { config: string; stuckReceipt?: boolean; overlapping?: boolean };
 type Outcome = {
   error: string | null; stateKind: string; gateBefore: string; gateAfter: string;
   receipt: string; desktopRoot: boolean; journal: boolean; config: string; startupRefusal: string;
+  overlappingError: string | null;
 };
 
 const sha = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -76,12 +78,26 @@ function run(scenario: Scenario): Outcome {
         }
         const gateBefore = stateApi.inspectClientRotationRecoveryGate(undefined, lockDeps).kind;
         const startupRefusal = stateApi.clientStartupRefusalMessage("client_disconnect_pending");
+        // A second ocx disconnect started while the first is restoring Codex.
+        let overlapping = null;
+        if (${JSON.stringify(scenario.overlapping === true)}) {
+          const journal = require("./src/codex/journal");
+          const actual = journal.restoreJournalState;
+          const { spyOn } = require("bun:test");
+          spyOn(journal, "restoreJournalState").mockImplementation((...args) => {
+            if (!overlapping) overlapping = connectApi.disconnectClient({}, { lifecycleLockDeps: lockDeps })
+              .then(() => null, cause => cause instanceof Error ? cause.message : String(cause));
+            return actual(...args);
+          });
+        }
         let error = null;
         try { await connectApi.disconnectClient({}, { lifecycleLockDeps: lockDeps }); }
         catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
+        const overlappingError = overlapping ? await overlapping : null;
         const receipt = store.readDesktopDisconnectReceipt();
         console.log(JSON.stringify({
           error,
+          overlappingError,
           stateKind: stateApi.readClientConnectionState().kind,
           gateBefore,
           startupRefusal,
@@ -160,4 +176,30 @@ describe("a refused disconnect does not block the next start (O8)", () => {
     expect(out.gateAfter).toBe("clean");
     expect(out.journal).toBe(true);
   }, SPAWN_BUDGET_MS);
+
+  test("a second disconnect started during the first one's Codex restore is refused and cannot clear its receipt", () => {
+    const out = run({ config: ROUTING_KEPT, overlapping: true });
+    expect(out.overlappingError).toContain("another ocx disconnect is running");
+    // The first attempt still owns its receipt, so its own rollback is the one that removes it.
+    expect(out.error).toContain("was rolled back");
+    expect(out.receipt).toBe("absent");
+    expect(out.gateAfter).toBe("clean");
+  }, SPAWN_BUDGET_MS);
+});
+
+describe("the O9 refusal quotes key names only", () => {
+  test("a multiline value inside an OpenCodex table never reaches the message", () => {
+    const keys = remainingOpencodexConfigKeys([
+      'model_provider = "openai"',
+      "[model_providers.opencodex]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'experimental_bearer_token = """',
+      "continuation-line-value-must-not-leak",
+      '"""',
+      "",
+    ].join("\n"));
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.join(" ")).not.toContain("must-not-leak");
+    expect(keys.join(" ")).not.toContain('"""');
+  });
 });

@@ -1,6 +1,6 @@
 import { beginCodexWriteSection, publishCodexArtifact, removeCodexProfileEntry } from "./config-write-section";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
-import { normalizeStructuralWhitespace, rootAssignmentKey, rootSourceLines, sourceAssignment, sourceText } from "../toml-source-lines";
+import { normalizeStructuralWhitespace, rootAssignmentKey, rootSourceLines, sourceAssignment, sourceText, splitSourceLines } from "../toml-source-lines";
 import { atomicWriteFile } from "../../config";
 import { ConfigWriteLockRefusal, configWriteLockFailureMessage, withConfigWriteLockHeld, withConfigWriteRecovery } from "../config-write-lock";
 import type { LockHandle } from "../config-write-lock";
@@ -150,7 +150,8 @@ export function stripOpencodexConfig(content: string): string {
  * What OpenCodex still owns in a Codex config, judged by the same strip `ocx restore` applies and
  * the journaled injection: the key or table header of each line it would remove. Empty means
  * nothing OpenCodex wrote is left, so lines Codex or the person added are all that changed.
- * Only keys are returned, never values, so a refusal can quote them.
+ * Only parsed key names and table headers are returned, never values or continuation lines of a
+ * multiline value, so a refusal can quote them without leaking a credential.
  */
 export function remainingOpencodexConfigKeys(rawContent: string): string[] {
   const content = applyEol(rawContent, "\n");
@@ -168,12 +169,17 @@ export function remainingOpencodexConfigKeys(rawContent: string): string[] {
   const kept = new Map<string, number>();
   for (const line of stripped.content.split("\n")) kept.set(line.trim(), (kept.get(line.trim()) ?? 0) + 1);
   const keys: string[] = [];
-  for (const line of content.split("\n")) {
-    const text = line.trim();
+  for (const line of splitSourceLines(content)) {
+    const text = line.text.trim();
     if (!text) continue;
     const left = kept.get(text) ?? 0;
     if (left > 0) { kept.set(text, left - 1); continue; }
-    const key = text.startsWith("[") ? text : text.startsWith("#") ? "an OpenCodex marker comment" : text.split("=")[0]!.trim();
+    // A line inside a multiline string or array is a value, never a name.
+    if (!line.structural) continue;
+    const header = /^\[\[?\s*([A-Za-z0-9_.\-"' ]{1,128})\s*\]\]?$/.exec(text);
+    const key = header ? `[${header[1]!.trim()}]`
+      : text.startsWith("#") ? "an OpenCodex marker comment"
+        : /^([A-Za-z0-9_.\-]{1,64})\s*=/.exec(text)?.[1] ?? "an OpenCodex line";
     if (!keys.includes(key)) keys.push(key);
   }
   // The strip changed something without removing a line: it would put back a line it replaced.
