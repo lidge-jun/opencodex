@@ -1,6 +1,7 @@
 # TRAE CN ACP
 
-`src/adapters/trae-cn/` runs the official TRAE CN CLI's ACP server for the `trae-cn` registry row.
+`src/adapters/trae-cn/` runs the official CLI's ACP server for manually configured `trae-cn` adapters.
+The directory row is inert and unverified; it advertises no canonical preset or live discovery.
 TRAE owns login and refresh; OpenCodex stores no TRAE token. A fresh session supplies the CLI-reported
 model roster and one selected-model turn. The vendor does not document the discovery fields or
 guarantee their account scope. The JSON-RPC reader bounds frames, update queues, stderr,

@@ -13,7 +13,7 @@ ocx init
 
 `ocx init` 會引導你完成:
 
-1. **選擇 provider** —— 從內建 registry 的 108 個預設中選擇一個，或選擇 `custom` 手動輸入
+1. **選擇 provider** —— 從內建 registry 的 107 個預設中選擇一個，或選擇 `custom` 手動輸入
    base URL 和 adapter。
 2. **API key** —— 貼上一個 key,或引用一個環境變數,例如 `${ANTHROPIC_API_KEY}`。
 

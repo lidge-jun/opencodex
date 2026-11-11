@@ -310,9 +310,9 @@ existante n'est pas concernée.
 
 ## 3. Catalogue des clés API
 
-**TRAE CN** utilise le CLI officiel déjà connecté et ne nécessite pas de clé API. Installez le CLI, connectez-vous et laissez le champ de clé vide dans l’assistant. Consultez la [configuration de TRAE CN (en anglais)](/guides/providers/#trae-cn-official-acp).
+**TRAE CN** est un adaptateur ACP expérimental à configurer manuellement. Le répertoire contient uniquement une référence non vérifiée ; aucun préréglage intégré n’est activé. Consultez la [configuration de TRAE CN (en anglais)](/guides/providers/#trae-cn-official-acp).
 
-opencodex fournit 108 préréglages intégrés : 87 à clé, 17 OAuth, trois locaux et un préréglage par défaut de
+opencodex fournit 107 préréglages intégrés : 86 à clé, 17 OAuth, trois locaux et un préréglage par défaut de
 transfert ChatGPT. Dans le tableau de bord, le sélecteur **Ajouter un fournisseur** ouvre le tableau de bord du
 fournisseur à clé, valide la clé et l'enregistre ; la validation dépend du fournisseur. Parmi les entrées notables :
 

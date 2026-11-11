@@ -18,7 +18,7 @@ ocx init
 
 `ocx init`은 다음 과정을 안내합니다:
 
-1. **프로바이더 선택** — 내장 레지스트리 프리셋 108개 중 하나를 고르거나 `custom`을 선택해 base URL과 adapter를 직접 입력합니다.
+1. **프로바이더 선택** — 내장 레지스트리 프리셋 107개 중 하나를 고르거나 `custom`을 선택해 base URL과 adapter를 직접 입력합니다.
 2. **API 키** — 키를 붙여넣거나 `${ANTHROPIC_API_KEY}` 같은 환경 변수를 참조합니다.
 
    **TRAE CN**은 로그인된 공식 CLI를 사용하므로 API 키가 필요하지 않습니다. CLI를 설치하고 로그인한 후 마법사의 키 입력란은 비워 두세요. 자세한 내용은 [TRAE CN 설정 안내(영문)](/guides/providers/#trae-cn-official-acp)를 참고하세요.

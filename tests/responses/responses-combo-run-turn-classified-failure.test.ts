@@ -94,6 +94,38 @@ async function respond(cfg: OcxConfig, stream: boolean) {
   return { status: response.status, text: await response.text() };
 }
 
+test("cancelled runTurn streams retain received usage after the consumer stops draining", async () => {
+  const controller = new AbortController();
+  const usage = { inputTokens: 123, outputTokens: 456, totalTokens: 579 };
+  let finishPrompt!: () => void;
+  const pending = new Promise<void>(resolve => { finishPrompt = resolve; });
+  let finished!: () => void;
+  const completed = new Promise<void>(resolve => { finished = resolve; });
+  const cfg = config([{ provider: "trae-cn", model: "test-model" }]);
+  cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
+    authMode: "key", models: ["test-model"], liveModels: false };
+  const open = spyOn(traeClient, "openTraeSession").mockResolvedValue({ models: ["test-model"],
+    prompt: async (_model, _text, emit, _signal, dispatch) => {
+      dispatch?.beforeSend(); dispatch?.onSend();
+      emit({ type: "text_delta", text: "received" }); emit({ type: "done", usage });
+      await pending;
+    },
+    close: async () => { finished(); },
+  });
+  const log = { model: "", provider: "" };
+  try {
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal,
+      body: JSON.stringify({ model: "chain/classified", input: "request", stream: true }),
+    }), cfg, log);
+    await response.body!.cancel();
+    controller.abort(); finishPrompt(); await completed;
+    for (let tick = 0; tick < 20 && !(log as unknown as { usage?: unknown }).usage; tick++) await new Promise(resolve => setTimeout(resolve, 5));
+    expect((log as unknown as { usage?: unknown }).usage).toMatchObject(usage);
+    expect(fallbackCalls).toBe(0);
+  } finally { finishPrompt(); open.mockRestore(); }
+});
+
 let home = "";
 let releaseSpendHome: (() => void) | undefined;
 const originalHome = process.env.OPENCODEX_HOME;
@@ -121,7 +153,7 @@ for (const stream of [false, true]) {
     childFailure = { type: "error", status: 502, errorType: "upstream_error", code: "trae_empty_response",
       message: "TRAE CN ended without a text response.", retryable: false, usage: { inputTokens: 12, outputTokens: 0 } };
     const cfg = config([{ provider: "trae-cn", model: "test-model" }, { provider: "fallback", model: MODEL }]);
-    cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", authMode: "key", models: ["test-model"], liveModels: false };
+    cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true, authMode: "key", models: ["test-model"], liveModels: false };
     const open = spyOn(traeClient, "openTraeSession").mockResolvedValue({
       models: ["test-model"],
       async prompt(_model, _text, emit, _signal, dispatch) {
@@ -144,7 +176,7 @@ for (const stream of [false, true]) {
 
   test(`a TRAE startup failure may fail over before any prompt is dispatched (stream=${stream})`, async () => {
     const cfg = config([{ provider: "trae-cn", model: "test-model" }, { provider: "fallback", model: MODEL }]);
-    cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", authMode: "key", models: ["test-model"], liveModels: false };
+    cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true, authMode: "key", models: ["test-model"], liveModels: false };
     const open = spyOn(traeClient, "openTraeSession").mockRejectedValue(new traeClient.TraeAcpError("TRAE CN CLI not found.", "cli_not_found"));
     try {
       const response = await respond(cfg, stream);

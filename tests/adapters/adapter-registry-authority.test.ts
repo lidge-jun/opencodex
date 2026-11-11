@@ -28,6 +28,13 @@ import * as catalogAdmission from "../../src/codex/catalog-admission";
 import type { CatalogDisposition } from "../../src/codex/convergence-types";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
+import { SpendLedgerFileRefusedError } from "../../src/lib/spend-reservation-ledger";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import { mapSpendLedgerStorageError } from "../../src/server/responses/spend-storage-error";
+import { buildResponseJSON } from "../../src/bridge";
+import { appOwnedBytesSnapshot, configureAppOwnedMemoryBudget, enforceAppOwnedMemoryBudget, registerRetainedStore, resetAppOwnedMemoryForTests } from "../../src/lib/app-owned-memory";
+import { registerDefaultAppOwnedMemoryStores } from "../../src/lib/app-owned-memory-stores";
+import { getPinnedCached, evictOldestModelCacheForBudget, modelCacheRetainedStoreSnapshot } from "../../src/codex/model-cache";
 import type { AdapterEvent } from "../../src/types";
 import type { IncomingMeta } from "../../src/adapters/base";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
@@ -38,7 +45,7 @@ import {
   getAdapterDefinition,
 } from "../../src/adapters/registry";
 import { resolveAdapter } from "../../src/server/adapter-resolve";
-import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
+import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { createTestTranslatorBudget, withTestTranslatorBudget } from "../helpers/translator-budget";
 
 const EXPECTED_ADAPTER_NAMES = {
@@ -228,6 +235,128 @@ describe("TRAE CN ACP regression contract", () => {
   )).models;
   beforeEach(() => { testHome = createTempHome("ocx-trae-regression-"); clearModelCache(); });
   afterEach(() => { mock.restore(); clearModelCache(); testHome.remove(); });
+
+  async function withProbeMemory<T>(pinned: boolean, run: (evictions: () => number) => Promise<T>): Promise<T> {
+    const budget = 64 * 1024 * 1024;
+    resetAppOwnedMemoryForTests(); clearModelCache(); configureAppOwnedMemoryBudget(budget);
+    registerRetainedStore({ id: "model_cache", category: "caches",
+      snapshot: modelCacheRetainedStoreSnapshot, evictOldest: evictOldestModelCacheForBudget });
+    let bytes = pinned ? budget : budget - 1;
+    let evictions = 0;
+    registerRetainedStore({ id: "probe-continuation", category: "continuation",
+      snapshot: () => ({ count: bytes ? 1 : 0, bytes, pinnedBytes: pinned ? bytes : 0,
+        evictableBytes: pinned ? 0 : bytes, oldestAt: pinned || !bytes ? null : 1 }),
+      evictOldest: () => { evictions++; const released = bytes; bytes = 0; return released; },
+    });
+    try { return await run(() => evictions); }
+    finally { clearModelCache(); resetAppOwnedMemoryForTests(); registerDefaultAppOwnedMemoryStores(); }
+  }
+
+  function pressureSession() {
+    return spyOn(traeClient, "openTraeSession").mockImplementation(async () => ({
+      models: ["new-probed-model"], prompt: async () => undefined, close: async () => undefined,
+    }));
+  }
+
+  for (const ttl of [60_000, 0]) {
+    test("probe publication keeps one discovered roster under pressure; ttl=" + ttl, async () => {
+      await withProbeMemory(false, async evictions => {
+        const open = pressureSession();
+        const row = { ...config(), models: ["configured-fallback"] };
+        const next: OcxConfig = { port: 10100, defaultProvider: "trae-cn", modelCacheTtlMs: ttl, providers: { "trae-cn": row } };
+        let state: string | undefined;
+        let rosterAvailable = false;
+        let clientRosterAvailable = false;
+        const response = await probeTraeCnProvider("trae-cn", row, async () => {
+          await refreshTraeCnCatalogSources(next);
+          const resolver = observedModelsAuthResolver(null, []);
+          const gathered = await fetchProviderModelsWithAuth(captureProviderGather("trae-cn", row, resolver), ttl, undefined, resolver);
+          state = gathered.outcome.state;
+          rosterAvailable = gathered.models.some(model => model.id === "new-probed-model");
+          enforceAppOwnedMemoryBudget();
+          expect(appOwnedBytesSnapshot().retainedBytes).toBeLessThanOrEqual(64 * 1024 * 1024);
+          return { status: "committed", changed: true, degraded: false, notices: [] };
+        }, undefined, { refreshConnectedClients: async admit => {
+          expect(admit()).toBe(true); enforceAppOwnedMemoryBudget();
+          clientRosterAvailable = Boolean(getPinnedCached("trae-cn")?.some(model => model.id === "new-probed-model"));
+          return [];
+        } });
+        expect(open).toHaveBeenCalledTimes(1);
+        expect(state).toBe("authoritative"); expect(rosterAvailable).toBe(true); expect(clientRosterAvailable).toBe(true);
+        expect(await response.json()).toMatchObject({ ok: true, rosterReplaced: true, clientRefreshPending: false, catalogRefresh: { status: "committed" } });
+        expect(evictions()).toBe(1); expect(modelCacheRetainedStoreSnapshot().pinnedBytes).toBe(0);
+        if (ttl === 0) expect(getFreshCached("trae-cn", ttl, Date.now())).toBeNull();
+      });
+    });
+  }
+
+  test("saturated pinned memory refuses publication without another CLI discovery", async () => {
+    await withProbeMemory(true, async () => {
+      const open = pressureSession();
+      const converge = mock(async (): Promise<CatalogDisposition> => ({ status: "committed", changed: true, degraded: false, notices: [] }));
+      const body = await (await probeTraeCnProvider("trae-cn", config(), converge)).json();
+      expect(body).toMatchObject({ ok: true, rosterReplaced: false, rosterRetentionPending: true,
+        catalogRefresh: { status: "failed", reason: "admission", phase: "gather", partialWrite: false } });
+      expect(converge).not.toHaveBeenCalled(); expect(open).toHaveBeenCalledTimes(1);
+      expect(modelCacheRetainedStoreSnapshot().pinnedBytes).toBe(0);
+      expect(appOwnedBytesSnapshot().retainedBytes).toBe(64 * 1024 * 1024);
+    });
+  });
+
+  test("convergence and client-refresh errors release every roster pin", async () => {
+    await withProbeMemory(false, async () => {
+      pressureSession();
+      const body = await (await probeTraeCnProvider("trae-cn", config(), async () => { throw new Error("fixture"); }, undefined, {
+        refreshConnectedClients: async () => { throw new Error("fixture"); },
+      })).json();
+      expect(body).toMatchObject({ ok: true, clientRefreshPending: true, catalogRefresh: { status: "failed" } });
+      expect(modelCacheRetainedStoreSnapshot().pinnedBytes).toBe(0);
+    });
+  });
+
+  test("local spend-ledger refusals retain the shared 503 diagnostic before CLI startup", async () => {
+    const refusal = new SpendLedgerFileRefusedError("journal", "extra-hard-link");
+    let producerClosed = 0;
+    const sendBudget = createRequestExecutionBudget(undefined, "trae-ledger-refusal", {
+      enforced: true, charge: () => { throw refusal; }, refund: () => undefined,
+      beginReporter: () => ({ start: () => undefined, rebindTarget: () => true, report: () => undefined,
+        close: () => { producerClosed++; } }),
+    });
+    const fixture = traeFixture();
+    const events: AdapterEvent[] = [];
+    await expect(createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta({ sendBudget }),
+      event => events.push(event))).rejects.toBe(refusal);
+    expect(fixture.options()).toBeUndefined(); expect(events).toEqual([]);
+    expect(sendBudget.used).toBe(0); expect(producerClosed).toBe(1);
+    expect(mapSpendLedgerStorageError(refusal)).toMatchObject({ status: 503, code: "spend_ledger_storage_unavailable", errorType: "server_error" });
+  });
+
+  for (const closeFails of [false, true]) {
+    test("cleanup cancellation retains received usage without provider errors; closeFails=" + closeFails, async () => {
+      const controller = new AbortController();
+      const usage = { inputTokens: 123, outputTokens: 456, totalTokens: 579 };
+      spyOn(traeClient, "openTraeSession").mockResolvedValue({
+        models: ["test-model"],
+        prompt: async (_model, _text, emit, _signal, dispatch) => {
+          dispatch?.beforeSend?.(); dispatch?.onSend?.();
+          emit({ type: "text_delta", text: "finished" }); emit({ type: "done", usage });
+        },
+        close: async () => { controller.abort(); if (closeFails) throw new Error("fixture cleanup failed"); },
+      });
+      const budget = fakeSendBudget();
+      const meta = traeMeta({ abortSignal: controller.signal, sendBudget: budget.budget });
+      const events: AdapterEvent[] = [];
+      await createTraeCnAdapter(config()).runTurn!(traeRequest(), meta, event => events.push(event));
+      expect(events.map(event => event.type)).toEqual(["heartbeat", "text_delta", "incomplete"]);
+      expect(events.at(-1)).toMatchObject({ type: "incomplete", reason: "client_cancelled", usage, retryable: false });
+      expect(budget.state).toEqual({ used: 1, refunded: 0, closed: 1 });
+      const observed: unknown[] = [];
+      const json = buildResponseJSON(events, "test-model", { translatorBudget: meta.translatorBudget, onUsage: value => observed.push(value) });
+      expect(observed).toEqual([usage]);
+      expect(json.status).toBe("incomplete");
+      expect(json.usage).toMatchObject({ input_tokens: 123, output_tokens: 456, total_tokens: 579 });
+    });
+  }
 
   // Captured from traecli --version 0.120.19 on 2026-11-08T16:22:30Z.
   // Session/model strings are replaced and unrelated fields omitted; the opt-in test below checks the installed CLI.

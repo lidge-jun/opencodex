@@ -3,15 +3,18 @@ title: TRAE CN (ACP)
 description: Connect OpenCodex to the signed-in official TRAE CN CLI.
 ---
 
-The `trae-cn` preset uses the signed-in official TRAE CN CLI through
-`traecli acp serve`. OpenCodex does not read desktop tokens, private IDE endpoints, or Ferry.
+The experimental `trae-cn` adapter can be configured manually through `custom`. Its directory
+entry is reference-only; canonical promotion awaits a maintenance owner, vendor discovery and
+forwarding evidence, and security review. It uses the signed-in official CLI through `traecli acp serve`.
+OpenCodex does not read desktop tokens, private IDE endpoints, or Ferry.
 
 ```json
 {
   "providers": {
     "trae-cn": {
       "adapter": "trae-cn",
-      "baseUrl": "https://www.trae.cn"
+      "baseUrl": "https://www.trae.cn",
+      "keyOptional": true
     }
   }
 }
@@ -26,7 +29,7 @@ The `trae-cn` preset uses the signed-in official TRAE CN CLI through
   `models.availableModels[].modelId`. This is observed CLI behavior. The [vendor ACP documentation](https://docs.trae.cn/cli_agent-client-protocol)
   does not document these discovery fields or guarantee their account scope.
   Successful discovery is cached by the normal provider catalog mechanism, with the last good
-  catalog and a small text-only seed as degraded fallbacks.
+  catalog and explicitly configured models as degraded fallbacks.
   Read-only catalog gathers use cached evidence; they never start the CLI or refresh its sign-in.
   Set `liveModels: false` for a static allowlist; **Test connection** then returns not applicable.
   After switching CLI accounts, enable live discovery and run **Test connection**. It

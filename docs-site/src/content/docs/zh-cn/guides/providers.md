@@ -222,9 +222,9 @@ API Key 提供商，也不负责让 WorkBuddy 桌面客户端使用 OpenCodex �
 
 ## 3. API 密钥目录
 
-**TRAE CN** 使用已登录的官方 CLI，无需 API 密钥。请先安装 CLI 并登录；向导若提示输入密钥，可直接留空。详见 [TRAE CN 配置说明（英文）](/guides/providers/#trae-cn-official-acp)。
+**TRAE CN** 提供需手工配置的实验性 ACP adapter。目录中仅有未经验证的参考项，内置预设尚未启用。详见 [TRAE CN 配置说明（英文）](/guides/providers/#trae-cn-official-acp)。
 
-opencodex 内置 108 个预设：87 个密钥预设、17 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 107 个预设：86 个密钥预设、17 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 

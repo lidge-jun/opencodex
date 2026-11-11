@@ -18,7 +18,7 @@ ocx init
 
 `ocx init` 会引导你完成：
 
-1. **选择 provider** — 从内置 registry 的 108 个预设中选择一个，或选择 `custom` 手动输入 base URL 和 adapter。
+1. **选择 provider** — 从内置 registry 的 107 个预设中选择一个，或选择 `custom` 手动输入 base URL 和 adapter。
 2. **API key** — 粘贴一个 key，或引用一个环境变量，例如 `${ANTHROPIC_API_KEY}`。
 
    **TRAE CN** 使用已登录的官方 CLI，无需 API 密钥。请先安装 CLI 并登录；向导若提示输入密钥，可直接留空。详见 [TRAE CN 配置说明（英文）](/guides/providers/#trae-cn-official-acp)。

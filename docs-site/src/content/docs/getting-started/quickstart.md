@@ -20,7 +20,7 @@ ocx init
 
 `ocx init` walks you through:
 
-1. **Pick a provider** — choose one of the 108 built-in registry presets or `custom` to type a base
+1. **Pick a provider** — choose one of the 107 built-in registry presets or `custom` to type a base
    URL and adapter.
 2. **API key** — paste a key, or reference an environment variable like `${ANTHROPIC_API_KEY}`.
    For **TRAE CN**, press Enter to leave the wizard’s key prompt empty: the signed-in official

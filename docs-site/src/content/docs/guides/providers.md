@@ -785,7 +785,7 @@ On upgrade, startup adds Pro to a saved model list only when it exactly matches 
 
 ## 3. API-key catalog
 
-opencodex ships 108 built-in presets: 87 in the key-based registry category, 17 OAuth, three local, and one default ChatGPT-forward preset. Keyless presets such as TRAE CN use their official CLI for authentication. For API-key providers, **Add provider** opens the provider’s dashboard, validates the key, and stores it; validation is provider-specific. Notable entries:
+opencodex ships 107 built-in presets: 86 in the key-based registry category, 17 OAuth, three local, and one default ChatGPT-forward preset. Keyless CLI adapters use their official CLI for authentication; experimental TRAE CN is available through manual configuration only. For API-key providers, **Add provider** opens the provider’s dashboard, validates the key, and stores it; validation is provider-specific. Notable entries:
 
 **ClinePass** uses a Cline API key with the [official subscription catalog](https://docs.cline.bot/getting-started/clinepass)
 and [Chat Completions endpoint](https://docs.cline.bot/api/chat-completions), operated by Cline Bot Inc. under
