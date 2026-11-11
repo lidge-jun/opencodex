@@ -196,5 +196,9 @@
   "link-child-update-launcher.test.ts": "clients",
   "cli-link-child-ops.test.ts": "cli",
   "sync-fanout-select-restart.test.ts": "cli",
-  "sync-command-child-flags.test.ts": "cli"
+  "sync-command-child-flags.test.ts": "cli",
+  "link-ssh-capture.test.ts": "clients",
+  "link-ssh-capture-redact.test.ts": "clients",
+  "link-ssh-capture-tunnels.test.ts": "clients",
+  "cli-link-capture.test.ts": "cli"
 }

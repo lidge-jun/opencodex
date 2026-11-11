@@ -132,6 +132,24 @@ Before sending data, OpenCodex allows one shared preflight retry for either an o
 
 This can recover these transient deadline paths and helps diagnose future failures. It does not establish the historical cause of [#7297](https://github.com/lidge-jun/opencodex/issues/7297).
 
+### Capture SSH diagnostics
+
+When a tunnel keeps failing and the cause in `ocx link status --json` does not explain it, OpenCodex can record what SSH itself reports for a short time. Capture is off by default, and only someone working on the machine whose tunnel you want to inspect can turn it on:
+
+```bash
+ocx link capture start            # 15 minutes; --minutes accepts 1 to 60
+ocx link capture status
+ocx link capture stop
+```
+
+Run it on the Home to capture the tunnels it runs to its Children, or on a Child to capture the tunnel that Child started to its Home. The command needs no running OpenCodex and no admin token. Nothing a Home syncs, and no dashboard or remote request, can start a capture. Running `start` again while a window is open moves its end time and keeps writing to the same file.
+
+While the window is open, the next SSH attempt of each tunnel runs with `LogLevel=DEBUG1` instead of `LogLevel=ERROR`. A tunnel that is already connected keeps its level until it reconnects; on the Home, `ocx link reconnect --link-id <id>` starts a new attempt right away. After `stop`, or when the window ends, nothing more is stored and the next attempt runs with `LogLevel=ERROR` again. Request admission is unchanged, and the extra lines SSH prints at the higher level are kept out of the failure cause that `ocx link status` reports. One exception: a line OpenCodex does not recognize still counts toward that cause, and SSH shows a server's login banner only at the higher level. During a window, a banner containing words such as "Permission denied" can therefore change the reported cause and, with it, the retry delay.
+
+Records go to `link/ssh-capture/ssh-<start time>.jsonl` under the OpenCodex configuration home, one JSON object per line with the time, the tunnel (`home` or `child`), the link ID, the SSH level, a fixed event name and the line text. Before anything is written, each line is matched against a list of known OpenSSH message shapes. Host names, addresses, user names, ports, file paths, keys and fingerprints, proxy commands, environment values and messages from the SSH server become placeholders such as `<host>` and `<port>`. Algorithm and authentication method names are kept only when they are standard OpenSSH names. A line that matches no known shape is stored only as `unrecognized` with a count, never its text. The link ID is OpenCodex's own random identifier; it is kept so you can tell tunnels apart.
+
+Each window writes one file of at most 1 MiB, and a `capture_truncated` record ends a full one. A file is deleted 72 hours after its last write, and at most four files are kept, so `start` deletes the oldest beyond that. Deletion runs when OpenCodex starts, when a tunnel starts, on every `ocx link capture` command, and in a running OpenCodex as soon as a file's 72 hours pass, including files an earlier OpenCodex process wrote. A file whose 72 hours pass while OpenCodex is not running is deleted at the next start or capture command. `stop` leaves the files in place so you can share them; delete them yourself once you no longer need them. The directory is private to your user (directory 0700 and files 0600 on macOS and Linux, a private ACL on Windows), and OpenCodex never writes or reads through a symbolic link there.
+
 ## Security
 
 The Child uses the Home computer's providers and provider credentials through the link. The Home creates a separate link key for each Child; removing the link revokes that key. On the Child, the key stays inside OpenCodex: credentials that Codex or Claude Code send there are not forwarded to the Home, including Bearer, Azure `api-key`, Anthropic-compatible `x-api-key`, and Google `x-goog-api-key` forms. Any program on the Child that reaches `127.0.0.1:<port>` uses the Home without a key, the same local trust a standalone install gives. Web pages from other sites are refused. Compare the host fingerprint before confirmation so a wrong machine or changed host key is not accepted by mistake. Dashboard sessions issued from a Tailscale identity cannot manage machine links.
@@ -151,6 +169,9 @@ ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]
 ocx link sync (--link-id <id> | --all) [--no-wait] [--json]
 ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]
 ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]
+ocx link capture start [--minutes <1-60>] [--json]
+ocx link capture stop [--json]
+ocx link capture status [--json]
 ```
 
 `ocx link status` needs the local admin token on a listener that only this machine can reach. When the public listener is bound to a non-loopback address, for example a Hub on `0.0.0.0`, no TCP listener qualifies: the hub management listener is reached through Tailscale Serve, so it refuses the raw admin token for link routes. On macOS and Linux the proxy therefore also opens a private Unix socket, `<OPENCODEX_HOME>/run/control-<port>.sock`, in a directory only your user can enter, and `ocx link status` uses it automatically. The socket answers only `GET /api/link/status` and still requires the admin token. Windows and runtimes older than this change keep the TCP path, where the read returns `403` on such a Hub.
