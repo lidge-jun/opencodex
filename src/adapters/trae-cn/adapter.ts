@@ -126,7 +126,8 @@ export function createTraeCnAdapter(provider: OcxProviderConfig, deps: TraeCnAda
       } catch (error) {
         if (incoming.abortSignal?.aborted) { emitCancelledUsage(); return; }
         if (error instanceof SendBudgetExhaustedError || error instanceof SpendLedgerFileRefusedError) throw error;
-        emit({ ...errorEvent(error), ...(terminal?.usage ? { usage: terminal.usage } : {}) });
+        const usage = terminal?.usage ?? (error instanceof TraeAcpError ? error.usage : undefined);
+        emit({ ...errorEvent(error), ...(usage ? { usage } : {}) });
       } finally {
         try { permit?.release(); } finally { producer?.close(); }
       }

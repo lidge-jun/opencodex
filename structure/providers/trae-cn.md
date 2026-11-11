@@ -18,7 +18,8 @@ normal `end_turn` completion without text fails with `trae_empty_response`. An o
 completion retains its truncation verdict and maps to an incomplete Responses result. ACP
 `max_turn_requests` emits an incomplete turn with that limit reason and retains partial text and usage.
 Empty completions and unsupported stop reasons retain reported usage in their terminal error. Refusals
-emit a non-retryable `content_filter` incomplete event with usage. The CLI uses
+emit a non-retryable `content_filter` incomplete event with usage. A fatal reader frame received after
+the prompt reply supersedes success and carries that reply's usage into its terminal error. The CLI uses
 an empty temporary workspace with disallow rules and no session MCP/skills. `src/codex/catalog/trae-cn-models.ts` publishes discovered
 models as text-only with verbosity disabled, including configured ids outside the seed list. All
 cached fallbacks reapply current caps and retention; a cold failure also observes discovery cooldown.

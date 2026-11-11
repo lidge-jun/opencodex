@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { commandInvocation } from "../../lib/win-exec";
 import { redactSecretString } from "../../lib/redact";
-import type { AdapterEvent, OcxProviderConfig } from "../../types";
+import type { AdapterEvent, OcxProviderConfig, OcxUsage } from "../../types";
 import { CodingAgentStreamLimitError, readJsonLines } from "../coding-agent/protocol";
 import { resolveTraeCli, traeCnChildEnv, traeCnDestinationMatches } from "./profile";
 import { traePosixInvocation, traeStopPipe } from "./process";
@@ -25,7 +25,7 @@ export interface TraeAcpDeps {
 }
 
 export class TraeAcpError extends Error {
-  constructor(message: string, readonly code = "trae_acp_error") {
+  constructor(message: string, readonly code = "trae_acp_error", readonly usage?: OcxUsage) {
     super(message);
     this.name = "TraeAcpError";
   }
@@ -233,6 +233,9 @@ class TraeAcpClient {
     return redactSecretString(this.stderr.trim() || this.failure?.message || "").trim().slice(0, 512);
   }
 
+  /** Return a fatal reader verdict that arrived after its prompt reply was already resolved. */
+  readerFailure(): Error | undefined { return this.failure; }
+
   /** Stop RPCs first, then terminate the owned process tree and bound all remaining waits. */
   async close(): Promise<void> {
     if (this.closing) return this.closing;
@@ -399,6 +402,14 @@ export async function openTraeSession(
           }
           const result = await completion;
           const usage = traeUsage(result);
+          const readerFailure = signal?.aborted ? undefined : client.readerFailure();
+          if (readerFailure) {
+            if (readerFailure instanceof TraeAcpError) {
+              throw new TraeAcpError(readerFailure.message, readerFailure.code, usage);
+            }
+            throw new TraeAcpError("TRAE CN ACP ended with an invalid protocol response.",
+              "trae_acp_protocol_error", usage);
+          }
           let stop: string;
           try { stop = traeStopReason(result); } catch {
             emit({ type: "error", message: "TRAE CN ACP ended with an invalid protocol response.", code: "trae_acp_protocol_error",
