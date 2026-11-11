@@ -856,7 +856,7 @@ When `model` names a combo, a compaction whose targets are all cooling fails fas
 A refusal from a cooling local Codex Pool account cools its combo target only for the short combo
 backoff, so the target returns once that account recovers. To let a dedicated compaction combo try
 its cooled targets again without waiting out a long upstream `Retry-After`, enable that combo's
-opt-in [all-cooled recovery](/opencodex/guides/combos/#retry-all-cooled-targets-opt-in), for example
+opt-in [all-cooled recovery](/guides/combos/#retry-all-cooled-targets-opt-in), for example
 `{"cooldownReprobe": {"enabled": true, "intervalMs": 300000}}`. Recovery stays demand-driven and
 keeps account quota and admission checks; it cannot make an exhausted account serve.
 
