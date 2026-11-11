@@ -941,6 +941,7 @@ export async function executeResponsesRunTurn(
           enforceDeclaredToolNames,
           // Same wire split: only a Responses client (Codex) needs the refusal as a failure.
           terminalRefusalAsFailed: enforceDeclaredToolNames,
+          escapeMemoryCitationTags: enforceDeclaredToolNames,
           toolParameterSchemas,
           ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
           ...(routedCompaction ? { compaction: true, compactionRetention: parsed._compactionRetention } : {}),
@@ -1109,6 +1110,7 @@ export async function executeResponsesRunTurn(
         toolNsMap,
         declaredToolNames,
         enforceDeclaredToolNames,
+        escapeMemoryCitationTags: enforceDeclaredToolNames,
         toolParameterSchemas,
         freeformToolNames,
         bareCustomToolNames,

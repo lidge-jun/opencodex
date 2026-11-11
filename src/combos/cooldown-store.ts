@@ -15,8 +15,10 @@
  * - `dropLocal()` (and the Map `delete()`/`clear()` it backs) forgets a row in memory only. Expiry
  *   checks, sweeps and the revision-guarded probe lift use it, so an expired local copy can never
  *   erase a row another process has since extended.
- * - `clearPersisted()` / `clearAllPersisted()` are the only deletes written to disk: they record
- *   user-requested clears (combo save, rename, delete). Clearing everything is a global reset.
+ * - Explicit key, prefix and global clears are the only deletes written to disk: they record
+ *   user-requested clears (combo save, rename, delete). Prefix clears also remove peer rows absent
+ *   from memory. Deletes exclude old disk rows before dirty values are overlaid, so a subsequent
+ *   `set()` starts a new cooldown even when the cleared row had a later expiry.
  * A busy lock or I/O failure keeps the pending state and retries with bounded backoff.
  *
  * Loading: once per config dir, on first use. Rows already in memory win; a file row loads only
@@ -73,6 +75,7 @@ export class PersistedCooldownMap<V extends PersistableCooldown> extends Map<str
   private scheduledDir: string | undefined;
   private readonly dirty = new Set<string>();
   private readonly tombstones = new Set<string>();
+  private readonly clearedPrefixes = new Set<string>();
   private clearAll = false;
   private readonly nextRevision: () => number;
 
@@ -103,7 +106,7 @@ export class PersistedCooldownMap<V extends PersistableCooldown> extends Map<str
   }
 
   private pending(): boolean {
-    return this.clearAll || this.dirty.size > 0 || this.tombstones.size > 0;
+    return this.clearAll || this.dirty.size > 0 || this.tombstones.size > 0 || this.clearedPrefixes.size > 0;
   }
 
   private schedule(): void {
@@ -123,9 +126,11 @@ export class PersistedCooldownMap<V extends PersistableCooldown> extends Map<str
         const file = readStoredRows(path);
         const now = Date.now();
         const out: Record<string, StoredRow> = {};
+        const clearedPrefixes = [...this.clearedPrefixes];
         if (!this.clearAll) {
           for (const [key, row] of Object.entries(file)) {
-            if (row.cooldownUntil > now && !this.tombstones.has(key)) out[key] = row;
+            if (row.cooldownUntil > now && !this.tombstones.has(key)
+              && !clearedPrefixes.some(prefix => key.startsWith(prefix))) out[key] = row;
           }
         }
         for (const key of this.dirty) {
@@ -147,6 +152,7 @@ export class PersistedCooldownMap<V extends PersistableCooldown> extends Map<str
     }
     this.dirty.clear();
     this.tombstones.clear();
+    this.clearedPrefixes.clear();
     this.clearAll = false;
     this.scheduledDir = undefined;
     this.delayMs = FLUSH_DELAY_MS;
@@ -178,12 +184,26 @@ export class PersistedCooldownMap<V extends PersistableCooldown> extends Map<str
     this.schedule();
   }
 
+  /** Clear a combo prefix in memory and in the fresh file read under the mutation lock. */
+  clearPrefixPersisted(prefix: string): void {
+    this.ensureLoaded();
+    for (const key of super.keys()) {
+      if (key.startsWith(prefix)) {
+        super.delete(key);
+        this.dirty.delete(key);
+      }
+    }
+    this.clearedPrefixes.add(prefix);
+    this.schedule();
+  }
+
   /** A user-requested clear of every row, written to disk as a global reset. */
   clearAllPersisted(): void {
     this.ensureLoaded();
     super.clear();
     this.dirty.clear();
     this.tombstones.clear();
+    this.clearedPrefixes.clear();
     this.clearAll = true;
     this.schedule();
   }
@@ -198,7 +218,7 @@ export class PersistedCooldownMap<V extends PersistableCooldown> extends Map<str
   override set(key: string, value: V): this {
     this.ensureLoaded();
     super.set(key, value);
-    this.tombstones.delete(key);
+    // Keep queued clears until flush excludes the previous disk row, then overlays this value.
     this.dirty.add(key);
     this.schedule();
     return this;

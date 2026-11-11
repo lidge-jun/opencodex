@@ -47,6 +47,13 @@ account-qualified model when a request must remain on one account. Pausing the o
 main blocks fallback for its matching caller credential; it does not identify or pause unrelated
 caller-owned logins.
 
+To keep automatic Pool routing off the native main login entirely, set `"codexPool": {"poolOnly": true}`.
+Pool then serves only registered, eligible added accounts: it never orders or keeps main as the
+selection, never uses the caller-main fallback above, and treats a manual pin on main as no pin.
+When every allowed account is cooling down or unavailable, the request is refused instead of
+spending main. Account-qualified models, including a `__main__`-qualified one, and Direct mode are
+explicit choices and still reach main. The setting is off by default.
+
 Adding or reauthenticating a pool account rejects a duplicate of the native main login with
 `Account is already configured as the native Codex main account.` The check compares ChatGPT
 account ID, personal/workspace subscription bucket, and email; a missing email does not prove

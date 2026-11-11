@@ -41,6 +41,38 @@ export function serviceInstallHealthMs(
   return platform === "win32" ? SERVICE_INSTALL_HEALTH_WINDOWS_MS : SERVICE_INSTALL_HEALTH_MS;
 }
 
+/** One identity read of a proxy: the pid its healthz reports, or null when it reports none. */
+export type ServingIdentity = (port: number, hostname: string) => Promise<{ pid: number | null } | null>;
+
+const defaultIdentify: ServingIdentity = async (port, hostname) => {
+  const identity = await proxyIdentityAt(port, { hostname });
+  return identity ? { pid: identity.pid } : null;
+};
+
+/** The pid a restart must replace, or null when there is nothing valid to compare against. */
+function replacedPid(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+/**
+ * The pid of the proxy answering on the installed service port right now, or null when nothing
+ * answers or the answer names no pid. `ocx service restart` reads it before restarting so the
+ * serving check can tell the replacement from the runtime it was meant to replace (#7771).
+ * Never throws: a failed read only means there is nothing to compare against.
+ */
+export async function servingRuntimePid(
+  deps: { port?: number; hostname?: string; identify?: ServingIdentity } = {},
+): Promise<number | null> {
+  try {
+    const port = deps.port ?? installedServiceListenPort();
+    const hostname = deps.hostname ?? loadConfig().hostname ?? "127.0.0.1";
+    const pid = (await (deps.identify ?? defaultIdentify)(port, hostname))?.pid;
+    return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Whether a proxy actually answers on the port this install/start just produced.
  *
@@ -55,26 +87,53 @@ export function serviceInstallHealthMs(
  *
  * Soft: returns the outcome, never throws; the caller chooses between a checkmark and
  * an actionable warning.
+ *
+ * `replacing` is the pid that answered before a restart. While it is set, only a proxy that
+ * reports a different pid counts as serving: a surviving old runtime answers healthz just as
+ * well, and counting it reported a restart that never happened (#7771). An answer without a
+ * pid cannot be shown to be the old runtime and counts. If the last answer still came from the
+ * replaced pid, the result carries it as `staleRuntimePid`.
  */
 export async function confirmServiceServing(
   deps: {
     port?: number;
     hostname?: string;
     probe?: (port: number, hostname: string) => Promise<boolean>;
+    replacing?: number | null;
+    /**
+     * Stop at the first answer from the replaced pid instead of waiting for a replacement. A
+     * restart that already threw usually refused before touching anything, so the old runtime
+     * answering is the final answer and polling the whole budget only delays the error.
+     */
+    settleOnReplaced?: boolean;
+    identify?: ServingIdentity;
     sleep?: (ms: number) => Promise<void>;
     now?: () => number;
     timeoutMs?: number;
   } = {},
-): Promise<{ ok: true; port: number } | { ok: false; port: number }> {
+): Promise<{ ok: true; port: number; runtimePid?: number } | { ok: false; port: number; staleRuntimePid?: number }> {
   const port = deps.port ?? installedServiceListenPort();
   const hostname = deps.hostname ?? loadConfig().hostname ?? "127.0.0.1";
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
-  const probe = deps.probe ?? (async (p, h) => !!(await proxyIdentityAt(p, { hostname: h })));
+  const replacing = replacedPid(deps.replacing);
+  let staleRuntimePid: number | undefined;
+  let runtimePid: number | undefined;
+  const identify = deps.identify ?? defaultIdentify;
+  const probe = replacing !== null
+    ? async (p: number, h: string) => {
+      const identity = await identify(p, h);
+      staleRuntimePid = identity?.pid === replacing ? replacing : undefined;
+      runtimePid = typeof identity?.pid === "number" && identity.pid !== replacing ? identity.pid : undefined;
+      return identity !== null && staleRuntimePid === undefined;
+    }
+    : deps.probe ?? (async (p: number, h: string) => !!(await proxyIdentityAt(p, { hostname: h })));
+  const serving = () => (runtimePid === undefined ? { ok: true as const, port } : { ok: true as const, port, runtimePid });
   const deadline = now() + (deps.timeoutMs ?? serviceInstallHealthMs());
   let waited = false;
   for (;;) {
-    if (await probe(port, hostname)) return { ok: true, port };
+    if (await probe(port, hostname)) return serving();
+    if (deps.settleOnReplaced && staleRuntimePid !== undefined) return { ok: false, port, staleRuntimePid };
     if (now() >= deadline) break;
     await sleep(500);
     waited = true;
@@ -85,9 +144,9 @@ export async function confirmServiceServing(
   // wait, so it gets exactly the single probe it asked for and nothing more.
   if (waited) {
     await sleep(500);
-    if (await probe(port, hostname)) return { ok: true, port };
+    if (await probe(port, hostname)) return serving();
   }
-  return { ok: false, port };
+  return staleRuntimePid === undefined ? { ok: false, port } : { ok: false, port, staleRuntimePid };
 }
 
 /**
@@ -132,16 +191,41 @@ export async function reportServiceServing(
   // judgement about elapsed time (#3009).
   const now = deps.now ?? Date.now;
   const startedAt = now();
-  const serving = await confirmServiceServing({ ...deps, timeoutMs: healthBudgetMs });
+  const serving = await confirmServiceServing({
+    ...deps, timeoutMs: healthBudgetMs, settleOnReplaced: precedingFailure !== undefined,
+  });
   const waitedMs = Math.max(0, now() - startedAt);
   const failureDetail = precedingFailure === undefined
     ? null
     : precedingFailure instanceof Error ? precedingFailure.message : String(precedingFailure);
   const operation = SERVICE_OPERATION_NOUN[verb];
+  const replacing = replacedPid(deps.replacing);
+  const staleRuntimePid = serving.ok ? undefined : serving.staleRuntimePid;
   if (failureDetail !== null) {
     // Serving or not, the operation did not complete, so neither branch may print a
     // checkmark. What differs is whether anything is answering, which is the fact the
     // operator acts on next.
+    if (staleRuntimePid !== undefined) {
+      console.error(
+        `⚠️  Service ${operation} did not complete: ${failureDetail}\n`
+        + `   The previous runtime (PID ${staleRuntimePid}) is still answering on port ${serving.port}; it was kept, not replaced.\n`
+        + `   Log:       ${serviceLogPath()}`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+    if (serving.ok && replacing !== null) {
+      console.error(
+        `⚠️  Service ${operation} reported a failure: ${failureDetail}\n`
+        + (serving.runtimePid !== undefined
+          ? `   A new runtime (PID ${serving.runtimePid}) is answering on port ${serving.port}.\n`
+          : `   A runtime that reports no pid is answering on port ${serving.port}; it could not be compared with the previous one.\n`)
+        + `   Check the log before relying on it.\n`
+        + `   Log:       ${serviceLogPath()}`,
+      );
+      process.exitCode = 1;
+      return;
+    }
     console.error(
       serving.ok
         ? `⚠️  Service ${operation} did not complete: ${failureDetail}\n`
@@ -158,6 +242,15 @@ export async function reportServiceServing(
   }
   if (serving.ok) {
     console.log(`✅ opencodex service ${verb} and serving on port ${serving.port}.`);
+    return;
+  }
+  if (staleRuntimePid !== undefined) {
+    console.error(
+      `⚠️  Service ${operation} requested, but the previous runtime (PID ${staleRuntimePid}) is still serving on port ${serving.port}; `
+      + `the requested replacement was not confirmed after ${Math.round(waitedMs / 1000)}s.\n`
+      + `   Log:       ${serviceLogPath()}`,
+    );
+    process.exitCode = 1;
     return;
   }
   console.error(

@@ -37,6 +37,16 @@ describe("observed Claude Code identity", () => {
     expect(hasObservedAnthropicClientIdentity(undefined)).toBe(false);
     expect(hasObservedAnthropicClientIdentity({} as AnthropicClientIdentity)).toBe(false);
   });
+  test("a background Claude Code session (X-App: cli-bg) is observed and forwards its own X-App", () => {
+    const identity = captureAnthropicClientIdentity(new Headers({ ...observed, "User-Agent": "claude-cli/2.1.322 (external, cli)", "X-App": "cli-bg" }));
+    expect(hasObservedAnthropicClientIdentity(identity)).toBe(true);
+    const built = new Headers(build(identity).headers);
+    expect(built.get("x-app")).toBe("cli-bg");
+    expect(built.get("x-claude-code-session-id")).toBe(SESSION);
+    for (const app of ["cli-fg", "bg", "CLI-BG", "cli,cli-bg"]) {
+      expect(captureAnthropicClientIdentity(new Headers({ ...observed, "X-App": app }))).toBeUndefined();
+    }
+  });
   test("TypeScript Agent SDK identity retains native feature betas and output_config", () => {
     const userAgent = "claude-cli/2.1.296 (external, sdk-ts)";
     const clientIdentity = captureAnthropicClientIdentity(new Headers({ ...observed, "User-Agent": userAgent }));

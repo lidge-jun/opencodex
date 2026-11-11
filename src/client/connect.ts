@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import { hostname } from "node:os";
 import { atomicWriteFile, loadConfig, withConfigMutationLockSync } from "../config";
+import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
 import { claudeDesktopIntegrationEnabledNow } from "../codex/desired-state";
 import { siblingOfLivePort, siblingSkipMessage } from "../codex/sibling-start";
 import {
@@ -454,7 +455,10 @@ async function rotateConnectedClientKeyHeld(
       const desktop = inspectRemoteDesktopStore(desktopOwner(connection));
       if (["conflict", "unsafe", "pending"].includes(desktop.kind)) throw new Error("desktop_lifecycle_recovery_required");
       // Establish legacy fallback ownership and reject edited projections BEFORE hub issuance.
-      alignDesktopCredential(held, connection, current.fingerprint, current);
+      // The remote Desktop store writes under the config root with required ACLs, so it admits
+      // after overlapping config-root ACL work (#7815); a timeout here refuses before the hub.
+      const unchanged = connection;
+      await withConfigDirHardeningSettled(getConfigDir(), () => alignDesktopCredential(held, unchanged, current.fingerprint, current));
       withConfigMutationLockSync(() => {
         assertClientConnectionUnchanged(connection!);
         const orphan = readTokenBackupState();
@@ -486,7 +490,10 @@ async function rotateConnectedClientKeyHeld(
       assertRotationCandidates(connection!, current.fingerprint, current.fingerprint);
       return replaceServiceApiTokenFile(rotation.key);
     });
-    alignDesktopCredential(held, connection, current.fingerprint, { token: rotation.key, fingerprint: replacement.fingerprint });
+    // Still before the hub commit: an admission timeout takes the ordinary rollback below.
+    const marking = connection;
+    await withConfigDirHardeningSettled(getConfigDir(), () =>
+      alignDesktopCredential(held, marking, current.fingerprint, { token: rotation.key, fingerprint: replacement.fingerprint }));
     if (!await probeClientKeyId(connection.serverUrl, rotation.key, connection.apiKeyId, { fetchImpl: deps.fetchImpl })) {
       throw new Error("new client key admission probe was refused");
     }
@@ -1092,7 +1099,10 @@ export async function disconnectClient(
 }> {
   if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
   const keepCatalog = options.keepCatalog === true;
-  const prepared = withClientLifecycleSync(held => withConfigMutationLockSync(() => {
+  // Both phases write the disconnect receipt and the remote Desktop store under the config root
+  // with required ACLs, so each admits after overlapping config-root ACL work (#7815). A timeout
+  // before phase 1 writes nothing; one before phase 2 leaves the prepared receipt it resumes from.
+  const prepared = await withConfigDirHardeningSettled(getConfigDir(), () => withClientLifecycleSync(held => withConfigMutationLockSync(() => {
     const read = readDesktopDisconnectReceipt();
     if (read.kind === "unsafe") throw new Error("client_disconnect_receipt_unsafe");
     const state = readClientConnectionState();
@@ -1128,7 +1138,7 @@ export async function disconnectClient(
     }
     if (!receipt || receipt.keepCatalog !== keepCatalog) throw new Error("client_disconnect_options_changed");
     return { receipt, connection };
-  }), deps.lifecycleLockDeps);
+  }), deps.lifecycleLockDeps));
 
   // The prepared receipt blocks even a sync queued for its actual N/C injection commit.
   // Codex-only restore MUST stay outside L; it never invokes Desktop cleanup.
@@ -1136,7 +1146,7 @@ export async function disconnectClient(
     restoreConnectedCodex(prepared.connection);
   }
 
-  return withClientLifecycleSync(held => withConfigMutationLockSync(() => {
+  return withConfigDirHardeningSettled(getConfigDir(), () => withClientLifecycleSync(held => withConfigMutationLockSync(() => {
     const read = readDesktopDisconnectReceipt();
     if (read.kind !== "valid" || JSON.stringify(read.value) !== JSON.stringify(prepared.receipt)) {
       throw new Error("client_disconnect_receipt_changed");
@@ -1213,7 +1223,7 @@ export async function disconnectClient(
       apiKeyId: receipt.owner.apiKeyId, restartRequired: desktop.restartRequired,
       ...(desktop.restoration ? { desktopRestoration: desktop.restoration } : {}),
     };
-  }), deps.lifecycleLockDeps);
+  }), deps.lifecycleLockDeps));
 }
 
 /**

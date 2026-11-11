@@ -2711,6 +2711,7 @@ export const fr: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Échec du chargement du préréglage du fournisseur OpenAI.",
   "codexAuth.openaiPresetUnavailable": "Le préréglage du fournisseur OpenAI est indisponible.",
   "codexAuth.openProviders": "Ouvrir Fournisseurs",
+  "codexAuth.changeAccountMode": "Changer le mode de compte",
   "codexAuth.add": "Ajouter",
   "codexAuth.credits": "Crédits",
   "codexAuth.creditsRemaining": "restants",

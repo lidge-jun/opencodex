@@ -434,7 +434,7 @@ fails closed. Because the source body is never mutated, each build — including
 re-selection moves to another domain — decides from the full envelope copy the lane was given.
 
 Client identity. `src/adapters/anthropic/client-identity.ts` captures a bounded observed CLI or Desktop Code bundle
-on an opaque request-local handle: recognized CLI/SDK/Desktop Code UA plus valid session UUID, `X-App: cli`, JS and Node
+on an opaque request-local handle: recognized CLI/SDK/Desktop Code UA plus valid session UUID, `X-App: cli` (or `cli-bg`, a background session), JS and Node
 SDK markers are required. Optional allowlisted SDK and request-id fields retain valid scalars.
 The TypeScript Agent SDK's `sdk-ts` entrypoint is accepted alongside `cli`, `sdk-cli` and `sdk`,
 with the same required headers and bounds, so its first-party native feature betas are retained.
@@ -464,7 +464,7 @@ an exact credential generation and rechecks the current route and binding before
 Route changes during asynchronous preparation re-enter bounded admission; pause, manual selection,
 credential replacement and provider UUID changes cannot authorize a stale send. Planning and
 `count_tokens` select, refresh and write no accounts. The body retains the native preamble when
-recognized, otherwise gets the Claude Code identity block, with declared OAuth tool names.
+recognized, otherwise gets the Claude Code identity block, with declared OAuth tool names (prefixed unless the client is observed, below).
 `src/adapters/anthropic/account-metadata.ts` copy-on-write aligns a valid JSON-string
 `metadata.user_id.account_uuid` and per-account `device_id` with the serving provider UUID.
 The local pool id is never used; malformed, absent and unknown metadata stays unchanged.
@@ -480,7 +480,7 @@ The [instance runtime contract](../providers/anthropic-account-pool.md#instance-
 owns per-pool state and credential/target fencing.
 Native OAuth Messages collect top-level and typed inline tool declarations before rewriting declared
 client names in tool choices, uses, references, additions and removals, including typed tool-result
-content. Typed built-in names stay fixed; ambiguous original or wire-name collisions are refused.
+content; an observed Claude Code client (`hasObservedAnthropicClientIdentity`) keeps its own names, as its OAuth login sends them, so tool-name-keyed first-party features (auto mode's server review) see its tools, and its reverse map stays empty. Typed built-in names stay fixed; ambiguous original or wire-name collisions are refused for every caller.
 The copy-on-write traversal leaves input schemas, tool arguments, unknown containers and cache markers
 (including lifetimes) opaque. Nested inline support is structural; it does not assert upstream acceptance.
 Key-auth and caller-forward requests retain their metadata. The answer's
@@ -497,13 +497,13 @@ does not generate or sign billing text. Counting uses the same observed bundle. 
 native beta allowance retains the source-listed inline-tool, per-turn control, thinking display,
 advisor, scoped-cache and context-management schemas. The table in
 `src/adapters/anthropic/beta-body-pairs.ts` owns admission and final-header pairing for
-`context_management` and `thinking.block_binding`. First-party key and OAuth requests admit
-`thinking-binding-controls-2026-08-01` for every caller; `context-management-2025-06-27` retains
-its observed-native-client requirement. After caller and operator betas merge, the builder removes
+`context_management`, `safeguards` and `thinking.block_binding`. First-party key and OAuth requests admit
+`thinking-binding-controls-2026-08-01` for every caller; `context-management-2025-06-27` and `dangerous-tool-use-2026-09-03` (auto mode's server review: context in `safeguards`, verdicts relayed unchanged in `message_delta.delta.safeguard_results`) retain
+the observed-native-client requirement. After caller and operator betas merge, the builder removes
 unsupported or unpaired fields copy-on-write; binding also requires adaptive or enabled thinking.
 Operator betas can enable first-party fields; compatible and cloud destinations receive neither caller
 beta nor paired field. Header-only thinking controls remain valid for transformation diagnostics. OAuth rewrites context edits' `exclude_tools`
-to the prefixed wire names of declared client tools. Translated Responses constructs its own thinking
+to the prefixed wire names of declared client tools when names are prefixed. Translated Responses constructs its own thinking
 configuration and never copies these native-only fields. Advisor may perform sub-inference
 already requested by the caller; no feature or beta-gated body is injected. Generic managed callers keep the narrower allowance,
 and compatible destinations receive no first-party allowance. These handles grant no credential authority.

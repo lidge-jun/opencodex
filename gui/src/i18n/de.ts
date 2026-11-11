@@ -2134,6 +2134,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "OpenAI-Anbieter-Preset konnte nicht geladen werden.",
   "codexAuth.openaiPresetUnavailable": "OpenAI-Anbieter-Preset ist nicht verfügbar.",
   "codexAuth.openProviders": "Anbieter öffnen",
+  "codexAuth.changeAccountMode": "Kontomodus ändern",
   "codexAuth.add": "Hinzufügen",
   "codexAuth.credits": "Credits",
   "codexAuth.creditsRemaining": "verbleibend",

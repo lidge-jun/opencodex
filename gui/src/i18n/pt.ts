@@ -2756,6 +2756,7 @@ export const pt: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Falha ao carregar o preset do provedor OpenAI.",
   "codexAuth.openaiPresetUnavailable": "O preset do provedor OpenAI não está disponível.",
   "codexAuth.openProviders": "Abrir Provedores",
+  "codexAuth.changeAccountMode": "Alterar modo de conta",
   "codexAuth.add": "Adicionar",
   "codexAuth.credits": "Créditos",
   "codexAuth.creditsRemaining": "restantes",

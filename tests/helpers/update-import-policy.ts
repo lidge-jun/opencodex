@@ -236,11 +236,27 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     // Package supervisor dispatch is guarded; arguments are materialized before authorization.
     'import { guardedSpawn, guardedSpawnSync, materializeMutationData } from "./mutation-guard.mjs";',
     "import { dirname, join, win32 } from \"node:path\";",
-    "import { fileURLToPath } from \"node:url\";"
+    "import { fileURLToPath } from \"node:url\";",
+    // Windows installer witness publication before the supervisor request (#8524).
+    'import { publishWindowsInstallerPid } from "./windows-installer-marker.mjs";',
+    // Refuses the Windows supervisor test seam outside a test process.
+    'import { isTestHomeGuardArmed } from "./test-home-guard.mjs";'
   ],
   "src/update/npm-invocation.mjs": [
     "import { existsSync, realpathSync } from \"node:fs\";",
     "import { win32 } from \"node:path\";"
+  ],
+  "src/update/windows-installer-marker.mjs": [
+    // Unique temp name for the marker publication.
+    'import { randomUUID } from "node:crypto";',
+    // Marker publication: replaces only a marker awaiting an installer.
+    'import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";',
+    // Read-only home derivation for the test-home guard.
+    'import { dirname } from "node:path";',
+    // Signal-zero liveness of an earlier recorded supervisor.
+    'import { probeProcessAlive } from "./mutation-guard.mjs";',
+    // Refuses the real home under test.
+    'import { assertNotRealHomeUnderTest } from "./test-home-guard.mjs";',
   ],
   // Supervisor entry: its reviewed caller launches it through the package-guarded spawn; it runs only what its stdin caller supplies.
   "src/update/posix-install-supervisor-entry.mjs": [

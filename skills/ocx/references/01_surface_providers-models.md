@@ -74,7 +74,7 @@ State-changing: yes. JSON mode: `envelope`.
 
 - Only routed provider/model selectors are supported. At least one option or --reset is required.
 - Context 0 or - and modalities/default effort - clear to null; reasoning efforts - restores inheritance while an empty string stores an empty ladder.
-- --reset clears all four overrides with null and cannot be combined with other settings. A saved-but-catalog-refresh-failed receipt must not be mistaken for an unsaved change.
+- --reset clears every override (including the API-only responsesCustomTools) with null and cannot be combined with other settings. A saved-but-catalog-refresh-failed receipt must not be mistaken for an unsaved change.
 
 ### `ocx provider list`
 

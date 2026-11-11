@@ -1017,6 +1017,7 @@ async function runPackageManagerSelfUpdate(manager, child) {
               if (session) session.noteUntrackedInstaller();
               return runNpmInstall(invocation, {
                 authorizeMutation: homePolicy.authorizeMutation,
+                ...(session ? { markerPath: join(configDir(), "update-orchestrated.json") } : {}),
                 env: unprivilegedOwnershipMutationEnvironment(invocation?.options?.env ?? process.env),
               }).then(result => {
                 if (session && result.processTreeExited === true && Number.isInteger(result.status)) session.confirmInstallerExit();
@@ -1079,7 +1080,8 @@ async function runPackageManagerSelfUpdate(manager, child) {
               const env = pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(invocation.env ?? process.env));
               if (process.platform === "win32") {
                 session.noteUntrackedInstaller();
-                const result = runWindowsInstallerSync(invocation, { cwd, env, authorizeMutation: homePolicy.authorizeMutation });
+                const result = runWindowsInstallerSync(invocation, { cwd, env, authorizeMutation: homePolicy.authorizeMutation,
+                  markerPath: join(configDir(), "update-orchestrated.json") });
                 if (result.processTreeExited === true && Number.isInteger(result.status)) session.confirmInstallerExit();
                 else { session.retainInstallerFence(); return { ...result, processTreeExited: false }; }
                 return result;
