@@ -15,7 +15,7 @@ export function desktopLifecycleRefusal(desktop: { kind: string; reason?: Deskto
       case "root_without_state":
         return `${at} exists but holds no Claude Desktop remote state or disconnect receipt (a leftover or renamed file), so disconnect cannot tell what it would restore. Nothing was changed. Move that folder aside, then run ocx disconnect again.`;
       case "store_unreadable":
-        return `OpenCodex cannot read safely the Claude Desktop remote state in ${at ?? FOLDER}: state.json or baseline.json is not an owner-only regular file, is not valid, or was written for another OpenCodex home or Claude Desktop library. Nothing was changed. Make both files owner-only (chmod 600) if they are not; if the folder was copied from elsewhere, move it aside instead; then run ocx disconnect again.`;
+        return `OpenCodex cannot read safely the Claude Desktop remote state in ${at ?? FOLDER}: state.json or baseline.json is not an owner-only regular file, is not valid, or was written for another OpenCodex home or Claude Desktop library. Nothing was changed. If either file is not owner-only, make it so (chmod 600) and retry. Otherwise move that folder aside and keep it (its baseline.json holds the Claude Desktop profile OpenCodex replaced); disconnect then gives Claude Desktop's OpenCodex profile its standard settings. In either case, then run ocx disconnect again.`;
       case "store_other_connection":
         return `${at} records a Claude Desktop profile applied for a different connection (another Home or an earlier link), so this disconnect cannot restore it. Nothing was changed. In Claude Desktop, remove that connection's OpenCodex profile; then move ${FOLDER} aside, then run ocx disconnect again.`;
       case "library_unreadable":
@@ -25,7 +25,7 @@ export function desktopLifecycleRefusal(desktop: { kind: string; reason?: Deskto
       case "profile_edited":
         return `the OpenCodex profile ${at} was edited outside OpenCodex after it was applied. Nothing was changed. Disconnect restores the profile OpenCodex replaced, which discards those edits: copy anything you want to keep from that file, undo the edits, then run ocx disconnect again.`;
       case "profile_ambiguous":
-        return `a profile in the Claude Desktop library ${at} reaches this Home, but disconnect cannot identify it as OpenCodex's current profile (it has another name, an older key, or is a second copy). Nothing was changed. In Claude Desktop, remove the profile that reaches this Home and is not OpenCodex's current one, then run ocx disconnect again.`;
+        return `a profile in the Claude Desktop library ${at} reaches this Home, but disconnect cannot identify it as OpenCodex's current profile (it has another name, an older key, or is a second copy). Nothing was changed. In Claude Desktop, remove every profile that reaches this Home except one named "opencodex" that uses this connection's current key; if the only one left uses an older key, remove that one too, then run ocx disconnect again.`;
       case "token_unreadable":
         return `the service token or its rotation backup (${at}) is not a safe regular file, so disconnect cannot tell which keys belong to this connection. Nothing was changed. Make both files owner-only regular files (move a directory or link at that path aside), then run ocx disconnect again.`;
       case "connection_changed":

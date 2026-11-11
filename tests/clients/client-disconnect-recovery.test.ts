@@ -27,11 +27,11 @@ const ROUTING_GONE = ORIGINAL + CODEX_LINES;
 // Codex dropped our marker comment but kept the value: still OpenCodex routing.
 const ROUTING_KEPT = ORIGINAL + "openai_base_url = \"" + BASE_URL + "\"\n" + CODEX_LINES;
 
-type Scenario = { config: string; stuckReceipt?: boolean; overlapping?: boolean };
+type Scenario = { config: string; stuckReceipt?: boolean; overlapping?: boolean; retryConfig?: string };
 type Outcome = {
   error: string | null; stateKind: string; gateBefore: string; gateAfter: string;
   receipt: string; desktopRoot: boolean; journal: boolean; config: string; startupRefusal: string;
-  overlappingError: string | null;
+  overlappingError: string | null; retryError: string | null;
 };
 
 const sha = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -94,10 +94,19 @@ function run(scenario: Scenario): Outcome {
         try { await connectApi.disconnectClient({}, { lifecycleLockDeps: lockDeps }); }
         catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
         const overlappingError = overlapping ? await overlapping : null;
+        // The edit the refusal asked for, then the retry it promised would get through.
+        let retryError = null;
+        const retryConfig = ${JSON.stringify(scenario.retryConfig ?? null)};
+        if (retryConfig !== null) {
+          fs.writeFileSync(path.join(process.env.CODEX_HOME, "config.toml"), retryConfig);
+          try { await connectApi.disconnectClient({}, { lifecycleLockDeps: lockDeps }); }
+          catch (cause) { retryError = cause instanceof Error ? cause.message : String(cause); }
+        }
         const receipt = store.readDesktopDisconnectReceipt();
         console.log(JSON.stringify({
           error,
           overlappingError,
+          retryError,
           stateKind: stateApi.readClientConnectionState().kind,
           gateBefore,
           startupRefusal,
@@ -140,6 +149,23 @@ describe("disconnect after Codex edited config.toml (O9)", () => {
     expect(out.stateKind).toBe("connected");
     expect(out.config).toBe(ROUTING_KEPT);
     expect(out.journal).toBe(true);
+  }, SPAWN_BUDGET_MS);
+
+  test("the named edit (remove the OpenCodex key) lets the retry finish", () => {
+    const out = run({ config: ROUTING_KEPT, retryConfig: ROUTING_GONE });
+    expect(out.error).toContain("openai_base_url");
+    expect(out.retryError).toBeNull();
+    expect(out.stateKind).toBe("disconnected");
+  }, SPAWN_BUDGET_MS);
+
+  test("an OpenCodex table with a multiline value is named as a table, and removing it whole lets the retry finish", () => {
+    const table = '[model_providers.opencodex]\nname = "OpenCodex"\nexperimental_bearer_token = """\nvalue-line\n"""\n';
+    const out = run({ config: ROUTING_GONE + table, retryConfig: ROUTING_GONE });
+    expect(out.error).toContain("[model_providers.opencodex]");
+    expect(out.error).toContain("whole value");
+    expect(out.error).toContain("every line under it");
+    expect(out.retryError).toBeNull();
+    expect(out.stateKind).toBe("disconnected");
   }, SPAWN_BUDGET_MS);
 });
 
@@ -201,5 +227,18 @@ describe("the O9 refusal quotes key names only", () => {
     expect(keys.length).toBeGreaterThan(0);
     expect(keys.join(" ")).not.toContain("must-not-leak");
     expect(keys.join(" ")).not.toContain('"""');
+  });
+
+  test("a quoted table name or an unknown key never reaches the message", () => {
+    const keys = remainingOpencodexConfigKeys([
+      'model_provider = "openai"',
+      '[model_providers.opencodex."QUOTED_NAME_MUST_NOT_LEAK"]',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "[model_providers.opencodex]",
+      "BARE_KEY_MUST_NOT_LEAK = 1",
+      "",
+    ].join("\n")).join(" ");
+    expect(keys).not.toContain("MUST_NOT_LEAK");
+    expect(keys).toContain("[model_providers.opencodex]");
   });
 });

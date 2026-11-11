@@ -16,7 +16,7 @@ import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 type Case =
   | "store-invalid" | "owner-mismatch" | "profile-missing" | "profile-edited" | "library-unreadable"
-  | "token-backup-unsafe" | "profile-foreign" | "desktop-restore-started";
+  | "token-backup-unsafe" | "profile-foreign" | "profile-old-key" | "desktop-restore-started";
 type Outcome = {
   error: string | null; retryError: string | null; receipt: string;
   root: string; library: string; profile: string; backup: string;
@@ -65,12 +65,19 @@ function run(kind: Case, retry = false): Outcome {
       } else if (kind === "store-invalid") {
         fs.mkdirSync(remote, { recursive: true, mode: 0o700 });
         fs.writeFileSync(path.join(remote, "state.json"), "{ not json", { mode: 0o600 });
+        // Owner-only and still corrupt: the fix is to set the folder aside and keep it.
+        fix = () => fs.renameSync(remote, remote + ".aside");
       } else if (kind === "token-backup-unsafe") {
         fs.mkdirSync(path.join(home, "service-api-token.prev"));
       } else if (kind === "profile-foreign") {
         // One profile reaches this Home with the current key but is not named opencodex.
         writeProfile("mine", { inferenceProvider: "gateway", inferenceCredentialKind: "static",
           inferenceGatewayBaseUrl: owner.serverUrl, inferenceGatewayApiKey: key, modelDiscoveryEnabled: true });
+        fix = removeProfile;
+      } else if (kind === "profile-old-key") {
+        // The only profile for this Home is named opencodex but carries a key this connection no longer has.
+        writeProfile("opencodex", { inferenceProvider: "gateway", inferenceCredentialKind: "static",
+          inferenceGatewayBaseUrl: owner.serverUrl, inferenceGatewayApiKey: "ocx_data_" + "9".repeat(40), modelDiscoveryEnabled: true });
         fix = removeProfile;
       } else {
         writeProfile("opencodex", { inferenceProvider: "gateway", inferenceCredentialKind: "static",
@@ -154,9 +161,10 @@ function expectNamedRefusal(out: Outcome, ...parts: string[]): void {
 }
 
 describe("desktop_lifecycle_unsafe names its cause and fix (O7)", () => {
-  test("an unreadable store file", () => {
-    const out = run("store-invalid");
-    expectNamedRefusal(out, out.root, "cannot read safely");
+  test("a corrupt owner-only store file; setting the folder aside (kept) clears it", () => {
+    const out = run("store-invalid", true);
+    expectNamedRefusal(out, out.root, "cannot read safely", "keep it");
+    expect(out.retryError).toBeNull();
   }, SPAWN_BUDGET_MS);
 
   test("a store written for another connection; removing that profile and moving the folder aside clears it", () => {
@@ -192,6 +200,12 @@ describe("desktop_lifecycle_unsafe names its cause and fix (O7)", () => {
     const out = run("profile-foreign", true);
     expectNamedRefusal(out, out.library, "cannot identify it as OpenCodex's");
     expect(out.error).not.toContain("extra");
+    expect(out.retryError).toBeNull();
+  }, SPAWN_BUDGET_MS);
+
+  test("the only profile for this Home uses an older key; removing it, as named, clears it", () => {
+    const out = run("profile-old-key", true);
+    expectNamedRefusal(out, out.library, "older key", "remove that one too");
     expect(out.retryError).toBeNull();
   }, SPAWN_BUDGET_MS);
 });

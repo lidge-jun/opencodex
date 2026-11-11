@@ -169,22 +169,43 @@ export function remainingOpencodexConfigKeys(rawContent: string): string[] {
   const kept = new Map<string, number>();
   for (const line of stripped.content.split("\n")) kept.set(line.trim(), (kept.get(line.trim()) ?? 0) + 1);
   const keys: string[] = [];
+  const add = (label: string) => { if (!keys.includes(label)) keys.push(label); };
+  // Lines under a removed table are covered by the table's label.
+  let underRemovedTable = false;
   for (const line of splitSourceLines(content)) {
     const text = line.text.trim();
     if (!text) continue;
+    const header = line.structural && text.startsWith("[");
     const left = kept.get(text) ?? 0;
-    if (left > 0) { kept.set(text, left - 1); continue; }
+    if (left > 0) { kept.set(text, left - 1); if (header) underRemovedTable = false; continue; }
     // A line inside a multiline string or array is a value, never a name.
     if (!line.structural) continue;
-    const header = /^\[\[?\s*([A-Za-z0-9_.\-"' ]{1,128})\s*\]\]?$/.exec(text);
-    const key = header ? `[${header[1]!.trim()}]`
-      : text.startsWith("#") ? "an OpenCodex marker comment"
-        : /^([A-Za-z0-9_.\-]{1,64})\s*=/.exec(text)?.[1] ?? "an OpenCodex line";
-    if (!keys.includes(key)) keys.push(key);
+    if (header) { underRemovedTable = true; add(ownedTableLabel(text)); continue; }
+    if (underRemovedTable) continue;
+    if (text.startsWith("#")) { add("an OpenCodex marker comment"); continue; }
+    const key = /^([A-Za-z0-9_]{1,64})\s*=/.exec(text)?.[1];
+    add(key && OWNED_CONFIG_KEYS.has(key) ? key : "an OpenCodex line");
   }
+
   // The strip changed something without removing a line: it would put back a line it replaced.
   return keys.length > 0 ? keys : ["web_search"];
 }
+
+/** The only names a refusal may quote: keys OpenCodex writes. Anything else gets a fixed label. */
+const OWNED_CONFIG_KEYS: ReadonlySet<string> = new Set([
+  "openai_base_url", REALTIME_WS_BASE_URL_KEY, "model_provider", "model", "model_catalog_json", "web_search", "profile",
+  "default_subagent_model", "default_subagent_reasoning_effort",
+]);
+
+/** A fixed label per table OpenCodex writes; a table name can carry arbitrary quoted text. */
+function ownedTableLabel(header: string): string {
+  const name = header.replace(/^\[+|\]+$/g, "").replace(/[\s"']/g, "");
+  for (const label of ["model_providers.opencodex", "profiles.opencodex", "agents"]) {
+    if (name === label || name.startsWith(label + ".")) return "[" + label + "]";
+  }
+  return "an OpenCodex table";
+}
+
 
 function hasOpencodexRouting(content: string): boolean {
   return (

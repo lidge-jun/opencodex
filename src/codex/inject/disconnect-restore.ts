@@ -43,8 +43,9 @@ export function restoreCodexForDisconnect(): DisconnectCodexRestore {
     if (remaining.length > 0) {
       return {
         ok: false,
-        reason: `${CODEX_CONFIG_PATH} changed after OpenCodex wrote it and still has OpenCodex lines (${remaining.join(", ")}), so the journal was kept. `
-          + "Delete only those lines from that file, keep every other line, then run ocx disconnect again",
+        reason: `${CODEX_CONFIG_PATH} changed after OpenCodex wrote it and still has OpenCodex settings (${remaining.join(", ")}), so the journal was kept. `
+          + "Remove them from that file: each named key with its whole value (a multiline value ends at its closing quotes or bracket), "
+          + "and each named table with every line under it. Keep every other line, then run ocx disconnect again",
       };
     }
     publishCodexArtifact(JOURNAL_PATH, held, (_path, hooks) => removeJournal(hooks));
