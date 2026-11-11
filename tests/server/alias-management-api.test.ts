@@ -83,3 +83,36 @@ test("provider alias routes treat inherited object keys as unknown providers", a
     for (const key of ["aliasTemplate", "alias", "modelAliases"]) delete (Object.prototype as Record<string, unknown>)[key];
   }
 });
+
+test("#7705: provider-wide writes cannot store a template the alias-template route would refuse", async () => {
+  const { validateConfigCandidate } = await import("../../src/config");
+  const bad = config();
+  bad.providers.alpha!.aliasTemplate = "{vendor}-{modelBasename}";
+  const refused = validateConfigCandidate(bad);
+  expect(refused.ok).toBe(false);
+  if (!refused.ok) expect(refused.error).toContain("aliasTemplate");
+  const good = config();
+  good.providers.alpha!.aliasTemplate = "{modelBasename}-x";
+  expect(validateConfigCandidate(good).ok).toBe(true);
+
+  const c = config();
+  const post = (provider: Record<string, unknown>) => {
+    const req = new Request("http://localhost/api/providers", { method: "POST",
+      headers: { "content-type": "application/json", host: "localhost" }, body: JSON.stringify({ name: "alpha", provider }) });
+    return handleManagementAPI(req, new URL(req.url), c, { saveConfigPreservingClaudeCode: () => {}, createManagementConvergeCodex: catalogConvergenceFactory() });
+  };
+  const created = await post({ ...c.providers.alpha, aliasTemplate: "{modelBasename}-x" });
+  expect(created?.status).toBe(400);
+  expect((await created!.json()).error).toContain("aliasTemplate is managed by the dedicated alias API");
+  expect(c.providers.alpha!.aliasTemplate).toBeUndefined();
+});
+
+test("default-aliases treats inherited object keys as unknown providers", async () => {
+  const c = config();
+  try {
+    expect((await request(c, "/api/default-aliases", { enabled: true, provider: "__proto__" }))?.status).toBe(404);
+    expect(({} as Record<string, unknown>).defaultAliases).toBeUndefined();
+  } finally {
+    delete (Object.prototype as Record<string, unknown>).defaultAliases;
+  }
+});

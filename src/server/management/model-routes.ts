@@ -391,9 +391,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (!isPlainRecord(raw) || typeof raw.enabled !== "boolean" || (raw.provider !== undefined && typeof raw.provider !== "string")) return jsonResponse({ error: "enabled must be boolean" }, 400, req, config);
     if (typeof raw.provider === "string") {
-      const provider = config.providers[raw.provider];
-      if (!provider) return jsonResponse({ error: `provider '${raw.provider}' not found` }, 404, req, config);
-      provider.defaultAliases = raw.enabled;
+      // Own keys only, as in the alias routes above.
+      if (!hasOwnProvider(config.providers, raw.provider)) return jsonResponse({ error: `provider '${raw.provider}' not found` }, 404, req, config);
+      config.providers[raw.provider]!.defaultAliases = raw.enabled;
     } else config.defaultModelAliases = raw.enabled;
     persistConfig(config);
     const catalogRefresh = await convergeCodexCatalog();

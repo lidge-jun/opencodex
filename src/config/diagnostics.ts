@@ -1,3 +1,4 @@
+import { aliasTemplateError } from "../providers/alias-template";
 import { readExistingSpendSalt, spendPoolAliasesError, validatePoolAliasOwners } from "../lib/spend-pool-alias-validation";
 import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
 import { validRemainingQuotaAccountIds } from "../codex/account-use-remaining";
@@ -633,6 +634,22 @@ export function loopbackCompanionBindError(
  * this opt-in listener cannot discard providers or credentials. A live config mutation must not
  * get that leniency: it receives an exact field error before the degrading schema is applied.
  */
+/**
+ * #7705: load drops a hand-edited template that does not validate; a live write that carries one
+ * (a provider-wide save, `ocx config set`) gets the same reason the alias-template route gives.
+ */
+function providerAliasTemplateConfigError(value: unknown): string | null {
+  const providers = rawConfigRecord(rawConfigRecord(value)?.providers);
+  if (!providers) return null;
+  for (const [name, provider] of Object.entries(providers)) {
+    const template = rawConfigRecord(provider)?.aliasTemplate;
+    if (template === undefined) continue;
+    const problem = typeof template === "string" ? aliasTemplateError(template) : "template must be a string";
+    if (problem) return `schema_invalid: providers.${name}.aliasTemplate: ${problem}`;
+  }
+  return null;
+}
+
 function managementIngressConfigError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
   if (!raw) return null;
@@ -785,6 +802,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? clientRolePairError(value)
     ?? loopbackListenerPortError(value)
     ?? managementIngressConfigError(value)
+    ?? providerAliasTemplateConfigError(value)
     ?? metricsExportConfigError(value)
     ?? serviceHealthRecoveryConfigError(value)
     ?? telemetryConfigError(value)
