@@ -1239,3 +1239,70 @@ describe("HTTP hard-code evidence excludes diagnostic types", () => {
     }
   });
 });
+
+describe("unoffered tool-call refusal", () => {
+  const verdict = "The model called a function that was not offered in tools.";
+  // The reported carrier: an aggregator re-wraps the model backend's 400 as
+  // `type: "upstream_error"` with `code: null`, then the proxy wraps that envelope again.
+  const reported = JSON.stringify({
+    error: { message: `Provider error 400: ${verdict}`, type: "upstream_error", code: null },
+  });
+
+  test("hops without cooling through every carrier the report shows", () => {
+    for (const message of [
+      reported,
+      `Provider error 400: ${reported}`,
+      `data: ${reported}`,
+      `Provider error 400: data: ${reported}`,
+      verdict,
+      `Provider error 400: ${verdict}`,
+      JSON.stringify({ message: verdict, type: "upstream_error", code: null }),
+      JSON.stringify({ error: verdict, type: "upstream_error", code: null }),
+    ]) {
+      expect(comboFailureDecision(400, message)).toBe("hop");
+      expect(comboFailureCooldownScope(400, message)).toBe("none");
+    }
+    expect(comboFailureDecision(400, reported, { code: "upstream_error" })).toBe("hop");
+    expect(comboFailureCooldownScope(400, reported, { code: "upstream_error" })).toBe("none");
+  });
+
+  test("request-validation spellings of the same verdict still hop", () => {
+    for (const type of ["invalid_request_error", "upstream_error"]) {
+      for (const param of [undefined, "tools", "tool_choice"]) {
+        const body = JSON.stringify({
+          error: { message: verdict, type, code: null, ...(param ? { param } : {}) },
+        });
+        expect(comboFailureDecision(400, body)).toBe("hop");
+        expect(comboFailureCooldownScope(400, body)).toBe("none");
+      }
+    }
+  });
+
+  test("echoed or competing evidence stays terminal", () => {
+    for (const message of [
+      // The verdict quoted inside a validation message is reflected text, not a provider verdict.
+      JSON.stringify({ error: { message: `Invalid value: "${verdict}"`, type: "invalid_request_error", code: null } }),
+      // Trailing content means the sentence is not the whole verdict.
+      JSON.stringify({ error: { message: `${verdict} Request id: abc`, type: "upstream_error", code: null } }),
+      // A param naming an unrelated field contradicts the refusal.
+      JSON.stringify({ error: { message: verdict, type: "invalid_request_error", code: null, param: "messages" } }),
+      // A competing diagnostic carrier could hide a hard refusal; fail closed.
+      JSON.stringify({ error: { message: verdict, type: "upstream_error", code: null }, details: { code: "cyber_policy" } }),
+      // A contradicting root message keeps the root authoritative.
+      JSON.stringify({ message: "different failure", type: "upstream_error", error: { message: verdict, type: "upstream_error", code: null } }),
+      // Codes and types outside the closed sets stay terminal. (`permission_denied` and
+      // `rate_limit_exceeded` would hop through their own structured-code rules regardless of
+      // the message, so they cannot pin this classifier shut.)
+      JSON.stringify({ error: { message: verdict, type: "made_up_type", code: null } }),
+      JSON.stringify({ error: { message: verdict, type: "upstream_error", code: "future_unknown_code" } }),
+    ]) {
+      expect(comboFailureDecision(400, message)).toBe("stop");
+    }
+  });
+
+  test("non-400 statuses and foreign outer codes stay on the existing rules", () => {
+    expect(comboFailureDecision(422, reported)).toBe("stop");
+    expect(comboFailureDecision(400, verdict, { code: "unsupported_value" })).toBe("stop");
+    expect(comboFailureDecision(400, reported, { code: "rate_limit_exceeded" })).toBe("stop");
+  });
+});

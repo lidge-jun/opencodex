@@ -28,6 +28,16 @@ Every physical attempt retains its own send count and usage. Coverage: `tests/he
 (registered by `tests/server/server-combo-failover-e2e.test.ts`), `tests/server/server-combo-reasoning-replay-eligibility.test.ts`
 and `tests/responses/responses-combo-exhausted-error.test.ts`.
 
+## Unoffered tool-call refusals
+
+`isUnofferedToolCallRefusal` in `src/combos/failover.ts` recognizes the provider verdict that a
+model called a function the request never offered (`The model called a function that was not
+offered in tools.`). The match is anchored to that sentence inside a bounded envelope walk —
+closed code/type/param sets, competing diagnostic carriers and a contradicting root message all
+fail closed — so quoted or reflected occurrences cannot impersonate the verdict. Like the other
+pre-output 400 hops it advances the combo without cooling the target: the model hallucinated the
+call on this target, the request itself fit, and the refusal arrives before any output commits.
+
 ## Buffered required-tool contract
 
 Before selection, `src/server/responses/core-combo.ts` excludes resolved Meta Responses destinations
