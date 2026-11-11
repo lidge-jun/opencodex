@@ -82,7 +82,8 @@ function readDefaultReasoningEffort(raw: unknown, efforts: string[] | undefined)
 import type { CatalogModel } from "../../codex/catalog";
 import { accountBoundNativeOpenAiSlugsBySelector, catalogModelSlug, configuredNativeAliasSlugs, disabledNativeSlugs, invalidateCodexModelsCache, nativeModelRows, shouldIncludeAccountBoundNativeOpenAi, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import { CatalogGatherBusyError } from "../../codex/catalog/provider-fetch";
-import { clearModelCache, getProviderLiveModelCount } from "../../codex/model-cache";
+import { clearModelCache, getProviderLiveModelCount, getStaleCached } from "../../codex/model-cache";
+import { antigravityFamilyDisabled, projectAntigravitySelectedModels } from "../../providers/antigravity-effort-families";
 import { NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-models";
 
 import {
@@ -114,7 +115,7 @@ import { withModelCostRowReplacement } from "../../config/live-reconcile";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
-import { encodedModelIdCollides, routedSlug, slugEquals } from "../../providers/slug-codec";
+import { encodedModelIdCollides, routedSlug, slugEquals, slugEquivalenceKey } from "../../providers/slug-codec";
 import { knownModelIdsForProvider } from "../../router";
 import { effectiveModelAliases, MODEL_ALIAS_PATTERN } from "../../providers/default-aliases";
 import { isValidModelDiscoveryModelId } from "../../providers/model-discovery-limits";
@@ -193,6 +194,33 @@ function summarizeExportedModels(client: ExportClientId, document: unknown): { m
   return EXPORT_CLIENTS[client].summarize(document);
 }
 
+/**
+ * What a recent arrival looks like in the picker (#8236), by the same rules the catalog applies:
+ * a disabled slug hides it, and a non-empty provider selection shows only what it names.
+ * `auto-disabled` means the `off` policy disabled it (or a row from before that was recorded),
+ * `disabled` that someone else did; `not-selected` that the selection leaves it out.
+ * `rows` is the provider's cached discovery, read passively: an Antigravity base inherits the
+ * disable of its known tiers and is selected through any of them, exactly as
+ * `filterCatalogVisibleModels` decides. Without cached rows those family rules have nothing to read.
+ */
+function arrivalState(
+  config: OcxConfig,
+  provider: string,
+  row: { id: string; disabledByPolicy?: boolean },
+  rows: readonly CatalogModel[],
+): "enabled" | "auto-disabled" | "disabled" | "not-selected" {
+  if ((config.disabledModels ?? []).some(slug => slugEquals(slug, provider, row.id))) {
+    return row.disabledByPolicy === false ? "disabled" : "auto-disabled";
+  }
+  const candidate = rows.find(model => model.provider === provider && model.id === row.id) ?? { provider, id: row.id };
+  if (antigravityFamilyDisabled(config, candidate, rows)) return "disabled";
+  const selected = config.providers[provider]?.selectedModels ?? [];
+  if (selected.length === 0) return "enabled";
+  const keys = new Set(projectAntigravitySelectedModels(provider, selected, rows)
+    .map(id => slugEquivalenceKey(routedSlug(provider, id))));
+  return keys.has(slugEquivalenceKey(routedSlug(provider, row.id))) ? "enabled" : "not-selected";
+}
+
 export async function handleModelRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
   // A handler persists the exact config object passed in. Production defaults to
@@ -216,14 +244,10 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     const providers = Object.fromEntries(Object.entries(config.providers).map(([name, provider]) => [
       name, provider.newModelPolicy ?? "inherit",
     ]));
-    const recentArrivals = Object.fromEntries(Object.entries(config.modelDiscovery?.recentArrivals ?? {}).map(([name, rows]) => [
-      name,
-      rows.map(row => ({
-        ...row,
-        state: (config.disabledModels ?? []).some(slug => slugEquals(slug, name, row.id))
-          ? "auto-disabled" : "enabled",
-      })),
-    ]));
+    const recentArrivals = Object.fromEntries(Object.entries(config.modelDiscovery?.recentArrivals ?? {}).map(([name, rows]) => {
+      const cached = getStaleCached(name) ?? [];
+      return [name, rows.map(row => ({ ...row, state: arrivalState(config, name, row, cached) }))];
+    }));
     const baselineCounts = Object.fromEntries(Object.entries(config.modelDiscovery?.knownModels ?? {}).map(([name, baseline]) => [
       name, baseline.ids.length,
     ]));
@@ -235,7 +259,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   if (url.pathname === "/api/model-discovery" && req.method === "PUT") {
     let body: { policy?: unknown; provider?: unknown };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
-    if (body.policy !== "on" && body.policy !== "off") return jsonResponse({ error: "policy must be on or off" }, 400);
+    if (body.policy !== "on" && body.policy !== "off" && body.policy !== "admit") {
+      return jsonResponse({ error: "policy must be on, off or admit" }, 400);
+    }
     const provider = typeof body.provider === "string" && body.provider.trim() ? body.provider.trim() : null;
     let baselineBootstrapped = false;
     if (provider) {

@@ -581,7 +581,8 @@ export interface OcxConfig {
   defaultProvider: string;
   /** Persisted state for newly discovered provider models (#2464). Absent keeps legacy "on" behavior. */
   modelDiscovery?: {
-    newModelPolicy?: "on" | "off";
+    /** `admit` appends arrivals to custom provider selections (#8236); default `on`. */
+    newModelPolicy?: "on" | "off" | "admit";
     knownModels?: Record<string, {
       ids: string[];
       removed: string[];
@@ -589,7 +590,14 @@ export interface OcxConfig {
       /** Consecutive successful discoveries in which an active id was absent. */
       missing?: Record<string, number>;
     }>;
-    recentArrivals?: Record<string, Array<{ id: string; at: string }>>;
+    recentArrivals?: Record<string, Array<{
+      id: string;
+      at: string;
+      /** Appended to the provider's custom selection by the `admit` policy. */
+      admitted?: boolean;
+      /** Whether the `off` policy disabled it; absent on rows recorded before #8236. */
+      disabledByPolicy?: boolean;
+    }>>;
   };
   /** Enable the shipped model alias patterns for providers without an override. */
   defaultModelAliases?: boolean;

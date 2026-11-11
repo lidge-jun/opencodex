@@ -92,8 +92,18 @@ Routing and catalog visibility are separate controls:
   using a temporary projection; they leave the running configuration and saved choices untouched.
   Use `ocx models new-policy off` globally, add `--provider <name>` for an override, and inspect
   `ocx models new-arrivals [--json]`. Failed/degraded fetches never change the baseline. Providers
-  with a non-empty `selectedModels` (including preset mode) are already curated, so this policy is
-  deliberately inert for them.
+  with a non-empty `selectedModels` (including preset mode) are already curated, so `on` and `off`
+  are deliberately inert for them. To keep a hand-picked selection and still get new releases, set
+  the policy to `admit` (`ocx models new-policy admit --provider <name>`, or **Admit** in the
+  provider's new-model policy control): each genuine arrival is appended to that provider's custom
+  `selectedModels` once, saved and applied to the running proxy without a restart. A model you
+  later deselect stays deselected, and `admit` never widens a preset-derived selection or changes
+  a provider without a selection.
+- `ocx models new-arrivals` and `GET /api/model-discovery` report each recent arrival as
+  `enabled` (visible in the picker), `not-selected` (the provider's selection leaves it out),
+  `auto-disabled` (the `off` policy disabled it) or `disabled` (disabled by you). The status uses
+  the picker's own rules, so an Antigravity model selected through one of its effort tiers reads
+  `enabled`, and one whose known tiers you all disabled reads `disabled`.
 - `provider.disabled: true` removes that provider from catalog discovery. Explicit
   `provider/model` requests fail, and `defaultModel` / `models[]` scans skip it.
 - Routed catalog rows are cloned from the Codex-native template, so native-only delivery flags are
