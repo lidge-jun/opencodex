@@ -28,9 +28,11 @@ import {
 } from "../lib/system-restart-contract";
 import type { OcxClientConnectionConfig } from "../types";
 import { isSupervisedServiceChild } from "../service/service-child-ownership";
+import { COMPANION_PROXY_ENV } from "../service/companion-proxy";
 import { sameClientConnectionOwner, type readClientConnectionState } from "./state";
 
 type ClientConnectionState = ReturnType<typeof readClientConnectionState>;
+const COMPANION_PROXY_LAUNCHERS = new Set(["claude", "codex", "opencode"]);
 
 /**
  * `service-unproven`: a service manager launched and owns this process (OCX_SERVICE or
@@ -158,27 +160,29 @@ export async function clientRestartSupervisor(): Promise<ClientRestartSupervisor
 }
 
 /**
- * Ownership and relaunch are separate facts. A manager owns this process when it launched it
- * (OCX_SERVICE or OCX_SERVICE_MANAGED); only an owned process whose service diagnostic is viable
- * may exit for the manager to relaunch it. Owned but not viable is `service-unproven` and keeps
- * the runtime; only a process no manager owns may start a detached replacement.
+ * Ownership and relaunch are separate facts, and both are decided from positive evidence only.
+ * Manager-launched: a manager's marker (isSupervisedServiceChild); it exits for the manager only
+ * when the service diagnostic is viable and running, otherwise it is `service-unproven`. No
+ * manager: no OCX_SERVICE at all (every service OpenCodex ever registered sets it), or the marker
+ * ocx claude and ocx opencode set on their own proxies. A bare OCX_SERVICE=1 with neither is what
+ * a service registered before v2.49 launches, unit file present or not, and also what an older
+ * companion carries: `owner-unproven`. Both unproven verdicts keep the runtime.
  */
 export function classifyClientRestartSupervisor(input: {
   desktop: boolean;
   env: NodeJS.ProcessEnv;
-  diagnose: () => { installed: boolean; viable: boolean; running: boolean };
+  diagnose: () => { viable: boolean; running: boolean };
   /** Manager-launched evidence; defaults to src/service/service-child-ownership.ts. */
   managed?: (env: NodeJS.ProcessEnv) => boolean;
 }): ClientRestartSupervisor | null {
   if (input.desktop) return "desktop";
   // The managed marker (launchd, systemd, WinSW), the Windows wrapper's protocol marker, or a
-  // legacy Windows wrapper parent. A bare OCX_SERVICE=1 is also what ocx claude and ocx opencode
-  // give their own proxies, so it alone proves no manager.
+  // legacy Windows wrapper parent.
   if (!(input.managed ?? isSupervisedServiceChild)(input.env)) {
     if (input.env.OCX_SERVICE !== "1") return null;
-    // Bare marker: a companion when no service is installed; with one installed it may also be a
-    // service registered before the managed marker existed, which nothing here can tell apart.
-    return input.diagnose().installed ? "owner-unproven" : null;
+    // Never inferred from a missing unit file: systemd keeps a running unit's process in its cgroup
+    // after the file is removed.
+    return COMPANION_PROXY_LAUNCHERS.has(input.env[COMPANION_PROXY_ENV] ?? "") ? null : "owner-unproven";
   }
   // Relaunch needs positive evidence: viable AND running (launchd's viable also covers an
   // unknown load state for its other callers; running there means loaded).

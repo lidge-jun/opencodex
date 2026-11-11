@@ -47,6 +47,7 @@ import { configuredAdminToken, opencodeCatalogToken } from "../lib/admin-secrets
 import { localManagementOrigin } from "../lib/local-destinations";
 import { directLocalHttpFetch } from "../server/direct-local-http";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/service-secrets";
+import { COMPANION_PROXY_ENV } from "../service/companion-proxy";
 import { providerCodexAccountMode } from "../providers/registry";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
@@ -570,12 +571,13 @@ function serviceTokenLookupEnv(env: OpencodeLaunchEnv): OpencodeLaunchEnv {
  * Child env for a detached `ocx start` from `ocx opencode`. When the admission token is
  * not already in the environment, pass through an existing `OCX_API_TOKEN_FILE` or the
  * default hardened service token path so `handleStart` can load it before bind.
+ * The companion marker tells a restart that no service manager owns this proxy.
  */
 export function opencodeProxyStartEnv(base: OpencodeLaunchEnv = process.env): OpencodeLaunchEnv {
   const withTokenFile = base.OPENCODEX_API_AUTH_TOKEN?.trim()
     ? base
     : serviceTokenLookupEnv(base);
-  return { ...withTokenFile, OCX_SERVICE: "1" };
+  return { ...withTokenFile, OCX_SERVICE: "1", [COMPANION_PROXY_ENV]: "opencode" };
 }
 
 /**

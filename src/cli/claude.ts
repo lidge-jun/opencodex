@@ -37,15 +37,16 @@ import { desktopProfileWireAlias, legacyDesktopProfileWireAlias } from "../claud
 import { inspectDesktopFirstParty } from "../claude/desktop-first-party";
 import { isClaudeInterceptProxyUrl, type ClaudeInterceptSettingsState } from "../claude/intercept/settings";
 import { withoutSiblingMarker } from "../codex/sibling-start";
+import { COMPANION_PROXY_ENV } from "../service/companion-proxy";
 
 /**
  * The environment of the detached `ocx start` that `ocx claude` launches (the spawn adds the runtime
- * provenance stamp): an ordinary owner. It
- * carries OCX_SERVICE=1 but no service manager's marker, which is how a restart tells it apart from
- * a manager-launched process (src/client/runtime-restart.ts classifyClientRestartSupervisor).
+ * provenance stamp): an ordinary owner. It carries OCX_SERVICE=1 and the companion marker, which a
+ * restart reads as positive evidence that no service manager owns it
+ * (src/client/runtime-restart.ts classifyClientRestartSupervisor).
  */
 export function claudeProxyStartEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return withoutSiblingMarker({ ...base, OCX_SERVICE: "1" });
+  return withoutSiblingMarker({ ...base, OCX_SERVICE: "1", [COMPANION_PROXY_ENV]: "claude" });
 }
 
 export interface ClaudeLaunchEnv {

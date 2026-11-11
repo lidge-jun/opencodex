@@ -33,6 +33,7 @@ import { withClientLifecycleSync } from "./lifecycle-lock";
 import { clientConnectionEnded, clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, type ClientRestartController } from "./runtime-restart";
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
 import { restoreLinkClientRouting } from "./stop-routing";
+import { COMPANION_PROXY_ENV } from "../service/companion-proxy";
 import { markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } from "./sync-runtime";
 
 let activeServer: Server<unknown> | null = null;
@@ -113,11 +114,12 @@ export function standaloneRecycleEnv(
 ): NodeJS.ProcessEnv {
   const childEnv = { ...env };
   // A detached replacement is nobody's child: not the desktop app's, not a service's, not a Windows
-  // wrapper's. It must carry no supervisor marker it would otherwise misread as its own.
+  // wrapper's, not a companion launcher's. It must carry no owner marker it would misread as its own.
   delete childEnv[DESKTOP_SUPERVISED_ENV];
   delete childEnv.OCX_SERVICE;
   delete childEnv.OCX_SERVICE_MANAGED;
   delete childEnv.OCX_WINDOWS_WRAPPER_PROTOCOL;
+  delete childEnv[COMPANION_PROXY_ENV];
   const admissionToken = childEnv.OPENCODEX_API_AUTH_TOKEN?.trim();
   if (admissionToken && serviceApiTokenFingerprint(admissionToken) !== disconnectedTokenFingerprint) {
     // A surviving env token shadows OCX_API_TOKEN_FILE entirely, so nothing below can
