@@ -340,6 +340,13 @@ The positive browser test must use a real signed-in Tailscale session; a bare `c
 identity headers needed for automatic session issuance. Pairing remains the fallback when the HTTPS
 frontend cannot provide trustworthy Tailscale identity.
 
+**Remember this device** works on this management origin: the hub's management listener is the
+trusted ingress, so a dashboard opened at `hub.managementPublicOrigin` can remember a device. A
+standalone instance behind its own TLS-terminating proxy has no such listener; it can remember devices
+only after you set `dashboardTrustedProxy` (see
+[Remember behind a reverse proxy](/guides/web-dashboard/#remember-behind-a-reverse-proxy)). A hub
+ignores that setting.
+
 ### Giving the data listener TLS
 
 The Serve mapping above publishes the **management** ingress only. That ingress never serves
