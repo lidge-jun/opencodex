@@ -18,11 +18,13 @@ file-backed image references in messages, agent messages or tool results before 
 dispatch. Other provider routes retain their own image handling; a usable image URL takes
 precedence over a file ID. `tests/providers/claude-cli-client-http.test.ts` covers this boundary.
 
-TRAE CN retains its pre-dispatch refusal for instruction media, native agent-message media, video, documents and tool replay.
-An ordinary user image may instead proceed when the selected route has a usable routed or OpenAI vision-preprocessing plan;
-the sidecar replaces it with a description before ACP dispatch. This exception does not advertise native ACP image support or
-bypass the other media refusals. `tests/responses/responses-combo-run-turn-classified-failure.test.ts` covers routed captioning
-and the remaining direct and combo refusals.
+TRAE CN retains its pre-dispatch refusal for instruction media, native agent-message media (including an item that also says
+`role: "user"`), video, documents and tool replay. An ordinary user `message` image may instead proceed only when the selected
+route produces an actual routed or credentialed OpenAI vision plan; preferring the OpenAI backend without usable credentials is
+not dispatchability. The sidecar replaces that image with a description before ACP dispatch. Tool-result images are refused
+before vision preparation, while rebuilt `web_search` results remain eligible for the existing no-search-plan cleanup.
+`tests/responses/responses-combo-run-turn-classified-failure.test.ts` covers these boundaries and verifies that refused agent
+and tool-result images trigger no vision request or ACP session.
 
 Mistral's registry entry in `src/providers/registry/entries-extended.ts` declares `zai-glm-5-3` native input as text-only, so registry enrichment enrolls that model in the enabled vision sidecar for existing configurations: the catalog advertises image attachments and request preprocessing sends GLM descriptions. Native Mistral vision models and explicit operator modalities retain precedence (`tests/vision/mistral-vision-sidecar.test.ts`).
 

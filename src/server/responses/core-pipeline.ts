@@ -26,8 +26,8 @@ import { releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
 import { formatErrorResponse } from "../../bridge";
 import { InvalidRetainedCompactionSummary, prepareCompactionRetention } from "./compaction-retention";
 import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
-import { responsesHasUnsupportedInputMedia } from "../../adapters/trae-cn/input-media";
-import { planVisionSidecar, shouldResolveOpenAiVisionSidecar } from "../../vision";
+import { responsesHasUnsupportedInputMedia, responsesHasUnsupportedToolMedia } from "../../adapters/trae-cn/input-media";
+import { planVisionSidecar } from "../../vision";
 import { markResponseNonReplayable } from "../../lib/upstream-retry";
 
 /** Compose request phases while retaining the original admission-finally ownership. */
@@ -58,11 +58,10 @@ export async function handleResponsesInner(
       const unsupportedTraeMedia = transportState.runTurnAdapter.name === "trae-cn"
         && (() => {
           const captionUserImages = planVisionSidecar(config, requestState.route.provider, requestState.route.modelId,
-            requestState.parsed, undefined, { providerName: requestState.route.providerName }) !== undefined
-            || shouldResolveOpenAiVisionSidecar(config, requestState.route.provider, requestState.route.modelId,
-              requestState.parsed, requestState.route.providerName);
+            requestState.parsed, undefined, { providerName: requestState.route.providerName }) !== undefined;
           return options.chatUnsupportedInstructionMedia
             || options.responsesUnsupportedInputMedia && !captionUserImages
+            || responsesHasUnsupportedToolMedia(requestState.parsed._rawBody)
             || responsesHasUnsupportedInputMedia(requestState.parsed._rawBody, { captionUserImages });
         })();
       if (instructionImage || options.responsesFileImage || unsupportedTraeMedia) {

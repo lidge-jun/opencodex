@@ -123,6 +123,87 @@ test("TRAE user images reach the routed vision sidecar instead of the pre-dispat
   } finally { open.mockRestore(); describer.mockRestore(); }
 });
 
+test("TRAE does not treat a credential-free OpenAI preference as a dispatchable vision plan", async () => {
+  const routed = await import("../../src/vision/routed-describe");
+  const describer = spyOn(routed, "describeImageRouted");
+  const cfg = config([{ provider: "trae-cn", model: "test-model" }]);
+  cfg.defaultProvider = "trae-cn";
+  cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
+    authMode: "key", models: ["test-model"], liveModels: false };
+  cfg.visionSidecar = { enabled: true, backend: "openai" };
+  const open = spyOn(traeClient, "openTraeSession");
+  try {
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "trae-cn/test-model", stream: false,
+        input: [{ role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" }] }] }),
+    }), cfg, { model: "", provider: "" });
+    expect(response.status).toBe(400);
+    expect((await response.json() as { error: { code: string } }).error.code).toBe("unsupported_input_modality");
+    expect(describer).not.toHaveBeenCalled(); expect(open).not.toHaveBeenCalled();
+  } finally { open.mockRestore(); describer.mockRestore(); }
+});
+
+test("TRAE rejects agent and tool-result images before any vision request", async () => {
+  const routed = await import("../../src/vision/routed-describe");
+  const describer = spyOn(routed, "describeImageRouted");
+  const cfg = config([{ provider: "trae-cn", model: "test-model" }]);
+  cfg.defaultProvider = "trae-cn";
+  cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
+    authMode: "key", models: ["test-model"], liveModels: false };
+  cfg.providers.vision = { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key",
+    authMode: "key", models: ["vision-model"], inputModalities: ["text", "image"] };
+  cfg.visionSidecar = { enabled: true, backend: "routed", model: "vision/vision-model" };
+  const open = spyOn(traeClient, "openTraeSession");
+  const image = { type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" };
+  try {
+    for (const item of [
+      { type: "agent_message", role: "user", content: [image] },
+      { type: "function_call_output", call_id: "call_image", output: [image] },
+    ]) {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "trae-cn/test-model", stream: false, input: [item] }),
+      }), cfg, { model: "", provider: "" });
+      expect(response.status).toBe(400);
+      expect((await response.json() as { error: { code: string } }).error.code).toBe("unsupported_input_modality");
+    }
+    expect(describer).not.toHaveBeenCalled(); expect(open).not.toHaveBeenCalled();
+  } finally { open.mockRestore(); describer.mockRestore(); }
+});
+
+test("TRAE rebuilt web-search images still refuse while ordinary search results may be removed", async () => {
+  const cfg = config([{ provider: "trae-cn", model: "test-model" }]);
+  cfg.defaultProvider = "trae-cn";
+  cfg.providers["trae-cn"] = { adapter: "trae-cn", baseUrl: "https://www.trae.cn", keyOptional: true,
+    authMode: "key", models: ["test-model"], liveModels: false };
+  cfg.providers.vision = { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key",
+    authMode: "key", models: ["vision-model"], inputModalities: ["text", "image"] };
+  cfg.visionSidecar = { enabled: true, backend: "routed", model: "vision/vision-model" };
+  const routed = await import("../../src/vision/routed-describe");
+  const describer = spyOn(routed, "describeImageRouted");
+  const open = spyOn(traeClient, "openTraeSession").mockResolvedValue({ models: ["test-model"],
+    prompt: async (_model, _text, emit) => { emit({ type: "text_delta", text: "answered" }); emit({ type: "done" }); },
+    close: async () => undefined });
+  const search = { type: "function_call", call_id: "ws_fixture", name: "web_search", arguments: "{}" };
+  try {
+    const refused = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "trae-cn/test-model", stream: false, input: [search,
+        { type: "function_call_output", call_id: "ws_fixture", output: [{ type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" }] }] }),
+    }), cfg, { model: "", provider: "" });
+    expect(refused.status).toBe(400);
+    expect(describer).not.toHaveBeenCalled(); expect(open).not.toHaveBeenCalled();
+    const admitted = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "trae-cn/test-model", stream: false, input: [search,
+        { type: "function_call_output", call_id: "ws_fixture", output: "result text" },
+        { role: "user", content: "Question" }] }),
+    }), cfg, { model: "", provider: "" });
+    expect(admitted.status, await admitted.clone().text()).toBe(200);
+  } finally { open.mockRestore(); describer.mockRestore(); }
+});
+
 test("Chat policy retry preserves normalized effort and instruction positions", async () => {
   const { restoreChatInstructionMedia } = await import("../../src/server/responses/chat-policy-media");
   const { chatToResponsesBody } = await import("../../src/protocols/codecs/chat");

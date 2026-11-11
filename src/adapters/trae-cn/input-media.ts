@@ -17,14 +17,31 @@ function hasUnsupportedInstructions(body: unknown, field: "input" | "messages"):
 
 /** Reject media that cannot survive Responses projection; user images may be captioned first. */
 export function responsesHasUnsupportedInputMedia(body: unknown, options: { captionUserImages?: boolean } = {}): boolean {
-  return hasUnsupportedInstructions(body, "input")
-    || (record(body) && Array.isArray(body.input) && body.input.some(item =>
-      record(item) && (item.type === "agent_message"
-        || ((item.type === undefined || item.type === "message") && item.role === "user"))
-      && Array.isArray(item.content)
-      && item.content.some(part => record(part) && typeof part.type === "string"
-        && MEDIA_PART_TYPES.has(part.type)
-        && !(options.captionUserImages === true && part.type === "input_image" && item.role === "user"))));
+  if (hasUnsupportedInstructions(body, "input")) return true;
+  if (!record(body) || !Array.isArray(body.input)) return false;
+  const messageMedia = body.input.some(item => record(item)
+    && (item.type === "agent_message" || ((item.type === undefined || item.type === "message") && item.role === "user"))
+    && Array.isArray(item.content) && item.content.some(part => record(part) && typeof part.type === "string"
+      && MEDIA_PART_TYPES.has(part.type)
+      && !(options.captionUserImages === true && part.type === "input_image" && item.role === "user"
+        && (item.type === undefined || item.type === "message"))));
+  const toolMedia = body.input.some(item => record(item)
+    && (item.type === "function_call_output" || item.type === "custom_tool_call_output")
+    && Array.isArray(item.output) && item.output.some(part => record(part) && typeof part.type === "string"
+      && MEDIA_PART_TYPES.has(part.type)));
+  return messageMedia || toolMedia;
+}
+
+/** A rebuilt search result may be removed later, but every other tool image is refused first. */
+export function responsesHasUnsupportedToolMedia(body: unknown): boolean {
+  if (!record(body) || !Array.isArray(body.input)) return false;
+  const searchCallIds = new Set(body.input.flatMap(item => record(item) && item.type === "function_call"
+    && item.name === "web_search" && typeof item.call_id === "string" ? [item.call_id] : []));
+  return body.input.some(item => record(item)
+    && (item.type === "function_call_output" || item.type === "custom_tool_call_output")
+    && !(typeof item.call_id === "string" && searchCallIds.has(item.call_id))
+    && Array.isArray(item.output) && item.output.some(part => record(part) && typeof part.type === "string"
+      && MEDIA_PART_TYPES.has(part.type)));
 }
 
 /** Inspect Chat instructions before their non-text parts disappear during Responses projection. */
