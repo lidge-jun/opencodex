@@ -15,6 +15,7 @@ import {
   readRuntimePort,
   removePid,
   removeRuntimePort,
+  runtimeOwnerScope,
   setOcxStartProcessCacheForTests,
   setProcessCommandLineExecForTests,
   setProcessCommandLineNativeForTests,
@@ -391,6 +392,20 @@ describe("proxy process-state ownership", () => {
     expect(readRuntimePort()).toEqual({ pid: 1234, port: 58195, hostname: "0.0.0.0", attestationSecret });
     expect(readRuntimePort(1234)).toEqual({ pid: 1234, port: 58195, hostname: "0.0.0.0", attestationSecret });
     expect(readRuntimePort(9999)).toBeNull();
+  });
+
+  // #8552: the scope says where the OWNER runs, so only the owner may stamp it.
+  test("a runtime record this process writes for itself carries its owner scope; one for another PID keeps its own", () => {
+    const scope = runtimeOwnerScope();
+    expect(scope.host).toMatch(/^[0-9a-f]{32}$/);
+    expect(runtimeOwnerScope()).toBe(scope);
+    if (process.platform !== "linux") expect(scope).toEqual({ host: scope.host });
+    writeRuntimePort({ pid: process.pid, port: 58195 });
+    expect(readRuntimePort()?.ownerScope).toEqual(scope);
+    writeRuntimePort({ pid: 1234, port: 58195, ownerScope: { host: "kept-as-written" } });
+    expect(readRuntimePort()?.ownerScope).toEqual({ host: "kept-as-written" });
+    writeRuntimePort({ pid: 1234, port: 58195 });
+    expect(readRuntimePort()?.ownerScope).toBeUndefined();
   });
 
   test("runtime port removal preserves newer pid state", () => {

@@ -216,6 +216,40 @@ describe("checked Windows stop, part A", () => {
     expect(result.unbound.sort()).toEqual([60, 61]);
   });
 
+  // Without a native API (ARM64, or no FFI) every watch answers "unavailable". The wrappers are
+  // still bound and terminated, but nothing proves they exited, so the stop is unknown, never stopped.
+  test("unavailable exit watches still terminate the bound wrappers and end as unknown", async () => {
+    const h = harness({ openWatch: () => ({ status: "unavailable" }) });
+    const result = await stopWindowsServiceChecked(h.deps);
+    expect(result).toMatchObject({ outcome: "unknown", reason: "evidence-unreadable", changed: true });
+    expect(mutations(h.calls)).toEqual(["end", "terminate:30", "terminate:20"]);
+    expect(result.terminated).toEqual([30, 20]);
+  });
+
+  // The answer slice 2's strict ARM64 adapter returns: never counted as an exit.
+  test("a terminate that answers unavailable is unknown and nothing further is terminated", async () => {
+    const h = harness({ terminate: (pid): WindowsTerminateResult => { h.calls.push("terminate:" + pid); return { status: "unavailable" }; } });
+    const result = await stopWindowsServiceChecked(h.deps);
+    expect(result).toMatchObject({ outcome: "unknown", reason: "evidence-unreadable", changed: true });
+    expect(mutations(h.calls)).toEqual(["end", "terminate:30"]);
+    expect(result.terminated).toEqual([]);
+  });
+
+  test("an unbound wrapper whose exit cannot be watched still counts as running", async () => {
+    const shell = entry(500, 4, "explorer.exe", "explorer.exe", 2_000);
+    const tree = [...supervisedTree(), shell, launcher(60, 500, 7_000), loop(61, 60, 7_100)];
+    const base = harness({}, tree);
+    const open = base.deps.openWatch;
+    base.deps.openWatch = (pid, start) => (pid === 60 || pid === 61 ? { status: "unavailable" } : open(pid, start));
+    expect(await stopWindowsServiceChecked(base.deps)).toMatchObject({ outcome: "survived", reason: "unbound-wrapper" });
+
+    // A wrapper of this home with no creation time is unreadable evidence: unknown, nothing changed.
+    const unwatched = harness({}, [...supervisedTree(), shell, { ...launcher(60, 500, 7_000), startTime: null }]);
+    const result = await stopWindowsServiceChecked(unwatched.deps);
+    expect(result).toMatchObject({ outcome: "unknown", reason: "evidence-unreadable", changed: false });
+    expect(mutations(unwatched.calls)).toEqual([]);
+  });
+
   test("a bound wrapper that outlives its terminate is survived", async () => {
     const h = harness();
     h.deps.terminate = pid => { h.calls.push("terminate:" + pid); return { status: "terminated" }; };
