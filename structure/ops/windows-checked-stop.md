@@ -70,7 +70,7 @@ deepest first, waits on the bind-time watches (terminates and wait share 3 s), a
 manager state once (1 s). Denied stops every further step. A cap overrun is `unknown`. A wrapper or
 manager still running is `survived` (`unbound-wrapper` when the survivor was never bound). WinSW
 is `survived` while the proxy is still alive after the service reports stopped. The authorizer
-variant `guardedStopWindowsServiceChecked` runs its authorizer at entry and before each terminate and
+variant `guardedStopWindowsServiceChecked` runs its authorizer at entry, before each manager stop (/end, the WinSW stop) and before each terminate and
 reports a refusal as `WindowsCheckedStopRefusedError` with what had already happened.
 
 Each step that asks the machine runs under a cap that races a timer and rechecks the elapsed time

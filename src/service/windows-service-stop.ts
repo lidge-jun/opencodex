@@ -61,7 +61,7 @@ export interface WindowsPartARequest {
   admission?: WindowsStopAdmission;
   /** The evidence snapshot (windowsProcessSnapshot) a guarded revalidation already read. */
   bindSnapshot?: readonly WindowsStopProcessEntry[];
-  /** The updater's authorizer: throws to refuse, at entry and before each terminate. */
+  /** The updater's authorizer: throws to refuse, at entry, before each manager stop and before each terminate. */
   authorize?: () => void | Promise<void>;
   /**
    * A hard cap (the route: 6 s with a receipt, 4 s for a stray sweep). An overrun answers

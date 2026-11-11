@@ -383,11 +383,38 @@ describe("checked Windows stop, part A", () => {
     let checks = 0;
     const error = await guardedStopWindowsServiceChecked(() => {
       checks += 1;
-      if (checks === 3) throw new Error("respawned runtime");
+      // Entry, before /end, before terminate:30, before terminate:20.
+      if (checks === 4) throw new Error("respawned runtime");
     }, h.deps).catch(caught => caught);
     expect(error).toBeInstanceOf(WindowsCheckedStopRefusedError);
     expect((error as WindowsCheckedStopRefusedError).partial.terminated).toEqual([30]);
     expect(h.calls.filter(call => call.startsWith("terminate:"))).toEqual(["terminate:30"]);
+  });
+});
+
+describe("the updater's authorizer guards each manager stop", () => {
+  test("a refusal right before /end sends no /end and changes nothing", async () => {
+    const h = harness();
+    let checks = 0;
+    const error = await guardedStopWindowsServiceChecked(() => {
+      checks += 1;
+      if (checks === 2) throw new Error("service home changed");
+    }, h.deps).catch(caught => caught);
+    expect(error).toBeInstanceOf(WindowsCheckedStopRefusedError);
+    expect((error as WindowsCheckedStopRefusedError).partial.changed).toBe(false);
+    expect(mutations(h.calls)).toEqual([]);
+  });
+
+  test("a refusal right before the WinSW stop sends no stop and changes nothing", async () => {
+    const h = harness({ probeScheduler: () => ({ status: "absent" }), probeWinsw: () => "started" as WinswStatus });
+    let checks = 0;
+    const error = await guardedStopWindowsServiceChecked(() => {
+      checks += 1;
+      if (checks === 2) throw new Error("service home changed");
+    }, h.deps).catch(caught => caught);
+    expect(error).toBeInstanceOf(WindowsCheckedStopRefusedError);
+    expect((error as WindowsCheckedStopRefusedError).partial.changed).toBe(false);
+    expect(mutations(h.calls)).toEqual([]);
   });
 });
 
