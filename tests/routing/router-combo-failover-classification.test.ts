@@ -1621,6 +1621,11 @@ describe("provider moderation refusal never outranks a hard refusal", () => {
     ["nested hard code beside a moderation code", body({ code: "content_filter", message: "Blocked.", innererror: { code: "bio_policy" } }), "content_filter", undefined],
     ["unstripped gateway prefix with a non-replayable root", 'Gateway error 400: {"code":"upstream_no_response","error":{"code":"content_filter"}}', "content_filter", undefined],
     ["validation error that merely names moderation categories", body({ message: "Invalid metadata value: moderation categories: harassment" }), undefined, undefined],
+    ["content_policy_violation root over a nested moderation code", body({ code: "content_filter", message: "The input was refused by moderation." }, { code: "content_policy_violation" }), "content_filter", "content_policy_violation"],
+    ["content_policy_violation code with moderation prose", body({ code: "content_policy_violation", message: "Your request was refused by moderation." }), "content_policy_violation", undefined],
+    ["an echoed value whose quote holds an apostrophe", body({ message: "Invalid enum value 'it's refused by moderation' for field mode" }), undefined, undefined],
+    ["an echoed value in backticks", body({ message: "Unknown tool name `refused by moderation` in tools[0]" }), undefined, undefined],
+    ["a JSON-escaped nested hard code", '{"error":{"code":"content_filter","message":"refused by moderation","inner":{"code":"\\u0062io_policy"}}}', "content_filter", undefined],
   ];
   for (const [label, message, code, rootCode] of cases) {
     test(label, () => {

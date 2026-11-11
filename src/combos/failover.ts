@@ -1021,7 +1021,7 @@ function isReflectedValidationText(text: string): boolean {
  */
 function unquotedProse(text: string): string {
   let out = "";
-  let quote: "'" | "\"" | null = null;
+  let quote: string | null = null;
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i]!;
     if (ch === "\\") {
@@ -1029,12 +1029,14 @@ function unquotedProse(text: string): string {
       i += 1;
       continue;
     }
+    // An apostrophe between letters ("it's") is literal both outside and inside a quote.
+    const inWordApostrophe = ch === "'" && i > 0 && /[A-Za-z]/.test(text[i - 1]!) && /[A-Za-z]/.test(text[i + 1] ?? "");
     if (quote) {
-      if (ch === quote) quote = null;
+      if (ch === quote && !inWordApostrophe) quote = null;
       out += " ";
       continue;
     }
-    if (ch === "\"" || (ch === "'" && !(i > 0 && /[A-Za-z]/.test(text[i - 1]!) && /[A-Za-z]/.test(text[i + 1] ?? "")))) {
+    if (ch === "\"" || ch === "`" || (ch === "'" && !inWordApostrophe)) {
       quote = ch;
       out += " ";
       continue;
@@ -1058,7 +1060,12 @@ const MODERATION_REFUSAL_VERDICT_PHRASES = [
  * carries both is not evidence that another target may serve the request.
  */
 const HARD_STOP_TOKEN =
-  /\b(?:cyber_policy|origin_rejected|bio_policy|misalignment_policy_violation|invalid_prompt|upstream_no_response|upstream_closed_before_response|upstream_reset_replay_refused)\b/i;
+  /\b(?:cyber_policy|origin_rejected|bio_policy|misalignment_policy_violation|invalid_prompt|content_policy_violation|upstream_no_response|upstream_closed_before_response|upstream_reset_replay_refused)\b/i;
+
+/** JSON \\uXXXX escapes decoded, so an escaped nested code cannot slip past {@link HARD_STOP_TOKEN}. */
+function withJsonEscapesDecoded(text: string): string {
+  return text.replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+}
 
 function namesModerationRefusal(text: string): boolean {
   if (isReflectedValidationText(text)) return false;
@@ -1085,13 +1092,15 @@ export function isProviderModerationRefusal(
     isCyberPolicyCode(normalizedCode)
     || isTerminalRefusalCode(normalizedCode)
     || isNonReplayableUpstreamCode(normalizedCode)
-    || normalizedCode === "origin_rejected"
+    // The envelope-root verdict codes (origin, content policy, context length, a generic
+    // invalid_request_error code) stop on their own; a moderation phrase beside one cannot hop.
+    || rootCodeStatesVerdict(normalizedCode)
   ) {
     return false;
   }
   // Hard refusals anywhere in the body outrank a moderation verdict, including nested codes,
   // serialized wrappers and safety copy. The terminal refusal path owns those bodies.
-  if (message && (HARD_STOP_TOKEN.test(message) || isHardPolicyOrOriginRefusal(message)
+  if (message && (HARD_STOP_TOKEN.test(withJsonEscapesDecoded(message)) || isHardPolicyOrOriginRefusal(message)
     || safetyRefusalCodeFromMessage(message) !== undefined)) {
     return false;
   }
@@ -1166,8 +1175,10 @@ export function isProviderModerationRefusal(
     for (const c of [rootCode, errCode]) {
       if (
         isCyberPolicyCode(c)
+        || isTerminalRefusalCode(c)
         || isNonReplayableUpstreamCode(c)
         || c === "origin_rejected"
+        || c === "content_policy_violation"
       ) {
         return false;
       }
