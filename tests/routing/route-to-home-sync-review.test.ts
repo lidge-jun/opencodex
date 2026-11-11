@@ -164,6 +164,123 @@ test("an off-only Home decision completes without model discovery and keeps the 
   expect(readRouteIntentReceipt().models).toEqual(roster);
 `), SPAWN_BUDGET_MS);
 
+test("a dashboard disable cannot be undone by an already projected Home sync", () => scenario(`
+  expect((await toggle('pi', true)).status).toBe(200);
+  expect(piRouted()).toBe(true);
+  const { materializeLocalRouteIntent } = await import('./src/client/route-intent-apply');
+  let projected, release;
+  const reached = new Promise(resolve => { projected = resolve; });
+  const barrier = new Promise(resolve => { release = resolve; });
+  let first = true;
+  const sync = syncHomeRouteTo(loadConfig(), 'test', false, undefined, undefined, {
+    loadModels: async () => [],
+    materialize: async (...args) => {
+      if (first) { first = false; projected(); await barrier; }
+      return materializeLocalRouteIntent(...args);
+    },
+  });
+  await reached;
+  const disable = await toggle('pi', false);
+  expect([200, 409]).toContain(disable.status);
+  release();
+  await sync;
+  if (disable.status === 409) expect((await toggle('pi', false)).status).toBe(200);
+  expect(readRouteIntentState().devices.home?.pi).toEqual({ enabled: false });
+  expect(piRouted()).toBe(false);
+`), SPAWN_BUDGET_MS);
+
+test("identical dashboard requests join while a conflicting request is refused during Home apply", () => scenario(`
+  mkdirSync(INTEGRATION_CLIENTS.dsh.detectDir({}, process.env.HOME), { recursive: true });
+  expect((await toggle('dsh', true)).status).toBe(200);
+  const { setIntegrationMutationFlightTestHooks } = await import('./src/server/management/integration-routes');
+  const { writeFile, rm } = await import('node:fs/promises');
+  let entered, release, writes = 0;
+  const reached = new Promise(resolve => { entered = resolve; });
+  const barrier = new Promise(resolve => { release = resolve; });
+  setIntegrationMutationFlightTestHooks({ lockSeams: {
+    writeFile: async (path, payload, options) => {
+      await writeFile(path, payload, options);
+      if (++writes === 1) { entered(); await barrier; }
+    },
+    removeFile: path => rm(path, { force: true }), now: Date.now,
+    delay: async () => { throw new Error('unexpected writer contention'); }, pid: process.pid,
+  } });
+  try {
+    const first = toggle('dsh', false);
+    expect(await Promise.race([reached.then(() => 'entered'), first.then(() => 'finished')])).toBe('entered');
+    const joined = toggle('dsh', false);
+    const conflicting = await toggle('dsh', true);
+    expect(conflicting.status).toBe(409);
+    expect(conflicting.body.code).toBe('integration_mutation_busy');
+    release();
+    const [a, b] = await Promise.all([first, joined]);
+    expect(a.status).toBe(200);
+    expect(b).toEqual(a);
+    expect(store.listOperations('dsh')).toHaveLength(2);
+    expect(readRouteIntentState().devices.home?.dsh).toEqual({ enabled: false });
+    expect(store.readRecords().dsh).toBeUndefined();
+  } finally { release(); setIntegrationMutationFlightTestHooks(null); }
+`), SPAWN_BUDGET_MS);
+
+test("large Aside profile mutations respect the Home apply lock and record the decision", () => scenario(`
+  const id = 1000000000;
+  mkdirSync(join(asideRoot, 'u', String(id)), { recursive: true });
+  writeFileSync(join(asideRoot, 'u', String(id), 'models.json'), JSON.stringify({ preferences: { userId: 'large-user' }, providers: {} }));
+  writeFileSync(join(asideRoot, 'accounts.json'), JSON.stringify({ currentAccountId: id, accounts: [{ id, userId: 'large-user' }] }));
+  setRouteClientIntent('pi', { enabled: false }, 'home');
+  const path = '/api/client-integrations/aside/profiles/' + id;
+  const blocked = await withLinkApply(() => management(handleIntegrationRoutes, 'PUT', path, { enabled: true }));
+  expect(blocked.status).toBe(409);
+  const enabled = await management(handleIntegrationRoutes, 'PUT', path, { enabled: true });
+  expect(enabled.status).toBe(200);
+  expect(readRouteIntentState().devices.home.aside).toEqual({ enabled: true, accounts: ['large-user'] });
+  const blockedRestore = await withLinkApply(() => management(handleIntegrationRoutes, 'POST', path + '/restore', { opId: enabled.body.opId }));
+  expect(blockedRestore.status).toBe(409);
+  const restored = await management(handleIntegrationRoutes, 'POST', path + '/restore', { opId: enabled.body.opId });
+  expect(restored.status).toBe(200);
+  expect(readRouteIntentState().devices.home.aside).toEqual({ enabled: false, accounts: ['large-user'] });
+`), SPAWN_BUDGET_MS);
+
+test("a refused Home toggle leaves model discovery settings untouched", () => scenario(`
+  const upstream = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => Response.json({ data: [{ id: 'new-model' }] }) });
+  const config = loadConfig();
+  config.providers.fixture.baseUrl = new URL('/v1', upstream.url).href;
+  config.providers.fixture.liveModels = true;
+  config.modelDiscovery = { newModelPolicy: 'off', knownModels: { fixture: { ids: ['fixture-model'], removed: [], updatedAt: '2026-01-01T00:00:00Z' } } };
+  saveConfig(config);
+  const configPath = join(process.env.OPENCODEX_HOME, 'config.json');
+  const before = readFileSync(configPath, 'utf8');
+  writeFileSync(routeIntentStatePath(), '{broken');
+  const result = await toggle('pi', true);
+  expect(result.body.code).toBe('route_intent_unavailable');
+  expect(readFileSync(configPath, 'utf8')).toBe(before);
+  const { loadExportModels } = await import('./src/server/management/model-rows');
+  await loadExportModels(loadConfig());
+  expect(readFileSync(configPath, 'utf8')).not.toBe(before);
+  upstream.stop(true);
+`), SPAWN_BUDGET_MS);
+
+test("a refused Home restore leaves model discovery settings untouched", () => scenario(`
+  const applied = await toggle('pi', true);
+  expect(applied.status).toBe(200);
+  const upstream = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => Response.json({ data: [{ id: 'new-model' }] }) });
+  const config = loadConfig();
+  config.providers.fixture.baseUrl = new URL('/v1', upstream.url).href;
+  config.providers.fixture.liveModels = true;
+  config.modelDiscovery = { newModelPolicy: 'off', knownModels: { fixture: { ids: ['fixture-model'], removed: [], updatedAt: '2026-01-01T00:00:00Z' } } };
+  saveConfig(config);
+  const configPath = join(process.env.OPENCODEX_HOME, 'config.json');
+  const before = readFileSync(configPath, 'utf8');
+  writeFileSync(routeIntentStatePath(), '{broken');
+  const result = await management(handleIntegrationRoutes, 'POST', '/api/client-integrations/restore', { opId: applied.body.opId });
+  expect(result.body.code).toBe('route_intent_unavailable');
+  expect(readFileSync(configPath, 'utf8')).toBe(before);
+  const { loadExportModels } = await import('./src/server/management/model-rows');
+  await loadExportModels(loadConfig());
+  expect(readFileSync(configPath, 'utf8')).not.toBe(before);
+  upstream.stop(true);
+`), SPAWN_BUDGET_MS);
+
 test("the CLI accepts an unresolved Aside row and prints the warning without failing the sync", async () => {
   const body = { schema: "ocx.route-to/1", warnings: ["Aside was left unchanged on this Home; decide it with ocx route to aside on|off --device home."],
     devices: [{ id: "home", alias: "home", clients: ROUTE_CLIENT_IDS.map(client => client === "aside"
