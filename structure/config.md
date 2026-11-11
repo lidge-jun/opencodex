@@ -393,6 +393,16 @@ not context-window metadata. They are applied only when a Responses request omit
 `max_output_tokens`; an explicit request value wins, then a model-specific configured value, then
 the provider default, then the adapter omits `max_tokens`.
 
+The Anthropic adapter reads the same two fields, and its own fallback is `max_tokens: 8192`. For an
+`adapter: "anthropic"` row, `routedProviderConfig` fills the routed copy by Claude model id rather than
+by row name (`src/providers/anthropic-output-caps.ts`, #8525): a row with no default of its own,
+operator-set or registry-seeded, receives the registry cap of every seeded Claude id under any
+operator per-model entry, and a row on `api.anthropic.com` also receives the 64000 Anthropic default.
+A row that already carries a default gets nothing, so the seeded Anthropic rows are unchanged; a
+gateway model id the registry does not list keeps 8192. The fill is runtime-only and never
+persisted, and a row that reaches the Anthropic wire only through `modelAdapters` is not covered
+(`tests/adapters/anthropic/anthropic-output-cap-by-model.test.ts`).
+
 Both fields must stay positive finite integers at disk-config and management validation boundaries.
 Registry entries may seed them through `providerConfigSeed`, key-login derivation, OAuth reconcile,
 and `routeModel`, but user config overrides registry defaults per field/key. Startup and login follow the [OAuth reconciliation contract](providers/oauth-reconciliation.md).
