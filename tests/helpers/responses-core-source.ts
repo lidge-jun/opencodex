@@ -98,6 +98,8 @@ export const RESPONSES_CORE_MODULES = [
   "adapter-delivery.ts",
   "anthropic-thinking-recovery.ts",
   "advisor-slot.ts",
+  // Reached from advisor-slot.ts: shared question bounds/clip helper.
+  "advisor-question.ts",
   "advisor-retention.ts",
   "advisor-plan-slot.ts",
   "policy-refusal.ts",
