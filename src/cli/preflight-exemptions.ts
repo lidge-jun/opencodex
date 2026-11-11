@@ -5,6 +5,8 @@ export function skipsCodexShimAutoRestore(command: string | undefined, args: str
   if (command === "uninstall" || command === "remove") return true;
   // Contract discovery and orchestrated update must validate before any repair.
   if (command === "capabilities") return true;
+  // Reading the bounded link diagnostics file must not repair, harden or create anything first.
+  if (command === "link" && args[1] === "diagnostics") return true;
   if (command === "update" && isOrchestratedUpdateArgv(args)) return true;
   if (command === "sync") return true;
   if (command === "status" || command === "doctor") return true;

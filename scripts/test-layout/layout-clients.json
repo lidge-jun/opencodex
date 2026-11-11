@@ -200,5 +200,8 @@
   "link-ssh-capture.test.ts": "clients",
   "link-ssh-capture-redact.test.ts": "clients",
   "link-ssh-capture-tunnels.test.ts": "clients",
-  "cli-link-capture.test.ts": "cli"
+  "cli-link-capture.test.ts": "cli",
+  "link-diagnostics-read.test.ts": "clients",
+  "cli-link-diagnostics.test.ts": "cli",
+  "link-diagnostics-route.test.ts": "server"
 }

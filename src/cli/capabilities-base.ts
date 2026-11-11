@@ -67,6 +67,16 @@ export const CAPABILITIES: readonly Capability[] = [
     details: ["Reads live listener/tunnel metadata; when no proxy is found, falls back to the local link store. Always emits JSON."],
   },
   {
+    command: ["link","diagnostics"],
+    summary: "Read this computer's bounded Remote Link diagnostics file.",
+    routes: [],
+    flags: [{"name":"--limit","value":"number","summary":"Newest records to show, 1-1000; default 200."},{"name":"--since","value":"string","summary":"Only records at or after this ISO time or epoch-millisecond timestamp."},{"name":"--json","value":"boolean","summary":"Emit the ocx.link.diagnostics/1 document as JSON."}],
+    mutates: false,
+    json: "envelope",
+    usage: "ocx link diagnostics [--limit <n>] [--since <iso-time|epoch-ms>] [--json]",
+    details: ["Reads <configDir>/link/diagnostics.jsonl and its backup diagnostics.jsonl.1 directly, oldest first, without the proxy or a management route. Never creates, hardens or writes a file, and skips the Codex-shim repair preflight.","Reads only regular files (never through a symlink, FIFO or symlinked link directory), at most the newest 256 KiB of each. Every line is re-checked against the writer's allowlist: tunnel and relay event/outcome/state words, generated UUIDs, numbers and timestamps. Lines that fail are counted in skipped, never printed.","Exit 0 including when nothing is recorded yet, which prints the file path. The dashboard reads the same records through GET /api/link/diagnostics."],
+  },
+  {
     command: ["link","revoke"],
     summary: "Revoke a link credential and remove its link record.",
     routes: [{"method":"DELETE","path":"/api/link/{id}"}],

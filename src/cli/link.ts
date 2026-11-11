@@ -12,6 +12,7 @@ import { runLinkEnrollment } from "./link-enrollment";
 import { runLinkCleanup, type LinkCleanupDeps } from "./link-cleanup";
 import { LINK_CAPTURE_USAGE, runLinkCapture, type LinkCaptureDeps } from "./link-capture";
 import { LINK_CHILD_OPS_USAGE, runLinkCheck, runLinkChildOp } from "./link-child-ops";
+import { LINK_DIAGNOSTICS_USAGE, runLinkDiagnostics } from "./link-diagnostics";
 import { validateChildOps, type LinkChildOpsView } from "./link-status-child";
 import { assertSshAlias } from "../link/ssh-argv";
 import { boundHint } from "../link/ssh-runner";
@@ -42,6 +43,7 @@ export const LINK_USAGE = `Usage:
   ocx link port [--json]
   ocx link issue --alias <alias> --tunnel-port <port> [--json]
   ocx link status [--json]
+  ${LINK_DIAGNOSTICS_USAGE}
   ocx link revoke --link-id <id> [--purge] [--force --yes] [--json]
   ocx link reconnect --link-id <id> [--json]
   ocx link cleanup [--link-id <id>] [--json]
@@ -51,6 +53,7 @@ ${LINK_CAPTURE_USAGE.join("\n")}
 
 Forced revoke skips remote cleanup. Run ocx disconnect on the remote client.
 Cleanup reports each Child's platform with disconnect guidance; it changes nothing.
+Diagnostics reads this computer's bounded link diagnostics file directly; it contacts no proxy and writes nothing.
 Check reads each Home-initiated Child's installed version and update route; it changes no install.
 Update, sync and restart-codex run on the Child over the link's SSH trust and wait for the job unless --no-wait.
 Capture opens a short, local window in which this machine's link tunnels log sanitized SSH diagnostics.`;
@@ -81,6 +84,8 @@ export interface LinkCliDeps extends RuntimeApiDeps, LocalControlDeps, LinkCaptu
   confirmFingerprint?: (host: { alias: string; fingerprint: string; keyType: string; ocxVersion?: string | null; runtimeKind?: "full" | "ephemeral" | "missing"; binarySizeBytes?: number }) => Promise<boolean>;
   readStore?: () => LinkStore;
   readAdminToken?: () => string | null;
+  /** Test seam: the config directory whose link diagnostics `ocx link diagnostics` reads. */
+  linkConfigDir?: string;
 }
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
@@ -406,13 +411,14 @@ export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}):
     else if (command === "port") await runPort(args, deps);
     else if (command === "issue") await runIssue(args, deps);
     else if (command === "status") await runStatus(args, deps);
+    else if (command === "diagnostics") await runLinkDiagnostics(args, deps, LINK_USAGE);
     else if (command === "revoke") await runRevoke(args, deps);
     else if (command === "reconnect") await runReconnect(args, deps);
     else if (command === "cleanup") await runLinkCleanup(args, deps, LINK_USAGE);
     else if (command === "check") verdictExit = await runLinkCheck(args, deps, linkRequest, LINK_USAGE);
     else if (command === "update" || command === "sync" || command === "restart-codex") verdictExit = await runLinkChildOp(command, args, deps, linkRequest, LINK_USAGE);
     else if (command === "capture") await runLinkCapture(args, deps, LINK_USAGE);
-    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, revoke, reconnect, cleanup, check, update, sync, restart-codex, capture", LINK_USAGE);
+    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, diagnostics, revoke, reconnect, cleanup, check, update, sync, restart-codex, capture", LINK_USAGE);
   });
   return code === 0 ? verdictExit : code;
 }
