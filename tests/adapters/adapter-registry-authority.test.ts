@@ -821,6 +821,39 @@ describe("TRAE CN ACP regression contract", () => {
       .toMatchObject({ input_tokens: 123, output_tokens: 456, total_tokens: 579 });
   });
 
+  for (const trailing of [
+    { name: "permission request", code: "trae_client_request_unsupported", frame: {
+      jsonrpc: "2.0", id: 99, method: "session/request_permission", params: {},
+    } },
+    { name: "unexpected model update", code: "trae_model_changed", frame: {
+      jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: {
+        sessionUpdate: "current_model_update", currentModelId: "unexpected-model",
+      } },
+    } },
+    { name: "malformed envelope", code: "trae_acp_protocol_error", frame: {
+      jsonrpc: "1.0", id: 100, result: {},
+    } },
+  ]) {
+    test("trailing " + trailing.name + " supersedes success and retains usage", async () => {
+      const usage = { inputTokens: 123, outputTokens: 456, totalTokens: 579 };
+      const fixture = traeFixture(request => {
+        if (request.method !== "session/prompt") return false;
+        fixture.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: {
+          sessionUpdate: "agent_message_chunk", content: { type: "text", text: "partial" },
+        } } });
+        fixture.send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn", usage } });
+        fixture.send(trailing.frame);
+        return true;
+      });
+      const events: AdapterEvent[] = [];
+      await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+      expect(events.at(-1)).toMatchObject({ type: "error", code: trailing.code, usage });
+      expect(events.some(event => event.type === "done")).toBe(false);
+      expect(buildResponseJSON(events, "test-model").usage)
+        .toMatchObject({ input_tokens: 123, output_tokens: 456, total_tokens: 579 });
+    });
+  }
+
   test("shutdown remains bounded when the process and its pipe never close", async () => {
     const fixture = traeFixture(request => request.method === "session/prompt");
     fixture.child.kill = () => true;
