@@ -5,7 +5,7 @@ import { isConnectedRuntime, standaloneApiTargets } from "../api-targets";
 import { ConnectPairingForm } from "../connect-pairing";
 import { InlineBanner } from "../components/v2-accounts/surface";
 import {
-  applyCodexCliUpdate, canApply, codexCliApplyCommand, codexCliStatusCommand, CodexCliUpdateError, fetchCodexCliUpdateJob, fetchCodexCliUpdatePlan, isTerminalJob,
+  applyCodexCliUpdate, canApply, codexCliApplyCommand, codexCliStatusCommand, CodexCliUpdateError, newCodexCliRequestId, fetchCodexCliUpdateJob, fetchCodexCliUpdatePlan, isTerminalJob,
   type CodexCliUpdateJobView, type CodexCliUpdatePlanView,
 } from "../codex-cli-update-api";
 
@@ -139,7 +139,8 @@ function CodexCliUpdatePanel({ apiBase }: { apiBase: string }) {
   const apply = useCallback(async () => {
     if (!plan || !canApply(plan, confirmed) || applying || job) return;
     const gen = generation.current;
-    requestId.current ??= crypto.randomUUID();
+    requestId.current ??= newCodexCliRequestId();
+    if (!requestId.current) { setApplyFailure({ code: "request_id_unavailable", retryable: false }); return; }
     setApplying(true); setApplyFailure(null);
     const controller = track();
     try {

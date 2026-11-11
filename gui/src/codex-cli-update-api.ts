@@ -47,7 +47,7 @@ const PROVENANCE = new Set(["npm-global", "app-bundle", "version-manager", "stan
 const SESSION = new Set(["none", "active", "unknown", "not-evaluated"]);
 const STATUS = new Set(["queued", "running", "applied", "not_applied", "refused", "ambiguous"]);
 const OWNER = new Set(["active", "unknown", "finished"]);
-/** Admission failures that leave nothing behind, so the same request may be sent again. */
+/** Failures after which resending the same request is idempotent: the server returns the job it already admitted, if any, and never admits a second. */
 const RETRYABLE_APPLY = new Set(["job_store_busy", "admission_failed", "network"]);
 
 const str = (value: unknown): string | null => typeof value === "string" ? value : null;
@@ -146,4 +146,23 @@ export function codexCliApplyCommand(planId: string | null): string {
 
 export function codexCliStatusCommand(jobId: string): string {
   return `ocx system codex-cli-update status ${jobId} --json`;
+}
+
+/**
+ * A fresh request id. `crypto.randomUUID` exists only in secure contexts; `getRandomValues`
+ * does not need one. Null means no id could be made, and the caller must not send.
+ */
+export function newCodexCliRequestId(): string | null {
+  const api = globalThis.crypto;
+  try {
+    if (api && typeof api.randomUUID === "function") return api.randomUUID();
+  } catch { /* not a secure context: fall through */ }
+  if (api && typeof api.getRandomValues === "function") {
+    const bytes = api.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+    bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+    const hex = [...bytes].map(byte => byte.toString(16).padStart(2, "0")).join("");
+    return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join("-");
+  }
+  return null;
 }

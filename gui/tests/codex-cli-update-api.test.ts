@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import {
-  applyCodexCliUpdate, canApply, CodexCliUpdateError, fetchCodexCliUpdateJob, fetchCodexCliUpdatePlan, isTerminalJob, readPlan,
+  applyCodexCliUpdate, canApply, CodexCliUpdateError, fetchCodexCliUpdateJob, fetchCodexCliUpdatePlan, isTerminalJob, newCodexCliRequestId, readPlan,
   type CodexCliUpdateJobView, type CodexCliUpdatePlanView,
 } from "../src/codex-cli-update-api";
 
@@ -75,4 +75,21 @@ test("a job is settled only when its status is final and no owner still writes i
   expect(isTerminalJob(job({ status: "applied", ownerState: "active" }))).toBe(false);
   expect(isTerminalJob(job({ status: "applied", ownerState: "finished" }))).toBe(true);
   expect(isTerminalJob(job({ status: "ambiguous", ownerState: "unknown", reason: "owner_state_unknown" }))).toBe(true);
+});
+
+test("a request id is made without a secure context and fits the server's id grammar", () => {
+  const real = Object.getOwnPropertyDescriptor(globalThis, "crypto")!;
+  try {
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: {
+      randomUUID: () => { throw new DOMException("insecure", "SecurityError"); },
+      getRandomValues: (bytes: Uint8Array) => { bytes.fill(7); return bytes; },
+    } });
+    const id = newCodexCliRequestId();
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(id).toMatch(/^[A-Za-z0-9._:-]{8,128}$/);
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: {} });
+    expect(newCodexCliRequestId()).toBeNull();
+  } finally {
+    Object.defineProperty(globalThis, "crypto", real);
+  }
 });
