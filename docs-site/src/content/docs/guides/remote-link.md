@@ -175,6 +175,7 @@ ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wai
 ocx link capture start [--minutes <1-60>] [--json]
 ocx link capture stop [--json]
 ocx link capture status [--json]
+ocx link policy [--updates off|notify|auto-when-idle] [--catalog-fanout auto|manual] [--child-codex-restart never|app-server-when-idle] [--idle-after-minutes <1-60>] [--json]
 ```
 
 `ocx link status` needs the local admin token on a listener that only this machine can reach. When the public listener is bound to a non-loopback address, for example a Hub on `0.0.0.0`, no TCP listener qualifies: the hub management listener is reached through Tailscale Serve, so it refuses the raw admin token for link routes. On macOS and Linux the proxy therefore also opens a private Unix socket, `<OPENCODEX_HOME>/run/control-<port>.sock`, in a directory only your user can enter, and `ocx link status` uses it automatically. The socket answers only `GET /api/link/status` and still requires the admin token. Windows and runtimes older than this change keep the TCP path, where the read returns `403` on such a Hub.
@@ -234,6 +235,32 @@ The Home does not restart Codex on a Child while it is relaying a model request 
 The commands exit 0 when every Child succeeded or was already up to date (with `--no-wait`, 0 only means the job was accepted; it may still be running. The printed job carries a `jobId`; read the result with `GET /api/link/children/jobs/<jobId>` on the Home, using the admin token on loopback. Finished jobs stay readable for one hour, at most 32 of them, and are lost when the Home restarts, so read the result promptly), 6 when a Child needs attention (busy, offline, refused, an owner action, unsupported, a skipped restart, or an update that was kept but whose follow-up sync failed; run `ocx link sync` for that link), 1 on a failure or an unconfirmed result (check the Child again with `ocx link check` before retrying), 4 for an unknown link or a Home without these commands, and 5 when another operation is running on that link, the only link named was started from the Child, the Home has no links, or the command ran on a Child; the error message names which. The CLI needs a Home bound to loopback; on any other Home these commands are refused (exit 1), and the dashboard has no controls for them.
 
 Do not link a machine you do not own: the Home runs commands there with your SSH key.
+
+### Automatic catalog fan-out and the Child policy
+
+Catalog fan-out is on by default. When the Home's catalog changes (the catalog auto-refresh reports a change, or a check every 5 minutes notices a dashboard or management edit), the Home waits 60 seconds for edits to settle (at most 5 minutes after the first change). Then, with no action from you, it opens a background SSH session to each eligible Child and runs the same pinned `ocx sync --expect-link` that `ocx link sync` runs, without a restart. A Child is eligible when the Home started its link, its tunnel is connected, no other operation runs on it, and the last sync this Home ran there predates the change; a Child that only downloaded the catalog still counts as behind. A Child that is relaying model requests is synced only when its Codex settings already match the Home's, because applying changed settings restarts its OpenCodex client runtime; otherwise it is synced once it is idle. A failed sync is retried after 5 minutes, doubling up to 6 hours, and a Child older than 2.93.0 is not retried until it reports another version. These jobs look like any other job, with `trigger: "auto"`. A Home with no links runs none of this.
+
+The fan-out fixes the Child's catalog file. A Codex app-server already running on the Child keeps the list it loaded until it restarts: use `ocx link restart-codex` or `ocx sync --restart-children`, or let the Home restart app-servers with `ocx link policy --child-codex-restart app-server-when-idle`, which it does only on a Child that is still idle when its sync runs.
+
+The policy lives in `<configDir>/link/child-policy.json` on the Home, never in `config.json`:
+
+| Setting | Default | Values |
+|---|---|---|
+| `catalogFanout` | `auto` | `auto`, `manual` |
+| `childCodexRestart` | `never` | `never`, `app-server-when-idle` |
+| `updates` | `auto-when-idle` | `off`, `notify`, `auto-when-idle` |
+| `idleAfterMs` | `600000` (10 minutes) | 1 to 60 minutes |
+
+`updates` defaults to keeping idle Children on the Home's version automatically. Automatic updates are not active in this release; the setting is stored now, so an opt-out with `ocx link policy --updates notify` or `--updates off` holds when they arrive. `idleAfterMs` is how long a Child must go without a relayed model request to count as idle; it also decides `activity.idle` in `ocx link status`.
+
+```text
+ocx link policy                                    # read the policy
+ocx link policy --catalog-fanout manual            # turn automatic catalog fan-out off
+ocx link policy --child-codex-restart app-server-when-idle
+ocx link policy --updates off --idle-after-minutes 20 --json
+```
+
+`GET` and `PUT /api/link/children/policy` read and change the same settings (the admin token on loopback, or a dashboard session); a `PUT` sends only the settings it changes. If the file is damaged or holds an unknown value, automatic catalog fan-out and updates are off, and `ocx link policy` says so, until you save a policy again. The Home never rewrites the file on its own.
 
 ### Standalone pairing authorization
 
