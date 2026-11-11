@@ -1059,6 +1059,7 @@ describe("activation window stays synchronous", () => {
    */
   const UNRESOLVED_CALLEES: Record<string, string> = {
     unregisterQuotaAutoRefresh: "let-binding holding the return of registerCodexQuotaAutoRefreshWorker, optional-called on the bind-failure path. There is no `function unregisterQuotaAutoRefresh` to inspect; following the assignment would be depth 2.",
+    unregisterAnthropicCooldownRecovery: "let-binding holding the return of registerAnthropicCooldownRecoveryProbeWorker (a synchronous sweep registration), optional-called on the bind-failure path. Same shape as unregisterQuotaAutoRefresh.",
   };
 
 
