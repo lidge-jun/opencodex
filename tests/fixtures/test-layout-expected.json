@@ -1676,5 +1676,6 @@
   "link-ssh-capture.test.ts": "clients",
   "link-ssh-capture-redact.test.ts": "clients",
   "link-ssh-capture-tunnels.test.ts": "clients",
-  "cli-link-capture.test.ts": "cli"
+  "cli-link-capture.test.ts": "cli",
+  "link-child-policy.test.ts": "clients"
 }
