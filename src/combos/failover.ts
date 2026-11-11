@@ -1030,6 +1030,8 @@ const MODERATION_EVIDENCE_LIMIT = 500;
  * blanks every quoted span; an apostrophe inside a word ("don't") is literal text, not a quote.
  */
 function unquotedProse(text: string): string {
+  // A backslash-escaped quote (a JSON string read raw) quotes exactly like the bare character.
+  text = text.replace(/\\(["'`])/g, "$1");
   let out = "";
   let quote: string | null = null;
   for (let i = 0; i < text.length; i += 1) {
@@ -1291,13 +1293,15 @@ export function comboFailureCooldownScope(
     // A capability gap says the target is healthy and the request did not fit it, which is the
     // same reason every other entry here refuses to cool a target.
     || isResponseFormatCapabilityRefusal(status, message, rawCode)
-    || providerModerationHop(status, message, rawCode, options?.providerModerationRefusal)
   ) return "none";
   if (isProviderScopedQuotaCap(status, message, rawCode)) return "provider";
   // A rejected or unpaid credential is provider-wide evidence: every target that routes
   // through the same provider row carries the same key and will fail identically.
   if (status === 401 || status === 402 || status === 403) return "provider";
   if (PROVIDER_SCOPED_FAILURE_CODES.has(code)) return "provider";
+  // A moderation verdict is target-local, but only after quota and credential evidence had its
+  // say: a refusing key beside moderation prose still cools its provider.
+  if (providerModerationHop(status, message, rawCode, options?.providerModerationRefusal)) return "none";
   // OpenRouter's opaque numeric-code wrapper may be target-specific (for example a gateway
   // rejecting a model's translated payload). It may advance the combo, but says nothing about
   // target health and must not quarantine the target.

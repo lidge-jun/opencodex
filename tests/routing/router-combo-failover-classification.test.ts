@@ -1687,3 +1687,18 @@ describe("provider moderation refusal judged on the whole body", () => {
     expect(comboFailureDecision(400, message)).toBe("hop");
   });
 });
+
+describe("provider moderation refusal keeps provider evidence and escaped echoes", () => {
+  test("quota or credential codes beside moderation prose still cool the provider", () => {
+    for (const code of ["insufficient_quota", "invalid_api_key"]) {
+      const message = JSON.stringify({ error: { code, message: "The input was refused by moderation." } });
+      expect({ code, scope: comboFailureCooldownScope(400, message, { code }) }).not.toEqual({ code, scope: "none" });
+    }
+  });
+
+  test("a backslash-escaped quoted echo is not a verdict", () => {
+    const message = 'Invalid value: \\"refused by moderation\\" for field mode';
+    expect(isProviderModerationRefusal(400, message)).toBe(false);
+    expect(comboFailureDecision(400, message)).toBe("stop");
+  });
+});

@@ -114,3 +114,20 @@ for (const [name, block, failed] of [
     else await result.response.body?.cancel();
   });
 }
+
+test("native combo preflight judges a moderation refusal on the whole event, like the HTTP reader", async () => {
+  const run = async (event: Record<string, unknown>) => {
+    const raw = prelude + "event: error\n" + "data: " + JSON.stringify(event) + "\n\n";
+    const result = await preflightNativeMessagesResponse(new Response(raw, {
+      headers: { "content-type": "text/event-stream" },
+    }), { model: "fixture", provider: "anth" }, createTestTranslatorBudget());
+    await result.response.body?.cancel();
+    return result.kind;
+  };
+  const error = { type: "invalid_request_error", code: "content_filter", message: "The input was refused by moderation." };
+  // A provider moderation verdict is target-local and advances the combo.
+  expect(await run({ type: "error", error })).toBe("failed");
+  // A root verdict code beside it stops, as consumeComboFailure and the stream preflight decide.
+  expect(await run({ type: "error", code: "invalid_request_error", error })).toBe("accepted");
+  expect(await run({ type: "error", code: "cyber_policy", error })).toBe("accepted");
+});

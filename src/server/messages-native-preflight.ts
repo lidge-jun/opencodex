@@ -1,4 +1,5 @@
 import { comboFailureDecision } from "../combos";
+import { isProviderModerationRefusal } from "../combos/failover";
 import { httpStatusFromTerminalError } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { sseFieldValue } from "../lib/sse-decoder";
@@ -100,6 +101,9 @@ export async function preflightNativeMessagesResponse(
           && comboFailureDecision(status, typeof error.message === "string" ? error.message : "", {
           code: typeof error.code === "string" ? error.code : undefined,
           rootCode: typeof payload.code === "string" ? payload.code : undefined,
+          // The whole event, as the HTTP and stream readers judge it, so transports cannot disagree.
+          providerModerationRefusal: status === 400 || status === 422
+            ? isProviderModerationRefusal(status, JSON.stringify(payload), undefined, true) : undefined,
         }) === "hop") { failure = error; failureStatus = status; }
         else committed = true;
       } else if (payload.type === "message_stop") terminal = true;
