@@ -81,3 +81,15 @@ export function formatClientRetryIn(value: string | number | null | undefined, n
   if (hours < 24) return `${hours}h`;
   return `${Math.ceil(hours / 24)}d`;
 }
+
+/**
+ * Name the earliest recovery inside a client-visible sentence: " (retry in ~2m)" goes before a
+ * trailing period, or at the end when there is none. Unusable advice leaves the message unchanged,
+ * so every listener that shows the same refusal shows the same wait.
+ */
+export function appendClientRetryIn(message: string, value: string | number | null | undefined, now = Date.now()): string {
+  const retryIn = formatClientRetryIn(value, now);
+  if (retryIn === undefined) return message;
+  const suffix = ` (retry in ~${retryIn})`;
+  return message.endsWith(".") ? `${message.slice(0, -1)}${suffix}.` : `${message}${suffix}`;
+}

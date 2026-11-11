@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatClientRetryAfter, formatClientRetryIn, MAX_CLIENT_RETRY_AFTER_SECONDS } from "../../src/lib/client-retry-after";
+import { appendClientRetryIn, formatClientRetryAfter, formatClientRetryIn, MAX_CLIENT_RETRY_AFTER_SECONDS } from "../../src/lib/client-retry-after";
 
 const now = Date.parse("2026-11-02T00:00:00Z");
 
@@ -77,6 +77,19 @@ describe("formatClientRetryIn", () => {
   test("unusable advice stays absent", () => {
     for (const value of ["", "-1", "NaN", "must-not-echo", null, undefined]) {
       expect(formatClientRetryIn(value as string | number | null | undefined, now)).toBeUndefined();
+    }
+  });
+});
+
+describe("appendClientRetryIn", () => {
+  test("the wait goes before a trailing period, or at the end without one", () => {
+    expect(appendClientRetryIn("No available targets for combo", "120", now)).toBe("No available targets for combo (retry in ~2m)");
+    expect(appendClientRetryIn("Review cooldowns before retrying.", "45", now)).toBe("Review cooldowns before retrying (retry in ~45s).");
+  });
+
+  test("unusable advice leaves the sentence byte-identical", () => {
+    for (const value of ["", "-1", "must-not-echo", null, undefined]) {
+      expect(appendClientRetryIn("Review cooldowns before retrying.", value, now)).toBe("Review cooldowns before retrying.");
     }
   });
 });
