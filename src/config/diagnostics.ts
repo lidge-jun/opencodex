@@ -1,3 +1,4 @@
+import { parseDashboardTrustedProxy } from "./dashboard-trusted-proxy";
 import { readExistingSpendSalt, spendPoolAliasesError, validatePoolAliasOwners } from "../lib/spend-pool-alias-validation";
 import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
 import { validRemainingQuotaAccountIds } from "../codex/account-use-remaining";
@@ -633,6 +634,14 @@ export function loopbackCompanionBindError(
  * this opt-in listener cannot discard providers or credentials. A live config mutation must not
  * get that leniency: it receives an exact field error before the degrading schema is applied.
  */
+/** #8338: the persisted schema drops a malformed trusted-proxy block; a live write gets the reason. */
+function dashboardTrustedProxyConfigError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "dashboardTrustedProxy") || raw.dashboardTrustedProxy === undefined) return null;
+  const parsed = parseDashboardTrustedProxy(raw.dashboardTrustedProxy);
+  return typeof parsed === "string" ? `schema_invalid: dashboardTrustedProxy: ${parsed}` : null;
+}
+
 function managementIngressConfigError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
   if (!raw) return null;
@@ -785,6 +794,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? clientRolePairError(value)
     ?? loopbackListenerPortError(value)
     ?? managementIngressConfigError(value)
+    ?? dashboardTrustedProxyConfigError(value)
     ?? metricsExportConfigError(value)
     ?? serviceHealthRecoveryConfigError(value)
     ?? telemetryConfigError(value)

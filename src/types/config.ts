@@ -1412,6 +1412,19 @@ export interface OcxConfig {
   /** Additional exact origins allowed for CORS (e.g. HTTPS or chrome-extension://<id>). Loopback origins are always allowed. */
   corsAllowOrigins?: string[];
   /**
+   * #8338, opt-in, standalone only: the one reverse proxy a dashboard may sit behind and still
+   * remember devices. `origin` is the exact https origin the browser uses; `proxyAddresses` are
+   * the proxy hop's own IP addresses as this process observes them (never a range); and
+   * `trustHeaders` names the forwarded headers that carry the browser's host and scheme (default:
+   * Host only, scheme from `origin`). Absent, Remember stays direct HTTPS or loopback only. Parsed by
+   * src/config/dashboard-trusted-proxy.ts; enforced in managementRequestOrigin (src/server/auth-cors.ts).
+   */
+  dashboardTrustedProxy?: {
+    origin: string;
+    proxyAddresses: string[];
+    trustHeaders?: Array<"x-forwarded-host" | "x-forwarded-proto">;
+  };
+  /**
    * OCX-11 fallback off: refuse model or provider fallback per scope, and record per-device local
    * fallback permission. Absent keeps every chain as it was. See src/routing/fallback-policy.ts.
    */
