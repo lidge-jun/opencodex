@@ -135,6 +135,56 @@ describe("checked Windows stop, part A", () => {
     expect(mutations(h.calls)).toEqual([]);
   });
 
+  test("a wrapper with an unreadable parent PID under a registered task is unknown, never unbound", async () => {
+    const h = harness({ childPid: null }, [scheduleHost, { ...launcher(), parentPid: null }, loop()]);
+    const result = await stopWindowsServiceChecked(h.deps);
+    expect(result).toMatchObject({ outcome: "unknown", reason: "evidence-unreadable", changed: false });
+    expect(mutations(h.calls)).toEqual([]);
+  });
+
+  test("a denied exit watch at bind is denied before the task is ended", async () => {
+    const h = harness();
+    const open = h.deps.openWatch;
+    h.deps.openWatch = (pid, start) => (pid === 30 ? { status: "denied" } : open(pid, start));
+    const result = await stopWindowsServiceChecked(h.deps);
+    expect(result).toMatchObject({ outcome: "denied", reason: "access-denied", changed: false });
+    expect(mutations(h.calls)).toEqual([]);
+  });
+
+  test("a terminate that overruns its cap ends part A as unknown with no further terminate", async () => {
+    const h = harness();
+    h.deps.terminate = pid => { h.calls.push("terminate:" + pid); return never(); };
+    const result = await stopWindowsServiceChecked(h.deps);
+    expect(result).toMatchObject({ outcome: "unknown", reason: "evidence-unreadable", changed: true });
+    expect(mutations(h.calls)).toEqual(["end", "terminate:30"]);
+  });
+
+  test("an unreadable task state after the stop is unknown, never stopped", async () => {
+    const unreadable = harness({ taskState: () => "unknown" });
+    expect(await stopWindowsServiceChecked(unreadable.deps))
+      .toMatchObject({ outcome: "unknown", reason: "evidence-unreadable" });
+    const failed = harness({ taskState: () => { throw new Error("schtasks failed"); } });
+    expect(await stopWindowsServiceChecked(failed.deps))
+      .toMatchObject({ outcome: "unknown", reason: "evidence-unreadable" });
+  });
+
+  test("an unreadable WinSW state after the stop is unknown, never stopped", async () => {
+    const finalState = (last: () => WindowsWinswScmState | Promise<WindowsWinswScmState>) => {
+      let reads = 0;
+      // The SCM poll sees stopped; the one manager-state read after the wait cannot tell.
+      return () => (reads++ === 0 ? "stopped" : last());
+    };
+    for (const last of [() => "unknown" as const, () => never<WindowsWinswScmState>()]) {
+      const h = harness({
+        probeScheduler: () => ({ status: "absent" }),
+        probeWinsw: () => "started" as WinswStatus,
+        winswState: finalState(last),
+      });
+      expect(await stopWindowsServiceChecked(h.deps))
+        .toMatchObject({ outcome: "unknown", reason: "evidence-unreadable" });
+    }
+  });
+
   test("a stray wrapper with the task not running is bound through the Schedule host and ended", async () => {
     const h = harness({ childPid: null }, [scheduleHost, launcher(), loop()]);
     const result = await stopWindowsServiceChecked(h.deps);
@@ -275,6 +325,13 @@ describe("checked Windows stop, part A", () => {
     const result = await stopWindowsServiceChecked(h.deps);
     expect(result.outcome).toBe("stopped");
     expect(mutations(h.calls)).toEqual(["terminate:30", "terminate:20"]);
+  });
+
+  test("with nothing registered, an unreadable stray candidate is unknown, never absent", async () => {
+    const h = harness({ childPid: null, probeScheduler: () => ({ status: "absent" }) }, [scheduleHost, launcher(20, SCHEDULE_PID, null)]);
+    const result = await stopWindowsServiceChecked(h.deps);
+    expect(result).toMatchObject({ outcome: "unknown", reason: "evidence-unreadable", changed: false });
+    expect(mutations(h.calls)).toEqual([]);
   });
 
   test("the updater's authorizer refuses at entry before any probe", async () => {

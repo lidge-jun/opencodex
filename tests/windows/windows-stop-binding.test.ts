@@ -78,6 +78,36 @@ describe("checked Windows stop binding", () => {
     expect(binding.unbound.map(wrapper => wrapper.pid).sort()).toEqual([20, 30]);
   });
 
+  test("an ancestor of the identity-checked child binds on that clause alone", () => {
+    // The launcher's parent is a live, older shell, so neither the Schedule host clause nor
+    // "parent gone" applies; only 030's first lineage clause can bind it.
+    const shell = entry(500, 4, "explorer.exe", "explorer.exe", 2_000);
+    const binding = bindWindowsStopWrappers(context({
+      processes: [scheduleHost, shell, launcher(20, 500), loop(), proxy()],
+      taskRegistered: false,
+    }));
+    expect(binding.bound.map(wrapper => wrapper.pid)).toEqual([30, 20]);
+    expect(binding.unbound).toEqual([]);
+  });
+
+  test("a wrapper whose parent PID is unreadable never binds, registered or not", () => {
+    const tree = [scheduleHost, { ...launcher(), parentPid: null }, loop()];
+    expect(bindWindowsStopWrappers(context({ processes: tree, childPid: null })).bound).toEqual([]);
+    const unregistered = bindWindowsStopWrappers(context({
+      processes: tree, childPid: null, taskRegistered: false, managerRegistered: false,
+    }));
+    expect(unregistered.bound).toEqual([]);
+    expect(unregistered.unbound.map(wrapper => wrapper.pid).sort()).toEqual([20, 30]);
+  });
+
+  test("with the task registered, a wrapper whose parent PID is unreadable is unreadable, not unbound", () => {
+    const binding = bindWindowsStopWrappers(context({
+      processes: [scheduleHost, { ...launcher(), parentPid: null }, loop()], childPid: null,
+    }));
+    expect(binding.unreadable).toEqual([20]);
+    expect(binding.unbound.map(wrapper => wrapper.pid)).not.toContain(20);
+  });
+
   test("an orphan binds only while this home's task is registered", () => {
     const orphanTree = [launcher(20, 777), loop()];
     const registered = bindWindowsStopWrappers(context({ processes: orphanTree, childPid: null }));

@@ -10,7 +10,7 @@ import {
   type WindowsPortSample,
   type WindowsStopConfirmDeps,
 } from "../../src/service/windows-stop-confirm";
-import { PATHS, entry, launcher, scheduleHost, virtualClock } from "../helpers/windows-checked-stop-fixtures";
+import { CMD, PATHS, entry, launcher, scheduleHost, virtualClock } from "../helpers/windows-checked-stop-fixtures";
 
 const quiet = (): WindowsStopProcessEntry[] => [scheduleHost, entry(70, 4, "explorer.exe", "explorer.exe", 1_000)];
 
@@ -82,6 +82,18 @@ describe("checked Windows stop, part B", () => {
     const { deps } = confirmDeps();
     deps.enumerate = () => new Promise(() => undefined);
     expect((await confirmWindowsStopFreed(deps)).outcome).toBe("unknown");
+  });
+
+  test("a process with this home's path and an unreadable image name is unknown, never freed or foreign", async () => {
+    const unnamed = entry(91, 4, null, 'cmd.exe /c "' + CMD + '"', 12_000);
+    const free = confirmDeps({ processes: [...quiet(), unnamed] });
+    expect(await confirmWindowsStopFreed(free.deps))
+      .toMatchObject({ outcome: "unknown", reason: "evidence-unreadable", lateWrappers: [] });
+    const held = confirmDeps({
+      processes: [...quiet(), unnamed], sample: () => ({ state: "listening", ownerPid: 777 }), identity: "foreign",
+    });
+    expect(await confirmWindowsStopFreed(held.deps))
+      .toMatchObject({ outcome: "unknown", portHeldByForeign: false, reason: "evidence-unreadable" });
   });
 
   test("a slow port release reports failure instead of overrunning the window", async () => {
