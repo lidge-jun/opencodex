@@ -60,7 +60,7 @@ export interface CliDispatchDeps {
   handleTrayProxyStart: (existingIsSuccess?: boolean) => Promise<boolean>;
   handleTrayProxyRestart: () => Promise<void>;
   handleRestartStartWhenStopped: (recoveringLiveRestart?: boolean) => Promise<ProxyRestartStartOutcome>;
-  handleProxyRestart: (startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>, onSupervised?: (supervisor: RestartSupervisor) => void, bindIo?: (io: ProxyRestartIo) => ProxyRestartIo) => Promise<boolean>;
+  handleProxyRestart: (startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>, onSupervised?: (supervisor: RestartSupervisor) => void, bindIo?: (io: ProxyRestartIo, deadlineAt: number) => ProxyRestartIo) => Promise<boolean>;
   handleUninstall: () => Promise<void>;
   handleStatus: () => Promise<void>;
   handleRecoverHistory: () => Promise<void>;
@@ -426,13 +426,26 @@ const commandRunners: Record<string, CommandRunner> = {
     const code = await handleDisconnectCommand(deps.args.slice(1));
     // Token recovery refuses any live client runtime and leaves nothing to restart.
     if (code !== 0 || deps.args.includes("--orphaned-token")) return code;
-    const { bindRestartToPid, restartRuntimeAfterDisconnect } = await import("./disconnect-runtime");
+    const { bindRestartToRuntime, restartRuntimeAfterDisconnect } = await import("./disconnect-runtime");
     const { observeProxyLiveness } = await import("../server/proxy-liveness");
     const { readClientConnectionState } = await import("../client/state");
+    const { readRuntimePort } = await import("../config/process-state");
+    const { requestBoundSystemRestart } = await import("./system-restart-client");
     return await restartRuntimeAfterDisconnect({
       observe: () => observeProxyLiveness({ attempts: 2 }),
-      restart: expectedPid => deps.handleProxyRestart(deps.handleRestartStartWhenStopped, undefined, io => bindRestartToPid(io, expectedPid)),
-      stillDisconnected: () => readClientConnectionState().kind === "disconnected",
+      capture: live => {
+        if (live.pid === null) return null;
+        const record = readRuntimePort(live.pid);
+        return record?.attestationSecret && record.pid === live.pid && record.port === live.port
+          ? { ...record, attestationSecret: record.attestationSecret } : null;
+      },
+      connectionState: () => {
+        const state = readClientConnectionState();
+        return state.kind === "invalid" || state.kind === "mismatched" ? { kind: state.kind, reason: state.reason } : { kind: state.kind };
+      },
+      restart: target => deps.handleProxyRestart(deps.handleRestartStartWhenStopped, undefined, (io, deadlineAt) =>
+        bindRestartToRuntime(io, target, (previous, readRuntime) =>
+          requestBoundSystemRestart(previous as Parameters<typeof requestBoundSystemRestart>[0], deadlineAt, { readRuntime: readRuntime as typeof readRuntimePort }))),
       json: deps.args.includes("--json"),
     });
   },

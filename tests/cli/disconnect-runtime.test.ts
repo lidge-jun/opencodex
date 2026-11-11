@@ -1,23 +1,29 @@
 import { describe, expect, test } from "bun:test";
-import { bindRestartToPid, restartRuntimeAfterDisconnect, type DisconnectRuntimeDeps } from "../../src/cli/disconnect-runtime";
+import { bindRestartToRuntime, restartRuntimeAfterDisconnect, type DisconnectRuntimeDeps, type RuntimeGeneration } from "../../src/cli/disconnect-runtime";
+import { requestBoundSystemRestart } from "../../src/cli/system-restart-client";
 import { runProxyRestart, type ProxyRestartIo } from "../../src/cli/tray-proxy";
+import { createLocalAttestationProof, createLocalAttestationSecret, LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER } from "../../src/lib/local-management-attestation";
+import { SYSTEM_RESTART_PATH } from "../../src/lib/system-restart-contract";
 
 type Observation = Awaited<ReturnType<DisconnectRuntimeDeps["observe"]>>;
-const live = (role?: string): Observation => ({ kind: "live", live: { pid: 4321, ...(role ? { role } : {}) } });
+type State = ReturnType<DisconnectRuntimeDeps["connectionState"]>;
+const live = (role?: string, pid = 4321): Observation => ({ kind: "live", live: { pid, port: 10100, ...(role ? { role } : {}) } });
+const generation: RuntimeGeneration = { pid: 4321, port: 10100, hostname: "127.0.0.1", attestationSecret: createLocalAttestationSecret() };
 
-function run(observation: Observation, restartOk: boolean, json = false, extra: { stillDisconnected?: () => boolean; after?: Observation } = {}) {
+function run(observation: Observation, restartOk: boolean, json = false, extra: { state?: State; states?: State[]; after?: Observation; capture?: RuntimeGeneration | null } = {}) {
   const out: string[] = [], err: string[] = [];
   let restarts = 0;
-  const pids: Array<number | null> = [];
+  const bound: RuntimeGeneration[] = [];
   const done = restartRuntimeAfterDisconnect({
-    observe: async () => (restarts > 0 ? extra.after ?? live("standalone") : observation),
-    restart: async pid => { restarts += 1; pids.push(pid); return restartOk; },
-    stillDisconnected: extra.stillDisconnected ?? (() => true),
+    observe: async () => (restarts > 0 ? extra.after ?? live("standalone", 9999) : observation),
+    capture: () => (extra.capture === undefined ? generation : extra.capture),
+    connectionState: () => extra.states?.shift() ?? extra.state ?? { kind: "disconnected" },
+    restart: async target => { restarts += 1; bound.push(target); return restartOk; },
     json,
     info: line => out.push(line),
     error: line => err.push(line),
   });
-  return done.then(code => ({ code, out, err, restarts, pids }));
+  return done.then(code => ({ code, out, err, restarts, bound }));
 }
 
 describe("ocx disconnect restarts the client runtime it left behind", () => {
@@ -39,37 +45,50 @@ describe("ocx disconnect restarts the client runtime it left behind", () => {
     }
   });
 
-  // findLiveProxy answers null for "nothing there" and for "could not tell" alike; a disconnect that
-  // cannot rule out a still-serving client runtime must not report success to a caller over SSH.
   test("an inconclusive liveness probe fails with what to check", async () => {
     const result = await run({ kind: "unknown", live: null }, true);
     expect(result).toMatchObject({ code: 1, restarts: 0 });
     expect(result.err.join("\n")).toContain("could not confirm whether the client runtime stopped");
-    expect(result.err.join("\n")).toContain("ocx status");
-    expect(result.err.join("\n")).toContain("ocx restart");
   });
 
-  // Final review: a connect that lands between disconnect and its restart owns the runtime now;
-  // disconnect must leave it alone and never call the machine standalone.
-  test("a connection made after the disconnect leaves its runtime alone", async () => {
-    const result = await run(live("client"), true, false, { stillDisconnected: () => false });
-    expect(result).toMatchObject({ code: 0, restarts: 0, err: [] });
-    expect(result.out.join("\n")).toContain("a new connection was made after this disconnect");
+  test("the restart is bound to the generation captured from the observed runtime", async () => {
+    expect((await run(live("client"), true)).bound).toEqual([generation]);
   });
 
-  test("standalone is reported only when the runtime after the restart is not a client", async () => {
-    const result = await run(live("client"), true, false, { after: live("client") });
-    expect(result.code).toBe(1);
-    expect(result.out).toEqual([]);
-    expect(result.err.join("\n")).toContain("still answers as a client");
+  test("a client runtime whose generation cannot be captured is not restarted", async () => {
+    const result = await run(live("client"), true, false, { capture: null });
+    expect(result).toMatchObject({ code: 1, restarts: 0 });
+    expect(result.err.join("\n")).toContain("could not identify the running client runtime");
   });
 
-  // Coordinator review round 2: the restart is bound to the runtime disconnect observed.
-  test("the restart is bound to the observed runtime's pid", async () => {
-    expect((await run(live("client"), true)).pids).toEqual([4321]);
+  // Coordinator review round 3: any state but disconnected stops the leave before the Home's own
+  // \`ocx restart\`, which would interrupt a connection that just landed or act on unreadable state.
+  test.each([
+    ["connected", { kind: "connected" } as State, "a new connection was made on this machine after this disconnect"],
+    ["invalid", { kind: "invalid", reason: "config.json is missing or unreadable" } as State, "client state is invalid (config.json is missing or unreadable)"],
+    ["mismatched", { kind: "mismatched", reason: "runtimeRole=client is present without config.json.client" } as State, "client state is mismatched (runtimeRole=client is present without config.json.client)"],
+  ])("a %s state after disconnect exits 1 and restarts nothing", async (_name, state, message) => {
+    const result = await run(live("client"), true, false, { state });
+    expect(result).toMatchObject({ code: 1, restarts: 0, out: [] });
+    expect(result.err.join("\n")).toContain(message);
   });
 
-  // ...and standalone is claimed only for a live, non-client runtime after it.
+  // The rule holds on every branch: exit 0 needs a disconnected state, read again before exit 0.
+  test.each([
+    ["no runtime", { kind: "absent", live: null } as Observation],
+    ["a standalone runtime", live("standalone")],
+  ])("%s with a connected state exits 1", async (_name, observation) => {
+    const result = await run(observation, true, false, { state: { kind: "connected" } });
+    expect(result).toMatchObject({ code: 1, restarts: 0, out: [] });
+    expect(result.err.join("\n")).toContain("a new connection was made on this machine after this disconnect");
+  });
+
+  test("a connection that lands during the restart turns the standalone result into exit 1", async () => {
+    const result = await run(live("client"), true, false, { states: [{ kind: "disconnected" }, { kind: "connected" }] });
+    expect(result).toMatchObject({ code: 1, restarts: 1, out: [] });
+    expect(result.err.join("\n")).toContain("a new connection was made on this machine after this disconnect");
+  });
+
   test.each([
     ["absent", { kind: "absent", live: null } as const],
     ["inconclusive", { kind: "unknown", live: null } as const],
@@ -78,7 +97,6 @@ describe("ocx disconnect restarts the client runtime it left behind", () => {
     expect(result.code).toBe(1);
     expect(result.out).toEqual([]);
     expect(result.err.join("\n")).toContain("could not confirm a standalone runtime");
-    expect(result.err.join("\n")).toContain("ocx status");
   });
 
   test("--json keeps stdout to the disconnect document", async () => {
@@ -88,9 +106,10 @@ describe("ocx disconnect restarts the client runtime it left behind", () => {
     try {
       let restarted = false;
       const result = await restartRuntimeAfterDisconnect({
-        observe: async () => live(restarted ? "standalone" : "client"),
+        observe: async () => live(restarted ? "standalone" : "client", restarted ? 9999 : 4321),
+        capture: () => generation,
+        connectionState: () => ({ kind: "disconnected" }),
         restart: async () => { console.log("restart progress"); restarted = true; return true; },
-        stillDisconnected: () => true,
         json: true,
         error: () => {},
       });
@@ -100,41 +119,62 @@ describe("ocx disconnect restarts the client runtime it left behind", () => {
   });
 });
 
-// Coordinator review round 2: a connect that commits after disconnect's check can start a new
-// client runtime before the restart discovers its target. The hook at that gap is a findLive that
-// answers a different pid: the request must never be sent, and nothing may be started generically.
-describe("a disconnect restart bound to the observed runtime", () => {
-  function io(found: { status: "live"; pid: number } | { status: "absent" }) {
+// Coordinator review rounds 2-3: the restart must reach only the runtime generation disconnect
+// observed. A pid can be reused, so the binding is the captured runtime record (pid, port and the
+// per-process attestation secret), and admission is driven through the real requestBoundSystemRestart.
+describe("a disconnect restart bound to the captured runtime generation", () => {
+  function world(current: { pid: number; secret: string } | null) {
+    const posts: string[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      if (url.endsWith(SYSTEM_RESTART_PATH)) { posts.push(url); return Response.json({ success: true }, { status: 202 }); }
+      if (!current) throw new Error("connection refused");
+      const challenge = new Headers(init.headers).get(LOCAL_ATTESTATION_CHALLENGE_HEADER) ?? "";
+      const proof = createLocalAttestationProof(current.secret, challenge, current.pid, 10100) ?? "";
+      return Response.json({ service: "opencodex", pid: current.pid, port: 10100, role: "client", restartCapability: "v1" }, { headers: { [LOCAL_ATTESTATION_PROOF_HEADER]: proof } });
+    }) as typeof fetch;
     const calls: string[] = [];
-    const base: ProxyRestartIo = {
-      findLive: async () => found.status === "live"
-        ? { status: "live", live: { pid: found.pid, port: 10100, source: "runtime" } }
+    const io: ProxyRestartIo = {
+      findLive: async () => current
+        ? { status: "live", live: { pid: current.pid, port: 10100, hostname: "127.0.0.1", source: "runtime" } }
         : { status: "absent" },
       startWhenStopped: async () => { calls.push("generic-start"); return { status: "started" }; },
-      requestInPlaceRestart: async previous => { calls.push(`request:${previous.pid}`); return { accepted: true }; },
+      requestInPlaceRestart: async () => { calls.push("unbound-request"); return { accepted: true }; },
       waitForReplacement: async () => ({ pid: 9999, port: 10100, source: "runtime" }),
       waitBetweenAttempts: async () => {},
     };
-    return { calls, base };
+    const request = (previous: Parameters<ProxyRestartIo["requestInPlaceRestart"]>[0], readRuntime: (pid: number) => RuntimeGeneration | null) =>
+      requestBoundSystemRestart({ ...previous, version: "0.0.0" } as never, Date.now() + 600_000, { fetchImpl, readRuntime: readRuntime as never, readUpdateHome: () => null, cliVersion: "0.0.0",
+        findLive: (async () => current ? { pid: current.pid, port: 10100, hostname: "127.0.0.1", source: "runtime" } : null) as never });
+    return { posts, calls, io, request };
   }
 
-  test("a different runtime at the restart's own discovery is refused before any request", async () => {
-    const { calls, base } = io({ status: "live", pid: 5555 });
-    const result = await runProxyRestart(bindRestartToPid(base, 4321));
-    expect(calls).toEqual([]);
-    expect(result).toMatchObject({ ok: false, phase: "request" });
-    expect(String((result as { error?: unknown }).error)).toContain("restart_target_changed");
+  test("same pid, different generation: refused before any restart request", async () => {
+    const w = world({ pid: 4321, secret: createLocalAttestationSecret() });
+    const result = await runProxyRestart(bindRestartToRuntime(w.io, generation, w.request));
+    expect(w.posts).toEqual([]);
+    expect(w.calls).toEqual([]);
+    expect(result.ok).toBe(false);
   });
 
-  test("the observed runtime is restarted", async () => {
-    const { calls, base } = io({ status: "live", pid: 4321 });
-    expect((await runProxyRestart(bindRestartToPid(base, 4321))).ok).toBe(true);
-    expect(calls).toEqual(["request:4321"]);
+  test("a different pid at the restart's own discovery is refused", async () => {
+    const w = world({ pid: 5555, secret: generation.attestationSecret });
+    const result = await runProxyRestart(bindRestartToRuntime(w.io, generation, w.request));
+    expect(w.posts).toEqual([]);
+    expect(result).toMatchObject({ ok: false, phase: "request" });
+  });
+
+  test("the captured generation is restarted", async () => {
+    const w = world({ pid: 4321, secret: generation.attestationSecret });
+    const result = await runProxyRestart(bindRestartToRuntime(w.io, generation, w.request));
+    expect(w.posts.length, JSON.stringify(result, (_k, v) => v instanceof Error ? v.message : v)).toBe(1);
+    expect(w.calls).toEqual([]);
   });
 
   test("a runtime that vanished gets no generic start", async () => {
-    const { calls, base } = io({ status: "absent" });
-    await runProxyRestart(bindRestartToPid(base, 4321));
-    expect(calls).toEqual([]);
+    const w = world(null);
+    await runProxyRestart(bindRestartToRuntime(w.io, generation, w.request));
+    expect(w.calls).toEqual([]);
+    expect(w.posts).toEqual([]);
   });
 });

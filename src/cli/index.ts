@@ -959,7 +959,7 @@ const PROXY_RESTART_OBSERVE_MS = MEMORY_DRAIN_RESTART_MS + REPLACEMENT_READY_TIM
 /** Reserve confirmation time within the shared restart deadline. */
 async function handleProxyRestart(
   startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>, onSupervised?: (supervisor: RestartSupervisor) => void,
-  bindIo: (io: ProxyRestartIo) => ProxyRestartIo = io => io,
+  bindIo: (io: ProxyRestartIo, deadlineAt: number) => ProxyRestartIo = io => io,
 ): Promise<boolean> {
   const deadlineAt = Date.now() + PROXY_RESTART_OBSERVE_MS;
   // A caller may bind the restart to one target (ocx disconnect: src/cli/disconnect-runtime.ts).
@@ -980,7 +980,7 @@ async function handleProxyRestart(
     recheckAfterFailedStart: () => recheckRestartFailedStart(end => discoverStableProxyForRestart({
       findLive: () => findLiveProxy({ deadlineAt: end, attempts: 2, acceptPackageTreeFenced: true }), expired: () => Date.now() >= end,
     })),
-  });
+  }, deadlineAt);
   const result = await runDesktopAwareProxyRestart({ ...restartIo });
   if (!result.ok && result.phase === "request" && result.error instanceof UpdateRestartRequired) {
     const candidate = result.error.candidate();
