@@ -86,11 +86,21 @@ ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
 ocx link check (--link-id <id> | --all) [--no-wait] [--json]
+ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]
+ocx link sync (--link-id <id> | --all) [--no-wait] [--json]
+ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]
+ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]
 ```
 
 非交互式终端（非 TTY）必须提供 `--expect-fingerprint`。交互式终端中可省略该参数，但必须明确确认所提供的指纹。
 
 在 Home 上，`ocx link check (--link-id <id> | --all)` 会读取每个由 Home 添加的子机的已安装版本、安装类型和更新途径：它通过链接的 SSH 连接在子机上运行 `ocx update --plan`（每台子机 60 秒，同时最多三台），该命令只计算更新计划，不做任何修改。早于 2.97.0 的子机显示为 `owner-action`（`legacy-ocx`），其版本在 macOS 和 Linux 上通过再一次只读 SSH 调用获取，在 Windows 上取自子机通过链接上报的版本。由子机发起的链接和 `ocx-child` 子机不经 SSH 直接报告。`ocx link status --json` 会为每一行添加 `child` 块（版本、版本差异、目录是否最新、活动情况、最近一次操作）。详情和退出码见 [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity)（英文）。
+
+### 从 Home 操作子机
+
+`ocx link sync`、`ocx link restart-codex` 和 `ocx link update` 通过链接的 SSH 连接在由 Home 添加的子机上运行，并以 JSON 输出任务。`sync` 运行固定的 `ocx sync --expect-link`（子机需 2.93.0 或更高版本）。`restart-codex` 先同步，再重启子机上的 Codex app-server，使正在运行的 Codex 加载当前目录；`--scope codex` 还会重新启动桌面应用。重启只能指定一个链接，并且需要 `--yes`；当 Home 正在为该子机中继模型请求时，重启会被跳过（`restart-skipped:link-active`）。对于早于 2.69 的子机，非流式请求要到响应开始后才能被看到。`update --yes` 使用子机自己的更新程序把子机的 OpenCodex 更新到本 Home 的版本，绝不会更新到其他版本（子机需 2.97.0 或更高版本；npm 和 pnpm 安装通过其 Node 启动器应用更新，因此 `ocx link check` 也会在那里以只读方式运行 `node --version`）。每次更新一台子机，之后再次同步；正在为该子机中继的请求会中断。Windows 子机只支持 `sync`，`ocx-child` 子机会将重启和更新报告为不支持。CLI 需要绑定到 loopback 的 Home；否则请使用仪表盘的 Remote Link 页面。详情和退出码见 [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home)（英文）。
+
+不要链接不属于你的机器：Home 会用你的 SSH 密钥在那里运行命令。
 
 ## 相关指南
 
