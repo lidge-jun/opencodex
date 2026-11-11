@@ -119,6 +119,36 @@ test("a full route-to sync on unresolved Aside reports the other clients and Asi
   expect(all.body.warnings).toHaveLength(1);
 `), SPAWN_BUDGET_MS);
 
+test("a Home Aside decision does not resolve or capture an inherited Child default", () => scenario(unresolvedHome + `
+  const decision = await call('/api/route-to', { client: 'aside', action: 'off', device: 'home' });
+  expect(decision.status).toBe(200);
+  expect(readRouteIntentState().defaults.aside).toBeUndefined();
+  const request = () => readLinkRouteIntent(new Request('http://127.0.0.1:19100'+LINK_ROUTE_INTENT_PATH), live, 'test', 'key-test');
+  expect((await request()).status).toBe(503);
+  const status = await read('all');
+  expect(status.body.devices.find(row => row.id === 'home').clients.find(row => row.client === 'aside').intent).toBe('off');
+  expect(status.body.devices.find(row => row.id !== 'home').clients.find(row => row.client === 'aside').intent).toBe('unresolved');
+  const { captureChildRouteDefaults } = await import('./src/routing/home-route-intent');
+  expect(() => captureChildRouteDefaults()).toThrow();
+  expect(readRouteIntentState().defaults.aside).toBeUndefined();
+  setRouteClientIntent('aside', { enabled: true, accounts: ['user-child'] }, 'lnk_0123456789abcdef');
+  const explicit = await request();
+  expect(explicit.status).toBe(200);
+  expect((await explicit.json()).clients.aside).toEqual({ enabled: true, accounts: ['user-child'] });
+  await fullHomeSync();
+  expect(readRouteIntentState().defaults.aside).toBeUndefined();
+`), SPAWN_BUDGET_MS);
+
+test("a Home Aside decision captures resolvable legacy ownership before applying it", () => scenario(`
+  writeLinkStore(linkStorePath(), { version: 1, listenerPort: 19100, links: [] });
+  asideProfile('user-legacy');
+  expect((await management(handleIntegrationRoutes, 'PUT', '/api/client-integrations/aside/profiles/0', { enabled: true })).status).toBe(200);
+  writeLinkStore(linkStorePath(), { version: 1, listenerPort: 19100, links: [{ id: 'lnk_0123456789abcdef', alias: 'child', direction: 'client-initiated', hostKeyFingerprint: null, tunnelPort: 19200, apiKeyId: 'key-test', createdAt: '2026-11-07T00:00:00.000Z' }] });
+  expect((await call('/api/route-to', { client: 'aside', action: 'off', device: 'home' })).status).toBe(200);
+  expect((await childIntent()).aside).toEqual({ enabled: true, accounts: ['user-legacy'] });
+  expect(readRouteIntentState().defaults.aside).toEqual({ enabled: true, accounts: ['user-legacy'] });
+`), SPAWN_BUDGET_MS);
+
 test("an off-only Home decision completes without model discovery and keeps the receipt's served roster", () => scenario(`
   writeLinkStore(linkStorePath(), { version: 1, listenerPort: 19100, links: [] });
   const roster = [{ namespaced: 'fixture/fixture-model', provider: 'fixture', id: 'fixture-model' }];

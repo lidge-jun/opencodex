@@ -9,7 +9,7 @@ import { homeLinkChildParity } from "../../link/child-parity";
 import { homeRouteIntentWatch } from "../../link/route-intent-watch";
 import { ROUTE_CLIENT_IDS, isHomeNativeRouteClient, parseRouteClientIntent, type HomeNativeRouteClientId, type RouteClientId, type RouteClientIntent, type RouteClientOutcome } from "../../link/route-intent";
 import { clearRouteClientIntent, readRouteIntentState, recordHomeNativeDecision, RouteIntentStateUnreadableError, setRouteClientIntent } from "../../routing/route-intent-state";
-import { initializeHomeRouteIntentDefaults, readHomeRouteIntentStateAsideTolerant, reconcileHomeRouteDevices } from "../../routing/home-route-intent";
+import { HomeAsideIntentDerivationError, initializeHomeRouteIntentDefaults, readHomeRouteIntentStateAsideTolerant, reconcileHomeRouteDevices } from "../../routing/home-route-intent";
 import { captureHomeRouteDefaults, homeHasLinks } from "../../routing/home-route-capture";
 import { EPHEMERAL_NO_ROUTE_INTENT, routeToAsideUnresolved, routeToDeviceStatus, unsupportedRouteToDevice, type RouteToStatus, type RouteToSyncRow } from "../../routing/route-to-status";
 import { projectHomeRouteIntent } from "../../link/route-intent";
@@ -176,16 +176,18 @@ export async function handleRouteToRoutes(ctx: ManagementContext, deps: RouteToR
       if (!routeIntentUntouched) {
         reconcileHomeRouteDevices(devices(ctx).map(link => link.id));
         // A Home-only decision captures the Children's native defaults only once the Home has a link.
-        // An explicit Home Aside decision saves no default: it is the Home's own row, and the
-        // Children's Aside default stays absent rather than guessed from unresolved ownership.
-        // A saved Home Aside entry also means the Children's Aside default is not this write's to
-        // derive, so the defaults capture runs without a deciding client.
+        // An explicit Home Aside decision must not guess a Child default from unresolved ownership.
         const asideDecided = homeAsideDecision || (write.client === "aside" && readRouteIntentState().devices.home?.aside !== undefined);
         if (!asideDecided) {
           initializeHomeRouteIntentDefaults(withDurableRouteNativeSettings(ctx.config), ctx.version, selected === undefined ? write.client : undefined,
             { whenLinked: selected === "home" });
         } else if (selected === "home") {
-          captureHomeRouteDefaults(undefined, { whenLinked: true });
+          // Capture resolvable ownership before applying the Home decision can change it.
+          try { initializeHomeRouteIntentDefaults(withDurableRouteNativeSettings(ctx.config), ctx.version, undefined, { whenLinked: true }); }
+          catch (error) {
+            if (!(error instanceof HomeAsideIntentDerivationError)) throw error;
+            captureHomeRouteDefaults(undefined, { whenLinked: true });
+          }
         }
       }
       if (homeNative) { if (!routeIntentUntouched) recordHomeNativeDecision(homeNative); }

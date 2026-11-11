@@ -30,10 +30,11 @@ export function readHomeRouteIntentState(config: OcxConfig, options: { store?: I
     const intent = parseRouteClientIntent({ enabled: true, ...(owner.modelNames ? { modelNames: owner.modelNames } : {}) });
     if (intent) state.defaults[client as keyof typeof state.defaults] = intent;
   }
-  // A saved Home Aside decision is the Home's own answer, so it never needs the Children's default
-  // derived from ownership. Deriving it here would refuse exactly the Home the recovery command
-  // (`ocx route to aside on|off --device home`) exists for: owned profiles without stable userIds.
-  if (state.defaults.aside !== undefined || state.devices.home?.aside !== undefined) return state;
+  // A Home override does not resolve the default inherited by Children.
+  if (state.defaults.aside !== undefined) return state;
+  // The Home decision may already have changed or removed its ownership records. They no longer
+  // prove what Children inherited before that decision, even when there are no records left.
+  if (state.devices.home?.aside !== undefined) throw new HomeAsideIntentDerivationError(undefined);
   const aside = deriveHomeAsideIntent(config, { store, home: options.home });
   if (aside) state.defaults.aside = aside;
   return state;
@@ -162,7 +163,9 @@ export function captureChildRouteDefaults(): void {
  * A pure read: enrollment and the link listener's start have already captured the native defaults.
  */
 export function projectChildRouteIntent(config: OcxConfig, version: string, deviceId: string): HomeRouteIntentDocument {
-  return projectHomeRouteIntent(config, version, deviceId, readHomeRouteIntentState(config));
+  const { state, asideUnresolved } = readHomeRouteIntentStateAsideTolerant(config);
+  if (asideUnresolved && state.devices[deviceId]?.aside === undefined) throw new HomeAsideIntentDerivationError(undefined);
+  return projectHomeRouteIntent(config, version, deviceId, state);
 }
 
 /** Provisioning runs under Home authority, before the read-only Child starts. */

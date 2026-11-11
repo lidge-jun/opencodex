@@ -77,7 +77,7 @@ export async function syncHomeRouteTo(config: OcxConfig, version: string, overwr
       if (!(error instanceof HomeAsideIntentDerivationError) || !leaveAside) throw error;
       asideUnresolved = true;
       // A placeholder so the document is complete; Aside is excluded from materialization below.
-      // A saved Home Aside entry returned above instead, so this placeholder is never a default.
+      // This placeholder is never saved as a default.
       const pinned: RouteIntentState = readRouteIntentState();
       pinned.defaults.aside = { enabled: false };
       state = readHomeRouteIntentState(local, { state: pinned });
