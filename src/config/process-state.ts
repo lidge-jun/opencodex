@@ -47,22 +47,29 @@ export function hasPublishedOwnershipRecords(): boolean {
  * Where the owner of a runtime record ran, as digests that store none of their inputs (#8552).
  *
  * Every container runs the proxy as PID 1, so a PID alone cannot say whether a record came from
- * this container's previous run or from another container serving the same state volume. On
- * Linux, `host` covers the host name and boot id, and at least one of two stronger facts must
- * also match ({@link sameRuntimeOwnerScope}):
+ * this container's previous run or from another container serving the same state volume. The
+ * `host` name must match, and on Linux at least one of two stronger facts as well
+ * ({@link sameRuntimeOwnerScope}):
  *
- * - `network`, the network namespace: a container restarted inside its Kubernetes pod keeps it,
- *   because the pod sandbox owns it;
- * - `container`, the Docker/Podman container (or CRI-O pod sandbox) id read from mountinfo: a
- *   restarted container keeps it, and one id never runs twice at the same time.
+ * - `network` with `boot`, the network namespace within one boot: a container restarted inside
+ *   its Kubernetes pod keeps it, because the pod sandbox owns it. Namespace inode numbers repeat
+ *   across machines and boots, so the boot id has to match too;
+ * - `container`, the writable layer of the overlay mounted at `/` (its `upperdir`): a Docker or
+ *   Podman container started again keeps it, across a host reboot as well, and no other container
+ *   ever mounts it, not even one sharing its network (`--network container:`) or its pod. A
+ *   container id is NOT used: a container joined to another's network sees that one's id in
+ *   mountinfo.
  *
- * A replacement pod, a second container with a fixed `hostname`, another node, or a WSL distro
- * sharing a Windows home matches neither. Elsewhere the PID space is the whole machine and the host
- * name suffices. Linux evidence that cannot be read yields a per-process value that matches no
- * other lifetime, so the self-record proof fails closed.
+ * A replacement pod, a second container with a fixed `hostname`, or another node matches neither.
+ * Processes that share one network namespace (host networking, pod sidecars, WSL distros, which
+ * share one VM) can match on `network`; for them the loopback probe still finds a listening owner.
+ * Elsewhere the PID space is the whole machine and the host name suffices. Linux evidence that
+ * cannot be read yields a per-process value that matches no other lifetime, so the self-record
+ * proof fails closed.
  */
 export interface RuntimeOwnerScope {
   host: string;
+  boot?: string;
   network?: string;
   container?: string;
 }
@@ -78,11 +85,23 @@ function scopeDigest(...parts: string[]): string {
   return createHash("sha256").update(parts.join("\0")).digest("hex").slice(0, 32);
 }
 
-const MOUNTINFO_CONTAINER_ID = /\/(?:containers|overlay-containers)\/([0-9a-f]{64})\/(?:userdata\/)?(?:resolv\.conf|hostname|hosts)(?:\s|$)/m;
-
-/** The container id Docker or Podman bind-mounts `/etc/hostname` and friends from, if any. */
-export function containerIdFromMountinfo(mountinfo: string): string | undefined {
-  return MOUNTINFO_CONTAINER_ID.exec(mountinfo)?.[1];
+/**
+ * The `upperdir` of the overlay mounted at `/`, if the root filesystem is one: a container's own
+ * writable layer. The last root mount wins, as it is the one visible. Any other root filesystem
+ * (bare host, btrfs/zfs/vfs drivers, fuse-overlayfs) yields nothing.
+ */
+export function rootOverlayUpperdirFromMountinfo(mountinfo: string): string | undefined {
+  let upperdir: string | undefined;
+  for (const line of mountinfo.split("\n")) {
+    const separator = line.indexOf(" - ");
+    if (separator < 0) continue;
+    const fields = line.slice(0, separator).split(" ");
+    if (fields[4] !== "/") continue;
+    const [fstype, , superOptions = ""] = line.slice(separator + 3).split(" ");
+    const match = fstype === "overlay" ? /(?:^|,)upperdir=([^,]+)/.exec(superOptions) : null;
+    upperdir = match?.[1];
+  }
+  return upperdir;
 }
 
 function readOptional(read: () => string): string | undefined {
@@ -93,13 +112,14 @@ function computeRuntimeOwnerScope(): RuntimeOwnerScope {
   if (process.platform !== "linux") return { host: scopeDigest(process.platform, hostname()) };
   const boot = readOptional(() => readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim());
   const network = readOptional(() => readlinkSync("/proc/self/ns/net"));
-  const container = readOptional(() => containerIdFromMountinfo(readFileSync("/proc/self/mountinfo", "utf8")) ?? "");
-  const scope: RuntimeOwnerScope = { host: "" };
-  if (network && /^net:\[\d+\]$/.test(network)) scope.network = scopeDigest("net", network);
+  const container = readOptional(() => rootOverlayUpperdirFromMountinfo(readFileSync("/proc/self/mountinfo", "utf8")) ?? "");
+  const scope: RuntimeOwnerScope = { host: scopeDigest("linux", hostname()) };
+  if (boot && /^[0-9a-f-]{36}$/.test(boot) && network && /^net:\[\d+\]$/.test(network)) {
+    scope.boot = scopeDigest("boot", boot);
+    scope.network = scopeDigest("net", network);
+  }
   if (container) scope.container = scopeDigest("container", container);
-  scope.host = boot && /^[0-9a-f-]{36}$/.test(boot) && (scope.network || scope.container)
-    ? scopeDigest("linux", hostname(), boot)
-    : scopeDigest("unverifiable", randomUUID());
+  if (!scope.network && !scope.container) return { host: scopeDigest("unverifiable", randomUUID()) };
   return scope;
 }
 
@@ -112,9 +132,9 @@ export function sameRuntimeOwnerScope(recorded: unknown, own: RuntimeOwnerScope)
   const record = recorded as Record<string, unknown>;
   if (typeof record.host !== "string" || record.host !== own.host) return false;
   if (own.network === undefined && own.container === undefined) {
-    return record.network === undefined && record.container === undefined;
+    return record.boot === undefined && record.network === undefined && record.container === undefined;
   }
-  return (own.network !== undefined && record.network === own.network)
+  return (own.network !== undefined && record.network === own.network && own.boot !== undefined && record.boot === own.boot)
     || (own.container !== undefined && record.container === own.container);
 }
 

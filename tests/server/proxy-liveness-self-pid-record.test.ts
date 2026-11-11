@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { containerIdFromMountinfo, runtimeOwnerScope, sameRuntimeOwnerScope } from "../../src/config/process-state";
+import { rootOverlayUpperdirFromMountinfo, runtimeOwnerScope, sameRuntimeOwnerScope } from "../../src/config/process-state";
 import { observeProxyLiveness, type LivenessIo } from "../../src/server/proxy-liveness";
 import { watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -30,7 +30,7 @@ function ioFor(extra: Partial<LivenessIo>): LivenessIo {
   };
 }
 
-const OWN = { host: "0123456789abcdef0123456789abcdef", network: "11111111111111111111111111111111" };
+const OWN = { host: "0123456789abcdef0123456789abcdef", boot: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", network: "11111111111111111111111111111111" };
 const unpublished = () => ({ pid: process.pid, publishedOwnership: false, scope: OWN });
 const selfRecord = (ownerScope: unknown = OWN) => ({ pid: process.pid, port: 10100, hostname: "127.0.0.1", ...(ownerScope === null ? {} : { ownerScope }) });
 
@@ -40,10 +40,12 @@ describe("a record naming this process's own PID", () => {
     expect(await observeProxyLiveness(io)).toEqual({ kind: "absent", live: null });
   });
 
-  test("a restarted Docker container matches on its container id when the network namespace is new", async () => {
-    const own = { host: OWN.host, network: "22222222222222222222222222222222", container: "33333333333333333333333333333333" };
+  // Docker gives a restarted container a new network namespace, and a host reboot a new boot id,
+  // but the container keeps its own writable layer.
+  test("a restarted Docker container matches on its writable layer, even across a host reboot", async () => {
+    const own = { host: OWN.host, boot: "cccccccccccccccccccccccccccccccc", network: "22222222222222222222222222222222", container: "33333333333333333333333333333333" };
     const io = ioFor({
-      readRuntimeFn: () => selfRecord({ host: OWN.host, network: OWN.network, container: own.container }),
+      readRuntimeFn: () => selfRecord({ host: OWN.host, boot: OWN.boot, network: OWN.network, container: own.container }),
       ownProcessFn: () => ({ pid: process.pid, publishedOwnership: false, scope: own }),
     });
     expect(await observeProxyLiveness(io)).toEqual({ kind: "absent", live: null });
@@ -69,8 +71,14 @@ describe("a record naming this process's own PID", () => {
     expect(await observeProxyLiveness(io)).toEqual({ kind: "unknown", live: null });
   });
 
-  test("a record from another host or boot still refuses", async () => {
+  test("a record from another host still refuses", async () => {
     const io = ioFor({ readRuntimeFn: () => selfRecord({ ...OWN, host: "fedcba9876543210fedcba9876543210" }), ownProcessFn: unpublished });
+    expect(await observeProxyLiveness(io)).toEqual({ kind: "unknown", live: null });
+  });
+
+  // Namespace inode numbers repeat across boots and machines.
+  test("an equal network namespace from another boot still refuses", async () => {
+    const io = ioFor({ readRuntimeFn: () => selfRecord({ ...OWN, boot: "dddddddddddddddddddddddddddddddd" }), ownProcessFn: unpublished });
     expect(await observeProxyLiveness(io)).toEqual({ kind: "unknown", live: null });
   });
 
@@ -109,13 +117,15 @@ describe("a record naming this process's own PID", () => {
 });
 
 describe("owner scope comparison", () => {
-  test("Linux needs the host plus the network namespace or the container", () => {
-    const own = { host: "h", network: "n", container: "c" };
-    expect(sameRuntimeOwnerScope({ host: "h", network: "n" }, own)).toBe(true);
-    expect(sameRuntimeOwnerScope({ host: "h", network: "x", container: "c" }, own)).toBe(true);
-    expect(sameRuntimeOwnerScope({ host: "h", network: "x", container: "y" }, own)).toBe(false);
+  test("Linux needs the host plus the network namespace within one boot, or the container", () => {
+    const own = { host: "h", boot: "b", network: "n", container: "c" };
+    expect(sameRuntimeOwnerScope({ host: "h", boot: "b", network: "n" }, own)).toBe(true);
+    expect(sameRuntimeOwnerScope({ host: "h", boot: "x", network: "n" }, own)).toBe(false);
+    expect(sameRuntimeOwnerScope({ host: "h", network: "n" }, own)).toBe(false);
+    expect(sameRuntimeOwnerScope({ host: "h", boot: "x", network: "x", container: "c" }, own)).toBe(true);
+    expect(sameRuntimeOwnerScope({ host: "h", boot: "b", network: "x", container: "y" }, own)).toBe(false);
     expect(sameRuntimeOwnerScope({ host: "h" }, own)).toBe(false);
-    expect(sameRuntimeOwnerScope({ host: "other", network: "n", container: "c" }, own)).toBe(false);
+    expect(sameRuntimeOwnerScope({ host: "other", boot: "b", network: "n", container: "c" }, own)).toBe(false);
     for (const malformed of [undefined, null, "h", ["h"], { host: 1, network: "n" }]) expect(sameRuntimeOwnerScope(malformed, own)).toBe(false);
   });
 
@@ -123,15 +133,22 @@ describe("owner scope comparison", () => {
     const own = { host: "h" };
     expect(sameRuntimeOwnerScope({ host: "h" }, own)).toBe(true);
     expect(sameRuntimeOwnerScope({ host: "h", network: "n" }, own)).toBe(false);
+    expect(sameRuntimeOwnerScope({ host: "h", boot: "b" }, own)).toBe(false);
     expect(sameRuntimeOwnerScope({ host: "other" }, own)).toBe(false);
   });
 
-  test("container ids come from the files Docker and Podman bind-mount, not from pod sandboxes", () => {
-    const id = "a".repeat(64);
-    expect(containerIdFromMountinfo(`1234 1200 0:52 /var/lib/docker/containers/${id}/hostname /etc/hostname rw,relatime - ext4 /dev/sda1 rw\n`)).toBe(id);
-    expect(containerIdFromMountinfo(`1234 1200 0:52 /containers/storage/overlay-containers/${id}/userdata/resolv.conf /etc/resolv.conf rw - tmpfs tmpfs rw\n`)).toBe(id);
-    expect(containerIdFromMountinfo(`1234 1200 0:52 /var/lib/containerd/io.containerd.grpc.v1.cri/sandboxes/${id}/hostname /etc/hostname rw - ext4 /dev/sda1 rw\n`)).toBeUndefined();
-    expect(containerIdFromMountinfo("25 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw\n")).toBeUndefined();
+  test("the container key is the root overlay's own writable layer, never a shared id", () => {
+    const docker = "/var/lib/docker/overlay2/" + "a".repeat(64) + "/diff";
+    const root = (fstype: string, options: string) => `1001 1000 0:52 / / rw,relatime master:1 - ${fstype} ${fstype} ${options}`;
+    // A container joined to another's network bind-mounts that one's hostname; it must not count.
+    const joined = `1201 1001 8:1 /var/lib/docker/containers/${"b".repeat(64)}/hostname /etc/hostname rw,relatime - ext4 /dev/sda1 rw`;
+    expect(rootOverlayUpperdirFromMountinfo([root("overlay", `ro,lowerdir=/l1:/l2,upperdir=${docker},workdir=/w`), joined].join("\n") + "\n")).toBe(docker);
+    expect(rootOverlayUpperdirFromMountinfo(joined + "\n")).toBeUndefined();
+    expect(rootOverlayUpperdirFromMountinfo(root("ext4", "rw,errors=remount-ro") + "\n")).toBeUndefined();
+    expect(rootOverlayUpperdirFromMountinfo(root("fuse.fuse-overlayfs", "rw,user_id=0") + "\n")).toBeUndefined();
+    expect(rootOverlayUpperdirFromMountinfo(root("overlay", "rw,lowerdir=/l1") + "\n")).toBeUndefined();
+    // The visible root is the last one mounted.
+    expect(rootOverlayUpperdirFromMountinfo([root("overlay", "rw,upperdir=/old,workdir=/w"), root("overlay", "rw,upperdir=/new,workdir=/w")].join("\n"))).toBe("/new");
   });
 });
 
