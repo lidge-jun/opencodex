@@ -108,9 +108,9 @@ Pause, policy and selection notifications affect only the matching existing stat
 expose corresponding instance-bound owners. Family leases, admission pauses and probe generations include the instance and
 account. Clear/removal fences prevent an older claim from becoming current after the same account ID is re-added.
 `src/lib/state-store-registrations.ts` sweeps and reconciles existing instance buckets without starting dormant pools. On that
-sweep `src/providers/quota/anthropic-cooldown-recovery-worker.ts` forces the fresh usage read that lifts a claimable 429 quota
-cooldown (#6989) for every instance and account, so recovery no longer waits for the dashboard, `ocx account refresh` or a reset
-admitted here; a read that keeps it backs off per account (one sweep interval, doubling to ten minutes), a newer refusal resets that backoff, and a deadline the sweeper reaches first is never read for.
+sweep `src/providers/quota/anthropic-cooldown-recovery-worker.ts` forces the usage read that lifts a claimable 429 quota cooldown
+(#6989) on enabled OAuth instances only; a windowless `Retry-After` cooldown is unclaimable and waits for its deadline. Retained
+reads back off per account (one sweep, doubling to ten minutes); a newer refusal resets it; a deadline due first is never read for.
 
 Responses and native Messages retain the configured instance and authorized
 target through preparation, retries and continuations. Named Pool 2 OAuth routes

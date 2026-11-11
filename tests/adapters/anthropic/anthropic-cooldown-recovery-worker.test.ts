@@ -3,7 +3,7 @@
  * (#6989) without waiting for the dashboard, `ocx account refresh` or a reset admitted through
  * this proxy. A read that keeps the cooldown backs off; a lifted or replaced refusal forgets it.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { createAnthropicInstanceFixture, INSTANCE_FIXTURE_INSTANCES, type AnthropicInstanceFixture } from "../../helpers/anthropic-instance-fixture";
 import {
   ANTHROPIC_COOLDOWN_RECOVERY_PROBE_MAX_MS,
@@ -67,27 +67,47 @@ for (const instance of INSTANCE_FIXTURE_INSTANCES) {
   });
 }
 
-test("a read that still shows a rejected window full keeps the cooldown and backs off", async () => {
+test("a read that still shows a rejected window full keeps the cooldown and backs off to the cap", async () => {
   const routing = f.routing.anthropicRoutingFor("anthropic");
   const id = f.ids[0];
-  const start = Date.now();
-  coolForDays("anthropic", id, 4, start);
-  const counter = usage(0, 100);
+  // One clock for the sweep and for settlement, so each deadline is checked on both sides.
+  let clock = Date.now();
+  const now = spyOn(Date, "now").mockImplementation(() => clock);
+  try {
+    coolForDays("anthropic", id, 4, clock);
+    const counter = usage(0, 100);
+    await runAnthropicCooldownRecoveryProbes(f.config);
+    expect(counter.reads).toBe(1);
+    expect(routing.getAnthropicAccountHealthSnapshot(id)).toMatchObject({ cooldownSource: "retry-after" });
 
-  await runAnthropicCooldownRecoveryProbes(f.config, start);
-  expect(counter.reads).toBe(1);
-  expect(routing.getAnthropicAccountHealthSnapshot(id)).toMatchObject({ cooldownSource: "retry-after" });
+    // Retained reads wait MIN, 2*MIN, 4*MIN, ... and never longer than MAX.
+    let delay = ANTHROPIC_COOLDOWN_RECOVERY_PROBE_MIN_MS;
+    for (let read = 2; read <= 7; read += 1) {
+      const settledAt = clock;
+      clock = settledAt + delay - 1;
+      await runAnthropicCooldownRecoveryProbes(f.config);
+      expect(counter.reads).toBe(read - 1);
+      clock = settledAt + delay;
+      await runAnthropicCooldownRecoveryProbes(f.config);
+      expect(counter.reads).toBe(read);
+      delay = Math.min(delay * 2, ANTHROPIC_COOLDOWN_RECOVERY_PROBE_MAX_MS);
+    }
+    // Five doublings from one minute pass the ten-minute cap, so the last waits were capped.
+    expect(delay).toBe(ANTHROPIC_COOLDOWN_RECOVERY_PROBE_MAX_MS);
+  } finally {
+    now.mockRestore();
+  }
+});
 
-  // The next sweep inside the backoff sends nothing; the one after it reads again.
-  await runAnthropicCooldownRecoveryProbes(f.config, Date.now());
-  expect(counter.reads).toBe(1);
-  await runAnthropicCooldownRecoveryProbes(f.config, Date.now() + ANTHROPIC_COOLDOWN_RECOVERY_PROBE_MIN_MS + 1);
-  expect(counter.reads).toBe(2);
-  // Each retained read doubles the wait, up to the cap.
-  await runAnthropicCooldownRecoveryProbes(f.config, Date.now() + ANTHROPIC_COOLDOWN_RECOVERY_PROBE_MIN_MS + 1);
-  expect(counter.reads).toBe(2);
-  await runAnthropicCooldownRecoveryProbes(f.config, Date.now() + ANTHROPIC_COOLDOWN_RECOVERY_PROBE_MAX_MS + 1);
-  expect(counter.reads).toBe(3);
+test("a unified-rejected 429 that names no window keeps its Retry-After cooldown unread", async () => {
+  const routing = f.routing.anthropicRoutingFor("anthropic");
+  const now = Date.now();
+  routing.recordAnthropicAccount429(f.config, f.ids[0], String(4 * 24 * 3600), now,
+    new Headers({ "anthropic-ratelimit-unified-status": "rejected" }));
+  expect(routing.getAnthropicAccountHealthSnapshot(f.ids[0], now)).not.toBeNull();
+  const counter = usage(0, 0);
+  await runAnthropicCooldownRecoveryProbes(f.config, now);
+  expect(counter.reads).toBe(0);
 });
 
 test("a newer refusal replaces the earned backoff and is read on the next sweep", async () => {

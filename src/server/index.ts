@@ -311,7 +311,6 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   // this line is the only one appending to usage.jsonl and the only one that may compact it.
   setUsageLedgerRetention(config.usageLedgerMaxBytes);
   registerCodexCooldownRecoveryProbeWorker(config);
-  registerAnthropicCooldownRecoveryProbeWorker(config);
   // Issue #42 Phase 3: opt-in archived auto-cleanup (default OFF). Unref'd hourly
   // tick for daily/weekly; startup evaluation is fire-and-forget after listen.
   // Heavy work runs in a Worker via the single-flight job controller.
@@ -612,6 +611,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   const linkPolicy = (): RequestPolicyView => requestPolicyView(config, LINK_INGRESS_HOSTNAME, { allowedKeyIds: optionalListeners.linkAdmissionKeyIds() });
   let backgroundLifecycle: ReturnType<typeof acquireServerBackgroundLifecycle> | null = null;
   let unregisterQuotaAutoRefresh: (() => void) | null = null;
+  let unregisterAnthropicCooldownRecovery: (() => void) | null = null;
   let remoteWorkspaceStopping = false;
   let remoteWorkspaceShutdown: (() => Promise<void>) | undefined;
   let desktopCompatibilityStartup: ReturnType<typeof scheduleDesktopCompatibilityStartup> | undefined;
@@ -638,6 +638,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     backgroundLifecycle = acquireServerBackgroundLifecycle(applyPolicy, config);
     unregisterQuotaAutoRefresh = (deps.registerCodexQuotaAutoRefreshWorker
       ?? registerCodexQuotaAutoRefreshWorker)(config);
+    unregisterAnthropicCooldownRecovery = registerAnthropicCooldownRecoveryProbeWorker(config);
     // Poll external pricing edits; the startup catch releases this owner-scoped lease.
     userCostOverlayReconciler = startUserCostOverlayReconciler({ liveConfig: config });
     const serveOptions = createServeOptions({
@@ -715,6 +716,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
       maxRequestBodySize: inboundBodyLimitBytes, dispatch: (req, requestServer) => serveOptions.fetch(req, requestServer) });
   } catch (error) {
     unregisterQuotaAutoRefresh?.();
+    unregisterAnthropicCooldownRecovery?.();
     userCostOverlayReconciler?.stop();
     backgroundLifecycle?.releaseAfterFailedStart();
     void nativeMainLifecycle.release();
@@ -760,6 +762,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
               userCostOverlayReconciler?.stop();
             } finally {
               unregisterQuotaAutoRefresh?.();
+              unregisterAnthropicCooldownRecovery?.();
             }
           },
         ],
