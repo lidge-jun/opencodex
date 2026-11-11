@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { isLocalAttestationSecret } from "../lib/local-management-attestation";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
@@ -27,8 +29,33 @@ function ensureProcessStateDir(): void {
   else hardenConfigDir();
 }
 
+/**
+ * Whether this process has written `ocx.pid` or `runtime-port.json` in its own lifetime (#8552).
+ *
+ * Set before the write and never cleared: a record this process wrote and later removed still
+ * means its PID once named a live owner of this home, so it can never be told apart from an
+ * earlier lifetime of the same PID number.
+ */
+let publishedOwnershipRecords = false;
+
+export function hasPublishedOwnershipRecords(): boolean {
+  return publishedOwnershipRecords;
+}
+
+/**
+ * Which host name a runtime record was written under, without storing the name itself (#8552).
+ *
+ * Every container runs the proxy as PID 1, so a PID alone cannot say whether a record came from
+ * this container's previous lifetime or from another pod serving the same state volume. A
+ * restarted container keeps its pod's host name; a replacement pod does not.
+ */
+export function runtimeHostIdentity(): string {
+  return createHash("sha256").update(hostname()).digest("hex").slice(0, 32);
+}
+
 export function writePid(pid: number): void {
   ensureProcessStateDir();
+  publishedOwnershipRecords = true;
   atomicWriteFile(getPidPath(), String(pid));
 }
 
@@ -45,9 +72,15 @@ export type RuntimePortState = {
   /**
    * The live proxy's port when this runtime is a sibling instance started beside it
    * (`src/codex/sibling-start.ts`). `ocx stop` reads it to leave shared client routing alone.
-   * Absent for every other runtime, so those records keep their bytes.
+   * Absent for every other runtime.
    */
   siblingOfPort?: number;
+  /**
+   * {@link runtimeHostIdentity} of the writer, stamped by {@link writeRuntimePort}. Not validated
+   * here: a malformed value must not hide a live owner from status, stop or liveness, and the one
+   * reader that uses it (`observeProxyLiveness`) accepts only an exact match.
+   */
+  hostIdentity?: string;
 };
 
 export function isValidRuntimePortState(value: unknown): value is RuntimePortState {
@@ -70,7 +103,8 @@ export function isValidRuntimePortState(value: unknown): value is RuntimePortSta
 
 export function writeRuntimePort(state: RuntimePortState): void {
   ensureProcessStateDir();
-  atomicWriteFile(getRuntimePortPath(), JSON.stringify(state, null, 2) + "\n");
+  publishedOwnershipRecords = true;
+  atomicWriteFile(getRuntimePortPath(), JSON.stringify({ ...state, hostIdentity: runtimeHostIdentity() }, null, 2) + "\n");
   // The record proves this home's owner only to a reader that knows where it lives.
   // One pointer in the shared registry makes the record findable from every home;
   // it is best-effort because ownership never depends on the registry write landing.

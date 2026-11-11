@@ -15,6 +15,7 @@ import {
   readRuntimePort,
   removePid,
   removeRuntimePort,
+  runtimeHostIdentity,
   setOcxStartProcessCacheForTests,
   setProcessCommandLineExecForTests,
   setProcessCommandLineNativeForTests,
@@ -388,8 +389,8 @@ describe("proxy process-state ownership", () => {
     const attestationSecret = "A".repeat(43);
     writeRuntimePort({ pid: 1234, port: 58195, hostname: "0.0.0.0", attestationSecret });
 
-    expect(readRuntimePort()).toEqual({ pid: 1234, port: 58195, hostname: "0.0.0.0", attestationSecret });
-    expect(readRuntimePort(1234)).toEqual({ pid: 1234, port: 58195, hostname: "0.0.0.0", attestationSecret });
+    expect(readRuntimePort()).toEqual({ pid: 1234, port: 58195, hostname: "0.0.0.0", attestationSecret, hostIdentity: runtimeHostIdentity() });
+    expect(readRuntimePort(1234)).toEqual({ pid: 1234, port: 58195, hostname: "0.0.0.0", attestationSecret, hostIdentity: runtimeHostIdentity() });
     expect(readRuntimePort(9999)).toBeNull();
   });
 
@@ -413,12 +414,12 @@ describe("proxy process-state ownership", () => {
     expect(readRuntimePort()).toBeNull();
   });
 
-  test("a sibling record carries the live owner's port; every other record keeps its bytes", () => {
-    // Absent means "not a sibling", and the writer must not add the key: a non-sibling record is
-    // byte-identical to the one written before the field existed.
+  test("a sibling record carries the live owner's port; every other record omits the field", () => {
+    // Absent means "not a sibling", and the writer must not add the key. Every record carries the
+    // writer's host identity (#8552).
     writeRuntimePort({ pid: 1234, port: 58195, hostname: "127.0.0.1", ...siblingRuntimeField() });
     expect(readFileSync(getRuntimePortPath(), "utf-8"))
-      .toBe(`${JSON.stringify({ pid: 1234, port: 58195, hostname: "127.0.0.1" }, null, 2)}\n`);
+      .toBe(`${JSON.stringify({ pid: 1234, port: 58195, hostname: "127.0.0.1", hostIdentity: runtimeHostIdentity() }, null, 2)}\n`);
     expect(readRuntimePort()?.siblingOfPort).toBeUndefined();
 
     markSiblingStart(10100);
@@ -427,7 +428,7 @@ describe("proxy process-state ownership", () => {
     } finally {
       resetSiblingStartForTests();
     }
-    expect(readRuntimePort()).toEqual({ pid: 1234, port: 10199, hostname: "127.0.0.1", siblingOfPort: 10100 });
+    expect(readRuntimePort()).toEqual({ pid: 1234, port: 10199, hostname: "127.0.0.1", siblingOfPort: 10100, hostIdentity: runtimeHostIdentity() });
 
     for (const siblingOfPort of [0, 70000, 1.5, "10100", null]) {
       writeFileSync(getRuntimePortPath(), JSON.stringify({ pid: 1234, port: 10199, siblingOfPort }), "utf-8");

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runtimeHostIdentity } from "../../src/config/process-state";
 import { observeProxyLiveness, type LivenessIo } from "../../src/server/proxy-liveness";
 import { watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -29,23 +30,42 @@ function ioFor(extra: Partial<LivenessIo>): LivenessIo {
   };
 }
 
-const unpublished = () => ({ pid: process.pid, publishedOwnership: false });
+const HOST = "0123456789abcdef0123456789abcdef";
+const unpublished = () => ({ pid: process.pid, publishedOwnership: false, hostIdentity: HOST });
+const selfRecord = (hostIdentity: string | null = HOST) => ({ pid: process.pid, port: 10100, hostname: "127.0.0.1", ...(hostIdentity === null ? {} : { hostIdentity }) });
 
 describe("a record naming this process's own PID", () => {
-  test("a runtime record left by an earlier lifetime of this PID is absent", async () => {
-    const io = ioFor({ readRuntimeFn: () => ({ pid: process.pid, port: 10100, hostname: "127.0.0.1" }), ownProcessFn: unpublished });
+  test("a runtime record this host's earlier lifetime of this PID left is absent", async () => {
+    const io = ioFor({ readRuntimeFn: () => selfRecord(), ownProcessFn: unpublished });
     expect(await observeProxyLiveness(io)).toEqual({ kind: "absent", live: null });
   });
 
-  test("a pid file left by an earlier lifetime of this PID is absent", async () => {
-    const io = ioFor({ readPidFn: () => process.pid, ownProcessFn: unpublished });
+  test("a pid file beside that runtime record is absent too", async () => {
+    const io = ioFor({ readPidFn: () => process.pid, readRuntimeFn: () => selfRecord(), ownProcessFn: unpublished });
     expect(await observeProxyLiveness(io)).toEqual({ kind: "absent", live: null });
+  });
+
+  test("a pid file alone carries no host identity and still refuses", async () => {
+    const io = ioFor({ readPidFn: () => process.pid, ownProcessFn: unpublished });
+    expect(await observeProxyLiveness(io)).toEqual({ kind: "unknown", live: null });
+  });
+
+  // Every container is PID 1: during a RollingUpdate the old pod still serves this state volume
+  // from another network namespace, and only its host name tells it apart.
+  test("a record another host wrote under the same PID number still refuses", async () => {
+    const io = ioFor({ readRuntimeFn: () => selfRecord("fedcba9876543210fedcba9876543210"), ownProcessFn: unpublished });
+    expect(await observeProxyLiveness(io)).toEqual({ kind: "unknown", live: null });
+  });
+
+  test("a record without a host identity (an older version, maybe still serving) still refuses", async () => {
+    const io = ioFor({ readRuntimeFn: () => selfRecord(null), ownProcessFn: unpublished });
+    expect(await observeProxyLiveness(io)).toEqual({ kind: "unknown", live: null });
   });
 
   test("once this process has published ownership, its own PID still reads as a live owner", async () => {
     const io = ioFor({
-      readRuntimeFn: () => ({ pid: process.pid, port: 10100, hostname: "127.0.0.1" }),
-      ownProcessFn: () => ({ pid: process.pid, publishedOwnership: true }),
+      readRuntimeFn: () => selfRecord(),
+      ownProcessFn: () => ({ ...unpublished(), publishedOwnership: true }),
     });
     expect(await observeProxyLiveness(io)).toEqual({ kind: "unknown", live: null });
   });
@@ -53,7 +73,7 @@ describe("a record naming this process's own PID", () => {
   test("another alive ocx PID beside the self record still refuses", async () => {
     const io = ioFor({
       readPidFn: () => process.ppid,
-      readRuntimeFn: pid => pid === undefined ? { pid: process.pid, port: 10100, hostname: "127.0.0.1" } : null,
+      readRuntimeFn: pid => pid === undefined ? selfRecord() : null,
       ownProcessFn: unpublished,
     });
     expect(await observeProxyLiveness(io)).toEqual({ kind: "unknown", live: null });
@@ -61,7 +81,7 @@ describe("a record naming this process's own PID", () => {
 
   test("an endpoint that did not answer definitively still refuses", async () => {
     const io = ioFor({
-      readRuntimeFn: () => ({ pid: process.pid, port: 10100, hostname: "127.0.0.1" }),
+      readRuntimeFn: () => selfRecord(),
       ownProcessFn: unpublished,
       fetchFn: (async () => { throw Object.assign(new Error("timed out"), { name: "TimeoutError" }); }) as unknown as typeof fetch,
     });
@@ -91,7 +111,7 @@ const START_WAIT_MS = watchdogMs(15_000);
 
 // `exec` keeps the shell's PID, so the shell plays the previous container and `ocx start` the next
 // one: same PID, new lifetime, records naming it already on disk. Windows has no exec handoff.
-test.skipIf(process.platform === "win32")("ocx start recovers records its own PID left in an earlier lifetime", async () => {
+async function startAfterOwnLifetime(hostIdentity: string): Promise<{ child: ReturnType<typeof Bun.spawn>; port: number; ocxHome: string; served: boolean; stderr: Promise<string> }> {
   const root = mkdtempSync(join(tmpdir(), "ocx-self-pid-"));
   roots.push(root);
   const ocxHome = join(root, "ocx"), codexHome = join(root, "codex"), home = join(root, "home"), runtime = join(root, "runtime");
@@ -109,7 +129,7 @@ test.skipIf(process.platform === "win32")("ocx start recovers records its own PI
   }));
   const script = [
     'printf %s "$$" > "$OPENCODEX_HOME/ocx.pid"',
-    'printf \'{"pid":%s,"port":%s,"hostname":"127.0.0.1"}\' "$$" "$SELF_PID_PORT" > "$OPENCODEX_HOME/runtime-port.json"',
+    'printf \'{"pid":%s,"port":%s,"hostname":"127.0.0.1","hostIdentity":"%s"}\' "$$" "$SELF_PID_PORT" "$SELF_PID_HOST" > "$OPENCODEX_HOME/runtime-port.json"',
     'exec "$SELF_PID_BUN" "$SELF_PID_CLI" start --port "$SELF_PID_PORT"',
   ].join(" && ");
   const child = Bun.spawn(["/bin/sh", "-c", script], {
@@ -125,6 +145,7 @@ test.skipIf(process.platform === "win32")("ocx start recovers records its own PI
       SELF_PID_BUN: process.execPath,
       SELF_PID_CLI: repoPath("src/cli/index.ts"),
       SELF_PID_PORT: String(port),
+      SELF_PID_HOST: hostIdentity,
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -132,27 +153,41 @@ test.skipIf(process.platform === "win32")("ocx start recovers records its own PI
   children.push(child);
   const stderr = new Response(child.stderr).text();
   const deadline = Date.now() + START_WAIT_MS;
-  let served: { pid?: number } | null = null;
+  let served = false;
   while (Date.now() < deadline && child.exitCode === null && !served) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(500) });
       const body = await response.json() as { pid?: number };
-      if (response.ok && body.pid === child.pid) served = body;
+      served = response.ok && body.pid === child.pid;
     } catch { /* not listening yet */ }
     if (!served) await Bun.sleep(50);
   }
+  return { child, port, ocxHome, served, stderr };
+}
+
+const posix = process.platform !== "win32";
+
+test.skipIf(!posix)("ocx start recovers records this host's earlier lifetime of its PID left", async () => {
+  const { child, port, ocxHome, served, stderr } = await startAfterOwnLifetime(runtimeHostIdentity());
   if (!served) {
     if (child.exitCode === null) child.kill();
     await child.exited;
-    const reason = (await stderr).split("\n").find(line => line.startsWith("error:")) ?? (await stderr).trim().slice(0, 400);
+    const text = await stderr;
+    const reason = text.split("\n").find(line => line.startsWith("error:")) ?? text.trim().slice(0, 400);
     throw new Error(`start did not serve as PID ${child.pid}: exit ${child.exitCode}: ${reason}`);
   }
-  expect(served.pid).toBe(child.pid);
-  const runtimePath = join(ocxHome, "runtime-port.json");
-  expect(existsSync(runtimePath)).toBe(true);
-  const record = JSON.parse(readFileSync(runtimePath, "utf8")) as { pid: number; port: number; attestationSecret?: string };
+  const record = JSON.parse(readFileSync(join(ocxHome, "runtime-port.json"), "utf8")) as { pid: number; port: number; attestationSecret?: string; hostIdentity?: string };
   expect(record.pid).toBe(child.pid);
   expect(record.port).toBe(port);
   // A fresh publication: the stale record had no attestation secret.
   expect(typeof record.attestationSecret).toBe("string");
+  expect(record.hostIdentity).toBe(runtimeHostIdentity());
+}, Math.max(30_000, START_WAIT_MS * 2));
+
+test.skipIf(!posix)("ocx start still refuses a same-PID record another host wrote", async () => {
+  const { child, served, stderr, ocxHome } = await startAfterOwnLifetime("fedcba9876543210fedcba9876543210");
+  expect(served).toBe(false);
+  expect(await child.exited).toBe(1);
+  expect(await stderr).toContain("Proxy ownership is unverified");
+  expect(existsSync(join(ocxHome, "ocx.pid"))).toBe(true);
 }, Math.max(30_000, START_WAIT_MS * 2));
