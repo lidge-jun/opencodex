@@ -121,6 +121,14 @@ describe("routing a template alias", () => {
     delete c.providers.cc!.aliasTemplate;
     expect(routeModel(c, "CC-beam-free")).toMatchObject({ providerName: "other", routeReason: "default-provider" });
   });
+
+  test("two providers whose templates produce the same name: neither wins the bare name, each keeps its qualified one", () => {
+    const c = config(["reflection/beam"], { aliasTemplate: "{modelBasename}-t" });
+    c.providers.dd = { adapter: "openai-chat", baseUrl: "https://dd.test/v1", aliasTemplate: "{modelBasename}-t", models: ["vendor/beam"] };
+    expect(() => routeModel(c, "beam-t")).toThrow("model alias 'beam-t' is ambiguous: CC/beam-t, dd/beam-t");
+    expect(routeModel(c, "CC/beam-t")).toMatchObject({ providerName: "cc", modelId: "reflection/beam" });
+    expect(routeModel(c, "dd/beam-t")).toMatchObject({ providerName: "dd", modelId: "vendor/beam" });
+  });
 });
 
 describe("loading a hand-edited alias template", () => {
