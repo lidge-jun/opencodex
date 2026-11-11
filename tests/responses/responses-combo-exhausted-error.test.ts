@@ -473,6 +473,15 @@ describe("zero-attempt combo refusal names why each target was excluded", () => 
 describe("the Messages listener names the earliest combo recovery too", () => {
   const messagesRequest = () => new Request("http://localhost/v1/messages", { method: "POST" });
 
+  test("an HTTP-date cooldown gives the body the same wait as the header", async () => {
+    const at = new Date(Math.ceil(Date.now() / 1000) * 1000 + 90_000).toUTCString();
+    const response = comboUnavailableResponse("No available targets for combo", { retryAfter: at });
+    const seconds = Number(response.headers.get("retry-after"));
+    expect(Number.isInteger(seconds) && seconds > 0).toBe(true);
+    const { error } = await response.json() as { error: { message: string } };
+    expect(error.message).toBe(`No available targets for combo (retry in ~${seconds < 60 ? `${seconds}s` : `${Math.ceil(seconds / 60)}m`})`);
+  });
+
   test("the fixed Messages sentence carries the clamped retry advice before its period", async () => {
     const response = comboUnavailableResponse("No available targets for combo (1 target; target 1 (a): cooldown)", {
       retryAfter: "120",

@@ -114,7 +114,8 @@ export function comboUnavailableResponse(
   // shows the user how long the combo stays cooled.
   return markProxyError(new Response(
     JSON.stringify({
-      error: { message: appendClientRetryIn(message, options?.retryAfter), type: "server_error", code: "combo_unavailable" },
+      // Built from the header value itself, so an HTTP-date cannot make the body and header disagree.
+      error: { message: appendClientRetryIn(message, advice), type: "server_error", code: "combo_unavailable" },
     }),
     { status: 503, headers },
   ), options?.presentation);
