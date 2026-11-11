@@ -902,6 +902,26 @@ describe("TRAE CN ACP regression contract", () => {
     expect(events.some(event => event.type === "done")).toBe(false);
   });
 
+  test("cleanup timeout preserves usage from a thrown reader failure", async () => {
+    const usage = { inputTokens: 123, outputTokens: 456, totalTokens: 579 };
+    const fixture = traeFixture(request => {
+      if (request.method !== "session/prompt") return false;
+      fixture.send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn", usage } });
+      fixture.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: {
+        sessionUpdate: "current_model_update", currentModelId: "unexpected-model",
+      } } });
+      return true;
+    });
+    fixture.child.kill = () => true;
+    const events: AdapterEvent[] = [];
+    await createTraeCnAdapter(config(), { ...fixture.deps, home: testHome.root, cwd: testHome.root })
+      .runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "trae_shutdown_timeout", usage });
+    expect(events.some(event => event.type === "done")).toBe(false);
+    expect(buildResponseJSON(events, "test-model").usage)
+      .toMatchObject({ input_tokens: 123, output_tokens: 456, total_tokens: 579 });
+  });
+
   for (const stopReason of ["end_turn", "max_tokens", "max_turn_requests", "fixture_unknown_stop"]) {
     test("a reasoning-only completion preserves its reason and usage: " + stopReason, async () => {
       const fixture = traeFixture(request => {
