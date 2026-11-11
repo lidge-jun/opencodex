@@ -1225,6 +1225,7 @@
   "proxy-liveness-recovery.test.ts": "server",
   "proxy-liveness-owner-evidence.test.ts": "server",
   "proxy-liveness-bind-scope.test.ts": "server",
+  "proxy-liveness-self-pid-record.test.ts": "server",
   "proxy-liveness-nonloopback-bind-proof.test.ts": "server",
   "system-restart-ownership.test.ts": "server",
   "proxy-liveness.test.ts": "server", "readyz-features.test.ts": "server", "served-by-header.test.ts": "server", "qoder-adapter.test.ts": "providers",
