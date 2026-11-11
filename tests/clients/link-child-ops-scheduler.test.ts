@@ -7,7 +7,7 @@ import type { ChildOpsEnv, ItemOutcome } from "../../src/link/child-ops-types";
 import { BACKOFF_MAX_MS, BACKOFF_MIN_MS, CATALOG_BACKOFF_KEY, CATALOG_POLL_MS, QUIET_MAX_DEFER_MS, QUIET_PERIOD_MS, createChildOpsScheduler,
   createLinkBackoff, type ChildOpsScheduler } from "../../src/link/child-ops-scheduler";
 import { DEFAULT_CHILD_POLICY, updateChildPolicy, type ChildPolicy } from "../../src/link/child-policy";
-import { hostChildOpsEnv, schedulerRevision, syncedEtagFor, type ChildOpsHostBinding } from "../../src/link/child-ops-host";
+import { hostChildOpsEnv, runtimeCurrentDigest, schedulerRevision, syncedEtagFor, type ChildOpsHostBinding } from "../../src/link/child-ops-host";
 import { childObservationsPath, linkStorePath } from "../../src/link/paths";
 import type { LinkWireState } from "../../src/link/status-projection";
 import type { LinkRecord } from "../../src/link/store";
@@ -423,5 +423,63 @@ describe("host env (2.3)", () => {
     etag = null;
     expect(revision.current()).toEqual({ etag: null, changedAt: null });
     expect(await revision.recompute()).toBe(true);
+  });
+});
+
+describe("review fixes (#8557)", () => {
+  const twoGroups = (gate: Promise<void>) => harness({ links: [record(A), record(B)], idle: { [A]: false, [B]: true }, childDigest: { [A]: "sha256:home" },
+    policy: { ...DEFAULT_CHILD_POLICY, childCodexRestart: "app-server-when-idle" }, gate });
+
+  test("stop() during the plain-sync job submits no restarting group afterwards", async () => {
+    let release!: () => void;
+    const h = twoGroups(new Promise<void>(resolve => { release = resolve; }));
+    await h.started();
+    const pass = h.scheduler.evaluateForTest();
+    await flush();
+    expect(h.submits.map(s => s.restart)).toEqual(["none"]);
+    h.scheduler.stop();
+    release();
+    await pass;
+    expect(h.submits.map(s => s.restart)).toEqual(["none"]);
+  });
+
+  test("a policy switched during the plain-sync job governs the second group", async () => {
+    let release!: () => void;
+    const manual = twoGroups(new Promise<void>(resolve => { release = resolve; }));
+    await manual.started();
+    const pass = manual.scheduler.evaluateForTest();
+    await flush();
+    manual.state.policy = { ...manual.state.policy, catalogFanout: "manual" };
+    release();
+    await pass;
+    expect(manual.submits.map(s => s.restart)).toEqual(["none"]);
+
+    let releaseNever!: () => void;
+    const never = twoGroups(new Promise<void>(resolve => { releaseNever = resolve; }));
+    await never.started();
+    const second = never.scheduler.evaluateForTest();
+    await flush();
+    never.state.policy = { ...never.state.policy, childCodexRestart: "never" };
+    releaseNever();
+    await second;
+    expect(never.submits.map(({ linkIds, restart }) => ({ linkIds, restart }))).toEqual([{ linkIds: [A], restart: "none" }, { linkIds: [B], restart: "none" }]);
+  });
+
+  test("a legacy Child stays blocked when its known version stops being reported", () => {
+    const backoff = createLinkBackoff();
+    backoff.record(A, CATALOG_BACKOFF_KEY, { state: "owner-action", reason: "child-ocx-lacks-expect-link" }, T0, "2.92.0");
+    expect(backoff.blocked(A, CATALOG_BACKOFF_KEY, T0 + 10 * BACKOFF_MAX_MS, null)).toBe(true);
+    expect(backoff.blocked(A, CATALOG_BACKOFF_KEY, T0, "2.97.0")).toBe(false);
+  });
+
+  test("a busy Child's digest counts only once its runtime started after the last apply", () => {
+    const digest = "sha256:home";
+    expect(runtimeCurrentDigest({ appliedCodexSettingsDigest: digest, lastApplyAt: 2_000_000_000_000, runtimeStartedAt: 2_000_000_000_001, reportedAt: 1 })).toBe(digest);
+    expect(runtimeCurrentDigest({ appliedCodexSettingsDigest: digest, lastApplyAt: 2_000_000_000_000, runtimeStartedAt: 2_000_000_000_000, reportedAt: 1 })).toBe(digest);
+    // The apply's runtime restart did not happen: the next sync would restart it.
+    expect(runtimeCurrentDigest({ appliedCodexSettingsDigest: digest, lastApplyAt: 2_000_000_000_000, runtimeStartedAt: 1_999_999_999_999, reportedAt: 1 })).toBeNull();
+    expect(runtimeCurrentDigest({ appliedCodexSettingsDigest: digest, lastApplyAt: null, runtimeStartedAt: 2_000_000_000_000, reportedAt: 1 })).toBeNull();
+    expect(runtimeCurrentDigest({ appliedCodexSettingsDigest: digest, lastApplyAt: 2_000_000_000_000, runtimeStartedAt: null, reportedAt: 1 })).toBeNull();
+    expect(runtimeCurrentDigest({ appliedCodexSettingsDigest: null, lastApplyAt: null, runtimeStartedAt: null, reportedAt: null })).toBeNull();
   });
 });

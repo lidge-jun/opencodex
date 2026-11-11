@@ -13,7 +13,7 @@ import { observeChild, type ObserveDeps } from "./child-observe";
 import { inspectRemoteChildRuntime } from "./remote-plant";
 import { requireRemotePlatform } from "./remote-platform";
 import { patchChildObservation, readChildObservations, updateChildObservations } from "./child-observations";
-import { homeLinkChildParity } from "./child-parity";
+import { homeLinkChildParity, type LinkChildParity } from "./child-parity";
 import { codexSettingsDigest, projectHomeCodexSettings } from "./codex-settings";
 import { packageVersion } from "../lib/package-version";
 import { setCatalogAutoRefreshLinkFanout } from "../codex/catalog-auto-refresh";
@@ -55,6 +55,16 @@ export function schedulerRevision(monitor: CatalogRevisionMonitor) {
 /** Revision 4 (4529521968): the etag a Home-run sync last delivered; a GET of /v1/catalog never sets it. */
 export function syncedEtagFor(linkId: string): string | null {
   return readChildObservations(childObservationsPath()).children[linkId]?.catalogSyncedEtag ?? null;
+}
+
+/**
+ * The Child's applied settings digest, only while its runtime started at or after that apply (#8557 review). A sync on a
+ * Child whose runtime predates its last apply restarts that runtime even when the settings did not change
+ * (restartRuntimeAfterApply), which would cut a busy Child's relayed streams. Both times are the Child's own clock.
+ */
+export function runtimeCurrentDigest(parity: LinkChildParity): string | null {
+  const { appliedCodexSettingsDigest: digest, lastApplyAt, runtimeStartedAt } = parity;
+  return digest !== null && lastApplyAt !== null && runtimeStartedAt !== null && runtimeStartedAt >= lastApplyAt ? digest : null;
 }
 
 const errorName = (error: unknown): string => error instanceof Error ? error.name : "unknown";
@@ -108,7 +118,7 @@ export function startChildOpsHost(binding: ChildOpsHostBinding): () => void {
   const homeDigest = (): string | null => {
     try { return codexSettingsDigest(projectHomeCodexSettings(binding.config(), version).settings); } catch { return null; }
   };
-  const childDigest = (linkId: string): string | null => homeLinkChildParity.get(linkId).appliedCodexSettingsDigest;
+  const childDigest = (linkId: string): string | null => runtimeCurrentDigest(homeLinkChildParity.get(linkId));
   const scheduler: ChildOpsScheduler = createChildOpsScheduler({
     engine: sharedChildOpsEngine(), env: () => hostChildOpsEnv(binding, runner, { home: homeDigest, child: childDigest }),
     readPolicy: () => readChildPolicy(),

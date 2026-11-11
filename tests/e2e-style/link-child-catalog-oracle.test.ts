@@ -131,6 +131,7 @@ describe("A3 oracle: automatic catalog fan-out repairs a stale Child", () => {
     const catalog = new Map(childFile("opencodex-catalog.json").map(entry => [entry.slug, entry]));
     const cache = new Map(childFile("models_cache.json").map(entry => [entry.slug, entry]));
     expect([...catalog.keys()].sort()).toEqual(home.map(entry => entry.slug).sort());
+    expect([...cache.keys()].sort()).toEqual(home.map(entry => entry.slug).sort());
     expect(catalog.has("home/retired")).toBe(false);
     for (const entry of home) {
       const pick = (source: Row | undefined) => Object.fromEntries(CONTEXT.map(field => [field, source?.[field]]));

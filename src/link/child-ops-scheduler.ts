@@ -44,7 +44,8 @@ export function createLinkBackoff(options: { growOn?: ReadonlySet<string>; count
       if (!entry) return false;
       // A Child below 2.93 is retried only after it reports a different version (D6). Revision 4 (4529522058): with no
       // version known at the time, any reported version, or the end of the maxMs backoff, allows one retry.
-      if (entry.legacy) return entry.legacyAtVersion !== null ? peerVersion === entry.legacyAtVersion
+      // #8557 review: once a version was recorded, a report without one is not "another version".
+      if (entry.legacy) return entry.legacyAtVersion !== null ? peerVersion === null || peerVersion === entry.legacyAtVersion
         : peerVersion === null && now < entry.until;
       return now < entry.until;
     },
@@ -145,9 +146,14 @@ export function createChildOpsScheduler(deps: ChildOpsSchedulerDeps): ChildOpsSc
       const jobs: ChildJob[] = [];
       for (const [ids, restart] of [[plain, "none"], [withRestart, "app-server"]] as const) {
         if (ids.length === 0) continue;
+        // #8557 review: the first group's job can run for minutes. A stop() (listener closed, shutdown) or a policy
+        // change in that time governs the next group, which is admitted against the policy as it is now.
+        const current = deps.readPolicy().policy;
+        if (stopped || deps.isClientRuntime() || current.catalogFanout !== "auto") break;
+        const restartNow = restart === "app-server" && current.childCodexRestart === "app-server-when-idle" ? "app-server" : "none";
         // submit reads links.json and can throw (the POST route maps that to 503); the next poll retries.
         let result: ReturnType<ChildOpsEngine["submit"]>;
-        try { result = deps.engine.submit({ op: "sync", linkIds: [...ids], restart, trigger: "auto" }, env); } catch { continue; }
+        try { result = deps.engine.submit({ op: "sync", linkIds: [...ids], restart: restartNow, trigger: "auto" }, env); } catch { continue; }
         if (!result.ok) continue;     // a single-link list held by a job or a reserve() answers link_operation_in_progress
         const done = await deps.engine.whenDone(result.job.jobId);
         if (done) { record(done, env.now()); jobs.push(done); }
