@@ -3,13 +3,15 @@
 ## Hermetic (any CI host; existing non-live seams only: injected process table, scheduler probe, WinSW status, terminate primitive; no real schtasks/PowerShell)
 
 - Binding: wrapper with this home's paths and a wrapper image bound; same path token under a non-wrapper image not bound; another home's wrapper not bound; substring-only match not bound; stray wrapper with the task not running bound by the stray rule; unreadable command line or creation time under the bound manager → unknown, nothing killed.
-- `/end` accepted, wrapper survives → handle terminate → stopped.
+- `/end` accepted, wrapper survives → handle terminate of the wrapper only → child stopped through the graceful path → stopped.
+- The child refuses the graceful stop (409) → never force-killed; outcome survived.
+- In the guarded path, the wrapper is ended before `signalApproved`, and the approved PID still receives its graceful signal and teardown-deferral receipt.
 - Child exits 0 and the wrapper relaunches within the deadline → survived (no unbounded retry).
 - Access denied on `/end` or terminate → denied, no further kills.
 - Creation time changed between bind and terminate (PID reuse) → that PID untouched.
 - Port still answered by this installation's identity → survived; by a foreign identity → stopped + `portHeldByForeign`.
 - ARM64 path (no FFI) → unknown, no kill.
-- Output mapping: `ServiceStopOutcome`, `ocx-stop/1` fields (additive), `/api/stop` codes, Desktop parser unit tests with old and new documents; updater variant refuses without authorization.
+- Output mapping per path: `ServiceStopOutcome`, `ocx-stop/1` (no new outcome/proxy enum values; additive fields only), `/api/stop` codes, Desktop parser unit tests with old and new documents; updater variant refuses without authorization at entry and before each terminate.
 - New test files registered in the layout maps; no capped file grows (file-size ratchet).
 
 ## Real Windows device (required before the implementation merges)

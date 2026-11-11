@@ -2,7 +2,7 @@
 
 ## Risks
 
-- Killing the wrong process: per-installation binding with an image-name allowlist, lineage, a creation time read at bind time and re-checked on the same handle that terminates. Residual: a process that perfectly impersonates this home's wrapper (image, command line, lineage and creation time) cannot be told apart; the guarded takeover already carries that residual.
+- Killing the wrong process: only wrapper images are ever terminated; the proxy child keeps the graceful stop and its refusal rule. Per-installation binding with an image-name allowlist, lineage, a creation time read at bind time and re-checked on the same handle that terminates. Residual: a process that perfectly impersonates this home's wrapper (image, command line, lineage and creation time) cannot be told apart; the guarded takeover already carries that residual.
 - Elevated tasks: an unelevated stop cannot terminate an elevated wrapper → `denied` with guidance; no automatic elevation.
 - Trigger races: a new instance during the stop is `survived`, not retried without bound.
 - Not persistent: the proxy returns at the next logon/unlock trigger; stated in output text.
