@@ -78,4 +78,21 @@ describe("JEV session pin management (#7525)", () => {
     expect(await handleComboCommand(["set", "saved", "--strategy", "failover", "--json"], deps)).toBe(0);
     expect(config.combos?.saved).not.toHaveProperty("sessionPin");
   });
+
+  test("the CLI and API carry the per-turn effort mode with the pin", async () => {
+    expect(await handleComboCommand(["set", "saved", "--session-pin-effort", "per-turn", "--json"], deps)).not.toBe(0);
+    expect(await handleComboCommand(["set", "saved", "--session-pin", "20m", "--session-pin-effort", "per-turn", "--json"], deps)).toBe(0);
+    expect(config.combos?.saved?.sessionPin).toEqual({ ttlMs: 1_200_000, effort: "per-turn" });
+    expect(stored().saved).toMatchObject({ sessionPin: { ttlMs: 1_200_000, effort: "per-turn" } });
+    // A new idle window keeps the effort mode; the mode alone keeps the idle window.
+    expect(await handleComboCommand(["set", "saved", "--session-pin", "1h", "--json"], deps)).toBe(0);
+    expect(config.combos?.saved?.sessionPin).toEqual({ ttlMs: 3_600_000, effort: "per-turn" });
+    expect(await handleComboCommand(["set", "saved", "--session-pin-effort", "pinned", "--json"], deps)).toBe(0);
+    expect(config.combos?.saved?.sessionPin).toEqual({ ttlMs: 3_600_000 });
+    for (const args of [["--session-pin-effort", "sometimes"], ["--session-pin", "-", "--session-pin-effort", "per-turn"],
+      ["--strategy", "failover", "--session-pin-effort", "per-turn"]]) {
+      expect(await handleComboCommand(["set", "saved", ...args, "--json"], deps)).not.toBe(0);
+    }
+    expect((await put({ strategy: "jev", targets, sessionPin: { ttlMs: 60_000, effort: "always" } })).status).toBe(400);
+  });
 });

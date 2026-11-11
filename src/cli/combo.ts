@@ -1,5 +1,5 @@
 import { normalizeJevQuotaTiers } from "../combos/jev-quota-config";
-import { parseJevSessionPinDuration } from "../combos/jev-session-pin-config";
+import { normalizeJevSessionPin, parseJevSessionPinDuration } from "../combos/jev-session-pin-config";
 import { JEV_DECISION_TIMEOUT_MAX_MS, JEV_DECISION_TIMEOUT_MIN_MS } from "../combos/types";
 import {
   CliUsageError,
@@ -34,6 +34,7 @@ const USAGE = `Usage:
       [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->]
       [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->]
       [--session-pin <duration|->] (e.g. 20m; keeps a session on JEV's target while active)
+      [--session-pin-effort <pinned|per-turn>] (per-turn decides the pinned target's effort each turn)
       (jev only; the provider must be a configured jev-decision row)
       [--rename-from <id>] [--json]
   ocx combo stats <id> [--range <7d|30d|all>] [--json]
@@ -151,6 +152,10 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   if (sessionPinRaw !== undefined && sessionPinRaw !== "-" && sessionPinMs === undefined) {
     throw new CliUsageError("--session-pin must be a duration from 1m to 24h (for example 90s, 20m, 1h, or milliseconds), or -", USAGE);
   }
+  const sessionPinEffort = takeOption(args, "--session-pin-effort");
+  if (sessionPinEffort !== undefined && sessionPinEffort !== "pinned" && sessionPinEffort !== "per-turn") {
+    throw new CliUsageError("--session-pin-effort must be pinned or per-turn", USAGE);
+  }
   const decisionTimeout = takeOption(args, "--decision-timeout");
   let decisionTimeoutMs: number | null | undefined;
   if (decisionTimeout !== undefined) {
@@ -175,6 +180,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
     if (decisionProvider !== undefined && decisionProvider !== "-") throw new CliUsageError("--decision-provider applies only to the jev strategy", USAGE);
     if (quotaSignals !== undefined && quotaSignals !== "-" || quotaTiers !== undefined && quotaTiers !== "-") throw new CliUsageError("quota settings apply only to jev", USAGE);
     if (sessionPinMs !== undefined) throw new CliUsageError("--session-pin applies only to the jev strategy", USAGE);
+    if (sessionPinEffort !== undefined) throw new CliUsageError("--session-pin-effort applies only to the jev strategy", USAGE);
     if (decisionTimeoutMs != null) throw new CliUsageError("--decision-timeout applies only to the jev strategy", USAGE);
     if (additional.jevEffortMode === "client") throw new CliUsageError("--jev-effort-mode client applies only to the jev strategy", USAGE);
   };
@@ -222,7 +228,18 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   if (decisionTimeoutMs !== undefined) combo.decisionTimeoutMs = decisionTimeoutMs;
   if (quotaSignals !== undefined) combo.decisionQuotaSignals = quotaSignals === "-" ? null : quotaSignals === "on";
   if (quotaTiers !== undefined) combo.decisionQuotaTiers = parsedQuotaTiers;
-  if (sessionPinRaw !== undefined) combo.sessionPin = sessionPinMs === undefined ? null : { ttlMs: sessionPinMs };
+  if (sessionPinRaw !== undefined || sessionPinEffort !== undefined) {
+    // A new TTL keeps the stored effort mode, and an effort mode alone keeps the stored TTL.
+    const previous = normalizeJevSessionPin(combo.sessionPin);
+    const ttlMs = sessionPinRaw !== undefined ? sessionPinMs : previous?.ttlMs;
+    if (ttlMs === undefined) {
+      if (sessionPinEffort !== undefined) throw new CliUsageError("--session-pin-effort needs a session pin; pass --session-pin", USAGE);
+      combo.sessionPin = null;
+    } else {
+      const pinEffort = sessionPinEffort ?? previous?.effort ?? "pinned";
+      combo.sessionPin = pinEffort === "per-turn" ? { ttlMs, effort: pinEffort } : { ttlMs };
+    }
+  }
   if (strategy !== "jev") {
     delete combo.decisionProvider;
     delete combo.decisionModel;

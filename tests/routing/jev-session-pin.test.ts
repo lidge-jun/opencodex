@@ -53,10 +53,14 @@ beforeEach(() => {
 afterEach(() => clearJevSessionPinsForTests());
 
 describe("JEV session pin settings", () => {
-  test("accept exactly { ttlMs } inside the documented range", () => {
+  test("accept { ttlMs } inside the documented range with an optional effort mode", () => {
     expect(normalizeJevSessionPin({ ttlMs: 1_200_000 })).toEqual({ ttlMs: 1_200_000 });
+    expect(normalizeJevSessionPin({ ttlMs: 1_200_000, effort: "per-turn" })).toEqual({ ttlMs: 1_200_000, effort: "per-turn" });
+    // The default mode is accepted as input and normalized away, so stored configs stay sparse.
+    expect(normalizeJevSessionPin({ ttlMs: 1_200_000, effort: "pinned" })).toEqual({ ttlMs: 1_200_000 });
     for (const value of [null, [], {}, { ttlMs: JEV_SESSION_PIN_TTL_MIN_MS - 1 }, { ttlMs: JEV_SESSION_PIN_TTL_MAX_MS + 1 },
-      { ttlMs: 90_000.5 }, { ttlMs: "20m" }, { ttlMs: 90_000, turns: 3 }]) {
+      { ttlMs: 90_000.5 }, { ttlMs: "20m" }, { ttlMs: 90_000, turns: 3 }, { effort: "per-turn" },
+      { ttlMs: 90_000, effort: "always" }, { ttlMs: 90_000, effort: null }]) {
       expect(normalizeJevSessionPin(value)).toBeUndefined();
     }
   });
@@ -212,6 +216,23 @@ describe("persisted session pin evidence", () => {
     expect(normalizePersistedJevDecision({ ...base, pinned: true })).toBeUndefined();
     expect(normalizePersistedJevDecision({ ...base, pinReason: "session" })).toBeUndefined();
     expect(normalizePersistedJevDecision({ ...base, pinned: true, pinReason: "expired" })).toBeUndefined();
+    expect(normalizePersistedJevDecision({ ...base, pinned: true, pinReason: "session_effort" }))
+      .toMatchObject({ pinned: true, pinReason: "session_effort" });
+    expect(normalizePersistedJevDecision({ ...base, pinReason: "session_effort" })).toBeUndefined();
+  });
+
+  test("a per-turn effort decision on a pinned turn counts as pinned and as a decision", () => {
+    const entry = (jevDecision: Record<string, unknown>, timestamp: number) => ({
+      timestamp, status: 200, jevDecision, attempts: [],
+    }) as unknown as PersistedUsageEntry;
+    const accumulator = createJevStatsAccumulator({ comboId: "auto" });
+    accumulator.add(entry({ ...base, latencyMs: 40 }, 1));
+    accumulator.add(entry({ ...base, latencyMs: 20, pinned: true, pinReason: "session_effort",
+      usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 } }, 2));
+    accumulator.add(entry({ ...base, pinned: true, pinReason: "session" }, 3));
+    expect(accumulator.clone().summarize("all", 3).summary).toMatchObject({
+      decisions: 2, appliedDecisions: 2, pinnedRequests: 2, averageLatencyMs: 30, decisionTotalTokens: 12,
+    });
   });
 
   test("stats count pinned turns apart from decisions while keeping their physical tokens and request outcomes", () => {

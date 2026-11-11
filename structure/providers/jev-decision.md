@@ -260,6 +260,15 @@ in-flight writers. A reused turn sends no decision request and persists `pinned:
 a decision that replaced a released pin persists the reason. `src/usage/jev-stats.ts` counts pinned turns as
 `pinnedRequests`, never as decisions, gates or backend latency; request success, model fallback and physical
 attempts count every JEV-routed request, pinned or decided. The CLI projection reads an absent `pinnedRequests` as 0.
+
+`sessionPin.effort: "per-turn"` (absent means `pinned`, which normalization drops) keeps the reused target
+but asks the decision backend again on every reused turn whose target offers more than one effort, with the
+pinned target as the only candidate. An applied answer for that target sets the effort, persists `pinned: true`
+with `pinReason: "session_effort"` and is rewritten into the pin on completion; any other answer, a thrown
+decision call or a single-effort target keeps the pinned decision (`pinReason: "session"`), and a cancellation
+during that call returns the client-cancelled response. `jev-stats` counts a `session_effort` turn as pinned
+and also as a decision, since it sent one. The CLI sets the mode with `--session-pin-effort <pinned|per-turn>`;
+a new `--session-pin` keeps the stored mode, and the GUI idle-window input preserves it.
 Besides a classified failure response, a non-cancellation dispatch, preflight or failure-read exception and a
 committed stream that ends `failed` also forget the pin; `incomplete` is an answer and keeps it. Each forget stamps a
 per-session failure fence, so a request already in flight on that session cannot write the pin back.

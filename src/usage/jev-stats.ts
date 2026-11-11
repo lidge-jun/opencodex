@@ -1,5 +1,5 @@
 import { normalizeJevQuotaSummary, type JevQuotaDecisionSummary } from "../combos/jev-quota-config";
-import { JEV_SESSION_PIN_REASONS, type JevSessionPinReason } from "../combos/jev-session-pin-config";
+import { JEV_SESSION_PIN_REASONS, JEV_SESSION_PINNED_REASONS, type JevSessionPinReason } from "../combos/jev-session-pin-config";
 import type { OcxComboDefaultEffort } from "../types";
 import type { PersistedUsageEntry } from "./log";
 import { usageDisplayTotalTokens } from "./totals";
@@ -49,9 +49,12 @@ export interface PersistedJevDecisionV1 {
     outputTokens: number;
     totalTokens: number;
   };
-  /** The turn reused its session pin (#7525); no decision request was sent for it. */
+  /**
+   * The turn reused its session pin (#7525). With `session` no decision request was sent; with
+   * `session_effort` one was sent for the pinned target's effort only.
+   */
   pinned?: true;
-  /** `session` with `pinned`; otherwise why an existing session pin was released. */
+  /** `session` or `session_effort` with `pinned`; otherwise why an existing session pin was released. */
   pinReason?: JevSessionPinReason;
 }
 
@@ -199,9 +202,10 @@ export function normalizePersistedJevDecision(value: unknown): PersistedJevDecis
     && (JEV_SESSION_PIN_REASONS as readonly string[]).includes(value.pinReason)
     ? value.pinReason as JevSessionPinReason
     : undefined;
-  // A pinned turn always says so with `session`; any other pairing is not a record this writes.
-  const pinned = value.pinned === true && pinReason === "session";
-  if ((value.pinned === true || pinReason === "session") && !pinned) return undefined;
+  // A pinned turn always says so with a pinned reason; any other pairing is not a record this writes.
+  const pinnedReason = pinReason !== undefined && JEV_SESSION_PINNED_REASONS.includes(pinReason);
+  const pinned = value.pinned === true && pinnedReason;
+  if ((value.pinned === true || pinnedReason) && !pinned) return undefined;
   return {
     version: 1,
     comboId,
@@ -405,8 +409,9 @@ class StreamingJevStatsAccumulator implements JevStatsAccumulator {
     this.addAttempts(attempts);
     if (decision.pinned) {
       // A session-pinned turn sent no decision request, so it stays out of every decision total.
+      // A per-turn effort decision on a pinned turn did send one and is counted below as well.
       this.pinnedRequests = saturatingAdd(this.pinnedRequests, 1);
-      return;
+      if (decision.pinReason !== "session_effort") return;
     }
 
     const backend = decision.backend ?? "unknown";

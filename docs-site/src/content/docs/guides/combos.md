@@ -320,14 +320,36 @@ JEV decides again, and the new decision replaces the pin, when:
 - any send of a pinned session fails (that request still fails over as usual);
 - the configuration has changed since the pin was written.
 
+#### Deciding effort on every pinned turn
+
+A pin keeps the effort of the first decision by default. A session that starts with a planning
+request and continues with small edits then pays for that effort on every turn. Set
+`effort: "per-turn"` to keep the pinned target, and its prompt cache, while JEV chooses the effort
+again on every turn:
+
+```bash
+ocx combo set jev-auto --session-pin 20m --session-pin-effort per-turn --json
+```
+
+```json
+{ "strategy": "jev", "sessionPin": { "ttlMs": 1200000, "effort": "per-turn" } }
+```
+
+Each reused turn sends one decision request that offers only the pinned target and its efforts.
+If JEV answers with an effort for that target, the turn uses it and the pin keeps the new effort.
+If the call fails, times out or answers anything else, the turn uses the pinned effort as it would
+without this setting. A target with a single effort skips the call. `--session-pin-effort pinned`
+returns to the default, and changing the idle window with `--session-pin` keeps the mode.
+
 A cancelled request keeps the pin. A fail-open decision (timeout, missing key, invalid answer)
 never creates one. Pins live in the proxy's memory, at most 512 sessions, and do not survive a
 restart.
 
-Usage records mark a reused turn with `jevDecision.pinned: true` and `pinReason: "session"`. A
+Usage records mark a reused turn with `jevDecision.pinned: true` and `pinReason: "session"`, or
+`pinReason: "session_effort"` when a per-turn effort decision set its effort. A
 decision that replaced a released pin records why in `pinReason` (`expired`, `config_changed`,
 `target_unavailable`, `effort_unavailable` or `quota_nearly_exhausted`). `ocx combo stats`
-counts pinned requests apart from decisions; they still count toward successful requests, model
+counts pinned requests apart from decisions, and also counts a `session_effort` turn as a decision; they still count toward successful requests, model
 fallbacks and per-model tokens.
 
 A pin makes provider cache reuse possible; whether the provider actually serves cached tokens still
