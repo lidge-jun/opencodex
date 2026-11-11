@@ -442,7 +442,8 @@ export async function executeComboResponses(
     : undefined;
   // Expand previous_response_id before image policy and child dispatch so a
   // continuation that only references prior images still fails closed when
-  // imageInput is disabled (and so targets see the full replayed input).
+  // imageInput is disabled (and so targets see the full replayed input). Chat projection can
+  // flatten instruction images, so its retained value-free fact participates in the same guard.
   const inboundClientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
   const body = expandPreviousResponseInput(rawBody, inboundClientThreadId);
   const replayFailure = previousResponseReplayFailure(body);
@@ -473,7 +474,7 @@ export async function executeComboResponses(
       "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
     );
   }
-  if (combo.imageInput === "disabled" && comboRequestHasImageInput(body)) {
+  if (combo.imageInput === "disabled" && (options.chatInstructionImage || comboRequestHasImageInput(body))) {
     return formatErrorResponse(400, "invalid_request_error", "This combo does not accept image input");
   }
   const comboReplaySnapshot = {

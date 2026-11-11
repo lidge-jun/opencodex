@@ -439,9 +439,9 @@ async function handleChatCompletionsWithBudget(
     const mayRetryPolicy = settledRoute?.routeKind === "policy"
       || Boolean(intercept?.enabled && intercept.model
         && isShadowSourceModel(requestedModel, intercept.sourceModels));
-    if (mayRetryPolicy || Boolean(settledRoute?.combo && !nativeChatCombos)) {
-      // Policy retries and translated combo children need the pre-projection conversation, but
-      // ordinary Chat requests and native combo delivery do not.
+    if (mayRetryPolicy || Boolean(settledRoute?.combo)) {
+      // Policy retries and combo bridge children need the pre-projection conversation. Native
+      // combo targets keep the protocol envelope; ordinary non-replay Chat requests keep neither.
       // Admit the serialized clone before allocating it and retain its charge with this request.
       translatorBudget.chargeRetained(jsonUtf8Bytes(chatBody), { kind: "request_copies" });
       chatReplayOriginalInboundBody = structuredClone(chatBody);

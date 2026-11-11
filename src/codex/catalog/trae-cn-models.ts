@@ -34,24 +34,21 @@ export async function refreshTraeCnCatalogSources(
     for (const roster of retained.reverse()) roster.release();
     retained.length = 0;
   };
-  for (const [name, provider] of Object.entries(config.providers)) {
-    if (!current()) { releaseRetained(); return; }
-    if (provider.adapter !== "trae-cn" || provider.disabled || provider.liveModels === false) continue;
-    const gathered = await fetchProviderModelsWithAuth(captureProviderGather(name, provider, refreshingModelsAuthResolver),
-      config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS, providerContextCap(config, name), refreshingModelsAuthResolver);
-    if (!current()) { releaseRetained(); return; }
-    if (after && gathered.outcome.state === "authoritative") {
-      const release = pinCachedModels(name, gathered.models, Date.now(), captureModelCacheGeneration(name));
-      if (!release) { releaseRetained(); return; }
-      retained.push({ name, release, contentRevision: observeModelCacheRevision(name) });
-    }
-  }
-  if (!after || retained.length === 0) return;
-  if (!current() || retained.some(roster => observeModelCacheRevision(roster.name) !== roster.contentRevision)) {
-    releaseRetained();
-    return;
-  }
   try {
+    for (const [name, provider] of Object.entries(config.providers)) {
+      if (!current()) return;
+      if (provider.adapter !== "trae-cn" || provider.disabled || provider.liveModels === false) continue;
+      const gathered = await fetchProviderModelsWithAuth(captureProviderGather(name, provider, refreshingModelsAuthResolver),
+        config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS, providerContextCap(config, name), refreshingModelsAuthResolver);
+      if (!current()) return;
+      if (after && gathered.outcome.state === "authoritative") {
+        const release = pinCachedModels(name, gathered.models, Date.now(), captureModelCacheGeneration(name));
+        if (!release) return;
+        retained.push({ name, release, contentRevision: observeModelCacheRevision(name) });
+      }
+    }
+    if (!after || retained.length === 0) return;
+    if (!current() || retained.some(roster => observeModelCacheRevision(roster.name) !== roster.contentRevision)) return;
     await after();
   } finally {
     releaseRetained();
