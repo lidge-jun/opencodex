@@ -501,16 +501,20 @@ export interface ReconcileJournalOptions {
  * runtime starting mid-connect sees a live process owner and leaves it alone. Without the takeover
  * the first start after that process exited (a supervisor relaunch after `ocx connect --link` and
  * `ocx restart`) read it as a crashed session and restored native Codex under the new link.
- * Returns whether it changed the owner.
+ * Only a process-written journal is taken: another client's journal belongs to a later connection
+ * (a stale sync must never claim it), and `beforeWrite` re-runs the caller's connection guard under
+ * the lock, so a connection that changed since its injection writes nothing. Returns whether it
+ * changed the owner.
  */
-export function adoptJournalForClient(apiKeyId: string): boolean {
+export function adoptJournalForClient(apiKeyId: string, beforeWrite: () => void = () => {}): boolean {
   if (codexHomeIsAbsent(CODEX_HOME)) return false;
   const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, undefined, handle => {
     assertCodexHomeOwner(CODEX_HOME);
     beginCodexWriteSection(handle);
     const journal = readJournal();
     if (!journal) return false;
-    if (journal.owner?.kind === "client" && journal.owner.apiKeyId === apiKeyId) return false;
+    if (journal.owner?.kind === "client") return false;
+    beforeWrite();
     const adopted = JSON.stringify({ ...journal, owner: { kind: "client", apiKeyId } });
     publishCodexArtifact(JOURNAL_PATH, handle, (path, hooks) => atomicWriteFile(path, adopted, undefined, hooks));
     return true;

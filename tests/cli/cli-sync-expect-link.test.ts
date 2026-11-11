@@ -227,6 +227,30 @@ describe("ocx sync --expect-link / --expect-hub-key", () => {
       restart.mockRestore(); connected.mockRestore(); shim.mockRestore(); log.mockRestore(); error.mockRestore();
     }
   });
+  // Review round 2: a sync whose Codex journal handover failed must not report a clean success,
+  // because a later supervised restart would restore native routing again.
+  test("a sync whose journal handover failed exits 1 and says to sync again", async () => {
+    writeClient({ transport: "hub" });
+    const current = readClientConnectionState();
+    if (current.kind !== "connected") throw new Error("fixture must be connected");
+    const connected = spyOn(connectApi, "syncConnectedClient").mockResolvedValue({ catalogWritten: false, cacheSynced: false, injected: true, stale: false, connection: current.value, journalHandoverFailed: true });
+    const shim = spyOn(shimAutoRestore, "runCodexShimAutoRestoreAsync").mockResolvedValue(undefined);
+    const errors: string[] = [];
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    const error = spyOn(console, "error").mockImplementation((...parts) => { errors.push(parts.map(String).join(" ")); });
+    try {
+      process.exitCode = 0;
+      const args = ["sync"];
+      const code = await dispatchCommand({ kind: "command", command: "sync", args }, { args } as unknown as CliDispatchDeps);
+      expect(code).toBe(1);
+      expect(errors.join("\n")).toContain("Codex journal could not be handed to this connection");
+      expect(errors.join("\n")).toContain("Run 'ocx sync' again");
+    } finally {
+      process.exitCode = 0;
+      connected.mockRestore(); shim.mockRestore(); log.mockRestore(); error.mockRestore();
+    }
+  });
+
   async function runSync(args: string[]) {
     let discoveries = 0;
     const errors: string[] = [];
