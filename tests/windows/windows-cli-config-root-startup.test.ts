@@ -68,6 +68,9 @@ test.each([
   ["service", ["service", "status", "--json"]],
   ["internal", ["internal", "chatgpt-app-server-filter"]],
   ["start", ["start"]],
+  ["ensure", ["ensure"]],
+  ["__startup-health", ["__startup-health"]],
+  ["__tray-start", ["__tray-start"]],
 ] as const)("%s %j neither starts nor waits for the flight", async (command, args) => {
   const flight = holdFlight();
   await settleConfigRootForCli(command, [...args]);
