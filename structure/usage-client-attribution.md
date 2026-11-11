@@ -44,6 +44,20 @@ observed during a row read re-verifies the selected bytes before publishing them
 offset that no longer frames a complete row drops the projection instead of serving a partial
 answer. `usage.jsonl` stays authoritative and is never truncated or rewritten.
 
+The index keeps its `-wal` and `-shm` sidecars after the last connection closes
+(`SQLITE_FCNTL_PERSIST_WAL` on every connection that can write, set only once the file classified
+as this projection). The writer runs `PRAGMA wal_checkpoint(TRUNCATE)` before it closes and a
+`journal_size_limit` is set, so a clean close leaves the kept WAL empty; while a reader in another
+process pins it, the WAL keeps its frames until a later writer's checkpoint. Creation registers the
+sidecar names up front; an existing projection whose names were never recorded (a 0-byte file left
+by a crash before the first open) registers them on the first open after they exist. SQLite's
+default deletes them on the final close, which changed the config directory on
+every filtered query. On Windows a changed
+config directory re-runs its ACL harden, whose inherited-ACE rewrite moves `usage.jsonl`'s
+ChangeTime, and both the usage aggregate and this index then rebuild from the whole ledger.
+`tests/usage/usage-filter-index.test.ts` asserts that filtered queries after the first leave the
+directory's entries and times unchanged.
+
 The reader also receives the snapshot's revision, boundary offset and trailing digest. When the
 revision moved since the snapshot it re-verifies that boundary before trusting any offset, so a
 rewrite between the index refresh and the row read becomes a rebuild rather than a silently
@@ -85,9 +99,18 @@ removed with it; a live writer keeps its registry row and lease, so another writ
 its staging alone and its own publish fails the fence and retries. A lease whose generation is no
 longer registered cannot belong to a live writer and is pruned.
 
-The projection is created 0600 through the shared private-SQLite path, its WAL and shared-memory
-sidecars are registered for uninstall only when this module creates them, and a file at that path
-that is not this projection is never modified. A passive management read opens an existing
+Opening the projection is safe against a concurrent first open. The busy timeout is set before the
+first read, and a classification that meets another writer's lock rethrows the busy error into the
+caller's retry; it never reads as a foreign file. A fresh file gets its whole schema in one
+`BEGIN IMMEDIATE` transaction that re-classifies under the lock, so no process can observe the meta
+table without the data tables, and a schema another process committed first is adopted and
+verified. An outdated schema is recreated only after re-checking it under the same lock, so two
+processes that both saw it stale cannot drop each other's fresh tables.
+
+The projection is created 0600 through the shared private-SQLite path. It and its WAL and
+shared-memory sidecars are registered for uninstall when this module creates them, or, beside an
+existing file that classified as this projection, once they appear; a file at that path that is
+not this projection is never registered or modified. A passive management read opens an existing
 projection read-only, requires this projection's full table set rather than a coincidental meta
 table, and only uses it when it is current for the exact ledger revision; otherwise it streams,
 and it never creates, writes or registers anything. Any other index-side failure -- unwritable home,
@@ -135,3 +158,15 @@ filtered HEAD reads, whose empty body cannot confirm the scope. Requests without
 newly scoped by that rule. `src/server/hub-usage.ts` binds a client-filtered data-plane read to its authenticated
 key and emits a safe scope echo; `src/remote/hub-usage.ts` projects it without key IDs, and
 `src/client/hub-client.ts` rejects a missing or mismatched echo.
+
+## Anthropic pool account tag
+
+Anthropic pool attempts carry no `accountLogLabel`; the pool folds the account into the logged
+provider (`anthropic-p<hex6>`, `formatAnthropicProviderForLog`). `anthropicAccountTag` in
+`src/providers/label.ts` exposes that same suffix as a separate `accountTag` field and mints no
+new identifier. `sealRequestAttemptIdentity` (`src/server/request-log-account-rotation.ts`)
+derives it from the attempt's frozen provider, so a failover split carries the next account's
+tag; the row's tag comes from the row's provider in `src/server/request-log.ts`. `src/usage/log.ts`
+and the request-log hydration keep only `p` plus six lowercase hex digits and drop anything else.
+Per-account summaries still key on `accountLogLabel` and ignore the tag
+(`tests/usage/request-log-anthropic-account-tag.test.ts`).

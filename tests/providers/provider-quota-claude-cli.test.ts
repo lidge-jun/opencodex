@@ -347,3 +347,35 @@ test("passive reconciliation preserves other held reports without probing", asyn
   expect(held.reports.find(row => row.provider === "openrouter")).toEqual(other);
   expect(requests).toBe(1);
 });
+test("carries an inactive Fable row as display-only and rejects a malformed one like a routed row", async () => {
+  const observedAt = Date.now() - 5 * 60_000;
+  const resetAt = observedAt + 86_400_000;
+  const write = (displayWindows: unknown) => writeFileSync(join(home, "claude-usage-admission.json"), JSON.stringify({
+    identity: ACCOUNT_A,
+    checkedAt: observedAt,
+    quota: { weeklyPercent: 91, weeklyResetAt: resetAt, displayWindows, updatedAt: observedAt },
+  }));
+  write([{ label: "Fable", scope: "model", percent: 4, resetAt, weeklyAllowancePercent: 50 }]);
+  const row = (await fetchProviderQuotaReports(config(), true)).reports.find(report => report.provider === "claude-cli");
+  expect(row?.quota.displayWindows).toEqual([{ label: "Fable", scope: "model", percent: 4, resetAt, weeklyAllowancePercent: 50 }]);
+  expect(row?.quota.customWindows).toBeUndefined();
+
+  clearProviderQuotaCache();
+  write([{ label: "Fable", percent: "4" }]);
+  const rejected = (await fetchProviderQuotaReports(config(), true)).reports.find(report => report.provider === "claude-cli");
+  expect(rejected).toBeUndefined();
+});
+test("rejects a snapshot whose weekly share is not a number in (0, 100]", async () => {
+  const observedAt = Date.now() - 5 * 60_000;
+  for (const weeklyAllowancePercent of ["<b>", 1e9, 0]) {
+    clearProviderQuotaCache();
+    writeFileSync(join(home, "claude-usage-admission.json"), JSON.stringify({
+      identity: ACCOUNT_A,
+      checkedAt: observedAt,
+      quota: { weeklyPercent: 91, updatedAt: observedAt,
+        displayWindows: [{ label: "Fable", scope: "model", percent: 4, weeklyAllowancePercent }] },
+    }));
+    const row = (await fetchProviderQuotaReports(config(), true)).reports.find(report => report.provider === "claude-cli");
+    expect(row).toBeUndefined();
+  }
+});

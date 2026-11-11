@@ -20,7 +20,7 @@ Responses-compatible streaming output. Every Responses serializer projects unref
 
 The `openai-responses` adapter preserves caller `User-Agent` unless provider headers own it, in either auth mode.
 Final route capability normalization removes rejected reasoning effort and toggle fields from the native passthrough body when those fields were parsed into options, before custom gateway-object serialization.
-`forwardClientHeaders` additionally opts into `originator`, `x-client-request-id`, `x-codex-app-version`, or `user-agent`.
+`forwardClientHeaders` additionally opts into `originator`, `x-client-request-id`, `x-codex-app-version`, `user-agent`, `x-codex-window-id`, or `x-codex-installation-id`. The Codex identifiers are copied only when present and explicitly selected, including native compact fallback; no identifiers are generated and arbitrary `x-codex-*` names remain refused. The inbound WebSocket handshake retains the original `user-agent` and `x-codex-app-version` in the per-connection header snapshot. Reconstructed Responses requests apply the same provider policy as HTTP ingress; retaining a header does not grant a provider permission to receive it. `src/server/responses/core-auth.ts` restores permitted metadata after credential materialization without replacing selected identity, and reapplies it on the 401 refresh replay and the alternate-account rebuild in `src/server/responses/core-codex-account.ts`, so every physical send of one turn carries the same permitted fingerprint. `tests/responses/responses-forward-client-headers-live.test.ts` covers full HTTP and WebSocket turns, including per-provider selection on one socket, static header precedence and credential isolation; `tests/responses/ws-endpoint.test.ts` covers the snapshot helper.
 Provider headers win case-insensitively; arbitrary names are rejected on load/write and ignored at runtime.
 Canonical forward auth retains its separate fixed credential/metadata allowlist; absent caller identity is not invented. Upstream WebSocket reasoning-inclusion headers follow the [native prelude and connection-signal contract](responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 
@@ -540,8 +540,8 @@ not `openai-chat` is decided without a copy. An eligible child is dispatched thr
 already opened (its opening stays hand-rolled: the ordinal comes from the parent context while the
 active attempt and requested effort land on the child context, which `beginInferenceAttempt`
 does not express). The child gets the combo's per-target send budget, the client's abort signal
-and the turn lease. Ordinary Combo policy maps onto `reasoning_effort` through `concreteComboRequestBody`; the first JEV choice overrides it, including explicit null.
-Initial shaping removes conflicting controls and caller `service_tier` before provider pins/caps and wire normalization; labels retain applied transitions ([JEV Decision Routing](../providers/jev-decision.md)).
+and the turn lease. Ordinary Combo policy maps onto `reasoning_effort` through `concreteComboRequestBody`; in the default `decide` mode the first JEV choice overrides it, including explicit null; with `jevEffortMode: "client"` ordinary Combo policy stays in force ([JEV owner](../providers/jev-decision.md)).
+In `decide` mode initial shaping removes conflicting controls and caller `service_tier` before provider pins/caps and wire normalization; labels retain applied transitions ([JEV Decision Routing](../providers/jev-decision.md)).
 Later targets use ordinary policy from the original body. Its attempt path is native (`[chat, chat]`) and its answer is marked `chat`.
 
 Send accounting: the combo's hop reservation already booked the target's first send, so the native
