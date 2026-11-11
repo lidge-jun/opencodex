@@ -1276,6 +1276,39 @@ describe("TRAE CN ACP regression contract", () => {
     });
   });
 
+  test("background publication cannot replace an intervening newer roster", async () => {
+    const rowA = { ...config(), models: [] };
+    const rowB = { ...config(), models: [] };
+    let calls = 0;
+    const session = (models: string[]) => ({ models, prompt: async () => undefined, close: async () => undefined });
+    const open = spyOn(traeClient, "openTraeSession").mockImplementation(async () => {
+      calls++;
+      if (calls === 1) return session(["old-model"]);
+      if (calls === 2) {
+        const newer = await fetchProviderModelsWithAuth(
+          captureProviderGather("trae-a", rowA, refreshingModelsAuthResolver), 0, undefined, refreshingModelsAuthResolver,
+        );
+        expect(newer.outcome.state).toBe("authoritative");
+        return session(["second-provider-model"]);
+      }
+      return session(["new-model"]);
+    });
+    const next: OcxConfig = { port: 10100, defaultProvider: "trae-a", modelCacheTtlMs: 0,
+      providers: { "trae-a": rowA, "trae-b": rowB } };
+    let published = false;
+    await refreshTraeCnCatalogSources(next, () => true, async () => { published = true; });
+    const observed = await fetchProviderModelsWithAuth(
+      captureProviderGather("trae-a", rowA, observedModelsAuthResolver(null, [])), 0, undefined,
+      observedModelsAuthResolver(null, []),
+    );
+    expect(published).toBe(false);
+    expect(open).toHaveBeenCalledTimes(3);
+    expect(observed.models.map(model => model.id)).toContain("new-model");
+    expect(observed.models.map(model => model.id)).not.toContain("old-model");
+    expect(getPinnedCached("trae-a")).toBeNull();
+    expect(getPinnedCached("trae-b")).toBeNull();
+  });
+
   for (const stopped of [false, true]) {
     test("background CLI refresh does not hold management admission; stopped=" + stopped, async () => {
       let entered!: () => void;
