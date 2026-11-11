@@ -442,7 +442,14 @@ export async function openTraeSession(
           emit({ type: "done", stopReason: stop, ...(usage ? { usage } : {}) });
         } catch (error) {
           if (error instanceof TraeAcpError && error.code === "trae_acp_closed") {
-            await client.close();
+            try {
+              await client.close();
+            } catch (cleanupError) {
+              if (cleanupError instanceof TraeAcpError && error.usage && !cleanupError.usage) {
+                throw new TraeAcpError(cleanupError.message, cleanupError.code, error.usage);
+              }
+              throw cleanupError;
+            }
             throw client.closedError(error);
           }
           throw error;

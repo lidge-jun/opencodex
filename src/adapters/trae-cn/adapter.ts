@@ -91,12 +91,14 @@ export function createTraeCnAdapter(provider: OcxProviderConfig, deps: TraeCnAda
       const producer = incoming.sendBudget?.beginSpendProducer?.();
       let permit: SingleUseDispatchPermit | undefined;
       let terminal: Extract<AdapterEvent, { type: "done" | "incomplete" | "error" }> | undefined;
+      let promptFailure: unknown;
       let cancelledUsageEmitted = false;
       /** Report received usage once when cancellation replaces the pending terminal outcome. */
       const emitCancelledUsage = () => {
-        if (!terminal?.usage || cancelledUsageEmitted) return;
+        const usage = terminal?.usage ?? (promptFailure instanceof TraeAcpError ? promptFailure.usage : undefined);
+        if (!usage || cancelledUsageEmitted) return;
         cancelledUsageEmitted = true;
-        emit({ type: "incomplete", reason: "client_cancelled", usage: terminal.usage, retryable: false });
+        emit({ type: "incomplete", reason: "client_cancelled", usage, retryable: false });
       };
       try {
         const replay = replayText(parsed);
@@ -104,37 +106,34 @@ export function createTraeCnAdapter(provider: OcxProviderConfig, deps: TraeCnAda
         if (decision && !decision.allowed) throw new SendBudgetExhaustedError();
         permit = decision?.allowed ? decision.permit : undefined;
         const session = await openTraeSession(provider.baseUrl, deps, incoming.abortSignal, provider);
-        let promptFailure: unknown;
+        let cleanupFailure: unknown;
         try {
-          try {
-            await session.prompt(parsed.modelId, replay, event => {
-              if (event.type === "done" || event.type === "incomplete" || event.type === "error") terminal = event;
-              else emit(event);
-            }, incoming.abortSignal, {
-              beforeSend: () => {
-                incoming.beforePhysicalSend?.();
-                if (permit && !permit.use()) throw new SendBudgetExhaustedError();
-              },
-              onSend: () => {
-                emit({ type: "heartbeat", replayUnsafe: true });
-                incoming.onPhysicalSend?.({ ordinal: 1 });
-              },
-            });
-          } catch (error) {
-            promptFailure = error;
-            throw error;
-          }
-        } finally {
-          try {
-            await session.close();
-          } catch (error) {
-            const usage = promptFailure instanceof TraeAcpError ? promptFailure.usage : undefined;
-            if (error instanceof TraeAcpError && usage && !error.usage) {
-              throw new TraeAcpError(error.message, error.code, usage);
-            }
-            throw error;
-          }
+          await session.prompt(parsed.modelId, replay, event => {
+            if (event.type === "done" || event.type === "incomplete" || event.type === "error") terminal = event;
+            else emit(event);
+          }, incoming.abortSignal, {
+            beforeSend: () => {
+              incoming.beforePhysicalSend?.();
+              if (permit && !permit.use()) throw new SendBudgetExhaustedError();
+            },
+            onSend: () => {
+              emit({ type: "heartbeat", replayUnsafe: true });
+              incoming.onPhysicalSend?.({ ordinal: 1 });
+            },
+          });
+        } catch (error) { promptFailure = error; }
+        try { await session.close(); } catch (error) { cleanupFailure = error; }
+        if (promptFailure instanceof SendBudgetExhaustedError || promptFailure instanceof SpendLedgerFileRefusedError) {
+          throw promptFailure;
         }
+        if (cleanupFailure) {
+          const usage = promptFailure instanceof TraeAcpError ? promptFailure.usage : undefined;
+          if (cleanupFailure instanceof TraeAcpError && usage && !cleanupFailure.usage) {
+            throw new TraeAcpError(cleanupFailure.message, cleanupFailure.code, usage);
+          }
+          throw cleanupFailure;
+        }
+        if (promptFailure) throw promptFailure;
         if (incoming.abortSignal?.aborted) emitCancelledUsage();
         else if (terminal) emit(terminal);
       } catch (error) {
