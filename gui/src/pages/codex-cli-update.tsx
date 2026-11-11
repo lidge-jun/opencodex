@@ -174,7 +174,7 @@ function CodexCliUpdatePanel({ apiBase }: { apiBase: string }) {
         <p className="muted text-control">{t("codexCliUpdate.checkHint")}</p>
       </div>
       <div>
-        <button type="button" className="btn btn-ghost btn-sm" disabled={busy || (!!job && !settled)} aria-busy={checking || undefined} onClick={() => void check()}>
+        <button type="button" className="btn btn-ghost btn-sm" disabled={busy || (!!job && !settled && !pollFailure)} aria-busy={checking || undefined} onClick={() => void check()}>
           {checking ? t("codexCliUpdate.checking") : t("codexCliUpdate.check")}
         </button>
       </div>
@@ -222,7 +222,7 @@ function CodexCliUpdatePanel({ apiBase }: { apiBase: string }) {
             applyFailure.code === "local_dashboard_confirmation_required" ? t("codexCliUpdate.errLocalOnly")
               : applyFailure.code === "idempotency_conflict" ? t("codexCliUpdate.errIdempotencyConflict")
                 : PERMANENT_STORE.has(applyFailure.code) ? t("codexCliUpdate.errStore")
-                  : applyFailure.retryable ? t("codexCliUpdate.errRetry") : t("codexCliUpdate.errIdempotencyConflict")
+                  : applyFailure.retryable ? t("codexCliUpdate.errRetry") : t("codexCliUpdate.errApplyFailed")
           }</p>
           {applyFailure.code === "local_dashboard_confirmation_required" && <code style={{ overflowWrap: "anywhere" }}>{applyCommand}</code>}
           <code className="text-[12px] text-fg-muted">{applyFailure.code}</code>

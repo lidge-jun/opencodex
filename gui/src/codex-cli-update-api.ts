@@ -35,13 +35,11 @@ export class CodexCliUpdateError extends Error {
   readonly code: string;
   readonly status: number;
   readonly retryable: boolean;
-  readonly retryAfterMs: number | null;
-  constructor(code: string, status: number, retryable: boolean, retryAfterMs: number | null = null) {
+  constructor(code: string, status: number, retryable: boolean) {
     super(code);
     this.code = code;
     this.status = status;
     this.retryable = retryable;
-    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -117,8 +115,7 @@ export async function applyCodexCliUpdate(apiBase: string, request: { requestId:
   }
   if (!res.ok) {
     const code = await errorCode(res, "admission_failed");
-    const after = Number(res.headers.get("Retry-After"));
-    throw new CodexCliUpdateError(code, res.status, RETRYABLE_APPLY.has(code), Number.isFinite(after) && after > 0 ? after * 1000 : null);
+    throw new CodexCliUpdateError(code, res.status, RETRYABLE_APPLY.has(code));
   }
   const job = readJob(((await res.json()) as { job?: unknown }).job);
   if (!job) throw new CodexCliUpdateError("job_result_unknown", res.status, false);

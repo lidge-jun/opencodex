@@ -175,6 +175,19 @@ test("a vanished job record stops polling and says the result is unknown", async
   await settle(1700);
   expect(requests.filter(r => r.url.includes("/jobs/"))).toHaveLength(1);
   expect(host.textContent).toContain("The job record is gone");
+  // A stopped poll must not strand the tab: Check is available again.
+  expect(button(host, "Check for update")!.disabled).toBe(false);
+});
+
+test("a refusal the tab has no words for says the update could not start and shows the code", async () => {
+  serve((url) => url.endsWith("/plan") ? Response.json(plan()) : Response.json({ error: "invalid_request" }, { status: 400 }));
+  const host = await mount();
+  await click(button(host, "Check for update"));
+  await click(checkbox(host));
+  await click(button(host, "Update Codex CLI"));
+  expect(host.textContent).toContain("The update could not start.");
+  expect(host.textContent).toContain("invalid_request");
+  expect(host.textContent).not.toContain("no longer matches");
 });
 
 test("a connected dashboard shows where to run the update and reads nothing", async () => {

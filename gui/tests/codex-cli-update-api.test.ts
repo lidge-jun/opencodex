@@ -47,7 +47,6 @@ test("only admission failures that leave nothing behind may be retried with the 
     globalThis.fetch = (async () => Response.json({ error: code }, { status, headers: code === "job_store_busy" ? { "Retry-After": "1" } : {} })) as unknown as typeof fetch;
     const error = await applyCodexCliUpdate("http://x", { requestId: "r", planId: PLAN.planId }, signal()).catch(e => e) as CodexCliUpdateError;
     expect([error.code, error.retryable]).toEqual([code, retryable]);
-    if (code === "job_store_busy") expect(error.retryAfterMs).toBe(1000);
   }
   globalThis.fetch = (async () => { throw new TypeError("offline"); }) as unknown as typeof fetch;
   const offline = await applyCodexCliUpdate("http://x", { requestId: "r", planId: PLAN.planId }, signal()).catch(e => e) as CodexCliUpdateError;
