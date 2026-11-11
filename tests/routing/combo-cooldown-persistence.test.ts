@@ -115,7 +115,7 @@ test("user clears are written: keys, one combo, and everything as a global reset
   expect(a.flush()).toBe(true);
   expect(Object.keys(stored()).sort()).toEqual(["c1\0p/b", "c2\0p/a", "foreign"]);
 
-  a.clearPersisted([...a.keys()].filter(key => key.startsWith("c2\0")));
+  a.clearPrefixPersisted("c2\0");
   expect(a.flush()).toBe(true);
   expect(Object.keys(stored()).sort()).toEqual(["c1\0p/b", "foreign"]);
 
@@ -159,4 +159,93 @@ test("a failed load is retried on a later access", () => {
   rmdirSync(file());
   writeFileSync(file(), JSON.stringify({ row: { cooldownUntil: now + 60_000 } }));
   expect(a.has("row")).toBe(true);
+});
+
+for (const scope of ["key", "combo"] as const) {
+  test(`a queued ${scope} clear survives a shorter cooldown for the same target`, () => {
+    const now = Date.now();
+    const key = "cleared\0p/a";
+    writeFileSync(file(), JSON.stringify({ [key]: { cooldownUntil: now + 86_400_000, status: 503 } }));
+    const a = peer();
+    if (scope === "key") a.clearPersisted([key]); else a.clearPrefixPersisted("cleared\0");
+    a.set(key, { cooldownUntil: now + 60_000, revision: nextRevision(), status: 429 });
+    a.flushForShutdown();
+    expect(stored()[key]).toEqual({ cooldownUntil: now + 60_000, status: 429 });
+    expect(peer().get(key)?.cooldownUntil).toBe(now + 60_000);
+  });
+}
+
+test("a combo-wide public clear removes peer rows absent from memory, including a later write", async () => {
+  const combo = "peer-clear";
+  const target = { provider: "provider-a", model: "model-x" };
+  // Load the production map before the peer writes anything for this combo.
+  expect(isComboTargetInCooldown(combo, target)).toBe(false);
+  const b = peer();
+  const until = Date.now() + 60_000;
+  b.set(`${combo}\0provider-a/model-x`, { cooldownUntil: until, revision: nextRevision() });
+  b.set(`${combo}-other\0provider-a/model-x`, { cooldownUntil: until, revision: nextRevision() });
+  b.flushForShutdown();
+  expect(isComboTargetInCooldown(combo, target)).toBe(false);
+
+  clearComboTargetCooldowns(combo);
+  // This row arrives after the clear was queued, but before its locked flush.
+  b.set(`${combo}\0provider-b/model-y`, { cooldownUntil: until, revision: nextRevision() });
+  b.flushForShutdown();
+  await wait(500);
+  expect(Object.keys(stored())).toEqual([`${combo}-other\0provider-a/model-x`]);
+  expect(peer().has(`${combo}\0provider-a/model-x`)).toBe(false);
+});
+
+test("a combo-prefix clear and its new cooldown survive a busy lock", () => {
+  const now = Date.now();
+  const key = "retry-clear\0p/a";
+  const a = peer();
+  expect(a.size).toBe(0);
+  a.clearPrefixPersisted("retry-clear\0");
+  writeFileSync(file(), JSON.stringify({
+    [key]: { cooldownUntil: now + 86_400_000, status: 503 },
+    "retry-clear\0p/b": { cooldownUntil: now + 86_400_000 },
+    "other\0p/a": { cooldownUntil: now + 86_400_000 },
+  }));
+  a.set(key, { cooldownUntil: now + 60_000, revision: nextRevision(), status: 429 });
+  const lock = new Database(join(home, "config-mutation.sqlite"), { create: true });
+  lock.exec("BEGIN IMMEDIATE");
+  try {
+    expect(a.flush()).toBe(false);
+  } finally {
+    lock.exec("ROLLBACK");
+    lock.close();
+  }
+  a.flushForShutdown();
+  expect(stored()).toEqual({
+    [key]: { cooldownUntil: now + 60_000, status: 429 },
+    "other\0p/a": { cooldownUntil: now + 86_400_000 },
+  });
+});
+
+test("a successful prefix clear does not delete future peer rows on a later write", () => {
+  const until = Date.now() + 60_000;
+  writeFileSync(file(), JSON.stringify({ "cleared\0p/a": { cooldownUntil: until } }));
+  const a = peer();
+  a.clearPrefixPersisted("cleared\0");
+  a.flushForShutdown();
+  expect(stored()).toEqual({});
+  const b = peer();
+  b.set("cleared\0p/b", { cooldownUntil: until, revision: nextRevision() });
+  b.flushForShutdown();
+  a.set("other\0p/a", { cooldownUntil: until, revision: nextRevision() });
+  a.flushForShutdown();
+  expect(Object.keys(stored()).sort()).toEqual(["cleared\0p/b", "other\0p/a"]);
+});
+
+test("repeated prefix clears discard intervening sets but preserve the last replacement", () => {
+  const now = Date.now();
+  writeFileSync(file(), JSON.stringify({ "cleared\0p/a": { cooldownUntil: now + 86_400_000 } }));
+  const a = peer();
+  a.clearPrefixPersisted("cleared\0");
+  a.set("cleared\0p/b", { cooldownUntil: now + 60_000, revision: nextRevision() });
+  a.clearPrefixPersisted("cleared\0");
+  a.set("cleared\0p/a", { cooldownUntil: now + 30_000, revision: nextRevision() });
+  a.flushForShutdown();
+  expect(stored()).toEqual({ "cleared\0p/a": { cooldownUntil: now + 30_000 } });
 });

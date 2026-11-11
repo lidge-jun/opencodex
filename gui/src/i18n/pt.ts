@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -134,6 +136,8 @@ export const pt: Record<TKey, string> = {
   "workflowBudget.saved": "Limites de fluxo de trabalho salvos.",
   ...desktopCompatibilityCopy("pt"),
   ...shellV2Copy("pt"),
+  ...codexCliUpdateCopy("pt"),
+  ...remoteLinkDiagnosticsCopy("pt"),
   ...modelsV2Copy("pt"),
   ...accountsV2Copy("pt"),
   ...subagentsV2Copy("pt"),
@@ -167,6 +171,8 @@ export const pt: Record<TKey, string> = {
   "advisor.modelsEmpty": "Nenhum modelo selecionável. Ative um provedor e um modelo e tente novamente.",
   "advisor.effort": "Raciocínio",
   "advisor.policy": "Política",
+  "advisor.questionOnly": "Enviar apenas a pergunta do worker",
+  "advisor.questionOnlyNote": "Apenas a pergunta do worker (até 2000 caracteres mantidos, com aviso em caso de truncamento) e uma instrução fixa são enviadas. Histórico, resultados de ferramentas e contexto da tarefa não são anexados. O worker deve incluir as informações essenciais. As consultas automáticas ficam pausadas; os limites existentes continuam válidos.",
   "advisor.policy.manual": "Manual — somente quando o worker solicitar",
   "advisor.policy.preflight": "Preflight — tentativa automática após evidência de orientação",
   "advisor.policy.adaptive": "Adaptativo — orientação e falha após correção",
@@ -2754,6 +2760,7 @@ export const pt: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Falha ao carregar o preset do provedor OpenAI.",
   "codexAuth.openaiPresetUnavailable": "O preset do provedor OpenAI não está disponível.",
   "codexAuth.openProviders": "Abrir Provedores",
+  "codexAuth.changeAccountMode": "Alterar modo de conta",
   "codexAuth.add": "Adicionar",
   "codexAuth.credits": "Créditos",
   "codexAuth.creditsRemaining": "restantes",

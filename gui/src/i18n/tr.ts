@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -133,6 +135,8 @@ export const tr: Record<TKey, string> = {
   "workflowBudget.saved": "İş akışı sınırları kaydedildi.",
   ...desktopCompatibilityCopy("tr"),
   ...shellV2Copy("tr"),
+  ...codexCliUpdateCopy("tr"),
+  ...remoteLinkDiagnosticsCopy("tr"),
   ...modelsV2Copy("tr"),
   ...accountsV2Copy("tr"),
   ...subagentsV2Copy("tr"),
@@ -285,6 +289,8 @@ export const tr: Record<TKey, string> = {
   "advisor.modelsEmpty": "Seçilebilir model yok. Sağlayıcıyı ve modeli etkinleştirip yeniden deneyin.",
   "advisor.effort": "Muhakeme düzeyi",
   "advisor.policy": "Politika",
+  "advisor.questionOnly": "Yalnızca çalışanın sorusunu gönder",
+  "advisor.questionOnlyNote": "Yalnızca çalışanın sorusu (en fazla 2000 karakter korunur; daha uzunsa kırpma bildirimi eklenir) ve sabit danışman talimatı gönderilir. Geçmiş, araç sonuçları ve görev bağlamı eklenmez. Çalışan gerekli arka planı soruya eklemelidir. Otomatik danışmalar duraklatılır; mevcut çağrı sınırları geçerlidir.",
   "advisor.policy.manual": "Manuel — yalnızca worker istediğinde",
   "advisor.policy.preflight": "Preflight — yönelim kanıtı oluşunca otomatik danışma denemesi",
   "advisor.policy.adaptive": "Uyarlanabilir — başlangıç ve başarısız onarım danışmaları",
@@ -2733,6 +2739,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "Ayar yüklenemedi.",
   "codexAuth.openaiPresetUnavailable": "Ayar kullanılamıyor.",
   "codexAuth.openProviders": "Sağlayıcıları Aç",
+  "codexAuth.changeAccountMode": "Hesap modunu değiştir",
   "codexAuth.add": "Ekle",
   "codexAuth.credits": "Kredi",
   "codexAuth.creditsRemaining": "kalan",

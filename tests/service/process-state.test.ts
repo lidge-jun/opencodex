@@ -15,13 +15,19 @@ import {
   readRuntimePort,
   removePid,
   removeRuntimePort,
+  runtimeOwnerScope,
   setOcxStartProcessCacheForTests,
   setProcessCommandLineExecForTests,
+  setProcessCommandLineNativeForTests,
   setProcessCommandLinePlatformForTests,
   verifyPidIdentity,
   writePid,
   writeRuntimePort,
 } from "../../src/config/process-state";
+import {
+  decodeProcessCommandLineInformation,
+  readWindowsProcessCommandLineNative,
+} from "../../src/config/windows-process-command-line";
 import {
   describeTrackedRuntimeTarget,
   inspectTrackedRuntimeRecord,
@@ -43,6 +49,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setProcessCommandLineExecForTests(null);
+  setProcessCommandLineNativeForTests(null);
   setProcessCommandLinePlatformForTests(null);
   setTrustedWindowsSystemDirectoryResolverForTests(null);
   setOcxStartProcessCacheForTests([]);
@@ -143,6 +150,121 @@ describe("proxy process-state ownership", () => {
     expect(isLikelyOcxProcess(4242)).toBe(true);
     expect(calls).toEqual([trustedWmic, trustedPowerShell, trustedPowerShell]);
   });
+
+  test("a native Windows command-line read verifies the runtime when the CIM probe overruns", () => {
+    // WMIC is gone from current Windows images and Get-CimInstance Win32_Process has been
+    // measured at 3.6-5.3 s on a busy machine, past the probe's 3 s bound. Both spawned
+    // probes then fail for a live, unchanged runtime, and the desktop's guarded takeover
+    // refused with "the recorded process identity could not be verified".
+    const trustedSystem32 = join(testDir, "trusted", "System32");
+    const trustedPowerShell = join(trustedSystem32, "WindowsPowerShell", "v1.0", "powershell.exe");
+    const spawned: string[] = [];
+    mkdirSync(dirname(trustedPowerShell), { recursive: true });
+    writeFileSync(trustedPowerShell, "", { mode: 0o755 });
+    setProcessCommandLinePlatformForTests("win32");
+    setTrustedWindowsSystemDirectoryResolverForTests(() => trustedSystem32);
+    setProcessCommandLineExecForTests(executable => {
+      spawned.push(executable);
+      throw Object.assign(new Error("spawnSync ETIMEDOUT"), { code: "ETIMEDOUT" });
+    });
+    setProcessCommandLineNativeForTests(pid =>
+      pid === process.pid ? '"C:\\Program Files\\OpenCodex\\ocx.exe"  start --port 10100 ' : undefined);
+    writeFileSync(getPidPath(), String(process.pid), "utf-8");
+
+    expect(readPid()).toBe(process.pid);
+    expect(spawned).toEqual([]);
+  });
+
+  test("an unanswered or failing native read keeps the spawned Windows probes", () => {
+    const trustedSystem32 = join(testDir, "trusted", "System32");
+    const trustedWmic = join(trustedSystem32, "wbem", "WMIC.exe");
+    const trustedPowerShell = join(trustedSystem32, "WindowsPowerShell", "v1.0", "powershell.exe");
+    const spawned: string[] = [];
+    mkdirSync(dirname(trustedPowerShell), { recursive: true });
+    writeFileSync(trustedPowerShell, "", { mode: 0o755 });
+    setProcessCommandLinePlatformForTests("win32");
+    setTrustedWindowsSystemDirectoryResolverForTests(() => trustedSystem32);
+    setProcessCommandLineExecForTests(executable => {
+      spawned.push(executable);
+      if (executable === trustedPowerShell) return "C:\\tools\\ocx.exe start\n";
+      throw new Error("WMIC unavailable");
+    });
+
+    setProcessCommandLineNativeForTests(() => undefined);
+    expect(isLikelyOcxProcess(4242)).toBe(true);
+    expect(spawned).toEqual([trustedWmic, trustedPowerShell]);
+
+    spawned.length = 0;
+    setProcessCommandLineNativeForTests(() => { throw new Error("native read failed"); });
+    expect(isLikelyOcxProcess(4242)).toBe(true);
+    expect(spawned).toEqual([trustedWmic, trustedPowerShell]);
+  });
+
+  test("decodes a ProcessCommandLineInformation buffer and refuses pointers outside it", () => {
+    const text = '"C:\\Program Files\\OpenCodex\\ocx.exe" start';
+    const encoded = Buffer.from(text, "utf16le");
+    const buffer = new Uint8Array(16 + encoded.byteLength);
+    const view = new DataView(buffer.buffer);
+    const base = 0x7f0000001000n;
+    view.setUint16(0, encoded.byteLength, true);
+    view.setUint16(2, encoded.byteLength, true);
+    view.setBigUint64(8, base + 16n, true);
+    buffer.set(encoded, 16);
+    expect(decodeProcessCommandLineInformation(buffer, base)).toBe(text);
+
+    // The text pointer must land after the header and the text must end inside the buffer.
+    view.setBigUint64(8, base + 8n, true);
+    expect(decodeProcessCommandLineInformation(buffer, base)).toBeUndefined();
+    view.setBigUint64(8, base + 18n, true);
+    expect(decodeProcessCommandLineInformation(buffer, base)).toBeUndefined();
+    view.setBigUint64(8, base - 16n, true);
+    expect(decodeProcessCommandLineInformation(buffer, base)).toBeUndefined();
+    // An empty or odd-length UTF-16 string is not a command line.
+    view.setBigUint64(8, base + 16n, true);
+    view.setUint16(0, 0, true);
+    expect(decodeProcessCommandLineInformation(buffer, base)).toBeUndefined();
+    view.setUint16(0, 3, true);
+    expect(decodeProcessCommandLineInformation(buffer, base)).toBeUndefined();
+    expect(decodeProcessCommandLineInformation(new Uint8Array(8), base)).toBeUndefined();
+  });
+
+  test.skipIf(process.platform !== "win32" || process.arch !== "x64")(
+    "the native Windows read returns a live child's command line and nothing for an exited one",
+    async () => {
+      const marker = `ocx-native-cmdline-${process.pid}-${Date.now()}`;
+      const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)", marker], {
+        stdio: ["ignore", "ignore", "ignore"],
+        windowsHide: true,
+      });
+      try {
+        // CreateProcess returns after the command line is in the child's parameters block.
+        expect(readWindowsProcessCommandLineNative(child.pid)).toContain(marker);
+      } finally {
+        child.kill();
+        await child.exited;
+      }
+      expect(readWindowsProcessCommandLineNative(child.pid)).toBeUndefined();
+    },
+  );
+
+  test.skipIf(process.platform !== "win32" || process.arch !== "x64")(
+    "the native Windows read grows its buffer for a command line longer than the first one",
+    async () => {
+      // 8,000 UTF-16 units overflow the 4,096-byte first buffer, so only the resized retry
+      // can return the marker placed after the padding.
+      const marker = `ocx-native-long-${process.pid}-${Date.now()}`;
+      const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)", "x".repeat(8_000), marker], {
+        stdio: ["ignore", "ignore", "ignore"],
+        windowsHide: true,
+      });
+      try {
+        expect(readWindowsProcessCommandLineNative(child.pid)).toContain(marker);
+      } finally {
+        child.kill();
+        await child.exited;
+      }
+    },
+  );
 
   test("the ownership probe distinguishes a real owner from a reused PID", () => {
     // The stop-side teardown recovery asks this about a PID recorded in a receipt. Bare
@@ -270,6 +392,20 @@ describe("proxy process-state ownership", () => {
     expect(readRuntimePort()).toEqual({ pid: 1234, port: 58195, hostname: "0.0.0.0", attestationSecret });
     expect(readRuntimePort(1234)).toEqual({ pid: 1234, port: 58195, hostname: "0.0.0.0", attestationSecret });
     expect(readRuntimePort(9999)).toBeNull();
+  });
+
+  // #8552: the scope says where the OWNER runs, so only the owner may stamp it.
+  test("a runtime record this process writes for itself carries its owner scope; one for another PID keeps its own", () => {
+    const scope = runtimeOwnerScope();
+    expect(scope.host).toMatch(/^[0-9a-f]{32}$/);
+    expect(runtimeOwnerScope()).toBe(scope);
+    if (process.platform !== "linux") expect(scope).toEqual({ host: scope.host });
+    writeRuntimePort({ pid: process.pid, port: 58195 });
+    expect(readRuntimePort()?.ownerScope).toEqual(scope);
+    writeRuntimePort({ pid: 1234, port: 58195, ownerScope: { host: "kept-as-written" } });
+    expect(readRuntimePort()?.ownerScope).toEqual({ host: "kept-as-written" });
+    writeRuntimePort({ pid: 1234, port: 58195 });
+    expect(readRuntimePort()?.ownerScope).toBeUndefined();
   });
 
   test("runtime port removal preserves newer pid state", () => {

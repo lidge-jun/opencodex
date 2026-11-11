@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -134,6 +136,8 @@ export const en = {
   "workflowBudget.saved": "Workflow limits saved.",
   ...desktopCompatibilityCopy("en"),
   ...shellV2Copy("en"),
+  ...codexCliUpdateCopy("en"),
+  ...remoteLinkDiagnosticsCopy("en"),
   ...modelsV2Copy("en"),
   ...accountsV2Copy("en"),
   ...subagentsV2Copy("en"),
@@ -286,6 +290,8 @@ export const en = {
   "advisor.modelsEmpty": "No selectable models. Enable a provider and model, then retry.",
   "advisor.effort": "Reasoning",
   "advisor.policy": "Policy",
+  "advisor.questionOnly": "Send only the worker's question",
+  "advisor.questionOnlyNote": "Only the worker's question (up to 2000 retained characters, plus a truncation notice when longer) is sent, with a fixed advisor instruction. History, tool results and task context are not attached. The worker must include essential background. Automatic consultations are paused; existing consultation limits still apply.",
   "advisor.policy.manual": "Manual — only when the worker asks",
   "advisor.policy.preflight": "Preflight — automatic consultation attempt once orientation evidence exists",
   "advisor.policy.adaptive": "Adaptive — orientation and failed-repair consultations",
@@ -2782,6 +2788,7 @@ export const en = {
   "codexAuth.openaiPresetLoadFailed": "Failed to load the OpenAI provider preset.",
   "codexAuth.openaiPresetUnavailable": "OpenAI provider preset is unavailable.",
   "codexAuth.openProviders": "Open Providers",
+  "codexAuth.changeAccountMode": "Change account mode",
   "codexAuth.add": "Add",
   "codexAuth.credits": "Credits",
   "codexAuth.creditsRemaining": "remaining",

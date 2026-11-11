@@ -387,8 +387,8 @@ than nudged.
   - Do not dispatch `lane=all` for a PR branch. Run it once for a batch on `dev`;
     never re-dispatch merely because the head moved or rerun to green. Cancel your
     own superseded dispatches with `gh run cancel`.
-  - Every description edit or label change starts three event-gate workflows. Batch those
-    edits, and keep the number of agents working pull requests in parallel small.
+  - Every description edit or label change starts a `PR gates` run with three gate jobs. Batch
+    those edits, and keep the number of agents working pull requests in parallel small.
 - **Never** add a `dev` push trigger, or `pull_request` runs for macOS/Windows
   jobs, to any workflow. PRs that change this policy will be closed.
 

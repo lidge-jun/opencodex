@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -132,6 +134,8 @@ export const ja: Record<TKey, string> = {
   "workflowBudget.saved": "ワークフロー上限を保存しました。",
   ...desktopCompatibilityCopy("ja"),
   ...shellV2Copy("ja"),
+  ...codexCliUpdateCopy("ja"),
+  ...remoteLinkDiagnosticsCopy("ja"),
   ...modelsV2Copy("ja"),
   ...accountsV2Copy("ja"),
   ...subagentsV2Copy("ja"),
@@ -285,6 +289,8 @@ export const ja: Record<TKey, string> = {
   "advisor.modelsEmpty": "選択できるモデルがありません。プロバイダーとモデルを有効にして再試行してください。",
   "advisor.effort": "推論強度",
   "advisor.policy": "ポリシー",
+  "advisor.questionOnly": "ワーカーの質問のみ送信",
+  "advisor.questionOnlyNote": "ワーカーの質問（最大2000文字を保持し、超過時は切り詰め通知を追加）と固定のアドバイザー指示のみを送信します。会話履歴、ツール結果、タスクの文脈は自動添付されません。必要な背景情報はワーカーが質問に含めます。自動相談は停止し、既存の回数制限は引き続き適用されます。",
   "advisor.policy.manual": "手動 — Worker が要求したときのみ",
   "advisor.policy.preflight": "Preflight — 方向性の証拠が出たら自動相談を試みる",
   "advisor.policy.adaptive": "適応型 — 初期調査と修正失敗時に相談",
@@ -2603,6 +2609,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "OpenAI プロバイダーのプリセットを読み込めませんでした。",
   "codexAuth.openaiPresetUnavailable": "OpenAI プロバイダーのプリセットを利用できません。",
   "codexAuth.openProviders": "プロバイダーを開く",
+  "codexAuth.changeAccountMode": "アカウントモードを変更",
   "codexAuth.add": "追加",
   "codexAuth.credits": "クレジット",
   "codexAuth.creditsRemaining": "残り",

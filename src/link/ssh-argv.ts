@@ -67,7 +67,10 @@ function optionPath(path: string): string {
   return /\s/.test(path) ? `"${path}"` : path;
 }
 
-function commonOptions(alias: string, knownHostsFile: string, strict: "yes" | "accept-new"): string[] {
+/** ERROR everywhere; DEBUG1 only for a tunnel spawned while opt-in SSH capture is on (src/link/ssh-capture.ts). */
+export type SshLogLevel = "ERROR" | "DEBUG1";
+
+function commonOptions(alias: string, knownHostsFile: string, strict: "yes" | "accept-new", logLevel: SshLogLevel = "ERROR"): string[] {
   return [
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=10",
@@ -87,7 +90,7 @@ function commonOptions(alias: string, knownHostsFile: string, strict: "yes" | "a
     "-o", "ForwardAgent=no",
     "-o", "ForwardX11=no",
     "-o", "PermitLocalCommand=no",
-    "-o", "LogLevel=ERROR",
+    "-o", `LogLevel=${logLevel}`,
   ];
 }
 
@@ -100,6 +103,8 @@ export interface TunnelArgvOptions {
   /** Port the forward connects to on the other side's 127.0.0.1. */
   targetPort: number;
   knownHostsFile: string;
+  /** Defaults to ERROR. DEBUG1 is requested only by opt-in SSH capture; the argv is otherwise unchanged. */
+  logLevel?: SshLogLevel;
 }
 
 export function buildTunnelArgv(options: TunnelArgvOptions): string[] {
@@ -107,9 +112,11 @@ export function buildTunnelArgv(options: TunnelArgvOptions): string[] {
   const bind = assertPort(options.bindPort, "bindPort");
   const target = assertPort(options.targetPort, "targetPort");
   if (options.direction !== "R" && options.direction !== "L") throw new LinkSshArgumentError("direction must be R or L");
+  const logLevel = options.logLevel ?? "ERROR";
+  if (logLevel !== "ERROR" && logLevel !== "DEBUG1") throw new LinkSshArgumentError("logLevel must be ERROR or DEBUG1");
   return [
     "ssh", "-N", "-T",
-    ...commonOptions(alias, options.knownHostsFile, "yes"),
+    ...commonOptions(alias, options.knownHostsFile, "yes", logLevel),
     "-o", "ExitOnForwardFailure=yes",
     `-${options.direction}`, `127.0.0.1:${bind}:127.0.0.1:${target}`,
     "--", alias,

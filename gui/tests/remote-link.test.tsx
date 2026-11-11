@@ -153,6 +153,20 @@ test("refreshing a now-paired status removes pairing guidance without automatica
   expect(calls.every(call => call.path === "/api/link/status" && call.method === "GET")).toBe(true);
 });
 
+test("diagnostics read the page's diagnostics base, not the shared Home relay", async () => {
+  const urls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    urls.push(url);
+    if (url.includes("/api/link/diagnostics")) return response({ schema: "ocx.link.diagnostics/1", files: [], matched: 0, skipped: 0, records: [] });
+    return response(baseStatus);
+  }) as typeof fetch;
+  const host = await mount({ apiBase: "http://child/api/machine/hub-relay", diagnosticsApiBase: "http://child" });
+  await act(async () => { host.querySelector<HTMLButtonElement>("[data-action='link-diagnostics-toggle']")!.click(); });
+  await settleUntil(() => urls.some(url => url.includes("/api/link/diagnostics")));
+  expect(urls.filter(url => url.includes("/api/link/diagnostics"))).toEqual(["http://child/api/link/diagnostics?limit=100"]);
+});
+
 test("session gate makes no link request", async () => {
   const calls: string[] = [];
   globalThis.fetch = (async input => { calls.push(String(input)); return response(baseStatus); }) as typeof fetch;

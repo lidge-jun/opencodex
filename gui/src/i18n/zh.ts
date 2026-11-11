@@ -1,5 +1,7 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { codexCliUpdateCopy } from "./codex-cli-update-copy";
+import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -132,6 +134,8 @@ export const zh: Record<TKey, string> = {
   "workflowBudget.saved": "工作流限制已保存。",
   ...desktopCompatibilityCopy("zh"),
   ...shellV2Copy("zh"),
+  ...codexCliUpdateCopy("zh"),
+  ...remoteLinkDiagnosticsCopy("zh"),
   ...modelsV2Copy("zh"),
   ...accountsV2Copy("zh"),
   ...subagentsV2Copy("zh"),
@@ -285,6 +289,8 @@ export const zh: Record<TKey, string> = {
   "advisor.modelsEmpty": "没有可选模型。请启用提供商和模型后重试。",
   "advisor.effort": "推理强度",
   "advisor.policy": "策略",
+  "advisor.questionOnly": "仅发送主模型的问题",
+  "advisor.questionOnlyNote": "仅发送主模型填写的问题（最多保留 2000 字符，超出时附加截断提示）和固定顾问指令，不自动附带对话历史、工具结果或任务上下文。主模型需要自行补充必要背景。自动咨询暂停，现有咨询次数限制仍然生效。",
   "advisor.policy.manual": "手动 — 仅在 Worker 主动请求时",
   "advisor.policy.preflight": "Preflight — 出现方向性证据后自动尝试咨询",
   "advisor.policy.adaptive": "自适应 — 初始探查与修复失败时咨询",
@@ -2149,6 +2155,7 @@ export const zh: Record<TKey, string> = {
   "codexAuth.openaiPresetLoadFailed": "无法加载 OpenAI 提供方预设。",
   "codexAuth.openaiPresetUnavailable": "OpenAI 提供方预设不可用。",
   "codexAuth.openProviders": "打开提供商",
+  "codexAuth.changeAccountMode": "更改账号模式",
   "codexAuth.add": "添加",
   "codexAuth.credits": "额度",
   "codexAuth.creditsRemaining": "剩余",

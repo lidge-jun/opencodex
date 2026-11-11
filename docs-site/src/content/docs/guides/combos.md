@@ -1083,6 +1083,9 @@ it has already been attempted for this request, or an encrypted v2 task excludes
 provider state and recent upstream errors. When no target was attempted, the error message lists
 why each target was skipped, for example
 `No available targets for combo (2 targets; target 1 (openai): quota exhausted; target 2 (anthropic): cooldown)`. The client error names targets by position and provider only; the service log records the target's position and provider when it fails or when the proxy waits out its cooldown.
+When a cooling target sets the earliest recovery, the response carries it in `Retry-After` and the
+message names the same wait, for example `(retry in ~2m)`, so a client that hides the header still
+shows it. The Claude Messages listener adds the same wait to its fixed combo sentence.
 For cooldowns, follow an observed `Retry-After` value first;
 Codex reset headers also take precedence over `cooldownMs`.
 If neither upstream signal is usable, the configured `cooldownMs` applies, or the upstream fallback applies

@@ -307,6 +307,7 @@
       "documents": [
         "src/advisor/",
         "src/server/responses/advisor-slot.ts",
+        "src/server/responses/advisor-question.ts",
         "src/server/responses/advisor-plan-slot.ts",
         "src/server/advisor-admission-scope.ts",
         "src/server/capture-admission-policy.ts",
@@ -691,6 +692,15 @@
       ]
     },
     {
+      "path": "providers/anthropic-output-caps.md",
+      "tier": 4,
+      "title": "Anthropic Output Caps by Model Id",
+      "scope": "Routed omitted-output caps for adapter:anthropic rows keyed by Claude model id, precedence and unknown-id fallback.",
+      "documents": [
+        "src/providers/anthropic-output-caps.ts"
+      ]
+    },
+    {
       "path": "providers/anthropic-key-billing.md",
       "tier": 4,
       "title": "Anthropic API-key Billing Recovery",
@@ -738,6 +748,7 @@
         "src/oauth/",
         "src/providers/",
         "src/providers/quota/anthropic-account-quota.ts",
+        "src/providers/quota/anthropic-cooldown-recovery-worker.ts",
         "src/server/management/anthropic-pool-settings.ts",
         "src/sidecar/anthropic-binding.ts"
       ]
@@ -1290,6 +1301,20 @@
         "src/service/health-sentinel-policy.ts",
         "src/service/health-sentinel-probe.ts",
         "src/service/health-sentinel-windows.ts"
+      ]
+    },
+    {
+      "path": "ops/windows-checked-stop.md",
+      "tier": 6,
+      "title": "Windows Checked Service Stop",
+      "scope": "Windows process evidence, the wrapper binding rule, and the checked manager stop and port confirmation that are not yet wired to a stop path.",
+      "documents": [
+        "src/service/windows-checked-stop.ts",
+        "src/service/windows-process-evidence.ts",
+        "src/service/windows-process-native.ts",
+        "src/service/windows-stop-binding.ts",
+        "src/service/windows-stop-budget.ts",
+        "src/service/windows-stop-confirm.ts"
       ]
     },
     {
