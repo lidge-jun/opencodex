@@ -22,7 +22,9 @@ The `trae-cn` preset uses the signed-in official TRAE CN CLI through
   The CLI owns authentication and token refresh; the provider needs no API key.
   OpenCodex preserves the default `~/.trae` CLI directory while isolating HOME. Set `TRAE_HOME`
   before starting OpenCodex to select a different signed-in CLI directory.
-- **Model discovery:** `session/new` returns the models available to the signed-in account.
+- **Model discovery:** The tested signed-in CLI returned model IDs through `session/new` →
+  `models.availableModels[].modelId`. This is observed CLI behavior. The [vendor ACP documentation](https://docs.trae.cn/cli_agent-client-protocol)
+  does not document these discovery fields or guarantee their account scope.
   Successful discovery is cached by the normal provider catalog mechanism, with the last good
   catalog and a small text-only seed as degraded fallbacks.
   Read-only catalog gathers use cached evidence; they never start the CLI or refresh its sign-in.
