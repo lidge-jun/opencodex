@@ -1,5 +1,9 @@
 import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../../types";
-import { declaredUnsupportedHostedTools, isHostedToolUnsupportedForModel } from "../../responses/hosted-tool-policy";
+import {
+  declaredUnsupportedHostedTools,
+  isHostedToolUnsupportedForModel,
+  responsesBodyDeclaresClientTools,
+} from "../../responses/hosted-tool-policy";
 import { debugProviderDiagnostic } from "../../lib/debug";
 import { stripUnicodePropertyPatterns } from "../responses-tool-schema";
 import {
@@ -8,13 +12,19 @@ import {
   XaiToolSchemaCompatibilityError,
 } from "../xai-tool-schema";
 import { isPlainObject } from "./internal";
+import { hasItemProvenance, isHistoricalItem } from "../../responses/item-provenance";
 
-function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean): unknown | undefined {
+function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean, chatDefaults: boolean): unknown | undefined {
   if (!isPlainObject(tool) || tool.type !== "function") return tool;
   // Runs for every Responses destination, forward auth included: the ChatGPT backend is where
   // the `\p{…}` rejection was observed, and it reaches this function through the same seam.
   const compatible = stripUnicodePropertyPatterns(tool);
-  const source = isPlainObject(compatible) ? compatible : tool;
+  const compatibleTool = isPlainObject(compatible) ? compatible : tool;
+  // Chat defaults to non-strict; OpenAI Responses otherwise normalizes an omitted flag to
+  // strict, making optional alternatives (such as pointer index vs coordinates) required.
+  const source = chatDefaults && compatibleTool.strict === undefined
+    ? { ...compatibleTool, strict: false }
+    : compatibleTool;
   if (xaiTarget) {
     const parameters = normalizeXaiToolParameters(isPlainObject(source.parameters) ? source.parameters : {});
     return parameters === undefined ? undefined : { ...source, parameters };
@@ -72,7 +82,7 @@ function reconcileToolChoiceForOmittedTools(
   return body;
 }
 
-export function normalizeToolSchemas(body: unknown, xaiTarget: boolean): unknown {
+export function normalizeToolSchemas(body: unknown, xaiTarget: boolean, chatDefaults = false): unknown {
   if (!isPlainObject(body)) return body;
 
   const omittedFunctionNames = new Set<string>();
@@ -80,7 +90,7 @@ export function normalizeToolSchemas(body: unknown, xaiTarget: boolean): unknown
     let changed = false;
     const normalized: unknown[] = [];
     for (const tool of tools) {
-      const fixed = normalizeFunctionToolSchema(tool, xaiTarget);
+      const fixed = normalizeFunctionToolSchema(tool, xaiTarget, chatDefaults);
       if (fixed === undefined) {
         changed = true;
         if (isPlainObject(tool) && typeof tool.name === "string") omittedFunctionNames.add(tool.name);
@@ -195,11 +205,19 @@ function mergeLoadedTools(declaredTools: unknown[], loadedTools: unknown[]): unk
  * serializing the raw request, so activate those returned definitions for upstreams that do not
  * implement the native deferred-loading handshake themselves.
  */
-export function promoteClientLoadedTools(body: unknown): unknown {
+export function promoteClientLoadedTools(body: unknown, replayPrefixLength?: number): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
 
-  const loadedTools = body.input.flatMap(item =>
-    isPlainObject(item) && item.type === "tool_search_output" && Array.isArray(item.tools)
+  const currentTurnStart = Number.isFinite(replayPrefixLength)
+    ? Math.max(0, Math.trunc(replayPrefixLength!))
+    : 0;
+  const hasProvenance = body.input.some(hasItemProvenance);
+  const isCurrentItem = (item: unknown, index: number): boolean =>
+    hasProvenance ? !isHistoricalItem(item) : index >= currentTurnStart;
+
+  // Filter the source before declarations lose their item's provenance in a live catalog.
+  const loadedTools = body.input.flatMap((item, index) =>
+    isCurrentItem(item, index) && isPlainObject(item) && item.type === "tool_search_output" && Array.isArray(item.tools)
       ? item.tools
       : []
   );
@@ -210,17 +228,20 @@ export function promoteClientLoadedTools(body: unknown): unknown {
     return tools === body.tools ? body : { ...body, tools };
   }
 
-  const additionalToolsIndex = body.input.findIndex(item =>
-    isPlainObject(item) && item.type === "additional_tools" && Array.isArray(item.tools)
+  const currentAdditionalToolsIndex = body.input.findIndex((item, index) =>
+    isCurrentItem(item, index) && isPlainObject(item) && item.type === "additional_tools" && Array.isArray(item.tools)
   );
-  if (additionalToolsIndex < 0) return { ...body, tools: mergeLoadedTools([], loadedTools) };
 
-  const additionalTools = body.input[additionalToolsIndex];
+  if (currentAdditionalToolsIndex < 0) {
+    return { ...body, tools: mergeLoadedTools([], loadedTools) };
+  }
+
+  const additionalTools = body.input[currentAdditionalToolsIndex];
   if (!isPlainObject(additionalTools) || !Array.isArray(additionalTools.tools)) return body;
   const tools = mergeLoadedTools(additionalTools.tools, loadedTools);
   if (tools === additionalTools.tools) return body;
   const input = [...body.input];
-  input[additionalToolsIndex] = { ...additionalTools, tools };
+  input[currentAdditionalToolsIndex] = { ...additionalTools, tools };
   return { ...body, input };
 }
 
@@ -232,18 +253,28 @@ export function promoteClientLoadedTools(body: unknown): unknown {
  * Responses gateway with a narrower capability set be described in config instead of
  * requiring a hard-coded destination rule per vendor (#5002).
  *
+ * `unsupportedHostedToolsWithClientTools` joins that declaration only when this request also
+ * declares client tools (#8204), for a gateway that serves a hosted tool alone but rejects it
+ * next to function calling. It feeds the same set, so every filter and selector
+ * reconciliation below treats a conditional denial exactly like an unconditional one.
+ *
  * No-op (returns the original reference) when nothing matches, keeping the common path
  * allocation-free.
  */
 export function stripUnsupportedHostedTools(
   body: unknown,
-  provider: Pick<OcxProviderConfig, "baseUrl" | "unsupportedHostedTools">,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "unsupportedHostedTools" | "unsupportedHostedToolsWithClientTools">,
 ): unknown {
   if (!isPlainObject(body)) return body;
   const model = typeof body.model === "string" ? body.model : "";
   // Expanded once per request rather than per tool: the alias walk is the only
-  // non-lookup work in this filter.
-  const declaredUnsupported = declaredUnsupportedHostedTools(provider);
+  // non-lookup work in this filter. The client-tool scan runs only for a provider that
+  // declared a conditional denial, so every other provider skips it.
+  const conditional = provider.unsupportedHostedToolsWithClientTools;
+  const declaredUnsupported = declaredUnsupportedHostedTools(
+    provider,
+    Array.isArray(conditional) && conditional.length > 0 && responsesBodyDeclaresClientTools(body),
+  );
   const filterTools = (tools: unknown[]): unknown[] => {
     const filtered = tools.filter(t => {
       const type = isPlainObject(t) && typeof t.type === "string" ? t.type : undefined;

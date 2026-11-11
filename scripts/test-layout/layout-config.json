@@ -1,4 +1,5 @@
 {
+  "lmstudio-system-policy.test.ts": "config",
   "atomic-write-exclusive.test.ts": "config",
   "config-removed-opencode-free-preserve-failure.test.ts": "config"
 }

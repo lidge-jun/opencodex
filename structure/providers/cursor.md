@@ -56,7 +56,12 @@ When the visible catalog is Codex code mode — a freeform unified `exec` and no
 the redirect steers the model INSIDE `exec`: shell, file, search, and fetch are nested
 `tools.<name>(...)` helpers of the JavaScript cell with `text(...)` required for output, and the
 wording never recommends the top-level `shell_command`/`exec_command` bridge code mode does not
-expose; separately listed namespaced tools remain callable as usual. A flat catalog with a bare
+expose; separately listed namespaced tools are called directly, outside `exec`. Cursor can defer
+the Codex client tools, `exec` included, behind its own `GetDynamicTools`/`CallDynamicTool` pair
+(#8132), so code-mode redirects and guidance never claim top-level reach: they add
+`CURSOR_DEFERRED_TOOL_FALLBACK`, which names `CallDynamicTool` with namespace
+`opencodex-responses` and the listed tool name. This removes a false statement; it does not
+register tools at the top level or stop a first native attempt. A flat catalog with a bare
 bridge or a non-freeform unified `exec` keeps the default bridge wording, and a catalog with no
 execution path at all keeps naming the request's actual client/MCP wire names.
 
@@ -123,6 +128,14 @@ The checkpoint instruction digest includes the format, so a changed schema force
 `tests/providers/cursor/cursor-request-builder.test.ts` checks checkpoint invalidation.
 
 ## Cursor parameterized models
+
+`src/adapters/cursor/catalog.ts` splits thinking/effort variants at the last `-thinking-`
+delimiter and validates its suffix once. `src/adapters/cursor/claude-id.ts` recognizes the
+numeric Claude base before parsing thinking, fast, and effort markers with linear string
+operations. Both retain legacy spelling, marker precedence, and unknown-ID behavior;
+`tests/providers/cursor/cursor-catalog.test.ts` and
+`tests/providers/cursor/cursor-claude-id.test.ts` compare legacy regex results and exercise
+long repeated-delimiter inputs without wall-clock assertions.
 
 Cursor Router's parameterized `default` model is represented in Codex by four catalog rows:
 `cursor/auto` preserves Cursor's team/account default, while `cursor/auto-cost`,

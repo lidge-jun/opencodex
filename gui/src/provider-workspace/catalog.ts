@@ -25,6 +25,7 @@
  */
 
 import { isSubscriptionCliProvider } from "./subscription-cli";
+import type { ProviderDiscoverySummary } from "../models-groups";
 
 /**
  * Shape of a single provider value as it appears in the proxy config map.
@@ -45,6 +46,10 @@ export interface WorkspaceProvider {
   /** Optional upstream HTTP version pin. Cursor defaults to HTTP/2 when omitted. */
   upstreamHttpVersion?: "auto" | "http1.1" | "h1" | "http2" | "h2";
   authMode?: "key" | "forward" | "oauth" | "local" | string;
+  googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
+  project?: string;
+  location?: string;
+  vertexCredentialKind?: "ambient" | "marker" | "reference" | "api-key";
   keyOptional?: boolean;
   /** Free pricing (may still require an API key). */
   freeTier?: boolean;
@@ -65,6 +70,8 @@ export interface WorkspaceProvider {
   codexAccountMode?: "direct" | "pool";
   /** Derived state of the two xAI Grok Responses model-adapter entries. */
   xaiResponsesOptInState?: boolean | "mixed";
+  initialModelSelection?: { status: "pending" | "ready" | "all-off"; modelCount?: number };
+  discovery?: ProviderDiscoverySummary;
 }
 
 /** Three-way pricing/ownership tier for a ready provider row. */
@@ -88,6 +95,8 @@ export interface WorkspaceSections {
   ready: WorkspaceItem[];
   /** Enabled providers that are missing required credentials (e.g. an API key). */
   needsSetup: WorkspaceItem[];
+  /** Credentials may be supplied by the proxy host but have not been verified. */
+  unverified: WorkspaceItem[];
   /** Providers explicitly disabled by the user. */
   disabled: WorkspaceItem[];
 }
@@ -153,6 +162,18 @@ function isConfigurationReady(p: WorkspaceProvider): boolean {
     p.authMode === "local" ||
     hasLoopbackBaseUrl(p.baseUrl) ||
     p.hasApiKey === true;
+}
+
+/** A keyless Vertex row can use host credentials, but the dashboard has not verified them. */
+export function isVertexProvider(p: WorkspaceProvider | WorkspaceItem): boolean {
+  return ("name" in p && p.name === "google-vertex" && (p.googleMode === undefined || p.googleMode === "vertex"))
+    || (p.adapter === "google" && p.googleMode === "vertex");
+}
+
+export function usesUnverifiedVertexCredentials(p: WorkspaceProvider | WorkspaceItem): boolean {
+  if (p.disabled || (p.authMode !== undefined && p.authMode !== "key") || !isVertexProvider(p)) return false;
+  if (p.vertexCredentialKind) return p.vertexCredentialKind !== "api-key";
+  return !p.hasApiKey;
 }
 
 /**
@@ -244,6 +265,7 @@ export function buildProviderWorkspace(
 ): WorkspaceSections {
   const ready: WorkspaceItem[] = [];
   const needsSetup: WorkspaceItem[] = [];
+  const unverified: WorkspaceItem[] = [];
   const disabled: WorkspaceItem[] = [];
 
   for (const [name, p] of Object.entries(providers)) {
@@ -251,14 +273,16 @@ export function buildProviderWorkspace(
       disabled.push({ name, ...p });
       continue;
     }
-    if (isConfigurationReady(p)) {
+    if (usesUnverifiedVertexCredentials({ name, ...p })) {
+      unverified.push({ name, ...p });
+    } else if (isConfigurationReady(p)) {
       ready.push({ name, ...p, tier: providerTier(name, p) });
     } else {
       needsSetup.push({ name, ...p });
     }
   }
 
-  return { ready, needsSetup, disabled };
+  return { ready, needsSetup, unverified, disabled };
 }
 
 /**
@@ -284,12 +308,13 @@ export function applyActiveAccountReauth(
   return {
     ready: tag(sections.ready),
     needsSetup: tag(sections.needsSetup),
+    unverified: tag(sections.unverified),
     disabled: sections.disabled,
   };
 }
 
 /** Canonical status string for a single provider — config plus optional live-auth overlay. */
-export type ProviderStatus = "ready" | "needs-setup" | "disabled";
+export type ProviderStatus = "ready" | "needs-setup" | "unverified" | "disabled";
 
 /**
  * Returns the canonical status for a single WorkspaceProvider (or WorkspaceItem).
@@ -299,6 +324,7 @@ export type ProviderStatus = "ready" | "needs-setup" | "disabled";
 export function binProviderStatus(p: WorkspaceProvider | WorkspaceItem): ProviderStatus {
   if (p.disabled) return "disabled";
   if ("activeNeedsReauth" in p && p.activeNeedsReauth) return "needs-setup";
+  if (usesUnverifiedVertexCredentials(p)) return "unverified";
   if (isConfigurationReady(p)) return "ready";
   return "needs-setup";
 }

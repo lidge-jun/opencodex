@@ -260,6 +260,12 @@ export interface ProviderRegistryEntry {
   supportsServiceTier?: boolean;
   /** Registry default for OpenAI extended hosted web_search field support. */
   supportsOpenAiWebSearchToolFields?: boolean;
+  /**
+   * Registry-only smallest image edge, in pixels, that the upstream accepts on the
+   * `openai-chat` wire. Inline images below it are upscaled before sending, because the
+   * upstream rejects the whole request otherwise (Venice: "images must be at least 64x64").
+   */
+  minImageEdge?: number;
   /** Registry default for native Responses custom-tool support. */
   supportsResponsesCustomTools?: boolean;
   /** Registry default for exact model service-tier capability; explicit config keys win. */
@@ -373,6 +379,8 @@ export interface ProviderRegistryEntry {
    * `system` instead. Seeds `foldDeveloperRoleToSystem` on the provider config; a user value wins.
    */
   foldDeveloperRoleToSystem?: boolean;
+  /** Seed the text-only single-leading-system Chat compatibility policy. A user value wins. */
+  singleLeadingSystemMessage?: boolean;
   autoToolChoiceOnlyModels?: string[];
   preserveReasoningContentModels?: string[];
   requiresReasoningPlaceholderModels?: string[];
@@ -409,6 +417,6 @@ export type ProviderConfigSeed = Pick<
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap" | "reasoningWireFormat"
   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noStopModels" | "noPenaltyModels"
-  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "requiresReasoningPlaceholderModels" | "reasoningSplitModels" | "inlineThinkTagModels" | "reasoningDetailsModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames" | "openaiChatEofTolerance" | "foldDeveloperRoleToSystem" | "showThinkingSummary"
+  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "requiresReasoningPlaceholderModels" | "reasoningSplitModels" | "inlineThinkTagModels" | "reasoningDetailsModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames" | "openaiChatEofTolerance" | "foldDeveloperRoleToSystem" | "singleLeadingSystemMessage" | "showThinkingSummary"
   | "googleMode" | "project" | "location" | "headers"
 >;

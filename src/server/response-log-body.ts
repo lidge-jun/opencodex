@@ -7,6 +7,7 @@ export type ResponseLogBodyEnd = "eof" | "read_error" | "cancel";
 
 export interface ResponseLogBodyOptions {
   json: boolean;
+  inspectionSource?: string;
   inspect: (text: string) => void;
   finalize: (reason: ResponseLogBodyEnd) => void;
   /** Internal test seam; this is not a provider-controlled limit. */
@@ -95,6 +96,10 @@ export function createBoundedResponseLogBody(
   const reader = body.getReader();
   let ended = false;
   let inspectionFailed = false;
+  if (options.inspectionSource !== undefined) {
+    try { inspection.append(new TextEncoder().encode(options.inspectionSource)); }
+    catch { inspectionFailed = true; inspection.dispose(); }
+  }
 
   const release = () => bestEffort(() => reader.releaseLock());
   const finish = (reason: ResponseLogBodyEnd) => {
@@ -135,7 +140,7 @@ export function createBoundedResponseLogBody(
       }
       if (!inspectionFailed) {
         try {
-          inspection.append(result.value);
+          if (options.inspectionSource === undefined) inspection.append(result.value);
         } catch {
           inspectionFailed = true;
           inspection.dispose();

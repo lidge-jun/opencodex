@@ -104,9 +104,9 @@ export async function handleDesktopAppRestart(
   log: Pick<Console, "log" | "error">,
   io: DesktopAppRestartIo = {},
 ): Promise<DesktopAppRestartResult> {
-  const { restartCodexDesktopApp } = await import("../codex/desktop-app-restart");
+  const { restartCodexDesktopAppAsync } = await import("../codex/desktop-app-restart");
   const { startDesktopRestartHandoff } = await import("../codex/desktop-app/handoff");
-  const result = restartCodexDesktopApp({
+  const result = await restartCodexDesktopAppAsync({
     ...io,
     // The CLI is the one caller whose exit is exactly the signal the helper waits for,
     // so it is the one caller allowed to hand off. The management service is not (it

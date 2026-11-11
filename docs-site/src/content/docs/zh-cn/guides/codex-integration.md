@@ -124,6 +124,13 @@ env_key = "OPENCODEX_API_AUTH_TOKEN"
 在 loopback 情况下，它包含可在自动注入被移除后手动合并的 root keys；在非 loopback 情况下，
 它包含专用 provider 形式。外部 provider 模式会保持这个 profile 不变。
 
+重新生成这个文件时，会保留 OpenCodex 不管理的普通 root keys，所以你添加的 `stream_idle_timeout_ms` 或
+`stream_max_retries` 这类设置在下一次注入后仍然存在。保留的赋值按原样复制，包括跨多行的值和 64 位整数，
+并放在第一个表之前。表内的键以及 `a.b = 1` 这样的点分 root key 不会保留。发生冲突时总是以 OpenCodex
+为准：它拥有的 root keys（`model_provider`、`model_catalog_json`、`openai_base_url`）会按当前路由模式
+重写；与 profile 写入的表同名的 root key（例如 profile 写入 `[features]` 时的内联 `features = { ... }`）
+会被丢弃。如果在注入等待写锁期间文件发生变化，注入会以可重试的错误停止，并保留你的修改。
+
 :::caution
 像 `openai_base_url`、`model_provider` 和 `model_catalog_json` 这样的 root keys **必须** 位于第一个
 `[table]` 头之前。注入器会保证这一点，移除自己留下的陈旧/重复副本，并且绝不会覆盖用户拥有的 root
@@ -142,7 +149,7 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-在 macOS 上，opencodex 在显式选择、shim、PATH、既有安装路径和可运行的裸 `codex` 后备命令之后，依次检查 `/Applications/ChatGPT.app` 和 `~/Applications/ChatGPT.app` 中的 Codex 应用内置 CLI，要求其 XML `Info.plist` 标识为 `com.openai.codex`，且不会用应用候选项自动替换仍可运行的已保存选择。
+在 macOS 上，opencodex 在显式选择、shim、PATH、既有安装路径和可运行的裸 `codex` 后备命令之后，依次检查 `/Applications/ChatGPT.app` 和 `~/Applications/ChatGPT.app` 中的 Codex 应用内置 CLI，要求其 XML `Info.plist` 标识为 `com.openai.codex`，且不会用应用候选项自动替换仍可运行的已保存选择。 如果完全没有发现 Codex CLI，则 `ocx connect status` 就绪状态背后的目录探测也会尝试这些内置位置，因此仅装有应用内置 CLI 的 Child 会报告其支持的推理级别，而不是 `unverified`；执行时仍会应用下述检查。
 
 执行检查还会识别任意位置的 `Codex.app` 和 `ChatGPT.app`，包括移动后的应用包、显式
 `CODEX_CLI_PATH` 或配置的运行时命令，以及符号链接别名。名称只触发验证，不代表可信。

@@ -43,6 +43,7 @@ function carriesTranslatableWords(value: string): boolean {
 const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   // The Codex sidebar row is the product name, kept in every locale like Claude.
   "nav.codexSet",
+  "kiroLogin.iam", // AWS product name, retained in the original spelling.
   // The primary Anthropic pool is labelled by the vendor name alone, kept in every locale.
   "sidecar.poolA",
   // A bare em dash: the "no Reasoning control" marker is a symbol, not copy.

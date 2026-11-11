@@ -155,8 +155,7 @@ session／task key 有助提升 Code Plan cache hit rate；沒有 key 的請求�
 
 credential 內含穩定 account id 或 email 的 OAuth provider 可以保存多個登入。Providers 頁面會在下拉
 選單顯示這些帳號、允許新增帳號，並在不登出其他帳號的情況下切換目前帳號。一般登入時，沒有 identity 的
-Kimi credential 會取代 active slot；明確的 **新增帳號** 會保留原有 slot 並啟用另一個新 slot。Kiro 帳號以
-profile ARN 作為 key。`chatgpt` 始終是 single-slot，因為
+Kimi credential 會取代 active slot；明確的 **新增帳號** 會保留原有 slot 並啟用另一個新 slot。Kiro 帳號結合 profile ARN 與登入使用者的電子郵件地址（若可取得）來識別身分；共用同一組織 profile 的使用者可以各自保留獨立的憑證。`chatgpt` 始終是 single-slot，因為
 Codex pool 帳號使用獨立 ledger。Token 仍存放在 `~/.opencodex/auth.json`；`/api/oauth/accounts` 只回傳
 遮蔽後的 metadata。
 
@@ -217,6 +216,8 @@ Reauthenticate。Codex pool 帳號不是那些 provider 之一，但 `ocx login 
 
 ### Kiro credential 匯入
 
+在儀表板選擇 **AWS IAM Identity Center**，輸入組織的 AWS 存取入口網站 URL 和 SSO 區域，即可新增帳號，無需 CLI 或 SSH。在瀏覽器核准裝置代碼後，如有多個 Kiro 設定檔，請選擇要儲存的設定檔。以下 CLI 步驟適用於 **Kiro CLI** 選項。
+
 Kiro 登入預期存在 Kiro CLI。Unix 可用 `curl -fsSL https://cli.kiro.dev/install | bash` 安裝；Windows
 PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1' | iex`；接著以 `kiro-cli login` 登入。若沒有
 `kiro-cli` session，`ocx login kiro` 會 fallback 到貼上的 access token 或 `KIRO_ACCESS_TOKEN` 環境變數。
@@ -263,7 +264,7 @@ database 並移除目前的 WAL、SHM 與 journal sidecar，再發布先前的 s
 
 ## 3. API 金鑰目錄
 
-opencodex 內建 106 個 preset：85 個 key-based、17 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
+opencodex 內建 107 個 preset：86 個 key-based、17 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
 preset。儀表板的 **Add provider** picker 會開啟 key provider 的 dashboard、驗證金鑰並儲存；驗證方式
 依 provider 而異。主要條目如下。
 
@@ -311,7 +312,7 @@ IDE／CLI，不透過 API；`minimax/minimax-m2.5` 是文件列出的 API 免費
 | Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
-| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
+| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1`。`moonshot` API 預設使用 `kimi-k3.1-pro`；官方 API 位址中已儲存的 `kimi-k2.5` 選擇會遷移到該模型。 |
 | Hugging Face | `https://router.huggingface.co/v1` |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
@@ -516,6 +517,13 @@ quota probe 只會把 active key 傳送到 canonical A6API host，並拒絕 redi
 key-based provider 也能保存多個 key。透過 Providers 頁面新增 key 時，會存到 `provider.apiKeyPool`、
 設為 active，並同步到 `provider.apiKey`，讓路由與 adapter 繼續讀取原本欄位。同一個下拉選單可切換或
 移除 key；管理 API 為 `/api/providers/keys`，而且只回傳遮蔽後的 key。
+
+儀表板中每個 API key 列皆提供獨立的暫停與恢復按鈕（亦可使用 `ocx account pause` 與 `ocx account resume`
+命令）。已暫停的金鑰不會參與自動請求路由、failover 容錯切換與冷卻恢復（Responses xAI 圖片／影片橋接已規劃好的媒體呼叫會沿用規劃時的金鑰）。若另一個啟用列共用相同金鑰參照，該參照仍可使用。若暫停現用參照的最後一個啟用列，
+OpenCodex 會依環狀順序（ring order）自動切換至金鑰池中下一個未暫停的可用金鑰；若池中所有金鑰皆已暫停，
+必須使用該提供者的請求會回傳 HTTP 403 `permission_error`，直到恢復金鑰為止。內建 Images 路由仍可使用其他符合條件的上游。
+選取已暫停的金鑰列會恢復並將其設為現用金鑰。
+獨立的「恢復」按鈕會保留目前可用的現用金鑰；只有目前未選取可用金鑰時，才會將恢復的金鑰設為現用金鑰。
 
 ### 從終端切換帳號
 

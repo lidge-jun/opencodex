@@ -18,7 +18,7 @@
  * unavailable context or with nothing, depending on the trigger.
  */
 import type { OcxConfig } from "../types";
-import { localAdmissionToken, localInferenceDestination } from "../lib/local-destinations";
+import { localInferenceDestination, selfFetchAdmissionToken, type LocalInferenceDestination } from "../lib/local-destinations";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
 import { sidecarEnter } from "../lib/sidecar-tracker";
@@ -38,8 +38,12 @@ import {
   ADVISOR_ADMISSION_SCOPE_HEADER,
   AdvisorAdmissionScopeEncodedBoundExceeded,
   encodeAdvisorAdmissionScope,
+  ADVISOR_ADMISSION_POLICY_HEADER,
+  registerAdvisorAdmissionPolicy,
 } from "../server/advisor-admission-scope";
 import type { AdmissionModelScope } from "../server/admission-model-scope";
+import type { CapturedAdmissionPolicy } from "../types/admission-policy";
+import { captureAdmissionPolicy } from "../server/capture-admission-policy";
 
 /**
  * The header the advisor presents on its own loopback request. Its VALUE is this process's
@@ -71,12 +75,18 @@ export interface AdvisorConsultationResult {
 export function advisorDestinationOrigin(
   config: Pick<OcxConfig, "port" | "hostname" | "unauthenticatedLoopbackListener">,
 ): string {
+  return advisorDestination(config).origin;
+}
+
+function advisorDestination(
+  config: Pick<OcxConfig, "port" | "hostname" | "unauthenticatedLoopbackListener">,
+): LocalInferenceDestination {
   // Same port resolution rule as the vision sidecar: config.port can be 0 (ephemeral bind, tests)
   // or stale after a live port override, so prefer the recorded actual bind port when present.
   const port = config.port && config.port > 0
     ? config.port
     : Number(configuredPort()) || 10_100;
-  return localInferenceDestination(config, port).origin;
+  return localInferenceDestination(config, port);
 }
 
 function extractContent(payload: unknown): string | undefined {
@@ -128,6 +138,7 @@ export async function consultAdvisor(
   abortSignal?: AbortSignal,
   baseUrlOverride?: string,
   admissionScope?: AdmissionModelScope,
+  admissionPolicy?: CapturedAdmissionPolicy,
 ): Promise<AdvisorConsultationResult> {
   const t0 = Date.now();
   // A low-level guard as well as the plan check: never fall back to task context or pay for an empty question.
@@ -142,15 +153,12 @@ export async function consultAdvisor(
     [ADVISOR_INTERNAL_CAPABILITY_HEADER]: internalCallCapability(),
   };
   // Admission ladder identical to the vision sidecar: env token || service token file || first
-  // configured API key, sent as `x-opencodex-api-key` — never Authorization. Loopback binds that
-  // require no token simply omit it.
-  const admission = localAdmissionToken(config);
+  // configured API key, sent as `x-opencodex-api-key` — never Authorization. A destination that
+  // requires no admission gets only a credential this data plane recognizes (#7894).
+  const admission = selfFetchAdmissionToken(config, advisorDestination(config));
   if (admission) headers["x-opencodex-api-key"] = admission;
-  // Always send the caller's resolved snapshot, including the unrestricted empty form: an
-  // omitted header would be re-resolved against the host admission token above, and a
-  // restricted host key would then narrow a caller whose own scope allows the destination.
-  // Empty lists decode as a defined-but-unrestricted scope, so the capability fence and the
-  // malformed-header refusal are unchanged.
+  // Keep the bounded scope envelope for transport validation; the process-local policy
+  // registration below owns the complete snapshot. The receiver also enforces host limits.
   try {
     headers[ADVISOR_ADMISSION_SCOPE_HEADER] = encodeAdvisorAdmissionScope(admissionScope ?? { providers: [], models: [] });
   } catch (error) {
@@ -179,7 +187,10 @@ export async function consultAdvisor(
     linkedSignal.cleanup();
     return { ok: false, cancelled: true, advice: "", advisorModel: input.advisorModel, error: "advisor cancelled before dispatch", durationMs: Date.now() - t0 };
   }
+  let policyRegistration: ReturnType<typeof registerAdvisorAdmissionPolicy> | undefined;
   try {
+    policyRegistration = registerAdvisorAdmissionPolicy(admissionPolicy ?? captureAdmissionPolicy(config, undefined, admissionScope), linkedSignal.signal);
+    headers[ADVISOR_ADMISSION_POLICY_HEADER] = policyRegistration.token;
     const res = await fetch(`${baseUrlOverride ?? advisorBaseUrl(config)}/v1/chat/completions`, {
       method: "POST",
       headers,
@@ -251,6 +262,7 @@ export async function consultAdvisor(
       durationMs,
     };
   } finally {
+    policyRegistration?.release();
     sidecarExit();
     linkedSignal.cleanup();
   }

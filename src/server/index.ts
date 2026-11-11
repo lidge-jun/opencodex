@@ -2,7 +2,9 @@ import { remoteWorkspaceEnabled } from "../remote-control/workspace-activation";
 import { scheduleDesktopCompatibilityStartup } from "./index/desktop-compatibility-startup";
 import { AuxiliaryListenerBindError } from "./ports";
 import { normalizeBindHostname } from "./bind-host";
-import { configureInboundBodyBudget, runAdmittedBodyWork } from "./inbound-body-admission";
+import { configureInboundBodyBudget } from "./inbound-body-admission";
+import { createAdmittedHttpTurn } from "./admitted-http-turn";
+import { isOllamaNativePath } from "./ollama-native-paths";
 import {
   buildWarmupCompletionFrames,
   buildWsErrorFrame,
@@ -93,9 +95,7 @@ import {
   runListenerShutdown,
   setServerRef,
   trackStreamLifetime,
-  tryAdmitTurn,
   unregisterTurn,
-  type ActiveTurnLease,
 } from "./lifecycle";
 export {
   drainAndShutdown,
@@ -116,9 +116,7 @@ import {
   type RequestLogContext,
   type RequestLogEntry,
 } from "./request-log";
-import { sessionLaneIdFromRequest } from "./request-log-conversation";
 import { setUsageLedgerRetention } from "./usage-ledger-retention";
-import { admitHttpWorkflowTurn, workflowDecisionRefusalResponse, type WorkflowRefusalLog } from "./workflow-refusal";
 export {
   addFinalRequestLog,
   filterRequestLogs, queryRequestLogs,
@@ -450,6 +448,8 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     }
     if (rawPath === "/remote-workspace/pair") return remoteWorkspaceEnabled(config) && req.method === "POST";
     if (rawPath === "/opencodex-session") return req.method === "GET" || req.method === "POST";
+    // Ollama-compatible inference paths are data plane, not management: never via Tailscale Serve.
+    if (isOllamaNativePath(rawPath)) return false;
     if (rawPath.startsWith("/api/")) return true;
     if (req.method !== "GET" && req.method !== "HEAD") return false;
     let decodedPath: string;
@@ -500,37 +500,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     }), req, policy);
   }
 
-  async function runAdmittedHttpTurn(
-    req: Request,
-    policy: RequestPolicyView,
-    work: (lease: ActiveTurnLease) => Promise<Response>,
-    refusalLog?: WorkflowRefusalLog,
-  ): Promise<Response> {
-    const lease = tryAdmitTurn(sessionLaneIdFromRequest(req.headers), req.signal);
-    if (!lease) return serverBusyResponse(req, "active turns", policy);
-    // Root, lane, and the refusal that follows from them, all live in ./workflow-refusal.
-    let workflow: ReturnType<typeof admitHttpWorkflowTurn>;
-    try { workflow = admitHttpWorkflowTurn(req.headers); }
-    catch (error) { lease.release(); throw error; }
-    if (workflow && !workflow.admitted) {
-      lease.release();
-      // withCors, because without Access-Control-Allow-Origin the exposed refusal header is
-      // still unreadable to a browser dashboard -- which made exposing it pointless.
-      return withCors(workflowDecisionRefusalResponse(workflow, undefined, refusalLog), req, policy);
-    }
-    if (workflow?.admitted) lease.attach(workflow.lease);
-    let response: Response;
-    try {
-      response = await runAdmittedBodyWork(req, policy, config.maxInboundBodyBytes, () => work(lease), refusalLog);
-    } catch (error) {
-      lease.release();
-      throw error;
-    }
-    if (!lease.isTransferred()) {
-      lease.release();
-    }
-    return response;
-  }
+  const runAdmittedHttpTurn = createAdmittedHttpTurn(() => config.maxInboundBodyBytes, serverBusyResponse);
 
   // Readiness gate: one PRIVATE controller per startServer invocation, captured
   // by this listener's closure. Starting/failing a second server in the same
@@ -746,6 +716,9 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     userCostOverlayReconciler?.stop();
     backgroundLifecycle?.releaseAfterFailedStart();
     void nativeMainLifecycle.release();
+    // A later optional listener can still throw after the local control socket started. Its lease
+    // is live state, so it has to go synchronously before the startup error propagates.
+    optionalListeners.abortStart();
     throw error;
   }
 

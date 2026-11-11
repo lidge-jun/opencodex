@@ -1,5 +1,5 @@
 import { probeSpawn, probeSpawnSync } from "./mutation-guard.mjs";
-import { accessSync, constants, realpathSync, statSync } from "node:fs";
+import { accessSync, constants, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 
 /**
@@ -169,6 +169,76 @@ export async function resolveSystemdRunAsync(hooks: SystemdRunHooks = systemdRun
 export function resetSystemdRunProbeForTests(): void {
   systemdRunProbe = undefined;
   systemdRunProbePending = undefined;
+}
+
+export interface DashboardRestartContext {
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
+  /** The resolved scope launcher, or undefined when none is usable. */
+  systemdRun: string | undefined;
+  /** The OpenCodex-managed user unit (`TASK` in src/service/state.ts) without `.service`. */
+  unitName: string;
+  readCgroup?: () => string;
+}
+
+function cgroupPaths(cgroup: string): string[] {
+  const rows = cgroup.split("\n").map(line => line.split(":")).filter(parts => parts.length >= 3);
+  // cgroup v2 ("0::") or the v1 systemd hierarchy name the unit; controller lines are noise.
+  const unified = rows.filter(parts => parts[1] === "" || parts[1] === "name=systemd");
+  return (unified.length > 0 ? unified : rows).map(parts => parts.slice(2).join(":").trim()).filter(Boolean);
+}
+
+/** The innermost systemd unit named by a cgroup path: its last `.service` or `.scope` component. */
+function innermostUnit(path: string): { unit: string; index: number; parts: string[] } | null {
+  const parts = path.split("/");
+  for (let index = parts.length - 1; index >= 0; index--) {
+    const part = parts[index]!;
+    if (part.endsWith(".service") || part.endsWith(".scope")) return { unit: part, index, parts };
+  }
+  return null;
+}
+
+/**
+ * Why a dashboard update must not run against this proxy, or null when it may (#7967).
+ *
+ * A dashboard update stops the proxy before it replaces the package, with or without a requested
+ * restart, and the worker survives that stop only from its own transient scope. Only OpenCodex's
+ * own user unit is restarted by the updater. A proxy inside any systemd service -- detected from
+ * `INVOCATION_ID` or from a `.service` cgroup, so a unit that unsets the variable is still seen
+ * -- is therefore refused unless the scope launcher works and the cgroup places it in
+ * `<unitName>.service` under a per-user manager (a delegated child cgroup below it is fine). A
+ * custom system unit with `User=` would lose the worker with its cgroup, and the restart would aim
+ * at an unrelated, possibly inactive user unit. Outside systemd nothing changes.
+ */
+export function dashboardRestartRefusal(context: DashboardRestartContext): string | null {
+  const platform = context.platform ?? process.platform;
+  const env = context.env ?? process.env;
+  if (platform !== "linux") return null;
+  let cgroup: string | null;
+  try { cgroup = (context.readCgroup ?? (() => readFileSync("/proc/self/cgroup", "utf8")))(); }
+  catch { cgroup = null; }
+  const paths = cgroup === null ? [] : cgroupPaths(cgroup);
+  // The innermost unit decides: a terminal or app scope below the per-user manager
+  // (user@<uid>.service/app.slice/vte-spawn-1.scope) is not a service; a system or user service is.
+  const units: ReturnType<typeof innermostUnit>[] = paths.map(innermostUnit);
+  const observed = units.filter((found): found is NonNullable<typeof found> => found !== null);
+  // The observed cgroup wins over an inherited INVOCATION_ID (a shell moved into its own scope
+  // keeps the variable); without an observation the variable alone fails closed.
+  const inService = observed.length > 0
+    ? observed.some(found => found.unit.endsWith(".service") && !found.unit.startsWith("user@"))
+    : Boolean(env.INVOCATION_ID);
+  if (!inService) return null;
+  const manual = "Stop the service with its own manager, update the package from a shell (for example `ocx update`), then start the service again.";
+  if (!context.systemdRun || !env.INVOCATION_ID) {
+    return `Dashboard update is unavailable: this proxy runs inside a systemd service, and the update worker cannot leave the service's cgroup (no usable \`systemd-run --user --scope\`), so stopping the proxy for the update would stop the update too. ${manual}`;
+  }
+  const ownUnit = `${context.unitName}.service`;
+  const managedByOwnUnit = units.some((found): boolean => found !== null && found.unit === ownUnit
+    && found.parts.slice(0, found.index).some((part: string) => part.startsWith("user@") && part.endsWith(".service")));
+  if (!managedByOwnUnit) {
+    return `Dashboard update is unavailable: this proxy runs under a systemd unit that is not OpenCodex's own \`${context.unitName}.service\` user unit, so the updater can neither keep its worker alive nor restart that unit safely. ${manual}`;
+  }
+  return null;
 }
 
 export function guiUpdateWorkerCommand(

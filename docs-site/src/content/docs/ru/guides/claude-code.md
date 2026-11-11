@@ -61,7 +61,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (при запуске по подписке, если не задано: нативные `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`) |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | Подпись `/model` для слота уровня, которому OpenCodex назначил маршрутизируемый псевдоним (например, `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`). Та же пара записывается в системное окружение launchd и в shell-хук. Идентификатор модели остаётся псевдонимом. Слоты и подписи, заданные вами, не изменяются |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1`, когда включён `alwaysEnableEffort` (условно) |
-| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch`, когда задан (условно; по умолчанию выключено) |
+| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch`, когда задан (условно; по умолчанию не задаётся, действует значение Claude Code по умолчанию) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | Устаревшее переопределение контекста, когда задан `maxContextTokens` (условно) |
 Переменные, которые вы экспортируете сами, всегда имеют приоритет. Дополнительные аргументы передаются как есть: `ocx claude -p "hello"`.
 
@@ -389,9 +389,7 @@ Anthropic сохраняют канонические id в обоих инте�
 реального окна модели, эта модель ломается — чат завершится ошибкой раньше, чем успеет сработать
 резюмирование.
 
-При нормализации ошибок переполнения контекста используются только первые 65 536 единиц кода UTF-16 сообщения провайдера.
-Диагностические сведения и числа токенов за этой границей могут исчезнуть без отметки об усечении.
-Точные ограничения и условия переноса чисел токенов описаны в [английском руководстве](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling).
+Нормализация ответов об ошибках Messages использует фиксированный текст и не сохраняет текст провайдера или числа токенов. Распознанное переполнение контекста возвращается как `prompt is too long: The request exceeds the model's context window.`. В потоке блок, первое поле которого — событие error, удерживается до 1 МиБ; при превышении возвращается фиксированная ошибка без фразы, запускающей сжатие. Область действия и два исключения описаны в [английском руководстве](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling).
 
 Нативные модели Anthropic с окном меньше 1M никогда не помечаются автоматически. Экспортированное
 вами окно сжатия имеет приоритет при пометке слотов запуска (прокси использует ВАШЕ значение, чтобы решить, какие модели
@@ -573,7 +571,7 @@ Claude Code — это лишь учётные данные для доступ�
 | `tool_use` ассистента | `function_call` (`input` → `arguments` в виде JSON-строки) |
 | `tool_result` пользователя | `function_call_output` (`is_error` → префикс `[tool error]`) |
 | Повтор `thinking` / `redacted_thinking` | Элементы `reasoning` с ограниченными конвертами `ocxr1` для подписей и скрытых данных |
-| Function-инструменты | `{type: "function"}` (`web_search*` → `{type: "web_search"}`). На переведённом маршруте к `api.anthropic.com` типизированные объявления `web_search_*` и `web_fetch_*` также передаются Anthropic для выполнения на сервере, если только сайдкар веб-поиска сам не предоставляет `web_search`. Поиск и загрузка возвращаются клиенту как `server_tool_use` и соответствующий `web_search_tool_result` / `web_fetch_tool_result` |
+| Function-инструменты | `{type: "function"}` (`web_search*` → `{type: "web_search"}`). На переведённом маршруте к `api.anthropic.com` типизированные объявления `web_search_*` и `web_fetch_*` также передаются Anthropic для выполнения на сервере, если только сайдкар веб-поиска сам не предоставляет `web_search`. Поиск и загрузка возвращаются клиенту как `server_tool_use` и соответствующий `web_search_tool_result` / `web_fetch_tool_result` Поиск с `allowed_domains`, `blocked_domains` или `user_location` исключается из переведённых маршрутов Responses/Chat; принудительный вызов исключённого поиска возвращает 400. Корректные определения функций с `defer_loading` остаются доступными как обычные функции. См. [ограничения перевода](/guides/claude-code/#search-restrictions-and-deferred-tools-on-translated-routes). |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, именованная функция→`{type:"function",name}`, размещённый WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
@@ -605,7 +603,7 @@ id/name; именованный `tool_choice` без имени.
 **Таксономия ошибок:** 400 `invalid_request_error`, 401 `authentication_error`,
 402 `billing_error`, 403 `permission_error`, 404 `not_found_error`, 409 `conflict_error`,
 413 `request_too_large`, 429 `rate_limit_error`, 504 `timeout_error`, 529 `overloaded_error`,
-прочие 5xx — `api_error`. `Retry-After` сохраняется.
+прочие 5xx — `api_error`. `Retry-After` передаётся целым числом секунд (HTTP-дата переводится в оставшиеся секунды) и ограничивается восемью днями.
 
 ## Кеширование промптов и расход токенов
 
@@ -614,9 +612,9 @@ id/name; именованный `tool_choice` без имени.
 автоматическим `cache_control` верхнего уровня. На стабильных ходах диалога попадание в кеш
 обычно составляет около 99,9%.
 
-**Нативная маршрутизация OpenAI/ChatGPT:** формируется сессионный `prompt_cache_key` (из
-`metadata.user_id`, если он есть, иначе — из хеша системного содержимого) и заголовок
-`session_id` для привязки к кешу. В ключ кеша входят модель и полные схемы инструментов.
+**Нативная маршрутизация OpenAI/ChatGPT:** формируется `prompt_cache_key` (из
+`metadata.user_id`, если это строка, иначе — из хеша системного содержимого) и, только при наличии идентификатора сессии (не из общего резервного ключа), заголовок
+`session_id` для привязки к кешу. Резервный ключ из хеша системного содержимого (только при наличии системного содержимого) также включает модель и полные схемы инструментов.
 
 **Арифметика токенов:** в ответе Anthropic из `input_tokens` вычитаются `cached_tokens` и
 `cache_write_tokens`, которые выводятся как `cache_read_input_tokens` и

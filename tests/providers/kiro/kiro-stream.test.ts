@@ -1527,6 +1527,7 @@ describe("kiro adapter — parseStream", () => {
       cacheCreationInputTokens: 2,
       outputTokens: 4,
       totalTokens: 19,
+      upstreamReported: true,
     });
     // The whole-payload checkpoint must exceed this turn's own total, which is the point of
     // reporting it separately.

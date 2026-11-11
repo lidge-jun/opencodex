@@ -18,6 +18,7 @@ import {
   DEFAULT_CODEX_PROVIDER_DISPLAY_NAME,
   buildProfileFileForTarget,
   buildProviderTableBlockForTarget,
+  preserveUnmanagedProfileKeys,
   resolveCodexProviderDisplayName,
 } from "../../src/codex/inject/config-toml";
 import {
@@ -934,4 +935,96 @@ test("malformed TOML preserves user routing and does not enable context injectio
       expect(inject(managed)).toEqual({ content: refreshed(managed), keptUserBaseUrl: false });
     }
   }
+});
+
+describe("profile file round trip", () => {
+  test("keeps the root keys an operator added to the profile", () => {
+    const generated = [
+      "# OpenCodex proxy profile — use with: codex --profile opencodex",
+      "# Routes all model requests through the opencodex proxy at 127.0.0.1:10100",
+      'model_provider = "opencodex"',
+      "",
+      "[features]",
+      "fast_mode = true",
+      "",
+    ].join("\n");
+    const existing = [
+      'model_provider = "opencodex"',
+      "stream_idle_timeout_ms = 60000",
+      "stream_max_retries = 8",
+      "",
+      "[features]",
+      "fast_mode = true",
+      "",
+    ].join("\n");
+
+    const merged = preserveUnmanagedProfileKeys(existing, generated);
+
+    expect(merged).toContain("stream_idle_timeout_ms = 60000");
+    expect(merged).toContain("stream_max_retries = 8");
+    // Keys this build owns are not duplicated, and carried keys stay above the
+    // first table so they remain root keys.
+    expect(merged.match(/model_provider =/g)).toHaveLength(1);
+    expect(merged.indexOf("stream_idle_timeout_ms")).toBeLessThan(merged.indexOf("[features]"));
+  });
+
+  test("copies a value that continues on another line whole", () => {
+    const generated = 'model_provider = "opencodex"\n';
+    const existing = [
+      'model_provider = "opencodex"',
+      "notify = [",
+      '  "first",',
+      '  "second",',
+      "]",
+      "stream_max_retries = 8",
+      "",
+    ].join("\n");
+
+    const merged = preserveUnmanagedProfileKeys(existing, generated);
+
+    expect(merged).toContain('notify = [\n  "first",\n  "second",\n]');
+    expect(merged).toContain("stream_max_retries = 8");
+    // The result still parses, which a half-copied array would not.
+    expect(() => Bun.TOML.parse(merged)).not.toThrow();
+  });
+
+  test("never carries a key this build owns, even when the template omits it", () => {
+    const rootOverride = 'openai_base_url = "http://127.0.0.1:10100/v1"\n';
+    const existing = [
+      'model_provider = "opencodex"',
+      'model_catalog_json = "/home/u/.codex/opencodex-catalog.json"',
+      "stream_max_retries = 8",
+      "",
+    ].join("\n");
+
+    const merged = preserveUnmanagedProfileKeys(existing, rootOverride);
+
+    // Provider-table mode wrote model_provider; this build is in root-override
+    // mode and must not resurrect it. A null catalog path means the same for
+    // model_catalog_json.
+    expect(merged).not.toContain("model_provider");
+    expect(merged).not.toContain("model_catalog_json");
+    expect(merged).toContain("stream_max_retries = 8");
+  });
+
+  test("leaves the generated profile alone when there is nothing to carry", () => {
+    const generated = 'model_provider = "opencodex"\n';
+    expect(preserveUnmanagedProfileKeys(null, generated)).toBe(generated);
+    expect(preserveUnmanagedProfileKeys('model_provider = "opencodex"\n', generated)).toBe(
+      generated,
+    );
+  });
+
+  test("carries keys through a real profile rebuild", () => {
+    const target = standaloneCodexRoutingTarget(10100, {});
+    const generated = buildProfileFileForTarget(target, null);
+    const firstTable = generated.indexOf("[");
+    const prefix = generated.endsWith("\n") ? generated : `${generated}\n`;
+    const existing =
+      firstTable === -1
+        ? `${prefix}stream_max_retries = 8\n`
+        : `${generated.slice(0, firstTable)}stream_max_retries = 8\n${generated.slice(firstTable)}`;
+
+    expect(preserveUnmanagedProfileKeys(existing, generated)).toContain("stream_max_retries = 8");
+  });
 });

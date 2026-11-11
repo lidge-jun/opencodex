@@ -212,8 +212,12 @@ export function claimCredentialObservation(home: string, scan: (accounts: readon
   });
 }
 /**
- * Advance on every observed event and rescan; a failed scan leaves an empty vector, which never
- * attests. It never waits for the fence: the runtime observer retries asynchronously instead.
+ * Advance on every observed coverage-relevant event and rescan; a failed scan leaves an empty
+ * vector, which never attests. It never waits for the fence: the runtime observer retries
+ * asynchronously instead. "Coverage-relevant" is the watcher's classification in inventory.ts:
+ * every event on a target name, credential-write residue, or ancestor structural change --
+ * but not an ancestor directory's last-write tick from ordinary child churn, which reports no
+ * credential change and would re-arm the observer's own save forever.
  */
 export function updateCredentialObservation(home: string, owner: string, scan: ((accounts: readonly string[]) => string) | null): void {
   withCredentialPublicationFence(home, () => {

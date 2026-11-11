@@ -1,11 +1,25 @@
 // Windows Node-launcher compatibility code. The install owns its entire process tree until
 // exit is proved; a timeout signal alone never authorizes stage removal.
-import { guardedSpawn, materializeMutationData } from "./mutation-guard.mjs";
+import { guardedSpawn, guardedSpawnSync, materializeMutationData } from "./mutation-guard.mjs";
 import { dirname, join, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const JOIN_MS = 10000;
 const failure = message => ({ status: null, processTreeExited: false, error: { code: "EINSTALLJOIN", message } });
+
+/** Bridge synchronous pnpm transactions to the same Windows Job Object barrier. */
+export function runWindowsInstallerSync(invocation, { env = process.env, cwd, timeoutMs = 180000, authorizeMutation = () => false } = {}) {
+  const moduleUrl = import.meta.url;
+  const script = `import {readFileSync} from 'node:fs';import {runNpmInstall} from ${JSON.stringify(moduleUrl)};const input=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify(await runNpmInstall(input.invocation,{timeoutMs:input.timeoutMs,authorizeMutation:()=>true})));`;
+  const result = guardedSpawnSync(authorizeMutation, "package", process.execPath, ["--input-type=module", "-e", script], {
+    input: JSON.stringify({ invocation, timeoutMs }), env, cwd, encoding: "utf8", windowsHide: true, stdio: ["pipe", "pipe", "inherit"],
+  });
+  try {
+    const value = JSON.parse(result.stdout);
+    if (result.status !== 0 || typeof value.processTreeExited !== "boolean") throw Error("invalid supervisor result");
+    return value;
+  } catch { return failure("Windows installer supervisor did not confirm process-tree exit"); }
+}
 
 function quoteWindowsArg(value) {
   return '"' + value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, "$1$1") + '"';
@@ -16,6 +30,11 @@ export async function runNpmInstall(invocation, { env = process.env, timeoutMs =
   env = materializeMutationData(env);
   if (!invocation) return { status: 1, processTreeExited: true, error: { code: "ENOENT", message: "npm invocation unavailable" } };
   if (process.platform === "win32") {
+    // The PowerShell helper assigns npm to a kill-on-close Job Object before it
+    // resumes the suspended process, then terminates the job on timeout and
+    // waits for the job to become empty. An unconfirmed join retains the stage.
+    // Windows acceptance still needs orchestrated npm and pnpm worker tests proving
+    // marker visibility across supervisor failure and Job Object termination.
     // Resolve from the same absolute system directory as the hardened cmd hop.
     // Never search PATH for PowerShell, and never interpolate the JSON as code.
     const roots = new Set(Object.entries(env).filter(([key, value]) => key.toLowerCase() === "systemroot" && value !== undefined).map(([, value]) => value));

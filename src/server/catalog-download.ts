@@ -10,7 +10,9 @@
  * If each route serialized independently they would drift, and the data-plane
  * copy is the one nobody looks at in the dashboard.
  */
-import { createHash } from "node:crypto";
+import { catalogEtag } from "../lib/catalog-etag";
+
+export { catalogEtag };
 
 /**
  * Upper bound for the REMOTE route only.
@@ -35,10 +37,6 @@ export interface SerializedCatalog {
   etag?: string;
   /** Byte length of `body`, present only when `body` is. */
   bytes?: number;
-}
-
-export function catalogEtag(body: string): string {
-  return `"${createHash("sha256").update(body).digest("hex")}"`;
 }
 
 /**

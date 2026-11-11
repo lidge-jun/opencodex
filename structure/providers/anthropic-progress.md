@@ -1,16 +1,28 @@
 # Anthropic progress updates
 
 `src/adapters/anthropic.ts` selects `thinking: {type: "adaptive", display: "updates"}` with
-`thinking-display-updates-2026-08-18` only for Opus 5.5 on `api.anthropic.com`, for key and OAuth sends.
+`thinking-display-updates-2026-08-18` by default only for Opus 5.5 on `api.anthropic.com`, for key and OAuth sends.
+An explicit request `reasoning.summary` of `concise` or `detailed` selects
+`display: "summarized"` instead, without the updates beta or progress-to-commentary classification.
+This display choice also applies when effort is absent or `none`; it does not add or change effort.
+Omitted summary, `auto` (the Codex default) and `none` keep the updates default. Local `hideThinkingSummary` controls summary
+presentation independently; it does not select the upstream display. The selected display controls
+both the generated beta header and response classification on every request, including adapter reuse.
+An operator override sits above that default without changing it when unset (#8363): the provider
+`thinkingDisplay` value, or the exact-model `modelThinkingDisplay` entry that wins over it, can force
+`summarized`, keep `updates`, or select `omitted` (adaptive thinking with no display field). `updates`
+is treated as `auto` on any model this adapter never sent it to, an explicit request summary still
+forces `summarized` on every adaptive model, and `hideThinkingSummary` keeps its meaning only under
+the `auto` policy. Every branch derives `progressUpdates` from the final body's `display`.
 `src/types/request.ts` carries the complete signed update on its text-delta event.
 `src/adapters/anthropic-progress.ts` uses this documented display contract to classify nonempty
 thinking text as commentary, buffering one block under the translator budget until its final signature.
 Signatures remain opaque; compatible gateways and other models keep their prior display mode.
-Hidden-summary preferences suppress reasoning, not these user-facing updates.
+Hidden-summary preferences suppress reasoning, not user-facing updates when the updates display is selected.
 Signed history preserves source block order, including thinking between tool calls; unsigned
 cross-provider history retains the adapter's preface-before-tools repair.
 `tests/adapters/anthropic/anthropic-progress-updates.test.ts` exercises SSE/JSON presentation,
-exact replay, mixed block order, OAuth beta preservation and cancellation cleanup.
+exact replay, mixed block order, explicit summary opt-in, adapter reuse, OAuth beta preservation and cancellation cleanup.
 
 ## Signed Anthropic progress commentary
 
@@ -28,6 +40,8 @@ both JSON and SSE conversions; ordinary locally hidden envelope text remains und
 `src/responses/assistant-replay.ts` preserves text, empty signed blocks, signature updates and
 redacted blocks in order for the internal continuation builders in
 `src/server/responses/terminal-guard.ts` and `src/server/responses/advisor-slot.ts`.
+Search sidecar Responses text follows the shared [identity snapshot reconciliation contract](../data-planes/search.md).
+
 The hosted tool loops in `src/web-search/loop.ts`, `src/web-search/run-turn-loop.ts` and
 `src/images/loop.ts` reconstruct progress events as signed thinking parts. Search's early
 commentary path retains these events for the next iteration.

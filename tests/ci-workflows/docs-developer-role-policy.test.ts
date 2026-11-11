@@ -21,6 +21,7 @@ import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { repoPath } from "../helpers/repo-root";
+import { PROVIDER_COMPAT_CARRY_FIELDS } from "../../src/server/management/provider-overwrite-carry";
 
 const INSTRUCTION = "Answer in exactly one sentence.";
 
@@ -133,6 +134,19 @@ describe("the documented developer-role policy is derived from the Chat wire", (
 });
 
 describe("translated pages do not contradict the English source", () => {
+  for (const path of [ENGLISH_REFERENCE, ...LOCALES.map(referencePage)]) {
+    test(path + " lists every carried compatibility setting and qualifies instruction placement", async () => {
+      const doc = await read(path);
+      const saveParagraph = doc.split(/\n\s*\n/).find(block => block.includes("`POST /api/providers`") && block.includes("`preserveReasoningContentModels`"));
+      expect(saveParagraph).toBeDefined();
+      const fields = [...saveParagraph!.matchAll(/`([^`]+)`/g)].map(match => match[1]!);
+      const carried = new Set<string>(PROVIDER_COMPAT_CARRY_FIELDS);
+      expect(fields.filter(field => carried.has(field)).sort())
+        .toEqual([...PROVIDER_COMPAT_CARRY_FIELDS].sort());
+      expect(await referenceRow(path)).toMatch(/singleLeadingSystemMessage|single-leading-system compatibility/);
+    });
+  }
+
   test("the English pages carry roles worth comparing", async () => {
     expect(roleSpans(await referenceRow(ENGLISH_REFERENCE)).length).toBeGreaterThan(0);
     expect(roleSpans(await guideParagraph(ENGLISH_GUIDE)).length).toBeGreaterThan(0);

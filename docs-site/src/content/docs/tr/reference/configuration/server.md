@@ -32,6 +32,7 @@ yardımcı özellikleri nasıl çalıştıracağını kontrol eder.
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | kullanılabilir olduğunda açık | Web arama sidecar seçenekleri. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | kullanılabilir olduğunda açık | Görsel açıklama sidecar seçenekleri. |
 | `images?` | `OcxImagesConfig` | otomatik OpenAI seçimi | Codex `image_gen` için bağımsız Görseller aktarma seçenekleri. |
+| `telemetry?` | `OcxTelemetryConfig` | insan bildiriminden sonra varsayılan olarak açık | Anonim günlük kullanım telemetrisi onay durumu (`decision`, `decidedAt`, `noticeShownAt`). Bir kişi bildirimi görene veya onay verene kadar hiçbir şey gönderilmez. `OCX_TELEMETRY=0` veya `DO_NOT_TRACK=1` ile geçersiz kılınır. Bkz. [Telemetri (`telemetry`)](#telemetri-telemetry) ve [Telemetri ve Gizlilik](/tr/guides/telemetry/). |
 
 Daha eski bir geliştirme derlemesi yedekleme desteği var olmadan önce devam
 geçmişi meta verilerini değiştirdiyse yerel sağlayıcı kurtarmasını zorlamak için
@@ -169,6 +170,35 @@ bağlama için güvenlidir. `ssh -g -L`, geniş kapsayıcı yayınlama veya iste
 tarafını `0.0.0.0` üzerinde açığa çıkaran yönlendirme modlarını kullanmayın.
 Emin olmadığınızda `ssh -L 127.0.0.1:20100:localhost:10100` ile açıkça bağlayın.
 :::
+
+## Telemetri (`telemetry`)
+
+Anonim günlük kullanım telemetrisi yalnızca bir kişi açıklama bildirimini (GUI açılır penceresinde veya etkileşimli bir terminal isteminde) gördükten sonra varsayılan olarak açık hale gelir. `config.json` içindeki `telemetry` bloğu bu onay durumunu kaydeder:
+
+```json
+{
+  "telemetry": {
+    "decision": "accepted",
+    "decidedAt": "2026-11-07T09:00:00.000Z",
+    "noticeShownAt": "2026-11-07T09:00:00.000Z"
+  }
+}
+```
+
+| Alan | Tip | Varsayılan | Anlamı |
+| --- | --- | --- | --- |
+| `telemetry.decision?` | `"accepted" \| "declined"` | ayarlanmamış (kararsız) | Açık kullanıcı seçimi. `"declined"` telemetriyi devre dışı bırakır ve `<OPENCODEX_HOME>/telemetry-id.json` dosyasını siler; `"accepted"` günlük raporları etkinleştirir. |
+| `telemetry.decidedAt?` | `string` (ISO 8601) | ayarlanmamış | `decision` değerinin kaydedildiği UTC zaman damgası. Yalnızca `decidedAt ?? noticeShownAt` UTC gününden kesin olarak sonraki tamamlanmış UTC takvim günleri (`day > formatUtcDay(decidedAt ?? noticeShownAt)`) gönderilir; onay günü ve önceki günler asla gönderilmez. |
+| `telemetry.noticeShownAt?` | `string` (ISO 8601) | ayarlanmamış | Bir insanın web kontrol panelinde veya etkileşimli bir terminalde bildirimi gördüğü UTC zaman damgası. `decision` ayarlanmadığında telemetri yalnızca `noticeShownAt` ayarlanmışsa (`default-on`) gönderim yapar; aksi halde proxy `awaiting-notice` durumunda kalır. |
+
+Toplayıcı uç noktası (`https://telemetry.opencodex.me/v1/events`) bir kod sabitidir ve `config.json` içinde yapılandırılamaz.
+
+İki ortam değişkeni `config.json` dosyasını geçersiz kılar ve kaydedilmiş `config.json` dosyasını değiştirmeden telemetriyi hemen devre dışı bırakır (proxy başlangıcında veya zamanlayıcı adımında algılandığında `<OPENCODEX_HOME>/telemetry-state.json` içine bugünün UTC gününü `ineligibleThroughDay` olarak kaydeder ve `<OPENCODEX_HOME>/telemetry-id.json` dosyasını siler; değişken kaldırıldığında bu günler gönderilmez ve yeni bir kimlik üretilir):
+
+- `OCX_TELEMETRY=0` (büyük/küçük harf duyarsız olarak `false`, `off` veya `no` da kabul eder)
+- `DO_NOT_TRACK=1` (büyük/küçük harf duyarsız olarak `true` veya `yes` de kabul eder)
+
+`ocx config set telemetry` ve `ocx config unset telemetry` reddedilir ve `ocx config import` tüm çağrılarda içe aktarılan `telemetry` bloğunu yoksayarak mevcut durumu korur; bunun yerine `ocx telemetry enable` (etkileşimli insan terminali ve onay istemi gerektirir, aksi halde `agent_consent_required` / `tty_required` ile çıkar), `ocx telemetry disable`, `ocx telemetry status [--json]` veya kontrol panelindeki **Proxy ayrıntıları** anahtarını kullanın. Tam yük şeması ve saklama politikası için [Telemetri ve Gizlilik](/tr/guides/telemetry/) sayfasına bakın.
 
 ## Depolama temizliği
 

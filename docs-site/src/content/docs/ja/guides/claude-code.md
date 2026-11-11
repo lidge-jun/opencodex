@@ -53,7 +53,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（サブスクリプション起動で未設定の場合はネイティブの `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`） |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | OpenCodex がルーティングエイリアスを設定した Tier スロットの `/model` ラベル（例: `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`）。launchd のシステム環境とシェルフックにも同じ組で書き込みます。モデル ID はエイリアスのままです。自分で設定したスロットやラベルは変更しません |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort` がオンなら `1` (条件付き) |
-| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` が設定されている場合 (条件付き、既定はオフ) |
+| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` が設定されている場合 (条件付き、既定では注入せず Claude Code 自身の既定値に従う) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `maxContextTokens` が設定された場合の従来コンテキスト上書き値 (条件付き) |
 直接 export した変数が常に優先します。追加引数はそのまま渡されます: `ocx claude -p "hello"`。
 
@@ -362,9 +362,7 @@ Claude Code は未知モデルのコンテキストを 200k トークンとし�
 **接続 → Claude** で圧縮値を調整できます。**警告:** モデルの実際のコンテキストウィンドウより大きく上げると
 要約を開始する前にチャットエラーが発生します。
 
-コンテキスト超過エラーの正規化では、プロバイダーのエラーメッセージの先頭 65,536 UTF-16 コード単位だけを使います。
-末尾の診断情報やトークン数は、省略を示す印なしで失われることがあります。
-詳しい制限とトークン数の扱いは[英語ガイド](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)を参照してください。
+Messages のエラー応答の正規化では、プロバイダーの文章やトークン数ではなく固定文を使います。認識したコンテキスト超過は `prompt is too long: The request exceeds the model's context window.` として返します。最初のフィールドが error イベントのストリームブロックは 1 MiB まで保持し、超過時は圧縮を促さない固定エラーにします。対象範囲と二つの例外は[英語ガイド](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)を参照してください。
 
 1M 未満のネイティブ Anthropic モデルには自動で標識を付けません。自分で export した圧縮値は起動スロットの標識に優先し、プロキシは**ユーザーが指定した**値を基準にどのモデルに安全に標識を付けるか決定します。ディスカバリー行はその export を無視し、固定の下限を保ちます。
 直接編集した設定値が不正な場合は 829,800 に戻ります。
@@ -537,7 +535,7 @@ Messages → Responses に変換されるリクエストでは、Claude Code の
 | Assistant `tool_use` | `function_call`(`input` → JSON 文字列に変換した `arguments`) |
 | ユーザー `tool_result` | `function_call_output`(`is_error` → `[tool error]` 接頭辞) |
 | `thinking` / `redacted_thinking` 再生 | シグネチャと秘匿ペイロードを境界付き `ocxr1` エンベロープに保持した `reasoning` 項目 |
-| Function ツール | `{type: "function"}`(`web_search*` → `{type: "web_search"}`). `api.anthropic.com` への翻訳ルートでは、型付き `web_search_*` と `web_fetch_*` 宣言も Anthropic に送信され、サーバー側で実行されます。ただし Web 検索サイドカーが `web_search` を提供する場合はそちらが優先されます。検索と取得の結果は `server_tool_use` と対応する `web_search_tool_result` / `web_fetch_tool_result` としてクライアントに返されます |
+| Function ツール | `{type: "function"}`(`web_search*` → `{type: "web_search"}`). `api.anthropic.com` への翻訳ルートでは、型付き `web_search_*` と `web_fetch_*` 宣言も Anthropic に送信され、サーバー側で実行されます。ただし Web 検索サイドカーが `web_search` を提供する場合はそちらが優先されます。検索と取得の結果は `server_tool_use` と対応する `web_search_tool_result` / `web_fetch_tool_result` としてクライアントに返されます `allowed_domains`、`blocked_domains`、`user_location` を指定したホスト検索は翻訳された Responses/Chat ルートから除外され、強制すると 400 を返します。有効な `defer_loading` 関数定義は通常の関数として呼び出せます。[翻訳の制限](/guides/claude-code/#search-restrictions-and-deferred-tools-on-translated-routes)を参照してください。 |
 | `tool_choice` | `auto`→`auto`、`none`→`none`、`any`→`required`、名前指定関数→`{type:"function",name}`、ホスト型 WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
@@ -568,7 +566,7 @@ role、`tool_use_id` のない `tool_result`、id/name のない `tool_use`、na
 **エラー分類:** 400 `invalid_request_error`、401 `authentication_error`、
 402 `billing_error`、403 `permission_error`、404 `not_found_error`、409 `conflict_error`、
 413 `request_too_large`、429 `rate_limit_error`、504 `timeout_error`、529 `overloaded_error`、
-それ以外の 5xx は `api_error` です。`Retry-After` はそのまま維持します。
+それ以外の 5xx は `api_error` です。`Retry-After` は整数の秒数で送信し（HTTP 日付は残り秒数に変換）、上限は 8 日です。
 
 ## プロンプトキャッシュとトークン使用量
 
@@ -576,9 +574,9 @@ role、`tool_use_id` のない `tool_result`、id/name のない `tool_use`、na
 分岐点と最上位自動 `cache_control` を管理します。安定した会話では通常キャッシュヒット率が約
 99.9% です。
 
-**ネイティブ OpenAI/ChatGPT ルーティング:** セッションスコープ `prompt_cache_key`(`metadata.user_id` があれば
-使用、なければシステム内容ハッシュ使用)とキャッシュ選好のための `session_id` ヘッダーを作ります。
-キャッシュキーにはモデルと全体ツールスキーマが含まれます。
+**ネイティブ OpenAI/ChatGPT ルーティング:** `prompt_cache_key`(`metadata.user_id` が文字列であれば
+使用、なければシステム内容ハッシュ使用)と、セッション識別子がある場合のみキャッシュ選好のための `session_id` ヘッダーを作ります(共有フォールバックキーからは作りません)。
+システム内容ハッシュから作るフォールバックキー(システム内容がある場合のみ)には、モデルと全体ツールスキーマも含まれます。
 
 **トークン計算:** Anthropic 出力は `input_tokens` から `cached_tokens` と `cache_write_tokens` を引き、
 それぞれ `cache_read_input_tokens` と `cache_creation_input_tokens` として公開します。リクエストログはこれを再び

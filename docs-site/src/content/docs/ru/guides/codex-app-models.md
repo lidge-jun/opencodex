@@ -3,6 +3,8 @@ title: Селектор моделей Codex App
 description: Как модели opencodex появляются в Codex App, Codex CLI и Codex TUI через общий каталог Codex.
 ---
 
+По умолчанию `false`. Установите `"omitDisabledNativeModels": true` в `config.json` и выполните `ocx sync`, чтобы исключить отключённые native-строки из каталога, кеша и HTTP-списка моделей в формате Codex. Проверенный до исключения шаблон сохраняет метаданные routed-строк. Маршрутизация прямых запросов не меняется. Описание скрытия ниже относится к настройкам по умолчанию.
+
 opencodex не патчит Codex App. Он записывает ту же конфигурацию Codex и тот же каталог моделей,
 которыми пользуются Codex CLI/TUI. App-server читает это общее состояние, но некоторые версии
 Codex Desktop применяют в renderer дополнительный remote allowlist и могут удалить routed-строки

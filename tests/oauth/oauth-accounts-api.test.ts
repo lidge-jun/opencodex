@@ -299,6 +299,51 @@ describe("multiauth accounts API", () => {
     }
   });
 
+  test("GET keeps the account label masked by default and keeps maskedLabel masked", async () => {
+    saveConfig({ ...baseConfig(), privacy: { maskEmails: "false" } } as unknown as OcxConfig);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts?provider=anthropic", server.url));
+      expect(res.status).toBe(200);
+      const body = await res.json() as { accounts: Array<{ id: string; accountLabel?: string; maskedLabel?: string }> };
+      const first = body.accounts.find(account => account.id === "aaaa1111");
+      expect(first?.accountLabel).toBe("f***t@example.com");
+      expect(first?.maskedLabel).toBe("f***t@example.com");
+      expect(JSON.stringify(body).includes("first@example.com")).toBe(false);
+    } finally { await server.stop(true); }
+  });
+
+  test("GET shows the raw account label when email masking is disabled (#8286)", async () => {
+    saveConfig({ ...baseConfig(), privacy: { maskEmails: false } });
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts?provider=anthropic", server.url));
+      expect(res.status).toBe(200);
+      const body = await res.json() as { accounts: Array<{ id: string; email?: string; accountLabel?: string; maskedLabel?: string }> };
+      const first = body.accounts.find(account => account.id === "aaaa1111");
+      expect(first?.email).toBe("first@example.com");
+      expect(first?.accountLabel).toBe("first@example.com");
+      // The tray-facing masked label keeps its contract regardless of the flag.
+      expect(first?.maskedLabel).toBe("f***t@example.com");
+      expect(first?.maskedLabel).not.toBe(first?.email);
+    } finally { await server.stop(true); }
+  });
+
+  test("GET omits identity labels for malformed and absent stored emails", async () => {
+    const authPath = join(testDir, "auth.json");
+    const auth = JSON.parse(readFileSync(authPath, "utf8"));
+    auth.anthropic.accounts[0].credential.email = "not-an-email";
+    delete auth.anthropic.accounts[1].credential.email;
+    writeFileSync(authPath, JSON.stringify(auth), { mode: 0o600 });
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts?provider=anthropic", server.url));
+      const body = await res.json() as { accounts: Array<{ accountLabel?: string; maskedLabel?: string }> };
+      expect(body.accounts.map(account => account.maskedLabel)).toEqual([undefined, undefined]);
+      expect(body.accounts.map(account => account.accountLabel)).toEqual([undefined, undefined]);
+    } finally { await server.stop(true); }
+  });
+
   test("GET includes projected health with redacted healthSummary", async () => {
     const server = startServer(0);
     try {

@@ -70,7 +70,9 @@ test("a labeled switch is named by its visible words, and exactly once", () => {
   // aria-hidden on the text would leave the button with no name at all.
   expect(el.querySelector(".switch-labeled-text")?.getAttribute("aria-hidden")).toBeNull();
   expect(button.textContent).toContain("Default window / cap");
-  expect(button.getAttribute("aria-pressed")).toBe("true");
+  expect(button.getAttribute("role")).toBe("switch");
+  expect(button.getAttribute("aria-checked")).toBe("true");
+  expect(button.getAttribute("aria-pressed")).toBeNull();
 });
 
 test("an unlabeled switch keeps aria-label and gains no redundant title", () => {
@@ -78,6 +80,8 @@ test("an unlabeled switch keeps aria-label and gains no redundant title", () => 
   const button = el.querySelector("button.switch")!;
 
   expect(button.getAttribute("aria-label")).toBe("Keep native");
+  expect(button.getAttribute("role")).toBe("switch");
+  expect(button.getAttribute("aria-checked")).toBe("false");
   // HTML-AAM maps title to the accessible DESCRIPTION when aria-describedby is
   // absent. Copying the name into it announces the control twice.
   expect(button.getAttribute("title")).toBeNull();
@@ -89,4 +93,16 @@ test("title stays opt-in and does not displace the accessible name", () => {
   const button = el.querySelector("button.switch")!;
   expect(button.getAttribute("title")).toBe("Explains the shadow lane");
   expect(button.getAttribute("aria-label")).toBe("Shadow call");
+});
+
+test("a tri-state bulk control keeps pressed-button semantics", () => {
+  const el = mount(<Switch on={false} mixed onClick={() => {}} label="All profiles" />);
+  const button = el.querySelector("button.switch")!;
+  expect(button.getAttribute("role")).toBeNull();
+  expect(button.getAttribute("aria-checked")).toBeNull();
+  expect(button.getAttribute("aria-pressed")).toBe("mixed");
+  act(() => root!.render(<Switch on mixed={false} onClick={() => {}} label="All profiles" />));
+  expect(button.getAttribute("role")).toBeNull();
+  expect(button.getAttribute("aria-checked")).toBeNull();
+  expect(button.getAttribute("aria-pressed")).toBe("true");
 });

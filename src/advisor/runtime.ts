@@ -20,10 +20,10 @@
  * places Advisor output in developer/system content. User-role advice can still contain
  * hostile recommendations; the fixed policy tells the worker how to interpret that data.
  */
-import type { OcxConfig, OcxParsedRequest } from "../types";
+import type { OcxConfig, OcxParsedRequest, OcxTool } from "../types";
 import type { AdvisorPlan, AdvisorConsultOutcome } from "../server/responses/advisor-slot";
 import { createAdvisorGuard, MAX_ADVISOR_CONSULTATIONS_PER_REQUEST } from "../server/responses/advisor-slot";
-import { resolveAdvisorSettings, type AdvisorPolicy } from "./settings";
+import { resolveAdvisorSettings, type AdvisorContextMode, type AdvisorPolicy } from "./settings";
 import { consultAdvisor } from "./consult";
 import { buildAdvisorTool } from "./synthetic-tool";
 import { sanitizeLogMetadataString } from "../lib/redact";
@@ -55,6 +55,7 @@ export interface AdvisorRuntimeDeps {
   workerIdentity: string;
   workerModelId: string;
   admissionScope?: AdmissionModelScope;
+  admissionPolicy?: import("../types/admission-policy").CapturedAdmissionPolicy;
   abortSignal?: AbortSignal;
   /** Test seam; production always self-fetches the resolved local destination. */
   baseUrlOverride?: string;
@@ -139,7 +140,11 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
     reason: AdvisorTrigger,
     question: string | undefined,
     evidence?: AdvisorRepairEvidence,
+    abortSignal?: AbortSignal,
   ): Promise<AdvisorConsultOutcome> => {
+    const consultationSignal = abortSignal && deps.abortSignal
+      ? AbortSignal.any([deps.abortSignal, abortSignal])
+      : abortSignal ?? deps.abortSignal;
     const current = liveSettings();
     if (!current.enabled || current.model.trim() === "") {
       return {
@@ -200,7 +205,7 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
         content: formatAdvisorUnavailable(reason === "manual" ? "manual" : "preflight", result.error),
       };
     }
-    if (deps.abortSignal?.aborted) return { ok: false, isError: true, cancelled: true, content: "" };
+    if (consultationSignal?.aborted) return { ok: false, isError: true, cancelled: true, content: "" };
     const budgetKey = identify(parsed).budget;
     const requestCapped = consultations >= MAX_ADVISOR_CONSULTATIONS_PER_REQUEST;
     if (requestCapped
@@ -230,9 +235,10 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
         deps.config,
         current.effort,
         current.timeoutMs,
-        deps.abortSignal,
+        consultationSignal,
         deps.baseUrlOverride,
-      deps.admissionScope,
+        deps.admissionScope,
+        deps.admissionPolicy,
       );
     } catch (error) {
       activities.finish(activityId, { status: "failed", durationMs: Math.max(0, now() - startedAt) });
@@ -350,10 +356,19 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
   const plan: AdvisorPlan = {
     shouldCountManualConsultation: question =>
       liveSettings().contextMode !== "question-only" || Boolean(question?.trim()),
-    consult: (parsed, reason, question) => runConsultation(parsed, reason, question),
+    consult: (parsed, reason, question, abortSignal) => runConsultation(parsed, reason, question, undefined, abortSignal),
     // The guard's own failure/limit text goes through the same runtime-owned, marker-neutralized
     // formatter so no guard path can emit text that looks like a genuine advice wrapper.
     formatUnavailable: (kind, error) => formatAdvisorUnavailable(kind, error),
+  };
+
+  // Sidecar paths compare the advisor tool by reference, so each context mode keeps one object.
+  const advisorTools = new Map<AdvisorContextMode, OcxTool>();
+  const advisorTool = (): OcxTool => {
+    const mode = liveSettings().contextMode;
+    let tool = advisorTools.get(mode);
+    if (!tool) advisorTools.set(mode, tool = buildAdvisorTool(mode));
+    return tool;
   };
 
   return {
@@ -361,7 +376,7 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
     // The synthetic tool is only safe where the guard can intercept: run-turn adapters own their
     // own loops, so they get preflight support but never the tool (documented limitation).
     toolEnabled: initial.enabled,
-    get tool() { return buildAdvisorTool(liveSettings().contextMode); },
+    get tool() { return advisorTool(); },
     shouldCountManualConsultation: plan.shouldCountManualConsultation,
     consult: plan.consult,
     formatUnavailable: plan.formatUnavailable,

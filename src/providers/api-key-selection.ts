@@ -9,6 +9,7 @@ import { routedProviderConfig } from "./routed-config";
 import { OPENCODE_GO_SESSION_HEADER } from "./opencode-go-transport";
 import { resolveProviderTransport, XAI_GROK_COMPATIBILITY, type OcxProviderTransport } from "./xai-transport";
 import { captureProviderApiKeySelection } from "./api-key-selection-capture";
+import { vertexEnvironmentKeyIsCurrent } from "./vertex-environment-authority";
 
 export { captureProviderApiKeySelection } from "./api-key-selection-capture";
 
@@ -31,11 +32,13 @@ function currentKeyProvider(config: OcxConfig, name: string, selection?: Provide
       || !configured.requestPacing?.enabled || configured.requestPacing.keySelection !== "round-robin") return null;
     row = { ...configured, apiKey: entry.key, _apiKeyAttempt: selection };
   }
-  if (row.apiKeyPool?.some(entry => entry.disabled && entry.key === row.apiKey)
-    || row.apiKeyPool?.length && row.apiKeyPool.every(entry => entry.disabled)) return null;
+  const hasPausedActiveReference = row.apiKeyPool?.some(entry => entry.disabled && entry.key === row.apiKey)
+    && !row.apiKeyPool?.some(entry => !entry.disabled && entry.key === row.apiKey);
+  if (hasPausedActiveReference || row.apiKeyPool?.length && row.apiKeyPool.every(entry => entry.disabled)) return null;
   const current = routedProviderConfig(name, { ...row, _apiKeyAttempt: selection?.distributed ? selection : undefined });
   if (current.authMode === "oauth" || current.authMode === "forward") return null;
-  if (current.authMode === "key" && !current.keyOptional && !current.apiKey?.trim()) return null;
+  if (current.authMode === "key" && !current.keyOptional && !current.apiKey?.trim()
+    && !(current.adapter === "google" && current.googleMode === "vertex")) return null;
   return current;
 }
 
@@ -61,10 +64,14 @@ function matchesConfiguredSelection(
   const expected = routedProvider._apiKeyAttempt;
   const current = currentKeyProvider(config, name, expected, allowCooling);
   return current !== null && expected !== undefined
+    && vertexEnvironmentKeyIsCurrent(expected, current)
     && (expected.distributed === true || matchesSelection(config.providers[name]!, expected))
     && current.apiKey === routedProvider.apiKey
     && current.authMode === routedProvider.authMode
-    && current.baseUrl === routedProvider.baseUrl;
+    && current.baseUrl === routedProvider.baseUrl
+    && (current.googleMode !== "vertex" && routedProvider.googleMode !== "vertex"
+      || current.googleMode === routedProvider.googleMode && current.project === routedProvider.project
+        && current.location === routedProvider.location);
 }
 
 /** Rebuild transport from the already committed choice; never allocate or publish a selection. */

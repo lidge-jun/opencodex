@@ -109,7 +109,7 @@ interface ProviderAdapter {
 - **Extended thinking 计算：** Anthropic 要求 `max_tokens > thinking.budget_tokens`。adapter 把
   reasoning effort 映射成 budget（minimal 1024 … max 32000），再计算留有输出余量的安全
   `max_tokens`；启用 thinking 后会**移除 `temperature`/`top_p`**，因为 Anthropic 禁止此组合。
-- **自适应 thinking 显示：** 自适应 thinking 模型（Opus 4.7+、Sonnet 5、Fable）会收到 `thinking.display: "summarized"`，因此长时间思考会以 reasoning 增量送达 Chat 和 Responses 客户端，而不是几分钟的 heartbeat。隐藏推理摘要的请求（`reasoning.summary: "none"`）保持提供方默认值。
+- **自适应 thinking 显示：** 自适应 thinking 模型（Opus 4.7+、Sonnet 5、Fable）会收到 `thinking.display: "summarized"`，因此长时间思考会以 reasoning 增量送达 Chat 和 Responses 客户端，而不是几分钟的 heartbeat。隐藏推理摘要的请求（`reasoning.summary: "none"`）保持提供方默认值。但 `api.anthropic.com` 上的 Opus 5.5 默认使用 `display: "updates"`；显式设置 `reasoning.summary` 为 `"concise"` 或 `"detailed"` 时，使用 `"summarized"`，不添加 updates beta。详见 [Opus 5.5 进度更新](/guides/providers/#claude-opus-55-progress-updates)。
 - 始终发送 `anthropic-version: 2023-06-01`。流式输出
   `content_block_delta`（`text_delta`、`thinking_delta`、`input_json_delta`）。
 
@@ -118,6 +118,15 @@ interface ProviderAdapter {
 **目标：** Google **Gemini**、**Vertex AI** 和 Antigravity **Cloud Code Assist**。AI Studio 使用
 `/v1beta/models/{model}:streamGenerateContent`，其他模式使用各自的 Google 原生 endpoint。
 **认证：** 根据 `googleMode` 选择 API key、Vertex ADC 或 Google Antigravity OAuth。
+
+在仪表盘的 Google Vertex AI 预设中，项目 ID 和位置为可选输入。API key 留空且未设置
+`GOOGLE_CLOUD_API_KEY` 时，代理使用 **代理主机**上的 ADC。ADC 还需要项目和位置，可在
+表单中填写，或由代理主机上的 `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` 和
+`GOOGLE_CLOUD_LOCATION` 提供。添加 provider 不代表凭据或权限已验证。API key 未指定
+项目时使用 Vertex express 模式。
+仪表盘预设使用以配置的默认模型为起点的静态目录；连接测试不会验证 Vertex 凭据或权限。
+已有 Vertex 配置省略 `liveModels` 时会保留通过通用发现端点进行实时发现的原有行为。
+设置 `liveModels: false` 使用静态目录，也可在设置页面切换这两种模式。
 
 - 系统提示词 → `systemInstruction`；消息 → `contents[]`（assistant → `model`）；工具 →
   `functionDeclarations`；data URL 图像 → `inline_data`。

@@ -8,6 +8,54 @@ import { activateDeferredTool } from "./tool-schema";
 import { stripOpenAiOnlyWebSearchFields } from "./web-search";
 
 /**
+ * Codex requests output.encrypted_content, which xAI, Meta, Azure and Kimi Code reject with HTTP 400.
+ * The caller gates this on the destination. Preserve reasoning.encrypted_content
+ * for stateless replay and leave unknown or malformed values for upstream validation.
+ */
+export function stripUnsupportedOutputInclude(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.include)) return body;
+  const include = body.include.filter(item => item !== "output.encrypted_content");
+  if (include.length === body.include.length) return body;
+  if (include.length === 0) {
+    const { include: _dropped, ...rest } = body;
+    return rest;
+  }
+  return { ...body, include };
+}
+
+/** 仅移除已验证孤立边界中无摘要、未被引用的推理项密文，保留整条历史项。 */
+export function stripArkKimiOrphanCipher(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  const input = body.input;
+  const isUser = (item: unknown) => isPlainObject(item) && item.role === "user"
+    && (item.type === undefined || item.type === "message");
+  const referenced = new Set(input.filter(item => isPlainObject(item) && item.type === "item_reference").map(item => item.id));
+  let changed = false;
+  const next = input.map((item, i) => {
+    // A matching call/result pair is the other confirmed boundary before an orphan.
+    const call = input[i - 2], result = input[i - 1];
+    const afterTool = isPlainObject(call) && call.type === "function_call"
+      && isPlainObject(result) && result.type === "function_call_output"
+      && typeof call.call_id === "string" && call.call_id.length > 0 && result.call_id === call.call_id;
+    // 仅放宽已配对工具结果之后的 developer 边界，其他角色仍保留密文。
+    const following = input[i + 1];
+    const developerAfterTool = afterTool && isPlainObject(following) && following.role === "developer"
+      && (following.type === undefined || following.type === "message");
+    if ((!isUser(result) && !afterTool) || (!isUser(following) && !developerAfterTool) || !isPlainObject(item)
+      || item.type !== "reasoning" || !Array.isArray(item.summary) || item.summary.length
+      || typeof item.encrypted_content !== "string" || !item.encrypted_content
+      || (item.id !== undefined && referenced.has(item.id))
+      // Codex can explicitly serialize the absent content channel as null.
+      || !Object.keys(item).every(key => ["type", "id", "status", "summary", "encrypted_content"].includes(key)
+        || (key === "content" && item.content === null))) return item;
+    const { encrypted_content: _cipher, ...rest } = item;
+    changed = true;
+    return rest;
+  });
+  return changed ? { ...body, input: next } : body;
+}
+
+/**
  * Provider-opaque replay metadata is client history, not an OpenAI input-item field (#7111).
  * The caller gates this on OpenAI-operated destinations; arbitrary gateways may accept it.
  * Strip only the known extension, never an item-field allowlist that can erase newer wire fields
@@ -271,12 +319,15 @@ const CANONICAL_ONLY_INPUT_ITEM_TYPES: ReadonlySet<string> = new Set([
  * {@link stripCanonicalOnlyTopLevelFields}; the canonical and OpenAI-operated destinations keep
  * the items verbatim and in order. Returns the input unchanged when none is present.
  */
+export function isCanonicalOnlyInputItem(item: unknown): boolean {
+  return isPlainObject(item)
+    && typeof item.type === "string" && CANONICAL_ONLY_INPUT_ITEM_TYPES.has(item.type);
+}
+
 export function stripCanonicalOnlyInputItems(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
-  const isPrivate = (item: unknown): boolean => isPlainObject(item)
-    && typeof item.type === "string" && CANONICAL_ONLY_INPUT_ITEM_TYPES.has(item.type);
-  if (!body.input.some(isPrivate)) return body;
-  return { ...body, input: body.input.filter(item => !isPrivate(item)) };
+  if (!body.input.some(isCanonicalOnlyInputItem)) return body;
+  return { ...body, input: body.input.filter(item => !isCanonicalOnlyInputItem(item)) };
 }
 
 /**

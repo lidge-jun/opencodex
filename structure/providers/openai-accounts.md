@@ -37,7 +37,7 @@ preserving a stale one would block every later migration.
 
 ## Model and wire identity
 
-Account-list rows retain each registered `slotId` and `slotKind`; optional `upstreamAccountKey` is a versioned HMAC of the ChatGPT account ID and user claim under the local administrator token. Native identity comes from the owned observation without passive credential reads; missing or conflicting claims omit the key, the native key needs one token that claims both the matching account and the user (an `auth.json` `account_id` alone, or account and user claims split across the ID and access tokens, omit it), Pool rows need the access token's matching account claim, and token rotation changes it. No raw identity or credential is serialized.
+[Pool installation identity](codex-installation-identity.md) is stable per account and OpenCodex home. Account-list rows retain each registered `slotId` and `slotKind`; optional `upstreamAccountKey` is a versioned HMAC of the ChatGPT account ID and user claim under the local administrator token. Native identity comes from the owned observation without passive credential reads; missing or conflicting claims omit the key, the native key needs one token that claims both the matching account and the user (an `auth.json` `account_id` alone, or account and user claims split across the ID and access tokens, omit it), Pool rows need the access token's matching account claim, and token rotation changes it. No raw identity or credential is serialized.
 The optional [native reasoning retention policy](../transports/native-reasoning-retention.md#runtime-boundary) can permit reasoning ciphertext forwarding across a known model or account change on the same canonical ChatGPT destination. It does not change account selection, entitlement, cache isolation, continuation-id ownership or uploaded-file retention; cross-account acceptance is not guaranteed.
 
 Native Spark membership and its model-specific request/tool exceptions are removed; the shared
@@ -259,7 +259,7 @@ and native-main refresh. Exact structured terminal codes apply only to authentic
 statuses; HTTP 429/5xx and malformed responses remain transient. Description-only OAuth 400
 compatibility never overrides a structured code. Endpoint diagnostics contain fixed outcome, HTTP
 status, an allowlisted code and (pool only) the account's durable `p<hex6>` label, never descriptions
-or credential material. Pool refresh errors keep that status/code without changing cooldown class.
+or credential material. Pool refresh errors keep that status/code without changing cooldown class. `mapCodexAuthContextErrorToResponse` in `src/server/responses/codex-auth-error.ts` marks only ordinary account-cooldown Responses with process-local provenance; combo reconstruction preserves it under the [combo cooldown contract](../transports/responses-failover.md#single-target-cooldown-retry-ownership). This limits restated account delays at target recording without changing account admission, quota health, probe ownership, client Retry-After or any hard-lock, credit, Reserve or transient policy.
 Once a stored-pool record carries the persisted terminal verdict (`lastCodexValidationTerminal`
 with a failed status), `auth-api/pool-quota-probe.ts` answers passive quota reads with that
 `refresh_failed` reauthentication result instead of spending the dead grant again. Passive reads
@@ -426,7 +426,7 @@ The Codex parser in `src/oauth/pool-kernel.ts` is reexported by the compatibilit
 
 The account-pool strategy control and `ocx account pool get openai strategy` summarize how the
 configured threshold applies to the active strategy. Manual-switch warnings use the routing usage
-score. A reset-less terminal short window is current only when its `shortObservedAt` is not in the
+score. A known long-window score excludes short usage when its valid reset has elapsed; absent or invalid resets retain it. A reset-less terminal short window is current only when its `shortObservedAt` is not in the
 future and is at most `TERMINAL_SHORT_WINDOW_FRESHNESS_MS` old; general `updatedAt` changes do not
 extend that observation.
 
@@ -492,7 +492,7 @@ Upstream API-key usage follows the [physical-attempt account attribution contrac
 `codexAccountAutoSwitchThresholds` is persisted per-account routing metadata. Each 0..100 value
 overrides global `autoSwitchThreshold` for that source account; absence inherits global, and 0 disables
 only usage-driven switching from that account. Runtime resolves this effective value for unbound
-selection, quota/reset-first bound-task re-evaluation, fill-first, priority-tier headroom, main-account
+selection, quota/reset-first bound-task re-evaluation, fill-first, [round-robin placement](codex-round-robin-placement.md), priority-tier headroom, main-account
 pin reuse, previews and subagent quota fallback. Failure recovery remains separate. The stable
 `__main__` alias participates, deletion removes an added account's sidecar entry, and malformed maps
 degrade as a unit rather than invalidating config. Zero never disables main-account hard-lock,

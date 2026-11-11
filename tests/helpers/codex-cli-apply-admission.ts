@@ -43,11 +43,15 @@ const lstat = fs.lstatSync, uid = process.geteuid?.() ?? 1234;
 const originalUid = Object.getOwnPropertyDescriptor(process, "geteuid");
 let barrier = false;
 Object.defineProperty(process, "geteuid", { configurable: true, value: () => uid });
-const stat = spyOn(fs, "lstatSync").mockImplementation(((path: fs.PathLike) => {
-  const value = lstat(path);
-  return value.isDirectory() ? Object.assign(value, { uid,
-    mode: 0o40700 | (path === temporaryRoot && lane === "unsafe-stage" ? 0o002 : 0)
-      | (barrier && path === mutationDirectory && lane === "unsafe-install" ? 0o020 : 0) }) : value;
+// Honor the options argument: identity checks request bigint stats.
+const stat = spyOn(fs, "lstatSync").mockImplementation(((path: fs.PathLike, options?: fs.StatOptions) => {
+  const value = lstat(path, options as fs.StatSyncOptions & { bigint: false });
+  if (!value?.isDirectory()) return value;
+  const mode = 0o40700 | (path === temporaryRoot && lane === "unsafe-stage" ? 0o002 : 0)
+    | (barrier && path === mutationDirectory && lane === "unsafe-install" ? 0o020 : 0);
+  return options?.bigint
+    ? Object.assign(value, { uid: BigInt(uid), mode: BigInt(mode) })
+    : Object.assign(value, { uid, mode });
 }) as typeof fs.lstatSync);
 let arms = 0, unavailable = false;
 const recoveryTimers: (() => void)[] = [];

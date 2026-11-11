@@ -196,8 +196,7 @@ sağlayıcıları birden fazla oturum tutabilir. Sağlayıcılar sayfası bu hes
 bir açılır menüde gösterir, başka bir tane eklemenize izin verir ve diğerlerinin
 oturumunu kapatmadan etkin hesabı değiştirir. Normal oturum açmada kimliği olmayan
 Kimi kimlik bilgileri etkin yuvanın yerini alır; açık **Hesap ekle** akışı mevcut
-yuvayı korur ve ayrı yeni yuvayı etkinleştirir. Kiro hesapları profil ARN'sine göre
-anahtarlanır. `chatgpt` her zaman tek yuvalıdır çünkü Codex havuz hesaplarının
+yuvayı korur ve ayrı yeni yuvayı etkinleştirir. Kiro hesapları, varsa oturum açan kullanıcının e-posta adresi ile profil ARN'si birlikte kullanılarak ayırt edilir; aynı kuruluş profilini paylaşan kullanıcılar ayrı kimlik bilgilerini koruyabilir. `chatgpt` her zaman tek yuvalıdır çünkü Codex havuz hesaplarının
 ayrı bir defteri vardır. Belirteçler `~/.opencodex/auth.json` içinde kalır;
 `/api/oauth/accounts` yalnızca maskelenmiş meta verileri döndürür.
 
@@ -280,6 +279,8 @@ referansında [`ocx status` / `ocx doctor`](/tr/reference/cli/) bölümüne bak�
 
 ### Kiro kimlik bilgisi içe aktarma
 
+Panelde **AWS IAM Identity Center** seçeneğini seçip kuruluşunuzun AWS erişim portalı URL’sini ve SSO bölgesini girin. Tarayıcıda cihaz kodunu onaylayın ve birden fazla Kiro profili varsa kaydedilecek profili seçin. CLI veya SSH gerekmez. Aşağıdaki CLI adımları **Kiro CLI** seçeneği içindir.
+
 Kiro oturum açma Kiro CLI'yı bekler: Unix'te `curl -fsSL
 https://cli.kiro.dev/install | bash` ile kurun; Windows PowerShell'de `irm
 'https://cli.kiro.dev/install.ps1' | iex` kullanın; ardından `kiro-cli login`
@@ -341,7 +342,7 @@ olmayan bir makineden oturum açmak bundan etkilenmez.
 
 ## 3. API anahtarı kataloğu
 
-opencodex 106 yerleşik önayar ile birlikte gelir: 85 anahtar tabanlı, 17
+opencodex 107 yerleşik önayar ile birlikte gelir: 86 anahtar tabanlı, 17
 OAuth, üç yerel ve bir varsayılan ChatGPT iletme önayarı. Kontrol panelinin
 **Sağlayıcı ekle** seçicisi bir anahtar sağlayıcısının kontrol panelini açar,
 anahtarı doğrular ve saklar; doğrulama sağlayıcıya özgüdür. Dikkate değer
@@ -397,7 +398,7 @@ yalnızca Cline IDE/CLI içinde mevcuttur; `minimax/minimax-m2.5` belgelenmiş A
 | Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
-| Moonshot (Kimi API) · Kimi (kodlama) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
+| Moonshot (Kimi API) · Kimi (kodlama) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1`. `moonshot` API varsayılanı `kimi-k3.1-pro` modelidir; resmî API adresleri için kaydedilmiş `kimi-k2.5` seçimleri bu modele taşınır. |
 | Hugging Face | `https://router.huggingface.co/v1` |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Kodlama) | `https://api.z.ai/api/coding/paas/v4` |

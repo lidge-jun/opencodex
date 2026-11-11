@@ -8,12 +8,34 @@ type RemoteProcFile = {
   close(): Promise<void>;
 };
 
-/** Select a candidate only; actual forwarding and authenticated readiness must still succeed. */
+export type RemotePortAllocator = () => { port: number; stop(force?: boolean): void };
+export interface RemotePortReservation { port: number; handoff(): void; release(): void }
+const pendingPorts = new Set<number>();
+const PORT_ALLOCATION_ATTEMPTS = 8;
+const allocateRemotePort: RemotePortAllocator = () => Bun.listen({ hostname: "127.0.0.1", port: 0,
+  exclusive: true, socket: { data(socket) { socket.end(); } } });
+
+/** Hold the socket until handoff, and the process-local claim until the owned attempt closes. */
+export function reserveRemotePort(allocate = allocateRemotePort, excluded: ReadonlySet<number> = new Set()): RemotePortReservation {
+  for (let attempt = 0; attempt < PORT_ALLOCATION_ATTEMPTS; attempt++) {
+    const listener = allocate(), port = listener.port;
+    if (!validPort(port)) { listener.stop(true); throw remoteError("invalid_port", "Cannot allocate an unprivileged messaging port candidate."); }
+    if (pendingPorts.has(port) || excluded.has(port)) { listener.stop(true); continue; }
+    pendingPorts.add(port);
+    let held = true, released = false;
+    const handoff = () => { if (held) { held = false; listener.stop(true); } };
+    return { port, handoff, release() {
+      if (released) return;
+      released = true; handoff(); pendingPorts.delete(port);
+    } };
+  }
+  throw remoteError("forward_port_lost", "Cannot allocate a distinct messaging forward port.");
+}
+
+/** A remote stdio helper cannot transfer its socket to sshd; the initiating owner checks SSH failure. */
 export function remotePortCandidate(): number {
-  const listener = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data(socket) { socket.end(); } } });
-  const port = listener.port; listener.stop(true);
-  if (!validPort(port)) throw remoteError("invalid_port", "Cannot allocate an unprivileged messaging port candidate.");
-  return port;
+  const reservation = reserveRemotePort();
+  try { return reservation.port; } finally { reservation.release(); }
 }
 /** Refuse GatewayPorts/public binds; neither port existence nor this scan proves endpoint identity. */
 export async function remotePortIsLoopback(port: number, budget: MessageBudget, capacity: RemoteCapacity,

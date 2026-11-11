@@ -1,6 +1,18 @@
+import { comboLogLabel, comboTargetLogLabel } from "../../combos/resolve";
+import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
+import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { carryProxyErrorContext, hasProxyErrorMessage, markProxyError } from "../../lib/client-error-body";
+import { classifyUpstreamCondition } from "../../lib/upstream-condition";
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
+import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
+import { isMetaAiResponsesDestination } from "../../responses/muse-tool-name-alias";
+import { chatCanPreserveMandatoryToolChoice, hasMandatoryToolChoice } from "./combo-required-tool-contract";
+import { isPolicyCandidateRefusal, isMandatoryToolChoiceRefusal } from "./policy-request-scope";
+import { isCodexAccountCooldownResponse } from "../../codex/account-cooldown-response";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
-import { comboCooldownRetryAfterSeconds, type CodexAccountModelRefusal } from "../../combos/failover";
+import { parseSyntheticRowId } from "../fast-row";
+import { resolveOpenAiVirtualModel } from "../../providers/openai-virtual-models";
+import { comboCooldownRetryAfterSeconds, isDefiniteContextOverflow, type CodexAccountModelRefusal } from "../../combos/failover";
 import { fallbackTriggerForStatus, guardFallbackHop } from "../../routing/fallback-policy";
 import {
   isCodexReasoningEffort,
@@ -18,7 +30,7 @@ import type {
   RequestExecutionBudgetPolicy,
   RequestExecutionBudget,
 } from "../../lib/request-execution-budget";
-import type { OcxComboDefaultEffort, OcxConfig } from "../../types";
+import type { OcxComboDefaultEffort, OcxConfig, OcxUsage } from "../../types";
 import type { RequestLogContext } from "../request-log";
 import type { HandleResponsesOptions, ResponsesDispatchers, ConsumedComboFailure } from "./core-options";
 import type { TranslatorBudget } from "../../lib/translator-budget";
@@ -48,14 +60,13 @@ import {
 } from "../../combos";
 import { formatErrorResponse } from "../../bridge";
 import { SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
-import { redactSecretString, sanitizeLogMetadataString } from "../../lib/redact";
 import {
   expandPreviousResponseInput,
   previousResponseReplayFailure,
   previousResponseProviderState,
 } from "../../responses/state";
 import { hasUnreadableEncryptedAgentTask } from "./encrypted-payload";
-import { routeConcreteModel, comboRouteDecisionTrace } from "../../router";
+import { captureRouteStaticPolicy, routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
 import { baseProviderLabel, poolAccountProviderLabel } from "../../providers/label";
 import { getAccountSet } from "../../oauth/store";
@@ -115,7 +126,13 @@ import {
 } from "../relay";
 import { preflightComboStreamResponse } from "./combo-stream-preflight";
 import { requiredToolContractOf } from "./combo-required-tool-contract";
-import { streamingContextOverflowResponse, jsonContextOverflowResponse, lateAttributionLimitResponse } from "./context-overflow";
+import {
+  streamingContextOverflowResponse,
+  jsonContextOverflowResponse,
+  lateAttributionLimitResponse,
+  jsonIncompleteResponse,
+  streamingIncompleteResponse,
+} from "./context-overflow";
 import { mandatoryResponsesReasoningReplayUnavailable } from "./core-replay";
 import { isReplayRefusalResponse, settleOperatorReplacement, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
 import { attributeFinalRequest } from "../request-log-failure-attribution";
@@ -377,19 +394,22 @@ export async function executeComboResponses(
   options: HandleResponsesOptions & { translatorBudget: TranslatorBudget },
   requestDispatchers: ResponsesDispatchers,
 ): Promise<Response> {
+  const clientModelLabel = options.clientModelLabel ?? clientFacingModelLabel(undefined);
+  const responseModel = clientFacingModelText(clientModelLabel);
   const requestedModel = options.mainHardLockFallbackOverride?.sourceModel
     ?? (typeof (rawBody as { model?: unknown } | null)?.model === "string"
       ? (rawBody as { model: string }).model
       : `combo/${comboId}`);
+  if (requestedModel !== responseModel) options = { ...options, clientResponseModelLabel: clientModelLabel };
   Object.assign(logCtx, {
-    requestedModel,
-    model: requestedModel,
+    requestedModel: responseModel,
+    model: responseModel,
     provider: "combo",
     comboId,
   });
   const combo = getCombo(config, comboId);
   if (!combo) {
-    return formatErrorResponse(404, "invalid_request_error", `Unknown combo: ${comboId}`);
+    return formatErrorResponse(404, "invalid_request_error", "Unknown combo");
   }
   // Resolve against the original request once; every bridge candidate receives the same trusted
   // result after its provisional Authorization is removed, including an explicitly keyless result.
@@ -399,7 +419,7 @@ export async function executeComboResponses(
   // internal request carries the caller's captured scope on options.admissionScope even though
   // its own admission is the host's broad key; recomputing from options.admission would lose it.
   const admissionScope = options.admissionScope ?? resolveAdmissionModelScope(config, options.admission);
-  // PF-07: present only for a Chat combo with `nativeChatCombos` on; otherwise every child
+  // Present only when an opted-in ingress supplied a native source; otherwise every child
   // takes the bridge below exactly as before.
   const protocolLanes = createComboProtocolLanes({
     source: options.protocolSource,
@@ -453,7 +473,7 @@ export async function executeComboResponses(
     );
   }
   if (combo.imageInput === "disabled" && comboRequestHasImageInput(body)) {
-    return formatErrorResponse(400, "invalid_request_error", `Combo "${comboId}" does not accept image input`);
+    return formatErrorResponse(400, "invalid_request_error", "This combo does not accept image input");
   }
   const comboReplaySnapshot = {
     sourceBody: body,
@@ -503,9 +523,11 @@ export async function executeComboResponses(
         attempt: childLog.activeAttempt,
       });
     }
+    carryProxyErrorContext(childLog, logCtx);
     Object.assign(logCtx, childLog, {
-      requestedModel,
-      model: requestedModel,
+      client: logCtx.client,
+      requestedModel: responseModel,
+      model: responseModel,
       provider: "combo",
       comboId,
       routeDecision: logCtx.routeDecision,
@@ -513,6 +535,11 @@ export async function executeComboResponses(
       activeAttempt: undefined,
       activeAttemptStartedAt: undefined,
     });
+    if (requestedModel !== responseModel) {
+      projectLocalModelRefusalLog(logCtx, clientModelLabel);
+      logCtx.model = responseModel; logCtx.requestedModel = responseModel;
+      if (options.clientModelLabel) logCtx.jevDecision = undefined;
+    }
   };
 
   const unreadableEncryptedAgentTask = hasUnreadableEncryptedAgentTask(
@@ -532,10 +559,33 @@ export async function executeComboResponses(
   const payloadEligible = (target: (typeof combo.targets)[number]): boolean =>
     comboPayloadReadable || !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
   const meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission, combo);
+  const museToolEligible = (target: (typeof combo.targets)[number]): boolean => {
+    if (!hasMandatoryToolChoice(body)) return true;
+    try {
+      const selector = `${target.provider}/${target.model}`, { fastRow, effortRow } = parseSyntheticRowId(selector, config);
+      const route = routeConcreteModel(config, fastRow?.baseId ?? effortRow?.baseId ?? selector);
+      const modelId = resolveOpenAiVirtualModel(route.providerName, route.modelId)?.wireModelId ?? route.modelId;
+      const inboundWire = options.inboundWire ?? "responses";
+      const policy = captureRouteStaticPolicy(route.providerName, modelId, route.provider,
+        route.staticPolicy.effectiveAlias, inboundWire);
+      const provider = resolveWireProtocolOverride(route.providerName, modelId, route.provider, inboundWire, policy);
+      // Copilot's Auto account may settle on a different wire; the child checks that result.
+      if (route.providerName === "github-copilot" && provider.authMode !== "forward") return true;
+      return provider.adapter === "openai-chat" ? chatCanPreserveMandatoryToolChoice(body, provider, modelId)
+        : provider.adapter !== "openai-responses" || !isMetaAiResponsesDestination(buildResponsesTransport(provider, { headers: req.headers }).url);
+    } catch {
+      return true;
+    }
+  };
+  const onlyMuseToolIncompatible = (): boolean => {
+    const enabled = combo.targets.filter(target => config.providers[target.provider]?.disabled !== true);
+    return enabled.length > 0 && enabled.every(target => !museToolEligible(target));
+  };
   // Recovery can replace unreadable encrypted input, but cannot relax other admission checks.
   const recoveryEligible = (target: (typeof combo.targets)[number]): boolean =>
     (meteredAllowed || !target.metered)
     && (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID)
+    && museToolEligible(target)
     && reasoningReplayEligible(target)
     && (protocolLanes?.pickable(target) ?? true);
   const targetEligible = (target: (typeof combo.targets)[number]): boolean =>
@@ -650,6 +700,9 @@ export async function executeComboResponses(
         config,
         { parentThreadId: inboundClientThreadId },
       );
+      if (!options.abortSignal?.aborted && onlyMuseToolIncompatible()) {
+        return comboUnavailableResponse("No available targets for combo; targets cannot preserve mandatory tool_choice");
+      }
       return options.abortSignal?.aborted
         ? clientCancelledResponse()
         : comboUnavailable(comboId, undefined,
@@ -667,6 +720,9 @@ export async function executeComboResponses(
     const protocolRefusal = protocolLanes?.refusal();
     if (protocolRefusal) return protocolRefusal;
     if (onlyReplayIncompatibleTargetsRemain()) return targetIncompatibleResponse();
+    if (!options.abortSignal?.aborted && onlyMuseToolIncompatible()) {
+      return comboUnavailableResponse("No available targets for combo; targets cannot preserve mandatory tool_choice");
+    }
     return options.abortSignal?.aborted
       ? clientCancelledResponse()
       : comboUnavailable(comboId, undefined, comboExclusionReasons(config, comboId, targetEligible));
@@ -779,7 +835,7 @@ export async function executeComboResponses(
     if (pinReuse?.released) decision = { ...decision, pinReason: pinReuse.released };
     jevDecision = decision;
     pick = { ...selected.pick, attempted: [targetKey(selected.pick.target)] };
-    logCtx.jevDecision = normalizePersistedJevDecision({
+    logCtx.jevDecision = !options.clientModelLabel || requestedModel === responseModel ? normalizePersistedJevDecision({
       version: 1,
       comboId,
       selected: {
@@ -798,10 +854,10 @@ export async function executeComboResponses(
       ...(decision.quota ? { quota: decision.quota } : {}),
       ...(decision.pinned ? { pinned: true } : {}),
       ...(decision.pinReason ? { pinReason: decision.pinReason } : {}),
-    });
+    }) : undefined;
     console.debug("[combo] JEV decision", {
       backend: decision.backend,
-      targetKey: decision.targetKey,
+      target: comboTargetLogLabel(config, comboId, pick.target),
       effort: decision.effort,
       gate: decision.gate,
       latencyMs: decision.latencyMs,
@@ -820,7 +876,7 @@ export async function executeComboResponses(
   }
   // One immutable combo selection trace, before any child dispatch; child
   // adoption below must never replace it with a concrete child route trace.
-  const decision = comboRouteDecisionTrace(config, comboId, pick, requestedModel);
+  const decision = comboRouteDecisionTrace(config, comboId, pick, responseModel);
   const selectedReason = options.memoryModelPhase
     ? memoryModelRouteReason(options.memoryModelPhase)
     : toolLoopPin ? COMBO_TOOL_LOOP_PIN_REASON : jevDecision?.pinned ? JEV_SESSION_PIN_ROUTE_REASON : undefined;
@@ -859,22 +915,38 @@ export async function executeComboResponses(
   // is gone, so carry the loop's own classification decision instead of re-deriving a
   // weaker one from the status alone (#4149).
   let lastFailureClassifiesOverflow = false;
+  let zeroOutputLimitFailure: { childLog: RequestLogContext; usage?: OcxUsage } | undefined;
+  let lastFailureUpstreamCode: string | undefined;
+  const wantsStream = (rawBody as { stream?: unknown } | null)?.stream === true || (body as { stream?: unknown } | null)?.stream === true;
   // Local input admission refusals (#1524), while every failed target so far was one: such a
   // target sent nothing, so an exhausted ladder must not be reported as a provider rejection.
   let localAdmissionRefusals: string[] | undefined = [];
+  let toolChoiceRefusalsOnly: boolean | undefined;
   // The first quota/rate-limit refusal of the ladder. A fallback that then refuses its own
   // credential or plan (401/403, or a 400 the ladder hopped past) says nothing about why the
   // request failed: the primary target ran out. Returning that fallback refusal told clients
   // "OpenAI account pool has no usable account credential" while every Claude account was spent.
   let quotaFailure: Response | undefined;
   let quotaFailedChildLog: RequestLogContext | undefined;
+  let contextFailure: { response: Response; childLog: RequestLogContext } | undefined;
   // Snapshotted before dispatch: a 401/403 inside this ladder cools its own provider, and that
   // fresh cooldown is not a reason the request found no target.
   const quotaCooldownSnapshot = snapshotComboQuotaCooldowns(config, comboId);
-  const exhaustedFailure = (): Response => {
+  const exhaustedFailure = (targetsExhausted = false): Response => {
+    if (contextFailure) {
+      adoptFailedChildLog(contextFailure.childLog);
+      return contextFailure.response;
+    }
+    if (lastFailure && lastFailureUpstreamCode === "zero_output_token_limit" && zeroOutputLimitFailure) {
+      adoptFailedChildLog(zeroOutputLimitFailure.childLog);
+      return wantsStream
+        ? streamingIncompleteResponse(responseModel, zeroOutputLimitFailure.usage, "max_output_tokens", options.translatorBudget)
+        : jsonIncompleteResponse(responseModel, zeroOutputLimitFailure.usage, "max_output_tokens");
+    }
     const returnsQuota = lastFailure && [400, 401, 403].includes(lastFailure.status) && quotaFailure;
     const failedChildLog = returnsQuota ? quotaFailedChildLog : lastFailedChildLog;
     if (failedChildLog) adoptFailedChildLog(failedChildLog);
+    if (targetsExhausted && toolChoiceRefusalsOnly === true) return comboUnavailableResponse("No available targets for combo; attempted targets cannot preserve mandatory tool_choice");
     if (!lastFailure || ![400, 401, 403].includes(lastFailure.status)) return lastFailure!;
     if (quotaFailure) return quotaFailure;
     // The quota-refused target was cooled before this request picked, so the ladder never saw
@@ -893,7 +965,7 @@ export async function executeComboResponses(
     }
     const remainingQuotaCooldownMs = quotaCooldownUntil === undefined ? 0 : quotaCooldownUntil - Date.now();
     return remainingQuotaCooldownMs > 0
-      ? comboUnavailableResponse(`No available targets for combo: ${comboId}`, {
+      ? comboUnavailableResponse("No available targets for combo", {
         retryAfter: String(Math.max(1, Math.ceil(remainingQuotaCooldownMs / 1000))),
       }) : lastFailure;
   };
@@ -1001,6 +1073,10 @@ export async function executeComboResponses(
       modelId: targetRoute.modelId,
     });
     const initialJevDecision = firstComboTarget ? jevDecision : undefined;
+    // `client` keeps the decision's target but not its tier: the caller and the target ladder
+    // own the wire effort, so a provider whose effort swaps the upstream model id is never
+    // re-tiered mid-session and its prompt cache survives the turn.
+    const jevEffortApplies = initialJevDecision !== undefined && combo.jevEffortMode !== "client";
     const childInput = options.droidDefaultEffort && isPlainObject(body) ? { ...body } : body;
     applyDroidResponsesReasoningDefault(childInput, options.droidDefaultEffort, {
       provider: targetRoute.provider,
@@ -1009,14 +1085,16 @@ export async function executeComboResponses(
     const childBody = concreteComboRequestBody(
       childInput,
       pick.target,
-      initialJevDecision ? initialJevDecision.effort : comboDefaultEffort(config, comboId),
-      initialJevDecision?.effort === null ? [] : targetReasoningEfforts,
+      jevEffortApplies ? initialJevDecision.effort : comboDefaultEffort(config, comboId),
+      jevEffortApplies && initialJevDecision.effort === null ? [] : targetReasoningEfforts,
       combo.reasoningEffortMode,
-      initialJevDecision ? (initialJevDecision.effort === null ? "fallback" : "force") : combo.defaultEffortMode,
+      jevEffortApplies
+        ? (initialJevDecision.effort === null ? "fallback" : "force")
+        : combo.defaultEffortMode,
     );
     if (initialJevDecision) {
-      delete childBody.service_tier;
-      if (initialJevDecision.effort !== null) {
+      if (jevEffortApplies) delete childBody.service_tier;
+      if (jevEffortApplies && initialJevDecision.effort !== null) {
         const childReasoning = childBody.reasoning;
         const preservedReasoning = childReasoning && typeof childReasoning === "object" && !Array.isArray(childReasoning)
           ? childReasoning as Record<string, unknown>
@@ -1067,6 +1145,19 @@ export async function executeComboResponses(
       finishRequestAttempt(attempt, 499, Date.now() - started, childLog.usage);
       attemptRetained = true;
     };
+    // The row is written from `logCtx`, which copies `childLog` only when the child commits. A
+    // bridge child binds its usage later, at the terminal frame, so the binding is forwarded here
+    // after that point. Left on `childLog`, the row would re-read the bridged wire instead of the
+    // adapter's usage, and that wire has no providerCredits and a context-derived input count.
+    // A binding that arrives before the commit waits for it, and a child that never commits
+    // forwards nothing: both flags belong to this target only.
+    let childCommitted = false;
+    let childUsageBound = false;
+    const forwardChildUsage = (): void => {
+      if (!childCommitted || !childUsageBound) return;
+      logCtx.usageFromBridge = true;
+      if (childLog.usage) logCtx.usage = childLog.usage;
+    };
     const completedTarget = { provider: pick.target.provider, model: pick.target.model };
     const writerGeneration = pick.writerGeneration;
     let consumedChildFailure: ConsumedComboFailure | undefined;
@@ -1112,7 +1203,7 @@ export async function executeComboResponses(
           && targetEligible(target)
           && !isComboTargetInCooldown(comboId, target),
         );
-      const nativeChild = protocolLanes?.nativeChild(pick.target, targetRoute, targetSendBudget, initialJevDecision);
+      const nativeChild = protocolLanes?.nativeChild(pick.target, targetRoute, targetSendBudget, initialJevDecision, jevEffortApplies);
       response = nativeChild ? await dispatchNativeComboChild({
         source: options.protocolSource!,
         plan: nativeChild,
@@ -1147,6 +1238,10 @@ export async function executeComboResponses(
         comboDispatchPermit: hopDecision?.allowed ? hopDecision.permit : undefined,
         comboReplaySnapshot,
         deferCodexResetDerivedCooldown,
+        onBridgeUsageBound: () => {
+          childUsageBound = true;
+          forwardChildUsage();
+        },
         // Attempt-relative TTFT is recorded HERE (not via childLog.firstOutputMs — a later
         // Object.assign(logCtx, childLog) would overwrite the request-relative value).
         onFirstOutput: () => {
@@ -1164,7 +1259,7 @@ export async function executeComboResponses(
         onResponseComplete: callbackGate.onResponseComplete,
       });
       // Both lanes applied the initial choice before provider pins/caps; retain those transitions.
-      restoreOriginalRequestedEffort(childLog, initialJevDecision?.effort);
+      restoreOriginalRequestedEffort(childLog, jevEffortApplies ? initialJevDecision?.effort : undefined);
     } catch (error) {
       callbackGate.discard();
       if (options.abortSignal?.aborted) {
@@ -1184,7 +1279,7 @@ export async function executeComboResponses(
 
     // A native Chat child reports a pre-stream failure by status before any byte, so its body
     // is never peeked; a non-OK one takes the ordinary failure path below.
-    if (response.ok && !runTurnAdapterSseResponses.has(response) && clientWireOf(response) !== "chat") {
+    if (response.ok && !runTurnAdapterSseResponses.has(response) && clientWireOf(response) === undefined) {
       const nativePassthrough = isNativePassthroughSseResponse(response);
       const eagerRelay = isEagerRelaySseResponse(response);
       let preflight;
@@ -1232,9 +1327,11 @@ export async function executeComboResponses(
       attemptRetained = true;
       noteComboSuccess(comboId, combo, pick.target, pick.writerGeneration);
       settleComboReprobeSuccess(pick);
+      carryProxyErrorContext(childLog, logCtx);
       Object.assign(logCtx, childLog, {
-        requestedModel,
-        model: requestedModel,
+        client: logCtx.client,
+        requestedModel: responseModel,
+        model: responseModel,
         provider: "combo",
         comboId,
         routeDecision: logCtx.routeDecision,
@@ -1246,6 +1343,8 @@ export async function executeComboResponses(
       options.onCodexAuthContextResolved?.(resolvedAuth);
       options.setTerminalOutcomeRecorder?.(terminalRecorder);
       callbackGate.commit();
+      childCommitted = true;
+      forwardChildUsage();
       return response;
     }
 
@@ -1257,7 +1356,8 @@ export async function executeComboResponses(
     let failure: ConsumedComboFailure;
     try {
       failure = consumedChildFailure
-        ?? await consumeComboFailure(response, options.abortSignal);
+        ?? await consumeComboFailure(response, options.abortSignal, Date.now(), childLog);
+      if (hasProxyErrorMessage(childLog, failure.upstreamMessage ?? "", { type: failure.upstreamType, code: failure.upstreamCode })) markProxyError(failure.response);
       if (preflightModelRefusal !== undefined) failure = { ...failure, codexModelRefusal: preflightModelRefusal };
     } catch (error) {
       if (options.abortSignal?.aborted) {
@@ -1286,7 +1386,7 @@ export async function executeComboResponses(
       attempt,
       failure.response.status,
       Date.now() - started,
-      failure.usage,
+      failure.usage ?? childLog.usage,
     );
     if (isReplayRefusalResponse(failure.response)) {
       // Numeric 429 is a client replay policy here, not an upstream quota observation.
@@ -1302,6 +1402,8 @@ export async function executeComboResponses(
     }
     attemptRetained = true;
     lastFailure = failure.response;
+    lastFailureUpstreamCode = failure.upstreamCode;
+    toolChoiceRefusalsOnly = (toolChoiceRefusalsOnly ?? true) && isMandatoryToolChoiceRefusal(failure.response);
     // A real target failure ends the session pin; the next turn is decided afresh (#7525).
     jevPin?.forget();
     if (!quotaFailure && (lastFailure.status === 429 || lastFailure.status === 402)) {
@@ -1327,10 +1429,14 @@ export async function executeComboResponses(
     // send that already ran the turn, so no later target may receive it, whatever its status says.
     const failureDecision = failure.nonReplayable || spentReplacement
       ? "stop"
+      : isPolicyCandidateRefusal(failure.response) ? "hop"
       : comboFailureDecision(failure.response.status, failure.classificationText, {
         code: failure.upstreamCode,
+        rootCode: failure.upstreamRootCode,
         codexModelRefusal: failure.codexModelRefusal,
         verifiedPlanRefusal: failure.verifiedPlanRefusal,
+        malformedResponseFormat: failure.malformedResponseFormat,
+        openRouterOpaque400: failure.openRouterOpaque400,
         // The adapter the failed leg actually resolved: a configured `kiro` provider can route a
         // model through another wire via `modelAdapters`, and an unresolved leg grants no hop.
         failedAdapter: childLog.providerAdapter,
@@ -1368,7 +1474,7 @@ export async function executeComboResponses(
       adoptFailedChildLog(childLog);
       if (classifyOverflow && failureDecision === "stop") {
         return wantsStream
-          ? streamingContextOverflowResponse(requestedModel, options.translatorBudget)
+          ? streamingContextOverflowResponse(responseModel, options.translatorBudget)
           : jsonContextOverflowResponse();
       }
       return lastFailure;
@@ -1377,25 +1483,38 @@ export async function executeComboResponses(
       adoptFailedChildLog(childLog);
       if (classifyOverflow) {
         return wantsStream
-          ? streamingContextOverflowResponse(requestedModel, options.translatorBudget)
+          ? streamingContextOverflowResponse(responseModel, options.translatorBudget)
           : jsonContextOverflowResponse();
       }
       return lastFailure;
     }
-    // A bare status made a revoked credential read as a provider outage. Log only the parsed
-    // code and message, never the raw envelope, as one redacted, bounded line.
-    const failureReason = sanitizeLogMetadataString(
-      redactSecretString([failure.upstreamCode, failure.upstreamMessage].filter(Boolean).join(": ")).replace(/\s+/g, " "),
-      200,
-    );
+    // Retain a confirmed target context refusal when later retryable failures exhaust the ladder.
+    // Hard stops above still return their own verdict, and every attempt keeps its own usage.
+    if (!contextFailure && failure.response.status === 400 && isDefiniteContextOverflow(400, failure.classificationText)) {
+      contextFailure = { childLog, response: formatErrorResponse(400, "invalid_request_error",
+        failure.upstreamMessage ?? failure.classificationText, { code: "context_length_exceeded", classified: true }) };
+    }
+    if (failure.upstreamCode === "zero_output_token_limit") {
+      zeroOutputLimitFailure = {
+        childLog,
+        usage: failure.usage ?? childLog.usage,
+      };
+    }
+    // A bare status made a revoked credential read as a provider outage. Log the classified
+    // condition (a closed member), never upstream-authored code or message text.
+    const failureReason = classifyUpstreamCondition({
+      status: failure.response.status, code: failure.upstreamCode, type: failure.upstreamType, message: failure.upstreamMessage,
+    });
     console.warn(
-      `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${failure.response.status}`
+      `[combo] ${comboLogLabel(config, comboId)}: ${comboTargetLogLabel(config, comboId, pick.target)} failed with ${failure.response.status}`
         + ` after ${Date.now() - started}ms${failureReason ? `: ${failureReason}` : ""}`,
     );
     const failureNow = Date.now();
     const attemptedTargets = pick.attempted;
-    const failureCooldownScope = comboFailureCooldownScope(failure.response.status, failure.classificationText, {
+    const failureCooldownScope = isPolicyCandidateRefusal(failure.response) ? "none" : comboFailureCooldownScope(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
+      malformedResponseFormat: failure.malformedResponseFormat,
+      openRouterOpaque400: failure.openRouterOpaque400,
     });
     const failedTargetKey = targetKey(pick.target);
     let failedTargetCooldownRecorded = false;
@@ -1415,9 +1534,10 @@ export async function executeComboResponses(
     const poolLocalRefusal = isAnthropicPoolLocalRefusal(
       config, pick.target.provider, failure.response.status, failedAccount, failureNow,
     );
+    const codexLocalRefusal = isCodexAccountCooldownResponse(failure.response);
     const nextPick = advanceComboAfterFailure(config, pick, {
-      retryAfter: poolLocalRefusal ? undefined : failure.retryAfter,
-      resetAt: failure.resetAt,
+      retryAfter: poolLocalRefusal || codexLocalRefusal ? undefined : failure.retryAfter,
+      resetAt: codexLocalRefusal ? undefined : failure.resetAt,
       cooldownMs: combo.cooldownMs,
       now: failureNow,
       cooldownScope: failureCooldownScope,
@@ -1479,6 +1599,7 @@ export async function executeComboResponses(
     if (!pick) {
       if (options.abortSignal?.aborted) return clientCancelledResponse();
       if (onlyReplayIncompatibleTargetsRemain(attemptedTargets)) {
+        if (contextFailure) return exhaustedFailure();
         adoptFailedChildLog(childLog);
         return targetIncompatibleResponse();
       }
@@ -1503,18 +1624,18 @@ export async function executeComboResponses(
       if (!initialSend?.producerOwned) initialSend?.permit.release();
     }
   }
-  const failure = exhaustedFailure();
+    const failure = exhaustedFailure(true);
   if (
-    lastFailure?.status === 413
+    failure === lastFailure && lastFailure?.status === 413
     && lastFailureClassifiesOverflow
   ) {
     if (localAdmissionRefusals?.length) logCtx.errorCode = "input_admission_refused";
     const localMessage = localAdmissionRefusals?.length
-      ? `opencodex refused this turn locally; nothing was sent upstream. No target of combo ${comboId} `
+      ? `opencodex refused this turn locally; nothing was sent upstream. No target of this combo `
         + `that was tried can fit its input: ${localAdmissionRefusals.join(" ")} Compact the conversation before retrying.`
       : undefined;
     return (rawBody as { stream?: unknown } | null)?.stream === true
-      ? streamingContextOverflowResponse(requestedModel, options.translatorBudget, localMessage)
+      ? streamingContextOverflowResponse(responseModel, options.translatorBudget, localMessage)
       : jsonContextOverflowResponse(localMessage);
   }
   return failure;

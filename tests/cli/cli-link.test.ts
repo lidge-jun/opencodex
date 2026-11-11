@@ -144,7 +144,7 @@ describe("ocx link", () => {
         ...statusResponse,
         links: statusResponse.links.map(link => ({ ...link, ...NO_PARITY })),
       });
-      expect(calls[0]?.url).toBe("http://127.0.0.1:19101/api/link/status?compatibility=1&diagnostics=1");
+      expect(calls[0]?.url).toBe("http://127.0.0.1:19101/api/link/status?compatibility=1&diagnostics=1&children=1");
       expect(new Headers(calls[0]?.init?.headers).get("x-opencodex-api-key")).toBe("ocx_admin_test-token");
     } finally {
       output.restore();
@@ -280,7 +280,7 @@ describe("ocx link", () => {
     }
   });
 
-  test("registers the canonical command and all eight capability leaves", () => {
+  test("registers the canonical command and all twelve capability leaves", () => {
     expect(findCommand("link")?.name).toBe("link");
     expect(DISPATCH_COMMANDS).toContain("link");
     expect(CAPABILITIES.filter(cap => cap.command[0] === "link").map(cap => cap.command.join(" "))).toEqual([
@@ -290,7 +290,7 @@ describe("ocx link", () => {
       "link issue",
       "link status",
       "link revoke",
-      "link reconnect", "link cleanup",
+      "link reconnect", "link cleanup", "link check", "link update", "link sync", "link restart-codex",
     ]);
   });
 });

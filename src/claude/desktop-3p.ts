@@ -27,6 +27,7 @@ import {
 import { nativeOpenAiContextWindow, type NativeContextLimitsInput } from "../codex/catalog";
 import { localAdmissionToken, localInferenceDestination } from "../lib/local-destinations";
 import { assertDesktop3pModelsValid } from "./desktop-3p-guard";
+import { filterDesktopModelsByVisibility, readDesktopModelVisibility, type DesktopModelVisibility } from "./desktop-model-visibility";
 import { claudeSurfaceSupportsOneMillion, ONE_MILLION } from "./long-context";
 
 export interface Desktop3pModelEntry {
@@ -170,9 +171,11 @@ function collectDesktop3pModels(
   routedModels: Array<Desktop3pRoutedModel>,
   profile?: OcxClaudeDesktopProfile,
   nativeContextCap?: NativeContextLimitsInput,
-): { models: Desktop3pModelEntry[]; registry: Map<string, string>; realAnthropicIds: Set<string> } {
+): { models: Desktop3pModelEntry[]; routes: string[]; registry: Map<string, string>; realAnthropicIds: Set<string> } {
   const registry = new Map<string, string>();
   const models: Desktop3pModelEntry[] = [];
+  // routes[i] is the route models[i] serves; visibility filters by route, never by alias.
+  const routes: string[] = [];
   const candidates: Desktop3pRoutedModel[] = [
     // Native candidates carry their real context window from the same accessor the
     // Desktop DTO uses, so a native 1M/372k model resolves identically in the written
@@ -224,6 +227,7 @@ function collectDesktop3pModels(
         ...(model.isFamilyDefault ? { isFamilyDefault: true } : {}),
         ...(model.supports1m ? { supports1m: true, prefer1m: true } : {}),
       });
+      routes.push(model.route);
     }
     // Previous profile IDs and both hash generations are compatibility-only and can
     // collide. Bind them in stable route order so changing a family default or
@@ -248,7 +252,7 @@ function collectDesktop3pModels(
       }
     }
     desktop3pAliasesByRoute = aliasesByRoute;
-    return { models, registry, realAnthropicIds };
+    return { models, routes, registry, realAnthropicIds };
   }
 
   const aliasesByRoute = new Map<string, string>();
@@ -272,6 +276,7 @@ function collectDesktop3pModels(
         ...(supports1m.supports1m ? { prefer1m: true as const } : {}),
       });
       emittedNames.add(alias);
+      routes.push(route);
       aliasesByRoute.set(route, alias);
       continue;
     }
@@ -300,12 +305,13 @@ function collectDesktop3pModels(
       ...supports1m,
       ...(supports1m.supports1m ? { prefer1m: true as const } : {}),
     });
+    routes.push(route);
     aliasesByRoute.set(route, alias);
   }
 
   if (models[0]) models[0].isFamilyDefault = true;
   desktop3pAliasesByRoute = aliasesByRoute;
-  return { models, registry, realAnthropicIds };
+  return { models, routes, registry, realAnthropicIds };
 }
 
 /** Build and install the registry used to decode Desktop aliases. */
@@ -328,6 +334,11 @@ export interface Desktop3pModelOptions {
    * (`supports1m`) but no longer defaults to it (`prefer1m` dropped).
    */
   preferOneMillion?: boolean;
+  /**
+   * Rows Desktop lists (#7702). Filters only the emitted list: the decode registry keeps every
+   * route so a running session holding a just-hidden alias still routes.
+   */
+  visibility?: DesktopModelVisibility;
 }
 
 export function generateDesktop3pModels(
@@ -337,15 +348,25 @@ export function generateDesktop3pModels(
   nativeContextCap?: NativeContextLimitsInput,
   options: Desktop3pModelOptions = {},
 ): Desktop3pModelEntry[] {
-  const { models, registry, realAnthropicIds } = collectDesktop3pModels(nativeSlugs, routedModels, profile, nativeContextCap);
+  const { models: all, routes, registry, realAnthropicIds } = collectDesktop3pModels(nativeSlugs, routedModels, profile, nativeContextCap);
   desktop3pRegistry = registry;
   desktop3pRealAnthropicIds = realAnthropicIds;
+  let models = filterDesktopModelsByVisibility(all, routes, options.visibility);
+  if (models.length === 0 && all.length > 0) {
+    // An empty static list leaves Desktop with no usable picker. The dashboard refuses to save
+    // such a selection; this covers selections whose every model has since disappeared.
+    console.warn("[opencodex] Claude Desktop model visibility hides every available model; listing all models instead");
+    models = all;
+  }
   return options.preferOneMillion === false ? models.map(({ prefer1m: _prefer1m, ...model }) => model) : models;
 }
 
 /** The Desktop model options a config asks for (one place, so writer and export agree). */
-export function desktop3pModelOptions(claudeCode: { contextAccounting?: string } | undefined): Desktop3pModelOptions {
-  return { preferOneMillion: claudeCode?.contextAccounting !== "200k" };
+export function desktop3pModelOptions(
+  claudeCode: { contextAccounting?: string; desktopModelVisibility?: unknown } | undefined,
+): Desktop3pModelOptions {
+  const visibility = readDesktopModelVisibility(claudeCode);
+  return { preferOneMillion: claudeCode?.contextAccounting !== "200k", ...(visibility ? { visibility } : {}) };
 }
 
 /** Resolve an alias using the most recently generated Desktop model registry. */

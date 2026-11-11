@@ -1,4 +1,20 @@
-# Append-only Claude Tool Loading
+# Claude Tool Loading: Append-only and Chat Dispatcher
+
+## Translated tool admission
+
+`src/claude/inbound-content-options.ts` omits hosted search from the translated catalog when any
+`web_search*` declaration supplies `allowed_domains`, `blocked_domains` or `user_location`.
+All duplicate hosted-search declarations are omitted together; shared sidecar backends cannot
+uniformly enforce these constraints. A forced hosted-search choice without a surviving declaration
+refuses locally. Typed originals still reach first-party Anthropic through the existing out-of-body
+server-tool lane; native passthrough retains its own declaration. Unrestricted search is unchanged.
+Valid function definitions marked `defer_loading` lower to ordinary callable functions on combo
+Responses/Chat destinations; the flag never drops the function or alone triggers compatibility
+rejection. `src/claude/compatibility.ts` still rejects unsupported top-level deferral, schema-less
+deferred declarations and server-executed discovery in enforce mode. This is eager-loading
+degradation, not native deferred discovery. `tests/claude-integration/claude-translated-tool-restrictions.test.ts`
+covers both physical fallback wires, sidecar availability, restriction combinations and duplicates,
+forced choice, original Anthropic declarations and deferred-function admission.
 
 `src/claude/inbound-tool-loading.ts` reconstructs successful client `ToolSearch` discovery from
 structured `tool_reference` results. For routes explicitly selected by
@@ -36,6 +52,54 @@ prefix stability, authorization boundaries, configuration salvage, and real late
 in both opt-in directions, including a fallback onto Chat that retains every original tool.
 `tests/claude-integration/claude-tool-loading-destinations.test.ts` covers excluded physical
 destinations, an ordinary gateway positive control and provider-ID selector migration.
+
+A Responses destination that accepts the request but silently drops `additional_tools` must not
+be selected either: the loaded definition never reaches the model. DeepSeek's official Responses
+API behaves this way (same input token count with and without the item, measured 2026-10-31).
+
+## Chat-wire dispatcher
+
+The Chat wire has no chronological tool carrier, and `src/adapters/tool-catalog-nudge.ts` lists
+every current tool name in the system message, so a ToolSearch load rewrites the prefix twice. For
+routes selected by `claudeCode.chatToolDispatchModels` (same selector grammar, validation, salvage
+and provider-ID migration as `appendOnlyToolLoadingModels`), `request-transport.ts` applies
+`applyChatToolDispatch` from `src/claude/chat-tool-dispatch.ts` at the same physical-adapter
+binding, only when the final adapter is a direct `openai-chat`; combo attempts and policy-owned
+requests are excluded, and late subagent fallback is judged by the physical route. It reads the
+same discovery evidence through `readClientToolDiscovery`.
+
+Each build projects afresh. The catalog carries one stable `use_loaded_tool {name, arguments}`
+function from the first request with an eager `ToolSearch`; unused deferred tools stay out of it,
+so the catalog and the nudge never change on load. A discovered definition is appended as text to
+the ToolSearch result that loaded it, and earlier calls to discovered tools are re-encoded as
+dispatcher calls so replay is byte-stable. Both parse paths (`parseStream`, `parseResponse`)
+rewrite every well-formed dispatcher call to the client tool it names: the payload must be exactly
+`{name, arguments?}` (`arguments` an object, or a JSON string holding one) with a non-empty name
+other than `use_loaded_tool`. The name is not checked against discovery: Claude inbound never
+enforces declared tool names, so the client runs a declared tool (loaded or not) exactly as a
+direct call and reports an undeclared one as unknown under its real name, instead of reporting
+`use_loaded_tool` as unknown. Extra top-level keys, malformed or incomplete calls pass through
+unchanged. The rewrite holds a dispatcher call until its end; the openai-chat adapter already
+emits every tool call whole, so this adds no delay. Tools called before discovery, including a
+hidden deferred tool the model called directly or through the dispatcher, keep or regain their
+native slot, which changes the catalog once. A forced choice of any tool the projection would
+hide, an allowed-tools restriction, duplicate tool_use ids, a discovery result that is not
+present exactly once, a duplicate declared name, or a client tool already named
+`use_loaded_tool` sends the request unprojected and leaves its response untouched. Absent, empty
+or unlisted configuration, a selected request without `ToolSearch`, and a Chat route named only by
+`appendOnlyToolLoadingModels` are byte-identical to no configuration, streaming or not.
+Definitions travel as text, so provider-side strict schema enforcement does not apply to them.
+The shared selector helpers are `isToolLoadingModelSelectors` and `toolLoadingModelMatches`;
+both settings and `toolSearch` are typed in `src/types/claude-tool-loading.ts`, which
+`OcxClaudeCodeConfig` extends.
+`tests/claude-integration/claude-chat-tool-dispatch.test.ts` covers projection, prefix stability on
+the real Chat adapter output, bail-out cases and the stream rewrite, including unloaded and
+undeclared names; `tests/claude-integration/claude-chat-tool-dispatch-routes.test.ts` covers byte
+identity when off, Responses and combo routes, late fallback in both directions, streaming and
+non-streaming client responses for loaded, unloaded and undeclared names, both parse paths and
+configuration salvage/migration.
+
+## Claude models behind a Responses gateway
 
 This opt-in does not stabilize Claude models routed through a Responses gateway that lifts
 `additional_tools` into Claude's top-level tools. For those, the documented operator path is a

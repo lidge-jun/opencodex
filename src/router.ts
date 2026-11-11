@@ -14,6 +14,7 @@ import {
 import type { NormalizedComboConfig } from "./combos/types";
 import { hasOwnProvider } from "./config/provider-name";
 import { anthropicInstanceRowShapeMatches } from "./providers/anthropic-instance-id";
+import { isProviderApiKeyPaused } from "./providers/api-key-pause";
 import { reconcileRouterWarningMemos, routedProviderConfig } from "./providers/routed-config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import {
@@ -30,7 +31,7 @@ import {
   LEGACY_OPENAI_MULTI_PROVIDER_ID,
   OPENAI_CODEX_PROVIDER_ID,
 } from "./providers/openai-tiers";
-import { decodeRoutedModelIdOrThrow, encodeRoutedModelId } from "./providers/slug-codec";
+import { decodeRoutedModelId, decodeRoutedModelIdOrThrow, encodeRoutedModelId } from "./providers/slug-codec";
 import { effectiveProviderAliasDecision, resolveModelAlias } from "./providers/default-aliases";
 import { resolveBlockedModelRedirect } from "./lib/shadow-call";
 import { workBuddyCatalogIdentity } from "./providers/workbuddy";
@@ -200,6 +201,20 @@ export function knownModelIdsForProvider(
  * (never a caller-supplied string), so the log carries no request content.
  */
 const compactionFallbackWarnings = new Set<string>();
+/**
+ * Last-resort decode for a direct provider-qualified slug the live roster cannot resolve yet.
+ * Retained ids win (an encoded slash-valued retained id included), then the operator-declared
+ * modelDisplayNames keys. Neither list feeds alias generation.
+ */
+function decodeDisplayNameFallback(prov: OcxProviderConfig, decoded: string): string {
+  const retained = prov.retainModels ?? [];
+  // Any retained claim, even an ambiguous one the codec refuses to guess, ends the fallback.
+  if (retained.some(id => id === decoded || encodeRoutedModelId(id) === decoded)) {
+    return decodeRoutedModelId(decoded, retained);
+  }
+  return decodeRoutedModelId(decoded, Object.keys(prov.modelDisplayNames ?? {}));
+}
+
 function warnCompactionDefaultProviderFallbackOnce(providerName: string): void {
   if (compactionFallbackWarnings.has(providerName)) return;
   compactionFallbackWarnings.add(providerName);
@@ -303,7 +318,9 @@ function crossProviderRedirectTarget(config: OcxConfig, providerName: string, va
       );
       return usable ? value : undefined;
     }
+    if (isProviderApiKeyPaused(effective)) return undefined;
     return authMode === "local" || effective.keyOptional === true || Boolean(effective.apiKey?.trim())
+      || (authMode === "key" && effective.adapter === "google" && effective.googleMode === "vertex")
       ? value : undefined;
   } catch {
     return undefined;
@@ -583,7 +600,12 @@ function routeModelInternal(
       const decoded = decodeRoutedModelIdOrThrow(requestedModel, known);
       const nativeModel = known.includes(decoded)
         ? decoded
-        : resolveModelAlias(config, prov, known, requestedModel) ?? decoded;
+        : resolveModelAlias(config, prov, known, requestedModel, provName)
+          // Last resort for direct requests while the live roster is cold: display-name keys are
+          // operator-declared native ids, consulted only here so they never claim aliases or shadow
+          // known or retained ids. Concrete policy/combo/redirect targets (bypassCombos) keep the
+          // exact model their evaluator selected, so evidence and eligibility describe what is sent.
+          ?? (bypassCombos ? decoded : decodeDisplayNameFallback(prov, decoded));
       return routeResult(
         config,
         provName,
@@ -650,7 +672,7 @@ function routeModelInternal(
   const aliasMatches: Array<{ provider: string; model: string; qualified: string }> = [];
   for (const [provName, prov] of activeProviderEntries(config)) {
     const known = knownModelIdsForProvider(provName, prov, config);
-    const native = resolveModelAlias(config, prov, known, modelId);
+    const native = resolveModelAlias(config, prov, known, modelId, provName);
     if (native) aliasMatches.push({
       provider: provName,
       model: native,

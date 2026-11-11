@@ -12,9 +12,10 @@ import {
   rmdirSync,
   unlinkSync,
   writeFileSync,
-  type Stats,
+  type BigIntStats,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { statTimeMs } from "../lib/file-identity";
 
 const SERVICE_STATE_LOCK_WAIT_MS = 2_000;
 const SERVICE_STATE_LOCK_POLL_MS = 20;
@@ -32,8 +33,8 @@ interface ServiceStateLockRecord {
 interface ServiceStateLockSnapshot {
   readonly record: ServiceStateLockRecord;
   readonly ownerPath: string;
-  readonly lockIdentity: Pick<Stats, "dev" | "ino">;
-  readonly ownerIdentity: Pick<Stats, "dev" | "ino" | "size">;
+  readonly lockIdentity: Pick<BigIntStats, "dev" | "ino">;
+  readonly ownerIdentity: Pick<BigIntStats, "dev" | "ino" | "size">;
   readonly mtimeMs: number;
 }
 
@@ -72,8 +73,8 @@ function lockOwnerProcessAlive(pid: number): boolean {
 }
 
 function sameIdentity(
-  left: Pick<Stats, "dev" | "ino">,
-  right: Pick<Stats, "dev" | "ino">,
+  left: Pick<BigIntStats, "dev" | "ino">,
+  right: Pick<BigIntStats, "dev" | "ino">,
 ): boolean {
   return left.dev === right.dev && left.ino === right.ino;
 }
@@ -90,10 +91,10 @@ function parseOwnerFileName(name: string): { pid: number; pathToken: string } | 
 }
 
 function readLockSnapshot(lockPath: string): ServiceStateLockSnapshot | null {
-  let lockIdentity: Stats;
+  let lockIdentity: BigIntStats;
   let entries: string[];
   try {
-    lockIdentity = lstatSync(lockPath);
+    lockIdentity = lstatSync(lockPath, { bigint: true });
     if (!lockIdentity.isDirectory()) return null;
     entries = readdirSync(lockPath);
   } catch {
@@ -102,7 +103,7 @@ function readLockSnapshot(lockPath: string): ServiceStateLockSnapshot | null {
   if (entries.length !== 1 || !parseOwnerFileName(entries[0]!)) return null;
   const ownerPath = join(lockPath, entries[0]!);
   try {
-    const ownerIdentity = lstatSync(ownerPath);
+    const ownerIdentity = lstatSync(ownerPath, { bigint: true });
     if (!ownerIdentity.isFile() || ownerIdentity.size > 4096) return null;
     const value = JSON.parse(readFileSync(ownerPath, "utf8")) as Partial<ServiceStateLockRecord>;
     if (value.version !== 1 || !Number.isSafeInteger(value.pid) || (value.pid ?? 0) <= 0
@@ -111,12 +112,12 @@ function readLockSnapshot(lockPath: string): ServiceStateLockSnapshot | null {
       || typeof value.createdAt !== "number" || !Number.isFinite(value.createdAt)) return null;
     const record = value as ServiceStateLockRecord;
     if (entries[0] !== ownerFileName(record)) return null;
-    const currentLock = lstatSync(lockPath);
-    const currentOwner = lstatSync(ownerPath);
+    const currentLock = lstatSync(lockPath, { bigint: true });
+    const currentOwner = lstatSync(ownerPath, { bigint: true });
     if (!currentLock.isDirectory() || !sameIdentity(lockIdentity, currentLock)
       || !currentOwner.isFile() || !sameIdentity(ownerIdentity, currentOwner)
       || currentOwner.size !== ownerIdentity.size) return null;
-    return { record, ownerPath, lockIdentity, ownerIdentity, mtimeMs: ownerIdentity.mtimeMs };
+    return { record, ownerPath, lockIdentity, ownerIdentity, mtimeMs: statTimeMs(ownerIdentity.mtimeNs) };
   } catch {
     return null;
   }

@@ -8,6 +8,14 @@ export interface RetainedCompaction {
   reasoning: string[];
 }
 
+/** Raised when a proxy-owned retained compaction envelope fails to decode. */
+export class InvalidRetainedCompactionEnvelopeError extends Error {
+  constructor() {
+    super("Invalid OpenCodex retained compaction envelope");
+    this.name = "InvalidRetainedCompactionEnvelopeError";
+  }
+}
+
 export function encodeRetainedCompaction(summary: string, reasoning: string[]): string {
   return RETAINED_COMPACTION_PREFIX + Buffer.from(JSON.stringify({ version: 2, summary, reasoning }), "utf-8").toString("base64");
 }
@@ -28,16 +36,34 @@ export function decodeRetainedCompaction(value: string): RetainedCompaction | nu
   } catch { return null; }
 }
 
+/** True when `item` carries a proxy-owned retained envelope marker, valid payload or not. */
+function isRetainedCompactionEnvelopeItem(item: unknown): item is { type: string; encrypted_content: string } {
+  if (!item || typeof item !== "object") return false;
+  const candidate = item as { type?: unknown; encrypted_content?: unknown };
+  return typeof candidate.type === "string"
+    && ["compaction", "compaction_summary", "context_compaction"].includes(candidate.type)
+    && typeof candidate.encrypted_content === "string"
+    && candidate.encrypted_content.startsWith(RETAINED_COMPACTION_PREFIX);
+}
+
+/** First malformed proxy-owned retained envelope in `input`, if any. */
+export function findInvalidRetainedCompactionEnvelope(input: unknown): InvalidRetainedCompactionEnvelopeError | null {
+  if (!Array.isArray(input)) return null;
+  for (const item of input) {
+    if (!isRetainedCompactionEnvelopeItem(item)) continue;
+    if (!decodeRetainedCompaction(item.encrypted_content)) return new InvalidRetainedCompactionEnvelopeError();
+  }
+  return null;
+}
+
 /** Expand only our structured envelopes; callers retain their existing native/ocx1 policy. */
 export function expandRetainedCompactionInput(input: unknown): unknown {
   if (!Array.isArray(input)) return input;
-  if (!input.some(item => item && typeof item === "object" && ["compaction", "compaction_summary", "context_compaction"].includes(item.type)
-    && typeof item.encrypted_content === "string" && item.encrypted_content.startsWith(RETAINED_COMPACTION_PREFIX))) return input;
+  if (!input.some(isRetainedCompactionEnvelopeItem)) return input;
   return input.flatMap(item => {
-    if (!item || typeof item !== "object" || !["compaction", "compaction_summary", "context_compaction"].includes(item.type)
-      || typeof item.encrypted_content !== "string" || !item.encrypted_content.startsWith(RETAINED_COMPACTION_PREFIX)) return [item];
+    if (!isRetainedCompactionEnvelopeItem(item)) return [item];
     const data = decodeRetainedCompaction(item.encrypted_content);
-    if (!data) throw new Error("Invalid OpenCodex retained compaction envelope");
+    if (!data) throw new InvalidRetainedCompactionEnvelopeError();
     return [
       { ...item, encrypted_content: "ocx1:" + Buffer.from(data.summary, "utf-8").toString("base64") },
       ...data.reasoning.map(text => ({ type: "message", role: "user", content: [{ type: "input_text", text }] })),

@@ -56,6 +56,50 @@ function capture(): { lines: string[]; errors: string[]; restore: () => void } {
   return { lines, errors, restore: () => { console.log = log; console.error = err; } };
 }
 
+describe("ocx account reset-affinity", () => {
+  test.each(["anthropic", "anthropic2"])("%s requires no roster or local config", async provider => {
+    const { cmdAccount } = await import("../../src/cli/account");
+    const calls: Captured[] = [];
+    const out = capture();
+    const d = deps(() => ({ json: { ok: true, provider, affinityResetConfirmed: true } }), calls);
+    d.loadConfigImpl = () => { throw new Error("must not require a roster or local configuration"); };
+    try {
+      expect(await cmdAccount(["reset-affinity", provider, "--json"], d)).toBe(0);
+      expect(calls).toEqual([{ path: "/api/oauth/accounts/affinity-reset", method: "PUT", body: { provider } }]);
+      expect(JSON.parse(out.lines.join(""))).toEqual({ ok: true, provider, affinityResetConfirmed: true });
+    } finally { out.restore(); }
+  });
+
+  test.each([
+    [503, { code: "affinity_reset_not_persisted", retryable: true }, "affinity_reset_not_persisted", true],
+    [503, { ok: true, provider: "anthropic", affinityResetConfirmed: true }, "affinity_reset_failed", false],
+    [200, { ok: true }, "affinity_reset_unconfirmed", false],
+    [200, null, "affinity_reset_unconfirmed", false],
+    [200, { ok: true, provider: "anthropic2", affinityResetConfirmed: true }, "affinity_reset_unconfirmed", false],
+    [200, { ok: true, provider: "anthropic", affinityResetConfirmed: false }, "affinity_reset_unconfirmed", false],
+  ] as const)("HTTP %s without matching durable confirmation fails (%#)", async (status, json, code, retryable) => {
+    const { cmdAccount } = await import("../../src/cli/account");
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await cmdAccount(["reset-affinity", "anthropic", "--json"], deps(() => ({ status, json }), calls))).toBe(1);
+      expect(calls).toHaveLength(1);
+      expect(JSON.parse(out.lines.join(""))).toEqual({ ok: false, code, retryable });
+    } finally { out.restore(); }
+  });
+
+  test.each([[], ["openai"], ["anthropic", "account-id"], ["anthropic", "--unknown"]].map(args => ({ args })))("rejects invalid arguments before dispatch (%#)", async ({ args }) => {
+    const { cmdAccount } = await import("../../src/cli/account");
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await cmdAccount(["reset-affinity", ...args, "--json"], deps(() => ({ json: {} }), calls))).toBe(1);
+      expect(calls).toHaveLength(0);
+      expect(JSON.parse(out.lines.join(""))).toMatchObject({ ok: false, code: "invalid_arguments" });
+    } finally { out.restore(); }
+  });
+});
+
 describe("ocx account pause / resume", () => {
   test("Anthropic ambiguous aliases fail without a write; exact ids still win", async () => {
     const out = capture();
@@ -657,5 +701,45 @@ describe("ocx account routes anthropic", () => {
       expect(await cmdRoutes(["anthropic", "--file", file], d)).toBe(1);
       expect(calls).toHaveLength(3);
     } finally { out.restore(); rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe("ocx account resume --if-healthy (#8398)", () => {
+  const genericConfig = () => ({ providers: { "google-antigravity": { adapter: "google", baseUrl: "https://cloudcode-pa.googleapis.com", authMode: "oauth" } } }) as never;
+  test("asks the server for a health-gated resume on the Codex pool and an OAuth pool", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await cmdPause(["openai", "acct_1", "--if-healthy"], deps(() => ({ json: { ok: true } }), calls), false)).toBe(0);
+      expect(await cmdPause(["google-antigravity", "acct_1", "--if-healthy"], { ...deps(() => ({ json: { ok: true } }), calls), loadConfigImpl: genericConfig }, false)).toBe(0);
+    } finally { out.restore(); }
+    expect(calls.find(call => call.path === "/api/codex-auth/accounts/pause")?.body).toEqual({ id: "acct_1", paused: false, ifHealthy: true });
+    expect(calls.find(call => call.path === "/api/oauth/accounts/pause")?.body).toEqual({ provider: "google-antigravity", accountId: "acct_1", paused: false, ifHealthy: true });
+  });
+
+  test("a refused resume names the reason and exits non-zero, also as JSON", async () => {
+    const calls: Captured[] = [];
+    const refused = () => ({ status: 409, json: { error: "account was not resumed: usage_read_failed", code: "resume_refused", reason: "usage_read_failed" } });
+    const out = capture();
+    let text: number; let json: number;
+    try {
+      text = await cmdPause(["openai", "acct_1", "--if-healthy"], deps(refused, calls), false);
+      json = await cmdPause(["openai", "acct_1", "--if-healthy", "--json"], deps(refused, calls), false);
+    } finally { out.restore(); }
+    expect(text).toBe(3);
+    expect(json).toBe(3);
+    expect(out.lines.join("\n")).toContain("acct_1 not resumed: usage_read_failed");
+    expect(JSON.parse(out.lines.at(-1)!)).toEqual({ ok: false, provider: "openai", id: "acct_1", resumed: false, reason: "usage_read_failed" });
+  });
+
+  test("is refused locally for a pause and for an API-key pool", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await cmdPause(["openai", "acct_1", "--if-healthy"], deps(() => ({ json: { ok: true } }), calls), true)).not.toBe(0);
+      expect(await cmdPause(["deepseek", "key_1", "--if-healthy"], { ...deps(() => ({ json: { ok: true } }), calls),
+        loadConfigImpl: () => ({ providers: { deepseek: { adapter: "openai-chat", baseUrl: "https://api.deepseek.com", authMode: "key", apiKey: "sk-test" } } }) as never }, false)).not.toBe(0);
+    } finally { out.restore(); }
+    expect(calls.filter(call => call.method === "PUT")).toEqual([]);
   });
 });
