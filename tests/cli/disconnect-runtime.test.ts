@@ -10,7 +10,7 @@ type State = ReturnType<DisconnectRuntimeDeps["connectionState"]>;
 const live = (role?: string, pid = 4321): Observation => ({ kind: "live", live: { pid, port: 10100, ...(role ? { role } : {}) } });
 const generation: RuntimeGeneration = { pid: 4321, port: 10100, hostname: "127.0.0.1", attestationSecret: createLocalAttestationSecret() };
 
-function run(observation: Observation, restartOk: boolean, json = false, extra: { state?: State; states?: State[]; after?: Observation; capture?: RuntimeGeneration | null; captureAfter?: RuntimeGeneration | null } = {}) {
+function run(observation: Observation, restartOk: boolean, json = false, extra: { state?: State; states?: State[]; after?: Observation; capture?: RuntimeGeneration | null; captureAfter?: RuntimeGeneration | null; refusedBy?: "service-unproven" } = {}) {
   const out: string[] = [], err: string[] = [];
   let restarts = 0;
   const bound: RuntimeGeneration[] = [];
@@ -18,7 +18,7 @@ function run(observation: Observation, restartOk: boolean, json = false, extra: 
     observe: async () => (restarts > 0 ? extra.after ?? live("standalone", 9999) : observation),
     capture: () => (restarts > 0 && extra.captureAfter !== undefined ? extra.captureAfter : extra.capture === undefined ? generation : extra.capture),
     connectionState: () => extra.states?.shift() ?? extra.state ?? { kind: "disconnected" },
-    restart: async target => { restarts += 1; bound.push(target); return restartOk; },
+    restart: async target => { restarts += 1; bound.push(target); return { ok: restartOk, ...(extra.refusedBy ? { refusedBy: extra.refusedBy } : {}) }; },
     json,
     info: line => out.push(line),
     error: line => err.push(line),
@@ -170,6 +170,24 @@ describe("ocx disconnect restarts the client runtime it left behind", () => {
     }
   });
 
+  // Final review: a restart its service manager refused (relaunch unproven) is redone through that
+  // manager; a plain ocx restart would only be refused again.
+  test("a restart refused by an unproven service manager advises the manager", async () => {
+    const result = await run(live("client"), false, false, { after: live("client"), refusedBy: "service-unproven" });
+    expect(result.code).toBe(1);
+    const text = result.err.join("\n");
+    expect(text).toContain("ocx service restart");
+    expect(text).not.toContain("Run on this machine: ocx restart");
+  });
+
+  // P3: after a completed restart, an unreadable state must not also claim nothing was restarted.
+  test("a completed restart followed by an unreadable state does not say nothing was restarted", async () => {
+    const result = await run(live("client"), true, false, { states: [{ kind: "disconnected" }, { kind: "invalid", reason: "unreadable" }] });
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain("The client runtime was restarted");
+    expect(result.err.join("\n")).not.toContain("nothing was restarted");
+  });
+
   test("--json keeps stdout to the disconnect document", async () => {
     const logged: unknown[][] = [];
     const original = console.log;
@@ -180,7 +198,7 @@ describe("ocx disconnect restarts the client runtime it left behind", () => {
         observe: async () => live(restarted ? "standalone" : "client", restarted ? 9999 : 4321),
         capture: () => generation,
         connectionState: () => ({ kind: "disconnected" }),
-        restart: async () => { console.log("restart progress"); restarted = true; return true; },
+        restart: async () => { console.log("restart progress"); restarted = true; return { ok: true }; },
         json: true,
         error: () => {},
       });

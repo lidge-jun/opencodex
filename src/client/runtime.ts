@@ -28,7 +28,7 @@ import { clientInitiatedLinkReadiness, createHomeInitiatedLinkReadiness } from "
 import { createClientLinkSupervisor, type ClientLinkSupervisor } from "./link-tunnel";
 import { clientLinkStatePath, isChildInitiatedLink, recordChildInitiatedLink } from "./link-state";
 import { startMachineListener, type MachineListenerDeps } from "./machine-listener";
-import { isLinkConnection, readClientConnectionState } from "./state";
+import { isLinkConnection, readClientConnectionState, readClientConnectionStateWithEvidence } from "./state";
 import { withClientLifecycleSync } from "./lifecycle-lock";
 import { clientConnectionEnded, clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, type ClientRestartController } from "./runtime-restart";
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
@@ -112,10 +112,12 @@ export function standaloneRecycleEnv(
   disconnectedTokenFingerprint: string,
 ): NodeJS.ProcessEnv {
   const childEnv = { ...env };
-  // A detached replacement is not the desktop app's child, nor a service's: a process that outlived
-  // its service registration must not hand the stale marker on.
+  // A detached replacement is nobody's child: not the desktop app's, not a service's, not a Windows
+  // wrapper's. It must carry no supervisor marker it would otherwise misread as its own.
   delete childEnv[DESKTOP_SUPERVISED_ENV];
   delete childEnv.OCX_SERVICE;
+  delete childEnv.OCX_SERVICE_MANAGED;
+  delete childEnv.OCX_WINDOWS_WRAPPER_PROTOCOL;
   const admissionToken = childEnv.OPENCODEX_API_AUTH_TOKEN?.trim();
   if (admissionToken && serviceApiTokenFingerprint(admissionToken) !== disconnectedTokenFingerprint) {
     // A surviving env token shadows OCX_API_TOKEN_FILE entirely, so nothing below can
@@ -438,7 +440,7 @@ export async function startClientRuntime(
   const restartController: ClientRestartController = createClientRestartController({
     stopping: () => shuttingDown,
     supervisor: io.restartSupervisor ?? clientRestartSupervisor,
-    connectionChanged: () => clientConnectionEnded(state.value, readClientConnectionState()),
+    connectionChanged: () => clientConnectionEnded(state.value, readClientConnectionStateWithEvidence()),
     recycle: supervisor => recycleStandalone(state.value.tokenFingerprint, {
       isDesktopSupervised: () => supervisor === "desktop",
       serviceSupervised: () => supervisor === "service",

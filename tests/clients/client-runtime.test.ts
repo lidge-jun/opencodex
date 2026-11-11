@@ -193,6 +193,29 @@ describe("standalone recycle", () => {
     });
   });
 
+  // Final review: an authorized detached replacement carries no supervisor marker at all.
+  test("a detached replacement's environment carries no supervisor marker", async () => {
+    await withServiceMarker("1", async () => {
+      const markers = ["OCX_SERVICE", "OCX_SERVICE_MANAGED", "OCX_DESKTOP_SUPERVISED", "OCX_WINDOWS_WRAPPER_PROTOCOL"];
+      const previous = Object.fromEntries(markers.map(name => [name, process.env[name]]));
+      for (const name of markers) process.env[name] = "1";
+      let env: NodeJS.ProcessEnv | undefined;
+      try {
+        await recycleStandalone(serviceApiTokenFingerprint("disconnected-hub-token"), {
+          configuredPort: () => 10456,
+          isDesktopSupervised: () => false,
+          serviceSupervised: () => false,
+          spawnReplacement: async request => { env = request.env; },
+          exitProcess: () => {},
+        });
+      } finally {
+        for (const name of markers) { if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name]; }
+      }
+      expect(env).toBeDefined();
+      for (const name of markers) expect(env?.[name]).toBeUndefined();
+    });
+  });
+
   test("a supervised client still exits 1 without spawning", async () => {
     await withServiceMarker("1", async () => {
       const calls: string[] = [];

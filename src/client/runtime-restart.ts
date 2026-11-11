@@ -31,7 +31,12 @@ import { sameClientConnectionOwner, type readClientConnectionState } from "./sta
 
 type ClientConnectionState = ReturnType<typeof readClientConnectionState>;
 
-export type ClientRestartSupervisor = "service" | "desktop";
+/**
+ * `service-unproven`: a service manager launched and owns this process (OCX_SERVICE or
+ * OCX_SERVICE_MANAGED), but its relaunch cannot be proven (for example a systemd unit started by
+ * hand while disabled). Neither exiting for it nor detaching from it is safe, so the restart is refused.
+ */
+export type ClientRestartSupervisor = "service" | "desktop" | "service-unproven";
 
 export type ClientRestartAdmission =
   | { kind: "accepted"; alreadyRestarting: boolean }
@@ -111,12 +116,18 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
       if (io.stopping?.()) return { kind: "stopping" };
       if (io.recycle && io.connectionChanged?.()) {
         if (flight) return { kind: "accepted", alreadyRestarting: true };
+        // An owner that cannot be proven to relaunch this process keeps it, connection ended or not.
+        const owner = await io.supervisor();
+        if (io.stopping?.()) return { kind: "stopping" };
+        if (owner === "service-unproven") return { kind: "supervised", supervisor: owner };
+        if (flight) return { kind: "accepted", alreadyRestarting: true };
         const recycle = io.recycle, changed = io.connectionChanged;
         // Let the 202 reach the CLI before the listener closes, then confirm the connection is
         // still ended: a connect that committed meanwhile keeps this runtime (the CLI reports kept).
         // The recheck is the last step before the recycle, after the (asynchronous) supervisor lookup.
         flight = sleep(200).then(async () => {
           const supervisor = await io.supervisor();
+          if (supervisor === "service-unproven") { warn("[client] restart: the service manager's relaunch could not be proven; this runtime keeps serving"); return; }
           if (changed()) await recycle(supervisor);
         }).finally(() => { flight = null; });
         return { kind: "accepted", alreadyRestarting: false };
@@ -136,11 +147,24 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
 
 /** Production supervision check: the desktop app, then a service that will really relaunch us. */
 export async function clientRestartSupervisor(): Promise<ClientRestartSupervisor | null> {
-  if (isDesktopSupervised()) return "desktop";
-  if (process.env.OCX_SERVICE !== "1") return null;
-  // Same viability test as the standalone restart: stale service assets would not relaunch.
-  const { isServiceViable } = await import("../service/orchestration");
-  return isServiceViable() ? "service" : null;
+  const { diagnoseService } = await import("../service/diagnostics");
+  return classifyClientRestartSupervisor({ desktop: isDesktopSupervised(), env: process.env, diagnose: diagnoseService });
+}
+
+/**
+ * Ownership and relaunch are separate facts. A manager owns this process when it launched it
+ * (OCX_SERVICE or OCX_SERVICE_MANAGED); only an owned process whose service diagnostic is viable
+ * may exit for the manager to relaunch it. Owned but not viable is `service-unproven` and keeps
+ * the runtime; only a process no manager owns may start a detached replacement.
+ */
+export function classifyClientRestartSupervisor(input: {
+  desktop: boolean;
+  env: NodeJS.ProcessEnv;
+  diagnose: () => { viable: boolean };
+}): ClientRestartSupervisor | null {
+  if (input.desktop) return "desktop";
+  if (input.env.OCX_SERVICE !== "1" && input.env.OCX_SERVICE_MANAGED !== "1") return null;
+  return input.diagnose().viable ? "service" : "service-unproven";
 }
 
 /**
@@ -164,6 +188,8 @@ export function clientRestartRollbackAction(
  * refusing on it instead of exiting a runtime whose link may still work.
  */
 export function clientConnectionEnded(served: OcxClientConnectionConfig, current: ClientConnectionState): boolean {
+  // Callers pass readClientConnectionStateWithEvidence(): "disconnected" then means a saved config
+  // with no client, never a missing file.
   if (current.kind === "disconnected") return true;
   return current.kind === "connected" && clientRestartRollbackAction(served, current) === "recycle";
 }

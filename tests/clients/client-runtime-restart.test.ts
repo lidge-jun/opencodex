@@ -11,7 +11,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "bun";
 import { startMachineListener } from "../../src/client/machine-listener";
-import { clientConnectionEnded, clientRestartRollbackAction, createClientRestartController, type ClientRestartAdmission, type ClientRestartIo } from "../../src/client/runtime-restart";
+import { classifyClientRestartSupervisor, clientConnectionEnded, clientRestartRollbackAction, createClientRestartController, type ClientRestartAdmission, type ClientRestartIo } from "../../src/client/runtime-restart";
+import { readClientConnectionStateWithEvidence } from "../../src/client/state";
+import { deriveLaunchdServiceDiagnostic, deriveSystemdServiceDiagnostic, deriveWindowsServiceDiagnostic } from "../../src/service/diagnostics";
 import {
   createLocalAttestationChallenge,
   createLocalAttestationSecret,
@@ -280,11 +282,12 @@ describe("client restart controller", () => {
     let ended = true;
     let releaseLookup!: (value: "desktop") => void;
     let lookupEntered!: () => void;
+    let lookups = 0;
     const entered = new Promise<void>(resolve => { lookupEntered = resolve; });
     const recycled: unknown[] = [];
     const { io } = fakeIo({
       connectionChanged: () => ended,
-      supervisor: () => { lookupEntered(); return new Promise(resolve => { releaseLookup = resolve; }); },
+      supervisor: () => { lookups += 1; if (lookups === 1) return Promise.resolve("desktop" as const); lookupEntered(); return new Promise(resolve => { releaseLookup = resolve; }); },
       recycle: async verdict => { recycled.push(verdict); },
     });
     const controller = createClientRestartController(io);
@@ -292,6 +295,17 @@ describe("client restart controller", () => {
     await entered;
     ended = false;
     releaseLookup("desktop");
+    await controller.settled();
+    expect(recycled).toEqual([]);
+  });
+
+  // Final review: a manager that owns this process but cannot be proven to relaunch it must keep
+  // the runtime; refused at admission, nothing recycled or detached.
+  test("an owned but unproven service refuses even an ended connection, and recycles nothing", async () => {
+    const recycled: unknown[] = [];
+    const { io } = fakeIo({ supervisor: async () => "service-unproven", connectionChanged: () => true, recycle: async verdict => { recycled.push(verdict); } });
+    const controller = createClientRestartController(io);
+    expect(await controller.request()).toEqual({ kind: "supervised", supervisor: "service-unproven" });
     await controller.settled();
     expect(recycled).toEqual([]);
   });
@@ -334,6 +348,58 @@ describe("client restart controller", () => {
     finish();
     await controller.settled();
     expect(spawns).toBe(1);
+  });
+});
+
+describe("who supervises a client restart (real service diagnostics)", () => {
+  const owned = { OCX_SERVICE: "1" } as NodeJS.ProcessEnv;
+  const systemd = (enabled: boolean, running: boolean) => deriveSystemdServiceDiagnostic({ installed: true, enabled, running, stale: false, diagnostics: "test" });
+  test.each([
+    ["systemd running but disabled (started by hand)", systemd(false, true), "service-unproven"],
+    ["systemd enabled and running", systemd(true, true), "service"],
+    ["launchd job installed but not loaded", deriveLaunchdServiceDiagnostic({ installed: true, stale: false, load: { state: "not-loaded" } as never, diagnostics: "test" }), "service-unproven"],
+    ["launchd job loaded from the current plist", deriveLaunchdServiceDiagnostic({ installed: true, stale: false, load: { state: "loaded-current" }, diagnostics: "test" }), "service"],
+    ["Windows native service stopped", deriveWindowsServiceDiagnostic({ schedulerXml: "", schedulerExpectedUserId: null, schedulerAssetsPresent: false, nativeStatus: "stopped", recordedBackend: "native", staleBakedPaths: false, nativeRepairAssetsOnly: false, diagnostics: "test" }), "service-unproven"],
+  ] as const)("%s", (_name, diagnostic, expected) => {
+    expect(classifyClientRestartSupervisor({ desktop: false, env: owned, diagnose: () => diagnostic })).toBe(expected);
+  });
+
+  test("OCX_SERVICE_MANAGED alone marks the process as manager-owned", () => {
+    expect(classifyClientRestartSupervisor({ desktop: false, env: { OCX_SERVICE_MANAGED: "1" }, diagnose: () => systemd(false, true) })).toBe("service-unproven");
+  });
+
+  test("no manager marker means no supervisor, whatever the service diagnostic says", () => {
+    expect(classifyClientRestartSupervisor({ desktop: false, env: {}, diagnose: () => systemd(true, true) })).toBeNull();
+  });
+
+  test("the desktop app wins", () => {
+    expect(classifyClientRestartSupervisor({ desktop: true, env: owned, diagnose: () => systemd(false, true) })).toBe("desktop");
+  });
+});
+
+// Final review: a missing config.json reads as the default configuration, which is not evidence that
+// the served connection ended. The real reader is used here, with no injected state.
+describe("connection-ended evidence from the real state reader", () => {
+  const link = { ...connection, transport: "link" as const, link: { linkId: `lnk_${"b".repeat(16)}`, tunnelPort: 23457 } };
+  test("a missing config.json is not proof the connection ended", () => {
+    const empty = mkdtempSync(join(tmpdir(), "ocx-client-restart-missing-config-"));
+    const previous = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = empty;
+    try {
+      const state = readClientConnectionStateWithEvidence();
+      expect(state).toEqual({ kind: "invalid", reason: "config.json is missing" });
+      expect(clientConnectionEnded(link, state)).toBe(false);
+    } finally {
+      process.env.OPENCODEX_HOME = previous;
+      removeTreeWithRetry(empty);
+    }
+  });
+
+  test("a saved config with no client is proof", () => {
+    // beforeEach wrote a standalone config.json into this test's home.
+    const state = readClientConnectionStateWithEvidence();
+    expect(state).toEqual({ kind: "disconnected" });
+    expect(clientConnectionEnded(link, state)).toBe(true);
   });
 });
 

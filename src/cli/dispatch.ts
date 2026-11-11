@@ -429,7 +429,7 @@ const commandRunners: Record<string, CommandRunner> = {
     if (code !== 0 || deps.args.includes("--orphaned-token")) return code;
     const { bindRestartToRuntime, restartRuntimeAfterDisconnect } = await import("./disconnect-runtime");
     const { observeProxyLiveness } = await import("../server/proxy-liveness");
-    const { readClientConnectionState } = await import("../client/state");
+    const { readClientConnectionStateWithEvidence } = await import("../client/state");
     const { readRuntimePort } = await import("../config/process-state");
     const { requestBoundSystemRestart } = await import("./system-restart-client");
     return await restartRuntimeAfterDisconnect({
@@ -441,12 +441,16 @@ const commandRunners: Record<string, CommandRunner> = {
           ? { ...record, attestationSecret: record.attestationSecret } : null;
       },
       connectionState: () => {
-        const state = readClientConnectionState();
+        const state = readClientConnectionStateWithEvidence();
         return state.kind === "invalid" || state.kind === "mismatched" ? { kind: state.kind, reason: state.reason } : { kind: state.kind };
       },
-      restart: target => deps.handleProxyRestart(deps.handleRestartStartWhenStopped, undefined, (io, deadlineAt) =>
-        bindRestartToRuntime(io, target, (previous, readRuntime) =>
-          requestBoundSystemRestart(previous as Parameters<typeof requestBoundSystemRestart>[0], deadlineAt, { readRuntime: readRuntime as typeof readRuntimePort }))),
+      restart: async target => {
+        let refusedBy: "service-unproven" | undefined;
+        const ok = await deps.handleProxyRestart(deps.handleRestartStartWhenStopped, supervisor => { if (supervisor === "service-unproven") refusedBy = supervisor; }, (io, deadlineAt) =>
+          bindRestartToRuntime(io, target, (previous, readRuntime) =>
+            requestBoundSystemRestart(previous as Parameters<typeof requestBoundSystemRestart>[0], deadlineAt, { readRuntime: readRuntime as typeof readRuntimePort })));
+        return { ok, ...(refusedBy ? { refusedBy } : {}) };
+      },
       json: deps.args.includes("--json"),
     });
   },
