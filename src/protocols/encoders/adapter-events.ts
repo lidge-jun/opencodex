@@ -35,13 +35,7 @@ import { coerceIntegerToolArguments } from "../../lib/tool-argument-integers";
 import { classifyError, isCyberPolicyCode, type OcxErrorPayload } from "../../lib/errors";
 import { redactSecretString } from "../../lib/redact";
 import { isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
-import {
-  createCitationMarkerFilter,
-  createMemoryCitationEscaper,
-  escapeMemoryCitationMentions,
-  type CitationMarkerFilter,
-  type MemoryCitationEscaper,
-} from "../../responses/citation-markers";
+import { createCitationMarkerFilter, type CitationMarkerFilter } from "../../responses/citation-markers";
 import { isTruncatedStopReason, truncationReasonFor } from "../../responses/truncated-stop-reason";
 import { safeWebSearchSources } from "../../web-search/sources";
 import { resolveStallTimeoutSec } from "../../stall-timeout";
@@ -353,19 +347,7 @@ export function encodeAdapterEventStream(
   };
 
   // Item state, ported from bridgeToResponsesSSE.
-  let currentMsg: {
-    phase?: OcxMessagePhase;
-    citationFilter: CitationMarkerFilter;
-    memoryCitationEscaper: MemoryCitationEscaper;
-    /** Bytes the escaper currently holds, charged to the translator budget. */
-    heldBytes: number;
-  } | null = null;
-  const syncHeldCitationBytes = (msg: NonNullable<typeof currentMsg>, held: string) => {
-    const next = Buffer.byteLength(held);
-    if (next > msg.heldBytes) budget.chargeRetained(next - msg.heldBytes, { kind: "live_transient" });
-    else if (next < msg.heldBytes) budget.releaseRetained(msg.heldBytes - next, { kind: "live_transient" });
-    msg.heldBytes = next;
-  };
+  let currentMsg: { phase?: OcxMessagePhase; citationFilter: CitationMarkerFilter } | null = null;
   let currentReasoning: { itemId: string } | null = null;
   let currentRawReasoning: { itemId: string } | null = null;
   let pendingSignature: string | undefined;
@@ -391,12 +373,7 @@ export function encodeAdapterEventStream(
     if (!currentMsg) return;
     // A citation span can straddle a delta boundary; the filter releases its held tail here.
     const trailing = currentMsg.citationFilter.flush();
-    // A tag or candidate block still held by the escaper is resolved once, whole, so a real
-    // block's closing tag is neither split nor re-escaped.
-    const tail = (trailing ? currentMsg.memoryCitationEscaper.push(trailing) : "")
-      + escapeMemoryCitationMentions(currentMsg.memoryCitationEscaper.pending());
-    syncHeldCitationBytes(currentMsg, "");
-    if (tail) writer.text(tail);
+    if (trailing) writer.text(trailing);
     writer.messageDone();
     currentMsg = null;
   };
@@ -631,7 +608,7 @@ export function encodeAdapterEventStream(
               flushHiddenReasoningEnvelope();
               if (currentToolCall) closeCurrentToolCall();
               writer.progressThinking(event.text, event.anthropicThinkingSignature);
-              writer.text(escapeMemoryCitationMentions(event.text));
+              writer.text(event.text);
               writer.messageDone();
               break;
             }
@@ -642,20 +619,10 @@ export function encodeAdapterEventStream(
             // Only an explicit phase change starts a new message.
             if (currentMsg && event.phase !== undefined && currentMsg.phase !== event.phase) closeCurrentMessage();
             if (!currentMsg) {
-              currentMsg = {
-                citationFilter: createCitationMarkerFilter(),
-                memoryCitationEscaper: createMemoryCitationEscaper(),
-                heldBytes: 0,
-                ...(event.phase ? { phase: event.phase } : {}),
-              };
+              currentMsg = { citationFilter: createCitationMarkerFilter(), ...(event.phase ? { phase: event.phase } : {}) };
             }
             const visible = currentMsg.citationFilter.push(event.text);
-            // A literal memory-citation tag in prose makes the Codex client hide everything
-            // between the first opening tag and the last closing one, which reads as a truncated
-            // answer. Escape it here, while it streams.
-            const escaped = visible ? currentMsg.memoryCitationEscaper.push(visible) : "";
-            syncHeldCitationBytes(currentMsg, currentMsg.memoryCitationEscaper.pending());
-            if (escaped) writer.text(escaped);
+            if (visible) writer.text(visible);
             break;
           }
           case "thinking_delta": {

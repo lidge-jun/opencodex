@@ -11,6 +11,7 @@ import {
 } from "../../src/responses/citation-markers";
 import { encodeChatCompletionSse } from "../../src/protocols/encoders/chat";
 import { bridgeToResponsesSSE } from "../../src/bridge";
+import { buildResponseJSON } from "../../src/bridge/response-json";
 import type { AdapterEvent } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { isAnthropicProgressMirror } from "../../src/responses/anthropic-progress";
@@ -30,6 +31,12 @@ const S = CITATION_MARKER_START;
 const P = CITATION_MARKER_SEPARATOR;
 const E = CITATION_MARKER_END;
 const span = `${S}cite${P}turn1view0${P}turn1view1${E}`;
+
+/** Text of the first assistant message in a buffered Responses body. */
+function messageText(body: Record<string, unknown>): string {
+  const output = body.output as Array<{ type?: string; content?: Array<{ text?: string }> }>;
+  return output.find(item => item.type === "message")?.content?.[0]?.text ?? "";
+}
 
 describe("citation marker stripping (#3150)", () => {
   test("a complete span is removed and the surrounding text survives", () => {
@@ -310,7 +317,7 @@ describe("non-citation directive spans pass through (#6039)", () => {
     { type: "done" } as AdapterEvent,
   ];
 
-  test("the Chat encoder escapes a mention split across deltas and keeps a split real block", async () => {
+  test("the Chat encoder never rewrites the tag: Chat clients do not parse it", async () => {
     const chatText = async (pieces: string[]) => {
       const raw = await new Response(encodeChatCompletionSse(replay(textEvents(pieces)), {
         model: "client-model", translatorBudget: createTestTranslatorBudget(),
@@ -320,9 +327,43 @@ describe("non-citation directive spans pass through (#6039)", () => {
         return content ?? "";
       }).join("");
     };
-    expect(await chatText(["quoted <oai-mem-", "citation> prose"])).toBe("quoted &lt;oai-mem-citation> prose");
+    expect(await chatText(["quoted <oai-mem-", "citation> prose"])).toBe("quoted <oai-mem-citation> prose");
     const real = `lead\n${REAL_BLOCK}`;
     expect(await chatText([...real])).toBe(real);
+  });
+
+  const bridgeText = async (pieces: string[], escapeMemoryCitationTags?: boolean) => {
+    const raw = await new Response(bridgeToResponsesSSE(
+      replay(textEvents(pieces)), "internal/model", undefined, undefined, undefined, undefined, 2_000,
+      { translatorBudget: createTestTranslatorBudget(), enforceDeclaredToolNames: false,
+        ...(escapeMemoryCitationTags === undefined ? {} : { escapeMemoryCitationTags }) },
+    )).text();
+    const frames = raw.split("\n\n").map(block => block.split("\n").find(line => line.startsWith("data: "))).filter(line => line && line !== "data: [DONE]")
+      .map(line => JSON.parse(line!.slice(6)) as { type?: string; delta?: string; text?: string });
+    return {
+      deltas: frames.filter(f => f.type === "response.output_text.delta").map(f => f.delta ?? "").join(""),
+      done: frames.find(f => f.type === "response.output_text.done")?.text ?? "",
+    };
+  };
+
+  test("Chat and Messages deliveries through the Responses bridge keep the raw tag", async () => {
+    const raw = await bridgeText(["quoted <oai-mem-", "citation> prose"], false);
+    expect(raw).toEqual({ deltas: "quoted <oai-mem-citation> prose", done: "quoted <oai-mem-citation> prose" });
+    const json = buildResponseJSON(textEvents(["quoted <oai-mem-citation> prose"]), "internal/model", { escapeMemoryCitationTags: false });
+    expect(messageText(json)).toBe("quoted <oai-mem-citation> prose");
+  });
+
+  test("a buffered Responses body escapes the mention and keeps a real block", () => {
+    const json = buildResponseJSON(textEvents([`quoted <oai-mem-citation> prose\n${REAL_BLOCK}`]), "internal/model");
+    expect(messageText(json)).toBe(`quoted &lt;oai-mem-citation> prose\n${REAL_BLOCK}`);
+  });
+
+  test("a real block without an ids list still counts as real, as the client parses it", async () => {
+    const entriesOnly = "<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[x]\n</citation_entries>\n</oai-mem-citation>";
+    const text = `answer\n${entriesOnly}`;
+    expect(escapeMemoryCitationMentions(text)).toBe(text);
+    expect(streamed([...text])).toBe(text);
+    expect(await bridgeText([...text])).toEqual({ deltas: text, done: text });
   });
 
   test("the Responses bridge streams the same text it reports as done", async () => {
@@ -407,6 +448,8 @@ describe("non-citation directive spans pass through (#6039)", () => {
     const carrier = items.find(item => item.type === "reasoning")!;
     const envelope = decodeReasoningEnvelope(carrier.encrypted_content!);
     expect(envelope?.txt).toBe(raw);
-    expect(isAnthropicProgressMirror(items.find(item => item.type === "message"), envelope)).toBe(true);
+    const visible = items.find(item => item.type === "message") as { content?: Array<{ text?: string }> } | undefined;
+    expect(visible?.content?.[0]?.text).toBe(escaped);
+    expect(isAnthropicProgressMirror(visible, envelope)).toBe(true);
   });
 });

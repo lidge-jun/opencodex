@@ -7,13 +7,13 @@ import type { TranslatorBudget } from "../lib/translator-budget";
  * escaped for a quoted memory-citation tag; the envelope keeps the raw text so the signed payload
  * is unchanged.
  */
-export function anthropicProgressItems(text: string, signature: string, budget?: TranslatorBudget) {
+export function anthropicProgressItems(text: string, signature: string, budget?: TranslatorBudget, escapeVisible = true) {
   const id = `msg_${crypto.randomUUID().replaceAll("-", "")}`;
   return [
     { type: "reasoning", id: `rs_${crypto.randomUUID().replaceAll("-", "")}`, summary: [],
       encrypted_content: encodeReasoningEnvelope({ sig: signature, txt: text, upd: id }, budget) },
     { type: "message", id, role: "assistant", status: "completed", phase: "commentary",
-      content: [{ type: "output_text", text: escapeMemoryCitationMentions(text), annotations: [] }] },
+      content: [{ type: "output_text", text: escapeVisible ? escapeMemoryCitationMentions(text) : text, annotations: [] }] },
   ];
 }
 

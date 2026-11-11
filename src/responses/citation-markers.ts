@@ -63,32 +63,36 @@ export interface CitationMarkerFilter {
 }
 
 /**
- * The memory-citation tags the Codex client renders specially: it keeps the LAST
- * `<oai-mem-citation>` block and drops everything else, so a literal mention of the tag in prose
- * swallows the rest of the answer between the first opening tag and the last closing one. A
- * model that quotes the tag ("output the `...` block at the end") therefore appears to truncate
- * at the quote. Matches the open tag, the close tag, and a backticked open tag, since a fenced or
- * inline-code copy is what shows up inside an otherwise ordinary sentence.
+ * The memory-citation tags the Codex client parses as hidden markup (openai/codex
+ * `codex-rs/utils/stream-parser/src/citation.rs`): matching is literal and non-nested, the text
+ * from an opening tag to the FIRST closing tag is hidden, and an opening tag that never closes is
+ * auto-closed at the end of the stream, hiding everything after it. A model that quotes the tag
+ * ("output the `...` block at the end") therefore appears to truncate at the quote. Backticks do
+ * not protect it, because the client parses before any markdown rendering.
  */
 const MEMORY_CITATION_OPEN = "<oai-mem-citation>";
 const MEMORY_CITATION_CLOSE = "</oai-mem-citation>";
 const MEMORY_CITATION_TAG = /<\/?(oai-mem-citation)>/g;
 
 /**
- * Body shape of a REAL memory-citation block: `<citation_entries>` plus `<rollout_ids>`.
+ * Body shape of a REAL memory-citation block: a complete `<citation_entries>` list. The ids block
+ * that usually follows (`<rollout_ids>`, or `<thread_ids>`) is optional, matching the client's
+ * `parse_memory_citation` (`codex-rs/memories/read/src/citations.rs`), which accepts a block
+ * without it.
  *
  * This is what separates a block the client should render from a mention of the tag name inside
  * ordinary prose. Escaping both would break the real feature: the client would print the tags
  * instead of the citation list, and the turn's memory references would silently disappear.
  */
-const MEMORY_CITATION_BODY = /<citation_entries>[\s\S]*<\/citation_entries>[\s\S]*<rollout_ids>/;
+const MEMORY_CITATION_BODY = /<citation_entries>[\s\S]*<\/citation_entries>/;
 
 /** First element of a real block's body, used to decide from a short lookahead. */
 const MEMORY_CITATION_BODY_OPEN = "<citation_entries>";
 
 /**
- * Longest candidate block the streaming escaper holds while waiting for its closing tag. Callers
- * charge the held bytes to their translator budget (`live_transient`) as the hold grows.
+ * Longest candidate block, in UTF-16 code units (JavaScript string length), that the streaming
+ * escaper holds while waiting for its closing tag; the whole-string form applies the same limit.
+ * Callers charge the held bytes to their translator budget (`live_transient`) as the hold grows.
  */
 const MAX_MEMORY_CITATION_HOLD = 16_384;
 
@@ -131,9 +135,14 @@ function opensRealBlock(text: string, openAt: number): number | undefined {
 /**
  * Neutralize a literal memory-citation tag so the client renders it as text.
  *
- * The client parses the tag as markup, not as markdown, so wrapping it in backticks does not
- * protect it. Escaping the leading `<` as `&lt;` keeps the same visible characters in every
- * renderer while leaving the payload itself recognizable.
+ * The client parses the tag as markup before markdown, so wrapping it in backticks does not
+ * protect it. The leading `<` becomes `&lt;`. In ordinary markdown text that renders as `<` again;
+ * inside an inline code span or a fenced block CommonMark does not decode entities, so the reader
+ * sees `&lt;oai-mem-citation>` literally. That visible difference is the trade-off for keeping the
+ * rest of the answer: the alternative is the client hiding everything after the quote.
+ *
+ * Only the Responses wire needs this: Chat Completions and Messages clients never parse the tag,
+ * so the bridges apply it behind `escapeMemoryCitationTags`.
  */
 export function escapeMemoryCitationMentions(text: string): string {
   if (!text.includes("oai-mem-citation")) return text;
@@ -189,6 +198,12 @@ export interface MemoryCitationEscaper {
   /** Text still withheld at the end of the stream; resolve it with `escapeMemoryCitationMentions`. */
   pending(): string;
 }
+
+/** Escaper for deliveries that must not rewrite text (Chat Completions, Messages). */
+export const passthroughMemoryCitationEscaper: MemoryCitationEscaper = {
+  push: (delta: string) => delta,
+  pending: () => "",
+};
 
 /**
  * Streaming form of `escapeMemoryCitationMentions`.
@@ -279,9 +294,9 @@ export function createMemoryCitationEscaper(): MemoryCitationEscaper {
  * stray SEPARATOR or END, and every non-citation directive.
  */
 export function stripCitationMarkers(text: string): string {
-  if (!text.includes(CITATION_MARKER_START)) return escapeMemoryCitationMentions(text);
+  if (!text.includes(CITATION_MARKER_START)) return text;
   const filter = createCitationMarkerFilter();
-  return escapeMemoryCitationMentions(filter.push(text) + filter.flush());
+  return filter.push(text) + filter.flush();
 }
 
 /**
