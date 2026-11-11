@@ -86,8 +86,12 @@ function run(scenario: Scenario): Outcome {
           const actual = journal.restoreJournalState;
           const { spyOn } = require("bun:test");
           spyOn(journal, "restoreJournalState").mockImplementation((...args) => {
-            if (!overlapping) overlapping = connectApi.disconnectClient({}, { lifecycleLockDeps: lockDeps })
-              .then(() => null, cause => cause instanceof Error ? cause.message : String(cause));
+            // A second process, as a second ocx disconnect would be, while this one holds its attempt lock.
+            if (!overlapping) {
+              const child = require("node:child_process").spawnSync(process.execPath, ["-e", 'require("./src/client/connect").disconnectClient({}, { lifecycleLockDeps: ' + JSON.stringify(lockDeps) + ' }).then(() => console.log("OK"), e => console.log(String(e && e.message)))'], { encoding: "utf8", env: process.env });
+              const said = child.stdout.trim().split(String.fromCharCode(10)).at(-1) ?? "";
+              overlapping = Promise.resolve(said === "OK" ? null : said || child.stderr);
+            }
             return actual(...args);
           });
         }

@@ -1164,6 +1164,9 @@ export async function disconnectClient(
   options: Parameters<typeof disconnectClientAttempt>[0] = {},
   deps: Pick<ClientConnectDeps, "lifecycleLockDeps"> = {},
 ): ReturnType<typeof disconnectClientAttempt> {
+  // The attempt lock is a file under the config directory: wait for parent ACL admission first,
+  // as every other phase does, so nothing is created under a directory still being hardened.
+  await withConfigDirHardeningSettled(getConfigDir(), () => undefined);
   return withClientDisconnectAttempt(() => disconnectClientAttempt(options, deps), deps.lifecycleLockDeps);
 }
 
