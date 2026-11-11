@@ -534,8 +534,7 @@ The optional `inferContextWindow` setting also survives same-name saves that omi
 
 `PATCH /api/providers?name=<provider>` changes only the fields it names and keeps every other stored field, whatever the destination. It accepts all fourteen settings; `null` clears one. It also accepts `modelDiscovery`, where `null` or `{}` clears it. It also accepts a boolean `hideRawReasoning` or `null` to clear it. For the two reasoning lists an empty array is stored as an explicit opt-out rather than removed.
 
-With `webSearchBridge` enabled, a search continuation stays bound to the API-key selection that
-served the first request. Changing the selected key, its reference or resolved value, authentication
+With `webSearchBridge` enabled, a search continuation stays bound to the API-key selection that served the first request. Changing the selected key, its reference or resolved value, authentication
 mode, or base URL during search or provider pacing ends the turn with a bridge error before another
 provider request is sent. Changing away and back also ends that continuation. Start a new turn to
 use the new selection. Selection changes before the first provider send retain normal reselection.
