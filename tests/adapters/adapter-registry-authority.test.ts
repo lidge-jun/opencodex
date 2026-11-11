@@ -854,6 +854,25 @@ describe("TRAE CN ACP regression contract", () => {
     });
   }
 
+  test("trailing stdout EOF supersedes success and retains usage", async () => {
+    const usage = { inputTokens: 123, outputTokens: 456, totalTokens: 579 };
+    const fixture = traeFixture((request, child) => {
+      if (request.method !== "session/prompt") return false;
+      fixture.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: {
+        sessionUpdate: "agent_message_chunk", content: { type: "text", text: "partial" },
+      } } });
+      fixture.send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn", usage } });
+      child.stdout!.end();
+      return true;
+    });
+    const events: AdapterEvent[] = [];
+    await createTraeCnAdapter(config(), fixture.deps).runTurn!(traeRequest(), traeMeta(), event => events.push(event));
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "trae_acp_closed", usage });
+    expect(events.some(event => event.type === "done")).toBe(false);
+    expect(buildResponseJSON(events, "test-model").usage)
+      .toMatchObject({ input_tokens: 123, output_tokens: 456, total_tokens: 579 });
+  });
+
   test("shutdown remains bounded when the process and its pipe never close", async () => {
     const fixture = traeFixture(request => request.method === "session/prompt");
     fixture.child.kill = () => true;
