@@ -628,13 +628,6 @@ export function loopbackCompanionBindError(
 }
 
 /**
- * Validate the hub management ingress at the live-write boundary.
- *
- * The persisted schema intentionally degrades a malformed hand edit to disabled so a typo in
- * this opt-in listener cannot discard providers or credentials. A live config mutation must not
- * get that leniency: it receives an exact field error before the degrading schema is applied.
- */
-/**
  * #7705: load drops a hand-edited template that does not validate; a live write that carries one
  * (a provider-wide save, `ocx config set`) gets the same reason the alias-template route gives.
  */
@@ -650,6 +643,13 @@ function providerAliasTemplateConfigError(value: unknown): string | null {
   return null;
 }
 
+/**
+ * Validate the hub management ingress at the live-write boundary.
+ *
+ * The persisted schema intentionally degrades a malformed hand edit to disabled so a typo in
+ * this opt-in listener cannot discard providers or credentials. A live config mutation must not
+ * get that leniency: it receives an exact field error before the degrading schema is applied.
+ */
 function managementIngressConfigError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
   if (!raw) return null;

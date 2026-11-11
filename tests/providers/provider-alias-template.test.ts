@@ -149,3 +149,13 @@ describe("loading a hand-edited alias template", () => {
     ]);
   });
 });
+
+describe("registry provider aliases", () => {
+  test("a provider's registry alias is reserved even when it sets none of its own", () => {
+    const c = config(["vendor/agy", "vendor/beam"], { aliasTemplate: "{modelBasename}" });
+    c.providers["google-antigravity"] = { adapter: "google-antigravity", baseUrl: "https://agy.test/v1" } as OcxProviderConfig;
+    const plan = templateAliasPlan(c, c.providers.cc!, "cc", ["vendor/agy", "vendor/beam"], new Map());
+    expect([...plan.accepted]).toEqual([["vendor/beam", "beam"]]);
+    expect(plan.skipped).toEqual([{ id: "vendor/agy", candidate: "agy", reason: "reserved" }]);
+  });
+});

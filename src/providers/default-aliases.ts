@@ -150,6 +150,8 @@ export function templateAliasPlan(
   for (const [name, other] of Object.entries(config.providers ?? {})) {
     reserve(name);
     reserve(other.alias);
+    // A registry alias (`agy` for google-antigravity) names the provider even when it sets none.
+    if (config.providers) reserve(effectiveProviderAlias(name, other, config as Pick<OcxConfig, "providers">));
     if (name !== providerName) for (const alias of Object.values(other.modelAliases ?? {})) reserve(alias);
   }
   for (const [id, combo] of Object.entries(config.combos ?? {})) { reserve(id); reserve((combo as { alias?: unknown }).alias); }
