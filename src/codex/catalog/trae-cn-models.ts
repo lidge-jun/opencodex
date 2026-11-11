@@ -29,33 +29,32 @@ export async function refreshTraeCnCatalogSources(
 ): Promise<void> {
   const { fetchProviderModelsWithAuth, refreshingModelsAuthResolver } = await import("./provider-models");
   const { captureProviderGather } = await import("./gather-capture");
-  const refreshed: Array<{ name: string; generation: string; contentRevision: string; models: CatalogModel[] }> = [];
+  const retained: Array<{ name: string; contentRevision: string; release: () => void }> = [];
+  const releaseRetained = (): void => {
+    for (const roster of retained.reverse()) roster.release();
+    retained.length = 0;
+  };
   for (const [name, provider] of Object.entries(config.providers)) {
-    if (!current()) return;
+    if (!current()) { releaseRetained(); return; }
     if (provider.adapter !== "trae-cn" || provider.disabled || provider.liveModels === false) continue;
     const gathered = await fetchProviderModelsWithAuth(captureProviderGather(name, provider, refreshingModelsAuthResolver),
       config.modelCacheTtlMs ?? DEFAULT_MODEL_CACHE_TTL_MS, providerContextCap(config, name), refreshingModelsAuthResolver);
-    if (!current()) return;
-    if (gathered.outcome.state === "authoritative") {
-      refreshed.push({ name, models: gathered.models, generation: captureModelCacheGeneration(name),
-        contentRevision: gathered.contentRevision });
+    if (!current()) { releaseRetained(); return; }
+    if (after && gathered.outcome.state === "authoritative") {
+      const release = pinCachedModels(name, gathered.models, Date.now(), captureModelCacheGeneration(name));
+      if (!release) { releaseRetained(); return; }
+      retained.push({ name, release, contentRevision: observeModelCacheRevision(name) });
     }
   }
-  if (!after || refreshed.length === 0 || !current()) return;
-  if (refreshed.some(roster => observeModelCacheRevision(roster.name) !== roster.contentRevision)) return;
-  const releases: Array<() => void> = [];
-  for (const roster of refreshed) {
-    const release = pinCachedModels(roster.name, roster.models, Date.now(), roster.generation);
-    if (!release) {
-      for (const acquired of releases.reverse()) acquired();
-      return;
-    }
-    releases.push(release);
+  if (!after || retained.length === 0) return;
+  if (!current() || retained.some(roster => observeModelCacheRevision(roster.name) !== roster.contentRevision)) {
+    releaseRetained();
+    return;
   }
   try {
     await after();
   } finally {
-    for (const release of releases.reverse()) release();
+    releaseRetained();
   }
 }
 

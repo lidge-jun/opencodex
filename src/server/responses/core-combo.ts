@@ -66,6 +66,7 @@ import {
   previousResponseProviderState,
 } from "../../responses/state";
 import { hasUnreadableEncryptedAgentTask } from "./encrypted-payload";
+import { restoreChatInstructionMedia } from "./chat-policy-media";
 import { captureRouteStaticPolicy, routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
 import { baseProviderLabel, poolAccountProviderLabel } from "../../providers/label";
@@ -1082,7 +1083,7 @@ export async function executeComboResponses(
       provider: targetRoute.provider,
       modelId: targetRoute.modelId,
     });
-    const childBody = concreteComboRequestBody(
+    const projectedChildBody = concreteComboRequestBody(
       childInput,
       pick.target,
       jevEffortApplies ? initialJevDecision.effort : comboDefaultEffort(config, comboId),
@@ -1092,6 +1093,9 @@ export async function executeComboResponses(
         ? (initialJevDecision.effort === null ? "fallback" : "force")
         : combo.defaultEffortMode,
     );
+    const childBody = options.inboundWire === "chat" && options.chatReplayOriginalInboundBody !== undefined
+      ? restoreChatInstructionMedia(projectedChildBody, options.chatReplayOriginalInboundBody)
+      : projectedChildBody;
     if (initialJevDecision) {
       if (jevEffortApplies) delete childBody.service_tier;
       if (jevEffortApplies && initialJevDecision.effort !== null) {

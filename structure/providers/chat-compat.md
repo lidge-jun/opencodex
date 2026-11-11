@@ -25,6 +25,8 @@ several consecutive instructions and the existing deferred tool-result boundary.
 while the normalized effort and other retry settings remain authoritative. Ordinary Chat projection is unchanged.
 `tests/responses/responses-combo-run-turn-classified-failure.test.ts` exercises the real Chat policy retry for OpenAI image
 and Google video targets.
+Translated concrete combo children use that same retained Chat projection, so a replayable text-only target refusal cannot
+drop instruction media before an image-capable fallback target. Native Chat combo delivery retains its existing envelope.
 Structured instructions with image/audio/document parts keep their image detail and use the same leading-system template
 role rule as text-only instructions, so pinned templates receive a chronological `user` turn rather than an invalid late
 `system` or `developer` role. `tests/adapters/openai/openai-chat-qwen38-leading-system.test.ts` covers the structured image.

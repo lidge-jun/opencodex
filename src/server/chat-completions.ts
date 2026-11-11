@@ -404,7 +404,7 @@ async function handleChatCompletionsWithBudget(
 
   let internalBody: Rec;
   let directConversation: ChatIrConversation | undefined;
-  let policyOriginalInboundBody: Rec | undefined;
+  let chatReplayOriginalInboundBody: Rec | undefined;
   try {
     // Validate the full Chat boundary after routing. Native Chat keeps `chatBody` as
     // its wire source; this Responses projection is used only by the fallback path.
@@ -439,11 +439,12 @@ async function handleChatCompletionsWithBudget(
     const mayRetryPolicy = settledRoute?.routeKind === "policy"
       || Boolean(intercept?.enabled && intercept.model
         && isShadowSourceModel(requestedModel, intercept.sourceModels));
-    if (mayRetryPolicy) {
-      // Policy retries need the pre-projection conversation, but ordinary Chat requests do not.
+    if (mayRetryPolicy || Boolean(settledRoute?.combo && !nativeChatCombos)) {
+      // Policy retries and translated combo children need the pre-projection conversation, but
+      // ordinary Chat requests and native combo delivery do not.
       // Admit the serialized clone before allocating it and retain its charge with this request.
       translatorBudget.chargeRetained(jsonUtf8Bytes(chatBody), { kind: "request_copies" });
-      policyOriginalInboundBody = structuredClone(chatBody);
+      chatReplayOriginalInboundBody = structuredClone(chatBody);
     }
   } catch (err) {
     const overflow = isTranslatorBudgetExceededError(err);
@@ -591,7 +592,7 @@ async function handleChatCompletionsWithBudget(
     abortSignal: req.signal,
     // Body is Responses-shaped by now, but the client spoke Chat Completions.
     inboundWire: "chat",
-    policyOriginalInboundBody,
+    chatReplayOriginalInboundBody,
     chatInstructionImage: chatHasInstructionImage(chatBody),
     chatUnsupportedInstructionMedia: chatHasUnsupportedInstructionMedia(chatBody),
     chatRawReasoningVisible: rawReasoningVisible,
