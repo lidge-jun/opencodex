@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { clearModelCache, setCached } from "../../src/codex/model-cache";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxConfig } from "../../src/types";
 import { ManagementRequest as Request } from "../helpers/management-auth";
@@ -49,5 +50,76 @@ describe("model discovery management API", () => {
     expect(result.response.status).toBe(200);
     expect(live.modelDiscovery.recentArrivals?.vendor).toEqual([]);
     expect(live.disabledModels).toEqual(["vendor/new"]);
+  });
+});
+
+describe("#8236 arrival status and the admit policy", () => {
+  test("arrival state follows the catalog's visibility rules", async () => {
+    const live = config();
+    live.providers.vendor.selectedModels = ["known", "kept"];
+    live.disabledModels = ["vendor/legacy", "vendor/mine", "vendor/auto"];
+    live.modelDiscovery = { recentArrivals: { vendor: [
+      { id: "legacy", at: "t" },
+      { id: "mine", at: "t", disabledByPolicy: false },
+      { id: "auto", at: "t", disabledByPolicy: true },
+      { id: "hidden", at: "t", disabledByPolicy: false },
+      { id: "kept", at: "t", admitted: true, disabledByPolicy: false },
+    ] } } as never;
+    const get = await call(live, "/api/model-discovery");
+    const states = Object.fromEntries((get.json.recentArrivals as Record<string, Array<{ id: string; state: string }>>).vendor!.map(row => [row.id, row.state]));
+    expect(states).toEqual({
+      // A row written before this field existed keeps its old reading.
+      legacy: "auto-disabled",
+      mine: "disabled",
+      auto: "auto-disabled",
+      hidden: "not-selected",
+      kept: "enabled",
+    });
+  });
+
+  test("an unselected provider reports a visible arrival as enabled", async () => {
+    const live = config();
+    live.disabledModels = [];
+    live.modelDiscovery = { recentArrivals: { vendor: [{ id: "fresh", at: "t", disabledByPolicy: false }] } } as never;
+    const get = await call(live, "/api/model-discovery");
+    expect((get.json.recentArrivals as Record<string, Array<{ state: string }>>).vendor![0]!.state).toBe("enabled");
+  });
+
+  // An Antigravity base row stands for its low/medium/high tiers in the picker.
+  const family = { provider: "vendor", id: "fam", antigravityEffortWireModelIds: { low: "fam-low", medium: "fam-medium", high: "fam-high" } };
+
+  test("an Antigravity base arrival selected through one of its tiers reports enabled", async () => {
+    const live = config();
+    live.disabledModels = [];
+    live.providers.vendor.selectedModels = ["fam-high"];
+    live.modelDiscovery = { recentArrivals: { vendor: [{ id: "fam", at: "t", disabledByPolicy: false }] } } as never;
+    setCached("vendor", [family as never]);
+    try {
+      const get = await call(live, "/api/model-discovery");
+      expect((get.json.recentArrivals as Record<string, Array<{ state: string }>>).vendor![0]!.state).toBe("enabled");
+    } finally { clearModelCache("vendor"); }
+  });
+
+  test("an Antigravity base arrival whose known tiers are all disabled reports disabled", async () => {
+    const live = config();
+    live.disabledModels = ["vendor/fam-low", "vendor/fam-medium", "vendor/fam-high"];
+    live.modelDiscovery = {
+      knownModels: { vendor: { ids: ["fam-low", "fam-medium", "fam-high"], removed: [], updatedAt: "t" } },
+      recentArrivals: { vendor: [{ id: "fam", at: "t", disabledByPolicy: false }] },
+    } as never;
+    setCached("vendor", [family as never]);
+    try {
+      const get = await call(live, "/api/model-discovery");
+      expect((get.json.recentArrivals as Record<string, Array<{ state: string }>>).vendor![0]!.state).toBe("disabled");
+    } finally { clearModelCache("vendor"); }
+  });
+
+  test("PUT accepts admit globally and per provider, and still rejects anything else", async () => {
+    const live = config();
+    expect((await call(live, "/api/model-discovery", "PUT", { policy: "admit", provider: "vendor" })).response.status).toBe(200);
+    expect(live.providers.vendor.newModelPolicy).toBe("admit");
+    expect((await call(live, "/api/model-discovery", "PUT", { policy: "admit", provider: null })).response.status).toBe(200);
+    expect(live.modelDiscovery?.newModelPolicy).toBe("admit");
+    expect((await call(live, "/api/model-discovery", "PUT", { policy: "everything", provider: null })).response.status).toBe(400);
   });
 });

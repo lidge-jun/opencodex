@@ -350,6 +350,8 @@ export const providerConfigSchema = z.object({
   tlsProfile: z.literal("antigravity-browser").optional(),
   alias: z.string().optional(),
   modelAliases: z.record(z.string(), z.string()).optional(),
+  // Grammar is checked by sanitizeAliasesForLoad and the alias-template route (#7705).
+  aliasTemplate: z.string().optional(),
   modelDisplayNames: modelDisplayNamesSchema.optional(),
   defaultAliases: z.boolean().optional(),
   initialModelSelection: z.object({
@@ -454,6 +456,7 @@ export const providerConfigSchema = z.object({
   responsesSnapshotRepair: z.boolean().optional(),
   messagePhaseInference: z.boolean().optional(),
   hideRawReasoning: z.boolean().optional(),
+  forwardAdvisorTool: z.boolean().optional(),
   // Invalid blocks degrade to "absent" rather than failing the whole config load: an unusable
   // bridge block must never send an operator through invalid-config recovery for an opt-in
   // feature that is off by default. The management write boundary still rejects it loudly.

@@ -317,7 +317,7 @@ test.skipIf(process.platform !== "win32")("a Windows ocx that cannot be containe
   // Constrained Language Mode blocks Add-Type, so the Job helper cannot exist; the session enters
   // it before the unchanged script runs.
   const native = windowsNativeArgv(process.execPath, [script, marker]);
-  const constrained = powershellArgv("$ExecutionContext.SessionState.LanguageMode='ConstrainedLanguage'\n" + Buffer.from(native.at(-1)!, "base64").toString("utf16le"));
+  const constrained = constrainedArgv(native);
   const child = Bun.spawn(constrained, { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const code = await child.exited;
   expect(code).toBe(WINDOWS_CONTAINMENT_EXIT);
@@ -327,10 +327,31 @@ test.skipIf(process.platform !== "win32")("a Windows ocx that cannot be containe
 // Every packed command inflates itself before its containment helper exists; a session that cannot
 // inflate must still refuse with 126. The candidate homes and PATH hold no ocx.exe, so 126 can only
 // be that refusal: an unguarded inflate exits 1 and exhausted discovery exits 127.
-for (const [name, build] of [
+const CONTAINMENT_PROBES = [
   ["discovery", () => windowsOcxArgv(["--version"])],
   ["pinned sync", () => windowsPinnedSyncArgv("lnk_0123456789abcdef")],
-] as const) {
+] as const;
+
+// The language-mode prefix is test scaffolding: no command Home sends carries it, so it is encoded
+// beside the builder's own command instead of spending the cmd.exe budget the builder already
+// enforced. Re-encoding through powershellArgv also repeated its preamble, and once the pinned
+// sync script grew to 7740 encoded characters (#8505) that overhead alone crossed the 8000 cap.
+function constrainedArgv(argv: readonly string[]): string[] {
+  const script = "$ExecutionContext.SessionState.LanguageMode='ConstrainedLanguage'\n" + Buffer.from(argv.at(-1)!, "base64").toString("utf16le");
+  return [...argv.slice(0, -1), Buffer.from(script, "utf16le").toString("base64")];
+}
+
+test("the constrained containment probes run each builder's own command unchanged", () => {
+  for (const [, build] of CONTAINMENT_PROBES) {
+    const argv = build();
+    const constrained = constrainedArgv(argv);
+    expect(constrained.slice(0, -1)).toEqual(argv.slice(0, -1));
+    expect(Buffer.from(constrained.at(-1)!, "base64").toString("utf16le"))
+      .toBe("$ExecutionContext.SessionState.LanguageMode='ConstrainedLanguage'\n" + Buffer.from(argv.at(-1)!, "base64").toString("utf16le"));
+  }
+});
+
+for (const [name, build] of CONTAINMENT_PROBES) {
   test.skipIf(process.platform !== "win32")(`a Windows ${name} command that cannot be contained is refused before any candidate is probed`, async () => {
     const empty = mkdtempSync(join(tmpdir(), "ocx-windows-refuse-candidates-")); roots.push(empty);
     const system32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
@@ -338,7 +359,7 @@ for (const [name, build] of [
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) if (value !== undefined && !isolated.has(key.toLowerCase())) env[key] = value;
     Object.assign(env, { PATH: system32, USERPROFILE: empty, LOCALAPPDATA: empty, ProgramFiles: empty });
-    const constrained = powershellArgv("$ExecutionContext.SessionState.LanguageMode='ConstrainedLanguage'\n" + Buffer.from(build().at(-1)!, "base64").toString("utf16le"));
+    const constrained = constrainedArgv(build());
     const child = Bun.spawn([join(system32, "WindowsPowerShell", "v1.0", "powershell.exe"), ...constrained.slice(1)], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const [code] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     expect(code).toBe(WINDOWS_CONTAINMENT_EXIT);

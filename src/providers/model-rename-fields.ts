@@ -6,6 +6,7 @@ type ModelRenameRole = "none" | "record" | "list" | "scalar" | "nested-models";
 export const PROVIDER_MODEL_RENAME_ROLES = {
   alias: "none",
   modelAliases: "record",
+  aliasTemplate: "none",
   modelDisplayNames: "record",
   defaultAliases: "none",
   adapter: "none",
@@ -152,6 +153,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   thinkingBudgetModels: "list",
   escapeBuiltinToolNames: "none",
   anthropicEofTolerance: "none",
+  forwardAdvisorTool: "none",
   noVisionModels: "list",
   googleMode: "none",
   googleToolSchemaPolicy: "none",

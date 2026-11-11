@@ -15,6 +15,19 @@ Téléchargez `OpenCodex-<version>-macos.dmg` depuis la [dernière version](http
 
 Les versions publiées de `OpenCodex.app` sont signées avec un Developer ID et notariées par Apple. Au premier lancement, macOS ne demande normalement que la confirmation habituelle pour une application téléchargée. S’il la bloque tout de même, utilisez **System Settings → Privacy & Security → Open Anyway**.
 
+#### Homebrew (application de bureau)
+
+Vous pouvez également installer l’application de bureau via Homebrew Cask :
+
+```bash
+brew install --cask opencodex
+```
+
+- **Mises à jour intégrées (`auto_updates`)** : L’application possède son propre système de mise à jour et le Cask déclare `auto_updates true`. Une commande ciblée `brew upgrade --cask opencodex` ou une mise à niveau greedy peut néanmoins remplacer une application mise à jour vers une version plus récente. Vérifiez les versions de l’application installée et du Cask avant une mise à niveau avec Homebrew.
+- **CLI et service d’arrière-plan** : Le Cask installe uniquement `OpenCodex.app`, qui intègre son CLI et son proxy. Vous pouvez installer séparément `ocx` via npm ou les archives de publication pour disposer d’un CLI autonome ou d’un service sans interface ; les deux partagent `~/.opencodex`. Pour confier le service à ce CLI, quittez OpenCodex, sélectionnez explicitement le CLI séparé (en contournant [la redirection du lanceur de paquets vers Desktop](/getting-started/installation/) si elle est activée), puis exécutez `ocx service install`. Voir la [sélection de la commande terminal](/guides/desktop-app/#using-the-ocx-cli-with-the-desktop-app) et la [propriété du runtime](/reference/cli/lifecycle/#runtime-ownership).
+- **Service après une mise à niveau du Cask** : L’étape de désinstallation du Cask peut supprimer la tâche launchd `com.opencodex.proxy` et son plist, même s’ils appartiennent au CLI séparé, et arrêter son service d’arrière-plan. Après la mise à niveau, quittez OpenCodex et, dans une session graphique macOS, utilisez le CLI séparé explicitement sélectionné ci-dessus pour exécuter `ocx service status`. Si le service est absent, exécutez `ocx service install` ; s’il est installé mais non chargé, exécutez `ocx service repair`. Vérifiez à nouveau avec `ocx service status`. `ocx service install` prend le port dans `OCX_BAKE_PORT` ou `config.port`, et non dans la tâche supprimée : si l’une de ces valeurs a changé depuis l’enregistrement du service, mettez à jour les clients qui pointent encore vers l’ancien port. La même étape de désinstallation supprime aussi l’élément Start at Login de Desktop (la tâche launchd `OpenCodex`) ; réactivez **Start at Login** dans OpenCodex si vous l’utilisez.
+- **Suppression des données avec `--zap`** : `brew uninstall --zap --cask opencodex` supprime `~/.opencodex` et `~/.opencodex-desktop`, y compris la configuration et les données d’état du CLI et de Desktop présentes dans ces répertoires. Sauvegardez les données à conserver avant d’utiliser `--zap`. Les définitions du Cask antérieures à 2.97.0 ne listaient pas ces deux répertoires, et Homebrew peut désinstaller avec la définition enregistrée lors de l’installation : vérifiez s’ils subsistent après `--zap` et supprimez-les vous-même si vous le souhaitez.
+
 ### Windows
 
 Téléchargez `OpenCodex-<version>-windows-x64.msi` et lancez l’installation. Windows SmartScreen peut afficher un avertissement, car l’installateur n’est pas encore signé ; choisissez **More info → Run anyway** après avoir vérifié que le téléchargement provient de la page des versions.

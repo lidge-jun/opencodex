@@ -75,7 +75,9 @@ export function unwrapLogConversationQuery(query: string): string {
 export function logConversationQueryCandidates(query: string): string[] {
   const trimmed = query.trim();
   const unwrapped = unwrapLogConversationQuery(trimmed);
-  return unwrapped === trimmed ? [unwrapped] : [unwrapped, trimmed];
+  // A pasted Claude Code metadata.user_id is stored without its per-turn `tk`.
+  const session = trimmed.length > LOG_CONVERSATION_ID_INPUT_MAX ? trimmed : claudeSessionUserId(trimmed);
+  return [...new Set([unwrapped, trimmed, session])];
 }
 
 /**
@@ -227,6 +229,7 @@ export function fillHermesLogConversationFallback(slot: LogConversationSlot, hea
  * Any other user_id, including one that is nothing but `tk`, is returned unchanged.
  */
 export function claudeSessionUserId(userId: string): string {
+  if (!userId.trimStart().startsWith("{")) return userId;
   try {
     const parsed: unknown = JSON.parse(userId);
     if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && "tk" in parsed) {
@@ -245,6 +248,8 @@ export function conversationIdFromClaudeMetadata(
   metadata: { user_id?: unknown } | null | undefined,
 ): string | undefined {
   if (!metadata || typeof metadata.user_id !== "string") return undefined;
+  // Too long to persist: skip parsing a blob normalizeLogConversationId rejects anyway.
+  if (metadata.user_id.trim().length > LOG_CONVERSATION_ID_INPUT_MAX) return undefined;
   return normalizeLogConversationId(claudeSessionUserId(metadata.user_id));
 }
 

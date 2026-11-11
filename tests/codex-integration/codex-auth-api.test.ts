@@ -1,5 +1,5 @@
 import { registerMainCollisionCases } from "../helpers/codex-main-collision";
-import { registerWarmupRateLimitCases } from "../helpers/codex-warmup-rate-limit";
+import { registerReloginPauseCases, registerWarmupRateLimitCases } from "../helpers/codex-warmup-rate-limit";
 import { registerResetCreditConsumeValidationTests } from "../helpers/reset-credit-consume-validation";
 import { registerPoolReauthCauseCases } from "../helpers/pool-reauth-cause";
 import * as usageHistoryModule from "../../src/usage/log";
@@ -5547,7 +5547,7 @@ describe("codex-auth API", () => {
   });
 
   registerMainCollisionCases(makeConfig, completeMockCodexOAuth);
-  registerWarmupRateLimitCases(makeConfig, completeMockCodexOAuth);
+  for (const register of [registerWarmupRateLimitCases, registerReloginPauseCases]) register(makeConfig, completeMockCodexOAuth);
 
   test("OAuth creation reports a durable add when catalog convergence is pending", async () => {
     const accountId = "oauth-picker-pending";

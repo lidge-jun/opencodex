@@ -738,6 +738,7 @@
         "src/oauth/",
         "src/providers/",
         "src/providers/quota/anthropic-account-quota.ts",
+        "src/providers/quota/anthropic-cooldown-recovery-worker.ts",
         "src/server/management/anthropic-pool-settings.ts",
         "src/sidecar/anthropic-binding.ts"
       ]
@@ -1369,6 +1370,9 @@
         "src/local-credentials/",
         "src/server/index/link-management.ts",
         "src/server/management/link-routes.ts",
+        "src/server/management/link-child-ops-routes.ts",
+        "src/cli/link-child-ops.ts",
+        "src/cli/link-status-child.ts",
         "src/server/index/local-control-listener.ts",
         "src/lib/local-control-socket.ts",
         "src/cli/link-local-control.ts",
@@ -1442,7 +1446,9 @@
         "gui/src/hooks/useProviderAccountPools.ts",
         "src/config/account-auto-pause-revisions.ts",
         "src/oauth/api-key-pool-preserve.ts",
-        "gui/src/account-pause-display.ts"
+        "gui/src/account-pause-display.ts",
+        "src/oauth/account-resume-health.ts",
+        "src/codex/account-resume-health.ts"
       ]
     },
     {
