@@ -48,6 +48,7 @@ import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { createLegacyUpdateSession, createOrchestratedChildSession, decodeOrchestratedExpect } from "./orchestrated-session.mjs";
 import { runPosixInstallerSync } from "./posix-install-supervisor.mjs";
 import { runWindowsInstallerSync } from "./npm-install.mjs";
+import { staleUpdateMarkerHint } from "./sync-update-mutex.mjs";
 import { protectOrchestratedWorkerSignals } from "./orchestrated-child.mjs";
 import type { OrchestratedChildArgs } from "./orchestrated-arguments.mjs";
 import { PNPM_READ_CWD, withPnpmCommandCwd, pnpmReadEnvironment } from "./pnpm-read-policy.mjs";
@@ -473,7 +474,12 @@ export async function runUpdate(child?: Extract<OrchestratedChildArgs, { ok: tru
   } else {
     session = createLegacyUpdateSession({ home: getConfigDir() });
     const started = session.start();
-    if (!started.ok) { console.error(`opencodex: ${started.error}`); process.exitCode = 1; return; }
+    if (!started.ok) {
+      console.error(`opencodex: ${started.error}`);
+      if (started.staleMarker) for (const line of staleUpdateMarkerHint(getConfigDir())) console.error(line);
+      process.exitCode = 1;
+      return;
+    }
     process.once("exit", () => session?.finishPreflight());
   }
   try { await runUpdateWithSession(child, session); }

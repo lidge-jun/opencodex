@@ -81,9 +81,11 @@ export function parentHoldsSyncMutex(home, claimedPid = process.env.OCX_SYNC_MUT
 }
 
 /** Shared wire format for launcher and Bun sync admission refusals. */
-export function refuseSync(reason, args) {
+export function refuseSync(reason, args, hint = []) {
   const exit = reason === "sync-in-progress" ? 1 : 7;
   console.error(reason);
+  // Recovery guidance follows the reason line on stderr; stdout and the JSON document never change.
+  for (const line of hint) console.error(line);
   if (args.includes("--json")) console.log(JSON.stringify({ schema: "ocx.sync.fanout/1", home: { state: "skipped", exit }, fanout: { state: "not-applicable", reason }, children: [] }));
   return exit;
 }
@@ -91,11 +93,31 @@ export function refuseSync(reason, args) {
 export function acquireSyncGuard(home, args) {
   const lease = tryAcquireUpdateSyncMutex(home, "sync");
   if (lease.kind !== "acquired") return { kind: "refused", exit: refuseSync(lease.holder === "sync" ? "sync-in-progress" : "update-in-flight", args) };
-  if (inspectUpdateMarker(home) !== "free") {
+  const detail = {};
+  if (inspectUpdateMarker(home, { detail }) !== "free") {
     lease.release();
-    return { kind: "refused", exit: refuseSync("update-in-flight", args) };
+    return { kind: "refused", exit: refuseSync("update-in-flight", args, detail.witnessless ? staleUpdateMarkerHint(home) : []) };
   }
   return lease;
+}
+
+/**
+ * Recovery guidance for a marker that records an interrupted installer with no witness (#8524).
+ * OpenCodex 2.100.x and earlier never recorded the Windows installer supervisor, so such a marker
+ * never clears by itself. Formatting only: the witnessless fact comes from the refusing inspection.
+ */
+export function staleUpdateMarkerHint(home, platform = process.platform) {
+  const path = join(home, "update-orchestrated.json");
+  const rename = platform === "win32"
+    ? `ren "${path}" update-orchestrated.json.stale`
+    : `mv "${path}" "${path}.stale"`;
+  return [
+    `The update marker ${path} records an interrupted update whose installer can no longer be checked`,
+    "(OpenCodex 2.100.x and earlier did not record it on Windows), so it will not clear by itself.",
+    "If no update is running (no ocx update, no npm or pnpm global install, no OpenCodex installer",
+    "PowerShell process), rename the marker and run ocx update again:",
+    `  ${rename}`,
+  ];
 }
 
 function inspectOwnershipLease(home) {
@@ -110,7 +132,7 @@ function inspectOwnershipLease(home) {
   } catch { return "unknown"; }
 }
 
-export function inspectUpdateMarker(home, { now = Date.now, platform = process.platform, signal } = {}) {
+export function inspectUpdateMarker(home, { now = Date.now, platform = process.platform, signal, detail } = {}) {
   const probe = signal ?? (id => process.kill(id, 0));
   const windows = platform === "win32";
   const path = join(home, "update-orchestrated.json");
@@ -158,7 +180,14 @@ export function inspectUpdateMarker(home, { now = Date.now, platform = process.p
     // An unconfirmed installer is free only once its process-tree witness is gone: the POSIX group,
     // or on Windows the supervisor whose exit closes the kill-on-close job.
     const witness = windows ? marker.installerPid : marker.installerPgid;
-    return unknown || (marker.terminationUnconfirmed && witness === undefined) ? "unknown" : "free";
+    if (unknown) return "unknown";
+    if (marker.terminationUnconfirmed && witness === undefined) {
+      // Unknown only because nothing witnesses the installer: the fence has passed and every
+      // recorded process is gone. The refusal can then name the marker and its manual recovery.
+      if (detail) detail.witnessless = true;
+      return "unknown";
+    }
+    return "free";
   } catch (error) { return !found && error?.code === "ENOENT" ? "free" : "unknown"; }
   finally { if (fd !== undefined) closeSync(fd); }
 }
