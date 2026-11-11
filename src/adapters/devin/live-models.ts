@@ -58,7 +58,11 @@ export const DEVIN_STATIC_MODELS = [
  * number over from the model's original vendor.
  */
 export const DEVIN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
-  "swe-2": 262_000,
+  // 261112: live catalog context_window 850_000; a real turn completed at 754,971 total.
+  "swe-2": 850_000,
+  // 261112: live catalog also advertises 850_000, but observed turns terminate at
+  // totalTokens 262,140 -- the serving bound is ~256KiB, not the catalog figure.
+  "swe-2-flash": 262_000,
   "swe-1-7": 262_000,
   "swe-1-7-lightning": 202_752,
   "swe-1-6": 200_000,

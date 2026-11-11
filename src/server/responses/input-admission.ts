@@ -11,6 +11,7 @@ import { clientFacingModelText, type ClientFacingModelLabel } from "../../lib/er
  * catches the pathological case and stays out of the way otherwise. Every uncertainty
  * resolves toward admitting.
  */
+import { collapseDevinModelUid, DEVIN_MODEL_CONTEXT_WINDOWS } from "../../adapters/devin/live-models";
 import {
   nativeOpenAiContextWindow,
   nativeOpenAiMaxInputTokens,
@@ -171,6 +172,20 @@ interface ResolvedContextLimits {
   ceiling: number | null;
 }
 
+/**
+ * Adapter-owned static window, consulted only when the routed provider config declares none.
+ * Devin is the case that matters: its live catalog windows reach the Codex-facing model list
+ * but never `provider.modelContextWindows`, so without this fallback every devin target
+ * resolved `window: null` and the strict combo gate stayed fail-open on exactly the turns it
+ * exists to skip. Explicit provider config still wins; the effort-suffix collapse covers
+ * catalog UIDs like `swe-2-flash-medium`.
+ */
+function adapterContextWindow(provider: OcxProviderConfig, modelId: string): number | null {
+  if (provider.adapter !== "devin") return null;
+  return positive(modelRecordValue(DEVIN_MODEL_CONTEXT_WINDOWS, modelId))
+    ?? positive(modelRecordValue(DEVIN_MODEL_CONTEXT_WINDOWS, collapseDevinModelUid(modelId)));
+}
+
 function resolveContextLimits(
   provider: OcxProviderConfig,
   providerName: string,
@@ -202,7 +217,7 @@ function resolveContextLimits(
     : null;
   const nativeMaxInput = canonicalNativeBare ? positive(nativeOpenAiMaxInputTokens(modelId, nativeLimits)) : null;
 
-  const window = canonicalNativeBare ? (native ?? generatedNativeWindow(modelId, configured, nativeContextCap)) : configured;
+  const window = canonicalNativeBare ? (native ?? generatedNativeWindow(modelId, configured, nativeContextCap)) : (configured ?? adapterContextWindow(provider, modelId));
   // modelMaxInputTokens is an input-only cap, so it can only tighten the window.
   const configuredMaxInput = positive(modelRecordValue(provider.modelMaxInputTokens, modelId));
   const limits = [window, configuredMaxInput, nativeMaxInput].filter((v): v is number => v !== null);
