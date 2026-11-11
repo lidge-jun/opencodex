@@ -1359,6 +1359,8 @@ async function resolveCodexAuthContextUnannotated(
     );
     eligibility.deniedModelAccountIds = deniedModelAccountIds;
     const selectionOptions = {
+      // A fixed selector (exact account, Reserve) is outside the pool-only policy (#7410).
+      explicitAccountSelector: fixedAccountId !== undefined,
       // Temporary switch drain keeps the candidate until the atomic claim rejects
       // it. Retained recovery makes main wholly ineligible so pool routing continues.
       nativeMainSelectionOnly,
@@ -1942,6 +1944,8 @@ export function headersForCodexAuthContext(
 
 export function isCodexAuthContextUsable(ctx: CodexAuthContext, config: OcxConfig): boolean {
   if (ctx.kind === "main") return true;
-  if (ctx.kind === "main-pool") return isCodexAccountUsable(config, ctx.accountId);
+  if (ctx.kind === "main-pool") {
+    return isCodexAccountUsable(config, ctx.accountId, ctx.fixedAccount === true ? { explicitAccountSelector: true } : undefined);
+  }
   return isCodexAccountUsable(config, ctx.accountId) && isCodexAccountGenerationLive(ctx.accountId, ctx.generation);
 }

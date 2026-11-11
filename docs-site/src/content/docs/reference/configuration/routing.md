@@ -31,6 +31,8 @@ active Pool account, and never used as the caller-main fallback; a manual pin on
 If no allowed account can serve, the request is refused. Account-qualified models (including
 `__main__`), Reserve models and Direct mode are explicit choices outside the policy. Paused,
 duplicate, entitlement and cooldown checks apply unchanged.
+Web-search and vision helpers that borrow a Codex login automatically follow the same rule: with
+only the native main login signed in, they treat Codex as unavailable while the policy is on.
 
 ```json
 {"codexPool":{"poolOnly":true}}

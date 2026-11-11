@@ -134,7 +134,9 @@ account-qualified subagent route passes `explicitAccountSelector`. `resolveCodex
 the paths that never reach selection: it skips request-owned main pin preservation, stored-main discovery and main
 entitlement reads, both caller-main fallbacks (no candidate, stored-account cooldown) and the no-candidate main policy
 check, and refuses with `CodexPoolAuthenticationError` if any selector still names main. Fixed selectors (an exact account,
-`__main__`, Reserve) and Direct mode stay outside the policy. Paused, duplicate-main, entitlement and cooldown checks are
+`__main__`, Reserve) and Direct mode stay outside the policy: their selection options and `isCodexAuthContextUsable` for a
+`fixedAccount` main-pool context pass `explicitAccountSelector`. `src/sidecar/auth.ts` (web-search and vision login presence)
+gets no opt-out, so main alone counts as no Codex login under the policy. Paused, duplicate-main, entitlement and cooldown checks are
 unchanged, and the policy never makes an ineligible stored account usable. Coverage:
 `tests/codex-integration/codex-pool-only-policy.test.ts`; `tests/codex-integration/codex-pool-caller-fallback-policy.test.ts`
 keeps the default-mode fallbacks.
