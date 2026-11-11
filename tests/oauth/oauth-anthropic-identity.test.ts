@@ -257,7 +257,9 @@ test("explicit import enriches legacy shared-token slot without changing its id 
   expect(getAccountCredential("anthropic", id)!.anthropicIdentity).toEqual(proof("synthetic-old"));
 });
 
-for (const mutation of ["login", "identity", "pause", "disk"] as const) {
+// A CLI credential change is caught by the awaited re-read just before persistence (below); the
+// Keychain read is asynchronous, so it no longer runs inside the serialized writer (#8161).
+for (const mutation of ["login", "identity", "pause"] as const) {
   test(`serialized adoption guard catches queued ${mutation} after the profile recheck`, async () => {
     const { id, credential } = await seed(); disk();
     const intent = writeOAuthRefreshIntent("anthropic", id, credentialGeneration(credential));
@@ -276,7 +278,6 @@ for (const mutation of ["login", "identity", "pause", "disk"] as const) {
       if (mutation === "login") row.loginId = "00000000-0000-4000-8000-000000000002";
       if (mutation === "identity") row.credential.accountId = "synthetic-owner-changed";
       if (mutation === "pause") row.paused = true;
-      if (mutation === "disk") disk("synthetic-newer-disk", "synthetic-newer-refresh");
     });
     try {
       await writerEntered.promise;
@@ -290,6 +291,31 @@ for (const mutation of ["login", "identity", "pause", "disk"] as const) {
     } finally {
       finishProfile.resolve(); finishWriter.resolve(); mergeSpy.mockRestore();
     }
+  });
+}
+
+for (const reread of ["unavailable", "rotated"] as const) {
+  test(`adoption fails closed when the CLI re-read just before persistence is ${reread}`, async () => {
+    const { id, credential } = await seed(); disk();
+    const intent = writeOAuthRefreshIntent("anthropic", id, credentialGeneration(credential));
+    const originalDetect = localTokens.detectClaudeCodeTokenAsync;
+    let reads = 0;
+    const detect = spyOn(localTokens, "detectClaudeCodeTokenAsync").mockImplementation(async () => {
+      reads += 1;
+      const observed = await originalDetect();
+      if (reads === 1 || !observed) return observed;
+      // A locked Keychain (timeout, backoff or a busy slot) reads as no credential.
+      return reread === "unavailable" ? null : { ...observed, access: "synthetic-rotated", refresh: "synthetic-rotated-rt" };
+    });
+    const before = getAccountSet("anthropic");
+    try {
+      await expect(refreshAnthropicAccountWithLock("anthropic", id, noRefresh, credential, {
+        resolveIdentity: async access => proof(access),
+      })).rejects.toBeInstanceOf(OAuthTokenRefreshStaleError);
+      expect(reads).toBe(2);
+      expect(getAccountSet("anthropic")).toEqual(before);
+      expect(readOAuthRefreshIntent("anthropic", id)).toEqual(intent);
+    } finally { detect.mockRestore(); }
   });
 }
 
@@ -502,12 +528,12 @@ test("different CLI account can clear an obsolete intent after durable same-acco
 });
 
 
-test("adoption reads the CLI generation only at observation and inside persistence", async () => {
+test("adoption reads the CLI generation at observation and again just before persistence, never inside it", async () => {
   const { id, credential } = await seed(); disk();
-  const originalDetect = localTokens.detectClaudeCodeToken;
+  const originalDetect = localTokens.detectClaudeCodeTokenAsync;
   const reads: boolean[] = [];
   let insidePersistence = false;
-  const detect = spyOn(localTokens, "detectClaudeCodeToken").mockImplementation(() => {
+  const detect = spyOn(localTokens, "detectClaudeCodeTokenAsync").mockImplementation(() => {
     reads.push(insidePersistence);
     return originalDetect();
   });
@@ -516,6 +542,7 @@ test("adoption reads the CLI generation only at observation and inside persisten
       resolveIdentity: async access => proof(access),
       afterPrePersistRead: () => { insidePersistence = true; },
     })).resolves.toBe("synthetic-other");
-    expect(reads).toEqual([false, true]);
+    // The Keychain read is asynchronous, so it must not run under the store writer (#8161).
+    expect(reads).toEqual([false, false]);
   } finally { detect.mockRestore(); }
 });

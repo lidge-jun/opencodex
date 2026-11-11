@@ -96,7 +96,7 @@ export { OAUTH_REFRESH_LOCK_WAIT_MS, peekAuthStore, peekOAuthRefreshIntent } fro
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 
 import { REFRESH_SKEW_MS } from "./refresh-policy";
-import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForInstance } from "./anthropic-continuity";
+import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForInstance, claudeCredentialGenerationCurrent } from "./anthropic-continuity";
 import { anthropicSubscriptionLabel } from "../providers/anthropic-subscription";
 import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
@@ -865,9 +865,11 @@ export async function refreshAnthropicAccountWithLock(
     const generation = credentialGeneration(stored);
     let pendingIntent = readOAuthRefreshIntent(provider, accountId);
     const observed = await newerClaudeCredentialForInstance(provider, stored, now(), deps.signal, deps.resolveIdentity);
+    // The CLI credential is re-read here, before the serialized writer, because the read is async.
+    const diskVerified = observed.kind === "absent" ? undefined : await claudeCredentialGenerationCurrent(observed.diskGeneration);
     const assertOwner = (store: AuthStore, checkDisk = true) => {
       if (observed.kind !== "absent" && deps.signal?.aborted) throw new OAuthTokenRefreshStaleError();
-      if (!owns(store, checkDisk && observed.kind !== "absent" ? observed.diskGeneration : undefined)) {
+      if (!owns(store, checkDisk ? diskVerified : undefined)) {
         if (store[provider]?.accounts.find(a => a.id === accountId)?.paused) throw new OAuthAccountPausedError();
         throw new OAuthTokenRefreshStaleError();
       }
