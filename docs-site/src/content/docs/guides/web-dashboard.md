@@ -251,6 +251,8 @@ The conversation field also accepts a pasted `codex://threads/<id>` deep link, t
 Codex "copy session link" puts on the clipboard — the wrapper and any link metadata such
 as `?hostId=…` are ignored and the bare thread id is matched, the same value an
 `ocx logs filter --conversation` search unwraps.
+It also accepts a remote Claude Code turn's `metadata.user_id`: the per-turn `tk` token
+is ignored, so any turn of a session finds the whole session.
 
 Time windows cover the last 15 minutes, hour, or day and refresh every 30 seconds while the
 Logs tab is active, even with auto-refresh off. Windows use the proxy timestamp from
