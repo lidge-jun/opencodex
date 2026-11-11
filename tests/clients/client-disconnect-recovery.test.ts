@@ -134,6 +134,30 @@ function run(scenario: Scenario): Outcome {
 }
 
 describe("disconnect after Codex edited config.toml (O9)", () => {
+  // Byte-for-byte boundaries of putting the person's own web_search line back.
+  test.each([
+    ["a BOM and a final line without a newline", "\uFEFFmodel_provider = \"openai\"", 'web_search = "live"',
+      "\uFEFFmodel_provider = \"openai\"\nweb_search = \"live\"\n"],
+    ["a file with no root lines", CODEX_LINES.slice(1), 'web_search = "live"',
+      'web_search = "live"\n' + CODEX_LINES.slice(1)],
+    ["a root array before the insertion point", 'model_provider = "openai"\nnotify = [\n  "a",\n  "b",\n]\n' + CODEX_LINES, 'web_search = "live"',
+      'model_provider = "openai"\nnotify = [\n  "a",\n  "b",\n]\nweb_search = "live"\n' + CODEX_LINES],
+    ["a journaled line with its own spacing and comment", ROUTING_GONE, 'web_search  =  "live"   # mine',
+      'model_provider = "openai"\nweb_search  =  "live"   # mine\n' + CODEX_LINES],
+  ])("putting the web_search line back keeps every other byte: %s", (_name, config, replaced, expected) => {
+    const out = run({ config, replacedWebSearch: replaced });
+    expect(out.error).toBeNull();
+    expect(out.journal).toBe(false);
+    expect(out.config).toBe(expected);
+  }, SPAWN_BUDGET_MS);
+
+  test("with another OpenCodex setting still present, nothing is put back and the journal is kept", () => {
+    const out = run({ config: ROUTING_KEPT, replacedWebSearch: 'web_search = "live"' });
+    expect(out.error).toContain("openai_base_url");
+    expect(out.config).toBe(ROUTING_KEPT);
+    expect(out.journal).toBe(true);
+  }, SPAWN_BUDGET_MS);
+
   test("putting the web_search line back keeps every other byte of a mixed CRLF/LF file", () => {
     const mixed = 'model_provider = "openai"\r\n[notice]\nhide_full_access_warning = true\r\n[projects."/srv/work/project"]\ntrust_level = "trusted"\n';
     const out = run({ config: mixed, replacedWebSearch: 'web_search = "live"' });
