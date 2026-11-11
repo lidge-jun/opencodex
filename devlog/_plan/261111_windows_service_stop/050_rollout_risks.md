@@ -5,6 +5,7 @@
 - Killing the wrong process: only wrapper images are ever terminated; the proxy child keeps the graceful stop and its refusal rule. Per-installation binding with an image-name allowlist, lineage, a creation time read at bind time and re-checked on the same handle that terminates. Residual: a process that perfectly impersonates this home's wrapper (image, command line, lineage and creation time) cannot be told apart; the guarded takeover already carries that residual.
 - Elevated tasks: an unelevated stop cannot terminate an elevated wrapper → `denied` with guidance; no automatic elevation.
 - Trigger races: a new instance during the stop is `survived`, not retried without bound.
+- Windows ARM64: the recommended fallback keeps today's ability to end a wrapper with a small accepted window between the in-script check and `Kill()`. If the owner prefers the strict variant (no kill without the handle primitive), ARM64 regresses from today: `ocx stop` and `ocx uninstall` report `unknown` wherever a wrapper survives.
 - Not persistent: the proxy returns at the next logon/unlock trigger; stated in output text.
 - Behavior change for scripts: `ocx stop`, `ocx service stop`, `ocx uninstall` and `/api/stop` report failure where they used to report success over a respawning wrapper.
 

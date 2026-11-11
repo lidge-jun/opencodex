@@ -10,7 +10,10 @@
 - Access denied on `/end` or terminate → denied, no further kills.
 - Creation time changed between bind and terminate (PID reuse) → that PID untouched.
 - Port still answered by this installation's identity → survived; by a foreign identity → stopped + `portHeldByForeign`.
-- ARM64 path (no FFI) → unknown, no kill.
+- Order: wrappers end in part A, the child then stops through the caller's graceful path, and only then does part B check the port; `/api/stop` runs part A only.
+- `ocx service uninstall` and `prepareServiceInstall` end a looping wrapper before deleting or replacing the task.
+- A wrapper that matches image and path but fails lineage is not terminated → survived with `unbound-wrapper`.
+- ARM64 fallback (if approved): CIM creation time bind, in-script StartTime recheck, `Kill()` on the same object.
 - Output mapping per path: `ServiceStopOutcome`, `ocx-stop/1` (no new outcome/proxy enum values; additive fields only), `/api/stop` codes, Desktop parser unit tests with old and new documents; updater variant refuses without authorization at entry and before each terminate.
 - New test files registered in the layout maps; no capped file grows (file-size ratchet).
 
