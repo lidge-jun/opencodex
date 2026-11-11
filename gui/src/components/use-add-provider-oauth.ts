@@ -6,6 +6,7 @@ import { afterOAuthCancellation, cancelOAuthLogin } from "../oauth-cancellation-
 import type { LoginHintData } from "./login-url-block";
 import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch";
 import { loginPollAttempts } from "../oauth-login-budget";
+import { isServerOwnedLogin, serverOwnedLoginAttempts } from "../oauth-server-owned-login";
 
 export const OAUTH_LOGIN_POLL_INTERVAL_MS = 2_000;
 
@@ -47,6 +48,9 @@ export function useAddProviderOAuth({
       const providers = [...activeProvidersRef.current];
       activeProvidersRef.current.clear();
       for (const [providerId, setters] of providers) {
+        // The proxy owns this login (its own isolated window and budget), so a
+        // dashboard teardown must not cancel a flow the user is completing there.
+        if (isServerOwnedLogin(providerId)) continue;
         bumpLoginGeneration(providerId);
         if (clearUi) {
           setters.setOauthBusy(false);
@@ -124,7 +128,10 @@ export function useAddProviderOAuth({
       else setOauthMsg(data.instructions || t("modal.loggingIn"));
       // A device grant outlives the browser budget; see oauth-login-budget.ts.
       let deviceFlow = Boolean(data.deviceCode);
-      for (let i = 0; i < loginPollAttempts(deviceFlow, OAUTH_LOGIN_POLL_INTERVAL_MS, 100); i++) {
+      const pollAttempts = isServerOwnedLogin(providerId)
+        ? serverOwnedLoginAttempts(OAUTH_LOGIN_POLL_INTERVAL_MS)
+        : loginPollAttempts(deviceFlow, OAUTH_LOGIN_POLL_INTERVAL_MS, 100);
+      for (let i = 0; i < pollAttempts; i++) {
         await new Promise(r => setTimeout(r, OAUTH_LOGIN_POLL_INTERVAL_MS));
         if (!aliveRef.current || !isCurrent()) return;
         const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${providerId}`).catch(() => null);

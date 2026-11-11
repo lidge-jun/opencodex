@@ -5,6 +5,7 @@ import { openBrowserRequestField } from "../oauth-open-browser-pref";
 import { afterOAuthCancellation, cancelOAuthLogin } from "../oauth-cancellation-barrier";
 import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch";
 import { loginPollAttempts } from "../oauth-login-budget";
+import { isServerOwnedLogin, serverOwnedLoginAttempts } from "../oauth-server-owned-login";
 import type { OAuthAccount, OAuthStatus } from "./providers-shared";
 import { oauthLabel } from "./providers-shared";
 
@@ -90,6 +91,9 @@ export function useProvidersOAuth({
       const active = [...activeLoginGenerationsRef.current];
       activeLoginGenerationsRef.current.clear();
       for (const [provider, generation] of active) {
+        // The proxy owns this login (its own isolated window and budget), so a
+        // dashboard teardown must not cancel a flow the user is completing there.
+        if (isServerOwnedLogin(provider)) continue;
         if (oauthLoginGenerationRef.current!.get(provider) === generation) bumpLoginGeneration(provider);
         if (clearUi) {
           setBusy(current => current === provider ? null : current);
@@ -158,7 +162,10 @@ export function useProvidersOAuth({
       // A device code can arrive with the POST or with a later status hint; either one stretches
       // the budget to the grant's lifetime (see oauth-login-budget.ts).
       let deviceFlow = Boolean(data.deviceCode);
-      for (let i = 0; i < loginPollAttempts(deviceFlow, 2000, 150) && aliveRef.current && oauthLoginGenerationRef.current!.get(provider) === generation; i++) {
+      const pollAttempts = isServerOwnedLogin(provider)
+        ? serverOwnedLoginAttempts(2000)
+        : loginPollAttempts(deviceFlow, 2000, 150);
+      for (let i = 0; i < pollAttempts && aliveRef.current && oauthLoginGenerationRef.current!.get(provider) === generation; i++) {
         await new Promise(r => setTimeout(r, 2000));
         if (oauthLoginGenerationRef.current!.get(provider) !== generation || !aliveRef.current) return;
         const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${provider}`).catch(() => null);

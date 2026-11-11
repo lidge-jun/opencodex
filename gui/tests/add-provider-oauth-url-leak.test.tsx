@@ -7,6 +7,7 @@ import { useT } from "../src/i18n/shared";
 import AddProviderModal from "../src/components/AddProviderModal";
 import { OAUTH_LOGIN_POLL_INTERVAL_MS } from "../src/components/use-add-provider-oauth";
 import { useProvidersOAuth } from "../src/pages/use-providers-oauth";
+import { serverOwnedLoginAttempts } from "../src/oauth-server-owned-login";
 import type { OAuthAccount, OAuthStatus } from "../src/pages/providers-shared";
 
 /**
@@ -309,6 +310,36 @@ test("pagehide clears the add-provider OAuth hint and allows another login", asy
     await new Promise((r) => setTimeout(r, 20));
   });
   expect(pendingLogins).toHaveLength(1);
+});
+
+test("pagehide leaves a proxy-owned login running, and Cancel still ends it", async () => {
+  await mountProvidersOAuthHarness({ provider: "m365-copilot" });
+  await act(async () => {
+    pendingLogins.shift()?.(A_URL);
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  expect(host.querySelector('[data-testid="oauth-busy"]')?.textContent).toBe("m365-copilot");
+
+  // The proxy owns the isolated window and its callback, so unloading this tab
+  // must not abort a login the user is still completing over there.
+  await act(async () => {
+    win.dispatchEvent(new win.Event("pagehide"));
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  expect(cancelledProviders).toEqual([]);
+  expect(host.querySelector('[data-testid="oauth-busy"]')?.textContent).toBe("m365-copilot");
+
+  // An explicit Cancel is still a user decision and must reach the proxy.
+  clickByText("Cancel login");
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  expect(cancelledProviders).toEqual(["m365-copilot"]);
+});
+
+test("a proxy-owned login is polled past the dashboard's own browser budget", () => {
+  // captureM365BrowserCode runs for 10 minutes plus a 120-second web-session poll;
+  // a dashboard budget shorter than that cancelled flows that were still live.
+  expect(serverOwnedLoginAttempts(OAUTH_LOGIN_POLL_INTERVAL_MS) * OAUTH_LOGIN_POLL_INTERVAL_MS)
+    .toBeGreaterThan(12 * 60_000);
 });
 
 test("the add-provider OAuth pane can cancel an in-flight login", async () => {
