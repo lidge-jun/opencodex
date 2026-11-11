@@ -30,7 +30,7 @@ import { clientLinkStatePath, isChildInitiatedLink, recordChildInitiatedLink } f
 import { startMachineListener, type MachineListenerDeps } from "./machine-listener";
 import { isLinkConnection, readClientConnectionState, readClientConnectionStateWithEvidence } from "./state";
 import { withClientLifecycleSync } from "./lifecycle-lock";
-import { clientConnectionEnded, clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, restartOwnerProven, type ClientRestartController } from "./runtime-restart";
+import { clientConnectionEnded, clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, restartOwnerEvidence, type ClientRestartController, type RestartOwner } from "./runtime-restart";
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
 import { restoreLinkClientRouting } from "./stop-routing";
 import { markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } from "./sync-runtime";
@@ -101,19 +101,20 @@ export function clientRuntimeRecord(
   pid: number,
   port: number,
   attestationSecret: string = createLocalAttestationSecret(),
-  ownerEvidence: boolean = ownerProven(),
+  owner: RestartOwner | null = classifiedOwner(),
 ): RuntimePortState {
   let command: string[] | undefined;
   try { command = currentServingCommand(); } catch { /* no reliable relaunch identity; update admission fails closed */ }
-  return { pid, port, hostname: "127.0.0.1", attestationSecret, ...(command ? { command } : {}), ...siblingRuntimeField(), ...(clientStopping ? { clientStopping: true as const } : {}), ...(ownerEvidence ? {} : { restartOwnerUnproven: true as const }) };
+  return { pid, port, hostname: "127.0.0.1", attestationSecret, ...(command ? { command } : {}), ...siblingRuntimeField(), ...(clientStopping ? { clientStopping: true as const } : {}), ...(owner ? { restartOwner: owner } : {}) };
 }
 
 /** Evaluated once: the launch environment and parent of this process do not change. */
-let ownerProvenMemo: boolean | undefined;
-function ownerProven(): boolean {
-  ownerProvenMemo ??= restartOwnerProven({ desktop: isDesktopSupervised(), env: process.env });
-  return ownerProvenMemo;
+let ownerMemo: { value: RestartOwner | null } | undefined;
+function classifiedOwner(): RestartOwner | null {
+  ownerMemo ??= { value: restartOwnerEvidence({ desktop: isDesktopSupervised(), env: process.env }) };
+  return ownerMemo.value;
 }
+const ownerProven = (): boolean => classifiedOwner() !== null;
 
 export function standaloneRecycleEnv(
   env: NodeJS.ProcessEnv,

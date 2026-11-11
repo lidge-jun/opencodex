@@ -8,6 +8,11 @@
  * Every other outcome exits 1, so a Home-driven leave stops before its own `ocx restart`.
  */
 import type { ProxyRestartIo, ProxyRestartLive, ProxyRestartRequestOutcome } from "./tray-proxy";
+import { RESTART_OWNERS, type RestartOwner } from "../client/runtime-restart";
+
+function isHandledRestartOwner(value: string | undefined): value is RestartOwner {
+  return value !== undefined && (RESTART_OWNERS as readonly string[]).includes(value);
+}
 
 /**
  * One runtime process: its runtime record. The attestation secret is created per process
@@ -19,8 +24,8 @@ export interface RuntimeGeneration {
   port: number;
   hostname?: string;
   attestationSecret: string;
-  /** The runtime published no positive evidence of its owner (a bare OCX_SERVICE=1). */
-  restartOwnerUnproven?: true;
+  /** The owner the runtime classified from positive evidence; absent for a bare flag or an older runtime. */
+  restartOwner?: string;
 }
 
 export type DisconnectClientState =
@@ -122,10 +127,11 @@ export async function restartRuntimeAfterDisconnect(deps: DisconnectRuntimeDeps)
   if (client && !target) {
     return fail(`Disconnected, but this machine could not identify the running client runtime${client.pid ? ` (pid ${client.pid})` : ""}: its runtime record is missing or names another process, so it was not restarted.`, { kind: "unknown" });
   }
-  // A runtime with no positive evidence of its owner (a bare OCX_SERVICE=1: a legacy service child
-  // or a companion proxy) is left exactly as origin/dev's `ocx disconnect` left it: not restarted,
-  // and the disconnect's own exit code (0) stands.
-  if (target?.restartOwnerUnproven) return 0;
+  // Only a record that states an owner this step handles (written by a runtime with this change:
+  // the desktop app, a service manager with a current marker, or no supervisor) is restarted. Any
+  // other record, a bare OCX_SERVICE=1 runtime or one started before this change, is left exactly
+  // as origin/dev's `ocx disconnect` left it: no restart request, the disconnect's own exit 0.
+  if (target && !isHandledRestartOwner(target.restartOwner)) return 0;
   const before = deps.connectionState();
   if (before.kind !== "disconnected") {
     error(`Disconnect finished, but the client runtime was not restarted. ${recoveryAdvice(before, { kind: "unknown" })}`);

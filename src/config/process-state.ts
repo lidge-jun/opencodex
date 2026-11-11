@@ -43,11 +43,12 @@ export type RuntimePortState = {
   /** A Link runtime is draining; new and in-flight sync commits must stand down. */
   clientStopping?: true;
   /**
-   * A client runtime with no positive evidence of its owner (a bare OCX_SERVICE=1:
-   * src/client/runtime-restart.ts restartOwnerProven). `ocx disconnect` leaves such a runtime
-   * alone, as origin/dev did. Absent for every other runtime.
+   * The owner a client runtime classified from positive evidence (src/client/runtime-restart.ts
+   * restartOwnerEvidence: desktop, service-manager or none). Absent for a bare OCX_SERVICE=1 and for
+   * runtimes older than this field; `ocx disconnect` restarts only a runtime whose record states a
+   * value it recognises. Any string is accepted here so a later value never invalidates the record.
    */
-  restartOwnerUnproven?: true;
+  restartOwner?: string;
   /**
    * The live proxy's port when this runtime is a sibling instance started beside it
    * (`src/codex/sibling-start.ts`). `ocx stop` reads it to leave shared client routing alone.
@@ -71,7 +72,7 @@ export function isValidRuntimePortState(value: unknown): value is RuntimePortSta
     && hostnameOk
     && attestationOk
     && (state.clientStopping === undefined || state.clientStopping === true)
-    && (state.restartOwnerUnproven === undefined || state.restartOwnerUnproven === true)
+    && (state.restartOwner === undefined || (typeof state.restartOwner === "string" && state.restartOwner.length <= 64))
     && siblingOk;
 }
 

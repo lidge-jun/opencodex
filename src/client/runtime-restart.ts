@@ -172,7 +172,18 @@ export async function clientRestartSupervisor(): Promise<ClientRestartSupervisor
  * and the proxies of ocx claude, ocx codex and ocx opencode all carry it.
  */
 export function restartOwnerProven(input: { desktop: boolean; env: NodeJS.ProcessEnv; managed?: (env: NodeJS.ProcessEnv) => boolean }): boolean {
-  return input.desktop || input.env.OCX_SERVICE !== "1" || (input.managed ?? isSupervisedServiceChild)(input.env);
+  return restartOwnerEvidence(input) !== null;
+}
+
+/** The owners this change handles, as a client runtime states them in its record (`restartOwner`). */
+export type RestartOwner = "desktop" | "service-manager" | "none";
+export const RESTART_OWNERS: readonly RestartOwner[] = ["desktop", "service-manager", "none"];
+
+/** The classified owner from positive evidence, or null for a bare OCX_SERVICE=1 ({@link restartOwnerProven}). */
+export function restartOwnerEvidence(input: { desktop: boolean; env: NodeJS.ProcessEnv; managed?: (env: NodeJS.ProcessEnv) => boolean }): RestartOwner | null {
+  if (input.desktop) return "desktop";
+  if ((input.managed ?? isSupervisedServiceChild)(input.env)) return "service-manager";
+  return input.env.OCX_SERVICE !== "1" ? "none" : null;
 }
 
 /**
