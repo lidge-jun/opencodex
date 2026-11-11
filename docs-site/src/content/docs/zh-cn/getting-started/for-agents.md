@@ -10,11 +10,15 @@ description: 为受代理驱动或脚本控制的终端安装并操作 opencodex
 安装已发布的包，并确认 `ocx` 已在 `PATH` 中：
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
 ```
 
-选择一种方式运行代理：
+启动代理前，在交互式终端运行 `ocx init`，以使用设置时选择的端口：
+
+```bash
+ocx init
+```
 
 ```bash
 # Foreground: blocks this terminal until stopped.
@@ -22,12 +26,6 @@ ocx start
 
 # Background: installs or updates the service, then starts it.
 ocx service
-```
-
-在交互式终端中运行 `ocx init`。如果 `ocx start` 正占用前台，请使用第二个终端：
-
-```bash
-ocx init
 ```
 
 该向导会写入 `$OPENCODEX_HOME/config.json`（通常是 `~/.opencodex/config.json`）。它还可以把代理地址注入 Codex 的 `config.toml`，并安装可选的 Codex 自动启动 shim。`ocx init` 从不启动代理。若要完全非交互式地完成设置，请改用下面所示的 `ocx provider add` 来配置提供方，而不是运行向导。
@@ -68,7 +66,7 @@ ocx provider add anthropic-apikey \
 
 ```bash
 ocx combo set main \
-  --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol \
+  --targets anthropic-apikey/claude-opus-4-8,openai/gpt-5.6-sol \
   --strategy failover
 ```
 

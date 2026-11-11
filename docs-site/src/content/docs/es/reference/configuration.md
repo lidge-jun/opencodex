@@ -96,3 +96,6 @@ Prefiere referencias `${ENV_VAR}` para las claves API. Los valores literales de 
 :::note[Escrituras atómicas]
 opencodex escribe los archivos administrados `config.toml` y `opencodex-catalog.json` en un archivo temporal y después lo renombra de forma atómica mediante `atomicWriteFile`. Esto evita archivos parciales cuando varios procesos, como `ocx stop` y el controlador de apagado del proxy, restauran Codex a la vez. Si un TOML administrado contiene un entero fuera del rango seguro de JavaScript, se rechaza la reescritura y se conserva el archivo original sin redondear su valor.
 :::
+
+
+En Windows, si el atributo de solo lectura de `opencodex-catalog.json` impide renombrarlo, opencodex elimina ese atributo y reintenta una vez. Si aún falla, informa `Codex catalog is read-only: <path>` en vez de un `EPERM` genérico.

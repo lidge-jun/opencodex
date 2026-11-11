@@ -24,7 +24,7 @@ Video Bridge 讓你透過 opencodex 路由的任何非 OpenAI 模型，使用 xA
 > }
 > ```
 >
-> 透過 `ocx login xai`（OAuth）接入後，供應商仍處於 `authMode: "oauth"`，橋接不會啟用。請在環境中設定 `XAI_API_KEY`，保留上方的 `${XAI_API_KEY}` 參照，並明確選擇 `authMode: "key"`。請勿將金鑰明文寫入提交、日誌或共享報告。
+> 在代理的啟動環境設定 `XAI_API_KEY`，保留 `${XAI_API_KEY}` 並明確使用 `authMode: "key"`。其他終端的匯出不會變更執行中的代理；請透過所屬 Desktop、服務或前景終端重新啟動。不要將金鑰寫入提交、紀錄或共用報告。
 
 ## 設定
 

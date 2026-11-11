@@ -9,8 +9,9 @@ use. Steps 1 and 2 are the same for every tool; step 3 has one short branch per 
 
 ## Standalone binary (no npm)
 
-You can also use a release archive containing the `ocx` binary and Bun runtime without npm.
-Extract it with its `gui/dist` directory beside the binary, then run `./ocx start`.
+You can also use a release archive containing the `ocx` binary and Bun runtime without npm. Extract it with `gui/dist` beside the binary. Run the following setup steps using that executable.
+
+For the remaining commands, add the extracted binary directory to your terminal’s PATH, or replace `ocx` with the executable’s full path. Keep `gui/dist` beside it.
 
 ## 1. Run the setup wizard
 
@@ -20,7 +21,7 @@ ocx init
 
 `ocx init` walks you through:
 
-1. **Pick a provider** — choose one of the 106 built-in registry presets or `custom` to type a base
+1. **Pick a provider** — choose one of the 107 built-in registry presets or `custom` to type a base
    URL and adapter.
 2. **API key** — paste a key, or reference an environment variable like `${ANTHROPIC_API_KEY}`.
 3. **Default model** — for key, local, and custom providers, accept the preset or enter a model id.
@@ -104,6 +105,10 @@ On start, opencodex:
 
 A live opencodex instance using the same `OPENCODEX_HOME` prevents a second start, even on a free port. Stop that instance first with `ocx stop`, or use a separate `OPENCODEX_HOME` for an independent instance. If an unrelated process holds the requested port, `ocx start` identifies it; choose a free port with `ocx start --port <port>`. It never changes ports automatically, which avoids leaving two proxies running with Codex pointed at the newer one.
 
+
+A separate `OPENCODEX_HOME` permits a sibling proxy, but does not independently route shared Codex, Grok or Claude configuration. The sibling serves direct requests on its own port while shared clients keep their existing proxy. A connected Hub client keeps its route on stop; stopping a sibling does not restore shared configuration. See [runtime ownership](/reference/cli/lifecycle/#runtime-ownership).
+
+
 Check it:
 
 ```bash
@@ -178,8 +183,8 @@ ocx integration client enable --client <id>
 
 Each tool's config file and when the change takes effect are listed in
 [Integrations](/guides/integrations/). Any other tool that accepts a custom endpoint can use the
-OpenAI-compatible base URL `http://localhost:10100/v1` or the Anthropic base URL
-`http://localhost:10100`.
+OpenAI-compatible base URL `http://localhost:<port>/v1` or the Anthropic base URL
+`http://localhost:<port>`.
 
 ## Choose sub-agent models (optional)
 
@@ -200,7 +205,7 @@ credentials straight through (see [Providers](/guides/providers/)).
 ## Stopping & restoring
 
 ```bash
-ocx stop          # stop the proxy and restore native Codex
+ocx stop      # stop this instance; restoration depends on ownership (see below)
 ocx restore       # restore native Codex without stopping (alias: ocx eject)
 ocx restore back  # route Codex through the still-running proxy again
 ```

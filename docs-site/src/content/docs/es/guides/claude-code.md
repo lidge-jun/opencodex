@@ -8,7 +8,7 @@ opencodex sirve `POST /v1/messages` (más `count_tokens`) junto con `/v1/respons
 En las rutas de Devin (incluyendo SWE-2) alcanzadas a través de la Messages API, las llamadas de texto y herramientas esperan a que se complete el giro aguas arriba para que su firma de razonamiento tardío pueda preceder a la respuesta. Esto evita que el resultado final de Claude Code se vuelva vacío; el razonamiento y el progreso de mantenimiento aún fluyen durante la generación. La memoria intermedia comparte el límite de traducción de 32 MiB de la solicitud y la cancelación detiene al productor. Esta corrección de orden de salida no resuelve el rechazo separado de Cognition de algún texto del sistema generado. Conserva las instrucciones del sistema y las limitaciones de seguridad.
 
 Para una ruta Anthropic en OAuth almacenada o una clave Anthropic API, Fast nativo está disponible en
-`claude-opus-5-5`, `claude-opus-5`, y `claude-opus-4-8`: elige el modelo `--fast` fila (listado cuando las filas rápidas están habilitadas) o establecer `fastMode: true`. El propio Claude Code `/fast` toggle no es Traducido a petición: el `speed` El campo que envía no sobrevive a la traducción. El proxy envía la solicitud rápida de Anthropic y registra la `usage.speed`; sólo El uso rápido confirmado obtiene la estimación de costo equivalente a 2x API. Un rechazo reconocido y específico en la ruta de solicitud del adaptador principal obtiene un reenvío de velocidad estándar presupuestado, y un nuevo giro puede incurrir en que se negó viaje de ida y vuelta de nuevo. Las cuentas de suscripción Pro/Max necesitan créditos de uso; Las cuentas de equipo/empresa necesitan habilitación de organización, y las claves API necesitan aprovisionamiento acceso a la investigación-previsión. Véase
+`claude-fable-5-2`, `claude-opus-5-5`, `claude-opus-5`, y `claude-opus-4-8`: elige el modelo `--fast` fila (listado cuando las filas rápidas están habilitadas) o establecer `fastMode: true`. El propio Claude Code `/fast` toggle no es Traducido a petición: el `speed` El campo que envía no sobrevive a la traducción. El proxy envía la solicitud rápida de Anthropic y registra la `usage.speed`; sólo El uso rápido confirmado obtiene la estimación de costo equivalente a 2x API. Un rechazo reconocido y específico en la ruta de solicitud del adaptador principal obtiene un reenvío de velocidad estándar presupuestado, y un nuevo giro puede incurrir en que se negó viaje de ida y vuelta de nuevo. Las cuentas de suscripción Pro/Max necesitan créditos de uso; Las cuentas de equipo/empresa necesitan habilitación de organización, y las claves API necesitan aprovisionamiento acceso a la investigación-previsión. Véase
 [Anthropic Configuración rápida](/es/reference/configuration/providers/#anthropic-fast-anthropic-speed)
 para el modelo exacto y alcance de recuperación.
 
@@ -89,7 +89,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`; en un lanzamiento de suscripción, una ranura no establecida obtiene el `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]` nativo, por lo que `--model opus`, `sonnet` y `fable` mantienen su contexto de 1M |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | La etiqueta `/model` para una ranura de nivel que OpenCodex establece en un alias encaminado, tal como `gpt-6.1-sol (native)` para `ocx-claude-native--gpt-6.1-sol`. Sin ella, Claude Code etiquetas que rema con el alias. El alias mantiene el ID de modelo seleccionado. Cuando el env del sistema está encendido, el entorno launchd y el gancho de la carcasa obtienen el mismo par de ranura y etiqueta. Una ranura o etiqueta que usted mismo establezca se deja sola |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1` cuando `alwaysEnableEffort` está encendido (condicional) |
-| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` cuando está establecido (condicional; desactivado de forma predeterminada - ver [Los esquemas de herramientas MCP llenan el contexto](#troubleshooting) ) |
+| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` cuando está establecido (condicional; no se inyecta de forma predeterminada; se aplica el valor de Claude Code - ver [Los esquemas de herramientas MCP llenan el contexto](#troubleshooting) ) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | Anulación de contexto heredado cuando se establece `maxContextTokens` (condicional) |
 Las variables que tú mismo exportas siempre ganan. Los argumentos adicionales pasan por: `ocx claude -p "hello"`.
 
@@ -691,7 +691,9 @@ eliminarlos mientras hay clientes en ejecución puede romper la coordinación en
 { "claudeCode": { "toolSearch": true } }
 ```
 
-Esta opción sigue desactivada de forma predeterminada. El **passthrough nativo de Anthropic** conserva la búsqueda de herramientas del servidor: el cliente envía las definiciones diferidas y Anthropic las mantiene fuera del contexto hasta descubrirlas. La ruta traducida predeterminada no implementa ese mecanismo: elimina la declaración de búsqueda tipada y normalmente envía todas las funciones desde el principio, por lo que el cliente puede subestimar la entrada real del proveedor.
+`ocx claude` solo inyecta `ENABLE_TOOL_SEARCH` cuando `claudeCode.toolSearch` tiene un valor activador. Sin ajuste se aplica el predeterminado del cliente; `toolSearch: false` no inyecta nada ni lo desactiva. En Chat traducido, cada carga de ToolSearch cambia catálogo y mensaje de sistema y puede reducir el uso de caché. Consulta abajo la diferencia entre versiones y las opciones para un prefijo estable.
+
+El **passthrough nativo de Anthropic** conserva la búsqueda de herramientas del servidor: el cliente envía las definiciones diferidas y Anthropic las mantiene fuera del contexto hasta descubrirlas. La ruta traducida predeterminada no implementa esa herramienta de servidor: elimina su declaración tipada y normalmente incluye todas las funciones desde el principio, por lo que el cliente puede subestimar la entrada real del proveedor.
 
 Hay una excepción independiente y limitada para **`ToolSearch` ejecutado por el cliente**, en un destino Responses verificado seleccionado mediante [`claudeCode.appendOnlyToolLoadingModels`](#preserve-cache-prefixes-when-client-tools-load). En esa ruta física final, la opción excluye del catálogo inicial las definiciones diferidas aún sin usar y añade las actuales en los resultados estructurados de descubrimiento exitosos. La búsqueda del cliente debe funcionar ya y debe declararse una función `ToolSearch` sin carga diferida. El ajuste del lanzador `toolSearch` puede activar el descubrimiento donde el cliente lo admite, pero no activa por sí solo esa opción ni implementa búsqueda del servidor. Verifica la combinación de cliente y pasarela antes de activarla; mantenla desactivada en otras rutas de terceros. La admisión que exige compatibilidad no cambia y todavía puede rechazar solicitudes de carga diferida no admitidas. Ninguna de las dos opciones garantiza aciertos de caché ni paridad completa con la búsqueda nativa.
 
@@ -725,6 +727,29 @@ El endpoint Responses de OpenCode Go y los hosts oficiales de xAI Responses cons
 La optimización requiere un valor de texto en `metadata.user_id` y una función `ToolSearch` declarada sin carga diferida. Las definiciones diferidas que aún no se usan se excluyen del catálogo inicial tanto antes como después del descubrimiento. Un resultado estructurado y exitoso de ToolSearch incorpora en esa posición las definiciones que siguen declaradas. El texto de una referencia nunca concede herramientas ni restaura definiciones revocadas. Las herramientas usadas antes de descubrirse y las herramientas no descubiertas cuya selección se fuerza explícitamente permanecen en el catálogo inicial. Se conservan los esquemas, su carácter estricto y la asociación entre llamadas y resultados. Si faltan metadatos, la configuración está ausente o vacía, o se usa passthrough nativo de Anthropic, se mantiene el comportamiento existente. Una configuración mal formada se rechaza al guardarla; la recuperación durante la carga solo desactiva esta opción, sin descartar los proveedores.
 
 Esto no implementa la búsqueda diferida del lado del servidor, no cambia la admisión que exige compatibilidad ni activa la búsqueda de herramientas del cliente. Se aplica cuando el cliente ya realiza el descubrimiento. Tampoco garantiza aciertos de caché: los cambios de esquema, revocaciones, cambios de modelo, compactaciones y disponibilidad de caché del proveedor todavía pueden exigir un prefijo nuevo.
+
+<a id="chat-routes"></a>
+
+#### Rutas Chat
+
+Chat Completions carece de `additional_tools`. En rutas directas verificadas con los modelos usados, esta opción conserva el catálogo y sistema al cargar herramientas:
+
+```json
+{
+  "claudeCode": {
+    "chatToolDispatchModels": ["deepseek/deepseek-flash"]
+  }
+}
+```
+
+Se aplican los selectores, límites, metadatos y requisito de ToolSearch inmediato de `appendOnlyToolLoadingModels`, así como sus reglas para combos, políticas y alternativas tardías, sobre una ruta física `openai-chat` directa:
+
+- El catálogo añade `use_loaded_tool` desde la primera solicitud y omite las herramientas diferidas aún no usadas; cargarlas no cambia catálogo ni sistema.
+- Nombre, descripción y esquema descubierto se añaden como texto al resultado de ToolSearch. El modelo usa `use_loaded_tool` con `{"name": ..., "arguments": {...}}`; las llamadas previas se reproducen así.
+- Cada llamada bien formada se convierte al nombre real antes de que llegue a Claude Code. Una herramienta declarada se ejecuta normalmente y una desconocida produce error bajo su nombre. Una envoltura inválida o con claves extra llega intacta y falla como herramienta desconocida.
+
+Los esquemas como texto carecen de validación estricta del proveedor y un argumento inválido consume un turno. Algunos modelos no siguen instrucciones en resultados de herramientas: verifica cada uno. Forzar una herramienta oculta, restringir las permitidas o un historial ambiguo conserva la solicitud original. Llamar a una herramienta diferida sin cargarla la devuelve al catálogo y pierde el prefijo una vez. Ausente, vacía o sin coincidencia conserva los mismos bytes, sin garantizar aciertos de caché. Los argumentos llegan cuando se completa la llamada, como en cualquier herramienta Chat traducida.
+
 
 <a id="claude-models-behind-a-gateway-that-also-serves-gpt"></a>
 
@@ -773,3 +798,38 @@ Claude Code **2.1.257 o más reciente** es necesario para la fuerza. Los argumen
 El panel de control advierte sobre versiones antiguas o desconocidas de CLI, objetivos no disponibles y cualquiera de las variables ya presentes en `settings.json` → `env` (que anula env de lanzamiento). La detección es de solo lectura y local en el servidor: no puede inspeccionar otro shell de lanzamiento, otra máquina o la configuración local del proyecto. Un resultado desconocido no es prueba de apoyo a la fuerza.
 
 Los selectores de puerta de enlace explícitos en una solicitud de agente generada tienen prioridad sobre su alternativa heredada `ocx-route`, incluso si la configuración de fuerza guardada cambia después del lanzamiento. Para las anulaciones de configuración o shell de los agentes de lista generados, use un alias de puerta de enlace explícito; los ids desnudos de Claude retienen el comportamiento de respaldo del cliente más antiguo. Los alias nativos restauran su modelo desnudo antes de las verificaciones de credenciales y mapas de modelo existentes. Los lanzamientos conectados validan los objetivos de fuerza contra un nuevo catálogo de puerta de enlace autenticado; el descubrimiento fallido omite la inyección automática de fuerza y las ventanas de contexto en caché por sí solas nunca demuestran disponibilidad.
+
+
+<a id="claude-oauth-client-version-errors"></a>
+
+## Errores de versión de Claude con OAuth
+
+Ante `claude_code_version_too_old`, comprueba el proveedor. Codex mediante el adaptador `anthropic` usa el perfil de compatibilidad de OpenCodex: actualizar otro ejecutable `claude` no cambia ese perfil. Actualiza OpenCodex y reinicia su proxy. Con `claude-cli` o Claude Code directo, actualiza esa CLI. Messages nativo con identidad de cliente observada conserva su versión, y los encabezados del operador prevalecen. El error de `claude-fable-5-2` exigía Claude Code 2.1.290 o posterior; este perfil presenta 2.1.321. Un requisito futuro puede exigir actualizar el perfil. No concede acceso a modelos ni cambia cuotas.
+
+Las ventanas semanales específicas de modelo inactivas, como Fable cuando limita la semana compartida, siguen visibles como **No está en vigor ahora**, con la proporción informada por Anthropic, por ejemplo hasta el 50% del límite semanal. Sin fila Fable no se inventa su barra. Las cuentas Claude priorizan el alias y después el correo enmascarado; sin identidad segura usan un ordinal. Overview muestra la misma cuenta si la lista está verificada. `privacy.maskEmails` en `false` muestra el correo completo.
+
+**Límites del paso directo.** Se usa la credencial del cliente y sus límites. Un 429 se devuelve con sus encabezados y `Retry-After`, sin reenviarlo por otra cuenta o proveedor. Las peticiones auxiliares de Claude, como WebSearch con `claude-haiku-5-5`, pueden fallar aunque funcione el modelo principal enrutado. Para moverlas, configura `claudeCode.intercept.modelMap` u `ocx claude desktop bind` en tráfico oficial Desktop/CLI, o `claudeCode.modelMap` en todos los accesos. Al no resolver el ID a sí mismo se enruta normalmente. En sesiones `ocx claude`, `claudeCode.tierModels.haiku` puede pedir un ID enrutado; un `claude-*` sigue en paso directo y `ANTHROPIC_DEFAULT_HAIKU_MODEL` exportado prevalece ([#7912](https://github.com/lidge-jun/opencodex/issues/7912)).
+
+<a id="anthropics-advisor-tool-on-translated-routes"></a>
+
+### Herramienta Advisor de Anthropic en rutas traducidas
+
+Claude Code declara la herramienta tipada `advisor_*`, como `advisor_20260301` con beta `advisor-tool-2026-03-01`. Anthropic consulta al asesor en el servidor de la misma solicitud y devuelve `server_tool_use` con nombre `advisor`, seguido de `advisor_tool_result`:
+
+- El adaptador `anthropic` con `https://api.anthropic.com` recibe la declaración y beta. Un gateway compatible solo las recibe si configura [`forwardAdvisorTool: true`](/es/reference/configuration/providers/); `forwardAdvisorTool: false` también las desactiva en el oficial.
+- Otros destinos, incluidos GPT, Gemini y gateways sin esa opción, omiten la declaración y ejecutan sin asesor. No bloquea destinos de combos o alternativas.
+- Si el [Advisor de OpenCodex](/es/reference/configuration/advisor/) está activo, controla el nombre `advisor` y no se reenvía la herramienta declarada; el registro indica `advisor-tool-shadowed-by-proxy-advisor`.
+- Si la clave del cliente no admite el `model` declarado, se omite con `advisor-tool-outside-model-scope`; el carril Messages nativo administrado rechaza la solicitud.
+- `server_tool_use` y `advisor_tool_result` llegan sin cambios, incluidos ID `srvtoolu_`, en streaming y sin él. Incluye `advisor_result`, `advisor_redacted_result` cifrado y `advisor_tool_result_error`. El contenido cifrado no se lee, reescribe ni registra.
+- Al reenviar un intercambio completo en el historial, se conserva en su posición, con beta, solo hacia destinos que admiten la declaración. La entrada debe ser un objeto vacío y el resultado una de esas tres variantes; el resto se descarta.
+- Una llamada pendiente al terminar con `pause_turn` o `tool_use` de cliente no se muestra ni reanuda. La siguiente solicitud conserva declaración y beta para consultar de nuevo.
+- Si OpenCodex controla Advisor, también excluye los intercambios anteriores de Claude durante todo el turno para no cambiar el prompt a mitad.
+- Los tokens del asesor se informan por separado y no se suman a los registros de uso, gasto de clave ni uso devuelto a Claude Code. Consulta su coste en Anthropic.
+
+**Afinidad OpenAI/ChatGPT nativa.** `prompt_cache_key` sirve a la afinidad de caché; `session_id` solo procede de identidad de sesión, nunca de la clave compartida. Si `metadata.user_id` es una cadena JSON con otras claves, se elimina el token por turno `tk` antes del hash, manteniendo identidad entre turnos remotos. Cadenas que no sean objetos JSON, arrays o un objeto con solo `tk` se hashean sin cambios; `user` sigue derivándose de la cadena original. Sin cadena y con sistema, se usa el hash de modelo resuelto, sistema y esquemas de herramientas: identifica un grupo de solicitudes, no una sesión.
+
+**Modelos no disponibles en perfiles.** Una ruta ausente del catálogo se conserva como **No disponible** porque puede ser una caída temporal. **Eliminar no disponibles (N)** o **Eliminar** en una fila avanzada quita asignación y alias. Si se elimina el predeterminado de una familia, se elige el primer modelo disponible; sin ninguno, se quitan también sus otras filas no disponibles, indicándolo antes. No cambia nada hasta **Guardar** o **Guardar y aplicar**, y nunca se elimina automáticamente.
+
+**Búsqueda de herramientas MCP.** Desde Claude Code 2.1.304, ToolSearch está activado por defecto tras un gateway `ANTHROPIC_BASE_URL`, incluido `ocx claude`. Versiones anteriores incluyen todos los esquemas inicialmente; se puede activar en ellas con la opción ya descrita. `ocx claude` solo inyecta `ENABLE_TOOL_SEARCH` cuando `claudeCode.toolSearch` tiene un valor activador. `toolSearch: false` no inyecta nada y no desactiva ToolSearch. En Chat traducido cada carga cambia catálogo y sistema y puede perder la caché del historial ([#7963](https://github.com/lidge-jun/opencodex/issues/7963)). Para priorizar un prefijo estable, exporta `ENABLE_TOOL_SEARCH=false`; un valor exportado siempre gana. Para conservar búsqueda y prefijo, verifica y activa `claudeCode.chatToolDispatchModels`.
+
+Una ruta Responses que acepta `additional_tools` pero lo descarta silenciosamente no está verificada para `claudeCode.appendOnlyToolLoadingModels`. Así se comportó la API oficial Responses de DeepSeek en la medición del 31 de octubre de 2026; usa su ruta Chat.

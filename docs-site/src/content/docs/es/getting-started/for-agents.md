@@ -17,8 +17,14 @@ disponible para la configuración interactiva; consulte
 Instale el paquete publicado y compruebe que `ocx` está en `PATH`:
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
+```
+
+Ejecuta `ocx init` en una terminal interactiva antes de iniciar el proxy, para que el listener use el puerto elegido:
+
+```bash
+ocx init
 ```
 
 Elija una forma de ejecutar el proxy:
@@ -29,13 +35,6 @@ ocx start
 
 # Background: installs or updates the service, then starts it.
 ocx service
-```
-
-Ejecute `ocx init` en un terminal interactivo. Si `ocx start` está ocupando
-el primer plano, use un segundo terminal:
-
-```bash
-ocx init
 ```
 
 El asistente crea `$OPENCODEX_HOME/config.json`, normalmente
@@ -119,7 +118,7 @@ en ejecución, cree un combo con conmutación por error:
 
 ```bash
 ocx combo set main \
-  --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol \
+  --targets anthropic-apikey/claude-opus-4-8,openai/gpt-5.6-sol \
   --strategy failover
 ```
 

@@ -190,9 +190,21 @@ Después de conectar, envíe:
 {"type":"session.start","config":{"input_audio_format":"pcm16","sample_rate_hz":48000,"num_channels":1,"max_buffer_size_bytes":4194304,"max_utterance_duration_ms":30000,"session_ttl_ms":300000,"provider_mode":"streaming_sse","transcript_delivery_mode":"segment","vad":{"type":"server_vad","threshold":0.5,"prefix_padding_ms":300,"silence_duration_ms":500}}}
 ```
 
-Utilice la frecuencia de muestreo real de audio PCM16 mono. Espere `session.started`, luego envíe `{"type":"audio.append","audio":"<base64 PCM bytes>"}`. Estos son JSON marcos de texto, no archivos WAV o binarios WebSocket marcos. La puerta de enlace acepta tasas de muestreo de 8,000 a 192,000 Hz; El soporte ascendente depende de la cuenta / servicio. Los marcos de cliente están limitados a 64 KiB y las sesiones a cinco minutos. Los campos Event/Config no soportados o mal formados cierran el flujo con el código 1008.
+Usa la frecuencia real del audio PCM16 mono. Espera `session.started` y envía `{"type":"audio.append","audio":"<base64 PCM bytes>"}` en texto JSON, no WAV ni frames binarios. Se aceptan de 8.000 a 192.000 Hz según el servicio y la cuenta. Cada frame de cliente tiene un límite de 64 KiB. Los campos de configuración o eventos mal formados cierran el stream con código 1008.
 
 `transcript.segment` y `transcript.final` contienen `utterance_id`, `revision` y `text`. Reemplace el texto anterior por la misma expresión cuando su revisión aumente; no concatene las revisiones. Terminar con `{"type":"session.close"}` y esperar el texto final y `session.updated` con `session.status="closed"`.
+
+El proxy permite diez minutos (600.000 ms) de grabación desde que se conecta el relay. Un `session.close` válido antes del plazo sustituye ese temporizador por una ventana independiente de 60 segundos para transcripciones finales; mantén abierto el WebSocket durante la finalización. `config.session_ttl_ms` acepta de 1 a 600.000 y se reenvía sin cambios, sin fijar el temporizador del proxy. Son límites de OpenCodex, no límites oficiales demostrados de OpenAI. GPT Live y los demás transportes de audio conservan sus plazos.
+
+ScribeTray admite además este inicio; sustituye los UUID de ejemplo por identificadores generados por el cliente:
+
+```json
+{"type":"session.start","dictation_session_id":"78d201cb-1b49-40e1-a5b5-e06a8f8489a1","attempt_id":"8b3c2e4f-d501-4a66-b123-456789abcdef","config":{"input_audio_format":"pcm16","sample_rate_hz":16000,"num_channels":1,"max_buffer_size_bytes":4194304,"max_utterance_duration_ms":30000,"session_ttl_ms":300000,"provider_mode":"streaming_sse","transcript_delivery_mode":"final_only","session_asset_mode":"none","vad":{"type":"server_vad"}},"client_capabilities":["server_stop_requested"]}
+```
+
+Los IDs son opcionales, no vacíos y de hasta 128 bytes UTF-8. `client_capabilities` acepta un array vacío o solo `"server_stop_requested"`. `config.language` es opcional, no vacío y de hasta 64 bytes UTF-8, por ejemplo `"it"`; estas cadenas no admiten controles. `config.session_asset_mode` solo acepta `"none"`. VAD solo necesita `{"type":"server_vad"}`; si se incluyen, `threshold` debe ser finito de 0 a 1, `prefix_padding_ms` un entero de 0 a 1.000 y `silence_duration_ms` de 0 a 5.000.
+
+Tras iniciar se acepta y reenvía `{"type":"audio.flush"}` sin cerrar la sesión: puede seguir audio hasta `session.close`. ScribeTray envía `audio.flush`, luego cierre y espera los resultados finales. No implica que flush sea obligatorio frente al cierre solo. Después del cierre no se acepta más audio ni eventos del cliente. Los payloads anteriores siguen admitidos; campos o capacidades desconocidos se rechazan.
 
 ## `POST /v1/responses`
 
@@ -598,3 +610,9 @@ Esta recuperación se aplica a todos los adaptadores que hablan el cable Respons
 ### Historial de llamadas de herramientas mal formado
 
 Las solicitudes enrutadas toleran los argumentos de función serializados mal formados como un objeto vacío. Dos reparaciones de historial acotado preservan argumentos utilizables: falta un prefijo de objeto JSON, y el rastro de MiMo `</function></tool_call>` sobre con una cita de cierre o soporte que falta. Una reparación debe decodificar a un objeto JSON. Se conservan los valores válidos de JSON que contienen esas etiquetas.
+
+### Validación de herramientas y compactación
+
+Al traducir Chat Completions a Responses de OpenAI o al backend ChatGPT, las herramientas de función mantienen el valor no estricto de Chat: si se omite `strict`, se envía false; los booleanos explícitos se conservan. Las `functions` heredadas tampoco se vuelven estrictas. Los argumentos opcionales —incluidos los selectores alternativos de índice y coordenadas de `computer_use`— siguen siendo opcionales. No se reescribe el esquema ni cambian los predeterminados de Responses nativo, destinos Chat o proveedores Responses externos.
+
+Una entrada de compactación retenida de OpenCodex mal formada (`ocx2:`) devuelve HTTP 400 con `error.type: "invalid_request_error"` antes de enrutar, elegir cuenta, refrescar credenciales o enviar al proveedor. No provoca reintentos ni registra un fallo contra una cuenta Codex del pool.

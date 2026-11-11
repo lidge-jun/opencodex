@@ -37,7 +37,7 @@ import {
   TRANSLATOR_MAX_TURN_BYTES,
   TranslatorBudgetExceededError,
 } from "../lib/translator-budget";
-import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "../web-search/progress-stream";
+import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchConsumerInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "../web-search/progress-stream";
 import { fulfillImageCall } from "./fulfill";
 import { parseVideoCallArgs, pollVideoWithHeartbeats, buildVideoResult, createVideoBudget } from "./fulfill-video";
 import { submitVideoJob } from "./xai-video-client";
@@ -391,6 +391,8 @@ export interface ImageBridgeDeps {
   forceEmptyResponseId?: boolean;
   /** Responses inbound only: deliver a non-retryable upstream refusal as `response.failed`. */
   terminalRefusalAsFailed?: boolean;
+  /** False for Chat/Messages inbound: their clients never parse `<oai-mem-citation>`, so text stays raw. */
+  escapeMemoryCitationTags?: boolean;
 }
 
 /**
@@ -895,7 +897,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       if (error instanceof LoopError) throw error;
       if (error instanceof SendBudgetExhaustedError) throw new LoopError(429, error.message,
         { type: "error", status: 429, errorType: "rate_limit_error", code: error.code, message: error.message, retryable: false });
-      if (error instanceof RoutedModelInactivityError) throw new LoopError(504, error.message);
+      if (error instanceof RoutedModelInactivityError || error instanceof WebSearchConsumerInactivityError) throw new LoopError(504, error.message);
       if (error instanceof WebSearchStreamProtocolError) throw new LoopError(502, error.message);
       throw new LoopError(502, `Provider stream error: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -1221,6 +1223,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       ...(deps.clientToolCatalogRestriction ? { ...deps.clientToolCatalogRestriction, enforceDeclaredToolNames: false } : {}),
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       ...(deps.terminalRefusalAsFailed ? { terminalRefusalAsFailed: true } : {}),
+      ...(deps.escapeMemoryCitationTags === false ? { escapeMemoryCitationTags: false } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       chatRawReasoningVisible: deps.chatRawReasoningVisible,
       hideRawReasoning: parsed.options.hideRawReasoning,

@@ -7,10 +7,18 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
  */
 export const POWERSHELL_ENCODED_MAX = 8_000;
 
+/** The encoded command would not fit cmd.exe's command line; callers that build gated commands rename it. */
+export class PowerShellCommandTooLongError extends Error {
+  constructor(readonly encodedLength: number) {
+    super(`Remote PowerShell command exceeds the cmd.exe-compatible command-line budget (${encodedLength})`);
+    this.name = "PowerShellCommandTooLongError";
+  }
+}
+
 export function powershellArgv(script: string): string[] {
   // Module preparation otherwise writes a CLIXML progress record to stderr, which Home would see.
   const encoded = Buffer.from("$ProgressPreference='SilentlyContinue'\n" + script, "utf16le").toString("base64");
-  if (encoded.length > POWERSHELL_ENCODED_MAX) throw new Error(`Remote PowerShell command exceeds the cmd.exe-compatible command-line budget (${encoded.length})`);
+  if (encoded.length > POWERSHELL_ENCODED_MAX) throw new PowerShellCommandTooLongError(encoded.length);
   return ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded];
 }
 
@@ -144,31 +152,113 @@ export function windowsNativeArgv(executable: string, args: readonly string[]): 
  * Desktop first, then the GOAT-managed current junction, then legacy and PATH candidates. Each
  * must answer --version within ten seconds; only the selected one runs the real command.
  */
-const OCX_CANDIDATES = String.raw`$u=$env:USERPROFILE;$c=@("$u\.opencodex-desktop\bin\ocx.exe","$u\.local\share\goat\opencodex\current\ocx.exe","$u\.local\bin\ocx.exe")
-if($env:LOCALAPPDATA){$c+="$env:LOCALAPPDATA\Programs\OpenCodex\ocx.exe"}
-if($env:ProgramFiles){$c+="$env:ProgramFiles\OpenCodex\ocx.exe"}
-$c+=@((Get-Command ocx.exe -Type Application -EA 0).Source)
+const OCX_CANDIDATES = String.raw`$u=$env:USERPROFILE;$f=@("$u\.opencodex-desktop\bin\ocx.exe","$u\.local\share\goat\opencodex\current\ocx.exe","$u\.local\bin\ocx.exe")
+if($env:LOCALAPPDATA){$f+="$env:LOCALAPPDATA\Programs\OpenCodex\ocx.exe"}
+if($env:ProgramFiles){$f+="$env:ProgramFiles\OpenCodex\ocx.exe"}
+$f+=@((Get-Command ocx.exe -Type Application -EA 0).Source)
+$k=@("$u\.local\bin\ocx-child.exe","$u\.cache\opencodex\bin\ocx-child.exe");if($env:LOCALAPPDATA){$k+="$env:LOCALAPPDATA\opencodex\bin\ocx-child.exe"};$k+=@((Get-Command ocx-child.exe -Type Application -EA 0).Source)
+$r=if($env:HOME){$env:HOME}elseif($u){$u}else{"."};$h=if($env:OPENCODEX_HOME){$env:OPENCODEX_HOME}else{"$r\.opencodex"};$c=if([IO.File]::Exists("$h\child\state.json")){$k+$f}else{$f+$k}
 `;
 export function windowsOcxArgv(args: readonly string[]): string[] {
+  const sweep = args.includes("--purge") ? String.raw`foreach($r in @($env:LOCALAPPDATA,$env:USERPROFILE)){if($r){foreach($s in @("$r\opencodex\bin","$r\.cache\opencodex\bin")){if([IO.Directory]::Exists($s)){Get-ChildItem -LiteralPath $s -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{$null=$_}}}}}};` : "";
+  const run = sweep ? `try{$c=[OcxJob]::Run($x,((@($x)+$d.args|%{Quote-Native $_}) -join ' '))}catch{Fail};${sweep}exit $c` : `Invoke-Native $x @($d.args)`;
   return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args }) + OCX_CANDIDATES + String.raw`
-foreach($x in ($c|select -Unique)){if([IO.File]::Exists($x)-and[OcxJob]::Ok($x)){Invoke-Native $x @($d.args)}}
+foreach($x in ($c|select -Unique)){if([IO.File]::Exists($x)-and[OcxJob]::Ok($x)){` + run + String.raw`}}
 [Console]::Error.WriteLine('No runnable ocx.exe found; install the Windows standalone archive.');exit 127
 `);
 }
 
-export function windowsPinnedSyncArgv(linkId: string): string[] {
-  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: ["sync", "--expect-link", linkId, "--json"] }) + OCX_CANDIDATES + String.raw`
+export function windowsInspectRuntimeArgv(): string[] {
+  return packedPowerShellArgv(NATIVE_PROCESS + OCX_CANDIDATES + String.raw`
+[Console]::Out.WriteLine('ocx-inspect:arch:'+[string]$env:PROCESSOR_ARCHITECTURE)
+foreach($x in ($c|select -Unique)){if(![IO.File]::Exists($x)){continue};$v=[OcxJob]::V($x);if($null -ne $v){$k=if(([IO.Path]::GetFileName($x)).ToLowerInvariant().StartsWith('ocx-child')){'ephemeral'}else{'full'};[Console]::Out.WriteLine('ocx-inspect:kind:'+$k);[Console]::Out.WriteLine('ocx-inspect:version:'+$v.Trim());exit 0}}
+[Console]::Out.WriteLine('ocx-inspect:kind:missing');exit 0
+`);
+}
+
+const WINDOWS_MANAGED_BIN = String.raw`function Resolve-PlantDir{
+$r=if($env:LOCALAPPDATA){$env:LOCALAPPDATA}else{$env:USERPROFILE};$subs=if($env:LOCALAPPDATA){@('opencodex','bin')}else{@('.cache','opencodex','bin')};$cur=$r
+foreach($s in $subs){$cur="$cur\$s";if([IO.Directory]::Exists($cur)-or[IO.File]::Exists($cur)){if((([IO.FileSystemInfo](Get-Item -LiteralPath $cur -Force)).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'reparse'}}else{[IO.Directory]::CreateDirectory($cur)|Out-Null}}
+$dst="$cur\ocx-child.exe";if([IO.File]::Exists($dst)-or[IO.Directory]::Exists($dst)){if((([IO.FileSystemInfo](Get-Item -LiteralPath $dst -Force)).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'reparse'}}
+return $cur}
+`;
+
+export function windowsPlantChildArgv(expectedBytes: number, expectedSha256: string): string[] {
+  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: [String(expectedBytes), expectedSha256] }) + WINDOWS_MANAGED_BIN + String.raw`
+$tmp=$null;try{$dir=Resolve-PlantDir;$dst="$dir\ocx-child.exe";$lim=[int]$d.args[0];$exp=$d.args[1]
+$tmp="$dir\.ocx-child.tmp.$PID.$([Guid]::NewGuid().ToString('N').Substring(0,8)).exe"
+$in=[Console]::OpenStandardInput();$fs=[IO.File]::Open($tmp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None);$h=[Security.Cryptography.SHA256]::Create();$buf=New-Object byte[] 16384;$tot=0
+try{while(($n=$in.Read($buf,0,$buf.Length)) -gt 0){$tot+=$n;if($tot -gt $lim){throw 'size'};$fs.Write($buf,0,$n);[void]$h.TransformBlock($buf,0,$n,$null,0)};[void]$h.TransformFinalBlock($buf,0,0)}finally{$fs.Dispose()}
+$sha=([BitConverter]::ToString($h.Hash)).Replace('-','').ToLowerInvariant();$h.Dispose()
+if($tot -ne $lim -or $sha -ne $exp){throw 'integrity'}
+[IO.File]::Copy($tmp,$dst,$true);[IO.File]::Delete($tmp);$tmp=$null
+$rc=[OcxJob]::Run($dst,('"'+$dst+'" --version'));if($rc -ne 0){[IO.File]::Delete($dst);exit 1};exit 0
+}catch{if($tmp -and [IO.File]::Exists($tmp)){try{[IO.File]::Delete($tmp)}catch{$null=$_}};[Console]::Error.WriteLine('Windows ocx-child plant failed.');exit 1}
+`);
+}
+
+export function windowsPurgePlantedChildArgv(): string[] {
+  return packedPowerShellArgv(NATIVE_PROCESS + WINDOWS_MANAGED_BIN + String.raw`
+$r=if($env:HOME){$env:HOME}elseif($env:USERPROFILE){$env:USERPROFILE}else{"."};$h=if($env:OPENCODEX_HOME){$env:OPENCODEX_HOME}else{"$r\.opencodex"};$cd="$h\child";$cx=if($env:CODEX_HOME){$env:CODEX_HOME}else{"$r\.codex"}
+$rec=@(@("$cd\state.json","$cd\codex-journal.json","$cd\attach-rollback.json","$cx\.ocx-child-owner.json")|?{[IO.File]::Exists($_)-or[IO.Directory]::Exists($_)});$pend=$rec.Count -gt 0;if($pend){$m='ocx-child recovery record remains at '+$rec[0]+'; keeping the planted binary for detach.'}
+try{$dir=Resolve-PlantDir;$dst="$dir\ocx-child.exe";if([IO.File]::Exists($dst)){if([OcxJob]::Ok($dst)){$rc=[OcxJob]::Run($dst,('"'+$dst+'" detach --purge'));if($rc -ne 0){exit $rc};try{[IO.File]::Delete($dst)}catch{$null=$_}}elseif($pend){[Console]::Error.WriteLine($m);exit 1}else{try{[IO.File]::Delete($dst)}catch{$null=$_}}}elseif($pend){[Console]::Error.WriteLine($m);exit 1};Get-ChildItem -LiteralPath $dir -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{$null=$_}}}catch{exit 1};exit 0
+`);
+}
+
+/** Printed on stderr when the managed plant directory holds no runnable ocx-child to purge. */
+export const MANAGED_PURGE_CHILD_MISSING_MARKER = "ocx-purge-error:managed_child_missing";
+
+/** Runs `disconnect --purge --json` through the planted %LOCALAPPDATA% binary, never a PATH candidate. */
+export function windowsManagedPurgeDisconnectArgv(): string[] {
+  return packedPowerShellArgv(NATIVE_PROCESS + WINDOWS_MANAGED_BIN + String.raw`
+try{$dir=Resolve-PlantDir}catch{[Console]::Error.WriteLine('Refusing a reparse point in the managed ocx-child directory.');exit 1}
+$dst="$dir\ocx-child.exe";if(-not([IO.File]::Exists($dst)-and[OcxJob]::Ok($dst))){[Console]::Error.WriteLine('${MANAGED_PURGE_CHILD_MISSING_MARKER}');exit 1}
+try{$rc=[OcxJob]::Run($dst,('"'+$dst+'" disconnect --purge --json'))}catch{exit 1}
+Get-ChildItem -LiteralPath $dir -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{$null=$_}};exit $rc
+`);
+}
+
+export interface WindowsGatedCommand {
+  versionParts: readonly [string, string, string];
+  lacksMarker: "child-ocx-lacks-expect-link" | "child-ocx-lacks-orchestrated-update";
+  acceptEphemeral: boolean;
+  /** Prints ocx-fanout:child-now:<epoch-ms> from [DateTimeOffset]::Now (Unix milliseconds do not depend on the offset). */
+  reportClock: boolean;
+  args: readonly string[];
+}
+
+/**
+ * The gated Windows command: select a candidate, refuse below the minimum, optionally refuse ocx-child, then run it
+ * contained. OCX_NO_DESKTOP_HANDOFF=1 makes a launcher answer --version and run the command itself. Windows never
+ * sends a restart, so the selected-kind report is not built here. Windows reads no served-runtime census, so the
+ * selected entry is always a binary: the script prints no entry marker and the Home infers "binary", which keeps the
+ * plan probe inside the command-line budget for long preview Home versions.
+ */
+export function windowsGatedOcxArgv(cmd: WindowsGatedCommand): string[] {
+  if (!cmd.versionParts.every(part => /^(0|[1-9][0-9]{0,3})$/.test(part))) throw new Error("invalid gate version");
+  if (!/^child-ocx-lacks-(expect-link|orchestrated-update)$/.test(cmd.lacksMarker)) throw new Error("invalid gate marker");
+  const b = cmd.versionParts.map(part => "'" + part + "'").join(",");
+  // -match is case-insensitive; the pattern reads the file name the way [IO.Path]::GetFileName does (either separator).
+  const ephemeral = cmd.acceptEphemeral ? "" : String.raw`if($x -match '(^|[\\/])ocx-child[^\\/]*$'){[Console]::Error.WriteLine('ocx-fanout:child-ocx-ephemeral');exit 121};`;
+  const clock = cmd.reportClock ? String.raw`[Console]::Error.WriteLine('ocx-fanout:child-now:'+[DateTimeOffset]::Now.ToUnixTimeMilliseconds());` : "";
+  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: cmd.args }) + OCX_CANDIDATES + String.raw`$env:OCX_NO_DESKTOP_HANDOFF='1'
 foreach($x in ($c|select -Unique)){
  if(![IO.File]::Exists($x)){continue};$v=[OcxJob]::V($x);if($null -eq $v){continue};$v=$v.Trim();if($v.StartsWith('opencodex ')){$v=$v.Substring(10)}
  $m=[regex]::Match($v,'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$')
  $bad=(!$m.Success -or $v.Length -gt 128);if(!$bad -and $m.Groups[4].Success){foreach($p in $m.Groups[4].Value.Split('.')){if(!$p -or ($p -match '^\d+$' -and $p.Length -gt 1 -and $p[0] -eq '0')){$bad=$true}}}
  if($bad){[Console]::Error.WriteLine('ocx-fanout:child-ocx-version-unknown');exit 121}
- $a=@($m.Groups[1].Value,$m.Groups[2].Value,$m.Groups[3].Value);$b=@('2','93','0');$cmp=0
+ $a=@($m.Groups[1].Value,$m.Groups[2].Value,$m.Groups[3].Value);$b=@(` + b + String.raw`);$cmp=0
  for($i=0;$i -lt 3;$i++){if($a[$i].Length -ne $b[$i].Length){$cmp=$a[$i].Length-$b[$i].Length;break};$cmp=[string]::CompareOrdinal($a[$i],$b[$i]);if($cmp -ne 0){break}}
- if($cmp -lt 0 -or ($cmp -eq 0 -and $m.Groups[4].Success)){[Console]::Error.WriteLine('ocx-fanout:child-ocx-lacks-expect-link');exit 121}
- [Console]::Error.WriteLine('ocx-fanout:selected:'+$v);[Console]::Out.WriteLine('ocx-fanout:stdout-begin');Invoke-Native $x @($d.args)
+ if($cmp -lt 0 -or ($cmp -eq 0 -and $m.Groups[4].Success)){[Console]::Error.WriteLine('ocx-fanout:` + cmd.lacksMarker + String.raw`');exit 121}
+ ` + ephemeral + String.raw`[Console]::Error.WriteLine('ocx-fanout:selected:'+$v);` + clock + String.raw`[Console]::Out.WriteLine('ocx-fanout:stdout-begin');Invoke-Native $x @($d.args)
 };exit 127
 `);
+}
+
+/** The 2.93.0 sync gate; kept as a named entry because discovery tests import it. */
+export function windowsPinnedSyncArgv(linkId: string): string[] {
+  return windowsGatedOcxArgv({ versionParts: ["2", "93", "0"], lacksMarker: "child-ocx-lacks-expect-link", acceptEphemeral: true,
+    reportClock: false, args: ["sync", "--expect-link", linkId, "--json"] });
 }
 
 /** Credential-free loopback probe of the Child; no proxy, no redirect, bounded body and deadline. */

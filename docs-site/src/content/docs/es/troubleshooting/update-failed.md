@@ -85,6 +85,31 @@ Ninguna carpeta sobrante bloquea por su nombre la siguiente actualización: cada
 
 Si una carpeta no se elimina, un proceso sigue ejecutándose desde ella. Al cerrar la sesión o reiniciar Windows, se libera el bloqueo.
 
+<a id="if-every-update-and-sync-says-update-in-flight"></a>
+
+## Si todas las actualizaciones y sincronizaciones dicen update-in-flight
+
+Si `ocx update` y `ocx sync` siguen rechazando `update-in-flight` tras esperar, reiniciar servicio o equipo, puede quedar un marcador de una actualización interrumpida ([#8524](https://github.com/lidge-jun/opencodex/issues/8524)): `update-orchestrated.json` en `%USERPROFILE%\.opencodex` o `~/.opencodex`.
+
+Las versiones actuales registran al supervisor del instalador Windows y limpian el marcador tras el plazo de 15 minutos cuando supervisor y launcher ya no existen. Hasta 2.100.x no se registraba ese supervisor; tras cerrar consola, Ctrl+C, suspensión o corte de energía, ese marcador no se puede verificar y no se limpia solo. Ante esa causa, la terminal muestra ruta y comando para renombrarlo; dashboard, Desktop y Remote Link solo muestran el código. Ejecuta `ocx update` en una terminal para ver las instrucciones.
+
+Antes de renombrar, verifica que no haya una actualización activa:
+
+1. Ningún `ocx update` ni actualización de dashboard en otra ventana.
+2. Ninguna instalación global `npm`, `pnpm` o Bun. En Windows inspecciona `node.exe` ejecutando npm y `powershell.exe` con `npm-install-job.ps1` en sus argumentos.
+3. Solo entonces renombra, conservando una copia, y vuelve a actualizar:
+
+   ```bat
+   ren "%USERPROFILE%\.opencodex\update-orchestrated.json" update-orchestrated.json.stale
+   ```
+
+   ```bash
+   mv -n ~/.opencodex/update-orchestrated.json ~/.opencodex/update-orchestrated.json.stale
+   ```
+
+Usa la ruta exacta del error si configuraste `OPENCODEX_HOME`. Si tiene caracteres que el shell expande o interpreta, o caracteres no ASCII en Windows, el error solo identifica el archivo: renómbralo manualmente. Un marcador aún dentro del plazo o con su proceso registrado activo no muestra estas instrucciones; espera a que termine. No renombres un marcador de una actualización vigente.
+
+
 <a id="if-the-update-reports-an-unsupervised-proxy"></a>
 
 ## Si la actualización informa de un proxy UNSUPERVISED

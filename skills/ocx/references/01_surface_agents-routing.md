@@ -182,9 +182,9 @@ Drives no management route.
 
 ### `ocx message mcp`
 
-Usage: `ocx message mcp --codex <absolute-cli-path> --codex-home <absolute-existing-home>`
+Usage: `ocx message mcp --codex <absolute-cli-path> --codex-home <absolute-existing-home> [--allow-reply-read]`
 
-Serve opt-in MCP tools for stored Codex metadata and queued text delivery over stdio.
+Serve MCP tools for stored Codex metadata, queued text and explicitly enabled stored-turn reply reads and bounded waits.
 
 State-changing: yes. JSON mode: `none`.
 
@@ -194,9 +194,10 @@ Drives no management route.
 |---|---|---|
 | `--codex` | string | Explicit local Codex CLI executable. |
 | `--codex-home` | string | Explicit existing Codex home; no creation or login. |
+| `--allow-reply-read` | boolean | Explicitly expose stored final-turn text through codex_read_reply and codex_wait_reply; disabled by default. |
 
 - macOS/Linux only. No proxy/control socket required. Starts bounded stdio helpers only when a tool is called; existing sessions/send behavior stays unchanged.
-- Stored threads are not verified live sessions. queued is not processing; unknown is never replayed. No daemon start, thread resume, steer, automatic replies or registration.
+- Stored threads are not verified live sessions. queued is not processing; unknown is never replayed. --allow-reply-read exposes bounded same-turn final text, not exclusive reply ownership or goal completion. No daemon start, thread resume, steer, automatic replies or registration.
 
 ### `ocx advisor`
 
@@ -213,12 +214,14 @@ State-changing: yes. JSON mode: `payload`.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit advisor settings as JSON. |
+| `--context-mode` | string | With set: context (default) or question-only; question-only pauses automatic consultations. |
 
-- `status` (the default) reads the resolved settings; `on`/`off` toggle the sidecar; `consent` records or revokes context-sharing consent; `set` updates model, effort, policy, or timeout.
+- `status` (the default) reads the resolved settings; `on`/`off` toggle the sidecar; `consent` records or revokes context-sharing consent; `set` updates model, effort, policy, context mode, task limit, or timeout.
 - `on` does not grant consent. Without current consent it refuses and prints the disclosure. `on --ack-context-sharing` records consent v1 and enables. `consent --revoke` removes consent and stops task-context transfer.
 - The advisor model may be any routable model string: a bare native model, an explicit `provider/model`, or an account-qualified native model.
 - `policy: preflight` makes OpenCodex attempt one automatic consultation per task with a stable conversation identity once the task shows orientation evidence (an assistant tool call or a tool result after the latest user message). Without a stable identity, each eligible request may trigger another consultation. `policy: manual` consults only when the worker calls the synthetic `advisor` tool. Neither path sends task context without current context-sharing consent.
 - `policy: adaptive` adds evidence-based failed-repair consultation after the same validation fails, a file edit completes, and validation fails again. Automatic calls require a stable conversation identity. `set --max-consultations <1-3>` caps adaptive task attempts, including manual calls, in a durable 24-hour budget. No semantic stuck detection is claimed.
+- `set --context-mode question-only` sends only a fixed instruction and a required, self-contained worker question (up to 2,000 retained characters plus a truncation notice). No task history, tools, worker identity or repair evidence is attached. Automatic preflight and adaptive repair calls are paused; manual calls, consent and existing limits still apply. `set --context-mode context` restores the default context-sharing behavior and selected policy.
 - `activity` reads up to 100 recent consultation metadata records (trigger, status, models, requested and mapped effort, duration, reported tokens); no task or advice content is retained. Records are process-local and expire after 24 hours. Missing mapped effort means unreported, not successful application.
 
 ### `ocx message enable`
@@ -976,7 +979,7 @@ State-changing: no. JSON mode: `payload`.
 
 ### `ocx combo set`
 
-Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--cooldown-reprobe <on|off>] [--cooldown-reprobe-interval <ms>] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->] [--description <text|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->] [--session-pin <duration|->] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--json]`
+Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--cooldown-reprobe <on|off>] [--cooldown-reprobe-interval <ms>] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->] [--description <text|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->] [--session-pin <duration|->] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--jev-effort-mode <decide|client>] [--json]`
 
 Create, update or rename a combo.
 
@@ -1012,6 +1015,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--targets-file` | string | Bounded ordered target JSON array, exclusive with --targets; preserves effort/profile/last-resort metadata. |
 | `--image-input` | string | auto or disabled; explicit auto clears the previous disabled choice. |
 | `--reasoning-effort-mode` | string | strict or adaptive, distinct from --effort-mode fallback/force. |
+| `--jev-effort-mode` | string | JEV wire-effort owner: decide (default) applies the decision effort; client keeps its target and leaves effort to combo policy. |
 
 - create and update are aliases of set. Existing fields are read before writing; --targets replaces targets. Without --strategy an existing combo keeps its stored strategy and JEV policy; a new combo defaults to failover.
 - force overrides valid client effort and may increase cost and latency.

@@ -13,11 +13,15 @@ available for interactive configuration; see [Web Dashboard](/guides/web-dashboa
 Install the published package and confirm that `ocx` is on `PATH`:
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
 ```
 
-Choose one way to run the proxy:
+Run `ocx init` in an interactive terminal before starting the proxy, so it listens on the port selected in setup:
+
+```bash
+ocx init
+```
 
 ```bash
 # Foreground: blocks this terminal until stopped.
@@ -25,13 +29,6 @@ ocx start
 
 # Background: installs or updates the service, then starts it.
 ocx service
-```
-
-Run `ocx init` in an interactive terminal. If `ocx start` is occupying the foreground, use a
-second terminal:
-
-```bash
-ocx init
 ```
 
 The wizard creates `$OPENCODEX_HOME/config.json` (normally
@@ -97,7 +94,7 @@ Once all target providers are configured and the proxy is running, create a fail
 
 ```bash
 ocx combo set main \
-  --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol \
+  --targets anthropic-apikey/claude-opus-4-8,openai/gpt-5.6-sol \
   --strategy failover
 ```
 

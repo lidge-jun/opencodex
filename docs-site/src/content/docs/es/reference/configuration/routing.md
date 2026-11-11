@@ -21,6 +21,16 @@ El enrutamiento convierte el ID de modelo enviado por un cliente en un proveedor
 
 Establecer `preferModelAliasIds: true` para publicar alias de modelo incorporados configurados o habilitados como el `id` en `GET /v1/models`. El valor predeterminado es `false`. Las filas promocionadas conservan su ID calificado anterior en `native_id` y mantienen `alias_of`; ambos ID permanecen enrutables. Los modelos sin alias mantienen sus ID existentes. Si un alias corto es ambiguo a través de proveedores o es sombreado por otra ruta, la fila mantiene su ID calificado de modo que la selección todavía alcanza el modelo previsto. El ID calificado también se mantiene cuando un alias corto incorporado produciría un selector Fast sintético no analizable. El catálogo de modelos de Codex no ha cambiado.
 
+<a id="codex-pool-only-policy"></a>
+
+### Solo cuentas añadidas en Codex Pool
+
+`codexPool.poolOnly`, booleano `false` de forma predeterminada, limita la selección automática a cuentas añadidas registradas. Activado, nunca elige la sesión principal nativa por ordenación, no la conserva como cuenta activa ni la usa como fallback del cliente; ignora una fijación manual sobre ella. Sin cuenta permitida apta, rechaza la solicitud. Modelos con cuenta explícita, incluido `__main__`, Reserve y modo Direct son elecciones fuera de esta política. No cambia las comprobaciones de pausa, duplicados, acceso y enfriamiento. Los helpers de búsqueda y visión que toman una sesión Codex siguen la regla: con solo la principal iniciada, consideran Codex no disponible.
+
+```json
+{"codexPool":{"poolOnly":true}}
+```
+
 <a id="codex-pool-low-quota-protection"></a>
 
 ### Codex Pool Protección de baja cuota
@@ -97,6 +107,7 @@ Cada tecla combinada es una identificación que coincide con `[A-Za-z0-9][A-Za-z
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | Sin configurar | `defaultEffort` llena un `reasoning.effort` ausente en el modo de reserva, o anula el esfuerzo del llamante válido en el modo de fuerza explícita cuando el combo tiene un valor por defecto no nulo y el objetivo seleccionado tiene una escalera conocida, no vacía. Si el destino admite el valor configurado, se retiene; de lo contrario, se usa el peldaño soportado más alto en o por debajo de él, o el peldaño soportado más bajo cuando ninguno es más bajo. Las escaleras desconocidas o vacías omiten el valor predeterminado. |
 | `defaultEffortMode?` | `"fallback" \| "force"` | `"fallback"` | Preserva la precedencia del llamante por defecto. La fuerza explícita requiere un valor predeterminado válido, respeta la capacidad de destino y puede aumentar el costo y la latencia. `reasoningEffortMode` sigue siendo independiente. |
 | `reasoningEffortMode?` | `"strict" \| "adaptive"` | `"strict"` | `"strict"` calcula la intersección de todas las escalas de esfuerzo conocidas de los objetivos, incluidas las vacías; `"adaptive"` excluye las escalas vacías. Las escalas desconocidas actúan como comodines en el catálogo en ambos modos. Al enviar la solicitud, una escala explícitamente vacía elimina los controles de esfuerzo y pensamiento en ambos modos; una escala desconocida solo los elimina en modo adaptativo. Se conserva `reasoning.summary`. Los objetivos con escalas conocidas y no vacías mantienen su resolución de esfuerzo; la selección y el orden de los objetivos no cambian. |
+| `jevEffortMode?` | `"decide" \| "client"` | `"decide"` | Solo JEV. `"decide"` aplica al primer hijo el esfuerzo decidido, por encima del cliente. `"client"` conserva el destino decidido y usa la política Combo habitual: esfuerzo del cliente, escala del destino y `defaultEffort`/`defaultEffortMode`; `"force"` aún prevalece. Solo se guarda `"client"`. Consulta [límites y estado compartidos](/es/guides/combos/#shared-limits-state-and-statistics). |
 | `imageInput?` | `"auto" \| "disabled"` | `"auto"` | `"auto"` publica imágenes solo cuando cada objetivo admite imágenes; `"disabled"` fuerza el texto solo (cae la imagen de las modalidades publicadas y rechaza las solicitudes que llevan imágenes antes del envío). |
 | `alias?` | `string` | — | id modelo público opcional en lugar de la identificador selector canónica. |
 | `nativeAlias?` | `boolean` | `false` | Deje que un id nativo desnudo actualmente soportado tenga prioridad solo para ese id no calificado. Los identificadores de Bare `gpt-5.6-*` usan las credenciales Codex Pool / Direct. Las rutas calificadas para la cuenta siguen siendo distintas. Las rutas calificadas por el proveedor como `openai-apikey/gpt-5.6-*` usan su ruta API -key configurada y nunca pasan al alias nativo. |

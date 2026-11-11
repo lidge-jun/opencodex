@@ -11,6 +11,8 @@ import { createProtocolEnvelope } from "../../src/protocols/envelope";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { inspectResponseLogJson } from "../../src/server/request-log";
 import type { RequestLogContext } from "../../src/server/request-log";
+import { comboUnavailableResponse } from "../../src/server/responses/core-errors";
+import { normalizeMessagesProxyRefusal } from "../../src/lib/messages-error-body";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
@@ -93,15 +95,15 @@ function upstream(fallbackStatus: number, fallbackMessage: string, primaryStatus
   return hosts;
 }
 
-// Exercise the real reject-policy eligibility path and native dispatch seam with a budget
-// for one selected target: its eligibility copy and dispatch copy, never an unused target.
+// Exercise the real reject-policy eligibility path and native dispatch seam with a budget for
+// one retained copy: eligibility reads the source in place, so only the dispatched child copies.
 async function nativeCombo(cfg = config, status = 200) {
   const nativeConfig: OcxConfig = {
     ...cfg,
     protocols: { unrepresentable: "reject", rollout: { nativeChatCombos: true } },
   };
   const chatBody = { model: "combo/fan", stream: false, n: 2, messages: [{ role: "user", content: "hello" }] };
-  const budget = createTranslatorBudget({ maxTurnBytes: 2 * jsonUtf8Bytes(chatBody) });
+  const budget = createTranslatorBudget({ maxTurnBytes: jsonUtf8Bytes(chatBody) });
   const envelope = createProtocolEnvelope({ inbound: "chat", body: chatBody, translatorBudget: budget });
   const copies: Record<string, unknown>[] = [];
   const dispatched: string[] = [];
@@ -215,7 +217,7 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
       const { response, dispatched, copies, overflows } = await nativeCombo();
       expect(response.status).toBe(200);
       expect(dispatched).toEqual(["primary"]);
-      expect(copies.map(copy => copy.model)).toEqual(["primary/model-primary", "primary/model-primary"]);
+      expect(copies.map(copy => copy.model)).toEqual(["primary/model-primary"]);
       expect(overflows).toBe(0);
     });
   }
@@ -231,14 +233,14 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     expect(overflows).toBe(0);
   });
 
-  test("a throwing snapshot eligibility check preserves the fallback's 401", async () => {
+  test("a cooled primary still eligible for the request answers with its cooldown over the fallback's 401", async () => {
     coolComboTarget("fan", { provider: "primary", model: "model-primary" }, { retryAfter: "120", status: 429 });
     const { response, dispatched, overflows } = await nativeCombo(config, 401);
     expect(dispatched).toEqual(["fallback"]);
-    expect(response.status).toBe(401);
-    expect(response.headers.get("retry-after")).toBeNull();
-    // Only lazy eligibility for the cooled primary attempts a third charged body copy.
-    expect(overflows).toBe(1);
+    expect(response.status).toBe(503);
+    expect(Number(response.headers.get("retry-after"))).toBeGreaterThan(0);
+    // Eligibility for the cooled primary reads the source in place: no copy, so no budget overflow.
+    expect(overflows).toBe(0);
   });
 
   test("quota cooldown snapshots retain usable targets and expiry for 429 and 402", () => {
@@ -289,6 +291,7 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     const body = await response.text();
     expect(body).toContain("No available targets for combo");
     expect(body).not.toContain("No available targets for combo: fan");
+    expect(body).toContain("retry in ~2m");
   });
 
   test("a target cooled earlier by a 502 does not replace the fallback's 401", async () => {
@@ -463,6 +466,41 @@ describe("zero-attempt combo refusal names why each target was excluded", () => 
     expect(response.status).toBe(503);
     const { error } = await response.json() as { error: { code: string; message: string } };
     expect(error.code).toBe("combo_unavailable");
-    expect(error.message).toMatch(/^No available targets for combo \(5 targets; target 1 \(gone\): provider missing; target 2 \(off\): provider disabled; target 3 \(spent\): quota exhausted; target 4 \(cooling\): cooldown; target 5 \(metered\): ineligible for this request\)$/);
+    expect(error.message).toMatch(/^No available targets for combo \(5 targets; target 1 \(gone\): provider missing; target 2 \(off\): provider disabled; target 3 \(spent\): quota exhausted; target 4 \(cooling\): cooldown; target 5 \(metered\): ineligible for this request\) \(retry in ~\d+s\)$/);
+  });
+});
+
+describe("the Messages listener names the earliest combo recovery too", () => {
+  const messagesRequest = () => new Request("http://localhost/v1/messages", { method: "POST" });
+
+  test("an HTTP-date cooldown gives the body the same wait as the header", async () => {
+    const at = new Date(Math.ceil(Date.now() / 1000) * 1000 + 90_000).toUTCString();
+    const response = comboUnavailableResponse("No available targets for combo", { retryAfter: at });
+    const seconds = Number(response.headers.get("retry-after"));
+    expect(Number.isInteger(seconds) && seconds > 0).toBe(true);
+    const { error } = await response.json() as { error: { message: string } };
+    expect(error.message).toBe(`No available targets for combo (retry in ~${seconds < 60 ? `${seconds}s` : `${Math.ceil(seconds / 60)}m`})`);
+  });
+
+  test("the fixed Messages sentence carries the clamped retry advice before its period", async () => {
+    const response = comboUnavailableResponse("No available targets for combo (1 target; target 1 (a): cooldown)", {
+      retryAfter: "120",
+      presentation: "combo",
+    });
+    const normalized = await normalizeMessagesProxyRefusal(messagesRequest(), response);
+    expect(normalized.status).toBe(503);
+    expect(normalized.headers.get("retry-after")).toBe("120");
+    const { error } = await normalized.json() as { error: { code: string; message: string } };
+    expect(error.code).toBe("combo_unavailable");
+    expect(error.message).toBe("No available targets for combo; review target availability, quota and cooldowns before retrying (retry in ~2m).");
+  });
+
+  test("without usable retry advice the fixed Messages sentence is unchanged", async () => {
+    const response = comboUnavailableResponse("No available targets for combo (1 target; target 1 (a): provider missing)", {
+      presentation: "combo",
+    });
+    const normalized = await normalizeMessagesProxyRefusal(messagesRequest(), response);
+    const { error } = await normalized.json() as { error: { message: string } };
+    expect(error.message).toBe("No available targets for combo; review target availability, quota and cooldowns before retrying.");
   });
 });

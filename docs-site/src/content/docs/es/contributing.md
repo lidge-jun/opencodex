@@ -68,7 +68,7 @@ cd docs-site && bun install && bun dev
 
 ## Publicación de documentación
 
-La documentación pública se publica en GitHub Pages en <https://opencodex.me/es/>. El workflow `.github/workflows/deploy-docs.yml` se ejecuta al subir a `main` cambios en `docs-site/**` o en el propio workflow; compila `docs-site` y publica el sitio generado. Antes de subir cambios de documentación, ejecuta:
+El sitio se publica en GitHub Pages, <https://opencodex.me/>. Un mantenedor ejecuta manualmente `.github/workflows/deploy-docs.yml` desde `dev`: compila la última versión estable publicada, o una etiqueta estable publicada explícita, en su commit resuelto. Es independiente de la versión npm. Antes de subir cambios:
 
 ```bash
 cd docs-site
@@ -80,51 +80,41 @@ bun run build
 
 ## CI y versiones
 
-Los workflows de GitHub Actions mantienen separadas estas funciones:
+GitHub Actions mantiene comprobaciones acotadas:
 
-- **CI multiplataforma** (`.github/workflows/ci.yml`) ejecuta el subconjunto rápido de Ubuntu en los PR. Los pushes a `main`/`preview` y `workflow_dispatch` ejecutan los trabajos seleccionados que no son de PR, según los filtros de rutas y la selección de lane. Los pushes a `dev` no ejecutan la suite completa. El trabajo completo de pruebas `platform-windows` solo se ejecuta en el horario nocturno o mediante `workflow_dispatch` con la lane predeterminada o `all`, no al subir a las ramas de publicación. Los trabajos de plataforma cubren instalación, tipos, pruebas, privacidad, compilación de prueba del asistente de versiones, build de GUI y `ocx help`. Una matriz independiente de npm comprueba la instalación global con el Bun incluido; su prueba de instalación en Windows es distinta de la suite completa de Windows.
-- **Release** (`.github/workflows/release.yml`) es manual. Antes de una simulación o publicación exige que el commit exacto de la versión (`GITHUB_SHA`) ya tenga una ejecución exitosa de CI multiplataforma; no repite toda esa validación.
-- **Stale needs-info** (`.github/workflows/stale-needs-info.yml`) se ejecuta a diario en la rama predeterminada. Advierte tras 14 días sin actividad en una issue abierta con `needs-info` y la cierra como no prevista después de otros 7 días. Una actualización elimina la advertencia. Para conservar un trabajo abierto a largo plazo, retira `needs-info`, por ejemplo al pasarlo a `roadmap`.
-- **Calidad de issues** (`.github/workflows/enforce-issue-quality.yml`) valida las plantillas de issues nuevas o editadas. Aplica etiquetas de tipo (`bug`, `enhancement`, `provider-compatibility`, `documentation`) y etiquetas de **área** a partir del formulario y de indicios del título y resumen: `provider`, `account-pool`, `catalog`, `gui`, `cli`, `proxy`, `platform`, `streaming`, `tools`, `install` y `service`. Las etiquetas de tipo y proceso se mantienen separadas: puedes filtrar por `bug` + `account-pool`. Usa el desplegable de área en lugar de inventar etiquetas por proveedor. El área Documentation no añade una segunda etiqueta: el formulario ya incluye `documentation`. Los mantenedores pueden volver a aplicar áreas a las issues abiertas mediante workflow_dispatch `backfill_open_areas` cuando el workflow esté en la rama predeterminada.
+- **Cross-platform CI** (`.github/workflows/ci.yml`): comprobaciones Linux del alcance del PR. La matriz completa Linux/macOS/Windows se despacha manualmente sobre `dev` con `lane=all`, una vez por lote de integraciones, no por PR. Un PR verde no es evidencia multiplataforma para una versión.
+- **Release** (`.github/workflows/release.yml`): flujo manual de `dev` que elige una fuente exacta con evidencia de la matriz completa, fija la versión en los checkouts de compilación y consulta npm/GitHub antes de publicar. La publicación sigue desactivada hasta terminar las verificaciones de migración. Una ejecución interrumpida se recupera con reanudación atestiguada por el operador, sin volver a publicar una versión npm. Consulta [`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/dev/MAINTAINERS.md).
+- **Stale needs-info** (`.github/workflows/stale-needs-info.yml`): cada día, avisa tras 14 días sin actividad en issues `needs-info`; siete días después las cierra. Cualquier actualización quita el aviso. Quita `needs-info` para trabajo de largo plazo, por ejemplo `roadmap`.
+- **Issue quality** (`.github/workflows/enforce-issue-quality.yml`): valida plantillas y etiquetas de tipo `bug`, `enhancement`, `provider-compatibility`, `documentation`, y áreas independientes `provider`, `account-pool`, `catalog`, `gui`, `cli`, `proxy`, `platform`, `streaming`, `tools`, `install`, `service`. El desplegable Area prevalece sobre crear etiquetas por proveedor. Documentation no duplica área. Los mantenedores pueden aplicar `backfill_open_areas` por workflow_dispatch cuando el flujo llegue a la rama predeterminada.
 
-Usa el asistente para preparar versiones. Primero elige la versión prevista y ejecuta `.github/workflows/dev-version-bump.yml` desde la rama predeterminada con `intended-version=<version>` y `mode=pre-move`. Revisa y fusiona en `dev` el PR generado; después promueve a `main` o `preview` y ejecuta el asistente. Si `dev` ya supera la versión prevista, el workflow devuelve `changed=false` y no necesita un PR de incremento. La publicación sigue exigiendo CI exitoso para el commit exacto de la versión.
-
-```bash
-bun run release <version>           # commits/pushes the bump; publish workflow is dry-run by default
-bun run release --bump minor        # derive the next patch, minor, or major version from tags and npm channels
-bun run release <version> --publish # publish after the CI-gated dry run is understood
-bun run release:watch               # watch the newest Release workflow run
-```
-
-`--bump patch|minor|major` permite elegir el incremento en lugar de indicar una versión explícita. Cuando una etiqueta preview abre un núcleo de versión superior, `--bump patch` rechaza continuar la línea estable anterior; la corrección debe publicarse en el núcleo de la preview abierta.
+El procedimiento antiguo de incremento de versión y promoción no es la ruta actual de publicación ni una alternativa para evitar sus condiciones pendientes.
 
 <a id="branches"></a>
 
 ## Ramas
 
-- `dev`: único destino de integración. Abre aquí tu PR.
-- `main`: versiones, mediante promoción de `dev` controlada por los mantenedores. No es destino de PR de funcionalidades.
-- `preview`: versiones preliminares.
+- `dev`: única rama de integración y rama predeterminada; dirige aquí tu PR.
+- `main` y `preview` se eliminaron tras adoptar una única rama. Su historial publicado sigue en las etiquetas; no son destinos de integración ni promoción.
 
-La línea `dev2-go` y su política de mantener dos implementaciones se retiraron. Su historial está disponible en modo de solo lectura en [lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive). TypeScript nativo de Bun en `dev` es la única línea de ejecución.
+La línea Go `dev2-go` y su política de mantenimiento paralelo están retiradas. Su historial es de solo lectura en [lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive). Bun nativo en `dev` es la única línea de ejecución.
 
-Se aceptan PR que actualicen una rama mediante rebase. Indica en la descripción los commits originales que estás incorporando.
+Se aceptan PR que actualizan ramas antiguas mediante rebase; identifica los commits de origen en la descripción.
 
 <a id="pull-requests"></a>
 
 ## Pull requests
 
-- Usa **`dev`** como destino, tanto para funcionalidades como para correcciones; no uses **`main`**.
-- Parte del commit actual de **`dev`**. El check **`enforce-target`** rechaza ramas cuya base de merge se encuentre en el extremo de **`main`** mientras estén muy por detrás de la base del PR, como ocurrió en #644.
-- Completa la plantilla del repositorio: `Summary`, `Verification` y `Checklist`. Explica qué cambia y por qué y documenta el plan de pruebas y sus resultados. El check rechaza descripciones vacías, compuestas solo por marcadores o que usen `\n` literal en lugar de saltos de línea reales.
-- Si cambias `gui/`, incluye una captura real de la interfaz en la descripción. `enforce-target` vuelve a comprobarla cuando se edita la descripción. Adjunta la imagen al editor; no la añadas a la rama del PR, porque el squash la incorporaría a `dev`. Para subirla por CLI se utiliza la rama `pr-assets` y un enlace fijado al SHA del commit.
-- Los workflows de confianza `enforce-target` y `label` usan **`pull_request_target`**. Su lógica de control nueva solo entra en vigor al llegar a la rama predeterminada, como se documentó en #631. La CI multiplataforma usa **`pull_request`** y la referencia de merge del PR (`refs/pull/<number>/merge`), por lo que un cambio del workflow puede afectar a ese PR antes del merge, según los filtros del evento y la autorización de las ejecuciones desde forks.
+- Dirige el PR a **`dev`**. `enforce-target` rechaza otras bases, salvo hijos apilados sobre la rama de otro PR abierto.
+- Parte de `dev` actual. Si te retrasas demasiado, se desmarca la afirmación de base reciente de la lista de preparación.
+- Completa la plantilla con `Summary`, `Verification` y `Checklist`: explica el cambio, motivo, plan y resultados. Texto vacío, marcadores de posición o `\n` escapados en vez de saltos reales fallan.
+- Si cambias `gui/`, incluye una captura en la descripción. Arrástrala al editor; no la añadas a la rama del PR, porque llegaría a `dev` con squash. Por CLI, usa `pr-assets` y un enlace fijado a su SHA.
+- La automatización privilegiada usa **`pull_request_target`** y solo cambia cuando llega a la rama predeterminada, como explica #631. Cross-platform CI usa **`pull_request`**; los cambios surten efecto en la rama base del PR.
 
 <a id="project-maintainers"></a>
 
 ## Mantenedores
 
-Los responsables, sus funciones y la política de revisión y merge se documentan en [`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/main/MAINTAINERS.md). `.github/CODEOWNERS` declara la responsabilidad de revisión de las rutas del repositorio, incluidas las sensibles para la seguridad.
+Los responsables, sus funciones y la política de revisión y merge se documentan en [`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/dev/MAINTAINERS.md). `.github/CODEOWNERS` declara la responsabilidad de revisión de las rutas del repositorio, incluidas las sensibles para la seguridad.
 
 Los PR de contribuyentes normalmente necesitan aprobación de un mantenedor. Un mantenedor actual con acceso `maintain` o `admin` puede integrar explícitamente un PR en `dev`, incluido uno propio, sin segunda aprobación. Debe registrar la decisión y la validación del commit exacto. Siguen vigentes CI, la revisión de seguridad y las objeciones pendientes de otros mantenedores. Esta excepción no cambia las reglas de `main`/`preview` ni permite pushes directos, force-pushes o eliminación.
 

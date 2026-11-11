@@ -95,3 +95,14 @@ Consulte [Configuración](/es/reference/configuration/) para los campos de prove
 ## Salida estructurada en rutas Cursor
 
 Cursor rutas traducen Responses `text.format` (`json_object` o `json_schema`) en instrucciones explícitas de respuesta final en el contexto del sistema y solicitud activa, incluyendo continuación de resultados de herramientas. Esta es una reserva rápida: Cursor no proporciona una decodificación JSON restringida nativa en este transporte, y los modelos aún pueden devolver una respuesta no válida. El adaptador no convierte la prosa en una decisión de aprobación. Las personas que llaman deben validar el JSON devuelto y usar una ruta con capacidad de salida estructurada cuando se requiere una aplicación estricta. Las solicitudes de texto ordinarias y las llamadas de herramientas intermedias mantienen su comportamiento existente.
+
+
+<a id="model-alias-templates"></a>
+
+## Plantillas de alias de modelos
+
+`aliasTemplate` es opcional por proveedor y asigna nombres a sus modelos sin alias manual o integrado. Por ejemplo, `"aliasTemplate": "{providerAlias}-{modelBasename}"` con alias `CC` convierte `reflection/beam:free` en `CC-beam-free`. Solo admite `{providerAlias}`, que exige un alias del proveedor, y `{modelBasename}`, obligatorio: el último segmento después de `/`, sustituyendo `:` por `-`. Los alias se calculan al resolver modelos, sin guardarlos en configuración; un modelo nuevo los recibe al descubrirse y quitar la plantilla los elimina de inmediato.
+
+Prevalecen los alias manuales, después los integrados y por último la plantilla. Se omite, sin renombrar, un resultado inválido, con prefijo reservado `gpt-`, `o1-`, `o3-`, `o4-` o `codex-`, o ya ocupado por IDs o alias del proveedor, alias integrados, nombres o alias de proveedores, alias manuales de otros proveedores o ID/alias de combos. Si dos modelos generan el mismo nombre, se omiten ambos sin depender del orden. Un alias sin calificador generado por dos proveedores es ambiguo; sigue funcionando `<provider-alias>/<alias>`. Usa `ocx alias template set <provider> <template>` o `PUT /api/providers/<name>/alias-template` con `{ "template": … }`, y `null` para quitarla. Se informa del número generado y de los omitidos con su causa. `ocx alias list` indica el origen `template`. Una plantilla inválida editada en `config.json` se ignora con aviso.
+
+- Para proveedores con `selectedModels` no vacío, incluido el modo de preajuste, las políticas `on` y `off` no amplían la selección. `admit`, mediante `ocx models new-policy admit --provider <name>`, añade una vez cada llegada auténtica a la selección personalizada y aplica el cambio sin reinicio. Una exclusión posterior se conserva; no amplía preajustes ni proveedores sin selección. `ocx models new-arrivals` y `GET /api/model-discovery` muestran `enabled`, `not-selected`, `auto-disabled` o `disabled` con las reglas reales del selector, incluidos los niveles de esfuerzo de Antigravity.

@@ -12,7 +12,8 @@ import { guardedRun, guardedSpawn, guardedSpawnSync, guardedExit, probeProcessAl
 import { probeSpawn, probeSpawnSync } from "../src/update/mutation-guard.mjs";
 import { createSupervisionLatch, inspectDesktopSupervision } from "../src/service/desktop-supervision.mjs";
 import { planDesktopCliHandoff, runDesktopCliHandoff } from "../src/lib/desktop-cli-handoff.mjs";
-import { acquireSyncGuard } from "../src/update/sync-update-mutex.mjs";
+import { forwardLauncherSignals } from "../src/lib/launcher-signal-forwarding.mjs";
+import { acquireSyncGuard, staleUpdateMarkerHint } from "../src/update/sync-update-mutex.mjs";
 import { desktopCliRecordPath } from "../src/lib/desktop-cli-record.mjs";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
 import { probeProxyLiveness } from "../src/update/proxy-liveness-probe.mjs";
@@ -274,7 +275,11 @@ async function runPackageManagerSelfUpdate(manager, child) {
   } else {
     session = createLegacyUpdateSession({ home: configDir() });
     const started = session.start();
-    if (!started.ok) { console.error(`opencodex: ${started.error}`); process.exit(1); }
+    if (!started.ok) {
+      console.error(`opencodex: ${started.error}`);
+      if (started.staleMarker) for (const line of staleUpdateMarkerHint(configDir())) console.error(line);
+      process.exit(1);
+    }
     process.once("exit", () => {
       try { if (enteredMutation) session.finish(childOutcome); else session.finishPreflight(); }
       catch (error) { console.error(`Update outcome write failed: ${error?.message ?? error}`); process.exitCode = 1; }
@@ -330,7 +335,7 @@ async function runPackageManagerSelfUpdate(manager, child) {
   const latestInvocation = managerInvocation(["view", `${PKG}@${selector}`, "version"]);
   const installArgs = manager === "pnpm"
     ? ["add", "-g", "--allow-build=bun", `${PKG}@${selector}`]
-    : ["install", "-g", `${PKG}@${selector}`];
+    : ["install", "-g", "--allow-scripts=bun", `${PKG}@${selector}`];
   const installInvocation = managerInvocation(installArgs);
   if (!latestInvocation || !installInvocation) {
     console.error(`opencodex: could not resolve ${manager} from a trusted absolute PATH entry; aborting before stopping the proxy.`);
@@ -571,6 +576,8 @@ async function runPackageManagerSelfUpdate(manager, child) {
     }
     const env = mutationChildEnvironment();
     delete env.OCX_SERVICE;
+    // Not launched by a supervisor: none of its markers (src/lib/supervisor-markers.ts) may ride along.
+    for (const name of ["OCX_DESKTOP_SUPERVISED", "OCX_SERVICE_MANAGED", "OCX_WINDOWS_WRAPPER_PROTOCOL"]) delete env[name];
     // The restarted proxy is an ordinary owner; only a sibling's own replacement carries this.
     delete env.OCX_SIBLING_OF_PORT;
     delete env.OCX_SIBLING_HANDOFF_NONCE;
@@ -1016,6 +1023,7 @@ async function runPackageManagerSelfUpdate(manager, child) {
               if (session) session.noteUntrackedInstaller();
               return runNpmInstall(invocation, {
                 authorizeMutation: homePolicy.authorizeMutation,
+                ...(session ? { markerPath: join(configDir(), "update-orchestrated.json") } : {}),
                 env: unprivilegedOwnershipMutationEnvironment(invocation?.options?.env ?? process.env),
               }).then(result => {
                 if (session && result.processTreeExited === true && Number.isInteger(result.status)) session.confirmInstallerExit();
@@ -1078,7 +1086,8 @@ async function runPackageManagerSelfUpdate(manager, child) {
               const env = pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(invocation.env ?? process.env));
               if (process.platform === "win32") {
                 session.noteUntrackedInstaller();
-                const result = runWindowsInstallerSync(invocation, { cwd, env, authorizeMutation: homePolicy.authorizeMutation });
+                const result = runWindowsInstallerSync(invocation, { cwd, env, authorizeMutation: homePolicy.authorizeMutation,
+                  markerPath: join(configDir(), "update-orchestrated.json") });
                 if (result.processTreeExited === true && Number.isInteger(result.status)) session.confirmInstallerExit();
                 else { session.retainInstallerFence(); return { ...result, processTreeExited: false }; }
                 return result;
@@ -1444,7 +1453,7 @@ if (desktopPlan.kind === "handoff") {
     // Signal delivery is asynchronous; never resume package repair or Bun lookup.
     await new Promise(() => {});
   }
-  // Only confirmed target ENOENT reaches the ordinary package path below.
+  // A selected Desktop never falls back to the package after a launch failure.
 }
 
 if (!orchestratedUpdate && process.argv[2] === "update" && installMethod === "mise") {
@@ -1608,6 +1617,8 @@ function createNodeLaunchContext() {
   return { launchProof, launchContext, inheritedEnv };
 }
 
+// Forwarders precede the spawn so no signal can kill this launcher by default action while the child runs.
+const forwarding = forwardLauncherSignals();
 const child = probeSpawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, ...process.argv.slice(2).filter(arg => !arg.startsWith(NODE_LAUNCH_PROOF_PREFIX))], {
   stdio: "inherit",
   // A headless Windows parent (Task Scheduler, dashboard restart, shortcut) has no
@@ -1622,6 +1633,7 @@ const child = probeSpawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProo
     [BUN_RUNTIME_PATH_ENV]: bunRuntime.path,
   },
 });
+forwarding.attach(child);
 let delegateError = false;
 if (child.pid) {
   try { addSyncDelegate(child.pid); }
@@ -1632,31 +1644,14 @@ if (child.pid) {
   }
 }
 
-// Windows has no real POSIX signals (no SIGHUP); forwarding is best-effort there.
-const FORWARDED = process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
-const handlers = FORWARDED.map(sig => {
-  const handler = () => {
-    try {
-      child.kill(sig);
-    } catch {
-      /* child already exited */
-    }
-  };
-  process.on(sig, handler);
-  return [sig, handler];
-});
-const clearHandlers = () => {
-  for (const [sig, handler] of handlers) process.removeListener(sig, handler);
-};
-
 child.on("error", err => {
-  clearHandlers();
+  forwarding.clear();
   console.error(`opencodex: failed to launch Bun runtime: ${err.message}`);
   process.exit(1);
 });
 
 child.on("exit", (code, signal) => {
-  clearHandlers();
+  forwarding.clear();
   releaseSyncLease();
   if (delegateError) process.exit(1);
   // Mirror the child's terminating signal/exit code so this launcher's status matches.

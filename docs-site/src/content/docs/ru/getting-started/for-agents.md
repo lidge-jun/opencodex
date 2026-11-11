@@ -14,11 +14,15 @@ description: Установите и используйте opencodex из аг�
 Установите опубликованный пакет и убедитесь, что `ocx` доступен в `PATH`:
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
 ```
 
-Выберите один из способов запуска прокси:
+Перед запуском прокси выполните `ocx init` в интерактивном терминале, чтобы использовать выбранный при настройке порт:
+
+```bash
+ocx init
+```
 
 ```bash
 # Foreground: blocks this terminal until stopped.
@@ -26,13 +30,6 @@ ocx start
 
 # Background: installs or updates the service, then starts it.
 ocx service
-```
-
-Запустите `ocx init` в интерактивном терминале. Если `ocx start` уже занимает передний план,
-используйте второй терминал:
-
-```bash
-ocx init
 ```
 
 Мастер записывает `$OPENCODEX_HOME/config.json` (обычно `~/.opencodex/config.json`). Он также может
@@ -92,7 +89,7 @@ ocx provider add anthropic-apikey \
 
 ```bash
 ocx combo set main \
-  --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol \
+  --targets anthropic-apikey/claude-opus-4-8,openai/gpt-5.6-sol \
   --strategy failover
 ```
 

@@ -652,6 +652,8 @@ describe("Windows tray packaging and command safety", () => {
     for (const scenario of ["Offline", "Online", "BadgeOverflowStdout", "BadgeOverflowStderr", "BadgeStaleFailure"]) {
       const directory = mkdtempSync(join(tmpdir(), "ocx-tray-fixture-"));
       const pidFile = join(directory, "pids.txt");
+      // The delayed scenario holds open the empty-file window before PID publication.
+      if (scenario === "Online") writeFileSync(pidFile, "");
       const child = Bun.spawn([process.execPath, helperPath("windows-tray-probe-child.ts"), "__startup-health"], {
         env: { ...process.env, OCX_PROBE_TEST_PID_FILE: pidFile, OCX_PROBE_TEST_SCENARIO: scenario },
         stdout: "pipe", stderr: "pipe",
@@ -670,9 +672,14 @@ describe("Windows tray packaging and command safety", () => {
       const stderr = drain(child.stderr);
       try {
         const deadline = Date.now() + INTERNAL_DEADLINE_MS;
-        while (!existsSync(pidFile) && child.exitCode === null && Date.now() < deadline) await Bun.sleep(10);
+        let publishedPid = "";
+        do {
+          publishedPid = existsSync(pidFile) ? readFileSync(pidFile, "utf8").trim() : "";
+          if (publishedPid === String(child.pid) || child.exitCode !== null || Date.now() >= deadline) break;
+          await Bun.sleep(10);
+        } while (true);
         expect(existsSync(pidFile), scenario).toBe(true);
-        expect(readFileSync(pidFile, "utf8").trim(), scenario).toBe(String(child.pid));
+        expect(publishedPid, scenario).toBe(String(child.pid));
         if (scenario.startsWith("BadgeOverflow")) {
           expect(await Promise.race([overflow.then(() => true), Bun.sleep(INTERNAL_DEADLINE_MS).then(() => false)]), scenario).toBe(true);
         }

@@ -253,7 +253,7 @@ tailscale serve status   # expect both mappings: 443 -> 10101, 8443 -> 10110
 
 Servir acepta un conjunto limitado de puertos HTTPS; confirmar que el mapeo fue creado con `tailscale serve status` en lugar de asumir que el puerto estaba permitido.
 
-Dar al promotor la misma vida útil que el hub. Un trabajo de shell en segundo plano muere en el reinicio mientras que el El servicio vuelve a aparecer, lo que deja un concentrador que se ejecuta e inalcanzable sobre TLS; ejecútelo desde lanzamiento o systemd junto `ocx service install`.
+Dar al promotor la misma vida útil que el hub. Un trabajo de shell en segundo plano muere en el reinicio mientras que el El servicio vuelve a aparecer, lo que deja un concentrador que se ejecuta e inalcanzable sobre TLS; ejecútelo desde `launchd` o `systemd` junto `ocx service install`.
 
 Luego conéctese con los dos orígenes establecidos por separado. El URL posicional es el origen **datos** - es donde `/readyz` y `/v1/catalog` son buscados - y `--management-url` es el origen del tablero de instrumentos utilizado para el emparejamiento y la emisión de claves. No tienen que compartir un puerto:
 
@@ -325,8 +325,7 @@ Cada invitación exitosa también imprime el **origen del navegador vinculado** 
 ocx config set corsAllowOrigins '["http://localhost:10100"]'
 ```
 
-Utilice el puerto en el que escucha el proxy de la máquina **afiliarse**; `10100` es el valor predeterminado. El bloque de configuración anterior ya lo establece. Un conjunto de matrices completas reemplaza la matriz, por lo que cuando el concentrador ya tiene entradas, ejecuta la línea `invite` impresiones, lleva las existentes más el nuevo origen. `ocx config get
-corsAllowOrigins` muestra lo que hay ahora.
+Usa el puerto en el que escucha el proxy de la máquina que **se conecta**; `10100` es el predeterminado. El bloque anterior ya lo establece. Asignar `corsAllowOrigins` reemplaza toda la lista. Si el Hub ya tiene entradas, ejecuta el comando completo que imprime `ocx hub invite`: conserva las existentes y añade el nuevo origen. `ocx config get corsAllowOrigins` muestra el valor actual.
 
 `ocx hub invite --json` emite `{ code, expiresAt, dataUrl, managementUrl, command }` con `expiresAt` como ISO 8601. El código es un secreto: de un solo uso, cinco minutos de vida útil, tasa limitada en el concentrador, y no debe ser persistente, registrado o pegado en un problema. `--clients codex,claude` elige qué cliente configura el comando impreso apuntará al concentrador.
 
@@ -383,7 +382,7 @@ Nunca ponga el código OAuth en argv de shell, registros, texto de emisión, cap
 
 ## Docker Compose
 
-opencodex no publica una imagen de contenedor oficial. El repositorio mantiene un código fuente-construido [`Dockerfile`](https://github.com/lidge-jun/opencodex/blob/main/Dockerfile), [`compose.yaml`](https://github.com/lidge-jun/opencodex/blob/main/compose.yaml), y un estrecho `.dockerignore`. La compilación fija el índice de imagen multiplataforma Bun 1.4.4 por compendio, ejecuta el proxy como el usuario no raíz `bun`, mantiene el sistema de archivos raíz de solo lectura, elimina las capacidades Linux y publica solo el oyente de datos en el `127.0.0.1:10100` del host de forma predeterminada. El proceso en primer plano utiliza `OCX_SERVICE=1`, por lo que detener o recrear el contenedor conserva el estado Codex enrutado en lugar de restaurar una configuración de escritorio nativa. Docker proporciona supervisión; no hay ningún administrador de servicios del sistema operativo instalado en la imagen. Use Compose para reiniciar/recrear el contenedor; esto no extiende el soporte a todas las rutas de reinicio del panel.
+opencodex no publica una imagen de contenedor oficial. El repositorio mantiene un código fuente-construido [`Dockerfile`](https://github.com/lidge-jun/opencodex/blob/dev/Dockerfile), [`compose.yaml`](https://github.com/lidge-jun/opencodex/blob/dev/compose.yaml), y un estrecho `.dockerignore`. La compilación fija el índice de imagen multiplataforma Bun 1.4.4 por compendio, ejecuta el proxy como el usuario no raíz `bun`, mantiene el sistema de archivos raíz de solo lectura, elimina las capacidades Linux y publica solo el oyente de datos en el `127.0.0.1:10100` del host de forma predeterminada. El proceso en primer plano utiliza `OCX_SERVICE=1`, por lo que detener o recrear el contenedor conserva el estado Codex enrutado en lugar de restaurar una configuración de escritorio nativa. Docker proporciona supervisión; no hay ningún administrador de servicios del sistema operativo instalado en la imagen. Use Compose para reiniciar/recrear el contenedor; esto no extiende el soporte a todas las rutas de reinicio del panel.
 
 La imagen siembra una configuración `hub` de primera ejecución que une el oyente de contenedor a `0.0.0.0`. Antes del primer inicio normal, transmita un token de plano de datos recién generado al ayudante de arranque. El ayudante acepta como máximo una línea de 4096 bytes, nunca imprime el token, se niega a reemplazar un token existente y lo persiste como el propietario canónico `service-api-token` en el volumen `ocx-state`.
 
@@ -393,7 +392,7 @@ No combine `CODEX_HOME` y `OPENCODEX_HOME`: ambos productos utilizan un nombre d
 
 La actualización conserva el volumen `ocx-state` existente y agrega `codex-state`; no se migran archivos automáticamente. Si una solución anterior colocó un catálogo directamente debajo de `/home/bun/.opencodex`, respalde y copie deliberadamente solo el catálogo a la nueva casa Codex, preservando el acceso solo para el propietario. No copie el `auth.json` de ninguno de los productos sobre el otro. Las implementaciones con un `CODEX_HOME` personalizado deben conservar su entorno explícito y la asignación de volumen grabable hasta que se complete la migración. Al anular `CODEX_HOME`, monte ese directorio exacto y persista el catálogo predeterminado en `${CODEX_HOME}/opencodex-catalog.json`. Si `model_catalog_json` selecciona explícitamente otro archivo, esa ruta de acceso resuelta también debe persistir.
 
-Mantenga estable el nombre del proyecto de redacción durante las actualizaciones para que se reutilicen los mismos volúmenes con nombre. Los montajes con propiedad externa existente, montajes de solo lectura y montajes con `volume-nocopy` no se reparan mediante la configuración del directorio de la imagen. Persistir catálogo seleccionado por separado o SQLite rutas por separado; un almacén de credenciales del sistema operativo no está respaldado por estos dos volúmenes.
+Los volúmenes con nombre anteriores conservan los directorios predeterminados de configuración de opencodex y de estado de Codex. Si eliges otras rutas para el catálogo o para SQLite, debes darles persistencia por separado; esos volúmenes no conservan automáticamente las rutas no predeterminadas.
 
 Cuando se ejecute sin Compose, proporcione explícitamente ambos montajes con nombre. Solo las declaraciones Dockerfile `VOLUME` crean volúmenes anónimos que un `docker run` posterior no reutiliza automáticamente. Estas opciones de montaje utilizan nombres de ejemplo independientes; para reutilizar los datos de Compose, sustituya los nombres de volumen predefinidos para el proyecto:
 
@@ -423,7 +422,7 @@ services:
   hub:
     pull_policy: build
     build:
-      context: https://github.com/lidge-jun/opencodex.git#main
+      context: https://github.com/lidge-jun/opencodex.git#dev
       dockerfile: Dockerfile
       target: runtime
       args:
@@ -480,7 +479,7 @@ docker compose exec hub bun -e \
 
 A continuación, realiza una solicitud enrutada autenticada real con un modelo configurado. Si falta el secreto o no puede leerse, un Hub que escucha fuera de loopback no debe considerarse listo. Que el proceso esté activo no basta para demostrar que puede atender solicitudes.
 
-`docker compose down` elimina el contenedor y la red, pero conserva ambos volúmenes con nombre. Tratar `docker compose down --volumes` como destructivo: elimina la configuración, OAuth credenciales, historial de uso, el token de plano de datos, y persistió Codex estado juntos.
+`docker compose down --volumes` elimina los volúmenes, incluida la configuración, las credenciales OAuth, el historial de uso, el token del plano de datos y el estado persistente de Codex. Usa `docker compose down` sin `--volumes` para conservar esos datos.
 
 CI multiplataforma construye la imagen de origen y comprueba el inicio, la admisión de tokens de plano de datos y la recreación de contenedores utilizando un proyecto de Compose aislado con credenciales desechables. Verifica que tanto los volúmenes con nombre como un catálogo sintético sobrevivan al reemplazo. Esta comprobación no valida una cuenta de proveedor real, devolución de llamada OAuth, migración de montaje personalizada o cada arquitectura de CPU; realice la comprobación de respuesta enrutada autenticada anterior para su implementación.
 
@@ -508,7 +507,7 @@ Para una reversión de contenedor, conserve tanto los volúmenes de estado con n
 - **Token giratorio o recuperación `.prev`:** vuelve a ejecutar `ocx connect rotate` con un código de emparejamiento o token de administración. No edite ni elimine ninguno de los candidatos de token antes de que finalice la sonda de recuperación.
 - **Desajuste de protocolo:** actualizar el lado más antiguo nombrado por el mensaje `hub-too-new` o `hub-too-old`. La negociación falla antes de que el token, el catálogo, el diario o el estado del cliente escriban.
 - **Código de emparejamiento perdido o quemado:** ejecutar `ocx hub invite` de nuevo. Las concesiones son de un solo uso y los fallos repetidos son de velocidad limitada sin revelar si existe un código.
-- **`ocx hub invite` dice `No loopback browser origin is admitted for pairing`:** el concentrador no admite el origen del navegador de bucle de retroceso, por lo que una concesión vinculada al origen nunca podría igualar. Nada fue acuñado. Ejecute la línea `ocx config set corsAllowOrigins` las impresiones de error, con el puerto proxy de la máquina de unión. Véase [Invitar a otra máquina](#inviting-another-machine).
+- **`ocx hub invite` dice `No loopback browser origin is admitted for pairing`:** el concentrador no admite el origen del navegador de bucle de retroceso, por lo que una concesión vinculada al origen nunca podría igualar. Nada fue acuñado. Ejecuta el comando completo `ocx config set corsAllowOrigins` que imprime el error: conserva los orígenes existentes y añade el del puerto del proxy de la máquina que se conecta. Véase [Invitar a otra máquina](#inviting-another-machine).
 - **`ocx hub invite` dice que el origen de los datos anunciados sería el propio bucle de retorno de esta máquina:** el bind es solo loopback o un comodín y `hub.dataPublicOrigin` no está definido, por lo que no hay dirección para anunciar y nada adivina una red Tailscale o LAN. Nada fue acuñado. Establecer `hub.dataPublicOrigin`, o pase `--data-url` para esta invitación solamente.
 - **El intercambio del equipo que se conecta se rechaza y consume el código:** la autorización estaba vinculada a otro origen. Revisa la línea `Bound browser origin:` de la invitación: indica el puerto que debe usar el otro equipo o propone admitir `http://localhost:10100` en el Hub.
 - **`ocx hub invite` rechaza un `--management-url`:** en un concentrador ese indicador confirma `hub.managementPublicOrigin` en lugar de anularlo, porque la concesión está vinculada al valor configurado. Cambie la configuración o suelte la bandera.
@@ -520,7 +519,7 @@ Para una reversión de contenedor, conserve tanto los volúmenes de estado con n
 - El emparejamiento de **Plain HTTP se negó:** sobre HTTP no loopback se rechaza completamente, y no hay ninguna bandera que opte por salirse de él. Ponga el origen de la administración detrás de HTTPS o pare sobre loopback. Los tokens de administrador nunca se envían por encima de HTTP.
 - **`403 origin_rejected` de `/v1/catalog` mientras que `/readyz` devuelve `200`:** el oyente de datos está obligado a retroceder detrás de un frontend TLS. Véase [Dar al oyente de datos TLS](#giving-the-data-listener-tls).
 - **Finalizó la sesión remota:** Iniciar sesión o emparejar de nuevo. El cierre de sesión y la expiración invalidan solo la sesión del navegador, no una clave de datos del cliente.
-- **Revocación excepcional después de la desconexión:** usa la página **Conecte las llaves → API** del panel de control central. Es el único camino de revocación posterior a la desconexión.
+- **Revocación excepcional después de la desconexión:** usa la página **Conectar → Claves API** del panel de control central. Es el único camino de revocación posterior a la desconexión.
 
 <a id="usage-from-a-connected-client"></a>
 
@@ -557,3 +556,23 @@ ocx hub disable --revoke-clients --client-key <client-key-id> --json
 ```
 
 Repita `--client-key` para varios clientes. Con las claves guardadas presentes, `--revoke-clients` sin ID seleccionados se niega antes de cambiar la configuración. Las identificaciones desconocidas también se niegan. Solo se eliminan las teclas seleccionadas y sus rotaciones pendientes; la salida contiene metadatos seguros en lugar de secretos. El comando imprime el paso de reinicio para el supervisor detectado; no reinicia el proxy. Revisión `tailscale serve status` y otros frontends externos para asignaciones a puertos hub antiguos. La configuración y revocación persistentes se aplican al proxy en ejecución después del reinicio; Los registros de enlace remoto y los túneles permanecen sin cambios.
+
+<a id="remember-and-service-recovery"></a>
+
+### Recordar el dispositivo y recuperar el servicio
+
+**Recordar este dispositivo** funciona en `hub.managementPublicOrigin` porque el listener de administración es la entrada de confianza del Hub. Una instancia independiente detrás de un proxy que termina TLS necesita `dashboardTrustedProxy`; un Hub ignora ese ajuste. Consulta [Recordar detrás de un proxy inverso](/es/guides/web-dashboard/#remember-behind-a-reverse-proxy).
+
+`invite` lee el origen del archivo, pero el Hub en ejecución valida contra su configuración de inicio. Después de cambiar `hub.managementPublicOrigin` o `corsAllowOrigins`, reinicia antes de invitar. `ocx config set` recuerda el reinicio para esas claves y `hub.managementIngress`.
+
+En macOS, `launchctl bootout` regresa antes de terminar el proceso y `launchctl print` puede indicar que el trabajo ya no existe mientras aquel drena. Un reinicio inmediato podría producir `Bootstrap failed: 5`. La recuperación espera entre un número acotado de intentos: tras `launchctl bootout gui/$(id -u)/com.opencodex.proxy`, una llamada a `ocx service restart` o `ocx service repair` recupera el trabajo. Si el cierre nunca termina, devuelve el diagnóstico en lugar de esperar indefinidamente.
+
+<a id="restarts-after-an-unclean-exit"></a>
+
+### Reinicios después de un cierre inesperado
+
+El contenedor ejecuta el proxy como PID 1. Una caída, OOM o fallo del nodo puede dejar `ocx.pid` y `runtime-port.json` con ese PID. El siguiente inicio solo recupera automáticamente un registro de una ejecución anterior del mismo contenedor cuando la versión registró su entorno: un reinicio dentro del mismo pod sin reiniciar el nodo, o el mismo contenedor Docker/Podman reiniciado —incluido `docker restart`, una política de reinicio o un reinicio del host— con un identificador aleatorio de capa escribible, como Docker `overlay2` y Podman. El almacén de imágenes containerd de Docker numera las capas, por lo que ese caso se rechaza.
+
+Los demás casos fallan con `Proxy ownership is unverified; startup refused`: un pod de reemplazo, un contenedor Compose recreado, el regreso de un pod tras reiniciar el nodo, otro nodo o un registro de una versión anterior. Confirma primero que ningún proceso siga sirviendo ese directorio y después aparta una sola vez los dos archivos de propiedad para reiniciar. Mantén un único escritor por volumen: un `Deployment` compartido debe usar `strategy: Recreate` o `maxSurge: 0`. No compartas estado entre procesos en un mismo espacio de red, sidecars, distribuciones WSL, clones de una instantánea de VM ni equipos con el mismo nombre. En Compose, `volume-nocopy` evita que Docker rellene un volumen vacío con el estado incluido en la imagen.
+
+- Si `ocx hub invite` informa `Minting a pairing code failed (origin-refused)`, reinicia con el comando que imprime el error y vuelve a invitar: el origen permitido en memoria puede preceder a un cambio reciente. `(rate-limited)` indica el límite de ocho códigos por minuto o de códigos sin usar; espera a que se usen o caduquen a los cinco minutos. `(rejected)` es otro rechazo.

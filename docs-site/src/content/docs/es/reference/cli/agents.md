@@ -1026,3 +1026,6 @@ Esto tiene efecto en el **siguiente inicio enrutado de `ocx claude`**, inyectand
 Claude Code **2.1.257 o más reciente** es necesario para la fuerza. Los argumentos de modelo de complemento y agentes incorporados (incluyendo Explorar/Planear) y por llamada se anulan. Las bifurcaciones y las habilidades de subagente con `model: inherit` mantienen el modelo de conversación principal. El bucle principal y los sidecars de pequeño-rápido no se ven afectados. Los archivos de la lista existentes permanecen disponibles.
 
 El panel de control advierte sobre versiones antiguas o desconocidas de CLI, objetivos no disponibles y cualquiera de las variables ya presentes en `settings.json` → `env` (que anula env de lanzamiento). La detección es de solo lectura y local en el servidor: no puede inspeccionar otro shell de lanzamiento, otra máquina o la configuración local del proyecto. Un resultado desconocido no es prueba de apoyo a la fuerza.
+
+
+`--jev-effort-mode decide|client` conserva el ajuste si se omite. `client` mantiene el destino de JEV y delega el esfuerzo a la política Combo ordinaria; un `decide` explícito borra `client`. La integración Command Code solo escribe `providers.json`: nunca escribe `~/.commandcode/auth.json`, porque Desktop necesita su propio inicio de sesión.

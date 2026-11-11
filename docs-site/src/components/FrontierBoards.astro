@@ -64,8 +64,7 @@ const boards = data.benchmarks.filter(board => !include || include.has(board.id)
         <h3 id={`board-${board.id}`}>{t(`frontier.board.${board.id}.title`)}</h3>
         <p class="frontier-meta">
           {fill("frontier.updated", { date: board.updated })}
-          {" · "}
-          {fill("frontier.tasks", { count: String(board.taskCount) })}
+          {board.taskCount != null && <span> · {fill("frontier.tasks", { count: String(board.taskCount) })}</span>}
           {" · "}
           <a href={board.provenance.url}>{t("frontier.sourceLink")}</a>
           {board.provenance.license && <span class="frontier-license"> · {board.provenance.license}</span>}
@@ -79,7 +78,7 @@ const boards = data.benchmarks.filter(board => !include || include.has(board.id)
               <th>{t("frontier.col.model")}</th>
               <th>{t("frontier.col.effort")}</th>
               <th>{SCORE_HEADER[locale] ?? SCORE_HEADER.en}</th>
-              <th>{t("frontier.col.cost")}</th>
+              <th>{board.chart.xLabel}</th>
               {board.allMeasured && <th>{t("frontier.col.efficiency")}</th>}
               <th>{t("frontier.col.tags")}</th>
             </tr>

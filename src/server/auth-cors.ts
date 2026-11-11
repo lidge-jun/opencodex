@@ -29,6 +29,8 @@ import {
   providerHeadersConfigError,
   providerForwardClientHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
+  thinkingDisplayConfigError,
+  modelThinkingDisplayConfigError,
   upstreamHttpVersionConfigError,
   credentialPinnedProviderConfigError,
 } from "../config/provider-validation";
@@ -41,6 +43,7 @@ import { effectiveGoogleMode, getProviderRegistryEntry, providerCodexAccountMode
 import { providerConfigSeed } from "../providers/derive";
 import { anthropicOAuthInstanceConfigError } from "../config/schema/anthropic-account-pool";
 import { accountAutoPausePolicySchema } from "../config/schema/account-auto-pause";
+import { normalizeProxyAddress, parseDashboardTrustedProxy } from "../config/dashboard-trusted-proxy";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { openRouterRoutingConfigError } from "../providers/openrouter-routing";
 import { modelAutoCompactTokenLimitsConfigError } from "../providers/auto-compact-budget";
@@ -49,6 +52,7 @@ import { googleVertexLocationConfigError } from "../providers/google-vertex-loca
 import { xaiResponsesOptInState } from "../providers/xai-responses-opt-in";
 import { authorizationCredential } from "../lib/authorization-scheme";
 import { noteTurnStateCaller } from "./turn-state-handles";
+import { providerModelDiscoveryConfigError } from "../providers/model-discovery-config";
 
 let _corsOrigin = "http://localhost:10100";
 // Listener identity is process-local. Never infer this trust from forwarded headers: the
@@ -62,6 +66,59 @@ export function markTrustedHubManagementRequest(req: Request): void {
 
 export function inheritTrustedHubManagementRequest(source: Request, target: Request): void {
   if (trustedHubManagementRequests.has(source)) trustedHubManagementRequests.add(target);
+  const peer = dashboardProxyPeers.get(source);
+  if (peer !== undefined) dashboardProxyPeers.set(target, peer);
+}
+
+// #8338: the kernel-observed peer of a public-listener request, recorded by the serve layer the
+// same way as the hub mark above. No header can create or change it.
+const dashboardProxyPeers = new WeakMap<Request, string>();
+
+export function markDashboardProxyPeer(req: Request, address: string | undefined): void {
+  const normalized = address ? normalizeProxyAddress(address) : null;
+  if (normalized) dashboardProxyPeers.set(req, normalized);
+}
+
+/** One forwarded value: undefined when absent, null when empty or a multi-hop list. */
+function singleForwardedValue(req: Request, name: string): string | null | undefined {
+  const value = req.headers.get(name);
+  if (value === null) return undefined;
+  const trimmed = value.trim();
+  return trimmed && !trimmed.includes(",") ? trimmed : null;
+}
+
+function forwardedAuthorityHost(value: string): string | null {
+  try {
+    const url = new URL(`https://${value}`);
+    return url.username || url.password || url.pathname !== "/" || url.search || url.hash ? null : url.host;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The configured dashboard origin when, and only when, the configured proxy delivered this request
+ * (#8338). The peer must be one of `proxyAddresses`; the browser host comes from Host, or from
+ * X-Forwarded-Host when that header is trusted; X-Forwarded-Proto must say https when trusted. A
+ * forwarded host or scheme that contradicts the configured origin refuses even when that header is
+ * not trusted, so a forged value can never pass silently. Standalone with remote auth only: a
+ * loopback bind must never hand local trust to whatever the proxy forwards.
+ */
+export function dashboardProxyOrigin(req: Request, config: OcxConfig): string | null {
+  if (config.dashboardTrustedProxy === undefined) return null;
+  const peer = dashboardProxyPeers.get(req);
+  if (peer === undefined) return null;
+  if ((config.runtimeRole ?? "standalone") !== "standalone" || !isApiAuthRequired(config)) return null;
+  const settings = parseDashboardTrustedProxy(config.dashboardTrustedProxy);
+  if (typeof settings === "string" || !settings.addresses.has(peer)) return null;
+  const forwardedHost = singleForwardedValue(req, "X-Forwarded-Host");
+  const forwardedProto = singleForwardedValue(req, "X-Forwarded-Proto");
+  if (forwardedHost === null || forwardedProto === null) return null;
+  if (forwardedHost !== undefined && forwardedAuthorityHost(forwardedHost) !== settings.host) return null;
+  if (forwardedProto !== undefined && forwardedProto.toLowerCase() !== "https") return null;
+  if (settings.trust.has("x-forwarded-proto") && forwardedProto === undefined) return null;
+  const authority = settings.trust.has("x-forwarded-host") ? forwardedHost : req.headers.get("Host");
+  return authority && forwardedAuthorityHost(authority) === settings.host ? settings.origin : null;
 }
 
 export function setCorsOrigin(port: number): void { _corsOrigin = `http://localhost:${port}`; }
@@ -149,6 +206,9 @@ function comparableOrigin(value: string): string | null {
 }
 
 export function managementRequestOrigin(req: Request, config: OcxConfig): string | null {
+  // #8338: a request the configured dashboard proxy delivered speaks for the configured origin.
+  const proxied = dashboardProxyOrigin(req, config);
+  if (proxied) return proxied;
   const host = req.headers.get("Host");
   const parsedHost = parseHttpHost(host);
   if (!host || !parsedHost) return null;
@@ -949,6 +1009,10 @@ export function providerManagementConfigError(
     raw.modelSupportsReasoningSummaries,
   );
   if (reasoningSummaryDeliveryError) return `provider ${name} ${reasoningSummaryDeliveryError}`;
+  const thinkingDisplayError = thinkingDisplayConfigError(raw.thinkingDisplay);
+  if (thinkingDisplayError) return `provider ${name} ${thinkingDisplayError}`;
+  const modelThinkingDisplayError = modelThinkingDisplayConfigError(raw.modelThinkingDisplay);
+  if (modelThinkingDisplayError) return `provider ${name} ${modelThinkingDisplayError}`;
   const modelAdaptersError = modelAdapterRecordConfigError(raw.modelAdapters, "modelAdapters", name, typed);
   if (modelAdaptersError) return `provider ${name} ${modelAdaptersError}`;
   const credentialPinError = credentialPinnedProviderConfigError(name, typed);
@@ -987,24 +1051,24 @@ export function providerManagementConfigError(
   if (jsonSchemaOptOutError) return `provider ${name} ${jsonSchemaOptOutError}`;
   const retainModelsError = nonBlankStringArrayConfigError(raw.retainModels, "retainModels");
   if (retainModelsError) return `provider ${name} ${retainModelsError}`;
+  const modelDiscoveryError = providerModelDiscoveryConfigError(raw.modelDiscovery);
+  if (modelDiscoveryError) return `provider ${JSON.stringify(redactSecretString(name))} ${modelDiscoveryError}`;
   const toolReasoningOptOutError = nonBlankStringArrayConfigError(
     raw.omitReasoningEffortWithToolsModels,
     "omitReasoningEffortWithToolsModels",
   );
   if (toolReasoningOptOutError) return `provider ${name} ${toolReasoningOptOutError}`;
-  const unsupportedHostedToolsError = nonBlankStringArrayConfigError(
-    raw.unsupportedHostedTools,
-    "unsupportedHostedTools",
-  );
-  if (unsupportedHostedToolsError) return `provider ${name} ${unsupportedHostedToolsError}`;
-  if (Array.isArray(raw.unsupportedHostedTools)) {
+  for (const field of ["unsupportedHostedTools", "unsupportedHostedToolsWithClientTools"] as const) {
+    const hostedToolsError = nonBlankStringArrayConfigError(raw[field], field);
+    if (hostedToolsError) return `provider ${name} ${hostedToolsError}`;
+    if (!Array.isArray(raw[field])) continue;
     // Closed vocabulary, same reason as the config schema: an unrecognized name would be
     // stored and then strip nothing, so the operator would keep getting the upstream 400
     // this field exists to prevent.
-    const unknownTool = (raw.unsupportedHostedTools as unknown[])
+    const unknownTool = (raw[field] as unknown[])
       .find(tool => typeof tool === "string" && !DECLARABLE_HOSTED_TOOL_TYPES.has(tool.trim()));
     if (unknownTool !== undefined) {
-      return `provider ${name} unsupportedHostedTools must name only hosted tool types: `
+      return `provider ${name} ${field} must name only hosted tool types: `
         + `${[...DECLARABLE_HOSTED_TOOL_TYPES].join(", ")}`;
     }
   }
@@ -1071,6 +1135,7 @@ type ProviderConfigFieldPolicy = "editor" | "redacted" | "runtime";
 const PROVIDER_CONFIG_FIELD_POLICY = {
   alias: "editor",
   modelAliases: "editor",
+  aliasTemplate: "editor",
   modelDisplayNames: "editor",
   defaultAliases: "editor",
   adapter: "editor",
@@ -1130,6 +1195,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   defaultModel: "editor",
   models: "editor",
   liveModels: "editor",
+  modelDiscovery: "editor",
   selectedModels: "editor",
   initialModelSelection: "runtime",
   retainModels: "editor",
@@ -1175,6 +1241,8 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   modelSupportsVerbosity: "editor",
   supportsVerbosity: "editor",
   modelReasoningSummaryDelivery: "editor",
+  thinkingDisplay: "editor",
+  modelThinkingDisplay: "editor",
   modelPreferHostedTools: "editor",
   supportsOpenAiWebSearchToolFields: "editor",
   xaiResponsesXSearch: "editor",
@@ -1182,6 +1250,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   zaiResponsesDefaultVersion: "runtime",
   supportsResponsesCustomTools: "editor",
   unsupportedHostedTools: "editor",
+  unsupportedHostedToolsWithClientTools: "editor",
   responsesSnapshotRepair: "editor",
   webSearchBridge: "editor",
   reasoningEffortMap: "editor",
@@ -1191,6 +1260,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   noTemperatureModels: "editor",
   noTopPModels: "editor",
   noStopModels: "editor",
+  arkKimiResponsesModels: "editor",
   noPenaltyModels: "editor",
   noStructuredOutputModels: "editor",
   noJsonSchemaModels: "editor",
@@ -1219,6 +1289,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   thinkingBudgetModels: "editor",
   escapeBuiltinToolNames: "editor",
   anthropicEofTolerance: "editor",
+  forwardAdvisorTool: "editor",
   noVisionModels: "editor",
   googleMode: "editor",
   project: "editor",
@@ -1360,6 +1431,16 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       hasApiKey: !!provider.apiKey,
       hasHeaders: !!provider.headers && Object.keys(provider.headers).length > 0,
     };
+    const registry = getProviderRegistryEntry(name);
+    const vertex = (provider.adapter === "google" && effectiveGoogleMode(name, provider) === "vertex")
+      || (registry?.adapter === "google" && (provider.googleMode ?? registry.googleMode) === "vertex"
+        && providerMatchesRegistryTransport(name, provider));
+    if (vertex) {
+      const key = provider.apiKey;
+      dto.vertexCredentialKind = key?.startsWith("gcp-sa:") ? "marker"
+        : !key?.trim() || key === "N/A" || key.startsWith("<") ? "ambient"
+          : key.startsWith("keychain:") || /^\$\{?\w+\}?$/.test(key) ? "reference" : "api-key";
+    }
     if (name === "xai") {
       dto.xaiResponsesOptInState = xaiResponsesOptInState(provider);
     }

@@ -28,7 +28,7 @@ achèvement, puis télécharge le résultat.
 > }
 > ```
 >
-> Si vous avez configuré xAI avec `ocx login xai` (OAuth), le fournisseur reste en `authMode: "oauth"` et le pont ne s'active pas. Définissez `XAI_API_KEY` dans l'environnement, conservez la référence `${XAI_API_KEY}` ci-dessus et sélectionnez explicitement `authMode: "key"`. Ne placez pas de clés littérales dans les commits, journaux ou rapports partagés.
+> Définissez `XAI_API_KEY` dans l’environnement de démarrage du proxy et gardez `${XAI_API_KEY}` avec `authMode: "key"`. Une exportation dans un autre terminal ne change pas un proxy actif : redémarrez-le via Desktop, son service ou son terminal propriétaire. Ne partagez pas les clés littérales.
 
 ## Configuration
 

@@ -207,7 +207,30 @@ describe("Spanish documentation localization", () => {
       expect(defaultStart, path).not.toContain("ocx status");
       expect(defaultStart, path).not.toContain("ocx gui");
       expect(blocks, path).toContain("ocx start --port 8080\n");
+      const portRecovery = source(path).split(/\n\s*\n/)
+        .find(block => block.includes("`ocx start --port <port>`"));
+      expect(portRecovery, `${path} same-home recovery`).toContain("OPENCODEX_HOME");
+      expect(portRecovery, `${path} stop owning instance first`).toContain("`ocx stop`");
     }
+  });
+
+  test("agent setup runs init before binding a listener and uses the configured combo provider", () => {
+    for (const locale of ["", ...localeFolders]) {
+      const path = join(root, locale, "getting-started/for-agents.md");
+      const commands = codeBlocks(source(path)).join("\n");
+      const init = commands.search(/^ocx init\s*$/m);
+      const start = commands.search(/^ocx (?:start|service)\s*$/m);
+      expect(init, `${path} interactive setup`).toBeGreaterThanOrEqual(0);
+      expect(start, `${path} setup before listener bind`).toBeGreaterThan(init);
+      expect(commands, path).toMatch(/ocx provider add anthropic-apikey\b/);
+      expect(commands, path).toContain("anthropic-apikey/claude-opus-4-8");
+      expect(commands, path).not.toContain("anthropic/claude-opus-4-8");
+    }
+  });
+
+  test("edit links target the current development branch", () => {
+    expect(config).toContain('baseUrl: "https://github.com/lidge-jun/opencodex/edit/dev/docs-site/"');
+    expect(config).not.toContain("/edit/main/");
   });
 
   test("keeps executable examples and frontmatter in the current English shape", () => {

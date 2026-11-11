@@ -10,11 +10,15 @@ description: 從 agent 驅動或腳本化終端機安裝並操作 opencodex，�
 安裝已發布的套件，並確認 `ocx` 在 `PATH` 上：
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
 ```
 
-選擇一種執行代理的方式：
+啟動代理前，請在互動式終端執行 `ocx init`，以使用設定時選擇的連接埠：
+
+```bash
+ocx init
+```
 
 ```bash
 # 前景：佔用此終端機直到停止。
@@ -22,12 +26,6 @@ ocx start
 
 # 背景：安裝或更新服務，然後啟動它。
 ocx service
-```
-
-在互動終端機執行 `ocx init`。若 `ocx start` 佔用了前景，請用第二個終端機：
-
-```bash
-ocx init
 ```
 
 精靈會寫入 `$OPENCODEX_HOME/config.json`（通常為
@@ -72,7 +70,7 @@ ocx provider add anthropic-apikey \
 
 ```bash
 ocx combo set main \
-  --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol \
+  --targets anthropic-apikey/claude-opus-4-8,openai/gpt-5.6-sol \
   --strategy failover
 ```
 

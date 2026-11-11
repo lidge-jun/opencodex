@@ -359,10 +359,10 @@ describe("native gateway transport", () => {
     const provider = { ...gateway, authMode, supportsNativeCompactEndpoint: true,
       headers: { Authorization: "Bearer static-fixture" },
       // Runtime must reject credential opt-ins even if an unvalidated row reaches dispatch.
-      forwardClientHeaders: ["X-Codex-App-Version", "originator", "x-client-request-id", "authorization", "chatgpt-account-id", "x-api-key", "cookie", "x-oai-attestation"],
+      forwardClientHeaders: ["X-Codex-App-Version", "originator", "x-client-request-id", "x-codex-window-id", "x-codex-installation-id", "authorization", "chatgpt-account-id", "x-api-key", "cookie", "x-oai-attestation"],
     };
     const config = { ...getDefaultConfig(), defaultProvider: "gw", providers: { gw: provider } };
-    const fingerprint = { "user-agent": "CodexFixture/1.0", "x-codex-app-version": "fixture-version", originator: "fixture-origin", "x-client-request-id": "fixture-request" };
+    const fingerprint = { "user-agent": "CodexFixture/1.0", "x-codex-app-version": "fixture-version", originator: "fixture-origin", "x-client-request-id": "fixture-request", "x-codex-window-id": "caller-window-fixture", "x-codex-installation-id": "caller-installation-fixture" };
     const response = await handleResponsesCompact(compactionRequest(baseCompactionBody(), undefined, {
       ...fingerprint, authorization: "Bearer caller-fixture", "chatgpt-account-id": "caller-account-fixture",
       "x-api-key": "caller-key-fixture", cookie: "caller-cookie-fixture", "x-oai-attestation": "caller-attestation-fixture",

@@ -12,7 +12,10 @@ through the disk reader. A row keeps:
   value (an upstream code that reached a writer) collapses to the status fallback (`invalid_request_error`,
   `invalid_api_key`, `permission_denied`, `rate_limit_exceeded`, `client_closed_request`,
   `server_is_overloaded`, `upstream_server_error`, `http_NNN`, else `upstream_error`). Attempt codes are
-  normalized the same way, and upstream text fields removed from attempts, in place.
+  normalized the same way, and upstream text fields removed from attempts, in place. `classifyError`
+  keeps Meta's Muse Code subscription refusal in `subscription_required` rather than
+  `permission_denied`: a 403 whose whole `error.message` is that sentence names a plan restriction on
+  a valid key, so the row must not read as an expired credential that needs a re-login.
 - `upstreamCondition`, a member of the closed set in `src/lib/upstream-condition.ts`, derived only for a
   failed row with upstream evidence; a client close (499, `client_closed_request`, `client_cancelled`) gets
   none, and a stored condition is kept only under the same rules. Text set through
@@ -25,7 +28,7 @@ through the disk reader. A row keeps:
   (account usage-limit codes `usage_limit_exceeded` and `1308` are billing exhaustion), context overflow
   from text needs the definite verdict `isDefiniteContextOverflow` in the dependency-free
   `src/lib/context-overflow-verdict.ts` (the one combo failover uses, re-exported by
-  `src/combos/failover.ts`), so a validation error that quotes "prompt is too long" stays rejected, a 429 that
+  `src/combos/failover.ts`), including bounded provider wording that a conversation/input has reached or passed the model context limit, that a prompt is too long for that window, or that the window is full/exhausted/over its limit, and a string-valued JSON `error` field. A negator governing that wording, and capacity prose about the service, stay outside the verdict, so a validation error that quotes "prompt is too long" stays rejected, a 429 that
   names a rate limit stays `rate_limited` even when it also mentions quota, a 5xx stays a server failure
   whatever its text says, and a bare status maps to a fixed condition. It is presentation-only; routing,
   retry and recovery keep their own classifiers in `src/lib/errors.ts`. `upstreamConditionMessage` holds the
@@ -33,10 +36,13 @@ through the disk reader. A row keeps:
 - `rateLimitResetAt`, finite epoch milliseconds after the request and at most eight days later, derived
   server-side from the exact Meta Muse quota sentence on a Muse 429; the dashboard quota observation in
   `gui/src/muse-limit-observation.ts` reads only this number. Legacy rows that stored the sentence recover
-  the number on hydration.
-- `failureDetail`, a closed `{ code, value?, type? }` from `src/lib/failure-detail.ts`: `code` is a member of
+  the number on hydration. Direct log rows also classify non-enumerable or inherited quota
+  evidence before discarding its text; `tests/usage/request-log-normalization.test.ts` covers both.
+- `failureDetail`, a closed `{ code, value?, type?, validation? }` from `src/lib/failure-detail.ts`: `code` is a member of
   `FAILURE_DETAIL_CODES`, `value` a safe integer (milliseconds or bytes) kept only for codes that take one,
-  and `type` a closed Anthropic error class kept only on `provider_error`. `recordLocalFailureDetail` in
+  `type` a closed provider error class (the Anthropic envelope types or a canonical Google RPC status
+  name such as `INVALID_ARGUMENT`) and `finishReason` a member of the Gemini/Vertex FinishReason enum,
+  both kept only on `provider_error`. `recordLocalFailureDetail` in
   `src/server/request-log-failure-detail.ts` takes the detail beside the English text it leaves on the
   context; `incompleteReasonDetail` maps the known `incomplete_details.reason` values (`max_output_tokens`,
   `upstream_stall_timeout`, `adapter_eof`), and an unknown reason stays on the context only. A relayed error
@@ -45,6 +51,36 @@ through the disk reader. A row keeps:
   read and hydration; free text (a row from an earlier build or an edited one) is dropped. The dashboard
   renders the code through `failureDetailLabel` in `gui/src/pages/logs-failure-summary.ts` and the
   `logs.failureDetail.*` catalog keys in every locale.
+
+For schema-validation 4xx responses, native Chat and the translated adapter dispatch capture
+`failureDetail.validation` before client formatting. `src/lib/upstream-validation-detail.ts` projects
+only closed field identities and validation types from structured `detail[].loc/type`, inspecting at
+most 64 issues and retaining at most eight distinct pairs. Known nested locations retain closed paths such as `messages.role` or `messages.content`; other nested
+locations become a closed root plus `.*`. Arbitrary keys, indexes, messages, inputs, contexts and unknown
+types are dropped. The optional error type must be an allowlisted upstream type; absent/unknown types
+are omitted. Existing 64 KiB upstream error-body retention limits remain authoritative: over-limit or
+partial bodies produce status-only diagnostics.
+`boundedFailureDetail` revalidates those pairs on live projection, usage append/read, hydration and
+GUI rendering. The dashboard appends the machine field/type pairs to its localized provider-error
+label. No upstream-authored free text is retained, and client-facing messages retain their existing policy.
+
+A provider failure also keeps its closed class without validation pairs (#8446).
+`recordUpstreamProviderErrorDetail` reads `error.type`, Google's `error.status` (an object or the first
+element of a streamed array) or a top-level `type` from a raw upstream body: native Chat, the
+translated adapter dispatch, and `consumeComboFailure` when adapter dispatch passes it the provider's
+own response. A proxy-marked response and every other `consumeComboFailure` caller keep the
+validation-only capture, because a body this proxy formatted is not provider evidence. An adapter
+transport that rewrites the body for display (`normalizeUpstreamHttpErrorResponse`, used by Vertex and
+Antigravity) reads the class from the original first and attaches it to the new response through
+`withProviderFailureFacts` in `src/lib/failure-detail.ts`, a `WeakMap` keyed by the object, so
+nothing new is serialized. The Google adapter tags a mid-stream `error` frame with its status and a
+fail-closed Vertex truncation with its finish reason the same way, and the parse seam in
+`src/server/responses/request-transport.ts` calls `observeProviderFailureEvent`, which records them.
+A later `done` on the same request (a retry or empty-completion replay that succeeded) retracts the
+detail this path recorded, so a successful row never names a failure it recovered from. The message
+itself stays on the context like every other upstream text. The dashboard appends the finish reason as
+a machine token. `tests/usage/provider-failure-detail.test.ts` drives the Vertex route for an HTTP 400,
+a combo child, a mid-stream error frame, a truncated turn and a recovered replay.
 
 `upstreamError`, `upstreamErrorCode`, `upstreamErrorType` and `upstreamRequestId` stay on the request
 context, where status heuristics and classifiers read them, and never reach a row, `usage.jsonl` or the
@@ -207,7 +243,17 @@ rows to client or catalog model identities and validated provider ids, omitting 
 is interpolated into those local messages. No serialized flag, code or header mints identity.
 The shared builders live in `src/combos/resolve.ts`, `src/server/admission-model-scope.ts`,
 `src/server/responses/input-admission.ts` and `src/oauth/generic-account-failover.ts`.
-`src/lib/upstream-retry.ts` owns the retry constructors.
+`src/lib/upstream-retry.ts` owns the retry constructors. For a transient 5xx, `fetchWithTransientRetry`
+does not resend a response whose bounded body prefix proves context overflow. It reads at most 16,384
+bytes from a clone within 250ms or until cancellation, leaving the returned body intact. Event streams
+and bodies without an observed verdict retain the normal retry; a verdict observed before a slow or
+endless body stalls still stops retry. Hypothetical, negated, question-form and configuration-failure
+mentions are excluded per sentence in the unwrapped provider message, so they cannot hide a definite
+overflow in another sentence. A throttle worded only as "too many tokens" is not a verdict, while an
+explicit "prompt is too long" remains a verdict when no throughput signal is present.
+Body inspection time does not count toward the upstream slow-attempt budget, and empty chunks cannot
+starve the deadline or cancellation. The retry and cancellation
+contracts are exercised in `tests/lib/upstream-retry.test.ts`.
 `InvalidSendBudgetError` displays only a finite non-negative number or `invalid`.
 `UpstreamRetryEvidenceError` uses fixed retry-evidence wording and retains the original rejection
 only as `Error.cause`. Chat request-read failures keep typed local size/encoding messages; other
@@ -368,10 +414,15 @@ formatter message
 before selecting the fixed incomplete or compaction sentence. Internal overflow decisions and HTTP
 status stay separate
 from this client-message check: a coded raw-collector throughput refusal still answers 400 without
-selecting the compaction sentence. The shared `isContextOverflowError` source and its #8128 suite
-remain unchanged; `tests/claude-integration/messages-overflow-baseline-contract.test.ts` binds their
-source bytes. The executable overflow golden compares actual client recovery-phrase recognition,
+selecting the compaction sentence. The shared `isContextOverflowError` adds `upstream_server_error`
+to the generic codes and ignores conditional context-window matches while still checking later matches;
+its remaining source and the #8128 suite stay byte-identical, enforced by
+`tests/claude-integration/messages-overflow-baseline-contract.test.ts`. The executable overflow golden compares actual client recovery-phrase recognition,
 HTTP status and the original internal decisions independently on every fixture/path row.
+The direct Messages writer also applies that shared verdict to the emitted code: a definite generic-coded overflow carries `context_length_exceeded`, the fixed compaction sentence and HTTP 400 on collection, even with `retryable: true`; original error evidence and proxy/transport metadata remain separate. `tests/helpers/messages-overflow-assertions.ts` records the affected fixture ids only on direct-stream/direct-fold as explicit expected changes to the immutable golden. All other paths keep their baseline comparisons; the fixture data is not regenerated.
+The translated non-2xx plain-text path classifies up to 16,384 characters before selecting the bounded
+400-character display text, so an overflow visible to the retry peek is not lost to display truncation.
+Adapter response-body inactivity emits the guard's bounded duration sentence and `upstream_stall_timeout` code for streamed initial, recovery and continuation errors. Terminal status classification records 504 for that code, while the duration sentence supplies the closed `body_stall` failure detail. A request-local continuation marker survives event spreads and empty-completion retry handling, and selects HTTP 504 for a buffered continuation stall; other buffered failures and provider-supplied codes retain their prior HTTP status. Initial buffered adapter timeouts also return 504 and the same detail sentence. `tests/server/terminal-guard-server.test.ts` covers stream, buffered continuation and marker isolation; `tests/server/error-fidelity.test.ts` distinguishes a stall from a 502.
 The direct encoder retains original adapter fields by terminal identity independently of shared
 classification. Buffered passthrough and count_tokens preserve the upstream status and closed
 type/code. The type chosen
@@ -394,6 +445,10 @@ The legacy envelope stays in the combo-evidence side channel, separate from the 
 
 Messages local-refusal presentation uses construction-registered process metadata in
 `src/lib/client-error-body.ts`, carried through response clones and registered terminal contexts.
+The same module holds the request-scoped `pause_turn` fact the bridge records when an Anthropic
+turn is paused: the client still receives `incomplete/max_output_tokens`, while combo stream
+preflight reads the marker and keeps the turn on its target instead of replaying it. It adds no
+wire field, and `carryProxyErrorContext` carries it with the rest of that context.
 `src/lib/messages-error-body.ts` selects fixed guidance from that closed reason or a closed local
 code; serialized fields and diagnostic text cannot register a reason. The original message still
 feeds status, recovery, logs and private combo evidence. Messages/count_tokens non-2xx delivery
@@ -413,6 +468,7 @@ inspection or serialization.
 
 `src/server/messages-native-tool-guard.ts`, `src/server/messages-shared.ts` and
 `src/server/sse-payload-rewrite.ts` carry complete-frame construction identity.
+Native combo replay evidence is collected before framing transforms; if a transform fails before preflight, complete output or opaque frames and an unfinished raw frame prevent replay. A complete empty message prelude and ping remain replayable. The accounting tap remains the owner of stream outcomes and error presentation; after an error it conservatively marks a long unfinished frame as followed, bounding repeated tail inspection.
 Native and passthrough Messages SSE apply error-response normalization after echo, guard,
 accounting tap and the existing configured-only overflow rewrite. The final enqueue stage in
 `src/server/messages-sse-error-filter.ts` introduces no stream queue, timer or possible-prefix hold.

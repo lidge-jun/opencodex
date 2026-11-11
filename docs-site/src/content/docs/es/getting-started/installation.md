@@ -28,7 +28,7 @@ En macOS y Linux, si todavía se ejecuta el lanzador de npm/pnpm, este delega lo
 ## Instalar
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ```
 
 Con pnpm 10.4 o posterior:
@@ -88,7 +88,7 @@ En Windows, [Firma de código en Windows](/es/reference/code-signing/) explica c
 El canal estable `latest` ya incluye el catálogo de GPT-5.6 Sol/Terra/Luna para ChatGPT, la API de OpenAI con clave, OpenRouter y las rutas experimentales de Cursor. La disponibilidad sigue dependiendo de la cuenta del proveedor: una entrada de catálogo no concede acceso. Usa el canal preview solo para probar versiones preliminares de opencodex:
 
 ```bash
-npm install -g @bitkyc08/opencodex@preview
+npm install -g --allow-scripts=bun @bitkyc08/opencodex@preview
 ocx update --tag preview
 ```
 
@@ -97,6 +97,8 @@ ocx update --tag preview
 ## Correr desde la fuente
 
 Para hackear el propio opencodex:
+
+Compilar un checkout del código fuente requiere un ejecutable Bun en PATH antes de ejecutar `bun install`. El paquete npm ofrece `ocx` y `opencodex`, no un comando global `bun`.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
@@ -126,7 +128,7 @@ opencodex guarda sus datos en `$OPENCODEX_HOME` (por defecto, `~/.opencodex`). L
 | `$CODEX_HOME/opencodex-catalog.json` | Catálogo de modelos nativos y enrutados sincronizados utilizado por Codex. |
 
 :::note
-opencodex no borra tu configuración de Codex. Cada inyección es reversible: `ocx stop`, `ocx restore` u `ocx eject` eliminan las líneas añadidas por opencodex y restauran el uso nativo de Codex.
+opencodex conserva tu configuración de Codex. En la instancia independiente propietaria, `ocx stop`, `ocx restore` y `ocx eject` eliminan las líneas administradas y restauran Codex nativo. Un cliente conectado a un Hub conserva su enrutamiento; detener una instancia hermana no modifica la configuración compartida del cliente. Consulta [ciclo de vida y propiedad](/es/reference/cli/lifecycle/#runtime-ownership) antes de confiar en esa restauración.
 :::
 
 <a id="next"></a>
@@ -134,3 +136,8 @@ opencodex no borra tu configuración de Codex. Cada inyección es reversible: `o
 ## Siguiente
 
 Continuar a la [Inicio rápido](/es/getting-started/quickstart/) para configurar su primer proveedor, o leer [Cómo funciona](/es/getting-started/how-it-works/) para la arquitectura.
+
+
+Un registro Desktop habilitado en macOS/Linux detiene el launcher del paquete si falta o no arranca el ejecutable seleccionado, sin fallback silencioso. Repara o desactiva el comando de terminal en Desktop; `OCX_NO_DESKTOP_HANDOFF=1` solo omite el handoff una vez.
+
+En Windows, el proxy activo mantiene `node_modules\bun\bin` abierto y `npm install -g` manual puede fallar con `EBUSY`. `ocx update` lo detiene y reinicia su servicio. Para reinstalar manualmente, usa `ocx stop`, instala y reinicia con `ocx service restart` si es servicio o `ocx start` si no tiene supervisor. Doctor muestra esa secuencia si el Bun del paquete no se descomprimió.

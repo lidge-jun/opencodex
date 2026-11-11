@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,7 @@ import {
   recordOwnedConfigPath,
   removeOwnedConfigState,
 } from "../../src/lib/config-ownership";
+import { setUninstallElevationProbeForTests } from "../../src/lib/config-ownership-removal";
 import { writePristineCatalogBackup } from "../../src/codex/catalog/parsing";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -17,6 +18,11 @@ function manifestPaths(dir: string): string[] {
 }
 
 describe("owned config uninstall", () => {
+  // These removal fixtures exercise the owning user's unelevated path. Elevated Windows
+  // junction refusal is covered separately in config-ownership-removal.test.ts.
+  beforeEach(() => { if (process.platform === "win32") setUninstallElevationProbeForTests(() => false); });
+  afterEach(() => { if (process.platform === "win32") setUninstallElevationProbeForTests(null); });
+
   (process.platform === "win32" ? test.skip : test)("refuses elevated removal when the root permits shared writes (POSIX modes required)", () => {
     const parent = mkdtempSync(join(tmpdir(), "ocx-config-mode-"));
     const dir = join(parent, "config");

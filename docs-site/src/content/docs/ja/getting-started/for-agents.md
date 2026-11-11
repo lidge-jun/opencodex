@@ -10,11 +10,15 @@ description: ユーザー同意の境界を越えずに、エージェント主�
 公開されたパッケージをインストールし、`ocx` が `PATH` 上にあることを確認します。
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
 ```
 
-プロキシを実行する方法を 1 つ選択します。
+設定したポートで起動するよう、プロキシを起動する前に対話型端末で `ocx init` を実行してください:
+
+```bash
+ocx init
+```
 
 ```bash
 # Foreground: blocks this terminal until stopped.
@@ -22,12 +26,6 @@ ocx start
 
 # Background: installs or updates the service, then starts it.
 ocx service
-```
-
-対話型端末で `ocx init` を実行します。 `ocx start` がフォアグラウンドを占有している場合は、2 番目の端末を使用します。
-
-```bash
-ocx init
 ```
 
 ウィザードは `$OPENCODEX_HOME/config.json` (通常は `~/.opencodex/config.json`) を書き込みます。プロキシアドレスを Codex の `config.toml` に挿入し、任意で Codex の自動起動 shim をインストールすることもできます。`ocx init` 自体はプロキシを起動しません。完全に非対話型でセットアップする場合は、ウィザードを操作せず、以下のように `ocx provider add` でプロバイダーを設定します。
@@ -68,7 +66,7 @@ ocx provider add anthropic-apikey \
 
 ```bash
 ocx combo set main \
-  --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol \
+  --targets anthropic-apikey/claude-opus-4-8,openai/gpt-5.6-sol \
   --strategy failover
 ```
 

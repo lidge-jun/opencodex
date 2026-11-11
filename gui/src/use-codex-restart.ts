@@ -25,6 +25,8 @@ export interface CodexRestartOptions {
    * models page.
    */
   onSettled?: (code: CodexRestartCode) => void;
+  /** Replacement for a reload trigger removed while the consent dialog is open. */
+  restoreFocusFallback?: (previouslyFocused: HTMLElement | null) => HTMLElement | null;
   /**
    * Where the outcome is shown. Required, and deliberately not defaulted: this used to
    * be `alert()`, which draws nothing inside the app, so every result — including a
@@ -65,6 +67,7 @@ export function useCodexRestart(
   // completion path must not touch state after unmount.
   const mounted = useRef(true);
   const onSettled = useRef(options.onSettled);
+  const restoreFocusFallback = useRef(options.restoreFocusFallback);
   const report = useRef(options.report);
   /*
    * The subject the consent is about. A restart names one backend, and the dialog is
@@ -80,8 +83,9 @@ export function useCodexRestart(
     // Written in an effect, not during render: a ref assignment in the render
     // body is exactly what the react-compiler lint forbids.
     onSettled.current = options.onSettled;
+    restoreFocusFallback.current = options.restoreFocusFallback;
     report.current = options.report;
-  }, [options.onSettled, options.report]);
+  }, [options.onSettled, options.report, options.restoreFocusFallback]);
 
   useEffect(() => {
     // A new base is a new subject: a consent granted for the old one no longer describes
@@ -111,6 +115,7 @@ export function useCodexRestart(
       confirmLabel: t("dash.codexRestart"),
       tone: "danger",
       signal: consent.signal,
+      restoreFocusFallback: previous => restoreFocusFallback.current?.(previous) ?? null,
     });
     if (pendingConsent.current === consent) pendingConsent.current = null;
     /*

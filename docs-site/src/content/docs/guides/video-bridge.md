@@ -27,7 +27,7 @@ job to xAI, polls until completion, and downloads the result.
 > }
 > ```
 >
-> If you onboarded via `ocx login xai` (OAuth), the provider remains in `authMode: "oauth"` and the bridge does not activate. Set `XAI_API_KEY` in the environment, keep the `${XAI_API_KEY}` reference shown above, and explicitly select `authMode: "key"`. Keep literal keys out of commits, logs, and shared reports.
+> Set `XAI_API_KEY` in the proxy startup environment, keep the `${XAI_API_KEY}` reference and explicitly select `authMode: "key"`. Exporting it in another terminal does not change an already running proxy; restart through its owning Desktop app, service, or foreground terminal so it inherits the value. Keep literal keys out of commits, logs and shared reports.
 
 ## Configuration
 

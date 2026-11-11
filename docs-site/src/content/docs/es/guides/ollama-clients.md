@@ -37,6 +37,8 @@ Las demás rutas `/api/*` siguen formando parte de la API de administración de 
 - `options`: `temperature`, `top_p`, `num_predict` y `stop`.
 - `format`: únicamente `"json"`.
 
+Cada solicitud `/api/chat` admite como máximo **1.024 llamadas a herramientas en total** entre todos los mensajes del asistente, incluidas las que ya tienen resultado. Superarlo devuelve HTTP 400 antes de contactar al proveedor. Reduce el historial y conserva cada resultado junto a su llamada correspondiente.
+
 Cualquier otro campo se rechaza con HTTP 400 en vez de ignorarse. Esto incluye `think`, `keep_alive`, `suffix`, `raw`, `template`, `context`, las demás `options`, un `format` con esquema JSON y las URL de imágenes. No se ofrecen los endpoints de gestión de modelos ni de embeddings de Ollama.
 
 No se pueden seleccionar combos, políticas de enrutamiento, alias `--fast` o de esfuerzo, ni proveedores que reenvíen las credenciales propias de quien hace la solicitud. Esas solicitudes fallan antes de enviar nada al proveedor.

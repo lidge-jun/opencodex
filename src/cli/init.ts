@@ -9,6 +9,7 @@ import { redactUserPath } from "../lib/redact";
 import { enrichProviderFromCatalog } from "../oauth/key-providers";
 import { deriveInitProviders } from "../providers/derive";
 import { pinSponsorsWithinKind } from "../providers/sponsor-order";
+import { maybeShowTelemetryPrompt } from "./telemetry";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 
 /** Parse a setup TCP port; only an empty answer selects the default. */
@@ -292,5 +293,8 @@ export async function runInit(): Promise<void> {
     }
   } finally {
     prompt.close();
+  }
+  if (configCreated && !process.exitCode) {
+    await maybeShowTelemetryPrompt();
   }
 }

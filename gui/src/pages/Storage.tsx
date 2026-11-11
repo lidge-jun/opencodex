@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useI18n, type TFn, type Locale } from "../i18n/shared";
-import { EmptyState } from "../ui";
+import { EmptyState, Select } from "../ui";
 import { IconRefresh } from "../icons";
 import { formatBytes } from "../format-bytes";
 import { NumberStepper } from "../components/NumberStepper";
@@ -11,6 +11,8 @@ import StorageWorkspace, {
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton, DataSurfaceStatus } from "../components/data-surface";
+import { quietButton } from "../components/v2-logs/classes";
+import { cn } from "@/lib/utils";
 
 
 interface CleanupPreview {
@@ -1151,38 +1153,34 @@ function AutoCleanupPolicyPanel({
         <div className="storage-policy-selects">
           <label className="field" htmlFor="storage-policy-schedule">
             <span className="field-label">{t("storage.policy.schedule")}</span>
-            <select
+            <Select
               id="storage-policy-schedule"
-              className="input"
+              fullWidth
               value={policy.schedule}
               disabled={saving || running}
-              onChange={e => {
-                const schedule = e.target.value as CleanupPolicy["schedule"];
-                void savePolicy({ schedule });
-              }}
-            >
-              <option value="manual">{t("storage.policy.schedule.manual")}</option>
-              <option value="startup">{t("storage.policy.schedule.startup")}</option>
-              <option value="daily">{t("storage.policy.schedule.daily")}</option>
-              <option value="weekly">{t("storage.policy.schedule.weekly")}</option>
-            </select>
+              onChange={value => { if (value !== policy.schedule) void savePolicy({ schedule: value as CleanupPolicy["schedule"] }); }}
+              options={[
+                { value: "manual", label: t("storage.policy.schedule.manual") },
+                { value: "startup", label: t("storage.policy.schedule.startup") },
+                { value: "daily", label: t("storage.policy.schedule.daily") },
+                { value: "weekly", label: t("storage.policy.schedule.weekly") },
+              ]}
+            />
           </label>
 
           <label className="field" htmlFor="storage-policy-mode">
             <span className="field-label">{t("storage.policy.mode")}</span>
-            <select
+            <Select
               id="storage-policy-mode"
-              className="input"
+              fullWidth
               value={policy.mode}
               disabled={saving || running}
-              onChange={e => {
-                const mode = e.target.value as CleanupPolicy["mode"];
-                void savePolicy({ mode });
-              }}
-            >
-              <option value="quarantine">{t("storage.policy.mode.quarantine")}</option>
-              <option value="permanent">{t("storage.policy.mode.permanent")}</option>
-            </select>
+              onChange={value => { if (value !== policy.mode) void savePolicy({ mode: value as CleanupPolicy["mode"] }); }}
+              options={[
+                { value: "quarantine", label: t("storage.policy.mode.quarantine") },
+                { value: "permanent", label: t("storage.policy.mode.permanent") },
+              ]}
+            />
           </label>
         </div>
         {policy.mode === "permanent" && (
@@ -1406,21 +1404,24 @@ export default function Storage({ apiBase }: { apiBase: string }) {
   const showTrashWhileSettling = showBody && (data!.total.fileCount > 0 || !trashSettled || trashHasEntries);
 
   return (
-    <>
-      <div className="page-head">
-        <h2 id="storage-page-title">{t("storage.title")}</h2>
-        <div className="storage-page-head-actions">
-          <span className="storage-page-head-feedback" role="status" aria-live="polite">
+    <div className="storage-v2 flex min-w-0 flex-col gap-4 font-sans text-fg">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-1 basis-80 flex-col gap-1">
+          <h2 id="storage-page-title" className="m-0 text-title font-semibold tracking-[-0.025em]">{t("storage.title")}</h2>
+          <p className="m-0 text-[13px] leading-5 text-fg-muted">{t("storage.subtitle")}</p>
+        </div>
+        <div className="storage-page-head-actions flex items-center gap-2">
+          <span className="storage-page-head-feedback text-[13px] text-fg-muted" role="status" aria-live="polite">
             {scanStatus ?? ""}
           </span>
-          <button type="button" className="btn btn-ghost btn-sm" disabled={loading} onClick={() => void refreshAll()}>
-            <IconRefresh /> {t("storage.refresh")}
+          <button type="button" className={cn(quietButton, "disabled:cursor-default disabled:opacity-50")} disabled={loading} onClick={() => void refreshAll()}>
+            <span className={cn("inline-flex", loading && "animate-spin")}><IconRefresh aria-hidden /></span>
+            {t("storage.refresh")}
           </button>
         </div>
       </div>
-      <p className="page-sub">{t("storage.subtitle")}</p>
       {data && data.error === undefined && (
-        <p className="storage-page-meta">
+        <p className="storage-page-meta m-0 -mt-2">
           <code className="mono storage-page-meta__home" title={data.codexHome}>{data.codexHome}</code>
           <span className="storage-page-meta__sep" aria-hidden="true">·</span>
           <span>
@@ -1466,6 +1467,6 @@ export default function Storage({ apiBase }: { apiBase: string }) {
           onTrashEntriesChange={onTrashEntriesChange}
         />
       )}
-    </>
+    </div>
   );
 }

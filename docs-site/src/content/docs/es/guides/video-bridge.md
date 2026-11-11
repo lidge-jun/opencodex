@@ -27,7 +27,7 @@ El puente de video permite generar videos con Grok Imagine Video de xAI desde cu
 > }
 > ```
 >
-> Si configuró el proveedor con `ocx login xai` (OAuth), permanece en `authMode: "oauth"` y el puente no se activa. Para usarlo, establezca `XAI_API_KEY` en el entorno, conserve la referencia `${XAI_API_KEY}` del ejemplo y configure explícitamente `authMode: "key"`. Mantenga las claves literales fuera de commits, registros e informes compartidos.
+> Define `XAI_API_KEY` en el entorno de inicio del proxy, conserva la referencia `${XAI_API_KEY}` y selecciona explícitamente `authMode: "key"`. Exportarla en otra terminal no modifica un proxy activo: reinícialo mediante Desktop, su servicio o la terminal propietaria para que herede el valor. No pongas claves literales en commits, registros o informes compartidos.
 
 <a id="configuration"></a>
 

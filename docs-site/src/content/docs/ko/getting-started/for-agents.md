@@ -10,11 +10,15 @@ description: 사용자의 동의 경계를 넘지 않으면서 에이전트가 �
 배포된 패키지를 설치하고 `ocx`가 `PATH`에 들어 있는지 확인합니다:
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
 ```
 
-프록시를 실행하는 방법은 하나를 선택합니다:
+설정에서 선택한 포트를 사용하도록 프록시를 시작하기 전에 대화형 터미널에서 `ocx init`을 실행하세요:
+
+```bash
+ocx init
+```
 
 ```bash
 # Foreground: blocks this terminal until stopped.
@@ -22,12 +26,6 @@ ocx start
 
 # Background: installs or updates the service, then starts it.
 ocx service
-```
-
-대화형 터미널에서 `ocx init`를 실행합니다. `ocx start`가 포그라운드를 차지하고 있으면 두 번째 터미널을 사용합니다:
-
-```bash
-ocx init
 ```
 
 이 마법사는 `$OPENCODEX_HOME/config.json`를 작성합니다(보통 `~/.opencodex/config.json`). 또한 프록시 주소를 Codex의 `config.toml`에 주입하고, 선택적 Codex 자동 시작 shim을 설치할 수 있습니다. `ocx init`는 프록시를 절대 시작하지 않습니다. 완전히 비대화형으로 설정하려면 아래처럼 마법사를 진행하지 말고 `ocx provider add`로 공급자를 구성하세요.
@@ -68,7 +66,7 @@ ocx provider add anthropic-apikey \
 
 ```bash
 ocx combo set main \
-  --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol \
+  --targets anthropic-apikey/claude-opus-4-8,openai/gpt-5.6-sol \
   --strategy failover
 ```
 

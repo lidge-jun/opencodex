@@ -17,9 +17,31 @@ Descarga `OpenCodex-<version>-macos.dmg` desde la [última versión](https://git
 
 Las versiones publicadas de `OpenCodex.app` tienen firma de Developer ID y certificación de Apple. Al abrirlas por primera vez, macOS normalmente solo pide la confirmación habitual para una aplicación descargada. Si sigue bloqueándola, usa **Configuración del Sistema → Privacidad y seguridad → Abrir de todos modos**.
 
+#### Homebrew, aplicación de escritorio
+
+Instala el Cask con:
+
+```bash
+brew install --cask opencodex
+```
+
+- **Actualizaciones internas (`auto_updates`)**: el Cask declara `auto_updates true`. `brew upgrade --cask opencodex` o una actualización greedy aún puede reemplazar una aplicación más nueva actualizada internamente; comprueba ambas versiones.
+- **CLI y servicio**: instala solo la aplicación y su CLI/proxy. Una CLI separada npm o de archivo comparte `~/.opencodex`. Para darle el servicio, cierra Desktop, selecciona esa CLI explícitamente, omitiendo el handoff si procede, y ejecuta `ocx service install`. Consulta [selección de terminal](/es/guides/desktop-app/#using-the-ocx-cli-with-the-desktop-app) y [propiedad](/es/reference/cli/lifecycle/#runtime-ownership).
+- **Tras actualizar Cask**: puede eliminar el trabajo/plist `com.opencodex.proxy`, incluso de la CLI separada. Cierra Desktop y, en sesión gráfica macOS, comprueba con esa CLI `ocx service status`; si falta, instala, y si no está cargado, `ocx service repair`. Vuelve a comprobar. Instalar toma el puerto de `OCX_BAKE_PORT` o `config.port`, no del trabajo eliminado: actualiza clientes si cambió. También elimina el trabajo de inicio `OpenCodex`: reactívalo en el menú si lo usas.
+- **Borrado con `--zap`**: `brew uninstall --zap --cask opencodex` elimina `~/.opencodex` y `~/.opencodex-desktop`, configuración y estado compartidos. Respalda antes. Casks anteriores a 2.97.0 no incluían esos directorios y Homebrew puede usar la definición de instalación; comprueba qué queda antes de quitarlo manualmente.
+
+
 ### Windows
 
 Descarga `OpenCodex-<version>-windows-x64.msi` y ejecuta el instalador. La firma de código a través de SignPath Foundation se está incorporando ([firma de código en Windows](/es/reference/code-signing/)). Hasta que una versión incluya esa firma, Windows SmartScreen puede advertir que el instalador no está firmado. Elige **Más información → Ejecutar de todas formas** después de confirmar que lo descargaste de la página de versiones.
+
+El instalador Windows resume el uso diario anónimo, enlaza la [privacidad](/es/reference/code-signing/#privacy) y muestra marcada **Enviar estadísticas anónimas de uso**. Desmárcala para guardar el rechazo al primer arranque de cada cuenta, antes del proxy. Es de todo el equipo, también en despliegues de administrador. Para instalación silenciosa:
+
+```powershell
+msiexec /i OpenCodex-<version>-windows-x64.msi /qn OCX_TELEMETRY_CHOICE=optout
+```
+
+Requiere administrador. Solo `send` conserva la opción; `optout`, sin distinguir mayúsculas, y otros valores como `off` o `0` la desactivan. Pasar `OCX_TELEMETRY_CHOICE` registra una decisión nueva: repetirlo en cada actualización vuelve a aplicar el rechazo sobre una decisión posterior del dashboard. La casilla marcada no inicia envíos ni reactiva una cuenta que los rechazó: aún exige el aviso. Actualizaciones internas, modo `/qr` y mantenimiento conservan la elección. Un instalador posterior sin cambiar la casilla no la reaplica sobre el dashboard. Un servicio puede iniciar sin Desktop; una decisión nueva lo alcanza al abrir la aplicación. Usa `ocx telemetry disable` para detener el envío de inmediato.
 
 ### Linux
 
@@ -97,13 +119,13 @@ Estas protecciones son avisos preventivos de las CLI y los entornos de ejecució
 
 La protección del inicio reconoce **Aplicación de escritorio** cuando un diagnóstico reciente verifica que la aplicación supervisa su proxy incluido y confirma el registro de **Start at Login** de esa misma aplicación. La propiedad registrada se conserva por separado; detectar supervisión no crea una declaración de propiedad.
 
-En Linux, el componente de inicio automático escribe la entrada en `~/.config/autostart/OpenCodex.desktop`, incluso si se definió `$XDG_CONFIG_HOME`. La protección del inicio lee esa entrada y el identificador de instalación bajo `~/.config`. Si `$XDG_CONFIG_HOME` apunta a otro lugar, la sesión busca un directorio distinto de inicio automático; por eso el estado permanece **En riesgo**.
+En Linux, el componente de inicio automático escribe la entrada en `~/.config/autostart/OpenCodex.desktop`, incluso si se definió `$XDG_CONFIG_HOME`. La protección del inicio lee esa entrada y el identificador de instalación bajo `~/.config`. Si `$XDG_CONFIG_HOME` apunta a otro lugar, la sesión busca un directorio distinto de inicio automático; por eso no se reconoce esa entrada como protección de reinicio.
 
 La entrada solo cuenta si no tiene `Hidden=true` ni `X-GNOME-Autostart-enabled=false`, y tampoco condiciones `OnlyShowIn`, `NotShowIn` o `TryExec`. Su campo `Exec` debe contener una ruta absoluta a `opencodex-desktop` sin comillas, espacios, escapes ni códigos de campo, seguida exactamente por `--autostart`. El ejecutable resuelto debe seguir llamándose `opencodex-desktop` y tener el `ocx` incluido a su lado. La protección del inicio lee dos veces toda la cadena de evidencias y solo reconoce la protección cuando ambas lecturas coinciden.
 
-Las instalaciones AppImage permanecen **En riesgo**: el inicio automático registra la ruta del archivo AppImage externo, mientras el proceso de Desktop se ejecuta dentro de su punto de montaje. Esa relación no se puede verificar y no se reconoce como protección.
+Las instalaciones AppImage no reciben protección Desktop verificada: el inicio automático registra la ruta del archivo AppImage externo, mientras el proceso de Desktop se ejecuta dentro de su punto de montaje. Esa relación no se puede verificar y no se reconoce como protección.
 
-Una comprobación ausente o desactualizada mantiene el estado **En riesgo**. Si Desktop tiene la propiedad del proxy pero no se puede verificar su protección, vuelve a abrir OpenCodex y comprueba **Start at Login**. La instalación o reparación del servicio y del lanzador permanece deshabilitada mientras exista esa propiedad; `ocx restore` sigue disponible para deshacer el enrutamiento de Codex.
+Una comprobación ausente o desactualizada no acredita protección de reinicio. Si Desktop posee o supervisa el proxy, se muestra una nota informativa y se pide comprobar **Start at Login** en el menú. La instalación o reparación del servicio permanece deshabilitada mientras exista esa propiedad. El lanzador Codex sí puede instalarse con diagnósticos recientes, pero no si están desactualizados. En Linux sin bandeja, inspecciona `~/.config/autostart/OpenCodex.desktop` y las condiciones anteriores. `ocx restore` permite deshacer el enrutamiento de Codex.
 
 Las actualizaciones normales de Desktop reemplazan la CLI incluida por la versión con la comprobación de inicio corregida. No necesitas conservar un parche local entre actualizaciones.
 
@@ -172,3 +194,10 @@ sudo apt remove opencodex
 Para AppImage, elimina el archivo descargado.
 
 Si no se puede leer la configuración guardada de la barra de menús, se rechazan las ediciones parciales para conservar el archivo. Restáuralo o restablece expresamente la configuración del complemento antes de editar de nuevo.
+
+
+La comprobación de Arranque solo marca completo el inicio automático si verifica registro y proxy servido por Desktop. Un registro ausente, obsoleto, Linux con XDG distinto o AppImage no reciben protección comprobada. Revisa el menú de Desktop o `~/.config/autostart/OpenCodex.desktop` sin bandeja. Mientras Desktop supervise, no se instala/repara un servicio; el shim puede instalarse con diagnósticos recientes y `ocx restore` sigue disponible. La palanca de parada del dashboard no detiene un proxy de Desktop: informa y no cambia nada; usa **Detener proxy** o **Salir** en la bandeja.
+
+Antes de desinstalar, quita el comando de terminal. En macOS/Linux un registro Desktop habilitado con ejecutable ausente bloquea launchers npm/pnpm, sin fallback silencioso. `OCX_NO_DESKTOP_HANDOFF=1` permite una invocación explícita del paquete sin reparar registro, shim o PATH.
+
+Para un despliegue sin interfaz, `OCX_TELEMETRY_CHOICE=optout` registra la exclusión para todo el equipo. Consulta arriba cuándo una nueva instalación vuelve a aplicar esa decisión.

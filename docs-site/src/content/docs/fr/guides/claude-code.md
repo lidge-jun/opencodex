@@ -65,7 +65,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` ; lors d'un lancement par abonnement, si non défini, `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]` natif |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | Libellé `/model` d'un emplacement de niveau qu'OpenCodex règle sur un alias routé (par exemple `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`). La même paire est écrite dans l'environnement système launchd et dans le hook shell. L'identifiant du modèle reste l'alias. Un emplacement ou un libellé que vous définissez vous-même n'est pas modifié |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1` lorsque `alwaysEnableEffort` est activé (conditionnel) |
-| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` lorsqu'il est défini (conditionnel ; désactivé par défaut) |
+| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` lorsqu'il est défini (conditionnel ; non injecté par défaut, la valeur par défaut de Claude Code s’applique) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | Remplacement du contexte hérité lorsque `maxContextTokens` est défini (conditionnel) |
 Les variables que vous exportez vous-même gagnent toujours. Les arguments supplémentaires passent par : `ocx claude -p "hello"`.
 
@@ -701,9 +701,9 @@ autre 5xx `api_error`. `Retry-After` est envoyé en secondes entières (une date
 et l'avant-dernier message utilisateur, ainsi que le champ `cache_control` automatique de premier niveau. Les tours stables
 atteignent généralement un taux d'accès au cache d'environ 99.9 %.
 
-**Routage OpenAI/ChatGPT natif :** produit une valeur `prompt_cache_key` propre à la session, à partir de
-`metadata.user_id` lorsqu'il est présent ou, à défaut, d'un hachage du contenu système, ainsi qu'un en-tête `session_id`
-pour l'affinité du cache. La clé de cache inclut le modèle et l'intégralité des schémas d'outils.
+**Routage OpenAI/ChatGPT natif :** produit une valeur `prompt_cache_key`, à partir de
+`metadata.user_id` lorsqu'il s'agit d'une chaîne ou, à défaut, d'un hachage du contenu système, ainsi qu'un en-tête `session_id`
+pour l'affinité du cache, cet en-tête provenant uniquement d'une identité de session et jamais de la clé de repli partagée. La clé de repli dérivée du contenu système (utilisée seulement si un contenu système est présent) inclut aussi le modèle et l'intégralité des schémas d'outils.
 
 **Calcul des jetons d'entrée :** Anthropic soustrait `cached_tokens` et `cache_write_tokens` de
 `input_tokens`, les exposant comme `cache_read_input_tokens` et `cache_creation_input_tokens`.

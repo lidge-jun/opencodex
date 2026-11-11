@@ -21,12 +21,56 @@ Release builds of `OpenCodex.app` are signed with a Developer ID and notarized b
 first launch macOS normally asks only for the standard confirmation for a downloaded app. If macOS
 still blocks it, use **System Settings → Privacy & Security → Open Anyway**.
 
+#### Homebrew (desktop app)
+
+Alternatively, install the desktop app using Homebrew Cask:
+
+```bash
+brew install --cask opencodex
+```
+
+- **In-app updates (`auto_updates`)**: The desktop app has a built-in updater, and the Cask declares `auto_updates true`. A named `brew upgrade --cask opencodex` or a greedy upgrade can still replace an app updated to a newer version in-app. Check the installed app and Cask versions before upgrading with Homebrew.
+- **CLI and background service**: The Cask installs only `OpenCodex.app`, which bundles its own CLI and proxy runtime. You can install a separate `ocx` via npm or release archives for a standalone CLI or headless service; both share `~/.opencodex`. To give that CLI the service, quit OpenCodex, select the separate CLI explicitly (including bypassing [Desktop’s package-launcher handoff](/getting-started/installation/) if enabled), and run `ocx service install`. See [terminal command selection](/guides/desktop-app/#using-the-ocx-cli-with-the-desktop-app) and [runtime ownership](/reference/cli/lifecycle/#runtime-ownership).
+- **Service after a Cask upgrade**: The Cask's uninstall step can remove the `com.opencodex.proxy` launchd job and plist, even when they belong to the separate CLI, stopping its background service. After upgrading, quit OpenCodex and, in a macOS GUI login session, use that explicitly selected separate CLI to run `ocx service status`. If the service is absent, run `ocx service install`; if it is installed but not loaded, run `ocx service repair`. Check `ocx service status` again. `ocx service install` takes the port from `OCX_BAKE_PORT` or `config.port`, not from the removed job, so if either changed since the service was registered, update clients that still point at the old port. The same uninstall step removes Desktop's own Start at Login item (the `OpenCodex` launchd job); turn **Start at Login** back on in OpenCodex if you use it.
+- **Data removal with `--zap`**: `brew uninstall --zap --cask opencodex` removes `~/.opencodex` and `~/.opencodex-desktop`. This deletes shared CLI and Desktop configuration and state in those directories. Back up any data you want to keep before using `--zap`. Cask definitions before 2.97.0 did not list these two directories, and Homebrew may uninstall with the definition recorded at install time, so check whether they remain after `--zap` and remove them yourself if you want them gone.
+
 ### Windows
 
 Download `OpenCodex-<version>-windows-x64.msi` and run the installer. Code signing through
 SignPath Foundation is rolling out ([Windows Code Signing](/reference/code-signing/)). Until a
 release carries the signature, Windows SmartScreen may warn about an unsigned installer; choose
 **More info → Run anyway** after confirming that you downloaded it from the release page.
+
+One installer page describes the anonymous daily usage summary OpenCodex sends, links the
+[privacy statement](/reference/code-signing/#privacy), and has a **Send anonymous usage
+statistics** checkbox, checked by default. Clear it and the app saves the opt-out to your
+opencodex config the first time it starts, before any proxy runs. The choice applies to every
+account on the computer, once for each account, so it also works for a silent install run by an
+administrator or a deployment tool (Intune, SCCM). For a silent install, pass
+`OCX_TELEMETRY_CHOICE=optout`:
+
+```powershell
+msiexec /i OpenCodex-<version>-windows-x64.msi /qn OCX_TELEMETRY_CHOICE=optout
+```
+
+The installer needs administrator rights and records the choice for the whole computer.
+Only `send` keeps telemetry on; `optout`, in any letter case, and any other value (`off`, `0`) turn it off.
+Each install that passes `OCX_TELEMETRY_CHOICE` records a new decision, so a deployment that reuses
+the same command for every version applies the opt-out again after each upgrade, over any dashboard
+choice made since.
+
+Leaving the box checked does not start sending by itself: the dashboard still shows its one-time
+notice first, and a checked box never turns telemetry back on for an account that turned it off.
+In-app updates, reduced-UI installs (`/qr`) and maintenance runs of the installed version skip this
+page and keep the recorded choice. Running a newer installer by hand shows the page again, unchecked
+if you opted out before. Continuing without changing the box keeps that earlier decision as it was,
+so it is not applied again over a choice you made in the dashboard since; changing the box records a
+new decision.
+
+If you installed the background service with `ocx service install`, it can start a proxy at logon
+without the app. An opt-out recorded by a later installer reaches that service's config the next
+time the app starts; until then the service may still send its daily summary. To stop it at once,
+run `ocx telemetry disable`.
 
 ### Linux
 
@@ -105,7 +149,15 @@ when they verify that the app runs its bundled proxy, even without recorded owne
 CLI service repairs for that runtime. On macOS and Linux, turn on **Start at Login**
 in the OpenCodex menu instead of installing a background service. Startup safety credits the app only when its login registration is verified;
 if it cannot be verified, follow the Desktop guidance in status.
-The Startup page then labels the Desktop row **Running · Start at Login not verified**.
+In the dashboard's Getting started checklist, the last step under the app is
+**Turn on Start at Login** and opens the Desktop card on the Startup page. It is marked
+done only when Startup safety verifies the registration and the app runs the proxy. It
+shows as to do when Start at Login is verified off, or on macOS when the app is confirmed
+not to be running the proxy. Otherwise the step stays unmarked, which is the usual case on
+Windows (the registration is not verified) and on Linux without a verified autostart
+entry; check the item in the OpenCodex menu yourself.
+The Startup page shows a quiet **Start at Login not verified** note when the app's
+registration cannot be checked. A verified disabled registration is shown as action required.
 On macOS the menu's **Start at Login** item is checked only when Startup safety would
 verify the same registration. Otherwise the item is unchecked and its label says why:
 **disabled by macOS** opens System Settings → General → Login Items & Extensions, where
@@ -174,7 +226,7 @@ On Linux, the pinned autostart backend writes the login entry to
 `~/.config/autostart/OpenCodex.desktop`, even when `$XDG_CONFIG_HOME` is set. Startup
 safety reads that entry and the desktop install-id under `~/.config`. When
 `$XDG_CONFIG_HOME` points elsewhere, the login session searches a different autostart
-directory, so startup safety stays **At risk** instead of crediting the entry.
+directory, so startup safety does not credit the entry as restart protection.
 The entry counts only while it is not marked `Hidden=true` or
 `X-GNOME-Autostart-enabled=false`, and has no `OnlyShowIn`, `NotShowIn`, or `TryExec`
 condition. Its `Exec` must be an unquoted absolute path to `opencodex-desktop`, without
@@ -183,12 +235,15 @@ executable must still be named `opencodex-desktop`, with its bundled `ocx` besid
 Startup safety reads the full evidence chain twice and grants protection only when
 both reads agree.
 
-AppImage installations remain **At risk**: the autostart backend registers the outer
+AppImage installations do not receive verified Desktop protection: the autostart backend registers the outer
 AppImage path, while the live desktop process runs inside its mount. Startup safety
 cannot verify that relationship and does not credit AppImage protection.
-A missing or stale check remains **At risk**. If the desktop app owns the proxy but
-protection cannot be verified, reopen OpenCodex and check **Start at Login**. Service
-and launcher installation or repair stays disabled while that ownership remains;
+A missing or stale check does not earn restart-protection credit. If Desktop owns or
+supervises the proxy, the page shows an informational note and asks you to check
+**Start at Login** in the OpenCodex menu. Service installation or repair stays disabled
+while that ownership remains. The launcher shim can still be installed when diagnostics are fresh;
+its Install button is disabled while diagnostics are stale. On Linux without a tray, inspect
+`~/.config/autostart/OpenCodex.desktop` and the conditions described above. The command
 `ocx restore` is still available to undo Codex routing.
 
 Normal desktop updates replace the bundled CLI with the fixed startup probe. No local
@@ -223,9 +278,9 @@ shows the Child's dashboard. If the port is held by something the app cannot use
 bound to an address other than `127.0.0.1`, the app stops retrying and waits for that to change. A
 recovery that finishes while the update page is open leaves that page on screen.
 
-The tray's **Stop proxy** and **Quit** keep the proxy stopped. The dashboard's own **Stop** button
-does not stop a proxy the app runs, because the app would start it again: it says so and changes
-nothing. What the app decided and why is
+The tray's **Stop proxy** and **Quit** keep the proxy stopped. The dashboard's own stop (pulling the
+proxy lever at the foot of the sidebar all the way down) does not stop a proxy the app runs,
+because the app would start it again: it says so and changes nothing. What the app decided and why is
 recorded in `runtime-supervisor.log` in the app's log directory (`~/Library/Logs/com.opencodex.desktop`
 on macOS).
 
@@ -294,7 +349,10 @@ Before uninstalling a supported Desktop installation, open **Terminal command** 
 dashboard or tray and choose **Remove terminal command**. Desktop removes only its unchanged
 managed configuration. Modified blocks or files are preserved and reported; resolve those
 issues before deleting the app. Uninstalling the app directly does not guarantee cleanup
-of shell files or the user `Path`.
+of shell files or the user `Path`. On macOS/Linux, a stale enabled Desktop command record
+also blocks eligible npm/pnpm launcher calls if the selected app executable is gone. Repair
+or remove the terminal command before deleting the app. `OCX_NO_DESKTOP_HANDOFF=1` permits
+one explicit package-launcher invocation; it does not repair the record, shim or PATH.
 
 On macOS, drag `OpenCodex.app` from Applications to the Trash. On Windows, remove
 OpenCodex from **Installed apps**. On Debian-based Linux systems, run:

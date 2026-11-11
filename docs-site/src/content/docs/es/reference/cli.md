@@ -232,3 +232,6 @@ Cuando la configuración guardada no es válida o ilegible, `ocx config`, `ocx c
 `ocx logs --model` admite un ID de modelo sin prefijo o la etiqueta completa `provider/model` que muestran las filas legibles por humanos, incluso si el ID contiene barras. Los intentos de failover se comparan como destinos completos. El filtro se aplica antes de `--limit`, y `--follow` usa el mismo filtro del servidor. Si no hay coincidencias, la salida humana lo indica; `--json` y `--jsonl` conservan sus formatos para máquinas.
 
 `ocx hub disable [--revoke-clients --client-key <id> ...] [--json]` devuelve un concentrador a autónomo en una escritura de configuración validada. La revocación de la clave del cliente requiere identificadores explícitos porque los nombres de clave no prueban el origen. Véase [Devolver un concentrador a autónomo](/es/guides/remote-hub/#return-a-hub-to-standalone).
+
+
+`ocx alias template set <provider> <template>`, `ocx alias template rm <provider>` y `ocx alias template show [<provider>]` administran plantillas opcionales por proveedor; consulta [plantillas de alias](/es/guides/model-routing/#model-alias-templates). La pestaña **Codex → Codex CLI** usa el mismo plan y trabajo de actualización: [guía del dashboard](/es/guides/web-dashboard/#applying-a-codex-cli-update-from-the-dashboard).

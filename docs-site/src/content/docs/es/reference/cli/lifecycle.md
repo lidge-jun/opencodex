@@ -279,11 +279,11 @@ Las escrituras de configuración usan `catalogRefreshPending`, mientras que las 
 
 Inspeccione el mismo objetivo con `ocx v2 status --json` o `ocx v2 status --live --json` y utilice `ocx system settings --json` para la lectura de la configuración. Un resultado guardado pero pendiente o desconocido no prueba retroceso y no es permiso para reproducir una escritura. Consulte [v2 resultados](/es/reference/cli/agents/#explicit-v2-target-and-outcome) y [política de cuenta](/es/reference/cli/providers-accounts/#pool-policy-account-thresholds-and-paid-credit-intent) para conocer los límites de gasto, alcance y destino. Una lectura de estado de reset-grant puede contactar con el estado de upstream pero nunca consume o reanuda una subvención.
 
-### `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only]` <span id="ocx-sync---restart-codex---restart-app-server-only"></span>
+### `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only] [--child <linkId>]... [--restart-children[=app-server] | --restart-children=codex --yes]` <span id="ocx-sync---restart-codex---restart-app-server-only"></span>
 
-En un Home de Remote Link, un catálogo actual confirmado correctamente también se sincroniza con los Children enlazados aptos. `--local-only` desactiva ese envío. `--json` imprime un resultado `ocx.sync.fanout/1` con el resultado del Home y el estado de cada Child; los omitidos incluyen el motivo. Un código de salida distinto de cero del Home se conserva. Si el Home termina con 0, un Child fallido o con timeout, o un almacén de enlaces ilegible, produce salida 6; en los demás casos, incluidos Children omitidos, la salida es 0. Un almacén ilegible produce un mensaje sin rutas en la salida humana. La salida 7 se reserva para una actualización en curso. Si el Home lanza un error en modo JSON, stdout aún contiene un único documento de resultado y stderr muestra un mensaje saneado.
+En Home, un catálogo confirmado se distribuye a Children aptos salvo `--local-only`. `--json` devuelve `ocx.sync.fanout/1` con Home y cada Child, incluidos motivo e `hint` de omisiones. Actualiza un Child antiguo a 2.93.0 o posterior mediante su instalador; para Desktop Windows sin sesión gráfica, usa el actualizador de la bandeja con sesión iniciada. Un vínculo cambiado puede requerir enlazar otra vez. Se conserva la salida no cero de Home; si Home termina con 0, un Child conectado omitido, fallido, con timeout, reinicio incierto o almacén ilegible produce 6. Omisiones intencionales por enlace iniciado en Child, selección `not-selected`, `--local-only` o `child-busy` mantienen su comportamiento. El error de almacén no expone rutas; 7 se reserva a una actualización activa. Si Home lanza error en JSON, stdout conserva un único resultado y stderr un mensaje saneado.
 
-El envío a Children nunca solicita reiniciar Codex App ni sus app-servers. Usa GOAT o ejecuta `ocx sync --restart-codex` en ese Child si necesita reiniciar Codex. La sincronización vinculada del Child sí puede reiniciar su propio cliente OpenCodex al aplicar cambios del Home. Si el Home agota el tiempo y detiene su proceso SSH local, una sincronización remota ya iniciada puede continuar en el Child.
+El fan-out no reinicia Codex salvo `--restart-children`, para app-servers, o `--restart-children=codex --yes`, para Desktop con sesión gráfica. Sync se realiza primero, luego se comprueba actividad otra vez y se envía otro sync fijado con reinicio. Se omite solo el reinicio ante `restart-skipped:link-active`, `restart-skipped:activity-unknown`, `restart-skipped:windows` o `restart-unsupported:ocx-child`, terminando con 6. Un tipo de Child desconocido recibe la opción para identificarlo; el ligero la ignora. Envío no realizado o resultado incierto indica `restart-not-run` o `restart-result-unknown`, también 6. Es protección de mejor esfuerzo: una petición nueva aún puede interrumpirse. `--child <linkId>` selecciona enlaces; el resto es `not-selected`, y una operación ocupada, `child-busy`. El sync puede reiniciar el runtime OpenCodex del Child tras cambiar ajustes. Un timeout del SSH local no garantiza que el sync remoto se detuviera.
 
 Si hay una actualización activa o no se puede determinar el estado del mutex compartido entre actualización y sincronización, sync no cambia nada, informa `update-in-flight` y termina con salida 7. Si otra sincronización posee el mutex, informa `sync-in-progress` y termina con 1; el Home cuenta ese Child como fallido y devuelve 6 si su propia sincronización tuvo éxito. Con `--json`, ambos rechazos imprimen un único resultado con el Home omitido y el motivo en `fanout.reason`.
 
@@ -728,6 +728,67 @@ El resumen se calcula sobre este JSON compacto en UTF-8, con las claves exactame
 
 En el Home, cada fila de `ocx link status --json` incluye lo último que declaró el Child: `lastApplyAt`, `runtimeStartedAt`, `appliedCodexSettingsDigest` (con los significados anteriores) y `reportedAt` (milisegundos desde epoch según el reloj del Home). El Child informa poco después del arranque y luego una vez por minuto. El Home solo conserva los informes en memoria: tras reiniciarse, los campos son `null` hasta el siguiente informe. Un Child cuyo entorno arrancó antes de `lastApplyAt` ejecuta un entorno anterior a su última aplicación de ajustes.
 
+<a id="child-operations-from-the-home"></a>
+
+## Operaciones sobre Children desde Home
+
+```text
+ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]
+ocx link sync (--link-id <id> | --all) [--no-wait] [--json]
+ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]
+ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]
+```
+
+Estos comandos crean un trabajo para enlaces iniciados en Home y devuelven `ocx.link.child-job/1`: `{schema, jobId, op, trigger, restart, state, createdAt, finishedAt, items}`. Cada elemento incluye `linkId`, `alias`, `state`, `reason`, `startedAt`, `finishedAt` y, cuando procede, `hint`, `fromVersion`, `toVersion`, `sync` con `{state, reason}` y `restart` con `{requested, outcome}`. `outcome` es `requested`, `unsupported`, `not-run` o `skipped`. Consulta [Operar Children desde Home](/es/guides/remote-link/#operating-children-from-the-home) para acciones, versiones y restricciones Windows/ligeras. Reiniciar nombra un solo enlace; `update`, `restart-codex` y `--restart-codex` requieren `--yes`.
+
+| Salida | Significado |
+|---|---|
+| 0 | Todos `succeeded` o `up-to-date` y cada reinicio solicitado se envió; con `--no-wait`, solo confirma aceptación, no finalización. |
+| 6 | Alguno `busy`, `offline`, `refused`, `owner-action`, `unsupported`, o con `restart-skipped:link-active` o `post-update-sync-failed`. |
+| 1 | `failed`, `uncertain`, estado desconocido, plazo de espera agotado o Home fuera de loopback. |
+| 2 | Argumentos inválidos, por ejemplo reinicio con `--all` o update sin `--yes`. |
+| 4 | Enlace desconocido o Home sin esas operaciones. |
+| 5 | Enlace ocupado, único enlace iniciado desde Child, Home sin enlaces o comando ejecutado en Child; el mensaje distingue la causa. |
+
+La espera excluye el tiempo de un elemento en cola detrás de otro trabajo. Quitar un enlace ocupado devuelve `409 link_operation_in_progress`.
+
+<a id="child-policy-from-the-home"></a>
+
+## Política de Children desde Home
+
+```text
+ocx link policy [--updates off|notify|auto-when-idle] [--catalog-fanout auto|manual] [--child-codex-restart never|app-server-when-idle] [--idle-after-minutes <1-60>] [--json]
+```
+
+`ocx link policy` no crea un trabajo ni devuelve `ocx.link.child-job/1`. Lee la política y solo modifica los ajustes nombrados: `--catalog-fanout auto|manual`, `--child-codex-restart never|app-server-when-idle`, `--updates off|notify|auto-when-idle`, `--idle-after-minutes <1-60>`. Imprime una línea por ajuste o `{policy, warning}` con `--json`. Un archivo dañado informa `policy-file-invalid` y desactiva automatismos; guardar conserva apagado lo no nombrado, por lo que debes indicar `--catalog-fanout auto` y un modo `--updates` para activarlos otra vez. El catálogo se distribuye automáticamente por defecto; consulta [la política](/es/guides/remote-link/#automatic-catalog-fan-out-and-the-child-policy). Salidas: 0 éxito, 2 argumentos, 4 Home antiguo, 5 conflicto `runtime_role_client`, 1 Home no loopback, respuesta inválida o rechazo local por ejecutar en Child.
+
+<a id="remote-link-ssh-capture"></a>
+
+## Captura SSH de Remote Link
+
+```text
+ocx link capture start [--minutes <1-60>] [--json]
+ocx link capture stop [--json]
+ocx link capture status [--json]
+```
+
+Ventana local de 15 minutos por defecto, hasta 60, con `LogLevel=DEBUG1` y copia saneada bajo `<OPENCODEX_HOME>/link/ssh-capture/`. No requiere proxy ni token y sirve en Home o Child. Devuelve `{enabled, logLevel, startedAt, expiresAt, directory, retentionHours, maxMinutes, maxFileBytes, files, removed}`. `stop` conserva archivos; `status` y `start` depuran los que llevan 72 horas sin escribir e informan cuántos quitaron. Consulta [los datos y su saneamiento](/es/guides/remote-link/#capture-ssh-diagnostics). Argumentos inválidos terminan con 2.
+
+`ocx link diagnostics [--limit <n>] [--since <iso-time|epoch-ms>] [--json]` solo lee el historial acotado en el equipo que lo creó, sin proxy activo ni escrituras. Consulta [diagnósticos 503](/es/guides/remote-link/#retryable-503-diagnostics).
+
+**Children ligeros.** `ocx-child sync [--expect-link <id>] [--json]`, `ocx-child status [--json]`, `ocx-child disconnect` y `ocx-child detach` se ejecutan allí; `ocx link status --json` sigue siendo del Home. Un sync correcto inicia `ocx-child serve` si falta, aun sin cambios, lo reemplaza si `runtimeStartedAt < lastApplyAt` y envía un informe de paridad de mejor esfuerzo en sync no obsoleto. Acepta `--restart-codex` y `--restart-app-server-only` sin reiniciar Codex; reinicia Desktop y app-servers por separado. Detach restaura `~/.codex` sin conexión y termina el relay sin dejar daemon.
+
+Solo una instalación ligera administra cada `CODEX_HOME`: usa `CODEX_HOME/.ocx-child.lock`, conservado permanentemente, y `CODEX_HOME/.ocx-child-owner.json` hasta completar detach. `ocx-child attach` o `sync` desde otro `OPENCODEX_HOME` no escribe y exige separar primero el propietario. En un Child completo, sync sin runtime cliente activo no inicia nada; un reinicio fallido deja al anterior sirviendo. El ligero detiene el anterior antes de reemplazar: si falla, no queda relay hasta `ocx-child sync` u `ocx-child restart`. No se intercalan applies. Un segundo `ocx-child sync --expect-link <id>` termina con `5`, `pending_operation`, sin cambios; sin expect-link espera al primero.
+
+**Actualización de servicios.** macOS usa la política launchd `Interactive` para evitar limitación de CPU/E/S de daemon; `ocx service repair` la aplica. Si la definición cambia y launchd rechaza, intenta restaurar la anterior cuando su estado puede comprobarse. Sin comprobación inicial no escribe plist ni respaldo. Si el estado se vuelve incierto después de bootstrap, conserva nueva definición y respaldo sin otra expulsión, distinguiendo rechazo de recarga no verificada. Inspecciona `launchctl print gui/$(id -u)/com.opencodex.proxy` antes de reintentar; puede requerir sesión gráfica. Un estado pendiente no se confirma solo por bytes o comando iguales. Conserva el respaldo original hasta verificar registro; quitar `.prev` después del éxito es de mejor esfuerzo. Los demás errores de limpieza, salvo archivo ya ausente, se notifican sin borrar el estado instalado.
+
+En una instalación Bun, `ocx update` comprueba antes de parar que `config.json` sea legible y no necesite fallback o rescate; si no, termina con 1 manteniendo servicio y bandeja. `ocx config validate` diagnostica sin modificar. Inspecciona permisos, enlaces y destino: validar valores predeterminados ante un enlace roto no demuestra que el archivo sea correcto. Corrige o restaura desde un respaldo confiable antes de reintentar.
+
+En un Child, `ocx connect status` añade `Link tunnel:` con `up`, `down (<reason>)` o `unknown (<reason>)` según `/readyz`; `--json` usa `linkTunnel`. `Connection: connected` solo indica vínculo, no disponibilidad del túnel.
+
+
+
+
 <a id="remote-link-child-attestations"></a>
 
 ## Atestaciones del Child de Remote Link
@@ -797,3 +858,14 @@ En macOS, `ocx service status` distingue un elemento de inicio de sesión de esc
 ## Consentimiento personalizado del proveedor Codex
 
 `ocx codex-provider status` enumera los ID de proveedor aprobados para el hogar seleccionado Codex. `ocx codex-provider allow <id>` pregunta antes de permitir la administración de solo URL en inicio/sincronización; `--yes` es el consentimiento explícito no interactivo para ese proveedor nombrado. `ocx codex-provider revoke <id>` restaura una URL administrada sin cambios y revoca el permiso. Estos comandos son locales y no requieren un proxy en ejecución. Ver [enrutamiento de proveedor personalizado](/es/guides/codex-integration/#opt-in-a-custom-provider-to-managed-local-routing) para elegibilidad, comportamiento de restauración y preservación del transporte.
+
+### Diagnóstico de propiedad y comandos del Child
+
+1. Verifica de manera independiente identidad del proceso, instalación, directorio, supervisor y dirección/puerto real de escucha, con permisos suficientes para IPv4, IPv6 y comodines. Un PID reutilizable o una inspección incompleta no prueba propiedad ni ausencia; las herramientas citadas abajo solo aportan indicios.
+2. Solo si todos esos hechos se confirman y se acepta terminación forzada, el dueño puede ejecutar `ocx stop` desde la instalación y el directorio propietarios. Primero intenta parar con normalidad, pero puede forzar la terminación o rechazarla. No eludas un rechazo.
+3. Confirma independientemente que el proceso terminó, que ningún supervisor lo reiniciará y que dirección y puerto están libres. Una parada correcta o un resultado de estado no prueba las tres cosas. Solo entonces usa `ocx start` desde la instalación, directorio, bind y puerto previstos. Si una comprobación queda incompleta o forzar el cierre no es aceptable, detente y pide al propietario o administrador que investigue; no edites el registro ni mates procesos ajenos.
+
+
+Antes de detener un PID desconocido, inspecciona su proceso con `ps -p <pid> -o pid=,ppid=,args=` y el listener con `lsof -nP -iTCP:<port> -sTCP:LISTEN`. Que `lsof` encuentre un puerto no demuestra que ese proceso pertenezca al registro de OpenCodex. No elimines registros de propiedad ni detengas procesos cuando no se puede confirmar el dueño.
+
+En el Home, `--child` selecciona el agente ligero `ocx-child`; el estado `child` distingue instalación, catálogo y actividad observados. `ocx link check (--link-id <id> | --all) [--no-wait] [--json]` comprueba sin actualizar. `ocx link update` actualiza con confirmación y `ocx link restart-codex` reinicia según el alcance elegido; no equivalen a sincronizar un catálogo. En una actualización local, `ocx update --plan` permite inspeccionar el plan antes de ejecutarlo. Consulta [operaciones de Remote Link](/es/guides/remote-link/#child-install-catalog-and-activity).

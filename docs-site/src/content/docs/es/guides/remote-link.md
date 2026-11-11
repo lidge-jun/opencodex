@@ -108,7 +108,7 @@ Seleccione **Desconectar** para el Child y confirme el alias. El Home detiene el
 Si el Home no puede alcanzar el Child para ejecutar su comando de desconexión, elija **Eliminar aquí solamente**. Esto elimina el túnel local, la clave y el registro. A continuación, inicie sesión en el Child y ejecute:
 
 ```bash
-ocx disconnect
+ocx disconnect   # or ~/.cache/opencodex/bin/ocx-child detach on a lightweight Child
 ```
 
 Para desconectar un enlace iniciado por Child, ejecute `ocx disconnect` en el Child. Desconecta el túnel del cliente y revoca el enlace en Home sobre SSH. Si la revocación Home falla, se imprime: `Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
@@ -148,6 +148,22 @@ Esto puede recuperar esos timeouts transitorios y aportar diagnósticos para fal
 
 El Child utiliza los proveedores de la computadora Home y las credenciales del proveedor a través del enlace. El Home crea una clave de enlace separada para cada Child; la eliminación del enlace revoca esa clave. En el Child, la clave permanece dentro de OpenCodex: las credenciales que Codex o Claude Code envían allí no se reenvían al Home, incluidos Bearer, Azure `api-key`, Anthropic -compatible `x-api-key` y Google `x-goog-api-key`. Cualquier programa en el Child que alcanza `127.0.0.1:<port>` utiliza el Home sin una llave, la misma confianza local que da una instalación independiente. Las páginas web de otros sitios son rechazadas. Compare la huella digital del host antes de la confirmación para que no se acepte por error una máquina incorrecta o una clave de host modificada. Las sesiones del panel de control emitidas desde una identidad de Tailscale no pueden administrar enlaces de máquina.
 
+<a id="capture-ssh-diagnostics"></a>
+
+### Capturar diagnósticos SSH
+
+La captura está desactivada por defecto y solo puede activarse localmente en el equipo cuyo túnel se inspecciona:
+
+```bash
+ocx link capture start            # 15 minutes; --minutes accepts 1 to 60
+ocx link capture status
+ocx link capture stop
+```
+
+En Home captura los túneles que ejecuta a sus Children; en Child, el suyo a Home. No requiere proxy activo ni token, y ningún sync, dashboard o petición remota puede activarla. `start` dentro de una ventana extiende el final y usa el mismo archivo. El siguiente intento SSH usa `LogLevel=DEBUG1` en lugar de `LogLevel=ERROR`; un túnel conectado conserva su nivel hasta reconectar. `stop` o caducar detiene la escritura y el siguiente intento vuelve a ERROR. No cambia la admisión; líneas reconocidas no alteran la causa de error, pero un banner no reconocido con Permission denied puede cambiarla y afectar la espera.
+
+Cada registro de `link/ssh-capture/ssh-<start time>.jsonl` indica hora, túnel `home` o Child, ID aleatorio del enlace, nivel y evento fijo saneado. Hosts, direcciones, usuarios, puertos, rutas, claves, huellas, comandos proxy, entorno y mensajes remotos se sustituyen por `<host>`, `<port>` u otros marcadores. Solo se conservan nombres estándar de algoritmo y autenticación; una línea no reconocida guarda `unrecognized` y recuento, nunca el texto. Cada ventana ocupa hasta 1 MiB, terminando en `capture_truncated`. Se conservan cuatro archivos y cada uno caduca a las 72 horas de su última escritura; se depuran al arrancar, iniciar túnel, ejecutar `ocx link capture` o vencer en un proxy activo. Sin proxy, se eliminan al siguiente arranque/comando. `stop` los conserva para compartir: bórralos al terminar. Directorio 0700 y archivos 0600 en POSIX, ACL privada en Windows y sin seguir enlaces simbólicos.
+
 <a id="cli-reference"></a>
 
 ## Referencia CLI
@@ -158,8 +174,18 @@ ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
 ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
+ocx link diagnostics [--limit <n>] [--since <iso-time|epoch-ms>] [--json]
 ocx link revoke --link-id <id> [--json]
 ocx link reconnect --link-id <id> [--json]
+ocx link check (--link-id <id> | --all) [--no-wait] [--json]
+ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]
+ocx link sync (--link-id <id> | --all) [--no-wait] [--json]
+ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]
+ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]
+ocx link capture start [--minutes <1-60>] [--json]
+ocx link capture stop [--json]
+ocx link capture status [--json]
+ocx link policy [--updates off|notify|auto-when-idle] [--catalog-fanout auto|manual] [--child-codex-restart never|app-server-when-idle] [--idle-after-minutes <1-60>] [--json]
 ```
 
 <a id="related-guides"></a>
@@ -232,3 +258,102 @@ Ejecuta `ocx link cleanup` en Home para inspeccionar las plataformas registradas
 Reiniciar espera los giros y puede tardar varios minutos. El éxito requiere que el Child reiniciado cumpla con el rol de cliente y transmita un nuevo catálogo completo a este Home. La configuración de SSH tiene una asignación limitada derivada de la latencia medida; la verificación del relé comienza después del reinicio con su propia ventana de 15 segundos. Los errores nombran la fase fallida. Si un error informa la configuración residual Child, ejecute `ocx disconnect` y `ocx restart` en ese Child antes de volver a intentarlo. Home limpieza por sí sola no restaura Child configuración. Un tiempo de espera CLI reporta un resultado incierto; inspeccione Home `ocx link status` y Child `ocx connect status` primero.
 
 En un Child Home -iniciado, `ocx link status` informa el rol `child`, la identidad del enlace y el puerto del túnel de su conexión guardada, aunque su almacén de enlaces Home está vacío. El estado del túnel no observado localmente es `idle`. `ocx status` llama al par un enlace remoto Home. Cuando Home se ejecuta en el modo Hub, el estado lee su proyección soportada a través del relé local Child. Un Home independiente informa que no publica el estado de Hub. Child -la identidad del túnel iniciada proviene de su vagón lateral válido; la evidencia ilegible no reclama una dirección.
+
+
+<a id="child-install-catalog-and-activity"></a>
+
+### Instalación, catálogo y actividad del Child
+
+El Home requiere OpenCodex 2.66.0 o posterior; el Child también si inicia el enlace o usa una instalación completa. Un host SSH vacío puede recibir `ocx-child` verificado sin Node, Bun ni OpenCodex previo. npm y Desktop no incluyen ese binario: consulta [Children efímeros](#ephemeral-child-machines-ocx-child). Confirma la huella antes de **Conectar Child** o **Instalar agente ligero y conectar**.
+
+Home reintenta cada minuto los túneles que inició tras un timeout o error de reenvío. Un Child que inició su enlace duplica la espera de uno hasta cinco minutos. Ambos esperan cinco minutos ante errores de autenticación; nunca reintentan una huella cambiada. `client_state_changed` significa que la conexión guardada falta o identifica otro propietario o enlace; los endpoints de estado también devuelven `503`. Detén o reinicia el Child y comprueba su conexión antes de enlazarlo otra vez; este resultado no desconecta el relay.
+
+`ocx connect status` muestra `Link tunnel:` con `up`, `down (<reason>)` o `unknown`. Las causas de este último son `runtime_not_running`, `runtime_unreadable` y `link_unverified`. `--json` lo incluye en `linkTunnel`. `Connection: connected` solo confirma el vínculo: puede coexistir con `Link tunnel: down (home_unreachable)` hasta reconectar.
+
+Si `ocx connect status --json` informa `disconnected` pero un token sobrante impide enlazar, inspecciona el Child. Tras confirmar que debes conservar los archivos, usa `ocx disconnect --orphaned-token --yes`. Rechaza clientes conectados o pendientes, runtimes clientes activos o no verificables, Hub, bind fuera de loopback, secretos de admisión configurados o coincidentes y servicios instalados o no verificables. Revisa `ocx service status`, bind, claves y entorno; migra o quita un servicio solo si es lo deseado. Mueve token y respaldo de rotación a un directorio privado e imprime su ubicación, sin presumir que eran del enlace. Windows exige enlaces duros para conservar identidad; inspecciona un respaldo incompleto antes de reintentar. Ante `unsafe token file`, revisa `orphaned-token-*` por `.service-api-token.identity` o `.service-api-token.prev.identity`: quita un pin solo si es un enlace duro al token actual, no solo porque coincida el nombre; puede ser la única copia de un token anterior. Inspecciona los demás enlaces. Para restaurar, detén OpenCodex y devuelve los archivos solo si sus nombres originales no existen. No revoca una clave Home ni reconstruye la configuración cliente.
+
+Con Desktop o un servicio supervisando el Child, sync puede aplicar ajustes y aplazar el reinicio. Cierra y abre Desktop o usa `ocx service restart` para hacerlos efectivos. Importar una configuración que reemplaza o elimina una conexión activa se rechaza: desconecta primero o conserva exactamente el registro.
+
+`ocx link status --json` incorpora un bloque `child` por enlace:
+
+- `runningVersion` es la versión declarada por el Child. `installedVersion`, `installKind` y `update` con `route`, `reason`, `observedAt` proceden de `ocx link check` y son null antes. `versionSkew` es `same`, `behind`, `ahead` o `unknown`; en `ocx-child`, siempre unknown.
+- `catalog.state` es `current`, `behind` o unknown según el contenido, no las fechas. Descargar, incluido durante `ocx link add`, no demuestra aplicar.
+- `activity.idle` es `true` tras diez minutos sin solicitudes retransmitidas, ajustable con `ocx link policy --idle-after-minutes`; `inFlight` cuenta las actuales. Tokens, catálogo y readiness no cuentan. Un Child antiguo sin autenticación por conexión cuenta contra todos los enlaces.
+- `activeJob` identifica la operación activa, `lastOperation` la última acabada; `codex` es null por ahora.
+
+`ocx link check --link-id <id>` o `ocx link check --all` consultan `ocx update --plan` por SSH, sin actualizar: 60 segundos por Child y tres a la vez. Antes de 2.97.0 devuelve `owner-action`, `legacy-ocx`; POSIX hace otra lectura de versión y Windows usa la declarada. npm/pnpm sin instalación servidora registrada pasan por el launcher habitual y sus registros de arranque. Los enlaces iniciados por Child y los ligeros no usan SSH en esta comprobación. `--no-wait` imprime el trabajo aceptado; en otro caso espera. Salidas: 0 todos responden, 6 no comprobable, ocupado, antiguo o desconectado, 1 fallo, 4 desconocido o Home antiguo, 5 operación ocupada o sin enlaces.
+
+<a id="operating-children-from-the-home"></a>
+
+### Operar Children desde Home
+
+- `ocx link sync` usa `ocx sync --expect-link`, con Child 2.93.0 o posterior.
+- `ocx link restart-codex --link-id <id> --yes` sincroniza y reinicia app-servers. `--scope codex` también cierra y abre Desktop y exige sesión gráfica. Equivale a `ocx link sync --link-id <id>` con `--restart-app-server-only` o `--restart-codex --yes`. Termina turnos y nombra un solo enlace.
+- `ocx link update (--link-id <id> | --all) --yes` lleva al Child exactamente a la versión del Home mediante su propio instalador. Comprueba pertenencia y plan, aplica con plazo del reloj del Child y sincroniza después de un éxito, fallo o reversión verificados. Un resultado desconocido no se reintenta ni sincroniza: usa `ocx link check`. npm/pnpm usan Node, con lectura previa `node --version`; Bun usa Bun. Requiere 2.97.0; procesa uno a la vez y termina las solicitudes del Child al reiniciarlo.
+
+Home no reinicia Codex mientras retransmite una solicitud del Child. `ocx sync --restart-children` o `--restart-children=codex --yes`, con `--child <linkId>` opcional, sincroniza y omite solo el reinicio ante actividad, `restart-skipped:link-active`. Si ya estaba activa al iniciar `ocx link restart-codex`, no envía nada y marca `busy`; si aparece durante sync, solo omite reinicio. Es de mejor esfuerzo: una petición que llegue entre la comprobación y el reinicio aún puede terminar. Antes de 2.69 la actividad sin streaming solo se ve al empezar la respuesta. Windows admite `sync`, pero rechaza `windows-restart` y `windows-apply`; `ocx-child` no admite esas operaciones. Solo una operación por enlace: borrarlo mientras trabaja devuelve `409 link_operation_in_progress`; un trabajo múltiple marca `link-operation-in-progress` en el ocupado y continúa con los demás.
+
+Salidas: 0 todos correctos o actualizados; con `--no-wait` solo confirma aceptación. Lee el `jobId` en `GET /api/link/children/jobs/<jobId>` con token administrativo loopback; los últimos 32 duran una hora y se pierden al reiniciar Home. 6 requiere atención, incluido reinicio omitido o actualización sin sync posterior; 1 es fallo o incertidumbre; 4 enlace desconocido o Home sin comandos; 5 operación activa, único enlace iniciado desde Child, sin enlaces o ejecución en Child. Requieren Home loopback; en otro bind fallan con 1 y no tienen controles de dashboard. No enlaces equipos ajenos: Home ejecuta comandos con tu clave SSH.
+
+<a id="automatic-catalog-fan-out-and-the-child-policy"></a>
+
+### Catálogo automático y política de Children
+
+El envío de catálogo está activo por defecto. Auto-refresh o una comprobación cada cinco minutos detectan cambios y esperan 60 segundos para agruparlos, hasta cinco minutos desde el primero, antes de sincronizar por SSH sin reiniciar Codex salvo `childCodexRestart`. Exige enlace iniciado en Home, túnel conectado, ninguna operación y sync anterior al cambio. Descargar no basta. Con solicitudes activas solo sincroniza si los ajustes ya coinciden y el runtime reinició desde aplicarlos; si no, espera inactividad. Tras fallo espera cinco minutos y duplica hasta seis horas; un Child anterior a 2.93.0 espera otra versión. El trabajo usa `trigger: "auto"`; sin enlaces no se activa.
+
+Un app-server conserva el catálogo hasta reiniciar. Usa `ocx link restart-codex --link-id <id> --yes`, `ocx sync --restart-children` o `ocx link policy --child-codex-restart app-server-when-idle`. Esta última opción actúa en el siguiente sync automático con el Child aún inactivo: un catálogo ya actual no provoca otro sync/reinicio.
+
+La política está en `<configDir>/link/child-policy.json`, nunca en `config.json`:
+
+| Ajuste | Predeterminado | Valores |
+|---|---|---|
+| `catalogFanout` | `auto` | `auto`, `manual` |
+| `childCodexRestart` | `never` | `never`, `app-server-when-idle` |
+| `updates` | `auto-when-idle` | `off`, `notify`, `auto-when-idle` |
+| `idleAfterMs` | `600000` (10 minutos) | 1 a 60 minutos |
+
+Las actualizaciones automáticas aún no están activas: `updates` se guarda ahora y `notify` o `auto-when-idle` se aplicarán cuando se publiquen. Puedes anticipar tu elección con `ocx link policy --updates notify` o `--updates off`. Este periodo también define `activity.idle`.
+
+```text
+ocx link policy                                    # read the policy
+ocx link policy --catalog-fanout manual            # turn automatic catalog fan-out off
+ocx link policy --child-codex-restart app-server-when-idle
+ocx link policy --updates off --idle-after-minutes 20 --json
+```
+
+`GET` y `PUT /api/link/children/policy` consultan y cambian ajustes con token administrativo loopback o sesión dashboard; PUT solo envía cambios. Un archivo dañado o valor desconocido desactiva automatismos y muestra aviso. Guardar lo limpia pero deja desactivado lo no nombrado: actívalo explícitamente con `ocx link policy --catalog-fanout auto --updates auto-when-idle`. Home no lo reescribe solo.
+
+El preflight usa primero la instalación que sirvió el Child, incluso un prefijo npm personalizado. Si falta o no da versión, prioriza Desktop y sistema sobre PATH y omite candidatos rotos. Windows usa PowerShell codificado sin consumir stdin de la clave. `ocx config show --json` admite 4 MiB; superarlos informa `child_preflight_output_limit` y qué comando reducir. Los errores indican fase y último motivo acotado, sin claves ni consultas URL.
+
+<a id="ephemeral-child-machines-ocx-child"></a>
+
+### Children efímeros (`ocx-child`)
+
+Home envía por SSH `stdin` un binario SHA-256 verificado a `~/.cache/opencodex/bin/ocx-child`, o `%LOCALAPPDATA%\opencodex\bin\ocx-child.exe`. El Child no necesita Node, Bun ni red saliente. Elige **Instalar agente ligero y conectar** o `ocx link add <alias> --plant --expect-fingerprint SHA256:…`; `ocx link add <alias>` interactivo pregunta antes. POSIX exige `sha256sum`, `shasum` u `openssl`; sin ellos rechaza `hash_tool_unavailable` antes de ejecutar. Puede estar preinstalado en `~/.local/bin/ocx-child`, la caché o `PATH`. Se buscan primero todos los candidatos completos; con `$OPENCODEX_HOME/child/state.json`, se mantiene el ligero hasta separarlo.
+
+Home nunca construye ni descarga el binario. npm/Desktop no lo traen: `plantable: false`, `plantUnavailableReason: "artifact_not_found"` hasta aportarlo. Busca targets `darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`, `windows-x64`, en orden:
+
+1. `OPENCODEX_CHILD_BIN_DIR`: `ocx-child-<target>`, `ocx-child-windows-x64.exe`, `<target>/ocx-child` o `ocx-child` si coincide con Home, listado en `SHA256SUMS` del mismo directorio.
+2. `native-bin/` junto al código o ejecutable, con la misma regla; ningún paquete lo aporta hoy.
+3. Solo en checkout, `native/ocx-child/target/release/ocx-child` para el mismo target.
+4. `$OPENCODEX_HOME/cache/ocx-child/<Home version>/ocx-child-<target>` con `SHA256SUMS`; debes copiarlo, no se rellena solo.
+
+Compila con `cargo build --release --locked --manifest-path native/ocx-child/Cargo.toml`, con compilación cruzada si procede; copia con el nombre adecuado y añade `sha256sum ocx-child-<target> >> SHA256SUMS` o `shasum -a 256`. No se aceptan enlaces ni archivos escribibles por grupo u otros.
+
+Un Child ligero separado no necesita daemon previo. Se comprueban el puerto `10100` y `~/.codex/config.toml`: `409 child_port_busy` o `409 child_external_provider_conflict` conserva la configuración y revierte el binario recién instalado. Home envía la clave por stdin, inicia `ocx-child serve` y verifica `/v1/catalog` autenticado. El dashboard indica **Ligero**. Desconectar restaura `~/.codex` y detiene el relay sin procesos, conservando el binario para reconectar. `--purge` de `ocx link revoke` también lo elimina, mediante su ruta verificada, nunca otro de PATH. Si falta o no confirma borrado, conserva el enlace y falla; permite reintentar, desconectar sin purga o limpiar manualmente. No admite purge para una instalación completa.
+
+En un Child completo, `ocx disconnect` reinicia el runtime cliente activo para servir independiente. Si falla distingue `ocx restart`, `ocx service restart` o inspección con `ocx status` y `ocx connect status` según propietario y conexión. Desktop o un servicio habilitado y activo pueden relanzarlo por SSH. Un servicio que no pueda verificarse relanzable conserva el proceso. Un simple `OCX_SERVICE=1`, incluidos `ocx claude`, `ocx codex` y `ocx opencode`, conserva el comportamiento anterior. Versiones antiguas deben reiniciar una vez con la nueva versión.
+
+`ocx link diagnostics` consulta solo archivos locales, sin proxy ni modificaciones: `--limit <n>` admite 1–1000, por defecto 200; `--since <iso-time|epoch-ms>` y `--json` usan `ocx.link.diagnostics/1`. Informa `skipped` para líneas no reconocidas y `files` con `refused` si hay enlaces o archivos no regulares. El dashboard usa la autoridad de estado de enlaces y muestra registros propios del Child.
+
+En un Home con bind `0.0.0.0`, el token administrativo no autoriza el listener público ni el de gestión vía Tailscale para leer enlaces. macOS/Linux ofrecen `<OPENCODEX_HOME>/run/control-<port>.sock`, socket privado que solo sirve `GET /api/link/status` con token; la CLI lo elige automáticamente. Windows y versiones anteriores conservan TCP, que devuelve `403` en este caso.
+
+<a id="lightweight-child-cleanup"></a>
+
+### Desconexión y recuperación del Child
+
+En el Home, `ocx link revoke --link-id <id>` desconecta sin borrar el binario ligero. `ocx link revoke --link-id <id> --purge` solicita además su eliminación, o usa `ocx-child detach --purge` desde el propio Child. Home ejecuta la copia plantada y verificada —`ocx-child.exe` en Windows—, no otra encontrada en PATH. Si falta o no confirma el borrado, informa error y conserva el enlace para reintentar o desconectar sin purga. Se rechaza la purga de una instalación completa; los enlaces antiguos primero verifican el tipo de Child. El agente ligero usa el `CODEX_HOME` elegido para restaurar el enrutamiento y cerrar el relay.
+
+Las operaciones que reinician Codex completo o actualizan un Child requieren `--yes`; una lectura no concede ese permiso. `ocx link policy` es local al Home: se persiste bajo la configuración de OpenCodex y no modifica el `config.toml` de Codex por sí solo. La API de políticas usa `PUT` con la autorización de administración habitual; una política de Home no puede activar la captura SSH local de otro equipo.
+
+Un error `Child restart preflight` con `child_restart_unsupported` describe la condición y el comando que la resuelve: un Child aún vinculado requiere desconectar y reiniciar; un runtime de cliente requiere `ocx restart`; un Hub, `ocx hub disable`; un runtime antiguo requiere actualizar; un puerto distinto del configurado requiere reiniciar. Inspecciona el estado antes de repetir una operación de resultado incierto.

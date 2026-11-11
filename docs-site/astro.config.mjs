@@ -28,15 +28,17 @@ export default defineConfig({
         "Universal provider proxy for OpenAI Codex & Claude Code — use any LLM with Codex CLI, App, SDK, and Claude Code.",
       tagline: "Use any LLM with OpenAI Codex and Claude Code.",
       logo: {
-        light: "./src/assets/logo-light.png",
-        dark: "./src/assets/logo-dark.png",
+        light: "./src/assets/logo-light.svg",
+        dark: "./src/assets/logo-dark.svg",
         replacesTitle: false,
       },
       favicon: "/favicon.ico",
       customCss: [
         "@fontsource-variable/geist",
-        "pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css",
+        "@fontsource-variable/geist-mono",
+        "wanted-sans/fonts/webfonts/variable/split/WantedSansVariable.css",
         "./src/styles/custom.css",
+        "./src/styles/site-theme.css",
       ],
       components: {
         Header: "./src/components/Header.astro",
@@ -45,6 +47,10 @@ export default defineConfig({
       head: [
         // Google favicon guidelines: PNG at a multiple of 48px, exposed via rel="icon".
         { tag: "link", attrs: { rel: "icon", type: "image/png", sizes: "192x192", href: "/favicon.png" } },
+        // The vector mark recolours itself for dark browser chrome; browsers that
+        // understand SVG icons prefer it over the generated ICO/PNG (scripts/brand-favicons.ts).
+        { tag: "link", attrs: { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" } },
+        { tag: "link", attrs: { rel: "apple-touch-icon", href: "/favicon.png" } },
         { tag: "meta", attrs: { property: "og:image", content: `${SITE_URL}/og.png` } },
         { tag: "meta", attrs: { property: "og:image:width", content: "1200" } },
         { tag: "meta", attrs: { property: "og:image:height", content: "630" } },
@@ -57,7 +63,7 @@ export default defineConfig({
         { icon: "github", label: "GitHub", href: "https://github.com/lidge-jun/opencodex" },
       ],
       editLink: {
-        baseUrl: "https://github.com/lidge-jun/opencodex/edit/main/docs-site/",
+        baseUrl: "https://github.com/lidge-jun/opencodex/edit/dev/docs-site/",
       },
       lastUpdated: true,
       expressiveCode: { getBlockLocale: ({ file }) => codeBlockLocale(file) },
@@ -113,7 +119,7 @@ export default defineConfig({
             { label: "Grok Build", translations: { es: "Grok Build", fr: "Grok Build", ko: "Grok Build", "zh-CN": "Grok Build", "zh-TW": "Grok Build", ru: "Grok Build", ja: "Grok Build", tr: "Grok Build" }, slug: "guides/grok-build" },
             { label: "opencode", translations: { es: "OpenCode", fr: "opencode", ko: "opencode", "zh-CN": "opencode", "zh-TW": "opencode", ru: "opencode", ja: "opencode", tr: "opencode" }, slug: "guides/opencode" },
             { label: "Pi", translations: { es: "Pi", fr: "Pi", ko: "Pi", "zh-CN": "Pi", "zh-TW": "Pi", ru: "Pi", ja: "Pi", tr: "Pi" }, slug: "guides/pi" },
-            { label: "ChatGPT Desktop (experimental)", translations: { es: "ChatGPT Desktop (experimental)" }, slug: "guides/chatgpt-desktop" },
+            { label: "ChatGPT Desktop (experimental)", slug: "guides/chatgpt-desktop" },
             { label: "Integrations", translations: { es: "Integraciones", fr: "Intégrations", ko: "연동", "zh-CN": "集成", "zh-TW": "整合", ru: "Интеграции", ja: "連携", tr: "Entegrasyonlar" }, slug: "guides/integrations" },
             { label: "MiniMax clients", translations: { es: "Clientes MiniMax", fr: "Clients MiniMax", ko: "MiniMax 클라이언트", "zh-CN": "MiniMax 客户端", "zh-TW": "MiniMax 客戶端", ru: "Клиенты MiniMax", ja: "MiniMax クライアント", tr: "MiniMax İstemcileri" }, slug: "guides/minimax" },
             { label: "Sidecars: Web Search & Vision", translations: { es: "Sidecars: búsqueda web y visión", fr: "Services auxiliaires : recherche web et vision", ko: "사이드카: 웹 검색 & 비전", "zh-CN": "边车：网络搜索与视觉", "zh-TW": "邊車：網路搜尋與視覺", ru: "Сайдкары: веб-поиск и зрение", ja: "サイドカー: ウェブ検索 & ビジョン", tr: "Sidecar'lar: Web Arama ve Görme" }, slug: "guides/sidecars" },
@@ -121,6 +127,7 @@ export default defineConfig({
             { label: "Image Bridge", translations: { es: "Puente de imágenes", fr: "Pont d’images", ko: "이미지 브릿지", "zh-CN": "图像桥接", "zh-TW": "圖像橋接", ru: "Image Bridge", ja: "画像ブリッジ", tr: "Image Bridge" }, slug: "guides/image-bridge" },
             { label: "Video Bridge", translations: { es: "Puente de video", fr: "Pont vidéo", ko: "비디오 브릿지", "zh-CN": "视频桥接", "zh-TW": "影片橋接", ru: "Video Bridge", ja: "動画ブリッジ", tr: "Video Bridge" }, slug: "guides/video-bridge" },
             { label: "Web Dashboard", translations: { es: "Dashboard web", fr: "Tableau de bord web", ko: "웹 대시보드", "zh-CN": "网页控制台", "zh-TW": "網頁儀表板", ru: "Веб-дашборд", ja: "ウェブダッシュボード", tr: "Web Kontrol Paneli" }, slug: "guides/web-dashboard" },
+            { label: "Telemetry & Privacy", translations: { es: "Telemetría", fr: "Télémétrie et confidentialité", ko: "텔레메트리 및 개인정보", "zh-CN": "遥测与隐私", "zh-TW": "遙測與隱私", ru: "Телеметрия и конфиденциальность", ja: "テレメトリとプライバシー", tr: "Telemetri ve Gizlilik" }, slug: "guides/telemetry" },
             { label: "Sub-agent Surface", translations: { es: "Interfaz de subagentes", fr: "Interface des sous-agents", ko: "서브에이전트 서피스", "zh-CN": "子代理界面", "zh-TW": "子代理介面", ru: "Интерфейс подагентов", ja: "サブエージェントサーフェス", tr: "Alt Ajan Arayüzü" }, slug: "guides/sub-agent-surface" },
             { label: "Why v1 Is the Default", translations: { es: "Por qué v1 es la opción predeterminada", fr: "Pourquoi v1 est la valeur par défaut", ko: "v1이 기본값인 이유", "zh-CN": "为什么默认是 v1", "zh-TW": "為什麼預設是 v1", ru: "Почему v1 по умолчанию", ja: "v1 がデフォルトである理由", tr: "Neden varsayılan v1" }, slug: "guides/subagent-v1-default" },
           ],

@@ -32,7 +32,7 @@ indirir.
 > }
 > ```
 >
-> `ocx login xai` (OAuth) ile kurulum yaptıysanız sağlayıcı `authMode: "oauth"` modunda kalır ve köprü etkinleşmez. Ortamda `XAI_API_KEY` tanımlayın, yukarıdaki `${XAI_API_KEY}` başvurusunu koruyun ve açıkça `authMode: "key"` seçin. Gerçek anahtarları commit, günlük veya paylaşılan raporlara yazmayın.
+> `XAI_API_KEY` değerini proxy başlangıç ortamında ayarlayın; `${XAI_API_KEY}` ve `authMode: "key"` korunsun. Başka terminalde export, çalışan proxy’yi değiştirmez; sahibi Desktop, hizmet veya ön plan terminalinden yeniden başlatın. Anahtarları commit ve günlüklere koymayın.
 
 ## Yapılandırma
 

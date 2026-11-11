@@ -1206,3 +1206,146 @@ once. Request one full CodeRabbit review without waiting for its result. Keep
 Draft for fresh review, maintainer-arranged independent Spanish/render
 acceptance, authorized current-head CI and maintainer approval. No merge,
 workflow dispatch/retry, reviewer assignment or permission change is performed.
+
+## 2026-11-11: conflict resolution and current-dev refresh
+
+This entry supersedes the earlier head, page counts and Draft instructions for
+the current handoff. The contributor subsequently authorized Ready for review
+and requested Ingwannu; maintainer approval and independent language/render
+acceptance remain separate.
+
+Merge `upstream/dev` normally, without rebasing or rewriting published history:
+base `de0914a1a83b1d831aeb79aadd3a56d2e0182df4` (package 2.100.0), 284 commits
+after the previously incorporated dev. Nine conflicts were resolved in the
+Astro configuration, header, landing, English contribution/PR-quality and
+protocol/provider references, test-layout registry and docs ownership note.
+All upstream test registrations and the Spanish docs shard remain present.
+The final pre-publication fetch found no newer dev commit. Runtime, GUI,
+native Desktop, dependencies, lockfiles and CI policy match dev; the two
+previously documented test-only fixture/budget fixes remain in the PR.
+
+Spanish now covers all 83 canonical paths. New pages are the public usage
+dashboard, telemetry/privacy guide and custom-gateway verification guide.
+The public telemetry and leaderboard dictionaries include complete Spanish
+copy. This is the documentation website, not the installed proxy dashboard.
+The upstream header design is retained with Spanish navigation and mobile
+language selection. Edit links now target dev, since main was retired.
+
+The 22 November 4 inline findings have the following dispositions:
+
+| Area | Correction |
+| --- | --- |
+| Benchmark overview | Describe the score-per-dollar column and measured-cost badge; no sorting claim |
+| Agent setup | Run init before foreground/background startup in every locale |
+| Agent combo | Use the configured anthropic-apikey provider in the target |
+| Source installation | Require Bun on PATH separately from npm's bundled Bun |
+| Installation/quickstart restoration | Qualify standalone owner, linked-client and sibling behavior |
+| Standalone quickstart | Put the executable on PATH or use its full path |
+| Quickstart ports, Spanish and English | Use the selected port; retain 10100 as the default |
+| Codex account-gated model row | Translate Pool, Direct, selector and verified-roster conditions accurately |
+| Log Guard reclaim | Name the canonical logs_2.sqlite target and preserve safety checks |
+| Remote Hub service | Keep launchd as the literal supervisor name |
+| Remote Hub CORS recovery | Run the complete printed command without dropping the existing allowlist |
+| Container persistence | Separate catalog backup from SQLite account persistence |
+| Container deletion | State the exact configuration/account/history/token/client state removed by --volumes |
+| Revocation navigation | Use Connect → API Keys consistently |
+| Dashboard pricing | Distinguish a different vendor's price from exact-provider/configured pricing |
+| Delegation guidance | Treat model/effort values as advisory; custom guidance replaces the built-in prompt |
+| Gemini file URI | Say the provider accesses the referenced resource |
+| Devin model discovery | Remove models absent from the live account roster from the displayed seed |
+| Separate-home quickstart | Explain that a sibling does not independently reroute shared clients |
+| Video Bridge environment | Set XAI_API_KEY before starting the proxy and restart after changes, all locales |
+| Korean pairing command | Remove the unused echo pipeline; preserve silent input and printf |
+
+Both duplicated selected-port inline comments are covered by the same fix.
+Four outside-diff findings are also corrected: same-home/free-port recovery
+in the remaining locales; omit absent benchmark task counts and their
+separator; use each board's localized cost unit in table headers; distinguish
+impossible local decryption from experimental backend-assisted task recovery
+in every translated v1 guide. The new same-home recovery assertion was
+observed failing on the French guide before these corrections and passes
+afterward.
+
+The current-dev audit updates provider/model admission and quota metadata,
+forwarded headers, MCP stored-reply limits, Mistral/tool-schema compatibility,
+custom-tool lowering, dictation/ScribeTray bounds, retained-compaction errors,
+Desktop installer consent/startup ownership, update recovery, Remote Hub
+container ownership and Remote Link lightweight agents, policy, diagnostics,
+readiness and child operations. Commands, inline identifiers, API status
+codes, links, table shapes, lists and model tokens retain English parity.
+The generated client support pages were regenerated with `bun run docs:clients`.
+
+Verification on Windows, Bun 1.4.4, with synthetic homes and the repository
+test wrapper:
+
+```powershell
+bun install --frozen-lockfile
+Push-Location docs-site
+bun install --frozen-lockfile
+Pop-Location
+
+$env:OCX_TEST_RUNNER_BUN = (Get-Command bun).Source
+# TEMP and TMP point to a task-local test-temp directory.
+$docsTests = @(rg --files tests/ci-workflows | Where-Object {
+  $_ -match '(docs-.*|client-support-matrix).*\.test\.ts$'
+})
+bun scripts/test.ts --timeout 120000 @docsTests tests/test-layout.test.ts tests/test-layout-tooling.test.ts
+# 459 pass / 0 fail, 10042 assertions, 20 files.
+
+bun scripts/test.ts --timeout 120000 tests/ci-workflows/docs-spanish-localization.test.ts
+# Final affected guard: 29 pass / 0 fail, 3130 assertions.
+
+bun run typecheck
+# No type errors in 2429 files.
+bun run structure:check
+bun scripts/file-size-ratchet.ts
+bun run privacy:scan
+git diff --cached --check upstream/dev -- docs-site scripts structure tests
+
+Push-Location docs-site
+$env:OPENCODEX_DOCS_OFFLINE = '1'
+bun run build
+Pop-Location
+# Complete site, Pagefind and sitemap: 748 pages / 111649 internal links.
+```
+
+The first merged-docs run had three parity failures, subsequently corrected:
+list/table layout, a repeated technical identifier, and obsolete main URLs.
+The final broad and affected-file results above replace those failures rather
+than describing the initial run as green. Full-root and native-client/live-
+provider execution were not repeated on this shared Windows host after the
+previous expensive interrupted runs. The full-suite resource exception still
+applies; broad runtime/platform validation remains for authorized hosted CI.
+The November 4 EPERM and isolated Linux results above are historical, not
+new-head execution results.
+
+Browser inspection verified Spanish landing/navigation, the new public usage
+dashboard, mobile language switching without losing the dashboard route,
+quickstart and the custom-gateway guide at 1280/390/320 px. Documents reported
+lang=es and no page-level horizontal overflow. The public collector could not
+be fetched from this environment; its translated unavailable/retry state was
+verified, not successful live collector delivery. Synthetic-data telemetry
+tests cover successful rendering separately. Temporary viewport overrides
+were reset. No personal Desktop configuration, credentials or provider
+accounts were used.
+
+Captures are pinned outside this PR branch at pr-assets commit
+`bbba08cb630a99335fe905c81bb95bfbe4ff2983`, directory
+`spanish-docs-review-20261111/`. No screenshot is staged on the source branch.
+Full staged merge whitespace diagnostics include inherited dev-only trailing
+lines; the contribution-relative staged diff check is clean. Unrelated
+upstream whitespace was deliberately preserved.
+
+The contributor token cannot add ci:full (GitHub denied AddLabelsToLabelable).
+The retained test-layout fixture change already selects the full Ubuntu test
+lane under the current selector; a maintainer must still authorize fork CI
+and can apply that label if needed. Missing, skipped, older-head or
+action_required results are not passing evidence. Do not dispatch per-PR
+lane=all, retry workflows, merge, or change permissions.
+
+Publish this merge and corrections together, reply to and resolve the 22
+corrected inline threads, update the English template description once and
+request one full CodeRabbit review without waiting for its result. Restore
+the authorized Ready-for-review state only after local checks and the known
+findings are complete. Keep independent acceptance, current-head CI and
+maintainer integration approval explicitly pending.

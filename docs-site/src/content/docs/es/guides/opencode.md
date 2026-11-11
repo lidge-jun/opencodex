@@ -192,3 +192,6 @@ npm install -g opencode-ai
 ```
 
 El lanzador lee el catálogo con el token de administración local obtenido del entorno o del directorio del proxy en ejecución. Se conecta directamente a un listener de administración de loopback y rechaza redirecciones. Un hub vinculado solo a una dirección no local necesita activar `hub.managementIngress`. El token de administración no se pasa al proceso hijo de OpenCode: la inferencia sigue usando su clave de datos independiente. Si falta el token de administración local, el lanzador informa del problema; no vuelve a intentarlo con una clave de datos.
+
+
+El lector JSONC acepta una única marca BOM UTF-8 inicial, como la que escriben algunos editores Windows; no modifica los caracteres BOM dentro de cadenas.

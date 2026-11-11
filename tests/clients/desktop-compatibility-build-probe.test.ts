@@ -7,6 +7,7 @@ import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmColdSpawn } from "../helpers/cold
 import { resolveTrustedWindowsPowerShellExe } from "../../src/lib/windows-elevation";
 import type { DesktopPackageObservation as DesktopAppInstall } from "../../src/codex/desktop-compatibility/installed-build";
 import { desktopPackageObservation } from "../helpers/desktop-package-observation";
+import { hostedWindowsQuarantine } from "../helpers/windows-ci-quarantine";
 
 const installed = desktopPackageObservation;
 
@@ -66,7 +67,7 @@ async function probeOwnedAncestry(deadlineMs: number): Promise<void> {
   }
 }
 
-describe.skipIf(process.platform !== "win32")("Windows package ancestry guard", () => {
+describe.skipIf(process.platform !== "win32" || hostedWindowsQuarantine)("Windows package ancestry guard", () => {
   // The first PowerShell child in a shard pays the cold .NET and PowerShell load. Measured on a busy
   // Windows host, the script body finished in under 0.7s with 24 copies running at once while the
   // process around it took 2-8s to start and exit, so the 10s bound below was measuring process

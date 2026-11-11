@@ -195,7 +195,7 @@
       "path": "local-messaging.md",
       "tier": 3,
       "title": "Local Codex Messaging",
-      "scope": "Loaded-session Unix messaging and separate opt-in stored-queue MCP tools, receipts and owned helper bounds.",
+      "scope": "Loaded-session Unix messaging and opt-in stored-queue MCP tools, explicit final-turn reads, receipts and owned helper bounds.",
       "documents": [
         "src/messaging/",
         "src/cli/"
@@ -307,6 +307,7 @@
       "documents": [
         "src/advisor/",
         "src/server/responses/advisor-slot.ts",
+        "src/server/responses/advisor-question.ts",
         "src/server/responses/advisor-plan-slot.ts",
         "src/server/advisor-admission-scope.ts",
         "src/server/capture-admission-policy.ts",
@@ -521,9 +522,9 @@
     {
       "path": "data-planes/claude-tool-loading.md",
       "tier": 3,
-      "title": "Append-only Claude Tool Loading",
-      "scope": "Physical-adapter tool-loading projection, preserved catalogs, fallback exclusions and opt-in prerequisites.",
-      "documents": ["src/claude/", "src/server/responses/"]
+      "title": "Claude Tool Loading: Append-only and Chat Dispatcher",
+      "scope": "Physical-adapter tool-loading projections (Responses additional_tools and the Chat use_loaded_tool dispatcher with its response rewrite), preserved catalogs, fallback exclusions and opt-in prerequisites.",
+      "documents": ["src/claude/", "src/server/responses/", "src/types/claude-tool-loading.ts"]
     },
     {
       "path": "data-planes/ollama-inbound.md",
@@ -550,6 +551,7 @@
         "src/lib/upstream-condition.ts",
         "src/lib/client-retry-after.ts",
         "src/lib/failure-detail.ts",
+        "src/lib/upstream-validation-detail.ts",
         "src/lib/response-service-tier.ts",
         "src/lib/model-identity.ts",
         "src/server/safe-response-headers.ts",
@@ -617,8 +619,8 @@
       "path": "providers/meta-muse.md",
       "tier": 4,
       "title": "Meta Muse Login",
-      "scope": "CLI credential import, approval lifecycle, explicit recovery and account-free login diagnostics.",
-      "documents": ["src/oauth/meta-muse.ts", "src/oauth/meta-muse-keychain.ts", "src/oauth/meta-muse-errors.ts", "src/oauth/login-cli.ts"]
+      "scope": "CLI credential import, approval lifecycle, explicit recovery, account-free login diagnostics and the runtime plan-refusal classification.",
+      "documents": ["src/oauth/meta-muse.ts", "src/oauth/meta-muse-keychain.ts", "src/oauth/meta-muse-errors.ts", "src/oauth/login-cli.ts", "src/providers/meta-muse-plan-refusal.ts"]
     },
     {
       "path": "providers/oauth-reconciliation.md",
@@ -690,6 +692,15 @@
       ]
     },
     {
+      "path": "providers/anthropic-output-caps.md",
+      "tier": 4,
+      "title": "Anthropic Output Caps by Model Id",
+      "scope": "Routed omitted-output caps for adapter:anthropic rows keyed by Claude model id, precedence and unknown-id fallback.",
+      "documents": [
+        "src/providers/anthropic-output-caps.ts"
+      ]
+    },
+    {
       "path": "providers/anthropic-key-billing.md",
       "tier": 4,
       "title": "Anthropic API-key Billing Recovery",
@@ -737,6 +748,7 @@
         "src/oauth/",
         "src/providers/",
         "src/providers/quota/anthropic-account-quota.ts",
+        "src/providers/quota/anthropic-cooldown-recovery-worker.ts",
         "src/server/management/anthropic-pool-settings.ts",
         "src/sidecar/anthropic-binding.ts"
       ]
@@ -860,6 +872,13 @@
       "documents": ["src/adapters/openai-chat/", "src/providers/", "src/config/", "src/types/", "src/server/management/", "src/server/auth-cors.ts"]
     },
     {
+      "path": "providers/mistral-chat.md",
+      "tier": 4,
+      "title": "Canonical Mistral Chat Wire Policy",
+      "scope": "Canonical Mistral request-field projection, native effort clamping and typed-content normalization.",
+      "documents": ["src/adapters/openai-chat/destination-policy.ts", "src/adapters/openai-chat/native-content.ts"]
+    },
+    {
       "path": "providers/chat-compat.md",
       "tier": 4,
       "title": "Chat Provider Compatibility",
@@ -868,6 +887,19 @@
         "src/adapters/",
         "src/chat/",
         "src/responses/"
+      ]
+    },
+    {
+      "path": "providers/hosted-tool-denials.md",
+      "tier": 4,
+      "title": "Hosted-Tool Denials",
+      "scope": "Provider-declared Responses hosted-tool denials, unconditional and conditional on client tools, with their validation and save carry.",
+      "documents": [
+        "src/responses/hosted-tool-policy.ts",
+        "src/adapters/openai-responses/tool-schema.ts",
+        "src/config/schema/leaf-validators.ts",
+        "src/server/auth-cors.ts",
+        "src/server/management/provider-overwrite-carry.ts"
       ]
     },
     {
@@ -974,6 +1006,25 @@
         "src/routing/history/",
         "src/server/",
         "src/usage/"
+      ]
+    },
+    {
+      "path": "usage-client-attribution.md",
+      "tier": 5,
+      "title": "Usage Client Attribution",
+      "scope": "Privacy-bounded client labels carried from request ingress into usage records.",
+      "documents": [
+        "src/usage/client.ts",
+        "src/usage/source-filter.ts",
+        "src/usage/summary.ts",
+        "src/server/request-log.ts",
+        "src/server/index/",
+        "src/server/management/logs-usage-routes.ts",
+        "src/server/management/usage-aggregate-cache.ts",
+        "src/server/hub-usage.ts",
+        "src/client/link-management-relay.ts",
+        "src/remote/hub-usage.ts",
+        "src/client/hub-client.ts"
       ]
     },
     {
@@ -1253,6 +1304,20 @@
       ]
     },
     {
+      "path": "ops/windows-checked-stop.md",
+      "tier": 6,
+      "title": "Windows Checked Service Stop",
+      "scope": "Windows process evidence, the wrapper binding rule, and the checked manager stop and port confirmation that are not yet wired to a stop path.",
+      "documents": [
+        "src/service/windows-checked-stop.ts",
+        "src/service/windows-process-evidence.ts",
+        "src/service/windows-process-native.ts",
+        "src/service/windows-stop-binding.ts",
+        "src/service/windows-stop-budget.ts",
+        "src/service/windows-stop-confirm.ts"
+      ]
+    },
+    {
       "path": "ops/update-supervised-recovery.md",
       "tier": 6,
       "title": "Update Supervised Recovery",
@@ -1329,6 +1394,14 @@
         "src/local-credentials/",
         "src/server/index/link-management.ts",
         "src/server/management/link-routes.ts",
+        "src/server/management/link-child-ops-routes.ts",
+        "src/cli/link-child-ops.ts",
+        "src/cli/link-status-child.ts",
+        "src/server/index/local-control-listener.ts",
+        "src/lib/local-control-socket.ts",
+        "src/cli/link-local-control.ts",
+        "src/server/management/link-enrollment.ts",
+        "native/ocx-child/",
         "src/lib/gui-pair-intent.ts",
         "src/lib/windows-owner-acl.ts",
         "src/server/gui-pair-delivery.ts"
@@ -1397,7 +1470,25 @@
         "gui/src/hooks/useProviderAccountPools.ts",
         "src/config/account-auto-pause-revisions.ts",
         "src/oauth/api-key-pool-preserve.ts",
-        "gui/src/account-pause-display.ts"
+        "gui/src/account-pause-display.ts",
+        "src/oauth/account-resume-health.ts",
+        "src/codex/account-resume-health.ts"
+      ]
+    },
+    {
+      "path": "telemetry.md",
+      "tier": 5,
+      "title": "Telemetry",
+      "scope": "Anonymous daily usage telemetry contract, consent state, install identity, ledger aggregation, scheduler, management API, CLI, and Cloudflare Worker collector.",
+      "documents": [
+        "src/telemetry/",
+        "src/types/telemetry.ts",
+        "src/server/management/telemetry-routes.ts",
+        "src/cli/telemetry.ts",
+        "src/config/telemetry-carry.ts",
+        "src/server/management/consent-session.ts",
+        "src/server/background-lifecycle.ts",
+        "services/telemetry-collector/"
       ]
     }
   ],

@@ -23,6 +23,21 @@ providers or is shadowed by another route, the row keeps its qualified ID so sel
 it still reaches the intended model. The qualified ID also stays when a built-in short
 alias would produce an unparseable synthetic Fast selector. Codex's own model catalog is unchanged.
 
+### Codex Pool-only policy
+
+`codexPool.poolOnly` (boolean, default `false`) limits automatic Pool selection to registered
+added accounts. With it on, the native main login is never selected by ordering, never kept as the
+active Pool account, and never used as the caller-main fallback; a manual pin on main is ignored.
+If no allowed account can serve, the request is refused. Account-qualified models (including
+`__main__`), Reserve models and Direct mode are explicit choices outside the policy. Paused,
+duplicate, entitlement and cooldown checks apply unchanged.
+Web-search and vision helpers that borrow a Codex login automatically follow the same rule: with
+only the native main login signed in, they treat Codex as unavailable while the policy is on.
+
+```json
+{"codexPool":{"poolOnly":true}}
+```
+
 ### Codex Pool low-quota protection
 
 `codexPool.lowQuotaProtection` applies only to stored Codex Pool accounts. The Desktop/main
@@ -169,6 +184,7 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | `defaultEffort` fills an absent `reasoning.effort` in fallback mode, or overrides valid caller effort in explicit force mode when the combo has a non-null default and the selected target has a known, nonempty supported ladder. If the target supports the configured value, it is retained; otherwise the highest supported rung at or below it is used, or the lowest supported rung when none is lower. Unknown or empty ladders omit the default. |
 | `defaultEffortMode?` | `"fallback" \| "force"` | `"fallback"` | Preserves caller precedence by default. Explicit force requires a valid non-null default, respects target capability and can increase cost and latency. `reasoningEffortMode` remains independent. |
 | `reasoningEffortMode?` | `"strict" \| "adaptive"` | `"strict"` | `"strict"` intersects all known target ladders, including empty ones; `"adaptive"` excludes empty ladders. Unknown ladders are catalog wildcards in both modes. At dispatch, explicit empty ladders remove effort/thinking controls in both modes; unknown ladders do so only in adaptive. `reasoning.summary` is preserved. Known nonempty targets retain their effort resolution, and target selection/order is unchanged. |
+| `jevEffortMode?` | `"decide" \| "client"` | `"decide"` | JEV only. `"decide"` applies the decision's effort to the first child, overriding the caller. `"client"` keeps the decision's target and leaves effort to ordinary Combo policy: caller effort, the target ladder, and `defaultEffort`/`defaultEffortMode` (`"force"` still overrides the caller). Only `"client"` is stored. See [Shared limits, state, and statistics](/guides/combos/#shared-limits-state-and-statistics). |
 | `imageInput?` | `"auto" \| "disabled"` | `"auto"` | `"auto"` publishes image only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
 | `alias?` | `string` | — | Optional public model id in place of the canonical picker slug. |
 | `nativeAlias?` | `boolean` | `false` | Let a currently supported bare native id take precedence only for that unqualified id. Bare `gpt-5.6-*` ids use Codex Pool/Direct credentials. Account-qualified routes remain distinct. Provider-qualified routes such as `openai-apikey/gpt-5.6-*` use their configured API-key route and never fall through to the native alias. |

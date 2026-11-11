@@ -636,6 +636,9 @@ describe("headless GUI parity CLI", () => {
       ["/api/subagent", "ocx agent"],
       ["/api/sync", "ocx system sync"],
       ["/api/system", "ocx observe/system"],
+      // Telemetry: status, enable and disable are `ocx telemetry`. The GUI's consent
+      // write (`PUT /api/telemetry`) is dashboard-session-only by design (an agent must not answer).
+      ["/api/telemetry", "ocx telemetry"],
       ["/api/update", "ocx system update"],
       ["/api/usage", "ocx observe usage"],
       ["/api/v2", "ocx v2/agent"],
@@ -1565,6 +1568,23 @@ describe("#2565 ocx provider quota renders bars, not a count", () => {
     expect(line).toContain("monthly 0.69%");
     expect(line).toContain("First-party models 0.77%");
     expect(line).toContain("API usage 0.19%");
+  });
+
+  test("a display-only window prints after routed windows with its weekly share, marked not in effect", () => {
+    const line = providerQuotaLine("anthropic", report("anthropic", {
+      weeklyPercent: 91,
+      customWindows: [{ label: "Opus", percent: 10 }],
+      displayWindows: [{ label: "Fable", percent: 4, weeklyAllowancePercent: 50 }, { label: "Opus", percent: 99 }],
+    }) as never);
+    // A routed row with the same label wins, as on the dashboard.
+    expect(line).toBe("anthropic weekly 91% Opus 10% Fable 4% (up to 50% of weekly; not in effect)");
+  });
+
+  test("a weekly share outside (0, 100] is not printed", () => {
+    const line = providerQuotaLine("anthropic", report("anthropic", {
+      displayWindows: [{ label: "Fable", percent: 4, weeklyAllowancePercent: 1e9 }],
+    }) as never);
+    expect(line).toBe("anthropic Fable 4% (not in effect)");
   });
 
   test("a report with no windows still names its provider", () => {

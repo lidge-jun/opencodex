@@ -40,7 +40,9 @@ routed child receives something it can act on.
 On v2 the parent emits the task as `encrypted_content`, minted by the ChatGPT backend. The key
 stays in that backend. OpenCodex never had it, so there is nothing for a proxy to decrypt and
 nothing to rewrite — the value really is ciphertext, not plaintext behind a flag. That is why
-this is structural rather than a misconfiguration, and why no proxy-side setting can fix it.
+this is structural rather than a misconfiguration: no proxy-side setting enables local decryption.
+
+No proxy-side setting enables local decryption. Experimental `agentTaskRecovery` can instead ask the ChatGPT backend to recover eligible tasks; it does not decrypt their ciphertext locally. Its authorization, eligibility and failure limits described above still apply.
 
 Three topologies are unaffected, which is worth stating because it explains the shape of the
 failure rather than the failure being mysterious:

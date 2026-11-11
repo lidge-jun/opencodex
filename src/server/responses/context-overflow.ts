@@ -1,10 +1,10 @@
-import { bridgeToResponsesSSE, formatErrorResponse } from "../../bridge";
+import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse } from "../../bridge";
 import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../adapters/ollama-native";
 import { isThroughputLimitText } from "../../claude/outbound";
 import { isDefiniteContextOverflow } from "../../combos/failover";
 import { classifyError, MODEL_NOT_IN_PLAN_STREAM_CODE } from "../../lib/errors";
 import type { TranslatorBudget } from "../../lib/translator-budget";
-import type { AdapterEvent } from "../../types";
+import type { AdapterEvent, OcxUsage } from "../../types";
 
 /**
  * The Ollama late-attribution refusal as a client response: the existing translator-budget
@@ -221,3 +221,59 @@ export function streamingContextOverflowResponse(
     },
   });
 }
+
+/**
+ * Return an incomplete JSON response with the target's usage and reason when combo candidates
+ * exhaust on zero-output token limits.
+ */
+export function jsonIncompleteResponse(
+  modelId: string,
+  usage?: OcxUsage,
+  reason = "max_output_tokens",
+): Response {
+  const json = buildResponseJSON([
+    {
+      type: "incomplete",
+      reason,
+      ...(usage ? { usage } : {}),
+    },
+  ], modelId);
+  return Response.json(json, { status: 200, headers: { "Cache-Control": "no-store" } });
+}
+
+/**
+ * Return an incomplete SSE stream with the target's usage and reason when combo candidates
+ * exhaust on zero-output token limits.
+ */
+export function streamingIncompleteResponse(
+  modelId: string,
+  usage?: OcxUsage,
+  reason = "max_output_tokens",
+  translatorBudget?: TranslatorBudget,
+): Response {
+  async function* incompleteEvents(): AsyncGenerator<AdapterEvent> {
+    yield {
+      type: "incomplete",
+      reason,
+      ...(usage ? { usage } : {}),
+    };
+  }
+  return new Response(bridgeToResponsesSSE(
+    incompleteEvents(),
+    modelId,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    2_000,
+    translatorBudget ? { translatorBudget } : undefined,
+  ), {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
+}
+

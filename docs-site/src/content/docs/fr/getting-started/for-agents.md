@@ -13,11 +13,15 @@ disponible pour une configuration interactive ; consultez le [tableau de bord w
 Installez le package publié et confirmez que `ocx` est sur `PATH` :
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
 ```
 
-Choisissez une façon d'exécuter le proxy :
+Exécutez `ocx init` dans un terminal interactif avant de démarrer le proxy pour utiliser le port choisi :
+
+```bash
+ocx init
+```
 
 ```bash
 # Foreground: blocks this terminal until stopped.
@@ -25,13 +29,6 @@ ocx start
 
 # Background: installs or updates the service, then starts it.
 ocx service
-```
-
-Exécutez `ocx init` dans un terminal interactif. Si `ocx start` occupe le premier plan, utilisez un
-deuxième terminal :
-
-```bash
-ocx init
 ```
 
 L’assistant écrit `$OPENCODEX_HOME/config.json` (généralement

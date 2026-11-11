@@ -24,7 +24,7 @@ Video Bridge는 opencodex가 라우팅한 OpenAI가 아닌 모델로 xAI의 Grok
 > }
 > ```
 >
-> `ocx login xai`(OAuth)로 연결했다면 공급자는 `authMode: "oauth"` 상태로 유지되어 브리지가 활성화되지 않습니다. 환경 변수 `XAI_API_KEY`를 설정하고 위의 `${XAI_API_KEY}` 참조를 유지한 다음 `authMode: "key"`를 명시적으로 선택하십시오. 실제 키를 커밋, 로그 또는 공유 보고서에 직접 넣지 마십시오.
+> `XAI_API_KEY`는 프록시 시작 환경에 설정하고 `${XAI_API_KEY}`와 `authMode: "key"`를 유지하세요. 다른 터미널의 export는 실행 중인 프록시를 바꾸지 않습니다. 소유한 Desktop, 서비스 또는 전경 터미널을 통해 재시작하세요. 키를 커밋이나 로그에 넣지 마세요.
 
 ## 구성
 

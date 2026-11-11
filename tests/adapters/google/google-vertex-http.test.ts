@@ -333,6 +333,31 @@ describe("vertex retry fetch", () => {
     });
   });
 
+  test("a repaired Vertex replay follows a later credential rebuild on transient retry", async () => {
+    const original: AdapterRequest = { ...request, headers: { authorization: "Bearer old" }, body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: "hi" }] }],
+      tools: [{ functionDeclarations: [{ name: "fixture", parameters: { type: "object", properties: { ids: { type: "array", items: { type: "string" } } } } }] }],
+    }) };
+    const calls: Array<{ url: string; authorization: string | null; body: string }> = [];
+    const sleep = spyOn(retry, "sleepWithAbort").mockImplementation(async () => {});
+    const executor = (async (input, init) => {
+      calls.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization"), body: String(init?.body) });
+      if (calls.length === 1) return new Response(vertexError(400, "INVALID_ARGUMENT", "tools.0.custom.input_schema: JSON schema is invalid"), { status: 400 });
+      if (calls.length === 2) {
+        original.url = "https://aiplatform.googleapis.com/v1/new";
+        original.headers = { authorization: "Bearer new" };
+        return new Response("retry", { status: 503 });
+      }
+      return new Response("ok");
+    }) as typeof fetch;
+    try {
+      expect((await fetchVertexWithRetry(original, { executor, timeoutMs: 5_000 })).status).toBe(200);
+      expect(calls).toHaveLength(3);
+      expect(calls[2]).toMatchObject({ url: "https://aiplatform.googleapis.com/v1/new", authorization: "Bearer new" });
+      expect(calls[2]!.body).toBe(calls[1]!.body);
+    } finally { sleep.mockRestore(); }
+  });
+
   test("raw mode preserves final error body and headers without normalization", async () => {
     const raw = vertexError(400, "INVALID_ARGUMENT", "provider-private-detail");
     const mock = mockFetch([new Response(raw, { status: 400, headers: { "x-provider-error": "raw" } })]);

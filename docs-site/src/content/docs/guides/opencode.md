@@ -93,6 +93,8 @@ read global or project config to detect a provider override — under `provider.
 or `providers.opencodex` — while your existing providers, agents, keybinds, MCP entries,
 and relative `{file:…}` references keep resolving from their original files.
 
+The JSONC reader accepts a single leading UTF-8 byte-order mark (BOM), as emitted by some Windows editors. BOM characters inside strings remain unchanged.
+
 For this launch only, opencodex adds both generated blocks — `provider.opencodex` and
 `providers.opencodex` — through OpenCode's inline runtime layer. That layer merges after global/custom/project config
 and overrides only conflicting keys for the child process.

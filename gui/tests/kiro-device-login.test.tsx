@@ -9,11 +9,14 @@ import ProviderAuthPanel from "../src/components/provider-workspace/ProviderAuth
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 import type { ProviderAuthHandlers } from "../src/components/provider-workspace/types";
 import { en } from "../src/i18n/en";
+import { chooseOption, selectTrigger } from "./helpers/custom-select";
 import { interpolate, type TFn } from "../src/i18n/shared";
 import { useProvidersOAuth } from "../src/pages/use-providers-oauth";
 import {
   finalizeKiroDeviceFlow, readKiroDeviceStatus, subscribeKiroDeviceFinal,
 } from "../src/kiro-device-login-finalizer";
+import { captureApiTarget, configureApiTargets } from "../src/api";
+import { standaloneApiTargets } from "../src/api-targets";
 
 const globals = ["document", "window", "navigator", "localStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previous: Record<(typeof globals)[number], unknown>;
@@ -170,8 +173,7 @@ test("IAM profile selection sends the server-offered ARN and completes only once
   await mountDialog(); await click("AWS IAM Identity Center"); await iamInput(); await submitIamForm(); await tick();
   expect(host.textContent).toContain("Choose a Kiro profile");
   expect(settled).toEqual([]);
-  const select = host.querySelector("select")!;
-  await act(async () => { select.value = profiles[1]!.arn; select.dispatchEvent(new win.Event("change", { bubbles: true })); });
+  await chooseOption(selectTrigger(host, "[role=combobox]"), profiles[1]!.arn);
   await submitIamForm();
   const posts = requests.filter(request => request.url.endsWith("/api/oauth/login"));
   expect(JSON.parse(String(posts[1]!.init?.body))).toEqual({ provider: "kiro", flowId, profileArn: profiles[1]!.arn });
@@ -510,6 +512,30 @@ test("an already-expired finalizer cancels its inherited read without polling", 
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(bodyCancelled).toBe(1);
   expect(requests.filter(r => r.url.includes("/api/oauth/status?"))).toHaveLength(1);
+});
+
+test("a stale Kiro capture ends the poll without requesting the new target", async () => {
+  const relay = (origin: string) => {
+    const base = standaloneApiTargets("");
+    return {
+      ...base,
+      connected: true,
+      shared: { ...base.shared, baseUrl: "/api/machine/hub-relay", serverOrigin: origin, transport: "relay" as const },
+      apiKeyId: "fixture-key",
+      relayTargetCheck: "expected-target-v1" as const,
+    };
+  };
+  configureApiTargets(relay("hub-a"));
+  const capture = captureApiTarget("shared");
+  configureApiTargets(relay("hub-b"));
+  try {
+    const outcome = await finalizeKiroDeviceFlow("/api/machine/hub-relay", flowId, Date.now() + 10_000, undefined, capture);
+    expect(outcome).toBe("ended");
+    // The old flow is not forwarded to the new hub.
+    expect(requests).toEqual([]);
+  } finally {
+    configureApiTargets(standaloneApiTargets(""));
+  }
 });
 
 test("closing aborts the pending timer and never dispatches a hook status fetch", async () => {

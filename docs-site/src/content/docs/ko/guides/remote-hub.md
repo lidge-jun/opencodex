@@ -204,7 +204,7 @@ Serve가 허용하는 HTTPS 포트는 제한적입니다. 포트가 실제로 �
 # Bash: enter the one-time code without echoing it or putting it in shell history.
 read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 # `ocx hub invite`가 코드까지 채워서 출력해 주는 바로 그 줄입니다.
-echo '<pairing-code>' | printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
   --management-url https://hub-name.tailnet-name.ts.net \
   --pairing-code-stdin
 unset pairing_code
@@ -356,7 +356,7 @@ services:
   hub:
     pull_policy: build
     build:
-      context: https://github.com/lidge-jun/opencodex.git#main
+      context: https://github.com/lidge-jun/opencodex.git#dev
       dockerfile: Dockerfile
       target: runtime
       args:

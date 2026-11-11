@@ -30,6 +30,7 @@ La configuración del servidor controla la forma en que el proxy local escucha, 
 | `nativeReasoningRetention?` | `{ modelSwitch?: boolean; accountSwitch?: boolean }` | ambos `false` | Permite reenviar el razonamiento cifrado al cambiar de un modelo o una cuenta conocidos dentro del mismo backend canónico de ChatGPT. La retención entre cuentas es experimental. Consulta [Retención del razonamiento nativo](#native-reasoning-retention). |
 | `workflowBudget?` | `{ maxConcurrentChildren?: number; maxPhysicalSends?: number; maxDistinctChildren?: number }` | `8` / `256` / `64` | Límites por tarea: turnos simultáneos, envíos al proveedor por ventana de 10 minutos y subagentes distintos por ventana. Los campos omitidos conservan su valor integrado. Consulta [Límites del flujo de trabajo](#workflow-limits). |
 | `corsAllowOrigins?` | `string[]` | `[]` | Orígenes exactos adicionales permitidos por CORS. Los orígenes de Loopback siempre están permitidos. Se admiten orígenes de extensión de navegador basados en autoridad como `chrome-extension://<extension-id>`; `*` no es un comodín. Firefox y Safari regeneran la extensión UUID (por instalación / por lanzamiento del navegador), así que actualice la entrada cuando cambie el origen. |
+| `dashboardTrustedProxy?` | `{ origin: string; proxyAddresses: string[]; trustHeaders?: ("x-forwarded-host" \| "x-forwarded-proto")[] }` | sin definir | Solo instancia independiente, con activación explícita: permite **Recordar este dispositivo** tras un proxy inverso que termina TLS. `origin` debe ser un origen `https://` exacto y `proxyAddresses` sus IP exactas, sin rangos ni comodines. `trustHeaders` lee el host de `X-Forwarded-Host` o exige `X-Forwarded-Proto: https`; por defecto solo `Host`. Se ignora en loopback y Hub. Consulta [recordar tras un proxy inverso](/es/guides/web-dashboard/#remember-behind-a-reverse-proxy). |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Credenciales generadas `ocx_…` para admitir tráfico de datos fuera de loopback. Se administran desde el panel y no autorizan las API de administración; estas utilizan la credencial independiente indicada en la [referencia de administración](/es/reference/management-api/). |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | desactivada | Política de limpieza de sesiones archivadas que requiere activación explícita. Nunca se habilita implícitamente. |
 | `usageLedgerMaxBytes?` | `number` | Sin configurar | Techo opt-in en bytes para `usage.jsonl`. Ausente significa que el historial de solicitudes crece sin límite, lo que se mantiene como predeterminado. Véase [tamaño del historial de uso](#usage-history-size). |
@@ -56,6 +57,7 @@ La configuración del servidor controla la forma en que el proxy local escucha, 
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | activado si está disponible | Opciones del asistente de búsqueda web. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | activado si está disponible | Opciones del asistente de descripción de imágenes. |
 | `images?` | `OcxImagesConfig` | selección automática de OpenAI | Opciones del relay independiente de imágenes para `image_gen` de Codex. |
+| `telemetry?` | `OcxTelemetryConfig` | activa tras mostrar el aviso a una persona | Estado de consentimiento para estadísticas diarias anónimas: `decision`, `decidedAt`, `noticeShownAt`. No envía nada hasta que una persona vea el aviso o acepte. `OCX_TELEMETRY=0` y `DO_NOT_TRACK=1` prevalecen. Consulta [Telemetría](#telemetry-telemetry) y [privacidad](/es/guides/telemetry/). |
 
 En Linux x64/arm64 con soporte para pidfd, la recuperación del servicio vincula la terminación a la identidad del proceso del proxy en el kernel; la reutilización del PID no puede redirigirla. El mensaje de supervisión del centinela termina en `(pidfd)`. Los kernels o arquitecturas sin soporte conservan la comprobación existente del PID del proceso padre activo y registran esa alternativa. Otros fallos de vinculación desactivan la recuperación para ese proxy. macOS conserva la comprobación del proceso padre activo y Windows su vinculación al identificador de proceso.
 
@@ -89,7 +91,7 @@ OpenCodex limita cuánto puede expandirse una tarea. Cada tarea incluye la conve
 | Campo | Predeterminado | Permitido | Significado |
 | --- | --- | --- | --- |
 | `maxConcurrentChildren` | `8` | 2–64 | Turnos simultáneos de una tarea. Siempre se reserva un espacio para la conversación raíz, por lo que los subagentes disponen de uno menos. |
-| `maxPhysicalSends` | `256` | 1–10000 | Envíos al proveedor, incluidos los reintentos, tras los cuales se rechazan las solicitudes nuevas de la tarea durante el resto de la ventana de 10 minutos. El contador se comprueba al admitir una solicitud: los reintentos de solicitudes ya admitidas y las solicitudes admitidas en paralelo pueden superar el límite total. |
+| `maxPhysicalSends` | `256` | 1–10000 | Admisiones de envíos al proveedor, incluidos reintentos, por ventana de diez minutos. Cada admisión comprueba y reserva una plaza atómicamente; solicitudes y reintentos comparten techo. Un permiso no usado no gasta plaza; un inicio físico confirmado sigue contando aunque falle. |
 | `maxDistinctChildren` | `64` | 1–1024 | Hilos de subagentes distintos que una tarea puede iniciar durante esa misma ventana. |
 
 Los valores predeterminados sirven para la mayoría de las instalaciones. Súbelos si un flujo que necesita muchos subagentes alcanza los límites repetidamente; bájalos para frenar antes una expansión descontrolada:
@@ -328,7 +330,7 @@ Los correos electrónicos de la cuenta almacenados están enmascarados en todas 
 
 | Campo | Tipo | Predeterminado | Descripción |
 | --- | --- | --- | --- |
-| `privacy.maskEmails?` | `boolean` | `true` | Configurar a `false` para mostrar los correos electrónicos de la cuenta almacenados en su totalidad. Ausente, `true`, y cualquier valor mal formado siguen enmascarando, por lo que sólo un `false` deliberada revela una dirección. |
+| `privacy.maskEmails?` | `boolean` | `true` | Solo `false` revela correos almacenados en los campos proyectados. Ausente, `true` o un valor inválido conserva la máscara. |
 
 Apáguelo cuando ejecute muchas cuentas en una máquina que controle y no pueda distinguirlas de los formularios enmascarados. Lea el indicador como una decisión de divulgación en lugar de una preferencia de visualización: la administración no siempre es loopback, por lo que en un concentrador configurado con `remoteGui`, una dirección desenmascarada llega a todos los principales de administración que pueden llegar al concentrador, no solo a alguien sentado en la máquina. La bandera mueve solo el campo de correo electrónico: los tokens, los tokens de actualización y los identificadores de cuenta permanecen redactados de cualquier manera.
 
@@ -337,6 +339,37 @@ Apáguelo cuando ejecute muchas cuentas en una máquina que controle y no pueda 
 ```
 
 `ocx config set privacy.maskEmails false` falla con `config parent path not found` hasta que el bloque existe, porque `config set` entra en los objetos existentes y nunca los crea. Escribe todo el objeto en su lugar - `ocx config set privacy '{"maskEmails":false}'` - o añadir el bloque a `config.json` a mano.
+
+<a id="telemetry-telemetry"></a>
+
+## Telemetría (`telemetry`)
+
+La telemetría diaria anónima solo se activa por defecto después de que una persona vea el aviso en el dashboard o la terminal. El bloque de `config.json` guarda el consentimiento:
+
+```json
+{
+  "telemetry": {
+    "decision": "accepted",
+    "decidedAt": "2026-11-07T09:00:00.000Z",
+    "noticeShownAt": "2026-11-07T09:00:00.000Z"
+  }
+}
+```
+
+| Campo | Tipo | Predeterminado | Significado |
+| --- | --- | --- | --- |
+| `telemetry.decision?` | `"accepted" \| "declined"` | sin definir | Elección explícita. `"declined"` desactiva y elimina `<OPENCODEX_HOME>/telemetry-id.json`; `"accepted"` permite informes diarios. |
+| `telemetry.decidedAt?` | `string` (ISO 8601) | sin definir | Momento UTC de la decisión. Solo se envían días completos posteriores al día de `decidedAt ?? noticeShownAt`: `day > formatUtcDay(decidedAt ?? noticeShownAt)`. No se recupera el día de consentimiento ni los anteriores. |
+| `telemetry.noticeShownAt?` | `string` (ISO 8601) | sin definir | Momento en que una persona vio el aviso. Sin `decision`, este campo permite `default-on`; sin él se mantiene `awaiting-notice`. |
+
+El endpoint `https://telemetry.opencodex.me/v1/events` es constante en el código y no configurable.
+
+Dos variables prevalecen sobre `config.json` sin modificarlo. Observar su desactivación al arrancar o en el planificador guarda `ineligibleThroughDay` con el día UTC en `<OPENCODEX_HOME>/telemetry-state.json` y elimina `<OPENCODEX_HOME>/telemetry-id.json`: esos días no se envían después, y una activación futura crea otro ID.
+
+- `OCX_TELEMETRY=0`, también `false`, `off` o `no`, sin distinguir mayúsculas.
+- `DO_NOT_TRACK=1`, también `true` o `yes`, sin distinguir mayúsculas.
+
+`ocx config set telemetry` y `ocx config unset telemetry` se rechazan para todos. `ocx config import` ignora ese bloque y conserva la decisión local. Usa `ocx telemetry enable`, con TTY humana interactiva, aviso y confirmación, o error `agent_consent_required` / `tty_required`; `ocx telemetry disable`; `ocx telemetry status [--json]`; o **Detalles del proxy**. Consulta el esquema y la conservación en [Telemetría y privacidad](/es/guides/telemetry/).
 
 <a id="storage-cleanup"></a>
 
@@ -479,7 +512,7 @@ Cómo una solicitud Chat Completions o Messages puede comunicarse con un proveed
 | --- | --- | --- | --- |
 | `protocols.unrepresentable?` | `"legacy" \| "reject"` | `"legacy"` | `legacy` envía una solicitud cuya ruta deja caer una característica y registra la pérdida en la traza. `reject` lo rechaza con HTTP 400 antes de cualquier envío, nombrando solo las claves de función. |
 | `protocols.rollout.nativeChatCombos?` | `boolean` | `false` | Enviar un candidato de chat elegible dentro de un combo de forma nativa desde su propia copia del cuerpo del cliente. |
-| `protocols.rollout.managedMessagesNative?` | `boolean` | `false` | Envíe el Messages de forma nativa a un proveedor Anthropic directo y autenticado por clave en lugar de a través del puente interno Responses. |
+| `protocols.rollout.managedMessagesNative?` | `boolean` | `false` | Envía Messages nativo a un proveedor directo Anthropic apto o un hijo Anthropic compatible con clave o oficial en un combo failover estricto sin esfuerzo predeterminado. Las demás estrategias, políticas y reescrituras exclusivas del puente conservan el puente. |
 | `protocols.rollout.managedMessagesNativeOAuth?` | `boolean` | `false` | Nativo Messages para el proveedor `anthropic` OAuth en `api.anthropic.com`, incluyendo grupos de cuentas almacenadas. Requiere `managedMessagesNative`. Para el proveedor `anthropic` establecido, un grupo habilitado proporciona verdadero para banderas nativas ausentes cuando `anthropicAccountPool.nativeMessages` está ausente o verdadero. Los indicadores explícitos falsos/malformados y una preferencia de grupo falso/malformado permanecen desactivados. Otros proveedores y pool-off mantienen el comportamiento de despliegue explícito. Las solicitudes agrupadas elegibles retienen la selección compartida, la afinidad y la recuperación previa de salida limitada. Los UUID de cuenta JSON-string `metadata.user_id` reconocidos están alineados con la credencial OAuth de servicio; se conservan los campos de dispositivo y sesión. |
 | `protocols.rollout.directEncoders?` | `boolean` | `false` | Codifique el chat y las respuestas Messages de un flujo ascendente no Responses directamente de los eventos del adaptador. |
 | `protocols.rollout.antigravityDirect?` | `boolean` | `true` | Envíe una solicitud de chat o Messages a una sola ruta Google Antigravity sin el cuerpo interno Responses en cualquier dirección. La configuración de la solicitud aún pasa por las políticas habituales, y una solicitud que el carril no puede llevar usa el puente. Establecer `false` para apagarlo. |
@@ -793,3 +826,12 @@ Desactivar el reloj de encabezados conserva la cancelación del cliente y cualqu
 `opencodeClientExport` opcional controla `headerTimeoutMs`, `chunkTimeoutMs` y `timeoutMs` del proveedor OpenCode generado: milisegundos positivos o `false` para desactivar. Omitirlos conserva los valores de OpenCode y los inválidos no se emiten. Se escriben para todo el proveedor en opciones V1 y settings V2. Consulta [modelos locales lentos](/es/guides/opencode/#slow-local-models-prefill-timeouts).
 
 El ajuste opcional `omoClientExport.api`, disponible solo en el archivo de configuración, selecciona el protocolo del bloque de proveedor administrado de omo, basado en Pi: `openai-completions` (predeterminado) u `openai-responses`. Se ignoran los demás valores. Solo omo lo utiliza. Después de añadir, cambiar o eliminar la clave, reinicia el proxy (`ocx service restart` si usa un servicio, o `ocx stop` y después `ocx start`) y actualiza **Conectar → omo** en el dashboard. Actualizar usa la configuración del proxy en ejecución; no vuelve a cargar el archivo. Consulta [Integraciones](/es/guides/integrations/).
+
+
+Las reservas de tokens se devuelven de inmediato si una admisión física rechaza antes de iniciar el envío; los envíos iniciados y reservas pendientes siguen contabilizados. Los rechazos de continuación nativa conservan HTTP 429 en el registro y en el error.
+
+Una tarea inactiva retiene su plaza mientras haya envíos o historial de hijos aún vigentes, aunque no agotara el límite. Solo se reutilizan plazas sin turno activo, historial restante ni presupuesto agotado. Si deben conservarse las 512, la nueva tarea recibe HTTP 429 `workflow_tracking_exhausted`. Las ventanas de recuento caducan normalmente y son del proceso; el techo persistente de tokens es independiente.
+
+Las etiquetas de cuentas OAuth, incluidas Claude, Grok y Kiro, siguen `privacy.maskEmails`: enmascaradas por defecto, completas solo con `false`. Un alias prevalece; Overview y diálogos de restablecimiento, cupones y borrado usan la misma etiqueta. La bandeja Desktop conserva la máscara en ambos casos.
+
+Si todos los destinos de un combo de compactación están en enfriamiento, falla rápido con `combo_unavailable` y el plazo más cercano, por ejemplo `(retry in ~2m)`. Un rechazo de una cuenta local Pool enfría el destino solo con el backoff corto del combo. Para reintentar todos sin esperar un `Retry-After` largo, usa [recuperación explícita](/es/guides/combos/#retry-all-cooled-targets-opt-in), como `{"cooldownReprobe": {"enabled": true, "intervalMs": 300000}}`. Solo actúa ante demanda y respeta cuotas y admisión; no permite servir a una cuenta agotada.

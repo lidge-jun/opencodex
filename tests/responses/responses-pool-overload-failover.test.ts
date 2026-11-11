@@ -30,7 +30,9 @@ const HOME_KEYS = ["HOME", "OPENCODEX_HOME", "CODEX_HOME"] as const;
 const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"] as const;
 
 type Listener = (event: unknown) => void;
-type Step = "refuse" | "ok" | "output-then-refuse" | "refuse-then-abort" | "transport-error" | "silent";
+type Step = "refuse" | "ok" | "output-then-refuse" | "refuse-then-abort" | "transport-error" | "silent"
+  | "heartbeat-then-refuse" | "heartbeat-output-then-refuse" | "unsafe-heartbeat-then-refuse"
+  | "heartbeat-bare-then-refuse" | "heartbeat-then-abort";
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -60,6 +62,17 @@ class FakeWebSocket {
     if (step === "silent") return;
     const id = `resp_${FakeWebSocket.instances.indexOf(this)}`;
     this.frame({ type: "response.created", response: { id, status: "in_progress", output: [] } });
+    if (step === "heartbeat-then-refuse" || step === "heartbeat-output-then-refuse"
+      || step === "unsafe-heartbeat-then-refuse" || step === "heartbeat-bare-then-refuse"
+      || step === "heartbeat-then-abort") {
+      // A heartbeat only keeps the connection alive. The bare-code case also carries the sequence
+      // marker the Responses wire puts on every event.
+      this.frame(step === "heartbeat-bare-then-refuse"
+        ? { type: "response.heartbeat", sequence_number: 2 }
+        : { type: "response.heartbeat" });
+      // A side-effect mark must never become replayable, even on a heartbeat.
+      if (step === "unsafe-heartbeat-then-refuse") this.frame({ type: "response.heartbeat", replayUnsafe: true });
+    }
     this.frame({ type: "response.in_progress", response: { id, status: "in_progress", output: [] } });
     if (step === "ok") {
       this.frame({ type: "response.completed", response: { id, status: "completed", output: [] } });
@@ -69,9 +82,19 @@ class FakeWebSocket {
       this.frame({ type: "response.output_item.added", response_id: id, output_index: 0,
         item: { id: "msg_1", type: "message", role: "assistant", content: [] } });
     }
-    this.frame({ type: "error", status: 503,
-      error: { type: "server_error", code: "server_is_overloaded", message: "Our servers are currently overloaded." } });
-    if (step === "refuse-then-abort") setTimeout(() => FakeWebSocket.onAbortStep?.(), 100);
+    if (step === "heartbeat-output-then-refuse") {
+      this.frame({ type: "response.output_item.added", response_id: id, output_index: 0,
+        item: { id: "msg_1", type: "message", role: "assistant", content: [] } });
+    }
+    if (step === "heartbeat-bare-then-refuse") {
+      // The field shape: the sequence marker on the heartbeat, then a refusal whose code alone
+      // identifies the overload with no numeric wrapper status.
+      this.frame({ type: "error", error: { code: "server_is_overloaded", message: "Our servers are currently overloaded." } });
+    } else {
+      this.frame({ type: "error", status: 503,
+        error: { type: "server_error", code: "server_is_overloaded", message: "Our servers are currently overloaded." } });
+    }
+    if (step === "refuse-then-abort" || step === "heartbeat-then-abort") setTimeout(() => FakeWebSocket.onAbortStep?.(), 100);
   }
 
   addEventListener(type: string, listener: Listener) {
@@ -265,6 +288,93 @@ describe("pooled native Codex recovers a pre-output upstream refusal (#6969)", (
     expect(body).toContain("response.output_item.added");
     expect(body).toContain("server_is_overloaded");
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  test("a heartbeat before the refusal takes the same-account ladder", async () => {
+    FakeWebSocket.plan = ["heartbeat-then-refuse", "ok"];
+    const { response, body, logCtx } = await send(poolConfig());
+    expect(response.status).toBe(200);
+    expect(body).toContain("response.completed");
+    expect(body).not.toContain("server_is_overloaded");
+    expect(sockets()).toEqual(["Bearer work-access", "Bearer work-access"]);
+    expect(logCtx.activeAttempt?.sendCount).toBe(2);
+    expect(logCtx.activeAttempt?.recoveryKinds).toContain("transient-5xx");
+    expect(failures(WORK)).toBe(0);
+  });
+
+  test("a heartbeat before the refusal still moves to the alternate after the ladder", async () => {
+    FakeWebSocket.plan = ["heartbeat-then-refuse", "heartbeat-then-refuse", "heartbeat-then-refuse", "ok"];
+    const { response, body } = await send(poolConfig());
+    expect(response.status).toBe(200);
+    expect(body).toContain("response.completed");
+    expect(sockets()).toEqual(["Bearer work-access", "Bearer work-access", "Bearer work-access", "Bearer other-access"]);
+    expect(failures(WORK)).toBe(1);
+    expect(failures(OTHER)).toBe(0);
+  });
+
+  test("the field shape recovers: heartbeat then a bare-code 503", async () => {
+    FakeWebSocket.plan = ["heartbeat-bare-then-refuse", "ok"];
+    const { response, body, logCtx } = await send(poolConfig());
+    expect(response.status).toBe(200);
+    expect(body).toContain("response.completed");
+    expect(body).not.toContain("server_is_overloaded");
+    expect(sockets()).toEqual(["Bearer work-access", "Bearer work-access"]);
+    expect(logCtx.activeAttempt?.sendCount).toBe(2);
+    expect(logCtx.activeAttempt?.recoveryKinds).toContain("transient-5xx");
+    expect(failures(WORK)).toBe(0);
+  });
+
+  test("output after a heartbeat is never sent again", async () => {
+    FakeWebSocket.plan = ["heartbeat-output-then-refuse", "ok"];
+    const { response, body } = await send(poolConfig());
+    expect(response.status).toBe(200);
+    expect(body).toContain("response.heartbeat");
+    expect(body).toContain("response.output_item.added");
+    expect(body).toContain("server_is_overloaded");
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    // Nothing was sent again; the committed 503 still counts once as this account's failure.
+    expect(failures(WORK)).toBe(1);
+  });
+
+  test("a replay-unsafe heartbeat is never sent again", async () => {
+    FakeWebSocket.plan = ["unsafe-heartbeat-then-refuse", "ok"];
+    const { response, body } = await send(poolConfig());
+    expect(response.status).toBe(200);
+    expect(body).toContain("server_is_overloaded");
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(failures(WORK)).toBe(1);
+  });
+
+  test("a heartbeat refusal still respects a pinned account", async () => {
+    FakeWebSocket.plan = ["heartbeat-then-refuse", "heartbeat-then-refuse", "heartbeat-then-refuse", "ok"];
+    const { response, body } = await send(poolConfig([WORK, OTHER], { codexAccountNamespaces: { side: WORK } }),
+      { model: "side/gpt-5.5" });
+    expect(response.status).toBe(200);
+    expect(body).toContain("server_is_overloaded");
+    expect(sockets()).toEqual(["Bearer work-access", "Bearer work-access", "Bearer work-access"]);
+    expect(failures(WORK)).toBe(1);
+    expect(failures(OTHER)).toBe(0);
+  });
+
+  test("a heartbeat refusal still stops at the request's four-send budget", async () => {
+    FakeWebSocket.plan = Array.from({ length: 6 }, () => "heartbeat-then-refuse");
+    const { response, body } = await send(poolConfig());
+    expect(response.status).toBe(200);
+    expect(body).toContain("server_is_overloaded");
+    expect(FakeWebSocket.instances).toHaveLength(4);
+    expect(sockets()).toEqual(["Bearer work-access", "Bearer work-access", "Bearer work-access", "Bearer other-access"]);
+    expect(failures(WORK)).toBe(1);
+    expect(failures(OTHER)).toBe(1);
+  });
+
+  test("a caller cancelling during a heartbeat refusal's backoff stops every later send", async () => {
+    const abort = new AbortController();
+    FakeWebSocket.plan = ["heartbeat-then-abort", "ok"];
+    FakeWebSocket.onAbortStep = () => abort.abort();
+    const { response } = await send(poolConfig(), { abortSignal: abort.signal });
+    expect(response.status).toBe(499);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(failures(WORK)).toBe(1);
   });
 
   test("a caller cancelling during the backoff stops every later send and records the refusal once", async () => {

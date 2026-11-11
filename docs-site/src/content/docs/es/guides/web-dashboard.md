@@ -41,6 +41,30 @@ Cuando **Olvidar este dispositivo** en la barra lateral o en la barra de accione
 
 Una sesión ya emitida que siga siendo válida en los demás aspectos puede usar **Olvidar este dispositivo** incluso después de un cambio del User-Agent del navegador; el acceso ordinario y la reanudación siguen exigiendo la identidad original del navegador.
 
+<a id="remember-behind-a-reverse-proxy"></a>
+
+### Recordar tras un proxy inverso
+
+La opción `dashboardTrustedProxy`, solo en una instancia independiente y con activación explícita, indica el origen exacto del navegador y las IP desde las que conecta el proxy:
+
+```json
+"dashboardTrustedProxy": {
+  "origin": "https://ocx.example.com",
+  "proxyAddresses": ["192.168.1.20"],
+  "trustHeaders": ["x-forwarded-proto"]
+}
+```
+
+- `origin` debe ser un origen `https://` exacto, sin ruta, comodines o credenciales; se rechaza `http://`.
+- `proxyAddresses` contiene las IP del proxy vistas desde este equipo, `127.0.0.1` si es local, sin rangos, comodines ni hostnames. Una IP distinta no se trata como proxy aunque envíe esos encabezados.
+- Por defecto se lee `Host`; conserva el original. `x-forwarded-host` en `trustHeaders` selecciona `X-Forwarded-Host`; `x-forwarded-proto` exige además `X-Forwarded-Proto: https`.
+- Un encabezado `X-Forwarded-Host` o `X-Forwarded-Proto` contradictorio o con varios saltos rechaza la solicitud aunque no sea de confianza.
+- Para un puerto no predeterminado con `x-forwarded-host`, reenvía también el puerto; en nginx usa `$http_host` en vez de `$host`.
+- Si el proxy sirve HTTP sin cifrar para ese host, exige `x-forwarded-proto` para rechazarlo.
+- Solo se respeta en bind fuera de loopback, con token de administración. Hub lo ignora y usa su listener de gestión.
+
+Recordar sigue exigiendo el token; un certificado de cliente en el proxy no otorga acceso por sí solo. Se mantienen Origin, caducidad de 30 días, Olvidar y restricciones de consentimiento. `ocx config set` rechaza valores inválidos; una edición manual inválida desactiva la opción. Reinicia OpenCodex tras cambiarla.
+
 <a id="finding-the-admin-token"></a>
 
 ### Encontrar el token de administración
@@ -64,6 +88,18 @@ Ningún comando de la CLI imprime el token. `ocx doctor` solo informa si hay una
 ### Cuando un panel local no puede iniciar una sesión
 
 El dashboard en `localhost` obtiene su propia sesión y no debería pedir un token. Si no puede iniciar una sesión, la causa es la dirección utilizada: el proxy no reconoció la solicitud como loopback. Abre la dirección exacta que muestra el proxy al iniciar, normalmente `http://127.0.0.1:<port>`, y usa ese host y puerto en lugar de una IP de la red local o un alias.
+
+<a id="classic-dashboard"></a>
+
+## Dashboard clásico
+
+El diseño nuevo abre Inicio y agrupa páginas en **Uso diario**, **Configuración** y **Ajustes avanzados**. El anterior sigue en `/classic/`, por ejemplo `http://127.0.0.1:10100/classic/`.
+
+- Cambia mediante el reloj **Dashboard clásico** al pie de la barra lateral; allí **Nuevo dashboard** permite volver.
+- El navegador recuerda la elección; abrir `/` y Desktop la respetan. El desplegable de bandeja siempre usa el nuevo.
+- El clásico modifica las mismas opciones del proxy, pero las páginas y opciones posteriores al rediseño solo existen en el nuevo.
+
+Las filas descritas en [Distribución del dashboard](#dashboard-layout) corresponden al clásico.
 
 <a id="dashboard-layout"></a>
 
@@ -103,6 +139,7 @@ La parte superior de cada página, salvo Inicio, muestra en una línea el uso de
 | **Seguridad de inicio** | Mostrar si el enrutamiento Codex inyectado sobrevive a un reinicio, con servicio separado y estado del lanzador más comandos de reparación exactos. |
 | **Bandeja Windows** | Instale una bandeja de inicio de sesión por usuario para iniciar, detener, reiniciar, acceder al panel y el estado del proxy con un solo clic. La bandeja es un controlador, no un servicio de reinicio proxy. |
 | **Codex autostart** | Permitir que se ejecute una shim de lanzador Codex ya instalada `ocx ensure`. Este conmutador no instala un servicio de shim o de fondo. |
+| **Telemetría** | En **Detalles del proxy** (`#proxy-telemetry`), activa o desactiva compartir estadísticas anónimas y consulta la vista previa JSON. El aviso inicial solo guarda al pulsar **Continuar** (`PUT /api/telemetry`); cerrarlo no registra nada. Consulta [Telemetría y privacidad](/es/guides/telemetry/). |
 | **Proveedores** | Añade, edita, habilita, deshabilita y elimina proveedores; solo los habilitados pueden ser predeterminados. Gestiona grupos de cuentas OAuth y de claves API cuando se admiten. Si eliminas el proveedor predeterminado, se selecciona el primer proveedor habilitado restante; si no hay ninguno, se rechaza la eliminación y se conserva el actual. Los ajustes del proveedor permiten desactivar el descubrimiento en vivo cuando su catálogo `/models` no existe, tarda demasiado o es demasiado grande. En Claude (Anthropic) OAuth, cada cuenta conectada muestra sus propias barras de cuota de cinco horas y semanal: el uso corresponde a cada credencial. Si falla una consulta, se conservan las últimas barras válidas y se marcan como no disponibles hasta que una actualización tenga éxito. La actualización de cuotas omite las cuentas OAuth en pausa y las claves API deshabilitadas; las filas omitidas sin una lectura en caché siguen sin estar disponibles, pero no afectan al resultado de la actualización. La actualización informa de un fallo si una cuenta OAuth sin pausar o una clave API habilitada que admita consultas de cuota tiene una lectura no disponible. Cuando no hay un proveedor seleccionado, la vista general ofrece **Actualizar todas las cuotas**, que fuerza una nueva consulta del servidor para cada proveedor configurado. Si falla la consulta a un proveedor, se conserva su última fila válida. El estado informa de que la comprobación terminó, sin afirmar que todos los valores sean nuevos; la antigüedad de cada fila indica la vigencia de sus datos. |
 | **Añadir proveedor** | Una búsqueda por encima de las pestañas llega a los cuatro a la vez — Cuentas, Gratis, Local, Pagado. Mientras una consulta está en vivo, los resultados se agrupan por pestaña con un recuento de cada uno, y la pestaña seleccionada se mantiene en lugar de saltar. Presione ArrowDown en el cuadro de búsqueda para enfocar la primera acción de resultado disponible, omitiendo los botones desactivados; si no hay ninguna acción disponible, el enfoque permanece en el cuadro de búsqueda. Los tiempos de ejecución locales (Ollama, vLLM, LM Studio, LitelLM) tienen su propia pestaña, y una larga nota del proveedor se fija a dos líneas con el texto completo a un clic de distancia. Claude Code CLI (suscripción) se encuentra bajo Pagado con una suscripción CLI insignia, y al seleccionarlo advierte que se factura la suscripción iniciada a través de Claude `claude -p` y nunca usa una clave API (usar `anthropic-apikey` ej., para facturación de claves). |
 | **Codex Autonomía** | Agregue cuentas de grupo ChatGPT/Codex, seleccione la cuenta de la siguiente sesión, actualice las cuotas de 5h / semanal / 30d, habilite o deshabilite el cambio automático de cuota, establezca su umbral 1–100% y configure la conmutación por error de transitorios. |
@@ -163,7 +200,7 @@ Un intento sin datos de consumo que nunca llegó al proveedor, o que recibió un
 
 Una fila con todas las solicitudes excluidas muestra un guion y su recuento, no una estimación de cero dólares. Un cero mostrado sí representa una estimación calculada. Un proxy antiguo que no informa la cobertura muestra solo un guion, sin recuento: así se distinguen la cobertura ausente, una fila completamente excluida y una estimación cero confirmada. Son estimaciones de tarifa pública, no recibos ni pruebas de un cargo real; pueden aplicarse cuotas de suscripción o créditos del proveedor.
 
-Las filas del modelo de proveedor pueden incluir **Uso del modelo solicitado no resuelto**: la ruta guardada envió el nombre solicitado sin cambios al proveedor predeterminado. Estos tokens pertenecen a ese proveedor de servicio, no necesariamente el proveedor nombrado en la solicitud. El panel conserva el nombre original y uso en lugar de adivinar qué modelo corrió. Para los nombres no resueltos que contienen barras, una El precio del modelo del proveedor por sí solo no es suficiente para estimar el costo; un proveedor exacto o un precio configurado Todavía se aplica. Las acciones del modelo se calculan dentro del proveedor seleccionado. Solicitudes para un desconocido reserva `policy/` nombre ahora falla antes de llegar a un proveedor de origen; se conserva el uso histórico.
+La atribución de uso conserva el modelo y proveedor resueltos por el servidor: los tokens pertenecen al proveedor que atendió la solicitud, no necesariamente al nombrado al entrar. El dashboard conserva el nombre y el uso originales sin adivinar qué modelo se ejecutó. Para un nombre no resuelto que contenga barras, el precio de un modelo de **otro proveedor** no basta para estimar el coste; sí puede aplicarse el precio del proveedor exacto o uno configurado. Las proporciones de modelos se calculan dentro del proveedor seleccionado. Una solicitud a un nombre reservado `policy/` desconocido falla antes de contactar al proveedor; se conserva el uso histórico.
 
 El proveedor seleccionado **Descripción general** y **Uso** tabuladores muestran **Uso de la cuenta corriente** debajo de la Estadísticas de uso. **Cuentas** y **Claves API** muestre la cuota propia de cada credencial soportada, incluyendo saldos de crédito. La visión general de todo el proveedor todavía muestra la capacidad combinada cuando está disponible; no se sustituye por una lectura de cuenta corriente faltante. Búsqueda sin soporte, sin pasivo observación, carga, búsqueda fallida con valores conocidos por última vez y cero medido están separados estados. **Control de cuotas completado** significa la lectura settled—not que una observación pasiva se convirtió en nuevo o que todas las mediciones anteriores se actualizaron.
 
@@ -190,7 +227,7 @@ El recuento de modelos del proveedor es el número de entradas únicas no desact
 
 ## Selector de delegación vs enrutamiento de generación
 
-El selector **Delegación de subagentes** guarda `injectionModel` y, opcionalmente, `injectionEffort`. **Guía multiagente de OpenCodex** controla de forma independiente las instrucciones de delegación que usan esos valores. En los turnos v2 elegibles, la guía indica al agente principal qué modelo y esfuerzo pasar a `spawn_agent`. Borrar el modelo también borra el esfuerzo guardado.
+El selector **Delegación de subagentes** guarda las preferencias orientativas `injectionModel` e `injectionEffort`, este último opcional. **Guía multiagente de OpenCodex** controla por separado si aparecen en la guía de los turnos v2 aptos. El texto incorporado nombra preferencias sin ordenar cambios de modelo; no garantiza qué argumentos enviará Codex a `spawn_agent`. Borrar el modelo también borra el esfuerzo.
 
 La opción **Usar como valores predeterminados de subagentes nativos de Codex** está desactivada de forma predeterminada. Si OpenCodex administra el enrutamiento activo, aplica la misma selección a los valores nativos de `[agents]` en la siguiente sincronización o reinicio. Respeta la configuración de proveedores externos del usuario. Solo afecta a tareas de Codex creadas después y no provoca delegación por sí misma. Los valores de `[agents]` definidos por el usuario se conservan, por lo que pueden seguir teniendo prioridad sobre los solicitados.
 
@@ -206,14 +243,15 @@ Ninguno de los controles es un router de generación de modelos cruzados del lad
 En **Conectar → Claves API**, cada fila tiene un botón para eliminar su clave tras pedir confirmación. Al pulsar una clave, una sesión autorizada de forma independiente puede mostrar su valor completo y un botón **Copiar**.
 
 <a id="applying-a-codex-cli-update-over-http"></a>
+<a id="applying-a-codex-cli-update-from-the-dashboard"></a>
 
-### Aplicar una actualización de Codex CLI mediante HTTP
+### Actualizar Codex CLI desde el dashboard
 
-La API HTTP de actualización de la CLI no tiene una interfaz de trabajos en el dashboard. Su ruta de aplicación exige una sesión de navegador vigente y emparejada explícitamente, recibida por una entrada loopback de confianza, encabezados Origin y CSRF coincidentes, y `confirmed: true`. El inicio local automático, una sesión administrativa recordada, un token de administración o el inicio de sesión de Tailscale por sí solos no autorizan esa acción.
+**Codex → Codex CLI** comprueba y actualiza la CLI usada por OpenCodex, por separado de OpenCodex; nunca modifica Codex Desktop. **Buscar actualización** es de solo lectura: muestra instalador, propiedad, versión instalada y disponible, sesiones activas y causa de rechazo. Solo permite un plan aplicable y exige confirmar que cambia únicamente esa instalación. Aplica exactamente el plan mostrado y sigue su trabajo hasta actualizado, sin cambios, rechazado o incierto. Un resultado incierto nunca se reintenta ni revierte: inspecciona la instalación. Consultar de nuevo descarta plan y confirmación anteriores. Un dashboard conectado a Remote Hub informa que debe ejecutarse en el equipo propietario.
 
-Para emparejar una instalación local independiente, abre el dashboard en su origen literal configurado `http://127.0.0.1:<port>` o `http://[::1]:<port>`. Usa el formulario local existente en **Conectar → Claves API** o en la configuración de Remote Link: ejecuta localmente el comando mostrado `ocx gui pair --origin "<browser-origin>"` y canjea su código de un solo uso en ese formulario. Emparejar no aplica una actualización; sigue siendo necesaria una solicitud API posterior con confirmación. Un servidor configurado con hostname `localhost`, una dirección comodín o el rol de cliente conectado no puede emitir esa autorización local. El emparejamiento remoto no elimina el requisito de loopback de confianza de la ruta de aplicación.
+Aplicar exige una sesión vigente emparejada explícitamente en una entrada loopback de confianza, Origin y CSRF coincidentes y `confirmed: true`. Inicio local automático, sesión recordada, token de administración o Tailscale solos no autorizan. Si falta esa autoridad, muestra el formulario local de emparejamiento y el comando `ocx system codex-cli-update apply`. Usa el origen literal `http://127.0.0.1:<port>` o `http://[::1]:<port>` configurado y `ocx gui pair --origin "<browser-origin>"`; `localhost`, un bind comodín o un rol de cliente no emiten esa autoridad. Emparejar no actualiza nada por sí solo.
 
-Si no hay una vía de emparejamiento HTTP apta, ejecuta localmente `ocx system codex-cli-update plan` y después `ocx system codex-cli-update apply --plan-id <32-hex> --yes`. Se usa el mismo propietario persistente del trabajo sin una sesión GUI. El emparejamiento demuestra autoridad para escribir en el directorio protegido de configuración, no la identidad humana ni protección frente a procesos sin restricciones del mismo usuario.
+La alternativa local sigue siendo `ocx system codex-cli-update plan` y `ocx system codex-cli-update apply --plan-id <32-hex> --yes`, con el mismo propietario persistente del trabajo. La prueba es autoridad sobre el directorio protegido, no identidad humana ni defensa frente a procesos sin restricciones del mismo usuario.
 
 <a id="reading-an-existing-api-key"></a>
 
@@ -225,7 +263,7 @@ Después del emparejamiento, vuelve a pulsar la clave para solicitar su valor; e
 
 La administración desde el dashboard está separada del tráfico de modelos directo entre cliente y hub. **Conectar → Claves API** muestra las rotaciones pendientes, revela el secreto de reemplazo una sola vez y requiere confirmación o cancelación explícita. Cerrar sesión en el navegador invalida únicamente la sesión remota actual. Con conexión se consulta el uso guardado en el hub filtrado por el `apiKeyId` del cliente; sin conexión se muestra el uso local, sin duplicarlo.
 
-La garantía de anulación del modelo solo se aplica a la guía v2 **incorporada**. Un `injectionPrompt` personalizado la reemplaza por completo y debe incluir `{{model}}` y `{{effort}}`, y opcionalmente `{{roster}}`, para que esos valores aparezcan en la guía.
+La guía v2 **incorporada** presenta preferencias orientativas, sin garantizar cambios de modelo al crear subagentes. Un `injectionPrompt` personalizado la sustituye por completo y debe incluir `{{model}}` y `{{effort}}`, y opcionalmente `{{roster}}`, para mostrar esos valores.
 
 El selector ofrece modelos nativos y enrutados habilitados, además de la escalera de esfuerzo global Codex. El API valida el esfuerzo seleccionado globalmente; Codex todavía valida un esfuerzo de generación contra el objetivo Entrada de catálogo.
 
@@ -351,3 +389,18 @@ El endpoint de administración autenticado es `POST /api/providers/test-completi
 Cada modelo figura como correcto, fallido o no probado. Fallido significa que el proveedor respondió con un error o agotó el tiempo de espera. No probado incluye rechazos de la API de administración, como otra prueba simultánea; rechazos de admisión anteriores al envío, como credenciales ausentes o cambiadas o un destino rechazado; y rechazos HTTP 401/403/429 del proveedor por autenticación, acceso o cuota, devueltos en un resultado estructurado con HTTP 200. Estos casos no se convierten en candidatos para deshabilitar. Un adaptador efectivo no compatible marca solo ese modelo como no probado y continúa, porque un proveedor puede usar protocolos distintos para modelos distintos. Un rechazo que afecte al proveedor completo, como autenticación OAuth o ajustes de transporte no admitidos, detiene el lote.
 
 Si algún modelo falla, **Deshabilitar modelos fallidos** pide una segunda confirmación. Solo entonces oculta esos modelos del catálogo y del selector mediante el mismo ajuste de visibilidad de **Modelos**, desde donde pueden volver a habilitarse. Como los demás modelos ocultos, siguen aceptando llamadas por identificador exacto. Nunca se deshabilitan sin esa confirmación. Salir de la página o cambiar la conexión del proveedor retira el consentimiento pendiente y cancela su solicitud. Un lote nuevo espera a que se resuelva ese consentimiento o la escritura de visibilidad, para que una respuesta antigua no oculte la acción del lote más reciente.
+
+
+<a id="usage-by-app"></a>
+
+### Uso por aplicación
+
+Uso abre con **Todas las aplicaciones**, **Todos los dispositivos** y **30d**, dentro del ámbito de acceso. Los cambios duran mientras se mantiene abierta la página; al reabrir vuelve a esos valores. Con todas las aplicaciones, **Aplicaciones**, después de Modelos y Proveedores, muestra porcentaje y total de tokens, coste estimado a precio de lista, solicitudes y solicitudes medidas. CLI, Desktop e IDE de Codex se agrupan en Codex. El histórico sin atribución es **Sin clasificar**, distinto de **Desconocido** y **Otro**. Elegir una aplicación oculta el desglose; no disponible no equivale a lista vacía.
+
+Los registros reúnen todas las aplicaciones con un icono accesible por solicitud, no pestañas ni filtro de aplicación. No tener atribución no implica Codex ni fallo. Los filtros combinan intercepción, proveedor, modelo exacto, estado, tiempo e identidad; un `metadata.user_id` de Claude remoto omite `tk` para encontrar toda la sesión. Si el proveedor declara `INVALID_ARGUMENT` o `MALFORMED_FUNCTION_CALL`, el detalle muestra ese identificador sin guardar su mensaje original.
+
+Termina un inicio de sesión o borrado OAuth antes de empezar el otro. Si no puede actualizarse su estado queda sin verificar y **Cerrar sesión** permite reintentar explícitamente. Tras borrar, se comprueba el login; si no se verifica, actualiza la lista antes de repetir. Las cuotas omiten OAuth pausado y claves desactivadas sin convertir sus filas no observadas en fallos. Un proveedor sin seleccionar ofrece **Actualizar todas las cuotas**; las filas fallidas conservan su última lectura y antigüedad, sin prometer frescura global.
+
+Los borradores de Ajustes y JSON se conservan en memoria por servidor: cambiarlo aparca el borrador; guardar escribe donde comenzó. Si cambió la configuración guardada, elige conservar tu borrador o cargarla. JSON combina solo tus cambios y señala conflictos; Ajustes solo escribe campos modificados. Un relay antiguo comprueba destino antes de enviar sin garantía atómica y avisa; actualiza el proxy. Cerrar o recargar pierde los borradores.
+
+- Créditos prepagados con 90% usado prevalecen en el titular si la ventana habitual no es crítica; si también lo es, se conserva esa ventana.

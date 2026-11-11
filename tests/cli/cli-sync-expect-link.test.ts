@@ -5,6 +5,9 @@
  * providers. Every case is in-process and deterministic: config fixtures are written directly, the
  * Home catalog is a stubbed fetch, and both client locks live in the per-test directory.
  */
+// First: CODEX_HOME must be a temp directory before src/codex/paths resolves DEFAULT_CATALOG_PATH,
+// which the shared setup below writes with raw fs calls (tests/helpers/codex-home-sandbox.ts).
+import { assertCodexHomeOwned } from "../helpers/codex-home-sandbox";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,6 +27,9 @@ import { DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import type { OcxClientConnectionConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import * as applyRestart from "../../src/cli/link-apply-restart";
+import { classifySyncResult } from "../../src/cli/sync-fanout";
+import { readClientConnectionState } from "../../src/client/state";
 
 const KEY = `ocx_data_${"e".repeat(40)}`;
 const LINK_ID = "lnk_0123456789abcdef";
@@ -33,6 +39,8 @@ const TUNNEL = 23461;
 const SENTINEL_CATALOG = JSON.stringify({ models: [{ slug: "sentinel-local-model" }] });
 const HOME_CATALOG = JSON.stringify({ models: [] });
 const realSyncConnectedClient = connectApi.syncConnectedClient;
+// Refuse to load unless the catalog resolves into a Codex home this process owns (proven by path).
+assertCodexHomeOwned(dirname(DEFAULT_CATALOG_PATH));
 
 let root = "";
 let previousHome: string | undefined;
@@ -187,6 +195,97 @@ describe("syncConnectedClient checks the expected identity under its own lock", 
 });
 
 describe("ocx sync --expect-link / --expect-hub-key", () => {
+  test.each(["desktop", "service"] as const)("a %s supervised Child sync succeeds and its Home accepts the JSON", async supervisor => {
+    writeClient({ transport: "link" });
+    const current = readClientConnectionState();
+    if (current.kind !== "connected") throw new Error("fixture must be connected");
+    const appliedAt = "2026-10-21T01:00:00.000Z";
+    const record = { linkId: LINK_ID, fetchedAt: appliedAt, appliedAt, document: {
+      version: 1 as const, home: { name: "fixture", version: "2.97.0" },
+      settings: { fastMode: true, multiAgentMode: "v1" as const, webSearchSidecarEnabled: false, subagentDefaults: null },
+    } };
+    const realRestart = applyRestart.restartRuntimeAfterApply;
+    const restart = spyOn(applyRestart, "restartRuntimeAfterApply").mockImplementation((entry, deps) => realRestart(entry, {
+      ...deps, findLive: async () => ({ pid: 5151, port: 23499, hostname: "127.0.0.1", source: "runtime", role: "client" }), readStartedAt: async () => 0,
+    }));
+    const connected = spyOn(connectApi, "syncConnectedClient").mockResolvedValue({ catalogWritten: false, cacheSynced: false, injected: true, stale: false, connection: current.value, appliedRecord: record });
+    const shim = spyOn(shimAutoRestore, "runCodexShimAutoRestoreAsync").mockResolvedValue(undefined);
+    const output: string[] = [], errors: string[] = [];
+    const log = spyOn(console, "log").mockImplementation((...parts) => { output.push(parts.map(String).join(" ")); });
+    const error = spyOn(console, "error").mockImplementation((...parts) => { errors.push(parts.map(String).join(" ")); });
+    try {
+      process.exitCode = 0;
+      const args = ["sync", "--expect-link", LINK_ID, "--json"];
+      const deps = { args, handleProxyRestart: async (_start: unknown, onSupervised: (value: typeof supervisor) => void) => { onSupervised(supervisor); return false; },
+        handleRestartStartWhenStopped: async () => { throw new Error("must not start a runtime"); } } as unknown as CliDispatchDeps;
+      const code = await dispatchCommand({ kind: "command", command: "sync", args }, deps);
+      expect(code).toBe(0);
+      expect(errors).toContain(supervisor === "desktop"
+        ? "Client runtime restart deferred; the settings take effect when OpenCodex Desktop restarts it. Use Quit in the OpenCodex tray menu, then reopen OpenCodex."
+        : "Client runtime restart deferred; the settings take effect when the background service restarts it. Run `ocx service restart`.");
+      expect(JSON.parse(output.at(-1)!)).toEqual({ schema: "ocx.sync.fanout/1", home: { state: "synced", exit: 0 }, fanout: { state: "not-applicable", reason: null }, children: [] });
+      expect(classifySyncResult({ code, stdout: `ocx-fanout:stdout-begin\n${output.at(-1)}`, stderr: "ocx-fanout:selected:2.97.0\n" })).toEqual({ state: "synced", reason: null });
+      process.exitCode = 1;
+      expect(await dispatchCommand({ kind: "command", command: "sync", args }, deps)).toBe(1);
+    } finally {
+      process.exitCode = 0;
+      restart.mockRestore(); connected.mockRestore(); shim.mockRestore(); log.mockRestore(); error.mockRestore();
+    }
+  });
+  // Review round 2: a sync whose Codex journal handover failed must not report a clean success,
+  // because a later supervised restart would restore native routing again.
+  test("a sync whose journal handover failed exits 1 and says to sync again", async () => {
+    writeClient({ transport: "hub" });
+    const current = readClientConnectionState();
+    if (current.kind !== "connected") throw new Error("fixture must be connected");
+    const connected = spyOn(connectApi, "syncConnectedClient").mockResolvedValue({ catalogWritten: false, cacheSynced: false, injected: true, stale: false, connection: current.value, journalHandoverFailed: true });
+    const shim = spyOn(shimAutoRestore, "runCodexShimAutoRestoreAsync").mockResolvedValue(undefined);
+    const errors: string[] = [];
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    const error = spyOn(console, "error").mockImplementation((...parts) => { errors.push(parts.map(String).join(" ")); });
+    try {
+      process.exitCode = 0;
+      const args = ["sync"];
+      const code = await dispatchCommand({ kind: "command", command: "sync", args }, { args } as unknown as CliDispatchDeps);
+      expect(code).toBe(1);
+      expect(errors.join("\n")).toContain("Codex journal could not be handed to this connection");
+      expect(errors.join("\n")).toContain("Run 'ocx sync' again");
+    } finally {
+      process.exitCode = 0;
+      connected.mockRestore(); shim.mockRestore(); log.mockRestore(); error.mockRestore();
+    }
+  });
+
+  // Final review: a failed handover must not be followed by the automatic post-apply restart,
+  // which on a Child with an earlier connection's journal would undo the routing just applied.
+  test("a failed journal handover skips the post-apply runtime restart", async () => {
+    writeClient({ transport: "link" });
+    const current = readClientConnectionState();
+    if (current.kind !== "connected") throw new Error("fixture must be connected");
+    const appliedAt = "2026-10-21T01:00:00.000Z";
+    const record = { linkId: LINK_ID, fetchedAt: appliedAt, appliedAt, document: {
+      version: 1 as const, home: { name: "fixture", version: "2.97.0" },
+      settings: { fastMode: true, multiAgentMode: "v1" as const, webSearchSidecarEnabled: false, subagentDefaults: null },
+    } };
+    const restart = spyOn(applyRestart, "restartRuntimeAfterApply").mockResolvedValue({ kind: "restarted" });
+    const connected = spyOn(connectApi, "syncConnectedClient").mockResolvedValue({ catalogWritten: false, cacheSynced: false, injected: true, stale: false, connection: current.value, appliedRecord: record, journalHandoverFailed: true });
+    const shim = spyOn(shimAutoRestore, "runCodexShimAutoRestoreAsync").mockResolvedValue(undefined);
+    const errors: string[] = [];
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    const error = spyOn(console, "error").mockImplementation((...parts) => { errors.push(parts.map(String).join(" ")); });
+    try {
+      process.exitCode = 0;
+      const args = ["sync"];
+      const code = await dispatchCommand({ kind: "command", command: "sync", args }, { args } as unknown as CliDispatchDeps);
+      expect(code).toBe(1);
+      expect(restart).not.toHaveBeenCalled();
+      expect(errors.join("\n")).toContain("the client runtime was not restarted");
+    } finally {
+      process.exitCode = 0;
+      restart.mockRestore(); connected.mockRestore(); shim.mockRestore(); log.mockRestore(); error.mockRestore();
+    }
+  });
+
   async function runSync(args: string[]) {
     let discoveries = 0;
     const errors: string[] = [];
@@ -461,4 +560,21 @@ test("the machine sync route does not return the saved connection", async () => 
     },
   );
   expect(await response?.json()).toEqual({ success: true, catalogWritten: true, cacheSynced: true, injected: false, stale: false });
+});
+
+// Review round 3: the machine API must not call a sync complete when its journal handover failed.
+test("the machine sync route reports a failed journal handover as not complete", async () => {
+  const connection = clientBlock({ transport: "hub" }) as unknown as OcxClientConnectionConfig;
+  const response = await handleMachineApi(
+    new Request("http://127.0.0.1/api/machine/sync", { method: "POST", body: "{}", headers: { "content-type": "application/json" } }),
+    new URL("http://127.0.0.1/api/machine/sync"),
+    connection,
+    {
+      sync: async () => ({ catalogWritten: true, cacheSynced: true, injected: true, stale: false, connection, journalHandoverFailed: true }),
+      disconnect: async () => { throw new Error("unused"); },
+      scheduleStandaloneRecycle: () => {},
+    },
+  );
+  expect(response?.status).toBe(409);
+  expect(await response?.json()).toMatchObject({ success: false, journalHandoverFailed: true });
 });

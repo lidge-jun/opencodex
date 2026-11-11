@@ -32,7 +32,9 @@ La respuesta es HTTP 400 y nunca devuelve el texto cifrado. El rechazo es delibe
 
 En v1, el agente principal emite la tarea del subagente como texto sin cifrar. OpenCodex la lee y la enruta; el subagente recibe instrucciones que puede ejecutar.
 
-En v2, el agente principal emite la tarea como `encrypted_content`, generado por el backend de ChatGPT. La clave permanece en ese backend; OpenCodex nunca la tuvo. El proxy no puede descifrar ni reescribir el contenido: es texto cifrado real. Es una limitación estructural y ningún ajuste del proxy puede eliminarla.
+En v2, el agente principal emite la tarea como `encrypted_content`, generado por el backend de ChatGPT. La clave permanece en ese backend; OpenCodex nunca la tuvo. El proxy no puede descifrar ni reescribir el contenido: es texto cifrado real. Es una limitación estructural: ningún ajuste del proxy permite descifrar el contenido localmente.
+
+Ningún ajuste del proxy permite descifrar localmente. La opción experimental `agentTaskRecovery` puede pedir al backend de ChatGPT que recupere tareas elegibles; no descifra su contenido en el equipo. Se mantienen la autorización, la elegibilidad y los límites de fallo descritos arriba.
 
 La comparación de estas tres combinaciones muestra dónde aparece el límite:
 

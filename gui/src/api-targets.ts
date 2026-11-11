@@ -1,4 +1,5 @@
 export type ApiPlane = "machine" | "shared";
+export type UsageTopology = "home" | "hub" | "link" | "unknown";
 export type SharedTransport = "same-origin" | "direct" | "relay";
 
 /**
@@ -75,9 +76,12 @@ export interface ApiTarget {
 
 export interface ApiTargets {
   connected: boolean;
+  usageTopology: UsageTopology;
   machine: ApiTarget;
   shared: ApiTarget;
   apiKeyId?: string;
+  /** The machine listener advertises this when its relay can check an expected target. */
+  relayTargetCheck?: "expected-target-v1";
   catalogSyncedAt?: string;
   /** Remote Link Child: the shared plane is the Home, read-only, relayed by this machine. */
   link?: { linkId: string; home: string | null };
@@ -90,6 +94,7 @@ export interface MachineStatusV1 {
   sharedBase: string;
   sharedServerOrigin: string;
   managementTransport: "direct" | "relay";
+  relayTargetCheck?: "expected-target-v1";
   apiKeyId: string;
   protocolVersion: 1;
   connectedAt: string;
@@ -127,6 +132,7 @@ export function standaloneApiTargets(initialBase: string): ApiTargets {
   const baseUrl = trimBase(initialBase);
   return {
     connected: false,
+    usageTopology: "home",
     machine: target("machine", baseUrl, resolved.origin, "same-origin"),
     shared: target("shared", baseUrl, resolved.origin, "same-origin"),
   };
@@ -140,6 +146,9 @@ function validStatus(value: unknown): value is MachineStatusV1 {
     && typeof row.machineBase === "string" && typeof row.sharedBase === "string"
     && typeof row.sharedServerOrigin === "string" && typeof row.apiKeyId === "string"
     && row.apiKeyId.trim().length > 0 && typeof row.connectedAt === "string"
+    // An unknown capability string belongs to a relay we do not understand; it reads as
+    // legacy rather than a malformed status. Only the exact negotiated value opts in.
+    && (row.relayTargetCheck === undefined || typeof row.relayTargetCheck === "string")
     && (row.catalogSyncedAt === undefined || typeof row.catalogSyncedAt === "string");
 }
 
@@ -147,6 +156,7 @@ function validStatus(value: unknown): value is MachineStatusV1 {
 function linkFromStatus(value: unknown): ApiTargets["link"] {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const row = value as Record<string, unknown>;
+  if (row.readOnly !== true || (row.home !== null && (typeof row.home !== "string" || !row.home.trim() || row.home.length > 255))) return undefined;
   if (typeof row.linkId !== "string" || !/^lnk_[0-9a-f]{16}$/.test(row.linkId)) return undefined;
   const home = typeof row.home === "string" && row.home.trim() && row.home.length <= 255 ? row.home.trim() : null;
   return { linkId: row.linkId, home };
@@ -187,11 +197,51 @@ export function targetsFromMachineStatus(initialBase: string, status: MachineSta
     ? target("shared", `${trimBase(initialBase)}/api/machine/hub-relay`, sharedOrigin, "relay")
     : target("shared", sharedOrigin, sharedOrigin, "direct");
   const link = linkFromStatus(status.link);
-  return { connected: true, machine, shared, apiKeyId: status.apiKeyId, catalogSyncedAt: status.catalogSyncedAt, ...(link ? { link } : {}) };
+  const usageTopology: UsageTopology = status.link !== undefined ? (link && status.managementTransport === "relay" ? "link" : "unknown")
+    : status.managementTransport === "direct" || sharedOrigin !== machineOrigin ? "hub" : "unknown";
+  return {
+    connected: true, usageTopology, machine, shared, apiKeyId: status.apiKeyId,
+    ...(status.relayTargetCheck === "expected-target-v1" ? { relayTargetCheck: "expected-target-v1" as const } : {}),
+    catalogSyncedAt: status.catalogSyncedAt, ...(link ? { link } : {}),
+  };
 }
 
 export function apiBaseForPlane(plane: ApiPlane, targets: ApiTargets): string {
   return targets[plane].baseUrl;
+}
+
+/**
+ * Stable identity for the server a dashboard plane actually manages.
+ *
+ * A relay plane's base URL is always `<machine>/api/machine/hub-relay`, so re-pairing the
+ * machine to another hub keeps the same request base. The advertised hub origin and, in
+ * link mode, the link id distinguish those logical targets. Rotating the machine API key
+ * is not a target change. The key is for in-memory scoping only; the label never carries
+ * key material.
+ */
+export function apiTargetIdentity(targets: ApiTargets): { key: string; label: string } {
+  const linkKey = targets.link?.linkId ? `link:${targets.link.linkId}` : null;
+  return {
+    key: linkKey ? `${targets.shared.serverOrigin}\u0000${linkKey}` : targets.shared.serverOrigin,
+    label: targets.shared.serverOrigin,
+  };
+}
+
+/**
+ * A Remote Link Child whose saved connection is missing or names another owner or link answers
+ * its machine and link status with `503 { error: "client_state_changed" }` (docs: Remote Link).
+ */
+export class ClientStateChangedError extends Error {
+  constructor() {
+    super("client_state_changed");
+    this.name = "ClientStateChangedError";
+  }
+}
+
+export async function isClientStateChangedResponse(response: Response): Promise<boolean> {
+  if (response.status !== 503 || response.bodyUsed) return false;
+  const body = await response.json().catch(() => null) as { error?: unknown } | null;
+  return body?.error === "client_state_changed";
 }
 
 export async function discoverApiTargets(initialBase: string, signal?: AbortSignal): Promise<ApiTargets> {
@@ -213,7 +263,10 @@ export async function discoverApiTargets(initialBase: string, signal?: AbortSign
     throw new Error("local machine plane unavailable", { cause: error });
   }
   if (response.status === 404) return standalone;
-  if (!response.ok) throw new Error(`local machine plane refused discovery (${response.status})`);
+  if (!response.ok) {
+    if (await isClientStateChangedResponse(response)) throw new ClientStateChangedError();
+    throw new Error(`local machine plane refused discovery (${response.status})`);
+  }
   const body = await response.json().catch(() => null);
   if (!validStatus(body)) throw new Error("local machine plane returned invalid status");
   return targetsFromMachineStatus(initialBase, body);

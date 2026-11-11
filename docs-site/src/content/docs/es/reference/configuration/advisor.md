@@ -7,6 +7,18 @@ El asesor es un modelo experto independiente que revisa la tarea del modelo prin
 
 Es distinto de los [subagentes](/es/reference/configuration/agents/), que el modelo principal inicia mediante las herramientas de colaboración de Codex. El asesor es un sidecar del proxy que el cliente no ve como herramienta; también puede asesorar a un modelo que nunca cree subagentes.
 
+<a id="question-only-mode"></a>
+
+## Modo de solo pregunta
+
+Para reducir entradas repetidas, selecciona **Enviar solo la pregunta del agente** en Advisor o ejecuta:
+
+```sh
+ocx advisor set --context-mode question-only
+```
+
+Esta opción envía únicamente una instrucción fija y la pregunta, hasta 2.000 caracteres conservados más el aviso de truncamiento. No adjunta tarea, historial, resultados o catálogo de herramientas, identidad del agente ni evidencias de reparación. La pregunta debe contener el contexto esencial. Una pregunta vacía se rechaza sin consultar al proveedor. Suspende consultas automáticas preventivas y de reparación adaptativa; conserva llamadas manuales, consentimiento y límites. El modo predeterminado `context` mantiene el contexto descrito más abajo; vuelve con `--context-mode context`.
+
 <a id="configuration"></a>
 
 ## Configuración
@@ -31,6 +43,7 @@ En **Advisor**, bajo **Subagentes** en la barra lateral del dashboard, elige el 
 | `model?` | `string` | — | Modelo experto. Admite un modelo nativo sin prefijo (`gpt-6-astra`), un `provider/model` explícito (`anthropic/claude-sonnet-4-6`, `xai/grok-...`) o un modelo nativo de una cuenta concreta. El asesor y el modelo principal pueden usar proveedores distintos. |
 | `effort?` | `string` | `"max"` | Esfuerzo de razonamiento de la consulta (`low` a `ultra`). |
 | `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | Cuándo se consulta al asesor. |
+| `contextMode?` | `"context" \| "question-only"` | `"context"` | Intercambio de contexto. `question-only` exige una pregunta explícita del agente y suspende consultas automáticas. |
 | `maxConsultationsPerTask?` | `integer` | `3` | Límite de intentos por tarea adaptativa, de 1 a 3, incluidas las consultas manuales. |
 | `timeoutMs?` | `number` | `120000` | Plazo de la consulta mediante loopback. |
 | `contextSharingConsent?` | `"v1"` | Ausente | Consentimiento del operador para enviar el contexto al proveedor del asesor. Solo `"v1"` es vigente. Un valor ausente, obsoleto o diferente impide enviar el contexto. |

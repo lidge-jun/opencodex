@@ -9,7 +9,9 @@ Esta guía te lleva desde una instalación nueva hasta la primera solicitud de l
 
 ## Binario independiente, sin npm
 
-También puedes usar el archivo de una versión que incluye el binario `ocx` y el entorno de ejecución Bun, sin npm. Extráelo de modo que el directorio `gui/dist` quede junto al binario y ejecuta `./ocx start`.
+También puedes usar un archivo de versión con el binario `ocx` y Bun, sin npm. Extráelo con `gui/dist` junto al binario. Sigue los pasos de configuración siguientes con ese ejecutable.
+
+Para los comandos siguientes, añade a PATH el directorio del binario extraído, o sustituye `ocx` por la ruta completa del ejecutable. Conserva `gui/dist` a su lado.
 
 <a id="1-run-the-setup-wizard"></a>
 
@@ -21,7 +23,7 @@ ocx init
 
 `ocx init` te guía por estos pasos:
 
-1. **Elegir un proveedor**: selecciona uno de los 106 preajustes del registro integrado o `custom` para introducir una URL base y un adaptador.
+1. **Elegir un proveedor**: selecciona uno de los 107 preajustes del registro integrado o `custom` para introducir una URL base y un adaptador.
 2. **Clave API**: pega una clave o indica una variable de entorno como `${ANTHROPIC_API_KEY}`.
 3. **Modelo predeterminado**: para proveedores con clave, locales o personalizados, acepta el preajuste o introduce un identificador de modelo.
 4. **Puerto del proxy**: `10100` de forma predeterminada.
@@ -81,6 +83,10 @@ Al iniciar, opencodex:
 - Escucha en `http://localhost:<port>/v1`.
 
 Una instancia activa de opencodex con el mismo `OPENCODEX_HOME` impide iniciar otra, aunque el nuevo puerto esté libre. Detén primero esa instancia con `ocx stop`, o usa otro `OPENCODEX_HOME` para una instancia independiente. Si un proceso ajeno ocupa el puerto solicitado, `ocx start` lo identifica; elige un puerto libre con `ocx start --port <port>`. Nunca cambia de puerto automáticamente, para evitar que queden dos proxies activos y Codex apunte al más reciente.
+
+
+Una ubicación `OPENCODEX_HOME` distinta permite otra instancia, pero no enruta por separado la configuración compartida de Codex, Grok o Claude. Esa instancia atiende solicitudes directas en su puerto; los clientes compartidos siguen apuntando a la instancia existente. Un cliente Hub conserva su ruta al detenerlo; detener una instancia hermana no restaura la configuración compartida. Consulta [la propiedad del entorno](/es/reference/cli/lifecycle/#runtime-ownership).
+
 
 Compruébalo:
 
@@ -145,7 +151,7 @@ Las herramientas con integración administrada, como OpenCode, Pi, Qoder, WorkBu
 ocx integration client enable --client <id>
 ```
 
-[Integraciones](/es/guides/integrations/) enumera el archivo de configuración de cada herramienta y cuándo entra en vigor el cambio. Cualquier otra herramienta que admita un endpoint personalizado puede usar la URL base compatible con OpenAI `http://localhost:10100/v1` o la URL base de Anthropic `http://localhost:10100`.
+[Integraciones](/es/guides/integrations/) enumera el archivo de configuración de cada herramienta y cuándo entra en vigor el cambio. Cualquier otra herramienta que admita un endpoint personalizado puede usar la URL base compatible con OpenAI `http://localhost:<port>/v1` o la URL base de Anthropic `http://localhost:<port>`.
 
 <a id="choose-sub-agent-models-optional"></a>
 
@@ -171,7 +177,7 @@ El proveedor predeterminado de OpenAI **no necesita una clave**: reenvía direct
 ## Detener y restaurar
 
 ```bash
-ocx stop          # stop the proxy and restore native Codex
+ocx stop      # stop this instance; restoration depends on ownership (see below)
 ocx restore       # restore native Codex without stopping (alias: ocx eject)
 ocx restore back  # route Codex through the still-running proxy again
 ```

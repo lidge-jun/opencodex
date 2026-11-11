@@ -15,11 +15,15 @@ kalır; bkz. [Web Kontrol Paneli](/tr/guides/web-dashboard/).
 Yayınlanan paketi kurun ve `ocx`'in `PATH` üzerinde olduğunu doğrulayın:
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
 ```
 
-Proxy'yi çalıştırmak için bir yol seçin:
+Kurulumda seçilen portu kullanmak için proxy başlamadan önce etkileşimli terminalde `ocx init` çalıştırın:
+
+```bash
+ocx init
+```
 
 ```bash
 # Ön plan: durdurulana kadar bu terminali kilitler.
@@ -27,13 +31,6 @@ ocx start
 
 # Arka plan: servisi kurar veya günceller, ardından başlatır.
 ocx service
-```
-
-Etkileşimli bir terminalde `ocx init` komutunu çalıştırın. Eğer `ocx start` ön
-planı işgal ediyorsa, ikinci bir terminal kullanın:
-
-```bash
-ocx init
 ```
 
 Sihirbaz `$OPENCODEX_HOME/config.json` (normalde `~/.opencodex/config.json`)
@@ -107,7 +104,7 @@ devretme (failover) kombosu oluşturun:
 
 ```bash
 ocx combo set main \
-  --targets anthropic/claude-opus-4-8,openai/gpt-5.6-sol \
+  --targets anthropic-apikey/claude-opus-4-8,openai/gpt-5.6-sol \
   --strategy failover
 ```
 

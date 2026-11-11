@@ -321,7 +321,7 @@ El selector prefiere los metadatos de reserva reales. Cuando no se ha observado 
 Haga una lista y cambie de cuentas de proveedores y grupos de claves API a través del proxy en ejecución. La superficie de ayuda enviada es:
 
 ```text
-Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
+Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|reset-affinity|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
@@ -335,6 +335,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
 strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Pool placement strategy; least-loaded is Kiro-only.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
@@ -479,6 +480,7 @@ Si no se permite ninguna reserva, la detección de cuotas y modelos en vivo espe
 ```bash
 ocx account pause google-antigravity <account-id-or-alias>
 ocx account resume google-antigravity <account-id-or-alias>
+ocx account resume anthropic <account-id-or-alias> --if-healthy
 ```
 
 ### `ocx account clear-cooldown <openai|anthropic> <id|alias|main> [--json]`
@@ -796,3 +798,18 @@ ocx account routes anthropic --clear
 El archivo está limitado a 64 KiB. El servidor valida cada ruta y la almacena bajo `anthropicAccountPool.routes`; las escrituras requieren el proxy en ejecución. Use los ID de cuenta almacenados de `ocx account list anthropic --json`. Las reglas solo afectan al grupo habilitado y nunca afirman que una cuenta tiene derecho a un modelo. Los registros de solicitudes identifican una regla coincidente como `route:#<n>` (posición de lista basada en 1), sin su nombre de operador.
 
 Los ayudantes de visión y búsqueda web coinciden con su propio modelo de forma independiente y pueden fallar localmente cuando su ruta estricta no tiene una cuenta elegible. Véase [Anthropic enrutamiento de cuenta de ayudante](/es/reference/configuration/providers/#anthropicaccountpool-experimental).
+
+
+`reset-affinity` confirma que se borraron todos los vínculos de sesión de Anthropic sin exigir cuentas, cambiar selección o pausas. Se ejecuta en Home; un Child informa del Home sin enviar. HTTP 404 termina con 4, 409 con 5 y otros errores o resultado no confirmado con 1.
+
+Cuando el saldo es desconocido, `quotaUnknownReason` explica `no_balance_source`, sin lector; `passive_not_observed`, sin observación pasiva; `read_failed`, lectura fallida; `not_read`, lector aún no usado, por ejemplo clave pausada; o `not_reported`, lectura correcta sin saldo. Filas de sondeo incluyen `quotaReadAt`, milisegundos epoch del último intento, incluso fallido. Solo `quotaMode: "probe"`, como OpenRouter, DeepSeek, Ollama Cloud, Moonshot, Venice o Abliteration, informa un saldo medido. La salida humana usa `unsupported: balance UNKNOWN (no balance source)` o `probe: mo 12%; read 3 min ago`, nunca cero por desconocido. OAuth sin observación muestra `UNKNOWN (not observed yet)`. CLIs antiguas ignoran los nuevos campos; motivos desconocidos se omiten.
+
+<a id="resume-if-healthy"></a>
+
+#### Reanudar solo si está sana
+
+`ocx account resume <provider> <account-id-or-alias> --if-healthy` permite un supervisor sin atención, pero solo reanuda después de leer con éxito el uso de esa cuenta: WHAM para Pool Codex o el token almacenado para Anthropic. Pausas automáticas `oauth_organization_disabled` y `account_permission_denied` nunca se levantan así. Un token Anthropic caducado no se renueva en esta prueba: `credential_expired` exige login nuevo. Otros OAuth y la principal Codex devuelven `health_check_unsupported`; pools de claves rechazan la opción. Un rechazo termina con 3 y motivo, o `{ "ok": false, "resumed": false, "reason": ... }` con JSON. Un login o reautenticación explícitos limpian pausas automáticas de la credencial anterior; una manual espera `ocx account resume`.
+
+Un enfriamiento Anthropic 429 con ventanas de cuota identificadas se puede levantar al observar margen en todas: el barrido de instancias OAuth activas consulta aproximadamente cada minuto, o diez mientras sigan agotadas. Un 429 solo con Retry-After conserva su plazo. Clear-cooldown sigue siendo el override manual.
+
+`ocx models` sin subcomando lista modelos locales guardados, semillas y caché de descubrimiento de ese proceso, no el catálogo del proxy. `reasoningEfforts` solo aparece con JSON: null es escala desconocida o no consultada, también si exigiría abrir el llavero; `[]` es escala explícitamente vacía o razonamiento desactivado, como `noReasoningModels`. Usa `ocx models live` para el catálogo activo. `new-policy [on\|off\|admit]` permite `admit`, que añade llegadas a `selectedModels` personalizado; sin proveedor selecciona política global y una lectura de proveedor puede decir inherit.

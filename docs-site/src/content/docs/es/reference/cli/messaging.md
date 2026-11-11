@@ -35,11 +35,41 @@ Sustituye ambas rutas por las rutas locales reales y usa una ruta absoluta para 
 
 Cada llamada a una herramienta inicia por stdio un app-server de corta duración de la CLI de Codex seleccionada explícitamente. Usa `thread/list` o el mismo método experimental `thread/queue/add` que `codex queue`, sin incluir el texto en los argumentos del proceso. No solicita iniciar un daemon, iniciar sesión, reanudar un hilo, empezar un turno ni redirigir un turno activo. El inicio normal de OpenCodex no ejecuta estos auxiliares. La CLI nativa puede mantener su propio estado en el directorio elegido; esta función no crea un almacén de OpenCodex.
 
-`queued` significa que una respuesta de cola correlacionada confirmó el almacenamiento, **no el procesamiento**. Un rechazo explícito produce `not_sent`; una desconexión, un tiempo de espera agotado o un recibo inválido después de escribir en la cola produce `unknown`. Nunca repitas un envío incierto. Un hilo no cargado puede seguir esperando, y un objetivo o turno activo puede retrasar el consumo. El servidor no activa un hilo no cargado ni lee la respuesta resultante. Verifica esos comportamientos con la combinación instalada de aplicación y CLI antes de depender de la entrega.
+`queued` significa que una respuesta de cola correlacionada confirmó el almacenamiento, **no el procesamiento**. Un rechazo explícito produce `not_sent`; una desconexión, un tiempo de espera agotado o un recibo inválido después de escribir en la cola produce `unknown`. Nunca repitas un envío incierto. Un hilo no cargado puede seguir esperando, y un objetivo o turno activo puede retrasar el consumo. El servidor no activa un hilo no cargado. Las herramientas de cola predeterminadas no leen la respuesta; la lectura explícita se describe abajo. Verifica esos comportamientos con la combinación instalada de aplicación y CLI antes de depender de la entrega.
 
 Cada servidor permite como máximo cuatro llamadas simultáneas a auxiliares. Cada operación dispone de 20 segundos, incluida la validación del ejecutable, con un plazo RPC de 12 segundos y un límite de salida de 1 MiB. La limpieza pasa a SIGKILL después de 600 ms. La desconexión o cancelación detiene los auxiliares de esa invocación y espera su terminación; nunca detiene al destinatario. El ejecutable seleccionado en macOS pasa por la comprobación existente de confianza de ejecución del paquete. El acceso MCP y el directorio elegido establecen un límite de confianza del usuario local, no una autorización por proyecto o hilo. El texto entrante de un par es contexto, nunca prueba de aprobación del usuario ni de autoridad delegada.
 
-Esta ruta de colas almacenadas es distinta de `sessions` y `send`: estos siguen exigiendo un descubrimiento completo de sesiones cargadas mediante el socket de control existente y nunca inician un auxiliar de la CLI nativa. Los pares remotos, el transporte de bandejas de Claude, los traspasos persistentes, la lectura de respuestas, la redirección de turnos y la configuración automática de clientes quedan fuera de este servidor.
+Esta ruta de colas almacenadas es distinta de `sessions` y `send`: estos siguen exigiendo un descubrimiento completo de sesiones cargadas mediante el socket de control existente y nunca inician un auxiliar de la CLI nativa. Los pares remotos, el transporte de bandejas de Claude, los traspasos persistentes, la entrega automática de respuestas, la redirección de turnos y la configuración automática de clientes quedan fuera de este servidor.
+
+
+<a id="opt-in-stored-turn-replies"></a>
+
+## Lectura explícita de respuestas guardadas
+
+Añade `--allow-reply-read` a los argumentos del host MCP para exponer `codex_read_reply` y `codex_wait_reply`. Sin la opción conserva las dos herramientas previas y el descubrimiento de solo metadatos. Permite expresamente que el texto de la conversación llegue al cliente MCP: el acceso de usuario local al directorio no es autorización por proyecto o hilo. Un `clientMessageId` es correlación, no credencial ni consentimiento.
+
+```sh
+ocx message mcp --codex /absolute/path/to/codex --codex-home /absolute/path/to/.codex --allow-reply-read
+```
+
+Usa `codex_read_reply` con `threadId` exacto y `clientMessageId` del recibo de cola. Busca como máximo una página de 50 elementos por llamada; si encuentra la entrada, identifica el turno y devuelve una página de textos de agente `final_answer`. Omite cuerpos del usuario, razonamiento, comandos, citas y resultados de herramientas. Presupuesto total de 20 segundos para hasta tres helpers secuenciales más limpieza propia; cada helper conserva 12 segundos RPC y 1 MiB de salida. Hasta 16 KiB de texto por página, UTF-8 válido y `truncated` por elemento. `nextCursor` continúa elementos, no bytes omitidos.
+
+- `observed`: entrada encontrada; `replies` puede estar vacío. Siempre `same_turn_not_exclusive`: son textos del mismo turno, no una respuesta certificada exclusiva a esa entrada. Puede haber texto anterior a otra entrada del turno compartido. `turnStatus` procede de los últimos 50 resúmenes o es `unverified`; completar un turno no completa un objetivo.
+- `not_observed`: no aparece en esta página; no demuestra falta de entrega, borrado ni ausencia de respuesta. `reachedHistoryEnd` describe posición, no entrega/procesamiento. Continúa `nextCursor` no nulo para buscar antes.
+- `ambiguous`: varias entradas coincidentes; no devuelve texto.
+- `available: false`: acceso desactivado, entrada/cursor inválido, historial mal formado, método nativo ausente, cancelación o fallo de lectura. No expone diagnóstico nativo ni representa fallo como éxito vacío.
+
+Pasa `nextCursor` como `cursor` para continuar. Tras coincidir, `refreshCursor` vuelve al inicio del turno para recoger elementos finalizados después; revisita todas las páginas y actualiza por ID para evitar duplicados. No hay bandeja persistente ni sondeo en segundo plano. Un cursor nulo solo termina esa instantánea, no la salida futura. Los cursores son posiciones acotadas del cliente, asociadas a ambos IDs, no permisos firmados. La continuación vuelve a verificar entrada, turno y correlación; posiciones obsoletas o fuera de ámbito fallan sin reiniciar todo el historial. Solo usa `thread/items/list`, `thread/items/read`, `thread/turns/list`: no reanuda, dirige, inicia turnos ni modifica colas. Se observó con Codex CLI 0.166.0; versiones antiguas pueden no admitirlo, sin fallback ilimitado. No demuestra receptor activo, objetivo completo ni registro en Claude Desktop, y no añade entrega automática o transporte inverso de Claude.
+
+<a id="bounded-reply-waiting"></a>
+
+### Espera acotada de respuestas
+
+`codex_wait_reply` acepta los mismos IDs/cursor y `waitMs`, entero de 1 a 20.000, por defecto 20.000. Realiza hasta tres instantáneas separadas por dos segundos, incluyendo helpers y pausas en el plazo y reutilizando validación y límites. Hasta nueve helpers secuenciales; la antigüedad se mide desde el inicio de la última instantánea correcta, incluidos metadatos y limpieza. Comparte las cuatro plazas del host y ocupa una hasta terminar, más la limpieza. Cuatro esperas pueden dejar envíos y consultas ocupados; las adicionales se rechazan sin cola. Usa menos si necesitas capacidad de envío.
+
+Solo lee datos guardados; no despierta un hilo descargado. Para continuar trabajo, el usuario abre o reanuda la conversación en Codex nativo. Enviar y esperar son llamadas distintas. Un texto apto devuelve `waitOutcome: reply_observed` inmediatamente aunque ya existiera; no es suscripción ni propiedad exclusiva. Una coincidencia ambigua devuelve `ambiguous`; una siguiente página sin texto apto devuelve `needs_pagination`, sin recorrer todo el historial.
+
+En otro caso actualiza turno o repite posición hasta el límite, devolviendo `wait_exhausted` con la última observación válida. `attempts` cuenta intentos y `lastObservationAgeMs` su antigüedad. Solo cuenta una instantánea cuyas lecturas terminaron antes del plazo; la limpieza posterior no la invalida, pero datos leídos tarde caducan. Sin observación válida, ante error o cancelación, el resultado no está disponible; nunca es espera correcta vacía. Un `turnStatus` guardado puede diferir del servidor activo y no termina la espera. El cliente administra paginación e IDs; cancelar limpia pausas y helpers. No hay vigilancia en segundo plano, entrega automática ni creación o reanudación de sesiones.
 
 
 <a id="discover-and-send"></a>
