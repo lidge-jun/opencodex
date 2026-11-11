@@ -14,6 +14,8 @@ import { handleResponses } from "../../src/server/responses/core";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { planAnthropicServerTools, withholdAdvisorServerTools } from "../../src/adapters/anthropic/advisor-tool";
+import { webSearchPairFromItem } from "../../src/claude/outbound";
 
 // Claude Code declares Anthropic's typed Advisor server tool (#8448). On the translated Messages
 // lane it travels out of body to first-party Anthropic, or to a gateway that opts in with
@@ -385,5 +387,41 @@ describe("the proxy Advisor owns the advisor name for its turn", () => {
     const admitted = await coreTurn(false, { providers: [], models: [MODEL, ADVISOR.model] });
     expect(toolTypes(admitted.wire)).toEqual(["function", "advisor_20260301"]);
     expect(admitted.reasons).not.toContain("advisor-tool-outside-model-scope");
+  });
+});
+
+describe("a shadowed turn stays shadowed on every leg", () => {
+  const provider = { adapter: "anthropic" as const, baseUrl: FIRST_PARTY, apiKey: "k" };
+  const run: Rec[] = [
+    { type: "server_tool_use", id: "srvtoolu_adv1", name: "advisor", input: {} },
+    { type: "advisor_tool_result", tool_use_id: "srvtoolu_adv1", content: PLAIN },
+  ];
+  test("withholding drops the declaration and the Advisor history, so a later leg without the synthetic tool adds neither", () => {
+    const parsed: { _anthropicServerTools?: Rec[]; _anthropicServerReplay?: ReadonlyMap<string, readonly Rec[]> } = {
+      _anthropicServerTools: [ADVISOR, { type: "web_search_20250305", name: "web_search" }],
+      _anthropicServerReplay: new Map([["text:after", run]]),
+    };
+    expect(withholdAdvisorServerTools(parsed)).toBe(true);
+    // The leg after the proxy Advisor runs out of consultations has no function named advisor.
+    const plan = planAnthropicServerTools(provider, parsed._anthropicServerTools, parsed._anthropicServerReplay, new Set(), true);
+    expect(plan.declared.map(tool => tool.type)).toEqual(["web_search_20250305"]);
+    expect(plan.replay).toBeUndefined();
+    expect(plan.betas).toEqual([]);
+    expect(withholdAdvisorServerTools(parsed)).toBe(false);
+  });
+});
+
+describe("a stored Advisor item that fails validation", () => {
+  test("is dropped instead of becoming an empty web_search", () => {
+    const item = {
+      type: "web_search_call", id: "ws_1", status: "completed",
+      anthropic_blocks: {
+        use: { type: "server_tool_use", id: "srvtoolu_adv2", name: "advisor", input: { smuggled: "x" } },
+        result: { type: "advisor_tool_result", tool_use_id: "srvtoolu_adv2", content: PLAIN },
+      },
+    };
+    expect(webSearchPairFromItem(item)).toBeUndefined();
+    const valid = { ...item, anthropic_blocks: { ...item.anthropic_blocks, use: { ...item.anthropic_blocks.use, input: {} } } };
+    expect(webSearchPairFromItem(valid)?.name).toBe("advisor");
   });
 });

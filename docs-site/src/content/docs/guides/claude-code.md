@@ -1108,9 +1108,14 @@ request and returns a `server_tool_use` block named `advisor` followed by an
   destination that receives the declaration carries it in place, with the beta. The call input
   must be an empty object and the result one of the three documented variants; anything else is
   dropped, as it is for every other destination.
-- An Advisor call still pending when Anthropic ends the response with `pause_turn` is not
-  surfaced or resumed. The resend still carries the declaration and the beta, so the model can
-  consult again.
+- An Advisor call still pending when Anthropic ends the response with `pause_turn`, or with
+  `tool_use` for a client tool, is not surfaced or resumed. The next request still carries the
+  declaration and the beta, so the model can consult again.
+- When the OpenCodex Advisor owns the name for a turn, Claude Code's earlier Advisor exchanges are
+  also withheld for every request of that turn, so the prompt does not change partway through it.
+- Anthropic reports the advisor model's tokens separately from the main model's usage, and
+  OpenCodex does not add them to its usage log, key spend or the usage Claude Code receives.
+  Check Anthropic's console for the advisor cost.
 
 ### Unicode-property patterns in tool schemas
 

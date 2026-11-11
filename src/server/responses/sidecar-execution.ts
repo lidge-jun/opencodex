@@ -11,7 +11,7 @@ import { formatErrorResponse } from "../../bridge";
 import { planWebSearch, buildWebSearchTool, runWithWebSearch } from "../../web-search";
 import { createRegisteredAdvisorPlan } from "./advisor-plan-slot";
 import { ADVISOR_TOOL_NAME, createAdvisorSidecarStep } from "./advisor-slot";
-import { advisorServerToolDestination, hasAdvisorDeclaration, isAdvisorServerToolType } from "../../adapters/anthropic/advisor-tool";
+import { advisorServerToolDestination, withholdAdvisorServerTools } from "../../adapters/anthropic/advisor-tool";
 import { addProtocolEntryReason } from "../../protocols/trace";
 import { buildToolBridgeMaps } from "./collaboration";
 import {
@@ -211,9 +211,9 @@ export async function executeResponsesSidecars(
   // is withheld here, not only while the function is on the catalog: a later loop iteration that
   // drops the synthetic tool must not forward it either (adapters/anthropic/advisor-tool.ts).
   const withholdShadowedAdvisorTool = () => {
-    if (!hasAdvisorDeclaration(parsed._anthropicServerTools)) return;
-    if (advisorServerToolDestination(route.provider)) addProtocolEntryReason(logCtx, "advisor-tool-shadowed-by-proxy-advisor");
-    parsed._anthropicServerTools = parsed._anthropicServerTools?.filter(tool => !isAdvisorServerToolType(tool.type));
+    if (withholdAdvisorServerTools(parsed) && advisorServerToolDestination(route.provider)) {
+      addProtocolEntryReason(logCtx, "advisor-tool-shadowed-by-proxy-advisor");
+    }
   };
 
   // Image / web-search sidecars: plan once, then dispatch with runTurn-aware priority.

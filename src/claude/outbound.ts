@@ -291,10 +291,15 @@ export function sanitizeWebSearchInput(input: unknown): Rec {
  */
 export function webSearchPairFromItem(item: Rec): {
   id: string; name: string; resultType: string; input: Rec; resultContent: unknown; completed: boolean;
-} {
+} | undefined {
   const action = isRec(item.action) ? item.action : {};
   const completed = item.status !== "failed";
   const { use, result } = isRec(item.anthropic_blocks) ? item.anthropic_blocks : {};
+  // An Advisor exchange is only ever emitted verbatim; one that fails validation is dropped rather
+  // than falling through to an empty web_search below.
+  if (isRec(use) && use.name === ADVISOR_SERVER_TOOL_NAME && !(isRec(result) && typeof use.id === "string"
+    && isAdvisorCallInput(use.input) && isAdvisorResultContent(result.content)
+    && result.tool_use_id === use.id && result.type === "advisor_tool_result")) return undefined;
   if (isRec(use) && isRec(result) && typeof use.id === "string" && isRec(use.input)
     && (use.name === "web_search" || use.name === "web_fetch"
       || (use.name === ADVISOR_SERVER_TOOL_NAME && isAdvisorCallInput(use.input) && isAdvisorResultContent(result.content)))
@@ -796,6 +801,7 @@ export function responsesSseToAnthropicSse(
               ensureStarted();
               closeOpenBlock();
               const pair = webSearchPairFromItem(item);
+              if (!pair) break;
               const toolIndex = blockIndex++;
               emit("content_block_start", {
                 type: "content_block_start", index: toolIndex,
@@ -1143,6 +1149,7 @@ export function responsesJsonToAnthropicMessage(json: unknown, model: string, tr
       case "web_search_call": {
         // Server-side search: emit the Anthropic pair. Does NOT set sawToolUse.
         const pair = webSearchPairFromItem(raw);
+        if (!pair) break;
         content.push({ type: "server_tool_use", id: pair.id, name: pair.name, input: pair.input });
         content.push({ type: pair.resultType, tool_use_id: pair.id, content: pair.resultContent });
         if (pair.completed && pair.name === "web_search") webSearchRequests++;

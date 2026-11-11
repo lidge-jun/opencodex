@@ -86,6 +86,27 @@ function runHasOtherServerTool(run: readonly Rec[]): boolean {
   return run.some(block => block.type === "server_tool_use" && block.name !== ADVISOR_SERVER_TOOL_NAME);
 }
 
+/**
+ * Withhold the caller's Advisor for a turn the proxy Advisor joins: its declaration and every
+ * replayed run that contains an Advisor call. The synthetic `advisor` owns the name for the whole
+ * turn, so a later leg that drops the synthetic tool (consultations exhausted) must not bring the
+ * history or the beta back and change the prompt mid-turn. Returns whether a declaration was withheld.
+ */
+export function withholdAdvisorServerTools(parsed: {
+  _anthropicServerTools?: readonly Rec[];
+  _anthropicServerReplay?: ReadonlyMap<string, readonly Rec[]>;
+}): boolean {
+  const declared = hasAdvisorDeclaration(parsed._anthropicServerTools);
+  if (declared) parsed._anthropicServerTools = parsed._anthropicServerTools!.filter(tool => !isAdvisorServerToolType(tool.type));
+  const replay = parsed._anthropicServerReplay;
+  if (replay && [...replay.values()].some(runHasAdvisor)) {
+    const kept = new Map([...replay].filter(([, run]) => !runHasAdvisor(run)));
+    if (kept.size > 0) parsed._anthropicServerReplay = kept;
+    else delete parsed._anthropicServerReplay;
+  }
+  return declared;
+}
+
 export interface AnthropicServerToolPlan {
   /** Typed declarations this destination receives, in caller order. */
   declared: Rec[];
