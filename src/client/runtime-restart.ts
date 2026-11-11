@@ -45,8 +45,11 @@ export interface ClientRestartIo {
   supervisor(): Promise<ClientRestartSupervisor | null>;
   /** The durable connection is no longer the one this runtime serves. */
   connectionChanged?: () => boolean;
-  /** Hand off to what the durable state now calls for; exits the process for its owner to relaunch. */
-  recycle?: () => Promise<void>;
+  /**
+   * Hand off to what the durable state now calls for; exits the process for its owner to relaunch.
+   * Receives the same supervisor verdict as the refusal path (a service only when it is viable).
+   */
+  recycle?: (supervisor: ClientRestartSupervisor | null) => Promise<void>;
   /** Stop the tunnel supervisor and the listener, giving in-flight requests up to `drainMs`. */
   stop(drainMs: number): Promise<void>;
   /** Start the replacement; resolves once it answers, rejects when none survives. */
@@ -111,7 +114,7 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
         const recycle = io.recycle, changed = io.connectionChanged;
         // Let the 202 reach the CLI before the listener closes, then confirm the connection is
         // still ended: a connect that committed meanwhile keeps this runtime (the CLI reports kept).
-        flight = sleep(200).then(async () => { if (changed()) await recycle(); }).finally(() => { flight = null; });
+        flight = sleep(200).then(async () => { if (changed()) await recycle(await io.supervisor()); }).finally(() => { flight = null; });
         return { kind: "accepted", alreadyRestarting: false };
       }
       const supervisor = await io.supervisor();

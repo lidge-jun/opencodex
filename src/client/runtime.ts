@@ -83,6 +83,8 @@ export interface StandaloneRecycleIo {
   exitProcess?: (code: number) => void;
   configuredPort?: () => number | undefined;
   isDesktopSupervised?: () => boolean;
+  /** A service that will really relaunch this process; defaults to the OCX_SERVICE marker. */
+  serviceSupervised?: () => boolean;
 }
 
 function cleanup(): void {
@@ -110,8 +112,10 @@ export function standaloneRecycleEnv(
   disconnectedTokenFingerprint: string,
 ): NodeJS.ProcessEnv {
   const childEnv = { ...env };
-  // A detached replacement is not the desktop app's child.
+  // A detached replacement is not the desktop app's child, nor a service's: a process that outlived
+  // its service registration must not hand the stale marker on.
   delete childEnv[DESKTOP_SUPERVISED_ENV];
+  delete childEnv.OCX_SERVICE;
   const admissionToken = childEnv.OPENCODEX_API_AUTH_TOKEN?.trim();
   if (admissionToken && serviceApiTokenFingerprint(admissionToken) !== disconnectedTokenFingerprint) {
     // A surviving env token shadows OCX_API_TOKEN_FILE entirely, so nothing below can
@@ -164,7 +168,8 @@ export async function recycleStandalone(
   const port = activePort ?? (io.configuredPort ?? configuredTcpPort)();
   const exit = io.exitProcess ?? ((code: number) => { process.exit(code); });
   // Capture the one-use sibling handoff before this process removes its runtime record.
-  const replacementEnv = port && process.env.OCX_SERVICE !== "1"
+  const serviceSupervised = (io.serviceSupervised ?? (() => process.env.OCX_SERVICE === "1"))();
+  const replacementEnv = port && !serviceSupervised
     ? withSiblingMarker(standaloneRecycleEnv(process.env, disconnectedTokenFingerprint), issueSiblingHandoff)
     : null;
   try {
@@ -201,7 +206,7 @@ export async function recycleStandalone(
   //
   // launchd's KeepAlive is failure-only too (`SuccessfulExit` false), so exit 1 is what
   // relaunches it as well; an exit 0 would leave the job stopped.
-  if (process.env.OCX_SERVICE === "1") {
+  if (serviceSupervised) {
     exit(1);
     return;
   }
@@ -434,7 +439,10 @@ export async function startClientRuntime(
     stopping: () => shuttingDown,
     supervisor: io.restartSupervisor ?? clientRestartSupervisor,
     connectionChanged: () => clientConnectionEnded(state.value, readClientConnectionState()),
-    recycle: () => recycleStandalone(state.value.tokenFingerprint),
+    recycle: supervisor => recycleStandalone(state.value.tokenFingerprint, {
+      isDesktopSupervised: () => supervisor === "desktop",
+      serviceSupervised: () => supervisor === "service",
+    }),
     stop: stopServing,
     spawnReplacement: async deadlineAt => {
       const { replacementStartEnvironment } = await import("../server/management/system-restart");

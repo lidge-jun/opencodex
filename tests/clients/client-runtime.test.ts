@@ -161,6 +161,23 @@ describe("standalone recycle", () => {
     }
   });
 
+  // Final review: a process launched with OCX_SERVICE=1 can outlive its service registration. A
+  // restart-driven recycle told the service is not viable must start a verified replacement (without
+  // the stale service marker) instead of exiting 1 into nothing.
+  test("a recycle told the service is not viable starts a replacement despite OCX_SERVICE=1", async () => {
+    await withServiceMarker("1", async () => {
+      const calls: string[] = [];
+      await recycleStandalone(serviceApiTokenFingerprint("disconnected-hub-token"), {
+        configuredPort: () => 10456,
+        isDesktopSupervised: () => false,
+        serviceSupervised: () => false,
+        spawnReplacement: async request => { calls.push(`spawn:${request.env?.OCX_SERVICE ?? "unset"}`); },
+        exitProcess: code => { calls.push(`exit:${code}`); },
+      });
+      expect(calls).toEqual(["spawn:unset", "exit:0"]);
+    });
+  });
+
   test("a supervised client still exits 1 without spawning", async () => {
     await withServiceMarker("1", async () => {
       const calls: string[] = [];

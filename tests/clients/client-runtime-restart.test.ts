@@ -271,6 +271,19 @@ describe("client restart controller", () => {
     });
   }
 
+  // Final review: the recycle hands off to the supervisor only when supervision is viable, so it
+  // receives the same verdict (isServiceViable included) the refusal path uses.
+  test("the recycle receives the supervisor verdict", async () => {
+    for (const supervisor of ["desktop", "service", null] as const) {
+      const seen: unknown[] = [];
+      const { io } = fakeIo({ supervisor: async () => supervisor, connectionChanged: () => true, recycle: async verdict => { seen.push(verdict); } });
+      const controller = createClientRestartController(io);
+      await controller.request();
+      await controller.settled();
+      expect(seen).toEqual([supervisor]);
+    }
+  });
+
   test("an unchanged connection under a supervisor is still refused", async () => {
     const { io, calls } = fakeIo({ supervisor: async () => "service", connectionChanged: () => false, recycle: async () => { calls.push("recycle"); } });
     expect(await createClientRestartController(io).request()).toEqual({ kind: "supervised", supervisor: "service" });
