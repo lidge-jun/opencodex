@@ -28,6 +28,9 @@ and Google video targets.
 Structured instructions with image/audio/document parts keep their image detail and use the same leading-system template
 role rule as text-only instructions, so pinned templates receive a chronological `user` turn rather than an invalid late
 `system` or `developer` role. `tests/adapters/openai/openai-chat-qwen38-leading-system.test.ts` covers the structured image.
+Inline audio never moves into a `system`/`developer` content part: its instruction text retains the original slot and the
+audio follows in a user-compatible carrier after any pending tool result. `tests/adapters/openai/openai-chat-audio.test.ts`
+covers the default folded role and this tool-result boundary.
 
 The role that slot carries is a separate decision, and the setting that makes it is tri-state.
 `foldDeveloperRoleToSystem` unset sends `system`, `true` sends `system`, and `false` sends

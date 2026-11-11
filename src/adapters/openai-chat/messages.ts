@@ -290,14 +290,30 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
             role: msg.role === "developer" ? (leadingSystemTemplate ? "user" : developerWireRole) : "user",
             content: chatParts,
           };
-          if (provider.singleLeadingSystemMessage === true && chatMsg.role !== "user") {
-            // Keep document bytes in a user-compatible slot; only their accompanying text is
-            // instruction content. Use the same tool barrier so instruction order is retained.
-            const instruction = { role: developerWireRole, content: chatParts.filter(p => p.type === "text") };
-            if (instruction.content.length > 0) {
-              (pendingToolCalls.length > 0 ? deferredBarrierMessages : out).push(instruction);
+          if (msg.role === "developer" && chatMsg.role !== "user"
+            && (hasAudio || provider.singleLeadingSystemMessage === true)) {
+            if (hasAudio) {
+              const audioParts = chatParts.filter(p => p.type === "input_audio");
+              const instructionParts = chatParts.filter(p => p.type !== "input_audio");
+              // Inline audio is user-content-only on this wire. Keep its instruction text in the
+              // original slot, then carry the attachment in a user message after the tool barrier.
+              chatMsg = { role: "user", content: audioParts };
+              if (instructionParts.length > 0) {
+                const instruction = { role: leadingSystemTemplate ? "user" : developerWireRole,
+                  content: instructionParts.filter(p => p.type === "text") };
+                const attachments = instructionParts.filter(p => p.type !== "text");
+                if (attachments.length > 0) instruction.content = [...instruction.content, ...attachments];
+                if (instruction.content.length > 0) {
+                  (pendingToolCalls.length > 0 ? deferredBarrierMessages : out).push(instruction);
+                }
+              }
+            } else {
+              const instruction = { role: developerWireRole, content: chatParts.filter(p => p.type === "text") };
+              if (instruction.content.length > 0) {
+                (pendingToolCalls.length > 0 ? deferredBarrierMessages : out).push(instruction);
+              }
+              chatMsg = { role: "user", content: chatParts.filter(p => p.type !== "text") };
             }
-            chatMsg = { role: "user", content: chatParts.filter(p => p.type !== "text") };
           }
         }
         if (pendingToolCalls.length > 0) deferredBarrierMessages.push(chatMsg);

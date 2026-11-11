@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../../../src/adapters/openai-chat";
+import { parseRequest } from "../../../src/responses/parser";
 import type { OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 
 const provider: OcxProviderConfig = {
@@ -72,6 +73,32 @@ test("user audio maps to a Chat input_audio content part", () => {
       { type: "input_audio", input_audio: { data: AUDIO_WAV.data, format: "wav" } },
     ],
   }]);
+});
+
+test("developer inline audio retains the instruction slot and uses a user audio carrier", () => {
+  const parsed = parseRequest({ model: "gpt-audio", instructions: "Base", input: [
+    { role: "user", content: "First" },
+    { type: "function_call", call_id: "call_1", name: "lookup", arguments: "{}" },
+    { role: "developer", content: [
+      { type: "input_text", text: "Listen to the recording" },
+      { type: "input_audio", audio_url: "data:audio/wav;base64,YXVkaW8=", format: "wav" },
+    ] },
+    { type: "function_call_output", call_id: "call_1", output: "result" },
+    { role: "user", content: "Continue" },
+  ] });
+  const messages = JSON.parse(createOpenAIChatAdapter({ adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1" })
+    .buildRequest(parsed).body).messages as Array<Record<string, unknown>>;
+  expect(messages).toEqual([
+    { role: "system", content: "Base" },
+    { role: "user", content: "First" },
+    { role: "assistant", content: "", tool_calls: [{ id: "call_1", type: "function", function: { name: "lookup", arguments: "{}" } }] },
+    { role: "tool", tool_call_id: "call_1", content: "result" },
+    { role: "system", content: [{ type: "text", text: "Listen to the recording" }] },
+    { role: "user", content: [{ type: "input_audio", input_audio: { data: "YXVkaW8=", format: "wav" } }] },
+    { role: "user", content: "Continue" },
+  ]);
+  expect(messages.some(message => (message.role === "system" || message.role === "developer")
+    && JSON.stringify(message.content).includes("input_audio"))).toBe(false);
 });
 
 test("tool-result audio rides a follow-up user message after the tool round", () => {
