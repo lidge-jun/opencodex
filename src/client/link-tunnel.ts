@@ -9,6 +9,7 @@ import { getConfigPath } from "../config/paths";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { linkDir, linkKnownHostsPath } from "../link/paths";
 import { buildTunnelArgv } from "../link/ssh-argv";
+import { defaultSshCaptureOpener, openSshCapture, type SshCaptureOpener } from "../link/ssh-capture";
 import { createSshRunner, type SshChild, type SshRunner } from "../link/ssh-runner";
 import {
   CLIENT_TUNNEL_RETRY_POLICY,
@@ -53,6 +54,8 @@ export interface ClientLinkTunnelDeps {
   runner?: SshRunner;
   configDir?: string;
   knownHostsFile?: string;
+  /** Opt-in SSH capture (src/link/ssh-capture.ts); defaults to the one for this configuration home. */
+  sshCapture?: SshCaptureOpener;
   setTimer?: (callback: () => void, ms: number) => ReturnType<typeof setTimeout>;
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
 }
@@ -384,14 +387,17 @@ export function spawnClientLinkTunnel(spec: ClientLinkTunnelSpec, deps: ClientLi
   if (!isLinkPort(spec.tunnelPort)) throw new Error("client tunnel port is outside the link range");
   const knownHostsFile = deps.knownHostsFile ?? linkKnownHostsPath(deps.configDir);
   const runner = deps.runner ?? createSshRunner();
+  // Off unless the operator opened a capture window on this machine; then only the level changes.
+  const capture = openSshCapture(deps.sshCapture ?? defaultSshCaptureOpener(linkDir(deps.configDir)), "child", spec.linkId);
   const argv = buildTunnelArgv({
     alias: spec.alias,
     direction: "L",
     bindPort: spec.tunnelPort,
     targetPort: spec.peerListenerPort,
     knownHostsFile,
+    ...(capture ? { logLevel: capture.logLevel } : {}),
   });
-  const child = runner.spawnTunnel(argv);
+  const child = capture ? runner.spawnTunnel(argv, { stderrLine: capture.stderrLine }) : runner.spawnTunnel(argv);
   const pidfile = clientTunnelPidfilePath(deps.configDir);
   const startTime = processStartTime(child.pid, process.platform, deps);
   try {

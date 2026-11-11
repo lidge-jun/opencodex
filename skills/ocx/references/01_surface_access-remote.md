@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 38.
+Declared capabilities: 41.
 
 ### `ocx link probe`
 
@@ -776,3 +776,53 @@ State-changing: yes. JSON mode: `payload`.
 
 - A pinned sync, then a second pinned sync with the restart flag; works on full Children from 2.93.0. app-server scope leaves the Codex desktop app's own app-server running. While a relayed model request for that Child is in flight nothing is sent and the item is busy (restart-skipped:link-active).
 - Refused on Windows Children (unsupported windows-restart) and reported unsupported for ocx-child. The codex scope needs a logged-in GUI session on the Child; its outcome is requested, not confirmed. Exit codes as for ocx link update.
+
+### `ocx link capture start`
+
+Usage: `ocx link capture start [--minutes <1-60>] [--json]`
+
+Open a short window in which this machine's link tunnels log sanitized SSH diagnostics.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--minutes` | number | Window length, 15 by default and 60 at most; starting again while open moves the expiry. |
+| `--json` | boolean | Emit the capture status as JSON. |
+
+- A local file operation under <OPENCODEX_HOME>/link/ssh-capture/ on a Home or a Child; it needs no running proxy and no admin token, and no sync, management route or remote input can start it. While the window is open, the next ssh attempt of each Home (-R) or Child (-L) tunnel runs with LogLevel=DEBUG1; an already connected tunnel keeps its level until it reconnects.
+- Every stderr line passes an allowlist of OpenSSH line shapes before it is stored: host names, addresses, users, ports, paths, keys, fingerprints, commands and server messages become fixed placeholders and an unknown line is stored only as the category unrecognized. One file per window, at most 1 MiB, deleted 72 h after its last write; at most four files are kept, the oldest deleted first. Admission, retries and the tunnel's failure classification are unchanged.
+
+### `ocx link capture stop`
+
+Usage: `ocx link capture stop [--json]`
+
+Close the SSH capture window; capture files stay until their retention passes.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the capture status as JSON. |
+
+- Removes only the control file, so nothing more is stored and the next tunnel attempt runs ssh with LogLevel=ERROR again. Capture files are kept for sharing and deleted 72 h after their last write; status and later starts apply that retention.
+
+### `ocx link capture status`
+
+Usage: `ocx link capture status [--json]`
+
+Show whether SSH capture is on, its expiry and the retained capture files.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the capture status as JSON. |
+
+- Reads the local capture directory. It also applies retention: capture files 72 h past their last write and an expired control file are deleted, and the count is reported as removed.

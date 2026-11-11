@@ -1411,6 +1411,16 @@ These commands start one job on the Home for Home-initiated Children and print i
 
 The wait does not count time an item spends queued behind another job. Removing a link while a job holds it answers `409 link_operation_in_progress`.
 
+## Remote Link SSH capture
+
+```text
+ocx link capture start [--minutes <1-60>] [--json]
+ocx link capture stop [--json]
+ocx link capture status [--json]
+```
+
+These commands manage a short local window, 15 minutes by default and 60 at most, in which this machine's Remote Link tunnels run SSH with `LogLevel=DEBUG1` and store a sanitized copy of what SSH reports under `<OPENCODEX_HOME>/link/ssh-capture/`. They run on a Home or a Child, need no running proxy or admin token, and print the capture status: `{enabled, logLevel, startedAt, expiresAt, directory, retentionHours, maxMinutes, maxFileBytes, files, removed}`. `stop` ends the window and keeps the files; `status` and `start` delete files 72 hours after their last write and report how many they removed. What is stored and how it is redacted is in [Capture SSH diagnostics](/guides/remote-link/#capture-ssh-diagnostics). Invalid arguments exit 2.
+
 ## Remote Link Child attestations
 
 A peer that sends work through a Remote Link Child can check two more facts in the Child's
