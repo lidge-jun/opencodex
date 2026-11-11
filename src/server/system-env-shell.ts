@@ -31,9 +31,9 @@ export type SystemEnvDeps = {
  * Resolve the Keychain source once, asynchronously, so the synchronous marker decision below
  * never spawns `security` itself (#8161). A caller-supplied probe (a test seam) is kept as is.
  */
-export async function withResolvedKeychainPresence(deps: SystemEnvDeps): Promise<SystemEnvDeps> {
+export async function withResolvedKeychainPresence(deps: SystemEnvDeps, authMode?: string): Promise<SystemEnvDeps> {
   if (deps.authDetect?.keychainProbe) return deps;
-  const presence = await resolveClaudeKeychainPresence();
+  const presence = await resolveClaudeKeychainPresence(authMode);
   return { ...deps, authDetect: { ...deps.authDetect, keychainProbe: () => presence } };
 }
 

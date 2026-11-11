@@ -866,7 +866,7 @@ export async function cmdClaude(args: string[]): Promise<number> {
   const gateway = await fetchGatewayModels(route, { admissionConfig: config });
   const forceAvailableSelectors = typeof route === "number" ? undefined : gateway?.models.map(model => model.id) ?? [];
   const allowRootSkipPermissions = shouldAllowRootSkipPermissions(args);
-  const keychainPresence = await resolveClaudeKeychainPresence();
+  const keychainPresence = await resolveClaudeKeychainPresence(config.claudeCode?.authMode);
   const env = buildClaudeEnv(config, route, process.env, contextWindows, {
     allowRootSkipPermissions, forceAvailable, forceAvailableSelectors, authDetect: { keychainProbe: () => keychainPresence },
   });

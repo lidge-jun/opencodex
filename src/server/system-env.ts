@@ -219,7 +219,7 @@ export async function injectSystemEnv(
     clientBaseUrl: destination.origin,
   };
   // One asynchronous Keychain observation serves both the launchd marker and the shell env file.
-  const resolvedDeps = await withResolvedKeychainPresence(deps);
+  const resolvedDeps = await withResolvedKeychainPresence(deps, config.claudeCode?.authMode);
   const markerMode = systemEnvMarkerMode(config, resolvedDeps);
   // The data-plane credential this host can present to its own public listener: env token,
   // hardened service token file, then a configured key. Never the admin token.

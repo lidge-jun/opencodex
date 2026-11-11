@@ -1537,7 +1537,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     const { defaultAuthDetectDeps, detectClaudeAuth, ownAdmissionTokens, resolveClaudeKeychainPresence } = await import("../../claude/auth-detect");
     const { authModeIntent, resolveClaudeAuthMode } = await import("../../claude/auth-mode");
     // Awaited, never spawned synchronously: a blocked Keychain lookup must not stall /healthz (#8161).
-    const keychainPresence = await resolveClaudeKeychainPresence();
+    const keychainPresence = await resolveClaudeKeychainPresence(config.claudeCode?.authMode);
     const authDetection = detectClaudeAuth(defaultAuthDetectDeps(process.env, ownAdmissionTokens(config), keychainPresence));
     const resolvedAuthMode = resolveClaudeAuthMode(config, authDetection);
     const contextWindows = buildClaudeContextWindows(

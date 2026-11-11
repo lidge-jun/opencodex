@@ -41,8 +41,15 @@ export const PROXY_MARKER = "opencodex-proxy";
  * waiting on an unlock prompt crashes `securityd` and re-locks the keychain (#8161). The shared
  * reader runs it without ever signalling the child, under the same single slot and backoff as the
  * credential read, and answers `absent` on a non-darwin host.
+ *
+ * A manual `claudeCode.authMode` ("proxy" or "subscription") never consults detection, so the
+ * probe is skipped there: a pinned user pays no wait and sees no unlock prompt for a discarded
+ * answer. The keychain source then reads `unknown`, which is never `absent`.
  */
-export function resolveClaudeKeychainPresence(): Promise<AuthPresence> {
+export function resolveClaudeKeychainPresence(authMode?: string): Promise<AuthPresence> {
+  if (authMode === "proxy" || authMode === "subscription") {
+    return Promise.resolve(process.platform === "darwin" ? "unknown" : "absent");
+  }
   return claudeKeychainReader.probe();
 }
 

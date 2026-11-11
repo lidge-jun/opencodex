@@ -170,6 +170,22 @@ test("resolveClaudeKeychainPresence answers from the shared Keychain reader's as
   }
 });
 
+
+test("a manual authMode never probes the Keychain, and auto still does", async () => {
+  const probe = spyOn(claudeKeychainReader, "probe").mockResolvedValue("present");
+  try {
+    for (const mode of ["proxy", "subscription"]) {
+      // Detection is discarded for a pinned mode, so no wait and no unlock prompt for it.
+      expect(await resolveClaudeKeychainPresence(mode)).toBe(process.platform === "darwin" ? "unknown" : "absent");
+    }
+    expect(probe).toHaveBeenCalledTimes(0);
+    expect(await resolveClaudeKeychainPresence("auto")).toBe("present");
+    expect(await resolveClaudeKeychainPresence(undefined)).toBe("present");
+    expect(probe).toHaveBeenCalledTimes(2);
+  } finally {
+    probe.mockRestore();
+  }
+});
 test("defaultAuthDetectDeps binds env to the caller-supplied environment", () => {
   const real = defaultAuthDetectDeps({ ANTHROPIC_API_KEY: "sk-ant-from-base" });
   expect(real.env().ANTHROPIC_API_KEY).toBe("sk-ant-from-base");
