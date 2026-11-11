@@ -384,6 +384,16 @@ describe("host env (2.3)", () => {
     expect(hostChildOpsEnv(busy, runner).activity(A)).toEqual({ inFlight: 1, idle: false });
   });
 
+  test("one env reads the current idleAfterMs on every activity check (#8557 review)", () => {
+    // The scheduler's second sync group reuses the env built for the first; a policy change in between must apply.
+    const lastDataEndAt = Date.now() - 5 * 60_000;
+    updateChildPolicy({ idleAfterMs: 60_000 });
+    const env = hostChildOpsEnv(binding({ activity: () => ({ inFlight: 0, lastDataEndAt, observedSince: 0 }) }), runner);
+    expect(env.activity(A)).toEqual({ inFlight: 0, idle: true });
+    updateChildPolicy({ idleAfterMs: 30 * 60_000 });
+    expect(env.activity(A)).toEqual({ inFlight: 0, idle: false });
+  });
+
   test("catalogEtag reads the shared monitor and is null when it throws", () => {
     expect(hostChildOpsEnv(binding(), runner).catalogEtag()).toBe("\"H1\"");
     expect(hostChildOpsEnv(binding({ catalogRevision: () => { throw new Error("catalog"); } }), runner).catalogEtag()).toBeNull();

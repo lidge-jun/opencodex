@@ -79,7 +79,9 @@ export function hostChildOpsEnv(binding: ChildOpsHostBinding, runner: Pick<SshRu
   const store = () => readLinkStore(linkStorePath());
   const hosts = linkKnownHostsPath();
   const version = packageVersion("0.0.0");
-  const idleAfterMs = readChildPolicy().policy.idleAfterMs;
+  // Read on every check, not captured: the scheduler reuses one env across sync groups, and a policy change between
+  // them must apply to the next idle decision (#8557 review).
+  const idleAfterMs = (): number => readChildPolicy().policy.idleAfterMs;
   const env: ChildOpsEnv = {
     readStore: store, runner, knownHostsFile: hosts, homeVersion: version, now: Date.now, sleep: ms => Bun.sleep(ms),
     // projectLinkStatus's default compensation read; the route state's in-memory compensationFailures are not visible
@@ -89,7 +91,7 @@ export function hostChildOpsEnv(binding: ChildOpsHostBinding, runner: Pick<SshRu
     activity: linkId => {
       const now = Date.now();
       const snapshot = binding.activity(linkId, now);
-      return snapshot ? { inFlight: snapshot.inFlight, idle: isLinkIdle(snapshot, now, idleAfterMs) } : null;
+      return snapshot ? { inFlight: snapshot.inFlight, idle: isLinkIdle(snapshot, now, idleAfterMs()) } : null;
     },
     observe: record => observeChild(record, { runner, knownHostsFile: hosts, homeVersion: version, peer: binding.peer,
       platformOf: link => requireRemotePlatform(runner, link.alias, hosts), inspect: inspectRemoteChildRuntime,

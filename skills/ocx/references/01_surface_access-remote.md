@@ -869,4 +869,4 @@ State-changing: yes. JSON mode: `payload`.
 | `--json` | boolean | Emit {policy, warning} as JSON. |
 
 - Without flags it reads the policy; with flags it changes only those knobs. Stored in <configDir>/link/child-policy.json on the Home, never in config.json. An invalid file turns automatic catalog fan-out and updates off; saving merges onto that, so pass --catalog-fanout auto and an --updates mode to turn them back on.
-- Catalog fan-out syncs Home-initiated Children 60 s after a Home catalog change; it restarts Codex on a Child only with app-server-when-idle, and only while that Child is idle. A Home without links runs none of it.
+- --updates stores the update mode only; this release starts no automatic update (notify and auto-when-idle take effect when the automatic update sweep ships). Catalog fan-out syncs Home-initiated Children 60 s after a Home catalog change; it restarts Codex on a Child only with app-server-when-idle, and only while that Child is idle. A Home without links runs none of it.

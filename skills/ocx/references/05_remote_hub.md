@@ -388,7 +388,7 @@ minutes to 6 hours. Automatic jobs show `trigger: "auto"` in the job document.
 default, `notify`, `off`) and `idleAfterMs` (`--idle-after-minutes <1-60>`, default 10). Changing the
 Child policy needs the operator's request; reading it does not. A `warning: "policy-file-invalid"`
 means fan-out and updates are off; a save keeps unnamed settings off, so re-enabling needs `--catalog-fanout auto` and an `--updates` mode. The fan-out fixes the Child's
-catalog file; a Codex app-server already running there keeps its old list until restarted.
+catalog file; a Codex app-server already running there keeps its old list until restarted. This release stores `updates` but starts no automatic update yet.
 
 ## Key rotation is a two-step commit
 

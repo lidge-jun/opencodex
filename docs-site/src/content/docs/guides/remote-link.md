@@ -251,6 +251,8 @@ The policy lives in `<configDir>/link/child-policy.json` on the Home, never in `
 | `updates` | `auto-when-idle` | `off`, `notify`, `auto-when-idle` |
 | `idleAfterMs` | `600000` (10 minutes) | 1 to 60 minutes |
 
+This release stores `updates` but starts no automatic update yet; `notify` and `auto-when-idle` take effect when the automatic update sweep ships.
+
 `updates` defaults to keeping idle Children on the Home's version automatically. Automatic updates are not active in this release; the setting is stored now, so an opt-out with `ocx link policy --updates notify` or `--updates off` holds when they arrive. `idleAfterMs` is how long a Child must go without a relayed model request to count as idle; it also decides `activity.idle` in `ocx link status`.
 
 ```text
