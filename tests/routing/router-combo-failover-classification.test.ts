@@ -1702,3 +1702,35 @@ describe("provider moderation refusal keeps provider evidence and escaped echoes
     expect(comboFailureDecision(400, message)).toBe("stop");
   });
 });
+
+describe("provider moderation refusal: type-only verdicts, nested escapes and cyber copy", () => {
+  for (const verdict of ["client_closed_request", "client_cancelled", "context_length_exceeded"]) {
+    for (const where of ["root", "error"] as const) {
+      test(verdict + " stated as the " + where + " type stops", async () => {
+        const error = { code: "content_filter", message: "The input was refused by moderation.", ...(where === "error" ? { type: verdict } : {}) };
+        const raw = JSON.stringify({ ...(where === "root" ? { type: verdict } : {}), error });
+        const failure = await consumeComboFailure(new Response(raw, { status: 400 }));
+        const options = { code: failure.upstreamCode, rootCode: failure.upstreamRootCode, providerModerationRefusal: failure.providerModerationRefusal };
+        expect(comboFailureDecision(400, failure.classificationText, options)).toBe("stop");
+        expect(comboFailureCooldownScope(400, failure.classificationText, { code: failure.upstreamCode, providerModerationRefusal: failure.providerModerationRefusal })).not.toBe("none");
+        expect(isProviderModerationRefusal(400, raw, "content_filter")).toBe(false);
+      });
+    }
+  }
+
+  test("nested and doubled quoted echoes are not verdicts", () => {
+    for (const message of [
+      String.raw`Invalid 'input': "it's a \"refused by moderation\" value".`,
+      'Invalid value: ""refused by moderation"" for field mode',
+    ]) {
+      expect({ message, hop: isProviderModerationRefusal(400, message) }).toEqual({ message, hop: false });
+      expect(comboFailureDecision(400, message)).toBe("stop");
+    }
+  });
+
+  test("this proxy's own cyber-policy copy beside moderation prose stops", () => {
+    const message = JSON.stringify({ error: { code: "content_filter", message: "The input was refused by moderation. Request blocked by the upstream cybersecurity policy." } });
+    expect(isProviderModerationRefusal(400, message, "content_filter")).toBe(false);
+    expect(comboFailureDecision(400, message, { code: "content_filter" })).toBe("stop");
+  });
+});

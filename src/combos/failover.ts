@@ -1,5 +1,5 @@
 import { parseResetCooldownMs } from "../codex/routing";
-import { classifyError, isCyberPolicyCode, isCyberPolicyMessage, isTerminalRefusalCode, safetyRefusalCodeFromMessage } from "../lib/errors";
+import { CYBER_POLICY_FALLBACK_MESSAGE, classifyError, isCyberPolicyCode, isCyberPolicyMessage, isTerminalRefusalCode, safetyRefusalCodeFromMessage } from "../lib/errors";
 import { isHardPolicyOrOriginRefusal } from "../lib/hard-refusal";
 import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
 import { isAnthropicBillingFailure } from "../providers/anthropic-billing-refusal";
@@ -1029,33 +1029,58 @@ const MODERATION_EVIDENCE_LIMIT = 500;
  * 'blocked by moderation'), not a verdict, so verdict evidence must appear in prose. One pass
  * blanks every quoted span; an apostrophe inside a word ("don't") is literal text, not a quote.
  */
+/** An apostrophe between letters ("it's", "it’s") is literal text, never a quote delimiter. */
+function isInWordApostrophe(text: string, i: number): boolean {
+  const ch = text[i];
+  return (ch === "'" || ch === "\u2019") && i > 0 && /[A-Za-z]/.test(text[i - 1]!) && /[A-Za-z]/.test(text[i + 1] ?? "");
+}
+
 function unquotedProse(text: string): string {
-  // A backslash-escaped quote (a JSON string read raw) quotes exactly like the bare character.
-  text = text.replace(/\\(["'`])/g, "$1");
   let out = "";
-  let quote: string | null = null;
-  for (let i = 0; i < text.length; i += 1) {
+  // The text that ends the open quoted span: one character, a doubled delimiter, or an escaped quote.
+  let closer: string | null = null;
+  for (let i = 0; i < text.length;) {
     const ch = text[i]!;
-    if (ch === "\\") {
-      out += quote ? "  " : ch + (text[i + 1] ?? "");
+    if (closer !== null) {
+      if (text.startsWith(closer, i) && !(closer.length === 1 && isInWordApostrophe(text, i))) {
+        out += " ".repeat(closer.length);
+        i += closer.length;
+        closer = null;
+        continue;
+      }
+      // An escaped character inside a span is content, including an escaped quote of its own kind.
+      if (ch === "\\" && !closer.startsWith("\\")) {
+        out += "  ";
+        i += 2;
+        continue;
+      }
+      out += " ";
       i += 1;
       continue;
     }
-    // An apostrophe between letters ("it's", "it\u2019s") is literal both outside and inside a quote.
-    const inWordApostrophe = (ch === "'" || ch === "\u2019") && i > 0
-      && /[A-Za-z]/.test(text[i - 1]!) && /[A-Za-z]/.test(text[i + 1] ?? "");
-    if (quote) {
-      if (ch === quote && !inWordApostrophe) quote = null;
-      out += " ";
+    if (ch === "\\") {
+      // A backslash-escaped quote (a JSON string read raw) opens a span its escaped twin closes.
+      const escapedClose = QUOTE_PAIRS[text[i + 1] ?? ""] ?? (text[i + 1] === "'" ? "'" : undefined);
+      if (escapedClose !== undefined) {
+        closer = "\\" + escapedClose;
+        out += "  ";
+        i += 2;
+        continue;
+      }
+      out += ch + (text[i + 1] ?? "");
+      i += 2;
       continue;
     }
-    const closing = ch === "'" ? (inWordApostrophe ? undefined : "'") : QUOTE_PAIRS[ch];
-    if (closing !== undefined) {
-      quote = closing;
-      out += " ";
+    const close = ch === "'" ? (isInWordApostrophe(text, i) ? undefined : "'") : QUOTE_PAIRS[ch];
+    if (close !== undefined) {
+      // A doubled delimiter ("" or '') opens a span the same doubled delimiter closes.
+      closer = close === ch && text[i + 1] === ch ? ch + ch : close;
+      out += " ".repeat(closer.length);
+      i += closer.length;
       continue;
     }
     out += ch;
+    i += 1;
   }
   // An unterminated quote leaves its tail blanked, matching the old "inside a quote" verdict.
   return out;
@@ -1074,7 +1099,7 @@ const MODERATION_REFUSAL_VERDICT_PHRASES = [
  * carries both is not evidence that another target may serve the request.
  */
 const HARD_STOP_TOKEN =
-  /\b(?:cyber_policy|origin_rejected|bio_policy|misalignment_policy_violation|invalid_prompt|content_policy_violation|upstream_no_response|upstream_closed_before_response|upstream_reset_replay_refused)\b/i;
+  /\b(?:cyber_policy|origin_rejected|bio_policy|misalignment_policy_violation|invalid_prompt|content_policy_violation|context_length_exceeded|client_closed_request|client_cancelled|upstream_no_response|upstream_closed_before_response|upstream_reset_replay_refused)\b/i;
 
 /** JSON \\uXXXX escapes decoded, so an escaped nested code cannot slip past {@link HARD_STOP_TOKEN}. */
 function withJsonEscapesDecoded(text: string): string {
@@ -1132,7 +1157,8 @@ export function isProviderModerationRefusal(
   // Hard refusals anywhere in the body outrank a moderation verdict, including nested codes,
   // serialized wrappers and safety copy. The terminal refusal path owns those bodies.
   if (message && (HARD_STOP_TOKEN.test(withJsonEscapesDecoded(message)) || isHardPolicyOrOriginRefusal(message)
-    || safetyRefusalCodeFromMessage(message) !== undefined)) {
+    || safetyRefusalCodeFromMessage(message) !== undefined || isCyberPolicyMessage(message)
+    || message.toLowerCase().includes(CYBER_POLICY_FALLBACK_MESSAGE.toLowerCase()))) {
     return false;
   }
   if (!message) {
