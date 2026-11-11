@@ -370,7 +370,7 @@ a request is still running can end it.
 Windows Children take `sync` only: restarts are `unsupported` (`windows-restart`) and orchestrated updates
 `unsupported` (`windows-apply`). `ocx-child` Children report restart and update `unsupported`. The CLI
 verbs need a Home bound to loopback; on any other Home they exit 1 and point at the dashboard's Remote
-Link page. While a job holds a link, `ocx link revoke` on it answers 409 `link_operation_in_progress`.
+Link page. While a job holds a link, `ocx link revoke` on it is refused with 409 `link_operation_in_progress` (it does not wait); while a revoke runs, a job for that link is refused the same way, or its item ends `busy`.
 
 ## Key rotation is a two-step commit
 
