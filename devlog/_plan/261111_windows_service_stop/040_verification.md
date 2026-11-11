@@ -18,6 +18,11 @@
 - `/api/stop` with a receipt skips part A; the whole consented stop fits the stated budget with injected clocks.
 - Guarded path: a stray wrapper bound by the rule is `bound-stray` and reaches part A; an unbindable one stays approval-changed.
 - Output mapping per path: `ServiceStopOutcome`, `ocx-stop/1` (no new outcome/proxy enum values; additive fields only), `/api/stop` codes, Desktop parser unit tests with old and new documents; updater variant refuses without authorization at entry and before each terminate.
+- Plain `ocx stop`: part A `denied`, `survived` and `unknown` each send no `/api/stop` POST, set `ownershipBlocked`, skip the shared restore, and record `outcome: failed`, `proxy: unknown`, `sharedTeardown: skipped`.
+- Budget, with injected clocks: every guarded step at its cap still fits 27 s with default settings; a larger `shutdownTimeoutMs` keeps the full drain and ends in `unverified-budget` with no shared teardown, never past the deadline; part B never gets less than its 6 s floor.
+- A wrapper relaunched after bind (port still free during the hold) is caught by the final enumeration → survived.
+- `/api/stop` without a receipt and risk `none` answers within its 6 s part A cap; an overrun answers `service_state_unknown`.
+- Updater call sites, including the one in `preparePort`, abort on a non-`stopped` part A.
 - New test files registered in the layout maps; no capped file grows (file-size ratchet).
 
 ## Real Windows device (required before the implementation merges)
@@ -29,7 +34,7 @@
 | Elevated (HighestAvailable) task stopped from an unelevated shell and from unelevated Desktop | Real access checks → denied; a command line hidden from a non-admin CIM query classifies as unknown or denied consistently |
 | npm Bun runtime vs bundled `ocx.exe` | Different process trees and command lines |
 | Logon/session-unlock trigger during a stop | Trigger timing |
-| WinSW backend stop with `onfailure restart delay="5 sec"` against the part A (5 s wait) and part B (6 s hold) deadlines | Real SCM behavior |
+| WinSW backend stop with `onfailure restart delay="5 sec"` against the part A (3 s handle wait) and part B (6 s hold) deadlines | Real SCM behavior |
 | Slow startup / antivirus interference against the deadline | Timing on real hardware |
 | Windows ARM64 | No FFI: bounded fallback (or unknown, if the owner chooses the strict variant) |
 
