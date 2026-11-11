@@ -1304,6 +1304,20 @@
       ]
     },
     {
+      "path": "ops/windows-checked-stop.md",
+      "tier": 6,
+      "title": "Windows Checked Service Stop",
+      "scope": "Windows process evidence, the wrapper binding rule, and the checked manager stop and port confirmation that are not yet wired to a stop path.",
+      "documents": [
+        "src/service/windows-checked-stop.ts",
+        "src/service/windows-process-evidence.ts",
+        "src/service/windows-process-native.ts",
+        "src/service/windows-stop-binding.ts",
+        "src/service/windows-stop-budget.ts",
+        "src/service/windows-stop-confirm.ts"
+      ]
+    },
+    {
       "path": "ops/update-supervised-recovery.md",
       "tier": 6,
       "title": "Update Supervised Recovery",
