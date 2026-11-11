@@ -1,3 +1,4 @@
+import { aliasTemplateError } from "../providers/alias-template";
 import { parseDashboardTrustedProxy } from "./dashboard-trusted-proxy";
 import { readExistingSpendSalt, spendPoolAliasesError, validatePoolAliasOwners } from "../lib/spend-pool-alias-validation";
 import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
@@ -636,6 +637,22 @@ function dashboardTrustedProxyConfigError(value: unknown): string | null {
 }
 
 /**
+ * #7705: load drops a hand-edited template that does not validate; a live write that carries one
+ * (a provider-wide save, `ocx config set`) gets the same reason the alias-template route gives.
+ */
+function providerAliasTemplateConfigError(value: unknown): string | null {
+  const providers = rawConfigRecord(rawConfigRecord(value)?.providers);
+  if (!providers) return null;
+  for (const [name, provider] of Object.entries(providers)) {
+    const template = rawConfigRecord(provider)?.aliasTemplate;
+    if (template === undefined) continue;
+    const problem = typeof template === "string" ? aliasTemplateError(template) : "template must be a string";
+    if (problem) return `schema_invalid: providers.${name}.aliasTemplate: ${problem}`;
+  }
+  return null;
+}
+
+/**
  * Validate the hub management ingress at the live-write boundary.
  *
  * The persisted schema intentionally degrades a malformed hand edit to disabled so a typo in
@@ -794,6 +811,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? clientRolePairError(value)
     ?? loopbackListenerPortError(value)
     ?? managementIngressConfigError(value)
+    ?? providerAliasTemplateConfigError(value)
     ?? dashboardTrustedProxyConfigError(value)
     ?? metricsExportConfigError(value)
     ?? serviceHealthRecoveryConfigError(value)
