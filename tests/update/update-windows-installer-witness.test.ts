@@ -190,7 +190,7 @@ test("the Windows supervisor seam refuses outside a test process", () => {
 });
 
 describe("legacy witnessless marker recovery hint (#8524 decision A)", () => {
-  const DEAD = 999_999; // beyond the default pid range on macOS and Linux test hosts
+  const DEAD = 2_147_483_647; // no host hands out this pid
   const legacy = { pid: DEAD, phase: "mutating", startedAt: 1_000, fenceUntil: 901_000, terminationUnconfirmed: true };
 
   test("the inspection that refuses reports a witnessless marker through its detail", () => {
@@ -222,7 +222,13 @@ describe("legacy witnessless marker recovery hint (#8524 decision A)", () => {
     expect(windows).toContain(`ren "${markerPath(root)}" update-orchestrated.json.stale`);
     expect(windows).toContain("ocx update");
     const posix = staleUpdateMarkerHint(root, "linux").join("\n");
-    expect(posix).toContain(`mv "${markerPath(root)}" "${markerPath(root)}.stale"`);
+    expect(posix).toContain(`mv -n '${markerPath(root)}' '${markerPath(root)}.stale'`);
+    // Nothing in a pasted command may expand: POSIX quotes a quote; Windows prints no command at all.
+    expect(staleUpdateMarkerHint("/home/o'neil/.opencodex", "linux").join("\n"))
+      .toContain("mv -n '/home/o'\\''neil/.opencodex/update-orchestrated.json'");
+    const expandable = staleUpdateMarkerHint("C:\\Users\\$(evil)\\.opencodex", "win32").join("\n");
+    expect(expandable).not.toContain("ren ");
+    expect(expandable).toContain("rename that file by hand");
     // A Windows-shaped marker read on POSIX has no group witness either; it gets the POSIX command.
     writeMarker(root, { ...interrupted, installerPid: SUPERVISOR });
     const detail: { witnessless?: boolean } = {};

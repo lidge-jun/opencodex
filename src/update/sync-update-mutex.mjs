@@ -108,17 +108,22 @@ export function acquireSyncGuard(home, args) {
  */
 export function staleUpdateMarkerHint(home, platform = process.platform) {
   const path = join(home, "update-orchestrated.json");
+  // A copy-paste command must not expand anything from the path. POSIX single quotes expand
+  // nothing; cmd.exe and PowerShell disagree on quoting, so a path with an expandable or control
+  // character gets no command at all, only the file to rename.
   const rename = platform === "win32"
-    ? `ren "${path}" update-orchestrated.json.stale`
-    : `mv "${path}" "${path}.stale"`;
+    ? (/[$`%"\x00-\x1f\x7f]/.test(path) ? null : `ren "${path}" update-orchestrated.json.stale`)
+    : `mv -n ${posixQuote(path)} ${posixQuote(path + ".stale")}`;
   return [
     `The update marker ${path} records an interrupted update whose installer can no longer be checked`,
-    "(OpenCodex 2.100.x and earlier did not record it on Windows), so it will not clear by itself.",
-    "If no update is running (no ocx update, no npm or pnpm global install, no OpenCodex installer",
-    "PowerShell process), rename the marker and run ocx update again:",
-    `  ${rename}`,
+    "(OpenCodex 2.100.x and earlier did not record the Windows installer), so it will not clear by itself.",
+    "If no update is running (no ocx update, no npm, pnpm or bun global install, no OpenCodex installer",
+    "PowerShell process running npm-install-job.ps1), rename the marker and run ocx update again:",
+    rename === null ? "  rename that file by hand, for example to update-orchestrated.json.stale" : `  ${rename}`,
   ];
 }
+
+function posixQuote(value) { return `'${value.replaceAll("'", "'\\''")}'`; }
 
 function inspectOwnershipLease(home) {
   try {

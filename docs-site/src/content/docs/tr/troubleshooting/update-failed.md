@@ -94,8 +94,8 @@ Pano, Desktop ve Remote Link yalnızca `update-in-flight` bildirir; yönergeyi g
 Dosyayı yeniden adlandırmadan önce hiçbir güncellemenin çalışmadığından emin olun:
 
 1. Başka bir pencerede `ocx update` veya pano güncellemesi sürmüyor.
-2. Hiçbir `npm` veya `pnpm` genel kurulumu çalışmıyor. Windows'ta Görev Yöneticisi'nde npm çalıştıran
-   `node.exe` ve OpenCodex güncelleyicisinin başlattığı `powershell.exe` olup olmadığına bakın.
+2. Hiçbir `npm`, `pnpm` veya `bun` genel kurulumu çalışmıyor. Windows'ta Görev Yöneticisi'nde npm çalıştıran
+   `node.exe` ve komut satırında `npm-install-job.ps1` geçen bir `powershell.exe` olup olmadığına bakın.
 3. Ardından dosyayı yeniden adlandırın (bir kopya kalır) ve `ocx update` komutunu yeniden çalıştırın:
 
    ```bat
@@ -103,10 +103,12 @@ Dosyayı yeniden adlandırmadan önce hiçbir güncellemenin çalışmadığınd
    ```
 
    ```bash
-   mv ~/.opencodex/update-orchestrated.json ~/.opencodex/update-orchestrated.json.stale
+   mv -n ~/.opencodex/update-orchestrated.json ~/.opencodex/update-orchestrated.json.stale
    ```
 
-`OPENCODEX_HOME` başka bir yeri gösteriyorsa hata mesajının yazdığı yolu kullanın. Koruma süresi
+`OPENCODEX_HOME` başka bir yeri gösteriyorsa hata mesajının yazdığı yolu kullanın. Bu yol bir kabuğun
+genişleteceği karakterler içeriyorsa hata mesajı komut vermeden yalnızca dosyayı adlandırır; dosyayı elle
+yeniden adlandırın. Koruma süresi
 dolmamış ya da kaydedilen süreci hâlâ çalışan bir dosya bu yönergeyi yazdırmaz; bu durumda bekleyin
 veya çalışan güncellemenin bitmesine izin verin.
 

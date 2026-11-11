@@ -117,8 +117,8 @@ Link only report `update-in-flight`, so run `ocx update` in a terminal to see th
 Before you rename the marker, make sure no update is running:
 
 1. No `ocx update` or dashboard update is in progress in another window.
-2. No `npm` or `pnpm` global install is running. On Windows, check Task Manager for `node.exe`
-   running npm and for a `powershell.exe` started by the OpenCodex updater.
+2. No `npm`, `pnpm` or `bun` global install is running. On Windows, check Task Manager for
+   `node.exe` running npm and for a `powershell.exe` whose command line contains `npm-install-job.ps1`.
 3. Then rename the marker (renaming keeps a copy) and run `ocx update` again:
 
    ```bat
@@ -126,10 +126,11 @@ Before you rename the marker, make sure no update is running:
    ```
 
    ```bash
-   mv ~/.opencodex/update-orchestrated.json ~/.opencodex/update-orchestrated.json.stale
+   mv -n ~/.opencodex/update-orchestrated.json ~/.opencodex/update-orchestrated.json.stale
    ```
 
-Use the exact path the error prints if `OPENCODEX_HOME` points somewhere else. A marker that is
+Use the exact path the error prints if `OPENCODEX_HOME` points somewhere else. If that path contains
+characters a shell would expand, the error names the file without a command; rename it by hand. A marker that is
 still inside its fence, or whose recorded process is still running, does not print this guidance.
 In that case, wait or let the running update finish.
 
