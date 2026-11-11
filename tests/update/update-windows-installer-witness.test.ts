@@ -57,12 +57,24 @@ test("win32: a marker without a supervisor witness, or with a POSIX group, stays
   expect(inspectUpdateMarker(root, { now: afterFence, platform: "win32", signal: signalWith(new Set()) })).toBe("unknown");
 });
 
-test("win32: a confirmed installer never probes its old supervisor pid", () => {
-  // Windows reuses pids quickly; a finished update must not read as in flight because some
-  // unrelated process now holds the supervisor's old number.
+test("win32: a finished session leaves no supervisor pid for a reused pid to hold", async () => {
+  // Windows reuses pids quickly. A finished update must not read as in flight because an
+  // unrelated process now holds the supervisor's old number, so the confirmed exit drops it.
   const root = home();
-  writeMarker(root, { pid: LAUNCHER, phase: "installed", startedAt: 1_000, installerPid: SUPERVISOR });
+  const session = createOrchestratedChildSession({ home: root, verifyIdentity: () => true });
+  session.start(); await session.enterMutation();
+  session.noteUntrackedInstaller();
+  publishWindowsInstallerPid(markerPath(root), SUPERVISOR);
+  session.confirmInstallerExit();
+  session.finish({ phase: "installed" });
+  expect(readMarker(root).installerPid).toBeUndefined();
   expect(inspectUpdateMarker(root, { now: afterFence, platform: "win32", signal: signalWith(new Set([SUPERVISOR])) })).toBe("free");
+});
+
+test("win32: a recorded live installer keeps a marker fenced, as on POSIX", () => {
+  const root = home();
+  writeMarker(root, { pid: 2147483647, phase: "failed", startedAt: 1_000, installerPid: SUPERVISOR });
+  expect(inspectUpdateMarker(root, { now: afterFence, platform: "win32", signal: signalWith(new Set([SUPERVISOR])) })).toBe("active");
 });
 
 test("POSIX keeps requiring the installer process group", () => {

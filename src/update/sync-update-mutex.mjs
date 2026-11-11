@@ -177,10 +177,9 @@ export function inspectUpdateMarker(home, { now = Date.now, platform = process.p
     for (const key of ["installerPid", "installerPgid"]) {
       if (marker[key] === undefined) continue;
       if (!Number.isSafeInteger(marker[key]) || marker[key] <= 0 || (key === "installerPgid" && windows)) return "unknown";
-      // On Windows installerPid names the Job Object supervisor and witnesses only an installer whose
-      // exit was not confirmed (#8524). A confirmed one needs no witness, and probing a stale pid
-      // that Windows has already reused would report a finished update as still in flight.
-      if (key === "installerPid" && windows && marker.terminationUnconfirmed !== true) continue;
+      // A recorded installer pid is probed whenever present, on every platform: a live installer
+      // keeps the marker fenced. On Windows confirmInstallerExit drops the supervisor pid, so a
+      // finished update leaves none to be held by a reused pid (#8524).
       ids.push(key === "installerPgid" ? -marker[key] : marker[key]);
     }
     let unknown = false;
