@@ -3,8 +3,11 @@ import type { CodexAccount } from "./accounts";
 import type { AnthropicAccountPoolConfig, OcxAccountPoolRotationStrategy } from "./anthropic-account-pool";
 import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import type { OcxFallbackConfig } from "./fallback";
+import type { OcxTelemetryConfig } from "./telemetry";
+import type { OcxClaudeCodeToolLoadingConfig } from "./claude-tool-loading";
 export type { AnthropicAccountPoolConfig, AnthropicModelRoute, OcxAccountPoolRotationStrategy, OcxAccountPoolQuotaWindow } from "./anthropic-account-pool";
 export type { OcxFallbackConfig, OcxFallbackDeviceConfig, OcxFallbackKind, OcxFallbackSwitches } from "./fallback";
+export type { OcxClaudeCodeToolLoadingConfig } from "./claude-tool-loading";
 
 /** Public inference API exposure. Responses and Chat Completions are always served. */
 export interface OcxApiSurfacesConfig {
@@ -44,9 +47,10 @@ export interface OcxProtocolsConfig {
 
 /**
  * Claude Code inbound settings (devlog/260711_claude_inbound). Consumed by the
- * /v1/messages surface, the `ocx claude` launcher, and the GUI Claude page.
+ * /v1/messages surface, the `ocx claude` launcher, and the GUI Claude page. Tool-loading
+ * fields (toolSearch and the two tool-loading opt-ins) live in ./claude-tool-loading.
  */
-export interface OcxClaudeCodeConfig {
+export interface OcxClaudeCodeConfig extends OcxClaudeCodeToolLoadingConfig {
   /** Route the standalone Claude Code CLI through the first-party intercept (settings.json env).
    * Independent of Desktop's first-party mode. Absent/false = off. */
   cliFirstParty?: boolean;
@@ -56,14 +60,6 @@ export interface OcxClaudeCodeConfig {
    * Default: false; only literal true enables it. Native passthrough is unchanged.
    */
   stabilizePromptCache?: boolean;
-  /**
-   * Opt-in resolved provider/model routes verified to accept Responses additional_tools.
-   * A single trailing '*' matches a provider-qualified prefix (for example 'gateway/gpt-*').
-   * Replays successful client ToolSearch discoveries in place without growing the initial
-   * catalog. Requires metadata.user_id. Absent/empty is off; native passthrough is unchanged.
-   * Applies only after routing settles on a direct openai-responses route; combos and policies are skipped.
-   */
-  appendOnlyToolLoadingModels?: string[];
   /** Opt-in translated Messages admission; unset keeps legacy behavior. Native passthrough is exempt. */
   compatibility?: "shadow" | "enforce";
   /** Kill switch for the /v1/messages inbound (GUI "Claude ON" toggle). Default: enabled. */
@@ -146,31 +142,6 @@ export interface OcxClaudeCodeConfig {
    * forcing effort on every request can leak reasoning params to non-reasoning routes.
    */
   alwaysEnableEffort?: boolean;
-  /**
-   * Opt-in ENABLE_TOOL_SEARCH injection for launched Claude Code sessions (#4838).
-   *
-   * Claude Code turns MCP tool deferral off whenever ANTHROPIC_BASE_URL names a
-   * non-first-party host, so an `ocx claude` session ships every tool schema in
-   * full on every request. Its own diagnostic states the precondition for turning
-   * that back on: "Set ENABLE_TOOL_SEARCH=true (or auto / auto:N) if your proxy
-   * forwards tool_reference blocks."
-   *
-   * Default OFF. Native Anthropic passthrough retains server-side search; the
-   * ordinary translated route drops the typed search tool and sends function schemas
-   * eagerly. appendOnlyToolLoadingModels is a separate opt-in for verified final
-   * Responses destinations and an eager client-executed ToolSearch function: it
-   * projects currently declared deferred definitions at successful discovery results.
-   * This launcher switch alone enables neither that projection nor server-side search.
-   * Compatibility-enforcement admission remains unchanged and can reject unsupported
-   * tool_search/tool_reference/deferred_tools requests; no native-search parity or
-   * cache-hit guarantee is implied.
-   *
-   * `true` injects "true"; a string is passed through verbatim so Claude Code's own
-   * vocabulary (`auto`, `auto:N`, `force`) stays reachable. `false` and absent
-   * inject nothing — they do not force the variable off, because a value the
-   * operator exported themselves always wins.
-   */
-  toolSearch?: boolean | string;
   /**
    * Subagent tier slots (devlog 260712 B2): injected as ANTHROPIC_DEFAULT_*_MODEL so
    * Claude Code's Agent-tool aliases (opus/sonnet/haiku/fable + parent-inherit) route
@@ -574,6 +545,7 @@ export interface OcxConfig {
   skills?: OcxSkillsConfig;
   /** Opt-in process-local aggregate request metrics on the authenticated management plane. */
   metricsExport?: { enabled?: boolean };
+  telemetry?: OcxTelemetryConfig;
   /**
    * Opt-in recovery of a managed service proxy that stays alive but stops answering /healthz:
    * a separate sentinel process terminates it so its supervisor restarts it (#6671).
@@ -609,7 +581,8 @@ export interface OcxConfig {
   defaultProvider: string;
   /** Persisted state for newly discovered provider models (#2464). Absent keeps legacy "on" behavior. */
   modelDiscovery?: {
-    newModelPolicy?: "on" | "off";
+    /** `admit` appends arrivals to custom provider selections (#8236); default `on`. */
+    newModelPolicy?: "on" | "off" | "admit";
     knownModels?: Record<string, {
       ids: string[];
       removed: string[];
@@ -617,7 +590,14 @@ export interface OcxConfig {
       /** Consecutive successful discoveries in which an active id was absent. */
       missing?: Record<string, number>;
     }>;
-    recentArrivals?: Record<string, Array<{ id: string; at: string }>>;
+    recentArrivals?: Record<string, Array<{
+      id: string;
+      at: string;
+      /** Appended to the provider's custom selection by the `admit` policy. */
+      admitted?: boolean;
+      /** Whether the `off` policy disabled it; absent on rows recorded before #8236. */
+      disabledByPolicy?: boolean;
+    }>>;
   };
   /** Enable the shipped model alias patterns for providers without an override. */
   defaultModelAliases?: boolean;
@@ -1440,6 +1420,19 @@ export interface OcxConfig {
   /** Additional exact origins allowed for CORS (e.g. HTTPS or chrome-extension://<id>). Loopback origins are always allowed. */
   corsAllowOrigins?: string[];
   /**
+   * #8338, opt-in, standalone only: the one reverse proxy a dashboard may sit behind and still
+   * remember devices. `origin` is the exact https origin the browser uses; `proxyAddresses` are
+   * the proxy hop's own IP addresses as this process observes them (never a range); and
+   * `trustHeaders` names the forwarded headers that carry the browser's host and scheme (default:
+   * Host only, scheme from `origin`). Absent, Remember stays direct HTTPS or loopback only. Parsed by
+   * src/config/dashboard-trusted-proxy.ts; enforced in managementRequestOrigin (src/server/auth-cors.ts).
+   */
+  dashboardTrustedProxy?: {
+    origin: string;
+    proxyAddresses: string[];
+    trustHeaders?: Array<"x-forwarded-host" | "x-forwarded-proto">;
+  };
+  /**
    * OCX-11 fallback off: refuse model or provider fallback per scope, and record per-device local
    * fallback permission. Absent keeps every chain as it was. See src/routing/fallback-policy.ts.
    */
@@ -1538,6 +1531,7 @@ export interface OcxComboConfig {
    * explicitly empty target ladder suppresses the whole combo's effort control.
    */
   reasoningEffortMode?: OcxComboReasoningEffortMode;
+  jevEffortMode?: import("./combo-jev-effort-mode").OcxComboJevEffortMode; // wire-effort owner on a `jev` combo; omitted = "decide"
   /**
    * Disable image input even when every target supports it.
    * Omitted / `"auto"` keeps automatic capability derivation (default: enabled when

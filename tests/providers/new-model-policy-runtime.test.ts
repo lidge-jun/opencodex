@@ -4,6 +4,7 @@ import { loadConfig, saveConfig } from "../../src/config";
 import { armClaudeCodeBaseline, saveConfigPreservingClaudeCode } from "../../src/config/live-reconcile";
 import { setPersistedConfigMutationBeforeCommitForTests } from "../../src/config/persisted-mutation";
 import { clearModelCache, observeModelCacheRevision, setCached } from "../../src/codex/model-cache";
+import { filterCatalogVisibleModels } from "../../src/codex/catalog/model-visibility";
 import { captureModelDiscoveryBaseline, finalizeModelDiscovery } from "../../src/providers/new-model-policy-runtime";
 import type { OcxConfig } from "../../src/types";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
@@ -224,4 +225,43 @@ test("file-backed discovery cannot publish to a different config home", () => {
   } finally {
     other.remove();
   }
+});
+
+function admitFixture(): OcxConfig {
+  const config = fixture();
+  config.providers.vendor.newModelPolicy = "admit";
+  config.providers.vendor.selectedModels = ["a"];
+  return config;
+}
+
+test("#8236 an admitted arrival reaches the running config and survives a later selection save", () => {
+  saveConfig(admitFixture());
+  const config = loadConfig();
+  armClaudeCodeBaseline(config);
+  expect(complete(config)).toBe(true);
+  expect(loadConfig().providers.vendor.selectedModels).toEqual(["a", "c"]);
+  // The current process sees the admission without a restart.
+  expect(config.providers.vendor.selectedModels).toEqual(["a", "c"]);
+  expect(filterCatalogVisibleModels(rows as never, config).map(model => model.id)).toEqual(["a", "c"]);
+  // A later picker save round-trips the live list; it must not drop the admitted id.
+  config.providers.vendor.selectedModels = [...config.providers.vendor.selectedModels!, "b"];
+  saveConfigPreservingClaudeCode(config);
+  expect(loadConfig().providers.vendor.selectedModels).toEqual(["a", "c", "b"]);
+});
+
+test("#8236 a read projection admits only into the projection, never the live selection", () => {
+  saveConfig(admitFixture());
+  const config = loadConfig();
+  armClaudeCodeBaseline(config);
+  const concurrent = loadConfig();
+  concurrent.providers.vendor.models!.push("c");
+  saveConfig(concurrent);
+  const before = bytes();
+  const liveBefore = structuredClone(config);
+  let projection: OcxConfig | undefined;
+  expect(finalizeModelDiscovery(config, captureModelDiscoveryBaseline(config), rows, ["vendor"],
+    new Map(), projected => { projection = projected; })).toBe(true);
+  expect(projection?.providers.vendor.selectedModels).toEqual(["a", "c"]);
+  expect(config).toEqual(liveBefore);
+  expect(bytes()).toBe(before);
 });

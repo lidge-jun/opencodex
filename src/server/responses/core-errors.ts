@@ -1,6 +1,6 @@
 import type { ComboExclusionReasons } from "../../combos/resolve";
 import { markProxyError } from "../../lib/client-error-body";
-import { formatClientRetryAfter } from "../../lib/client-retry-after";
+import { appendClientRetryIn, formatClientRetryAfter } from "../../lib/client-retry-after";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { redactSecretString } from "../../lib/redact";
 import { isCyberPolicyMessage, isCyberPolicyCode } from "../../lib/errors";
@@ -70,7 +70,9 @@ export function normalizeUpstreamErrorText(text: string, fallback: string): Norm
       message = redactSecretString(source.message.trim()).slice(0, 500);
     }
     if (typeof source.type === "string" && source.type.trim()) type = source.type.trim();
-    if (typeof source.code === "string" && source.code.trim()) code = source.code.trim();
+    if (typeof source.code === "string" && source.code.trim()) {
+      code = source.code.trim();
+    }
   } catch {
     /* non-JSON upstream body — retain the bounded display-safe text */
   }
@@ -91,7 +93,7 @@ export function decodeRequestErrorResponse(err: unknown, label: string): Respons
     return markProxyError(formatErrorResponse(415, "invalid_request_error", err.message));
   }
   if (err instanceof DecompressedBodyTooLargeError) {
-    return markProxyError(formatErrorResponse(413, "inbound_body_too_large", describeInboundBodyRefusal(err)));
+    return markProxyError(formatErrorResponse(413, "inbound_body_too_large", describeInboundBodyRefusal(err)), "inbound");
   }
   console.warn(`[${label}] request body decode/parse failed: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`);
   return markProxyError(formatErrorResponse(400, "invalid_request_error", "Invalid JSON body"));
@@ -102,24 +104,28 @@ export function decodeRequestErrorResponse(err: unknown, label: string): Respons
 
 export function comboUnavailableResponse(
   message: string,
-  options?: { retryAfter?: string | null },
+  options?: { retryAfter?: string | null; presentation?: "combo" },
 ): Response {
   const headers = new Headers({ "Content-Type": "application/json" });
   // Advice leaves in this proxy's format, whatever form the earliest cooldown was recorded in.
   const advice = formatClientRetryAfter(options?.retryAfter);
   if (advice !== undefined) headers.set("Retry-After", advice);
+  // Name the earliest recovery in the body too: a client that drops the header still
+  // shows the user how long the combo stays cooled.
   return markProxyError(new Response(
     JSON.stringify({
-      error: { message, type: "server_error", code: "combo_unavailable" },
+      // Built from the header value itself, so an HTTP-date cannot make the body and header disagree.
+      error: { message: appendClientRetryIn(message, advice), type: "server_error", code: "combo_unavailable" },
     }),
     { status: 503, headers },
-  ));
+  ), options?.presentation);
 }
 
 
 export function comboUnavailable(comboId: string, now = Date.now(), reasons?: ComboExclusionReasons): Response {
   return comboUnavailableResponse(new NoAvailableComboTargetsError(comboId, reasons).message, {
     retryAfter: comboCooldownRetryAfterSeconds(comboId, now),
+    presentation: reasons === undefined ? undefined : "combo",
   });
 }
 
@@ -156,7 +162,7 @@ export function anthropicPoolCooldownResponse(
 ): Response {
   if (refusal.usageLimit !== null && !options.comboAttempt) {
     if (options.logCtx) options.logCtx.errorCode = "usage_limit_reached";
-    return markProxyError(formatUsageLimitReachedResponse(refusal.message, refusal.usageLimit.resetsAt, refusal.retryAfterSeconds));
+    return markProxyError(formatUsageLimitReachedResponse(refusal.message, refusal.usageLimit.resetsAt, refusal.retryAfterSeconds), refusal.usageLimit.resetsAt === null ? undefined : "usage");
   }
   return markProxyError(formatErrorResponse(429, "rate_limit_error", refusal.retryableMessage,
     refusal.retryAfterSeconds === null ? undefined : { retryAfter: String(refusal.retryAfterSeconds) }));

@@ -451,6 +451,8 @@ export interface CatalogProviderDiscoveryPolicySnapshot {
   readonly preferFirst: CatalogDiscoveryPolicyField<readonly ProviderModelDiscoveryPredicate[] | undefined>;
   readonly maxResponseBytes: number;
   readonly maxModels: number;
+  /** Operator opt-in `modelDiscovery.skipInvalidRows` (#7910). */
+  readonly skipInvalidRows: boolean;
   readonly trustedOpenAiApi: CatalogTrustedOpenAiApiPolicySnapshot;
 }
 

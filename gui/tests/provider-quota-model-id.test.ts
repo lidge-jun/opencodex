@@ -70,3 +70,47 @@ test("quota bars have unique stable identities for repeated labels", () => {
   const refreshed = buildQuotaRows({ updatedAt: 456, customWindows: customWindows.map(row => ({ ...row, percent: 99 })) }, null, t);
   expect(refreshed.map(row => row.id)).toEqual(rows.map(row => row.id));
 });
+const inactiveFableReport = { updatedAt: 123, quota: { updatedAt: 123, fiveHourPercent: 35, weeklyPercent: 91,
+  displayWindows: [{ label: "Fable", scope: "model", percent: 4, resetAt: 456, weeklyAllowancePercent: 50 }] } };
+
+test("display-only rows stay out of customWindows and keep their weekly share", () => {
+  const quota = accountQuotaFromReport({
+    updatedAt: 123,
+    quota: {
+      updatedAt: 123,
+      weeklyPercent: 69,
+      customWindows: [{ label: "Opus", percent: 40, weeklyAllowancePercent: 60 }],
+      displayWindows: [{ label: "Fable", percent: 0, resetAt: 456, weeklyAllowancePercent: 50 }, { label: "Opus", percent: 10 }],
+    },
+  });
+  expect(quota?.customWindows).toEqual([{ label: "Opus", percent: 40, weeklyAllowancePercent: 60 }]);
+  // A routed row with the same label comes from a later rate-limit observation, so it wins.
+  expect(quota?.displayWindows).toEqual([{ label: "Fable", percent: 0, resetAt: 456, weeklyAllowancePercent: 50 }]);
+  expect(accountQuotaFromReport({ quota: { updatedAt: 1, displayWindows: [{ label: "Fable", percent: 4 }] } })?.displayWindows)
+    .toEqual([{ label: "Fable", percent: 4 }]);
+});
+
+test("a display-only row never becomes a summary headline, a summary or tray row, or urgency", () => {
+  expect(buildQuotaSummary({ anthropic: { updatedAt: 123, quota: { updatedAt: 123, displayWindows: [{ label: "Fable", percent: 55 }] } } }, id => id))
+    .toEqual([]);
+  const report = { updatedAt: 123, quota: { updatedAt: 123, weeklyPercent: 20, displayWindows: [{ label: "Fable", percent: 95 }] } };
+  const [row] = buildQuotaSummary({ anthropic: report }, id => id);
+  expect(row?.headline.id).toBe("quota.weeklyLimit");
+  expect(row?.severity).toBe("normal");
+  expect(row?.windows.map(window => window.id)).toEqual(["quota.weeklyLimit"]);
+  const projected = accountQuotaFromReport(report)!;
+  expect(quotaWindows(projected).map(window => window.id)).toEqual(["quota.weeklyLimit"]);
+  expect(maxQuotaUtilisation(projected)).toBe(20);
+});
+
+test("account bars list display-only Fable after routed rows, marked not in effect, with its weekly share", () => {
+  const t = ((key: string) => key) as Parameters<typeof buildQuotaRows>[2];
+  const rows = buildQuotaRows(accountQuotaFromReport(inactiveFableReport), null, t);
+  expect(rows.map(row => [row.label, row.percent, row.resetAt, row.notInEffect === true, row.weeklyAllowancePercent])).toEqual([
+    ["codexAuth.fiveHour", 35, undefined, false, undefined],
+    ["codexAuth.weekly", 91, undefined, false, undefined],
+    ["Fable", 4, 456, true, 50],
+  ]);
+  const routed = buildQuotaRows({ updatedAt: 1, customWindows: [{ label: "Fable", percent: 60, weeklyAllowancePercent: 50 }] }, null, t);
+  expect(routed.map(row => [row.label, row.percent, row.notInEffect === true, row.weeklyAllowancePercent])).toEqual([["Fable", 60, false, 50]]);
+});

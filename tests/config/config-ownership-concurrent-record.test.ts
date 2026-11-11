@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -21,12 +21,14 @@ const modulePath = repoPath("src/lib/config-ownership.ts");
 const BARRIER_MS = 20_000;
 // Exit codes: 0 recorded, 2 not recorded, 3 refused by the uninstall tombstone, 1 anything else.
 // With a gate, the child creates its file, announces it, and records only once the gate opens.
-const childScript = (dir: string, rel: string, gate?: { ready: string; go: string }) => [
+const childScript = (dir: string, rel: string, gate?: { ready: string; go: string }, createPath = true) => [
   "import { existsSync, writeFileSync } from \"node:fs\";",
   "import { ConfigUninstallInProgressError, recordOwnedConfigPath } from " + JSON.stringify(modulePath) + ";",
   "const path = " + JSON.stringify(join(dir, rel)) + ";",
-  gate ? "writeFileSync(path, \"child\"); writeFileSync(" + JSON.stringify(gate.ready) + ", \"\");" : "",
+  gate && createPath ? "writeFileSync(path, \"child\");" : "",
+  gate ? "writeFileSync(" + JSON.stringify(gate.ready) + ", \"\");" : "",
   gate ? "const until = Date.now() + " + BARRIER_MS + "; while (!existsSync(" + JSON.stringify(gate.go) + ") && Date.now() < until) Bun.sleepSync(5);" : "",
+  gate ? "if (!existsSync(" + JSON.stringify(gate.go) + ")) process.exit(1);" : "",
   // A busy ownership lock fails fast; callers retry, and so does this child.
   "let code = 1;",
   "for (let attempt = 0; attempt < 400; attempt++) {",
@@ -40,8 +42,107 @@ const childScript = (dir: string, rel: string, gate?: { ready: string; go: strin
 ].join("\n");
 const spawnChild = (dir: string, rel: string, gate?: { ready: string; go: string }) =>
   Bun.spawn([process.execPath, "-e", childScript(dir, rel, gate)], { stderr: "inherit" });
+
+/** Complete the owner's JSON at the first creation poll, without relying on process scheduling. */
+function observeOwnerPublication(dir: string, completedOwner: string | null, cacheUnowned = false): string {
+  const script = [
+    "import { writeFileSync } from \"node:fs\";",
+    "import { initializeConfigOwnership, registerOwnedConfigPath } from " + JSON.stringify(modulePath) + ";",
+    cacheUnowned ? "if (initializeConfigOwnership(" + JSON.stringify(dir) + ")) throw new Error(\"fixture unexpectedly owned before publication\");" : "",
+    // The spent publication wait is remembered per unchanged metadata pair; only a changed owner
+    // marker re-arms it, so the cached-unowned publication case needs a new incomplete marker to
+    // wait on. The unfinished variants keep theirs: unchanged files must not re-enter the wait.
+    cacheUnowned && completedOwner !== null ? "writeFileSync(" + JSON.stringify(join(dir, ".opencodex-owner.json")) + ", \"still-incomplete\");" : "",
+    "const completedOwner = " + JSON.stringify(completedOwner) + ";",
+    "const realNow = Date.now; let reads = 0;",
+    "Date.now = () => {",
+    "  reads++;",
+    "  if (completedOwner !== null && reads === 2) writeFileSync(" + JSON.stringify(join(dir, ".opencodex-owner.json")) + ", completedOwner);",
+    // An abandoned publication reaches the existing deadline without a wall-clock sleep.
+    "  return completedOwner === null ? reads * 20_000 : realNow();",
+    "};",
+    "console.log(JSON.stringify(registerOwnedConfigPath(" + JSON.stringify(dir) + ", " + JSON.stringify(join(dir, "after-publication")) + ")));",
+  ].join("\n");
+  const child = Bun.spawnSync([process.execPath, "-e", script]);
+  expect(child.exitCode, child.stderr.toString()).toBe(0);
+  return JSON.parse(child.stdout.toString()) as string;
+}
 const manifest = (dir: string) =>
   JSON.parse(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8")) as { paths: string[]; uninstallStartedAt?: number };
+
+/**
+ * A fresh process that spends its publication wait on an invalid pair, then completes the pair
+ * while keeping the exact stat identity the spent wait recorded — what the race between a
+ * creation's last failed read and the spent-wait sampling produces (#8270 review). Returns the
+ * following registration's outcome; exit 4 means the identity could not be preserved.
+ */
+function registerAfterPairCompletesAtSpentIdentity(dir: string): string {
+  // Ownership metadata comes from a separate process: a process that creates it caches the
+  // valid pair and would answer later initialization without touching the files.
+  const seed = Bun.spawnSync([process.execPath, "-e",
+    "import { initializeConfigOwnership } from " + JSON.stringify(modulePath) + ";\n"
+    + "initializeConfigOwnership(" + JSON.stringify(dir) + ");"]);
+  expect(seed.exitCode, seed.stderr.toString()).toBe(0);
+  const script = [
+    "import { lstatSync, readFileSync, utimesSync, writeFileSync } from \"node:fs\";",
+    "import { join } from \"node:path\";",
+    "import { initializeConfigOwnership, registerOwnedConfigPath } from " + JSON.stringify(modulePath) + ";",
+    "const dir = " + JSON.stringify(dir) + ";",
+    "const ownerPath = join(dir, \".opencodex-owner.json\");",
+    "const owner = readFileSync(ownerPath, \"utf8\");",
+    // A same-length owner id swap: complete in stat terms, an invalid pair semantically.
+    "const invalid = owner.replace(/\"ownerId\": \"[^\"]+\"/, '\"ownerId\": \"00000000-0000-4000-8000-000000000000\"');",
+    "writeFileSync(ownerPath, invalid);",
+    // A round-millisecond mtime the completing rewrite can restore exactly.
+    "const stamp = new Date(1_700_000_000_000);",
+    "utimesSync(ownerPath, stamp, stamp);",
+    "const spent = lstatSync(ownerPath, { bigint: true });",
+    "if (initializeConfigOwnership(dir)) throw new Error(\"invalid pair unexpectedly owned\");",
+    "writeFileSync(ownerPath, owner);",
+    "utimesSync(ownerPath, stamp, stamp);",
+    "const now = lstatSync(ownerPath, { bigint: true });",
+    "if (spent.dev !== now.dev || spent.ino !== now.ino || spent.size !== now.size || spent.mtimeNs !== now.mtimeNs) {",
+    "  console.log(\"identity-not-preserved\"); process.exit(4);",
+    "}",
+    "console.log(JSON.stringify(registerOwnedConfigPath(dir, join(dir, \"after-completion\"))));",
+  ].join("\n");
+  const child = Bun.spawnSync([process.execPath, "-e", script]);
+  expect(child.exitCode, child.stderr.toString()).toBe(0);
+  return JSON.parse(child.stdout.toString()) as string;
+}
+
+/**
+ * A fresh process whose metadata pair changes mid-wait. Returns each registration's outcome and
+ * how long its ownership initialization took: a pair that changed while a wait ran has not spent
+ * its own wait yet, so the next registration must pay it once (#8270 review).
+ */
+function registerAfterPairChangedMidWait(dir: string): { first: boolean; second: boolean; third: boolean; firstMs: number; secondMs: number; thirdMs: number } {
+  const seed = Bun.spawnSync([process.execPath, "-e",
+    "import { initializeConfigOwnership } from " + JSON.stringify(modulePath) + ";\n"
+    + "initializeConfigOwnership(" + JSON.stringify(dir) + ");"]);
+  expect(seed.exitCode, seed.stderr.toString()).toBe(0);
+  const script = [
+    "import { readFileSync, unlinkSync, writeFileSync } from \"node:fs\";",
+    "import { join } from \"node:path\";",
+    "import { initializeConfigOwnership } from " + JSON.stringify(modulePath) + ";",
+    "const dir = " + JSON.stringify(dir) + ";",
+    "const ownerPath = join(dir, \".opencodex-owner.json\");",
+    "const owner = readFileSync(ownerPath, \"utf8\");",
+    "const invalid = owner.replace(/\"ownerId\": \"[^\"]+\"/, '\"ownerId\": \"00000000-0000-4000-8000-000000000000\"');",
+    "unlinkSync(ownerPath);",
+    // Completing the owner bytes on the third clock read lands the change inside the wait.
+    "const realNow = Date.now; let reads = 0;",
+    "Date.now = () => { reads++; if (reads === 3) writeFileSync(ownerPath, invalid); return realNow(); };",
+    "let at = performance.now(); const first = initializeConfigOwnership(dir); const firstMs = performance.now() - at;",
+    "Date.now = realNow;",
+    "at = performance.now(); const second = initializeConfigOwnership(dir); const secondMs = performance.now() - at;",
+    "at = performance.now(); const third = initializeConfigOwnership(dir); const thirdMs = performance.now() - at;",
+    "console.log(JSON.stringify({ first, second, third, firstMs, secondMs, thirdMs }));",
+  ].join("\n");
+  const child = Bun.spawnSync([process.execPath, "-e", script]);
+  expect(child.exitCode, child.stderr.toString()).toBe(0);
+  return JSON.parse(child.stdout.toString());
+}
 
 function holdLock(dir: string): () => void {
   const database = new Database(join(dir, CONFIG_OWNERSHIP_LOCK), { create: false, readwrite: true });
@@ -111,8 +212,7 @@ describe("serialized ownership manifest (#8093)", () => {
     expect(existsSync(join(dir, CONFIG_OWNERSHIP_LOCK))).toBe(false);
   }), 60_000);
 
-  test("an interrupted uninstall refuses registrations, cached paths included, and a rerun finishes it",
-    { skip: process.platform === "win32" || process.getuid?.() === 0 },
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an interrupted uninstall refuses registrations, cached paths included, and a rerun finishes it",
     withHome(async dir => {
       // This process records (and caches) paths, as a long-running proxy would.
       expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
@@ -189,7 +289,28 @@ describe("serialized ownership manifest (#8093)", () => {
 });
 
 describe("callers that create files after registering them (#8093)", () => {
-  test("service log rotation goes ahead unrecorded once the ownership lock keeps failing", { skip: process.platform === "win32" },
+  test("service log rotation goes ahead unrecorded while the ownership lock is busy", withHome(async dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    const { startServiceLogging, SERVICE_LOG_MAX_BYTES } = await import("../../src/service/logging");
+    const path = join(dir, "service.log");
+    writeFileSync(path, "x".repeat(SERVICE_LOG_MAX_BYTES + 1));
+    expect(manifest(dir).paths).not.toContain("service.log.1");
+    const release = holdLock(dir);
+    let stop: (() => void) | undefined;
+    try {
+      expect(() => recordOwnedConfigPath(dir, path + ".1")).toThrow(ConfigOwnershipLockError);
+      stop = startServiceLogging(path, { OCX_SERVICE: "1" }, 10);
+      expect(existsSync(path + ".1")).toBe(false);
+      const deadline = Date.now() + 3_000;
+      while (!existsSync(path + ".1") && Date.now() < deadline) await Bun.sleep(10);
+      expect(existsSync(path + ".1")).toBe(true);
+      expect(manifest(dir).paths).not.toContain("service.log.1");
+    } finally {
+      try { stop?.(); } finally { release(); }
+    }
+  }));
+
+  test.skipIf(process.platform === "win32")("service log rotation goes ahead unrecorded once the ownership lock keeps failing",
     withHome(async dir => {
       expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
       // A second link to the lock file is refused on every attempt: a lock fault that persists.
@@ -274,8 +395,7 @@ describe("manifest limits and uninstall leftovers (#8093)", () => {
 });
 
 describe("upgraded homes near the manifest byte limit (#8093)", () => {
-  test("an interrupted uninstall of a near-limit manifest still resumes after the tombstone",
-    { skip: process.platform === "win32" || process.getuid?.() === 0 },
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an interrupted uninstall of a near-limit manifest still resumes after the tombstone",
     withHome(dir => {
       expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
       // An older version could fill the manifest up to the limit with no tombstone reserve.
@@ -329,8 +449,11 @@ describe("interrupted metadata writes (#8093)", () => {
     writeFileSync(truncated, JSON.stringify(manifest(dir)).slice(0, 40));
     writeFileSync(otherHome, JSON.stringify({ ...manifest(dir), ownerId: crypto.randomUUID() }));
     const result = removeOwnedConfigState(dir);
-    expect(result.status).toBe("partial");
-    expect([...result.residualPaths].sort()).toEqual([userData, truncated, otherHome].sort());
+    expect({ ...result, residualPaths: [...result.residualPaths].sort() }).toEqual({
+      status: "partial",
+      reason: "unowned files remain in the config directory",
+      residualPaths: [userData, truncated, otherHome].sort(),
+    });
     expect(readFileSync(userData, "utf8")).toBe("user data");
   }));
 
@@ -401,17 +524,22 @@ describe("teardown scope ends cleanly (#8093)", () => {
 });
 
 describe("concurrent first registrations on an absent home (#8093)", () => {
+  test("a worker whose first-registration barrier expired exits without creating the home", withHome(dir => {
+    const gate = { ready: join(dirname(dir), "expired.ready"), go: join(dirname(dir), "never-go") };
+    const clock = "let tick = 0; Date.now = () => tick++ * " + BARRIER_MS + ";\n";
+    const child = Bun.spawnSync([process.execPath, "-e", clock + childScript(dir, "cold", gate, false)]);
+    expect(existsSync(gate.ready)).toBe(true);
+    expect(child.exitCode).toBe(1);
+    expect(existsSync(dir)).toBe(false);
+  }));
+
   test("processes that start together on an absent home all record their paths", withHome(async dir => {
     const names = Array.from({ length: 6 }, (_, i) => "cold-" + i);
     const signals = dirname(dir);
     const go = join(signals, "go-cold");
-    const script = (rel: string) => [
-      "import { existsSync, writeFileSync } from \"node:fs\";",
-      "import { recordOwnedConfigPath } from " + JSON.stringify(modulePath) + ";",
-      "writeFileSync(" + JSON.stringify(join(signals, rel + ".ready")) + ", \"\");",
-      "const until = Date.now() + " + BARRIER_MS + "; while (!existsSync(" + JSON.stringify(go) + ") && Date.now() < until) Bun.sleepSync(2);",
-      "process.exit(recordOwnedConfigPath(" + JSON.stringify(dir) + ", " + JSON.stringify(join(dir, rel)) + ") ? 0 : 2);",
-    ].join("\n");
+    // Use the same bounded busy-lock retry as other registration children, while
+    // leaving the home absent until the synchronized first registration starts.
+    const script = (rel: string) => childScript(dir, rel, { ready: join(signals, rel + ".ready"), go }, false);
     const children = names.map(name => Bun.spawn([process.execPath, "-e", script(name)], { stderr: "inherit" }));
     const deadline = Date.now() + BARRIER_MS;
     while (Date.now() < deadline && !names.every(name => existsSync(join(signals, name + ".ready")))) await Bun.sleep(10);
@@ -498,7 +626,7 @@ describe("paths recorded after the uninstall snapshot (#8093)", () => {
     expect(existsSync(join(dir, "fresh-between"))).toBe(false);
   }), 60_000);
 
-  test("a finishing uninstall leaves a lock file another installation created in place", { skip: process.platform === "win32" },
+  test.skipIf(process.platform === "win32")("a finishing uninstall leaves a lock file another installation created in place",
     withHome(async dir => {
       const { setUninstallStepHookForTests } = await import("../../src/lib/config-ownership");
       expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
@@ -682,7 +810,7 @@ describe("ownership edge cases from review (#8093)", () => {
     expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
   }));
 
-  test("a finishing uninstall unlinks its lock file before releasing it", { skip: process.platform === "win32" }, withHome(dir => {
+  test.skipIf(process.platform === "win32")("a finishing uninstall unlinks its lock file before releasing it", withHome(dir => {
     expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
     // A process that takes the old file after release must see the path change and retry, so the
     // path is gone while this run still holds the lock.
@@ -756,7 +884,7 @@ describe("ownership edge cases from review (#8093)", () => {
     expect(existsSync(join(dir, "config-mutation.sqlite"))).toBe(true);
   }));
 
-  test("a listed symlink whose target is gone is removed", { skip: process.platform === "win32" }, withHome(dir => {
+  test.skipIf(process.platform === "win32")("a listed symlink whose target is gone is removed", withHome(dir => {
     expect(recordOwnedConfigPath(dir, join(dir, "linked"))).toBe(true);
     symlinkSync(join(dirname(dir), "missing-target"), join(dir, "linked"));
     expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
@@ -772,6 +900,34 @@ describe("ownership edge cases from review (#8093)", () => {
     expect(manifest(dir).paths).toContain("later");
   }));
 
+  for (const cached of [false, true]) for (const state of ["empty", "mismatched"] as const) {
+    const context = cached ? "cached-unowned" : "uncached";
+    test(`${context} registration waits for ${state} owner publication`, withHome(dir => {
+      expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+      const ownerPath = join(dir, ".opencodex-owner.json");
+      const owner = readFileSync(ownerPath, "utf8");
+      // Exclusive create exposes the file name before writeFileSync finishes its bytes.
+      const incomplete = state === "empty" ? "" : JSON.stringify({ ...JSON.parse(owner), ownerId: "00000000-0000-4000-8000-000000000000" });
+      writeFileSync(ownerPath, incomplete);
+      expect(observeOwnerPublication(dir, owner, cached)).toBe("recorded");
+      expect(readFileSync(ownerPath, "utf8")).toBe(owner);
+      expect(manifest(dir).paths).toContain("after-publication");
+    }));
+
+    test(`${context} unfinished ${state} owner publication stays unowned and unchanged`, withHome(dir => {
+      expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+      const ownerPath = join(dir, ".opencodex-owner.json");
+      const owner = JSON.parse(readFileSync(ownerPath, "utf8"));
+      const invalid = state === "empty" ? "" : JSON.stringify({ ...owner, ownerId: "00000000-0000-4000-8000-000000000000" });
+      writeFileSync(ownerPath, invalid);
+      const before = readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8");
+      expect(observeOwnerPublication(dir, null, cached)).toBe("unowned");
+      expect(readFileSync(ownerPath, "utf8")).toBe(invalid);
+      expect(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8")).toBe(before);
+      expect(existsSync(join(dir, "after-publication"))).toBe(false);
+    }));
+  }
+
   test("a first registration waits for a home another process is still creating", withHome(dir => {
     expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
     removeTreeWithRetry(join(dir, ".opencodex-owner.json"));
@@ -784,5 +940,50 @@ describe("ownership edge cases from review (#8093)", () => {
     const result = JSON.parse(Bun.spawnSync([process.execPath, "-e", script]).stdout.toString()) as { recorded: boolean; waited: number };
     expect(result.recorded).toBe(false);
     expect(result.waited).toBeGreaterThanOrEqual(90);
+  }));
+
+  test("an unchanged ownerless manifest spends the publication wait once, not per registration", withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    const ownerPath = join(dir, ".opencodex-owner.json");
+    const owner = JSON.parse(readFileSync(ownerPath, "utf8"));
+    // A creation stopped after the manifest, or a corrupt marker: the pair never validates.
+    writeFileSync(ownerPath, JSON.stringify({ ...owner, ownerId: "00000000-0000-4000-8000-000000000000" }));
+    // The locked reload drops the stale cache entry; the next registration pays the one wait.
+    expect(recordOwnedConfigPath(dir, join(dir, "observer"))).toBe(false);
+    let sleeps = 0;
+    const realSleep = Bun.sleepSync;
+    Bun.sleepSync = (ms: number) => { sleeps += 1; realSleep(ms); };
+    let waitedMs = 0;
+    try {
+      const first = performance.now();
+      expect(recordOwnedConfigPath(dir, join(dir, "first"))).toBe(false);
+      waitedMs = performance.now() - first;
+      const firstSleeps = sleeps;
+      expect(firstSleeps).toBeGreaterThan(0);
+      const repeats = performance.now();
+      for (let i = 0; i < 20; i += 1) expect(recordOwnedConfigPath(dir, join(dir, `repeat-${i}`))).toBe(false);
+      // Twenty repeats stay under the single wait the first registration already paid: with the
+      // wait wrongly spent per call this would take twenty times as long.
+      expect(performance.now() - repeats).toBeLessThan(waitedMs);
+      expect(sleeps - firstSleeps).toBe(0);
+    } finally { Bun.sleepSync = realSleep; }
+    expect(waitedMs).toBeGreaterThanOrEqual(90);
+  }));
+
+  // #8270 review: a pair completing between the wait's last failed read and the spent-wait
+  // sampling must not stay unowned on the identity match; the record suppresses only the wait.
+  test("a spent wait recorded on a completed pair still reloads and records", withHome(dir => {
+    expect(registerAfterPairCompletesAtSpentIdentity(dir)).toBe("recorded");
+    expect(manifest(dir).paths).toContain("after-completion");
+  }));
+
+  test("a pair changed during the publication wait spends its own wait", withHome(dir => {
+    const result = registerAfterPairChangedMidWait(dir);
+    expect([result.first, result.second, result.third]).toEqual([false, false, false]);
+    expect(result.firstMs).toBeGreaterThanOrEqual(90);
+    // The identity sampled before the wait no longer matches: the new pair waits once, then the
+    // honestly spent record suppresses further waits.
+    expect(result.secondMs).toBeGreaterThanOrEqual(90);
+    expect(result.thirdMs).toBeLessThan(result.secondMs);
   }));
 });

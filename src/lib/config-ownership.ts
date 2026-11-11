@@ -14,6 +14,15 @@ import { Database } from "bun:sqlite";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { GenerationContext } from "./state-store-sweeper";
 import { renameAtomicFile } from "./windows-atomic-replace";
+import {
+  canonicalRootUnchanged,
+  elevatedRemovalRefusal,
+  ownedEntryPresent,
+  removeOwnedEntry,
+  rootIdentity,
+  uninstallRunsElevated,
+  type RootIdentity,
+} from "./config-ownership-removal";
 
 export const CONFIG_OWNER_FILE = ".opencodex-owner.json";
 export const CONFIG_UNINSTALL_MANIFEST = ".opencodex-uninstall.json";
@@ -141,6 +150,13 @@ let lastReconciledGeneration = 0;
 const lockedManifestIdentity = new Map<string, string>();
 const warnedFullManifest = new Set<string>();
 /**
+ * The metadata state in which a creation wait already ran out for a home, keyed as
+ * {@link ownershipCache}. An unowned home whose manifest and owner marker keep the same identity
+ * has no publication left to wait for (a stopped creation, or a corrupt marker), so a registration
+ * must not pay the bounded wait again; either file changing re-arms a single wait.
+ */
+const expiredCreationWait = new Map<string, string>();
+/**
  * Open while this process runs `ocx uninstall` itself. Its own registrations then skip the
  * tombstone check: the same process runs removeOwnedConfigState afterwards, whose locked snapshot
  * includes whatever they add, so nothing it records is orphaned. Without this, a rerun after an
@@ -181,6 +197,27 @@ function manifestIdentity(configDir: string): string | undefined {
   }
 }
 
+/**
+ * Which file each ownership metadata name refers to while a manifest exists, in the same
+ * dev:ino:size:mtime terms {@link manifestIdentity} uses, or null when no manifest exists: without
+ * one the publication wait ends in a single pass, so there is no spent wait to remember. The
+ * manifest is replaced atomically and the owner marker written once, so either file changing
+ * produces a new identity and re-arms a single wait.
+ */
+function creationWaitIdentity(configDir: string): string | null {
+  const describe = (name: string): string | null => {
+    try {
+      const entry = lstatSync(join(configDir, name), { bigint: true });
+      return `${entry.dev}:${entry.ino}:${entry.size}:${entry.mtimeNs}`;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return code === "ENOENT" ? null : `unreadable:${code ?? "unknown"}`;
+    }
+  };
+  const manifest = describe(CONFIG_UNINSTALL_MANIFEST);
+  return manifest === null ? null : `${manifest}|${describe(CONFIG_OWNER_FILE)}`;
+}
+
 export function listLiveConfigOwnershipRoots(currentConfigDir: string): ReadonlySet<string> {
   const currentRoot = ownershipCacheKey(currentConfigDir);
   const roots = new Set<string>([currentRoot]);
@@ -202,6 +239,7 @@ export function reconcileConfigOwnershipRoots(context: GenerationContext): numbe
       existsSync(join(root, ...rel.split("/"))));
     if (hasLiveOwnedPath) continue;
     ownershipCache.delete(root);
+    expiredCreationWait.delete(root);
     removed += 1;
   }
   lastReconciledGeneration = context.generation;
@@ -256,15 +294,6 @@ function isManifest(value: unknown): value is ConfigUninstallManifest {
 
 function canonicalRoot(configDir: string): string {
   return realpathSync.native(resolve(configDir));
-}
-
-function isWithinRoot(root: string, candidate: string): boolean {
-  const rel = relative(root, candidate);
-  return rel === "" || (
-    rel !== ".."
-    && !rel.startsWith(`..${sep}`)
-    && !isAbsolute(rel)
-  );
 }
 
 function manifestRelativePath(configDir: string, candidatePath: string): string | null {
@@ -520,50 +549,36 @@ function removeEmptyLockSidecars(configDir: string): void {
   }
 }
 
-function removeOwnedEntry(root: string, path: string): void {
-  const entry = lstatSync(path);
-  if (entry.isSymbolicLink()) {
-    unlinkSync(path);
-    return;
-  }
-  if (!entry.isDirectory()) {
-    unlinkSync(path);
-    return;
-  }
-
-  const realDirectory = realpathSync.native(path);
-  if (!isWithinRoot(root, realDirectory)) {
-    throw new Error(`owned directory resolves outside the config root: ${path}`);
-  }
-  for (const name of readdirSync(path)) {
-    removeOwnedEntry(root, join(path, name));
-  }
-  rmdirSync(path);
-}
-
 /** Initialize only an empty or already-owned root; do not claim a candidate path. */
 export function initializeConfigOwnership(configDir: string): boolean {
   const cacheKey = ownershipCacheKey(configDir);
   if (!existsSync(configDir)) {
     ownershipCache.delete(cacheKey);
+    expiredCreationWait.delete(cacheKey);
     mkdirSync(configDir, { recursive: true, mode: 0o700 });
   }
   let ownership = ownershipCache.get(cacheKey);
-  if (ownership === undefined) {
-    ownership = loadOrCreateOwnership(configDir);
-    ownershipCache.set(cacheKey, ownership);
-  } else if (ownership === null) {
-    // A home cached as unowned may have finished being created by another process since: re-read
-    // the metadata (no waiting) so a late owner marker is picked up. A root that has become empty
-    // since is claimed like an absent one; a nonempty unowned root still never is.
-    ownership = loadOwnership(configDir);
-    if (!ownership) {
-      try {
-        ownership = createOwnership(configDir);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        ownership = loadOwnership(configDir);
-      }
+  if (ownership === undefined || ownership === null) {
+    // A previously unowned home can enter creation later; use the same bounded publication wait,
+    // but spend it at most once per unchanged metadata pair. A manifest left without a valid
+    // owner marker — a stopped creation, or a corrupt marker — is not a creation still in
+    // progress, and registrations run on the request path: charging each of them the full wait
+    // stalls every request to that home. Either file changing re-arms a single wait.
+    const observed = creationWaitIdentity(configDir);
+    if (observed !== null && expiredCreationWait.get(cacheKey) === observed) {
+      // A spent wait suppresses only the wait itself, never the reload: the identity it keeps
+      // may already name a completed pair. One plain load stays cheap for an unchanged invalid
+      // pair and lets a valid one register instead of sticking unowned.
+      ownership = loadOwnership(configDir);
+      if (ownership !== null) expiredCreationWait.delete(cacheKey);
+    } else {
+      ownership = loadOrCreateOwnership(configDir);
+      const current = creationWaitIdentity(configDir);
+      // Record only the identity the wait actually ran out on: unchanged across it, so its last
+      // failed read describes the same state. A pair that changed during the wait, including one
+      // that completed just after that read, spends its own wait on the next registration.
+      if (ownership === null && current !== null && current === observed) expiredCreationWait.set(cacheKey, current);
+      else expiredCreationWait.delete(cacheKey);
     }
     ownershipCache.set(cacheKey, ownership);
   }
@@ -594,13 +609,13 @@ function loadOwnershipForUninstall(configDir: string): { owner: ConfigOwner; man
   return loadOwnership(configDir) ?? tombstonedManifestWithoutOwner(configDir);
 }
 
-/** How long a first registration waits for another process that is creating the same home. */
+/** How long an uncached or unowned registration waits for another process creating the same home. */
 const CONCURRENT_CREATION_WAIT_MS = 100;
 
 /**
  * Load the ownership metadata, or create it in an empty root. Two processes can start on the same
  * absent home: the loser of the exclusive manifest write, or one that sees the manifest before the
- * owner marker (creation writes them in that order), waits briefly and loads the winner's metadata
+ * complete owner marker (creation writes them in that order), waits briefly and loads the winner's metadata
  * instead of caching the home as unowned for the rest of its life.
  */
 function loadOrCreateOwnership(configDir: string): { owner: ConfigOwner; manifest: ConfigUninstallManifest } | null {
@@ -614,7 +629,9 @@ function loadOrCreateOwnership(configDir: string): { owner: ConfigOwner; manifes
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
-    const creating = existsSync(join(configDir, CONFIG_UNINSTALL_MANIFEST)) && !existsSync(join(configDir, CONFIG_OWNER_FILE))
+    // Exclusive create publishes the owner file name before its JSON bytes are complete.
+    // Only a valid matching pair proves ownership; file presence alone must not end this wait.
+    const creating = existsSync(join(configDir, CONFIG_UNINSTALL_MANIFEST))
       && !tombstonedManifestWithoutOwner(configDir);
     if (!creating || Date.now() >= deadline) return loadOwnership(configDir);
     Bun.sleepSync(5);
@@ -781,6 +798,20 @@ function removeIdleLockFiles(configDir: string): "removed" | "busy" {
   return "removed";
 }
 
+/** The elevated-run check; null when the run is not elevated. */
+function privilegeCheck(configDir: string): { refusal: string | null } | null {
+  if (!uninstallRunsElevated()) return null;
+  return { refusal: elevatedRemovalRefusal(configDir) };
+}
+
+/**
+ * Read-only check `ocx uninstall` runs before its first teardown step: the reason an elevated run
+ * must not touch this home, or null. The remover repeats it before taking the lock.
+ */
+export function uninstallPrivilegeRefusal(configDir: string): string | null {
+  return privilegeCheck(configDir)?.refusal ?? null;
+}
+
 export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
   ownershipCache.delete(ownershipCacheKey(configDir));
   lockedManifestIdentity.delete(ownershipCacheKey(configDir));
@@ -793,6 +824,47 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
       residualPaths: [configDir],
     };
   }
+  // Everything below works on the canonical root, resolved once here, so no later step goes back
+  // through the spelling the caller passed. Residual paths are reported in that spelling.
+  let canonical: string;
+  let identity: RootIdentity;
+  try {
+    canonical = canonicalRoot(configDir);
+    identity = rootIdentity(canonical);
+  } catch {
+    return { status: "refused", reason: "config ownership root is not a real directory", residualPaths: [configDir] };
+  }
+  const result = removeCanonicalOwnedConfigState(canonical, identity);
+  return { ...result, residualPaths: result.residualPaths.map(path => callerSpelling(path, canonical, configDir)) };
+}
+
+function callerSpelling(path: string, canonical: string, configDir: string): string {
+  if (path === canonical) return configDir;
+  const rel = relative(canonical, path);
+  return rel && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel) ? join(configDir, rel) : path;
+}
+
+function removeCanonicalOwnedConfigState(configDir: string, identity: RootIdentity): ConfigRemovalResult {
+  // `configDir` is the canonical root resolved once by the caller, and `identity` the directory it
+  // named then. It is never resolved again: each step below that acts on it first confirms it is still
+  // that directory, a real one resolving to itself. A change before anything is written is refused;
+  // one found later ends the run partial, and the tombstone lets a rerun finish.
+  const rootChanged: ConfigRemovalResult = {
+    status: "refused",
+    reason: "the config directory changed while uninstall ran; run 'ocx uninstall' again",
+    residualPaths: [configDir],
+  };
+  const rootMoved: ConfigRemovalResult = {
+    status: "partial",
+    reason: "the config directory changed while uninstall ran; run 'ocx uninstall' again",
+    residualPaths: [configDir],
+  };
+  ownershipCache.delete(ownershipCacheKey(configDir));
+  lockedManifestIdentity.delete(ownershipCacheKey(configDir));
+  // Before the lock exists or anything is written, so a refused elevated run changes nothing.
+  const privilege = privilegeCheck(configDir);
+  if (privilege?.refusal) return { status: "refused", reason: privilege.refusal, residualPaths: [configDir] };
+  if (!canonicalRootUnchanged(configDir, identity)) return rootChanged;
   if (!loadOwnershipForUninstall(configDir)) {
     // A finished uninstall whose lock file could not be unlinked (Windows keeps a file another
     // process holds open) leaves only lock files. They are removed once no process holds the lock.
@@ -836,17 +908,25 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
           return { status: "refused", reason: "config ownership manifest contains an unsafe path", residualPaths: [configDir] };
         }
       }
+      // Checked again under the lock and before the tombstone: the manifest, ownership, modes and the
+      // tree may all have changed since the unlocked check.
+      const lockedRefusal = privilege ? elevatedRemovalRefusal(configDir) : null;
+      if (lockedRefusal) return { status: "refused", reason: lockedRefusal, residualPaths: [configDir] };
+      if (!canonicalRootUnchanged(configDir, identity)) return rootChanged;
       if (ownership.manifest.uninstallStartedAt === undefined) {
         writeManifest(configDir, { ...ownership.manifest, uninstallStartedAt: Date.now() });
       }
+      if (!canonicalRootUnchanged(configDir, identity)) return rootMoved;
       removeAbandonedMetadataTemps(configDir, ownership.owner);
-      const rootPath = canonicalRoot(configDir);
+      const rootPath = configDir;
+      const elevatedUid = process.platform !== "win32" && uninstallRunsElevated() ? process.geteuid?.() : undefined;
       for (const rel of ownership.manifest.paths) {
-        const path = join(configDir, ...rel.split("/"));
-        // lstat, not existsSync: a listed symlink whose target is gone is still ours to unlink.
-        try { lstatSync(path); } catch { continue; }
+        const parts = rel.split("/");
+        const path = join(configDir, ...parts);
         try {
-          removeOwnedEntry(rootPath, path);
+          // lstat-based: a listed symlink whose target is gone is still ours to unlink, and a link on
+          // the way to an entry is reported rather than read as absence.
+          if (ownedEntryPresent(rootPath, parts)) removeOwnedEntry(rootPath, parts, { elevatedUid, rootIdentity: identity });
         } catch (error) {
           return {
             status: "partial",
@@ -856,6 +936,7 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
         }
       }
       uninstallStepHookForTests?.("snapshot-removed");
+      if (!canonicalRootUnchanged(configDir, identity)) return rootMoved;
       try {
         // Owner marker first, manifest last: until the end the tombstoned manifest stays as the record
         // a rerun resumes from, and creation (manifest first) never leaves that state.
@@ -883,6 +964,7 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
     };
   }
   if (outcome.status !== "removed") return outcome;
+  if (!canonicalRootUnchanged(configDir, identity)) return rootMoved;
   // The lock holder retired its own lock file on release; one that remains (Windows) is reported.
   const residualPaths = readdirSync(configDir).map(name => join(configDir, name));
   if (residualPaths.length > 0) {

@@ -57,7 +57,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（以訂閱方式啟動且未設定時為原生 `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`） |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | OpenCodex 將層級槽位設為路由別名時對應的 `/model` 標籤（例如 `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`）。launchd 系統環境與 shell 掛鉤中也成對寫入。模型 ID 仍為別名。您自行設定的槽位或標籤不會被修改 |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | 啟用 `alwaysEnableEffort` 時設為 `1`（條件注入） |
-| `ENABLE_TOOL_SEARCH` | 設定 `claudeCode.toolSearch` 時注入（條件注入，預設關閉） |
+| `ENABLE_TOOL_SEARCH` | 設定 `claudeCode.toolSearch` 時注入（條件注入；預設不注入，沿用 Claude Code 自身的預設值） |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | 設定 `maxContextTokens` 時使用的舊版上下文覆蓋項（條件注入） |
 你自行匯出的變數始終優先。額外引數會直接透傳：`ocx claude -p "hello"`。
 
@@ -398,9 +398,7 @@ v1 別名按字面解碼（歷史上 model ID 中包含的兩字元序列 `~s` /
 可以在 Claude 頁面調整壓縮值。**警告：**如果將其提高到超過模型的實際視窗，該模型將無法正常
 工作——聊天會在觸發摘要之前報錯。
 
-正規化上下文超限錯誤時，只使用提供方錯誤訊息的前 65,536 個 UTF-16 程式碼單元。
-後面的診斷資訊或 token 數可能被捨棄，且不會新增截斷標記。
-詳細限制和 token 數處理條件請參閱[英文指南](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)。
+Messages 錯誤回應正規化使用固定文案，不保留提供方原文或 token 數量。辨識到上下文超限時傳回 `prompt is too long: The request exceeds the model's context window.`。串流中第一個欄位為 error 事件的區塊最多保留 1 MiB；超過後傳回不含壓縮觸發短語的固定錯誤。範圍和兩項例外請見[英文指南](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)。
 
 低於 1M 的原生 Anthropic 模型絕不會被自動標記。你自行匯出的壓縮值在啟動槽位標記上始終優先（代理會使用**你的**
 值來判斷哪些模型可以安全標記）。探索列表忽略該匯出值並保持固定下限。手動編輯設定時填入的無效值會回退到 829,800。
@@ -595,9 +593,9 @@ role；`tool_result` 缺少 `tool_use_id`；`tool_use` 缺少 id/name；指定�
 **Anthropic 路由請求：**適配器會管理工具、系統內容和倒數第二條使用者訊息的快取斷點，以及頂層
 自動 `cache_control`。穩定輪次通常能達到約 99.9% 的快取命中率。
 
-**原生 OpenAI/ChatGPT 路由：**派生會話範圍的 `prompt_cache_key`（存在時取自
-`metadata.user_id`，否則回退到系統內容雜湊）和用於快取親和性的 `session_id` 標頭。
-快取鍵包含模型和完整的工具 schema。
+**原生 OpenAI/ChatGPT 路由：**派生 `prompt_cache_key`（`metadata.user_id` 為字串時取自該值，
+否則回退到系統內容雜湊），並僅在存在會話識別時派生用於快取親和性的 `session_id` 標頭（不會從共享回退鍵派生）。
+由系統內容雜湊派生的回退鍵（僅在存在系統內容時使用）還包含模型和完整的工具 schema。
 
 **Token 計算：**Anthropic 輸出會從 `input_tokens` 中減去 `cached_tokens` 和
 `cache_write_tokens`，並將它們分別公開為 `cache_read_input_tokens` 和

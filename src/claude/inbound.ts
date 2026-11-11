@@ -1,3 +1,5 @@
+import { messagesRolePresentation } from "../lib/messages-error-body";
+import { CLAUDE_CONTEXT_OVERFLOW_MESSAGE, markProxyError } from "../lib/client-error-body";
 /**
  * Claude Code inbound: Anthropic Messages API request -> internal /v1/responses body.
  *
@@ -11,6 +13,7 @@
  */
 import type { OcxClaudeCodeConfig } from "../types";
 import { createHash } from "node:crypto";
+import { claudeSessionUserId } from "../server/request-log-conversation";
 
 export { AnthropicRequestError, DesktopModelMappingUnavailableError } from "./inbound-records";
 export { resolveInboundModel, effortForThinkingBudget, effortFromOutputConfig, extractOcxRouteDirective, extractOcxEffortDirective } from "./inbound-model-options";
@@ -34,9 +37,9 @@ export function anthropicImageBlockUrl(block: Rec): string | null {
   const source = block.source;
   if (!isRec(source)) return null;
   if (source.type === "file") {
-    throw new AnthropicRequestError(
+    throw markProxyError(new AnthropicRequestError(
       "File-backed images require native Anthropic passthrough; use base64 or URL images on translated routes.",
-    );
+    ));
   }
   if (source.type === "base64" && typeof source.data === "string") {
     const media = typeof source.media_type === "string" ? source.media_type : "image/png";
@@ -274,7 +277,7 @@ function userMessageToItems(content: unknown, input: Rec[], elide: SkillElisionC
         pushUserMessage(input, pending);
         pending = [];
         if (typeof raw.tool_use_id !== "string" || raw.tool_use_id.length === 0) {
-          throw new AnthropicRequestError("tool_result requires tool_use_id");
+          throw markProxyError(new AnthropicRequestError("tool_result requires tool_use_id"));
         }
         input.push({
           type: "function_call_output",
@@ -319,7 +322,7 @@ function assistantMessageToItems(content: unknown, input: Rec[], budget: Transla
       case "tool_use": {
         flush();
         if (typeof raw.id !== "string" || raw.id.length === 0 || typeof raw.name !== "string" || raw.name.length === 0) {
-          throw new AnthropicRequestError("tool_use requires id and name");
+          throw markProxyError(new AnthropicRequestError("tool_use requires id and name"));
         }
         input.push({ type: "function_call", call_id: raw.id, name: raw.name, arguments: JSON.stringify(raw.input ?? {}) });
         break;
@@ -330,8 +333,8 @@ function assistantMessageToItems(content: unknown, input: Rec[], budget: Transla
         const signature = typeof raw.signature === "string" ? raw.signature : "";
         if (signature.startsWith(OCX_REASONING_PREFIX)) {
           const owned = decodeReasoningEnvelope(signature, budget);
-          if (!owned) throw new AnthropicRequestError("malformed ocxr1 reasoning signature");
-          if (Object.hasOwn(owned, "sig")) throw new AnthropicRequestError("OpenCodex reasoning continuity cannot be replayed as an Anthropic signature");
+          if (!owned) throw markProxyError(new AnthropicRequestError("malformed ocxr1 reasoning signature"));
+          if (Object.hasOwn(owned, "sig")) throw markProxyError(new AnthropicRequestError("OpenCodex reasoning continuity cannot be replayed as an Anthropic signature"));
           if (owned.nat) {
             // The provider's own blob goes back only to the model that minted it; any other
             // model gets the visible text alone, as before this envelope field existed.
@@ -456,7 +459,7 @@ function translateAnthropicRequest(
     names: blockedNames,
   };
   for (const msg of raw.messages) {
-    if (!isRec(msg)) throw new AnthropicRequestError("each message must be an object");
+    if (!isRec(msg)) throw markProxyError(new AnthropicRequestError("each message must be an object"));
     if (msg.role === "user") userMessageToItems(msg.content, input, elide);
     else if (msg.role === "assistant") assistantMessageToItems(msg.content, input, budget, raw.model, nativeReasoningReplay);
     else if (msg.role === "system") {
@@ -468,7 +471,11 @@ function translateAnthropicRequest(
         input.push({ type: "message", role: "developer", content: [{ type: "input_text", text }] });
       }
     }
-    else throw new AnthropicRequestError(`unsupported message role: ${String(msg.role)}`);
+    else {
+      const role = messagesRolePresentation(msg.role);
+      if (role.coercionFailed) throw markProxyError(new TypeError("unsupported message role: unsupported"));
+      throw markProxyError(new AnthropicRequestError(role.overflow ? CLAUDE_CONTEXT_OVERFLOW_MESSAGE : "unsupported message role: unsupported"));
+    }
   }
 
   const body: Rec = {
@@ -495,12 +502,12 @@ function translateAnthropicRequest(
 }
 
 function assertAnthropicRequestShape(raw: unknown): asserts raw is Rec & { model: string; messages: unknown[] } {
-  if (!isRec(raw)) throw new AnthropicRequestError("request body must be a JSON object");
+  if (!isRec(raw)) throw markProxyError(new AnthropicRequestError("request body must be a JSON object"));
   if (typeof raw.model !== "string" || raw.model.length === 0) {
-    throw new AnthropicRequestError("model is required");
+    throw markProxyError(new AnthropicRequestError("model is required"));
   }
   if (!Array.isArray(raw.messages) || raw.messages.length === 0) {
-    throw new AnthropicRequestError("messages must be a non-empty array");
+    throw markProxyError(new AnthropicRequestError("messages must be a non-empty array"));
   }
 }
 
@@ -592,8 +599,10 @@ function applyAnthropicSettings(
     // their session id; without it consecutive /v1/messages turns reported
     // cached_tokens: 0 on the ChatGPT backend — devlog 090). Claude Code's
     // metadata.user_id embeds the session uuid, so hashing it yields a stable
-    // per-session key with a bounded length/charset.
-    body.prompt_cache_key = userIdHash.slice(0, 32);
+    // per-session key with a bounded length/charset. Remote Claude Code adds a per-turn
+    // attribution token (`tk`) to that blob; it is dropped, as Claude Code itself drops it,
+    // so every turn of one session keeps one key.
+    body.prompt_cache_key = createHash("sha256").update(claudeSessionUserId(raw.metadata.user_id)).digest("hex").slice(0, 32);
     cacheKeySource = "metadata";
   } else if (typeof cacheSystem === "string" || cacheSystem.length > 0) {
     // Claude Desktop sends no metadata.user_id (H1, devlog 130): without any key the

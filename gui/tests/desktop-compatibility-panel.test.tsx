@@ -314,9 +314,9 @@ test("a stopped runtime still presents a stale verified check as a past observat
 test("auto-start toggle writes once with the displayed revision and rechecks the saved state", async () => {
   server(); const container = await mount();
   const toggle = button(container, "Resume observation when OpenCodex starts");
-  expect(toggle.getAttribute("aria-pressed")).toBe("false");
+  expect(toggle.getAttribute("aria-checked")).toBe("false");
   await act(async () => toggle.click());
-  expect(toggle.getAttribute("aria-pressed")).toBe("true");
+  expect(toggle.getAttribute("aria-checked")).toBe("true");
   const posts = requests.filter(req => req.method === "POST"); expect(posts).toHaveLength(1);
   expect(posts[0]!.url).toEndWith("/settings"); expect(posts[0]!.body).toEqual({ confirmed: true, startOnProxyStart: true, revision: "a".repeat(64) });
   expect(requests.some(req => req.method === "POST" && req.url.endsWith("/runtime"))).toBe(false);
@@ -327,7 +327,7 @@ test("an uncertain auto-start write is not replayed and refresh recovers its com
   await act(async () => toggle.click()); expect(toggle.disabled).toBe(true);
   const setting = toggle.closest(".panel")!;
   await act(async () => button(setting as HTMLElement, "Refresh status").click());
-  expect(toggle.disabled).toBe(false); expect(toggle.getAttribute("aria-pressed")).toBe("true");
+  expect(toggle.disabled).toBe(false); expect(toggle.getAttribute("aria-checked")).toBe("true");
   expect(requests.filter(req => req.method === "POST")).toHaveLength(1);
 });
 
@@ -378,7 +378,7 @@ test("machine session replacement aborts a held settings POST before a 401 can r
   await act(async () => io.refreshAuthority());
   expect(io.toggle.disabled).toBe(true); // Authority metadata cannot settle the uncertain preference.
   await act(async () => button(io.setting, "Refresh status").click());
-  expect(io.toggle.disabled).toBe(false); expect(io.toggle.getAttribute("aria-pressed")).toBe("false");
+  expect(io.toggle.disabled).toBe(false); expect(io.toggle.getAttribute("aria-checked")).toBe("false");
 });
 
 test("a late old-session settings response cannot replace a fresh read or restore uncertainty", async () => {
@@ -390,7 +390,7 @@ test("a late old-session settings response cannot replace a fresh read or restor
   const reads = io.sent.filter(request => request.method === "GET").length;
   await act(async () => io.release(Response.json({ ok: true, settings: { startOnProxyStart: true, revision: "b".repeat(64) } })));
   expect(io.sent.filter(request => request.method === "GET")).toHaveLength(reads);
-  expect(io.toggle.disabled).toBe(false); expect(io.toggle.getAttribute("aria-pressed")).toBe("false");
+  expect(io.toggle.disabled).toBe(false); expect(io.toggle.getAttribute("aria-checked")).toBe("false");
 });
 
 test("a shared-session change does not cancel an authorized machine settings operation", async () => {
@@ -399,5 +399,5 @@ test("a shared-session change does not cancel an authorized machine settings ope
   expect(io.signal()?.aborted).toBe(false);
   io.save(); await act(async () => io.release(io.settings()));
   expect(io.sent.filter(request => request.method === "POST").map(request => request.token)).toEqual(["ocx_session_old"]);
-  expect(io.toggle.disabled).toBe(false); expect(io.toggle.getAttribute("aria-pressed")).toBe("true");
+  expect(io.toggle.disabled).toBe(false); expect(io.toggle.getAttribute("aria-checked")).toBe("true");
 });

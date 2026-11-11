@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, useState } from "react";
+import { act, useEffect, useState } from "react";
 import type { Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import ComboWorkspace from "../src/components/ComboWorkspace";
@@ -12,6 +12,7 @@ import Combos from "../src/pages/Combos";
 import { navigateHash } from "../src/hash-routing";
 import { readModelsTab } from "../src/pages/models-tab";
 import { toPutBody, type ComboItem, type ComboTarget } from "../src/combo-workspace-data";
+import { chooseOption, selectTrigger, selectValue } from "./helpers/custom-select";
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
@@ -73,10 +74,9 @@ async function flush(rounds = 3) {
   });
 }
 
-function setSelect(select: HTMLSelectElement, value: string) {
-  Object.getOwnPropertyDescriptor(testWindow.HTMLSelectElement.prototype, "value")!
-    .set!.call(select, value);
-  select.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
+/** The Select triggers (ui.tsx) under `scope`, in document order. */
+function selects(scope: ParentNode): HTMLButtonElement[] {
+  return [...scope.querySelectorAll<HTMLButtonElement>("[role=combobox]")];
 }
 
 test("Combo workspace exposes JEV Auto and reports an existing selector collision", () => {
@@ -160,7 +160,7 @@ test("JEV target effort checkboxes persist an exact non-empty subset and reset f
 
   function Harness() {
     const [targets, setTargets] = useState(observed);
-    observed = targets;
+    useEffect(() => { observed = targets; }, [targets]);
     return (
       <LanguageProvider>
         <TargetEditor
@@ -189,8 +189,7 @@ test("JEV target effort checkboxes persist an exact non-empty subset and reset f
   expect(observed[0]?.reasoningEfforts).toEqual(["xhigh"]);
   expect(effortInputs().find(input => input.value === "xhigh")?.disabled).toBe(true);
 
-  const modelSelect = host.querySelectorAll<HTMLSelectElement>("select")[1]!;
-  await act(async () => { setSelect(modelSelect, "gpt-5.6-sol"); });
+  await chooseOption(selectTrigger(host, '[role="combobox"][aria-label="Model"]'), "gpt-5.6-sol");
   expect(observed[0]?.reasoningEfforts).toBeUndefined();
   expect(effortInputs().map(input => [input.value, input.checked])).toEqual([
     ["low", true],
@@ -334,18 +333,16 @@ test("configured JEV deep-link opens the shared editable Combo modal and submits
   expect(host.textContent).toContain("Fail-open target");
   expect([...dialog!.querySelectorAll<HTMLInputElement>(".cwi-target-entry:first-child input[data-jev-effort]")]
     .map(input => input.value)).toEqual(["medium", "high", "xhigh"]);
-  expect([...dialog!.querySelectorAll<HTMLSelectElement>('select[aria-label="Provider"]')]
-    .map(select => select.value)).toEqual(["openai", "openai", "openai"]);
+  expect([...dialog!.querySelectorAll<HTMLButtonElement>('[role="combobox"][aria-label="Provider"]')]
+    .map(select => selectValue(select))).toEqual(["openai", "openai", "openai"]);
 
   const addTarget = [...host.querySelectorAll<HTMLButtonElement>("button")]
     .find(button => button.textContent?.trim() === "Add target")!;
   await act(async () => { addTarget.click(); });
   let targetRows = host.querySelectorAll<HTMLElement>(".cwi-target-row");
   expect(targetRows).toHaveLength(4);
-  await act(async () => {
-    setSelect(targetRows[3]!.querySelectorAll("select")[0]!, "anthropic");
-  });
-  expect(targetRows[3]!.querySelectorAll("select")[1]!.value).toBe("claude-sonnet-5");
+  await chooseOption(selects(targetRows[3]!)[0]!, "anthropic");
+  expect(selectValue(selects(targetRows[3]!)[1]!)).toBe("claude-sonnet-5");
 
   const removeButtons = host.querySelectorAll<HTMLButtonElement>('button[aria-label="Remove"]');
   await act(async () => { removeButtons[2]!.click(); });

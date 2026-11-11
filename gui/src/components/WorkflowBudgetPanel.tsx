@@ -3,7 +3,10 @@ import { useT } from "../i18n/shared";
 import { createBoundedFetch } from "../bounded-fetch";
 import { clampNumberDraft } from "../clamp-draft";
 import { requireJson } from "../pages/dashboard-shared";
-import { NumberStepper } from "./NumberStepper";
+import { Button } from "./ui-v2/button";
+import { Frame, FrameBody, FrameFoot, HelpTip } from "./v2-subagents/frame";
+import { useHelpDisclosure } from "./v2-subagents/use-help-disclosure";
+import { StepperInput } from "./v2-subagents/StepperInput";
 
 const KEYS = ["maxConcurrentChildren", "maxPhysicalSends", "maxDistinctChildren"] as const;
 type Key = typeof KEYS[number];
@@ -52,12 +55,13 @@ function parseDraft(raw: string, range: { min: number; max: number }): number | 
   return value >= range.min && value <= range.max ? value : undefined;
 }
 
-export default function WorkflowBudgetPanel({ apiBase }: { apiBase: string }) {
-  return <WorkflowBudgetControls key={apiBase} apiBase={apiBase} />;
+export default function WorkflowBudgetPanel({ apiBase, id }: { apiBase: string; id?: string }) {
+  return <WorkflowBudgetControls key={apiBase} apiBase={apiBase} id={id} />;
 }
 
-function WorkflowBudgetControls({ apiBase }: { apiBase: string }) {
+function WorkflowBudgetControls({ apiBase, id }: { apiBase: string; id?: string | undefined }) {
   const t = useT();
+  const help = useHelpDisclosure(t("workflowBudget.title"));
   const [saved, setSaved] = useState<Settings | undefined>();
   const [drafts, setDrafts] = useState<Drafts>({ maxConcurrentChildren: "", maxPhysicalSends: "", maxDistinctChildren: "" });
   const [busy, setBusy] = useState(false);
@@ -124,55 +128,68 @@ function WorkflowBudgetControls({ apiBase }: { apiBase: string }) {
   const disabled = busy || saved === undefined || loadError;
   const edit = (key: Key, value: string) => { setDrafts(current => ({ ...current, [key]: value })); setFeedback(null); };
 
-  return <section className="panel" aria-labelledby="workflow-budget-title" aria-busy={busy || (saved === undefined && !loadError)}>
-    <div className="font-semibold" id="workflow-budget-title">{t("workflowBudget.title")}</div>
-    <p className="muted setting-hint">{t("workflowBudget.description", { minutes: saved?.windowMinutes ?? 10 })}</p>
-    <div className="stack" style={{ gap: "var(--space-3)" }}>
+  // A settings form with a sticky save bar (React Bits settings-form-1): the long window
+  // explanation sits behind the "?", each field keeps one caption line, and the foot says
+  // whether there is anything to save.
+  return <Frame
+    id={id}
+    title={t("workflowBudget.title")}
+    lede={t("subagentsV2.budgetLede")}
+    meta={help.button}
+    busy={busy || (saved === undefined && !loadError)}
+    below={help.panel(<p>{t("workflowBudget.description", { minutes: saved?.windowMinutes ?? 10 })}</p>)}
+  >
+    {loadError && (
+      <div className="mx-4 mb-3 flex flex-wrap items-center gap-2 rounded-[8px] bg-danger-soft px-3 py-2 text-[13px] text-danger" role="alert">
+        <span className="flex-1">{t("workflowBudget.loadFailed")}</span>
+        <Button size="sm" variant="outline" onClick={() => { void load(); }}>{t("common.retry")}</Button>
+      </div>
+    )}
+    <FrameBody>
       {KEYS.map(key => {
         const [labelKey, hintKey] = LABEL_KEYS[key];
         const label = t(labelKey);
         const range = saved?.bounds[key] ?? { min: 0, max: 0 };
         const invalid = saved !== undefined && parsed?.[key] === undefined;
         const hintId = "workflow-budget-" + key + "-hint";
-        return <div className="spread" key={key} style={{ alignItems: "flex-start", gap: "var(--space-3)" }}>
-          <div className="stack" style={{ gap: "var(--space-1)", minWidth: 0 }}>
-            <span>{label}</span>
-            <span className="muted setting-hint" id={hintId}>
-              {t(hintKey)}{" "}
+        return <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3" key={key}>
+          <div className="flex min-w-[min(100%,12rem)] flex-1 flex-col gap-0.5">
+            <span className="flex items-center gap-1.5 text-[14px] leading-5 font-medium text-fg">
+              {label}
+              <HelpTip label={label}>{t(hintKey)}</HelpTip>
+            </span>
+            <span className="text-[12px] leading-4 text-fg-subtle tabular-nums" id={hintId}>
               {saved && t("workflowBudget.range", { default: saved.defaults[key], min: range.min, max: range.max })}
             </span>
-            {invalid && <span className="setting-hint" role="alert" style={{ color: "var(--red)" }}>{t("workflowBudget.invalid", { min: range.min, max: range.max })}</span>}
+            {invalid && <span className="text-[12px] leading-4 text-danger" role="alert">{t("workflowBudget.invalid", { min: range.min, max: range.max })}</span>}
           </div>
-          <span className="codex-auto-switch-input-wrap">
-            <input
-              className="input mono codex-auto-switch-input"
-              type="number" min={range.min} max={range.max} step={1} inputMode="numeric"
-              value={drafts[key]} readOnly={disabled} aria-disabled={disabled}
-              aria-label={label} aria-describedby={hintId} aria-invalid={invalid}
-              onChange={event => edit(key, event.target.value)}
-              onKeyDown={event => {
-                if (event.key === "Enter" && !event.nativeEvent.isComposing && !disabled && changed && valid) {
-                  event.preventDefault(); void save();
-                }
-              }}
-            />
-            <NumberStepper
-              disabled={disabled}
-              incrementLabel={t("workflowBudget.increase", { label })}
-              decrementLabel={t("workflowBudget.decrease", { label })}
-              onIncrement={() => edit(key, clampNumberDraft(drafts[key], 1, range.min, range.max))}
-              onDecrement={() => edit(key, clampNumberDraft(drafts[key], -1, range.min, range.max))}
-            />
-          </span>
+          <StepperInput
+            min={range.min} max={range.max} step={1} inputMode="numeric"
+            value={drafts[key]} readOnly={disabled} aria-disabled={disabled}
+            aria-label={label} aria-describedby={hintId} aria-invalid={invalid}
+            onChange={event => edit(key, event.target.value)}
+            onKeyDown={event => {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing && !disabled && changed && valid) {
+                event.preventDefault(); void save();
+              }
+            }}
+            stepDisabled={disabled}
+            incrementLabel={t("workflowBudget.increase", { label })}
+            decrementLabel={t("workflowBudget.decrease", { label })}
+            onIncrement={() => edit(key, clampNumberDraft(drafts[key], 1, range.min, range.max))}
+            onDecrement={() => edit(key, clampNumberDraft(drafts[key], -1, range.min, range.max))}
+          />
         </div>;
       })}
-      <div className="row">
-        <button type="button" className="btn btn-primary" disabled={disabled || !changed || !valid} onClick={() => { void save(); }}>{t("common.save")}</button>
-        <button type="button" className="btn btn-ghost" disabled={disabled || (!changed && atDefaults)} onClick={() => { void save(true); }}>{t("workflowBudget.reset")}</button>
-      </div>
-    </div>
-    {loadError && <div className="notice notice-err" role="alert">{t("workflowBudget.loadFailed")} <button type="button" className="btn btn-ghost btn-sm" onClick={() => { void load(); }}>{t("common.retry")}</button></div>}
-    {feedback === "failed" && <div className="notice notice-err" role="alert">{t("workflowBudget.saveFailed")}</div>}
-    {feedback === "saved" && <div className="muted setting-hint" role="status">{t("workflowBudget.saved")}</div>}
-  </section>;
+    </FrameBody>
+    <FrameFoot className="sticky bottom-0 z-[1] rounded-b-[12px] bg-surface">
+      <span className="mr-auto min-w-0" aria-live="polite">
+        {feedback === "failed" ? <span className="text-danger" role="alert">{t("workflowBudget.saveFailed")}</span>
+          : feedback === "saved" ? <span className="text-success" role="status">{t("workflowBudget.saved")}</span>
+          : <span className={changed ? "text-fg" : undefined}>{t(changed ? "subagentsV2.unsaved" : "subagentsV2.noChanges")}</span>}
+      </span>
+      <Button size="sm" variant="ghost" disabled={disabled || (!changed && atDefaults)} onClick={() => { void save(true); }}>{t("workflowBudget.reset")}</Button>
+      <Button size="sm" variant="primary" disabled={disabled || !changed || !valid} onClick={() => { void save(); }}>{t("common.save")}</Button>
+    </FrameFoot>
+  </Frame>;
 }

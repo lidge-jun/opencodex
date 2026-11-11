@@ -81,7 +81,8 @@ test.each([
 ])("non-streaming: a declared %s answers %i, not a retryable 502", async (errorType, status) => {
   const result = await send(errorType, false);
   expect(result.status).toBe(status);
-  expect(JSON.parse(result.text).error).toMatchObject({ type: errorType, message: `upstream says ${errorType}` });
+  expect(JSON.parse(result.text).error).toMatchObject({ type: errorType });
+  expect(JSON.parse(result.text).error.message).toBe(status === 401 ? "The provider rejected the configured credentials." : status === 403 ? "The provider denied access to this request." : status === 404 ? "The requested model is not available from the provider." : "The provider rejected the request.");
   expect(result.calls).toBe(1);
 }, 15_000);
 

@@ -159,7 +159,7 @@ export interface ManagementApiDeps {
   codexPromptPaths?: CodexPromptPaths;
   /** Link seams are getters so the optional listener and supervisor are singletons. */
   linkSupervisor?: () => LinkSupervisor;
-  linkListener?: () => Pick<LinkListenerLifecycle<unknown>, "ensureStarted" | "status" | "close" | "onAuthenticatedCatalog"> & Partial<Pick<LinkListenerLifecycle<unknown>, "peerObservation">> & Partial<Pick<import("../index/optional-listeners").OptionalListenerSet<unknown>, "ensureClaudeIntercept" | "claudeInterceptOutcome">>;
+  linkListener?: () => Pick<LinkListenerLifecycle<unknown>, "ensureStarted" | "status" | "close" | "onAuthenticatedCatalog"> & Partial<Pick<LinkListenerLifecycle<unknown>, "peerObservation">> & Partial<Pick<import("../index/optional-listeners").OptionalListenerSet<unknown>, "ensureClaudeIntercept" | "claudeInterceptOutcome" | "linkActivity" | "catalogPull" | "flushCatalogPulls">>;
   readLinkStore?: () => LinkStore;
   writeLinkStore?: (store: LinkStore) => void;
   linkKnownHostsPath?: () => string;
@@ -167,6 +167,7 @@ export interface ManagementApiDeps {
   issueApiKey?: (config: OcxConfig, name: string) => IssuedApiKey;
   revokeApiKey?: (config: OcxConfig, id: string) => boolean;
   loadLinkCandidates?: () => Array<{ alias: string; source: "ssh_config" | "tailscale" }>;
+  resolveChildBinarySource?: typeof import("../../link/child-binary-source").resolveChildBinarySource;
   /** Bound public inference port, not the ingress receiving this management request. */
   liveListenPort?: () => number | undefined;
   now?: () => number;

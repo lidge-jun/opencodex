@@ -58,8 +58,8 @@ if (import.meta.main) {
   } else {
     let range: string | null = null;
     if (hasRef("@{u}")) range = "@{u}...HEAD";
-    else if (hasRef("origin/main")) range = "origin/main...HEAD";
-    else if (hasRef("main")) range = "main...HEAD";
+    else if (hasRef("origin/dev")) range = "origin/dev...HEAD";
+    else if (hasRef("dev")) range = "dev...HEAD";
     hadBase = range !== null;
     files = range ? diffNames(range) : [];
   }

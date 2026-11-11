@@ -53,54 +53,10 @@ bun run prepare:package           # 刷新 package launcher/asset
 cd docs-site && bun install && bun dev
 ```
 
-## 文档发布
+## CI / Release / Pages
 
-公开文档发布到 GitHub Pages：<https://opencodex.me/zh-cn/>。
-`.github/workflows/deploy-docs.yml` 会在 `main` push 中 `docs-site/**` 或 workflow 本身发生变化时
-运行，构建 `docs-site` 并部署生成的网站。推送文档变更前请运行：
+文档发布、CI、发布与分支政策请参阅[英文权威文档](/contributing/)。
 
-```bash
-cd docs-site
-bun install --frozen-lockfile
-bun run build
-```
-
-## CI 与发布
-
-GitHub Actions 有意只保留必要步骤：
-
-- **Cross-platform CI**（`.github/workflows/ci.yml`）会在改动 runtime、test、package、script、
-  TypeScript 或 workflow 文件的 pull request 与 `main` push 上运行。Bun matrix 覆盖 Linux、
-  Windows 和 macOS，执行 install、typecheck、test、privacy scan、release-helper build smoke、GUI
-  build 和 `ocx help`。另一个三系统 lane 使用 package 内置 runtime，验证无需单独安装 Bun 也能
-  完成 npm global install。
-- **Release**（`.github/workflows/release.yml`）只能手动运行。它不是第二套完整 CI；dry-run 或
-  publish 前，精确的 release commit（`GITHUB_SHA`）必须已有成功的 Cross-platform CI run。
-
-发布请使用 helper：
-
-
-运行 helper 前，先确定目标发布版本，并从默认分支运行
-`.github/workflows/dev-version-bump.yml`，设置 `intended-version=<version>` 和
-`mode=pre-move`。审核生成的 PR 并合并到 `dev`，再提升到 `main` 或 `preview`，
-最后运行 helper。如果 `dev` 的版本已经高于目标版本，工作流会返回
-`changed=false`，无需创建版本更新 PR。发布仍要求对应发布提交的 CI 全部通过。
-
-```bash
-bun run release <version>           # commit/push 版本 bump；publish workflow 默认 dry-run
-bun run release --bump minor        # 根据 tag 与 npm channel 推导下一个 patch、minor 或 major 版本
-bun run release <version> --publish # 确认 CI-gated dry-run 后真正 publish
-bun run release:watch               # 观察最新的 Release workflow run
-```
-
-可用 `--bump patch|minor|major` 代替显式版本。较高 core 的 preview tag 建立后，`--bump patch`
-会拒绝继续旧的 stable patch 版本线；请将修复包含在已开启的 preview core 中发布。
-
-## 分支
-
-- `dev` — 唯一的集成目标。请把所有 PR 提到这里。
-- `main` — 仅用于发布。只有维护者从 `dev` 提升时才会变动，请勿直接提功能 PR。
-- `preview` — 预发布通道。
 
 承载 Go 原生移植的 `dev2-go` 已经退役，同时维护两条集成线的政策也一并结束。其历史以只读
 形式保存在

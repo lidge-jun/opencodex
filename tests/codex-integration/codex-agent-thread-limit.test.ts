@@ -235,3 +235,45 @@ describe("canonical management API thread limits", () => {
   });
 
 });
+
+describe("a comment on the line after the v2 limit stays put", () => {
+  const INLINE = "[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 4 }\n";
+  const TABLE = "[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 4\n";
+  const NEXT_LINE = "# belongs to the next key\ntool_search = true\n";
+  const flip = (path: string) => (enabled: boolean) => {
+    writeFileSync(path, readFileSync(path, "utf8").replace(/^enabled\s*=\s*(?:true|false)$/m, `enabled = ${enabled}`));
+  };
+
+  for (const [form, limitLines] of [["inline", INLINE], ["table", TABLE]] as const) {
+    for (const [spacing, config] of [
+      ["LF", `${limitLines}${NEXT_LINE}`],
+      ["LF after a blank line", `${limitLines}\n${NEXT_LINE}`],
+      ["CRLF", `${limitLines}${NEXT_LINE}`.replace(/\n/g, "\r\n")],
+    ] as const) {
+      test(`${form}, ${spacing}: a same-value save is a byte-identical no-op`, () => {
+        const path = fixtureConfig(config);
+        for (let save = 0; save < 2; save++) {
+          expect(transitionMultiAgentV2(true, () => {}, { configPath: path, threadLimit: 4 }))
+            .toEqual({ ok: true, changed: false, threadLimit: 4 });
+          expect(readFileSync(path, "utf8")).toBe(config);
+        }
+      });
+    }
+  }
+
+  test("the limit's own trailing comment is still carried across a backend switch", () => {
+    const path = fixtureConfig(`${TABLE.replace("= 4\n", "= 4 # tuned\n")}${NEXT_LINE}`);
+    expect(transitionMultiAgentV2(false, flip(path), { configPath: path }).ok).toBe(true);
+    const written = readFileSync(path, "utf8");
+    expect(written).toContain("[agents]\nmax_concurrent_threads_per_session = 3 # tuned\n");
+    expect(written.split("# belongs to the next key")).toHaveLength(2);
+  });
+
+  test("a next-line comment is not migrated onto the limit across a backend switch", () => {
+    const path = fixtureConfig(`${TABLE}${NEXT_LINE}`);
+    expect(transitionMultiAgentV2(false, flip(path), { configPath: path }).ok).toBe(true);
+    const written = readFileSync(path, "utf8");
+    expect(written).toContain("[agents]\nmax_concurrent_threads_per_session = 3\n");
+    expect(written.split("# belongs to the next key")).toHaveLength(2);
+  });
+});
