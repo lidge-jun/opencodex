@@ -22,6 +22,24 @@ import type { CatalogModel } from "./parsing";
 import type { OcxConfig } from "../../types";
 import { providerContextCap } from "../../providers/context-cap";
 
+const discoveryTails = new Map<string, Promise<void>>();
+
+/** Serialize account-roster sessions per provider without retaining a rejected flight. */
+async function withDiscoveryTurn<T>(provider: string, run: () => Promise<T>): Promise<T> {
+  const previous = discoveryTails.get(provider) ?? Promise.resolve();
+  let release!: () => void;
+  const turn = new Promise<void>(resolve => { release = resolve; });
+  const tail = previous.then(() => turn);
+  discoveryTails.set(provider, tail);
+  await previous;
+  try {
+    return await run();
+  } finally {
+    release();
+    if (discoveryTails.get(provider) === tail) discoveryTails.delete(provider);
+  }
+}
+
 /** Prepare CLI-owned evidence in the background source phase, independently of management admission. */
 export async function refreshTraeCnCatalogSources(
   config: Readonly<OcxConfig>, current: () => boolean = () => true,
@@ -82,23 +100,29 @@ export async function fetchTraeCnProviderModels(
   // Observed gathers cannot bind the CLI's live sign-in to their captured auth snapshot.
   if (!allowDiscovery) return observed(stale ?? configured, "degraded");
   if (isModelsFetchCoolingDown(name)) return observed(stale ?? configured, "degraded");
-  const generation = captureModelCacheGeneration(name);
-  const currentFallback = (): ProviderModelsResult => observed(getStaleCached(name) ?? configured, "degraded");
-  try {
-    const session = await openTraeSession(provider.baseUrl, { timeoutMs: 15_000 }, undefined, provider);
-    await session.close();
-    if (!isModelCacheGenerationCurrent(name, generation)) return currentFallback();
-    const models = session.models.map(id => applyProviderConfigHints(name, provider,
-      { id, provider: name, inputModalities: ["text"] }, contextCap, metadataModelIdCaseFold,
-      captured.effectiveAlias, metadataConfigDir, false));
-    if (!setCached(name, models, Date.now(), generation)) return currentFallback();
-    markProviderDiscoveryOk(name, models.length);
-    return observed(models, "authoritative");
-  } catch {
-    if (isModelCacheGenerationCurrent(name, generation)) {
-      markModelsFetchFailure(name);
-      markProviderDiscoveryFailed(name, { reason: "provider" });
+  return withDiscoveryTurn(name, async () => {
+    const lockedFresh = getPinnedCached(name) ?? getFreshCached(name, ttlMs, Date.now());
+    if (lockedFresh) return observed(lockedFresh, "authoritative");
+    const lockedStale = getStaleCached(name);
+    if (isModelsFetchCoolingDown(name)) return observed(lockedStale ?? configured, "degraded");
+    const generation = captureModelCacheGeneration(name);
+    const currentFallback = (): ProviderModelsResult => observed(getStaleCached(name) ?? configured, "degraded");
+    try {
+      const session = await openTraeSession(provider.baseUrl, { timeoutMs: 15_000 }, undefined, provider);
+      await session.close();
+      if (!isModelCacheGenerationCurrent(name, generation)) return currentFallback();
+      const models = session.models.map(id => applyProviderConfigHints(name, provider,
+        { id, provider: name, inputModalities: ["text"] }, contextCap, metadataModelIdCaseFold,
+        captured.effectiveAlias, metadataConfigDir, false));
+      if (!setCached(name, models, Date.now(), generation)) return currentFallback();
+      markProviderDiscoveryOk(name, models.length);
+      return observed(models, "authoritative");
+    } catch {
+      if (isModelCacheGenerationCurrent(name, generation)) {
+        markModelsFetchFailure(name);
+        markProviderDiscoveryFailed(name, { reason: "provider" });
+      }
+      return currentFallback();
     }
-    return currentFallback();
-  }
+  });
 }

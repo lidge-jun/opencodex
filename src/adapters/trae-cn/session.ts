@@ -192,7 +192,8 @@ class TraeAcpClient {
   }
 
   /** Register before writing so immediate responses and stream errors settle the same request. */
-  async request(method: string, params: Record<string, unknown>, dispatch?: TraePromptDispatch, onSuccess?: () => void): Promise<unknown> {
+  async request(method: string, params: Record<string, unknown>, dispatch?: TraePromptDispatch,
+    onSuccess?: (result: unknown) => void): Promise<unknown> {
     if (this.closed) throw this.failure ?? new TraeAcpError("TRAE CN ACP is closed", "trae_acp_closed");
     const id = ++this.nextId;
     const result = new Promise<unknown>((resolve, reject) => {
@@ -201,7 +202,7 @@ class TraeAcpClient {
         reject(new TraeAcpError(`TRAE CN ACP timed out during ${method}`, "trae_acp_timeout"));
       }, this.timeoutMs);
       this.pending.set(id, { resolve: result => {
-        try { onSuccess?.(); resolve(result); } catch (error) { reject(error); }
+        try { onSuccess?.(result); resolve(result); } catch (error) { reject(error); }
       }, reject, timer });
     });
     try {
@@ -357,20 +358,31 @@ export async function openTraeSession(
           await client.request("session/set_model", { sessionId, modelId }, undefined, () => client.acknowledgeModelSelection(sessionId, modelId));
           if (signal?.aborted) return;
           let output = false;
-          completion = client.request("session/prompt", { sessionId, prompt: [{ type: "text", text }] }, dispatch);
-          void completion.then(() => client.endUpdates(), () => client.endUpdates());
+          let receivedCompletion: unknown;
+          let completionReceived = false;
+          completion = client.request("session/prompt", { sessionId, prompt: [{ type: "text", text }] }, dispatch, result => {
+            receivedCompletion = result;
+            completionReceived = true;
+          });
+          const endUpdatesAfterBatch = () => {
+            const timer = setTimeout(() => client.endUpdates(), 0);
+            timer.unref?.();
+          };
+          void completion.then(endUpdatesAfterBatch, endUpdatesAfterBatch);
           while (true) {
             const frame = await client.nextUpdate();
             if (!frame) break;
             if (frame.kind !== "update" || frame.sessionId !== sessionId) continue;
             for (const event of traePromptEvents(sessionId, frame.update)) {
-              if (event.type === "text_delta") output = true;
-              emit(event);
               if (event.type === "error") {
+                const usage = completionReceived ? traeUsage(receivedCompletion) : undefined;
+                emit({ ...event, ...(usage ? { usage } : {}) });
                 client.write({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
                 await client.close();
                 return;
               }
+              if (event.type === "text_delta") output = true;
+              emit(event);
             }
           }
           const result = await completion;

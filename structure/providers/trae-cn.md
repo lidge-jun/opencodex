@@ -29,7 +29,8 @@ user home plus `.trae`, before HOME isolation. Provider `proxy`/`noProxy` overri
 are refused before CLI startup, including explicit direct routing.
 Observed-auth gathers and management admission use only cached evidence; only refreshing gathers and explicit connection
 probes may launch the CLI. Automatic refresh prepares CLI-owned evidence in its independent background
-source phase, then revalidates the gather's content revision before pinning each authoritative result and discovering the next provider. Those pins survive
+source phase. Discovery sessions are serialized per provider, so a slow older session cannot overwrite a newer roster.
+The source phase revalidates the gather's content revision before pinning each authoritative result and discovering the next provider. Those pins survive
 through catalog convergence and connected-client refresh before release, so later ordinary cache eviction cannot
 discard an earlier roster. Every pinned content revision is revalidated before publication;
 an intervening discovery retires that publication round instead of restoring its older roster. This keeps a zero-TTL roster authoritative for the full publication
