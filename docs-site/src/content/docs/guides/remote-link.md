@@ -111,6 +111,10 @@ To disconnect a Child-initiated link, run `ocx disconnect` on the Child. It disc
 
 On a full OpenCodex Child, `ocx disconnect` also restarts a client runtime that is still running, so the Child is serving standalone OpenCodex when the command returns. If that restart does not complete, the command exits non-zero and prints the remaining step: `ocx restart` on the Child. A client runtime whose connection was removed accepts `ocx restart` whoever owns it: the OpenCodex desktop app or a background service starts the standalone replacement, so the same command works over SSH with nobody at the Child's screen.
 
+If `ocx disconnect` is refused before it has changed anything outside Codex, for example because the Codex configuration cannot be restored, it rolls itself back: the Child stays connected, its runtime still starts, and the message says the disconnect was rolled back. A Child left with a half-finished disconnect by an older release refuses to start its client runtime with `client startup refused: an ocx disconnect on this machine stopped part way`; run `ocx disconnect` again (with `--keep-catalog` if the first run used it) to finish it or roll it back.
+
+Codex adds its own lines to `~/.codex/config.toml`, such as trusted projects and notice flags. When it has done so after OpenCodex wrote its routing and no OpenCodex line remains, `ocx disconnect` leaves the file as it is and removes the Codex journal, whose snapshot would otherwise overwrite those lines. If an OpenCodex line remains, disconnect keeps the journal and names the line; delete only that line, then run `ocx disconnect` again. A refusal about the Claude Desktop remote profile store (`desktop_lifecycle_unsafe`) names the file or folder involved and the step that clears it.
+
 ## Troubleshooting
 
 When a step fails, the dashboard shows the reason and, when SSH reported one, a short sanitized hint from its last non-empty error line under the message. Remote-shell errors can appear there even when the remote shell emits non-UTF-8 text; OpenCodex removes terminal controls, link keys and URL queries and limits the hint's length.
