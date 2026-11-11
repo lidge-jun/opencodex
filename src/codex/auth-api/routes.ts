@@ -99,17 +99,30 @@ export async function handleCodexAuthAPI(
   }
 
   if (url.pathname === "/api/codex-auth/accounts/pause" && req.method === "PUT") {
-    const body = await req.json().catch(() => ({})) as { id?: unknown; paused?: unknown };
+    const body = await req.json().catch(() => ({})) as { id?: unknown; paused?: unknown; ifHealthy?: unknown };
     const id = typeof body.id === "string" ? body.id.trim() : "";
     if (id !== MAIN_CODEX_ACCOUNT_ID && !isValidCodexAccountId(id)) {
       return jsonResponse({ error: "Invalid account id format" }, 400);
     }
     if (typeof body.paused !== "boolean") return jsonResponse({ error: "paused must be a boolean" }, 400);
+    if (body.ifHealthy !== undefined && typeof body.ifHealthy !== "boolean") return jsonResponse({ error: "ifHealthy must be a boolean" }, 400);
+    if (body.ifHealthy === true && body.paused !== false) return jsonResponse({ error: "ifHealthy applies only to a resume (paused: false)" }, 400);
 
-    const runtimeConfig = getRuntimeConfig(config);
+    let runtimeConfig = getRuntimeConfig(config);
     const exists = id === MAIN_CODEX_ACCOUNT_ID
       || (runtimeConfig.codexAccounts ?? []).some(account => isSelectableCodexPoolAccount(account) && account.id === id);
     if (!exists) return jsonResponse({ error: "Account not found" }, 404);
+    if (body.ifHealthy === true) {
+      // Explicit resume gated on a forced pool quota read (#8398); the read can take a while, so
+      // the pause is committed against the configuration as it is after the read.
+      const { checkCodexResumeHealth } = await import("../account-resume-health");
+      const verdict = await checkCodexResumeHealth(runtimeConfig, id);
+      runtimeConfig = getRuntimeConfig(config);
+      const refusal = verdict && !verdict.ok ? verdict.reason
+        : verdict && (!isCodexAccountPaused(runtimeConfig, id) || runtimeConfig.codexAccountPauseState?.[id]?.revision !== verdict.pauseRevision)
+          ? "account_changed" : undefined;
+      if (refusal) return jsonResponse({ error: `account was not resumed: ${refusal}`, code: "resume_refused", reason: refusal, id }, 409);
+    }
 
     const paused = body.paused;
     return withCodexAccountPauseGroup(runtimeConfig, id, accountIds => {

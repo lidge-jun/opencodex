@@ -644,6 +644,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (body.retryAffinityReset !== undefined && typeof body.retryAffinityReset !== "boolean") {
       return jsonResponse({ error: "retryAffinityReset must be a boolean" }, 400);
     }
+    if (body.ifHealthy !== undefined && typeof body.ifHealthy !== "boolean") {
+      return jsonResponse({ error: "ifHealthy must be a boolean" }, 400);
+    }
+    if (body.ifHealthy === true && body.paused !== false) {
+      return jsonResponse({ error: "ifHealthy applies only to a resume (paused: false)" }, 400);
+    }
 
     const { isGenericFailoverProvider } = await import("../../oauth/generic-account-failover");
     const effectiveProvider = genericOAuthProviderConfig(provider, config);
@@ -653,8 +659,23 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     }
 
     const { setAccountPaused } = await import("../../oauth/store");
-    const result = await setAccountPaused(provider, body.accountId, body.paused);
+    let resumeGuard: { generation: string; pauseRevision: string | undefined } | undefined;
+    if (body.ifHealthy === true) {
+      // Explicit resume gated on an account-bound health read (#8398); an unpaused account needs none.
+      const { checkOAuthResumeHealth } = await import("../../oauth/account-resume-health");
+      const verdict = await checkOAuthResumeHealth(provider, body.accountId);
+      if (verdict && !verdict.ok) {
+        return jsonResponse({ error: `account was not resumed: ${verdict.reason}`, code: "resume_refused", reason: verdict.reason,
+          provider, accountId: body.accountId }, 409);
+      }
+      if (verdict) resumeGuard = { generation: verdict.generation, pauseRevision: verdict.pauseRevision };
+    }
+    const result = await setAccountPaused(provider, body.accountId, body.paused, undefined, resumeGuard);
     if (result.status === "not-found") return jsonResponse({ error: "account not found" }, 404);
+    if (result.status === "changed") {
+      return jsonResponse({ error: "account was not resumed: account_changed", code: "resume_refused", reason: "account_changed",
+        provider, accountId: body.accountId }, 409);
+    }
 
     const anthropicRouting = isAnthropicOAuthInstance(provider)
       ? (await import("../../oauth/anthropic-routing")).anthropicRoutingFor(provider) : undefined;

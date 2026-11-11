@@ -33,6 +33,29 @@ auth row; Codex metadata/revision fences use `codexAccountPauseState`; key pools
 `disabled`, `pauseDetails` and `pauseRevision` per entry. Runtime counters are process-local.
 Manual resume (including an already enabled key) clears details and changes the revision, fencing already-sent refusals.
 
+## Explicit health-gated resume and login (#8398)
+
+Resume stays explicit: nothing resumes a paused account in the background. `ocx account resume
+<provider> <id> --if-healthy` sends `ifHealthy: true` with a resume to `PUT /api/oauth/accounts/pause`
+or `PUT /api/codex-auth/accounts/pause`; API-key pools reject the flag. `src/oauth/account-resume-health.ts`
+refuses `oauth_organization_disabled` and `account_permission_denied` (`PERMANENT_PAUSE_REASONS`)
+without a read. For Anthropic instances it reads usage with the stored token through the bare
+`probeAnthropicUsageQuota`, which publishes no quota or routing evidence; it never refreshes a paused
+credential, because every refresh path refuses a paused row, so an expiring token reports
+`credential_expired`. Other OAuth providers report `health_check_unsupported`. The resume then commits
+through `setAccountPaused` with a `resumeGuard` holding the probed credential generation and pause
+revision, and answers `account_changed` if either moved. `src/codex/account-resume-health.ts` applies the
+same rules to a pool account through a forced, explicit `fetchPoolAccountQuota`: healthy means a fresh
+quota read by a still-live credential generation, and the main account reports `health_check_unsupported`.
+A refusal is HTTP 409 `{ code: "resume_refused", reason }`, and the CLI exits 3.
+
+An explicit login or reauthentication clears an automatic pause (one with details) on the account
+whose credential it replaced: `clearAutomaticPauseForLogin` in `src/oauth/store.ts`
+(`saveCredentialWithReceipt`, `saveAccountCredential`) and the reauthentication branch of
+`src/codex/auth-api/login-flow.ts`. An operator pause has no details and stays. Coverage:
+`tests/oauth/oauth-account-resume-if-healthy.test.ts`, `tests/codex-integration/codex-resume-if-healthy.test.ts`,
+`tests/helpers/codex-relogin-pause.ts` and `tests/cli/cli-account-pool-verbs.test.ts`.
+
 ## Opt-in permanent refusal recovery
 
 `src/server/responses/request-transport.ts` observes exact physical account outcomes before

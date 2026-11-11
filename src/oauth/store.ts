@@ -644,6 +644,20 @@ function newAccountId(cred: OAuthCredentials): string {
 }
 
 /** Allocate a persisted slot id without reusing any existing account's ownership key. */
+/**
+ * An explicit login or reauthentication clears an AUTOMATIC pause (one that recorded
+ * `pauseDetails`), because the evidence behind it described the replaced credential (#8398).
+ * An operator pause carries no details and stays. Eligibility changed, so the selection revision
+ * moves with a fresh pause revision, which also retires any auto-pause proposal captured before.
+ */
+function clearAutomaticPauseForLogin(set: ProviderAccountSet, account: ProviderAccount): void {
+  if (account.paused !== true || !account.pauseDetails) return;
+  delete account.paused;
+  delete account.pauseDetails;
+  account.pauseRevision = randomUUID();
+  set.selectionRevision = randomUUID();
+}
+
 function distinctAccountId(cred: OAuthCredentials, accounts: readonly ProviderAccount[]): string {
   const base = newAccountId(cred);
   const occupied = new Set(accounts.map(account => account.id));
@@ -973,6 +987,7 @@ export async function saveCredentialWithReceipt(
         delete existing.needsReauth;
         delete existing.needsReauthReason;
         delete existing.refreshAttentionGeneration;
+        clearAutomaticPauseForLogin(set, existing);
         accountId = existing.id;
       } else {
         const id = distinctAccountId(safe, set.accounts);
@@ -995,6 +1010,7 @@ export async function saveCredentialWithReceipt(
         delete existing.needsReauth;
         delete existing.needsReauthReason;
         delete existing.refreshAttentionGeneration;
+        clearAutomaticPauseForLogin(set, existing);
         if (existing.paused !== true) set.activeAccountId = existing.id;
         accountId = existing.id;
       } else {
@@ -1014,6 +1030,7 @@ export async function saveCredentialWithReceipt(
           delete active.needsReauth;
           delete active.needsReauthReason;
           delete active.refreshAttentionGeneration;
+          clearAutomaticPauseForLogin(set, active);
           accountId = active.id;
         } else {
           const id = distinctAccountId(safe, set.accounts);
@@ -1035,6 +1052,7 @@ export async function saveCredentialWithReceipt(
         delete active.needsReauth;
         delete active.needsReauthReason;
         delete active.refreshAttentionGeneration;
+        clearAutomaticPauseForLogin(set, active);
         accountId = active.id;
       } else {
         const id = distinctAccountId(safe, set.accounts);
@@ -1321,6 +1339,7 @@ export async function saveAccountCredential(
     delete account.needsReauth;
     delete account.needsReauthReason;
     delete account.refreshAttentionGeneration;
+    clearAutomaticPauseForLogin(set, account);
     // A pause that found no usable fallback leaves the active id on a paused row. Once this
     // reauthentication makes an unpaused account usable, hand the selection to it.
     const active = set.accounts.find(a => a.id === set.activeAccountId);
@@ -1401,6 +1420,8 @@ export async function setAccountAlias(provider: string, accountId: string, alias
 export type SetAccountPausedResult =
   | { status: "updated"; activeAccountId: string; activeAccountChanged: boolean }
   | { status: "unchanged"; activeAccountId: string; activeAccountChanged: boolean }
+  /** A guarded resume found the pause or credential replaced since its health check. */
+  | { status: "changed" }
   | { status: "not-found" };
 
 /** Serialize policy with refresh/removal; stale pre-wait selection proposals must retry. */
@@ -1449,6 +1470,8 @@ export async function setAccountPaused(
   accountId: string,
   paused: boolean,
   automatic?: { generation: string; pauseRevision?: string; details: import("../types/account-auto-pause").AccountPauseDetails; isCurrent?: () => boolean; assertPolicyBeforePersist?: () => void },
+  /** Resume only while the pause and credential are the ones a health check observed (#8398). */
+  resumeGuard?: { generation: string; pauseRevision: string | undefined },
 ): Promise<SetAccountPausedResult> {
   const result = await mutateStore(store => {
     const set = store[provider];
@@ -1456,6 +1479,8 @@ export async function setAccountPaused(
     if (!set || !account) return { status: "not-found" } as const;
     if (automatic && (automatic.isCurrent?.() === false || credentialGeneration(account.credential) !== automatic.generation
       || account.pauseRevision !== automatic.pauseRevision)) return { status: "not-found" } as const;
+    if (resumeGuard && (paused || account.paused !== true || account.pauseRevision !== resumeGuard.pauseRevision
+      || credentialGeneration(account.credential) !== resumeGuard.generation)) return { status: "changed" } as const;
     if (paused && account.paused === true) {
       return { status: "unchanged", activeAccountId: set.activeAccountId, activeAccountChanged: false } as const;
     }
