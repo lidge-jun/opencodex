@@ -2,9 +2,13 @@
  * Bytes a Remote Link carried, per link, since this process started counting (#3023 measurement).
  *
  * The counters are plain integer additions on the JavaScript thread: no lock, no log line, no
- * timer and no disk. A book holds at most `MAX_LINKS` links and forgets the oldest beyond that;
- * links are bounded by links.json anyway. A process restart starts a new book, and `since` says
- * when the current one began, so a reader computes a rate from two reads of the same `since`.
+ * timer and no disk. A book holds at most `MAX_LINKS` links: beyond that it forgets the oldest
+ * link with no request in flight, so a running request never loses its counts (a book can exceed
+ * the bound only by links with requests in flight). Each link's counters carry their own `since`:
+ * the book's start for a link counted before any eviction, otherwise when its entry was created;
+ * a link without an entry reads zero since the last eviction. A process restart starts a new book.
+ * A reader computes a rate only from two reads with the same `since`; a changed `since` means the
+ * window restarted.
  *
  * Two books exist. A Child's relay (`src/client/link-relay.ts`) counts every request-body byte it
  * hands to the link transport and every response-body byte it reads back, so its numbers are the
@@ -18,7 +22,7 @@
 export const MAX_LINKS = 256;
 
 export interface LinkTrafficCounters {
-  /** When this book began counting (ISO). Every counter below covers the time since then. */
+  /** When counting for this link began (ISO). Every counter below covers the time since then. */
   since: string;
   /** Relayed requests on this link. */
   requests: number;
@@ -50,7 +54,11 @@ export interface LinkTrafficBook {
   snapshot(linkId: string): LinkTrafficCounters;
 }
 
-interface Entry { requests: number; incomplete: number; toHomeBytes: number; fromHomeBytes: number; toHomeUncounted: number }
+interface Entry {
+  since: string;
+  inFlight: number;
+  requests: number; incomplete: number; toHomeBytes: number; fromHomeBytes: number; toHomeUncounted: number;
+}
 
 function addable(bytes: number): number {
   return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : 0;
@@ -60,14 +68,26 @@ export function createLinkTrafficBook(
   toHomeSource: LinkTrafficCounters["toHomeSource"],
   deps: { now?: () => number } = {},
 ): LinkTrafficBook {
-  const since = new Date((deps.now ?? Date.now)()).toISOString();
+  const now = deps.now ?? Date.now;
+  const started = new Date(now()).toISOString();
+  // null until the first eviction; from then on, a new or absent link counts from that moment on.
+  let lastEviction: string | null = null;
   const entries = new Map<string, Entry>();
+  const evictOne = (): void => {
+    for (const [linkId, entry] of entries) {
+      if (entry.inFlight > 0) continue;
+      entries.delete(linkId);
+      lastEviction = new Date(now()).toISOString();
+      return;
+    }
+  };
   const entryFor = (linkId: string): Entry => {
     let entry = entries.get(linkId);
     if (!entry) {
-      entry = { requests: 0, incomplete: 0, toHomeBytes: 0, fromHomeBytes: 0, toHomeUncounted: 0 };
+      if (entries.size >= MAX_LINKS) evictOne();
+      entry = { since: lastEviction === null ? started : new Date(now()).toISOString(), inFlight: 0,
+        requests: 0, incomplete: 0, toHomeBytes: 0, fromHomeBytes: 0, toHomeUncounted: 0 };
       entries.set(linkId, entry);
-      if (entries.size > MAX_LINKS) entries.delete(entries.keys().next().value!);
     }
     return entry;
   };
@@ -75,6 +95,7 @@ export function createLinkTrafficBook(
     begin(linkId) {
       const entry = entryFor(linkId);
       entry.requests += 1;
+      entry.inFlight += 1;
       let ended = false;
       return {
         toHome(bytes) { entry.toHomeBytes += addable(bytes); },
@@ -83,6 +104,7 @@ export function createLinkTrafficBook(
         end(complete) {
           if (ended) return;
           ended = true;
+          entry.inFlight -= 1;
           if (!complete) entry.incomplete += 1;
         },
       };
@@ -90,7 +112,7 @@ export function createLinkTrafficBook(
     snapshot(linkId) {
       const entry = entries.get(linkId);
       return {
-        since,
+        since: entry?.since ?? lastEviction ?? started,
         requests: entry?.requests ?? 0,
         incomplete: entry?.incomplete ?? 0,
         toHomeBytes: entry?.toHomeBytes ?? 0,
