@@ -85,7 +85,7 @@ To confirm which Home is serving a Child, compare the `x-opencodex-served-by` he
 
 ## Several routes to one Child
 
-A Child that the Home added can be reached over more than one SSH route: for example a direct alias on the same LAN or tailnet, and a relay alias that works from anywhere. The Home keeps an ordered list of routes for the link and uses the first that works, so model traffic takes the direct path when it exists and the relay only when it does not.
+A Child that the Home added can be reached over more than one SSH route: for example a direct alias on the same LAN or tailnet, and a relay alias that works from anywhere. The Home keeps an ordered list of routes for the link and connects over the first one that works, so model traffic takes the direct path when that path is up at connection time and the relay otherwise.
 
 ```text
 ocx link routes --link-id <id>
