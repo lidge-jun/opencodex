@@ -37,7 +37,7 @@ import { knownModelIdentity } from "../lib/model-identity";
 import { recordClientWireRequestLog } from "./inference/client-wire-log";
 import { nativeResponseFingerprint } from "./responses/native-response-json";
 import { nativeResponseOutput } from "./responses/native-response-output";
-import { bareUpstreamError, isUntypedBareUpstreamError, MAX_BARE_ERROR_MESSAGE_CHARS, reduceBareUpstreamEvidence, type BareUpstreamError, type BareUpstreamEvidence } from "./bare-upstream-error";
+import { bareUpstreamError, guardBareCopy, isUntypedBareUpstreamError, MAX_BARE_ERROR_MESSAGE_CHARS, reduceBareUpstreamEvidence, type BareUpstreamError, type BareUpstreamEvidence } from "./bare-upstream-error";
 
 const nativePassthroughSseResponses = new WeakSet<Response>();
 const eagerRelaySseResponses = new WeakSet<Response>();
@@ -292,6 +292,8 @@ export type SseTerminalOutputBoundaryOptions = CodexSafetyBufferingFilterOptions
   maxOutputBytes?: number;
   /** Optional aggregate frame count through the first terminal. */
   maxFrames?: number;
+  /** Per-request outbound mask, applied to upstream copy before the boundary bounds it. */
+  maskCredential?: (text: string) => string;
 };
 
 /**
@@ -359,7 +361,7 @@ export function createSseTerminalOutputBoundary(
       const parsed = payload === null ? undefined : parseSsePayload(payload);
       // Observe on the client reader itself: a tee inspection branch may lag
       // behind EOF, so its log context cannot determine the outgoing terminal.
-      const evidence = reduceBareUpstreamEvidence(bareEvidence, parsed);
+      const evidence = reduceBareUpstreamEvidence(bareEvidence, parsed, options?.maskCredential);
       if (evidence !== undefined && evidence !== bareEvidence) {
         bareEvidence = evidence;
         upstreamError = evidence.verdict.message;
@@ -375,7 +377,7 @@ export function createSseTerminalOutputBoundary(
       const policyError = parsed !== undefined && isPolicyRewriteType(parsed, typedBareSeen)
         ? cyberPolicyTerminalError(parsed)
         : undefined;
-      const policyPayload = policyError ? policyFailurePayload(policyError, parsed) : undefined;
+      const policyPayload = policyError ? policyFailurePayload(policyError, parsed, options?.maskCredential) : undefined;
       let outboundBlock = policyPayload !== undefined
         ? encoder.encode(rewritePolicyTerminalBlock(decoder.decode(frame.block), policyPayload))
         : frame.block;
@@ -484,7 +486,7 @@ export function relaySseWithFailedTail(
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
-  const terminalBoundary = createSseTerminalOutputBoundary(opts?.terminalBoundary);
+  const terminalBoundary = createSseTerminalOutputBoundary({ ...opts?.terminalBoundary, maskCredential: opts?.maskCredential });
   let closed = false;
   const relayChunk = (
     controller: ReadableStreamDefaultController<Uint8Array>,
@@ -694,11 +696,12 @@ function rewritePolicyTerminalBlock(block: string, payload: string): string {
   return withEvent.join(newline);
 }
 
-function policyFailurePayload(policyError: { message: string; type?: string }, parsed: unknown): string {
+function policyFailurePayload(policyError: { message: string; type?: string }, parsed: unknown, mask?: (text: string) => string): string {
   const error = {
     type: cyberPolicyErrorType(policyError.type),
     code: CYBER_POLICY_ERROR_CODE,
-    message: redactSecretString(policyError.message).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
+    // Mask before bounding: a slice first can keep a credential prefix the later rewrite misses.
+    message: redactSecretString(guardBareCopy(policyError.message, mask)).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
   };
   const root = asJsonRecord(parsed);
   const originalResponse = asJsonRecord(root?.response);

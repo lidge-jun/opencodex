@@ -8,6 +8,7 @@ import {
   upstreamErrorMessageFromPayload,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
+import { outboundCredentials } from "../lib/outbound-credential-registry";
 import { codexWsWrapperStatus } from "./responses/codex-ws-wire";
 
 type JsonRecord = Record<string, unknown>;
@@ -18,6 +19,23 @@ const field = (value: JsonRecord | undefined, key: string): string | undefined =
   const item = value?.[key];
   return typeof item === "string" && item.trim() ? item.trim() : undefined;
 };
+const MAX_BARE_CLASS_CHARS = 128;
+/** A class identifier longer than the bound is not a class; truncating it could keep a credential prefix. */
+const classField = (value: JsonRecord | undefined, key: string): string | undefined => {
+  const item = field(value, key);
+  return item !== undefined && item.length <= MAX_BARE_CLASS_CHARS ? item : undefined;
+};
+
+/**
+ * Masks upstream copy before anything bounds it. A bound applied first can keep a prefix of a long
+ * credential that a later full-value mask no longer recognizes. The relay passes its per-request
+ * outbound mask; every reader also refuses copy that contains a credential this process sent.
+ */
+export type BareCopyMask = (text: string) => string;
+export function guardBareCopy(raw: string, mask?: BareCopyMask): string {
+  const masked = mask ? mask(raw) : raw;
+  return outboundCredentials().matches(masked) ? "[REDACTED]" : masked;
+}
 
 /** Codes this proxy's own transport layer assigns to a delivery failure, not a provider verdict. */
 function isTransportFailureCode(code: string): boolean {
@@ -50,7 +68,7 @@ export interface BareUpstreamError {
 }
 
 /** Preserve first-code precedence when deriving a bounded provisional stream verdict. */
-export function bareUpstreamError(payload: unknown): BareUpstreamError | undefined {
+export function bareUpstreamError(payload: unknown, mask?: BareCopyMask): BareUpstreamError | undefined {
   const root = record(payload);
   const untyped = isUntypedBareUpstreamError(payload);
   // A bare error is a typed `error` event or an untyped envelope. `response.failed` is a genuine
@@ -63,16 +81,17 @@ export function bareUpstreamError(payload: unknown): BareUpstreamError | undefin
   const candidates = untyped
     ? [record(root.error), record(root.last_error), record(response?.error), record(response?.incomplete_details), root]
     : [root, record(root.error), record(root.last_error), record(response?.error), record(response?.incomplete_details)];
-  const code = candidates.map(candidate => field(candidate, "code")).find(value => value !== undefined)?.slice(0, 128);
+  const code = candidates.map(candidate => classField(candidate, "code")).find(value => value !== undefined);
   // The envelope's own `type` is `error` or the terminal event name, never the error class.
   const errorType = (untyped ? candidates.slice(0, -1) : candidates.slice(1))
-    .map(candidate => field(candidate, "type")).find(value => value !== undefined)?.slice(0, 128);
+    .map(candidate => classField(candidate, "type")).find(value => value !== undefined);
   // The message follows the same precedence as the class: a typed frame's own envelope copy is
   // the provider's verdict, while an untyped envelope's copy lives inside its error object.
   const rawMessage = untyped
     ? upstreamErrorMessageFromPayload(payload)
     : field(root, "message") ?? upstreamErrorMessageFromPayload(payload);
-  const message = rawMessage ? redactSecretString(rawMessage).slice(0, MAX_BARE_ERROR_MESSAGE_CHARS) : undefined;
+  const message = rawMessage
+    ? redactSecretString(guardBareCopy(rawMessage, mask)).slice(0, MAX_BARE_ERROR_MESSAGE_CHARS) : undefined;
   // An explicit refusal code is the provider's own verdict. Otherwise verified refusal copy is
   // recognized beside an unrelated code: a gateway that wraps the refusal in its own class still
   // ended the turn with a refusal, and retrying it would loop. A recognized quota/overload class
@@ -99,7 +118,7 @@ export function bareUpstreamError(payload: unknown): BareUpstreamError | undefin
   const terminalStatus = httpStatus ?? 502;
   return {
     message: message ?? (refusalCode ? terminalRefusalFallbackMessage(refusalCode)
-      : fallback ? `Upstream error without a message (${redactSecretString(fallback)})` : "The upstream reported an error."),
+      : fallback ? `Upstream error without a message (${redactSecretString(guardBareCopy(fallback, mask))})` : "The upstream reported an error."),
     refusalCode,
     errorType,
     errorCode: code,
@@ -156,8 +175,9 @@ function isBarePolicyTerminal(payload: unknown, verdict: BareUpstreamError): boo
 export function reduceBareUpstreamEvidence(
   previous: BareUpstreamEvidence | undefined,
   payload: unknown,
+  mask?: BareCopyMask,
 ): BareUpstreamEvidence | undefined {
-  const verdict = bareUpstreamError(payload);
+  const verdict = bareUpstreamError(payload, mask);
   if (verdict === undefined) return previous;
   if (previous?.terminal === true) return previous;
   const typed = !isUntypedBareUpstreamError(payload);

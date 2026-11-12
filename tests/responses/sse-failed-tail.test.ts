@@ -88,6 +88,42 @@ function doneEvents(text: string): string[] {
 }
 
 describe("relaySseWithFailedTail", () => {
+  // Longer than every bound (512 message, 128 code/type): a slice taken before the mask would
+  // keep a prefix the full-value mask no longer recognizes.
+  const longCredential = `fixturelong${"Q7xk".repeat(180)}`;
+  const longFrames: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+    ["untyped policy message", { error: { code: "cyber_policy", message: longCredential } }],
+    ["typed policy message", { type: "error", error: { code: "cyber_policy", message: longCredential } }],
+    ["untyped unknown message", { error: { code: "mystery_code", message: longCredential } }],
+    ["untyped code only", { error: { code: longCredential } }],
+    ["untyped type only", { error: { type: longCredential } }],
+  ];
+  test.each(["tee", "eager"] as const)("%s never emits a prefix of a long selected credential", async mode => {
+    const maskCredential = createOutboundCredentialMask({ authorization: `Bearer ${longCredential}` });
+    for (const [name, payload] of longFrames) {
+      const src = sourceStream([`event: error\ndata: ${JSON.stringify(payload)}\n\n`]);
+      const out = await drain(mode === "tee"
+        ? relaySseWithFailedTail(src, new AbortController(), undefined, { maskCredential })
+        : relaySseEagerBounded(src, new AbortController(), parityHooks, { maskCredential }));
+      const synthesized = out.split("\n").filter(line => line.includes('"response.failed"')).join("\n");
+      expect([name, synthesized.length > 0, synthesized.includes(longCredential.slice(0, 64))]).toEqual([name, true, false]);
+    }
+  });
+
+  test("the row keeps no prefix of a long credential this process sent", () => {
+    const registry = new OutboundCredentialRegistry();
+    registry.remember({ authorization: `Bearer ${longCredential}` });
+    const restore = setOutboundCredentialRegistryForTests(registry);
+    try {
+      for (const [name, payload] of longFrames) {
+        const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+        inspectResponseLogSsePayload(log, JSON.stringify(payload));
+        const stored = [log.upstreamError, log.upstreamErrorCode, log.upstreamErrorType].join("|");
+        expect([name, stored.includes(longCredential.slice(0, 64))]).toEqual([name, false]);
+      }
+    } finally { restore(); }
+  });
+
   test.each(["tee", "eager"] as const)("masks a JSON-escaped selected credential in a %s synthetic failure", async mode => {
     const credential = 'fixture"quoted\\token';
     const maskCredential = createOutboundCredentialMask({ authorization: `Bearer ${credential}` });
