@@ -14,7 +14,8 @@ import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 import { getObservedMainQuotaIdentityKey, mainDecisionQuotaWriterGeneration, isMainQuotaWriterLive, type MainQuotaWriter } from "./main-account-cache";
 
 import { CodexQuotaHistory, QUOTA_HISTORY_LIMITS, type QuotaHistoryWindow } from "./quota-history";
-import { isPoolQuotaWriterLive, poolQuotaHistoryIdentity } from "./account-store";
+import { isPoolQuotaWriterLive, poolQuotaHistoryIdentity, readCodexAccountRecord } from "./account-store";
+import { detectWeeklyWindowConflicts, type WeeklyWindowConflict } from "./quota-window-conflict";
 import { CODEX_EXHAUSTED_USAGE_PERCENT, MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT, hasSpendableCodexCredits, resetAtToMs } from "./quota-types";
 import type { PoolQuotaWriter, StoredAccountQuota, WhamUsageResponse, WhamUsageWindow } from "./quota-types";
 
@@ -1300,4 +1301,16 @@ export function getAccountQuotaHistory(accountId: string, limit: number = QUOTA_
 export function latestCodexQuotaObservationSource(accountId: string): "wham" | "response-header" | undefined {
   hydrateAccountQuotasFromDisk();
   return quotaHistory.peekLatestSource(accountId, poolQuotaHistoryIdentity(accountId));
+}
+
+/**
+ * Live weekly windows the current credential generation has reported in contradiction (#8574),
+ * read from the cached history only. Display evidence: admission, routing and credit consent
+ * never read it.
+ */
+export function getAccountWeeklyQuotaConflicts(accountId: string, now = Date.now()): WeeklyWindowConflict[] {
+  hydrateAccountQuotasFromDisk();
+  const identity = poolQuotaHistoryIdentity(accountId);
+  if (!identity) return [];
+  return detectWeeklyWindowConflicts(quotaHistory.read(accountId, identity, now).samples, readCodexAccountRecord(accountId)?.generation, now);
 }

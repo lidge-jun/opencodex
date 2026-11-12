@@ -3,7 +3,7 @@ import { codexCreditsDtoField, hasCodexCreditsObservation, pruneCodexCredits } f
 import type { CodexCredits } from "../credits";
 import { codexAccountLogLabel } from "../account-label";
 import { poolQuotaHistoryIdentity, getCodexAccountCredential, getValidCodexToken, isCodexAccountGenerationLive, readCodexAccountRecord } from "../account-store";
-import { getAccountQuota, isCodexQuotaExhausted, setAccountQuotaFromParsed, withoutRetiredCodexQuota } from "../quota";
+import { getAccountQuota, getAccountWeeklyQuotaConflicts, isCodexQuotaExhausted, setAccountQuotaFromParsed, withoutRetiredCodexQuota } from "../quota";
 import type { StoredAccountQuota } from "../quota";
 import { ConfigMutationLockError, mutatePersistedConfig } from "../../config";
 import { reconcileMainCodexAccountRuntimeState } from "../account-lifecycle";
@@ -139,6 +139,7 @@ export function poolAccountDto(
   // account took their model away and why, so name the cause they actually have to act on.
   const reauthReason: CodexAccountReauthReason | undefined = rawReauthReason ?? (health.status === "reauth_required" ? health.reason : undefined);
   const duplicateMain = configuredCodexMainDuplicate(config, account.id);
+  const weeklyQuotaConflicts = getAccountWeeklyQuotaConflicts(account.id);
   return {
     id: account.id,
     slotId: account.id,
@@ -156,6 +157,7 @@ export function poolAccountDto(
     creditsAfterLimit: codexAccountUsesCreditsAfterLimit(config, account.id),
     useRemainingQuota: codexAccountUsesRemainingQuota(config, account.id),
     quota: quota ? { ...quota } : null,
+    ...(weeklyQuotaConflicts.length > 0 ? { weeklyQuotaConflicts } : {}),
     ...codexCreditsDtoField(config, account.id, poolQuotaHistoryIdentity(account.id) ?? null),
     needsReauth: needsReauth || health.status === "reauth_required",
     ...(reauthReason !== undefined ? { reauthReason } : {}),
@@ -194,6 +196,8 @@ export interface CodexAuthAccountDto {
   creditsAfterLimit?: boolean;
   useRemainingQuota?: boolean;
   quota: (StoredAccountQuota | (Omit<StoredAccountQuota, "updatedAt"> & { updatedAt: number })) | null;
+  /** Live weekly windows this account reported in contradiction (#8574); display only. */
+  weeklyQuotaConflicts?: import("../quota-window-conflict").WeeklyWindowConflict[];
   credits?: CodexCredits;
   needsReauth?: boolean;
   /**

@@ -11,6 +11,7 @@ import { AccountCreditsToggle, CreditsOnBadge } from "./CodexCreditSpend";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import QuotaBars from "./QuotaBars";
+import { weeklyWindowConflictText } from "../codex-weekly-conflict";
 import { AccountMore, AccountRow, AccountSetting } from "./v2-accounts/account-row";
 import { InlineBanner } from "./v2-accounts/surface";
 import CodexCreditsRow from "./CodexCreditsRow";
@@ -274,6 +275,9 @@ export function CodexAccountPoolCards({
                   pending={a.quota == null && (loading || !showCredits)}
                   afterWeekly={showCredits && !loading ? <CodexCreditsRow credits={a.credits} t={t} locale={locale} /> : undefined}
                 />
+                {weeklyWindowConflictText(a.weeklyQuotaConflicts, t, locale) && (
+                  <div className="card-sub text-warning" role="note">{weeklyWindowConflictText(a.weeklyQuotaConflicts, t, locale)}</div>
+                )}
               </div>
             )}
           </AccountRow>
